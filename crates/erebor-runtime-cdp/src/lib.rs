@@ -1,7 +1,10 @@
 //! Browser/CDP enforcement surface contracts for erebor-runtime.
 
+mod error;
+
+pub use error::CdpError;
+
 use erebor_runtime_events::{ActionKind, ExecutionSurface};
-use thiserror::Error;
 
 pub const GOVERNED_CDP_METHODS: &[&str] = &[
     "Runtime.evaluate",
@@ -29,12 +32,4 @@ pub fn classify_cdp_method(method: &str) -> Option<(ExecutionSurface, ActionKind
     };
 
     Some((ExecutionSurface::BrowserCdp, action))
-}
-
-#[derive(Debug, Error, Eq, PartialEq)]
-pub enum CdpError {
-    #[error("CDP method is missing")]
-    MissingMethod,
-    #[error("unsupported governed CDP method `{0}`")]
-    UnsupportedMethod(String),
 }
