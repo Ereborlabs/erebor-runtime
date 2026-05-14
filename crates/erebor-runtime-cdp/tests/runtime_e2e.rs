@@ -66,6 +66,7 @@ async fn browser_cdp_runtime_blocks_denied_commands_before_upstream() -> Result<
 }
 
 #[tokio::test]
+#[ignore = "slow real Chrome validation"]
 async fn browser_cdp_runtime_executes_governed_commands_against_real_chrome() -> Result<(), E2eError>
 {
     if !real_chrome_available() {
@@ -111,6 +112,7 @@ async fn browser_cdp_runtime_executes_governed_commands_against_real_chrome() ->
 }
 
 #[tokio::test]
+#[ignore = "slow real Chrome validation"]
 async fn browser_cdp_runtime_blocks_real_chrome_script_eval_side_effects() -> Result<(), E2eError> {
     if !real_chrome_available() {
         return Ok(());

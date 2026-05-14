@@ -107,6 +107,40 @@ fn denied_approval_fails_closed() -> Result<(), RuntimeError> {
 }
 
 #[test]
+fn deferred_approval_remains_pending_and_is_audited() -> Result<(), RuntimeError> {
+    let sink = RecordingAuditSink::default();
+    let engine = LocalEnforcementEngine::with_hooks(
+        approval_policy()?,
+        StaticApprovalProvider {
+            response: Ok(ApprovalResponse::Approved),
+        },
+        sink.clone(),
+    );
+
+    let outcome = engine.enforce_with_deferred_approval(&event())?;
+
+    assert_eq!(
+        outcome.final_decision,
+        Decision::RequireApproval {
+            reason: String::from("terminal execution requires approval"),
+            rule_id: Some(String::from("approve-terminal-exec")),
+            approval_id: None,
+        }
+    );
+    assert_eq!(sink.records().len(), 1);
+    assert_eq!(
+        sink.records()[0].final_decision,
+        Decision::RequireApproval {
+            reason: String::from("terminal execution requires approval"),
+            rule_id: Some(String::from("approve-terminal-exec")),
+            approval_id: None,
+        }
+    );
+
+    Ok(())
+}
+
+#[test]
 fn approval_backend_error_fails_closed() -> Result<(), RuntimeError> {
     let engine = LocalEnforcementEngine::with_hooks(
         approval_policy()?,

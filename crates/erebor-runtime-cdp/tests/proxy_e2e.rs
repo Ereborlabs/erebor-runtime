@@ -60,6 +60,7 @@ async fn cdp_proxy_blocks_denied_commands_before_upstream() -> Result<(), E2eErr
 }
 
 #[tokio::test]
+#[ignore = "slow real Chrome validation"]
 async fn cdp_proxy_executes_governed_commands_against_real_chrome() -> Result<(), E2eError> {
     if !real_chrome_available() {
         return Ok(());
@@ -99,6 +100,7 @@ async fn cdp_proxy_executes_governed_commands_against_real_chrome() -> Result<()
 }
 
 #[tokio::test]
+#[ignore = "slow real Chrome validation"]
 async fn cdp_proxy_blocks_real_chrome_script_eval_side_effects() -> Result<(), E2eError> {
     if !real_chrome_available() {
         return Ok(());

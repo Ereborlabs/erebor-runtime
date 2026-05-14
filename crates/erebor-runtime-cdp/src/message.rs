@@ -1,7 +1,7 @@
 use erebor_runtime_core::{ApprovalProvider, AuditSink, LocalEnforcementEngine, RuntimeError};
 use erebor_runtime_events::{ActorIdentity, EventId, RiskMetadata, RuntimeEvent, SessionId};
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::{classify_cdp_method, CdpCommand, CdpError, CdpEvent, GovernedCdpCommand};
 
@@ -34,7 +34,9 @@ where
     }
 
     let event = normalize_cdp_command(context, command)?;
-    let outcome = engine.enforce(&event).map_err(CdpError::enforcement)?;
+    let outcome = engine
+        .enforce_with_deferred_approval(&event)
+        .map_err(CdpError::enforcement)?;
 
     Ok(match outcome.policy_decision {
         Decision::RequireApproval { reason, .. } => CdpEnforcementAction::AwaitApproval { reason },
@@ -72,7 +74,7 @@ fn normalize_cdp_command(
         target: command
             .protocol_command()
             .and_then(GovernedCdpCommand::target),
-        payload: command.params.clone(),
+        payload: command_payload(command),
         risk: RiskMetadata {
             level: classification.risk_level,
             reasons: vec![format!("governed CDP method `{}`", command.method)],
@@ -95,7 +97,7 @@ fn normalize_cdp_event(
         surface: classification.surface,
         action: classification.action,
         target: event.protocol_event().target(),
-        payload: event.params.clone(),
+        payload: event_payload(event),
         risk: RiskMetadata {
             level: classification.risk_level,
             reasons: vec![format!("inspected CDP method `{}`", event.method)],
@@ -116,6 +118,24 @@ fn event_id_from_command(command: &CdpCommand) -> Result<String, CdpError> {
     Err(CdpError::missing_message_id())
 }
 
+fn command_payload(command: &CdpCommand) -> Value {
+    json!({
+        "kind": "command",
+        "method": command.method,
+        "message_id": command.id,
+        "params": command.params,
+    })
+}
+
+fn event_payload(event: &CdpEvent) -> Value {
+    json!({
+        "kind": "event",
+        "method": event.method,
+        "event_id": event.protocol_event().event_id(),
+        "params": event.params,
+    })
+}
+
 impl From<RuntimeError> for CdpError {
     fn from(error: RuntimeError) -> Self {
         Self::enforcement(error)
@@ -124,9 +144,12 @@ impl From<RuntimeError> for CdpError {
 
 #[cfg(test)]
 mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
     use erebor_runtime_core::{ApprovalProvider, ApprovalRequest, ApprovalResponse};
     use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
-    use erebor_runtime_policy::LocalPolicy;
+    use erebor_runtime_policy::{Decision, LocalPolicy};
+    use serde_json::json;
 
     use super::{enforce_cdp_command, observe_cdp_event, CdpEnforcementAction, CdpSessionContext};
     use crate::{decode_cdp_command, decode_cdp_event};
@@ -229,6 +252,117 @@ mod tests {
     }
 
     #[test]
+    fn audits_denied_governed_messages_with_source_method() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let sink = RecordingAuditSink::default();
+        let policy = LocalPolicy::from_json_str(
+            r#"
+            {
+              "rules": [
+                {
+                  "id": "deny-script-eval",
+                  "match": {
+                    "surface": "browser_cdp",
+                    "action": "browser_script_eval"
+                  },
+                  "decision": "deny",
+                  "reason": "script evaluation denied"
+                }
+              ]
+            }
+            "#,
+        )?;
+        let engine = erebor_runtime_core::LocalEnforcementEngine::with_hooks(
+            policy,
+            ApproveAll,
+            sink.clone(),
+        );
+        let command = decode_cdp_command(
+            r#"{ "id": 9, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#,
+        )?;
+
+        let action = enforce_cdp_command(&engine, &context(), &command)?;
+        let records = sink.records();
+
+        assert_eq!(
+            action,
+            CdpEnforcementAction::Block {
+                reason: String::from("script evaluation denied")
+            }
+        );
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].event.payload,
+            json!({
+                "kind": "command",
+                "method": "Runtime.evaluate",
+                "message_id": 9,
+                "params": {
+                    "expression": "1 + 1"
+                }
+            })
+        );
+        assert_eq!(
+            records[0].final_decision,
+            Decision::Deny {
+                reason: String::from("script evaluation denied"),
+                rule_id: Some(String::from("deny-script-eval"))
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn audits_approval_required_commands_as_pending() -> Result<(), Box<dyn std::error::Error>> {
+        let sink = RecordingAuditSink::default();
+        let policy = LocalPolicy::from_json_str(
+            r#"
+            {
+              "rules": [
+                {
+                  "id": "approve-script-eval",
+                  "match": {
+                    "surface": "browser_cdp",
+                    "action": "browser_script_eval"
+                  },
+                  "decision": "require_approval",
+                  "reason": "script evaluation requires approval"
+                }
+              ]
+            }
+            "#,
+        )?;
+        let engine = erebor_runtime_core::LocalEnforcementEngine::with_hooks(
+            policy,
+            ApproveAll,
+            sink.clone(),
+        );
+        let command = decode_cdp_command(
+            r#"{ "id": 10, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#,
+        )?;
+
+        let action = enforce_cdp_command(&engine, &context(), &command)?;
+        let records = sink.records();
+
+        assert_eq!(
+            action,
+            CdpEnforcementAction::AwaitApproval {
+                reason: String::from("script evaluation requires approval")
+            }
+        );
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].final_decision,
+            Decision::RequireApproval {
+                reason: String::from("script evaluation requires approval"),
+                rule_id: Some(String::from("approve-script-eval")),
+                approval_id: None
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
     fn observes_fetch_request_paused_context() -> Result<(), Box<dyn std::error::Error>> {
         let event = decode_cdp_event(
             r#"
@@ -311,6 +445,27 @@ mod tests {
             _request: &ApprovalRequest,
         ) -> Result<ApprovalResponse, erebor_runtime_core::ApprovalError> {
             Ok(ApprovalResponse::Approved)
+        }
+    }
+
+    #[derive(Clone, Debug, Default)]
+    struct RecordingAuditSink {
+        records: Rc<RefCell<Vec<erebor_runtime_core::AuditRecord>>>,
+    }
+
+    impl RecordingAuditSink {
+        fn records(&self) -> Vec<erebor_runtime_core::AuditRecord> {
+            self.records.borrow().clone()
+        }
+    }
+
+    impl erebor_runtime_core::AuditSink for RecordingAuditSink {
+        fn record(
+            &self,
+            record: &erebor_runtime_core::AuditRecord,
+        ) -> Result<(), erebor_runtime_core::AuditError> {
+            self.records.borrow_mut().push(record.clone());
+            Ok(())
         }
     }
 }

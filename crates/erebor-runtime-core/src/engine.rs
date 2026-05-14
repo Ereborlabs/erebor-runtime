@@ -146,11 +146,26 @@ where
     }
 
     pub fn enforce(&self, event: &RuntimeEvent) -> Result<EnforcementOutcome, RuntimeError> {
+        self.enforce_with_mode(event, ApprovalMode::ResolveImmediately)
+    }
+
+    pub fn enforce_with_deferred_approval(
+        &self,
+        event: &RuntimeEvent,
+    ) -> Result<EnforcementOutcome, RuntimeError> {
+        self.enforce_with_mode(event, ApprovalMode::Defer)
+    }
+
+    fn enforce_with_mode(
+        &self,
+        event: &RuntimeEvent,
+        approval_mode: ApprovalMode,
+    ) -> Result<EnforcementOutcome, RuntimeError> {
         let policy_decision = self
             .evaluator
             .evaluate(event)
             .map_err(RuntimeError::policy)?;
-        let final_decision = self.resolve_decision(event, &policy_decision);
+        let final_decision = self.resolve_decision(event, &policy_decision, approval_mode);
         let mut outcome = EnforcementOutcome {
             event: event.clone(),
             policy_decision,
@@ -166,36 +181,50 @@ where
         Ok(outcome)
     }
 
-    fn resolve_decision(&self, event: &RuntimeEvent, decision: &Decision) -> Decision {
+    fn resolve_decision(
+        &self,
+        event: &RuntimeEvent,
+        decision: &Decision,
+        approval_mode: ApprovalMode,
+    ) -> Decision {
         match decision {
             Decision::Allow { .. } | Decision::Deny { .. } => decision.clone(),
             Decision::RequireApproval {
                 reason,
                 rule_id,
                 approval_id,
-            } => {
-                let request = ApprovalRequest {
-                    event: event.clone(),
-                    reason: reason.clone(),
-                    rule_id: rule_id.clone(),
-                    approval_id: approval_id.clone(),
-                };
+            } => match approval_mode {
+                ApprovalMode::Defer => decision.clone(),
+                ApprovalMode::ResolveImmediately => {
+                    let request = ApprovalRequest {
+                        event: event.clone(),
+                        reason: reason.clone(),
+                        rule_id: rule_id.clone(),
+                        approval_id: approval_id.clone(),
+                    };
 
-                match self.approval_provider.request_approval(&request) {
-                    Ok(ApprovalResponse::Approved) => Decision::Allow {
-                        rule_id: rule_id.clone(),
-                    },
-                    Ok(ApprovalResponse::Denied { reason })
-                    | Ok(ApprovalResponse::TimedOut { reason })
-                    | Ok(ApprovalResponse::Unavailable { reason })
-                    | Err(ApprovalError::Unavailable { reason, .. }) => Decision::Deny {
-                        reason,
-                        rule_id: rule_id.clone(),
-                    },
+                    match self.approval_provider.request_approval(&request) {
+                        Ok(ApprovalResponse::Approved) => Decision::Allow {
+                            rule_id: rule_id.clone(),
+                        },
+                        Ok(ApprovalResponse::Denied { reason })
+                        | Ok(ApprovalResponse::TimedOut { reason })
+                        | Ok(ApprovalResponse::Unavailable { reason })
+                        | Err(ApprovalError::Unavailable { reason, .. }) => Decision::Deny {
+                            reason,
+                            rule_id: rule_id.clone(),
+                        },
+                    }
                 }
-            }
+            },
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApprovalMode {
+    ResolveImmediately,
+    Defer,
 }
 
 #[derive(Clone, Debug, PartialEq)]
