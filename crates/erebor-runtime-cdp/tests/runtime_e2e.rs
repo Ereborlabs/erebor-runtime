@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use erebor_runtime_core::GovernanceLayer;
 use erebor_runtime_e2e::E2eError;
 use serde_json::{json, Value};
 
@@ -8,8 +9,13 @@ mod support;
 use support::{allow_all_policy, deny_script_eval_policy, real_chrome_available, CdpE2eHarness};
 
 #[tokio::test]
-async fn cdp_proxy_forwards_allowed_commands_to_mini_upstream() -> Result<(), E2eError> {
-    let mut harness = CdpE2eHarness::start_proxy_with_mini_upstream(allow_all_policy()?).await?;
+async fn browser_cdp_runtime_starts_and_forwards_allowed_commands() -> Result<(), E2eError> {
+    let mut harness = CdpE2eHarness::start_runtime_with_mini_upstream(allow_all_policy()?).await?;
+    let running_runtime = harness
+        .running_runtime()
+        .ok_or_else(|| E2eError::closed("browser CDP runtime status"))?;
+
+    assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
     let response = harness
         .send_command(json!({
             "id": 1,
@@ -33,9 +39,9 @@ async fn cdp_proxy_forwards_allowed_commands_to_mini_upstream() -> Result<(), E2
 }
 
 #[tokio::test]
-async fn cdp_proxy_blocks_denied_commands_before_upstream() -> Result<(), E2eError> {
+async fn browser_cdp_runtime_blocks_denied_commands_before_upstream() -> Result<(), E2eError> {
     let mut harness =
-        CdpE2eHarness::start_proxy_with_mini_upstream(deny_script_eval_policy()?).await?;
+        CdpE2eHarness::start_runtime_with_mini_upstream(deny_script_eval_policy()?).await?;
     let response = harness
         .send_command(json!({
             "id": 7,
@@ -60,18 +66,24 @@ async fn cdp_proxy_blocks_denied_commands_before_upstream() -> Result<(), E2eErr
 }
 
 #[tokio::test]
-async fn cdp_proxy_executes_governed_commands_against_real_chrome() -> Result<(), E2eError> {
+async fn browser_cdp_runtime_executes_governed_commands_against_real_chrome() -> Result<(), E2eError>
+{
     if !real_chrome_available() {
         return Ok(());
     }
 
-    let harness = CdpE2eHarness::start_proxy_with_real_chrome(allow_all_policy()?).await?;
+    let harness = CdpE2eHarness::start_runtime_with_real_chrome(allow_all_policy()?).await?;
+    let running_runtime = harness
+        .running_runtime()
+        .ok_or_else(|| E2eError::closed("browser CDP runtime status"))?;
+
+    assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
     let response = harness
         .send_command(json!({
             "id": 1,
             "method": "Runtime.evaluate",
             "params": {
-                "expression": "window.__erebor = 'proxy-allowed'; window.__erebor",
+                "expression": "window.__erebor = 'runtime-allowed'; window.__erebor",
                 "returnByValue": true
             }
         }))
@@ -89,28 +101,33 @@ async fn cdp_proxy_executes_governed_commands_against_real_chrome() -> Result<()
 
     assert_eq!(
         response.pointer("/result/result/value"),
-        Some(&Value::String(String::from("proxy-allowed")))
+        Some(&Value::String(String::from("runtime-allowed")))
     );
     assert_eq!(
         browser_state.pointer("/result/result/value"),
-        Some(&Value::String(String::from("proxy-allowed")))
+        Some(&Value::String(String::from("runtime-allowed")))
     );
     Ok(())
 }
 
 #[tokio::test]
-async fn cdp_proxy_blocks_real_chrome_script_eval_side_effects() -> Result<(), E2eError> {
+async fn browser_cdp_runtime_blocks_real_chrome_script_eval_side_effects() -> Result<(), E2eError> {
     if !real_chrome_available() {
         return Ok(());
     }
 
-    let harness = CdpE2eHarness::start_proxy_with_real_chrome(deny_script_eval_policy()?).await?;
+    let harness = CdpE2eHarness::start_runtime_with_real_chrome(deny_script_eval_policy()?).await?;
+    let running_runtime = harness
+        .running_runtime()
+        .ok_or_else(|| E2eError::closed("browser CDP runtime status"))?;
+
+    assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
     let response = harness
         .send_command(json!({
             "id": 7,
             "method": "Runtime.evaluate",
             "params": {
-                "expression": "window.__erebor = 'proxy-denied'; window.__erebor",
+                "expression": "window.__erebor = 'runtime-denied'; window.__erebor",
                 "returnByValue": true
             }
         }))
