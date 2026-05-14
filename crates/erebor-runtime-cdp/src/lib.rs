@@ -2,11 +2,13 @@
 
 mod error;
 mod message;
+mod proxy;
 
 pub use error::CdpError;
 pub use message::{
     enforce_cdp_message, parse_cdp_message, CdpEnforcementAction, CdpMessage, CdpSessionContext,
 };
+pub use proxy::{proxy_cdp_message, CdpBackend, CdpBackendResponse, CdpProxyAction};
 
 use erebor_runtime_events::{ActionKind, ExecutionSurface, RiskLevel};
 

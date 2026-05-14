@@ -102,7 +102,11 @@ checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 name = "erebor-runtime-cdp"
 version = "0.1.0"
 dependencies = [
+ "erebor-runtime-core",
  "erebor-runtime-events",
+ "erebor-runtime-policy",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
@@ -111,6 +115,8 @@ name = "erebor-runtime-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "erebor-runtime-core",
+ "thiserror",
 ]
 
 [[package]]
@@ -119,6 +125,7 @@ version = "0.1.0"
 dependencies = [
  "erebor-runtime-events",
  "erebor-runtime-policy",
+ "serde",
  "serde_json",
  "thiserror",
 ]
