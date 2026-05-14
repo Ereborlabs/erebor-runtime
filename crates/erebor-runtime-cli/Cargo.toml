@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+clap.workspace = true
+
 [[bin]]
 name = "erebor-runtime"
 path = "src/main.rs"

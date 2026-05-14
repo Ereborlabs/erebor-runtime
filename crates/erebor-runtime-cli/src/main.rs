@@ -1,3 +1,9 @@
+mod cli;
+
+use clap::Parser;
+use cli::Cli;
+
 fn main() {
-    println!("erebor-runtime CLI scaffold");
+    let cli = Cli::parse();
+    cli.execute();
 }
