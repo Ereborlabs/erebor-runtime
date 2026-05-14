@@ -1,20 +1,18 @@
 [package]
-name = "erebor-runtime-cli"
+name = "erebor-runtime-audit"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-clap.workspace = true
-erebor-runtime-audit = { path = "../erebor-runtime-audit" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 serde_json.workspace = true
 thiserror.workspace = true
 
-[[bin]]
-name = "erebor-runtime"
-path = "src/main.rs"
+[dev-dependencies]
+erebor-runtime-events = { path = "../erebor-runtime-events" }
+erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 
 [lints]
 workspace = true

@@ -5,6 +5,7 @@ use std::{
 };
 
 use clap::{Args, Parser, Subcommand};
+use erebor_runtime_audit::{read_audit_records, AuditLogError};
 use erebor_runtime_core::{GovernanceLayer, RuntimeConfig, RuntimeConfigError, RuntimeStartPlan};
 use thiserror::Error;
 
@@ -31,6 +32,13 @@ impl Cli {
                     args.listen,
                     format_layers(plan.layers())
                 );
+            }
+            Command::Audit(AuditArgs {
+                command: AuditCommand::Tail(args),
+            }) => {
+                for record in read_audit_records(&args.file)? {
+                    println!("{}", serde_json::to_string(&record)?);
+                }
             }
             _ => println!("{}", self.command),
         }
@@ -216,6 +224,10 @@ pub(crate) enum CliError {
     ReadConfig { path: PathBuf, source: io::Error },
     #[error("{0}")]
     InvalidConfig(#[from] RuntimeConfigError),
+    #[error("{0}")]
+    AuditLog(#[from] AuditLogError),
+    #[error("failed to encode audit record: {0}")]
+    EncodeAuditRecord(#[from] serde_json::Error),
 }
 
 #[cfg(test)]
@@ -253,7 +265,7 @@ mod tests {
 
     #[test]
     fn start_loads_runtime_config() -> Result<(), Box<dyn std::error::Error>> {
-        let config_path = write_temp_config(
+        let config_path = write_temp_file(
             r#"
             {
               "policies": ["policies/browser.json"],
@@ -278,7 +290,7 @@ mod tests {
 
     #[test]
     fn start_rejects_invalid_runtime_config() -> Result<(), Box<dyn std::error::Error>> {
-        let config_path = write_temp_config(
+        let config_path = write_temp_file(
             r#"
             {
               "policies": [],
@@ -331,11 +343,27 @@ mod tests {
     }
 
     #[test]
+    fn audit_tail_rejects_invalid_jsonl() -> Result<(), Box<dyn std::error::Error>> {
+        let audit_path = write_temp_file("{not-json}\n")?;
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "audit",
+            "tail",
+            "--file",
+            audit_path.to_string_lossy().as_ref(),
+        ])?;
+
+        assert!(cli.execute().is_err());
+        let _result = fs::remove_file(audit_path);
+        Ok(())
+    }
+
+    #[test]
     fn clap_debug_assertions_pass() {
         Cli::command().debug_assert();
     }
 
-    fn write_temp_config(source: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    fn write_temp_file(source: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let path = std::env::temp_dir().join(format!(
             "erebor-runtime-cli-{nanos}-{}.json",

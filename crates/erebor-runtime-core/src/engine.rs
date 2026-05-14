@@ -1,5 +1,6 @@
 use erebor_runtime_events::RuntimeEvent;
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::RuntimeError;
@@ -47,7 +48,7 @@ pub enum ApprovalError {
     Unavailable { reason: String },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AuditRecord {
     pub event: RuntimeEvent,
     pub policy_decision: Decision,
