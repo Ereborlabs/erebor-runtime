@@ -26,10 +26,10 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Launch a governed browser session.
-    RunBrowser(GovernedBrowserArgs),
-    /// Proxy an existing Chromium CDP endpoint.
-    ProxyCdp(ProxyCdpArgs),
+    /// Start the configured governance runtime.
+    Start(StartArgs),
+    /// Development and surface-specific utilities.
+    Dev(DevArgs),
     /// Policy development and validation commands.
     Policy(PolicyArgs),
     /// Audit log commands.
@@ -39,18 +39,22 @@ enum Command {
 impl fmt::Display for Command {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::RunBrowser(args) => write!(
+            Self::Start(args) => write!(
                 formatter,
-                "run-browser policy={} listen={}",
-                args.policy.display(),
+                "start config={} listen={}",
+                args.config.display(),
                 args.listen
             ),
-            Self::ProxyCdp(args) => write!(
-                formatter,
-                "proxy-cdp policy={} browser-url={}",
-                args.policy.display(),
-                args.browser_url.as_str()
-            ),
+            Self::Dev(DevArgs {
+                command: DevCommand::ProxyCdp(args),
+            }) => {
+                write!(
+                    formatter,
+                    "dev proxy-cdp policy={} browser-url={}",
+                    args.policy.display(),
+                    args.browser_url.as_str()
+                )
+            }
             Self::Policy(PolicyArgs {
                 command: PolicyCommand::Test(args),
             }) => write!(
@@ -67,16 +71,25 @@ impl fmt::Display for Command {
 }
 
 #[derive(Debug, Args)]
-struct GovernedBrowserArgs {
-    /// Policy file or package entrypoint to apply.
+struct StartArgs {
+    /// Runtime config describing enabled governance layers and policies.
     #[arg(long, value_parser = parse_non_empty_path)]
-    policy: PathBuf,
-    /// Local address for the governed CDP endpoint.
-    #[arg(long, default_value = "127.0.0.1:0")]
+    config: PathBuf,
+    /// Local address for runtime control/status APIs.
+    #[arg(long, default_value = "127.0.0.1:3737")]
     listen: SocketAddr,
-    /// Chromium profile directory for the governed browser session.
-    #[arg(long, value_parser = parse_non_empty_path)]
-    chrome_profile: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+struct DevArgs {
+    #[command(subcommand)]
+    command: DevCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum DevCommand {
+    /// Proxy an existing Chromium CDP endpoint with an explicit policy.
+    ProxyCdp(ProxyCdpArgs),
 }
 
 #[derive(Debug, Args)]
@@ -167,22 +180,30 @@ mod tests {
 
     #[test]
     fn rejects_unknown_arguments() {
-        let error = Cli::try_parse_from(["erebor-runtime", "run-browser", "--unknown"]);
+        let error = Cli::try_parse_from(["erebor-runtime", "start", "--unknown"]);
 
         assert!(error.is_err());
     }
 
     #[test]
-    fn requires_policy_for_governed_browser() {
-        let error = Cli::try_parse_from(["erebor-runtime", "run-browser"]);
+    fn requires_config_for_runtime_start() {
+        let error = Cli::try_parse_from(["erebor-runtime", "start"]);
 
         assert!(error.is_err());
+    }
+
+    #[test]
+    fn accepts_single_runtime_command_with_config() {
+        let cli = Cli::try_parse_from(["erebor-runtime", "start", "--config", "erebor.json"]);
+
+        assert!(cli.is_ok());
     }
 
     #[test]
     fn rejects_non_websocket_cdp_url() {
         let error = Cli::try_parse_from([
             "erebor-runtime",
+            "dev",
             "proxy-cdp",
             "--browser-url",
             "http://localhost:9222",
