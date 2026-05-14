@@ -7,10 +7,10 @@ use std::{
 
 use clap::{Args, Parser, Subcommand};
 use erebor_runtime_audit::{read_audit_records, AuditLogError};
-use erebor_runtime_cdp::{CdpError, CdpProxyServer, CdpProxyServerConfig, CdpSessionContext};
+use erebor_runtime_cdp::{BrowserCdpRuntime, CdpSessionContext};
 use erebor_runtime_core::{
-    BrowserCdpLayerConfig, BrowserCdpRuntimeConfig, GovernanceLayer, GovernanceLayers,
-    LocalEnforcementEngine, RuntimeConfig, RuntimeConfigError, RuntimeStartPlan,
+    BrowserCdpLayerConfig, GovernanceLayers, RunningRuntime, RuntimeConfig, RuntimeConfigError,
+    RuntimeDefinition, RuntimeError, RuntimeLaunchPlan, RuntimeLauncher, RuntimeStartPlan,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, RuntimeEvent, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicyEvaluator, PolicySet};
@@ -206,7 +206,7 @@ fn build_start_plan(path: &Path) -> Result<RuntimeStartPlan, CliError> {
 
 fn build_runtime_launch_plan(args: &StartArgs) -> Result<RuntimeLaunchPlan, CliError> {
     let plan = build_start_plan(&args.config)?;
-    runtime_launch_plan_from_start_plan(args.listen, &plan)
+    Ok(RuntimeLaunchPlan::from_start_plan(args.listen, &plan)?)
 }
 
 fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<RuntimeLaunchPlan, CliError> {
@@ -223,39 +223,7 @@ fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<RuntimeLaunchPlan,
     };
     let plan = config.start_plan().map_err(CliError::InvalidConfig)?;
 
-    runtime_launch_plan_from_start_plan(args.listen, &plan)
-}
-
-fn runtime_launch_plan_from_start_plan(
-    control_listen: SocketAddr,
-    plan: &RuntimeStartPlan,
-) -> Result<RuntimeLaunchPlan, CliError> {
-    let unsupported = plan
-        .layers()
-        .iter()
-        .copied()
-        .filter(|layer| *layer != GovernanceLayer::BrowserCdp)
-        .map(GovernanceLayer::as_str)
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-
-    if let Some(layer) = unsupported.first() {
-        return Err(CliError::UnsupportedGovernanceLayer {
-            layer: layer.clone(),
-        });
-    }
-    let Some(browser_cdp) = plan.browser_cdp().cloned() else {
-        return Err(CliError::UnsupportedGovernanceLayer {
-            layer: String::from("browser_cdp"),
-        });
-    };
-
-    Ok(RuntimeLaunchPlan {
-        control_listen,
-        governance_layers: plan.layers().to_vec(),
-        policy_paths: plan.policies().to_vec(),
-        browser_cdp,
-    })
+    Ok(RuntimeLaunchPlan::from_start_plan(args.listen, &plan)?)
 }
 
 fn read_policy(path: &Path) -> Result<LocalPolicy, CliError> {
@@ -300,30 +268,30 @@ fn execute_dev(args: &DevArgs) -> Result<(), CliError> {
 }
 
 fn start_runtime_from_launch_plan(launch_plan: RuntimeLaunchPlan) -> Result<(), CliError> {
-    let policy_set = read_policy_set(&launch_plan.policy_paths)?;
-    let engine = LocalEnforcementEngine::new(policy_set);
-    let context = runtime_context("browser-cdp");
-    let config = CdpProxyServerConfig {
-        listen: launch_plan.browser_cdp.listen(),
-        browser_url: launch_plan.browser_cdp.browser_url().to_owned(),
-        context,
-    };
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|source| CliError::BuildRuntime { source })?;
-    let governance = format_layers(&launch_plan.governance_layers);
+    let policy_set = read_policy_set(launch_plan.policy_paths())?;
+    let mut launcher = RuntimeLauncher::new(launch_plan.control_listen());
 
-    runtime.block_on(async move {
-        let server = CdpProxyServer::bind(config, engine).await?;
-        let local_addr = server.local_addr()?;
-        println!(
-            "start control={} governance={} browser_cdp={}",
-            launch_plan.control_listen, governance, local_addr
-        );
-        server.run().await
-    })?;
+    for definition in launch_plan.definitions() {
+        match definition {
+            RuntimeDefinition::BrowserCdp(config) => {
+                launcher.add_runtime(BrowserCdpRuntime::new(
+                    config.clone(),
+                    policy_set.clone(),
+                    runtime_context("browser-cdp"),
+                ));
+            }
+        }
+    }
 
+    let supervisor = launcher.start()?;
+    println!(
+        "start control={} governance={} {}",
+        supervisor.control_listen(),
+        format_layers(supervisor.running().iter().map(RunningRuntime::layer)),
+        format_endpoints(supervisor.running())
+    );
+
+    supervisor.wait()?;
     Ok(())
 }
 
@@ -371,20 +339,19 @@ fn runtime_timestamp() -> String {
     format!("unix:{seconds}")
 }
 
-fn format_layers(layers: &[GovernanceLayer]) -> String {
+fn format_layers(layers: impl Iterator<Item = erebor_runtime_core::GovernanceLayer>) -> String {
     layers
-        .iter()
-        .map(|layer| layer.as_str())
+        .map(erebor_runtime_core::GovernanceLayer::as_str)
         .collect::<Vec<_>>()
         .join(",")
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct RuntimeLaunchPlan {
-    control_listen: SocketAddr,
-    governance_layers: Vec<GovernanceLayer>,
-    policy_paths: Vec<PathBuf>,
-    browser_cdp: BrowserCdpRuntimeConfig,
+fn format_endpoints(runtimes: &[RunningRuntime]) -> String {
+    runtimes
+        .iter()
+        .map(|runtime| format!("{}={}", runtime.layer().as_str(), runtime.endpoint()))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[derive(Debug, Error)]
@@ -401,12 +368,8 @@ pub(crate) enum CliError {
     ReadEvent { path: PathBuf, source: io::Error },
     #[error("event fixture JSON is invalid: {0}")]
     InvalidEvent(serde_json::Error),
-    #[error("failed to build async runtime: {source}")]
-    BuildRuntime { source: io::Error },
     #[error("{0}")]
-    Cdp(#[from] CdpError),
-    #[error("runtime start plan includes unsupported governance layer `{layer}`")]
-    UnsupportedGovernanceLayer { layer: String },
+    Runtime(#[from] RuntimeError),
     #[error("{0}")]
     AuditLog(#[from] AuditLogError),
     #[error("failed to encode JSON output: {0}")]
@@ -422,7 +385,7 @@ mod tests {
     };
 
     use clap::{CommandFactory, Parser};
-    use erebor_runtime_core::GovernanceLayer;
+    use erebor_runtime_core::{GovernanceLayer, RuntimeDefinition, RuntimeError};
 
     use super::{
         build_dev_proxy_launch_plan, build_runtime_launch_plan, Cli, CliError, ProxyCdpArgs,
@@ -473,15 +436,16 @@ mod tests {
 
         let plan = build_runtime_launch_plan(&args)?;
 
-        assert_eq!(plan.control_listen, "127.0.0.1:3737".parse()?);
+        assert_eq!(plan.control_listen(), "127.0.0.1:3737".parse()?);
         assert_eq!(
-            plan.policy_paths,
+            plan.policy_paths(),
             vec![PathBuf::from("policies/browser.json")]
         );
-        assert_eq!(plan.governance_layers, vec![GovernanceLayer::BrowserCdp]);
-        assert_eq!(plan.browser_cdp.listen(), "127.0.0.1:3738".parse()?);
+        assert_eq!(plan.layers(), vec![GovernanceLayer::BrowserCdp]);
+        let RuntimeDefinition::BrowserCdp(browser_cdp) = &plan.definitions()[0];
+        assert_eq!(browser_cdp.listen(), "127.0.0.1:3738".parse()?);
         assert_eq!(
-            plan.browser_cdp.browser_url(),
+            browser_cdp.browser_url(),
             "ws://127.0.0.1:9222/devtools/browser/demo"
         );
 
@@ -501,13 +465,15 @@ mod tests {
         let plan = build_dev_proxy_launch_plan(&args)?;
 
         assert_eq!(
-            plan.policy_paths,
+            plan.policy_paths(),
             vec![PathBuf::from("policies/browser.json")]
         );
-        assert_eq!(plan.governance_layers, vec![GovernanceLayer::BrowserCdp]);
-        assert_eq!(plan.browser_cdp.listen(), "127.0.0.1:3738".parse()?);
+        assert_eq!(plan.layers(), vec![GovernanceLayer::BrowserCdp]);
+        assert_eq!(plan.definitions().len(), 1);
+        let RuntimeDefinition::BrowserCdp(browser_cdp) = &plan.definitions()[0];
+        assert_eq!(browser_cdp.listen(), "127.0.0.1:3738".parse()?);
         assert_eq!(
-            plan.browser_cdp.browser_url(),
+            browser_cdp.browser_url(),
             "ws://127.0.0.1:9222/devtools/browser/demo"
         );
         Ok(())
@@ -564,7 +530,8 @@ mod tests {
 
         assert!(matches!(
             error,
-            Err(CliError::UnsupportedGovernanceLayer { layer }) if layer == "terminal"
+            Err(CliError::Runtime(RuntimeError::UnsupportedGovernanceLayer { layer }))
+                if layer == "terminal"
         ));
 
         let _result = fs::remove_file(config_path);

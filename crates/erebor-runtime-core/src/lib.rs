@@ -3,6 +3,7 @@
 mod config;
 mod engine;
 mod error;
+mod runtime;
 #[cfg(test)]
 mod tests;
 
@@ -15,3 +16,7 @@ pub use engine::{
     AuditSink, DenyApprovalProvider, EnforcementOutcome, LocalEnforcementEngine, NoopAuditSink,
 };
 pub use error::{RuntimeConfigError, RuntimeError};
+pub use runtime::{
+    GovernanceRuntime, RunningRuntime, RuntimeDefinition, RuntimeFailure, RuntimeFailureSender,
+    RuntimeLaunchPlan, RuntimeLauncher, RuntimeSupervisor,
+};

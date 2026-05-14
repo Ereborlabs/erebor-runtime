@@ -3,6 +3,7 @@
 mod error;
 mod message;
 mod proxy;
+mod runtime;
 mod server;
 
 pub use error::CdpError;
@@ -11,6 +12,7 @@ pub use message::{
     CdpSessionContext,
 };
 pub use proxy::{proxy_cdp_message, CdpBackend, CdpBackendResponse, CdpProxyAction};
+pub use runtime::BrowserCdpRuntime;
 pub use server::{CdpProxyServer, CdpProxyServerConfig};
 
 use erebor_runtime_events::{ActionKind, ExecutionSurface, RiskLevel};

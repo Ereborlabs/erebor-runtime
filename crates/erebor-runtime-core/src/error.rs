@@ -1,3 +1,5 @@
+use std::io;
+
 use erebor_runtime_policy::PolicyError;
 use thiserror::Error;
 
@@ -19,8 +21,18 @@ pub enum RuntimeConfigError {
     BrowserCdpInvalidBrowserUrl,
 }
 
-#[derive(Debug, Error, Eq, PartialEq)]
+#[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error("policy evaluation failed: {0}")]
     Policy(#[from] PolicyError),
+    #[error("failed to build async runtime: {source}")]
+    BuildAsyncRuntime { source: io::Error },
+    #[error("runtime start plan includes unsupported governance layer `{layer}`")]
+    UnsupportedGovernanceLayer { layer: String },
+    #[error("runtime start plan did not include any governance runtimes")]
+    NoGovernanceRuntimes,
+    #[error("failed to start governance runtime `{layer}`: {reason}")]
+    RuntimeStart { layer: String, reason: String },
+    #[error("governance runtime `{layer}` exited: {reason}")]
+    RuntimeExited { layer: String, reason: String },
 }
