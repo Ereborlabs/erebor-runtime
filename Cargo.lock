@@ -181,6 +181,7 @@ name = "erebor-runtime-cdp"
 version = "0.1.0"
 dependencies = [
  "erebor-runtime-core",
+ "erebor-runtime-e2e",
  "erebor-runtime-events",
  "erebor-runtime-policy",
  "futures-util",
@@ -221,6 +222,19 @@ dependencies = [
  "snafu",
  "thiserror",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "erebor-runtime-e2e"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "serde_json",
+ "snafu",
+ "thiserror",
+ "tokio",
+ "tokio-tungstenite",
  "tracing",
 ]
 

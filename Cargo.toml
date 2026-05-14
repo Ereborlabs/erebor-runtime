@@ -4,6 +4,7 @@ members = [
     "crates/erebor-runtime-cdp",
     "crates/erebor-runtime-cli",
     "crates/erebor-runtime-core",
+    "crates/erebor-runtime-e2e",
     "crates/erebor-runtime-events",
     "crates/erebor-runtime-policy",
 ]
@@ -22,7 +23,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 snafu = "0.8"
 thiserror = "2"
-tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = "0.26"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

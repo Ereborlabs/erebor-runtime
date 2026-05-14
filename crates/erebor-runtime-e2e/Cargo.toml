@@ -1,0 +1,19 @@
+[package]
+name = "erebor-runtime-e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+futures-util.workspace = true
+serde_json.workspace = true
+snafu.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
