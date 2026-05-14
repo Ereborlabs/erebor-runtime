@@ -13,6 +13,10 @@ pub enum RuntimeConfigError {
     EmptyPolicyPath,
     #[error("runtime config must enable at least one governance layer")]
     NoGovernanceLayers,
+    #[error("runtime config browser_cdp requires browser_url when enabled")]
+    BrowserCdpMissingBrowserUrl,
+    #[error("runtime config browser_cdp browser_url must start with ws://")]
+    BrowserCdpInvalidBrowserUrl,
 }
 
 #[derive(Debug, Error, Eq, PartialEq)]

@@ -8,4 +8,4 @@ mod tests;
 
 pub use decision::Decision;
 pub use error::PolicyError;
-pub use policy::{AllowAllPolicy, LocalPolicy, PolicyEvaluator};
+pub use policy::{AllowAllPolicy, LocalPolicy, PolicyEvaluator, PolicySet};

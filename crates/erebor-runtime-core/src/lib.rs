@@ -7,8 +7,8 @@ mod error;
 mod tests;
 
 pub use config::{
-    validate_policy_path, GovernanceLayer, GovernanceLayerConfig, GovernanceLayers, RuntimeConfig,
-    RuntimeStartPlan,
+    validate_policy_path, BrowserCdpLayerConfig, BrowserCdpRuntimeConfig, GovernanceLayer,
+    GovernanceLayerConfig, GovernanceLayers, RuntimeConfig, RuntimeStartPlan,
 };
 pub use engine::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,

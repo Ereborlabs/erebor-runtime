@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
 
 use serde::Deserialize;
 
@@ -42,6 +45,16 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::NoGovernanceLayers);
         }
 
+        if self.governance.browser_cdp.enabled {
+            let Some(browser_url) = self.governance.browser_cdp.browser_url.as_deref() else {
+                return Err(RuntimeConfigError::BrowserCdpMissingBrowserUrl);
+            };
+
+            if !browser_url.starts_with("ws://") {
+                return Err(RuntimeConfigError::BrowserCdpInvalidBrowserUrl);
+            }
+        }
+
         Ok(())
     }
 
@@ -59,6 +72,7 @@ impl RuntimeConfig {
 pub struct RuntimeStartPlan {
     policies: Vec<PathBuf>,
     layers: Vec<GovernanceLayer>,
+    browser_cdp: Option<BrowserCdpRuntimeConfig>,
 }
 
 impl RuntimeStartPlan {
@@ -68,6 +82,19 @@ impl RuntimeStartPlan {
         Ok(Self {
             policies: config.policies.clone(),
             layers: config.enabled_layers(),
+            browser_cdp: config
+                .governance
+                .browser_cdp
+                .enabled
+                .then(|| BrowserCdpRuntimeConfig {
+                    listen: config.governance.browser_cdp.listen,
+                    browser_url: config
+                        .governance
+                        .browser_cdp
+                        .browser_url
+                        .clone()
+                        .unwrap_or_default(),
+                }),
         })
     }
 
@@ -85,12 +112,17 @@ impl RuntimeStartPlan {
     pub fn contains_layer(&self, layer: GovernanceLayer) -> bool {
         self.layers.contains(&layer)
     }
+
+    #[must_use]
+    pub fn browser_cdp(&self) -> Option<&BrowserCdpRuntimeConfig> {
+        self.browser_cdp.as_ref()
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
 pub struct GovernanceLayers {
     #[serde(default)]
-    pub browser_cdp: GovernanceLayerConfig,
+    pub browser_cdp: BrowserCdpLayerConfig,
     #[serde(default)]
     pub mcp: GovernanceLayerConfig,
     #[serde(default)]
@@ -109,19 +141,42 @@ impl GovernanceLayers {
     #[must_use]
     pub fn enabled_layers(&self) -> Vec<GovernanceLayer> {
         let candidates = [
-            (GovernanceLayer::BrowserCdp, &self.browser_cdp),
-            (GovernanceLayer::Mcp, &self.mcp),
-            (GovernanceLayer::Terminal, &self.terminal),
-            (GovernanceLayer::Network, &self.network),
-            (GovernanceLayer::Saas, &self.saas),
-            (GovernanceLayer::Desktop, &self.desktop),
-            (GovernanceLayer::InternalSystem, &self.internal_system),
+            (GovernanceLayer::BrowserCdp, self.browser_cdp.enabled),
+            (GovernanceLayer::Mcp, self.mcp.enabled),
+            (GovernanceLayer::Terminal, self.terminal.enabled),
+            (GovernanceLayer::Network, self.network.enabled),
+            (GovernanceLayer::Saas, self.saas.enabled),
+            (GovernanceLayer::Desktop, self.desktop.enabled),
+            (
+                GovernanceLayer::InternalSystem,
+                self.internal_system.enabled,
+            ),
         ];
 
         candidates
             .into_iter()
-            .filter_map(|(layer, config)| config.enabled.then_some(layer))
+            .filter_map(|(layer, enabled)| enabled.then_some(layer))
             .collect()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct BrowserCdpLayerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub browser_url: Option<String>,
+    #[serde(default = "default_browser_cdp_listen")]
+    pub listen: SocketAddr,
+}
+
+impl Default for BrowserCdpLayerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            browser_url: None,
+            listen: default_browser_cdp_listen(),
+        }
     }
 }
 
@@ -129,6 +184,24 @@ impl GovernanceLayers {
 pub struct GovernanceLayerConfig {
     #[serde(default)]
     pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BrowserCdpRuntimeConfig {
+    listen: SocketAddr,
+    browser_url: String,
+}
+
+impl BrowserCdpRuntimeConfig {
+    #[must_use]
+    pub fn listen(&self) -> SocketAddr {
+        self.listen
+    }
+
+    #[must_use]
+    pub fn browser_url(&self) -> &str {
+        &self.browser_url
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,8 +238,14 @@ pub fn validate_policy_path(path: &Path) -> Result<(), RuntimeConfigError> {
     }
 }
 
+fn default_browser_cdp_listen() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], 0))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::net::SocketAddr;
+
     use crate::{GovernanceLayer, RuntimeConfig, RuntimeConfigError};
 
     #[test]
@@ -176,7 +255,10 @@ mod tests {
             {
               "policies": ["policies/browser.json"],
               "governance": {
-                "browser_cdp": { "enabled": true },
+                "browser_cdp": {
+                  "enabled": true,
+                  "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo"
+                },
                 "terminal": { "enabled": true }
               }
             }
@@ -198,7 +280,10 @@ mod tests {
             {
               "policies": [],
               "governance": {
-                "browser_cdp": { "enabled": true }
+                "browser_cdp": {
+                  "enabled": true,
+                  "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo"
+                }
               }
             }
             "#,
@@ -214,7 +299,10 @@ mod tests {
             {
               "policies": [""],
               "governance": {
-                "browser_cdp": { "enabled": true }
+                "browser_cdp": {
+                  "enabled": true,
+                  "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo"
+                }
               }
             }
             "#,
@@ -244,7 +332,11 @@ mod tests {
             {
               "policies": ["policies/browser.json", "policies/terminal.json"],
               "governance": {
-                "browser_cdp": { "enabled": true },
+                "browser_cdp": {
+                  "enabled": true,
+                  "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo",
+                  "listen": "127.0.0.1:3738"
+                },
                 "terminal": { "enabled": true }
               }
             }
@@ -256,7 +348,50 @@ mod tests {
         assert!(plan.contains_layer(GovernanceLayer::BrowserCdp));
         assert!(plan.contains_layer(GovernanceLayer::Terminal));
         assert!(!plan.contains_layer(GovernanceLayer::Mcp));
+        assert_eq!(
+            plan.browser_cdp().map(|config| config.browser_url()),
+            Some("ws://127.0.0.1:9222/devtools/browser/demo")
+        );
+        assert_eq!(
+            plan.browser_cdp().map(|config| config.listen()),
+            Some(SocketAddr::from(([127, 0, 0, 1], 3738)))
+        );
 
         Ok(())
+    }
+
+    #[test]
+    fn rejects_browser_cdp_without_browser_url() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "governance": {
+                "browser_cdp": { "enabled": true }
+              }
+            }
+            "#,
+        );
+
+        assert_eq!(error, Err(RuntimeConfigError::BrowserCdpMissingBrowserUrl));
+    }
+
+    #[test]
+    fn rejects_browser_cdp_without_local_ws_url() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "governance": {
+                "browser_cdp": {
+                  "enabled": true,
+                  "browser_url": "wss://browser.example/ws"
+                }
+              }
+            }
+            "#,
+        );
+
+        assert_eq!(error, Err(RuntimeConfigError::BrowserCdpInvalidBrowserUrl));
     }
 }

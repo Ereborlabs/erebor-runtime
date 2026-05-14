@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use erebor_runtime_core::LocalEnforcementEngine;
-use erebor_runtime_policy::LocalPolicy;
+use erebor_runtime_policy::PolicySet;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
@@ -15,7 +15,7 @@ use crate::{
     CdpMessage, CdpSessionContext,
 };
 
-type CdpEngine = LocalEnforcementEngine<LocalPolicy>;
+type CdpEngine = LocalEnforcementEngine<PolicySet>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpProxyServerConfig {
@@ -201,7 +201,7 @@ fn websocket_error(error: WebSocketError) -> CdpError {
 #[cfg(test)]
 mod tests {
     use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
-    use erebor_runtime_policy::LocalPolicy;
+    use erebor_runtime_policy::{LocalPolicy, PolicySet};
     use serde_json::json;
 
     use super::{handle_client_text, observe_browser_text, ClientTextAction};
@@ -221,7 +221,10 @@ mod tests {
     #[test]
     fn client_text_forwards_allowed_commands() -> Result<(), Box<dyn std::error::Error>> {
         let policy = LocalPolicy::from_json_str(r#"{ "rules": [] }"#)?;
-        let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
+        let engine =
+            erebor_runtime_core::LocalEnforcementEngine::new(PolicySet::from_policies(vec![
+                policy,
+            ]));
         let source = r#"{ "id": 1, "method": "Page.navigate", "params": { "url": "https://example.com/" } }"#;
 
         let action = handle_client_text(&engine, &context(), source)?;
@@ -254,7 +257,10 @@ mod tests {
             }
             "#,
         )?;
-        let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
+        let engine =
+            erebor_runtime_core::LocalEnforcementEngine::new(PolicySet::from_policies(vec![
+                policy,
+            ]));
         let source =
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#;
 
@@ -294,7 +300,10 @@ mod tests {
             }
             "#,
         )?;
-        let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
+        let engine =
+            erebor_runtime_core::LocalEnforcementEngine::new(PolicySet::from_policies(vec![
+                policy,
+            ]));
         let source =
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#;
 

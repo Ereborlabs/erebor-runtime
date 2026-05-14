@@ -18,6 +18,31 @@ impl PolicyEvaluator for AllowAllPolicy {
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct PolicySet {
+    policies: Vec<LocalPolicy>,
+}
+
+impl PolicySet {
+    #[must_use]
+    pub fn from_policies(policies: Vec<LocalPolicy>) -> Self {
+        Self { policies }
+    }
+}
+
+impl PolicyEvaluator for PolicySet {
+    fn evaluate(&self, event: &RuntimeEvent) -> Result<Decision, PolicyError> {
+        for policy in &self.policies {
+            let decision = policy.evaluate(event)?;
+            if decision.rule_id().is_some() {
+                return Ok(decision);
+            }
+        }
+
+        Ok(Decision::Allow { rule_id: None })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LocalPolicy {
     rules: Vec<PolicyRule>,
