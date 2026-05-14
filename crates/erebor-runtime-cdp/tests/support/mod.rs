@@ -17,7 +17,8 @@ use erebor_runtime_core::{
     GovernanceRuntime, RunningRuntime, RuntimeConfig, RuntimeError, RuntimeStartPlan,
 };
 use erebor_runtime_e2e::{
-    send_json_request, E2eError, JsonWebSocketHandler, MiniJsonWebSocketServer, MiniSystem,
+    assert_json_request_has_no_response, send_json_request, E2eError, JsonWebSocketHandler,
+    MiniJsonWebSocketServer, MiniSystem,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicySet};
@@ -164,6 +165,15 @@ impl CdpE2eHarness {
         send_json_request(&self.endpoint, command).await
     }
 
+    pub async fn assert_command_has_no_response(
+        &self,
+        command: Value,
+        duration: Duration,
+    ) -> Result<(), E2eError> {
+        let _keep_runtime_alive = (&self.runtime_host, &self.browser);
+        assert_json_request_has_no_response(&self.endpoint, command, duration).await
+    }
+
     pub async fn send_direct_browser_command(&self, command: Value) -> Result<Value, E2eError> {
         let endpoint = self
             .direct_browser_endpoint
@@ -218,6 +228,27 @@ pub fn deny_script_eval_policy() -> Result<LocalPolicy, E2eError> {
         "#,
     )
     .map_err(|error| E2eError::external("deny-script-eval policy setup", error))
+}
+
+pub fn require_approval_script_eval_policy() -> Result<LocalPolicy, E2eError> {
+    LocalPolicy::from_json_str(
+        r#"
+        {
+          "rules": [
+            {
+              "id": "approve-script-eval",
+              "match": {
+                "surface": "browser_cdp",
+                "action": "browser_script_eval"
+              },
+              "decision": "require_approval",
+              "reason": "script evaluation requires approval by e2e policy"
+            }
+          ]
+        }
+        "#,
+    )
+    .map_err(|error| E2eError::external("require-approval-script-eval policy setup", error))
 }
 
 pub fn session_context() -> CdpSessionContext {

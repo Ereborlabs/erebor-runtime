@@ -144,7 +144,9 @@ mod tests {
     use std::{cell::RefCell, rc::Rc};
 
     use erebor_runtime_core::{ApprovalProvider, ApprovalRequest, ApprovalResponse};
-    use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
+    use erebor_runtime_events::{
+        ActionKind, ActorIdentity, ActorKind, ExecutionSurface, SessionId,
+    };
     use erebor_runtime_policy::{Decision, LocalPolicy};
     use serde_json::json;
 
@@ -245,6 +247,79 @@ mod tests {
                 reason: String::from("script evaluation requires approval")
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn audits_forwarded_governed_navigation_with_full_record_fields(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let sink = RecordingAuditSink::default();
+        let policy = LocalPolicy::from_json_str(
+            r#"
+            {
+              "rules": [
+                {
+                  "id": "allow-example-navigation",
+                  "match": {
+                    "surface": "browser_cdp",
+                    "action": "browser_navigate",
+                    "target_contains": "example.com"
+                  },
+                  "decision": "allow"
+                }
+              ]
+            }
+            "#,
+        )?;
+        let engine = erebor_runtime_core::LocalEnforcementEngine::with_hooks(
+            policy,
+            ApproveAll,
+            sink.clone(),
+        );
+        let command = decode_cdp_command(
+            r#"{ "id": 3, "method": "Page.navigate", "params": { "url": "https://example.com/" } }"#,
+        )?;
+
+        let action = enforce_cdp_command(&engine, &context(), &command)?;
+        let records = sink.records();
+
+        assert_eq!(action, CdpEnforcementAction::Forward);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].event.session_id.as_str(), "session-1");
+        assert_eq!(records[0].event.actor.id, "agent-1");
+        assert_eq!(records[0].event.actor.kind, ActorKind::Agent);
+        assert_eq!(records[0].event.surface, ExecutionSurface::BrowserCdp);
+        assert_eq!(records[0].event.action, ActionKind::BrowserNavigate);
+        assert_eq!(
+            records[0]
+                .event
+                .target
+                .as_ref()
+                .and_then(|target| target.uri.as_deref()),
+            Some("https://example.com/")
+        );
+        assert_eq!(
+            records[0].event.payload,
+            json!({
+                "kind": "command",
+                "method": "Page.navigate",
+                "message_id": 3,
+                "params": {
+                    "url": "https://example.com/"
+                }
+            })
+        );
+        assert_eq!(
+            records[0].event.risk.reasons,
+            vec![String::from("governed CDP method `Page.navigate`")]
+        );
+        assert_eq!(
+            records[0].final_decision,
+            Decision::Allow {
+                rule_id: Some(String::from("allow-example-navigation"))
+            }
+        );
+        assert_eq!(records[0].policy_decision, records[0].final_decision);
         Ok(())
     }
 

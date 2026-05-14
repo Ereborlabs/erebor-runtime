@@ -6,7 +6,10 @@ use serde_json::{json, Value};
 
 mod support;
 
-use support::{allow_all_policy, deny_script_eval_policy, real_chrome_available, CdpE2eHarness};
+use support::{
+    allow_all_policy, deny_script_eval_policy, real_chrome_available,
+    require_approval_script_eval_policy, CdpE2eHarness,
+};
 
 #[tokio::test]
 async fn browser_cdp_runtime_starts_and_forwards_allowed_commands() -> Result<(), E2eError> {
@@ -59,6 +62,36 @@ async fn browser_cdp_runtime_blocks_denied_commands_before_upstream() -> Result<
             "script evaluation denied by e2e policy"
         )))
     );
+    harness
+        .assert_no_upstream_command(Duration::from_millis(100))
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_cdp_runtime_holds_approval_required_commands_before_upstream(
+) -> Result<(), E2eError> {
+    let mut harness =
+        CdpE2eHarness::start_runtime_with_mini_upstream(require_approval_script_eval_policy()?)
+            .await?;
+    let running_runtime = harness
+        .running_runtime()
+        .ok_or_else(|| E2eError::closed("browser CDP runtime status"))?;
+
+    assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
+    harness
+        .assert_command_has_no_response(
+            json!({
+                "id": 9,
+                "method": "Runtime.evaluate",
+                "params": {
+                    "expression": "window.localStorage.clear()"
+                }
+            }),
+            Duration::from_millis(100),
+        )
+        .await?;
+
     harness
         .assert_no_upstream_command(Duration::from_millis(100))
         .await?;

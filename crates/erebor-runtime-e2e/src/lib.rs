@@ -6,4 +6,7 @@ pub mod websocket;
 
 pub use error::E2eError;
 pub use system::MiniSystem;
-pub use websocket::{send_json_request, JsonWebSocketHandler, MiniJsonWebSocketServer};
+pub use websocket::{
+    assert_json_request_has_no_response, send_json_request, JsonWebSocketHandler,
+    MiniJsonWebSocketServer,
+};

@@ -79,6 +79,20 @@ pub async fn send_json_request(endpoint: &str, request: Value) -> Result<Value, 
     read_json_message(&mut socket, "JSON websocket response").await
 }
 
+pub async fn assert_json_request_has_no_response(
+    endpoint: &str,
+    request: Value,
+    duration: Duration,
+) -> Result<(), E2eError> {
+    let (mut socket, _response) = connect_async(endpoint).await.map_err(E2eError::websocket)?;
+    socket
+        .send(Message::Text(request.to_string().into()))
+        .await
+        .map_err(E2eError::websocket)?;
+
+    assert_no_json_message(&mut socket, "JSON websocket response", duration).await
+}
+
 async fn run_json_websocket_server(
     listener: TcpListener,
     handler: JsonWebSocketHandler,
@@ -161,4 +175,20 @@ where
         .map_err(E2eError::websocket)?
         .to_string();
     serde_json::from_str(&source).map_err(E2eError::json)
+}
+
+async fn assert_no_json_message<S>(
+    socket: &mut S,
+    operation: &str,
+    duration: Duration,
+) -> Result<(), E2eError>
+where
+    S: StreamExt<Item = Result<Message, WebSocketError>> + Unpin,
+{
+    match timeout(duration, socket.next()).await {
+        Err(_) => Ok(()),
+        Ok(None) => Err(E2eError::closed(operation)),
+        Ok(Some(Err(error))) => Err(E2eError::websocket(error)),
+        Ok(Some(Ok(message))) => Err(E2eError::unexpected_message(operation, message.to_string())),
+    }
 }
