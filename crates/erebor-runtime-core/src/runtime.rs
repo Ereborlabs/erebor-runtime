@@ -5,6 +5,7 @@ use std::{
 };
 
 use tokio::runtime::Runtime;
+use tracing::{debug, error, info};
 
 use crate::{BrowserCdpRuntimeConfig, GovernanceLayer, RuntimeError, RuntimeStartPlan};
 
@@ -38,6 +39,10 @@ impl RuntimeLauncher {
     where
         R: GovernanceRuntime + 'static,
     {
+        debug!(
+            layer = runtime.layer().as_str(),
+            "registered governance runtime"
+        );
         self.runtimes.push(Box::new(runtime));
     }
 
@@ -46,6 +51,11 @@ impl RuntimeLauncher {
             return Err(RuntimeError::no_governance_runtimes());
         }
 
+        info!(
+            control = %self.control_listen,
+            runtime_count = self.runtimes.len(),
+            "starting governance runtime supervisor"
+        );
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -54,7 +64,15 @@ impl RuntimeLauncher {
         let mut running = Vec::new();
 
         for governance_runtime in self.runtimes {
-            running.push(governance_runtime.start(&runtime, failures.clone())?);
+            let layer = governance_runtime.layer();
+            debug!(layer = layer.as_str(), "starting governance runtime");
+            let runtime_status = governance_runtime.start(&runtime, failures.clone())?;
+            info!(
+                layer = runtime_status.layer().as_str(),
+                endpoint = runtime_status.endpoint(),
+                "governance runtime is listening"
+            );
+            running.push(runtime_status);
         }
         drop(failures);
 
@@ -91,6 +109,11 @@ impl RuntimeSupervisor {
             .recv()
             .map_err(|_| RuntimeError::no_governance_runtimes())?;
 
+        error!(
+            layer = failure.layer.as_str(),
+            reason = %failure.reason,
+            "governance runtime exited"
+        );
         Err(RuntimeError::runtime_exited(
             failure.layer.as_str(),
             failure.reason,

@@ -17,6 +17,8 @@ use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicyEvaluator, PolicySet
 use snafu::Location;
 use thiserror::Error;
 
+use crate::logging::{init_tracing, LoggingArgs};
+
 #[derive(Debug, Parser)]
 #[command(
     name = "erebor-runtime",
@@ -25,12 +27,17 @@ use thiserror::Error;
     next_line_help = true
 )]
 pub(crate) struct Cli {
+    #[command(flatten)]
+    logging: LoggingArgs,
     #[command(subcommand)]
     command: Command,
 }
 
 impl Cli {
     pub(crate) fn execute(&self) -> Result<(), CliError> {
+        init_tracing(&self.logging);
+        tracing::debug!(command = %self.command, "executing command");
+
         match &self.command {
             Command::Start(args) => start_runtime(args)?,
             Command::Dev(args) => execute_dev(args)?,
@@ -191,6 +198,7 @@ fn parse_non_empty_path(value: &str) -> Result<PathBuf, String> {
 }
 
 fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, CliError> {
+    tracing::debug!(path = %path.display(), "reading runtime config");
     let source = fs::read_to_string(path).map_err(|error| CliError::ReadConfig {
         path: path.to_path_buf(),
         source: error,
@@ -208,6 +216,12 @@ fn build_start_plan(path: &Path) -> Result<RuntimeStartPlan, CliError> {
 
 fn build_runtime_launch_plan(args: &StartArgs) -> Result<RuntimeLaunchPlan, CliError> {
     let plan = build_start_plan(&args.config)?;
+    tracing::debug!(
+        control_listen = %args.listen,
+        layers = ?plan.layers(),
+        policy_count = plan.policies().len(),
+        "building runtime launch plan"
+    );
     RuntimeLaunchPlan::from_start_plan(args.listen, &plan).map_err(CliError::runtime)
 }
 
@@ -229,6 +243,7 @@ fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<RuntimeLaunchPlan,
 }
 
 fn read_policy(path: &Path) -> Result<LocalPolicy, CliError> {
+    tracing::debug!(path = %path.display(), "reading policy");
     let source = fs::read_to_string(path).map_err(|error| CliError::ReadPolicy {
         path: path.to_path_buf(),
         source: error,
@@ -248,6 +263,7 @@ fn read_policy_set(paths: &[PathBuf]) -> Result<PolicySet, CliError> {
 }
 
 fn read_event(path: &Path) -> Result<RuntimeEvent, CliError> {
+    tracing::debug!(path = %path.display(), "reading runtime event fixture");
     let source = fs::read_to_string(path).map_err(|error| CliError::ReadEvent {
         path: path.to_path_buf(),
         source: error,
@@ -288,11 +304,11 @@ fn start_runtime_from_launch_plan(launch_plan: RuntimeLaunchPlan) -> Result<(), 
     }
 
     let supervisor = launcher.start().map_err(CliError::runtime)?;
-    println!(
-        "start control={} governance={} {}",
-        supervisor.control_listen(),
-        format_layers(supervisor.running().iter().map(RunningRuntime::layer)),
-        format_endpoints(supervisor.running())
+    tracing::info!(
+        control = %supervisor.control_listen(),
+        governance = %format_layers(supervisor.running().iter().map(RunningRuntime::layer)),
+        endpoints = %format_endpoints(supervisor.running()),
+        "governance runtime started"
     );
 
     supervisor.wait().map_err(CliError::runtime)?;
@@ -302,6 +318,11 @@ fn start_runtime_from_launch_plan(launch_plan: RuntimeLaunchPlan) -> Result<(), 
 fn execute_policy(args: &PolicyArgs) -> Result<(), CliError> {
     match &args.command {
         PolicyCommand::Test(args) => {
+            tracing::debug!(
+                policy = %args.policy.display(),
+                event = %args.event.display(),
+                "testing policy"
+            );
             let policy_set = read_policy_set(std::slice::from_ref(&args.policy))?;
             let event = read_event(&args.event)?;
             let decision = policy_set
@@ -320,6 +341,7 @@ fn execute_policy(args: &PolicyArgs) -> Result<(), CliError> {
 fn execute_audit(args: &AuditArgs) -> Result<(), CliError> {
     match &args.command {
         AuditCommand::Tail(args) => {
+            tracing::debug!(file = %args.file.display(), "reading audit records");
             for record in read_audit_records(&args.file).map_err(CliError::audit_log)? {
                 println!(
                     "{}",
@@ -516,6 +538,34 @@ mod tests {
         let cli = Cli::try_parse_from(["erebor-runtime", "start", "--config", "erebor.json"]);
 
         assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn accepts_restrictive_global_log_level() {
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "--log-level",
+            "debug",
+            "start",
+            "--config",
+            "erebor.json",
+        ]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn rejects_unknown_log_level() {
+        let error = Cli::try_parse_from([
+            "erebor-runtime",
+            "--log-level",
+            "verbose",
+            "start",
+            "--config",
+            "erebor.json",
+        ]);
+
+        assert!(error.is_err());
     }
 
     #[test]

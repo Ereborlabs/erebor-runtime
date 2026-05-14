@@ -4,6 +4,7 @@ use erebor_runtime_core::{
 };
 use erebor_runtime_policy::PolicySet;
 use tokio::runtime::Runtime;
+use tracing::{debug, error, info};
 
 use crate::{CdpProxyServer, CdpProxyServerConfig, CdpSessionContext};
 
@@ -45,6 +46,16 @@ impl GovernanceRuntime for BrowserCdpRuntime {
             browser_url: self.config.browser_url().to_owned(),
             context: self.context,
         };
+        info!(
+            listen = %config.listen,
+            layer = layer.as_str(),
+            "starting CDP governance runtime"
+        );
+        debug!(
+            browser_url = %config.browser_url,
+            layer = layer.as_str(),
+            "configured CDP upstream"
+        );
         let server = runtime
             .block_on(CdpProxyServer::bind(config, engine))
             .map_err(|error| RuntimeError::runtime_start(layer.as_str(), error.to_string()))?;
@@ -54,6 +65,11 @@ impl GovernanceRuntime for BrowserCdpRuntime {
 
         let handle = runtime.spawn(async move {
             if let Err(error) = server.run().await {
+                error!(
+                    layer = layer.as_str(),
+                    error = %error,
+                    "CDP governance runtime failed"
+                );
                 let _result = failures.send(RuntimeFailure::new(layer, error.to_string()));
             }
         });

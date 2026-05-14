@@ -9,6 +9,7 @@ use tokio_tungstenite::{
     accept_async, connect_async,
     tungstenite::{Error as WebSocketError, Message},
 };
+use tracing::{debug, info, warn};
 
 use crate::{
     enforce_cdp_message, observe_cdp_message, parse_cdp_message, CdpEnforcementAction, CdpError,
@@ -36,6 +37,12 @@ impl CdpProxyServer {
         let listener = TcpListener::bind(config.listen)
             .await
             .map_err(CdpError::io)?;
+        let local_addr = listener.local_addr().map_err(CdpError::io)?;
+
+        info!(
+            listen = %local_addr,
+            "CDP proxy server bound"
+        );
 
         Ok(Self {
             listener,
@@ -50,13 +57,26 @@ impl CdpProxyServer {
     }
 
     pub async fn run(self) -> Result<(), CdpError> {
+        let local_addr = self.local_addr()?;
+        info!(listen = %local_addr, "CDP proxy server accepting connections");
+
         loop {
-            let (stream, _address) = self.listener.accept().await.map_err(CdpError::io)?;
+            let (stream, address) = self.listener.accept().await.map_err(CdpError::io)?;
             let browser_url = self.browser_url.clone();
             let engine = Arc::clone(&self.engine);
             let context = self.context.clone();
+            debug!(client = %address, "accepted CDP proxy connection");
             let handle = tokio::spawn(async move {
-                let _result = proxy_connection(stream, browser_url, engine, context).await;
+                match proxy_connection(stream, browser_url, engine, context).await {
+                    Ok(()) => debug!(client = %address, "CDP proxy connection closed"),
+                    Err(error) => {
+                        warn!(
+                            client = %address,
+                            error = %error,
+                            "CDP proxy connection failed"
+                        );
+                    }
+                }
             });
             drop(handle);
         }
@@ -69,7 +89,9 @@ async fn proxy_connection(
     engine: Arc<CdpEngine>,
     context: CdpSessionContext,
 ) -> Result<(), CdpError> {
+    debug!("accepting client websocket");
     let client_socket = accept_async(stream).await.map_err(websocket_error)?;
+    debug!(browser_url = %browser_url, "connecting to upstream CDP websocket");
     let (browser_socket, _response) = connect_async(browser_url.as_str())
         .await
         .map_err(websocket_error)?;
@@ -157,13 +179,36 @@ fn handle_client_text(
     let message = parse_cdp_message(source)?;
 
     match enforce_cdp_message(engine, context, &message)? {
-        CdpEnforcementAction::Forward => Ok(ClientTextAction::Forward {
-            payload: source.to_owned(),
-        }),
-        CdpEnforcementAction::Block { reason } => Ok(ClientTextAction::Reply {
-            payload: error_response(&message, -32000, &reason),
-        }),
-        CdpEnforcementAction::AwaitApproval { .. } => Ok(ClientTextAction::HoldForApproval),
+        CdpEnforcementAction::Forward => {
+            debug!(
+                method = %message.method,
+                id = ?message.id,
+                "forwarding CDP command"
+            );
+            Ok(ClientTextAction::Forward {
+                payload: source.to_owned(),
+            })
+        }
+        CdpEnforcementAction::Block { reason } => {
+            warn!(
+                method = %message.method,
+                id = ?message.id,
+                reason = %reason,
+                "blocking CDP command"
+            );
+            Ok(ClientTextAction::Reply {
+                payload: error_response(&message, -32000, &reason),
+            })
+        }
+        CdpEnforcementAction::AwaitApproval { reason } => {
+            info!(
+                method = %message.method,
+                id = ?message.id,
+                reason = %reason,
+                "holding CDP command for approval"
+            );
+            Ok(ClientTextAction::HoldForApproval)
+        }
     }
 }
 
@@ -173,7 +218,13 @@ fn observe_browser_text(context: &CdpSessionContext, source: &str) -> Result<(),
         Err(CdpError::InvalidJson { .. }) | Err(CdpError::MissingMethod { .. }) => return Ok(()),
         Err(error) => return Err(error),
     };
-    let _event = observe_cdp_message(context, &message)?;
+    if observe_cdp_message(context, &message)?.is_some() {
+        debug!(
+            method = %message.method,
+            id = ?message.id,
+            "observed CDP context message"
+        );
+    }
 
     Ok(())
 }

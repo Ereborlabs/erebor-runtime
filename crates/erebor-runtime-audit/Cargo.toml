@@ -10,6 +10,7 @@ erebor-runtime-core = { path = "../erebor-runtime-core" }
 serde_json.workspace = true
 snafu.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 erebor-runtime-events = { path = "../erebor-runtime-events" }

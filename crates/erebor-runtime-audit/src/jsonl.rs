@@ -5,6 +5,7 @@ use std::{
 };
 
 use erebor_runtime_core::{AuditError, AuditRecord, AuditSink};
+use tracing::debug;
 
 use crate::AuditLogError;
 
@@ -37,6 +38,11 @@ pub fn append_audit_record(
     record: &AuditRecord,
 ) -> Result<(), AuditLogError> {
     let path = path.as_ref();
+    debug!(
+        path = %path.display(),
+        event_id = record.event.id.as_str(),
+        "appending audit record"
+    );
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -55,6 +61,7 @@ pub fn append_audit_record(
 
 pub fn read_audit_records(path: impl AsRef<Path>) -> Result<Vec<AuditRecord>, AuditLogError> {
     let path = path.as_ref();
+    debug!(path = %path.display(), "reading audit records");
     let file =
         File::open(path).map_err(|source| AuditLogError::open(path.to_path_buf(), source))?;
     let reader = BufReader::new(file);
@@ -73,5 +80,10 @@ pub fn read_audit_records(path: impl AsRef<Path>) -> Result<Vec<AuditRecord>, Au
         records.push(record);
     }
 
+    debug!(
+        path = %path.display(),
+        record_count = records.len(),
+        "read audit records"
+    );
     Ok(records)
 }
