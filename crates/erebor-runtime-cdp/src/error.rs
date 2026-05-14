@@ -12,4 +12,8 @@ pub enum CdpError {
     UnsupportedMethod(String),
     #[error("runtime enforcement failed: {0}")]
     Enforcement(String),
+    #[error("CDP proxy I/O failed: {0}")]
+    Io(String),
+    #[error("CDP websocket failed: {0}")]
+    WebSocket(String),
 }

@@ -2,11 +2,17 @@ use std::{
     fmt, fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use clap::{Args, Parser, Subcommand};
 use erebor_runtime_audit::{read_audit_records, AuditLogError};
-use erebor_runtime_core::{GovernanceLayer, RuntimeConfig, RuntimeConfigError, RuntimeStartPlan};
+use erebor_runtime_cdp::{CdpError, CdpProxyServer, CdpProxyServerConfig, CdpSessionContext};
+use erebor_runtime_core::{
+    GovernanceLayer, LocalEnforcementEngine, RuntimeConfig, RuntimeConfigError, RuntimeStartPlan,
+};
+use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
+use erebor_runtime_policy::{LocalPolicy, PolicyError};
 use thiserror::Error;
 
 #[derive(Debug, Parser)]
@@ -40,6 +46,9 @@ impl Cli {
                     println!("{}", serde_json::to_string(&record)?);
                 }
             }
+            Command::Dev(DevArgs {
+                command: DevCommand::ProxyCdp(args),
+            }) => start_cdp_proxy(args)?,
             _ => println!("{}", self.command),
         }
 
@@ -73,9 +82,9 @@ impl fmt::Display for Command {
             }) => {
                 write!(
                     formatter,
-                    "dev proxy-cdp policy={} browser-url={}",
+                    "dev proxy-cdp policy={} listen={} upstream=configured",
                     args.policy.display(),
-                    args.browser_url.as_str()
+                    args.listen
                 )
             }
             Self::Policy(PolicyArgs {
@@ -117,7 +126,7 @@ enum DevCommand {
 
 #[derive(Debug, Args)]
 struct ProxyCdpArgs {
-    /// Existing Chromium browser websocket URL.
+    /// Existing local Chromium browser websocket URL.
     #[arg(long, value_parser = parse_ws_url)]
     browser_url: WebSocketUrl,
     /// Policy file or package entrypoint to apply.
@@ -179,10 +188,10 @@ impl WebSocketUrl {
 }
 
 fn parse_ws_url(value: &str) -> Result<WebSocketUrl, String> {
-    if value.starts_with("ws://") || value.starts_with("wss://") {
+    if value.starts_with("ws://") {
         Ok(WebSocketUrl(value.to_owned()))
     } else {
-        Err(String::from("must start with ws:// or wss://"))
+        Err(String::from("must start with ws://"))
     }
 }
 
@@ -210,6 +219,58 @@ fn build_start_plan(path: &Path) -> Result<RuntimeStartPlan, CliError> {
         .map_err(CliError::InvalidConfig)
 }
 
+fn read_policy(path: &Path) -> Result<LocalPolicy, CliError> {
+    let source = fs::read_to_string(path).map_err(|error| CliError::ReadPolicy {
+        path: path.to_path_buf(),
+        source: error,
+    })?;
+
+    LocalPolicy::from_json_str(&source).map_err(CliError::InvalidPolicy)
+}
+
+fn start_cdp_proxy(args: &ProxyCdpArgs) -> Result<(), CliError> {
+    let policy = read_policy(&args.policy)?;
+    let engine = LocalEnforcementEngine::new(policy);
+    let context = CdpSessionContext {
+        session_id: SessionId::new(format!("cdp-{}", std::process::id())),
+        actor: ActorIdentity {
+            id: String::from("erebor-runtime-cli"),
+            kind: ActorKind::System,
+        },
+        timestamp: runtime_timestamp(),
+    };
+    let config = CdpProxyServerConfig {
+        listen: args.listen,
+        browser_url: args.browser_url.as_str().to_owned(),
+        context,
+    };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|source| CliError::BuildRuntime { source })?;
+
+    runtime.block_on(async {
+        let server = CdpProxyServer::bind(config, engine).await?;
+        let local_addr = server.local_addr()?;
+        println!(
+            "dev proxy-cdp listen={} policy={} upstream=configured",
+            local_addr,
+            args.policy.display()
+        );
+        server.run().await
+    })?;
+
+    Ok(())
+}
+
+fn runtime_timestamp() -> String {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+
+    format!("unix:{seconds}")
+}
+
 fn format_layers(layers: &[GovernanceLayer]) -> String {
     layers
         .iter()
@@ -224,6 +285,14 @@ pub(crate) enum CliError {
     ReadConfig { path: PathBuf, source: io::Error },
     #[error("{0}")]
     InvalidConfig(#[from] RuntimeConfigError),
+    #[error("failed to read policy `{}`: {source}", path.display())]
+    ReadPolicy { path: PathBuf, source: io::Error },
+    #[error("{0}")]
+    InvalidPolicy(#[from] PolicyError),
+    #[error("failed to build async runtime: {source}")]
+    BuildRuntime { source: io::Error },
+    #[error("{0}")]
+    Cdp(#[from] CdpError),
     #[error("{0}")]
     AuditLog(#[from] AuditLogError),
     #[error("failed to encode audit record: {0}")]
@@ -320,6 +389,21 @@ mod tests {
             "proxy-cdp",
             "--browser-url",
             "http://localhost:9222",
+            "--policy",
+            "policy.json",
+        ]);
+
+        assert!(error.is_err());
+    }
+
+    #[test]
+    fn rejects_non_local_cdp_websocket_url() {
+        let error = Cli::try_parse_from([
+            "erebor-runtime",
+            "dev",
+            "proxy-cdp",
+            "--browser-url",
+            "wss://browser.example/ws",
             "--policy",
             "policy.json",
         ]);

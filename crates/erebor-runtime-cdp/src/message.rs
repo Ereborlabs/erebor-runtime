@@ -72,17 +72,27 @@ where
     })
 }
 
+pub fn observe_cdp_message(
+    context: &CdpSessionContext,
+    message: &CdpMessage,
+) -> Result<Option<RuntimeEvent>, CdpError> {
+    if !crate::is_context_method(&message.method) {
+        return Ok(None);
+    }
+
+    normalize_cdp_message(context, message).map(Some)
+}
+
 fn normalize_cdp_message(
     context: &CdpSessionContext,
     message: &CdpMessage,
 ) -> Result<RuntimeEvent, CdpError> {
     let classification = classify_cdp_method(&message.method)
         .ok_or_else(|| CdpError::UnsupportedMethod(message.method.clone()))?;
-    let id = message.id.as_ref().ok_or(CdpError::MissingMessageId)?;
-    let event_id = match id {
-        Value::String(value) => value.clone(),
-        Value::Number(value) => value.to_string(),
-        _ => return Err(CdpError::MissingMessageId),
+    let event_id = event_id_from_message(message)?;
+    let reason_kind = match classification.role {
+        crate::CdpMethodRole::GovernedCommand => "governed",
+        crate::CdpMethodRole::ContextEvent => "inspected",
     };
 
     Ok(RuntimeEvent {
@@ -95,20 +105,51 @@ fn normalize_cdp_message(
         payload: message.params.clone(),
         risk: RiskMetadata {
             level: classification.risk_level,
-            reasons: vec![format!("governed CDP method `{}`", message.method)],
+            reasons: vec![format!("{reason_kind} CDP method `{}`", message.method)],
         },
         timestamp: context.timestamp.clone(),
     })
 }
 
+fn event_id_from_message(message: &CdpMessage) -> Result<String, CdpError> {
+    if let Some(id) = message.id.as_ref() {
+        return match id {
+            Value::String(value) => Ok(value.clone()),
+            Value::Number(value) => Ok(value.to_string()),
+            _ => Err(CdpError::MissingMessageId),
+        };
+    }
+
+    if crate::is_context_method(&message.method) {
+        return Ok(message
+            .params
+            .get("requestId")
+            .or_else(|| message.params.get("loaderId"))
+            .or_else(|| message.params.get("networkId"))
+            .and_then(Value::as_str)
+            .map_or_else(|| message.method.clone(), ToOwned::to_owned));
+    }
+
+    Err(CdpError::MissingMessageId)
+}
+
 fn target_from_params(params: &Value) -> Option<TargetRef> {
-    params
+    let uri = params
         .get("url")
         .and_then(Value::as_str)
-        .map(|url| TargetRef {
-            label: None,
-            uri: Some(url.to_owned()),
-        })
+        .or_else(|| params.get("documentURL").and_then(Value::as_str))
+        .or_else(|| params.pointer("/request/url").and_then(Value::as_str))
+        .or_else(|| params.pointer("/response/url").and_then(Value::as_str))?;
+
+    let label = params
+        .get("requestId")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+
+    Some(TargetRef {
+        label,
+        uri: Some(uri.to_owned()),
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,7 +171,10 @@ mod tests {
     use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
     use erebor_runtime_policy::LocalPolicy;
 
-    use super::{enforce_cdp_message, parse_cdp_message, CdpEnforcementAction, CdpSessionContext};
+    use super::{
+        enforce_cdp_message, observe_cdp_message, parse_cdp_message, CdpEnforcementAction,
+        CdpSessionContext,
+    };
 
     fn context() -> CdpSessionContext {
         CdpSessionContext {
@@ -225,6 +269,62 @@ mod tests {
             CdpEnforcementAction::AwaitApproval {
                 reason: String::from("script evaluation requires approval")
             }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn observes_fetch_request_paused_context() -> Result<(), Box<dyn std::error::Error>> {
+        let message = parse_cdp_message(
+            r#"
+            {
+              "method": "Fetch.requestPaused",
+              "params": {
+                "requestId": "fetch-1",
+                "request": {
+                  "url": "https://example.com/sensitive"
+                }
+              }
+            }
+            "#,
+        )?;
+
+        let event = observe_cdp_message(&context(), &message)?
+            .ok_or_else(|| std::io::Error::other("missing event"))?;
+
+        assert_eq!(event.id.as_str(), "fetch-1");
+        assert_eq!(
+            event.target.and_then(|target| target.uri),
+            Some(String::from("https://example.com/sensitive"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn observes_network_context_without_command_id() -> Result<(), Box<dyn std::error::Error>> {
+        let message = parse_cdp_message(
+            r#"
+            {
+              "method": "Network.requestWillBeSent",
+              "params": {
+                "requestId": "network-1",
+                "request": {
+                  "url": "https://example.com/"
+                }
+              }
+            }
+            "#,
+        )?;
+
+        let event = observe_cdp_message(&context(), &message)?
+            .ok_or_else(|| std::io::Error::other("missing event"))?;
+
+        assert_eq!(event.id.as_str(), "network-1");
+        assert_eq!(
+            event.risk.reasons,
+            vec![String::from(
+                "inspected CDP method `Network.requestWillBeSent`"
+            )]
         );
         Ok(())
     }
