@@ -9,6 +9,8 @@ pub enum RuntimeConfigError {
     InvalidJson { reason: String },
     #[error("runtime config must include at least one policy")]
     MissingPolicy,
+    #[error("runtime config policy paths cannot be empty")]
+    EmptyPolicyPath,
     #[error("runtime config must enable at least one governance layer")]
     NoGovernanceLayers,
 }

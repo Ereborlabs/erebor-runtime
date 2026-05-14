@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -30,6 +30,14 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::MissingPolicy);
         }
 
+        if self
+            .policies
+            .iter()
+            .any(|policy| policy.as_os_str().is_empty())
+        {
+            return Err(RuntimeConfigError::EmptyPolicyPath);
+        }
+
         if self.governance.enabled_layers().is_empty() {
             return Err(RuntimeConfigError::NoGovernanceLayers);
         }
@@ -40,6 +48,42 @@ impl RuntimeConfig {
     #[must_use]
     pub fn enabled_layers(&self) -> Vec<GovernanceLayer> {
         self.governance.enabled_layers()
+    }
+
+    pub fn start_plan(&self) -> Result<RuntimeStartPlan, RuntimeConfigError> {
+        RuntimeStartPlan::from_config(self)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeStartPlan {
+    policies: Vec<PathBuf>,
+    layers: Vec<GovernanceLayer>,
+}
+
+impl RuntimeStartPlan {
+    pub fn from_config(config: &RuntimeConfig) -> Result<Self, RuntimeConfigError> {
+        config.validate()?;
+
+        Ok(Self {
+            policies: config.policies.clone(),
+            layers: config.enabled_layers(),
+        })
+    }
+
+    #[must_use]
+    pub fn policies(&self) -> &[PathBuf] {
+        &self.policies
+    }
+
+    #[must_use]
+    pub fn layers(&self) -> &[GovernanceLayer] {
+        &self.layers
+    }
+
+    #[must_use]
+    pub fn contains_layer(&self, layer: GovernanceLayer) -> bool {
+        self.layers.contains(&layer)
     }
 }
 
@@ -113,6 +157,14 @@ impl GovernanceLayer {
     }
 }
 
+pub fn validate_policy_path(path: &Path) -> Result<(), RuntimeConfigError> {
+    if path.as_os_str().is_empty() {
+        Err(RuntimeConfigError::EmptyPolicyPath)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{GovernanceLayer, RuntimeConfig, RuntimeConfigError};
@@ -156,6 +208,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_policy_paths() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": [""],
+              "governance": {
+                "browser_cdp": { "enabled": true }
+              }
+            }
+            "#,
+        );
+
+        assert_eq!(error, Err(RuntimeConfigError::EmptyPolicyPath));
+    }
+
+    #[test]
     fn rejects_config_without_enabled_governance_layers() {
         let error = RuntimeConfig::from_json_str(
             r#"
@@ -167,5 +235,28 @@ mod tests {
         );
 
         assert_eq!(error, Err(RuntimeConfigError::NoGovernanceLayers));
+    }
+
+    #[test]
+    fn creates_start_plan_from_config() -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json", "policies/terminal.json"],
+              "governance": {
+                "browser_cdp": { "enabled": true },
+                "terminal": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let plan = config.start_plan()?;
+
+        assert_eq!(plan.policies().len(), 2);
+        assert!(plan.contains_layer(GovernanceLayer::BrowserCdp));
+        assert!(plan.contains_layer(GovernanceLayer::Terminal));
+        assert!(!plan.contains_layer(GovernanceLayer::Mcp));
+
+        Ok(())
     }
 }

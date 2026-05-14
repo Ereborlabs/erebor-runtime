@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::{Args, Parser, Subcommand};
-use erebor_runtime_core::{GovernanceLayer, RuntimeConfig, RuntimeConfigError};
+use erebor_runtime_core::{GovernanceLayer, RuntimeConfig, RuntimeConfigError, RuntimeStartPlan};
 use thiserror::Error;
 
 #[derive(Debug, Parser)]
@@ -24,12 +24,12 @@ impl Cli {
     pub(crate) fn execute(&self) -> Result<(), CliError> {
         match &self.command {
             Command::Start(args) => {
-                let config = read_runtime_config(&args.config)?;
+                let plan = build_start_plan(&args.config)?;
                 println!(
                     "start config={} listen={} governance={}",
                     args.config.display(),
                     args.listen,
-                    format_layers(&config.enabled_layers())
+                    format_layers(plan.layers())
                 );
             }
             _ => println!("{}", self.command),
@@ -194,6 +194,12 @@ fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, CliError> {
     })?;
 
     RuntimeConfig::from_json_str(&source).map_err(CliError::InvalidConfig)
+}
+
+fn build_start_plan(path: &Path) -> Result<RuntimeStartPlan, CliError> {
+    read_runtime_config(path)?
+        .start_plan()
+        .map_err(CliError::InvalidConfig)
 }
 
 fn format_layers(layers: &[GovernanceLayer]) -> String {
