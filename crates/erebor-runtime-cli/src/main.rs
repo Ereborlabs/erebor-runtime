@@ -5,5 +5,8 @@ use cli::Cli;
 
 fn main() {
     let cli = Cli::parse();
-    cli.execute();
+    if let Err(error) = cli.execute() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
 }

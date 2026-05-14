@@ -7,6 +7,8 @@ repository.workspace = true
 
 [dependencies]
 clap.workspace = true
+erebor-runtime-core = { path = "../erebor-runtime-core" }
+thiserror.workspace = true
 
 [[bin]]
 name = "erebor-runtime"

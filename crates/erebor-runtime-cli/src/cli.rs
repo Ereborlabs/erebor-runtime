@@ -1,10 +1,12 @@
 use std::{
-    fmt,
+    fmt, fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
 };
 
 use clap::{Args, Parser, Subcommand};
+use erebor_runtime_core::{GovernanceLayer, RuntimeConfig, RuntimeConfigError};
+use thiserror::Error;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -19,8 +21,21 @@ pub(crate) struct Cli {
 }
 
 impl Cli {
-    pub(crate) fn execute(&self) {
-        println!("{}", self.command);
+    pub(crate) fn execute(&self) -> Result<(), CliError> {
+        match &self.command {
+            Command::Start(args) => {
+                let config = read_runtime_config(&args.config)?;
+                println!(
+                    "start config={} listen={} governance={}",
+                    args.config.display(),
+                    args.listen,
+                    format_layers(&config.enabled_layers())
+                );
+            }
+            _ => println!("{}", self.command),
+        }
+
+        Ok(())
     }
 }
 
@@ -172,8 +187,39 @@ fn parse_non_empty_path(value: &str) -> Result<PathBuf, String> {
     }
 }
 
+fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, CliError> {
+    let source = fs::read_to_string(path).map_err(|error| CliError::ReadConfig {
+        path: path.to_path_buf(),
+        source: error,
+    })?;
+
+    RuntimeConfig::from_json_str(&source).map_err(CliError::InvalidConfig)
+}
+
+fn format_layers(layers: &[GovernanceLayer]) -> String {
+    layers
+        .iter()
+        .map(|layer| layer.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum CliError {
+    #[error("failed to read runtime config `{}`: {source}", path.display())]
+    ReadConfig { path: PathBuf, source: io::Error },
+    #[error("{0}")]
+    InvalidConfig(#[from] RuntimeConfigError),
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use clap::{CommandFactory, Parser};
 
     use super::Cli;
@@ -197,6 +243,55 @@ mod tests {
         let cli = Cli::try_parse_from(["erebor-runtime", "start", "--config", "erebor.json"]);
 
         assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn start_loads_runtime_config() -> Result<(), Box<dyn std::error::Error>> {
+        let config_path = write_temp_config(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "governance": {
+                "browser_cdp": { "enabled": true },
+                "terminal": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "start",
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+        ])?;
+
+        cli.execute()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn start_rejects_invalid_runtime_config() -> Result<(), Box<dyn std::error::Error>> {
+        let config_path = write_temp_config(
+            r#"
+            {
+              "policies": [],
+              "governance": {
+                "browser_cdp": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "start",
+            "--config",
+            config_path.to_string_lossy().as_ref(),
+        ])?;
+
+        assert!(cli.execute().is_err());
+
+        Ok(())
     }
 
     #[test]
@@ -232,5 +327,17 @@ mod tests {
     #[test]
     fn clap_debug_assertions_pass() {
         Cli::command().debug_assert();
+    }
+
+    fn write_temp_config(source: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "erebor-runtime-cli-{nanos}-{}.json",
+            std::process::id()
+        ));
+
+        fs::write(&path, source)?;
+
+        Ok(path)
     }
 }

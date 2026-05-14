@@ -8,6 +8,8 @@ repository.workspace = true
 [dependencies]
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
