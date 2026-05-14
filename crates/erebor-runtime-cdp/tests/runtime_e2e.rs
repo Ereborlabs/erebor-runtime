@@ -4,21 +4,40 @@ use erebor_runtime_core::GovernanceLayer;
 use erebor_runtime_e2e::E2eError;
 use serde_json::{json, Value};
 
+#[path = "support/common.rs"]
+mod common;
+#[path = "support/runtime.rs"]
 mod support;
 
 use support::{
-    allow_all_policy, deny_script_eval_policy, real_chrome_available,
+    allow_all_policy, create_governed_session_with_mini_upstream, deny_payload_script_eval_policy,
+    deny_script_eval_policy, deny_target_script_eval_policy, real_chrome_available,
     require_approval_script_eval_policy, CdpE2eHarness,
 };
 
 #[tokio::test]
+async fn browser_session_manager_creates_governed_session_with_public_auth_endpoint(
+) -> Result<(), E2eError> {
+    let session = create_governed_session_with_mini_upstream(allow_all_policy()?).await?;
+
+    assert!(!session.owns_browser());
+    assert!(session.public_endpoint().starts_with("ws://127.0.0.1:"));
+    assert!(session.public_endpoint().contains("erebor_session="));
+    assert_eq!(
+        session.metadata().public_endpoint,
+        session.public_endpoint()
+    );
+    assert_eq!(session.metadata().session_id.as_str(), "e2e-cdp-session");
+    Ok(())
+}
+
+#[tokio::test]
 async fn browser_cdp_runtime_starts_and_forwards_allowed_commands() -> Result<(), E2eError> {
     let mut harness = CdpE2eHarness::start_runtime_with_mini_upstream(allow_all_policy()?).await?;
-    let running_runtime = harness
-        .running_runtime()
-        .ok_or_else(|| E2eError::closed("browser CDP runtime status"))?;
+    let running_runtime = harness.running_runtime();
 
     assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
+    assert!(harness.endpoint().contains("erebor_session="));
     let response = harness
         .send_command(json!({
             "id": 1,
@@ -74,9 +93,7 @@ async fn browser_cdp_runtime_holds_approval_required_commands_before_upstream(
     let mut harness =
         CdpE2eHarness::start_runtime_with_mini_upstream(require_approval_script_eval_policy()?)
             .await?;
-    let running_runtime = harness
-        .running_runtime()
-        .ok_or_else(|| E2eError::closed("browser CDP runtime status"))?;
+    let running_runtime = harness.running_runtime();
 
     assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
     harness
@@ -99,6 +116,143 @@ async fn browser_cdp_runtime_holds_approval_required_commands_before_upstream(
 }
 
 #[tokio::test]
+async fn browser_cdp_runtime_executes_commands_against_owned_chrome() -> Result<(), E2eError> {
+    if !real_chrome_available() {
+        return Ok(());
+    }
+
+    let harness = CdpE2eHarness::start_runtime_with_owned_browser(allow_all_policy()?).await?;
+    let running_runtime = harness.running_runtime();
+
+    assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
+    assert!(harness.endpoint().contains("erebor_session="));
+    let response = harness
+        .send_command(json!({
+            "id": 21,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "window.__erebor = 'owned-allowed'; window.__erebor",
+                "returnByValue": true
+            }
+        }))
+        .await?;
+
+    assert_eq!(
+        response.pointer("/result/result/value"),
+        Some(&Value::String(String::from("owned-allowed")))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_cdp_runtime_blocks_owned_chrome_script_eval_side_effects() -> Result<(), E2eError>
+{
+    if !real_chrome_available() {
+        return Ok(());
+    }
+
+    let harness = CdpE2eHarness::start_runtime_with_owned_browser(deny_payload_script_eval_policy(
+        "owned-denied",
+    )?)
+    .await?;
+    let denied = harness
+        .send_command(json!({
+            "id": 22,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "window.__erebor = 'owned-denied'; window.__erebor",
+                "returnByValue": true
+            }
+        }))
+        .await?;
+    let browser_state = harness
+        .send_command(json!({
+            "id": 23,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "window.__erebor ?? null",
+                "returnByValue": true
+            }
+        }))
+        .await?;
+
+    assert_eq!(denied.pointer("/id"), Some(&Value::from(22)));
+    assert_eq!(
+        denied.pointer("/error/message"),
+        Some(&Value::String(String::from(
+            "script payload denied by e2e policy"
+        )))
+    );
+    assert_eq!(
+        browser_state.pointer("/result/result/value"),
+        Some(&Value::Null)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_cdp_runtime_applies_policy_to_owned_page_context() -> Result<(), E2eError> {
+    if !real_chrome_available() {
+        return Ok(());
+    }
+
+    let harness = CdpE2eHarness::start_runtime_with_owned_browser(deny_target_script_eval_policy(
+        "mail.example.test",
+    )?)
+    .await?;
+    harness
+        .send_command(json!({
+            "id": 31,
+            "method": "Page.navigate",
+            "params": {
+                "url": "data:text/html,mail.example.test"
+            }
+        }))
+        .await?;
+    let denied = harness
+        .send_command(json!({
+            "id": 32,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "window.__erebor = 'blocked-by-page-context'; window.__erebor",
+                "returnByValue": true
+            }
+        }))
+        .await?;
+    harness
+        .send_command(json!({
+            "id": 33,
+            "method": "Page.navigate",
+            "params": {
+                "url": "about:blank"
+            }
+        }))
+        .await?;
+    let allowed = harness
+        .send_command(json!({
+            "id": 34,
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "window.__erebor = 'allowed-by-page-context'; window.__erebor",
+                "returnByValue": true
+            }
+        }))
+        .await?;
+
+    assert_eq!(
+        denied.pointer("/error/message"),
+        Some(&Value::String(String::from(
+            "script evaluation denied for this page"
+        )))
+    );
+    assert_eq!(
+        allowed.pointer("/result/result/value"),
+        Some(&Value::String(String::from("allowed-by-page-context")))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "slow real Chrome validation"]
 async fn browser_cdp_runtime_executes_governed_commands_against_real_chrome() -> Result<(), E2eError>
 {
@@ -107,9 +261,7 @@ async fn browser_cdp_runtime_executes_governed_commands_against_real_chrome() ->
     }
 
     let harness = CdpE2eHarness::start_runtime_with_real_chrome(allow_all_policy()?).await?;
-    let running_runtime = harness
-        .running_runtime()
-        .ok_or_else(|| E2eError::closed("browser CDP runtime status"))?;
+    let running_runtime = harness.running_runtime();
 
     assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
     let response = harness
@@ -152,9 +304,7 @@ async fn browser_cdp_runtime_blocks_real_chrome_script_eval_side_effects() -> Re
     }
 
     let harness = CdpE2eHarness::start_runtime_with_real_chrome(deny_script_eval_policy()?).await?;
-    let running_runtime = harness
-        .running_runtime()
-        .ok_or_else(|| E2eError::closed("browser CDP runtime status"))?;
+    let running_runtime = harness.running_runtime();
 
     assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
     let response = harness

@@ -6,14 +6,19 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{
-    accept_async, connect_async,
-    tungstenite::{Error as WebSocketError, Message},
+    accept_hdr_async, connect_async,
+    tungstenite::{
+        handshake::server::{ErrorResponse, Request, Response},
+        http::StatusCode,
+        Error as WebSocketError, Message,
+    },
 };
 use tracing::{debug, info, warn};
 
 use crate::{
-    decode_cdp_command, decode_cdp_event, enforce_cdp_command, observe_cdp_event, CdpCommand,
-    CdpEnforcementAction, CdpError, CdpSessionContext,
+    decode_cdp_command, decode_cdp_event, enforce_cdp_command_with_session_state,
+    observe_cdp_event, CdpCommand, CdpEnforcementAction, CdpError, CdpSessionContext,
+    CdpSessionState,
 };
 
 type CdpEngine = LocalEnforcementEngine<PolicySet>;
@@ -23,6 +28,7 @@ pub struct CdpProxyServerConfig {
     pub listen: SocketAddr,
     pub browser_url: String,
     pub context: CdpSessionContext,
+    pub auth_token: Option<String>,
 }
 
 pub struct CdpProxyServer {
@@ -30,6 +36,8 @@ pub struct CdpProxyServer {
     browser_url: String,
     engine: Arc<CdpEngine>,
     context: CdpSessionContext,
+    auth_token: Option<String>,
+    session_state: CdpSessionState,
 }
 
 impl CdpProxyServer {
@@ -44,11 +52,15 @@ impl CdpProxyServer {
             "CDP proxy server bound"
         );
 
+        let session_state = CdpSessionState::from_browser_url(&config.browser_url);
+
         Ok(Self {
             listener,
             browser_url: config.browser_url,
             engine: Arc::new(engine),
             context: config.context,
+            auth_token: config.auth_token,
+            session_state,
         })
     }
 
@@ -65,9 +77,20 @@ impl CdpProxyServer {
             let browser_url = self.browser_url.clone();
             let engine = Arc::clone(&self.engine);
             let context = self.context.clone();
+            let auth_token = self.auth_token.clone();
+            let session_state = self.session_state.clone();
             debug!(client = %address, "accepted CDP proxy connection");
             let handle = tokio::spawn(async move {
-                match proxy_connection(stream, browser_url, engine, context).await {
+                match proxy_connection(
+                    stream,
+                    browser_url,
+                    engine,
+                    context,
+                    auth_token,
+                    session_state,
+                )
+                .await
+                {
                     Ok(()) => debug!(client = %address, "CDP proxy connection closed"),
                     Err(error) => {
                         warn!(
@@ -88,9 +111,13 @@ async fn proxy_connection(
     browser_url: String,
     engine: Arc<CdpEngine>,
     context: CdpSessionContext,
+    auth_token: Option<String>,
+    session_state: CdpSessionState,
 ) -> Result<(), CdpError> {
     debug!("accepting client websocket");
-    let client_socket = accept_async(stream).await.map_err(websocket_error)?;
+    let client_socket = accept_client(stream, auth_token)
+        .await
+        .map_err(websocket_error)?;
     debug!(browser_url = %browser_url, "connecting to upstream CDP websocket");
     let (browser_socket, _response) = connect_async(browser_url.as_str())
         .await
@@ -108,7 +135,7 @@ async fn proxy_connection(
 
                 if client_message.is_text() {
                     let source = client_message.into_text().map_err(websocket_error)?.to_string();
-                    match handle_client_text(engine.as_ref(), &context, &source)? {
+                    match handle_client_text(engine.as_ref(), &context, &session_state, &source)? {
                         ClientTextAction::Forward { payload } => {
                             browser_write
                                 .send(Message::Text(payload.into()))
@@ -142,7 +169,7 @@ async fn proxy_connection(
 
                 if browser_message.is_text() {
                     let source = browser_message.into_text().map_err(websocket_error)?.to_string();
-                    observe_browser_text(&context, &source)?;
+                    observe_browser_text(&context, &session_state, &source)?;
                     client_write
                         .send(Message::Text(source.into()))
                         .await
@@ -164,6 +191,38 @@ async fn proxy_connection(
     Ok(())
 }
 
+async fn accept_client(
+    stream: TcpStream,
+    auth_token: Option<String>,
+) -> Result<tokio_tungstenite::WebSocketStream<TcpStream>, WebSocketError> {
+    let callback = move |request: &Request, response: Response| {
+        if let Some(expected_token) = auth_token.as_deref() {
+            if !request_has_auth_token(request, expected_token) {
+                return Err(unauthorized_response());
+            }
+        }
+
+        Ok(response)
+    };
+
+    accept_hdr_async(stream, callback).await
+}
+
+fn request_has_auth_token(request: &Request, expected_token: &str) -> bool {
+    request.uri().query().is_some_and(|query| {
+        query.split('&').any(|pair| {
+            pair.split_once('=')
+                .is_some_and(|(name, value)| name == "erebor_session" && value == expected_token)
+        })
+    })
+}
+
+fn unauthorized_response() -> ErrorResponse {
+    let mut response = ErrorResponse::new(Some(String::from("missing or invalid erebor_session")));
+    *response.status_mut() = StatusCode::UNAUTHORIZED;
+    response
+}
+
 #[derive(Debug, PartialEq)]
 enum ClientTextAction {
     Forward { payload: String },
@@ -174,12 +233,16 @@ enum ClientTextAction {
 fn handle_client_text(
     engine: &CdpEngine,
     context: &CdpSessionContext,
+    session_state: &CdpSessionState,
     source: &str,
 ) -> Result<ClientTextAction, CdpError> {
     let command = decode_cdp_command(source)?;
 
-    match enforce_cdp_command(engine, context, &command)? {
+    match enforce_cdp_command_with_session_state(engine, context, &command, session_state)? {
         CdpEnforcementAction::Forward => {
+            if let Some(command) = command.protocol_command() {
+                session_state.record_forwarded_command(command);
+            }
             debug!(
                 method = %command.method,
                 id = ?command.id,
@@ -212,12 +275,17 @@ fn handle_client_text(
     }
 }
 
-fn observe_browser_text(context: &CdpSessionContext, source: &str) -> Result<(), CdpError> {
+fn observe_browser_text(
+    context: &CdpSessionContext,
+    session_state: &CdpSessionState,
+    source: &str,
+) -> Result<(), CdpError> {
     let event = match decode_cdp_event(source) {
         Ok(Some(event)) => event,
         Ok(None) | Err(CdpError::InvalidJson { .. }) => return Ok(()),
         Err(error) => return Err(error),
     };
+    session_state.record_browser_event(&event);
     let runtime_event = observe_cdp_event(context, &event)?;
     debug!(
         method = %event.method(),
@@ -248,8 +316,12 @@ mod tests {
     use erebor_runtime_policy::{LocalPolicy, PolicySet};
     use serde_json::json;
 
-    use super::{handle_client_text, observe_browser_text, ClientTextAction};
-    use crate::CdpSessionContext;
+    use tokio_tungstenite::tungstenite::http::Request;
+
+    use super::{
+        handle_client_text, observe_browser_text, request_has_auth_token, ClientTextAction,
+    };
+    use crate::{CdpSessionContext, CdpSessionState};
 
     fn context() -> CdpSessionContext {
         CdpSessionContext {
@@ -271,7 +343,7 @@ mod tests {
             ]));
         let source = r#"{ "id": 1, "method": "Page.navigate", "params": { "url": "https://example.com/" } }"#;
 
-        let action = handle_client_text(&engine, &context(), source)?;
+        let action = handle_client_text(&engine, &context(), &CdpSessionState::default(), source)?;
 
         assert_eq!(
             action,
@@ -308,7 +380,7 @@ mod tests {
         let source =
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#;
 
-        let action = handle_client_text(&engine, &context(), source)?;
+        let action = handle_client_text(&engine, &context(), &CdpSessionState::default(), source)?;
 
         assert_eq!(
             action,
@@ -351,7 +423,7 @@ mod tests {
         let source =
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#;
 
-        let action = handle_client_text(&engine, &context(), source)?;
+        let action = handle_client_text(&engine, &context(), &CdpSessionState::default(), source)?;
 
         assert_eq!(action, ClientTextAction::HoldForApproval);
         Ok(())
@@ -359,8 +431,25 @@ mod tests {
 
     #[test]
     fn browser_text_ignores_command_responses() -> Result<(), Box<dyn std::error::Error>> {
-        observe_browser_text(&context(), r#"{ "id": 1, "result": {} }"#)?;
+        observe_browser_text(
+            &context(),
+            &CdpSessionState::default(),
+            r#"{ "id": 1, "result": {} }"#,
+        )?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn auth_token_is_required_when_configured() -> Result<(), Box<dyn std::error::Error>> {
+        let request = Request::builder()
+            .uri("/?erebor_session=session-token")
+            .body(())?;
+        let missing = Request::builder().uri("/").body(())?;
+
+        assert!(request_has_auth_token(&request, "session-token"));
+        assert!(!request_has_auth_token(&request, "other-token"));
+        assert!(!request_has_auth_token(&missing, "session-token"));
         Ok(())
     }
 }

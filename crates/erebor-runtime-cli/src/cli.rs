@@ -233,6 +233,7 @@ fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<RuntimeLaunchPlan,
                 enabled: true,
                 browser_url: Some(args.browser_url.as_str().to_owned()),
                 listen: args.listen,
+                browser: Default::default(),
             },
             ..GovernanceLayers::default()
         },
@@ -601,7 +602,7 @@ mod tests {
         assert_eq!(browser_cdp.listen(), "127.0.0.1:3738".parse()?);
         assert_eq!(
             browser_cdp.browser_url(),
-            "ws://127.0.0.1:9222/devtools/browser/demo"
+            Some("ws://127.0.0.1:9222/devtools/browser/demo")
         );
 
         let _result = fs::remove_file(config_path);
@@ -629,7 +630,7 @@ mod tests {
         assert_eq!(browser_cdp.listen(), "127.0.0.1:3738".parse()?);
         assert_eq!(
             browser_cdp.browser_url(),
-            "ws://127.0.0.1:9222/devtools/browser/demo"
+            Some("ws://127.0.0.1:9222/devtools/browser/demo")
         );
         Ok(())
     }

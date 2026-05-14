@@ -103,6 +103,70 @@ impl CdpEvent {
                 params: params_value(&event.params)?,
                 protocol: ProtocolEvent::NetworkLoadingFailed(event),
             },
+            ProtocolEvent::PageFrameNavigated(event) => Self {
+                method: "Page.frameNavigated",
+                event_id: event.params.frame.id.clone(),
+                target: target_ref(
+                    Some(event.params.frame.id.clone()),
+                    non_empty(&event.params.frame.url),
+                ),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::PageFrameNavigated(event),
+            },
+            ProtocolEvent::PageNavigatedWithinDocument(event) => Self {
+                method: "Page.navigatedWithinDocument",
+                event_id: event.params.frame_id.clone(),
+                target: target_ref(
+                    Some(event.params.frame_id.clone()),
+                    non_empty(&event.params.url),
+                ),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::PageNavigatedWithinDocument(event),
+            },
+            ProtocolEvent::RuntimeExecutionContextCreated(event) => Self {
+                method: "Runtime.executionContextCreated",
+                event_id: event.params.context.id.to_string(),
+                target: target_ref(
+                    Some(event.params.context.id.to_string()),
+                    non_empty(&event.params.context.origin),
+                ),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::RuntimeExecutionContextCreated(event),
+            },
+            ProtocolEvent::TargetCreated(event) => Self {
+                method: "Target.targetCreated",
+                event_id: event.params.target_info.target_id.clone(),
+                target: target_ref(
+                    Some(event.params.target_info.target_id.clone()),
+                    non_empty(&event.params.target_info.url),
+                ),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::TargetCreated(event),
+            },
+            ProtocolEvent::TargetDestroyed(event) => Self {
+                method: "Target.targetDestroyed",
+                event_id: event.params.target_id.clone(),
+                target: target_ref(Some(event.params.target_id.clone()), None),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::TargetDestroyed(event),
+            },
+            ProtocolEvent::TargetCrashed(event) => Self {
+                method: "Target.targetCrashed",
+                event_id: event.params.target_id.clone(),
+                target: target_ref(Some(event.params.target_id.clone()), None),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::TargetCrashed(event),
+            },
+            ProtocolEvent::TargetInfoChanged(event) => Self {
+                method: "Target.targetInfoChanged",
+                event_id: event.params.target_info.target_id.clone(),
+                target: target_ref(
+                    Some(event.params.target_info.target_id.clone()),
+                    non_empty(&event.params.target_info.url),
+                ),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::TargetInfoChanged(event),
+            },
             _ => return Ok(None),
         };
 

@@ -3,7 +3,7 @@ use erebor_runtime_events::{ActorIdentity, EventId, RiskMetadata, RuntimeEvent, 
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
 use serde_json::{json, Value};
 
-use crate::{classify_cdp_method, CdpCommand, CdpError, CdpEvent};
+use crate::{classify_cdp_method, CdpCommand, CdpError, CdpEvent, CdpSessionState};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpSessionContext {
@@ -29,11 +29,25 @@ where
     A: ApprovalProvider,
     S: AuditSink,
 {
+    enforce_cdp_command_with_session_state(engine, context, command, &CdpSessionState::default())
+}
+
+pub fn enforce_cdp_command_with_session_state<E, A, S>(
+    engine: &LocalEnforcementEngine<E, A, S>,
+    context: &CdpSessionContext,
+    command: &CdpCommand,
+    session_state: &CdpSessionState,
+) -> Result<CdpEnforcementAction, CdpError>
+where
+    E: PolicyEvaluator,
+    A: ApprovalProvider,
+    S: AuditSink,
+{
     if command.protocol_command().is_none() {
         return Ok(CdpEnforcementAction::Forward);
     }
 
-    let event = normalize_cdp_command(context, command)?;
+    let event = normalize_cdp_command(context, command, session_state)?;
     let outcome = engine
         .enforce_with_deferred_approval(&event)
         .map_err(CdpError::enforcement)?;
@@ -60,6 +74,7 @@ pub fn observe_cdp_event(
 fn normalize_cdp_command(
     context: &CdpSessionContext,
     command: &CdpCommand,
+    session_state: &CdpSessionState,
 ) -> Result<RuntimeEvent, CdpError> {
     let classification = classify_cdp_method(&command.method)
         .ok_or_else(|| CdpError::unsupported_method(command.method.clone()))?;
@@ -74,8 +89,11 @@ fn normalize_cdp_command(
         actor: context.actor.clone(),
         surface: classification.surface,
         action: classification.action,
-        target: protocol_command.target(),
-        payload: command_payload(command)?,
+        target: session_state.target_for_command(protocol_command),
+        payload: command_payload(
+            command,
+            session_state.command_page_payload(protocol_command),
+        )?,
         risk: RiskMetadata {
             level: classification.risk_level,
             reasons: vec![format!("governed CDP method `{}`", command.method)],
@@ -111,7 +129,7 @@ fn event_id_from_command(command: &CdpCommand) -> Result<String, CdpError> {
     Ok(command.id.to_string())
 }
 
-fn command_payload(command: &CdpCommand) -> Result<Value, CdpError> {
+fn command_payload(command: &CdpCommand, page_context: Value) -> Result<Value, CdpError> {
     let params = command
         .params()
         .ok_or_else(|| CdpError::unsupported_method(command.method.clone()))?;
@@ -120,6 +138,7 @@ fn command_payload(command: &CdpCommand) -> Result<Value, CdpError> {
         "kind": "command",
         "method": command.method,
         "message_id": command.id,
+        "page": page_context,
         "params": params,
     }))
 }
@@ -150,8 +169,11 @@ mod tests {
     use erebor_runtime_policy::{Decision, LocalPolicy};
     use serde_json::json;
 
-    use super::{enforce_cdp_command, observe_cdp_event, CdpEnforcementAction, CdpSessionContext};
-    use crate::{decode_cdp_command, decode_cdp_event};
+    use super::{
+        enforce_cdp_command, enforce_cdp_command_with_session_state, observe_cdp_event,
+        CdpEnforcementAction, CdpSessionContext,
+    };
+    use crate::{decode_cdp_command, decode_cdp_event, CdpSessionState};
 
     fn context() -> CdpSessionContext {
         CdpSessionContext {
@@ -251,6 +273,52 @@ mod tests {
     }
 
     #[test]
+    fn script_eval_policy_can_match_active_page_context() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let policy = LocalPolicy::from_json_str(
+            r#"
+            {
+              "rules": [
+                {
+                  "id": "deny-email-send",
+                  "match": {
+                    "surface": "browser_cdp",
+                    "action": "browser_script_eval",
+                    "target_contains": "mail.example.test"
+                  },
+                  "decision": "deny",
+                  "reason": "email send is not allowed from this page"
+                }
+              ]
+            }
+            "#,
+        )?;
+        let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
+        let state = CdpSessionState::from_browser_url("ws://127.0.0.1:1/devtools/page/page-1");
+        let navigate = decode_cdp_command(
+            r#"{ "id": 1, "method": "Page.navigate", "params": { "url": "https://mail.example.test/compose" } }"#,
+        )?;
+        state.record_forwarded_command(
+            navigate
+                .protocol_command()
+                .ok_or_else(|| std::io::Error::other("missing navigate command"))?,
+        );
+        let send = decode_cdp_command(
+            r#"{ "id": 2, "method": "Runtime.evaluate", "params": { "expression": "send()" } }"#,
+        )?;
+
+        let action = enforce_cdp_command_with_session_state(&engine, &context(), &send, &state)?;
+
+        assert_eq!(
+            action,
+            CdpEnforcementAction::Block {
+                reason: String::from("email send is not allowed from this page")
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
     fn audits_forwarded_governed_navigation_with_full_record_fields(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let sink = RecordingAuditSink::default();
@@ -304,6 +372,11 @@ mod tests {
                 "kind": "command",
                 "method": "Page.navigate",
                 "message_id": 3,
+                "page": {
+                    "active_page": null,
+                    "command_page": null,
+                    "pages": []
+                },
                 "params": {
                     "url": "https://example.com/"
                 }
@@ -369,6 +442,11 @@ mod tests {
                 "kind": "command",
                 "method": "Runtime.evaluate",
                 "message_id": 9,
+                "page": {
+                    "active_page": null,
+                    "command_page": null,
+                    "pages": []
+                },
                 "params": {
                     "expression": "1 + 1"
                 }

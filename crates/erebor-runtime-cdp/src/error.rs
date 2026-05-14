@@ -42,6 +42,8 @@ pub enum CdpError {
         source: Box<WebSocketError>,
         location: Location,
     },
+    #[error("owned browser launch failed: {reason}")]
+    BrowserLaunch { reason: String, location: Location },
 }
 
 impl CdpError {
@@ -105,6 +107,14 @@ impl CdpError {
     pub fn websocket(source: WebSocketError) -> Self {
         Self::WebSocket {
             source: Box::new(source),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn browser_launch(reason: impl Into<String>) -> Self {
+        Self::BrowserLaunch {
+            reason: reason.into(),
             location: Location::default(),
         }
     }

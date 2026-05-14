@@ -44,12 +44,10 @@ impl RuntimeConfig {
         }
 
         if self.governance.browser_cdp.enabled {
-            let Some(browser_url) = self.governance.browser_cdp.browser_url.as_deref() else {
-                return Err(RuntimeConfigError::browser_cdp_missing_browser_url());
-            };
-
-            if !browser_url.starts_with("ws://") {
-                return Err(RuntimeConfigError::browser_cdp_invalid_browser_url());
+            if let Some(browser_url) = self.governance.browser_cdp.browser_url.as_deref() {
+                if !browser_url.starts_with("ws://") {
+                    return Err(RuntimeConfigError::browser_cdp_invalid_browser_url());
+                }
             }
         }
 
@@ -86,12 +84,8 @@ impl RuntimeStartPlan {
                 .enabled
                 .then(|| BrowserCdpRuntimeConfig {
                     listen: config.governance.browser_cdp.listen,
-                    browser_url: config
-                        .governance
-                        .browser_cdp
-                        .browser_url
-                        .clone()
-                        .unwrap_or_default(),
+                    browser_url: config.governance.browser_cdp.browser_url.clone(),
+                    browser: config.governance.browser_cdp.browser.clone().into(),
                 }),
         })
     }
@@ -166,6 +160,8 @@ pub struct BrowserCdpLayerConfig {
     pub browser_url: Option<String>,
     #[serde(default = "default_browser_cdp_listen")]
     pub listen: SocketAddr,
+    #[serde(default)]
+    pub browser: BrowserLaunchLayerConfig,
 }
 
 impl Default for BrowserCdpLayerConfig {
@@ -174,6 +170,27 @@ impl Default for BrowserCdpLayerConfig {
             enabled: false,
             browser_url: None,
             listen: default_browser_cdp_listen(),
+            browser: BrowserLaunchLayerConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct BrowserLaunchLayerConfig {
+    #[serde(default)]
+    pub executable: Option<PathBuf>,
+    #[serde(default)]
+    pub user_data_dir: Option<PathBuf>,
+    #[serde(default = "default_browser_headless")]
+    pub headless: bool,
+}
+
+impl Default for BrowserLaunchLayerConfig {
+    fn default() -> Self {
+        Self {
+            executable: None,
+            user_data_dir: None,
+            headless: default_browser_headless(),
         }
     }
 }
@@ -187,7 +204,8 @@ pub struct GovernanceLayerConfig {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserCdpRuntimeConfig {
     listen: SocketAddr,
-    browser_url: String,
+    browser_url: Option<String>,
+    browser: BrowserLaunchConfig,
 }
 
 impl BrowserCdpRuntimeConfig {
@@ -197,8 +215,52 @@ impl BrowserCdpRuntimeConfig {
     }
 
     #[must_use]
-    pub fn browser_url(&self) -> &str {
-        &self.browser_url
+    pub fn browser_url(&self) -> Option<&str> {
+        self.browser_url.as_deref()
+    }
+
+    #[must_use]
+    pub const fn browser(&self) -> &BrowserLaunchConfig {
+        &self.browser
+    }
+
+    #[must_use]
+    pub const fn owns_browser(&self) -> bool {
+        self.browser_url.is_none()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BrowserLaunchConfig {
+    executable: Option<PathBuf>,
+    user_data_dir: Option<PathBuf>,
+    headless: bool,
+}
+
+impl BrowserLaunchConfig {
+    #[must_use]
+    pub fn executable(&self) -> Option<&Path> {
+        self.executable.as_deref()
+    }
+
+    #[must_use]
+    pub fn user_data_dir(&self) -> Option<&Path> {
+        self.user_data_dir.as_deref()
+    }
+
+    #[must_use]
+    pub const fn headless(&self) -> bool {
+        self.headless
+    }
+}
+
+impl From<BrowserLaunchLayerConfig> for BrowserLaunchConfig {
+    fn from(config: BrowserLaunchLayerConfig) -> Self {
+        Self {
+            executable: config.executable,
+            user_data_dir: config.user_data_dir,
+            headless: config.headless,
+        }
     }
 }
 
@@ -240,9 +302,13 @@ fn default_browser_cdp_listen() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 0))
 }
 
+const fn default_browser_headless() -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
+    use std::{net::SocketAddr, path::Path};
 
     use crate::{GovernanceLayer, RuntimeConfig, RuntimeConfigError};
 
@@ -357,7 +423,7 @@ mod tests {
         assert!(!plan.contains_layer(GovernanceLayer::Mcp));
         assert_eq!(
             plan.browser_cdp().map(|config| config.browser_url()),
-            Some("ws://127.0.0.1:9222/devtools/browser/demo")
+            Some(Some("ws://127.0.0.1:9222/devtools/browser/demo"))
         );
         assert_eq!(
             plan.browser_cdp().map(|config| config.listen()),
@@ -368,22 +434,37 @@ mod tests {
     }
 
     #[test]
-    fn rejects_browser_cdp_without_browser_url() {
-        let error = RuntimeConfig::from_json_str(
+    fn creates_owned_browser_runtime_config_without_browser_url() -> Result<(), RuntimeConfigError>
+    {
+        let config = RuntimeConfig::from_json_str(
             r#"
             {
               "policies": ["policies/browser.json"],
               "governance": {
-                "browser_cdp": { "enabled": true }
+                "browser_cdp": {
+                  "enabled": true,
+                  "browser": {
+                    "headless": false,
+                    "user_data_dir": "/tmp/erebor-browser-profile"
+                  }
+                }
               }
             }
             "#,
-        );
+        )?;
+        let start_plan = config.start_plan()?;
+        let browser_cdp = start_plan
+            .browser_cdp()
+            .ok_or_else(RuntimeConfigError::no_governance_layers)?;
 
-        assert!(matches!(
-            error,
-            Err(RuntimeConfigError::BrowserCdpMissingBrowserUrl { .. })
-        ));
+        assert_eq!(browser_cdp.browser_url(), None);
+        assert!(browser_cdp.owns_browser());
+        assert!(!browser_cdp.browser().headless());
+        assert_eq!(
+            browser_cdp.browser().user_data_dir(),
+            Some(Path::new("/tmp/erebor-browser-profile"))
+        );
+        Ok(())
     }
 
     #[test]

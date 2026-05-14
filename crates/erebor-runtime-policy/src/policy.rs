@@ -28,6 +28,11 @@ impl PolicySet {
     pub fn from_policies(policies: Vec<LocalPolicy>) -> Self {
         Self { policies }
     }
+
+    #[must_use]
+    pub fn policy_count(&self) -> usize {
+        self.policies.len()
+    }
 }
 
 impl PolicyEvaluator for PolicySet {
@@ -140,6 +145,7 @@ struct EventMatcher {
     surface: Option<ExecutionSurface>,
     action: Option<ActionKind>,
     target_contains: Option<String>,
+    payload_contains: Option<String>,
     risk_at_least: Option<RiskLevel>,
 }
 
@@ -148,6 +154,7 @@ impl EventMatcher {
         self.surface.is_none()
             && self.action.is_none()
             && self.target_contains.is_none()
+            && self.payload_contains.is_none()
             && self.risk_at_least.is_none()
     }
 
@@ -163,6 +170,10 @@ impl EventMatcher {
                 .target_contains
                 .as_ref()
                 .is_none_or(|needle| target_contains(event, needle))
+            && self
+                .payload_contains
+                .as_ref()
+                .is_none_or(|needle| payload_contains(event, needle))
             && self
                 .risk_at_least
                 .as_ref()
@@ -186,4 +197,8 @@ fn target_contains(event: &RuntimeEvent, needle: &str) -> bool {
             .is_some_and(|label| label.contains(needle))
             || target.uri.as_ref().is_some_and(|uri| uri.contains(needle))
     })
+}
+
+fn payload_contains(event: &RuntimeEvent, needle: &str) -> bool {
+    event.payload.to_string().contains(needle)
 }

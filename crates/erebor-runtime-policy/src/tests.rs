@@ -28,6 +28,18 @@ fn event(surface: ExecutionSurface, action: ActionKind, risk: RiskLevel) -> Runt
     }
 }
 
+fn event_with_payload(
+    surface: ExecutionSurface,
+    action: ActionKind,
+    risk: RiskLevel,
+    payload: serde_json::Value,
+) -> RuntimeEvent {
+    RuntimeEvent {
+        payload,
+        ..event(surface, action, risk)
+    }
+}
+
 #[test]
 fn evaluates_first_matching_rule() -> Result<(), PolicyError> {
     let policy = LocalPolicy::from_json_str(
@@ -184,6 +196,50 @@ fn target_and_risk_matchers_work_together() -> Result<(), PolicyError> {
     ))?;
 
     assert_eq!(decision.rule_id(), Some("approve-delete-clicks"));
+
+    Ok(())
+}
+
+#[test]
+fn payload_matcher_can_target_specific_protocol_params() -> Result<(), PolicyError> {
+    let policy = LocalPolicy::from_json_str(
+        r#"
+        {
+          "rules": [
+            {
+              "id": "deny-specific-script",
+              "match": {
+                "surface": "browser_cdp",
+                "action": "browser_script_eval",
+                "payload_contains": "owned-denied"
+              },
+              "decision": "deny",
+              "reason": "script payload denied"
+            }
+          ]
+        }
+        "#,
+    )?;
+    let decision = policy.evaluate(&event_with_payload(
+        ExecutionSurface::BrowserCdp,
+        ActionKind::BrowserScriptEval,
+        RiskLevel::High,
+        serde_json::json!({
+            "kind": "command",
+            "method": "Runtime.evaluate",
+            "params": {
+                "expression": "window.__erebor = 'owned-denied'"
+            }
+        }),
+    ))?;
+
+    assert_eq!(
+        decision,
+        Decision::Deny {
+            reason: String::from("script payload denied"),
+            rule_id: Some(String::from("deny-specific-script"))
+        }
+    );
 
     Ok(())
 }

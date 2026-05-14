@@ -1,15 +1,19 @@
 //! Browser/CDP enforcement surface contracts for erebor-runtime.
 
+mod browser;
 mod error;
 mod message;
 mod protocol;
 mod proxy;
 mod runtime;
 mod server;
+mod state;
 
+pub use browser::{BrowserSessionManager, BrowserSessionMetadata, GovernedBrowserSession};
 pub use error::CdpError;
 pub use message::{
-    enforce_cdp_command, observe_cdp_event, CdpEnforcementAction, CdpSessionContext,
+    enforce_cdp_command, enforce_cdp_command_with_session_state, observe_cdp_event,
+    CdpEnforcementAction, CdpSessionContext,
 };
 pub use protocol::{
     decode_cdp_command, decode_cdp_event, CdpCommand, CdpEvent, GovernedCdpCommand,
@@ -17,6 +21,7 @@ pub use protocol::{
 pub use proxy::{proxy_cdp_message, CdpBackend, CdpBackendResponse, CdpProxyAction};
 pub use runtime::BrowserCdpRuntime;
 pub use server::{CdpProxyServer, CdpProxyServerConfig};
+pub use state::{CdpSessionSnapshot, CdpSessionState, PageStatus, PageStatusKind};
 
 use cdp_protocol::{fetch, input, page, runtime as cdp_runtime, types::Method};
 use erebor_runtime_events::{ActionKind, ExecutionSurface, RiskLevel};
@@ -35,6 +40,13 @@ pub const CONTEXT_CDP_METHODS: &[&str] = &[
     "Network.requestWillBeSent",
     "Network.responseReceived",
     "Network.loadingFailed",
+    "Page.frameNavigated",
+    "Page.navigatedWithinDocument",
+    "Runtime.executionContextCreated",
+    "Target.targetCreated",
+    "Target.targetDestroyed",
+    "Target.targetCrashed",
+    "Target.targetInfoChanged",
 ];
 
 #[must_use]
@@ -83,6 +95,24 @@ pub fn classify_cdp_method(method: &str) -> Option<CdpCommandClassification> {
         "Network.requestWillBeSent" | "Network.responseReceived" | "Network.loadingFailed" => (
             CdpMethodRole::ContextEvent,
             ActionKind::NetworkRequest,
+            RiskLevel::Low,
+        ),
+        "Page.frameNavigated" | "Page.navigatedWithinDocument" => (
+            CdpMethodRole::ContextEvent,
+            ActionKind::BrowserNavigate,
+            RiskLevel::Low,
+        ),
+        "Runtime.executionContextCreated" => (
+            CdpMethodRole::ContextEvent,
+            ActionKind::BrowserScriptEval,
+            RiskLevel::Low,
+        ),
+        "Target.targetCreated"
+        | "Target.targetDestroyed"
+        | "Target.targetCrashed"
+        | "Target.targetInfoChanged" => (
+            CdpMethodRole::ContextEvent,
+            ActionKind::BrowserNavigate,
             RiskLevel::Low,
         ),
         _ => return None,

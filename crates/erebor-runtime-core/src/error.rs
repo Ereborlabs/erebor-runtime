@@ -19,8 +19,6 @@ pub enum RuntimeConfigError {
     EmptyPolicyPath { location: Location },
     #[error("runtime config must enable at least one governance layer")]
     NoGovernanceLayers { location: Location },
-    #[error("runtime config browser_cdp requires browser_url when enabled")]
-    BrowserCdpMissingBrowserUrl { location: Location },
     #[error("runtime config browser_cdp browser_url must start with ws://")]
     BrowserCdpInvalidBrowserUrl { location: Location },
 }
@@ -88,13 +86,6 @@ impl RuntimeConfigError {
     #[track_caller]
     pub fn no_governance_layers() -> Self {
         Self::NoGovernanceLayers {
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    pub fn browser_cdp_missing_browser_url() -> Self {
-        Self::BrowserCdpMissingBrowserUrl {
             location: Location::default(),
         }
     }
