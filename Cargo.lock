@@ -20,6 +20,7 @@ version = "0.1.0"
 dependencies = [
  "erebor-runtime-events",
  "erebor-runtime-policy",
+ "serde_json",
  "thiserror",
 ]
 
@@ -36,6 +37,8 @@ name = "erebor-runtime-policy"
 version = "0.1.0"
 dependencies = [
  "erebor-runtime-events",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
