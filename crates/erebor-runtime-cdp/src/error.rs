@@ -14,6 +14,11 @@ pub enum CdpError {
         source: serde_json::Error,
         location: Location,
     },
+    #[error("CDP protocol message is invalid: {source}")]
+    InvalidProtocol {
+        source: serde_json::Error,
+        location: Location,
+    },
     #[error("CDP message id is required for governed commands")]
     MissingMessageId { location: Location },
     #[error("unsupported governed CDP method `{method}`")]
@@ -46,6 +51,14 @@ impl CdpError {
     #[track_caller]
     pub fn invalid_json(source: serde_json::Error) -> Self {
         Self::InvalidJson {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn invalid_protocol(source: serde_json::Error) -> Self {
+        Self::InvalidProtocol {
             source,
             location: Location::default(),
         }

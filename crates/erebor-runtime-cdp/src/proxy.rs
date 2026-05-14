@@ -2,7 +2,7 @@ use erebor_runtime_core::{ApprovalProvider, AuditSink, LocalEnforcementEngine};
 use erebor_runtime_policy::PolicyEvaluator;
 use serde_json::Value;
 
-use crate::{enforce_cdp_message, CdpEnforcementAction, CdpError, CdpMessage, CdpSessionContext};
+use crate::{enforce_cdp_command, CdpCommand, CdpEnforcementAction, CdpError, CdpSessionContext};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpBackendResponse {
@@ -10,7 +10,7 @@ pub struct CdpBackendResponse {
 }
 
 pub trait CdpBackend {
-    fn forward(&self, message: &CdpMessage) -> Result<CdpBackendResponse, CdpError>;
+    fn forward(&self, command: &CdpCommand) -> Result<CdpBackendResponse, CdpError>;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -24,7 +24,7 @@ pub fn proxy_cdp_message<E, A, S, B>(
     engine: &LocalEnforcementEngine<E, A, S>,
     context: &CdpSessionContext,
     backend: &B,
-    message: &CdpMessage,
+    command: &CdpCommand,
 ) -> Result<CdpProxyAction, CdpError>
 where
     E: PolicyEvaluator,
@@ -32,9 +32,9 @@ where
     S: AuditSink,
     B: CdpBackend,
 {
-    match enforce_cdp_message(engine, context, message)? {
+    match enforce_cdp_command(engine, context, command)? {
         CdpEnforcementAction::Forward => {
-            let response = backend.forward(message)?;
+            let response = backend.forward(command)?;
             Ok(CdpProxyAction::Forwarded { response })
         }
         CdpEnforcementAction::Block { reason } => Ok(CdpProxyAction::Block { reason }),
@@ -54,10 +54,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        proxy_cdp_message, CdpBackend, CdpBackendResponse, CdpMessage, CdpProxyAction,
+        proxy_cdp_message, CdpBackend, CdpBackendResponse, CdpCommand, CdpProxyAction,
         CdpSessionContext,
     };
-    use crate::parse_cdp_message;
+    use crate::decode_cdp_command;
 
     fn context() -> CdpSessionContext {
         CdpSessionContext {
@@ -75,9 +75,9 @@ mod tests {
         let policy = LocalPolicy::from_json_str(r#"{ "rules": [] }"#)?;
         let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
         let backend = RecordingBackend::default();
-        let message = parse_cdp_message(r#"{ "id": 1, "method": "Browser.getVersion" }"#)?;
+        let command = decode_cdp_command(r#"{ "id": 1, "method": "Browser.getVersion" }"#)?;
 
-        let action = proxy_cdp_message(&engine, &context(), &backend, &message)?;
+        let action = proxy_cdp_message(&engine, &context(), &backend, &command)?;
 
         assert_eq!(backend.forwarded.get(), 1);
         assert_eq!(
@@ -112,11 +112,11 @@ mod tests {
         )?;
         let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
         let backend = RecordingBackend::default();
-        let message = parse_cdp_message(
+        let command = decode_cdp_command(
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#,
         )?;
 
-        let action = proxy_cdp_message(&engine, &context(), &backend, &message)?;
+        let action = proxy_cdp_message(&engine, &context(), &backend, &command)?;
 
         assert_eq!(backend.forwarded.get(), 0);
         assert_eq!(
@@ -153,11 +153,11 @@ mod tests {
             erebor_runtime_core::NoopAuditSink,
         );
         let backend = RecordingBackend::default();
-        let message = parse_cdp_message(
+        let command = decode_cdp_command(
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#,
         )?;
 
-        let action = proxy_cdp_message(&engine, &context(), &backend, &message)?;
+        let action = proxy_cdp_message(&engine, &context(), &backend, &command)?;
 
         assert_eq!(backend.forwarded.get(), 0);
         assert_eq!(
@@ -187,11 +187,11 @@ mod tests {
     }
 
     impl CdpBackend for RecordingBackend {
-        fn forward(&self, message: &CdpMessage) -> Result<CdpBackendResponse, crate::CdpError> {
+        fn forward(&self, command: &CdpCommand) -> Result<CdpBackendResponse, crate::CdpError> {
             self.forwarded.set(self.forwarded.get() + 1);
 
             Ok(CdpBackendResponse {
-                payload: json!({ "forwarded_method": message.method }),
+                payload: json!({ "forwarded_method": command.method }),
             })
         }
     }

@@ -12,8 +12,8 @@ use tokio_tungstenite::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    enforce_cdp_message, observe_cdp_message, parse_cdp_message, CdpEnforcementAction, CdpError,
-    CdpMessage, CdpSessionContext,
+    decode_cdp_command, decode_cdp_event, enforce_cdp_command, observe_cdp_event, CdpCommand,
+    CdpEnforcementAction, CdpError, CdpSessionContext,
 };
 
 type CdpEngine = LocalEnforcementEngine<PolicySet>;
@@ -176,13 +176,13 @@ fn handle_client_text(
     context: &CdpSessionContext,
     source: &str,
 ) -> Result<ClientTextAction, CdpError> {
-    let message = parse_cdp_message(source)?;
+    let command = decode_cdp_command(source)?;
 
-    match enforce_cdp_message(engine, context, &message)? {
+    match enforce_cdp_command(engine, context, &command)? {
         CdpEnforcementAction::Forward => {
             debug!(
-                method = %message.method,
-                id = ?message.id,
+                method = %command.method,
+                id = ?command.id,
                 "forwarding CDP command"
             );
             Ok(ClientTextAction::Forward {
@@ -191,19 +191,19 @@ fn handle_client_text(
         }
         CdpEnforcementAction::Block { reason } => {
             warn!(
-                method = %message.method,
-                id = ?message.id,
+                method = %command.method,
+                id = ?command.id,
                 reason = %reason,
                 "blocking CDP command"
             );
             Ok(ClientTextAction::Reply {
-                payload: error_response(&message, -32000, &reason),
+                payload: error_response(&command, -32000, &reason),
             })
         }
         CdpEnforcementAction::AwaitApproval { reason } => {
             info!(
-                method = %message.method,
-                id = ?message.id,
+                method = %command.method,
+                id = ?command.id,
                 reason = %reason,
                 "holding CDP command for approval"
             );
@@ -213,25 +213,24 @@ fn handle_client_text(
 }
 
 fn observe_browser_text(context: &CdpSessionContext, source: &str) -> Result<(), CdpError> {
-    let message = match parse_cdp_message(source) {
-        Ok(message) => message,
-        Err(CdpError::InvalidJson { .. }) | Err(CdpError::MissingMethod { .. }) => return Ok(()),
+    let event = match decode_cdp_event(source) {
+        Ok(Some(event)) => event,
+        Ok(None) | Err(CdpError::InvalidJson { .. }) => return Ok(()),
         Err(error) => return Err(error),
     };
-    if observe_cdp_message(context, &message)?.is_some() {
-        debug!(
-            method = %message.method,
-            id = ?message.id,
-            "observed CDP context message"
-        );
-    }
+    let runtime_event = observe_cdp_event(context, &event)?;
+    debug!(
+        method = %event.method,
+        event_id = %runtime_event.id.as_str(),
+        "observed CDP context message"
+    );
 
     Ok(())
 }
 
-fn error_response(message: &CdpMessage, code: i64, reason: &str) -> Value {
+fn error_response(command: &CdpCommand, code: i64, reason: &str) -> Value {
     json!({
-        "id": message.id.clone().unwrap_or(Value::Null),
+        "id": command.id.clone().unwrap_or(Value::Null),
         "error": {
             "code": code,
             "message": reason

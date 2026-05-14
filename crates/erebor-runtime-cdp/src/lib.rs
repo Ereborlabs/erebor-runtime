@@ -2,28 +2,32 @@
 
 mod error;
 mod message;
+mod protocol;
 mod proxy;
 mod runtime;
 mod server;
 
 pub use error::CdpError;
 pub use message::{
-    enforce_cdp_message, observe_cdp_message, parse_cdp_message, CdpEnforcementAction, CdpMessage,
-    CdpSessionContext,
+    enforce_cdp_command, observe_cdp_event, CdpEnforcementAction, CdpSessionContext,
+};
+pub use protocol::{
+    decode_cdp_command, decode_cdp_event, CdpCommand, CdpEvent, ContextCdpEvent, GovernedCdpCommand,
 };
 pub use proxy::{proxy_cdp_message, CdpBackend, CdpBackendResponse, CdpProxyAction};
 pub use runtime::BrowserCdpRuntime;
 pub use server::{CdpProxyServer, CdpProxyServerConfig};
 
+use cdp_protocol::{fetch, input, page, runtime as cdp_runtime, types::Method};
 use erebor_runtime_events::{ActionKind, ExecutionSurface, RiskLevel};
 
 pub const GOVERNED_CDP_METHODS: &[&str] = &[
-    "Runtime.evaluate",
-    "Runtime.callFunctionOn",
-    "Input.dispatchMouseEvent",
-    "Input.dispatchKeyEvent",
-    "Page.navigate",
-    "Fetch.continueRequest",
+    cdp_runtime::Evaluate::NAME,
+    cdp_runtime::CallFunctionOn::NAME,
+    input::DispatchMouseEvent::NAME,
+    input::DispatchKeyEvent::NAME,
+    page::Navigate::NAME,
+    fetch::ContinueRequest::NAME,
 ];
 
 pub const CONTEXT_CDP_METHODS: &[&str] = &[

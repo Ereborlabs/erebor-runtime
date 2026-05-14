@@ -1,19 +1,9 @@
 use erebor_runtime_core::{ApprovalProvider, AuditSink, LocalEnforcementEngine, RuntimeError};
-use erebor_runtime_events::{
-    ActorIdentity, EventId, RiskMetadata, RuntimeEvent, SessionId, TargetRef,
-};
+use erebor_runtime_events::{ActorIdentity, EventId, RiskMetadata, RuntimeEvent, SessionId};
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
-use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{classify_cdp_method, CdpError};
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct CdpMessage {
-    pub id: Option<Value>,
-    pub method: String,
-    pub params: Value,
-}
+use crate::{classify_cdp_method, CdpCommand, CdpError, CdpEvent, GovernedCdpCommand};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpSessionContext {
@@ -29,32 +19,21 @@ pub enum CdpEnforcementAction {
     AwaitApproval { reason: String },
 }
 
-pub fn parse_cdp_message(source: &str) -> Result<CdpMessage, CdpError> {
-    let raw: RawCdpMessage = serde_json::from_str(source).map_err(CdpError::invalid_json)?;
-    let method = raw.method.ok_or_else(CdpError::missing_method)?;
-
-    Ok(CdpMessage {
-        id: raw.id,
-        method,
-        params: raw.params.unwrap_or(Value::Null),
-    })
-}
-
-pub fn enforce_cdp_message<E, A, S>(
+pub fn enforce_cdp_command<E, A, S>(
     engine: &LocalEnforcementEngine<E, A, S>,
     context: &CdpSessionContext,
-    message: &CdpMessage,
+    command: &CdpCommand,
 ) -> Result<CdpEnforcementAction, CdpError>
 where
     E: PolicyEvaluator,
     A: ApprovalProvider,
     S: AuditSink,
 {
-    if !crate::is_governed_method(&message.method) {
+    if command.protocol_command().is_none() {
         return Ok(CdpEnforcementAction::Forward);
     }
 
-    let event = normalize_cdp_message(context, message)?;
+    let event = normalize_cdp_command(context, command)?;
     let outcome = engine.enforce(&event).map_err(CdpError::enforcement)?;
 
     Ok(match outcome.policy_decision {
@@ -69,28 +48,20 @@ where
     })
 }
 
-pub fn observe_cdp_message(
+pub fn observe_cdp_event(
     context: &CdpSessionContext,
-    message: &CdpMessage,
-) -> Result<Option<RuntimeEvent>, CdpError> {
-    if !crate::is_context_method(&message.method) {
-        return Ok(None);
-    }
-
-    normalize_cdp_message(context, message).map(Some)
+    event: &CdpEvent,
+) -> Result<RuntimeEvent, CdpError> {
+    normalize_cdp_event(context, event)
 }
 
-fn normalize_cdp_message(
+fn normalize_cdp_command(
     context: &CdpSessionContext,
-    message: &CdpMessage,
+    command: &CdpCommand,
 ) -> Result<RuntimeEvent, CdpError> {
-    let classification = classify_cdp_method(&message.method)
-        .ok_or_else(|| CdpError::unsupported_method(message.method.clone()))?;
-    let event_id = event_id_from_message(message)?;
-    let reason_kind = match classification.role {
-        crate::CdpMethodRole::GovernedCommand => "governed",
-        crate::CdpMethodRole::ContextEvent => "inspected",
-    };
+    let classification = classify_cdp_method(&command.method)
+        .ok_or_else(|| CdpError::unsupported_method(command.method.clone()))?;
+    let event_id = event_id_from_command(command)?;
 
     Ok(RuntimeEvent {
         id: EventId::new(event_id),
@@ -98,18 +69,43 @@ fn normalize_cdp_message(
         actor: context.actor.clone(),
         surface: classification.surface,
         action: classification.action,
-        target: target_from_params(&message.params),
-        payload: message.params.clone(),
+        target: command
+            .protocol_command()
+            .and_then(GovernedCdpCommand::target),
+        payload: command.params.clone(),
         risk: RiskMetadata {
             level: classification.risk_level,
-            reasons: vec![format!("{reason_kind} CDP method `{}`", message.method)],
+            reasons: vec![format!("governed CDP method `{}`", command.method)],
         },
         timestamp: context.timestamp.clone(),
     })
 }
 
-fn event_id_from_message(message: &CdpMessage) -> Result<String, CdpError> {
-    if let Some(id) = message.id.as_ref() {
+fn normalize_cdp_event(
+    context: &CdpSessionContext,
+    event: &CdpEvent,
+) -> Result<RuntimeEvent, CdpError> {
+    let classification = classify_cdp_method(&event.method)
+        .ok_or_else(|| CdpError::unsupported_method(event.method.clone()))?;
+
+    Ok(RuntimeEvent {
+        id: EventId::new(event.protocol_event().event_id()),
+        session_id: context.session_id.clone(),
+        actor: context.actor.clone(),
+        surface: classification.surface,
+        action: classification.action,
+        target: event.protocol_event().target(),
+        payload: event.params.clone(),
+        risk: RiskMetadata {
+            level: classification.risk_level,
+            reasons: vec![format!("inspected CDP method `{}`", event.method)],
+        },
+        timestamp: context.timestamp.clone(),
+    })
+}
+
+fn event_id_from_command(command: &CdpCommand) -> Result<String, CdpError> {
+    if let Some(id) = command.id.as_ref() {
         return match id {
             Value::String(value) => Ok(value.clone()),
             Value::Number(value) => Ok(value.to_string()),
@@ -117,43 +113,7 @@ fn event_id_from_message(message: &CdpMessage) -> Result<String, CdpError> {
         };
     }
 
-    if crate::is_context_method(&message.method) {
-        return Ok(message
-            .params
-            .get("requestId")
-            .or_else(|| message.params.get("loaderId"))
-            .or_else(|| message.params.get("networkId"))
-            .and_then(Value::as_str)
-            .map_or_else(|| message.method.clone(), ToOwned::to_owned));
-    }
-
     Err(CdpError::missing_message_id())
-}
-
-fn target_from_params(params: &Value) -> Option<TargetRef> {
-    let uri = params
-        .get("url")
-        .and_then(Value::as_str)
-        .or_else(|| params.get("documentURL").and_then(Value::as_str))
-        .or_else(|| params.pointer("/request/url").and_then(Value::as_str))
-        .or_else(|| params.pointer("/response/url").and_then(Value::as_str))?;
-
-    let label = params
-        .get("requestId")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-
-    Some(TargetRef {
-        label,
-        uri: Some(uri.to_owned()),
-    })
-}
-
-#[derive(Debug, Deserialize)]
-struct RawCdpMessage {
-    id: Option<Value>,
-    method: Option<String>,
-    params: Option<Value>,
 }
 
 impl From<RuntimeError> for CdpError {
@@ -168,10 +128,8 @@ mod tests {
     use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
     use erebor_runtime_policy::LocalPolicy;
 
-    use super::{
-        enforce_cdp_message, observe_cdp_message, parse_cdp_message, CdpEnforcementAction,
-        CdpSessionContext,
-    };
+    use super::{enforce_cdp_command, observe_cdp_event, CdpEnforcementAction, CdpSessionContext};
+    use crate::{decode_cdp_command, decode_cdp_event};
 
     fn context() -> CdpSessionContext {
         CdpSessionContext {
@@ -188,9 +146,9 @@ mod tests {
     fn forwards_ungoverned_messages() -> Result<(), Box<dyn std::error::Error>> {
         let policy = LocalPolicy::from_json_str(r#"{ "rules": [] }"#)?;
         let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
-        let message = parse_cdp_message(r#"{ "id": 1, "method": "Browser.getVersion" }"#)?;
+        let command = decode_cdp_command(r#"{ "id": 1, "method": "Browser.getVersion" }"#)?;
 
-        let action = enforce_cdp_message(&engine, &context(), &message)?;
+        let action = enforce_cdp_command(&engine, &context(), &command)?;
 
         assert_eq!(action, CdpEnforcementAction::Forward);
         Ok(())
@@ -216,11 +174,11 @@ mod tests {
             "#,
         )?;
         let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
-        let message = parse_cdp_message(
+        let command = decode_cdp_command(
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#,
         )?;
 
-        let action = enforce_cdp_message(&engine, &context(), &message)?;
+        let action = enforce_cdp_command(&engine, &context(), &command)?;
 
         assert_eq!(
             action,
@@ -255,11 +213,11 @@ mod tests {
             ApproveAll,
             erebor_runtime_core::NoopAuditSink,
         );
-        let message = parse_cdp_message(
+        let command = decode_cdp_command(
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#,
         )?;
 
-        let action = enforce_cdp_message(&engine, &context(), &message)?;
+        let action = enforce_cdp_command(&engine, &context(), &command)?;
 
         assert_eq!(
             action,
@@ -272,26 +230,32 @@ mod tests {
 
     #[test]
     fn observes_fetch_request_paused_context() -> Result<(), Box<dyn std::error::Error>> {
-        let message = parse_cdp_message(
+        let event = decode_cdp_event(
             r#"
             {
               "method": "Fetch.requestPaused",
               "params": {
                 "requestId": "fetch-1",
                 "request": {
-                  "url": "https://example.com/sensitive"
-                }
+                  "url": "https://example.com/sensitive",
+                  "method": "GET",
+                  "headers": {},
+                  "initialPriority": "Low",
+                  "referrerPolicy": "no-referrer"
+                },
+                "frameId": "frame-1",
+                "resourceType": "Document"
               }
             }
             "#,
-        )?;
+        )?
+        .ok_or_else(|| std::io::Error::other("missing event"))?;
 
-        let event = observe_cdp_message(&context(), &message)?
-            .ok_or_else(|| std::io::Error::other("missing event"))?;
+        let runtime_event = observe_cdp_event(&context(), &event)?;
 
-        assert_eq!(event.id.as_str(), "fetch-1");
+        assert_eq!(runtime_event.id.as_str(), "fetch-1");
         assert_eq!(
-            event.target.and_then(|target| target.uri),
+            runtime_event.target.and_then(|target| target.uri),
             Some(String::from("https://example.com/sensitive"))
         );
         Ok(())
@@ -299,26 +263,38 @@ mod tests {
 
     #[test]
     fn observes_network_context_without_command_id() -> Result<(), Box<dyn std::error::Error>> {
-        let message = parse_cdp_message(
+        let event = decode_cdp_event(
             r#"
             {
               "method": "Network.requestWillBeSent",
               "params": {
                 "requestId": "network-1",
+                "loaderId": "loader-1",
+                "documentURL": "https://example.com/",
                 "request": {
-                  "url": "https://example.com/"
-                }
+                  "url": "https://example.com/",
+                  "method": "GET",
+                  "headers": {},
+                  "initialPriority": "Low",
+                  "referrerPolicy": "no-referrer"
+                },
+                "timestamp": 1.0,
+                "wallTime": 1.0,
+                "initiator": {
+                  "type": "other"
+                },
+                "redirectHasExtraInfo": false
               }
             }
             "#,
-        )?;
+        )?
+        .ok_or_else(|| std::io::Error::other("missing event"))?;
 
-        let event = observe_cdp_message(&context(), &message)?
-            .ok_or_else(|| std::io::Error::other("missing event"))?;
+        let runtime_event = observe_cdp_event(&context(), &event)?;
 
-        assert_eq!(event.id.as_str(), "network-1");
+        assert_eq!(runtime_event.id.as_str(), "network-1");
         assert_eq!(
-            event.risk.reasons,
+            runtime_event.risk.reasons,
             vec![String::from(
                 "inspected CDP method `Network.requestWillBeSent`"
             )]
