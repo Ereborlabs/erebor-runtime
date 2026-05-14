@@ -220,7 +220,7 @@ fn observe_browser_text(context: &CdpSessionContext, source: &str) -> Result<(),
     };
     let runtime_event = observe_cdp_event(context, &event)?;
     debug!(
-        method = %event.method,
+        method = %event.method(),
         event_id = %runtime_event.id.as_str(),
         "observed CDP context message"
     );
@@ -230,7 +230,7 @@ fn observe_browser_text(context: &CdpSessionContext, source: &str) -> Result<(),
 
 fn error_response(command: &CdpCommand, code: i64, reason: &str) -> Value {
     json!({
-        "id": command.id.clone().unwrap_or(Value::Null),
+        "id": command.id,
         "error": {
             "code": code,
             "message": reason

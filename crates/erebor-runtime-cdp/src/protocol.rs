@@ -1,18 +1,18 @@
 use cdp_protocol::{
-    fetch, input, network, page, runtime,
-    types::{Event as ProtocolEvent, Method},
+    fetch, input, page, runtime,
+    types::{CallId, Event as ProtocolEvent, Method},
 };
 use erebor_runtime_events::TargetRef;
-use serde::{de::DeserializeOwned, Deserialize};
-use serde_json::{Map, Value};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::CdpError;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpCommand {
-    pub id: Option<Value>,
+    pub id: CallId,
     pub method: String,
-    pub params: Value,
+    params: Option<Value>,
     protocol: Option<GovernedCdpCommand>,
 }
 
@@ -21,19 +21,92 @@ impl CdpCommand {
     pub fn protocol_command(&self) -> Option<&GovernedCdpCommand> {
         self.protocol.as_ref()
     }
+
+    #[must_use]
+    pub fn params(&self) -> Option<&Value> {
+        self.params.as_ref()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpEvent {
-    pub method: String,
-    pub params: Value,
-    protocol: ContextCdpEvent,
+    method: &'static str,
+    event_id: String,
+    target: Option<TargetRef>,
+    params: Value,
+    protocol: ProtocolEvent,
 }
 
 impl CdpEvent {
     #[must_use]
-    pub const fn protocol_event(&self) -> &ContextCdpEvent {
+    pub const fn method(&self) -> &'static str {
+        self.method
+    }
+
+    #[must_use]
+    pub fn event_id(&self) -> &str {
+        &self.event_id
+    }
+
+    #[must_use]
+    pub fn target(&self) -> Option<TargetRef> {
+        self.target.clone()
+    }
+
+    #[must_use]
+    pub const fn params(&self) -> &Value {
+        &self.params
+    }
+
+    #[must_use]
+    pub const fn protocol_event(&self) -> &ProtocolEvent {
         &self.protocol
+    }
+
+    fn from_protocol(protocol: ProtocolEvent) -> Result<Option<Self>, CdpError> {
+        let event = match protocol {
+            ProtocolEvent::FetchRequestPaused(event) => Self {
+                method: "Fetch.requestPaused",
+                event_id: event.params.request_id.clone(),
+                target: target_ref(
+                    Some(event.params.request_id.clone()),
+                    non_empty(&event.params.request.url),
+                ),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::FetchRequestPaused(event),
+            },
+            ProtocolEvent::NetworkRequestWillBeSent(event) => Self {
+                method: "Network.requestWillBeSent",
+                event_id: event.params.request_id.clone(),
+                target: target_ref(
+                    Some(event.params.request_id.clone()),
+                    non_empty(&event.params.request.url)
+                        .or_else(|| non_empty(&event.params.document_url)),
+                ),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::NetworkRequestWillBeSent(event),
+            },
+            ProtocolEvent::NetworkResponseReceived(event) => Self {
+                method: "Network.responseReceived",
+                event_id: event.params.request_id.clone(),
+                target: target_ref(
+                    Some(event.params.request_id.clone()),
+                    non_empty(&event.params.response.url),
+                ),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::NetworkResponseReceived(event),
+            },
+            ProtocolEvent::NetworkLoadingFailed(event) => Self {
+                method: "Network.loadingFailed",
+                event_id: event.params.request_id.clone(),
+                target: target_ref(Some(event.params.request_id.clone()), None),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::NetworkLoadingFailed(event),
+            },
+            _ => return Ok(None),
+        };
+
+        Ok(Some(event))
     }
 }
 
@@ -63,65 +136,25 @@ impl GovernedCdpCommand {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum ContextCdpEvent {
-    FetchRequestPaused(Box<fetch::events::RequestPausedEvent>),
-    NetworkRequestWillBeSent(Box<network::events::RequestWillBeSentEvent>),
-    NetworkResponseReceived(Box<network::events::ResponseReceivedEvent>),
-    NetworkLoadingFailed(Box<network::events::LoadingFailedEvent>),
-}
-
-impl ContextCdpEvent {
-    #[must_use]
-    pub fn event_id(&self) -> String {
-        match self {
-            Self::FetchRequestPaused(event) => event.params.request_id.clone(),
-            Self::NetworkRequestWillBeSent(event) => event.params.request_id.clone(),
-            Self::NetworkResponseReceived(event) => event.params.request_id.clone(),
-            Self::NetworkLoadingFailed(event) => event.params.request_id.clone(),
-        }
-    }
-
-    #[must_use]
-    pub fn target(&self) -> Option<TargetRef> {
-        match self {
-            Self::FetchRequestPaused(event) => target_ref(
-                Some(event.params.request_id.clone()),
-                non_empty(&event.params.request.url),
-            ),
-            Self::NetworkRequestWillBeSent(event) => target_ref(
-                Some(event.params.request_id.clone()),
-                non_empty(&event.params.request.url)
-                    .or_else(|| non_empty(&event.params.document_url)),
-            ),
-            Self::NetworkResponseReceived(event) => target_ref(
-                Some(event.params.request_id.clone()),
-                non_empty(&event.params.response.url),
-            ),
-            Self::NetworkLoadingFailed(event) => {
-                target_ref(Some(event.params.request_id.clone()), None)
-            }
-        }
-    }
-}
-
 pub fn decode_cdp_command(source: &str) -> Result<CdpCommand, CdpError> {
-    let envelope = decode_wire_envelope(source)?;
-    let method = envelope.method.ok_or_else(CdpError::missing_method)?;
-    let params = envelope.params.unwrap_or(Value::Null);
-    let protocol = decode_governed_command(&method, &params)?;
+    let head: IncomingMethodHead = deserialize_wire(source)?;
+    let decoded = decode_governed_command(source, &head.method)?;
+    let (id, params, protocol) = match decoded {
+        Some(decoded) => (decoded.id, Some(decoded.params), Some(decoded.command)),
+        None => (head.id, None, None),
+    };
 
     Ok(CdpCommand {
-        id: envelope.id,
-        method,
+        id,
+        method: head.method,
         params,
         protocol,
     })
 }
 
 pub fn decode_cdp_event(source: &str) -> Result<Option<CdpEvent>, CdpError> {
-    let envelope = decode_wire_envelope(source)?;
-    let Some(method) = envelope.method else {
+    let head: IncomingEventHead = deserialize_wire(source)?;
+    let Some(method) = head.method else {
         return Ok(None);
     };
 
@@ -129,74 +162,87 @@ pub fn decode_cdp_event(source: &str) -> Result<Option<CdpEvent>, CdpError> {
         return Ok(None);
     }
 
-    let params = envelope.params.unwrap_or(Value::Null);
-    let protocol = decode_context_event(source, &method)?;
-
-    Ok(Some(CdpEvent {
-        method,
-        params,
-        protocol,
-    }))
-}
-
-fn decode_wire_envelope(source: &str) -> Result<CdpWireEnvelope, CdpError> {
-    serde_json::from_str(source).map_err(CdpError::invalid_json)
+    let event: ProtocolEvent = deserialize_wire(source)?;
+    CdpEvent::from_protocol(event)?
+        .ok_or_else(|| CdpError::unsupported_method(method))
+        .map(Some)
 }
 
 fn decode_governed_command(
+    source: &str,
     method: &str,
-    params: &Value,
-) -> Result<Option<GovernedCdpCommand>, CdpError> {
+) -> Result<Option<DecodedGovernedCommand>, CdpError> {
     match method {
-        runtime::Evaluate::NAME => deserialize_params(params)
-            .map(|command| Some(GovernedCdpCommand::RuntimeEvaluate(Box::new(command)))),
-        runtime::CallFunctionOn::NAME => deserialize_params(params)
-            .map(|command| Some(GovernedCdpCommand::RuntimeCallFunctionOn(Box::new(command)))),
-        input::DispatchMouseEvent::NAME => deserialize_params(params).map(|command| {
-            Some(GovernedCdpCommand::InputDispatchMouseEvent(Box::new(
-                command,
-            )))
-        }),
-        input::DispatchKeyEvent::NAME => deserialize_params(params)
-            .map(|command| Some(GovernedCdpCommand::InputDispatchKeyEvent(Box::new(command)))),
-        page::Navigate::NAME => deserialize_params(params)
-            .map(|command| Some(GovernedCdpCommand::PageNavigate(Box::new(command)))),
-        fetch::ContinueRequest::NAME => deserialize_params(params)
-            .map(|command| Some(GovernedCdpCommand::FetchContinueRequest(Box::new(command)))),
+        runtime::Evaluate::NAME => {
+            governed::<runtime::Evaluate>(source, GovernedCdpCommand::RuntimeEvaluate)
+        }
+        runtime::CallFunctionOn::NAME => {
+            governed::<runtime::CallFunctionOn>(source, GovernedCdpCommand::RuntimeCallFunctionOn)
+        }
+        input::DispatchMouseEvent::NAME => governed::<input::DispatchMouseEvent>(
+            source,
+            GovernedCdpCommand::InputDispatchMouseEvent,
+        ),
+        input::DispatchKeyEvent::NAME => {
+            governed::<input::DispatchKeyEvent>(source, GovernedCdpCommand::InputDispatchKeyEvent)
+        }
+        page::Navigate::NAME => {
+            governed::<page::Navigate>(source, GovernedCdpCommand::PageNavigate)
+        }
+        fetch::ContinueRequest::NAME => {
+            governed::<fetch::ContinueRequest>(source, GovernedCdpCommand::FetchContinueRequest)
+        }
         _ => Ok(None),
     }
 }
 
-fn decode_context_event(source: &str, method: &str) -> Result<ContextCdpEvent, CdpError> {
-    let event: ProtocolEvent = serde_json::from_str(source).map_err(CdpError::invalid_protocol)?;
+fn governed<T>(
+    source: &str,
+    wrap: fn(Box<T>) -> GovernedCdpCommand,
+) -> Result<Option<DecodedGovernedCommand>, CdpError>
+where
+    T: Method + DeserializeOwned + Serialize,
+{
+    let call = decode_method_call::<T>(source)?;
+    let params = params_value(&call.params)?;
 
-    match event {
-        ProtocolEvent::FetchRequestPaused(event) => {
-            Ok(ContextCdpEvent::FetchRequestPaused(Box::new(event)))
-        }
-        ProtocolEvent::NetworkRequestWillBeSent(event) => {
-            Ok(ContextCdpEvent::NetworkRequestWillBeSent(Box::new(event)))
-        }
-        ProtocolEvent::NetworkResponseReceived(event) => {
-            Ok(ContextCdpEvent::NetworkResponseReceived(Box::new(event)))
-        }
-        ProtocolEvent::NetworkLoadingFailed(event) => {
-            Ok(ContextCdpEvent::NetworkLoadingFailed(Box::new(event)))
-        }
-        _ => Err(CdpError::unsupported_method(method.to_owned())),
-    }
+    Ok(Some(DecodedGovernedCommand {
+        id: call.id,
+        params,
+        command: wrap(Box::new(call.params)),
+    }))
 }
 
-fn deserialize_params<T>(params: &Value) -> Result<T, CdpError>
+fn decode_method_call<T>(source: &str) -> Result<IncomingMethodCall<T>, CdpError>
+where
+    T: Method + DeserializeOwned,
+{
+    let call: IncomingMethodCall<T> = deserialize_wire(source)?;
+    if call.method != T::NAME {
+        return Err(CdpError::unexpected_method(T::NAME, call.method));
+    }
+
+    Ok(call)
+}
+
+fn deserialize_wire<T>(source: &str) -> Result<T, CdpError>
 where
     T: DeserializeOwned,
 {
-    let normalized = match params {
-        Value::Null => Value::Object(Map::new()),
-        value => value.clone(),
-    };
+    serde_json::from_str(source).map_err(|error| {
+        if error.is_syntax() || error.is_eof() {
+            CdpError::invalid_json(error)
+        } else {
+            CdpError::invalid_protocol(error)
+        }
+    })
+}
 
-    serde_json::from_value(normalized).map_err(CdpError::invalid_protocol)
+fn params_value<T>(params: &T) -> Result<Value, CdpError>
+where
+    T: Serialize,
+{
+    serde_json::to_value(params).map_err(CdpError::invalid_protocol)
 }
 
 fn target_ref(label: Option<String>, uri: Option<String>) -> Option<TargetRef> {
@@ -215,44 +261,70 @@ fn non_empty(value: &str) -> Option<String> {
     }
 }
 
-// cdp-protocol 0.3.1 has typed methods/events but no inbound "any command" enum.
-// This envelope is only for CDP dispatch and id preservation at the proxy boundary.
 #[derive(Debug, Deserialize)]
-struct CdpWireEnvelope {
-    id: Option<Value>,
+struct IncomingMethodHead {
+    id: CallId,
+    #[serde(rename = "method")]
+    method: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct IncomingEventHead {
     method: Option<String>,
-    params: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IncomingMethodCall<T> {
+    id: CallId,
+    #[serde(rename = "method")]
+    method: String,
+    params: T,
+}
+
+#[derive(Debug)]
+struct DecodedGovernedCommand {
+    id: CallId,
+    params: Value,
+    command: GovernedCdpCommand,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_cdp_command, GovernedCdpCommand};
+    use cdp_protocol::{page, types::Method};
+
+    use super::{decode_cdp_command, decode_cdp_event, GovernedCdpCommand, IncomingMethodCall};
     use crate::CdpError;
 
     #[test]
-    fn decodes_governed_command_with_protocol_type() -> Result<(), CdpError> {
-        let command = decode_cdp_command(
-            r#"
-            {
-              "id": 1,
-              "method": "Page.navigate",
-              "params": {
-                "url": "https://example.com/"
-              }
-            }
-            "#,
-        )?;
+    fn decodes_governed_command_from_protocol_method_call_shape() -> Result<(), CdpError> {
+        let navigate = page::Navigate {
+            url: String::from("https://example.com/"),
+            referrer: None,
+            transition_type: None,
+            frame_id: None,
+            referrer_policy: None,
+        };
+        let source = serde_json::to_string(&navigate.to_method_call(1))
+            .map_err(CdpError::invalid_protocol)?;
+        let command = decode_cdp_command(&source)?;
 
         assert!(matches!(
             command.protocol_command(),
             Some(GovernedCdpCommand::PageNavigate(_))
         ));
+        assert_eq!(command.id, 1);
         assert_eq!(
             command
                 .protocol_command()
                 .and_then(GovernedCdpCommand::target)
                 .and_then(|target| target.uri),
             Some(String::from("https://example.com/"))
+        );
+        assert_eq!(
+            command.params().and_then(|params| params.get("url")),
+            Some(&serde_json::Value::String(String::from(
+                "https://example.com/"
+            )))
         );
         Ok(())
     }
@@ -274,5 +346,59 @@ mod tests {
         );
 
         assert!(matches!(result, Err(CdpError::InvalidProtocol { .. })));
+    }
+
+    #[test]
+    fn inbound_method_call_mirror_matches_cdp_protocol_method_call_json(
+    ) -> Result<(), serde_json::Error> {
+        let navigate = page::Navigate {
+            url: String::from("https://example.com/"),
+            referrer: None,
+            transition_type: None,
+            frame_id: None,
+            referrer_policy: None,
+        };
+        let value = serde_json::to_string(&navigate.to_method_call(7))?;
+        let call: IncomingMethodCall<page::Navigate> = serde_json::from_str(&value)?;
+
+        assert_eq!(call.id, 7);
+        assert_eq!(call.method, page::Navigate::NAME);
+        assert_eq!(call.params.url, "https://example.com/");
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_context_event_through_protocol_event_enum() -> Result<(), CdpError> {
+        let event = decode_cdp_event(
+            r#"
+            {
+              "method": "Network.loadingFailed",
+              "params": {
+                "requestId": "network-1",
+                "timestamp": 1.0,
+                "type": "Document",
+                "errorText": "net::ERR_FAILED",
+                "canceled": false
+              }
+            }
+            "#,
+        )?
+        .ok_or_else(|| CdpError::unsupported_method("Network.loadingFailed"))?;
+
+        assert_eq!(event.method(), "Network.loadingFailed");
+        assert_eq!(event.event_id(), "network-1");
+        assert_eq!(
+            event.params().get("errorText"),
+            Some(&serde_json::Value::String(String::from("net::ERR_FAILED")))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ignores_cdp_responses_without_event_method() -> Result<(), CdpError> {
+        let event = decode_cdp_event(r#"{ "id": 1, "result": {} }"#)?;
+
+        assert_eq!(event, None);
+        Ok(())
     }
 }

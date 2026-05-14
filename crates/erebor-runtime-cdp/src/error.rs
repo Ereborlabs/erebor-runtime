@@ -19,10 +19,14 @@ pub enum CdpError {
         source: serde_json::Error,
         location: Location,
     },
-    #[error("CDP message id is required for governed commands")]
-    MissingMessageId { location: Location },
     #[error("unsupported governed CDP method `{method}`")]
     UnsupportedMethod { method: String, location: Location },
+    #[error("CDP method `{actual}` cannot be decoded as `{expected}`")]
+    UnexpectedMethod {
+        expected: &'static str,
+        actual: String,
+        location: Location,
+    },
     #[error("runtime enforcement failed: {source}")]
     Enforcement {
         source: Box<RuntimeError>,
@@ -65,16 +69,18 @@ impl CdpError {
     }
 
     #[track_caller]
-    pub fn missing_message_id() -> Self {
-        Self::MissingMessageId {
+    pub fn unsupported_method(method: impl Into<String>) -> Self {
+        Self::UnsupportedMethod {
+            method: method.into(),
             location: Location::default(),
         }
     }
 
     #[track_caller]
-    pub fn unsupported_method(method: impl Into<String>) -> Self {
-        Self::UnsupportedMethod {
-            method: method.into(),
+    pub fn unexpected_method(expected: &'static str, actual: impl Into<String>) -> Self {
+        Self::UnexpectedMethod {
+            expected,
+            actual: actual.into(),
             location: Location::default(),
         }
     }

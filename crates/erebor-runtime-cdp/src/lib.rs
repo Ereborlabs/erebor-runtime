@@ -12,7 +12,7 @@ pub use message::{
     enforce_cdp_command, observe_cdp_event, CdpEnforcementAction, CdpSessionContext,
 };
 pub use protocol::{
-    decode_cdp_command, decode_cdp_event, CdpCommand, CdpEvent, ContextCdpEvent, GovernedCdpCommand,
+    decode_cdp_command, decode_cdp_event, CdpCommand, CdpEvent, GovernedCdpCommand,
 };
 pub use proxy::{proxy_cdp_message, CdpBackend, CdpBackendResponse, CdpProxyAction};
 pub use runtime::BrowserCdpRuntime;

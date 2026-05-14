@@ -3,7 +3,7 @@ use erebor_runtime_events::{ActorIdentity, EventId, RiskMetadata, RuntimeEvent, 
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
 use serde_json::{json, Value};
 
-use crate::{classify_cdp_method, CdpCommand, CdpError, CdpEvent, GovernedCdpCommand};
+use crate::{classify_cdp_method, CdpCommand, CdpError, CdpEvent};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpSessionContext {
@@ -63,6 +63,9 @@ fn normalize_cdp_command(
 ) -> Result<RuntimeEvent, CdpError> {
     let classification = classify_cdp_method(&command.method)
         .ok_or_else(|| CdpError::unsupported_method(command.method.clone()))?;
+    let protocol_command = command
+        .protocol_command()
+        .ok_or_else(|| CdpError::unsupported_method(command.method.clone()))?;
     let event_id = event_id_from_command(command)?;
 
     Ok(RuntimeEvent {
@@ -71,10 +74,8 @@ fn normalize_cdp_command(
         actor: context.actor.clone(),
         surface: classification.surface,
         action: classification.action,
-        target: command
-            .protocol_command()
-            .and_then(GovernedCdpCommand::target),
-        payload: command_payload(command),
+        target: protocol_command.target(),
+        payload: command_payload(command)?,
         risk: RiskMetadata {
             level: classification.risk_level,
             reasons: vec![format!("governed CDP method `{}`", command.method)],
@@ -87,52 +88,48 @@ fn normalize_cdp_event(
     context: &CdpSessionContext,
     event: &CdpEvent,
 ) -> Result<RuntimeEvent, CdpError> {
-    let classification = classify_cdp_method(&event.method)
-        .ok_or_else(|| CdpError::unsupported_method(event.method.clone()))?;
+    let classification = classify_cdp_method(event.method())
+        .ok_or_else(|| CdpError::unsupported_method(event.method()))?;
 
     Ok(RuntimeEvent {
-        id: EventId::new(event.protocol_event().event_id()),
+        id: EventId::new(event.event_id()),
         session_id: context.session_id.clone(),
         actor: context.actor.clone(),
         surface: classification.surface,
         action: classification.action,
-        target: event.protocol_event().target(),
+        target: event.target(),
         payload: event_payload(event),
         risk: RiskMetadata {
             level: classification.risk_level,
-            reasons: vec![format!("inspected CDP method `{}`", event.method)],
+            reasons: vec![format!("inspected CDP method `{}`", event.method())],
         },
         timestamp: context.timestamp.clone(),
     })
 }
 
 fn event_id_from_command(command: &CdpCommand) -> Result<String, CdpError> {
-    if let Some(id) = command.id.as_ref() {
-        return match id {
-            Value::String(value) => Ok(value.clone()),
-            Value::Number(value) => Ok(value.to_string()),
-            _ => Err(CdpError::missing_message_id()),
-        };
-    }
-
-    Err(CdpError::missing_message_id())
+    Ok(command.id.to_string())
 }
 
-fn command_payload(command: &CdpCommand) -> Value {
-    json!({
+fn command_payload(command: &CdpCommand) -> Result<Value, CdpError> {
+    let params = command
+        .params()
+        .ok_or_else(|| CdpError::unsupported_method(command.method.clone()))?;
+
+    Ok(json!({
         "kind": "command",
         "method": command.method,
         "message_id": command.id,
-        "params": command.params,
-    })
+        "params": params,
+    }))
 }
 
 fn event_payload(event: &CdpEvent) -> Value {
     json!({
         "kind": "event",
-        "method": event.method,
-        "event_id": event.protocol_event().event_id(),
-        "params": event.params,
+        "method": event.method(),
+        "event_id": event.event_id(),
+        "params": event.params(),
     })
 }
 
