@@ -13,6 +13,7 @@ erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 serde_json.workspace = true
+snafu.workspace = true
 thiserror.workspace = true
 
 [[bin]]

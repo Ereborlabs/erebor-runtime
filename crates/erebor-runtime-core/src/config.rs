@@ -16,13 +16,11 @@ pub struct RuntimeConfig {
 impl RuntimeConfig {
     pub fn from_json_str(source: &str) -> Result<Self, RuntimeConfigError> {
         if source.trim().is_empty() {
-            return Err(RuntimeConfigError::EmptyConfig);
+            return Err(RuntimeConfigError::empty_config());
         }
 
         let config: Self =
-            serde_json::from_str(source).map_err(|error| RuntimeConfigError::InvalidJson {
-                reason: error.to_string(),
-            })?;
+            serde_json::from_str(source).map_err(RuntimeConfigError::invalid_json)?;
         config.validate()?;
 
         Ok(config)
@@ -30,7 +28,7 @@ impl RuntimeConfig {
 
     pub fn validate(&self) -> Result<(), RuntimeConfigError> {
         if self.policies.is_empty() {
-            return Err(RuntimeConfigError::MissingPolicy);
+            return Err(RuntimeConfigError::missing_policy());
         }
 
         if self
@@ -38,20 +36,20 @@ impl RuntimeConfig {
             .iter()
             .any(|policy| policy.as_os_str().is_empty())
         {
-            return Err(RuntimeConfigError::EmptyPolicyPath);
+            return Err(RuntimeConfigError::empty_policy_path());
         }
 
         if self.governance.enabled_layers().is_empty() {
-            return Err(RuntimeConfigError::NoGovernanceLayers);
+            return Err(RuntimeConfigError::no_governance_layers());
         }
 
         if self.governance.browser_cdp.enabled {
             let Some(browser_url) = self.governance.browser_cdp.browser_url.as_deref() else {
-                return Err(RuntimeConfigError::BrowserCdpMissingBrowserUrl);
+                return Err(RuntimeConfigError::browser_cdp_missing_browser_url());
             };
 
             if !browser_url.starts_with("ws://") {
-                return Err(RuntimeConfigError::BrowserCdpInvalidBrowserUrl);
+                return Err(RuntimeConfigError::browser_cdp_invalid_browser_url());
             }
         }
 
@@ -232,7 +230,7 @@ impl GovernanceLayer {
 
 pub fn validate_policy_path(path: &Path) -> Result<(), RuntimeConfigError> {
     if path.as_os_str().is_empty() {
-        Err(RuntimeConfigError::EmptyPolicyPath)
+        Err(RuntimeConfigError::empty_policy_path())
     } else {
         Ok(())
     }
@@ -289,7 +287,10 @@ mod tests {
             "#,
         );
 
-        assert_eq!(error, Err(RuntimeConfigError::MissingPolicy));
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::MissingPolicy { .. })
+        ));
     }
 
     #[test]
@@ -308,7 +309,10 @@ mod tests {
             "#,
         );
 
-        assert_eq!(error, Err(RuntimeConfigError::EmptyPolicyPath));
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::EmptyPolicyPath { .. })
+        ));
     }
 
     #[test]
@@ -322,7 +326,10 @@ mod tests {
             "#,
         );
 
-        assert_eq!(error, Err(RuntimeConfigError::NoGovernanceLayers));
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::NoGovernanceLayers { .. })
+        ));
     }
 
     #[test]
@@ -373,7 +380,10 @@ mod tests {
             "#,
         );
 
-        assert_eq!(error, Err(RuntimeConfigError::BrowserCdpMissingBrowserUrl));
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::BrowserCdpMissingBrowserUrl { .. })
+        ));
     }
 
     #[test]
@@ -392,6 +402,9 @@ mod tests {
             "#,
         );
 
-        assert_eq!(error, Err(RuntimeConfigError::BrowserCdpInvalidBrowserUrl));
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::BrowserCdpInvalidBrowserUrl { .. })
+        ));
     }
 }

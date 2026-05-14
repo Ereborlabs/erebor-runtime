@@ -111,9 +111,7 @@ fn approval_backend_error_fails_closed() -> Result<(), RuntimeError> {
     let engine = LocalEnforcementEngine::with_hooks(
         approval_policy()?,
         StaticApprovalProvider {
-            response: Err(ApprovalError::Unavailable {
-                reason: String::from("socket closed"),
-            }),
+            response: Err(ApprovalError::unavailable("socket closed")),
         },
         RecordingAuditSink::default(),
     );
@@ -158,7 +156,7 @@ fn audit_failure_does_not_block_mvp_decision() -> Result<(), RuntimeError> {
 }
 
 fn approval_policy() -> Result<LocalPolicy, RuntimeError> {
-    Ok(LocalPolicy::from_json_str(
+    LocalPolicy::from_json_str(
         r#"
         {
           "rules": [
@@ -175,7 +173,8 @@ fn approval_policy() -> Result<LocalPolicy, RuntimeError> {
           ]
         }
         "#,
-    )?)
+    )
+    .map_err(RuntimeError::policy)
 }
 
 #[derive(Clone, Debug)]
@@ -215,8 +214,6 @@ struct FailingAuditSink;
 
 impl AuditSink for FailingAuditSink {
     fn record(&self, _record: &AuditRecord) -> Result<(), AuditError> {
-        Err(AuditError::Unavailable {
-            reason: String::from("disk full"),
-        })
+        Err(AuditError::unavailable("disk full"))
     }
 }

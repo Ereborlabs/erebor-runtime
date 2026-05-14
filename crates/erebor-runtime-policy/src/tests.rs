@@ -209,10 +209,8 @@ fn duplicate_rules_are_rejected() {
         "#,
     );
 
-    assert_eq!(
+    assert!(matches!(
         error,
-        Err(PolicyError::DuplicateRule {
-            rule_id: String::from("duplicate")
-        })
-    );
+        Err(PolicyError::DuplicateRule { rule_id, .. }) if rule_id == "duplicate"
+    ));
 }

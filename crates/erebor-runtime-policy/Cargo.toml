@@ -9,6 +9,7 @@ repository.workspace = true
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 serde.workspace = true
 serde_json.workspace = true
+snafu.workspace = true
 thiserror.workspace = true
 
 [lints]

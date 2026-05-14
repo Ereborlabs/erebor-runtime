@@ -27,9 +27,8 @@ impl JsonlAuditSink {
 
 impl AuditSink for JsonlAuditSink {
     fn record(&self, record: &AuditRecord) -> Result<(), AuditError> {
-        append_audit_record(&self.path, record).map_err(|error| AuditError::Unavailable {
-            reason: error.to_string(),
-        })
+        append_audit_record(&self.path, record)
+            .map_err(|error| AuditError::unavailable(error.to_string()))
     }
 }
 
@@ -42,53 +41,35 @@ pub fn append_audit_record(
         .create(true)
         .append(true)
         .open(path)
-        .map_err(|source| AuditLogError::Open {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        .map_err(|source| AuditLogError::open(path.to_path_buf(), source))?;
 
-    serde_json::to_writer(&mut file, record).map_err(|source| AuditLogError::SerializeRecord {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    serde_json::to_writer(&mut file, record)
+        .map_err(|source| AuditLogError::serialize_record(path.to_path_buf(), source))?;
     file.write_all(b"\n")
-        .map_err(|source| AuditLogError::Write {
-            path: path.to_path_buf(),
-            source,
-        })?;
-    file.flush().map_err(|source| AuditLogError::Write {
-        path: path.to_path_buf(),
-        source,
-    })?;
+        .map_err(|source| AuditLogError::write(path.to_path_buf(), source))?;
+    file.flush()
+        .map_err(|source| AuditLogError::write(path.to_path_buf(), source))?;
 
     Ok(())
 }
 
 pub fn read_audit_records(path: impl AsRef<Path>) -> Result<Vec<AuditRecord>, AuditLogError> {
     let path = path.as_ref();
-    let file = File::open(path).map_err(|source| AuditLogError::Open {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let file =
+        File::open(path).map_err(|source| AuditLogError::open(path.to_path_buf(), source))?;
     let reader = BufReader::new(file);
     let mut records = Vec::new();
 
     for (index, line) in reader.lines().enumerate() {
-        let line = line.map_err(|source| AuditLogError::Read {
-            path: path.to_path_buf(),
-            source,
-        })?;
+        let line = line.map_err(|source| AuditLogError::read(path.to_path_buf(), source))?;
 
         if line.trim().is_empty() {
             continue;
         }
 
-        let record =
-            serde_json::from_str(&line).map_err(|source| AuditLogError::InvalidRecord {
-                path: path.to_path_buf(),
-                line: index + 1,
-                source,
-            })?;
+        let record = serde_json::from_str(&line).map_err(|source| {
+            AuditLogError::invalid_record(path.to_path_buf(), index + 1, source)
+        })?;
         records.push(record);
     }
 

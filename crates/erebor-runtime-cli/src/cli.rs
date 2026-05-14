@@ -14,6 +14,7 @@ use erebor_runtime_core::{
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, RuntimeEvent, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicyEvaluator, PolicySet};
+use snafu::Location;
 use thiserror::Error;
 
 #[derive(Debug, Parser)]
@@ -193,20 +194,21 @@ fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, CliError> {
     let source = fs::read_to_string(path).map_err(|error| CliError::ReadConfig {
         path: path.to_path_buf(),
         source: error,
+        location: Location::default(),
     })?;
 
-    RuntimeConfig::from_json_str(&source).map_err(CliError::InvalidConfig)
+    RuntimeConfig::from_json_str(&source).map_err(CliError::invalid_config)
 }
 
 fn build_start_plan(path: &Path) -> Result<RuntimeStartPlan, CliError> {
     read_runtime_config(path)?
         .start_plan()
-        .map_err(CliError::InvalidConfig)
+        .map_err(CliError::invalid_config)
 }
 
 fn build_runtime_launch_plan(args: &StartArgs) -> Result<RuntimeLaunchPlan, CliError> {
     let plan = build_start_plan(&args.config)?;
-    Ok(RuntimeLaunchPlan::from_start_plan(args.listen, &plan)?)
+    RuntimeLaunchPlan::from_start_plan(args.listen, &plan).map_err(CliError::runtime)
 }
 
 fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<RuntimeLaunchPlan, CliError> {
@@ -221,18 +223,19 @@ fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<RuntimeLaunchPlan,
             ..GovernanceLayers::default()
         },
     };
-    let plan = config.start_plan().map_err(CliError::InvalidConfig)?;
+    let plan = config.start_plan().map_err(CliError::invalid_config)?;
 
-    Ok(RuntimeLaunchPlan::from_start_plan(args.listen, &plan)?)
+    RuntimeLaunchPlan::from_start_plan(args.listen, &plan).map_err(CliError::runtime)
 }
 
 fn read_policy(path: &Path) -> Result<LocalPolicy, CliError> {
     let source = fs::read_to_string(path).map_err(|error| CliError::ReadPolicy {
         path: path.to_path_buf(),
         source: error,
+        location: Location::default(),
     })?;
 
-    LocalPolicy::from_json_str(&source).map_err(CliError::InvalidPolicy)
+    LocalPolicy::from_json_str(&source).map_err(CliError::invalid_policy)
 }
 
 fn read_policy_set(paths: &[PathBuf]) -> Result<PolicySet, CliError> {
@@ -248,9 +251,10 @@ fn read_event(path: &Path) -> Result<RuntimeEvent, CliError> {
     let source = fs::read_to_string(path).map_err(|error| CliError::ReadEvent {
         path: path.to_path_buf(),
         source: error,
+        location: Location::default(),
     })?;
 
-    serde_json::from_str(&source).map_err(CliError::InvalidEvent)
+    serde_json::from_str(&source).map_err(CliError::invalid_event)
 }
 
 fn start_runtime(args: &StartArgs) -> Result<(), CliError> {
@@ -283,7 +287,7 @@ fn start_runtime_from_launch_plan(launch_plan: RuntimeLaunchPlan) -> Result<(), 
         }
     }
 
-    let supervisor = launcher.start()?;
+    let supervisor = launcher.start().map_err(CliError::runtime)?;
     println!(
         "start control={} governance={} {}",
         supervisor.control_listen(),
@@ -291,7 +295,7 @@ fn start_runtime_from_launch_plan(launch_plan: RuntimeLaunchPlan) -> Result<(), 
         format_endpoints(supervisor.running())
     );
 
-    supervisor.wait()?;
+    supervisor.wait().map_err(CliError::runtime)?;
     Ok(())
 }
 
@@ -300,8 +304,13 @@ fn execute_policy(args: &PolicyArgs) -> Result<(), CliError> {
         PolicyCommand::Test(args) => {
             let policy_set = read_policy_set(std::slice::from_ref(&args.policy))?;
             let event = read_event(&args.event)?;
-            let decision = policy_set.evaluate(&event)?;
-            println!("{}", serde_json::to_string(&decision)?);
+            let decision = policy_set
+                .evaluate(&event)
+                .map_err(CliError::policy_evaluation)?;
+            println!(
+                "{}",
+                serde_json::to_string(&decision).map_err(CliError::encode_json)?
+            );
         }
     }
 
@@ -311,8 +320,11 @@ fn execute_policy(args: &PolicyArgs) -> Result<(), CliError> {
 fn execute_audit(args: &AuditArgs) -> Result<(), CliError> {
     match &args.command {
         AuditCommand::Tail(args) => {
-            for record in read_audit_records(&args.file)? {
-                println!("{}", serde_json::to_string(&record)?);
+            for record in read_audit_records(&args.file).map_err(CliError::audit_log)? {
+                println!(
+                    "{}",
+                    serde_json::to_string(&record).map_err(CliError::encode_json)?
+                );
             }
         }
     }
@@ -357,23 +369,116 @@ fn format_endpoints(runtimes: &[RunningRuntime]) -> String {
 #[derive(Debug, Error)]
 pub(crate) enum CliError {
     #[error("failed to read runtime config `{}`: {source}", path.display())]
-    ReadConfig { path: PathBuf, source: io::Error },
-    #[error("{0}")]
-    InvalidConfig(#[from] RuntimeConfigError),
+    ReadConfig {
+        path: PathBuf,
+        source: io::Error,
+        location: Location,
+    },
+    #[error("{source}")]
+    InvalidConfig {
+        source: RuntimeConfigError,
+        location: Location,
+    },
     #[error("failed to read policy `{}`: {source}", path.display())]
-    ReadPolicy { path: PathBuf, source: io::Error },
-    #[error("{0}")]
-    InvalidPolicy(#[from] PolicyError),
+    ReadPolicy {
+        path: PathBuf,
+        source: io::Error,
+        location: Location,
+    },
+    #[error("{source}")]
+    InvalidPolicy {
+        source: PolicyError,
+        location: Location,
+    },
+    #[error("policy evaluation failed: {source}")]
+    PolicyEvaluation {
+        source: PolicyError,
+        location: Location,
+    },
     #[error("failed to read event `{}`: {source}", path.display())]
-    ReadEvent { path: PathBuf, source: io::Error },
-    #[error("event fixture JSON is invalid: {0}")]
-    InvalidEvent(serde_json::Error),
-    #[error("{0}")]
-    Runtime(#[from] RuntimeError),
-    #[error("{0}")]
-    AuditLog(#[from] AuditLogError),
-    #[error("failed to encode JSON output: {0}")]
-    EncodeJson(#[from] serde_json::Error),
+    ReadEvent {
+        path: PathBuf,
+        source: io::Error,
+        location: Location,
+    },
+    #[error("event fixture JSON is invalid: {source}")]
+    InvalidEvent {
+        source: serde_json::Error,
+        location: Location,
+    },
+    #[error("{source}")]
+    Runtime {
+        source: RuntimeError,
+        location: Location,
+    },
+    #[error("{source}")]
+    AuditLog {
+        source: AuditLogError,
+        location: Location,
+    },
+    #[error("failed to encode JSON output: {source}")]
+    EncodeJson {
+        source: serde_json::Error,
+        location: Location,
+    },
+}
+
+impl CliError {
+    #[track_caller]
+    fn invalid_config(source: RuntimeConfigError) -> Self {
+        Self::InvalidConfig {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn invalid_policy(source: PolicyError) -> Self {
+        Self::InvalidPolicy {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn policy_evaluation(source: PolicyError) -> Self {
+        Self::PolicyEvaluation {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn invalid_event(source: serde_json::Error) -> Self {
+        Self::InvalidEvent {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn runtime(source: RuntimeError) -> Self {
+        Self::Runtime {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn audit_log(source: AuditLogError) -> Self {
+        Self::AuditLog {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn encode_json(source: serde_json::Error) -> Self {
+        Self::EncodeJson {
+            source,
+            location: Location::default(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -530,7 +635,10 @@ mod tests {
 
         assert!(matches!(
             error,
-            Err(CliError::Runtime(RuntimeError::UnsupportedGovernanceLayer { layer }))
+            Err(CliError::Runtime {
+                source: RuntimeError::UnsupportedGovernanceLayer { layer, .. },
+                ..
+            })
                 if layer == "terminal"
         ));
 

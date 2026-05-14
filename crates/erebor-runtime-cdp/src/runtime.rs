@@ -47,16 +47,10 @@ impl GovernanceRuntime for BrowserCdpRuntime {
         };
         let server = runtime
             .block_on(CdpProxyServer::bind(config, engine))
-            .map_err(|error| RuntimeError::RuntimeStart {
-                layer: layer.as_str().to_owned(),
-                reason: error.to_string(),
-            })?;
+            .map_err(|error| RuntimeError::runtime_start(layer.as_str(), error.to_string()))?;
         let endpoint = server
             .local_addr()
-            .map_err(|error| RuntimeError::RuntimeStart {
-                layer: layer.as_str().to_owned(),
-                reason: error.to_string(),
-            })?;
+            .map_err(|error| RuntimeError::runtime_start(layer.as_str(), error.to_string()))?;
 
         let handle = runtime.spawn(async move {
             if let Err(error) = server.run().await {

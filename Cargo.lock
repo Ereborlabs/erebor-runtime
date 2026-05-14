@@ -162,6 +162,7 @@ dependencies = [
  "erebor-runtime-events",
  "erebor-runtime-policy",
  "serde_json",
+ "snafu",
  "thiserror",
 ]
 
@@ -175,6 +176,7 @@ dependencies = [
  "futures-util",
  "serde",
  "serde_json",
+ "snafu",
  "thiserror",
  "tokio",
  "tokio-tungstenite",
@@ -191,8 +193,8 @@ dependencies = [
  "erebor-runtime-events",
  "erebor-runtime-policy",
  "serde_json",
+ "snafu",
  "thiserror",
- "tokio",
 ]
 
 [[package]]
@@ -203,7 +205,9 @@ dependencies = [
  "erebor-runtime-policy",
  "serde",
  "serde_json",
+ "snafu",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -221,6 +225,7 @@ dependencies = [
  "erebor-runtime-events",
  "serde",
  "serde_json",
+ "snafu",
  "thiserror",
 ]
 
@@ -485,6 +490,27 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "snafu"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e84b3f4eacbf3a1ce05eac6763b4d629d60cbc94d632e4092c54ade71f1e1a2"
+dependencies = [
+ "snafu-derive",
+]
+
+[[package]]
+name = "snafu-derive"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "socket2"

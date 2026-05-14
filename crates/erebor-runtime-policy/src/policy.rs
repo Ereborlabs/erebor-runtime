@@ -51,13 +51,11 @@ pub struct LocalPolicy {
 impl LocalPolicy {
     pub fn from_json_str(source: &str) -> Result<Self, PolicyError> {
         if source.trim().is_empty() {
-            return Err(PolicyError::EmptyPolicy);
+            return Err(PolicyError::empty_policy());
         }
 
         let document: PolicyDocument =
-            serde_json::from_str(source).map_err(|error| PolicyError::InvalidPolicySyntax {
-                reason: error.to_string(),
-            })?;
+            serde_json::from_str(source).map_err(PolicyError::invalid_policy_syntax)?;
 
         Self::from_document(document)
     }
@@ -67,23 +65,21 @@ impl LocalPolicy {
 
         for rule in &document.rules {
             if rule.id.trim().is_empty() {
-                return Err(PolicyError::InvalidRule {
-                    rule_id: rule.id.clone(),
-                    reason: String::from("rule id cannot be empty"),
-                });
+                return Err(PolicyError::invalid_rule(
+                    rule.id.clone(),
+                    "rule id cannot be empty",
+                ));
             }
 
             if !seen.insert(rule.id.clone()) {
-                return Err(PolicyError::DuplicateRule {
-                    rule_id: rule.id.clone(),
-                });
+                return Err(PolicyError::duplicate_rule(rule.id.clone()));
             }
 
             if rule.matcher.is_empty() {
-                return Err(PolicyError::InvalidRule {
-                    rule_id: rule.id.clone(),
-                    reason: String::from("rule must declare at least one match criterion"),
-                });
+                return Err(PolicyError::invalid_rule(
+                    rule.id.clone(),
+                    "rule must declare at least one match criterion",
+                ));
             }
         }
 

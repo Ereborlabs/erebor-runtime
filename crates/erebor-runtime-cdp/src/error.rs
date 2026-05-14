@@ -1,19 +1,92 @@
-use thiserror::Error;
+use std::io;
 
-#[derive(Debug, Error, Eq, PartialEq)]
+use erebor_runtime_core::RuntimeError;
+use snafu::Location;
+use thiserror::Error;
+use tokio_tungstenite::tungstenite::Error as WebSocketError;
+
+#[derive(Debug, Error)]
 pub enum CdpError {
     #[error("CDP method is missing")]
-    MissingMethod,
-    #[error("CDP message is invalid JSON: {0}")]
-    InvalidJson(String),
+    MissingMethod { location: Location },
+    #[error("CDP message is invalid JSON: {source}")]
+    InvalidJson {
+        source: serde_json::Error,
+        location: Location,
+    },
     #[error("CDP message id is required for governed commands")]
-    MissingMessageId,
-    #[error("unsupported governed CDP method `{0}`")]
-    UnsupportedMethod(String),
-    #[error("runtime enforcement failed: {0}")]
-    Enforcement(String),
-    #[error("CDP proxy I/O failed: {0}")]
-    Io(String),
-    #[error("CDP websocket failed: {0}")]
-    WebSocket(String),
+    MissingMessageId { location: Location },
+    #[error("unsupported governed CDP method `{method}`")]
+    UnsupportedMethod { method: String, location: Location },
+    #[error("runtime enforcement failed: {source}")]
+    Enforcement {
+        source: Box<RuntimeError>,
+        location: Location,
+    },
+    #[error("CDP proxy I/O failed: {source}")]
+    Io {
+        source: io::Error,
+        location: Location,
+    },
+    #[error("CDP websocket failed: {source}")]
+    WebSocket {
+        source: Box<WebSocketError>,
+        location: Location,
+    },
+}
+
+impl CdpError {
+    #[track_caller]
+    pub fn missing_method() -> Self {
+        Self::MissingMethod {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn invalid_json(source: serde_json::Error) -> Self {
+        Self::InvalidJson {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn missing_message_id() -> Self {
+        Self::MissingMessageId {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn unsupported_method(method: impl Into<String>) -> Self {
+        Self::UnsupportedMethod {
+            method: method.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn enforcement(source: RuntimeError) -> Self {
+        Self::Enforcement {
+            source: Box::new(source),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn io(source: io::Error) -> Self {
+        Self::Io {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn websocket(source: WebSocketError) -> Self {
+        Self::WebSocket {
+            source: Box::new(source),
+            location: Location::default(),
+        }
+    }
 }

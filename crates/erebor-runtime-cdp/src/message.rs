@@ -30,9 +30,8 @@ pub enum CdpEnforcementAction {
 }
 
 pub fn parse_cdp_message(source: &str) -> Result<CdpMessage, CdpError> {
-    let raw: RawCdpMessage =
-        serde_json::from_str(source).map_err(|error| CdpError::InvalidJson(error.to_string()))?;
-    let method = raw.method.ok_or(CdpError::MissingMethod)?;
+    let raw: RawCdpMessage = serde_json::from_str(source).map_err(CdpError::invalid_json)?;
+    let method = raw.method.ok_or_else(CdpError::missing_method)?;
 
     Ok(CdpMessage {
         id: raw.id,
@@ -56,9 +55,7 @@ where
     }
 
     let event = normalize_cdp_message(context, message)?;
-    let outcome = engine
-        .enforce(&event)
-        .map_err(|error| CdpError::Enforcement(error.to_string()))?;
+    let outcome = engine.enforce(&event).map_err(CdpError::enforcement)?;
 
     Ok(match outcome.policy_decision {
         Decision::RequireApproval { reason, .. } => CdpEnforcementAction::AwaitApproval { reason },
@@ -88,7 +85,7 @@ fn normalize_cdp_message(
     message: &CdpMessage,
 ) -> Result<RuntimeEvent, CdpError> {
     let classification = classify_cdp_method(&message.method)
-        .ok_or_else(|| CdpError::UnsupportedMethod(message.method.clone()))?;
+        .ok_or_else(|| CdpError::unsupported_method(message.method.clone()))?;
     let event_id = event_id_from_message(message)?;
     let reason_kind = match classification.role {
         crate::CdpMethodRole::GovernedCommand => "governed",
@@ -116,7 +113,7 @@ fn event_id_from_message(message: &CdpMessage) -> Result<String, CdpError> {
         return match id {
             Value::String(value) => Ok(value.clone()),
             Value::Number(value) => Ok(value.to_string()),
-            _ => Err(CdpError::MissingMessageId),
+            _ => Err(CdpError::missing_message_id()),
         };
     }
 
@@ -130,7 +127,7 @@ fn event_id_from_message(message: &CdpMessage) -> Result<String, CdpError> {
             .map_or_else(|| message.method.clone(), ToOwned::to_owned));
     }
 
-    Err(CdpError::MissingMessageId)
+    Err(CdpError::missing_message_id())
 }
 
 fn target_from_params(params: &Value) -> Option<TargetRef> {
@@ -161,7 +158,7 @@ struct RawCdpMessage {
 
 impl From<RuntimeError> for CdpError {
     fn from(error: RuntimeError) -> Self {
-        Self::Enforcement(error.to_string())
+        Self::enforcement(error)
     }
 }
 

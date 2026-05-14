@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 serde_json.workspace = true
+snafu.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

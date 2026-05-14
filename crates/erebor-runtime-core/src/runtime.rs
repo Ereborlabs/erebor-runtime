@@ -43,13 +43,13 @@ impl RuntimeLauncher {
 
     pub fn start(self) -> Result<RuntimeSupervisor, RuntimeError> {
         if self.runtimes.is_empty() {
-            return Err(RuntimeError::NoGovernanceRuntimes);
+            return Err(RuntimeError::no_governance_runtimes());
         }
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .map_err(|source| RuntimeError::BuildAsyncRuntime { source })?;
+            .map_err(RuntimeError::build_async_runtime)?;
         let (failures, failure_rx) = mpsc::channel();
         let mut running = Vec::new();
 
@@ -89,12 +89,12 @@ impl RuntimeSupervisor {
         let failure = self
             .failure_rx
             .recv()
-            .map_err(|_| RuntimeError::NoGovernanceRuntimes)?;
+            .map_err(|_| RuntimeError::no_governance_runtimes())?;
 
-        Err(RuntimeError::RuntimeExited {
-            layer: failure.layer.as_str().to_owned(),
-            reason: failure.reason,
-        })
+        Err(RuntimeError::runtime_exited(
+            failure.layer.as_str(),
+            failure.reason,
+        ))
     }
 }
 
@@ -116,9 +116,7 @@ impl RuntimeLaunchPlan {
             match layer {
                 GovernanceLayer::BrowserCdp => {
                     let Some(browser_cdp) = plan.browser_cdp().cloned() else {
-                        return Err(RuntimeError::UnsupportedGovernanceLayer {
-                            layer: layer.as_str().to_owned(),
-                        });
+                        return Err(RuntimeError::unsupported_governance_layer(layer.as_str()));
                     };
                     definitions.push(RuntimeDefinition::BrowserCdp(browser_cdp));
                 }
@@ -128,9 +126,7 @@ impl RuntimeLaunchPlan {
                 | GovernanceLayer::Saas
                 | GovernanceLayer::Desktop
                 | GovernanceLayer::InternalSystem => {
-                    return Err(RuntimeError::UnsupportedGovernanceLayer {
-                        layer: layer.as_str().to_owned(),
-                    });
+                    return Err(RuntimeError::unsupported_governance_layer(layer.as_str()));
                 }
             }
         }

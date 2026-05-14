@@ -35,7 +35,7 @@ impl CdpProxyServer {
     pub async fn bind(config: CdpProxyServerConfig, engine: CdpEngine) -> Result<Self, CdpError> {
         let listener = TcpListener::bind(config.listen)
             .await
-            .map_err(|error| CdpError::Io(error.to_string()))?;
+            .map_err(CdpError::io)?;
 
         Ok(Self {
             listener,
@@ -46,18 +46,12 @@ impl CdpProxyServer {
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr, CdpError> {
-        self.listener
-            .local_addr()
-            .map_err(|error| CdpError::Io(error.to_string()))
+        self.listener.local_addr().map_err(CdpError::io)
     }
 
     pub async fn run(self) -> Result<(), CdpError> {
         loop {
-            let (stream, _address) = self
-                .listener
-                .accept()
-                .await
-                .map_err(|error| CdpError::Io(error.to_string()))?;
+            let (stream, _address) = self.listener.accept().await.map_err(CdpError::io)?;
             let browser_url = self.browser_url.clone();
             let engine = Arc::clone(&self.engine);
             let context = self.context.clone();
@@ -176,7 +170,7 @@ fn handle_client_text(
 fn observe_browser_text(context: &CdpSessionContext, source: &str) -> Result<(), CdpError> {
     let message = match parse_cdp_message(source) {
         Ok(message) => message,
-        Err(CdpError::InvalidJson(_)) | Err(CdpError::MissingMethod) => return Ok(()),
+        Err(CdpError::InvalidJson { .. }) | Err(CdpError::MissingMethod { .. }) => return Ok(()),
         Err(error) => return Err(error),
     };
     let _event = observe_cdp_message(context, &message)?;
@@ -195,7 +189,7 @@ fn error_response(message: &CdpMessage, code: i64, reason: &str) -> Value {
 }
 
 fn websocket_error(error: WebSocketError) -> CdpError {
-    CdpError::WebSocket(error.to_string())
+    CdpError::websocket(error)
 }
 
 #[cfg(test)]

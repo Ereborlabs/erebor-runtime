@@ -1,6 +1,7 @@
 use erebor_runtime_events::RuntimeEvent;
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
 use serde::{Deserialize, Serialize};
+use snafu::Location;
 use thiserror::Error;
 
 use crate::RuntimeError;
@@ -42,10 +43,20 @@ pub enum ApprovalResponse {
     Unavailable { reason: String },
 }
 
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[derive(Clone, Debug, Error)]
 pub enum ApprovalError {
     #[error("approval provider unavailable: {reason}")]
-    Unavailable { reason: String },
+    Unavailable { reason: String, location: Location },
+}
+
+impl ApprovalError {
+    #[track_caller]
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self::Unavailable {
+            reason: reason.into(),
+            location: Location::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -79,10 +90,20 @@ impl AuditSink for NoopAuditSink {
     }
 }
 
-#[derive(Clone, Debug, Error, Eq, PartialEq)]
+#[derive(Clone, Debug, Error)]
 pub enum AuditError {
     #[error("audit sink unavailable: {reason}")]
-    Unavailable { reason: String },
+    Unavailable { reason: String, location: Location },
+}
+
+impl AuditError {
+    #[track_caller]
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        Self::Unavailable {
+            reason: reason.into(),
+            location: Location::default(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -125,7 +146,10 @@ where
     }
 
     pub fn enforce(&self, event: &RuntimeEvent) -> Result<EnforcementOutcome, RuntimeError> {
-        let policy_decision = self.evaluator.evaluate(event)?;
+        let policy_decision = self
+            .evaluator
+            .evaluate(event)
+            .map_err(RuntimeError::policy)?;
         let final_decision = self.resolve_decision(event, &policy_decision);
         let mut outcome = EnforcementOutcome {
             event: event.clone(),
@@ -164,7 +188,7 @@ where
                     Ok(ApprovalResponse::Denied { reason })
                     | Ok(ApprovalResponse::TimedOut { reason })
                     | Ok(ApprovalResponse::Unavailable { reason })
-                    | Err(ApprovalError::Unavailable { reason }) => Decision::Deny {
+                    | Err(ApprovalError::Unavailable { reason, .. }) => Decision::Deny {
                         reason,
                         rule_id: rule_id.clone(),
                     },
