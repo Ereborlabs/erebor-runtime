@@ -57,12 +57,12 @@ impl CdpSessionState {
         })
     }
 
-    pub fn record_forwarded_command(&self, command: &GovernedCdpCommand) {
+    pub fn record_provisional_forwarded_command(&self, command: &GovernedCdpCommand) {
         if let GovernedCdpCommand::PageNavigate(navigate) = command {
             self.with_data_mut(|data| {
-                let page = data.active_page_mut();
+                let page = data.provisional_active_page_mut();
                 page.url = non_empty(&navigate.url);
-                page.status = PageStatusKind::Loading;
+                page.status = PageStatusKind::ProvisionalNavigation;
             });
         }
     }
@@ -120,7 +120,7 @@ impl CdpSessionStateData {
         CdpSessionSnapshot { active_page, pages }
     }
 
-    fn active_page_mut(&mut self) -> &mut PageStatus {
+    fn provisional_active_page_mut(&mut self) -> &mut PageStatus {
         let page_id = self
             .active_page_id
             .clone()
@@ -304,7 +304,7 @@ impl PageStatus {
 #[serde(rename_all = "snake_case")]
 pub enum PageStatusKind {
     Active,
-    Loading,
+    ProvisionalNavigation,
     Closed,
     Crashed,
     Unknown,
@@ -368,11 +368,11 @@ fn non_empty(value: &str) -> Option<String> {
 mod tests {
     use cdp_protocol::page;
 
-    use super::CdpSessionState;
+    use super::{CdpSessionState, PageStatusKind};
     use crate::{decode_cdp_command, GovernedCdpCommand};
 
     #[test]
-    fn command_target_uses_active_page_url_for_script_eval(
+    fn command_target_uses_provisional_page_url_for_script_eval(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let state = CdpSessionState::from_browser_url("ws://127.0.0.1:1/devtools/page/page-1");
         let navigate = decode_cdp_command(
@@ -381,7 +381,9 @@ mod tests {
         let Some(GovernedCdpCommand::PageNavigate(navigate)) = navigate.protocol_command() else {
             return Err(std::io::Error::other("expected page navigate command").into());
         };
-        state.record_forwarded_command(&GovernedCdpCommand::PageNavigate(navigate.clone()));
+        state.record_provisional_forwarded_command(&GovernedCdpCommand::PageNavigate(
+            navigate.clone(),
+        ));
         let evaluate = decode_cdp_command(
             r#"{ "id": 2, "method": "Runtime.evaluate", "params": { "expression": "send()" } }"#,
         )?;
@@ -393,19 +395,67 @@ mod tests {
             target.and_then(|target| target.uri),
             Some(String::from("https://mail.example.test/compose"))
         );
+        assert_eq!(
+            state.snapshot().active_page.map(|page| page.status),
+            Some(PageStatusKind::ProvisionalNavigation)
+        );
         Ok(())
     }
 
     #[test]
     fn frame_tree_refresh_updates_browser_page_url() {
         let state = CdpSessionState::from_browser_url("ws://127.0.0.1:1/devtools/page/page-1");
-        let frame_tree = page::FrameTree {
+        let frame_tree = frame_tree("https://browser-state.example.test/compose");
+
+        state.record_frame_tree(&frame_tree);
+
+        assert_eq!(
+            state.snapshot().active_page.and_then(|page| page.url),
+            Some(String::from("https://browser-state.example.test/compose"))
+        );
+    }
+
+    #[test]
+    fn browser_confirmed_frame_tree_overrides_provisional_command_context(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let state = CdpSessionState::from_browser_url("ws://127.0.0.1:1/devtools/page/page-1");
+        let navigate = decode_cdp_command(
+            r#"{ "id": 1, "method": "Page.navigate", "params": { "url": "https://mail.example.test/compose" } }"#,
+        )?;
+        let Some(GovernedCdpCommand::PageNavigate(navigate)) = navigate.protocol_command() else {
+            return Err(std::io::Error::other("expected page navigate command").into());
+        };
+        state.record_provisional_forwarded_command(&GovernedCdpCommand::PageNavigate(
+            navigate.clone(),
+        ));
+        state.record_frame_tree(&frame_tree("https://calendar.example.test/day"));
+
+        let evaluate = decode_cdp_command(
+            r#"{ "id": 2, "method": "Runtime.evaluate", "params": { "expression": "send()" } }"#,
+        )?;
+        let target = evaluate
+            .protocol_command()
+            .and_then(|command| state.target_for_command(command));
+
+        assert_eq!(
+            target.and_then(|target| target.uri),
+            Some(String::from("https://calendar.example.test/day"))
+        );
+        assert_eq!(
+            state.snapshot().active_page.map(|page| page.status),
+            Some(PageStatusKind::Active)
+        );
+        Ok(())
+    }
+
+    fn frame_tree(url: &str) -> page::FrameTree {
+        page::FrameTree {
             frame: page::Frame {
                 id: String::from("frame-1"),
                 parent_id: None,
                 loader_id: String::from("loader-1"),
                 name: None,
-                url: String::from("https://browser-state.example.test/compose"),
+                url: url.to_owned(),
                 url_fragment: None,
                 domain_and_registry: String::from("example.test"),
                 security_origin: String::from("https://browser-state.example.test"),
@@ -419,13 +469,6 @@ mod tests {
                 gated_api_features: vec![],
             },
             child_frames: None,
-        };
-
-        state.record_frame_tree(&frame_tree);
-
-        assert_eq!(
-            state.snapshot().active_page.and_then(|page| page.url),
-            Some(String::from("https://browser-state.example.test/compose"))
-        );
+        }
     }
 }

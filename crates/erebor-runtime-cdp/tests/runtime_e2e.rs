@@ -191,7 +191,7 @@ async fn browser_cdp_runtime_blocks_owned_chrome_script_eval_side_effects() -> R
 }
 
 #[tokio::test]
-async fn browser_cdp_runtime_applies_policy_to_owned_page_context() -> Result<(), E2eError> {
+async fn browser_cdp_runtime_keeps_page_context_across_client_reconnects() -> Result<(), E2eError> {
     if !real_chrome_available() {
         return Ok(());
     }
@@ -200,6 +200,7 @@ async fn browser_cdp_runtime_applies_policy_to_owned_page_context() -> Result<()
         "mail.example.test",
     )?)
     .await?;
+    // Each send_command call opens a fresh client WebSocket.
     harness
         .send_command(json!({
             "id": 31,

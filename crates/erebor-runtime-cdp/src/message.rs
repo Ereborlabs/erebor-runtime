@@ -298,7 +298,7 @@ mod tests {
         let navigate = decode_cdp_command(
             r#"{ "id": 1, "method": "Page.navigate", "params": { "url": "https://mail.example.test/compose" } }"#,
         )?;
-        state.record_forwarded_command(
+        state.record_provisional_forwarded_command(
             navigate
                 .protocol_command()
                 .ok_or_else(|| std::io::Error::other("missing navigate command"))?,
