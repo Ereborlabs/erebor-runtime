@@ -44,6 +44,8 @@ pub enum CdpError {
     },
     #[error("owned browser launch failed: {reason}")]
     BrowserLaunch { reason: String, location: Location },
+    #[error("CDP browser state synchronization failed: {reason}")]
+    BrowserStateSync { reason: String, location: Location },
 }
 
 impl CdpError {
@@ -114,6 +116,14 @@ impl CdpError {
     #[track_caller]
     pub fn browser_launch(reason: impl Into<String>) -> Self {
         Self::BrowserLaunch {
+            reason: reason.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn browser_state_sync(reason: impl Into<String>) -> Self {
+        Self::BrowserStateSync {
             reason: reason.into(),
             location: Location::default(),
         }

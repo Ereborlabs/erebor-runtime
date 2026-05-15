@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use cdp_protocol::{runtime::ExecutionContextId, types::Event as ProtocolEvent};
+use cdp_protocol::{page, runtime::ExecutionContextId, types::Event as ProtocolEvent};
 use erebor_runtime_events::TargetRef;
 use serde_json::{json, Value};
 
@@ -69,6 +69,10 @@ impl CdpSessionState {
 
     pub fn record_browser_event(&self, event: &CdpEvent) {
         self.with_data_mut(|data| data.record_protocol_event(event.protocol_event()));
+    }
+
+    pub fn record_frame_tree(&self, frame_tree: &page::FrameTree) {
+        self.with_data_mut(|data| data.record_frame_tree(frame_tree));
     }
 
     fn ensure_page(&self, page_id: String) {
@@ -207,6 +211,38 @@ impl CdpSessionStateData {
         }
     }
 
+    fn record_frame_tree(&mut self, frame_tree: &page::FrameTree) {
+        let page_id = self
+            .active_page_id
+            .clone()
+            .unwrap_or_else(|| frame_tree.frame.id.clone());
+        self.active_page_id = Some(page_id.clone());
+        self.record_frame_tree_for_page(&page_id, frame_tree, true);
+    }
+
+    fn record_frame_tree_for_page(
+        &mut self,
+        page_id: &str,
+        frame_tree: &page::FrameTree,
+        main_frame: bool,
+    ) {
+        self.frame_to_page
+            .insert(frame_tree.frame.id.clone(), page_id.to_owned());
+
+        if main_frame {
+            let page = self.page_mut(page_id.to_owned());
+            page.frame_id = Some(frame_tree.frame.id.clone());
+            page.url = non_empty(&frame_tree.frame.url);
+            page.status = PageStatusKind::Active;
+        }
+
+        if let Some(child_frames) = &frame_tree.child_frames {
+            for child_frame in child_frames {
+                self.record_frame_tree_for_page(page_id, child_frame, false);
+            }
+        }
+    }
+
     fn page_mut(&mut self, page_id: String) -> &mut PageStatus {
         self.pages
             .entry(page_id.clone())
@@ -330,6 +366,8 @@ fn non_empty(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use cdp_protocol::page;
+
     use super::CdpSessionState;
     use crate::{decode_cdp_command, GovernedCdpCommand};
 
@@ -356,5 +394,38 @@ mod tests {
             Some(String::from("https://mail.example.test/compose"))
         );
         Ok(())
+    }
+
+    #[test]
+    fn frame_tree_refresh_updates_browser_page_url() {
+        let state = CdpSessionState::from_browser_url("ws://127.0.0.1:1/devtools/page/page-1");
+        let frame_tree = page::FrameTree {
+            frame: page::Frame {
+                id: String::from("frame-1"),
+                parent_id: None,
+                loader_id: String::from("loader-1"),
+                name: None,
+                url: String::from("https://browser-state.example.test/compose"),
+                url_fragment: None,
+                domain_and_registry: String::from("example.test"),
+                security_origin: String::from("https://browser-state.example.test"),
+                security_origin_details: None,
+                mime_type: String::from("text/html"),
+                unreachable_url: None,
+                ad_frame_status: None,
+                secure_context_type: page::SecureContextType::Secure,
+                cross_origin_isolated_context_type:
+                    page::CrossOriginIsolatedContextType::NotIsolated,
+                gated_api_features: vec![],
+            },
+            child_frames: None,
+        };
+
+        state.record_frame_tree(&frame_tree);
+
+        assert_eq!(
+            state.snapshot().active_page.and_then(|page| page.url),
+            Some(String::from("https://browser-state.example.test/compose"))
+        );
     }
 }

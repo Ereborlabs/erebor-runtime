@@ -1,10 +1,16 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use cdp_protocol::{
+    page, runtime as cdp_runtime,
+    types::{CallId, Method},
+};
 use erebor_runtime_core::LocalEnforcementEngine;
 use erebor_runtime_policy::PolicySet;
 use futures_util::{SinkExt, StreamExt};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{sleep, timeout, Duration};
 use tokio_tungstenite::{
     accept_hdr_async, connect_async,
     tungstenite::{
@@ -12,6 +18,7 @@ use tokio_tungstenite::{
         http::StatusCode,
         Error as WebSocketError, Message,
     },
+    MaybeTlsStream, WebSocketStream,
 };
 use tracing::{debug, info, warn};
 
@@ -22,6 +29,11 @@ use crate::{
 };
 
 type CdpEngine = LocalEnforcementEngine<PolicySet>;
+const BROWSER_STATE_SYNC_TIMEOUT: Duration = Duration::from_secs(1);
+const BROWSER_STATE_OBSERVER_RETRY: Duration = Duration::from_millis(250);
+const PAGE_ENABLE_ID: CallId = CallId::MAX - 2;
+const RUNTIME_ENABLE_ID: CallId = CallId::MAX - 1;
+const GET_FRAME_TREE_ID: CallId = CallId::MAX;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpProxyServerConfig {
@@ -53,6 +65,15 @@ impl CdpProxyServer {
         );
 
         let session_state = CdpSessionState::from_browser_url(&config.browser_url);
+        if should_observe_browser_state(&config.browser_url) {
+            let browser_url = config.browser_url.clone();
+            let context = config.context.clone();
+            let observer_state = session_state.clone();
+            let handle = tokio::spawn(async move {
+                observe_browser_state(browser_url, context, observer_state).await;
+            });
+            drop(handle);
+        }
 
         Ok(Self {
             listener,
@@ -189,6 +210,163 @@ async fn proxy_connection(
     }
 
     Ok(())
+}
+
+fn should_observe_browser_state(browser_url: &str) -> bool {
+    browser_url.contains("/devtools/page/")
+}
+
+async fn observe_browser_state(
+    browser_url: String,
+    context: CdpSessionContext,
+    session_state: CdpSessionState,
+) {
+    loop {
+        match observe_browser_state_connection(&browser_url, &context, &session_state).await {
+            Ok(()) => warn!(browser_url = %browser_url, "browser state observer stopped"),
+            Err(error) => warn!(
+                browser_url = %browser_url,
+                error = %error,
+                "browser state observer failed"
+            ),
+        }
+
+        sleep(BROWSER_STATE_OBSERVER_RETRY).await;
+    }
+}
+
+async fn observe_browser_state_connection(
+    browser_url: &str,
+    context: &CdpSessionContext,
+    session_state: &CdpSessionState,
+) -> Result<(), CdpError> {
+    let (mut browser_socket, _response) =
+        connect_async(browser_url).await.map_err(websocket_error)?;
+    bootstrap_browser_state(&mut browser_socket, context, session_state).await?;
+
+    while let Some(message) = browser_socket.next().await {
+        let message = message.map_err(websocket_error)?;
+        if let Message::Text(source) = message {
+            observe_browser_text(context, session_state, source.as_ref())?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn bootstrap_browser_state(
+    browser_socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    context: &CdpSessionContext,
+    session_state: &CdpSessionState,
+) -> Result<(), CdpError> {
+    send_internal_method(
+        browser_socket,
+        page::Enable {
+            enable_file_chooser_opened_event: None,
+        },
+        PAGE_ENABLE_ID,
+    )
+    .await?;
+    send_internal_method(browser_socket, cdp_runtime::Enable(None), RUNTIME_ENABLE_ID).await?;
+    send_internal_method(browser_socket, page::GetFrameTree(None), GET_FRAME_TREE_ID).await?;
+
+    let mut page_enabled = false;
+    let mut runtime_enabled = false;
+    let mut frame_tree_loaded = false;
+
+    while !(page_enabled && runtime_enabled && frame_tree_loaded) {
+        let message = timeout(BROWSER_STATE_SYNC_TIMEOUT, browser_socket.next())
+            .await
+            .map_err(|_| CdpError::browser_state_sync("timed out waiting for browser state"))?
+            .ok_or_else(|| CdpError::browser_state_sync("browser socket closed during state sync"))?
+            .map_err(websocket_error)?;
+
+        let Message::Text(source) = message else {
+            continue;
+        };
+        let source = source.to_string();
+        let head = serde_json::from_str::<BrowserStateMessageHead>(&source)
+            .map_err(CdpError::invalid_protocol)?;
+
+        if head.method.is_some() {
+            observe_browser_text(context, session_state, &source)?;
+            continue;
+        }
+
+        match head.id {
+            Some(PAGE_ENABLE_ID) => {
+                parse_internal_response::<Value>(&source, "Page.enable")?;
+                page_enabled = true;
+            }
+            Some(RUNTIME_ENABLE_ID) => {
+                parse_internal_response::<Value>(&source, "Runtime.enable")?;
+                runtime_enabled = true;
+            }
+            Some(GET_FRAME_TREE_ID) => {
+                let response = parse_internal_response::<page::GetFrameTreeReturnObject>(
+                    &source,
+                    "Page.getFrameTree",
+                )?;
+                session_state.record_frame_tree(&response.frame_tree);
+                frame_tree_loaded = true;
+            }
+            Some(_) | None => {}
+        }
+    }
+
+    debug!("bootstrapped browser state from upstream CDP");
+    Ok(())
+}
+
+async fn send_internal_method<T>(
+    browser_socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    method: T,
+    id: CallId,
+) -> Result<(), CdpError>
+where
+    T: Method + Serialize,
+{
+    let payload =
+        serde_json::to_string(&method.to_method_call(id)).map_err(CdpError::invalid_protocol)?;
+    browser_socket
+        .send(Message::Text(payload.into()))
+        .await
+        .map_err(websocket_error)
+}
+
+fn parse_internal_response<T>(source: &str, method: &str) -> Result<T, CdpError>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let response: BrowserStateMethodResponse<T> =
+        serde_json::from_str(source).map_err(CdpError::invalid_protocol)?;
+    if let Some(error) = response.error {
+        return Err(CdpError::browser_state_sync(format!(
+            "{method} failed: {}",
+            error.message
+        )));
+    }
+
+    response
+        .result
+        .ok_or_else(|| CdpError::browser_state_sync(format!("{method} did not return a result")))
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserStateMessageHead {
+    id: Option<CallId>,
+    method: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserStateMethodResponse<T> {
+    result: Option<T>,
+    error: Option<BrowserStateMethodError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BrowserStateMethodError {
+    message: String,
 }
 
 async fn accept_client(
