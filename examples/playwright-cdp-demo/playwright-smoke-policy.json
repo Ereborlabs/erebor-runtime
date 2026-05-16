@@ -1,0 +1,30 @@
+{
+  "rules": [
+    {
+      "id": "deny-playwright-owned-denied-payload",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_script_eval",
+        "payload_contains": "owned-denied"
+      },
+      "decision": "deny",
+      "reason": "playwright smoke denied suspicious script payload"
+    },
+    {
+      "id": "allow-playwright-navigation",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_navigate"
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "allow-playwright-target-management",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_target_manage"
+      },
+      "decision": "allow"
+    }
+  ]
+}

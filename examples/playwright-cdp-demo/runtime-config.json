@@ -1,0 +1,14 @@
+{
+  "policies": [
+    "playwright-smoke-policy.json"
+  ],
+  "governance": {
+    "browser_cdp": {
+      "enabled": true,
+      "listen": "127.0.0.1:3738",
+      "browser": {
+        "headless": true
+      }
+    }
+  }
+}

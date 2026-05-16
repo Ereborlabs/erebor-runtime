@@ -1,0 +1,31 @@
+{
+  "rules": [
+    {
+      "id": "approve-script-eval",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_script_eval"
+      },
+      "decision": "require_approval",
+      "reason": "script evaluation requires approval"
+    },
+    {
+      "id": "allow-navigation",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_navigate"
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "review-network-continue",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "network_request",
+        "risk_at_least": "medium"
+      },
+      "decision": "require_approval",
+      "reason": "continued paused network requests require approval"
+    }
+  ]
+}
