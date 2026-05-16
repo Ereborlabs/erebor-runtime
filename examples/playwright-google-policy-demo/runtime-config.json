@@ -1,0 +1,14 @@
+{
+  "policies": [
+    "google-search-policy.json"
+  ],
+  "governance": {
+    "browser_cdp": {
+      "enabled": true,
+      "listen": "127.0.0.1:3740",
+      "browser": {
+        "headless": true
+      }
+    }
+  }
+}

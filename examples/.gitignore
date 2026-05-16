@@ -1,2 +1,2 @@
 # Node mocule dependencies
-node_modules/
+playwright-*/node_modules

@@ -1,0 +1,59 @@
+{
+  "rules": [
+    {
+      "id": "allow-playwright-target-management",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_target_manage"
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "allow-google-search-something-something",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_navigate",
+        "target_contains": "https://www.google.com/search?q=Something+Something"
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "deny-other-google-searches",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_navigate",
+        "target_contains": "https://www.google.com/search"
+      },
+      "decision": "deny",
+      "reason": "only the Something Something Google search is allowed by demo policy"
+    },
+    {
+      "id": "allow-google-navigation",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_navigate",
+        "target_contains": "https://www.google.com"
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "deny-microsoft-navigation",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_navigate",
+        "target_contains": "microsoft.com"
+      },
+      "decision": "deny",
+      "reason": "navigation to microsoft.com is denied by demo policy"
+    },
+    {
+      "id": "deny-other-navigation",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_navigate"
+      },
+      "decision": "deny",
+      "reason": "only Google navigation is allowed by demo policy"
+    }
+  ]
+}
