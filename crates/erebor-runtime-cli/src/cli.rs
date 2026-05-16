@@ -204,8 +204,11 @@ fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, CliError> {
         source: error,
         location: Location::default(),
     })?;
+    let mut config: RuntimeConfig =
+        RuntimeConfig::from_json_str(&source).map_err(CliError::invalid_config)?;
+    resolve_config_paths(path, &mut config);
 
-    RuntimeConfig::from_json_str(&source).map_err(CliError::invalid_config)
+    Ok(config)
 }
 
 fn build_start_plan(path: &Path) -> Result<RuntimeStartPlan, CliError> {
@@ -241,6 +244,40 @@ fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<RuntimeLaunchPlan,
     let plan = config.start_plan().map_err(CliError::invalid_config)?;
 
     RuntimeLaunchPlan::from_start_plan(args.listen, &plan).map_err(CliError::runtime)
+}
+
+fn resolve_config_paths(config_path: &Path, config: &mut RuntimeConfig) {
+    let base_dir = config_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty());
+    for policy in &mut config.policies {
+        resolve_config_path(base_dir, policy);
+    }
+    resolve_optional_config_path(
+        base_dir,
+        &mut config.governance.browser_cdp.browser.executable,
+    );
+    resolve_optional_config_path(
+        base_dir,
+        &mut config.governance.browser_cdp.browser.user_data_dir,
+    );
+}
+
+fn resolve_optional_config_path(base_dir: Option<&Path>, path: &mut Option<PathBuf>) {
+    if let Some(path) = path {
+        resolve_config_path(base_dir, path);
+    }
+}
+
+fn resolve_config_path(base_dir: Option<&Path>, path: &mut PathBuf) {
+    if path.is_absolute() {
+        return;
+    }
+    let Some(base_dir) = base_dir else {
+        return;
+    };
+
+    *path = base_dir.join(&path);
 }
 
 fn read_policy(path: &Path) -> Result<LocalPolicy, CliError> {
@@ -595,7 +632,10 @@ mod tests {
         assert_eq!(plan.control_listen(), "127.0.0.1:3737".parse()?);
         assert_eq!(
             plan.policy_paths(),
-            vec![PathBuf::from("policies/browser.json")]
+            vec![config_path
+                .parent()
+                .ok_or_else(|| std::io::Error::other("missing config parent"))?
+                .join("policies/browser.json")]
         );
         assert_eq!(plan.layers(), vec![GovernanceLayer::BrowserCdp]);
         let RuntimeDefinition::BrowserCdp(browser_cdp) = &plan.definitions()[0];
@@ -604,6 +644,37 @@ mod tests {
             browser_cdp.browser_url(),
             Some("ws://127.0.0.1:9222/devtools/browser/demo")
         );
+
+        let _result = fs::remove_file(config_path);
+        Ok(())
+    }
+
+    #[test]
+    fn start_preserves_absolute_policy_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let absolute_policy_path =
+            std::env::temp_dir().join(format!("erebor-runtime-policy-{}.json", std::process::id()));
+        let config_path = write_temp_file(&format!(
+            r#"
+            {{
+              "policies": ["{}"],
+              "governance": {{
+                "browser_cdp": {{
+                  "enabled": true,
+                  "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo"
+                }}
+              }}
+            }}
+            "#,
+            absolute_policy_path.display()
+        ))?;
+        let args = StartArgs {
+            config: config_path.clone(),
+            listen: "127.0.0.1:3737".parse()?,
+        };
+
+        let plan = build_runtime_launch_plan(&args)?;
+
+        assert_eq!(plan.policy_paths(), vec![absolute_policy_path]);
 
         let _result = fs::remove_file(config_path);
         Ok(())
