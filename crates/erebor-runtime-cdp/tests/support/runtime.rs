@@ -1,4 +1,7 @@
-use std::{sync::mpsc, time::Duration};
+use std::{
+    sync::{mpsc, OnceLock},
+    time::Duration,
+};
 
 use erebor_runtime_cdp::{BrowserCdpRuntime, BrowserSessionManager, GovernedBrowserSession};
 use erebor_runtime_core::{
@@ -9,8 +12,13 @@ use erebor_runtime_e2e::{
     MiniSystem,
 };
 use erebor_runtime_policy::{LocalPolicy, PolicySet};
+use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
+use tokio::sync::{Mutex, MutexGuard};
+use tokio::time::timeout;
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 
 pub use crate::common::{
     allow_all_policy, deny_script_eval_policy, real_chrome_available,
@@ -26,6 +34,15 @@ pub struct CdpE2eHarness {
     endpoint: String,
     direct_browser_endpoint: Option<String>,
     running_runtime: RunningRuntime,
+}
+
+static OWNED_BROWSER_E2E_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+pub async fn owned_browser_e2e_guard() -> MutexGuard<'static, ()> {
+    OWNED_BROWSER_E2E_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await
 }
 
 impl CdpE2eHarness {
@@ -95,6 +112,11 @@ impl CdpE2eHarness {
         send_json_request(&self.endpoint, command).await
     }
 
+    pub async fn browser_level_client(&self) -> Result<BrowserLevelCdpClient, E2eError> {
+        let _keep_runtime_alive = (&self.runtime_host, &self.browser);
+        BrowserLevelCdpClient::connect(&self.endpoint).await
+    }
+
     pub async fn assert_command_has_no_response(
         &self,
         command: Value,
@@ -136,6 +158,183 @@ impl CdpE2eHarness {
     pub fn endpoint(&self) -> &str {
         &self.endpoint
     }
+}
+
+pub struct BrowserLevelCdpClient {
+    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    next_id: u32,
+    target_id: String,
+    session_id: String,
+}
+
+impl BrowserLevelCdpClient {
+    async fn connect(endpoint: &str) -> Result<Self, E2eError> {
+        let (socket, _response) = connect_async(endpoint).await.map_err(E2eError::websocket)?;
+        let mut client = Self {
+            socket,
+            next_id: 1,
+            target_id: String::new(),
+            session_id: String::new(),
+        };
+        let target_id = client.find_or_create_page_target().await?;
+        client.attach_to_target(target_id).await?;
+        client.enable_page_domains().await?;
+
+        Ok(client)
+    }
+
+    pub async fn reconnect_to(endpoint: &str, target_id: String) -> Result<Self, E2eError> {
+        let (socket, _response) = connect_async(endpoint).await.map_err(E2eError::websocket)?;
+        let mut client = Self {
+            socket,
+            next_id: 1,
+            target_id: String::new(),
+            session_id: String::new(),
+        };
+        client.attach_to_target(target_id).await?;
+        client.enable_page_domains().await?;
+
+        Ok(client)
+    }
+
+    pub fn target_id(&self) -> &str {
+        &self.target_id
+    }
+
+    pub async fn navigate(&mut self, url: &str) -> Result<Value, E2eError> {
+        self.session_command("Page.navigate", json!({ "url": url }))
+            .await
+    }
+
+    pub async fn evaluate(&mut self, expression: &str) -> Result<Value, E2eError> {
+        self.session_command(
+            "Runtime.evaluate",
+            json!({
+                "expression": expression,
+                "returnByValue": true
+            }),
+        )
+        .await
+    }
+
+    async fn find_or_create_page_target(&mut self) -> Result<String, E2eError> {
+        let targets = self.command("Target.getTargets", json!({})).await?;
+        if let Some(target_id) = targets
+            .pointer("/result/targetInfos")
+            .and_then(Value::as_array)
+            .and_then(|targets| {
+                targets.iter().find_map(|target| {
+                    let is_page = target
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| kind == "page");
+                    is_page.then(|| {
+                        target
+                            .get("targetId")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })?
+                })
+            })
+        {
+            return Ok(target_id);
+        }
+
+        let created = self
+            .command("Target.createTarget", json!({ "url": "about:blank" }))
+            .await?;
+        created
+            .pointer("/result/targetId")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| E2eError::external("browser-level CDP target creation", MissingTargetId))
+    }
+
+    async fn attach_to_target(&mut self, target_id: String) -> Result<(), E2eError> {
+        let attached = self
+            .command(
+                "Target.attachToTarget",
+                json!({
+                    "targetId": target_id.clone(),
+                    "flatten": true
+                }),
+            )
+            .await?;
+        self.session_id = attached
+            .pointer("/result/sessionId")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| E2eError::external("browser-level CDP attach", MissingSessionId))?;
+        self.target_id = target_id;
+
+        Ok(())
+    }
+
+    async fn enable_page_domains(&mut self) -> Result<(), E2eError> {
+        let _runtime = self.session_command("Runtime.enable", json!({})).await?;
+        let _page = self.session_command("Page.enable", json!({})).await?;
+        Ok(())
+    }
+
+    async fn command(&mut self, method: &str, params: Value) -> Result<Value, E2eError> {
+        self.send_call(method, params, None).await
+    }
+
+    async fn session_command(&mut self, method: &str, params: Value) -> Result<Value, E2eError> {
+        let session_id = self.session_id.clone();
+        self.send_call(method, params, Some(session_id.as_str()))
+            .await
+    }
+
+    async fn send_call(
+        &mut self,
+        method: &str,
+        params: Value,
+        session_id: Option<&str>,
+    ) -> Result<Value, E2eError> {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        let mut payload = json!({
+            "id": id,
+            "method": method,
+            "params": params
+        });
+        if let Some(session_id) = session_id {
+            payload["sessionId"] = Value::String(session_id.to_owned());
+        }
+        self.socket
+            .send(Message::Text(payload.to_string().into()))
+            .await
+            .map_err(E2eError::websocket)?;
+
+        loop {
+            let response = read_browser_level_message(&mut self.socket).await?;
+            if response.pointer("/id") == Some(&Value::from(id)) {
+                return Ok(response);
+            }
+        }
+    }
+}
+
+async fn read_browser_level_message(
+    socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+) -> Result<Value, E2eError> {
+    let message = timeout(Duration::from_secs(2), socket.next())
+        .await
+        .map_err(|_| E2eError::timeout("browser-level CDP response"))?
+        .ok_or_else(|| E2eError::closed("browser-level CDP response"))?
+        .map_err(E2eError::websocket)?;
+    if !message.is_text() {
+        return Err(E2eError::unsupported_websocket_message(
+            "browser-level CDP response",
+        ));
+    }
+
+    let source = message
+        .into_text()
+        .map_err(E2eError::websocket)?
+        .to_string();
+    serde_json::from_str(&source).map_err(E2eError::json)
 }
 
 pub fn deny_payload_script_eval_policy(needle: &str) -> Result<LocalPolicy, E2eError> {
@@ -298,3 +497,11 @@ struct MissingMiniUpstream;
 #[derive(Debug, thiserror::Error)]
 #[error("browser CDP runtime config was missing from the start plan")]
 struct MissingRuntimeConfig;
+
+#[derive(Debug, thiserror::Error)]
+#[error("browser-level CDP response did not include a target id")]
+struct MissingTargetId;
+
+#[derive(Debug, thiserror::Error)]
+#[error("browser-level CDP response did not include a session id")]
+struct MissingSessionId;

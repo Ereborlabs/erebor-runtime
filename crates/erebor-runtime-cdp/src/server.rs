@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use cdp_protocol::{
-    page, runtime as cdp_runtime,
+    page, runtime as cdp_runtime, target,
     types::{CallId, Method},
 };
 use erebor_runtime_core::LocalEnforcementEngine;
@@ -23,14 +23,17 @@ use tokio_tungstenite::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    decode_cdp_command, decode_cdp_event, enforce_cdp_command_with_session_state,
-    observe_cdp_event, CdpCommand, CdpEnforcementAction, CdpError, CdpSessionContext,
-    CdpSessionState,
+    decode_cdp_command, decode_cdp_event, enforce_cdp_command_with_client_state, observe_cdp_event,
+    BrowserTargetId, CdpCommand, CdpEnforcementAction, CdpError, CdpEvent, CdpSessionContext,
+    CdpSessionState, ClientTargetSessions,
 };
 
 type CdpEngine = LocalEnforcementEngine<PolicySet>;
 const OBSERVER_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(1);
 const OBSERVER_RECONNECT_DELAY: Duration = Duration::from_millis(250);
+const OBSERVER_SET_DISCOVER_TARGETS_ID: CallId = CallId::MAX - 5;
+const OBSERVER_SET_AUTO_ATTACH_ID: CallId = CallId::MAX - 4;
+const OBSERVER_GET_TARGETS_ID: CallId = CallId::MAX - 3;
 const OBSERVER_PAGE_ENABLE_ID: CallId = CallId::MAX - 2;
 const OBSERVER_RUNTIME_ENABLE_ID: CallId = CallId::MAX - 1;
 const OBSERVER_GET_FRAME_TREE_ID: CallId = CallId::MAX;
@@ -65,7 +68,15 @@ impl CdpProxyServer {
         );
 
         let session_state = CdpSessionState::from_browser_url(&config.browser_url);
-        if should_start_page_state_observer(&config.browser_url) {
+        if should_start_browser_state_observer(&config.browser_url) {
+            let browser_url = config.browser_url.clone();
+            let context = config.context.clone();
+            let observer_state = session_state.clone();
+            let handle = tokio::spawn(async move {
+                run_browser_state_observer(browser_url, context, observer_state).await;
+            });
+            drop(handle);
+        } else if should_start_page_state_observer(&config.browser_url) {
             let browser_url = config.browser_url.clone();
             let context = config.context.clone();
             let observer_state = session_state.clone();
@@ -145,6 +156,7 @@ async fn proxy_connection(
         .map_err(websocket_error)?;
     let (mut client_write, mut client_read) = client_socket.split();
     let (mut browser_write, mut browser_read) = browser_socket.split();
+    let mut client_targets = ClientTargetSessions::default();
 
     loop {
         tokio::select! {
@@ -156,7 +168,13 @@ async fn proxy_connection(
 
                 if client_message.is_text() {
                     let source = client_message.into_text().map_err(websocket_error)?.to_string();
-                    match handle_client_text(engine.as_ref(), &context, &session_state, &source)? {
+                    match handle_client_text(
+                        engine.as_ref(),
+                        &context,
+                        &session_state,
+                        &client_targets,
+                        &source,
+                    )? {
                         ClientTextAction::Forward { payload } => {
                             browser_write
                                 .send(Message::Text(payload.into()))
@@ -190,7 +208,12 @@ async fn proxy_connection(
 
                 if browser_message.is_text() {
                     let source = browser_message.into_text().map_err(websocket_error)?.to_string();
-                    observe_browser_event_text(&context, &session_state, &source)?;
+                    let _event = observe_browser_event_text(
+                        &context,
+                        &session_state,
+                        Some(&mut client_targets),
+                        &source,
+                    )?;
                     client_write
                         .send(Message::Text(source.into()))
                         .await
@@ -214,6 +237,174 @@ async fn proxy_connection(
 
 fn should_start_page_state_observer(browser_url: &str) -> bool {
     browser_url.contains("/devtools/page/")
+}
+
+fn should_start_browser_state_observer(browser_url: &str) -> bool {
+    browser_url.contains("/devtools/browser/")
+}
+
+async fn run_browser_state_observer(
+    browser_url: String,
+    context: CdpSessionContext,
+    session_state: CdpSessionState,
+) {
+    loop {
+        match observe_browser_state_connection(&browser_url, &context, &session_state).await {
+            Ok(()) => warn!(browser_url = %browser_url, "browser state observer stopped"),
+            Err(error) => warn!(
+                browser_url = %browser_url,
+                error = %error,
+                "browser state observer failed"
+            ),
+        }
+
+        sleep(OBSERVER_RECONNECT_DELAY).await;
+    }
+}
+
+async fn observe_browser_state_connection(
+    browser_url: &str,
+    context: &CdpSessionContext,
+    session_state: &CdpSessionState,
+) -> Result<(), CdpError> {
+    let (mut browser_socket, _response) =
+        connect_async(browser_url).await.map_err(websocket_error)?;
+    bootstrap_browser_state_observer(&mut browser_socket, context, session_state).await?;
+    let mut observer_targets = ClientTargetSessions::default();
+    let mut frame_tree_requests = FrameTreeRequests::default();
+    let mut next_observer_command_id = ObserverCommandIds::default();
+
+    while let Some(message) = browser_socket.next().await {
+        let message = message.map_err(websocket_error)?;
+        let Message::Text(source) = message else {
+            continue;
+        };
+        observe_browser_level_message(
+            &mut browser_socket,
+            context,
+            session_state,
+            &mut observer_targets,
+            &mut frame_tree_requests,
+            &mut next_observer_command_id,
+            source.as_ref(),
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
+async fn bootstrap_browser_state_observer(
+    browser_socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    context: &CdpSessionContext,
+    session_state: &CdpSessionState,
+) -> Result<(), CdpError> {
+    send_internal_method(
+        browser_socket,
+        target::SetDiscoverTargets {
+            discover: true,
+            filter: None,
+        },
+        OBSERVER_SET_DISCOVER_TARGETS_ID,
+    )
+    .await?;
+    send_internal_method(
+        browser_socket,
+        target::SetAutoAttach {
+            auto_attach: true,
+            wait_for_debugger_on_start: false,
+            flatten: Some(true),
+            filter: None,
+        },
+        OBSERVER_SET_AUTO_ATTACH_ID,
+    )
+    .await?;
+    send_internal_method(
+        browser_socket,
+        target::GetTargets { filter: None },
+        OBSERVER_GET_TARGETS_ID,
+    )
+    .await?;
+
+    let mut discover_enabled = false;
+    let mut auto_attach_enabled = false;
+    let mut targets_loaded = false;
+    let mut observer_targets = ClientTargetSessions::default();
+    let mut frame_tree_requests = FrameTreeRequests::default();
+    let mut next_observer_command_id = ObserverCommandIds::default();
+
+    while !(discover_enabled && auto_attach_enabled && targets_loaded) {
+        let message = timeout(OBSERVER_BOOTSTRAP_TIMEOUT, browser_socket.next())
+            .await
+            .map_err(|_| {
+                CdpError::browser_state_sync("timed out waiting for browser observer bootstrap")
+            })?
+            .ok_or_else(|| {
+                CdpError::browser_state_sync("browser socket closed during observer bootstrap")
+            })?
+            .map_err(websocket_error)?;
+
+        let Message::Text(source) = message else {
+            continue;
+        };
+        let source = source.to_string();
+        let head = serde_json::from_str::<ObserverBootstrapMessageHead>(&source)
+            .map_err(CdpError::invalid_protocol)?;
+
+        if head.method.is_some() {
+            observe_browser_level_message(
+                browser_socket,
+                context,
+                session_state,
+                &mut observer_targets,
+                &mut frame_tree_requests,
+                &mut next_observer_command_id,
+                &source,
+            )
+            .await?;
+            continue;
+        }
+
+        match head.id {
+            Some(OBSERVER_SET_DISCOVER_TARGETS_ID) => {
+                parse_internal_response::<target::SetDiscoverTargetsReturnObject>(
+                    &source,
+                    "Target.setDiscoverTargets",
+                )?;
+                discover_enabled = true;
+            }
+            Some(OBSERVER_SET_AUTO_ATTACH_ID) => {
+                parse_internal_response::<target::SetAutoAttachReturnObject>(
+                    &source,
+                    "Target.setAutoAttach",
+                )?;
+                auto_attach_enabled = true;
+            }
+            Some(OBSERVER_GET_TARGETS_ID) => {
+                let response = parse_internal_response::<target::GetTargetsReturnObject>(
+                    &source,
+                    "Target.getTargets",
+                )?;
+                for target_info in response.target_infos {
+                    session_state.record_target_info(&target_info);
+                }
+                targets_loaded = true;
+            }
+            Some(id) => {
+                if let Some(target_id) = frame_tree_requests.remove(id) {
+                    let response = parse_internal_response::<page::GetFrameTreeReturnObject>(
+                        &source,
+                        "Page.getFrameTree",
+                    )?;
+                    session_state.record_frame_tree_for_target(target_id, &response.frame_tree);
+                }
+            }
+            None => {}
+        }
+    }
+
+    debug!("bootstrapped browser-level state observer from upstream CDP");
+    Ok(())
 }
 
 async fn run_page_state_observer(
@@ -247,7 +438,7 @@ async fn observe_page_state_connection(
     while let Some(message) = browser_socket.next().await {
         let message = message.map_err(websocket_error)?;
         if let Message::Text(source) = message {
-            observe_browser_event_text(context, session_state, source.as_ref())?;
+            let _event = observe_browser_event_text(context, session_state, None, source.as_ref())?;
         }
     }
 
@@ -301,7 +492,7 @@ async fn bootstrap_page_state_observer(
             .map_err(CdpError::invalid_protocol)?;
 
         if head.method.is_some() {
-            observe_browser_event_text(context, session_state, &source)?;
+            let _event = observe_browser_event_text(context, session_state, None, &source)?;
             continue;
         }
 
@@ -330,6 +521,59 @@ async fn bootstrap_page_state_observer(
     Ok(())
 }
 
+async fn observe_browser_level_message(
+    browser_socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    context: &CdpSessionContext,
+    session_state: &CdpSessionState,
+    observer_targets: &mut ClientTargetSessions,
+    frame_tree_requests: &mut FrameTreeRequests,
+    next_observer_command_id: &mut ObserverCommandIds,
+    source: &str,
+) -> Result<(), CdpError> {
+    if let Some(target_id) = frame_tree_response_target(source, frame_tree_requests)? {
+        let response =
+            parse_internal_response::<page::GetFrameTreeReturnObject>(source, "Page.getFrameTree")?;
+        session_state.record_frame_tree_for_target(target_id, &response.frame_tree);
+        return Ok(());
+    }
+
+    let Some(event) =
+        observe_browser_event_text(context, session_state, Some(observer_targets), source)?
+    else {
+        return Ok(());
+    };
+
+    if let Some((session_id, target_id)) = attached_page_target(&event) {
+        send_internal_session_method(
+            browser_socket,
+            page::Enable {
+                enable_file_chooser_opened_event: None,
+            },
+            next_observer_command_id.next(),
+            &session_id,
+        )
+        .await?;
+        send_internal_session_method(
+            browser_socket,
+            cdp_runtime::Enable(None),
+            next_observer_command_id.next(),
+            &session_id,
+        )
+        .await?;
+        let get_frame_tree_id = next_observer_command_id.next();
+        frame_tree_requests.insert(get_frame_tree_id, target_id);
+        send_internal_session_method(
+            browser_socket,
+            page::GetFrameTree(None),
+            get_frame_tree_id,
+            &session_id,
+        )
+        .await?;
+    }
+
+    Ok(())
+}
+
 async fn send_internal_method<T>(
     browser_socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
     method: T,
@@ -344,6 +588,58 @@ where
         .send(Message::Text(payload.into()))
         .await
         .map_err(websocket_error)
+}
+
+async fn send_internal_session_method<T>(
+    browser_socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    method: T,
+    id: CallId,
+    session_id: &str,
+) -> Result<(), CdpError>
+where
+    T: Method + Serialize,
+{
+    let mut payload =
+        serde_json::to_value(method.to_method_call(id)).map_err(CdpError::invalid_protocol)?;
+    payload["sessionId"] = Value::String(session_id.to_owned());
+    browser_socket
+        .send(Message::Text(payload.to_string().into()))
+        .await
+        .map_err(websocket_error)
+}
+
+#[derive(Debug, Default)]
+struct FrameTreeRequests {
+    requests: std::collections::HashMap<CallId, BrowserTargetId>,
+}
+
+impl FrameTreeRequests {
+    fn insert(&mut self, id: CallId, target_id: BrowserTargetId) {
+        self.requests.insert(id, target_id);
+    }
+
+    fn remove(&mut self, id: CallId) -> Option<BrowserTargetId> {
+        self.requests.remove(&id)
+    }
+}
+
+#[derive(Debug)]
+struct ObserverCommandIds {
+    next: CallId,
+}
+
+impl Default for ObserverCommandIds {
+    fn default() -> Self {
+        Self { next: 1 }
+    }
+}
+
+impl ObserverCommandIds {
+    fn next(&mut self) -> CallId {
+        let id = self.next;
+        self.next = self.next.saturating_add(1);
+        id
+    }
 }
 
 fn parse_internal_response<T>(source: &str, method: &str) -> Result<T, CdpError>
@@ -362,6 +658,25 @@ where
     response
         .result
         .ok_or_else(|| CdpError::browser_state_sync(format!("{method} did not return a result")))
+}
+
+fn frame_tree_response_target(
+    source: &str,
+    frame_tree_requests: &mut FrameTreeRequests,
+) -> Result<Option<BrowserTargetId>, CdpError> {
+    let response: ObserverBootstrapMessageHead =
+        serde_json::from_str(source).map_err(CdpError::invalid_protocol)?;
+    Ok(response.id.and_then(|id| frame_tree_requests.remove(id)))
+}
+
+fn attached_page_target(event: &CdpEvent) -> Option<(String, BrowserTargetId)> {
+    let cdp_protocol::types::Event::AttachedToTarget(attached) = event.protocol_event() else {
+        return None;
+    };
+    let target_id = BrowserTargetId::new(attached.params.target_info.target_id.clone());
+    let kind = crate::BrowserTargetKind::from_cdp_target_type(&attached.params.target_info.r#type);
+    kind.is_page_like()
+        .then(|| (attached.params.session_id.clone(), target_id))
 }
 
 #[derive(Debug, Deserialize)]
@@ -424,14 +739,25 @@ fn handle_client_text(
     engine: &CdpEngine,
     context: &CdpSessionContext,
     session_state: &CdpSessionState,
+    client_targets: &ClientTargetSessions,
     source: &str,
 ) -> Result<ClientTextAction, CdpError> {
     let command = decode_cdp_command(source)?;
 
-    match enforce_cdp_command_with_session_state(engine, context, &command, session_state)? {
+    match enforce_cdp_command_with_client_state(
+        engine,
+        context,
+        &command,
+        session_state,
+        Some(client_targets),
+    )? {
         CdpEnforcementAction::Forward => {
-            if let Some(command) = command.protocol_command() {
-                session_state.record_provisional_forwarded_command(command);
+            if let Some(protocol_command) = command.protocol_command() {
+                session_state.record_provisional_forwarded_command_for_client_session(
+                    protocol_command,
+                    command.session_id.as_deref(),
+                    Some(client_targets),
+                );
             }
             debug!(
                 method = %command.method,
@@ -468,14 +794,15 @@ fn handle_client_text(
 fn observe_browser_event_text(
     context: &CdpSessionContext,
     session_state: &CdpSessionState,
+    client_targets: Option<&mut ClientTargetSessions>,
     source: &str,
-) -> Result<(), CdpError> {
+) -> Result<Option<CdpEvent>, CdpError> {
     let event = match decode_cdp_event(source) {
         Ok(Some(event)) => event,
-        Ok(None) | Err(CdpError::InvalidJson { .. }) => return Ok(()),
+        Ok(None) | Err(CdpError::InvalidJson { .. }) => return Ok(None),
         Err(error) => return Err(error),
     };
-    session_state.record_browser_event(&event);
+    session_state.record_browser_event_for_client_session(&event, client_targets);
     let runtime_event = observe_cdp_event(context, &event)?;
     debug!(
         method = %event.method(),
@@ -483,17 +810,23 @@ fn observe_browser_event_text(
         "observed CDP context message"
     );
 
-    Ok(())
+    Ok(Some(event))
 }
 
 fn error_response(command: &CdpCommand, code: i64, reason: &str) -> Value {
-    json!({
+    let mut response = json!({
         "id": command.id,
         "error": {
             "code": code,
             "message": reason
         }
-    })
+    });
+
+    if let Some(session_id) = command.session_id.as_ref() {
+        response["sessionId"] = Value::String(session_id.clone());
+    }
+
+    response
 }
 
 fn websocket_error(error: WebSocketError) -> CdpError {
@@ -511,7 +844,7 @@ mod tests {
     use super::{
         handle_client_text, observe_browser_event_text, request_has_auth_token, ClientTextAction,
     };
-    use crate::{CdpSessionContext, CdpSessionState};
+    use crate::{CdpSessionContext, CdpSessionState, ClientTargetSessions};
 
     fn context() -> CdpSessionContext {
         CdpSessionContext {
@@ -533,7 +866,13 @@ mod tests {
             ]));
         let source = r#"{ "id": 1, "method": "Page.navigate", "params": { "url": "https://example.com/" } }"#;
 
-        let action = handle_client_text(&engine, &context(), &CdpSessionState::default(), source)?;
+        let action = handle_client_text(
+            &engine,
+            &context(),
+            &CdpSessionState::default(),
+            &ClientTargetSessions::default(),
+            source,
+        )?;
 
         assert_eq!(
             action,
@@ -570,13 +909,69 @@ mod tests {
         let source =
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#;
 
-        let action = handle_client_text(&engine, &context(), &CdpSessionState::default(), source)?;
+        let action = handle_client_text(
+            &engine,
+            &context(),
+            &CdpSessionState::default(),
+            &ClientTargetSessions::default(),
+            source,
+        )?;
 
         assert_eq!(
             action,
             ClientTextAction::Reply {
                 payload: json!({
                     "id": 1,
+                    "error": {
+                        "code": -32000,
+                        "message": "script evaluation denied"
+                    }
+                })
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn client_text_preserves_session_id_in_block_response() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let policy = LocalPolicy::from_json_str(
+            r#"
+            {
+              "rules": [
+                {
+                  "id": "deny-script-eval",
+                  "match": {
+                    "surface": "browser_cdp",
+                    "action": "browser_script_eval"
+                  },
+                  "decision": "deny",
+                  "reason": "script evaluation denied"
+                }
+              ]
+            }
+            "#,
+        )?;
+        let engine =
+            erebor_runtime_core::LocalEnforcementEngine::new(PolicySet::from_policies(vec![
+                policy,
+            ]));
+        let source = r#"{ "id": 5, "sessionId": "cdp-session-1", "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#;
+
+        let action = handle_client_text(
+            &engine,
+            &context(),
+            &CdpSessionState::default(),
+            &ClientTargetSessions::default(),
+            source,
+        )?;
+
+        assert_eq!(
+            action,
+            ClientTextAction::Reply {
+                payload: json!({
+                    "id": 5,
+                    "sessionId": "cdp-session-1",
                     "error": {
                         "code": -32000,
                         "message": "script evaluation denied"
@@ -613,7 +1008,13 @@ mod tests {
         let source =
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#;
 
-        let action = handle_client_text(&engine, &context(), &CdpSessionState::default(), source)?;
+        let action = handle_client_text(
+            &engine,
+            &context(),
+            &CdpSessionState::default(),
+            &ClientTargetSessions::default(),
+            source,
+        )?;
 
         assert_eq!(action, ClientTextAction::HoldForApproval);
         Ok(())
@@ -624,6 +1025,7 @@ mod tests {
         observe_browser_event_text(
             &context(),
             &CdpSessionState::default(),
+            None,
             r#"{ "id": 1, "result": {} }"#,
         )?;
 

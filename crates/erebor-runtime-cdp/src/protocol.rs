@@ -1,5 +1,5 @@
 use cdp_protocol::{
-    fetch, input, page, runtime,
+    fetch, input, page, runtime, target,
     types::{CallId, Event as ProtocolEvent, Method},
 };
 use erebor_runtime_events::TargetRef;
@@ -12,6 +12,7 @@ use crate::CdpError;
 pub struct CdpCommand {
     pub id: CallId,
     pub method: String,
+    pub session_id: Option<String>,
     params: Option<Value>,
     protocol: Option<GovernedCdpCommand>,
 }
@@ -31,6 +32,7 @@ impl CdpCommand {
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpEvent {
     method: &'static str,
+    session_id: Option<String>,
     event_id: String,
     target: Option<TargetRef>,
     params: Value,
@@ -49,6 +51,11 @@ impl CdpEvent {
     }
 
     #[must_use]
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    #[must_use]
     pub fn target(&self) -> Option<TargetRef> {
         self.target.clone()
     }
@@ -63,10 +70,14 @@ impl CdpEvent {
         &self.protocol
     }
 
-    fn from_protocol(protocol: ProtocolEvent) -> Result<Option<Self>, CdpError> {
+    fn from_protocol(
+        protocol: ProtocolEvent,
+        session_id: Option<String>,
+    ) -> Result<Option<Self>, CdpError> {
         let event = match protocol {
             ProtocolEvent::FetchRequestPaused(event) => Self {
                 method: "Fetch.requestPaused",
+                session_id,
                 event_id: event.params.request_id.clone(),
                 target: target_ref(
                     Some(event.params.request_id.clone()),
@@ -77,6 +88,7 @@ impl CdpEvent {
             },
             ProtocolEvent::NetworkRequestWillBeSent(event) => Self {
                 method: "Network.requestWillBeSent",
+                session_id,
                 event_id: event.params.request_id.clone(),
                 target: target_ref(
                     Some(event.params.request_id.clone()),
@@ -88,6 +100,7 @@ impl CdpEvent {
             },
             ProtocolEvent::NetworkResponseReceived(event) => Self {
                 method: "Network.responseReceived",
+                session_id,
                 event_id: event.params.request_id.clone(),
                 target: target_ref(
                     Some(event.params.request_id.clone()),
@@ -98,6 +111,7 @@ impl CdpEvent {
             },
             ProtocolEvent::NetworkLoadingFailed(event) => Self {
                 method: "Network.loadingFailed",
+                session_id,
                 event_id: event.params.request_id.clone(),
                 target: target_ref(Some(event.params.request_id.clone()), None),
                 params: params_value(&event.params)?,
@@ -105,6 +119,7 @@ impl CdpEvent {
             },
             ProtocolEvent::PageFrameNavigated(event) => Self {
                 method: "Page.frameNavigated",
+                session_id,
                 event_id: event.params.frame.id.clone(),
                 target: target_ref(
                     Some(event.params.frame.id.clone()),
@@ -115,6 +130,7 @@ impl CdpEvent {
             },
             ProtocolEvent::PageNavigatedWithinDocument(event) => Self {
                 method: "Page.navigatedWithinDocument",
+                session_id,
                 event_id: event.params.frame_id.clone(),
                 target: target_ref(
                     Some(event.params.frame_id.clone()),
@@ -125,6 +141,7 @@ impl CdpEvent {
             },
             ProtocolEvent::RuntimeExecutionContextCreated(event) => Self {
                 method: "Runtime.executionContextCreated",
+                session_id,
                 event_id: event.params.context.id.to_string(),
                 target: target_ref(
                     Some(event.params.context.id.to_string()),
@@ -133,18 +150,37 @@ impl CdpEvent {
                 params: params_value(&event.params)?,
                 protocol: ProtocolEvent::RuntimeExecutionContextCreated(event),
             },
+            ProtocolEvent::AttachedToTarget(event) => Self {
+                method: "Target.attachedToTarget",
+                session_id,
+                event_id: event.params.session_id.clone(),
+                target: target_ref_from_target_info(&event.params.target_info),
+                params: params_value(&event.params)?,
+                protocol: ProtocolEvent::AttachedToTarget(event),
+            },
+            ProtocolEvent::DetachedFromTarget(event) => {
+                #[allow(deprecated)]
+                let target_id = event.params.target_id.clone();
+                Self {
+                    method: "Target.detachedFromTarget",
+                    session_id,
+                    event_id: event.params.session_id.clone(),
+                    target: target_id.and_then(|target_id| target_ref(Some(target_id), None)),
+                    params: params_value(&event.params)?,
+                    protocol: ProtocolEvent::DetachedFromTarget(event),
+                }
+            }
             ProtocolEvent::TargetCreated(event) => Self {
                 method: "Target.targetCreated",
+                session_id,
                 event_id: event.params.target_info.target_id.clone(),
-                target: target_ref(
-                    Some(event.params.target_info.target_id.clone()),
-                    non_empty(&event.params.target_info.url),
-                ),
+                target: target_ref_from_target_info(&event.params.target_info),
                 params: params_value(&event.params)?,
                 protocol: ProtocolEvent::TargetCreated(event),
             },
             ProtocolEvent::TargetDestroyed(event) => Self {
                 method: "Target.targetDestroyed",
+                session_id,
                 event_id: event.params.target_id.clone(),
                 target: target_ref(Some(event.params.target_id.clone()), None),
                 params: params_value(&event.params)?,
@@ -152,6 +188,7 @@ impl CdpEvent {
             },
             ProtocolEvent::TargetCrashed(event) => Self {
                 method: "Target.targetCrashed",
+                session_id,
                 event_id: event.params.target_id.clone(),
                 target: target_ref(Some(event.params.target_id.clone()), None),
                 params: params_value(&event.params)?,
@@ -159,11 +196,9 @@ impl CdpEvent {
             },
             ProtocolEvent::TargetInfoChanged(event) => Self {
                 method: "Target.targetInfoChanged",
+                session_id,
                 event_id: event.params.target_info.target_id.clone(),
-                target: target_ref(
-                    Some(event.params.target_info.target_id.clone()),
-                    non_empty(&event.params.target_info.url),
-                ),
+                target: target_ref_from_target_info(&event.params.target_info),
                 params: params_value(&event.params)?,
                 protocol: ProtocolEvent::TargetInfoChanged(event),
             },
@@ -182,6 +217,7 @@ pub enum GovernedCdpCommand {
     InputDispatchKeyEvent(Box<input::DispatchKeyEvent>),
     PageNavigate(Box<page::Navigate>),
     FetchContinueRequest(Box<fetch::ContinueRequest>),
+    TargetManagement(Box<TargetManagementCommand>),
 }
 
 impl GovernedCdpCommand {
@@ -192,12 +228,20 @@ impl GovernedCdpCommand {
             Self::FetchContinueRequest(command) => {
                 target_ref(Some(command.request_id.clone()), command.url.clone())
             }
+            Self::TargetManagement(command) => command.target.clone(),
             Self::RuntimeEvaluate(_)
             | Self::RuntimeCallFunctionOn(_)
             | Self::InputDispatchMouseEvent(_)
             | Self::InputDispatchKeyEvent(_) => None,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TargetManagementCommand {
+    pub method: String,
+    pub params: Value,
+    pub target: Option<TargetRef>,
 }
 
 pub fn decode_cdp_command(source: &str) -> Result<CdpCommand, CdpError> {
@@ -211,6 +255,7 @@ pub fn decode_cdp_command(source: &str) -> Result<CdpCommand, CdpError> {
     Ok(CdpCommand {
         id,
         method: head.method,
+        session_id: head.session_id,
         params,
         protocol,
     })
@@ -227,7 +272,7 @@ pub fn decode_cdp_event(source: &str) -> Result<Option<CdpEvent>, CdpError> {
     }
 
     let event: ProtocolEvent = deserialize_wire(source)?;
-    CdpEvent::from_protocol(event)?
+    CdpEvent::from_protocol(event, head.session_id)?
         .ok_or_else(|| CdpError::unsupported_method(method))
         .map(Some)
 }
@@ -256,8 +301,26 @@ fn decode_governed_command(
         fetch::ContinueRequest::NAME => {
             governed::<fetch::ContinueRequest>(source, GovernedCdpCommand::FetchContinueRequest)
         }
+        method if method.starts_with("Target.") => target_management(source),
         _ => Ok(None),
     }
+}
+
+fn target_management(source: &str) -> Result<Option<DecodedGovernedCommand>, CdpError> {
+    let call: IncomingGenericMethodCall = deserialize_wire(source)?;
+    let params = call.params.unwrap_or(Value::Object(serde_json::Map::new()));
+    let target = target_ref_from_params(&params);
+    let command = TargetManagementCommand {
+        method: call.method,
+        params: params.clone(),
+        target,
+    };
+
+    Ok(Some(DecodedGovernedCommand {
+        id: call.id,
+        params,
+        command: GovernedCdpCommand::TargetManagement(Box::new(command)),
+    }))
 }
 
 fn governed<T>(
@@ -317,6 +380,24 @@ fn target_ref(label: Option<String>, uri: Option<String>) -> Option<TargetRef> {
     Some(TargetRef { label, uri })
 }
 
+fn target_ref_from_target_info(target_info: &target::TargetInfo) -> Option<TargetRef> {
+    target_ref(
+        Some(target_info.target_id.clone()),
+        non_empty(&target_info.url),
+    )
+}
+
+fn target_ref_from_params(params: &Value) -> Option<TargetRef> {
+    params
+        .get("targetId")
+        .and_then(Value::as_str)
+        .filter(|target_id| !target_id.is_empty())
+        .map(|target_id| TargetRef {
+            label: Some(target_id.to_owned()),
+            uri: None,
+        })
+}
+
 fn non_empty(value: &str) -> Option<String> {
     if value.is_empty() {
         None
@@ -330,11 +411,15 @@ struct IncomingMethodHead {
     id: CallId,
     #[serde(rename = "method")]
     method: String,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct IncomingEventHead {
     method: Option<String>,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -343,6 +428,14 @@ struct IncomingMethodCall<T> {
     #[serde(rename = "method")]
     method: String,
     params: T,
+}
+
+#[derive(Debug, Deserialize)]
+struct IncomingGenericMethodCall {
+    id: CallId,
+    #[serde(rename = "method")]
+    method: String,
+    params: Option<Value>,
 }
 
 #[derive(Debug)]
@@ -410,6 +503,34 @@ mod tests {
         );
 
         assert!(matches!(result, Err(CdpError::InvalidProtocol { .. })));
+    }
+
+    #[test]
+    fn decodes_target_management_commands_as_governed() -> Result<(), CdpError> {
+        let command = decode_cdp_command(
+            r#"
+            {
+              "id": 4,
+              "method": "Target.setAutoAttach",
+              "params": {
+                "autoAttach": true,
+                "waitForDebuggerOnStart": false,
+                "flatten": true
+              }
+            }
+            "#,
+        )?;
+
+        let Some(GovernedCdpCommand::TargetManagement(target_command)) = command.protocol_command()
+        else {
+            return Err(CdpError::unsupported_method("Target.setAutoAttach"));
+        };
+        assert_eq!(target_command.method, "Target.setAutoAttach");
+        assert_eq!(
+            target_command.params.get("flatten"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        Ok(())
     }
 
     #[test]

@@ -3,7 +3,9 @@ use erebor_runtime_events::{ActorIdentity, EventId, RiskMetadata, RuntimeEvent, 
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
 use serde_json::{json, Value};
 
-use crate::{classify_cdp_method, CdpCommand, CdpError, CdpEvent, CdpSessionState};
+use crate::{
+    classify_cdp_method, CdpCommand, CdpError, CdpEvent, CdpSessionState, ClientTargetSessions,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpSessionContext {
@@ -43,11 +45,26 @@ where
     A: ApprovalProvider,
     S: AuditSink,
 {
+    enforce_cdp_command_with_client_state(engine, context, command, session_state, None)
+}
+
+pub fn enforce_cdp_command_with_client_state<E, A, S>(
+    engine: &LocalEnforcementEngine<E, A, S>,
+    context: &CdpSessionContext,
+    command: &CdpCommand,
+    session_state: &CdpSessionState,
+    client_sessions: Option<&ClientTargetSessions>,
+) -> Result<CdpEnforcementAction, CdpError>
+where
+    E: PolicyEvaluator,
+    A: ApprovalProvider,
+    S: AuditSink,
+{
     if command.protocol_command().is_none() {
         return Ok(CdpEnforcementAction::Forward);
     }
 
-    let event = normalize_cdp_command(context, command, session_state)?;
+    let event = normalize_cdp_command(context, command, session_state, client_sessions)?;
     let outcome = engine
         .enforce_with_deferred_approval(&event)
         .map_err(CdpError::enforcement)?;
@@ -75,6 +92,7 @@ fn normalize_cdp_command(
     context: &CdpSessionContext,
     command: &CdpCommand,
     session_state: &CdpSessionState,
+    client_sessions: Option<&ClientTargetSessions>,
 ) -> Result<RuntimeEvent, CdpError> {
     let classification = classify_cdp_method(&command.method)
         .ok_or_else(|| CdpError::unsupported_method(command.method.clone()))?;
@@ -89,10 +107,18 @@ fn normalize_cdp_command(
         actor: context.actor.clone(),
         surface: classification.surface,
         action: classification.action,
-        target: session_state.target_for_command(protocol_command),
+        target: session_state.target_for_command_with_client_session(
+            protocol_command,
+            command.session_id.as_deref(),
+            client_sessions,
+        ),
         payload: command_payload(
             command,
-            session_state.command_page_payload(protocol_command),
+            session_state.command_page_payload_with_client_session(
+                protocol_command,
+                command.session_id.as_deref(),
+                client_sessions,
+            ),
         )?,
         risk: RiskMetadata {
             level: classification.risk_level,
@@ -138,6 +164,7 @@ fn command_payload(command: &CdpCommand, page_context: Value) -> Result<Value, C
         "kind": "command",
         "method": command.method,
         "message_id": command.id,
+        "cdp_session_id": command.session_id,
         "page": page_context,
         "params": params,
     }))
@@ -147,6 +174,7 @@ fn event_payload(event: &CdpEvent) -> Value {
     json!({
         "kind": "event",
         "method": event.method(),
+        "cdp_session_id": event.session_id(),
         "event_id": event.event_id(),
         "params": event.params(),
     })
@@ -228,6 +256,41 @@ mod tests {
             action,
             CdpEnforcementAction::Block {
                 reason: String::from("script evaluation denied")
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn blocks_denied_target_management_messages() -> Result<(), Box<dyn std::error::Error>> {
+        let policy = LocalPolicy::from_json_str(
+            r#"
+            {
+              "rules": [
+                {
+                  "id": "deny-target-management",
+                  "match": {
+                    "surface": "browser_cdp",
+                    "action": "browser_target_manage"
+                  },
+                  "decision": "deny",
+                  "reason": "target management denied"
+                }
+              ]
+            }
+            "#,
+        )?;
+        let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
+        let command = decode_cdp_command(
+            r#"{ "id": 4, "method": "Target.setAutoAttach", "params": { "autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true } }"#,
+        )?;
+
+        let action = enforce_cdp_command(&engine, &context(), &command)?;
+
+        assert_eq!(
+            action,
+            CdpEnforcementAction::Block {
+                reason: String::from("target management denied")
             }
         );
         Ok(())
@@ -372,10 +435,14 @@ mod tests {
                 "kind": "command",
                 "method": "Page.navigate",
                 "message_id": 3,
+                "cdp_session_id": null,
                 "page": {
                     "active_page": null,
                     "command_page": null,
-                    "pages": []
+                    "pages": [],
+                    "browser_targets": [],
+                    "client_session_id": null,
+                    "client_target": null
                 },
                 "params": {
                     "url": "https://example.com/"
@@ -442,10 +509,14 @@ mod tests {
                 "kind": "command",
                 "method": "Runtime.evaluate",
                 "message_id": 9,
+                "cdp_session_id": null,
                 "page": {
                     "active_page": null,
                     "command_page": null,
-                    "pages": []
+                    "pages": [],
+                    "browser_targets": [],
+                    "client_session_id": null,
+                    "client_target": null
                 },
                 "params": {
                     "expression": "1 + 1"

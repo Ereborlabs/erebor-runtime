@@ -156,7 +156,12 @@ impl BrowserUpstream {
         }
 
         let owned_browser = OwnedBrowserProcess::launch(config.browser())?;
-        let endpoint = owned_browser.page_ws_url.clone();
+        debug!(
+            browser_endpoint = %owned_browser.browser_ws_url,
+            page_endpoint = %owned_browser.page_ws_url,
+            "prepared owned browser CDP upstream"
+        );
+        let endpoint = owned_browser.browser_ws_url.clone();
 
         Ok(Self {
             endpoint,
@@ -175,6 +180,7 @@ struct OwnedBrowserProcess {
     child: Child,
     user_data_dir: PathBuf,
     cleanup_user_data_dir: bool,
+    browser_ws_url: String,
     page_ws_url: String,
 }
 
@@ -235,6 +241,7 @@ impl OwnedBrowserProcess {
             child,
             user_data_dir,
             cleanup_user_data_dir,
+            browser_ws_url: devtools.browser_ws_url,
             page_ws_url,
         })
     }

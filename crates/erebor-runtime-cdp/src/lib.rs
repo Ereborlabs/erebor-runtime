@@ -8,12 +8,14 @@ mod proxy;
 mod runtime;
 mod server;
 mod state;
+mod target_graph;
 
 pub use browser::{BrowserSessionManager, BrowserSessionMetadata, GovernedBrowserSession};
 pub use error::CdpError;
 pub use message::{
-    enforce_cdp_command, enforce_cdp_command_with_session_state, observe_cdp_event,
-    CdpEnforcementAction, CdpSessionContext,
+    enforce_cdp_command, enforce_cdp_command_with_client_state,
+    enforce_cdp_command_with_session_state, observe_cdp_event, CdpEnforcementAction,
+    CdpSessionContext,
 };
 pub use protocol::{
     decode_cdp_command, decode_cdp_event, CdpCommand, CdpEvent, GovernedCdpCommand,
@@ -22,6 +24,10 @@ pub use proxy::{proxy_cdp_message, CdpBackend, CdpBackendResponse, CdpProxyActio
 pub use runtime::BrowserCdpRuntime;
 pub use server::{CdpProxyServer, CdpProxyServerConfig};
 pub use state::{CdpSessionSnapshot, CdpSessionState, PageStatus, PageStatusKind};
+pub use target_graph::{
+    BrowserTarget, BrowserTargetGraph, BrowserTargetId, BrowserTargetKind, BrowserTargetStatus,
+    ClientTargetSessions, ExecutionContextState, FrameId, FrameState,
+};
 
 use cdp_protocol::{fetch, input, page, runtime as cdp_runtime, types::Method};
 use erebor_runtime_events::{ActionKind, ExecutionSurface, RiskLevel};
@@ -43,6 +49,8 @@ pub const CONTEXT_CDP_METHODS: &[&str] = &[
     "Page.frameNavigated",
     "Page.navigatedWithinDocument",
     "Runtime.executionContextCreated",
+    "Target.attachedToTarget",
+    "Target.detachedFromTarget",
     "Target.targetCreated",
     "Target.targetDestroyed",
     "Target.targetCrashed",
@@ -51,7 +59,7 @@ pub const CONTEXT_CDP_METHODS: &[&str] = &[
 
 #[must_use]
 pub fn is_governed_method(method: &str) -> bool {
-    GOVERNED_CDP_METHODS.contains(&method)
+    GOVERNED_CDP_METHODS.contains(&method) || method.starts_with("Target.")
 }
 
 #[must_use]
@@ -107,13 +115,20 @@ pub fn classify_cdp_method(method: &str) -> Option<CdpCommandClassification> {
             ActionKind::BrowserScriptEval,
             RiskLevel::Low,
         ),
-        "Target.targetCreated"
+        "Target.attachedToTarget"
+        | "Target.detachedFromTarget"
+        | "Target.targetCreated"
         | "Target.targetDestroyed"
         | "Target.targetCrashed"
         | "Target.targetInfoChanged" => (
             CdpMethodRole::ContextEvent,
-            ActionKind::BrowserNavigate,
+            ActionKind::BrowserTargetManage,
             RiskLevel::Low,
+        ),
+        method if method.starts_with("Target.") => (
+            CdpMethodRole::GovernedCommand,
+            ActionKind::BrowserTargetManage,
+            RiskLevel::Medium,
         ),
         _ => return None,
     };

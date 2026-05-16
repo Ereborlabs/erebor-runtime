@@ -3,11 +3,14 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use cdp_protocol::{page, runtime::ExecutionContextId, types::Event as ProtocolEvent};
+use cdp_protocol::{page, runtime::ExecutionContextId, target, types::Event as ProtocolEvent};
 use erebor_runtime_events::TargetRef;
 use serde_json::{json, Value};
 
-use crate::{CdpEvent, GovernedCdpCommand};
+use crate::{
+    BrowserTarget, BrowserTargetGraph, BrowserTargetId, CdpEvent, ClientTargetSessions,
+    GovernedCdpCommand,
+};
 
 #[derive(Clone, Debug, Default)]
 pub struct CdpSessionState {
@@ -32,47 +35,124 @@ impl CdpSessionState {
 
     #[must_use]
     pub fn target_for_command(&self, command: &GovernedCdpCommand) -> Option<TargetRef> {
+        self.target_for_command_with_client_session(command, None, None)
+    }
+
+    #[must_use]
+    pub fn target_for_command_with_client_session(
+        &self,
+        command: &GovernedCdpCommand,
+        client_session_id: Option<&str>,
+        client_sessions: Option<&ClientTargetSessions>,
+    ) -> Option<TargetRef> {
         self.with_data(|data| {
             let explicit_target = command.target();
+            let browser_target = client_session_id
+                .and_then(|session_id| client_sessions?.target_for_session(session_id))
+                .and_then(|target_id| data.target_graph.target(&target_id).cloned());
             let command_page = data.page_for_command(command);
 
             match explicit_target {
-                Some(target) => Some(merge_target_with_page(target, command_page.as_ref())),
-                None => command_page.as_ref().map(page_target),
+                Some(target) => Some(merge_target_with_context(
+                    target,
+                    browser_target.as_ref(),
+                    command_page.as_ref(),
+                )),
+                None => browser_target
+                    .as_ref()
+                    .map(BrowserTarget::target_ref)
+                    .or_else(|| command_page.as_ref().map(page_target)),
             }
         })
     }
 
     #[must_use]
     pub fn command_page_payload(&self, command: &GovernedCdpCommand) -> Value {
+        self.command_page_payload_with_client_session(command, None, None)
+    }
+
+    #[must_use]
+    pub fn command_page_payload_with_client_session(
+        &self,
+        command: &GovernedCdpCommand,
+        client_session_id: Option<&str>,
+        client_sessions: Option<&ClientTargetSessions>,
+    ) -> Value {
         self.with_data(|data| {
             let snapshot = data.snapshot();
             let command_page = data.page_for_command(command);
+            let browser_target = client_session_id
+                .and_then(|session_id| client_sessions?.target_for_session(session_id))
+                .and_then(|target_id| data.target_graph.target(&target_id).cloned());
 
             json!({
                 "active_page": snapshot.active_page,
                 "command_page": command_page,
                 "pages": snapshot.pages,
+                "browser_targets": snapshot.targets,
+                "client_session_id": client_session_id,
+                "client_target": browser_target,
             })
         })
     }
 
     pub fn record_provisional_forwarded_command(&self, command: &GovernedCdpCommand) {
+        self.record_provisional_forwarded_command_for_client_session(command, None, None);
+    }
+
+    pub fn record_provisional_forwarded_command_for_client_session(
+        &self,
+        command: &GovernedCdpCommand,
+        client_session_id: Option<&str>,
+        client_sessions: Option<&ClientTargetSessions>,
+    ) {
         if let GovernedCdpCommand::PageNavigate(navigate) = command {
             self.with_data_mut(|data| {
-                let page = data.provisional_active_page_mut();
+                let target_id = client_session_id
+                    .and_then(|session_id| client_sessions?.target_for_session(session_id));
+                let page = match target_id.as_ref() {
+                    Some(target_id) => {
+                        data.active_page_id = Some(target_id.as_str().to_owned());
+                        data.page_mut(target_id.as_str().to_owned())
+                    }
+                    None => data.provisional_active_page_mut(),
+                };
                 page.url = non_empty(&navigate.url);
                 page.status = PageStatusKind::ProvisionalNavigation;
+                if let Some(target_id) = target_id {
+                    data.target_graph
+                        .record_provisional_navigation(target_id, &navigate.url);
+                }
             });
         }
     }
 
     pub fn record_browser_event(&self, event: &CdpEvent) {
-        self.with_data_mut(|data| data.record_protocol_event(event.protocol_event()));
+        self.record_browser_event_for_client_session(event, None);
+    }
+
+    pub fn record_browser_event_for_client_session(
+        &self,
+        event: &CdpEvent,
+        client_sessions: Option<&mut ClientTargetSessions>,
+    ) {
+        self.with_data_mut(|data| data.record_protocol_event(event, client_sessions));
     }
 
     pub fn record_frame_tree(&self, frame_tree: &page::FrameTree) {
-        self.with_data_mut(|data| data.record_frame_tree(frame_tree));
+        self.with_data_mut(|data| data.record_frame_tree(None, frame_tree));
+    }
+
+    pub fn record_frame_tree_for_target(
+        &self,
+        target_id: BrowserTargetId,
+        frame_tree: &page::FrameTree,
+    ) {
+        self.with_data_mut(|data| data.record_frame_tree(Some(target_id), frame_tree));
+    }
+
+    pub fn record_target_info(&self, target_info: &target::TargetInfo) {
+        self.with_data_mut(|data| data.record_target_info(target_info));
     }
 
     fn ensure_page(&self, page_id: String) {
@@ -105,6 +185,7 @@ struct CdpSessionStateData {
     active_page_id: Option<String>,
     frame_to_page: HashMap<String, String>,
     execution_context_to_page: HashMap<ExecutionContextId, String>,
+    target_graph: BrowserTargetGraph,
 }
 
 impl CdpSessionStateData {
@@ -117,7 +198,11 @@ impl CdpSessionStateData {
             .and_then(|page_id| self.pages.get(page_id))
             .cloned();
 
-        CdpSessionSnapshot { active_page, pages }
+        CdpSessionSnapshot {
+            active_page,
+            pages,
+            targets: self.target_graph.targets(),
+        }
     }
 
     fn provisional_active_page_mut(&mut self) -> &mut PageStatus {
@@ -135,11 +220,21 @@ impl CdpSessionStateData {
     fn ensure_page(&mut self, page_id: String) {
         self.pages
             .entry(page_id.clone())
-            .or_insert_with(|| PageStatus::new(page_id));
+            .or_insert_with(|| PageStatus::new(page_id.clone()));
+        self.target_graph
+            .ensure_page_target(BrowserTargetId::new(page_id));
     }
 
-    fn record_protocol_event(&mut self, event: &ProtocolEvent) {
-        match event {
+    fn record_protocol_event(
+        &mut self,
+        event: &CdpEvent,
+        mut client_sessions: Option<&mut ClientTargetSessions>,
+    ) {
+        let browser_target_id = event
+            .session_id()
+            .and_then(|session_id| client_sessions.as_deref()?.target_for_session(session_id));
+
+        match event.protocol_event() {
             ProtocolEvent::PageFrameNavigated(event) => {
                 let frame = &event.params.frame;
                 let page_id = frame
@@ -152,12 +247,19 @@ impl CdpSessionStateData {
                             .clone()
                             .unwrap_or_else(|| frame.id.clone())
                     });
+                let page_id = browser_target_id
+                    .as_ref()
+                    .map_or(page_id, |target_id| target_id.as_str().to_owned());
                 let page = self.page_mut(page_id.clone());
                 page.frame_id = Some(frame.id.clone());
                 page.url = non_empty(&frame.url);
                 page.status = PageStatusKind::Active;
                 self.frame_to_page.insert(frame.id.clone(), page_id.clone());
                 self.active_page_id = Some(page_id);
+                self.target_graph.record_frame_navigated(
+                    browser_target_id.unwrap_or_else(|| BrowserTargetId::new(frame.id.clone())),
+                    frame,
+                );
             }
             ProtocolEvent::PageNavigatedWithinDocument(event) => {
                 let page_id = self
@@ -169,6 +271,9 @@ impl CdpSessionStateData {
                             .clone()
                             .unwrap_or_else(|| event.params.frame_id.clone())
                     });
+                let page_id = browser_target_id
+                    .as_ref()
+                    .map_or(page_id, |target_id| target_id.as_str().to_owned());
                 let page = self.page_mut(page_id.clone());
                 page.frame_id = Some(event.params.frame_id.clone());
                 page.url = non_empty(&event.params.url);
@@ -176,6 +281,12 @@ impl CdpSessionStateData {
                 self.frame_to_page
                     .insert(event.params.frame_id.clone(), page_id.clone());
                 self.active_page_id = Some(page_id);
+                self.target_graph.record_navigated_within_document(
+                    browser_target_id
+                        .unwrap_or_else(|| BrowserTargetId::new(event.params.frame_id.clone())),
+                    event.params.frame_id.clone(),
+                    &event.params.url,
+                );
             }
             ProtocolEvent::RuntimeExecutionContextCreated(event) => {
                 let context = &event.params.context;
@@ -190,6 +301,29 @@ impl CdpSessionStateData {
                     self.frame_to_page.insert(frame_id, page_id.clone());
                     self.execution_context_to_page.insert(context.id, page_id);
                 }
+                self.target_graph.record_execution_context(
+                    browser_target_id.unwrap_or_else(|| {
+                        self.active_page_id.clone().map_or_else(
+                            || BrowserTargetId::new("active-page"),
+                            BrowserTargetId::new,
+                        )
+                    }),
+                    context.id,
+                    non_empty(&context.origin),
+                    context.aux_data.as_ref(),
+                );
+            }
+            ProtocolEvent::AttachedToTarget(event) => {
+                let target_id = BrowserTargetId::new(event.params.target_info.target_id.clone());
+                if let Some(client_sessions) = client_sessions.as_mut() {
+                    (*client_sessions).record_attached(event.params.session_id.clone(), target_id);
+                }
+                self.record_target_info(&event.params.target_info);
+            }
+            ProtocolEvent::DetachedFromTarget(event) => {
+                if let Some(client_sessions) = client_sessions.as_mut() {
+                    (*client_sessions).record_detached(event.params.session_id.clone());
+                }
             }
             ProtocolEvent::TargetCreated(event) => {
                 self.record_target_info(&event.params.target_info);
@@ -198,11 +332,15 @@ impl CdpSessionStateData {
                 self.record_target_info(&event.params.target_info);
             }
             ProtocolEvent::TargetDestroyed(event) => {
+                self.target_graph
+                    .record_target_destroyed(event.params.target_id.clone());
                 if let Some(page) = self.pages.get_mut(&event.params.target_id) {
                     page.status = PageStatusKind::Closed;
                 }
             }
             ProtocolEvent::TargetCrashed(event) => {
+                self.target_graph
+                    .record_target_crashed(event.params.target_id.clone());
                 if let Some(page) = self.pages.get_mut(&event.params.target_id) {
                     page.status = PageStatusKind::Crashed;
                 }
@@ -211,12 +349,26 @@ impl CdpSessionStateData {
         }
     }
 
-    fn record_frame_tree(&mut self, frame_tree: &page::FrameTree) {
-        let page_id = self
-            .active_page_id
-            .clone()
-            .unwrap_or_else(|| frame_tree.frame.id.clone());
+    fn record_frame_tree(
+        &mut self,
+        target_id: Option<BrowserTargetId>,
+        frame_tree: &page::FrameTree,
+    ) {
+        let page_id = target_id.as_ref().map_or_else(
+            || {
+                self.active_page_id
+                    .clone()
+                    .unwrap_or_else(|| frame_tree.frame.id.clone())
+            },
+            |target_id| target_id.as_str().to_owned(),
+        );
         self.active_page_id = Some(page_id.clone());
+        if let Some(target_id) = target_id {
+            self.target_graph.record_frame_tree(target_id, frame_tree);
+        } else {
+            self.target_graph
+                .record_frame_tree(BrowserTargetId::new(page_id.clone()), frame_tree);
+        }
         self.record_frame_tree_for_page(&page_id, frame_tree, true);
     }
 
@@ -255,6 +407,14 @@ impl CdpSessionStateData {
             .and_then(|page_id| self.pages.get(page_id))
             .cloned()
             .or_else(|| {
+                command_execution_context_id(command)
+                    .and_then(|context_id| {
+                        self.target_graph.target_for_execution_context(context_id)
+                    })
+                    .and_then(|target| self.pages.get(target.id.as_str()))
+                    .cloned()
+            })
+            .or_else(|| {
                 self.active_page_id
                     .as_ref()
                     .and_then(|page_id| self.pages.get(page_id))
@@ -263,6 +423,7 @@ impl CdpSessionStateData {
     }
 
     fn record_target_info(&mut self, target_info: &cdp_protocol::target::TargetInfo) {
+        self.target_graph.record_target_info(target_info);
         if target_info.r#type == "page" {
             let page = self.page_mut(target_info.target_id.clone());
             page.url = non_empty(&target_info.url);
@@ -277,6 +438,7 @@ impl CdpSessionStateData {
 pub struct CdpSessionSnapshot {
     pub active_page: Option<PageStatus>,
     pub pages: Vec<PageStatus>,
+    pub targets: Vec<BrowserTarget>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -317,16 +479,23 @@ fn command_execution_context_id(command: &GovernedCdpCommand) -> Option<Executio
         GovernedCdpCommand::InputDispatchMouseEvent(_)
         | GovernedCdpCommand::InputDispatchKeyEvent(_)
         | GovernedCdpCommand::PageNavigate(_)
-        | GovernedCdpCommand::FetchContinueRequest(_) => None,
+        | GovernedCdpCommand::FetchContinueRequest(_)
+        | GovernedCdpCommand::TargetManagement(_) => None,
     }
 }
 
-fn merge_target_with_page(target: TargetRef, active_page: Option<&PageStatus>) -> TargetRef {
+fn merge_target_with_context(
+    target: TargetRef,
+    browser_target: Option<&BrowserTarget>,
+    active_page: Option<&PageStatus>,
+) -> TargetRef {
     let label = target
         .label
+        .or_else(|| browser_target.map(|target| target.id.as_str().to_owned()))
         .or_else(|| active_page.map(|page| page.id.clone()));
     let uri = target
         .uri
+        .or_else(|| browser_target.and_then(|target| target.url.clone()))
         .or_else(|| active_page.and_then(|page| page.url.clone()));
 
     TargetRef { label, uri }

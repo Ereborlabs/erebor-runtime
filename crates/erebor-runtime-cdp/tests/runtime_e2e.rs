@@ -121,20 +121,15 @@ async fn browser_cdp_runtime_executes_commands_against_owned_chrome() -> Result<
         return Ok(());
     }
 
+    let _owned_browser_guard = support::owned_browser_e2e_guard().await;
     let harness = CdpE2eHarness::start_runtime_with_owned_browser(allow_all_policy()?).await?;
     let running_runtime = harness.running_runtime();
 
     assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
     assert!(harness.endpoint().contains("erebor_session="));
-    let response = harness
-        .send_command(json!({
-            "id": 21,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": "window.__erebor = 'owned-allowed'; window.__erebor",
-                "returnByValue": true
-            }
-        }))
+    let mut client = harness.browser_level_client().await?;
+    let response = client
+        .evaluate("window.__erebor = 'owned-allowed'; window.__erebor")
         .await?;
 
     assert_eq!(
@@ -151,32 +146,17 @@ async fn browser_cdp_runtime_blocks_owned_chrome_script_eval_side_effects() -> R
         return Ok(());
     }
 
+    let _owned_browser_guard = support::owned_browser_e2e_guard().await;
     let harness = CdpE2eHarness::start_runtime_with_owned_browser(deny_payload_script_eval_policy(
         "owned-denied",
     )?)
     .await?;
-    let denied = harness
-        .send_command(json!({
-            "id": 22,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": "window.__erebor = 'owned-denied'; window.__erebor",
-                "returnByValue": true
-            }
-        }))
+    let mut client = harness.browser_level_client().await?;
+    let denied = client
+        .evaluate("window.__erebor = 'owned-denied'; window.__erebor")
         .await?;
-    let browser_state = harness
-        .send_command(json!({
-            "id": 23,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": "window.__erebor ?? null",
-                "returnByValue": true
-            }
-        }))
-        .await?;
+    let browser_state = client.evaluate("window.__erebor ?? null").await?;
 
-    assert_eq!(denied.pointer("/id"), Some(&Value::from(22)));
     assert_eq!(
         denied.pointer("/error/message"),
         Some(&Value::String(String::from(
@@ -196,48 +176,22 @@ async fn browser_cdp_runtime_keeps_page_context_across_client_reconnects() -> Re
         return Ok(());
     }
 
+    let _owned_browser_guard = support::owned_browser_e2e_guard().await;
     let harness = CdpE2eHarness::start_runtime_with_owned_browser(deny_target_script_eval_policy(
         "mail.example.test",
     )?)
     .await?;
-    // Each send_command call opens a fresh client WebSocket.
-    harness
-        .send_command(json!({
-            "id": 31,
-            "method": "Page.navigate",
-            "params": {
-                "url": "data:text/html,mail.example.test"
-            }
-        }))
+    let mut client = harness.browser_level_client().await?;
+    let target_id = client.target_id().to_owned();
+    client.navigate("data:text/html,mail.example.test").await?;
+    let denied = client
+        .evaluate("window.__erebor = 'blocked-by-page-context'; window.__erebor")
         .await?;
-    let denied = harness
-        .send_command(json!({
-            "id": 32,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": "window.__erebor = 'blocked-by-page-context'; window.__erebor",
-                "returnByValue": true
-            }
-        }))
-        .await?;
-    harness
-        .send_command(json!({
-            "id": 33,
-            "method": "Page.navigate",
-            "params": {
-                "url": "about:blank"
-            }
-        }))
-        .await?;
-    let allowed = harness
-        .send_command(json!({
-            "id": 34,
-            "method": "Runtime.evaluate",
-            "params": {
-                "expression": "window.__erebor = 'allowed-by-page-context'; window.__erebor",
-                "returnByValue": true
-            }
-        }))
+    let mut reconnected =
+        support::BrowserLevelCdpClient::reconnect_to(harness.endpoint(), target_id).await?;
+    reconnected.navigate("about:blank").await?;
+    let allowed = reconnected
+        .evaluate("window.__erebor = 'allowed-by-page-context'; window.__erebor")
         .await?;
 
     assert_eq!(
