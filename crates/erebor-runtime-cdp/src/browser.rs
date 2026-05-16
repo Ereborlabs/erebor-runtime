@@ -20,6 +20,8 @@ use crate::{CdpError, CdpProxyServer, CdpProxyServerConfig, CdpSessionContext};
 const DEVTOOLS_WAIT: Duration = Duration::from_secs(10);
 const DEVTOOLS_POLL: Duration = Duration::from_millis(50);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
+const CHROME_STDERR_LOG: &str = "chrome-stderr.log";
+const CHROME_STDERR_EXCERPT_LIMIT: usize = 4_000;
 
 pub struct BrowserSessionManager {
     config: BrowserCdpRuntimeConfig,
@@ -43,7 +45,6 @@ impl BrowserSessionManager {
 
     pub async fn create_session(self) -> Result<GovernedBrowserSession, CdpError> {
         let upstream = BrowserUpstream::prepare(&self.config)?;
-        let auth_token = session_auth_token(&self.context);
         let policy_set_label = format!("local:{} policies", self.policy_set.policy_count());
         let engine = LocalEnforcementEngine::new(self.policy_set);
         let server = CdpProxyServer::bind(
@@ -51,12 +52,11 @@ impl BrowserSessionManager {
                 listen: self.config.listen(),
                 browser_url: upstream.endpoint.clone(),
                 context: self.context.clone(),
-                auth_token: Some(auth_token.clone()),
             },
             engine,
         )
         .await?;
-        let public_endpoint = governed_endpoint(server.local_addr()?, &auth_token);
+        let public_endpoint = governed_endpoint(server.local_addr()?);
         let lease_id = session_lease_id(&self.context);
         let metadata = BrowserSessionMetadata {
             session_id: self.context.session_id.clone(),
@@ -199,6 +199,8 @@ impl OwnedBrowserProcess {
         };
 
         fs::create_dir_all(&user_data_dir).map_err(CdpError::io)?;
+        let stderr_log_path = user_data_dir.join(CHROME_STDERR_LOG);
+        let stderr_log = fs::File::create(&stderr_log_path).map_err(CdpError::io)?;
         let mut command = Command::new(&binary);
         if config.headless() {
             command.arg("--headless=new");
@@ -210,23 +212,28 @@ impl OwnedBrowserProcess {
             .arg("--disable-background-networking")
             .arg("--disable-extensions")
             .arg("--disable-sync")
+            .arg("--disable-breakpad")
+            .arg("--disable-crash-reporter")
+            .arg("--disable-dev-shm-usage")
             .arg("--metrics-recording-only")
             .arg("--remote-debugging-address=127.0.0.1")
             .arg("--remote-debugging-port=0")
             .arg(format!("--user-data-dir={}", user_data_dir.display()))
             .arg("about:blank")
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::from(stderr_log));
 
         debug!(
             binary = %binary.display(),
             profile = %user_data_dir.display(),
+            stderr = %stderr_log_path.display(),
             headless = config.headless(),
             "launching owned browser"
         );
         let mut child = command.spawn().map_err(CdpError::io)?;
         let devtools =
-            wait_for_devtools_endpoint(&mut child, &user_data_dir.join("DevToolsActivePort"))?;
+            wait_for_devtools_endpoint(&mut child, &user_data_dir.join("DevToolsActivePort"))
+                .map_err(|error| enrich_browser_launch_error(error, &stderr_log_path))?;
         let page_ws_url =
             create_page_ws_url(&devtools.browser_ws_url, devtools.port).or_else(|ws_error| {
                 wait_for_page_ws_url(&mut child, devtools.port).map_err(|http_error| {
@@ -333,6 +340,38 @@ fn wait_for_devtools_endpoint(
 
         std::thread::sleep(DEVTOOLS_POLL);
     }
+}
+
+fn enrich_browser_launch_error(error: CdpError, stderr_log_path: &Path) -> CdpError {
+    let CdpError::BrowserLaunch { reason, .. } = error else {
+        return error;
+    };
+
+    let Some(stderr) = chrome_stderr_excerpt(stderr_log_path) else {
+        return CdpError::browser_launch(reason);
+    };
+
+    CdpError::browser_launch(format!("{reason}; Chrome stderr: {stderr}"))
+}
+
+fn chrome_stderr_excerpt(stderr_log_path: &Path) -> Option<String> {
+    let source = fs::read_to_string(stderr_log_path).ok()?;
+    let source = source.trim();
+    if source.is_empty() {
+        return None;
+    }
+
+    if source.chars().count() <= CHROME_STDERR_EXCERPT_LIMIT {
+        return Some(source.to_owned());
+    }
+
+    let mut tail = source
+        .chars()
+        .rev()
+        .take(CHROME_STDERR_EXCERPT_LIMIT)
+        .collect::<Vec<_>>();
+    tail.reverse();
+    Some(format!("...{}", tail.into_iter().collect::<String>()))
 }
 
 fn create_page_ws_url(browser_ws_url: &str, port: u16) -> Result<String, CdpError> {
@@ -608,20 +647,8 @@ fn temp_profile_dir() -> PathBuf {
     ))
 }
 
-fn governed_endpoint(address: SocketAddr, token: &str) -> String {
-    format!("ws://{address}/?erebor_session={token}")
-}
-
-fn session_auth_token(context: &CdpSessionContext) -> String {
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-
-    format!(
-        "{}-{}-{timestamp}",
-        sanitize_token_part(context.session_id.as_str()),
-        std::process::id()
-    )
+fn governed_endpoint(address: SocketAddr) -> String {
+    format!("ws://{address}/")
 }
 
 fn session_lease_id(context: &CdpSessionContext) -> String {

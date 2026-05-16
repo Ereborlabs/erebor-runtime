@@ -16,13 +16,13 @@ use support::{
 };
 
 #[tokio::test]
-async fn browser_session_manager_creates_governed_session_with_public_auth_endpoint(
+async fn browser_session_manager_creates_governed_session_with_public_endpoint(
 ) -> Result<(), E2eError> {
     let session = create_governed_session_with_mini_upstream(allow_all_policy()?).await?;
 
     assert!(!session.owns_browser());
     assert!(session.public_endpoint().starts_with("ws://127.0.0.1:"));
-    assert!(session.public_endpoint().contains("erebor_session="));
+    assert!(!session.public_endpoint().contains('?'));
     assert_eq!(
         session.metadata().public_endpoint,
         session.public_endpoint()
@@ -37,7 +37,7 @@ async fn browser_cdp_runtime_starts_and_forwards_allowed_commands() -> Result<()
     let running_runtime = harness.running_runtime();
 
     assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
-    assert!(harness.endpoint().contains("erebor_session="));
+    assert!(!harness.endpoint().contains('?'));
     let response = harness
         .send_command(json!({
             "id": 1,
@@ -126,7 +126,7 @@ async fn browser_cdp_runtime_executes_commands_against_owned_chrome() -> Result<
     let running_runtime = harness.running_runtime();
 
     assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
-    assert!(harness.endpoint().contains("erebor_session="));
+    assert!(!harness.endpoint().contains('?'));
     let mut client = harness.browser_level_client().await?;
     let response = client
         .evaluate("window.__erebor = 'owned-allowed'; window.__erebor")

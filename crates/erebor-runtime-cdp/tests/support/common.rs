@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::Arc,
+    sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -75,7 +76,9 @@ pub fn session_context() -> CdpSessionContext {
 }
 
 pub fn real_chrome_available() -> bool {
-    chrome_binary_path().is_some()
+    static AVAILABLE: OnceLock<bool> = OnceLock::new();
+
+    *AVAILABLE.get_or_init(|| RealChromeInstance::launch().is_ok())
 }
 
 pub fn mini_cdp_handler() -> JsonWebSocketHandler {

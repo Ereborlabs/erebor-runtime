@@ -15,12 +15,8 @@ use serde_json::{json, Value};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout, Duration};
 use tokio_tungstenite::{
-    accept_hdr_async, connect_async,
-    tungstenite::{
-        handshake::server::{ErrorResponse, Request, Response},
-        http::StatusCode,
-        Error as WebSocketError, Message,
-    },
+    accept_async, connect_async,
+    tungstenite::{Error as WebSocketError, Message},
     MaybeTlsStream, WebSocketStream,
 };
 use tracing::{debug, info, warn};
@@ -32,21 +28,21 @@ use crate::{
 };
 
 type CdpEngine = LocalEnforcementEngine<PolicySet>;
-const OBSERVER_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(1);
+const OBSERVER_BOOTSTRAP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const OBSERVER_RECONNECT_DELAY: Duration = Duration::from_millis(250);
-const OBSERVER_SET_DISCOVER_TARGETS_ID: CallId = CallId::MAX - 5;
-const OBSERVER_SET_AUTO_ATTACH_ID: CallId = CallId::MAX - 4;
-const OBSERVER_GET_TARGETS_ID: CallId = CallId::MAX - 3;
-const OBSERVER_PAGE_ENABLE_ID: CallId = CallId::MAX - 2;
-const OBSERVER_RUNTIME_ENABLE_ID: CallId = CallId::MAX - 1;
-const OBSERVER_GET_FRAME_TREE_ID: CallId = CallId::MAX;
+const OBSERVER_SET_DISCOVER_TARGETS_ID: CallId = 10_000;
+const OBSERVER_SET_AUTO_ATTACH_ID: CallId = 10_001;
+const OBSERVER_GET_TARGETS_ID: CallId = 10_002;
+const OBSERVER_PAGE_ENABLE_ID: CallId = 10_003;
+const OBSERVER_RUNTIME_ENABLE_ID: CallId = 10_004;
+const OBSERVER_GET_FRAME_TREE_ID: CallId = 10_005;
+const OBSERVER_TARGET_COMMAND_ID_START: CallId = 20_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpProxyServerConfig {
     pub listen: SocketAddr,
     pub browser_url: String,
     pub context: CdpSessionContext,
-    pub auth_token: Option<String>,
 }
 
 pub struct CdpProxyServer {
@@ -54,7 +50,6 @@ pub struct CdpProxyServer {
     browser_url: String,
     engine: Arc<CdpEngine>,
     context: CdpSessionContext,
-    auth_token: Option<String>,
     session_state: CdpSessionState,
 }
 
@@ -99,7 +94,6 @@ impl CdpProxyServer {
             browser_url: config.browser_url,
             engine,
             context: config.context,
-            auth_token: config.auth_token,
             session_state,
         })
     }
@@ -117,20 +111,10 @@ impl CdpProxyServer {
             let browser_url = self.browser_url.clone();
             let engine = Arc::clone(&self.engine);
             let context = self.context.clone();
-            let auth_token = self.auth_token.clone();
             let session_state = self.session_state.clone();
             debug!(client = %address, "accepted CDP proxy connection");
             let handle = tokio::spawn(async move {
-                match proxy_connection(
-                    stream,
-                    browser_url,
-                    engine,
-                    context,
-                    auth_token,
-                    session_state,
-                )
-                .await
-                {
+                match proxy_connection(stream, browser_url, engine, context, session_state).await {
                     Ok(()) => debug!(client = %address, "CDP proxy connection closed"),
                     Err(error) => {
                         warn!(
@@ -151,13 +135,10 @@ async fn proxy_connection(
     browser_url: String,
     engine: Arc<CdpEngine>,
     context: CdpSessionContext,
-    auth_token: Option<String>,
     session_state: CdpSessionState,
 ) -> Result<(), CdpError> {
     debug!("accepting client websocket");
-    let client_socket = accept_client(stream, auth_token)
-        .await
-        .map_err(websocket_error)?;
+    let client_socket = accept_async(stream).await.map_err(websocket_error)?;
     debug!(browser_url = %browser_url, "connecting to upstream CDP websocket");
     let (browser_socket, _response) = connect_async(browser_url.as_str())
         .await
@@ -353,7 +334,7 @@ async fn bootstrap_browser_state_observer(
     let mut next_observer_command_id = ObserverCommandIds::default();
 
     while !(discover_enabled && auto_attach_enabled && targets_loaded) {
-        let message = timeout(OBSERVER_BOOTSTRAP_TIMEOUT, browser_socket.next())
+        let message = timeout(OBSERVER_BOOTSTRAP_RESPONSE_TIMEOUT, browser_socket.next())
             .await
             .map_err(|_| {
                 CdpError::browser_state_sync("timed out waiting for browser observer bootstrap")
@@ -510,7 +491,7 @@ async fn bootstrap_page_state_observer(
     let mut frame_tree_loaded = false;
 
     while !(page_enabled && runtime_enabled && frame_tree_loaded) {
-        let message = timeout(OBSERVER_BOOTSTRAP_TIMEOUT, browser_socket.next())
+        let message = timeout(OBSERVER_BOOTSTRAP_RESPONSE_TIMEOUT, browser_socket.next())
             .await
             .map_err(|_| CdpError::browser_state_sync("timed out waiting for observer bootstrap"))?
             .ok_or_else(|| {
@@ -694,7 +675,9 @@ struct ObserverCommandIds {
 
 impl Default for ObserverCommandIds {
     fn default() -> Self {
-        Self { next: 1 }
+        Self {
+            next: OBSERVER_TARGET_COMMAND_ID_START,
+        }
     }
 }
 
@@ -809,38 +792,6 @@ struct ObserverBootstrapMethodResponse<T> {
 #[derive(Debug, Deserialize)]
 struct ObserverBootstrapMethodError {
     message: String,
-}
-
-async fn accept_client(
-    stream: TcpStream,
-    auth_token: Option<String>,
-) -> Result<tokio_tungstenite::WebSocketStream<TcpStream>, WebSocketError> {
-    let callback = move |request: &Request, response: Response| {
-        if let Some(expected_token) = auth_token.as_deref() {
-            if !request_has_auth_token(request, expected_token) {
-                return Err(unauthorized_response());
-            }
-        }
-
-        Ok(response)
-    };
-
-    accept_hdr_async(stream, callback).await
-}
-
-fn request_has_auth_token(request: &Request, expected_token: &str) -> bool {
-    request.uri().query().is_some_and(|query| {
-        query.split('&').any(|pair| {
-            pair.split_once('=')
-                .is_some_and(|(name, value)| name == "erebor_session" && value == expected_token)
-        })
-    })
-}
-
-fn unauthorized_response() -> ErrorResponse {
-    let mut response = ErrorResponse::new(Some(String::from("missing or invalid erebor_session")));
-    *response.status_mut() = StatusCode::UNAUTHORIZED;
-    response
 }
 
 #[derive(Debug, PartialEq)]
@@ -1015,11 +966,9 @@ mod tests {
     use erebor_runtime_policy::{LocalPolicy, PolicySet};
     use serde_json::json;
 
-    use tokio_tungstenite::tungstenite::http::Request;
-
     use super::{
         handle_client_text, observe_browser_event_text, observe_browser_response_text,
-        request_has_auth_token, ClientTextAction,
+        ClientTextAction,
     };
     use crate::{BrowserTargetId, CdpSessionContext, CdpSessionState, ClientTargetSessions};
 
@@ -1274,19 +1223,6 @@ mod tests {
             r#"{ "id": 1, "result": {} }"#,
         )?;
 
-        Ok(())
-    }
-
-    #[test]
-    fn auth_token_is_required_when_configured() -> Result<(), Box<dyn std::error::Error>> {
-        let request = Request::builder()
-            .uri("/?erebor_session=session-token")
-            .body(())?;
-        let missing = Request::builder().uri("/").body(())?;
-
-        assert!(request_has_auth_token(&request, "session-token"));
-        assert!(!request_has_auth_token(&request, "other-token"));
-        assert!(!request_has_auth_token(&missing, "session-token"));
         Ok(())
     }
 }
