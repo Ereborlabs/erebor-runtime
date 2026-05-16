@@ -208,6 +208,69 @@ async fn browser_cdp_runtime_keeps_page_context_across_client_reconnects() -> Re
 }
 
 #[tokio::test]
+async fn browser_cdp_runtime_distinguishes_two_owned_browser_targets() -> Result<(), E2eError> {
+    if !real_chrome_available() {
+        return Ok(());
+    }
+
+    let _owned_browser_guard = support::owned_browser_e2e_guard().await;
+    let harness = CdpE2eHarness::start_runtime_with_owned_browser(deny_target_script_eval_policy(
+        "mail.example.test",
+    )?)
+    .await?;
+    let mut mail_client = harness.browser_level_client().await?;
+    mail_client
+        .navigate("data:text/html,mail.example.test")
+        .await?;
+    let calendar_target = mail_client.create_page_target("about:blank").await?;
+    let mut calendar_client =
+        support::BrowserLevelCdpClient::reconnect_to(harness.endpoint(), calendar_target).await?;
+    calendar_client
+        .navigate("data:text/html,calendar.example.test")
+        .await?;
+
+    let denied = mail_client
+        .evaluate("window.__erebor = 'blocked-in-mail'; window.__erebor")
+        .await?;
+    let allowed = calendar_client
+        .evaluate("window.__erebor = 'allowed-in-calendar'; window.__erebor")
+        .await?;
+
+    assert_eq!(
+        denied.pointer("/error/message"),
+        Some(&Value::String(String::from(
+            "script evaluation denied for this page"
+        )))
+    );
+    assert_eq!(
+        allowed.pointer("/result/result/value"),
+        Some(&Value::String(String::from("allowed-in-calendar")))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_cdp_runtime_closed_owned_target_commands_fail_safely() -> Result<(), E2eError> {
+    if !real_chrome_available() {
+        return Ok(());
+    }
+
+    let _owned_browser_guard = support::owned_browser_e2e_guard().await;
+    let harness = CdpE2eHarness::start_runtime_with_owned_browser(allow_all_policy()?).await?;
+    let mut client = harness.browser_level_client().await?;
+    let target_id = client.target_id().to_owned();
+
+    let close_response = client.close_target(&target_id).await?;
+    let stale_command = client
+        .evaluate("window.__erebor = 'should-not-run'; window.__erebor")
+        .await?;
+
+    assert!(close_response.get("error").is_none());
+    assert!(stale_command.get("error").is_some());
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "slow real Chrome validation"]
 async fn browser_cdp_runtime_executes_governed_commands_against_real_chrome() -> Result<(), E2eError>
 {

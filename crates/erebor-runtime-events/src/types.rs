@@ -64,6 +64,7 @@ pub enum ActionKind {
     BrowserInput,
     BrowserScriptEval,
     BrowserTargetManage,
+    BrowserStateRecovery,
     NetworkRequest,
     ProcessExec,
     FileRead,

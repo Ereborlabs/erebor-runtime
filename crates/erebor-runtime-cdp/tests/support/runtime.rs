@@ -206,6 +206,22 @@ impl BrowserLevelCdpClient {
             .await
     }
 
+    pub async fn create_page_target(&mut self, url: &str) -> Result<String, E2eError> {
+        let created = self
+            .command("Target.createTarget", json!({ "url": url }))
+            .await?;
+        created
+            .pointer("/result/targetId")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| E2eError::external("browser-level CDP target creation", MissingTargetId))
+    }
+
+    pub async fn close_target(&mut self, target_id: &str) -> Result<Value, E2eError> {
+        self.command("Target.closeTarget", json!({ "targetId": target_id }))
+            .await
+    }
+
     pub async fn evaluate(&mut self, expression: &str) -> Result<Value, E2eError> {
         self.session_command(
             "Runtime.evaluate",
@@ -240,14 +256,7 @@ impl BrowserLevelCdpClient {
             return Ok(target_id);
         }
 
-        let created = self
-            .command("Target.createTarget", json!({ "url": "about:blank" }))
-            .await?;
-        created
-            .pointer("/result/targetId")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or_else(|| E2eError::external("browser-level CDP target creation", MissingTargetId))
+        self.create_page_target("about:blank").await
     }
 
     async fn attach_to_target(&mut self, target_id: String) -> Result<(), E2eError> {

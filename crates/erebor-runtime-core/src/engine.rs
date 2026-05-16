@@ -156,6 +156,13 @@ where
         self.enforce_with_mode(event, ApprovalMode::Defer)
     }
 
+    pub fn record_audit_record(&self, record: &AuditRecord) -> Option<String> {
+        self.audit_sink
+            .record(record)
+            .err()
+            .map(|error| error.to_string())
+    }
+
     fn enforce_with_mode(
         &self,
         event: &RuntimeEvent,

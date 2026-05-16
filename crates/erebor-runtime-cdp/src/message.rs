@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use crate::{
     classify_cdp_method, CdpCommand, CdpError, CdpEvent, CdpSessionState, ClientTargetSessions,
+    GovernedCdpCommand,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -64,6 +65,12 @@ where
         return Ok(CdpEnforcementAction::Forward);
     }
 
+    if browser_level_target_is_ambiguous(command, client_sessions) {
+        return Ok(CdpEnforcementAction::Block {
+            reason: String::from("browser target is unknown for CDP session"),
+        });
+    }
+
     let event = normalize_cdp_command(context, command, session_state, client_sessions)?;
     let outcome = engine
         .enforce_with_deferred_approval(&event)
@@ -79,6 +86,27 @@ where
             }
         },
     })
+}
+
+fn browser_level_target_is_ambiguous(
+    command: &CdpCommand,
+    client_sessions: Option<&ClientTargetSessions>,
+) -> bool {
+    let Some(session_id) = command.session_id.as_deref() else {
+        return false;
+    };
+    let Some(protocol_command) = command.protocol_command() else {
+        return false;
+    };
+    if !requires_client_target(protocol_command) {
+        return false;
+    }
+
+    client_sessions.is_none_or(|sessions| !sessions.has_session(session_id))
+}
+
+fn requires_client_target(command: &GovernedCdpCommand) -> bool {
+    !matches!(command, GovernedCdpCommand::TargetManagement(_))
 }
 
 pub fn observe_cdp_event(
@@ -198,10 +226,11 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        enforce_cdp_command, enforce_cdp_command_with_session_state, observe_cdp_event,
-        CdpEnforcementAction, CdpSessionContext,
+        enforce_cdp_command, enforce_cdp_command_with_client_state,
+        enforce_cdp_command_with_session_state, observe_cdp_event, CdpEnforcementAction,
+        CdpSessionContext,
     };
-    use crate::{decode_cdp_command, decode_cdp_event, CdpSessionState};
+    use crate::{decode_cdp_command, decode_cdp_event, CdpSessionState, ClientTargetSessions};
 
     fn context() -> CdpSessionContext {
         CdpSessionContext {
@@ -291,6 +320,32 @@ mod tests {
             action,
             CdpEnforcementAction::Block {
                 reason: String::from("target management denied")
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_browser_level_session_commands_fail_closed(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let policy = LocalPolicy::from_json_str(r#"{ "rules": [] }"#)?;
+        let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
+        let command = decode_cdp_command(
+            r#"{ "id": 12, "sessionId": "missing-session", "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#,
+        )?;
+
+        let action = enforce_cdp_command_with_client_state(
+            &engine,
+            &context(),
+            &command,
+            &CdpSessionState::default(),
+            Some(&ClientTargetSessions::default()),
+        )?;
+
+        assert_eq!(
+            action,
+            CdpEnforcementAction::Block {
+                reason: String::from("browser target is unknown for CDP session")
             }
         );
         Ok(())
