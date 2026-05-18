@@ -372,24 +372,15 @@ async fn bootstrap_browser_state_observer(
 
         match head.id {
             Some(OBSERVER_SET_DISCOVER_TARGETS_ID) => {
-                parse_internal_response::<target::SetDiscoverTargetsReturnObject>(
-                    &source,
-                    "Target.setDiscoverTargets",
-                )?;
+                parse_internal_method_response::<target::SetDiscoverTargets>(&source)?;
                 discover_enabled = true;
             }
             Some(OBSERVER_SET_AUTO_ATTACH_ID) => {
-                parse_internal_response::<target::SetAutoAttachReturnObject>(
-                    &source,
-                    "Target.setAutoAttach",
-                )?;
+                parse_internal_method_response::<target::SetAutoAttach>(&source)?;
                 auto_attach_enabled = true;
             }
             Some(OBSERVER_GET_TARGETS_ID) => {
-                let response = parse_internal_response::<target::GetTargetsReturnObject>(
-                    &source,
-                    "Target.getTargets",
-                )?;
+                let response = parse_internal_method_response::<target::GetTargets>(&source)?;
                 for target_info in response.target_infos {
                     session_state.record_target_info(&target_info);
                 }
@@ -398,10 +389,7 @@ async fn bootstrap_browser_state_observer(
             }
             Some(id) => {
                 if let Some(target_id) = frame_tree_requests.remove(id) {
-                    let response = parse_internal_response::<page::GetFrameTreeReturnObject>(
-                        &source,
-                        "Page.getFrameTree",
-                    )?;
+                    let response = parse_internal_method_response::<page::GetFrameTree>(&source)?;
                     audit_state_recovery(
                         engine,
                         context,
@@ -513,18 +501,15 @@ async fn bootstrap_page_state_observer(
 
         match head.id {
             Some(OBSERVER_PAGE_ENABLE_ID) => {
-                parse_internal_response::<Value>(&source, "Page.enable")?;
+                parse_internal_method_response::<page::Enable>(&source)?;
                 page_enabled = true;
             }
             Some(OBSERVER_RUNTIME_ENABLE_ID) => {
-                parse_internal_response::<Value>(&source, "Runtime.enable")?;
+                parse_internal_method_response::<cdp_runtime::Enable>(&source)?;
                 runtime_enabled = true;
             }
             Some(OBSERVER_GET_FRAME_TREE_ID) => {
-                let response = parse_internal_response::<page::GetFrameTreeReturnObject>(
-                    &source,
-                    "Page.getFrameTree",
-                )?;
+                let response = parse_internal_method_response::<page::GetFrameTree>(&source)?;
                 audit_state_recovery(engine, context, "page_observer_bootstrap_frame_tree", None);
                 session_state.record_frame_tree(&response.frame_tree);
                 frame_tree_loaded = true;
@@ -544,8 +529,7 @@ async fn observe_browser_level_message(
     source: &str,
 ) -> Result<(), CdpError> {
     if let Some(target_id) = frame_tree_response_target(source, scratch.frame_tree_requests)? {
-        let response =
-            parse_internal_response::<page::GetFrameTreeReturnObject>(source, "Page.getFrameTree")?;
+        let response = parse_internal_method_response::<page::GetFrameTree>(source)?;
         audit_state_recovery(
             refs.engine,
             refs.context,
@@ -689,22 +673,23 @@ impl ObserverCommandIds {
     }
 }
 
-fn parse_internal_response<T>(source: &str, method: &str) -> Result<T, CdpError>
+fn parse_internal_method_response<M>(source: &str) -> Result<M::ReturnObject, CdpError>
 where
-    T: serde::de::DeserializeOwned,
+    M: Method,
 {
-    let response: ObserverBootstrapMethodResponse<T> =
+    let response: ObserverBootstrapMethodResponse<M::ReturnObject> =
         serde_json::from_str(source).map_err(CdpError::invalid_protocol)?;
     if let Some(error) = response.error {
         return Err(CdpError::browser_state_sync(format!(
-            "{method} failed: {}",
+            "{} failed: {}",
+            M::NAME,
             error.message
         )));
     }
 
     response
         .result
-        .ok_or_else(|| CdpError::browser_state_sync(format!("{method} did not return a result")))
+        .ok_or_else(|| CdpError::browser_state_sync(format!("{} did not return a result", M::NAME)))
 }
 
 fn frame_tree_response_target(
@@ -913,19 +898,18 @@ fn record_pending_client_target_command(
     let GovernedCdpCommand::TargetManagement(target_command) = protocol_command else {
         return;
     };
-    if target_command.method != target::AttachToTarget::NAME {
+    if target_command.method() != target::AttachToTarget::NAME {
         return;
     }
     let Some(target_id) = target_command
-        .target
-        .as_ref()
-        .and_then(|target| target.label.as_ref())
+        .target()
+        .and_then(|target| target.label)
         .filter(|target_id| !target_id.is_empty())
     else {
         return;
     };
 
-    client_targets.record_attach_request(command.id, BrowserTargetId::new(target_id.clone()));
+    client_targets.record_attach_request(command.id, BrowserTargetId::new(target_id));
 }
 
 fn error_response(command: &CdpCommand, code: i64, reason: &str) -> Value {

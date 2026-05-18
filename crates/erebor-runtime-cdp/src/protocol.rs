@@ -4,7 +4,7 @@ use cdp_protocol::{
 };
 use erebor_runtime_events::TargetRef;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::CdpError;
 
@@ -209,6 +209,7 @@ impl CdpEvent {
     }
 }
 
+#[allow(deprecated)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum GovernedCdpCommand {
     RuntimeEvaluate(Box<runtime::Evaluate>),
@@ -228,7 +229,7 @@ impl GovernedCdpCommand {
             Self::FetchContinueRequest(command) => {
                 target_ref(Some(command.request_id.clone()), command.url.clone())
             }
-            Self::TargetManagement(command) => command.target.clone(),
+            Self::TargetManagement(command) => command.target(),
             Self::RuntimeEvaluate(_)
             | Self::RuntimeCallFunctionOn(_)
             | Self::InputDispatchMouseEvent(_)
@@ -237,8 +238,100 @@ impl GovernedCdpCommand {
     }
 }
 
+#[allow(deprecated)]
 #[derive(Clone, Debug, PartialEq)]
-pub struct TargetManagementCommand {
+pub enum TargetManagementCommand {
+    ActivateTarget(Box<target::ActivateTarget>),
+    AttachToTarget(Box<target::AttachToTarget>),
+    AttachToBrowserTarget(Box<target::AttachToBrowserTarget>),
+    CloseTarget(Box<target::CloseTarget>),
+    ExposeDevToolsProtocol(Box<target::ExposeDevToolsProtocol>),
+    CreateBrowserContext(Box<target::CreateBrowserContext>),
+    GetBrowserContexts(Box<target::GetBrowserContexts>),
+    CreateTarget(Box<target::CreateTarget>),
+    DetachFromTarget(Box<target::DetachFromTarget>),
+    DisposeBrowserContext(Box<target::DisposeBrowserContext>),
+    GetTargetInfo(Box<target::GetTargetInfo>),
+    GetTargets(Box<target::GetTargets>),
+    SendMessageToTarget(Box<target::SendMessageToTarget>),
+    SetAutoAttach(Box<target::SetAutoAttach>),
+    AutoAttachRelated(Box<target::AutoAttachRelated>),
+    SetDiscoverTargets(Box<target::SetDiscoverTargets>),
+    SetRemoteLocations(Box<target::SetRemoteLocations>),
+    GetDevToolsTarget(Box<target::GetDevToolsTarget>),
+    OpenDevTools(Box<target::OpenDevTools>),
+    Generic(Box<GenericTargetManagementCommand>),
+}
+
+#[allow(deprecated)]
+impl TargetManagementCommand {
+    #[must_use]
+    pub fn method(&self) -> &str {
+        match self {
+            Self::ActivateTarget(_) => target::ActivateTarget::NAME,
+            Self::AttachToTarget(_) => target::AttachToTarget::NAME,
+            Self::AttachToBrowserTarget(_) => target::AttachToBrowserTarget::NAME,
+            Self::CloseTarget(_) => target::CloseTarget::NAME,
+            Self::ExposeDevToolsProtocol(_) => target::ExposeDevToolsProtocol::NAME,
+            Self::CreateBrowserContext(_) => target::CreateBrowserContext::NAME,
+            Self::GetBrowserContexts(_) => target::GetBrowserContexts::NAME,
+            Self::CreateTarget(_) => target::CreateTarget::NAME,
+            Self::DetachFromTarget(_) => target::DetachFromTarget::NAME,
+            Self::DisposeBrowserContext(_) => target::DisposeBrowserContext::NAME,
+            Self::GetTargetInfo(_) => target::GetTargetInfo::NAME,
+            Self::GetTargets(_) => target::GetTargets::NAME,
+            Self::SendMessageToTarget(_) => target::SendMessageToTarget::NAME,
+            Self::SetAutoAttach(_) => target::SetAutoAttach::NAME,
+            Self::AutoAttachRelated(_) => target::AutoAttachRelated::NAME,
+            Self::SetDiscoverTargets(_) => target::SetDiscoverTargets::NAME,
+            Self::SetRemoteLocations(_) => target::SetRemoteLocations::NAME,
+            Self::GetDevToolsTarget(_) => target::GetDevToolsTarget::NAME,
+            Self::OpenDevTools(_) => target::OpenDevTools::NAME,
+            Self::Generic(command) => &command.method,
+        }
+    }
+
+    #[must_use]
+    pub fn target(&self) -> Option<TargetRef> {
+        match self {
+            Self::ActivateTarget(command) => target_id_ref(&command.target_id),
+            Self::AttachToTarget(command) => target_id_ref(&command.target_id),
+            Self::AttachToBrowserTarget(_) => None,
+            Self::CloseTarget(command) => target_id_ref(&command.target_id),
+            Self::ExposeDevToolsProtocol(command) => target_id_ref(&command.target_id),
+            Self::CreateBrowserContext(_) | Self::GetBrowserContexts(_) => None,
+            Self::CreateTarget(command) => target_ref(None, non_empty(&command.url)),
+            Self::DetachFromTarget(command) => {
+                #[allow(deprecated)]
+                let target_id = command.target_id.as_ref();
+                target_id.and_then(|target_id| target_id_ref(target_id))
+            }
+            Self::DisposeBrowserContext(command) => {
+                target_ref(Some(command.browser_context_id.clone()), None)
+            }
+            Self::GetTargetInfo(command) => command
+                .target_id
+                .as_ref()
+                .and_then(|target_id| target_id_ref(target_id)),
+            Self::GetTargets(_) => None,
+            Self::SendMessageToTarget(command) => {
+                #[allow(deprecated)]
+                let target_id = command.target_id.as_ref();
+                target_id.and_then(|target_id| target_id_ref(target_id))
+            }
+            Self::SetAutoAttach(_) | Self::SetDiscoverTargets(_) | Self::SetRemoteLocations(_) => {
+                None
+            }
+            Self::AutoAttachRelated(command) => target_id_ref(&command.target_id),
+            Self::GetDevToolsTarget(command) => target_id_ref(&command.target_id),
+            Self::OpenDevTools(command) => target_id_ref(&command.target_id),
+            Self::Generic(command) => command.target.clone(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GenericTargetManagementCommand {
     pub method: String,
     pub params: Value,
     pub target: Option<TargetRef>,
@@ -283,34 +376,145 @@ fn decode_governed_command(
 ) -> Result<Option<DecodedGovernedCommand>, CdpError> {
     match method {
         runtime::Evaluate::NAME => {
-            governed::<runtime::Evaluate>(source, GovernedCdpCommand::RuntimeEvaluate)
+            governed::<runtime::Evaluate, _>(source, GovernedCdpCommand::RuntimeEvaluate)
         }
-        runtime::CallFunctionOn::NAME => {
-            governed::<runtime::CallFunctionOn>(source, GovernedCdpCommand::RuntimeCallFunctionOn)
-        }
-        input::DispatchMouseEvent::NAME => governed::<input::DispatchMouseEvent>(
+        runtime::CallFunctionOn::NAME => governed::<runtime::CallFunctionOn, _>(
+            source,
+            GovernedCdpCommand::RuntimeCallFunctionOn,
+        ),
+        input::DispatchMouseEvent::NAME => governed::<input::DispatchMouseEvent, _>(
             source,
             GovernedCdpCommand::InputDispatchMouseEvent,
         ),
-        input::DispatchKeyEvent::NAME => {
-            governed::<input::DispatchKeyEvent>(source, GovernedCdpCommand::InputDispatchKeyEvent)
-        }
+        input::DispatchKeyEvent::NAME => governed::<input::DispatchKeyEvent, _>(
+            source,
+            GovernedCdpCommand::InputDispatchKeyEvent,
+        ),
         page::Navigate::NAME => {
-            governed::<page::Navigate>(source, GovernedCdpCommand::PageNavigate)
+            governed::<page::Navigate, _>(source, GovernedCdpCommand::PageNavigate)
         }
         fetch::ContinueRequest::NAME => {
-            governed::<fetch::ContinueRequest>(source, GovernedCdpCommand::FetchContinueRequest)
+            governed::<fetch::ContinueRequest, _>(source, GovernedCdpCommand::FetchContinueRequest)
         }
-        method if method.starts_with("Target.") => target_management(source),
+        method if method.starts_with("Target.") => target_management(source, method),
         _ => Ok(None),
     }
 }
 
-fn target_management(source: &str) -> Result<Option<DecodedGovernedCommand>, CdpError> {
+#[allow(deprecated)]
+fn target_management(
+    source: &str,
+    method: &str,
+) -> Result<Option<DecodedGovernedCommand>, CdpError> {
+    match method {
+        target::ActivateTarget::NAME => target_governed::<target::ActivateTarget, _>(
+            source,
+            TargetManagementCommand::ActivateTarget,
+        ),
+        target::AttachToTarget::NAME => target_governed::<target::AttachToTarget, _>(
+            source,
+            TargetManagementCommand::AttachToTarget,
+        ),
+        target::AttachToBrowserTarget::NAME => {
+            target_governed_with_default::<target::AttachToBrowserTarget, _>(
+                source,
+                Value::Null,
+                TargetManagementCommand::AttachToBrowserTarget,
+            )
+        }
+        target::CloseTarget::NAME => {
+            target_governed::<target::CloseTarget, _>(source, TargetManagementCommand::CloseTarget)
+        }
+        target::ExposeDevToolsProtocol::NAME => {
+            target_governed::<target::ExposeDevToolsProtocol, _>(
+                source,
+                TargetManagementCommand::ExposeDevToolsProtocol,
+            )
+        }
+        target::CreateBrowserContext::NAME => {
+            target_governed_with_default::<target::CreateBrowserContext, _>(
+                source,
+                empty_params(),
+                TargetManagementCommand::CreateBrowserContext,
+            )
+        }
+        target::GetBrowserContexts::NAME => {
+            target_governed_with_default::<target::GetBrowserContexts, _>(
+                source,
+                Value::Null,
+                TargetManagementCommand::GetBrowserContexts,
+            )
+        }
+        target::CreateTarget::NAME => target_governed_with_default::<target::CreateTarget, _>(
+            source,
+            empty_params(),
+            TargetManagementCommand::CreateTarget,
+        ),
+        target::DetachFromTarget::NAME => {
+            target_governed_with_default::<target::DetachFromTarget, _>(
+                source,
+                empty_params(),
+                TargetManagementCommand::DetachFromTarget,
+            )
+        }
+        target::DisposeBrowserContext::NAME => target_governed::<target::DisposeBrowserContext, _>(
+            source,
+            TargetManagementCommand::DisposeBrowserContext,
+        ),
+        target::GetTargetInfo::NAME => target_governed_with_default::<target::GetTargetInfo, _>(
+            source,
+            empty_params(),
+            TargetManagementCommand::GetTargetInfo,
+        ),
+        target::GetTargets::NAME => target_governed_with_default::<target::GetTargets, _>(
+            source,
+            empty_params(),
+            TargetManagementCommand::GetTargets,
+        ),
+        target::SendMessageToTarget::NAME => {
+            target_governed_with_default::<target::SendMessageToTarget, _>(
+                source,
+                empty_params(),
+                TargetManagementCommand::SendMessageToTarget,
+            )
+        }
+        target::SetAutoAttach::NAME => target_governed_with_default::<target::SetAutoAttach, _>(
+            source,
+            empty_params(),
+            TargetManagementCommand::SetAutoAttach,
+        ),
+        target::AutoAttachRelated::NAME => target_governed::<target::AutoAttachRelated, _>(
+            source,
+            TargetManagementCommand::AutoAttachRelated,
+        ),
+        target::SetDiscoverTargets::NAME => {
+            target_governed_with_default::<target::SetDiscoverTargets, _>(
+                source,
+                empty_params(),
+                TargetManagementCommand::SetDiscoverTargets,
+            )
+        }
+        target::SetRemoteLocations::NAME => target_governed::<target::SetRemoteLocations, _>(
+            source,
+            TargetManagementCommand::SetRemoteLocations,
+        ),
+        target::GetDevToolsTarget::NAME => target_governed::<target::GetDevToolsTarget, _>(
+            source,
+            TargetManagementCommand::GetDevToolsTarget,
+        ),
+        target::OpenDevTools::NAME => target_governed::<target::OpenDevTools, _>(
+            source,
+            TargetManagementCommand::OpenDevTools,
+        ),
+        _ => target_management_generic(source),
+    }
+}
+
+fn target_management_generic(source: &str) -> Result<Option<DecodedGovernedCommand>, CdpError> {
     let call: IncomingGenericMethodCall = deserialize_wire(source)?;
     let params = call.params.unwrap_or(Value::Object(serde_json::Map::new()));
     let target = target_ref_from_params(&params);
-    let command = TargetManagementCommand {
+    let command = GenericTargetManagementCommand {
         method: call.method,
         params: params.clone(),
         target,
@@ -319,18 +523,61 @@ fn target_management(source: &str) -> Result<Option<DecodedGovernedCommand>, Cdp
     Ok(Some(DecodedGovernedCommand {
         id: call.id,
         params,
-        command: GovernedCdpCommand::TargetManagement(Box::new(command)),
+        command: GovernedCdpCommand::TargetManagement(Box::new(TargetManagementCommand::Generic(
+            Box::new(command),
+        ))),
     }))
 }
 
-fn governed<T>(
+fn target_governed<T, F>(source: &str, wrap: F) -> Result<Option<DecodedGovernedCommand>, CdpError>
+where
+    T: Method + DeserializeOwned + Serialize,
+    F: FnOnce(Box<T>) -> TargetManagementCommand,
+{
+    governed(source, |command| {
+        GovernedCdpCommand::TargetManagement(Box::new(wrap(command)))
+    })
+}
+
+fn target_governed_with_default<T, F>(
     source: &str,
-    wrap: fn(Box<T>) -> GovernedCdpCommand,
+    default_params: Value,
+    wrap: F,
 ) -> Result<Option<DecodedGovernedCommand>, CdpError>
 where
     T: Method + DeserializeOwned + Serialize,
+    F: FnOnce(Box<T>) -> TargetManagementCommand,
+{
+    governed_with_default(source, default_params, |command| {
+        GovernedCdpCommand::TargetManagement(Box::new(wrap(command)))
+    })
+}
+
+fn governed<T, F>(source: &str, wrap: F) -> Result<Option<DecodedGovernedCommand>, CdpError>
+where
+    T: Method + DeserializeOwned + Serialize,
+    F: FnOnce(Box<T>) -> GovernedCdpCommand,
 {
     let call = decode_method_call::<T>(source)?;
+    let params = params_value(&call.params)?;
+
+    Ok(Some(DecodedGovernedCommand {
+        id: call.id,
+        params,
+        command: wrap(Box::new(call.params)),
+    }))
+}
+
+fn governed_with_default<T, F>(
+    source: &str,
+    default_params: Value,
+    wrap: F,
+) -> Result<Option<DecodedGovernedCommand>, CdpError>
+where
+    T: Method + DeserializeOwned + Serialize,
+    F: FnOnce(Box<T>) -> GovernedCdpCommand,
+{
+    let call = decode_method_call_with_default::<T>(source, default_params)?;
     let params = params_value(&call.params)?;
 
     Ok(Some(DecodedGovernedCommand {
@@ -350,6 +597,31 @@ where
     }
 
     Ok(call)
+}
+
+fn decode_method_call_with_default<T>(
+    source: &str,
+    default_params: Value,
+) -> Result<IncomingMethodCall<T>, CdpError>
+where
+    T: Method + DeserializeOwned,
+{
+    let call: IncomingRawMethodCall = deserialize_wire(source)?;
+    if call.method != T::NAME {
+        return Err(CdpError::unexpected_method(T::NAME, call.method));
+    }
+
+    let params = match call.params {
+        Some(Value::Null) | None => default_params,
+        Some(params) => params,
+    };
+    let params = serde_json::from_value(params).map_err(CdpError::invalid_protocol)?;
+
+    Ok(IncomingMethodCall {
+        id: call.id,
+        method: call.method,
+        params,
+    })
 }
 
 fn deserialize_wire<T>(source: &str) -> Result<T, CdpError>
@@ -387,6 +659,13 @@ fn target_ref_from_target_info(target_info: &target::TargetInfo) -> Option<Targe
     )
 }
 
+fn target_id_ref(target_id: &str) -> Option<TargetRef> {
+    (!target_id.is_empty()).then(|| TargetRef {
+        label: Some(target_id.to_owned()),
+        uri: None,
+    })
+}
+
 fn target_ref_from_params(params: &Value) -> Option<TargetRef> {
     params
         .get("targetId")
@@ -404,6 +683,10 @@ fn non_empty(value: &str) -> Option<String> {
     } else {
         Some(value.to_owned())
     }
+}
+
+fn empty_params() -> Value {
+    Value::Object(Map::new())
 }
 
 #[derive(Debug, Deserialize)]
@@ -432,6 +715,14 @@ struct IncomingMethodCall<T> {
 
 #[derive(Debug, Deserialize)]
 struct IncomingGenericMethodCall {
+    id: CallId,
+    #[serde(rename = "method")]
+    method: String,
+    params: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IncomingRawMethodCall {
     id: CallId,
     #[serde(rename = "method")]
     method: String,
@@ -525,11 +816,28 @@ mod tests {
         else {
             return Err(CdpError::unsupported_method("Target.setAutoAttach"));
         };
-        assert_eq!(target_command.method, "Target.setAutoAttach");
+        assert_eq!(target_command.method(), "Target.setAutoAttach");
         assert_eq!(
-            target_command.params.get("flatten"),
+            command.params().and_then(|params| params.get("flatten")),
             Some(&serde_json::Value::Bool(true))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn decodes_optional_target_management_params_with_protocol_defaults() -> Result<(), CdpError> {
+        let command = decode_cdp_command(r#"{ "id": 4, "method": "Target.getTargets" }"#)?;
+
+        let Some(GovernedCdpCommand::TargetManagement(target_command)) = command.protocol_command()
+        else {
+            return Err(CdpError::unsupported_method("Target.getTargets"));
+        };
+        assert!(matches!(
+            target_command.as_ref(),
+            super::TargetManagementCommand::GetTargets(_)
+        ));
+        assert_eq!(target_command.method(), "Target.getTargets");
+        assert_eq!(command.params(), Some(&serde_json::json!({})));
         Ok(())
     }
 
