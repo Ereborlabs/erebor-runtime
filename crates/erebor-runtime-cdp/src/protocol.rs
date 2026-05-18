@@ -375,6 +375,25 @@ fn decode_governed_command(
     method: &str,
 ) -> Result<Option<DecodedGovernedCommand>, CdpError> {
     match method {
+        runtime::Evaluate::NAME | runtime::CallFunctionOn::NAME => {
+            decode_runtime_command(source, method)
+        }
+        input::DispatchMouseEvent::NAME | input::DispatchKeyEvent::NAME => {
+            decode_input_command(source, method)
+        }
+        page::Navigate::NAME => decode_page_command(source, method),
+        fetch::ContinueRequest::NAME => decode_fetch_command(source, method),
+        method if method.starts_with("Target.") => decode_target_command(source, method),
+        _ => Ok(None),
+    }
+}
+
+#[allow(deprecated)]
+fn decode_runtime_command(
+    source: &str,
+    method: &str,
+) -> Result<Option<DecodedGovernedCommand>, CdpError> {
+    match method {
         runtime::Evaluate::NAME => {
             governed::<runtime::Evaluate, _>(source, GovernedCdpCommand::RuntimeEvaluate)
         }
@@ -382,6 +401,15 @@ fn decode_governed_command(
             source,
             GovernedCdpCommand::RuntimeCallFunctionOn,
         ),
+        _ => Ok(None),
+    }
+}
+
+fn decode_input_command(
+    source: &str,
+    method: &str,
+) -> Result<Option<DecodedGovernedCommand>, CdpError> {
+    match method {
         input::DispatchMouseEvent::NAME => governed::<input::DispatchMouseEvent, _>(
             source,
             GovernedCdpCommand::InputDispatchMouseEvent,
@@ -390,127 +418,137 @@ fn decode_governed_command(
             source,
             GovernedCdpCommand::InputDispatchKeyEvent,
         ),
+        _ => Ok(None),
+    }
+}
+
+fn decode_page_command(
+    source: &str,
+    method: &str,
+) -> Result<Option<DecodedGovernedCommand>, CdpError> {
+    match method {
         page::Navigate::NAME => {
             governed::<page::Navigate, _>(source, GovernedCdpCommand::PageNavigate)
         }
+        _ => Ok(None),
+    }
+}
+
+fn decode_fetch_command(
+    source: &str,
+    method: &str,
+) -> Result<Option<DecodedGovernedCommand>, CdpError> {
+    match method {
         fetch::ContinueRequest::NAME => {
             governed::<fetch::ContinueRequest, _>(source, GovernedCdpCommand::FetchContinueRequest)
         }
-        method if method.starts_with("Target.") => target_management(source, method),
         _ => Ok(None),
     }
 }
 
 #[allow(deprecated)]
-fn target_management(
+fn decode_target_command(
     source: &str,
     method: &str,
 ) -> Result<Option<DecodedGovernedCommand>, CdpError> {
     match method {
-        target::ActivateTarget::NAME => target_governed::<target::ActivateTarget, _>(
+        target::ActivateTarget::NAME => governed::<target::ActivateTarget, _>(
             source,
-            TargetManagementCommand::ActivateTarget,
+            wrap_target(TargetManagementCommand::ActivateTarget),
         ),
-        target::AttachToTarget::NAME => target_governed::<target::AttachToTarget, _>(
+        target::AttachToTarget::NAME => governed::<target::AttachToTarget, _>(
             source,
-            TargetManagementCommand::AttachToTarget,
+            wrap_target(TargetManagementCommand::AttachToTarget),
         ),
         target::AttachToBrowserTarget::NAME => {
-            target_governed_with_default::<target::AttachToBrowserTarget, _>(
+            governed_with_default::<target::AttachToBrowserTarget, _>(
                 source,
                 Value::Null,
-                TargetManagementCommand::AttachToBrowserTarget,
+                wrap_target(TargetManagementCommand::AttachToBrowserTarget),
             )
         }
-        target::CloseTarget::NAME => {
-            target_governed::<target::CloseTarget, _>(source, TargetManagementCommand::CloseTarget)
-        }
-        target::ExposeDevToolsProtocol::NAME => {
-            target_governed::<target::ExposeDevToolsProtocol, _>(
-                source,
-                TargetManagementCommand::ExposeDevToolsProtocol,
-            )
-        }
+        target::CloseTarget::NAME => governed::<target::CloseTarget, _>(
+            source,
+            wrap_target(TargetManagementCommand::CloseTarget),
+        ),
+        target::ExposeDevToolsProtocol::NAME => governed::<target::ExposeDevToolsProtocol, _>(
+            source,
+            wrap_target(TargetManagementCommand::ExposeDevToolsProtocol),
+        ),
         target::CreateBrowserContext::NAME => {
-            target_governed_with_default::<target::CreateBrowserContext, _>(
+            governed_with_default::<target::CreateBrowserContext, _>(
                 source,
                 empty_params(),
-                TargetManagementCommand::CreateBrowserContext,
+                wrap_target(TargetManagementCommand::CreateBrowserContext),
             )
         }
-        target::GetBrowserContexts::NAME => {
-            target_governed_with_default::<target::GetBrowserContexts, _>(
-                source,
-                Value::Null,
-                TargetManagementCommand::GetBrowserContexts,
-            )
-        }
-        target::CreateTarget::NAME => target_governed_with_default::<target::CreateTarget, _>(
+        target::GetBrowserContexts::NAME => governed_with_default::<target::GetBrowserContexts, _>(
+            source,
+            Value::Null,
+            wrap_target(TargetManagementCommand::GetBrowserContexts),
+        ),
+        target::CreateTarget::NAME => governed_with_default::<target::CreateTarget, _>(
             source,
             empty_params(),
-            TargetManagementCommand::CreateTarget,
+            wrap_target(TargetManagementCommand::CreateTarget),
         ),
-        target::DetachFromTarget::NAME => {
-            target_governed_with_default::<target::DetachFromTarget, _>(
-                source,
-                empty_params(),
-                TargetManagementCommand::DetachFromTarget,
-            )
-        }
-        target::DisposeBrowserContext::NAME => target_governed::<target::DisposeBrowserContext, _>(
-            source,
-            TargetManagementCommand::DisposeBrowserContext,
-        ),
-        target::GetTargetInfo::NAME => target_governed_with_default::<target::GetTargetInfo, _>(
+        target::DetachFromTarget::NAME => governed_with_default::<target::DetachFromTarget, _>(
             source,
             empty_params(),
-            TargetManagementCommand::GetTargetInfo,
+            wrap_target(TargetManagementCommand::DetachFromTarget),
         ),
-        target::GetTargets::NAME => target_governed_with_default::<target::GetTargets, _>(
+        target::DisposeBrowserContext::NAME => governed::<target::DisposeBrowserContext, _>(
+            source,
+            wrap_target(TargetManagementCommand::DisposeBrowserContext),
+        ),
+        target::GetTargetInfo::NAME => governed_with_default::<target::GetTargetInfo, _>(
             source,
             empty_params(),
-            TargetManagementCommand::GetTargets,
+            wrap_target(TargetManagementCommand::GetTargetInfo),
+        ),
+        target::GetTargets::NAME => governed_with_default::<target::GetTargets, _>(
+            source,
+            empty_params(),
+            wrap_target(TargetManagementCommand::GetTargets),
         ),
         target::SendMessageToTarget::NAME => {
-            target_governed_with_default::<target::SendMessageToTarget, _>(
+            governed_with_default::<target::SendMessageToTarget, _>(
                 source,
                 empty_params(),
-                TargetManagementCommand::SendMessageToTarget,
+                wrap_target(TargetManagementCommand::SendMessageToTarget),
             )
         }
-        target::SetAutoAttach::NAME => target_governed_with_default::<target::SetAutoAttach, _>(
+        target::SetAutoAttach::NAME => governed_with_default::<target::SetAutoAttach, _>(
             source,
             empty_params(),
-            TargetManagementCommand::SetAutoAttach,
+            wrap_target(TargetManagementCommand::SetAutoAttach),
         ),
-        target::AutoAttachRelated::NAME => target_governed::<target::AutoAttachRelated, _>(
+        target::AutoAttachRelated::NAME => governed::<target::AutoAttachRelated, _>(
             source,
-            TargetManagementCommand::AutoAttachRelated,
+            wrap_target(TargetManagementCommand::AutoAttachRelated),
         ),
-        target::SetDiscoverTargets::NAME => {
-            target_governed_with_default::<target::SetDiscoverTargets, _>(
-                source,
-                empty_params(),
-                TargetManagementCommand::SetDiscoverTargets,
-            )
-        }
-        target::SetRemoteLocations::NAME => target_governed::<target::SetRemoteLocations, _>(
+        target::SetDiscoverTargets::NAME => governed_with_default::<target::SetDiscoverTargets, _>(
             source,
-            TargetManagementCommand::SetRemoteLocations,
+            empty_params(),
+            wrap_target(TargetManagementCommand::SetDiscoverTargets),
         ),
-        target::GetDevToolsTarget::NAME => target_governed::<target::GetDevToolsTarget, _>(
+        target::SetRemoteLocations::NAME => governed::<target::SetRemoteLocations, _>(
             source,
-            TargetManagementCommand::GetDevToolsTarget,
+            wrap_target(TargetManagementCommand::SetRemoteLocations),
         ),
-        target::OpenDevTools::NAME => target_governed::<target::OpenDevTools, _>(
+        target::GetDevToolsTarget::NAME => governed::<target::GetDevToolsTarget, _>(
             source,
-            TargetManagementCommand::OpenDevTools,
+            wrap_target(TargetManagementCommand::GetDevToolsTarget),
         ),
-        _ => target_management_generic(source),
+        target::OpenDevTools::NAME => governed::<target::OpenDevTools, _>(
+            source,
+            wrap_target(TargetManagementCommand::OpenDevTools),
+        ),
+        _ => decode_generic_target_command(source),
     }
 }
 
-fn target_management_generic(source: &str) -> Result<Option<DecodedGovernedCommand>, CdpError> {
+fn decode_generic_target_command(source: &str) -> Result<Option<DecodedGovernedCommand>, CdpError> {
     let call: IncomingGenericMethodCall = deserialize_wire(source)?;
     let params = call.params.unwrap_or(Value::Object(serde_json::Map::new()));
     let target = target_ref_from_params(&params);
@@ -529,28 +567,12 @@ fn target_management_generic(source: &str) -> Result<Option<DecodedGovernedComma
     }))
 }
 
-fn target_governed<T, F>(source: &str, wrap: F) -> Result<Option<DecodedGovernedCommand>, CdpError>
+fn wrap_target<T>(
+    wrap: fn(Box<T>) -> TargetManagementCommand,
+) -> impl FnOnce(Box<T>) -> GovernedCdpCommand
 where
-    T: Method + DeserializeOwned + Serialize,
-    F: FnOnce(Box<T>) -> TargetManagementCommand,
 {
-    governed(source, |command| {
-        GovernedCdpCommand::TargetManagement(Box::new(wrap(command)))
-    })
-}
-
-fn target_governed_with_default<T, F>(
-    source: &str,
-    default_params: Value,
-    wrap: F,
-) -> Result<Option<DecodedGovernedCommand>, CdpError>
-where
-    T: Method + DeserializeOwned + Serialize,
-    F: FnOnce(Box<T>) -> TargetManagementCommand,
-{
-    governed_with_default(source, default_params, |command| {
-        GovernedCdpCommand::TargetManagement(Box::new(wrap(command)))
-    })
+    move |command| GovernedCdpCommand::TargetManagement(Box::new(wrap(command)))
 }
 
 fn governed<T, F>(source: &str, wrap: F) -> Result<Option<DecodedGovernedCommand>, CdpError>
