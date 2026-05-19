@@ -22,6 +22,20 @@ const DEVTOOLS_POLL: Duration = Duration::from_millis(50);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 const CHROME_STDERR_LOG: &str = "chrome-stderr.log";
 const CHROME_STDERR_EXCERPT_LIMIT: usize = 4_000;
+const DEFAULT_BROWSER_FLAGS: &[&str] = &[
+    "--disable-gpu",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-networking",
+    "--disable-extensions",
+    "--disable-sync",
+    "--disable-breakpad",
+    "--disable-crash-reporter",
+    "--disable-dev-shm-usage",
+    "--metrics-recording-only",
+    "--remote-debugging-address=127.0.0.1",
+    "--remote-debugging-port=0",
+];
 
 pub struct BrowserSessionManager {
     config: BrowserCdpRuntimeConfig,
@@ -186,54 +200,30 @@ struct OwnedBrowserProcess {
 
 impl OwnedBrowserProcess {
     fn launch(config: &BrowserLaunchConfig) -> Result<Self, CdpError> {
-        let binary = config
-            .executable()
-            .map(Path::to_path_buf)
-            .or_else(chrome_binary_path)
-            .ok_or_else(|| {
-                CdpError::browser_launch("no local Chrome or Chromium binary was found")
-            })?;
-        let (user_data_dir, cleanup_user_data_dir) = match config.user_data_dir() {
-            Some(path) => (path.to_path_buf(), false),
-            None => (temp_profile_dir(), true),
-        };
+        let launch = OwnedBrowserLaunch::from_config(config)?;
+        let stderr_log = fs::File::create(&launch.stderr_log_path).map_err(CdpError::io)?;
 
-        fs::create_dir_all(&user_data_dir).map_err(CdpError::io)?;
-        let stderr_log_path = user_data_dir.join(CHROME_STDERR_LOG);
-        let stderr_log = fs::File::create(&stderr_log_path).map_err(CdpError::io)?;
-        let mut command = Command::new(&binary);
-        if config.headless() {
-            command.arg("--headless=new");
-        }
+        let mut command = Command::new(&launch.executable.path);
         command
-            .arg("--disable-gpu")
-            .arg("--no-first-run")
-            .arg("--no-default-browser-check")
-            .arg("--disable-background-networking")
-            .arg("--disable-extensions")
-            .arg("--disable-sync")
-            .arg("--disable-breakpad")
-            .arg("--disable-crash-reporter")
-            .arg("--disable-dev-shm-usage")
-            .arg("--metrics-recording-only")
-            .arg("--remote-debugging-address=127.0.0.1")
-            .arg("--remote-debugging-port=0")
-            .arg(format!("--user-data-dir={}", user_data_dir.display()))
-            .arg("about:blank")
+            .args(&launch.args)
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr_log));
 
         debug!(
-            binary = %binary.display(),
-            profile = %user_data_dir.display(),
-            stderr = %stderr_log_path.display(),
-            headless = config.headless(),
+            browser = %launch.executable.label(),
+            binary = %launch.executable.path.display(),
+            profile = %launch.user_data_dir.display(),
+            stderr = %launch.stderr_log_path.display(),
+            headless = launch.options.headless,
+            args = ?launch.args,
             "launching owned browser"
         );
         let mut child = command.spawn().map_err(CdpError::io)?;
-        let devtools =
-            wait_for_devtools_endpoint(&mut child, &user_data_dir.join("DevToolsActivePort"))
-                .map_err(|error| enrich_browser_launch_error(error, &stderr_log_path))?;
+        let devtools = wait_for_devtools_endpoint(
+            &mut child,
+            &launch.user_data_dir.join("DevToolsActivePort"),
+        )
+        .map_err(|error| enrich_browser_launch_error(error, &launch.stderr_log_path))?;
         let page_ws_url =
             create_page_ws_url(&devtools.browser_ws_url, devtools.port).or_else(|ws_error| {
                 wait_for_page_ws_url(&mut child, devtools.port).map_err(|http_error| {
@@ -246,11 +236,194 @@ impl OwnedBrowserProcess {
 
         Ok(Self {
             child,
-            user_data_dir,
-            cleanup_user_data_dir,
+            user_data_dir: launch.user_data_dir,
+            cleanup_user_data_dir: launch.cleanup_user_data_dir,
             browser_ws_url: devtools.browser_ws_url,
             page_ws_url,
         })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OwnedBrowserLaunch {
+    executable: BrowserExecutable,
+    user_data_dir: PathBuf,
+    cleanup_user_data_dir: bool,
+    stderr_log_path: PathBuf,
+    options: OwnedBrowserLaunchOptions,
+    args: Vec<String>,
+}
+
+impl OwnedBrowserLaunch {
+    fn from_config(config: &BrowserLaunchConfig) -> Result<Self, CdpError> {
+        let executable = BrowserExecutable::from_config(config)?;
+        let (user_data_dir, cleanup_user_data_dir) = match config.user_data_dir() {
+            Some(path) => (path.to_path_buf(), false),
+            None => (temp_profile_dir(), true),
+        };
+        fs::create_dir_all(&user_data_dir).map_err(CdpError::io)?;
+
+        let stderr_log_path = user_data_dir.join(CHROME_STDERR_LOG);
+        let options = OwnedBrowserLaunchOptions {
+            headless: config.headless(),
+            user_data_dir: user_data_dir.clone(),
+        };
+        let args = build_browser_launch_args(&options);
+
+        Ok(Self {
+            executable,
+            user_data_dir,
+            cleanup_user_data_dir,
+            stderr_log_path,
+            options,
+            args,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct OwnedBrowserLaunchOptions {
+    headless: bool,
+    user_data_dir: PathBuf,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BrowserExecutable {
+    path: PathBuf,
+    source: BrowserExecutableSource,
+}
+
+impl BrowserExecutable {
+    fn from_config(config: &BrowserLaunchConfig) -> Result<Self, CdpError> {
+        if let Some(path) = config.executable() {
+            return browser_executable_from_config(path);
+        }
+
+        browser_executable_from_env()
+            .or_else(discover_browser_executable)
+            .ok_or_else(|| CdpError::browser_launch("no local Chrome or Chromium binary was found"))
+    }
+
+    fn label(&self) -> &'static str {
+        match &self.source {
+            BrowserExecutableSource::Config => "configured",
+            BrowserExecutableSource::Env => "env",
+            BrowserExecutableSource::Discovered(browser_type) => browser_type.as_str(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum BrowserExecutableSource {
+    Config,
+    Env,
+    Discovered(BrowserType),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BrowserType {
+    Chrome,
+    Chromium,
+}
+
+impl BrowserType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Chrome => "chrome",
+            Self::Chromium => "chromium",
+        }
+    }
+
+    fn search_order() -> &'static [Self] {
+        &[Self::Chrome, Self::Chromium]
+    }
+
+    fn candidates(self) -> &'static [&'static str] {
+        match self {
+            Self::Chrome => &[
+                "google-chrome",
+                "google-chrome-stable",
+                "chrome",
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            ],
+            Self::Chromium => &[
+                "chromium",
+                "chromium-browser",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            ],
+        }
+    }
+
+    fn find_executable(self) -> Option<PathBuf> {
+        self.candidates()
+            .iter()
+            .find_map(|candidate| resolve_browser_candidate(candidate))
+    }
+}
+
+fn browser_executable_from_config(path: &Path) -> Result<BrowserExecutable, CdpError> {
+    if !is_executable(path) {
+        return Err(CdpError::browser_launch(format!(
+            "configured browser executable `{}` was not found or is not executable",
+            path.display()
+        )));
+    }
+
+    Ok(BrowserExecutable {
+        path: path.to_path_buf(),
+        source: BrowserExecutableSource::Config,
+    })
+}
+
+fn discover_browser_executable() -> Option<BrowserExecutable> {
+    BrowserType::search_order().iter().find_map(|browser_type| {
+        browser_type
+            .find_executable()
+            .map(|path| BrowserExecutable {
+                path,
+                source: BrowserExecutableSource::Discovered(*browser_type),
+            })
+    })
+}
+
+fn browser_executable_from_env() -> Option<BrowserExecutable> {
+    std::env::var_os("EREBOR_BROWSER_BIN")
+        .map(PathBuf::from)
+        .filter(|path| is_executable(path))
+        .map(|path| BrowserExecutable {
+            path,
+            source: BrowserExecutableSource::Env,
+        })
+}
+
+fn resolve_browser_candidate(candidate: &str) -> Option<PathBuf> {
+    let path = Path::new(candidate);
+    if path.is_absolute() {
+        return is_executable(path).then(|| path.to_path_buf());
+    }
+
+    find_binary_on_path(candidate)
+}
+
+fn build_browser_launch_args(options: &OwnedBrowserLaunchOptions) -> Vec<String> {
+    let mut args = Vec::new();
+    if options.headless {
+        push_unique(&mut args, String::from("--headless=new"));
+    }
+    for flag in DEFAULT_BROWSER_FLAGS {
+        push_unique(&mut args, (*flag).to_owned());
+    }
+    push_unique(
+        &mut args,
+        format!("--user-data-dir={}", options.user_data_dir.display()),
+    );
+    push_unique(&mut args, String::from("about:blank"));
+    args
+}
+
+fn push_unique(args: &mut Vec<String>, arg: String) {
+    if !args.iter().any(|existing| existing == &arg) {
+        args.push(arg);
     }
 }
 
@@ -609,31 +782,31 @@ fn split_http_response(response: &str) -> Option<(&str, &str)> {
     Some((status_line, body))
 }
 
-fn chrome_binary_path() -> Option<PathBuf> {
-    std::env::var_os("EREBOR_BROWSER_BIN")
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
-        .or_else(|| find_binary_on_path("google-chrome"))
-        .or_else(|| find_binary_on_path("google-chrome-stable"))
-        .or_else(|| find_binary_on_path("chromium"))
-        .or_else(|| find_binary_on_path("chromium-browser"))
-        .or_else(|| {
-            chrome_app_binary("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-        })
-        .or_else(|| chrome_app_binary("/Applications/Chromium.app/Contents/MacOS/Chromium"))
-}
-
 fn find_binary_on_path(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|path| {
         std::env::split_paths(&path)
             .map(|entry| entry.join(name))
-            .find(|candidate| candidate.is_file())
+            .find(|candidate| is_executable(candidate))
     })
 }
 
-fn chrome_app_binary(path: &str) -> Option<PathBuf> {
-    let path = PathBuf::from(path);
-    path.is_file().then_some(path)
+fn is_executable(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn temp_profile_dir() -> PathBuf {
@@ -669,4 +842,45 @@ fn sanitize_token_part(value: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{build_browser_launch_args, OwnedBrowserLaunchOptions, DEFAULT_BROWSER_FLAGS};
+
+    fn has_arg(args: &[String], expected: &str) -> bool {
+        args.iter().any(|arg| arg == expected)
+    }
+
+    #[test]
+    fn browser_launch_args_keep_owned_browser_debugging_flags() {
+        let args = build_browser_launch_args(&OwnedBrowserLaunchOptions {
+            headless: true,
+            user_data_dir: PathBuf::from("/tmp/erebor-owned-browser-test"),
+        });
+
+        assert!(has_arg(&args, "--headless=new"));
+        for flag in DEFAULT_BROWSER_FLAGS {
+            assert!(has_arg(&args, flag));
+        }
+        assert!(has_arg(
+            &args,
+            "--user-data-dir=/tmp/erebor-owned-browser-test"
+        ));
+        assert_eq!(args.last().map(String::as_str), Some("about:blank"));
+    }
+
+    #[test]
+    fn browser_launch_args_omit_headless_when_disabled() {
+        let args = build_browser_launch_args(&OwnedBrowserLaunchOptions {
+            headless: false,
+            user_data_dir: PathBuf::from("/tmp/erebor-owned-browser-test"),
+        });
+
+        assert!(!has_arg(&args, "--headless=new"));
+        assert!(has_arg(&args, "--remote-debugging-address=127.0.0.1"));
+        assert!(has_arg(&args, "--remote-debugging-port=0"));
+    }
 }
