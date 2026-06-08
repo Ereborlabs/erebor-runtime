@@ -2,18 +2,25 @@ use std::{
     fmt, fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
+    process::Command as ProcessCommand,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use clap::{Args, Parser, Subcommand};
-use erebor_runtime_audit::{read_audit_records, AuditLogError};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use erebor_runtime_audit::{read_audit_records, AuditLogError, JsonlAuditSink};
 use erebor_runtime_cdp::{BrowserCdpRuntime, CdpSessionContext};
 use erebor_runtime_core::{
-    BrowserCdpLayerConfig, GovernanceLayers, RunningRuntime, RuntimeConfig, RuntimeConfigError,
-    RuntimeDefinition, RuntimeError, RuntimeLaunchPlan, RuntimeLauncher, RuntimeStartPlan,
+    AuditError, AuditRecord, AuditSink, BrowserCdpLayerConfig, DenyApprovalProvider,
+    DockerSessionLaunchPlan, GovernanceLayers, LocalEnforcementEngine, NoopAuditSink,
+    RunningRuntime, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError, RuntimeDefinition,
+    RuntimeError, RuntimeLaunchPlan, RuntimeLauncher, RuntimeStartPlan, SessionRunPlan,
+    SessionRuntimeKind,
 };
-use erebor_runtime_events::{ActorIdentity, ActorKind, RuntimeEvent, SessionId};
-use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicyEvaluator, PolicySet};
+use erebor_runtime_events::{
+    ActionKind, ActorIdentity, ActorKind, ExecutionSurface, RiskLevel, RiskMetadata, RuntimeEvent,
+    SessionId, TargetRef,
+};
+use erebor_runtime_policy::{Decision, LocalPolicy, PolicyError, PolicyEvaluator, PolicySet};
 use snafu::Location;
 use thiserror::Error;
 
@@ -40,6 +47,7 @@ impl Cli {
 
         match &self.command {
             Command::Start(args) => start_runtime(args)?,
+            Command::Session(args) => execute_session(args)?,
             Command::Dev(args) => execute_dev(args)?,
             Command::Policy(args) => execute_policy(args)?,
             Command::Audit(args) => execute_audit(args)?,
@@ -53,6 +61,8 @@ impl Cli {
 enum Command {
     /// Start the configured governance runtime.
     Start(StartArgs),
+    /// Start or manage governed agent sessions.
+    Session(SessionArgs),
     /// Development and surface-specific utilities.
     Dev(DevArgs),
     /// Policy development and validation commands.
@@ -69,6 +79,15 @@ impl fmt::Display for Command {
                 "start config={} listen={}",
                 args.config.display(),
                 args.listen
+            ),
+            Self::Session(SessionArgs {
+                command: SessionCommand::Run(args),
+            }) => write!(
+                formatter,
+                "session run runtime={} config={} command={}",
+                args.runtime.as_str(),
+                args.config.display(),
+                args.command.join(" ")
             ),
             Self::Dev(DevArgs {
                 command: DevCommand::ProxyCdp(args),
@@ -103,6 +122,52 @@ struct StartArgs {
     /// Local address for runtime control/status APIs.
     #[arg(long, default_value = "127.0.0.1:3737")]
     listen: SocketAddr,
+}
+
+#[derive(Debug, Args)]
+struct SessionArgs {
+    #[command(subcommand)]
+    command: SessionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum SessionCommand {
+    /// Run an agent or command inside a governed session runtime.
+    Run(SessionRunArgs),
+}
+
+#[derive(Debug, Args)]
+struct SessionRunArgs {
+    /// Session runtime config describing policies, audit, and runtime settings.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    config: PathBuf,
+    /// Concrete session runtime to use.
+    #[arg(long, value_enum)]
+    runtime: SessionRuntimeArg,
+    /// Command to execute inside the governed session runtime.
+    #[arg(required = true, trailing_var_arg = true, num_args = 1..)]
+    command: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum SessionRuntimeArg {
+    Docker,
+}
+
+impl SessionRuntimeArg {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Docker => "docker",
+        }
+    }
+}
+
+impl From<SessionRuntimeArg> for SessionRuntimeKind {
+    fn from(value: SessionRuntimeArg) -> Self {
+        match value {
+            SessionRuntimeArg::Docker => Self::Docker,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -231,6 +296,8 @@ fn build_runtime_launch_plan(args: &StartArgs) -> Result<RuntimeLaunchPlan, CliE
 fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<RuntimeLaunchPlan, CliError> {
     let config = RuntimeConfig {
         policies: vec![args.policy.clone()],
+        audit: RuntimeAuditConfig::default(),
+        session: Default::default(),
         governance: GovernanceLayers {
             browser_cdp: BrowserCdpLayerConfig {
                 enabled: true,
@@ -253,6 +320,8 @@ fn resolve_config_paths(config_path: &Path, config: &mut RuntimeConfig) {
     for policy in &mut config.policies {
         resolve_config_path(base_dir, policy);
     }
+    resolve_optional_config_path(base_dir, &mut config.audit.jsonl);
+    resolve_optional_config_path(base_dir, &mut config.session.workspace);
     resolve_optional_config_path(
         base_dir,
         &mut config.governance.browser_cdp.browser.executable,
@@ -314,6 +383,110 @@ fn read_event(path: &Path) -> Result<RuntimeEvent, CliError> {
 fn start_runtime(args: &StartArgs) -> Result<(), CliError> {
     let launch_plan = build_runtime_launch_plan(args)?;
     start_runtime_from_launch_plan(launch_plan)
+}
+
+fn execute_session(args: &SessionArgs) -> Result<(), CliError> {
+    match &args.command {
+        SessionCommand::Run(args) => session_run(args),
+    }
+}
+
+fn session_run(args: &SessionRunArgs) -> Result<(), CliError> {
+    let plan = build_session_run_plan(args)?;
+    let policy_set = read_policy_set(plan.policies())?;
+    let engine = LocalEnforcementEngine::with_hooks(
+        policy_set,
+        DenyApprovalProvider,
+        ConfiguredAuditSink::from_config(plan.audit()),
+    );
+    let event = session_process_event(&plan);
+    let outcome = engine.enforce(&event).map_err(CliError::runtime)?;
+
+    match outcome.final_decision {
+        Decision::Allow { .. } => launch_docker_session(&plan),
+        Decision::Deny { reason, .. } => Err(CliError::session_denied(reason)),
+        Decision::RequireApproval { reason, .. } => Err(CliError::session_denied(reason)),
+    }
+}
+
+fn build_session_run_plan(args: &SessionRunArgs) -> Result<SessionRunPlan, CliError> {
+    let config = read_runtime_config(&args.config)?;
+    let session_id = SessionId::new(format!("session-{}", std::process::id()));
+    SessionRunPlan::from_config(
+        &config,
+        args.runtime.into(),
+        session_id,
+        args.command.clone(),
+    )
+    .map_err(CliError::invalid_config)
+}
+
+fn launch_docker_session(plan: &SessionRunPlan) -> Result<(), CliError> {
+    let launch = DockerSessionLaunchPlan::from_session_run_plan(plan);
+    tracing::info!(
+        session = %plan.session_id().as_str(),
+        actor = %plan.actor().id,
+        image = %plan.runtime().docker().image(),
+        "launching Docker/OCI governed session runtime"
+    );
+    let status = ProcessCommand::new(launch.program())
+        .args(launch.args())
+        .status()
+        .map_err(|source| CliError::LaunchSessionRuntime {
+            program: launch.program().to_owned(),
+            source,
+            location: Location::default(),
+        })?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(CliError::SessionRuntimeExit {
+            code: status.code(),
+            location: Location::default(),
+        })
+    }
+}
+
+fn session_process_event(plan: &SessionRunPlan) -> RuntimeEvent {
+    let command = plan.command();
+    let command_name = command.first().cloned().unwrap_or_default();
+
+    RuntimeEvent {
+        id: erebor_runtime_events::EventId::new(format!(
+            "{}-root-process-exec",
+            plan.session_id().as_str()
+        )),
+        session_id: plan.session_id().clone(),
+        actor: ActorIdentity {
+            id: plan.actor().id.clone(),
+            kind: plan.actor().kind.clone(),
+        },
+        surface: ExecutionSurface::Terminal,
+        action: ActionKind::ProcessExec,
+        target: Some(TargetRef {
+            label: Some(command_name),
+            uri: None,
+        }),
+        payload: serde_json::json!({
+            "kind": "session_process_exec",
+            "session_runtime": "docker",
+            "docker": {
+                "image": plan.runtime().docker().image(),
+                "network": plan.runtime().docker().network(),
+                "workdir": plan.runtime().docker().workdir(),
+            },
+            "workspace": plan.workspace(),
+            "command": command,
+        }),
+        risk: RiskMetadata {
+            level: RiskLevel::Medium,
+            reasons: vec![String::from(
+                "root command for Docker/OCI governed session runtime",
+            )],
+        },
+        timestamp: runtime_timestamp(),
+    }
 }
 
 fn execute_dev(args: &DevArgs) -> Result<(), CliError> {
@@ -426,6 +599,30 @@ fn format_endpoints(runtimes: &[RunningRuntime]) -> String {
         .join(" ")
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ConfiguredAuditSink {
+    Runtime(NoopAuditSink),
+    Jsonl(JsonlAuditSink),
+}
+
+impl ConfiguredAuditSink {
+    fn from_config(config: &RuntimeAuditConfig) -> Self {
+        config.jsonl().map_or_else(
+            || Self::Runtime(NoopAuditSink),
+            |path| Self::Jsonl(JsonlAuditSink::new(path.to_path_buf())),
+        )
+    }
+}
+
+impl AuditSink for ConfiguredAuditSink {
+    fn record(&self, record: &AuditRecord) -> Result<(), AuditError> {
+        match self {
+            Self::Runtime(sink) => sink.record(record),
+            Self::Jsonl(sink) => sink.record(record),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub(crate) enum CliError {
     #[error("failed to read runtime config `{}`: {source}", path.display())]
@@ -469,6 +666,19 @@ pub(crate) enum CliError {
     #[error("{source}")]
     Runtime {
         source: RuntimeError,
+        location: Location,
+    },
+    #[error("session command denied: {reason}")]
+    SessionDenied { reason: String, location: Location },
+    #[error("failed to launch session runtime `{program}`: {source}")]
+    LaunchSessionRuntime {
+        program: String,
+        source: io::Error,
+        location: Location,
+    },
+    #[error("session runtime exited unsuccessfully with code {code:?}")]
+    SessionRuntimeExit {
+        code: Option<i32>,
         location: Location,
     },
     #[error("{source}")]
@@ -525,6 +735,14 @@ impl CliError {
     }
 
     #[track_caller]
+    fn session_denied(reason: impl Into<String>) -> Self {
+        Self::SessionDenied {
+            reason: reason.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
     fn audit_log(source: AuditLogError) -> Self {
         Self::AuditLog {
             source,
@@ -553,8 +771,8 @@ mod tests {
     use erebor_runtime_core::{GovernanceLayer, RuntimeDefinition, RuntimeError};
 
     use super::{
-        build_dev_proxy_launch_plan, build_runtime_launch_plan, Cli, CliError, ProxyCdpArgs,
-        StartArgs, WebSocketUrl,
+        build_dev_proxy_launch_plan, build_runtime_launch_plan, build_session_run_plan, Cli,
+        CliError, ProxyCdpArgs, SessionRunArgs, SessionRuntimeArg, StartArgs, WebSocketUrl,
     };
 
     #[test]
@@ -574,6 +792,23 @@ mod tests {
     #[test]
     fn accepts_single_runtime_command_with_config() {
         let cli = Cli::try_parse_from(["erebor-runtime", "start", "--config", "erebor.json"]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn accepts_session_run_with_runtime_config_and_command() {
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "run",
+            "--runtime",
+            "docker",
+            "--config",
+            "pilot-session.json",
+            "openclaw",
+            "--help",
+        ]);
 
         assert!(cli.is_ok());
     }
@@ -675,6 +910,61 @@ mod tests {
         let plan = build_runtime_launch_plan(&args)?;
 
         assert_eq!(plan.policy_paths(), vec![absolute_policy_path]);
+
+        let _result = fs::remove_file(config_path);
+        Ok(())
+    }
+
+    #[test]
+    fn session_run_builds_docker_session_plan() -> Result<(), Box<dyn std::error::Error>> {
+        let config_path = write_temp_file(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "audit": { "jsonl": "audit/pilot.jsonl" },
+              "session": {
+                "enabled": true,
+                "actor": { "id": "openclaw", "kind": "agent" },
+                "workspace": "workspace",
+                "runtime": {
+                  "kind": "docker",
+                  "docker": {
+                    "image": "erebor/openclaw-pilot:local",
+                    "network": "none",
+                    "workdir": "/work"
+                  }
+                }
+              }
+            }
+            "#,
+        )?;
+        let args = SessionRunArgs {
+            config: config_path.clone(),
+            runtime: SessionRuntimeArg::Docker,
+            command: vec![String::from("openclaw"), String::from("--help")],
+        };
+
+        let plan = build_session_run_plan(&args)?;
+        let base_dir = config_path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing config parent"))?;
+
+        assert_eq!(plan.actor().id, "openclaw");
+        assert_eq!(
+            plan.policies(),
+            vec![base_dir.join("policies/browser.json")].as_slice()
+        );
+        assert_eq!(
+            plan.audit().jsonl(),
+            Some(base_dir.join("audit/pilot.jsonl").as_path())
+        );
+        assert_eq!(plan.workspace(), Some(base_dir.join("workspace").as_path()));
+        assert_eq!(
+            plan.runtime().docker().image(),
+            "erebor/openclaw-pilot:local"
+        );
+        assert_eq!(plan.runtime().docker().network(), "none");
+        assert_eq!(plan.command(), ["openclaw", "--help"]);
 
         let _result = fs::remove_file(config_path);
         Ok(())

@@ -9,8 +9,11 @@ mod tests;
 
 pub use config::{
     validate_policy_path, BrowserCdpLayerConfig, BrowserCdpRuntimeConfig, BrowserLaunchConfig,
-    BrowserLaunchLayerConfig, GovernanceLayer, GovernanceLayerConfig, GovernanceLayers,
-    RuntimeConfig, RuntimeStartPlan,
+    BrowserLaunchLayerConfig, DockerSessionLaunchPlan, DockerSessionRuntimeConfig,
+    DockerSessionRuntimeLayerConfig, GovernanceLayer, GovernanceLayerConfig, GovernanceLayers,
+    RuntimeAuditConfig, RuntimeConfig, RuntimeStartPlan, SessionActorLayerConfig,
+    SessionLayerConfig, SessionRunPlan, SessionRuntimeConfig, SessionRuntimeKind,
+    SessionRuntimeLayerConfig,
 };
 pub use engine::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,

@@ -17,7 +17,19 @@ pub enum RuntimeConfigError {
     MissingPolicy { location: Location },
     #[error("runtime config policy paths cannot be empty")]
     EmptyPolicyPath { location: Location },
-    #[error("runtime config must enable at least one governance layer")]
+    #[error("runtime config audit jsonl path cannot be empty")]
+    EmptyAuditJsonlPath { location: Location },
+    #[error("runtime config session actor id cannot be empty")]
+    EmptySessionActorId { location: Location },
+    #[error("runtime config session workspace path cannot be empty")]
+    EmptySessionWorkspace { location: Location },
+    #[error("runtime config Docker/OCI session runtime image cannot be empty")]
+    EmptyDockerSessionImage { location: Location },
+    #[error("runtime config Docker/OCI session runtime network cannot be empty")]
+    EmptyDockerSessionNetwork { location: Location },
+    #[error("session run command cannot be empty")]
+    EmptySessionCommand { location: Location },
+    #[error("runtime config must enable at least one governance layer or session runtime")]
     NoGovernanceLayers { location: Location },
     #[error("runtime config browser_cdp browser_url must start with ws://")]
     BrowserCdpInvalidBrowserUrl { location: Location },
@@ -79,6 +91,48 @@ impl RuntimeConfigError {
     #[track_caller]
     pub fn empty_policy_path() -> Self {
         Self::EmptyPolicyPath {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn empty_audit_jsonl_path() -> Self {
+        Self::EmptyAuditJsonlPath {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn empty_session_actor_id() -> Self {
+        Self::EmptySessionActorId {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn empty_session_workspace() -> Self {
+        Self::EmptySessionWorkspace {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn empty_docker_session_image() -> Self {
+        Self::EmptyDockerSessionImage {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn empty_docker_session_network() -> Self {
+        Self::EmptyDockerSessionNetwork {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn empty_session_command() -> Self {
+        Self::EmptySessionCommand {
             location: Location::default(),
         }
     }
