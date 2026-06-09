@@ -1,23 +1,23 @@
 use std::{
     fmt, fs, io,
+    io::Write,
     net::SocketAddr,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use erebor_runtime_audit::{read_audit_records, AuditLogError, JsonlAuditSink};
-use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
+use erebor_runtime_audit::{read_audit_records, AuditLogError};
 use erebor_runtime_core::{
-    AuditError, AuditRecord, AuditSink, BrowserCdpSurfaceLayerConfig, DenyApprovalProvider,
-    LocalEnforcementEngine, NoopAuditSink, RunningSessionSurface, RuntimeAuditConfig,
-    RuntimeConfig, RuntimeConfigError, RuntimeError, SessionRunPlan, SessionRunnerKind,
-    SessionSurfaceDefinition, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
-    SessionSurfaceLayers, SessionSurfaceStartPlan, SessionSurfaceSupervisor,
-    TerminalSessionSurface,
+    BrowserCdpSurfaceLayerConfig, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
+    RuntimeError, SessionRunPlan, SessionRunnerKind, SessionSurfaceLaunchPlan,
+    SessionSurfaceLayers, SessionSurfaceStartPlan,
 };
-use erebor_runtime_events::{ActorIdentity, ActorKind, RuntimeEvent, SessionId};
+use erebor_runtime_events::{RuntimeEvent, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicyEvaluator, PolicySet};
+use erebor_runtime_session::{
+    run_session_diagnostic, run_session_plan, start_surface_launch_plan, SessionDiagnosticOutcome,
+    SessionExecutionError,
+};
 use snafu::Location;
 use thiserror::Error;
 
@@ -81,9 +81,8 @@ impl fmt::Display for Command {
                 command: SessionCommand::Run(args),
             }) => write!(
                 formatter,
-                "session run runner={} tty={} config={} command={}",
+                "session run runner={} config={} command={}",
                 args.runner.as_str(),
-                args.tty,
                 args.config.display(),
                 args.command.join(" ")
             ),
@@ -139,7 +138,7 @@ struct SessionArgs {
 
 #[derive(Debug, Subcommand)]
 enum SessionCommand {
-    /// Run an agent or command inside a governed session runner.
+    /// Start an agent inside a governed session runner.
     Run(SessionRunArgs),
     /// Run a named bounded diagnostic from the session config.
     Diagnose(SessionDiagnoseArgs),
@@ -153,10 +152,7 @@ struct SessionRunArgs {
     /// Concrete session runner to use.
     #[arg(long, alias = "runtime", value_enum)]
     runner: SessionRunnerArg,
-    /// Allocate an interactive terminal for the governed session command.
-    #[arg(long)]
-    tty: bool,
-    /// Command to execute inside the governed session runner.
+    /// Agent entrypoint to launch inside the governed session runner.
     #[arg(required = true, trailing_var_arg = true, num_args = 1..)]
     command: Vec<String>,
 }
@@ -325,6 +321,7 @@ fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<SessionSurfaceLaun
         surfaces: SessionSurfaceLayers {
             browser_cdp: BrowserCdpSurfaceLayerConfig {
                 enabled: true,
+                policies: Vec::new(),
                 browser_url: Some(args.browser_url.as_str().to_owned()),
                 listen: args.listen,
                 browser: Default::default(),
@@ -355,6 +352,12 @@ fn resolve_config_paths(config_path: &Path, config: &mut RuntimeConfig) {
         base_dir,
         &mut config.surfaces.browser_cdp.browser.user_data_dir,
     );
+    for policy in &mut config.surfaces.browser_cdp.policies {
+        resolve_config_path(base_dir, policy);
+    }
+    for policy in &mut config.surfaces.terminal.policies {
+        resolve_config_path(base_dir, policy);
+    }
 }
 
 fn config_base_dir(config_path: &Path) -> Option<PathBuf> {
@@ -441,8 +444,7 @@ fn session_run(args: &SessionRunArgs) -> Result<(), CliError> {
         session_id,
         args.command.clone(),
     )
-    .map_err(CliError::invalid_config)?
-    .with_tty(args.tty);
+    .map_err(CliError::invalid_config)?;
     execute_session_run_plan(&config, &plan)
 }
 
@@ -451,34 +453,35 @@ fn session_diagnose(args: &SessionDiagnoseArgs) -> Result<(), CliError> {
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
     let plan = SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
         .map_err(CliError::invalid_config)?;
-    execute_session_run_plan(&config, &plan)
+    execute_session_diagnostic_plan(&config, &plan)
 }
 
 fn execute_session_run_plan(config: &RuntimeConfig, plan: &SessionRunPlan) -> Result<(), CliError> {
-    let policy_set = read_policy_set(plan.policies())?;
-    let engine = LocalEnforcementEngine::with_hooks(
-        policy_set,
-        DenyApprovalProvider,
-        ConfiguredAuditSink::from_config(plan.audit()),
-    );
-    let terminal = TerminalSessionSurface::new(engine);
-    let planned_environment = planned_session_environment(config, plan);
-    let authorization = terminal
-        .authorize(plan, &planned_environment)
-        .map_err(map_terminal_runtime_error)?;
-    let side_resources = start_session_side_resources(config, plan)?;
-
-    match terminal.execute_authorized(authorization, plan, side_resources.environment()) {
-        Ok(_outcome) => Ok(()),
-        Err(error) => Err(map_terminal_runtime_error(error)),
-    }
+    run_session_plan(config, plan).map_err(CliError::session_execution)?;
+    Ok(())
 }
 
-fn map_terminal_runtime_error(error: RuntimeError) -> CliError {
-    match error {
-        RuntimeError::TerminalCommandDenied { reason, .. } => CliError::session_denied(reason),
-        error => CliError::runtime(error),
+fn execute_session_diagnostic_plan(
+    config: &RuntimeConfig,
+    plan: &SessionRunPlan,
+) -> Result<(), CliError> {
+    let outcome = run_session_diagnostic(config, plan).map_err(CliError::session_execution)?;
+    write_session_diagnostic_outcome(&outcome)
+}
+
+fn write_session_diagnostic_outcome(outcome: &SessionDiagnosticOutcome) -> Result<(), CliError> {
+    if !outcome.stdout().is_empty() {
+        io::stdout()
+            .write_all(outcome.stdout().as_bytes())
+            .map_err(CliError::write_session_output)?;
     }
+    if !outcome.stderr().is_empty() {
+        io::stderr()
+            .write_all(outcome.stderr().as_bytes())
+            .map_err(CliError::write_session_output)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -502,123 +505,6 @@ fn build_session_diagnose_plan(args: &SessionDiagnoseArgs) -> Result<SessionRunP
         .map_err(CliError::invalid_config)
 }
 
-fn start_session_side_resources(
-    config: &RuntimeConfig,
-    plan: &SessionRunPlan,
-) -> Result<SessionSideResources, CliError> {
-    let start_plan = config
-        .surface_start_plan_for_session(plan)
-        .map_err(CliError::invalid_config)?;
-    if start_plan.surfaces().is_empty() {
-        return Ok(SessionSideResources::default());
-    }
-
-    let policy_set = read_policy_set(start_plan.policies())?;
-    let launch_plan = SessionSurfaceLaunchPlan::from_start_plan(
-        SocketAddr::from(([127, 0, 0, 1], 0)),
-        &start_plan,
-    )
-    .map_err(CliError::runtime)?;
-    let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
-    let mut environment = Vec::new();
-
-    for definition in launch_plan.definitions() {
-        match definition {
-            SessionSurfaceDefinition::BrowserCdp(config) => {
-                launcher.add_surface(BrowserCdpSurface::new(
-                    config.clone(),
-                    policy_set.clone(),
-                    session_cdp_context(plan),
-                ));
-            }
-            SessionSurfaceDefinition::Terminal(_) => {
-                environment.push((
-                    String::from("EREBOR_TERMINAL_SURFACE"),
-                    String::from("governed"),
-                ));
-                environment.push((String::from("EREBOR_TERMINAL_TTY"), plan.tty().to_string()));
-            }
-        }
-    }
-
-    if launcher.is_empty() {
-        return Ok(SessionSideResources {
-            environment,
-            _supervisor: None,
-        });
-    }
-
-    let supervisor = launcher.start().map_err(CliError::runtime)?;
-    for runtime in supervisor.running() {
-        if runtime.surface() == erebor_runtime_core::SessionSurfaceKind::BrowserCdp {
-            environment.push((
-                String::from("EREBOR_BROWSER_CDP_URL"),
-                runtime.endpoint().to_owned(),
-            ));
-            environment.push((
-                String::from("EREBOR_OPENCLAW_BROWSER_PROFILE"),
-                String::from("erebor"),
-            ));
-        }
-    }
-
-    Ok(SessionSideResources {
-        environment,
-        _supervisor: Some(supervisor),
-    })
-}
-
-fn planned_session_environment(
-    config: &RuntimeConfig,
-    plan: &SessionRunPlan,
-) -> Vec<(String, String)> {
-    let mut environment = Vec::new();
-
-    if config.surfaces.terminal.enabled {
-        environment.push((
-            String::from("EREBOR_TERMINAL_SURFACE"),
-            String::from("governed"),
-        ));
-        environment.push((String::from("EREBOR_TERMINAL_TTY"), plan.tty().to_string()));
-    }
-
-    if config.surfaces.browser_cdp.enabled {
-        environment.push((
-            String::from("EREBOR_BROWSER_CDP_URL"),
-            String::from("<session-governed-browser-cdp-url>"),
-        ));
-        environment.push((
-            String::from("EREBOR_OPENCLAW_BROWSER_PROFILE"),
-            String::from("erebor"),
-        ));
-    }
-
-    environment
-}
-
-fn session_cdp_context(plan: &SessionRunPlan) -> CdpSessionContext {
-    CdpSessionContext {
-        session_id: plan.session_id().clone(),
-        actor: ActorIdentity {
-            id: plan.actor().id.clone(),
-            kind: plan.actor().kind.clone(),
-        },
-        timestamp: runtime_timestamp(),
-    }
-}
-
-#[derive(Default)]
-struct SessionSideResources {
-    environment: Vec<(String, String)>,
-    _supervisor: Option<SessionSurfaceSupervisor>,
-}
-
-impl SessionSideResources {
-    fn environment(&self) -> &[(String, String)] {
-        &self.environment
-    }
-}
-
 fn execute_dev(args: &DevArgs) -> Result<(), CliError> {
     match &args.command {
         DevCommand::ProxyCdp(args) => {
@@ -629,46 +515,7 @@ fn execute_dev(args: &DevArgs) -> Result<(), CliError> {
 }
 
 fn start_runtime_from_launch_plan(launch_plan: SessionSurfaceLaunchPlan) -> Result<(), CliError> {
-    let policy_set = read_policy_set(launch_plan.policy_paths())?;
-    let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
-
-    for definition in launch_plan.definitions() {
-        match definition {
-            SessionSurfaceDefinition::BrowserCdp(config) => {
-                launcher.add_surface(BrowserCdpSurface::new(
-                    config.clone(),
-                    policy_set.clone(),
-                    runtime_context("browser-cdp"),
-                ));
-            }
-            SessionSurfaceDefinition::Terminal(_) => {
-                tracing::info!(
-                    surface = erebor_runtime_core::SessionSurfaceKind::Terminal.as_str(),
-                    "terminal session surface is command-scoped and has no long-lived endpoint"
-                );
-            }
-        }
-    }
-
-    if launcher.is_empty() {
-        tracing::info!(
-            control = %launch_plan.control_listen(),
-            surfaces = %format_surfaces(launch_plan.surfaces().into_iter()),
-            "no long-lived session surface services to start"
-        );
-        return Ok(());
-    }
-
-    let supervisor = launcher.start().map_err(CliError::runtime)?;
-    tracing::info!(
-        control = %supervisor.control_listen(),
-        surfaces = %format_surfaces(supervisor.running().iter().map(RunningSessionSurface::surface)),
-        endpoints = %format_endpoints(supervisor.running()),
-        "session surfaces started"
-    );
-
-    supervisor.wait().map_err(CliError::runtime)?;
-    Ok(())
+    start_surface_launch_plan(launch_plan).map_err(CliError::session_execution)
 }
 
 fn execute_policy(args: &PolicyArgs) -> Result<(), CliError> {
@@ -708,66 +555,6 @@ fn execute_audit(args: &AuditArgs) -> Result<(), CliError> {
     }
 
     Ok(())
-}
-
-fn runtime_context(session_prefix: &str) -> CdpSessionContext {
-    CdpSessionContext {
-        session_id: SessionId::new(format!("{session_prefix}-{}", std::process::id())),
-        actor: ActorIdentity {
-            id: String::from("erebor-runtime-cli"),
-            kind: ActorKind::System,
-        },
-        timestamp: runtime_timestamp(),
-    }
-}
-
-fn runtime_timestamp() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-
-    format!("unix:{seconds}")
-}
-
-fn format_surfaces(
-    surfaces: impl Iterator<Item = erebor_runtime_core::SessionSurfaceKind>,
-) -> String {
-    surfaces
-        .map(erebor_runtime_core::SessionSurfaceKind::as_str)
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn format_endpoints(runtimes: &[RunningSessionSurface]) -> String {
-    runtimes
-        .iter()
-        .map(|runtime| format!("{}={}", runtime.surface().as_str(), runtime.endpoint()))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ConfiguredAuditSink {
-    Runtime(NoopAuditSink),
-    Jsonl(JsonlAuditSink),
-}
-
-impl ConfiguredAuditSink {
-    fn from_config(config: &RuntimeAuditConfig) -> Self {
-        config.jsonl().map_or_else(
-            || Self::Runtime(NoopAuditSink),
-            |path| Self::Jsonl(JsonlAuditSink::new(path.to_path_buf())),
-        )
-    }
-}
-
-impl AuditSink for ConfiguredAuditSink {
-    fn record(&self, record: &AuditRecord) -> Result<(), AuditError> {
-        match self {
-            Self::Runtime(sink) => sink.record(record),
-            Self::Jsonl(sink) => sink.record(record),
-        }
-    }
 }
 
 #[derive(Debug, Error)]
@@ -815,8 +602,16 @@ pub(crate) enum CliError {
         source: RuntimeError,
         location: Location,
     },
-    #[error("session command denied: {reason}")]
-    SessionDenied { reason: String, location: Location },
+    #[error("{source}")]
+    SessionExecution {
+        source: Box<SessionExecutionError>,
+        location: Location,
+    },
+    #[error("failed to write session diagnostic output: {source}")]
+    WriteSessionOutput {
+        source: io::Error,
+        location: Location,
+    },
     #[error("{source}")]
     AuditLog {
         source: AuditLogError,
@@ -871,9 +666,17 @@ impl CliError {
     }
 
     #[track_caller]
-    fn session_denied(reason: impl Into<String>) -> Self {
-        Self::SessionDenied {
-            reason: reason.into(),
+    fn session_execution(source: SessionExecutionError) -> Self {
+        Self::SessionExecution {
+            source: Box::new(source),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn write_session_output(source: io::Error) -> Self {
+        Self::WriteSessionOutput {
+            source,
             location: Location::default(),
         }
     }
@@ -951,8 +754,8 @@ mod tests {
     }
 
     #[test]
-    fn accepts_session_run_with_tty() {
-        let cli = Cli::try_parse_from([
+    fn rejects_session_run_tty_flag() {
+        let error = Cli::try_parse_from([
             "erebor-runtime",
             "session",
             "run",
@@ -964,7 +767,7 @@ mod tests {
             "openclaw",
         ]);
 
-        assert!(cli.is_ok());
+        assert!(error.is_err());
     }
 
     #[test]
@@ -1109,6 +912,9 @@ mod tests {
                     "workdir": "/work"
                   }
                 }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true, "tty": true }
               }
             }
             "#,
@@ -1116,7 +922,6 @@ mod tests {
         let args = SessionRunArgs {
             config: config_path.clone(),
             runner: SessionRunnerArg::Docker,
-            tty: false,
             command: vec![String::from("openclaw"), String::from("--help")],
         };
 
@@ -1140,7 +945,7 @@ mod tests {
             "erebor/openclaw-pilot:local"
         );
         assert_eq!(plan.runner().docker().network(), "none");
-        assert!(!plan.tty());
+        assert!(plan.terminal().tty());
         assert_eq!(plan.command(), ["openclaw", "--help"]);
 
         let _result = fs::remove_file(config_path);
@@ -1158,6 +963,16 @@ mod tests {
               "session": {
                 "enabled": true,
                 "workspace": "../.."
+              },
+              "surfaces": {
+                "browser_cdp": {
+                  "enabled": true,
+                  "policies": ["browser-policy.json"]
+                },
+                "terminal": {
+                  "enabled": true,
+                  "policies": ["terminal-policy.json"]
+                }
               }
             }
             "#,
@@ -1180,6 +995,14 @@ mod tests {
         assert_eq!(
             config.session.workspace,
             Some(current_dir.join("examples/governed-openclaw-pilot/../.."))
+        );
+        assert_eq!(
+            config.surfaces.browser_cdp.policies,
+            vec![current_dir.join("examples/governed-openclaw-pilot/browser-policy.json")]
+        );
+        assert_eq!(
+            config.surfaces.terminal.policies,
+            vec![current_dir.join("examples/governed-openclaw-pilot/terminal-policy.json")]
         );
         Ok(())
     }
@@ -1207,6 +1030,9 @@ mod tests {
                     "workdir": "/workspace"
                   }
                 }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
               }
             }
             "#,

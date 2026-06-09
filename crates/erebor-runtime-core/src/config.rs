@@ -42,6 +42,18 @@ impl RuntimeConfig {
             .policies
             .iter()
             .any(|policy| policy.as_os_str().is_empty())
+            || self
+                .surfaces
+                .browser_cdp
+                .policies
+                .iter()
+                .any(|policy| policy.as_os_str().is_empty())
+            || self
+                .surfaces
+                .terminal
+                .policies
+                .iter()
+                .any(|policy| policy.as_os_str().is_empty())
         {
             return Err(RuntimeConfigError::empty_policy_path());
         }
@@ -108,20 +120,18 @@ impl SessionSurfaceStartPlan {
             policies: config.policies.clone(),
             audit: config.audit.clone(),
             surfaces: config.enabled_surfaces(),
-            browser_cdp: config
-                .surfaces
-                .browser_cdp
-                .enabled
-                .then(|| BrowserCdpSurfaceConfig {
-                    listen: config.surfaces.browser_cdp.listen,
-                    browser_url: config.surfaces.browser_cdp.browser_url.clone(),
-                    browser: config.surfaces.browser_cdp.browser.clone().into(),
-                }),
-            terminal: config
-                .surfaces
-                .terminal
-                .enabled
-                .then_some(TerminalSurfaceConfig),
+            browser_cdp: config.surfaces.browser_cdp.enabled.then(|| {
+                BrowserCdpSurfaceConfig::from_layer(
+                    &config.surfaces.browser_cdp,
+                    config.policies.clone(),
+                )
+            }),
+            terminal: config.surfaces.terminal.enabled.then(|| {
+                TerminalSurfaceConfig::from_layer(
+                    &config.surfaces.terminal,
+                    config.policies.clone(),
+                )
+            }),
         })
     }
 
@@ -356,7 +366,7 @@ pub struct SessionRunPlan {
     runner: SessionRunnerConfig,
     command: Vec<String>,
     diagnostic: Option<String>,
-    tty: bool,
+    terminal: TerminalSurfaceConfig,
 }
 
 impl SessionRunPlan {
@@ -385,7 +395,10 @@ impl SessionRunPlan {
             runner: runner.into(),
             command,
             diagnostic: None,
-            tty: false,
+            terminal: TerminalSurfaceConfig::from_layer(
+                &config.surfaces.terminal,
+                config.policies.clone(),
+            ),
         })
     }
 
@@ -449,14 +462,13 @@ impl SessionRunPlan {
     }
 
     #[must_use]
-    pub const fn tty(&self) -> bool {
-        self.tty
+    pub const fn terminal(&self) -> &TerminalSurfaceConfig {
+        &self.terminal
     }
 
     #[must_use]
-    pub const fn with_tty(mut self, tty: bool) -> Self {
-        self.tty = tty;
-        self
+    pub const fn tty(&self) -> bool {
+        self.terminal.tty()
     }
 }
 
@@ -582,6 +594,62 @@ pub struct DockerSessionCommandPlan {
     args: Vec<String>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DockerSessionCommandOptions {
+    extra_environment: Vec<(String, String)>,
+    mounts: Vec<DockerSessionMount>,
+    entrypoint: Option<String>,
+}
+
+impl DockerSessionCommandOptions {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn with_environment(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_environment.push((key.into(), value.into()));
+        self
+    }
+
+    #[must_use]
+    pub fn with_mount(mut self, mount: DockerSessionMount) -> Self {
+        self.mounts.push(mount);
+        self
+    }
+
+    #[must_use]
+    pub fn with_entrypoint(mut self, entrypoint: impl Into<String>) -> Self {
+        self.entrypoint = Some(entrypoint.into());
+        self
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DockerSessionMount {
+    host_path: PathBuf,
+    container_path: PathBuf,
+    read_only: bool,
+}
+
+impl DockerSessionMount {
+    #[must_use]
+    pub fn new(host_path: impl Into<PathBuf>, container_path: impl Into<PathBuf>) -> Self {
+        Self {
+            host_path: host_path.into(),
+            container_path: container_path.into(),
+            read_only: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn read_only(mut self) -> Self {
+        self.read_only = true;
+        self
+    }
+}
+
 impl DockerSessionCommandPlan {
     #[must_use]
     pub fn from_session_run_plan(plan: &SessionRunPlan) -> Self {
@@ -593,13 +661,59 @@ impl DockerSessionCommandPlan {
         plan: &SessionRunPlan,
         environment: &[(String, String)],
     ) -> Self {
+        Self::from_session_run_plan_with_environment_and_options(
+            plan,
+            environment,
+            &DockerSessionCommandOptions::default(),
+        )
+    }
+
+    #[must_use]
+    pub fn from_session_run_plan_with_environment_and_options(
+        plan: &SessionRunPlan,
+        environment: &[(String, String)],
+        options: &DockerSessionCommandOptions,
+    ) -> Self {
+        Self::from_session_run_plan_with_command_and_environment(
+            plan,
+            environment,
+            plan.command(),
+            false,
+            options,
+        )
+    }
+
+    #[must_use]
+    pub fn detached_from_session_run_plan_with_command_and_environment(
+        plan: &SessionRunPlan,
+        environment: &[(String, String)],
+        command: &[String],
+    ) -> Self {
+        Self::from_session_run_plan_with_command_and_environment(
+            plan,
+            environment,
+            command,
+            true,
+            &DockerSessionCommandOptions::default(),
+        )
+    }
+
+    fn from_session_run_plan_with_command_and_environment(
+        plan: &SessionRunPlan,
+        environment: &[(String, String)],
+        command: &[String],
+        detached: bool,
+        options: &DockerSessionCommandOptions,
+    ) -> Self {
         let docker = plan.runner().docker();
-        let environment = docker_environment_for_session(docker, environment);
+        let mut combined_environment = environment.to_vec();
+        combined_environment.extend(options.extra_environment.iter().cloned());
+        let environment = docker_environment_for_session(docker, &combined_environment);
         let mut args = vec![
             String::from("run"),
             String::from("--rm"),
             String::from("--name"),
-            docker_container_name(plan.session_id()),
+            docker_container_name_for_session(plan.session_id()),
             String::from("--label"),
             format!("dev.erebor.session_id={}", plan.session_id().as_str()),
             String::from("--label"),
@@ -613,6 +727,10 @@ impl DockerSessionCommandPlan {
             String::from("-e"),
             String::from("EREBOR_SESSION_RUNNER=docker"),
         ];
+
+        if detached {
+            args.push(String::from("-d"));
+        }
 
         if plan.tty() {
             args.push(String::from("-i"));
@@ -629,6 +747,19 @@ impl DockerSessionCommandPlan {
             args.push(format!("{key}={value}"));
         }
 
+        for mount in &options.mounts {
+            args.push(String::from("-v"));
+            let mut spec = format!(
+                "{}:{}",
+                mount.host_path.display(),
+                mount.container_path.display()
+            );
+            if mount.read_only {
+                spec.push_str(":ro");
+            }
+            args.push(spec);
+        }
+
         if let Some(workspace) = plan.workspace() {
             args.push(String::from("-v"));
             args.push(format!(
@@ -640,8 +771,13 @@ impl DockerSessionCommandPlan {
             args.push(docker.workdir().display().to_string());
         }
 
+        if let Some(entrypoint) = options.entrypoint.as_deref() {
+            args.push(String::from("--entrypoint"));
+            args.push(entrypoint.to_owned());
+        }
+
         args.push(docker.image().to_owned());
-        args.extend(plan.command().iter().cloned());
+        args.extend(command.iter().cloned());
 
         Self {
             program: String::from("docker"),
@@ -706,6 +842,8 @@ pub struct BrowserCdpSurfaceLayerConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
+    pub policies: Vec<PathBuf>,
+    #[serde(default)]
     pub browser_url: Option<String>,
     #[serde(default = "default_browser_cdp_listen")]
     pub listen: SocketAddr,
@@ -717,6 +855,7 @@ impl Default for BrowserCdpSurfaceLayerConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            policies: Vec::new(),
             browser_url: None,
             listen: default_browser_cdp_listen(),
             browser: BrowserLaunchLayerConfig::default(),
@@ -754,19 +893,51 @@ pub struct SessionSurfaceToggleConfig {
 pub struct TerminalSurfaceLayerConfig {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
+    pub tty: bool,
+    #[serde(default)]
+    pub policies: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct TerminalSurfaceConfig;
+pub struct TerminalSurfaceConfig {
+    tty: bool,
+    policies: Vec<PathBuf>,
+}
+
+impl TerminalSurfaceConfig {
+    #[must_use]
+    pub const fn tty(&self) -> bool {
+        self.tty
+    }
+
+    #[must_use]
+    pub fn policies(&self) -> &[PathBuf] {
+        &self.policies
+    }
+
+    fn from_layer(config: &TerminalSurfaceLayerConfig, default_policies: Vec<PathBuf>) -> Self {
+        Self {
+            tty: config.tty,
+            policies: surface_policies(&config.policies, default_policies),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserCdpSurfaceConfig {
+    policies: Vec<PathBuf>,
     listen: SocketAddr,
     browser_url: Option<String>,
     browser: BrowserLaunchConfig,
 }
 
 impl BrowserCdpSurfaceConfig {
+    #[must_use]
+    pub fn policies(&self) -> &[PathBuf] {
+        &self.policies
+    }
+
     #[must_use]
     pub fn listen(&self) -> SocketAddr {
         self.listen
@@ -785,6 +956,15 @@ impl BrowserCdpSurfaceConfig {
     #[must_use]
     pub const fn owns_browser(&self) -> bool {
         self.browser_url.is_none()
+    }
+
+    fn from_layer(config: &BrowserCdpSurfaceLayerConfig, default_policies: Vec<PathBuf>) -> Self {
+        Self {
+            policies: surface_policies(&config.policies, default_policies),
+            listen: config.listen,
+            browser_url: config.browser_url.clone(),
+            browser: config.browser.clone().into(),
+        }
     }
 }
 
@@ -860,6 +1040,14 @@ fn default_browser_cdp_listen() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 0))
 }
 
+fn surface_policies(surface_policies: &[PathBuf], default_policies: Vec<PathBuf>) -> Vec<PathBuf> {
+    if surface_policies.is_empty() {
+        default_policies
+    } else {
+        surface_policies.to_vec()
+    }
+}
+
 const fn default_browser_headless() -> bool {
     true
 }
@@ -888,7 +1076,8 @@ fn default_docker_session_workdir() -> PathBuf {
     PathBuf::from("/workspace")
 }
 
-fn docker_container_name(session_id: &SessionId) -> String {
+#[must_use]
+pub fn docker_container_name_for_session(session_id: &SessionId) -> String {
     let suffix = session_id
         .as_str()
         .chars()
@@ -904,7 +1093,10 @@ fn docker_container_name(session_id: &SessionId) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{net::SocketAddr, path::Path};
+    use std::{
+        net::SocketAddr,
+        path::{Path, PathBuf},
+    };
 
     use erebor_runtime_events::SessionId;
 
@@ -1055,6 +1247,13 @@ mod tests {
                     "workdir": "/work"
                   }
                 }
+              },
+              "surfaces": {
+                "terminal": {
+                  "enabled": true,
+                  "tty": true,
+                  "policies": ["policies/terminal.json"]
+                }
               }
             }
             "#,
@@ -1079,6 +1278,11 @@ mod tests {
         );
         assert_eq!(plan.runner().docker().network(), "none");
         assert_eq!(plan.runner().docker().workdir(), Path::new("/work"));
+        assert!(plan.terminal().tty());
+        assert_eq!(
+            plan.terminal().policies(),
+            &[PathBuf::from("policies/terminal.json")]
+        );
         assert_eq!(plan.command(), ["openclaw", "--help"]);
 
         Ok(())
@@ -1101,6 +1305,9 @@ mod tests {
                     "workdir": "/work"
                   }
                 }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
               }
             }
             "#,
@@ -1160,6 +1367,9 @@ mod tests {
                     "network": "bridge"
                   }
                 }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true, "tty": true }
               }
             }
             "#,
@@ -1169,8 +1379,7 @@ mod tests {
             SessionRunnerKind::Docker,
             SessionId::new("session-tty"),
             vec![String::from("openclaw")],
-        )?
-        .with_tty(true);
+        )?;
 
         let launch = DockerSessionCommandPlan::from_session_run_plan(&plan);
 
@@ -1194,6 +1403,9 @@ mod tests {
                     "network": "none"
                   }
                 }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
               }
             }
             "#,
@@ -1223,6 +1435,61 @@ mod tests {
     }
 
     #[test]
+    fn docker_command_plan_can_start_detached_session_container() -> Result<(), RuntimeConfigError>
+    {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "runner": {
+                  "docker": {
+                    "image": "alpine:3.20",
+                    "network": "bridge"
+                  }
+                }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let plan = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::Docker,
+            SessionId::new("session-detached"),
+            vec![String::from("openclaw")],
+        )?;
+
+        let launch =
+            DockerSessionCommandPlan::detached_from_session_run_plan_with_command_and_environment(
+                &plan,
+                &[(
+                    String::from("EREBOR_BROWSER_CDP_URL"),
+                    String::from("ws://127.0.0.1:3738/"),
+                )],
+                &[
+                    String::from("sh"),
+                    String::from("-lc"),
+                    String::from("sleep 3600"),
+                ],
+            );
+
+        assert!(launch.args().iter().any(|argument| argument == "-d"));
+        assert!(launch.args().windows(2).any(|args| args[0] == "-e"
+            && args[1] == "EREBOR_BROWSER_CDP_URL=ws://host.docker.internal:3738/"));
+        assert!(launch.args().ends_with(&[
+            String::from("alpine:3.20"),
+            String::from("sh"),
+            String::from("-lc"),
+            String::from("sleep 3600"),
+        ]));
+        Ok(())
+    }
+
+    #[test]
     fn docker_command_plan_rewrites_loopback_endpoints_for_bridge_network(
     ) -> Result<(), RuntimeConfigError> {
         let config = RuntimeConfig::from_json_str(
@@ -1237,6 +1504,9 @@ mod tests {
                     "network": "bridge"
                   }
                 }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
               }
             }
             "#,
@@ -1282,6 +1552,7 @@ mod tests {
                 }
               },
               "surfaces": {
+                "terminal": { "enabled": true },
                 "browser_cdp": {
                   "enabled": true,
                   "listen": "127.0.0.1:0"
@@ -1329,6 +1600,9 @@ mod tests {
                     "workdir": "/workspace"
                   }
                 }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
               }
             }
             "#,

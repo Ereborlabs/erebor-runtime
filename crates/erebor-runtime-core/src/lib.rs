@@ -9,8 +9,9 @@ mod session;
 mod tests;
 
 pub use config::{
-    validate_policy_path, BrowserCdpSurfaceConfig, BrowserCdpSurfaceLayerConfig,
-    BrowserLaunchConfig, BrowserLaunchLayerConfig, DockerSessionCommandPlan,
+    docker_container_name_for_session, validate_policy_path, BrowserCdpSurfaceConfig,
+    BrowserCdpSurfaceLayerConfig, BrowserLaunchConfig, BrowserLaunchLayerConfig,
+    DockerSessionCommandOptions, DockerSessionCommandPlan, DockerSessionMount,
     DockerSessionRunnerConfig, DockerSessionRunnerLayerConfig, RuntimeAuditConfig, RuntimeConfig,
     SessionActorLayerConfig, SessionDiagnosticLayerConfig, SessionLayerConfig, SessionRunPlan,
     SessionRunnerConfig, SessionRunnerKind, SessionRunnerLayerConfig, SessionSurfaceKind,
@@ -28,6 +29,6 @@ pub use runtime::{
     SessionSurfaceService, SessionSurfaceSupervisor,
 };
 pub use session::{
-    terminal_process_event, DockerSessionRunner, SessionRunOutcome, SessionRunner,
-    SessionRunnerLauncher, TerminalSessionAuthorization, TerminalSessionSurface,
+    DockerSessionRunner, SessionCapturedRunOutcome, SessionRunOutcome, SessionRunner,
+    SessionRunnerLauncher,
 };
