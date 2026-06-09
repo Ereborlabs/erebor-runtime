@@ -3,9 +3,10 @@ use std::{
     time::Duration,
 };
 
-use erebor_runtime_cdp::{BrowserCdpRuntime, BrowserSessionManager, GovernedBrowserSession};
+use erebor_runtime_cdp::{BrowserCdpSurface, BrowserSessionManager, GovernedBrowserSession};
 use erebor_runtime_core::{
-    GovernanceRuntime, RunningRuntime, RuntimeConfig, RuntimeError, RuntimeStartPlan,
+    RunningSessionSurface, RuntimeConfig, RuntimeError, SessionSurfaceService,
+    SessionSurfaceStartPlan,
 };
 use erebor_runtime_e2e::{
     assert_json_request_has_no_response, send_json_request, E2eError, MiniJsonWebSocketServer,
@@ -33,7 +34,7 @@ pub struct CdpE2eHarness {
     browser: Option<RealChromeInstance>,
     endpoint: String,
     direct_browser_endpoint: Option<String>,
-    running_runtime: RunningRuntime,
+    running_runtime: RunningSessionSurface,
 }
 
 static OWNED_BROWSER_E2E_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -151,7 +152,7 @@ impl CdpE2eHarness {
             .await
     }
 
-    pub const fn running_runtime(&self) -> &RunningRuntime {
+    pub const fn running_runtime(&self) -> &RunningSessionSurface {
         &self.running_runtime
     }
 
@@ -407,15 +408,15 @@ pub async fn create_governed_session_with_mini_upstream(
 
 fn start_browser_cdp_runtime(
     policy: LocalPolicy,
-    config: erebor_runtime_core::BrowserCdpRuntimeConfig,
-) -> Result<(RuntimeHost, RunningRuntime), E2eError> {
+    config: erebor_runtime_core::BrowserCdpSurfaceConfig,
+) -> Result<(RuntimeHost, RunningSessionSurface), E2eError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(RuntimeError::build_async_runtime)
         .map_err(|error| E2eError::external("CDP runtime executor", error))?;
     let (failures, _failure_rx) = mpsc::channel();
-    let browser_runtime = BrowserCdpRuntime::new(
+    let browser_runtime = BrowserCdpSurface::new(
         config,
         PolicySet::from_policies(vec![policy]),
         session_context(),
@@ -429,11 +430,11 @@ fn start_browser_cdp_runtime(
 
 fn browser_cdp_runtime_config(
     browser_url: &str,
-) -> Result<erebor_runtime_core::BrowserCdpRuntimeConfig, E2eError> {
+) -> Result<erebor_runtime_core::BrowserCdpSurfaceConfig, E2eError> {
     let config = RuntimeConfig::from_json_str(
         &json!({
             "policies": ["policies/e2e/browser.json"],
-            "governance": {
+            "surfaces": {
                 "browser_cdp": {
                     "enabled": true,
                     "listen": "127.0.0.1:0",
@@ -444,7 +445,7 @@ fn browser_cdp_runtime_config(
         .to_string(),
     )
     .map_err(|error| E2eError::external("browser CDP runtime config", error))?;
-    let start_plan = RuntimeStartPlan::from_config(&config)
+    let start_plan = SessionSurfaceStartPlan::from_config(&config)
         .map_err(|error| E2eError::external("browser CDP runtime start plan", error))?;
 
     start_plan
@@ -454,11 +455,11 @@ fn browser_cdp_runtime_config(
 }
 
 fn owned_browser_cdp_runtime_config(
-) -> Result<erebor_runtime_core::BrowserCdpRuntimeConfig, E2eError> {
+) -> Result<erebor_runtime_core::BrowserCdpSurfaceConfig, E2eError> {
     let config = RuntimeConfig::from_json_str(
         &json!({
             "policies": ["policies/e2e/browser.json"],
-            "governance": {
+            "surfaces": {
                 "browser_cdp": {
                     "enabled": true,
                     "listen": "127.0.0.1:0",
@@ -471,7 +472,7 @@ fn owned_browser_cdp_runtime_config(
         .to_string(),
     )
     .map_err(|error| E2eError::external("owned browser CDP runtime config", error))?;
-    let start_plan = RuntimeStartPlan::from_config(&config)
+    let start_plan = SessionSurfaceStartPlan::from_config(&config)
         .map_err(|error| E2eError::external("owned browser CDP runtime start plan", error))?;
 
     start_plan.browser_cdp().cloned().ok_or_else(|| {

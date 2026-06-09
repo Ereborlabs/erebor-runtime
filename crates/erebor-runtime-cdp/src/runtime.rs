@@ -1,6 +1,6 @@
 use erebor_runtime_core::{
-    BrowserCdpRuntimeConfig, GovernanceLayer, GovernanceRuntime, RunningRuntime, RuntimeError,
-    RuntimeFailure, RuntimeFailureSender,
+    BrowserCdpSurfaceConfig, RunningSessionSurface, RuntimeError, SessionSurfaceFailure,
+    SessionSurfaceFailureSender, SessionSurfaceKind, SessionSurfaceService,
 };
 use erebor_runtime_policy::PolicySet;
 use tokio::runtime::Runtime;
@@ -8,16 +8,16 @@ use tracing::{debug, error, info};
 
 use crate::{BrowserSessionManager, CdpSessionContext};
 
-pub struct BrowserCdpRuntime {
-    config: BrowserCdpRuntimeConfig,
+pub struct BrowserCdpSurface {
+    config: BrowserCdpSurfaceConfig,
     policy_set: PolicySet,
     context: CdpSessionContext,
 }
 
-impl BrowserCdpRuntime {
+impl BrowserCdpSurface {
     #[must_use]
     pub fn new(
-        config: BrowserCdpRuntimeConfig,
+        config: BrowserCdpSurfaceConfig,
         policy_set: PolicySet,
         context: CdpSessionContext,
     ) -> Self {
@@ -29,33 +29,33 @@ impl BrowserCdpRuntime {
     }
 }
 
-impl GovernanceRuntime for BrowserCdpRuntime {
-    fn layer(&self) -> GovernanceLayer {
-        GovernanceLayer::BrowserCdp
+impl SessionSurfaceService for BrowserCdpSurface {
+    fn surface(&self) -> SessionSurfaceKind {
+        SessionSurfaceKind::BrowserCdp
     }
 
     fn start(
         self: Box<Self>,
         runtime: &Runtime,
-        failures: RuntimeFailureSender,
-    ) -> Result<RunningRuntime, RuntimeError> {
-        let layer = self.layer();
+        failures: SessionSurfaceFailureSender,
+    ) -> Result<RunningSessionSurface, RuntimeError> {
+        let surface = self.surface();
         info!(
             listen = %self.config.listen(),
-            layer = layer.as_str(),
-            "starting CDP governance runtime"
+            surface = surface.as_str(),
+            "starting browser CDP session surface"
         );
         if let Some(browser_url) = self.config.browser_url() {
             debug!(
                 browser_url = %browser_url,
-                layer = layer.as_str(),
+                surface = surface.as_str(),
                 "using configured CDP upstream"
             );
         } else {
             debug!(
                 headless = self.config.browser().headless(),
-                layer = layer.as_str(),
-                "launching owned browser for CDP runtime"
+                surface = surface.as_str(),
+                "launching owned browser for CDP session surface"
             );
         }
         let session = runtime
@@ -63,23 +63,23 @@ impl GovernanceRuntime for BrowserCdpRuntime {
                 BrowserSessionManager::new(self.config, self.policy_set, self.context)
                     .create_session(),
             )
-            .map_err(|error| RuntimeError::runtime_start(layer.as_str(), error.to_string()))?;
+            .map_err(|error| RuntimeError::surface_start(surface.as_str(), error.to_string()))?;
         let endpoint = session.public_endpoint().to_owned();
         let lease_id = session.lease_id().to_owned();
 
         let handle = runtime.spawn(async move {
             if let Err(error) = session.run().await {
                 error!(
-                    layer = layer.as_str(),
+                    surface = surface.as_str(),
                     lease_id = %lease_id,
                     error = %error,
-                    "CDP governance runtime failed"
+                    "browser CDP session surface failed"
                 );
-                let _result = failures.send(RuntimeFailure::new(layer, error.to_string()));
+                let _result = failures.send(SessionSurfaceFailure::new(surface, error.to_string()));
             }
         });
         drop(handle);
 
-        Ok(RunningRuntime::new(layer, endpoint))
+        Ok(RunningSessionSurface::new(surface, endpoint))
     }
 }

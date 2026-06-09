@@ -4,16 +4,17 @@ mod config;
 mod engine;
 mod error;
 mod runtime;
+mod session;
 #[cfg(test)]
 mod tests;
 
 pub use config::{
-    validate_policy_path, BrowserCdpLayerConfig, BrowserCdpRuntimeConfig, BrowserLaunchConfig,
-    BrowserLaunchLayerConfig, DockerSessionLaunchPlan, DockerSessionRuntimeConfig,
-    DockerSessionRuntimeLayerConfig, GovernanceLayer, GovernanceLayerConfig, GovernanceLayers,
-    RuntimeAuditConfig, RuntimeConfig, RuntimeStartPlan, SessionActorLayerConfig,
-    SessionDiagnosticLayerConfig, SessionLayerConfig, SessionRunPlan, SessionRuntimeConfig,
-    SessionRuntimeKind, SessionRuntimeLayerConfig,
+    validate_policy_path, BrowserCdpSurfaceConfig, BrowserCdpSurfaceLayerConfig,
+    BrowserLaunchConfig, BrowserLaunchLayerConfig, DockerSessionCommandPlan,
+    DockerSessionRunnerConfig, DockerSessionRunnerLayerConfig, RuntimeAuditConfig, RuntimeConfig,
+    SessionActorLayerConfig, SessionDiagnosticLayerConfig, SessionLayerConfig, SessionRunPlan,
+    SessionRunnerConfig, SessionRunnerKind, SessionRunnerLayerConfig, SessionSurfaceKind,
+    SessionSurfaceLayers, SessionSurfaceStartPlan, SessionSurfaceToggleConfig,
 };
 pub use engine::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,
@@ -21,6 +22,8 @@ pub use engine::{
 };
 pub use error::{RuntimeConfigError, RuntimeError};
 pub use runtime::{
-    GovernanceRuntime, RunningRuntime, RuntimeDefinition, RuntimeFailure, RuntimeFailureSender,
-    RuntimeLaunchPlan, RuntimeLauncher, RuntimeSupervisor,
+    RunningSessionSurface, SessionSurfaceDefinition, SessionSurfaceFailure,
+    SessionSurfaceFailureSender, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
+    SessionSurfaceService, SessionSurfaceSupervisor,
 };
+pub use session::{DockerSessionRunner, SessionRunOutcome, SessionRunner, SessionRunnerLauncher};

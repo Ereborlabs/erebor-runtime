@@ -7,54 +7,54 @@ use std::{
 use tokio::runtime::Runtime;
 use tracing::{debug, error, info};
 
-use crate::{BrowserCdpRuntimeConfig, GovernanceLayer, RuntimeError, RuntimeStartPlan};
+use crate::{BrowserCdpSurfaceConfig, RuntimeError, SessionSurfaceKind, SessionSurfaceStartPlan};
 
-pub type RuntimeFailureSender = Sender<RuntimeFailure>;
+pub type SessionSurfaceFailureSender = Sender<SessionSurfaceFailure>;
 
-pub trait GovernanceRuntime: Send {
-    fn layer(&self) -> GovernanceLayer;
+pub trait SessionSurfaceService: Send {
+    fn surface(&self) -> SessionSurfaceKind;
 
     fn start(
         self: Box<Self>,
         runtime: &Runtime,
-        failures: RuntimeFailureSender,
-    ) -> Result<RunningRuntime, RuntimeError>;
+        failures: SessionSurfaceFailureSender,
+    ) -> Result<RunningSessionSurface, RuntimeError>;
 }
 
-pub struct RuntimeLauncher {
+pub struct SessionSurfaceLauncher {
     control_listen: SocketAddr,
-    runtimes: Vec<Box<dyn GovernanceRuntime>>,
+    surfaces: Vec<Box<dyn SessionSurfaceService>>,
 }
 
-impl RuntimeLauncher {
+impl SessionSurfaceLauncher {
     #[must_use]
     pub fn new(control_listen: SocketAddr) -> Self {
         Self {
             control_listen,
-            runtimes: Vec::new(),
+            surfaces: Vec::new(),
         }
     }
 
-    pub fn add_runtime<R>(&mut self, runtime: R)
+    pub fn add_surface<S>(&mut self, surface: S)
     where
-        R: GovernanceRuntime + 'static,
+        S: SessionSurfaceService + 'static,
     {
         debug!(
-            layer = runtime.layer().as_str(),
-            "registered governance runtime"
+            surface = surface.surface().as_str(),
+            "registered session surface service"
         );
-        self.runtimes.push(Box::new(runtime));
+        self.surfaces.push(Box::new(surface));
     }
 
-    pub fn start(self) -> Result<RuntimeSupervisor, RuntimeError> {
-        if self.runtimes.is_empty() {
-            return Err(RuntimeError::no_governance_runtimes());
+    pub fn start(self) -> Result<SessionSurfaceSupervisor, RuntimeError> {
+        if self.surfaces.is_empty() {
+            return Err(RuntimeError::no_session_surface_services());
         }
 
         info!(
             control = %self.control_listen,
-            runtime_count = self.runtimes.len(),
-            "starting governance runtime supervisor"
+            surface_count = self.surfaces.len(),
+            "starting session surface supervisor"
         );
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -63,20 +63,20 @@ impl RuntimeLauncher {
         let (failures, failure_rx) = mpsc::channel();
         let mut running = Vec::new();
 
-        for governance_runtime in self.runtimes {
-            let layer = governance_runtime.layer();
-            debug!(layer = layer.as_str(), "starting governance runtime");
-            let runtime_status = governance_runtime.start(&runtime, failures.clone())?;
+        for session_surface in self.surfaces {
+            let surface = session_surface.surface();
+            debug!(surface = surface.as_str(), "starting session surface");
+            let surface_status = session_surface.start(&runtime, failures.clone())?;
             info!(
-                layer = runtime_status.layer().as_str(),
-                endpoint = runtime_status.endpoint(),
-                "governance runtime is listening"
+                surface = surface_status.surface().as_str(),
+                endpoint = surface_status.endpoint(),
+                "session surface is listening"
             );
-            running.push(runtime_status);
+            running.push(surface_status);
         }
         drop(failures);
 
-        Ok(RuntimeSupervisor {
+        Ok(SessionSurfaceSupervisor {
             control_listen: self.control_listen,
             running,
             failure_rx,
@@ -85,21 +85,21 @@ impl RuntimeLauncher {
     }
 }
 
-pub struct RuntimeSupervisor {
+pub struct SessionSurfaceSupervisor {
     control_listen: SocketAddr,
-    running: Vec<RunningRuntime>,
-    failure_rx: Receiver<RuntimeFailure>,
+    running: Vec<RunningSessionSurface>,
+    failure_rx: Receiver<SessionSurfaceFailure>,
     _runtime: Runtime,
 }
 
-impl RuntimeSupervisor {
+impl SessionSurfaceSupervisor {
     #[must_use]
     pub fn control_listen(&self) -> SocketAddr {
         self.control_listen
     }
 
     #[must_use]
-    pub fn running(&self) -> &[RunningRuntime] {
+    pub fn running(&self) -> &[RunningSessionSurface] {
         &self.running
     }
 
@@ -107,49 +107,49 @@ impl RuntimeSupervisor {
         let failure = self
             .failure_rx
             .recv()
-            .map_err(|_| RuntimeError::no_governance_runtimes())?;
+            .map_err(|_| RuntimeError::no_session_surface_services())?;
 
         error!(
-            layer = failure.layer.as_str(),
+            surface = failure.surface.as_str(),
             reason = %failure.reason,
-            "governance runtime exited"
+            "session surface exited"
         );
-        Err(RuntimeError::runtime_exited(
-            failure.layer.as_str(),
+        Err(RuntimeError::surface_exited(
+            failure.surface.as_str(),
             failure.reason,
         ))
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RuntimeLaunchPlan {
+pub struct SessionSurfaceLaunchPlan {
     control_listen: SocketAddr,
     policy_paths: Vec<PathBuf>,
-    definitions: Vec<RuntimeDefinition>,
+    definitions: Vec<SessionSurfaceDefinition>,
 }
 
-impl RuntimeLaunchPlan {
+impl SessionSurfaceLaunchPlan {
     pub fn from_start_plan(
         control_listen: SocketAddr,
-        plan: &RuntimeStartPlan,
+        plan: &SessionSurfaceStartPlan,
     ) -> Result<Self, RuntimeError> {
         let mut definitions = Vec::new();
 
-        for layer in plan.layers() {
-            match layer {
-                GovernanceLayer::BrowserCdp => {
+        for surface in plan.surfaces() {
+            match surface {
+                SessionSurfaceKind::BrowserCdp => {
                     let Some(browser_cdp) = plan.browser_cdp().cloned() else {
-                        return Err(RuntimeError::unsupported_governance_layer(layer.as_str()));
+                        return Err(RuntimeError::unsupported_session_surface(surface.as_str()));
                     };
-                    definitions.push(RuntimeDefinition::BrowserCdp(browser_cdp));
+                    definitions.push(SessionSurfaceDefinition::BrowserCdp(browser_cdp));
                 }
-                GovernanceLayer::Mcp
-                | GovernanceLayer::Terminal
-                | GovernanceLayer::Network
-                | GovernanceLayer::Saas
-                | GovernanceLayer::Desktop
-                | GovernanceLayer::InternalSystem => {
-                    return Err(RuntimeError::unsupported_governance_layer(layer.as_str()));
+                SessionSurfaceKind::Mcp
+                | SessionSurfaceKind::Terminal
+                | SessionSurfaceKind::Network
+                | SessionSurfaceKind::Saas
+                | SessionSurfaceKind::Desktop
+                | SessionSurfaceKind::InternalSystem => {
+                    return Err(RuntimeError::unsupported_session_surface(surface.as_str()));
                 }
             }
         }
@@ -172,67 +172,67 @@ impl RuntimeLaunchPlan {
     }
 
     #[must_use]
-    pub fn definitions(&self) -> &[RuntimeDefinition] {
+    pub fn definitions(&self) -> &[SessionSurfaceDefinition] {
         &self.definitions
     }
 
     #[must_use]
-    pub fn layers(&self) -> Vec<GovernanceLayer> {
+    pub fn surfaces(&self) -> Vec<SessionSurfaceKind> {
         self.definitions
             .iter()
-            .map(RuntimeDefinition::layer)
+            .map(SessionSurfaceDefinition::surface)
             .collect()
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RuntimeDefinition {
-    BrowserCdp(BrowserCdpRuntimeConfig),
+pub enum SessionSurfaceDefinition {
+    BrowserCdp(BrowserCdpSurfaceConfig),
 }
 
-impl RuntimeDefinition {
+impl SessionSurfaceDefinition {
     #[must_use]
-    pub fn layer(&self) -> GovernanceLayer {
+    pub fn surface(&self) -> SessionSurfaceKind {
         match self {
-            Self::BrowserCdp(_) => GovernanceLayer::BrowserCdp,
+            Self::BrowserCdp(_) => SessionSurfaceKind::BrowserCdp,
         }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RuntimeFailure {
-    layer: GovernanceLayer,
+pub struct SessionSurfaceFailure {
+    surface: SessionSurfaceKind,
     reason: String,
 }
 
-impl RuntimeFailure {
+impl SessionSurfaceFailure {
     #[must_use]
-    pub fn new(layer: GovernanceLayer, reason: impl Into<String>) -> Self {
+    pub fn new(surface: SessionSurfaceKind, reason: impl Into<String>) -> Self {
         Self {
-            layer,
+            surface,
             reason: reason.into(),
         }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RunningRuntime {
-    layer: GovernanceLayer,
+pub struct RunningSessionSurface {
+    surface: SessionSurfaceKind,
     endpoint: String,
 }
 
-impl RunningRuntime {
+impl RunningSessionSurface {
     #[must_use]
-    pub fn new(layer: GovernanceLayer, endpoint: impl Into<String>) -> Self {
+    pub fn new(surface: SessionSurfaceKind, endpoint: impl Into<String>) -> Self {
         Self {
-            layer,
+            surface,
             endpoint: endpoint.into(),
         }
     }
 
     #[must_use]
-    pub fn layer(&self) -> GovernanceLayer {
-        self.layer
+    pub fn surface(&self) -> SessionSurfaceKind {
+        self.surface
     }
 
     #[must_use]

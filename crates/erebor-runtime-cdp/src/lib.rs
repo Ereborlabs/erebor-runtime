@@ -21,7 +21,7 @@ pub use protocol::{
     decode_cdp_command, decode_cdp_event, CdpCommand, CdpEvent, GovernedCdpCommand,
 };
 pub use proxy::{proxy_cdp_message, CdpBackend, CdpBackendResponse, CdpProxyAction};
-pub use runtime::BrowserCdpRuntime;
+pub use runtime::BrowserCdpSurface;
 pub use server::{CdpProxyServer, CdpProxyServerConfig};
 pub use state::{CdpSessionSnapshot, CdpSessionState, PageStatus, PageStatusKind};
 pub use target_graph::{

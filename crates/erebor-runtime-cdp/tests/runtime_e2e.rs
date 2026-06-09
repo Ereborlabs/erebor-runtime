@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use erebor_runtime_core::GovernanceLayer;
+use erebor_runtime_core::SessionSurfaceKind;
 use erebor_runtime_e2e::E2eError;
 use serde_json::{json, Value};
 
@@ -36,7 +36,7 @@ async fn browser_cdp_runtime_starts_and_forwards_allowed_commands() -> Result<()
     let mut harness = CdpE2eHarness::start_runtime_with_mini_upstream(allow_all_policy()?).await?;
     let running_runtime = harness.running_runtime();
 
-    assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
+    assert_eq!(running_runtime.surface(), SessionSurfaceKind::BrowserCdp);
     assert!(!harness.endpoint().contains('?'));
     let response = harness
         .send_command(json!({
@@ -95,7 +95,7 @@ async fn browser_cdp_runtime_holds_approval_required_commands_before_upstream(
             .await?;
     let running_runtime = harness.running_runtime();
 
-    assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
+    assert_eq!(running_runtime.surface(), SessionSurfaceKind::BrowserCdp);
     harness
         .assert_command_has_no_response(
             json!({
@@ -125,7 +125,7 @@ async fn browser_cdp_runtime_executes_commands_against_owned_chrome() -> Result<
     let harness = CdpE2eHarness::start_runtime_with_owned_browser(allow_all_policy()?).await?;
     let running_runtime = harness.running_runtime();
 
-    assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
+    assert_eq!(running_runtime.surface(), SessionSurfaceKind::BrowserCdp);
     assert!(!harness.endpoint().contains('?'));
     let mut client = harness.browser_level_client().await?;
     let response = client
@@ -281,7 +281,7 @@ async fn browser_cdp_runtime_executes_governed_commands_against_real_chrome() ->
     let harness = CdpE2eHarness::start_runtime_with_real_chrome(allow_all_policy()?).await?;
     let running_runtime = harness.running_runtime();
 
-    assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
+    assert_eq!(running_runtime.surface(), SessionSurfaceKind::BrowserCdp);
     let response = harness
         .send_command(json!({
             "id": 1,
@@ -324,7 +324,7 @@ async fn browser_cdp_runtime_blocks_real_chrome_script_eval_side_effects() -> Re
     let harness = CdpE2eHarness::start_runtime_with_real_chrome(deny_script_eval_policy()?).await?;
     let running_runtime = harness.running_runtime();
 
-    assert_eq!(running_runtime.layer(), GovernanceLayer::BrowserCdp);
+    assert_eq!(running_runtime.surface(), SessionSurfaceKind::BrowserCdp);
     let response = harness
         .send_command(json!({
             "id": 7,

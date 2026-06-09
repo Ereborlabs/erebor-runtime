@@ -8,7 +8,7 @@ use std::{
 };
 
 use cdp_protocol::{target, types::Method};
-use erebor_runtime_core::{BrowserCdpRuntimeConfig, BrowserLaunchConfig, LocalEnforcementEngine};
+use erebor_runtime_core::{BrowserCdpSurfaceConfig, BrowserLaunchConfig, LocalEnforcementEngine};
 use erebor_runtime_events::{ActorIdentity, SessionId};
 use erebor_runtime_policy::PolicySet;
 use serde::Deserialize;
@@ -38,7 +38,7 @@ const DEFAULT_BROWSER_FLAGS: &[&str] = &[
 ];
 
 pub struct BrowserSessionManager {
-    config: BrowserCdpRuntimeConfig,
+    config: BrowserCdpSurfaceConfig,
     policy_set: PolicySet,
     context: CdpSessionContext,
 }
@@ -46,7 +46,7 @@ pub struct BrowserSessionManager {
 impl BrowserSessionManager {
     #[must_use]
     pub fn new(
-        config: BrowserCdpRuntimeConfig,
+        config: BrowserCdpSurfaceConfig,
         policy_set: PolicySet,
         context: CdpSessionContext,
     ) -> Self {
@@ -161,7 +161,7 @@ struct BrowserUpstream {
 }
 
 impl BrowserUpstream {
-    fn prepare(config: &BrowserCdpRuntimeConfig) -> Result<Self, CdpError> {
+    fn prepare(config: &BrowserCdpSurfaceConfig) -> Result<Self, CdpError> {
         if let Some(browser_url) = config.browser_url() {
             return Ok(Self {
                 endpoint: browser_url.to_owned(),

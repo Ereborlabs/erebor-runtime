@@ -31,14 +31,14 @@ pub enum RuntimeConfigError {
     EmptySessionDiagnosticCommand { name: String, location: Location },
     #[error("runtime config session diagnostic `{name}` was not found")]
     UnknownSessionDiagnostic { name: String, location: Location },
-    #[error("runtime config Docker/OCI session runtime image cannot be empty")]
+    #[error("runtime config Docker/OCI session runner image cannot be empty")]
     EmptyDockerSessionImage { location: Location },
-    #[error("runtime config Docker/OCI session runtime network cannot be empty")]
+    #[error("runtime config Docker/OCI session runner network cannot be empty")]
     EmptyDockerSessionNetwork { location: Location },
     #[error("session run command cannot be empty")]
     EmptySessionCommand { location: Location },
-    #[error("runtime config must enable at least one governance layer or session runtime")]
-    NoGovernanceLayers { location: Location },
+    #[error("runtime config must enable at least one session surface or session runner")]
+    NoSessionSurfaces { location: Location },
     #[error("runtime config browser_cdp browser_url must start with ws://")]
     BrowserCdpInvalidBrowserUrl { location: Location },
 }
@@ -55,20 +55,33 @@ pub enum RuntimeError {
         source: io::Error,
         location: Location,
     },
-    #[error("runtime start plan includes unsupported governance layer `{layer}`")]
-    UnsupportedGovernanceLayer { layer: String, location: Location },
-    #[error("runtime start plan did not include any governance runtimes")]
-    NoGovernanceRuntimes { location: Location },
-    #[error("failed to start governance runtime `{layer}`: {reason}")]
-    RuntimeStart {
-        layer: String,
+    #[error("session surface start plan includes unsupported surface `{surface}`")]
+    UnsupportedSessionSurface { surface: String, location: Location },
+    #[error("session surface start plan did not include any services")]
+    NoSessionSurfaceServices { location: Location },
+    #[error("failed to start session surface `{surface}`: {reason}")]
+    SurfaceStart {
+        surface: String,
         reason: String,
         location: Location,
     },
-    #[error("governance runtime `{layer}` exited: {reason}")]
-    RuntimeExited {
-        layer: String,
+    #[error("session surface `{surface}` exited: {reason}")]
+    SurfaceExited {
+        surface: String,
         reason: String,
+        location: Location,
+    },
+    #[error("failed to launch session runner `{runner}` using `{program}`: {source}")]
+    SessionRunnerLaunch {
+        runner: String,
+        program: String,
+        source: io::Error,
+        location: Location,
+    },
+    #[error("session runner `{runner}` exited unsuccessfully with code {code:?}")]
+    SessionRunnerExit {
+        runner: String,
+        code: Option<i32>,
         location: Location,
     },
 }
@@ -177,8 +190,8 @@ impl RuntimeConfigError {
     }
 
     #[track_caller]
-    pub fn no_governance_layers() -> Self {
-        Self::NoGovernanceLayers {
+    pub fn no_session_surfaces() -> Self {
+        Self::NoSessionSurfaces {
             location: Location::default(),
         }
     }
@@ -209,34 +222,57 @@ impl RuntimeError {
     }
 
     #[track_caller]
-    pub fn unsupported_governance_layer(layer: impl Into<String>) -> Self {
-        Self::UnsupportedGovernanceLayer {
-            layer: layer.into(),
+    pub fn unsupported_session_surface(surface: impl Into<String>) -> Self {
+        Self::UnsupportedSessionSurface {
+            surface: surface.into(),
             location: Location::default(),
         }
     }
 
     #[track_caller]
-    pub fn no_governance_runtimes() -> Self {
-        Self::NoGovernanceRuntimes {
+    pub fn no_session_surface_services() -> Self {
+        Self::NoSessionSurfaceServices {
             location: Location::default(),
         }
     }
 
     #[track_caller]
-    pub fn runtime_start(layer: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::RuntimeStart {
-            layer: layer.into(),
+    pub fn surface_start(surface: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::SurfaceStart {
+            surface: surface.into(),
             reason: reason.into(),
             location: Location::default(),
         }
     }
 
     #[track_caller]
-    pub fn runtime_exited(layer: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::RuntimeExited {
-            layer: layer.into(),
+    pub fn surface_exited(surface: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self::SurfaceExited {
+            surface: surface.into(),
             reason: reason.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn session_runner_launch(
+        runner: impl Into<String>,
+        program: impl Into<String>,
+        source: io::Error,
+    ) -> Self {
+        Self::SessionRunnerLaunch {
+            runner: runner.into(),
+            program: program.into(),
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn session_runner_exit(runner: impl Into<String>, code: Option<i32>) -> Self {
+        Self::SessionRunnerExit {
+            runner: runner.into(),
+            code,
             location: Location::default(),
         }
     }

@@ -2,19 +2,19 @@ use std::{
     fmt, fs, io,
     net::SocketAddr,
     path::{Path, PathBuf},
-    process::Command as ProcessCommand,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use erebor_runtime_audit::{read_audit_records, AuditLogError, JsonlAuditSink};
-use erebor_runtime_cdp::{BrowserCdpRuntime, CdpSessionContext};
+use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
-    AuditError, AuditRecord, AuditSink, BrowserCdpLayerConfig, DenyApprovalProvider,
-    DockerSessionLaunchPlan, GovernanceLayers, LocalEnforcementEngine, NoopAuditSink,
-    RunningRuntime, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError, RuntimeDefinition,
-    RuntimeError, RuntimeLaunchPlan, RuntimeLauncher, RuntimeStartPlan, SessionRunPlan,
-    SessionRuntimeKind,
+    AuditError, AuditRecord, AuditSink, BrowserCdpSurfaceLayerConfig, DenyApprovalProvider,
+    LocalEnforcementEngine, NoopAuditSink, RunningSessionSurface, RuntimeAuditConfig,
+    RuntimeConfig, RuntimeConfigError, RuntimeError, SessionRunPlan, SessionRunnerKind,
+    SessionRunnerLauncher, SessionSurfaceDefinition, SessionSurfaceLaunchPlan,
+    SessionSurfaceLauncher, SessionSurfaceLayers, SessionSurfaceStartPlan,
+    SessionSurfaceSupervisor,
 };
 use erebor_runtime_events::{
     ActionKind, ActorIdentity, ActorKind, ExecutionSurface, RiskLevel, RiskMetadata, RuntimeEvent,
@@ -59,7 +59,7 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Start the configured governance runtime.
+    /// Start the configured session surfaces.
     Start(StartArgs),
     /// Start or manage governed agent sessions.
     Session(SessionArgs),
@@ -84,8 +84,8 @@ impl fmt::Display for Command {
                 command: SessionCommand::Run(args),
             }) => write!(
                 formatter,
-                "session run runtime={} config={} command={}",
-                args.runtime.as_str(),
+                "session run runner={} config={} command={}",
+                args.runner.as_str(),
                 args.config.display(),
                 args.command.join(" ")
             ),
@@ -93,8 +93,8 @@ impl fmt::Display for Command {
                 command: SessionCommand::Diagnose(args),
             }) => write!(
                 formatter,
-                "session diagnose runtime={} config={} name={}",
-                args.runtime.as_str(),
+                "session diagnose runner={} config={} name={}",
+                args.runner.as_str(),
                 args.config.display(),
                 args.name
             ),
@@ -125,7 +125,7 @@ impl fmt::Display for Command {
 
 #[derive(Debug, Args)]
 struct StartArgs {
-    /// Runtime config describing enabled governance layers and policies.
+    /// Runtime config describing enabled session surfaces and policies.
     #[arg(long, value_parser = parse_non_empty_path)]
     config: PathBuf,
     /// Local address for runtime control/status APIs.
@@ -141,7 +141,7 @@ struct SessionArgs {
 
 #[derive(Debug, Subcommand)]
 enum SessionCommand {
-    /// Run an agent or command inside a governed session runtime.
+    /// Run an agent or command inside a governed session runner.
     Run(SessionRunArgs),
     /// Run a named bounded diagnostic from the session config.
     Diagnose(SessionDiagnoseArgs),
@@ -149,35 +149,35 @@ enum SessionCommand {
 
 #[derive(Debug, Args)]
 struct SessionRunArgs {
-    /// Session runtime config describing policies, audit, and runtime settings.
+    /// Session config describing policies, audit, surfaces, and runner settings.
     #[arg(long, value_parser = parse_non_empty_path)]
     config: PathBuf,
-    /// Concrete session runtime to use.
-    #[arg(long, value_enum)]
-    runtime: SessionRuntimeArg,
-    /// Command to execute inside the governed session runtime.
+    /// Concrete session runner to use.
+    #[arg(long, alias = "runtime", value_enum)]
+    runner: SessionRunnerArg,
+    /// Command to execute inside the governed session runner.
     #[arg(required = true, trailing_var_arg = true, num_args = 1..)]
     command: Vec<String>,
 }
 
 #[derive(Debug, Args)]
 struct SessionDiagnoseArgs {
-    /// Session runtime config describing policies, audit, and diagnostics.
+    /// Session config describing policies, audit, diagnostics, and runner settings.
     #[arg(long, value_parser = parse_non_empty_path)]
     config: PathBuf,
-    /// Concrete session runtime to use.
-    #[arg(long, value_enum)]
-    runtime: SessionRuntimeArg,
+    /// Concrete session runner to use.
+    #[arg(long, alias = "runtime", value_enum)]
+    runner: SessionRunnerArg,
     /// Named diagnostic from the session config.
     name: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum SessionRuntimeArg {
+enum SessionRunnerArg {
     Docker,
 }
 
-impl SessionRuntimeArg {
+impl SessionRunnerArg {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Docker => "docker",
@@ -185,10 +185,10 @@ impl SessionRuntimeArg {
     }
 }
 
-impl From<SessionRuntimeArg> for SessionRuntimeKind {
-    fn from(value: SessionRuntimeArg) -> Self {
+impl From<SessionRunnerArg> for SessionRunnerKind {
+    fn from(value: SessionRunnerArg) -> Self {
         match value {
-            SessionRuntimeArg::Docker => Self::Docker,
+            SessionRunnerArg::Docker => Self::Docker,
         }
     }
 }
@@ -299,47 +299,48 @@ fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, CliError> {
     Ok(config)
 }
 
-fn build_start_plan(path: &Path) -> Result<RuntimeStartPlan, CliError> {
+fn build_start_plan(path: &Path) -> Result<SessionSurfaceStartPlan, CliError> {
     read_runtime_config(path)?
-        .start_plan()
+        .surface_start_plan()
         .map_err(CliError::invalid_config)
 }
 
-fn build_runtime_launch_plan(args: &StartArgs) -> Result<RuntimeLaunchPlan, CliError> {
+fn build_runtime_launch_plan(args: &StartArgs) -> Result<SessionSurfaceLaunchPlan, CliError> {
     let plan = build_start_plan(&args.config)?;
     tracing::debug!(
         control_listen = %args.listen,
-        layers = ?plan.layers(),
+        surfaces = ?plan.surfaces(),
         policy_count = plan.policies().len(),
-        "building runtime launch plan"
+        "building session surface launch plan"
     );
-    RuntimeLaunchPlan::from_start_plan(args.listen, &plan).map_err(CliError::runtime)
+    SessionSurfaceLaunchPlan::from_start_plan(args.listen, &plan).map_err(CliError::runtime)
 }
 
-fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<RuntimeLaunchPlan, CliError> {
+fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<SessionSurfaceLaunchPlan, CliError> {
     let config = RuntimeConfig {
         policies: vec![args.policy.clone()],
         audit: RuntimeAuditConfig::default(),
         session: Default::default(),
-        governance: GovernanceLayers {
-            browser_cdp: BrowserCdpLayerConfig {
+        surfaces: SessionSurfaceLayers {
+            browser_cdp: BrowserCdpSurfaceLayerConfig {
                 enabled: true,
                 browser_url: Some(args.browser_url.as_str().to_owned()),
                 listen: args.listen,
                 browser: Default::default(),
             },
-            ..GovernanceLayers::default()
+            ..SessionSurfaceLayers::default()
         },
     };
-    let plan = config.start_plan().map_err(CliError::invalid_config)?;
+    let plan = config
+        .surface_start_plan()
+        .map_err(CliError::invalid_config)?;
 
-    RuntimeLaunchPlan::from_start_plan(args.listen, &plan).map_err(CliError::runtime)
+    SessionSurfaceLaunchPlan::from_start_plan(args.listen, &plan).map_err(CliError::runtime)
 }
 
 fn resolve_config_paths(config_path: &Path, config: &mut RuntimeConfig) {
-    let base_dir = config_path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty());
+    let base_dir = config_base_dir(config_path);
+    let base_dir = base_dir.as_deref();
     for policy in &mut config.policies {
         resolve_config_path(base_dir, policy);
     }
@@ -347,12 +348,27 @@ fn resolve_config_paths(config_path: &Path, config: &mut RuntimeConfig) {
     resolve_optional_config_path(base_dir, &mut config.session.workspace);
     resolve_optional_config_path(
         base_dir,
-        &mut config.governance.browser_cdp.browser.executable,
+        &mut config.surfaces.browser_cdp.browser.executable,
     );
     resolve_optional_config_path(
         base_dir,
-        &mut config.governance.browser_cdp.browser.user_data_dir,
+        &mut config.surfaces.browser_cdp.browser.user_data_dir,
     );
+}
+
+fn config_base_dir(config_path: &Path) -> Option<PathBuf> {
+    config_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| {
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir()
+                    .map(|current_dir| current_dir.join(path))
+                    .unwrap_or_else(|_| path.to_path_buf())
+            }
+        })
 }
 
 fn resolve_optional_config_path(base_dir: Option<&Path>, path: &mut Option<PathBuf>) {
@@ -416,16 +432,27 @@ fn execute_session(args: &SessionArgs) -> Result<(), CliError> {
 }
 
 fn session_run(args: &SessionRunArgs) -> Result<(), CliError> {
-    let plan = build_session_run_plan(args)?;
-    execute_session_run_plan(&plan)
+    let config = read_runtime_config(&args.config)?;
+    let session_id = SessionId::new(format!("session-{}", std::process::id()));
+    let plan = SessionRunPlan::from_config(
+        &config,
+        args.runner.into(),
+        session_id,
+        args.command.clone(),
+    )
+    .map_err(CliError::invalid_config)?;
+    execute_session_run_plan(&config, &plan)
 }
 
 fn session_diagnose(args: &SessionDiagnoseArgs) -> Result<(), CliError> {
-    let plan = build_session_diagnose_plan(args)?;
-    execute_session_run_plan(&plan)
+    let config = read_runtime_config(&args.config)?;
+    let session_id = SessionId::new(format!("session-{}", std::process::id()));
+    let plan = SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
+        .map_err(CliError::invalid_config)?;
+    execute_session_run_plan(&config, &plan)
 }
 
-fn execute_session_run_plan(plan: &SessionRunPlan) -> Result<(), CliError> {
+fn execute_session_run_plan(config: &RuntimeConfig, plan: &SessionRunPlan) -> Result<(), CliError> {
     let policy_set = read_policy_set(plan.policies())?;
     let engine = LocalEnforcementEngine::with_hooks(
         policy_set,
@@ -436,55 +463,110 @@ fn execute_session_run_plan(plan: &SessionRunPlan) -> Result<(), CliError> {
     let outcome = engine.enforce(&event).map_err(CliError::runtime)?;
 
     match outcome.final_decision {
-        Decision::Allow { .. } => launch_docker_session(plan),
+        Decision::Allow { .. } => {
+            let side_resources = start_session_side_resources(config, plan)?;
+            SessionRunnerLauncher::run(plan, side_resources.environment())
+                .map_err(CliError::runtime)?;
+            Ok(())
+        }
         Decision::Deny { reason, .. } => Err(CliError::session_denied(reason)),
         Decision::RequireApproval { reason, .. } => Err(CliError::session_denied(reason)),
     }
 }
 
+#[cfg(test)]
 fn build_session_run_plan(args: &SessionRunArgs) -> Result<SessionRunPlan, CliError> {
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
     SessionRunPlan::from_config(
         &config,
-        args.runtime.into(),
+        args.runner.into(),
         session_id,
         args.command.clone(),
     )
     .map_err(CliError::invalid_config)
 }
 
+#[cfg(test)]
 fn build_session_diagnose_plan(args: &SessionDiagnoseArgs) -> Result<SessionRunPlan, CliError> {
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
-    SessionRunPlan::from_diagnostic(&config, args.runtime.into(), session_id, &args.name)
+    SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
         .map_err(CliError::invalid_config)
 }
 
-fn launch_docker_session(plan: &SessionRunPlan) -> Result<(), CliError> {
-    let launch = DockerSessionLaunchPlan::from_session_run_plan(plan);
-    tracing::info!(
-        session = %plan.session_id().as_str(),
-        actor = %plan.actor().id,
-        image = %plan.runtime().docker().image(),
-        "launching Docker/OCI governed session runtime"
-    );
-    let status = ProcessCommand::new(launch.program())
-        .args(launch.args())
-        .status()
-        .map_err(|source| CliError::LaunchSessionRuntime {
-            program: launch.program().to_owned(),
-            source,
-            location: Location::default(),
-        })?;
+fn start_session_side_resources(
+    config: &RuntimeConfig,
+    plan: &SessionRunPlan,
+) -> Result<SessionSideResources, CliError> {
+    let start_plan = config
+        .surface_start_plan_for_session(plan)
+        .map_err(CliError::invalid_config)?;
+    if start_plan.surfaces().is_empty() {
+        return Ok(SessionSideResources::default());
+    }
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(CliError::SessionRuntimeExit {
-            code: status.code(),
-            location: Location::default(),
-        })
+    let policy_set = read_policy_set(start_plan.policies())?;
+    let launch_plan = SessionSurfaceLaunchPlan::from_start_plan(
+        SocketAddr::from(([127, 0, 0, 1], 0)),
+        &start_plan,
+    )
+    .map_err(CliError::runtime)?;
+    let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
+
+    for definition in launch_plan.definitions() {
+        match definition {
+            SessionSurfaceDefinition::BrowserCdp(config) => {
+                launcher.add_surface(BrowserCdpSurface::new(
+                    config.clone(),
+                    policy_set.clone(),
+                    session_cdp_context(plan),
+                ));
+            }
+        }
+    }
+
+    let supervisor = launcher.start().map_err(CliError::runtime)?;
+    let mut environment = Vec::new();
+    for runtime in supervisor.running() {
+        if runtime.surface() == erebor_runtime_core::SessionSurfaceKind::BrowserCdp {
+            environment.push((
+                String::from("EREBOR_BROWSER_CDP_URL"),
+                runtime.endpoint().to_owned(),
+            ));
+            environment.push((
+                String::from("EREBOR_OPENCLAW_BROWSER_PROFILE"),
+                String::from("erebor"),
+            ));
+        }
+    }
+
+    Ok(SessionSideResources {
+        environment,
+        _supervisor: Some(supervisor),
+    })
+}
+
+fn session_cdp_context(plan: &SessionRunPlan) -> CdpSessionContext {
+    CdpSessionContext {
+        session_id: plan.session_id().clone(),
+        actor: ActorIdentity {
+            id: plan.actor().id.clone(),
+            kind: plan.actor().kind.clone(),
+        },
+        timestamp: runtime_timestamp(),
+    }
+}
+
+#[derive(Default)]
+struct SessionSideResources {
+    environment: Vec<(String, String)>,
+    _supervisor: Option<SessionSurfaceSupervisor>,
+}
+
+impl SessionSideResources {
+    fn environment(&self) -> &[(String, String)] {
+        &self.environment
     }
 }
 
@@ -510,11 +592,11 @@ fn session_process_event(plan: &SessionRunPlan) -> RuntimeEvent {
         }),
         payload: serde_json::json!({
             "kind": "session_process_exec",
-            "session_runtime": "docker",
+            "session_runner": plan.runner().kind().as_str(),
             "docker": {
-                "image": plan.runtime().docker().image(),
-                "network": plan.runtime().docker().network(),
-                "workdir": plan.runtime().docker().workdir(),
+                "image": plan.runner().docker().image(),
+                "network": plan.runner().docker().network(),
+                "workdir": plan.runner().docker().workdir(),
             },
             "workspace": plan.workspace(),
             "diagnostic": plan.diagnostic(),
@@ -523,7 +605,7 @@ fn session_process_event(plan: &SessionRunPlan) -> RuntimeEvent {
         risk: RiskMetadata {
             level: RiskLevel::Medium,
             reasons: vec![String::from(
-                "root command for Docker/OCI governed session runtime",
+                "root command for Docker/OCI governed session runner",
             )],
         },
         timestamp: runtime_timestamp(),
@@ -539,14 +621,14 @@ fn execute_dev(args: &DevArgs) -> Result<(), CliError> {
     }
 }
 
-fn start_runtime_from_launch_plan(launch_plan: RuntimeLaunchPlan) -> Result<(), CliError> {
+fn start_runtime_from_launch_plan(launch_plan: SessionSurfaceLaunchPlan) -> Result<(), CliError> {
     let policy_set = read_policy_set(launch_plan.policy_paths())?;
-    let mut launcher = RuntimeLauncher::new(launch_plan.control_listen());
+    let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
 
     for definition in launch_plan.definitions() {
         match definition {
-            RuntimeDefinition::BrowserCdp(config) => {
-                launcher.add_runtime(BrowserCdpRuntime::new(
+            SessionSurfaceDefinition::BrowserCdp(config) => {
+                launcher.add_surface(BrowserCdpSurface::new(
                     config.clone(),
                     policy_set.clone(),
                     runtime_context("browser-cdp"),
@@ -558,9 +640,9 @@ fn start_runtime_from_launch_plan(launch_plan: RuntimeLaunchPlan) -> Result<(), 
     let supervisor = launcher.start().map_err(CliError::runtime)?;
     tracing::info!(
         control = %supervisor.control_listen(),
-        governance = %format_layers(supervisor.running().iter().map(RunningRuntime::layer)),
+        surfaces = %format_surfaces(supervisor.running().iter().map(RunningSessionSurface::surface)),
         endpoints = %format_endpoints(supervisor.running()),
-        "governance runtime started"
+        "session surfaces started"
     );
 
     supervisor.wait().map_err(CliError::runtime)?;
@@ -625,17 +707,19 @@ fn runtime_timestamp() -> String {
     format!("unix:{seconds}")
 }
 
-fn format_layers(layers: impl Iterator<Item = erebor_runtime_core::GovernanceLayer>) -> String {
-    layers
-        .map(erebor_runtime_core::GovernanceLayer::as_str)
+fn format_surfaces(
+    surfaces: impl Iterator<Item = erebor_runtime_core::SessionSurfaceKind>,
+) -> String {
+    surfaces
+        .map(erebor_runtime_core::SessionSurfaceKind::as_str)
         .collect::<Vec<_>>()
         .join(",")
 }
 
-fn format_endpoints(runtimes: &[RunningRuntime]) -> String {
+fn format_endpoints(runtimes: &[RunningSessionSurface]) -> String {
     runtimes
         .iter()
-        .map(|runtime| format!("{}={}", runtime.layer().as_str(), runtime.endpoint()))
+        .map(|runtime| format!("{}={}", runtime.surface().as_str(), runtime.endpoint()))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -711,17 +795,6 @@ pub(crate) enum CliError {
     },
     #[error("session command denied: {reason}")]
     SessionDenied { reason: String, location: Location },
-    #[error("failed to launch session runtime `{program}`: {source}")]
-    LaunchSessionRuntime {
-        program: String,
-        source: io::Error,
-        location: Location,
-    },
-    #[error("session runtime exited unsuccessfully with code {code:?}")]
-    SessionRuntimeExit {
-        code: Option<i32>,
-        location: Location,
-    },
     #[error("{source}")]
     AuditLog {
         source: AuditLogError,
@@ -809,12 +882,12 @@ mod tests {
     };
 
     use clap::{CommandFactory, Parser};
-    use erebor_runtime_core::{GovernanceLayer, RuntimeDefinition, RuntimeError};
+    use erebor_runtime_core::{RuntimeError, SessionSurfaceDefinition, SessionSurfaceKind};
 
     use super::{
         build_dev_proxy_launch_plan, build_runtime_launch_plan, build_session_diagnose_plan,
-        build_session_run_plan, Cli, CliError, ProxyCdpArgs, SessionDiagnoseArgs, SessionRunArgs,
-        SessionRuntimeArg, StartArgs, WebSocketUrl,
+        build_session_run_plan, resolve_config_paths, Cli, CliError, ProxyCdpArgs,
+        SessionDiagnoseArgs, SessionRunArgs, SessionRunnerArg, StartArgs, WebSocketUrl,
     };
 
     #[test]
@@ -844,7 +917,7 @@ mod tests {
             "erebor-runtime",
             "session",
             "run",
-            "--runtime",
+            "--runner",
             "docker",
             "--config",
             "pilot-session.json",
@@ -861,7 +934,7 @@ mod tests {
             "erebor-runtime",
             "session",
             "diagnose",
-            "--runtime",
+            "--runner",
             "docker",
             "--config",
             "pilot-session.json",
@@ -900,12 +973,12 @@ mod tests {
     }
 
     #[test]
-    fn start_builds_runtime_launch_plan() -> Result<(), Box<dyn std::error::Error>> {
+    fn start_builds_surface_launch_plan() -> Result<(), Box<dyn std::error::Error>> {
         let config_path = write_temp_file(
             r#"
             {
               "policies": ["policies/browser.json"],
-              "governance": {
+              "surfaces": {
                 "browser_cdp": {
                   "enabled": true,
                   "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo",
@@ -930,8 +1003,8 @@ mod tests {
                 .ok_or_else(|| std::io::Error::other("missing config parent"))?
                 .join("policies/browser.json")]
         );
-        assert_eq!(plan.layers(), vec![GovernanceLayer::BrowserCdp]);
-        let RuntimeDefinition::BrowserCdp(browser_cdp) = &plan.definitions()[0];
+        assert_eq!(plan.surfaces(), vec![SessionSurfaceKind::BrowserCdp]);
+        let SessionSurfaceDefinition::BrowserCdp(browser_cdp) = &plan.definitions()[0];
         assert_eq!(browser_cdp.listen(), "127.0.0.1:3738".parse()?);
         assert_eq!(
             browser_cdp.browser_url(),
@@ -950,7 +1023,7 @@ mod tests {
             r#"
             {{
               "policies": ["{}"],
-              "governance": {{
+              "surfaces": {{
                 "browser_cdp": {{
                   "enabled": true,
                   "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo"
@@ -984,7 +1057,7 @@ mod tests {
                 "enabled": true,
                 "actor": { "id": "openclaw", "kind": "agent" },
                 "workspace": "workspace",
-                "runtime": {
+                "runner": {
                   "kind": "docker",
                   "docker": {
                     "image": "erebor/openclaw-pilot:local",
@@ -998,7 +1071,7 @@ mod tests {
         )?;
         let args = SessionRunArgs {
             config: config_path.clone(),
-            runtime: SessionRuntimeArg::Docker,
+            runner: SessionRunnerArg::Docker,
             command: vec![String::from("openclaw"), String::from("--help")],
         };
 
@@ -1018,13 +1091,50 @@ mod tests {
         );
         assert_eq!(plan.workspace(), Some(base_dir.join("workspace").as_path()));
         assert_eq!(
-            plan.runtime().docker().image(),
+            plan.runner().docker().image(),
             "erebor/openclaw-pilot:local"
         );
-        assert_eq!(plan.runtime().docker().network(), "none");
+        assert_eq!(plan.runner().docker().network(), "none");
         assert_eq!(plan.command(), ["openclaw", "--help"]);
 
         let _result = fs::remove_file(config_path);
+        Ok(())
+    }
+
+    #[test]
+    fn relative_config_paths_resolve_from_absolute_config_base(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut config = erebor_runtime_core::RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policy.json"],
+              "audit": { "jsonl": "pilot-audit.jsonl" },
+              "session": {
+                "enabled": true,
+                "workspace": "../.."
+              }
+            }
+            "#,
+        )?;
+
+        resolve_config_paths(
+            std::path::Path::new("examples/governed-openclaw-pilot/session-config.json"),
+            &mut config,
+        );
+
+        let current_dir = std::env::current_dir()?;
+        assert_eq!(
+            config.policies,
+            vec![current_dir.join("examples/governed-openclaw-pilot/policy.json")]
+        );
+        assert_eq!(
+            config.audit.jsonl,
+            Some(current_dir.join("examples/governed-openclaw-pilot/pilot-audit.jsonl"))
+        );
+        assert_eq!(
+            config.session.workspace,
+            Some(current_dir.join("examples/governed-openclaw-pilot/../.."))
+        );
         Ok(())
     }
 
@@ -1043,7 +1153,7 @@ mod tests {
                     "command": ["sh", "-lc", "ls -la /workspace | head"]
                   }
                 ],
-                "runtime": {
+                "runner": {
                   "kind": "docker",
                   "docker": {
                     "image": "alpine:3.20",
@@ -1057,7 +1167,7 @@ mod tests {
         )?;
         let args = SessionDiagnoseArgs {
             config: config_path.clone(),
-            runtime: SessionRuntimeArg::Docker,
+            runner: SessionRunnerArg::Docker,
             name: String::from("list-workspace"),
         };
 
@@ -1072,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn dev_proxy_builds_the_same_runtime_launch_plan_shape(
+    fn dev_proxy_builds_the_same_surface_launch_plan_shape(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let args = ProxyCdpArgs {
             browser_url: WebSocketUrl(String::from("ws://127.0.0.1:9222/devtools/browser/demo")),
@@ -1086,9 +1196,9 @@ mod tests {
             plan.policy_paths(),
             vec![PathBuf::from("policies/browser.json")]
         );
-        assert_eq!(plan.layers(), vec![GovernanceLayer::BrowserCdp]);
+        assert_eq!(plan.surfaces(), vec![SessionSurfaceKind::BrowserCdp]);
         assert_eq!(plan.definitions().len(), 1);
-        let RuntimeDefinition::BrowserCdp(browser_cdp) = &plan.definitions()[0];
+        let SessionSurfaceDefinition::BrowserCdp(browser_cdp) = &plan.definitions()[0];
         assert_eq!(browser_cdp.listen(), "127.0.0.1:3738".parse()?);
         assert_eq!(
             browser_cdp.browser_url(),
@@ -1103,7 +1213,7 @@ mod tests {
             r#"
             {
               "policies": [],
-              "governance": {
+              "surfaces": {
                 "browser_cdp": {
                   "enabled": true,
                   "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo"
@@ -1124,12 +1234,12 @@ mod tests {
     }
 
     #[test]
-    fn start_rejects_unsupported_enabled_layers() -> Result<(), Box<dyn std::error::Error>> {
+    fn start_rejects_unsupported_enabled_surfaces() -> Result<(), Box<dyn std::error::Error>> {
         let config_path = write_temp_file(
             r#"
             {
               "policies": ["policies/browser.json"],
-              "governance": {
+              "surfaces": {
                 "browser_cdp": {
                   "enabled": true,
                   "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo"
@@ -1149,10 +1259,10 @@ mod tests {
         assert!(matches!(
             error,
             Err(CliError::Runtime {
-                source: RuntimeError::UnsupportedGovernanceLayer { layer, .. },
+                source: RuntimeError::UnsupportedSessionSurface { surface, .. },
                 ..
             })
-                if layer == "terminal"
+                if surface == "terminal"
         ));
 
         let _result = fs::remove_file(config_path);

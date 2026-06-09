@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
@@ -16,8 +16,8 @@ pub struct RuntimeConfig {
     pub audit: RuntimeAuditConfig,
     #[serde(default)]
     pub session: SessionLayerConfig,
-    #[serde(default)]
-    pub governance: GovernanceLayers,
+    #[serde(default, alias = "surfaces")]
+    pub surfaces: SessionSurfaceLayers,
 }
 
 impl RuntimeConfig {
@@ -59,12 +59,12 @@ impl RuntimeConfig {
             self.session.validate()?;
         }
 
-        if self.governance.enabled_layers().is_empty() && !self.session.enabled {
-            return Err(RuntimeConfigError::no_governance_layers());
+        if self.surfaces.enabled_surfaces().is_empty() && !self.session.enabled {
+            return Err(RuntimeConfigError::no_session_surfaces());
         }
 
-        if self.governance.browser_cdp.enabled {
-            if let Some(browser_url) = self.governance.browser_cdp.browser_url.as_deref() {
+        if self.surfaces.browser_cdp.enabled {
+            if let Some(browser_url) = self.surfaces.browser_cdp.browser_url.as_deref() {
                 if !browser_url.starts_with("ws://") {
                     return Err(RuntimeConfigError::browser_cdp_invalid_browser_url());
                 }
@@ -75,41 +75,66 @@ impl RuntimeConfig {
     }
 
     #[must_use]
-    pub fn enabled_layers(&self) -> Vec<GovernanceLayer> {
-        self.governance.enabled_layers()
+    pub fn enabled_surfaces(&self) -> Vec<SessionSurfaceKind> {
+        self.surfaces.enabled_surfaces()
     }
 
-    pub fn start_plan(&self) -> Result<RuntimeStartPlan, RuntimeConfigError> {
-        RuntimeStartPlan::from_config(self)
+    pub fn surface_start_plan(&self) -> Result<SessionSurfaceStartPlan, RuntimeConfigError> {
+        SessionSurfaceStartPlan::from_config(self)
+    }
+
+    pub fn surface_start_plan_for_session(
+        &self,
+        session: &SessionRunPlan,
+    ) -> Result<SessionSurfaceStartPlan, RuntimeConfigError> {
+        SessionSurfaceStartPlan::from_config_for_session(self, session)
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RuntimeStartPlan {
+pub struct SessionSurfaceStartPlan {
     policies: Vec<PathBuf>,
     audit: RuntimeAuditConfig,
-    layers: Vec<GovernanceLayer>,
-    browser_cdp: Option<BrowserCdpRuntimeConfig>,
+    surfaces: Vec<SessionSurfaceKind>,
+    browser_cdp: Option<BrowserCdpSurfaceConfig>,
 }
 
-impl RuntimeStartPlan {
+impl SessionSurfaceStartPlan {
     pub fn from_config(config: &RuntimeConfig) -> Result<Self, RuntimeConfigError> {
         config.validate()?;
 
         Ok(Self {
             policies: config.policies.clone(),
             audit: config.audit.clone(),
-            layers: config.enabled_layers(),
+            surfaces: config.enabled_surfaces(),
             browser_cdp: config
-                .governance
+                .surfaces
                 .browser_cdp
                 .enabled
-                .then(|| BrowserCdpRuntimeConfig {
-                    listen: config.governance.browser_cdp.listen,
-                    browser_url: config.governance.browser_cdp.browser_url.clone(),
-                    browser: config.governance.browser_cdp.browser.clone().into(),
+                .then(|| BrowserCdpSurfaceConfig {
+                    listen: config.surfaces.browser_cdp.listen,
+                    browser_url: config.surfaces.browser_cdp.browser_url.clone(),
+                    browser: config.surfaces.browser_cdp.browser.clone().into(),
                 }),
         })
+    }
+
+    pub fn from_config_for_session(
+        config: &RuntimeConfig,
+        session: &SessionRunPlan,
+    ) -> Result<Self, RuntimeConfigError> {
+        let mut plan = Self::from_config(config)?;
+
+        if let Some(browser_cdp) = plan.browser_cdp.as_mut() {
+            if session.runner().docker().needs_host_reachable_endpoints()
+                && browser_cdp.listen.ip().is_loopback()
+            {
+                browser_cdp.listen =
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), browser_cdp.listen.port());
+            }
+        }
+
+        Ok(plan)
     }
 
     #[must_use]
@@ -123,17 +148,17 @@ impl RuntimeStartPlan {
     }
 
     #[must_use]
-    pub fn layers(&self) -> &[GovernanceLayer] {
-        &self.layers
+    pub fn surfaces(&self) -> &[SessionSurfaceKind] {
+        &self.surfaces
     }
 
     #[must_use]
-    pub fn contains_layer(&self, layer: GovernanceLayer) -> bool {
-        self.layers.contains(&layer)
+    pub fn contains_surface(&self, surface: SessionSurfaceKind) -> bool {
+        self.surfaces.contains(&surface)
     }
 
     #[must_use]
-    pub fn browser_cdp(&self) -> Option<&BrowserCdpRuntimeConfig> {
+    pub fn browser_cdp(&self) -> Option<&BrowserCdpSurfaceConfig> {
         self.browser_cdp.as_ref()
     }
 }
@@ -161,8 +186,8 @@ pub struct SessionLayerConfig {
     pub workspace: Option<PathBuf>,
     #[serde(default)]
     pub diagnostics: Vec<SessionDiagnosticLayerConfig>,
-    #[serde(default)]
-    pub runtime: SessionRuntimeLayerConfig,
+    #[serde(default, alias = "runner")]
+    pub runner: SessionRunnerLayerConfig,
 }
 
 impl SessionLayerConfig {
@@ -189,7 +214,7 @@ impl SessionLayerConfig {
             }
         }
 
-        self.runtime.validate()
+        self.runner.validate()
     }
 
     fn diagnostic(&self, name: &str) -> Option<&SessionDiagnosticLayerConfig> {
@@ -246,38 +271,38 @@ impl SessionDiagnosticLayerConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
-pub struct SessionRuntimeLayerConfig {
-    #[serde(default = "default_session_runtime_kind")]
-    pub kind: SessionRuntimeKind,
+pub struct SessionRunnerLayerConfig {
+    #[serde(default = "default_session_runner_kind")]
+    pub kind: SessionRunnerKind,
     #[serde(default)]
-    pub docker: DockerSessionRuntimeLayerConfig,
+    pub docker: DockerSessionRunnerLayerConfig,
 }
 
-impl Default for SessionRuntimeLayerConfig {
+impl Default for SessionRunnerLayerConfig {
     fn default() -> Self {
         Self {
-            kind: default_session_runtime_kind(),
-            docker: DockerSessionRuntimeLayerConfig::default(),
+            kind: default_session_runner_kind(),
+            docker: DockerSessionRunnerLayerConfig::default(),
         }
     }
 }
 
-impl SessionRuntimeLayerConfig {
+impl SessionRunnerLayerConfig {
     fn validate(&self) -> Result<(), RuntimeConfigError> {
         match self.kind {
-            SessionRuntimeKind::Docker => self.docker.validate(),
+            SessionRunnerKind::Docker => self.docker.validate(),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SessionRuntimeKind {
+pub enum SessionRunnerKind {
     Docker,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
-pub struct DockerSessionRuntimeLayerConfig {
+pub struct DockerSessionRunnerLayerConfig {
     #[serde(default = "default_docker_session_image")]
     pub image: String,
     #[serde(default = "default_docker_session_network")]
@@ -286,7 +311,7 @@ pub struct DockerSessionRuntimeLayerConfig {
     pub workdir: PathBuf,
 }
 
-impl Default for DockerSessionRuntimeLayerConfig {
+impl Default for DockerSessionRunnerLayerConfig {
     fn default() -> Self {
         Self {
             image: default_docker_session_image(),
@@ -296,7 +321,7 @@ impl Default for DockerSessionRuntimeLayerConfig {
     }
 }
 
-impl DockerSessionRuntimeLayerConfig {
+impl DockerSessionRunnerLayerConfig {
     fn validate(&self) -> Result<(), RuntimeConfigError> {
         if self.image.trim().is_empty() {
             return Err(RuntimeConfigError::empty_docker_session_image());
@@ -317,7 +342,7 @@ pub struct SessionRunPlan {
     session_id: SessionId,
     actor: SessionActorLayerConfig,
     workspace: Option<PathBuf>,
-    runtime: SessionRuntimeConfig,
+    runner: SessionRunnerConfig,
     command: Vec<String>,
     diagnostic: Option<String>,
 }
@@ -325,7 +350,7 @@ pub struct SessionRunPlan {
 impl SessionRunPlan {
     pub fn from_config(
         config: &RuntimeConfig,
-        runtime_kind: SessionRuntimeKind,
+        runtime_kind: SessionRunnerKind,
         session_id: SessionId,
         command: Vec<String>,
     ) -> Result<Self, RuntimeConfigError> {
@@ -335,9 +360,9 @@ impl SessionRunPlan {
             return Err(RuntimeConfigError::empty_session_command());
         }
 
-        let mut runtime = config.session.runtime.clone();
-        runtime.kind = runtime_kind;
-        runtime.validate()?;
+        let mut runner = config.session.runner.clone();
+        runner.kind = runtime_kind;
+        runner.validate()?;
 
         Ok(Self {
             policies: config.policies.clone(),
@@ -345,7 +370,7 @@ impl SessionRunPlan {
             session_id,
             actor: config.session.actor.clone(),
             workspace: config.session.workspace.clone(),
-            runtime: runtime.into(),
+            runner: runner.into(),
             command,
             diagnostic: None,
         })
@@ -353,7 +378,7 @@ impl SessionRunPlan {
 
     pub fn from_diagnostic(
         config: &RuntimeConfig,
-        runtime_kind: SessionRuntimeKind,
+        runtime_kind: SessionRunnerKind,
         session_id: SessionId,
         diagnostic_name: &str,
     ) -> Result<Self, RuntimeConfigError> {
@@ -396,8 +421,8 @@ impl SessionRunPlan {
     }
 
     #[must_use]
-    pub const fn runtime(&self) -> &SessionRuntimeConfig {
-        &self.runtime
+    pub const fn runner(&self) -> &SessionRunnerConfig {
+        &self.runner
     }
 
     #[must_use]
@@ -412,25 +437,25 @@ impl SessionRunPlan {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionRuntimeConfig {
-    kind: SessionRuntimeKind,
-    docker: DockerSessionRuntimeConfig,
+pub struct SessionRunnerConfig {
+    kind: SessionRunnerKind,
+    docker: DockerSessionRunnerConfig,
 }
 
-impl SessionRuntimeConfig {
+impl SessionRunnerConfig {
     #[must_use]
-    pub const fn kind(&self) -> SessionRuntimeKind {
+    pub const fn kind(&self) -> SessionRunnerKind {
         self.kind
     }
 
     #[must_use]
-    pub const fn docker(&self) -> &DockerSessionRuntimeConfig {
+    pub const fn docker(&self) -> &DockerSessionRunnerConfig {
         &self.docker
     }
 }
 
-impl From<SessionRuntimeLayerConfig> for SessionRuntimeConfig {
-    fn from(config: SessionRuntimeLayerConfig) -> Self {
+impl From<SessionRunnerLayerConfig> for SessionRunnerConfig {
+    fn from(config: SessionRunnerLayerConfig) -> Self {
         Self {
             kind: config.kind,
             docker: config.docker.into(),
@@ -439,13 +464,13 @@ impl From<SessionRuntimeLayerConfig> for SessionRuntimeConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DockerSessionRuntimeConfig {
+pub struct DockerSessionRunnerConfig {
     image: String,
     network: String,
     workdir: PathBuf,
 }
 
-impl DockerSessionRuntimeConfig {
+impl DockerSessionRunnerConfig {
     #[must_use]
     pub fn image(&self) -> &str {
         &self.image
@@ -460,10 +485,15 @@ impl DockerSessionRuntimeConfig {
     pub fn workdir(&self) -> &Path {
         &self.workdir
     }
+
+    #[must_use]
+    pub fn needs_host_reachable_endpoints(&self) -> bool {
+        !self.network.eq_ignore_ascii_case("host") && !self.network.eq_ignore_ascii_case("none")
+    }
 }
 
-impl From<DockerSessionRuntimeLayerConfig> for DockerSessionRuntimeConfig {
-    fn from(config: DockerSessionRuntimeLayerConfig) -> Self {
+impl From<DockerSessionRunnerLayerConfig> for DockerSessionRunnerConfig {
+    fn from(config: DockerSessionRunnerLayerConfig) -> Self {
         Self {
             image: config.image,
             network: config.network,
@@ -473,15 +503,74 @@ impl From<DockerSessionRuntimeLayerConfig> for DockerSessionRuntimeConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DockerSessionLaunchPlan {
+struct DockerSessionEnvironment {
+    variables: Vec<(String, String)>,
+    requires_host_gateway: bool,
+}
+
+fn docker_environment_for_session(
+    docker: &DockerSessionRunnerConfig,
+    environment: &[(String, String)],
+) -> DockerSessionEnvironment {
+    let mut requires_host_gateway = false;
+    let variables = environment
+        .iter()
+        .map(|(key, value)| {
+            let value = if let Some(rewritten) = docker_reachable_endpoint_value(docker, value) {
+                requires_host_gateway = true;
+                rewritten
+            } else {
+                value.clone()
+            };
+            (key.clone(), value)
+        })
+        .collect();
+
+    DockerSessionEnvironment {
+        variables,
+        requires_host_gateway,
+    }
+}
+
+fn docker_reachable_endpoint_value(
+    docker: &DockerSessionRunnerConfig,
+    value: &str,
+) -> Option<String> {
+    if !docker.needs_host_reachable_endpoints() {
+        return None;
+    }
+
+    for host in ["127.0.0.1", "localhost", "0.0.0.0"] {
+        for scheme in ["ws", "http"] {
+            let prefix = format!("{scheme}://{host}");
+            if let Some(suffix) = value.strip_prefix(&prefix) {
+                return Some(format!("{scheme}://host.docker.internal{suffix}"));
+            }
+        }
+    }
+
+    None
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DockerSessionCommandPlan {
     program: String,
     args: Vec<String>,
 }
 
-impl DockerSessionLaunchPlan {
+impl DockerSessionCommandPlan {
     #[must_use]
     pub fn from_session_run_plan(plan: &SessionRunPlan) -> Self {
-        let docker = plan.runtime().docker();
+        Self::from_session_run_plan_with_environment(plan, &[])
+    }
+
+    #[must_use]
+    pub fn from_session_run_plan_with_environment(
+        plan: &SessionRunPlan,
+        environment: &[(String, String)],
+    ) -> Self {
+        let docker = plan.runner().docker();
+        let environment = docker_environment_for_session(docker, environment);
         let mut args = vec![
             String::from("run"),
             String::from("--rm"),
@@ -498,8 +587,18 @@ impl DockerSessionLaunchPlan {
             String::from("-e"),
             format!("EREBOR_ACTOR_ID={}", plan.actor().id),
             String::from("-e"),
-            String::from("EREBOR_SESSION_RUNTIME=docker"),
+            String::from("EREBOR_SESSION_RUNNER=docker"),
         ];
+
+        if environment.requires_host_gateway {
+            args.push(String::from("--add-host"));
+            args.push(String::from("host.docker.internal:host-gateway"));
+        }
+
+        for (key, value) in environment.variables {
+            args.push(String::from("-e"));
+            args.push(format!("{key}={value}"));
+        }
 
         if let Some(workspace) = plan.workspace() {
             args.push(String::from("-v"));
@@ -533,35 +632,35 @@ impl DockerSessionLaunchPlan {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
-pub struct GovernanceLayers {
+pub struct SessionSurfaceLayers {
     #[serde(default)]
-    pub browser_cdp: BrowserCdpLayerConfig,
+    pub browser_cdp: BrowserCdpSurfaceLayerConfig,
     #[serde(default)]
-    pub mcp: GovernanceLayerConfig,
+    pub mcp: SessionSurfaceToggleConfig,
     #[serde(default)]
-    pub terminal: GovernanceLayerConfig,
+    pub terminal: SessionSurfaceToggleConfig,
     #[serde(default)]
-    pub network: GovernanceLayerConfig,
+    pub network: SessionSurfaceToggleConfig,
     #[serde(default)]
-    pub saas: GovernanceLayerConfig,
+    pub saas: SessionSurfaceToggleConfig,
     #[serde(default)]
-    pub desktop: GovernanceLayerConfig,
+    pub desktop: SessionSurfaceToggleConfig,
     #[serde(default)]
-    pub internal_system: GovernanceLayerConfig,
+    pub internal_system: SessionSurfaceToggleConfig,
 }
 
-impl GovernanceLayers {
+impl SessionSurfaceLayers {
     #[must_use]
-    pub fn enabled_layers(&self) -> Vec<GovernanceLayer> {
+    pub fn enabled_surfaces(&self) -> Vec<SessionSurfaceKind> {
         let candidates = [
-            (GovernanceLayer::BrowserCdp, self.browser_cdp.enabled),
-            (GovernanceLayer::Mcp, self.mcp.enabled),
-            (GovernanceLayer::Terminal, self.terminal.enabled),
-            (GovernanceLayer::Network, self.network.enabled),
-            (GovernanceLayer::Saas, self.saas.enabled),
-            (GovernanceLayer::Desktop, self.desktop.enabled),
+            (SessionSurfaceKind::BrowserCdp, self.browser_cdp.enabled),
+            (SessionSurfaceKind::Mcp, self.mcp.enabled),
+            (SessionSurfaceKind::Terminal, self.terminal.enabled),
+            (SessionSurfaceKind::Network, self.network.enabled),
+            (SessionSurfaceKind::Saas, self.saas.enabled),
+            (SessionSurfaceKind::Desktop, self.desktop.enabled),
             (
-                GovernanceLayer::InternalSystem,
+                SessionSurfaceKind::InternalSystem,
                 self.internal_system.enabled,
             ),
         ];
@@ -574,7 +673,7 @@ impl GovernanceLayers {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
-pub struct BrowserCdpLayerConfig {
+pub struct BrowserCdpSurfaceLayerConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
@@ -585,7 +684,7 @@ pub struct BrowserCdpLayerConfig {
     pub browser: BrowserLaunchLayerConfig,
 }
 
-impl Default for BrowserCdpLayerConfig {
+impl Default for BrowserCdpSurfaceLayerConfig {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -617,19 +716,19 @@ impl Default for BrowserLaunchLayerConfig {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
-pub struct GovernanceLayerConfig {
+pub struct SessionSurfaceToggleConfig {
     #[serde(default)]
     pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BrowserCdpRuntimeConfig {
+pub struct BrowserCdpSurfaceConfig {
     listen: SocketAddr,
     browser_url: Option<String>,
     browser: BrowserLaunchConfig,
 }
 
-impl BrowserCdpRuntimeConfig {
+impl BrowserCdpSurfaceConfig {
     #[must_use]
     pub fn listen(&self) -> SocketAddr {
         self.listen
@@ -686,7 +785,7 @@ impl From<BrowserLaunchLayerConfig> for BrowserLaunchConfig {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GovernanceLayer {
+pub enum SessionSurfaceKind {
     BrowserCdp,
     Mcp,
     Terminal,
@@ -696,7 +795,7 @@ pub enum GovernanceLayer {
     InternalSystem,
 }
 
-impl GovernanceLayer {
+impl SessionSurfaceKind {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -735,8 +834,8 @@ const fn default_session_actor_kind() -> ActorKind {
     ActorKind::Agent
 }
 
-const fn default_session_runtime_kind() -> SessionRuntimeKind {
-    SessionRuntimeKind::Docker
+const fn default_session_runner_kind() -> SessionRunnerKind {
+    SessionRunnerKind::Docker
 }
 
 fn default_docker_session_image() -> String {
@@ -772,17 +871,17 @@ mod tests {
     use erebor_runtime_events::SessionId;
 
     use crate::{
-        DockerSessionLaunchPlan, GovernanceLayer, RuntimeConfig, RuntimeConfigError,
-        SessionRunPlan, SessionRuntimeKind,
+        DockerSessionCommandPlan, RuntimeConfig, RuntimeConfigError, SessionRunPlan,
+        SessionRunnerKind, SessionSurfaceKind,
     };
 
     #[test]
-    fn loads_config_with_multiple_governance_layers() -> Result<(), RuntimeConfigError> {
+    fn loads_config_with_multiple_session_surfaces() -> Result<(), RuntimeConfigError> {
         let config = RuntimeConfig::from_json_str(
             r#"
             {
               "policies": ["policies/browser.json"],
-              "governance": {
+              "surfaces": {
                 "browser_cdp": {
                   "enabled": true,
                   "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo"
@@ -794,8 +893,8 @@ mod tests {
         )?;
 
         assert_eq!(
-            config.enabled_layers(),
-            vec![GovernanceLayer::BrowserCdp, GovernanceLayer::Terminal]
+            config.enabled_surfaces(),
+            vec![SessionSurfaceKind::BrowserCdp, SessionSurfaceKind::Terminal]
         );
 
         Ok(())
@@ -807,7 +906,7 @@ mod tests {
             r#"
             {
               "policies": [],
-              "governance": {
+              "surfaces": {
                 "browser_cdp": {
                   "enabled": true,
                   "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo"
@@ -829,7 +928,7 @@ mod tests {
             r#"
             {
               "policies": [""],
-              "governance": {
+              "surfaces": {
                 "browser_cdp": {
                   "enabled": true,
                   "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo"
@@ -846,19 +945,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_config_without_enabled_governance_layers() {
+    fn rejects_config_without_enabled_session_surfaces_or_session() {
         let error = RuntimeConfig::from_json_str(
             r#"
             {
               "policies": ["policies/browser.json"],
-              "governance": {}
+              "surfaces": {}
             }
             "#,
         );
 
         assert!(matches!(
             error,
-            Err(RuntimeConfigError::NoGovernanceLayers { .. })
+            Err(RuntimeConfigError::NoSessionSurfaces { .. })
         ));
     }
 
@@ -868,7 +967,7 @@ mod tests {
             r#"
             {
               "policies": ["policies/browser.json", "policies/terminal.json"],
-              "governance": {
+              "surfaces": {
                 "browser_cdp": {
                   "enabled": true,
                   "browser_url": "ws://127.0.0.1:9222/devtools/browser/demo",
@@ -879,13 +978,13 @@ mod tests {
             }
             "#,
         )?;
-        let plan = config.start_plan()?;
+        let plan = config.surface_start_plan()?;
 
         assert_eq!(plan.policies().len(), 2);
         assert_eq!(plan.audit().jsonl(), None);
-        assert!(plan.contains_layer(GovernanceLayer::BrowserCdp));
-        assert!(plan.contains_layer(GovernanceLayer::Terminal));
-        assert!(!plan.contains_layer(GovernanceLayer::Mcp));
+        assert!(plan.contains_surface(SessionSurfaceKind::BrowserCdp));
+        assert!(plan.contains_surface(SessionSurfaceKind::Terminal));
+        assert!(!plan.contains_surface(SessionSurfaceKind::Mcp));
         assert_eq!(
             plan.browser_cdp().map(|config| config.browser_url()),
             Some(Some("ws://127.0.0.1:9222/devtools/browser/demo"))
@@ -909,7 +1008,7 @@ mod tests {
                 "enabled": true,
                 "actor": { "id": "openclaw", "kind": "agent" },
                 "workspace": "/tmp/erebor-workspace",
-                "runtime": {
+                "runner": {
                   "kind": "docker",
                   "docker": {
                     "image": "erebor/openclaw-pilot:local",
@@ -924,7 +1023,7 @@ mod tests {
 
         let plan = SessionRunPlan::from_config(
             &config,
-            SessionRuntimeKind::Docker,
+            SessionRunnerKind::Docker,
             SessionId::new("session-1"),
             vec![String::from("openclaw"), String::from("--help")],
         )?;
@@ -934,20 +1033,20 @@ mod tests {
         assert_eq!(plan.session_id().as_str(), "session-1");
         assert_eq!(plan.actor().id, "openclaw");
         assert_eq!(plan.workspace(), Some(Path::new("/tmp/erebor-workspace")));
-        assert_eq!(plan.runtime().kind(), SessionRuntimeKind::Docker);
+        assert_eq!(plan.runner().kind(), SessionRunnerKind::Docker);
         assert_eq!(
-            plan.runtime().docker().image(),
+            plan.runner().docker().image(),
             "erebor/openclaw-pilot:local"
         );
-        assert_eq!(plan.runtime().docker().network(), "none");
-        assert_eq!(plan.runtime().docker().workdir(), Path::new("/work"));
+        assert_eq!(plan.runner().docker().network(), "none");
+        assert_eq!(plan.runner().docker().workdir(), Path::new("/work"));
         assert_eq!(plan.command(), ["openclaw", "--help"]);
 
         Ok(())
     }
 
     #[test]
-    fn docker_launch_plan_wraps_session_command() -> Result<(), RuntimeConfigError> {
+    fn docker_command_plan_wraps_session_command() -> Result<(), RuntimeConfigError> {
         let config = RuntimeConfig::from_json_str(
             r#"
             {
@@ -956,7 +1055,7 @@ mod tests {
                 "enabled": true,
                 "actor": { "id": "openclaw" },
                 "workspace": "/tmp/erebor-workspace",
-                "runtime": {
+                "runner": {
                   "docker": {
                     "image": "erebor/openclaw-pilot:local",
                     "network": "none",
@@ -969,12 +1068,12 @@ mod tests {
         )?;
         let plan = SessionRunPlan::from_config(
             &config,
-            SessionRuntimeKind::Docker,
+            SessionRunnerKind::Docker,
             SessionId::new("session-1"),
             vec![String::from("openclaw"), String::from("--help")],
         )?;
 
-        let launch = DockerSessionLaunchPlan::from_session_run_plan(&plan);
+        let launch = DockerSessionCommandPlan::from_session_run_plan(&plan);
 
         assert_eq!(launch.program(), "docker");
         assert_eq!(
@@ -995,7 +1094,7 @@ mod tests {
                 "-e",
                 "EREBOR_ACTOR_ID=openclaw",
                 "-e",
-                "EREBOR_SESSION_RUNTIME=docker",
+                "EREBOR_SESSION_RUNNER=docker",
                 "-v",
                 "/tmp/erebor-workspace:/work",
                 "-w",
@@ -1004,6 +1103,133 @@ mod tests {
                 "openclaw",
                 "--help"
             ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn docker_command_plan_injects_session_side_resource_environment(
+    ) -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "runner": {
+                  "docker": {
+                    "image": "alpine:3.20",
+                    "network": "none"
+                  }
+                }
+              }
+            }
+            "#,
+        )?;
+        let plan = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::Docker,
+            SessionId::new("session-1"),
+            vec![
+                String::from("printenv"),
+                String::from("EREBOR_BROWSER_CDP_URL"),
+            ],
+        )?;
+
+        let launch = DockerSessionCommandPlan::from_session_run_plan_with_environment(
+            &plan,
+            &[(
+                String::from("EREBOR_BROWSER_CDP_URL"),
+                String::from("ws://127.0.0.1:3738/"),
+            )],
+        );
+
+        assert!(launch.args().windows(2).any(
+            |args| args[0] == "-e" && args[1] == "EREBOR_BROWSER_CDP_URL=ws://127.0.0.1:3738/"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn docker_command_plan_rewrites_loopback_endpoints_for_bridge_network(
+    ) -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "runner": {
+                  "docker": {
+                    "image": "alpine:3.20",
+                    "network": "bridge"
+                  }
+                }
+              }
+            }
+            "#,
+        )?;
+        let plan = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::Docker,
+            SessionId::new("session-1"),
+            vec![String::from("printenv")],
+        )?;
+
+        let launch = DockerSessionCommandPlan::from_session_run_plan_with_environment(
+            &plan,
+            &[(
+                String::from("EREBOR_BROWSER_CDP_URL"),
+                String::from("ws://0.0.0.0:3738/"),
+            )],
+        );
+
+        assert!(launch
+            .args()
+            .windows(2)
+            .any(|args| args[0] == "--add-host" && args[1] == "host.docker.internal:host-gateway"));
+        assert!(launch.args().windows(2).any(|args| args[0] == "-e"
+            && args[1] == "EREBOR_BROWSER_CDP_URL=ws://host.docker.internal:3738/"));
+        Ok(())
+    }
+
+    #[test]
+    fn session_surface_start_plan_uses_host_reachable_browser_listen_for_docker_bridge(
+    ) -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "runner": {
+                  "docker": {
+                    "image": "alpine:3.20",
+                    "network": "bridge"
+                  }
+                }
+              },
+              "surfaces": {
+                "browser_cdp": {
+                  "enabled": true,
+                  "listen": "127.0.0.1:0"
+                }
+              }
+            }
+            "#,
+        )?;
+        let session = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::Docker,
+            SessionId::new("session-1"),
+            vec![String::from("printenv")],
+        )?;
+
+        let start_plan = config.surface_start_plan_for_session(&session)?;
+
+        assert_eq!(
+            start_plan.browser_cdp().map(|config| config.listen()),
+            Some(SocketAddr::from(([0, 0, 0, 0], 0)))
         );
         Ok(())
     }
@@ -1024,7 +1250,7 @@ mod tests {
                     "command": ["sh", "-lc", "ls -la /workspace | head"]
                   }
                 ],
-                "runtime": {
+                "runner": {
                   "docker": {
                     "image": "alpine:3.20",
                     "network": "none",
@@ -1038,7 +1264,7 @@ mod tests {
 
         let plan = SessionRunPlan::from_diagnostic(
             &config,
-            SessionRuntimeKind::Docker,
+            SessionRunnerKind::Docker,
             SessionId::new("session-1"),
             "list-workspace",
         )?;
@@ -1061,7 +1287,7 @@ mod tests {
 
         let error = SessionRunPlan::from_diagnostic(
             &config,
-            SessionRuntimeKind::Docker,
+            SessionRunnerKind::Docker,
             SessionId::new("session-1"),
             "list-workspace",
         );
@@ -1134,7 +1360,7 @@ mod tests {
 
         let error = SessionRunPlan::from_config(
             &config,
-            SessionRuntimeKind::Docker,
+            SessionRunnerKind::Docker,
             SessionId::new("session-1"),
             Vec::new(),
         );
@@ -1154,7 +1380,7 @@ mod tests {
               "policies": ["policies/browser.json"],
               "session": {
                 "enabled": true,
-                "runtime": { "docker": { "image": "" } }
+                "runner": { "docker": { "image": "" } }
               }
             }
             "#,
@@ -1167,13 +1393,13 @@ mod tests {
     }
 
     #[test]
-    fn creates_owned_browser_runtime_config_without_browser_url() -> Result<(), RuntimeConfigError>
+    fn creates_owned_browser_surface_config_without_browser_url() -> Result<(), RuntimeConfigError>
     {
         let config = RuntimeConfig::from_json_str(
             r#"
             {
               "policies": ["policies/browser.json"],
-              "governance": {
+              "surfaces": {
                 "browser_cdp": {
                   "enabled": true,
                   "browser": {
@@ -1185,10 +1411,10 @@ mod tests {
             }
             "#,
         )?;
-        let start_plan = config.start_plan()?;
+        let start_plan = config.surface_start_plan()?;
         let browser_cdp = start_plan
             .browser_cdp()
-            .ok_or_else(RuntimeConfigError::no_governance_layers)?;
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
 
         assert_eq!(browser_cdp.browser_url(), None);
         assert!(browser_cdp.owns_browser());
@@ -1206,7 +1432,7 @@ mod tests {
             r#"
             {
               "policies": ["policies/browser.json"],
-              "governance": {
+              "surfaces": {
                 "browser_cdp": {
                   "enabled": true,
                   "browser_url": "wss://browser.example/ws"
