@@ -97,6 +97,7 @@ pub struct SessionSurfaceStartPlan {
     audit: RuntimeAuditConfig,
     surfaces: Vec<SessionSurfaceKind>,
     browser_cdp: Option<BrowserCdpSurfaceConfig>,
+    terminal: Option<TerminalSurfaceConfig>,
 }
 
 impl SessionSurfaceStartPlan {
@@ -116,6 +117,11 @@ impl SessionSurfaceStartPlan {
                     browser_url: config.surfaces.browser_cdp.browser_url.clone(),
                     browser: config.surfaces.browser_cdp.browser.clone().into(),
                 }),
+            terminal: config
+                .surfaces
+                .terminal
+                .enabled
+                .then_some(TerminalSurfaceConfig),
         })
     }
 
@@ -160,6 +166,11 @@ impl SessionSurfaceStartPlan {
     #[must_use]
     pub fn browser_cdp(&self) -> Option<&BrowserCdpSurfaceConfig> {
         self.browser_cdp.as_ref()
+    }
+
+    #[must_use]
+    pub fn terminal(&self) -> Option<&TerminalSurfaceConfig> {
+        self.terminal.as_ref()
     }
 }
 
@@ -345,6 +356,7 @@ pub struct SessionRunPlan {
     runner: SessionRunnerConfig,
     command: Vec<String>,
     diagnostic: Option<String>,
+    tty: bool,
 }
 
 impl SessionRunPlan {
@@ -373,6 +385,7 @@ impl SessionRunPlan {
             runner: runner.into(),
             command,
             diagnostic: None,
+            tty: false,
         })
     }
 
@@ -433,6 +446,17 @@ impl SessionRunPlan {
     #[must_use]
     pub fn diagnostic(&self) -> Option<&str> {
         self.diagnostic.as_deref()
+    }
+
+    #[must_use]
+    pub const fn tty(&self) -> bool {
+        self.tty
+    }
+
+    #[must_use]
+    pub const fn with_tty(mut self, tty: bool) -> Self {
+        self.tty = tty;
+        self
     }
 }
 
@@ -590,6 +614,11 @@ impl DockerSessionCommandPlan {
             String::from("EREBOR_SESSION_RUNNER=docker"),
         ];
 
+        if plan.tty() {
+            args.push(String::from("-i"));
+            args.push(String::from("-t"));
+        }
+
         if environment.requires_host_gateway {
             args.push(String::from("--add-host"));
             args.push(String::from("host.docker.internal:host-gateway"));
@@ -638,7 +667,7 @@ pub struct SessionSurfaceLayers {
     #[serde(default)]
     pub mcp: SessionSurfaceToggleConfig,
     #[serde(default)]
-    pub terminal: SessionSurfaceToggleConfig,
+    pub terminal: TerminalSurfaceLayerConfig,
     #[serde(default)]
     pub network: SessionSurfaceToggleConfig,
     #[serde(default)]
@@ -720,6 +749,15 @@ pub struct SessionSurfaceToggleConfig {
     #[serde(default)]
     pub enabled: bool,
 }
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+pub struct TerminalSurfaceLayerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TerminalSurfaceConfig;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserCdpSurfaceConfig {
@@ -985,6 +1023,7 @@ mod tests {
         assert!(plan.contains_surface(SessionSurfaceKind::BrowserCdp));
         assert!(plan.contains_surface(SessionSurfaceKind::Terminal));
         assert!(!plan.contains_surface(SessionSurfaceKind::Mcp));
+        assert!(plan.terminal().is_some());
         assert_eq!(
             plan.browser_cdp().map(|config| config.browser_url()),
             Some(Some("ws://127.0.0.1:9222/devtools/browser/demo"))
@@ -1104,6 +1143,39 @@ mod tests {
                 "--help"
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn docker_command_plan_allocates_tty_when_requested() -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "runner": {
+                  "docker": {
+                    "image": "alpine:3.20",
+                    "network": "bridge"
+                  }
+                }
+              }
+            }
+            "#,
+        )?;
+        let plan = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::Docker,
+            SessionId::new("session-tty"),
+            vec![String::from("openclaw")],
+        )?
+        .with_tty(true);
+
+        let launch = DockerSessionCommandPlan::from_session_run_plan(&plan);
+
+        assert!(launch.args().iter().any(|argument| argument == "-i"));
+        assert!(launch.args().iter().any(|argument| argument == "-t"));
         Ok(())
     }
 

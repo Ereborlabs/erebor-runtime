@@ -15,6 +15,7 @@ pub use config::{
     SessionActorLayerConfig, SessionDiagnosticLayerConfig, SessionLayerConfig, SessionRunPlan,
     SessionRunnerConfig, SessionRunnerKind, SessionRunnerLayerConfig, SessionSurfaceKind,
     SessionSurfaceLayers, SessionSurfaceStartPlan, SessionSurfaceToggleConfig,
+    TerminalSurfaceConfig, TerminalSurfaceLayerConfig,
 };
 pub use engine::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,
@@ -26,4 +27,7 @@ pub use runtime::{
     SessionSurfaceFailureSender, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
     SessionSurfaceService, SessionSurfaceSupervisor,
 };
-pub use session::{DockerSessionRunner, SessionRunOutcome, SessionRunner, SessionRunnerLauncher};
+pub use session::{
+    terminal_process_event, DockerSessionRunner, SessionRunOutcome, SessionRunner,
+    SessionRunnerLauncher, TerminalSessionAuthorization, TerminalSessionSurface,
+};

@@ -7,7 +7,10 @@ use std::{
 use tokio::runtime::Runtime;
 use tracing::{debug, error, info};
 
-use crate::{BrowserCdpSurfaceConfig, RuntimeError, SessionSurfaceKind, SessionSurfaceStartPlan};
+use crate::{
+    BrowserCdpSurfaceConfig, RuntimeError, SessionSurfaceKind, SessionSurfaceStartPlan,
+    TerminalSurfaceConfig,
+};
 
 pub type SessionSurfaceFailureSender = Sender<SessionSurfaceFailure>;
 
@@ -44,6 +47,11 @@ impl SessionSurfaceLauncher {
             "registered session surface service"
         );
         self.surfaces.push(Box::new(surface));
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.surfaces.is_empty()
     }
 
     pub fn start(self) -> Result<SessionSurfaceSupervisor, RuntimeError> {
@@ -143,8 +151,13 @@ impl SessionSurfaceLaunchPlan {
                     };
                     definitions.push(SessionSurfaceDefinition::BrowserCdp(browser_cdp));
                 }
+                SessionSurfaceKind::Terminal => {
+                    let Some(terminal) = plan.terminal().cloned() else {
+                        return Err(RuntimeError::unsupported_session_surface(surface.as_str()));
+                    };
+                    definitions.push(SessionSurfaceDefinition::Terminal(terminal));
+                }
                 SessionSurfaceKind::Mcp
-                | SessionSurfaceKind::Terminal
                 | SessionSurfaceKind::Network
                 | SessionSurfaceKind::Saas
                 | SessionSurfaceKind::Desktop
@@ -188,6 +201,7 @@ impl SessionSurfaceLaunchPlan {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SessionSurfaceDefinition {
     BrowserCdp(BrowserCdpSurfaceConfig),
+    Terminal(TerminalSurfaceConfig),
 }
 
 impl SessionSurfaceDefinition {
@@ -195,6 +209,7 @@ impl SessionSurfaceDefinition {
     pub fn surface(&self) -> SessionSurfaceKind {
         match self {
             Self::BrowserCdp(_) => SessionSurfaceKind::BrowserCdp,
+            Self::Terminal(_) => SessionSurfaceKind::Terminal,
         }
     }
 }

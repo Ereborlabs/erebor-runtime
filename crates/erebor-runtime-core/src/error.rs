@@ -84,6 +84,8 @@ pub enum RuntimeError {
         code: Option<i32>,
         location: Location,
     },
+    #[error("terminal command denied: {reason}")]
+    TerminalCommandDenied { reason: String, location: Location },
 }
 
 impl RuntimeConfigError {
@@ -273,6 +275,14 @@ impl RuntimeError {
         Self::SessionRunnerExit {
             runner: runner.into(),
             code,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn terminal_command_denied(reason: impl Into<String>) -> Self {
+        Self::TerminalCommandDenied {
+            reason: reason.into(),
             location: Location::default(),
         }
     }
