@@ -282,6 +282,7 @@ dependencies = [
  "erebor-runtime-core",
  "erebor-runtime-events",
  "erebor-runtime-policy",
+ "erebor-runtime-session",
  "serde_json",
  "snafu",
  "thiserror",
@@ -332,6 +333,31 @@ dependencies = [
  "serde",
  "serde_json",
  "snafu",
+ "thiserror",
+]
+
+[[package]]
+name = "erebor-runtime-session"
+version = "0.1.0"
+dependencies = [
+ "erebor-runtime-cdp",
+ "erebor-runtime-core",
+ "erebor-runtime-events",
+ "erebor-runtime-policy",
+ "erebor-runtime-terminal",
+ "snafu",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
+name = "erebor-runtime-terminal"
+version = "0.1.0"
+dependencies = [
+ "erebor-runtime-core",
+ "erebor-runtime-events",
+ "erebor-runtime-policy",
+ "serde_json",
  "thiserror",
 ]
 

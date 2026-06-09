@@ -25,7 +25,7 @@
       "match": {
         "surface": "terminal",
         "action": "process_exec",
-        "payload_contains": "list-workspace"
+        "payload_contains": "ls -la /workspace"
       },
       "decision": "allow"
     }

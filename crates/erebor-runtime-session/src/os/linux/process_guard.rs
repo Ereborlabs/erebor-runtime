@@ -518,6 +518,10 @@ fn command_text(path: &str, argv: &[String]) -> String {
 
 fn parse_rules() -> Vec<DenyRule> {
     let source = env::var("EREBOR_GUARD_DENY_RULES").unwrap_or_default();
+    parse_rules_from_source(&source)
+}
+
+fn parse_rules_from_source(source: &str) -> Vec<DenyRule> {
     source
         .lines()
         .take(MAX_RULES)
@@ -704,4 +708,104 @@ fn errno_message(error: c_int) -> String {
 fn die(message: &str) -> ! {
     eprintln!("erebor linux process guard: {message}");
     process::exit(127);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        command_text, json_string, parse_rules_from_source, ptrace_event, wait_exit_status,
+        wait_exited, wait_signaled, wait_stop_signal, wait_stopped, wait_term_signal, MAX_RULES,
+        MAX_TEXT, PTRACE_EVENT_CLONE, SIGTRAP,
+    };
+
+    #[test]
+    fn parses_deny_rules_from_guard_environment_format() {
+        let rules = parse_rules_from_source(
+            "remote-debugging-port\traw CDP is denied\tdeny-raw-cdp\nchromium\t\t\n\n",
+        );
+
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].token, "remote-debugging-port");
+        assert_eq!(rules[0].reason, "raw CDP is denied");
+        assert_eq!(rules[0].rule_id, "deny-raw-cdp");
+        assert_eq!(rules[1].token, "chromium");
+        assert_eq!(
+            rules[1].reason,
+            "process execution denied by Erebor policy"
+        );
+        assert_eq!(rules[1].rule_id, "erebor-linux-process-guard");
+    }
+
+    #[test]
+    fn ignores_empty_rule_tokens_and_caps_rule_count() {
+        let source = (0..(MAX_RULES + 5))
+            .map(|index| format!("token-{index}\treason-{index}\trule-{index}"))
+            .chain([String::from("\tmissing token\tmissing-token")])
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let rules = parse_rules_from_source(&source);
+
+        assert_eq!(rules.len(), MAX_RULES);
+        assert_eq!(rules[0].token, "token-0");
+        assert_eq!(rules[MAX_RULES - 1].rule_id, format!("rule-{}", MAX_RULES - 1));
+    }
+
+    #[test]
+    fn command_text_preserves_path_and_arguments_with_spaces() {
+        let text = command_text(
+            "/bin/sh",
+            &[
+                String::from("sh"),
+                String::from("-lc"),
+                String::from("echo hello world"),
+            ],
+        );
+
+        assert_eq!(text, "/bin/sh sh -lc echo hello world");
+    }
+
+    #[test]
+    fn command_text_is_bounded() {
+        let text = command_text("/bin/echo", &[String::from("x".repeat(MAX_TEXT * 2))]);
+
+        assert_eq!(text.len(), MAX_TEXT);
+        assert!(text.starts_with("/bin/echo "));
+    }
+
+    #[test]
+    fn json_string_escapes_audit_values() {
+        assert_eq!(
+            json_string("quote\" slash\\ newline\n tab\t"),
+            "\"quote\\\" slash\\\\ newline\\n tab\\t\""
+        );
+    }
+
+    #[test]
+    fn wait_status_helpers_do_not_treat_stops_as_signals() {
+        let stopped = (SIGTRAP << 8) | 0x7f;
+
+        assert!(wait_stopped(stopped));
+        assert!(!wait_signaled(stopped));
+        assert!(!wait_exited(stopped));
+        assert_eq!(wait_stop_signal(stopped), SIGTRAP);
+    }
+
+    #[test]
+    fn wait_status_helpers_decode_exit_and_signal_statuses() {
+        let exited = 42 << 8;
+        let signaled = 9;
+
+        assert!(wait_exited(exited));
+        assert_eq!(wait_exit_status(exited), 42);
+        assert!(wait_signaled(signaled));
+        assert_eq!(wait_term_signal(signaled), 9);
+    }
+
+    #[test]
+    fn ptrace_event_decodes_high_status_bits() {
+        let status = (PTRACE_EVENT_CLONE as i32) << 16;
+
+        assert_eq!(ptrace_event(status), PTRACE_EVENT_CLONE);
+    }
 }

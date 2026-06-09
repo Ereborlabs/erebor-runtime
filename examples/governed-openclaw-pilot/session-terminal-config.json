@@ -3,12 +3,12 @@
     "policy.json"
   ],
   "audit": {
-    "jsonl": "pilot-audit.jsonl"
+    "jsonl": "pilot-terminal-audit.jsonl"
   },
   "session": {
     "enabled": true,
     "actor": {
-      "id": "openclaw",
+      "id": "generic-agent",
       "kind": "agent"
     },
     "workspace": "../..",
@@ -19,7 +19,7 @@
         "command": [
           "sh",
           "-lc",
-          "echo \"erebor session=$EREBOR_SESSION_ID actor=$EREBOR_ACTOR_ID browser=$EREBOR_BROWSER_CDP_URL guard=$EREBOR_PROCESS_GUARD\"; ls -la /workspace | head"
+          "echo \"erebor session=$EREBOR_SESSION_ID actor=$EREBOR_ACTOR_ID guard=$EREBOR_PROCESS_GUARD\"; ls -la /workspace | head"
         ]
       },
       {
@@ -52,14 +52,7 @@
   "surfaces": {
     "terminal": {
       "enabled": true,
-      "tty": true
-    },
-    "browser_cdp": {
-      "enabled": true,
-      "listen": "127.0.0.1:0",
-      "browser": {
-        "headless": true
-      }
+      "tty": false
     }
   }
 }
