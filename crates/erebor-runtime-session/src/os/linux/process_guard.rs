@@ -1,0 +1,707 @@
+#![allow(unsafe_code)]
+
+use std::{
+    collections::HashMap,
+    env,
+    ffi::{CStr, CString},
+    fs::OpenOptions,
+    io::Write,
+    os::{
+        raw::{c_char, c_int, c_long, c_uint, c_ulong, c_void},
+        unix::ffi::OsStringExt,
+    },
+    path::PathBuf,
+    process,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+compile_error!("Erebor's Linux process guard currently supports x86_64 Linux only");
+
+const MAX_RULES: usize = 64;
+const MAX_ARGV: usize = 32;
+const MAX_TEXT: usize = 4096;
+const MAX_STRING: usize = 512;
+
+const PTRACE_TRACEME: c_uint = 0;
+const PTRACE_PEEKDATA: c_uint = 2;
+const PTRACE_GETREGS: c_uint = 12;
+const PTRACE_SETREGS: c_uint = 13;
+const PTRACE_SYSCALL: c_uint = 24;
+const PTRACE_SETOPTIONS: c_uint = 0x4200;
+const PTRACE_GETEVENTMSG: c_uint = 0x4201;
+
+const PTRACE_O_TRACESYSGOOD: c_ulong = 1;
+const PTRACE_O_TRACEFORK: c_ulong = 1 << 1;
+const PTRACE_O_TRACEVFORK: c_ulong = 1 << 2;
+const PTRACE_O_TRACECLONE: c_ulong = 1 << 3;
+const PTRACE_O_TRACEEXEC: c_ulong = 1 << 4;
+const PTRACE_O_TRACEEXIT: c_ulong = 1 << 6;
+
+const PTRACE_EVENT_FORK: u32 = 1;
+const PTRACE_EVENT_VFORK: u32 = 2;
+const PTRACE_EVENT_CLONE: u32 = 3;
+const PTRACE_EVENT_EXEC: u32 = 4;
+const PTRACE_EVENT_EXIT: u32 = 6;
+const PTRACE_EVENT_STOP: u32 = 128;
+
+const SYS_EXECVE: u64 = 59;
+const SYS_EXECVEAT: u64 = 322;
+
+const SIGSTOP: c_int = 19;
+const SIGTRAP: c_int = 5;
+const EINTR: c_int = 4;
+const ENOENT: c_int = 2;
+const EPERM: c_int = 1;
+const ESRCH: c_int = 3;
+const WAIT_ALL_TRACED: c_int = 0x4000_0000;
+
+type Pid = c_int;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct UserRegsStruct {
+    r15: u64,
+    r14: u64,
+    r13: u64,
+    r12: u64,
+    rbp: u64,
+    rbx: u64,
+    r11: u64,
+    r10: u64,
+    r9: u64,
+    r8: u64,
+    rax: u64,
+    rcx: u64,
+    rdx: u64,
+    rsi: u64,
+    rdi: u64,
+    orig_rax: u64,
+    rip: u64,
+    cs: u64,
+    eflags: u64,
+    rsp: u64,
+    ss: u64,
+    fs_base: u64,
+    gs_base: u64,
+    ds: u64,
+    es: u64,
+    fs: u64,
+    gs: u64,
+}
+
+#[derive(Clone, Debug)]
+struct DenyRule {
+    token: String,
+    reason: String,
+    rule_id: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct PidState {
+    in_syscall: bool,
+    denied_pending: bool,
+}
+
+struct TraceContext {
+    rules: Vec<DenyRule>,
+    states: HashMap<Pid, PidState>,
+    audit_seq: u64,
+    root_pid: Pid,
+    live_traces: usize,
+}
+
+unsafe extern "C" {
+    fn ptrace(request: c_uint, pid: Pid, address: *mut c_void, data: *mut c_void) -> c_long;
+    fn waitpid(pid: Pid, status: *mut c_int, options: c_int) -> Pid;
+    fn fork() -> Pid;
+    fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
+    fn raise(signal: c_int) -> c_int;
+    fn _exit(status: c_int) -> !;
+    fn strerror(error: c_int) -> *mut c_char;
+    fn __errno_location() -> *mut c_int;
+}
+
+fn main() {
+    let command = match command_args() {
+        Ok(command) => command,
+        Err(error) => die(&error),
+    };
+    let rules = parse_rules();
+
+    let child = unsafe { fork() };
+    if child < 0 {
+        die(&format!("fork failed: {}", errno_message(errno())));
+    }
+
+    if child == 0 {
+        child_exec(command);
+    }
+
+    let mut context = TraceContext {
+        rules,
+        states: HashMap::from([(child, PidState::default())]),
+        audit_seq: 0,
+        root_pid: child,
+        live_traces: 1,
+    };
+
+    wait_for_initial_stop(child);
+    set_trace_options(child);
+    continue_trace(child, 0);
+
+    process::exit(trace_loop(&mut context));
+}
+
+fn command_args() -> Result<Vec<CString>, String> {
+    let mut args = Vec::new();
+    for arg in env::args_os().skip(1) {
+        let bytes = arg.into_vec();
+        let c_string = CString::new(bytes)
+            .map_err(|_| String::from("session command contains a NUL byte"))?;
+        args.push(c_string);
+    }
+
+    if args.is_empty() {
+        Err(String::from("missing session command"))
+    } else {
+        Ok(args)
+    }
+}
+
+fn child_exec(command: Vec<CString>) -> ! {
+    let mut argv = command
+        .iter()
+        .map(|argument| argument.as_ptr())
+        .collect::<Vec<_>>();
+    argv.push(std::ptr::null());
+
+    if unsafe {
+        ptrace(
+            PTRACE_TRACEME,
+            0,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    } != 0
+    {
+        die(&format!("PTRACE_TRACEME failed: {}", errno_message(errno())));
+    }
+    unsafe {
+        raise(SIGSTOP);
+        execvp(command[0].as_ptr(), argv.as_ptr());
+    }
+
+    let error = errno();
+    eprintln!(
+        "erebor linux process guard: failed to exec {}: {}",
+        command[0].to_string_lossy(),
+        errno_message(error)
+    );
+    unsafe {
+        _exit(if error == ENOENT { 127 } else { 126 });
+    }
+}
+
+fn wait_for_initial_stop(child: Pid) {
+    let mut status = 0;
+    let waited = unsafe { waitpid(child, &mut status, 0) };
+    if waited < 0 {
+        die(&format!("initial waitpid failed: {}", errno_message(errno())));
+    }
+    if !wait_stopped(status) {
+        die("child did not stop for tracing");
+    }
+}
+
+fn trace_loop(context: &mut TraceContext) -> i32 {
+    let mut root_status = 1;
+
+    while context.live_traces > 0 {
+        let mut status = 0;
+        let pid = unsafe { waitpid(-1, &mut status, WAIT_ALL_TRACED) };
+        if pid < 0 {
+            let error = errno();
+            if error == EINTR {
+                continue;
+            }
+            die(&format!("waitpid failed: {}", errno_message(error)));
+        }
+
+        if wait_exited(status) || wait_signaled(status) {
+            if pid == context.root_pid {
+                root_status = if wait_exited(status) {
+                    wait_exit_status(status)
+                } else {
+                    128 + wait_term_signal(status)
+                };
+            }
+            context.states.remove(&pid);
+            context.live_traces = context.live_traces.saturating_sub(1);
+            continue;
+        }
+
+        if !wait_stopped(status) {
+            continue_trace(pid, 0);
+            continue;
+        }
+
+        let stop_signal = wait_stop_signal(status);
+        let event = ptrace_event(status);
+
+        if matches!(
+            event,
+            PTRACE_EVENT_FORK | PTRACE_EVENT_VFORK | PTRACE_EVENT_CLONE
+        ) {
+            let mut new_pid: c_ulong = 0;
+            let result = unsafe {
+                ptrace(
+                    PTRACE_GETEVENTMSG,
+                    pid,
+                    std::ptr::null_mut(),
+                    &mut new_pid as *mut c_ulong as *mut c_void,
+                )
+            };
+            if result == 0 && new_pid != 0 {
+                context.states.entry(new_pid as Pid).or_default();
+                context.live_traces += 1;
+            }
+            continue_trace(pid, 0);
+            continue;
+        }
+
+        if matches!(
+            event,
+            PTRACE_EVENT_EXEC | PTRACE_EVENT_EXIT | PTRACE_EVENT_STOP
+        ) {
+            continue_trace(pid, 0);
+            continue;
+        }
+
+        if stop_signal == (SIGTRAP | 0x80) {
+            handle_syscall_stop(context, pid);
+            continue_trace(pid, 0);
+            continue;
+        }
+
+        if stop_signal == SIGSTOP || stop_signal == SIGTRAP {
+            continue_trace(pid, 0);
+        } else {
+            continue_trace(pid, stop_signal);
+        }
+    }
+
+    root_status
+}
+
+fn handle_syscall_stop(context: &mut TraceContext, pid: Pid) {
+    let mut regs = UserRegsStruct::default();
+    let get_result = unsafe {
+        ptrace(
+            PTRACE_GETREGS,
+            pid,
+            std::ptr::null_mut(),
+            &mut regs as *mut UserRegsStruct as *mut c_void,
+        )
+    };
+    if get_result != 0 {
+        return;
+    }
+
+    let entering_syscall = match context.states.get_mut(&pid) {
+        Some(state) => {
+            if state.in_syscall {
+                false
+            } else {
+                state.in_syscall = true;
+                true
+            }
+        }
+        None => return,
+    };
+
+    if entering_syscall {
+        if regs.orig_rax == SYS_EXECVE || regs.orig_rax == SYS_EXECVEAT {
+            let deny = should_deny_exec(context, pid, &regs, regs.orig_rax == SYS_EXECVEAT);
+            if deny {
+                regs.orig_rax = (-1i64) as u64;
+                regs.rax = (-(EPERM as i64)) as u64;
+                if let Some(state) = context.states.get_mut(&pid) {
+                    state.denied_pending = true;
+                }
+                set_regs(pid, &regs);
+            }
+        }
+    } else {
+        if let Some(state) = context.states.get_mut(&pid) {
+            if state.denied_pending {
+                regs.rax = (-(EPERM as i64)) as u64;
+                state.denied_pending = false;
+                set_regs(pid, &regs);
+            }
+            state.in_syscall = false;
+        }
+    }
+}
+
+fn should_deny_exec(
+    context: &mut TraceContext,
+    pid: Pid,
+    regs: &UserRegsStruct,
+    is_execveat: bool,
+) -> bool {
+    let path_address = if is_execveat { regs.rsi } else { regs.rdi };
+    let argv_address = if is_execveat { regs.rdx } else { regs.rsi };
+    let path = read_cstring(pid, path_address, MAX_STRING);
+    let argv = read_argv(pid, argv_address);
+    let text = command_text(&path, &argv);
+    let rule = context
+        .rules
+        .iter()
+        .find(|rule| text.contains(&rule.token))
+        .cloned();
+
+    context.audit_seq += 1;
+    write_audit(context.audit_seq, pid, &path, &argv, &text, rule.as_ref());
+
+    if let Some(rule) = rule {
+        eprintln!(
+            "erebor linux process guard: denied exec: {}: {}",
+            text, rule.reason
+        );
+        true
+    } else {
+        false
+    }
+}
+
+fn set_trace_options(pid: Pid) {
+    let options = PTRACE_O_TRACESYSGOOD
+        | PTRACE_O_TRACEFORK
+        | PTRACE_O_TRACEVFORK
+        | PTRACE_O_TRACECLONE
+        | PTRACE_O_TRACEEXEC
+        | PTRACE_O_TRACEEXIT;
+    let result = unsafe {
+        ptrace(
+            PTRACE_SETOPTIONS,
+            pid,
+            std::ptr::null_mut(),
+            options as usize as *mut c_void,
+        )
+    };
+    if result != 0 {
+        die(&format!(
+            "failed to set ptrace options for pid {}: {}",
+            pid,
+            errno_message(errno())
+        ));
+    }
+}
+
+fn continue_trace(pid: Pid, signal_to_deliver: c_int) {
+    let result = unsafe {
+        ptrace(
+            PTRACE_SYSCALL,
+            pid,
+            std::ptr::null_mut(),
+            signal_to_deliver as isize as *mut c_void,
+        )
+    };
+    if result != 0 && errno() != ESRCH {
+        eprintln!(
+            "erebor linux process guard: failed to continue pid {}: {}",
+            pid,
+            errno_message(errno())
+        );
+    }
+}
+
+fn set_regs(pid: Pid, regs: &UserRegsStruct) {
+    unsafe {
+        ptrace(
+            PTRACE_SETREGS,
+            pid,
+            std::ptr::null_mut(),
+            regs as *const UserRegsStruct as *mut c_void,
+        );
+    }
+}
+
+fn read_argv(pid: Pid, argv_address: u64) -> Vec<String> {
+    if argv_address == 0 {
+        return Vec::new();
+    }
+
+    let mut argv = Vec::new();
+    for index in 0..MAX_ARGV {
+        let pointer_address = argv_address + (index * std::mem::size_of::<u64>()) as u64;
+        let Some(pointer) = read_pointer(pid, pointer_address) else {
+            break;
+        };
+        if pointer == 0 {
+            break;
+        }
+        let argument = read_cstring(pid, pointer, 256);
+        if argument.is_empty() {
+            break;
+        }
+        argv.push(argument);
+    }
+    argv
+}
+
+fn read_pointer(pid: Pid, address: u64) -> Option<u64> {
+    ptrace_peek(pid, address).map(|value| value as u64)
+}
+
+fn read_cstring(pid: Pid, address: u64, size: usize) -> String {
+    if address == 0 || size == 0 {
+        return String::new();
+    }
+
+    let mut bytes = Vec::new();
+    let word_size = std::mem::size_of::<c_long>();
+    while bytes.len() + 1 < size {
+        let Some(word) = ptrace_peek(pid, address + bytes.len() as u64) else {
+            break;
+        };
+        for byte in word.to_ne_bytes() {
+            if bytes.len() + 1 >= size {
+                break;
+            }
+            if byte == 0 {
+                return String::from_utf8_lossy(&bytes).to_string();
+            }
+            bytes.push(byte);
+        }
+        if word_size == 0 {
+            break;
+        }
+    }
+
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+fn ptrace_peek(pid: Pid, address: u64) -> Option<c_long> {
+    set_errno(0);
+    let value = unsafe {
+        ptrace(
+            PTRACE_PEEKDATA,
+            pid,
+            address as usize as *mut c_void,
+            std::ptr::null_mut(),
+        )
+    };
+    if errno() == 0 {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn command_text(path: &str, argv: &[String]) -> String {
+    let mut text = String::new();
+    text.push_str(path);
+    for argument in argv {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(argument);
+        if text.len() >= MAX_TEXT {
+            text.truncate(MAX_TEXT);
+            break;
+        }
+    }
+    text
+}
+
+fn parse_rules() -> Vec<DenyRule> {
+    let source = env::var("EREBOR_GUARD_DENY_RULES").unwrap_or_default();
+    source
+        .lines()
+        .take(MAX_RULES)
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let token = fields.next().unwrap_or_default();
+            if token.is_empty() {
+                return None;
+            }
+            Some(DenyRule {
+                token: token.to_owned(),
+                reason: fields
+                    .next()
+                    .filter(|reason| !reason.is_empty())
+                    .unwrap_or("process execution denied by Erebor policy")
+                    .to_owned(),
+                rule_id: fields
+                    .next()
+                    .filter(|rule_id| !rule_id.is_empty())
+                    .unwrap_or("erebor-linux-process-guard")
+                    .to_owned(),
+            })
+        })
+        .collect()
+}
+
+fn write_audit(
+    sequence: u64,
+    pid: Pid,
+    path: &str,
+    argv: &[String],
+    text: &str,
+    rule: Option<&DenyRule>,
+) {
+    let audit_path = match env::var("EREBOR_GUARD_AUDIT_JSONL") {
+        Ok(path) if !path.is_empty() => path,
+        _ => return,
+    };
+
+    let Ok(mut file) = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&audit_path)
+    else {
+        eprintln!(
+            "erebor linux process guard: failed to open audit log {}: {}",
+            audit_path,
+            errno_message(errno())
+        );
+        return;
+    };
+
+    let session_id = env::var("EREBOR_SESSION_ID").unwrap_or_else(|_| String::from("unknown-session"));
+    let actor_id = env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent"));
+    let tty = env::var("EREBOR_TERMINAL_TTY").unwrap_or_else(|_| String::from("false"));
+    let cwd = env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("<unknown>"))
+        .display()
+        .to_string();
+    let event_id = format!("{session_id}-process-exec-{pid}-{sequence}");
+    let decision = if rule.is_some() { "deny" } else { "allow" };
+    let risk = if rule.is_some() { "high" } else { "medium" };
+    let reason = rule.map_or("agent-issued process execution attempt", |rule| {
+        rule.reason.as_str()
+    });
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+
+    let _ = write!(
+        file,
+        "{{\"event\":{{\"id\":{},\"session_id\":{},\"actor\":{{\"id\":{},\"kind\":\"agent\"}},\"surface\":\"terminal\",\"action\":\"process_exec\",\"target\":{{\"label\":{},\"uri\":null}},\"payload\":{{\"kind\":\"agent_process_exec_attempt\",\"terminal\":{{\"surface\":\"terminal\",\"tty\":{},\"mediation_path\":\"linux_ptrace\"}},\"working_directory\":{},\"parent_process\":\"linux-process-guard\",\"argv_summary\":{},\"command\":[",
+        json_string(&event_id),
+        json_string(&session_id),
+        json_string(&actor_id),
+        json_string(path),
+        if tty == "true" { "true" } else { "false" },
+        json_string(&cwd),
+        json_string(text)
+    );
+    for (index, argument) in argv.iter().enumerate() {
+        if index > 0 {
+            let _ = write!(file, ",");
+        }
+        let _ = write!(file, "{}", json_string(argument));
+    }
+    let _ = write!(
+        file,
+        "]}},\"risk\":{{\"level\":\"{}\",\"reasons\":[{}]}},\"timestamp\":\"unix:{}\"}},\"policy_decision\":{{\"type\":\"{}\"",
+        risk,
+        json_string(reason),
+        timestamp,
+        decision
+    );
+    if let Some(rule) = rule {
+        let _ = write!(
+            file,
+            ",\"reason\":{},\"rule_id\":{}",
+            json_string(&rule.reason),
+            json_string(&rule.rule_id)
+        );
+    }
+    let _ = write!(file, "}},\"final_decision\":{{\"type\":\"{}\"", decision);
+    if let Some(rule) = rule {
+        let _ = write!(
+            file,
+            ",\"reason\":{},\"rule_id\":{}",
+            json_string(&rule.reason),
+            json_string(&rule.rule_id)
+        );
+    }
+    let _ = writeln!(file, "}}}}");
+}
+
+fn json_string(value: &str) -> String {
+    let mut output = String::from("\"");
+    for character in value.chars() {
+        match character {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            character if character < ' ' => {
+                output.push_str(&format!("\\u{:04x}", character as u32));
+            }
+            character => output.push(character),
+        }
+    }
+    output.push('"');
+    output
+}
+
+fn wait_exited(status: c_int) -> bool {
+    status & 0x7f == 0
+}
+
+fn wait_exit_status(status: c_int) -> c_int {
+    (status >> 8) & 0xff
+}
+
+fn wait_signaled(status: c_int) -> bool {
+    let term_signal = status & 0x7f;
+    term_signal != 0 && term_signal != 0x7f
+}
+
+fn wait_term_signal(status: c_int) -> c_int {
+    status & 0x7f
+}
+
+fn wait_stopped(status: c_int) -> bool {
+    status & 0xff == 0x7f
+}
+
+fn wait_stop_signal(status: c_int) -> c_int {
+    (status >> 8) & 0xff
+}
+
+fn ptrace_event(status: c_int) -> u32 {
+    (status as u32) >> 16
+}
+
+fn errno() -> c_int {
+    unsafe { *__errno_location() }
+}
+
+fn set_errno(value: c_int) {
+    unsafe {
+        *__errno_location() = value;
+    }
+}
+
+fn errno_message(error: c_int) -> String {
+    let pointer = unsafe { strerror(error) };
+    if pointer.is_null() {
+        format!("errno {error}")
+    } else {
+        unsafe { CStr::from_ptr(pointer) }
+            .to_string_lossy()
+            .to_string()
+    }
+}
+
+fn die(message: &str) -> ! {
+    eprintln!("erebor linux process guard: {message}");
+    process::exit(127);
+}

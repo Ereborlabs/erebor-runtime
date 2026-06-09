@@ -19,10 +19,10 @@ use erebor_runtime_terminal::{compile_terminal_process_guard_rules, TerminalSurf
 use snafu::Location;
 use thiserror::Error;
 
-const DOCKER_PROCESS_GUARD: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/erebor-docker-process-guard"));
+const LINUX_PROCESS_GUARD: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/erebor-linux-process-guard"));
 const DOCKER_GUARD_DIR: &str = "/erebor/guard";
-const DOCKER_GUARD_PATH: &str = "/erebor/guard/erebor-docker-process-guard";
+const LINUX_PROCESS_GUARD_PATH: &str = "/erebor/guard/erebor-linux-process-guard";
 const DOCKER_AUDIT_DIR: &str = "/erebor/audit";
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -165,7 +165,7 @@ fn start_session_side_resources(
                 ));
             }
             SessionSurfaceDefinition::Terminal(config) => {
-                let bundle = DockerProcessGuardBundle::prepare(config, plan)?;
+                let bundle = LinuxProcessGuardBundle::prepare(config, plan)?;
                 docker_options = bundle.docker_options().clone();
                 guard_bundle = Some(bundle);
                 environment.push((
@@ -239,31 +239,31 @@ fn read_policy_set(paths: &[PathBuf]) -> Result<PolicySet, SessionExecutionError
     Ok(PolicySet::from_policies(policies))
 }
 
-struct DockerProcessGuardBundle {
+struct LinuxProcessGuardBundle {
     host_dir: PathBuf,
     docker_options: DockerSessionCommandOptions,
 }
 
-impl DockerProcessGuardBundle {
+impl LinuxProcessGuardBundle {
     fn prepare(
         config: &TerminalSurfaceConfig,
         plan: &SessionRunPlan,
     ) -> Result<Self, SessionExecutionError> {
         let host_dir = std::env::temp_dir().join(format!(
-            "erebor-process-guard-{}-{}",
+            "erebor-linux-process-guard-{}-{}",
             plan.session_id().as_str(),
             std::process::id()
         ));
         fs::create_dir_all(&host_dir).map_err(SessionExecutionError::guard_io)?;
-        let guard_path = host_dir.join("erebor-docker-process-guard");
-        fs::write(&guard_path, DOCKER_PROCESS_GUARD).map_err(SessionExecutionError::guard_io)?;
+        let guard_path = host_dir.join("erebor-linux-process-guard");
+        fs::write(&guard_path, LINUX_PROCESS_GUARD).map_err(SessionExecutionError::guard_io)?;
         fs::set_permissions(&guard_path, fs::Permissions::from_mode(0o755))
             .map_err(SessionExecutionError::guard_io)?;
 
         let mut options = DockerSessionCommandOptions::new()
             .with_mount(DockerSessionMount::new(&host_dir, DOCKER_GUARD_DIR).read_only())
-            .with_entrypoint(DOCKER_GUARD_PATH)
-            .with_environment("EREBOR_PROCESS_GUARD", "ptrace")
+            .with_entrypoint(LINUX_PROCESS_GUARD_PATH)
+            .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
             .with_environment("EREBOR_TERMINAL_TTY", plan.terminal().tty().to_string())
             .with_environment(
                 "EREBOR_GUARD_DENY_RULES",
@@ -302,7 +302,7 @@ impl DockerProcessGuardBundle {
     }
 }
 
-impl Drop for DockerProcessGuardBundle {
+impl Drop for LinuxProcessGuardBundle {
     fn drop(&mut self) {
         let _result = fs::remove_dir_all(&self.host_dir);
     }
@@ -357,7 +357,7 @@ fn format_endpoints(runtimes: &[erebor_runtime_core::RunningSessionSurface]) -> 
 struct SessionSideResources {
     environment: Vec<(String, String)>,
     docker_options: DockerSessionCommandOptions,
-    _guard_bundle: Option<DockerProcessGuardBundle>,
+    _guard_bundle: Option<LinuxProcessGuardBundle>,
     _supervisor: Option<SessionSurfaceSupervisor>,
 }
 
@@ -401,12 +401,12 @@ pub enum SessionExecutionError {
     },
     #[error("guarded session diagnostic failed: {reason}")]
     DiagnosticFailed { reason: String, location: Location },
-    #[error("Docker process guard I/O failed: {source}")]
+    #[error("Linux process guard I/O failed: {source}")]
     GuardIo {
         source: io::Error,
         location: Location,
     },
-    #[error("Docker process guard config is invalid: {reason}")]
+    #[error("Linux process guard config is invalid: {reason}")]
     GuardConfig { reason: String, location: Location },
 }
 

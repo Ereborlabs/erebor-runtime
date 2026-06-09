@@ -2,7 +2,7 @@ use std::process::Command;
 use std::{env, path::PathBuf, process};
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/docker_process_guard.c");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard.rs");
 
     let out_dir = match env::var("OUT_DIR") {
         Ok(out_dir) => PathBuf::from(out_dir),
@@ -11,32 +11,35 @@ fn main() {
             process::exit(1);
         }
     };
-    let guard = out_dir.join("erebor-docker-process-guard");
+    let guard = out_dir.join("erebor-linux-process-guard");
     let Some(guard) = guard.to_str() else {
         eprintln!("Cargo OUT_DIR path is not valid UTF-8 for guard build");
         process::exit(1);
     };
-    let status = match Command::new("cc")
+    let status = match Command::new("rustc")
         .args([
-            "-static",
-            "-O2",
-            "-Wall",
-            "-Wextra",
+            "--edition=2021",
+            "-C",
+            "opt-level=2",
+            "-C",
+            "target-feature=+crt-static",
+            "-C",
+            "panic=abort",
             "-o",
             guard,
-            "src/docker_process_guard.c",
+            "src/os/linux/process_guard.rs",
         ])
         .status()
     {
         Ok(status) => status,
         Err(error) => {
-            eprintln!("failed to invoke cc for Docker process guard: {error}");
+            eprintln!("failed to invoke rustc for Linux process guard: {error}");
             process::exit(1);
         }
     };
 
     if !status.success() {
-        eprintln!("failed to compile Docker process guard");
+        eprintln!("failed to compile Linux process guard");
         process::exit(1);
     }
 }
