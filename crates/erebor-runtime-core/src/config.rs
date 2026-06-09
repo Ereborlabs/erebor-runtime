@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     net::SocketAddr,
     path::{Path, PathBuf},
 };
@@ -159,6 +160,8 @@ pub struct SessionLayerConfig {
     #[serde(default)]
     pub workspace: Option<PathBuf>,
     #[serde(default)]
+    pub diagnostics: Vec<SessionDiagnosticLayerConfig>,
+    #[serde(default)]
     pub runtime: SessionRuntimeLayerConfig,
 }
 
@@ -176,7 +179,23 @@ impl SessionLayerConfig {
             return Err(RuntimeConfigError::empty_session_workspace());
         }
 
+        let mut diagnostics = HashSet::new();
+        for diagnostic in &self.diagnostics {
+            diagnostic.validate()?;
+            if !diagnostics.insert(diagnostic.name.clone()) {
+                return Err(RuntimeConfigError::duplicate_session_diagnostic_name(
+                    diagnostic.name.clone(),
+                ));
+            }
+        }
+
         self.runtime.validate()
+    }
+
+    fn diagnostic(&self, name: &str) -> Option<&SessionDiagnosticLayerConfig> {
+        self.diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.name == name)
     }
 }
 
@@ -194,6 +213,35 @@ impl Default for SessionActorLayerConfig {
             id: default_session_actor_id(),
             kind: default_session_actor_kind(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct SessionDiagnosticLayerConfig {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub command: Vec<String>,
+}
+
+impl SessionDiagnosticLayerConfig {
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        if self.name.trim().is_empty() {
+            return Err(RuntimeConfigError::empty_session_diagnostic_name());
+        }
+
+        if self.command.is_empty()
+            || self
+                .command
+                .iter()
+                .any(|argument| argument.trim().is_empty())
+        {
+            return Err(RuntimeConfigError::empty_session_diagnostic_command(
+                self.name.clone(),
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -271,6 +319,7 @@ pub struct SessionRunPlan {
     workspace: Option<PathBuf>,
     runtime: SessionRuntimeConfig,
     command: Vec<String>,
+    diagnostic: Option<String>,
 }
 
 impl SessionRunPlan {
@@ -298,7 +347,27 @@ impl SessionRunPlan {
             workspace: config.session.workspace.clone(),
             runtime: runtime.into(),
             command,
+            diagnostic: None,
         })
+    }
+
+    pub fn from_diagnostic(
+        config: &RuntimeConfig,
+        runtime_kind: SessionRuntimeKind,
+        session_id: SessionId,
+        diagnostic_name: &str,
+    ) -> Result<Self, RuntimeConfigError> {
+        config.validate()?;
+
+        let diagnostic = config
+            .session
+            .diagnostic(diagnostic_name)
+            .ok_or_else(|| RuntimeConfigError::unknown_session_diagnostic(diagnostic_name))?;
+        let mut plan =
+            Self::from_config(config, runtime_kind, session_id, diagnostic.command.clone())?;
+        plan.diagnostic = Some(diagnostic.name.clone());
+
+        Ok(plan)
     }
 
     #[must_use]
@@ -334,6 +403,11 @@ impl SessionRunPlan {
     #[must_use]
     pub fn command(&self) -> &[String] {
         &self.command
+    }
+
+    #[must_use]
+    pub fn diagnostic(&self) -> Option<&str> {
+        self.diagnostic.as_deref()
     }
 }
 
@@ -932,6 +1006,119 @@ mod tests {
             ]
         );
         Ok(())
+    }
+
+    #[test]
+    fn creates_session_run_plan_from_named_diagnostic() -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "actor": { "id": "openclaw" },
+                "diagnostics": [
+                  {
+                    "name": "list-workspace",
+                    "description": "List workspace files",
+                    "command": ["sh", "-lc", "ls -la /workspace | head"]
+                  }
+                ],
+                "runtime": {
+                  "docker": {
+                    "image": "alpine:3.20",
+                    "network": "none",
+                    "workdir": "/workspace"
+                  }
+                }
+              }
+            }
+            "#,
+        )?;
+
+        let plan = SessionRunPlan::from_diagnostic(
+            &config,
+            SessionRuntimeKind::Docker,
+            SessionId::new("session-1"),
+            "list-workspace",
+        )?;
+
+        assert_eq!(plan.diagnostic(), Some("list-workspace"));
+        assert_eq!(plan.command(), ["sh", "-lc", "ls -la /workspace | head"]);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_unknown_session_diagnostic() -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": { "enabled": true }
+            }
+            "#,
+        )?;
+
+        let error = SessionRunPlan::from_diagnostic(
+            &config,
+            SessionRuntimeKind::Docker,
+            SessionId::new("session-1"),
+            "list-workspace",
+        );
+
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::UnknownSessionDiagnostic { name, .. })
+                if name == "list-workspace"
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_duplicate_session_diagnostic_names() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "diagnostics": [
+                  { "name": "status", "command": ["true"] },
+                  { "name": "status", "command": ["true"] }
+                ]
+              }
+            }
+            "#,
+        );
+
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::DuplicateSessionDiagnosticName { name, .. })
+                if name == "status"
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_session_diagnostic_command() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "diagnostics": [
+                  { "name": "status", "command": [] }
+                ]
+              }
+            }
+            "#,
+        );
+
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::EmptySessionDiagnosticCommand { name, .. })
+                if name == "status"
+        ));
     }
 
     #[test]

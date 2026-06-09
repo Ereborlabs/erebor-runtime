@@ -89,6 +89,15 @@ impl fmt::Display for Command {
                 args.config.display(),
                 args.command.join(" ")
             ),
+            Self::Session(SessionArgs {
+                command: SessionCommand::Diagnose(args),
+            }) => write!(
+                formatter,
+                "session diagnose runtime={} config={} name={}",
+                args.runtime.as_str(),
+                args.config.display(),
+                args.name
+            ),
             Self::Dev(DevArgs {
                 command: DevCommand::ProxyCdp(args),
             }) => {
@@ -134,6 +143,8 @@ struct SessionArgs {
 enum SessionCommand {
     /// Run an agent or command inside a governed session runtime.
     Run(SessionRunArgs),
+    /// Run a named bounded diagnostic from the session config.
+    Diagnose(SessionDiagnoseArgs),
 }
 
 #[derive(Debug, Args)]
@@ -147,6 +158,18 @@ struct SessionRunArgs {
     /// Command to execute inside the governed session runtime.
     #[arg(required = true, trailing_var_arg = true, num_args = 1..)]
     command: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct SessionDiagnoseArgs {
+    /// Session runtime config describing policies, audit, and diagnostics.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    config: PathBuf,
+    /// Concrete session runtime to use.
+    #[arg(long, value_enum)]
+    runtime: SessionRuntimeArg,
+    /// Named diagnostic from the session config.
+    name: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -388,22 +411,32 @@ fn start_runtime(args: &StartArgs) -> Result<(), CliError> {
 fn execute_session(args: &SessionArgs) -> Result<(), CliError> {
     match &args.command {
         SessionCommand::Run(args) => session_run(args),
+        SessionCommand::Diagnose(args) => session_diagnose(args),
     }
 }
 
 fn session_run(args: &SessionRunArgs) -> Result<(), CliError> {
     let plan = build_session_run_plan(args)?;
+    execute_session_run_plan(&plan)
+}
+
+fn session_diagnose(args: &SessionDiagnoseArgs) -> Result<(), CliError> {
+    let plan = build_session_diagnose_plan(args)?;
+    execute_session_run_plan(&plan)
+}
+
+fn execute_session_run_plan(plan: &SessionRunPlan) -> Result<(), CliError> {
     let policy_set = read_policy_set(plan.policies())?;
     let engine = LocalEnforcementEngine::with_hooks(
         policy_set,
         DenyApprovalProvider,
         ConfiguredAuditSink::from_config(plan.audit()),
     );
-    let event = session_process_event(&plan);
+    let event = session_process_event(plan);
     let outcome = engine.enforce(&event).map_err(CliError::runtime)?;
 
     match outcome.final_decision {
-        Decision::Allow { .. } => launch_docker_session(&plan),
+        Decision::Allow { .. } => launch_docker_session(plan),
         Decision::Deny { reason, .. } => Err(CliError::session_denied(reason)),
         Decision::RequireApproval { reason, .. } => Err(CliError::session_denied(reason)),
     }
@@ -419,6 +452,13 @@ fn build_session_run_plan(args: &SessionRunArgs) -> Result<SessionRunPlan, CliEr
         args.command.clone(),
     )
     .map_err(CliError::invalid_config)
+}
+
+fn build_session_diagnose_plan(args: &SessionDiagnoseArgs) -> Result<SessionRunPlan, CliError> {
+    let config = read_runtime_config(&args.config)?;
+    let session_id = SessionId::new(format!("session-{}", std::process::id()));
+    SessionRunPlan::from_diagnostic(&config, args.runtime.into(), session_id, &args.name)
+        .map_err(CliError::invalid_config)
 }
 
 fn launch_docker_session(plan: &SessionRunPlan) -> Result<(), CliError> {
@@ -477,6 +517,7 @@ fn session_process_event(plan: &SessionRunPlan) -> RuntimeEvent {
                 "workdir": plan.runtime().docker().workdir(),
             },
             "workspace": plan.workspace(),
+            "diagnostic": plan.diagnostic(),
             "command": command,
         }),
         risk: RiskMetadata {
@@ -771,8 +812,9 @@ mod tests {
     use erebor_runtime_core::{GovernanceLayer, RuntimeDefinition, RuntimeError};
 
     use super::{
-        build_dev_proxy_launch_plan, build_runtime_launch_plan, build_session_run_plan, Cli,
-        CliError, ProxyCdpArgs, SessionRunArgs, SessionRuntimeArg, StartArgs, WebSocketUrl,
+        build_dev_proxy_launch_plan, build_runtime_launch_plan, build_session_diagnose_plan,
+        build_session_run_plan, Cli, CliError, ProxyCdpArgs, SessionDiagnoseArgs, SessionRunArgs,
+        SessionRuntimeArg, StartArgs, WebSocketUrl,
     };
 
     #[test]
@@ -808,6 +850,22 @@ mod tests {
             "pilot-session.json",
             "openclaw",
             "--help",
+        ]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn accepts_session_diagnose_with_runtime_config_and_name() {
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "diagnose",
+            "--runtime",
+            "docker",
+            "--config",
+            "pilot-session.json",
+            "list-workspace",
         ]);
 
         assert!(cli.is_ok());
@@ -965,6 +1023,49 @@ mod tests {
         );
         assert_eq!(plan.runtime().docker().network(), "none");
         assert_eq!(plan.command(), ["openclaw", "--help"]);
+
+        let _result = fs::remove_file(config_path);
+        Ok(())
+    }
+
+    #[test]
+    fn session_diagnose_builds_named_diagnostic_plan() -> Result<(), Box<dyn std::error::Error>> {
+        let config_path = write_temp_file(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "actor": { "id": "openclaw", "kind": "agent" },
+                "diagnostics": [
+                  {
+                    "name": "list-workspace",
+                    "command": ["sh", "-lc", "ls -la /workspace | head"]
+                  }
+                ],
+                "runtime": {
+                  "kind": "docker",
+                  "docker": {
+                    "image": "alpine:3.20",
+                    "network": "none",
+                    "workdir": "/workspace"
+                  }
+                }
+              }
+            }
+            "#,
+        )?;
+        let args = SessionDiagnoseArgs {
+            config: config_path.clone(),
+            runtime: SessionRuntimeArg::Docker,
+            name: String::from("list-workspace"),
+        };
+
+        let plan = build_session_diagnose_plan(&args)?;
+
+        assert_eq!(plan.actor().id, "openclaw");
+        assert_eq!(plan.diagnostic(), Some("list-workspace"));
+        assert_eq!(plan.command(), ["sh", "-lc", "ls -la /workspace | head"]);
 
         let _result = fs::remove_file(config_path);
         Ok(())

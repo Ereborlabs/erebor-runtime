@@ -1,0 +1,33 @@
+{
+  "rules": [
+    {
+      "id": "deny-unmanaged-chrome-cdp-launch",
+      "match": {
+        "surface": "terminal",
+        "action": "process_exec",
+        "payload_contains": "remote-debugging-port"
+      },
+      "decision": "deny",
+      "reason": "unmanaged browser launch with raw CDP is denied"
+    },
+    {
+      "id": "deny-direct-chromium-launch",
+      "match": {
+        "surface": "terminal",
+        "action": "process_exec",
+        "payload_contains": "chromium"
+      },
+      "decision": "deny",
+      "reason": "direct Chromium launch must go through the Erebor-owned browser"
+    },
+    {
+      "id": "allow-session-smoke-diagnostics",
+      "match": {
+        "surface": "terminal",
+        "action": "process_exec",
+        "payload_contains": "list-workspace"
+      },
+      "decision": "allow"
+    }
+  ]
+}

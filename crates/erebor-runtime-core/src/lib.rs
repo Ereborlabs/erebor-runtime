@@ -12,8 +12,8 @@ pub use config::{
     BrowserLaunchLayerConfig, DockerSessionLaunchPlan, DockerSessionRuntimeConfig,
     DockerSessionRuntimeLayerConfig, GovernanceLayer, GovernanceLayerConfig, GovernanceLayers,
     RuntimeAuditConfig, RuntimeConfig, RuntimeStartPlan, SessionActorLayerConfig,
-    SessionLayerConfig, SessionRunPlan, SessionRuntimeConfig, SessionRuntimeKind,
-    SessionRuntimeLayerConfig,
+    SessionDiagnosticLayerConfig, SessionLayerConfig, SessionRunPlan, SessionRuntimeConfig,
+    SessionRuntimeKind, SessionRuntimeLayerConfig,
 };
 pub use engine::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,

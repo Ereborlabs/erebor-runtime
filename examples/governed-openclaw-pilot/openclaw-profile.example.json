@@ -1,0 +1,12 @@
+{
+  "browser": {
+    "enabled": true,
+    "defaultProfile": "erebor",
+    "profiles": {
+      "erebor": {
+        "cdpUrl": "<session-governed-cdp-url>",
+        "attachOnly": true
+      }
+    }
+  }
+}

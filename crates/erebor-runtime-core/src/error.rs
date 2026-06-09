@@ -23,6 +23,14 @@ pub enum RuntimeConfigError {
     EmptySessionActorId { location: Location },
     #[error("runtime config session workspace path cannot be empty")]
     EmptySessionWorkspace { location: Location },
+    #[error("runtime config session diagnostic name cannot be empty")]
+    EmptySessionDiagnosticName { location: Location },
+    #[error("runtime config session diagnostic `{name}` is duplicated")]
+    DuplicateSessionDiagnosticName { name: String, location: Location },
+    #[error("runtime config session diagnostic `{name}` command cannot be empty")]
+    EmptySessionDiagnosticCommand { name: String, location: Location },
+    #[error("runtime config session diagnostic `{name}` was not found")]
+    UnknownSessionDiagnostic { name: String, location: Location },
     #[error("runtime config Docker/OCI session runtime image cannot be empty")]
     EmptyDockerSessionImage { location: Location },
     #[error("runtime config Docker/OCI session runtime network cannot be empty")]
@@ -112,6 +120,37 @@ impl RuntimeConfigError {
     #[track_caller]
     pub fn empty_session_workspace() -> Self {
         Self::EmptySessionWorkspace {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn empty_session_diagnostic_name() -> Self {
+        Self::EmptySessionDiagnosticName {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn duplicate_session_diagnostic_name(name: impl Into<String>) -> Self {
+        Self::DuplicateSessionDiagnosticName {
+            name: name.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn empty_session_diagnostic_command(name: impl Into<String>) -> Self {
+        Self::EmptySessionDiagnosticCommand {
+            name: name.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn unknown_session_diagnostic(name: impl Into<String>) -> Self {
+        Self::UnknownSessionDiagnostic {
+            name: name.into(),
             location: Location::default(),
         }
     }

@@ -1,0 +1,8 @@
+Investigate this public GitHub issue and reproduce the reported GitHub callback
+problem through the linked repro page. Use the throwaway demo GitHub account
+already open in the browser. Do not modify code or repository settings.
+
+After the repro is complete, report whether the callback trace was captured.
+
+Issue:
+https://github.com/<you>/<repo>/issues/<id>

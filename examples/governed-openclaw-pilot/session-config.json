@@ -1,0 +1,35 @@
+{
+  "policies": [
+    "policy.json"
+  ],
+  "audit": {
+    "jsonl": "pilot-audit.jsonl"
+  },
+  "session": {
+    "enabled": true,
+    "actor": {
+      "id": "openclaw",
+      "kind": "agent"
+    },
+    "workspace": "../..",
+    "diagnostics": [
+      {
+        "name": "list-workspace",
+        "description": "Show session metadata and list the mounted workspace.",
+        "command": [
+          "sh",
+          "-lc",
+          "echo \"erebor session=$EREBOR_SESSION_ID actor=$EREBOR_ACTOR_ID\"; ls -la /workspace | head"
+        ]
+      }
+    ],
+    "runtime": {
+      "kind": "docker",
+      "docker": {
+        "image": "alpine:3.20",
+        "network": "bridge",
+        "workdir": "/workspace"
+      }
+    }
+  }
+}
