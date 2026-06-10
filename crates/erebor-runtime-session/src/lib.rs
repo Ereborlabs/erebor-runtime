@@ -8,10 +8,11 @@ use std::{
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
-    DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions, RuntimeConfig,
-    RuntimeConfigError, RuntimeError, SessionRunOutcome, SessionRunPlan, SessionRunnerKind,
-    SessionRunnerLauncher, SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan,
-    SessionSurfaceLauncher, SessionSurfaceSupervisor, TerminalSurfaceConfig,
+    DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions,
+    RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError, RuntimeError, SessionActorLayerConfig,
+    SessionAdoptPlan, SessionRunOutcome, SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher,
+    SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
+    SessionSurfaceSupervisor, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
@@ -103,6 +104,62 @@ pub fn run_session_diagnostic(
     }
 }
 
+pub fn adopt_session_plan(
+    config: &RuntimeConfig,
+    plan: &SessionAdoptPlan,
+) -> Result<SessionRunOutcome, SessionExecutionError> {
+    match plan.runner().kind() {
+        SessionRunnerKind::Docker => Err(SessionExecutionError::runtime(
+            RuntimeError::unsupported_session_runner_operation("docker", "adopt"),
+        )),
+        SessionRunnerKind::LinuxHost => {
+            let side_resources = start_adopt_session_side_resources(config, plan)?;
+            SessionRunnerLauncher::adopt_with_linux_host_options(
+                plan,
+                side_resources.environment(),
+                &side_resources.linux_host_adopt_options(plan.pid()),
+            )
+            .map_err(SessionExecutionError::runtime)
+        }
+    }
+}
+
+pub fn adopt_session_plan_capture(
+    config: &RuntimeConfig,
+    plan: &SessionAdoptPlan,
+) -> Result<SessionDiagnosticOutcome, SessionExecutionError> {
+    let outcome = match plan.runner().kind() {
+        SessionRunnerKind::Docker => {
+            return Err(SessionExecutionError::runtime(
+                RuntimeError::unsupported_session_runner_operation("docker", "adopt"),
+            ));
+        }
+        SessionRunnerKind::LinuxHost => {
+            let side_resources = start_adopt_session_side_resources(config, plan)?;
+            SessionRunnerLauncher::adopt_capture_with_linux_host_options(
+                plan,
+                side_resources.environment(),
+                &side_resources.linux_host_adopt_options(plan.pid()),
+            )
+        }
+    }
+    .map_err(SessionExecutionError::runtime)?;
+
+    if outcome.run().exit_code() == Some(0) {
+        Ok(SessionDiagnosticOutcome::new(
+            outcome.stdout().to_owned(),
+            outcome.stderr().to_owned(),
+        ))
+    } else {
+        Err(SessionExecutionError::diagnostic_failed(format!(
+            "guarded {} adoption exited with code {:?}: {}",
+            plan.runner().kind().as_str(),
+            outcome.run().exit_code(),
+            outcome.stderr().trim()
+        )))
+    }
+}
+
 pub fn start_surface_launch_plan(
     launch_plan: SessionSurfaceLaunchPlan,
 ) -> Result<(), SessionExecutionError> {
@@ -155,6 +212,30 @@ fn start_session_side_resources(
     let start_plan = config
         .surface_start_plan_for_session(plan)
         .map_err(SessionExecutionError::invalid_config)?;
+    start_session_side_resources_from_start_plan(config, plan, start_plan)
+}
+
+fn start_adopt_session_side_resources(
+    config: &RuntimeConfig,
+    plan: &SessionAdoptPlan,
+) -> Result<SessionSideResources, SessionExecutionError> {
+    if plan.runner().kind() == SessionRunnerKind::LinuxHost && !config.surfaces.terminal.enabled {
+        return Err(SessionExecutionError::guard_config(
+            "linux-host adoption requires the terminal/process surface",
+        ));
+    }
+
+    let start_plan = config
+        .surface_start_plan_for_runner_kind(plan.runner().kind())
+        .map_err(SessionExecutionError::invalid_config)?;
+    start_session_side_resources_from_start_plan(config, plan, start_plan)
+}
+
+fn start_session_side_resources_from_start_plan(
+    _config: &RuntimeConfig,
+    plan: &impl SessionPlanContext,
+    start_plan: erebor_runtime_core::SessionSurfaceStartPlan,
+) -> Result<SessionSideResources, SessionExecutionError> {
     if start_plan.surfaces().is_empty() {
         return Ok(SessionSideResources::default());
     }
@@ -189,10 +270,7 @@ fn start_session_side_resources(
                     String::from("EREBOR_TERMINAL_SURFACE"),
                     String::from("process_guard"),
                 ));
-                environment.push((
-                    String::from("EREBOR_TERMINAL_TTY"),
-                    plan.terminal().tty().to_string(),
-                ));
+                environment.push((String::from("EREBOR_TERMINAL_TTY"), plan.tty().to_string()));
             }
         }
     }
@@ -238,6 +316,53 @@ fn start_session_side_resources(
     })
 }
 
+trait SessionPlanContext {
+    fn audit(&self) -> &RuntimeAuditConfig;
+    fn session_id(&self) -> &SessionId;
+    fn actor(&self) -> &SessionActorLayerConfig;
+    fn terminal(&self) -> &TerminalSurfaceConfig;
+
+    fn tty(&self) -> bool {
+        self.terminal().tty()
+    }
+}
+
+impl SessionPlanContext for SessionRunPlan {
+    fn audit(&self) -> &RuntimeAuditConfig {
+        self.audit()
+    }
+
+    fn session_id(&self) -> &SessionId {
+        self.session_id()
+    }
+
+    fn actor(&self) -> &SessionActorLayerConfig {
+        self.actor()
+    }
+
+    fn terminal(&self) -> &TerminalSurfaceConfig {
+        self.terminal()
+    }
+}
+
+impl SessionPlanContext for SessionAdoptPlan {
+    fn audit(&self) -> &RuntimeAuditConfig {
+        self.audit()
+    }
+
+    fn session_id(&self) -> &SessionId {
+        self.session_id()
+    }
+
+    fn actor(&self) -> &SessionActorLayerConfig {
+        self.actor()
+    }
+
+    fn terminal(&self) -> &TerminalSurfaceConfig {
+        self.terminal()
+    }
+}
+
 fn read_policy(path: &Path) -> Result<LocalPolicy, SessionExecutionError> {
     tracing::debug!(path = %path.display(), "reading session policy");
     let source = fs::read_to_string(path).map_err(|error| SessionExecutionError::ReadPolicy {
@@ -261,6 +386,7 @@ fn read_policy_set(paths: &[PathBuf]) -> Result<PolicySet, SessionExecutionError
 struct LinuxProcessGuardBundle {
     host_dir: PathBuf,
     guard_path: PathBuf,
+    session_id: String,
     deny_rules: String,
     audit_path: Option<PathBuf>,
     audit_filename: Option<String>,
@@ -270,7 +396,7 @@ struct LinuxProcessGuardBundle {
 impl LinuxProcessGuardBundle {
     fn prepare(
         config: &TerminalSurfaceConfig,
-        plan: &SessionRunPlan,
+        plan: &impl SessionPlanContext,
     ) -> Result<Self, SessionExecutionError> {
         let host_dir = std::env::temp_dir().join(format!(
             "erebor-linux-process-guard-{}-{}",
@@ -312,6 +438,7 @@ impl LinuxProcessGuardBundle {
         Ok(Self {
             host_dir,
             guard_path,
+            session_id: plan.session_id().as_str().to_owned(),
             deny_rules,
             audit_path: audit_jsonl_path,
             audit_filename,
@@ -349,7 +476,14 @@ impl LinuxProcessGuardBundle {
             .with_wrapper_program(&self.guard_path)
             .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
             .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string())
-            .with_environment("EREBOR_GUARD_DENY_RULES", self.deny_rules.clone());
+            .with_environment("EREBOR_GUARD_DENY_RULES", self.deny_rules.clone())
+            .with_environment(
+                "EREBOR_GUARD_CGROUP_DIR",
+                format!(
+                    "/sys/fs/cgroup/erebor/{}",
+                    linux_cgroup_component(&self.session_id)
+                ),
+            );
 
         if let Some(audit_path) = self.audit_path.as_ref() {
             options = options
@@ -357,6 +491,10 @@ impl LinuxProcessGuardBundle {
         }
 
         options
+    }
+
+    fn linux_host_adopt_options(&self, pid: i32) -> LinuxHostSessionCommandOptions {
+        self.linux_host_options().with_adopt_pid(pid)
     }
 }
 
@@ -366,7 +504,7 @@ impl Drop for LinuxProcessGuardBundle {
     }
 }
 
-fn session_cdp_context(plan: &SessionRunPlan) -> CdpSessionContext {
+fn session_cdp_context(plan: &impl SessionPlanContext) -> CdpSessionContext {
     CdpSessionContext {
         session_id: plan.session_id().clone(),
         actor: ActorIdentity {
@@ -375,6 +513,19 @@ fn session_cdp_context(plan: &SessionRunPlan) -> CdpSessionContext {
         },
         timestamp: runtime_timestamp(),
     }
+}
+
+fn linux_cgroup_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn runtime_context(session_prefix: &str) -> CdpSessionContext {
@@ -431,6 +582,14 @@ impl SessionSideResources {
 
     fn linux_host_options(&self) -> &LinuxHostSessionCommandOptions {
         &self.linux_host_options
+    }
+
+    fn linux_host_adopt_options(&self, pid: i32) -> LinuxHostSessionCommandOptions {
+        self._guard_bundle
+            .as_ref()
+            .map_or_else(LinuxHostSessionCommandOptions::default, |bundle| {
+                bundle.linux_host_adopt_options(pid)
+            })
     }
 }
 

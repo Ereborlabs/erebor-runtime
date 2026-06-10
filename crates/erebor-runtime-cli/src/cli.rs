@@ -9,14 +9,14 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use erebor_runtime_audit::{read_audit_records, AuditLogError};
 use erebor_runtime_core::{
     BrowserCdpSurfaceLayerConfig, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
-    RuntimeError, SessionRunPlan, SessionRunnerKind, SessionSurfaceLaunchPlan,
+    RuntimeError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind, SessionSurfaceLaunchPlan,
     SessionSurfaceLayers, SessionSurfaceStartPlan,
 };
 use erebor_runtime_events::{RuntimeEvent, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicyEvaluator, PolicySet};
 use erebor_runtime_session::{
-    run_session_diagnostic, run_session_plan, start_surface_launch_plan, SessionDiagnosticOutcome,
-    SessionExecutionError,
+    adopt_session_plan, run_session_diagnostic, run_session_plan, start_surface_launch_plan,
+    SessionDiagnosticOutcome, SessionExecutionError,
 };
 use snafu::Location;
 use thiserror::Error;
@@ -95,6 +95,15 @@ impl fmt::Display for Command {
                 args.config.display(),
                 args.name
             ),
+            Self::Session(SessionArgs {
+                command: SessionCommand::Adopt(args),
+            }) => write!(
+                formatter,
+                "session adopt runner={} config={} pid={}",
+                args.runner.as_str(),
+                args.config.display(),
+                args.pid
+            ),
             Self::Dev(DevArgs {
                 command: DevCommand::ProxyCdp(args),
             }) => {
@@ -142,6 +151,8 @@ enum SessionCommand {
     Run(SessionRunArgs),
     /// Run a named bounded diagnostic from the session config.
     Diagnose(SessionDiagnoseArgs),
+    /// Adopt an already-running agent process into a governed session.
+    Adopt(SessionAdoptArgs),
 }
 
 #[derive(Debug, Args)]
@@ -167,6 +178,19 @@ struct SessionDiagnoseArgs {
     runner: SessionRunnerArg,
     /// Named diagnostic from the session config.
     name: String,
+}
+
+#[derive(Debug, Args)]
+struct SessionAdoptArgs {
+    /// Session config describing policies, audit, surfaces, and runner settings.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    config: PathBuf,
+    /// Concrete session runner to use.
+    #[arg(long, alias = "runtime", value_enum)]
+    runner: SessionRunnerArg,
+    /// Already-running process id to attach to.
+    #[arg(long, value_parser = parse_positive_pid)]
+    pid: i32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -282,6 +306,17 @@ fn parse_non_empty_path(value: &str) -> Result<PathBuf, String> {
         Err(String::from("path cannot be empty"))
     } else {
         Ok(path.to_path_buf())
+    }
+}
+
+fn parse_positive_pid(value: &str) -> Result<i32, String> {
+    let pid = value
+        .parse::<i32>()
+        .map_err(|_| String::from("pid must be a positive process id"))?;
+    if pid <= 0 {
+        Err(String::from("pid must be a positive process id"))
+    } else {
+        Ok(pid)
     }
 }
 
@@ -435,6 +470,7 @@ fn execute_session(args: &SessionArgs) -> Result<(), CliError> {
     match &args.command {
         SessionCommand::Run(args) => session_run(args),
         SessionCommand::Diagnose(args) => session_diagnose(args),
+        SessionCommand::Adopt(args) => session_adopt(args),
     }
 }
 
@@ -459,6 +495,14 @@ fn session_diagnose(args: &SessionDiagnoseArgs) -> Result<(), CliError> {
     execute_session_diagnostic_plan(&config, &plan)
 }
 
+fn session_adopt(args: &SessionAdoptArgs) -> Result<(), CliError> {
+    let config = read_runtime_config(&args.config)?;
+    let session_id = SessionId::new(format!("session-{}", std::process::id()));
+    let plan = SessionAdoptPlan::from_config(&config, args.runner.into(), session_id, args.pid)
+        .map_err(CliError::invalid_config)?;
+    execute_session_adopt_plan(&config, &plan)
+}
+
 fn execute_session_run_plan(config: &RuntimeConfig, plan: &SessionRunPlan) -> Result<(), CliError> {
     run_session_plan(config, plan).map_err(CliError::session_execution)?;
     Ok(())
@@ -470,6 +514,14 @@ fn execute_session_diagnostic_plan(
 ) -> Result<(), CliError> {
     let outcome = run_session_diagnostic(config, plan).map_err(CliError::session_execution)?;
     write_session_diagnostic_outcome(&outcome)
+}
+
+fn execute_session_adopt_plan(
+    config: &RuntimeConfig,
+    plan: &SessionAdoptPlan,
+) -> Result<(), CliError> {
+    adopt_session_plan(config, plan).map_err(CliError::session_execution)?;
+    Ok(())
 }
 
 fn write_session_diagnostic_outcome(outcome: &SessionDiagnosticOutcome) -> Result<(), CliError> {
@@ -505,6 +557,14 @@ fn build_session_diagnose_plan(args: &SessionDiagnoseArgs) -> Result<SessionRunP
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
     SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
+        .map_err(CliError::invalid_config)
+}
+
+#[cfg(test)]
+fn build_session_adopt_plan(args: &SessionAdoptArgs) -> Result<SessionAdoptPlan, CliError> {
+    let config = read_runtime_config(&args.config)?;
+    let session_id = SessionId::new(format!("session-{}", std::process::id()));
+    SessionAdoptPlan::from_config(&config, args.runner.into(), session_id, args.pid)
         .map_err(CliError::invalid_config)
 }
 
@@ -713,9 +773,10 @@ mod tests {
     use erebor_runtime_core::{SessionSurfaceDefinition, SessionSurfaceKind};
 
     use super::{
-        build_dev_proxy_launch_plan, build_runtime_launch_plan, build_session_diagnose_plan,
-        build_session_run_plan, resolve_config_paths, Cli, ProxyCdpArgs, SessionDiagnoseArgs,
-        SessionRunArgs, SessionRunnerArg, StartArgs, WebSocketUrl,
+        build_dev_proxy_launch_plan, build_runtime_launch_plan, build_session_adopt_plan,
+        build_session_diagnose_plan, build_session_run_plan, resolve_config_paths, Cli,
+        ProxyCdpArgs, SessionAdoptArgs, SessionDiagnoseArgs, SessionRunArgs, SessionRunnerArg,
+        StartArgs, WebSocketUrl,
     };
 
     #[test]
@@ -803,6 +864,40 @@ mod tests {
         ]);
 
         assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn accepts_session_adopt_with_linux_host_runner_and_pid() {
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "adopt",
+            "--runner",
+            "linux-host",
+            "--config",
+            "pilot-session.json",
+            "--pid",
+            "1234",
+        ]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn rejects_session_adopt_with_invalid_pid() {
+        let error = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "adopt",
+            "--runner",
+            "linux-host",
+            "--config",
+            "pilot-session.json",
+            "--pid",
+            "0",
+        ]);
+
+        assert!(error.is_err());
     }
 
     #[test]
@@ -1009,6 +1104,49 @@ mod tests {
         );
         assert_eq!(plan.workspace(), Some(base_dir.join("workspace").as_path()));
         assert_eq!(plan.command(), ["openclaw"]);
+
+        let _result = fs::remove_file(config_path);
+        Ok(())
+    }
+
+    #[test]
+    fn session_adopt_builds_linux_host_session_plan() -> Result<(), Box<dyn std::error::Error>> {
+        let config_path = write_temp_file(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "actor": { "id": "openclaw", "kind": "agent" },
+                "workspace": "workspace",
+                "runner": {
+                  "kind": "linux_host"
+                }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let args = SessionAdoptArgs {
+            config: config_path.clone(),
+            runner: SessionRunnerArg::LinuxHost,
+            pid: 1234,
+        };
+
+        let plan = build_session_adopt_plan(&args)?;
+        let base_dir = config_path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing config parent"))?;
+
+        assert_eq!(plan.actor().id, "openclaw");
+        assert_eq!(
+            plan.runner().kind(),
+            erebor_runtime_core::SessionRunnerKind::LinuxHost
+        );
+        assert_eq!(plan.workspace(), Some(base_dir.join("workspace").as_path()));
+        assert_eq!(plan.pid(), 1234);
 
         let _result = fs::remove_file(config_path);
         Ok(())

@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::{
     DockerSessionCommandOptions, DockerSessionCommandPlan, LinuxHostSessionCommandOptions,
-    LinuxHostSessionCommandPlan, RuntimeError, SessionRunPlan, SessionRunnerKind,
+    LinuxHostSessionCommandPlan, RuntimeError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
 };
 
 pub trait SessionRunner {
@@ -127,6 +127,46 @@ impl SessionRunnerLauncher {
                 )
             }
             SessionRunnerKind::LinuxHost => LinuxHostSessionRunner.run_with_options(
+                plan,
+                environment,
+                options,
+                LinuxHostSessionOutputMode::Capture,
+            ),
+        }
+    }
+
+    pub fn adopt_with_linux_host_options(
+        plan: &SessionAdoptPlan,
+        environment: &[(String, String)],
+        options: &LinuxHostSessionCommandOptions,
+    ) -> Result<SessionRunOutcome, RuntimeError> {
+        match plan.runner().kind() {
+            SessionRunnerKind::Docker => Err(RuntimeError::unsupported_session_runner_operation(
+                SessionRunnerKind::Docker.as_str(),
+                "adopt",
+            )),
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner
+                .adopt_with_options(
+                    plan,
+                    environment,
+                    options,
+                    LinuxHostSessionOutputMode::Inherit,
+                )
+                .map(|outcome| outcome.run),
+        }
+    }
+
+    pub fn adopt_capture_with_linux_host_options(
+        plan: &SessionAdoptPlan,
+        environment: &[(String, String)],
+        options: &LinuxHostSessionCommandOptions,
+    ) -> Result<SessionCapturedRunOutcome, RuntimeError> {
+        match plan.runner().kind() {
+            SessionRunnerKind::Docker => Err(RuntimeError::unsupported_session_runner_operation(
+                SessionRunnerKind::Docker.as_str(),
+                "adopt",
+            )),
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner.adopt_with_options(
                 plan,
                 environment,
                 options,
@@ -335,6 +375,74 @@ impl LinuxHostSessionRunner {
             program = %launch.program(),
             tty = plan.tty(),
             "launching Linux host session runner"
+        );
+
+        let mut command = ProcessCommand::new(launch.program());
+        command.args(launch.args());
+        command.envs(launch.environment().iter().cloned());
+        if let Some(current_dir) = launch.current_dir() {
+            command.current_dir(current_dir);
+        }
+
+        match output_mode {
+            LinuxHostSessionOutputMode::Inherit => {
+                let status = command.status().map_err(|source| {
+                    RuntimeError::session_runner_launch(
+                        self.kind().as_str(),
+                        launch.program().to_owned(),
+                        source,
+                    )
+                })?;
+
+                if status.success() {
+                    Ok(SessionCapturedRunOutcome::new(
+                        SessionRunOutcome::new(self.kind(), status.code()),
+                        String::new(),
+                        String::new(),
+                    ))
+                } else {
+                    Err(RuntimeError::session_runner_exit(
+                        self.kind().as_str(),
+                        status.code(),
+                    ))
+                }
+            }
+            LinuxHostSessionOutputMode::Capture => {
+                let output = command.output().map_err(|source| {
+                    RuntimeError::session_runner_launch(
+                        self.kind().as_str(),
+                        launch.program().to_owned(),
+                        source,
+                    )
+                })?;
+                Ok(SessionCapturedRunOutcome::new(
+                    SessionRunOutcome::new(self.kind(), output.status.code()),
+                    String::from_utf8_lossy(&output.stdout).to_string(),
+                    String::from_utf8_lossy(&output.stderr).to_string(),
+                ))
+            }
+        }
+    }
+
+    fn adopt_with_options(
+        &self,
+        plan: &SessionAdoptPlan,
+        environment: &[(String, String)],
+        options: &LinuxHostSessionCommandOptions,
+        output_mode: LinuxHostSessionOutputMode,
+    ) -> Result<SessionCapturedRunOutcome, RuntimeError> {
+        let launch =
+            LinuxHostSessionCommandPlan::from_session_adopt_plan_with_environment_and_options(
+                plan,
+                environment,
+                options,
+            );
+        info!(
+            session = %plan.session_id().as_str(),
+            actor = %plan.actor().id,
+            pid = plan.pid(),
+            program = %launch.program(),
+            "adopting process into Linux host session runner"
         );
 
         let mut command = ProcessCommand::new(launch.program());

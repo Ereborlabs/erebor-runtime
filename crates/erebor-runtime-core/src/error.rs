@@ -31,6 +31,8 @@ pub enum RuntimeConfigError {
     EmptySessionDiagnosticCommand { name: String, location: Location },
     #[error("runtime config session diagnostic `{name}` was not found")]
     UnknownSessionDiagnostic { name: String, location: Location },
+    #[error("session adopt pid must be a positive process id")]
+    InvalidSessionAdoptPid { location: Location },
     #[error("runtime config Docker/OCI session runner image cannot be empty")]
     EmptyDockerSessionImage { location: Location },
     #[error("runtime config Docker/OCI session runner network cannot be empty")]
@@ -82,6 +84,12 @@ pub enum RuntimeError {
     SessionRunnerExit {
         runner: String,
         code: Option<i32>,
+        location: Location,
+    },
+    #[error("session runner `{runner}` does not support `{operation}`")]
+    UnsupportedSessionRunnerOperation {
+        runner: String,
+        operation: String,
         location: Location,
     },
 }
@@ -164,6 +172,13 @@ impl RuntimeConfigError {
     pub fn unknown_session_diagnostic(name: impl Into<String>) -> Self {
         Self::UnknownSessionDiagnostic {
             name: name.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn invalid_session_adopt_pid() -> Self {
+        Self::InvalidSessionAdoptPid {
             location: Location::default(),
         }
     }
@@ -273,6 +288,18 @@ impl RuntimeError {
         Self::SessionRunnerExit {
             runner: runner.into(),
             code,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn unsupported_session_runner_operation(
+        runner: impl Into<String>,
+        operation: impl Into<String>,
+    ) -> Self {
+        Self::UnsupportedSessionRunnerOperation {
+            runner: runner.into(),
+            operation: operation.into(),
             location: Location::default(),
         }
     }

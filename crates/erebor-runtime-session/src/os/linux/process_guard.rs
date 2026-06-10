@@ -4,13 +4,13 @@ use std::{
     collections::HashMap,
     env,
     ffi::{CStr, CString},
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::Write,
     os::{
         raw::{c_char, c_int, c_long, c_uint, c_ulong, c_void},
         unix::ffi::OsStringExt,
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     process,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -27,6 +27,8 @@ const PTRACE_TRACEME: c_uint = 0;
 const PTRACE_PEEKDATA: c_uint = 2;
 const PTRACE_GETREGS: c_uint = 12;
 const PTRACE_SETREGS: c_uint = 13;
+const PTRACE_ATTACH: c_uint = 16;
+const PTRACE_DETACH: c_uint = 17;
 const PTRACE_SYSCALL: c_uint = 24;
 const PTRACE_SETOPTIONS: c_uint = 0x4200;
 const PTRACE_GETEVENTMSG: c_uint = 0x4201;
@@ -123,12 +125,20 @@ unsafe extern "C" {
 }
 
 fn main() {
+    let rules = parse_rules();
+
+    if let Some(root_pid) = adopt_pid_from_env() {
+        process::exit(adopt_existing_process_tree(root_pid, rules));
+    }
+
     let command = match command_args() {
         Ok(command) => command,
         Err(error) => die(&error),
     };
-    let rules = parse_rules();
+    process::exit(launch_new_process_tree(command, rules));
+}
 
+fn launch_new_process_tree(command: Vec<CString>, rules: Vec<DenyRule>) -> i32 {
     let child = unsafe { fork() };
     if child < 0 {
         die(&format!("fork failed: {}", errno_message(errno())));
@@ -148,9 +158,121 @@ fn main() {
 
     wait_for_initial_stop(child);
     set_trace_options(child);
+    let cgroup = join_configured_cgroup(&[child]);
+    write_capability_report("relaunch", child, 1, 0, &cgroup);
     continue_trace(child, 0);
 
-    process::exit(trace_loop(&mut context));
+    trace_loop(&mut context)
+}
+
+fn adopt_existing_process_tree(root_pid: Pid, rules: Vec<DenyRule>) -> i32 {
+    let candidate_pids = process_tree_pids(root_pid);
+    let mut context = TraceContext {
+        rules,
+        states: HashMap::new(),
+        audit_seq: 0,
+        root_pid,
+        live_traces: 0,
+    };
+    let mut failed = Vec::new();
+
+    for pid in candidate_pids {
+        match attach_existing_pid(pid) {
+            Ok(()) => {
+                context.states.insert(pid, PidState::default());
+                context.live_traces += 1;
+            }
+            Err(reason) => {
+                failed.push((pid, reason));
+            }
+        }
+    }
+
+    let attached_pids = context.states.keys().copied().collect::<Vec<_>>();
+    let cgroup = join_configured_cgroup(&attached_pids);
+    write_capability_report(
+        "adopt",
+        root_pid,
+        attached_pids.len(),
+        failed.len(),
+        &cgroup,
+    );
+
+    for (pid, reason) in &failed {
+        eprintln!(
+            "erebor linux process guard residual risk: failed_attach_pid={} reason={}",
+            pid, reason
+        );
+    }
+
+    if !context.states.contains_key(&root_pid) {
+        for pid in attached_pids {
+            detach_trace(pid);
+        }
+        return 126;
+    }
+
+    for pid in context.states.keys().copied().collect::<Vec<_>>() {
+        continue_trace(pid, 0);
+    }
+
+    trace_loop(&mut context)
+}
+
+fn adopt_pid_from_env() -> Option<Pid> {
+    let Ok(value) = env::var("EREBOR_GUARD_ADOPT_PID") else {
+        return None;
+    };
+    let Ok(pid) = value.parse::<Pid>() else {
+        die("EREBOR_GUARD_ADOPT_PID must be a positive process id");
+    };
+    if pid <= 0 {
+        die("EREBOR_GUARD_ADOPT_PID must be a positive process id");
+    }
+
+    Some(pid)
+}
+
+fn attach_existing_pid(pid: Pid) -> Result<(), String> {
+    let result = unsafe {
+        ptrace(
+            PTRACE_ATTACH,
+            pid,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if result != 0 {
+        return Err(errno_message(errno()));
+    }
+
+    wait_for_attached_stop(pid)?;
+    if let Err(reason) = try_set_trace_options(pid) {
+        detach_trace(pid);
+        Err(reason)
+    } else {
+        Ok(())
+    }
+}
+
+fn wait_for_attached_stop(pid: Pid) -> Result<(), String> {
+    loop {
+        let mut status = 0;
+        let waited = unsafe { waitpid(pid, &mut status, 0) };
+        if waited < 0 {
+            let error = errno();
+            if error == EINTR {
+                continue;
+            }
+            return Err(format!("waitpid failed: {}", errno_message(error)));
+        }
+        if waited == pid && wait_stopped(status) {
+            return Ok(());
+        }
+        if wait_exited(status) || wait_signaled(status) {
+            return Err(String::from("process exited before attachment completed"));
+        }
+    }
 }
 
 fn command_args() -> Result<Vec<CString>, String> {
@@ -376,6 +498,12 @@ fn should_deny_exec(
 }
 
 fn set_trace_options(pid: Pid) {
+    if let Err(reason) = try_set_trace_options(pid) {
+        die(&reason);
+    }
+}
+
+fn try_set_trace_options(pid: Pid) -> Result<(), String> {
     let options = PTRACE_O_TRACESYSGOOD
         | PTRACE_O_TRACEFORK
         | PTRACE_O_TRACEVFORK
@@ -391,11 +519,13 @@ fn set_trace_options(pid: Pid) {
         )
     };
     if result != 0 {
-        die(&format!(
+        Err(format!(
             "failed to set ptrace options for pid {}: {}",
             pid,
             errno_message(errno())
-        ));
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -426,6 +556,160 @@ fn set_regs(pid: Pid, regs: &UserRegsStruct) {
             regs as *const UserRegsStruct as *mut c_void,
         );
     }
+}
+
+fn detach_trace(pid: Pid) {
+    let result = unsafe {
+        ptrace(
+            PTRACE_DETACH,
+            pid,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if result != 0 && errno() != ESRCH {
+        eprintln!(
+            "erebor linux process guard: failed to detach pid {}: {}",
+            pid,
+            errno_message(errno())
+        );
+    }
+}
+
+fn process_tree_pids(root_pid: Pid) -> Vec<Pid> {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return vec![root_pid];
+    };
+    let mut parent_by_pid = HashMap::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Ok(pid) = name.parse::<Pid>() else {
+            continue;
+        };
+        if let Some(ppid) = proc_parent_pid(pid) {
+            parent_by_pid.insert(pid, ppid);
+        }
+    }
+
+    let mut tree = vec![root_pid];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (pid, ppid) in &parent_by_pid {
+            if tree.contains(pid) || !tree.contains(ppid) {
+                continue;
+            }
+            tree.push(*pid);
+            changed = true;
+        }
+    }
+
+    tree.sort_unstable();
+    tree.retain(|pid| *pid != root_pid);
+    tree.insert(0, root_pid);
+    tree
+}
+
+fn proc_parent_pid(pid: Pid) -> Option<Pid> {
+    let source = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    parse_parent_pid_from_stat(&source)
+}
+
+fn parse_parent_pid_from_stat(source: &str) -> Option<Pid> {
+    let (_command, rest) = source.rsplit_once(')')?;
+    rest.split_whitespace().nth(1)?.parse().ok()
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct CgroupJoinReport {
+    requested: bool,
+    cgroup_v2: bool,
+    dir: Option<String>,
+    joined: usize,
+    failed: usize,
+    reason: Option<String>,
+}
+
+fn join_configured_cgroup(pids: &[Pid]) -> CgroupJoinReport {
+    let Ok(dir) = env::var("EREBOR_GUARD_CGROUP_DIR") else {
+        return CgroupJoinReport::default();
+    };
+    if dir.is_empty() {
+        return CgroupJoinReport::default();
+    }
+
+    let mut report = CgroupJoinReport {
+        requested: true,
+        cgroup_v2: Path::new("/sys/fs/cgroup/cgroup.controllers").exists(),
+        dir: Some(dir.clone()),
+        ..CgroupJoinReport::default()
+    };
+
+    if !report.cgroup_v2 {
+        report.failed = pids.len();
+        report.reason = Some(String::from("cgroup v2 is not mounted"));
+        return report;
+    }
+
+    if let Err(error) = fs::create_dir_all(&dir) {
+        report.failed = pids.len();
+        report.reason = Some(format!("failed to create cgroup directory: {error}"));
+        return report;
+    }
+
+    let procs = Path::new(&dir).join("cgroup.procs");
+    for pid in pids {
+        match OpenOptions::new().write(true).open(&procs) {
+            Ok(mut file) => {
+                if writeln!(file, "{pid}").is_ok() {
+                    report.joined += 1;
+                } else {
+                    report.failed += 1;
+                }
+            }
+            Err(error) => {
+                report.failed += 1;
+                if report.reason.is_none() {
+                    report.reason = Some(format!("failed to open cgroup.procs: {error}"));
+                }
+            }
+        }
+    }
+
+    report
+}
+
+fn write_capability_report(
+    mode: &str,
+    root_pid: Pid,
+    attached: usize,
+    failed_attach: usize,
+    cgroup: &CgroupJoinReport,
+) {
+    eprintln!(
+        "erebor linux process guard capability: mode={} root_pid={} ptrace=enabled recursive_attach={} attached={} failed_attach={} yama_ptrace_scope={} cgroup_v2={} cgroup_requested={} cgroup_dir={} cgroup_joined={} cgroup_failed={} cgroup_reason={} residual_risks=preexisting_fds,preexisting_sockets,network_not_enforced",
+        mode,
+        root_pid,
+        if failed_attach == 0 { "complete" } else { "partial" },
+        attached,
+        failed_attach,
+        yama_ptrace_scope(),
+        cgroup.cgroup_v2,
+        cgroup.requested,
+        cgroup.dir.as_deref().unwrap_or("none"),
+        cgroup.joined,
+        cgroup.failed,
+        cgroup.reason.as_deref().unwrap_or("none")
+    );
+}
+
+fn yama_ptrace_scope() -> String {
+    fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope")
+        .map(|value| value.trim().to_owned())
+        .unwrap_or_else(|_| String::from("unknown"))
 }
 
 fn read_argv(pid: Pid, argv_address: u64) -> Vec<String> {
@@ -713,9 +997,10 @@ fn die(message: &str) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_text, json_string, parse_rules_from_source, ptrace_event, wait_exit_status,
-        wait_exited, wait_signaled, wait_stop_signal, wait_stopped, wait_term_signal, MAX_RULES,
-        MAX_TEXT, PTRACE_EVENT_CLONE, SIGTRAP,
+        command_text, json_string, parse_parent_pid_from_stat, parse_rules_from_source,
+        ptrace_event, wait_exit_status, wait_exited, wait_signaled, wait_stop_signal,
+        wait_stopped, wait_term_signal, CgroupJoinReport, MAX_RULES, MAX_TEXT,
+        PTRACE_EVENT_CLONE, SIGTRAP,
     };
 
     #[test]
@@ -807,5 +1092,22 @@ mod tests {
         let status = (PTRACE_EVENT_CLONE as i32) << 16;
 
         assert_eq!(ptrace_event(status), PTRACE_EVENT_CLONE);
+    }
+
+    #[test]
+    fn parses_parent_pid_from_proc_stat_with_spaces_in_command() {
+        let stat = "1234 (agent worker) S 4321 1 1 0 -1 4194560 0 0 0 0";
+
+        assert_eq!(parse_parent_pid_from_stat(stat), Some(4321));
+    }
+
+    #[test]
+    fn cgroup_report_defaults_to_not_requested() {
+        let report = CgroupJoinReport::default();
+
+        assert!(!report.requested);
+        assert!(!report.cgroup_v2);
+        assert_eq!(report.joined, 0);
+        assert_eq!(report.failed, 0);
     }
 }

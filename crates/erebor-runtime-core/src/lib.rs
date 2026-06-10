@@ -14,10 +14,11 @@ pub use config::{
     DockerSessionCommandOptions, DockerSessionCommandPlan, DockerSessionMount,
     DockerSessionRunnerConfig, DockerSessionRunnerLayerConfig, LinuxHostSessionCommandOptions,
     LinuxHostSessionCommandPlan, LinuxHostSessionRunnerConfig, LinuxHostSessionRunnerLayerConfig,
-    RuntimeAuditConfig, RuntimeConfig, SessionActorLayerConfig, SessionDiagnosticLayerConfig,
-    SessionLayerConfig, SessionRunPlan, SessionRunnerConfig, SessionRunnerKind,
-    SessionRunnerLayerConfig, SessionSurfaceKind, SessionSurfaceLayers, SessionSurfaceStartPlan,
-    SessionSurfaceToggleConfig, TerminalSurfaceConfig, TerminalSurfaceLayerConfig,
+    RuntimeAuditConfig, RuntimeConfig, SessionActorLayerConfig, SessionAdoptPlan,
+    SessionDiagnosticLayerConfig, SessionLayerConfig, SessionRunPlan, SessionRunnerConfig,
+    SessionRunnerKind, SessionRunnerLayerConfig, SessionSurfaceKind, SessionSurfaceLayers,
+    SessionSurfaceStartPlan, SessionSurfaceToggleConfig, TerminalSurfaceConfig,
+    TerminalSurfaceLayerConfig,
 };
 pub use engine::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,

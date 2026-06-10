@@ -101,6 +101,13 @@ impl RuntimeConfig {
     ) -> Result<SessionSurfaceStartPlan, RuntimeConfigError> {
         SessionSurfaceStartPlan::from_config_for_session(self, session)
     }
+
+    pub fn surface_start_plan_for_runner_kind(
+        &self,
+        runner_kind: SessionRunnerKind,
+    ) -> Result<SessionSurfaceStartPlan, RuntimeConfigError> {
+        SessionSurfaceStartPlan::from_config_for_runner_kind(self, runner_kind)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -146,6 +153,22 @@ impl SessionSurfaceStartPlan {
                 && session.runner().docker().needs_host_reachable_endpoints()
                 && browser_cdp.listen.ip().is_loopback()
             {
+                browser_cdp.listen =
+                    SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), browser_cdp.listen.port());
+            }
+        }
+
+        Ok(plan)
+    }
+
+    pub fn from_config_for_runner_kind(
+        config: &RuntimeConfig,
+        runner_kind: SessionRunnerKind,
+    ) -> Result<Self, RuntimeConfigError> {
+        let mut plan = Self::from_config(config)?;
+
+        if let Some(browser_cdp) = plan.browser_cdp.as_mut() {
+            if runner_kind == SessionRunnerKind::Docker && browser_cdp.listen.ip().is_loopback() {
                 browser_cdp.listen =
                     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), browser_cdp.listen.port());
             }
@@ -475,6 +498,96 @@ impl SessionRunPlan {
     #[must_use]
     pub fn diagnostic(&self) -> Option<&str> {
         self.diagnostic.as_deref()
+    }
+
+    #[must_use]
+    pub const fn terminal(&self) -> &TerminalSurfaceConfig {
+        &self.terminal
+    }
+
+    #[must_use]
+    pub const fn tty(&self) -> bool {
+        self.terminal.tty()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionAdoptPlan {
+    policies: Vec<PathBuf>,
+    audit: RuntimeAuditConfig,
+    session_id: SessionId,
+    actor: SessionActorLayerConfig,
+    workspace: Option<PathBuf>,
+    runner: SessionRunnerConfig,
+    pid: i32,
+    terminal: TerminalSurfaceConfig,
+}
+
+impl SessionAdoptPlan {
+    pub fn from_config(
+        config: &RuntimeConfig,
+        runtime_kind: SessionRunnerKind,
+        session_id: SessionId,
+        pid: i32,
+    ) -> Result<Self, RuntimeConfigError> {
+        config.validate()?;
+
+        if pid <= 0 {
+            return Err(RuntimeConfigError::invalid_session_adopt_pid());
+        }
+
+        let mut runner = config.session.runner.clone();
+        runner.kind = runtime_kind;
+        runner.validate()?;
+
+        Ok(Self {
+            policies: config.policies.clone(),
+            audit: config.audit.clone(),
+            session_id,
+            actor: config.session.actor.clone(),
+            workspace: config.session.workspace.clone(),
+            runner: runner.into(),
+            pid,
+            terminal: TerminalSurfaceConfig::from_layer(
+                &config.surfaces.terminal,
+                config.policies.clone(),
+            ),
+        })
+    }
+
+    #[must_use]
+    pub fn policies(&self) -> &[PathBuf] {
+        &self.policies
+    }
+
+    #[must_use]
+    pub const fn audit(&self) -> &RuntimeAuditConfig {
+        &self.audit
+    }
+
+    #[must_use]
+    pub const fn session_id(&self) -> &SessionId {
+        &self.session_id
+    }
+
+    #[must_use]
+    pub const fn actor(&self) -> &SessionActorLayerConfig {
+        &self.actor
+    }
+
+    #[must_use]
+    pub fn workspace(&self) -> Option<&Path> {
+        self.workspace.as_deref()
+    }
+
+    #[must_use]
+    pub const fn runner(&self) -> &SessionRunnerConfig {
+        &self.runner
+    }
+
+    #[must_use]
+    pub const fn pid(&self) -> i32 {
+        self.pid
     }
 
     #[must_use]
@@ -840,6 +953,7 @@ pub struct LinuxHostSessionCommandPlan {
 pub struct LinuxHostSessionCommandOptions {
     extra_environment: Vec<(String, String)>,
     wrapper_program: Option<PathBuf>,
+    adopt_pid: Option<i32>,
 }
 
 impl LinuxHostSessionCommandOptions {
@@ -857,6 +971,12 @@ impl LinuxHostSessionCommandOptions {
     #[must_use]
     pub fn with_wrapper_program(mut self, wrapper: impl Into<PathBuf>) -> Self {
         self.wrapper_program = Some(wrapper.into());
+        self
+    }
+
+    #[must_use]
+    pub const fn with_adopt_pid(mut self, pid: i32) -> Self {
+        self.adopt_pid = Some(pid);
         self
     }
 }
@@ -885,17 +1005,8 @@ impl LinuxHostSessionCommandPlan {
         environment: &[(String, String)],
         options: &LinuxHostSessionCommandOptions,
     ) -> Self {
-        let mut combined_environment = vec![
-            (
-                String::from("EREBOR_SESSION_ID"),
-                plan.session_id().as_str().to_owned(),
-            ),
-            (String::from("EREBOR_ACTOR_ID"), plan.actor().id.clone()),
-            (
-                String::from("EREBOR_SESSION_RUNNER"),
-                SessionRunnerKind::LinuxHost.as_str().to_owned(),
-            ),
-        ];
+        let mut combined_environment =
+            linux_host_base_environment(plan.session_id(), &plan.actor().id);
         combined_environment.extend(environment.iter().cloned());
         combined_environment.extend(options.extra_environment.iter().cloned());
 
@@ -921,6 +1032,34 @@ impl LinuxHostSessionCommandPlan {
     }
 
     #[must_use]
+    pub fn from_session_adopt_plan_with_environment_and_options(
+        plan: &SessionAdoptPlan,
+        environment: &[(String, String)],
+        options: &LinuxHostSessionCommandOptions,
+    ) -> Self {
+        let mut combined_environment =
+            linux_host_base_environment(plan.session_id(), &plan.actor().id);
+        combined_environment.extend(environment.iter().cloned());
+        combined_environment.extend(options.extra_environment.iter().cloned());
+        combined_environment.push((
+            String::from("EREBOR_GUARD_ADOPT_PID"),
+            options.adopt_pid.unwrap_or_else(|| plan.pid()).to_string(),
+        ));
+
+        let program = options
+            .wrapper_program
+            .as_ref()
+            .map_or_else(String::new, |wrapper| wrapper.display().to_string());
+
+        Self {
+            program,
+            args: Vec::new(),
+            environment: combined_environment,
+            current_dir: plan.workspace().map(Path::to_path_buf),
+        }
+    }
+
+    #[must_use]
     pub fn program(&self) -> &str {
         &self.program
     }
@@ -939,6 +1078,20 @@ impl LinuxHostSessionCommandPlan {
     pub fn current_dir(&self) -> Option<&Path> {
         self.current_dir.as_deref()
     }
+}
+
+fn linux_host_base_environment(session_id: &SessionId, actor_id: &str) -> Vec<(String, String)> {
+    vec![
+        (
+            String::from("EREBOR_SESSION_ID"),
+            session_id.as_str().to_owned(),
+        ),
+        (String::from("EREBOR_ACTOR_ID"), actor_id.to_owned()),
+        (
+            String::from("EREBOR_SESSION_RUNNER"),
+            SessionRunnerKind::LinuxHost.as_str().to_owned(),
+        ),
+    ]
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
@@ -1247,7 +1400,8 @@ mod tests {
 
     use crate::{
         DockerSessionCommandPlan, LinuxHostSessionCommandOptions, LinuxHostSessionCommandPlan,
-        RuntimeConfig, RuntimeConfigError, SessionRunPlan, SessionRunnerKind, SessionSurfaceKind,
+        RuntimeConfig, RuntimeConfigError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
+        SessionSurfaceKind,
     };
 
     #[test]
@@ -1602,6 +1756,59 @@ mod tests {
         assert!(launch.environment().contains(&(
             String::from("EREBOR_PROCESS_GUARD"),
             String::from("linux-ptrace")
+        )));
+        Ok(())
+    }
+
+    #[test]
+    fn linux_host_adopt_plan_sets_guard_pid_environment() -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "actor": { "id": "openclaw" },
+                "workspace": "/tmp/erebor-workspace",
+                "runner": {
+                  "kind": "linux-host"
+                }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let plan = SessionAdoptPlan::from_config(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-adopt"),
+            4242,
+        )?;
+        let options = LinuxHostSessionCommandOptions::new()
+            .with_wrapper_program("/tmp/erebor-linux-process-guard")
+            .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace");
+
+        let launch =
+            LinuxHostSessionCommandPlan::from_session_adopt_plan_with_environment_and_options(
+                &plan,
+                &[],
+                &options,
+            );
+
+        assert_eq!(launch.program(), "/tmp/erebor-linux-process-guard");
+        assert!(launch.args().is_empty());
+        assert_eq!(
+            launch.current_dir(),
+            Some(Path::new("/tmp/erebor-workspace"))
+        );
+        assert!(launch
+            .environment()
+            .contains(&(String::from("EREBOR_GUARD_ADOPT_PID"), String::from("4242"))));
+        assert!(launch.environment().contains(&(
+            String::from("EREBOR_SESSION_RUNNER"),
+            String::from("linux-host")
         )));
         Ok(())
     }
@@ -1967,6 +2174,31 @@ mod tests {
         assert!(matches!(
             error,
             Err(RuntimeConfigError::EmptySessionCommand { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_session_adopt_pid() -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": { "enabled": true }
+            }
+            "#,
+        )?;
+
+        let error = SessionAdoptPlan::from_config(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-1"),
+            0,
+        );
+
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::InvalidSessionAdoptPid { .. })
         ));
         Ok(())
     }
