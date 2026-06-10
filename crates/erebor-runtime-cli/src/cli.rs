@@ -172,12 +172,14 @@ struct SessionDiagnoseArgs {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum SessionRunnerArg {
     Docker,
+    LinuxHost,
 }
 
 impl SessionRunnerArg {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Docker => "docker",
+            Self::LinuxHost => "linux-host",
         }
     }
 }
@@ -186,6 +188,7 @@ impl From<SessionRunnerArg> for SessionRunnerKind {
     fn from(value: SessionRunnerArg) -> Self {
         match value {
             SessionRunnerArg::Docker => Self::Docker,
+            SessionRunnerArg::LinuxHost => Self::LinuxHost,
         }
     }
 }
@@ -754,6 +757,22 @@ mod tests {
     }
 
     #[test]
+    fn accepts_session_run_with_linux_host_runner() {
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "run",
+            "--runner",
+            "linux-host",
+            "--config",
+            "pilot-session.json",
+            "openclaw",
+        ]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
     fn rejects_session_run_tty_flag() {
         let error = Cli::try_parse_from([
             "erebor-runtime",
@@ -947,6 +966,49 @@ mod tests {
         assert_eq!(plan.runner().docker().network(), "none");
         assert!(plan.terminal().tty());
         assert_eq!(plan.command(), ["openclaw", "--help"]);
+
+        let _result = fs::remove_file(config_path);
+        Ok(())
+    }
+
+    #[test]
+    fn session_run_builds_linux_host_session_plan() -> Result<(), Box<dyn std::error::Error>> {
+        let config_path = write_temp_file(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "actor": { "id": "openclaw", "kind": "agent" },
+                "workspace": "workspace",
+                "runner": {
+                  "kind": "linux_host"
+                }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let args = SessionRunArgs {
+            config: config_path.clone(),
+            runner: SessionRunnerArg::LinuxHost,
+            command: vec![String::from("openclaw")],
+        };
+
+        let plan = build_session_run_plan(&args)?;
+        let base_dir = config_path
+            .parent()
+            .ok_or_else(|| std::io::Error::other("missing config parent"))?;
+
+        assert_eq!(plan.actor().id, "openclaw");
+        assert_eq!(
+            plan.runner().kind(),
+            erebor_runtime_core::SessionRunnerKind::LinuxHost
+        );
+        assert_eq!(plan.workspace(), Some(base_dir.join("workspace").as_path()));
+        assert_eq!(plan.command(), ["openclaw"]);
 
         let _result = fs::remove_file(config_path);
         Ok(())

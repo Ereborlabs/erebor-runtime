@@ -8,10 +8,10 @@ use std::{
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
-    DockerSessionCommandOptions, DockerSessionMount, RuntimeConfig, RuntimeConfigError,
-    RuntimeError, SessionRunOutcome, SessionRunPlan, SessionRunnerLauncher,
-    SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
-    SessionSurfaceSupervisor, TerminalSurfaceConfig,
+    DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions, RuntimeConfig,
+    RuntimeConfigError, RuntimeError, SessionRunOutcome, SessionRunPlan, SessionRunnerKind,
+    SessionRunnerLauncher, SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan,
+    SessionSurfaceLauncher, SessionSurfaceSupervisor, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
@@ -54,11 +54,18 @@ pub fn run_session_plan(
 ) -> Result<SessionRunOutcome, SessionExecutionError> {
     let side_resources = start_session_side_resources(config, plan)?;
 
-    SessionRunnerLauncher::run_with_docker_options(
-        plan,
-        side_resources.environment(),
-        side_resources.docker_options(),
-    )
+    match plan.runner().kind() {
+        SessionRunnerKind::Docker => SessionRunnerLauncher::run_with_docker_options(
+            plan,
+            side_resources.environment(),
+            side_resources.docker_options(),
+        ),
+        SessionRunnerKind::LinuxHost => SessionRunnerLauncher::run_with_linux_host_options(
+            plan,
+            side_resources.environment(),
+            side_resources.linux_host_options(),
+        ),
+    }
     .map_err(SessionExecutionError::runtime)
 }
 
@@ -67,11 +74,18 @@ pub fn run_session_diagnostic(
     plan: &SessionRunPlan,
 ) -> Result<SessionDiagnosticOutcome, SessionExecutionError> {
     let side_resources = start_session_side_resources(config, plan)?;
-    let outcome = SessionRunnerLauncher::run_capture_with_docker_options(
-        plan,
-        side_resources.environment(),
-        side_resources.docker_options(),
-    )
+    let outcome = match plan.runner().kind() {
+        SessionRunnerKind::Docker => SessionRunnerLauncher::run_capture_with_docker_options(
+            plan,
+            side_resources.environment(),
+            side_resources.docker_options(),
+        ),
+        SessionRunnerKind::LinuxHost => SessionRunnerLauncher::run_capture_with_linux_host_options(
+            plan,
+            side_resources.environment(),
+            side_resources.linux_host_options(),
+        ),
+    }
     .map_err(SessionExecutionError::runtime)?;
 
     if outcome.run().exit_code() == Some(0) {
@@ -81,7 +95,8 @@ pub fn run_session_diagnostic(
         ))
     } else {
         Err(SessionExecutionError::diagnostic_failed(format!(
-            "guarded Docker diagnostic exited with code {:?}: {}",
+            "guarded {} diagnostic exited with code {:?}: {}",
+            plan.runner().kind().as_str(),
             outcome.run().exit_code(),
             outcome.stderr().trim()
         )))
@@ -152,6 +167,7 @@ fn start_session_side_resources(
     let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
     let mut environment = Vec::new();
     let mut docker_options = DockerSessionCommandOptions::default();
+    let mut linux_host_options = LinuxHostSessionCommandOptions::default();
     let mut guard_bundle = None;
 
     for definition in launch_plan.definitions() {
@@ -166,7 +182,8 @@ fn start_session_side_resources(
             }
             SessionSurfaceDefinition::Terminal(config) => {
                 let bundle = LinuxProcessGuardBundle::prepare(config, plan)?;
-                docker_options = bundle.docker_options().clone();
+                docker_options = bundle.docker_options();
+                linux_host_options = bundle.linux_host_options();
                 guard_bundle = Some(bundle);
                 environment.push((
                     String::from("EREBOR_TERMINAL_SURFACE"),
@@ -184,6 +201,7 @@ fn start_session_side_resources(
         return Ok(SessionSideResources {
             environment,
             docker_options,
+            linux_host_options,
             _guard_bundle: guard_bundle,
             _supervisor: None,
         });
@@ -214,6 +232,7 @@ fn start_session_side_resources(
     Ok(SessionSideResources {
         environment,
         docker_options,
+        linux_host_options,
         _guard_bundle: guard_bundle,
         _supervisor: Some(supervisor),
     })
@@ -241,7 +260,11 @@ fn read_policy_set(paths: &[PathBuf]) -> Result<PolicySet, SessionExecutionError
 
 struct LinuxProcessGuardBundle {
     host_dir: PathBuf,
-    docker_options: DockerSessionCommandOptions,
+    guard_path: PathBuf,
+    deny_rules: String,
+    audit_path: Option<PathBuf>,
+    audit_filename: Option<String>,
+    terminal_tty: bool,
 }
 
 impl LinuxProcessGuardBundle {
@@ -260,17 +283,11 @@ impl LinuxProcessGuardBundle {
         fs::set_permissions(&guard_path, fs::Permissions::from_mode(0o755))
             .map_err(SessionExecutionError::guard_io)?;
 
-        let mut options = DockerSessionCommandOptions::new()
-            .with_mount(DockerSessionMount::new(&host_dir, DOCKER_GUARD_DIR).read_only())
-            .with_entrypoint(LINUX_PROCESS_GUARD_PATH)
-            .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
-            .with_environment("EREBOR_TERMINAL_TTY", plan.terminal().tty().to_string())
-            .with_environment(
-                "EREBOR_GUARD_DENY_RULES",
-                compile_terminal_process_guard_rules(config)
-                    .map_err(SessionExecutionError::terminal_surface)?
-                    .to_docker_env_value(),
-            );
+        let deny_rules = compile_terminal_process_guard_rules(config)
+            .map_err(SessionExecutionError::terminal_surface)?
+            .to_docker_env_value();
+        let mut audit_jsonl_path = None;
+        let mut audit_filename = None;
 
         if let Some(audit_path) = plan.audit().jsonl() {
             let audit_parent = audit_path
@@ -278,27 +295,68 @@ impl LinuxProcessGuardBundle {
                 .filter(|path| !path.as_os_str().is_empty())
                 .unwrap_or_else(|| Path::new("."));
             fs::create_dir_all(audit_parent).map_err(SessionExecutionError::guard_io)?;
-            let audit_filename = audit_path
-                .file_name()
-                .ok_or_else(|| {
-                    SessionExecutionError::guard_config("audit JSONL path must include a file name")
-                })?
-                .to_string_lossy()
-                .to_string();
+            audit_filename = Some(
+                audit_path
+                    .file_name()
+                    .ok_or_else(|| {
+                        SessionExecutionError::guard_config(
+                            "audit JSONL path must include a file name",
+                        )
+                    })?
+                    .to_string_lossy()
+                    .to_string(),
+            );
+            audit_jsonl_path = Some(audit_path.to_path_buf());
+        }
+
+        Ok(Self {
+            host_dir,
+            guard_path,
+            deny_rules,
+            audit_path: audit_jsonl_path,
+            audit_filename,
+            terminal_tty: plan.terminal().tty(),
+        })
+    }
+
+    fn docker_options(&self) -> DockerSessionCommandOptions {
+        let mut options = DockerSessionCommandOptions::new()
+            .with_mount(DockerSessionMount::new(&self.host_dir, DOCKER_GUARD_DIR).read_only())
+            .with_entrypoint(LINUX_PROCESS_GUARD_PATH)
+            .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
+            .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string())
+            .with_environment("EREBOR_GUARD_DENY_RULES", self.deny_rules.clone());
+
+        if let Some(audit_path) = self.audit_path.as_ref() {
+            let audit_parent = audit_path
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let Some(audit_filename) = self.audit_filename.as_ref() else {
+                return options;
+            };
             let container_audit_path = format!("{DOCKER_AUDIT_DIR}/{audit_filename}");
             options = options
                 .with_mount(DockerSessionMount::new(audit_parent, DOCKER_AUDIT_DIR))
                 .with_environment("EREBOR_GUARD_AUDIT_JSONL", container_audit_path);
         }
 
-        Ok(Self {
-            host_dir,
-            docker_options: options,
-        })
+        options
     }
 
-    fn docker_options(&self) -> &DockerSessionCommandOptions {
-        &self.docker_options
+    fn linux_host_options(&self) -> LinuxHostSessionCommandOptions {
+        let mut options = LinuxHostSessionCommandOptions::new()
+            .with_wrapper_program(&self.guard_path)
+            .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
+            .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string())
+            .with_environment("EREBOR_GUARD_DENY_RULES", self.deny_rules.clone());
+
+        if let Some(audit_path) = self.audit_path.as_ref() {
+            options = options
+                .with_environment("EREBOR_GUARD_AUDIT_JSONL", audit_path.display().to_string());
+        }
+
+        options
     }
 }
 
@@ -357,6 +415,7 @@ fn format_endpoints(runtimes: &[erebor_runtime_core::RunningSessionSurface]) -> 
 struct SessionSideResources {
     environment: Vec<(String, String)>,
     docker_options: DockerSessionCommandOptions,
+    linux_host_options: LinuxHostSessionCommandOptions,
     _guard_bundle: Option<LinuxProcessGuardBundle>,
     _supervisor: Option<SessionSurfaceSupervisor>,
 }
@@ -368,6 +427,10 @@ impl SessionSideResources {
 
     fn docker_options(&self) -> &DockerSessionCommandOptions {
         &self.docker_options
+    }
+
+    fn linux_host_options(&self) -> &LinuxHostSessionCommandOptions {
+        &self.linux_host_options
     }
 }
 

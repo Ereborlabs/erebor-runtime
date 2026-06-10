@@ -142,7 +142,8 @@ impl SessionSurfaceStartPlan {
         let mut plan = Self::from_config(config)?;
 
         if let Some(browser_cdp) = plan.browser_cdp.as_mut() {
-            if session.runner().docker().needs_host_reachable_endpoints()
+            if session.runner().kind() == SessionRunnerKind::Docker
+                && session.runner().docker().needs_host_reachable_endpoints()
                 && browser_cdp.listen.ip().is_loopback()
             {
                 browser_cdp.listen =
@@ -297,6 +298,8 @@ pub struct SessionRunnerLayerConfig {
     pub kind: SessionRunnerKind,
     #[serde(default)]
     pub docker: DockerSessionRunnerLayerConfig,
+    #[serde(default)]
+    pub linux_host: LinuxHostSessionRunnerLayerConfig,
 }
 
 impl Default for SessionRunnerLayerConfig {
@@ -304,6 +307,7 @@ impl Default for SessionRunnerLayerConfig {
         Self {
             kind: default_session_runner_kind(),
             docker: DockerSessionRunnerLayerConfig::default(),
+            linux_host: LinuxHostSessionRunnerLayerConfig::default(),
         }
     }
 }
@@ -312,6 +316,7 @@ impl SessionRunnerLayerConfig {
     fn validate(&self) -> Result<(), RuntimeConfigError> {
         match self.kind {
             SessionRunnerKind::Docker => self.docker.validate(),
+            SessionRunnerKind::LinuxHost => self.linux_host.validate(),
         }
     }
 }
@@ -320,6 +325,17 @@ impl SessionRunnerLayerConfig {
 #[serde(rename_all = "snake_case")]
 pub enum SessionRunnerKind {
     Docker,
+    #[serde(alias = "linux-host")]
+    LinuxHost,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+pub struct LinuxHostSessionRunnerLayerConfig {}
+
+impl LinuxHostSessionRunnerLayerConfig {
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
@@ -476,6 +492,7 @@ impl SessionRunPlan {
 pub struct SessionRunnerConfig {
     kind: SessionRunnerKind,
     docker: DockerSessionRunnerConfig,
+    linux_host: LinuxHostSessionRunnerConfig,
 }
 
 impl SessionRunnerConfig {
@@ -488,6 +505,11 @@ impl SessionRunnerConfig {
     pub const fn docker(&self) -> &DockerSessionRunnerConfig {
         &self.docker
     }
+
+    #[must_use]
+    pub const fn linux_host(&self) -> &LinuxHostSessionRunnerConfig {
+        &self.linux_host
+    }
 }
 
 impl From<SessionRunnerLayerConfig> for SessionRunnerConfig {
@@ -495,7 +517,17 @@ impl From<SessionRunnerLayerConfig> for SessionRunnerConfig {
         Self {
             kind: config.kind,
             docker: config.docker.into(),
+            linux_host: config.linux_host.into(),
         }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LinuxHostSessionRunnerConfig {}
+
+impl From<LinuxHostSessionRunnerLayerConfig> for LinuxHostSessionRunnerConfig {
+    fn from(_config: LinuxHostSessionRunnerLayerConfig) -> Self {
+        Self {}
     }
 }
 
@@ -793,6 +825,119 @@ impl DockerSessionCommandPlan {
     #[must_use]
     pub fn args(&self) -> &[String] {
         &self.args
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinuxHostSessionCommandPlan {
+    program: String,
+    args: Vec<String>,
+    environment: Vec<(String, String)>,
+    current_dir: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LinuxHostSessionCommandOptions {
+    extra_environment: Vec<(String, String)>,
+    wrapper_program: Option<PathBuf>,
+}
+
+impl LinuxHostSessionCommandOptions {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn with_environment(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_environment.push((key.into(), value.into()));
+        self
+    }
+
+    #[must_use]
+    pub fn with_wrapper_program(mut self, wrapper: impl Into<PathBuf>) -> Self {
+        self.wrapper_program = Some(wrapper.into());
+        self
+    }
+}
+
+impl LinuxHostSessionCommandPlan {
+    #[must_use]
+    pub fn from_session_run_plan(plan: &SessionRunPlan) -> Self {
+        Self::from_session_run_plan_with_environment(plan, &[])
+    }
+
+    #[must_use]
+    pub fn from_session_run_plan_with_environment(
+        plan: &SessionRunPlan,
+        environment: &[(String, String)],
+    ) -> Self {
+        Self::from_session_run_plan_with_environment_and_options(
+            plan,
+            environment,
+            &LinuxHostSessionCommandOptions::default(),
+        )
+    }
+
+    #[must_use]
+    pub fn from_session_run_plan_with_environment_and_options(
+        plan: &SessionRunPlan,
+        environment: &[(String, String)],
+        options: &LinuxHostSessionCommandOptions,
+    ) -> Self {
+        let mut combined_environment = vec![
+            (
+                String::from("EREBOR_SESSION_ID"),
+                plan.session_id().as_str().to_owned(),
+            ),
+            (String::from("EREBOR_ACTOR_ID"), plan.actor().id.clone()),
+            (
+                String::from("EREBOR_SESSION_RUNNER"),
+                SessionRunnerKind::LinuxHost.as_str().to_owned(),
+            ),
+        ];
+        combined_environment.extend(environment.iter().cloned());
+        combined_environment.extend(options.extra_environment.iter().cloned());
+
+        let (program, args) = if let Some(wrapper) = options.wrapper_program.as_ref() {
+            (
+                wrapper.display().to_string(),
+                plan.command().iter().map(ToOwned::to_owned).collect(),
+            )
+        } else {
+            let command = plan.command();
+            (
+                command[0].clone(),
+                command.iter().skip(1).map(ToOwned::to_owned).collect(),
+            )
+        };
+
+        Self {
+            program,
+            args,
+            environment: combined_environment,
+            current_dir: plan.workspace().map(Path::to_path_buf),
+        }
+    }
+
+    #[must_use]
+    pub fn program(&self) -> &str {
+        &self.program
+    }
+
+    #[must_use]
+    pub fn args(&self) -> &[String] {
+        &self.args
+    }
+
+    #[must_use]
+    pub fn environment(&self) -> &[(String, String)] {
+        &self.environment
+    }
+
+    #[must_use]
+    pub fn current_dir(&self) -> Option<&Path> {
+        self.current_dir.as_deref()
     }
 }
 
@@ -1101,8 +1246,8 @@ mod tests {
     use erebor_runtime_events::SessionId;
 
     use crate::{
-        DockerSessionCommandPlan, RuntimeConfig, RuntimeConfigError, SessionRunPlan,
-        SessionRunnerKind, SessionSurfaceKind,
+        DockerSessionCommandPlan, LinuxHostSessionCommandOptions, LinuxHostSessionCommandPlan,
+        RuntimeConfig, RuntimeConfigError, SessionRunPlan, SessionRunnerKind, SessionSurfaceKind,
     };
 
     #[test]
@@ -1350,6 +1495,114 @@ mod tests {
                 "--help"
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn linux_host_command_plan_relaunches_local_command_with_session_environment(
+    ) -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "actor": { "id": "openclaw" },
+                "workspace": "/tmp/erebor-workspace",
+                "runner": {
+                  "kind": "linux_host"
+                }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let plan = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-1"),
+            vec![String::from("openclaw"), String::from("--help")],
+        )?;
+
+        let launch = LinuxHostSessionCommandPlan::from_session_run_plan_with_environment(
+            &plan,
+            &[(
+                String::from("EREBOR_BROWSER_CDP_URL"),
+                String::from("ws://127.0.0.1:3738/"),
+            )],
+        );
+
+        assert_eq!(launch.program(), "openclaw");
+        assert_eq!(launch.args(), &["--help"]);
+        assert_eq!(
+            launch.current_dir(),
+            Some(Path::new("/tmp/erebor-workspace"))
+        );
+        assert!(launch
+            .environment()
+            .contains(&(String::from("EREBOR_SESSION_ID"), String::from("session-1"))));
+        assert!(launch
+            .environment()
+            .contains(&(String::from("EREBOR_ACTOR_ID"), String::from("openclaw"))));
+        assert!(launch.environment().contains(&(
+            String::from("EREBOR_SESSION_RUNNER"),
+            String::from("linux-host")
+        )));
+        assert!(launch.environment().contains(&(
+            String::from("EREBOR_BROWSER_CDP_URL"),
+            String::from("ws://127.0.0.1:3738/")
+        )));
+        Ok(())
+    }
+
+    #[test]
+    fn linux_host_command_plan_can_wrap_command_with_process_guard(
+    ) -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "runner": {
+                  "kind": "linux-host"
+                }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let plan = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-guard"),
+            vec![
+                String::from("python3"),
+                String::from("-c"),
+                String::from("print('hello')"),
+            ],
+        )?;
+        let options = LinuxHostSessionCommandOptions::new()
+            .with_wrapper_program("/tmp/erebor-linux-process-guard")
+            .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace");
+
+        let launch =
+            LinuxHostSessionCommandPlan::from_session_run_plan_with_environment_and_options(
+                &plan,
+                &[],
+                &options,
+            );
+
+        assert_eq!(launch.program(), "/tmp/erebor-linux-process-guard");
+        assert_eq!(launch.args(), &["python3", "-c", "print('hello')"]);
+        assert!(launch.environment().contains(&(
+            String::from("EREBOR_PROCESS_GUARD"),
+            String::from("linux-ptrace")
+        )));
         Ok(())
     }
 

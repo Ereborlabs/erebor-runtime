@@ -12,11 +12,12 @@ pub use config::{
     docker_container_name_for_session, validate_policy_path, BrowserCdpSurfaceConfig,
     BrowserCdpSurfaceLayerConfig, BrowserLaunchConfig, BrowserLaunchLayerConfig,
     DockerSessionCommandOptions, DockerSessionCommandPlan, DockerSessionMount,
-    DockerSessionRunnerConfig, DockerSessionRunnerLayerConfig, RuntimeAuditConfig, RuntimeConfig,
-    SessionActorLayerConfig, SessionDiagnosticLayerConfig, SessionLayerConfig, SessionRunPlan,
-    SessionRunnerConfig, SessionRunnerKind, SessionRunnerLayerConfig, SessionSurfaceKind,
-    SessionSurfaceLayers, SessionSurfaceStartPlan, SessionSurfaceToggleConfig,
-    TerminalSurfaceConfig, TerminalSurfaceLayerConfig,
+    DockerSessionRunnerConfig, DockerSessionRunnerLayerConfig, LinuxHostSessionCommandOptions,
+    LinuxHostSessionCommandPlan, LinuxHostSessionRunnerConfig, LinuxHostSessionRunnerLayerConfig,
+    RuntimeAuditConfig, RuntimeConfig, SessionActorLayerConfig, SessionDiagnosticLayerConfig,
+    SessionLayerConfig, SessionRunPlan, SessionRunnerConfig, SessionRunnerKind,
+    SessionRunnerLayerConfig, SessionSurfaceKind, SessionSurfaceLayers, SessionSurfaceStartPlan,
+    SessionSurfaceToggleConfig, TerminalSurfaceConfig, TerminalSurfaceLayerConfig,
 };
 pub use engine::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,
@@ -29,6 +30,6 @@ pub use runtime::{
     SessionSurfaceService, SessionSurfaceSupervisor,
 };
 pub use session::{
-    DockerSessionRunner, SessionCapturedRunOutcome, SessionRunOutcome, SessionRunner,
-    SessionRunnerLauncher,
+    DockerSessionRunner, LinuxHostSessionRunner, SessionCapturedRunOutcome, SessionRunOutcome,
+    SessionRunner, SessionRunnerLauncher,
 };
