@@ -146,6 +146,7 @@ struct EventMatcher {
     action: Option<ActionKind>,
     target_contains: Option<String>,
     payload_contains: Option<String>,
+    command_contains: Option<String>,
     risk_at_least: Option<RiskLevel>,
 }
 
@@ -155,6 +156,7 @@ impl EventMatcher {
             && self.action.is_none()
             && self.target_contains.is_none()
             && self.payload_contains.is_none()
+            && self.command_contains.is_none()
             && self.risk_at_least.is_none()
     }
 
@@ -175,6 +177,10 @@ impl EventMatcher {
                 .as_ref()
                 .is_none_or(|needle| payload_contains(event, needle))
             && self
+                .command_contains
+                .as_ref()
+                .is_none_or(|needle| command_contains(event, needle))
+            && self
                 .risk_at_least
                 .as_ref()
                 .is_none_or(|minimum| event.risk.level.is_at_least(minimum))
@@ -186,6 +192,7 @@ impl EventMatcher {
 enum RuleDecision {
     Allow,
     Deny,
+    #[serde(alias = "require_verification")]
     RequireApproval,
 }
 
@@ -201,4 +208,25 @@ fn target_contains(event: &RuntimeEvent, needle: &str) -> bool {
 
 fn payload_contains(event: &RuntimeEvent, needle: &str) -> bool {
     event.payload.to_string().contains(needle)
+}
+
+fn command_contains(event: &RuntimeEvent, needle: &str) -> bool {
+    event
+        .payload
+        .get("command")
+        .is_some_and(|command| value_contains(command, needle))
+        || event
+            .payload
+            .get("argv_summary")
+            .is_some_and(|summary| value_contains(summary, needle))
+}
+
+fn value_contains(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.contains(needle),
+        serde_json::Value::Array(values) => {
+            values.iter().any(|value| value_contains(value, needle))
+        }
+        _ => value.to_string().contains(needle),
+    }
 }

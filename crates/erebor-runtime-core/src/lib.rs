@@ -17,7 +17,8 @@ pub use config::{
     RuntimeAuditConfig, RuntimeConfig, SessionActorLayerConfig, SessionAdoptPlan,
     SessionDiagnosticLayerConfig, SessionLayerConfig, SessionRunPlan, SessionRunnerConfig,
     SessionRunnerKind, SessionRunnerLayerConfig, SessionSurfaceKind, SessionSurfaceLayers,
-    SessionSurfaceStartPlan, SessionSurfaceToggleConfig, TerminalSurfaceConfig,
+    SessionSurfaceStartPlan, SessionSurfaceToggleConfig, TerminalProcessGuardBackend,
+    TerminalProcessGuardConfig, TerminalProcessGuardLayerConfig, TerminalSurfaceConfig,
     TerminalSurfaceLayerConfig,
 };
 pub use engine::{

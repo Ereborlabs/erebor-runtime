@@ -219,9 +219,11 @@ fn start_adopt_session_side_resources(
     config: &RuntimeConfig,
     plan: &SessionAdoptPlan,
 ) -> Result<SessionSideResources, SessionExecutionError> {
-    if plan.runner().kind() == SessionRunnerKind::LinuxHost && !config.surfaces.terminal.enabled {
+    if plan.runner().kind() == SessionRunnerKind::LinuxHost
+        && (!config.surfaces.terminal.enabled || !config.surfaces.terminal.process_guard.enabled)
+    {
         return Err(SessionExecutionError::guard_config(
-            "linux-host adoption requires the terminal/process surface",
+            "linux-host adoption requires surfaces.terminal.process_guard.enabled=true",
         ));
     }
 
@@ -262,15 +264,27 @@ fn start_session_side_resources_from_start_plan(
                 ));
             }
             SessionSurfaceDefinition::Terminal(config) => {
-                let bundle = LinuxProcessGuardBundle::prepare(config, plan)?;
-                docker_options = bundle.docker_options();
-                linux_host_options = bundle.linux_host_options();
-                guard_bundle = Some(bundle);
                 environment.push((
                     String::from("EREBOR_TERMINAL_SURFACE"),
-                    String::from("process_guard"),
+                    String::from("terminal"),
                 ));
                 environment.push((String::from("EREBOR_TERMINAL_TTY"), plan.tty().to_string()));
+
+                if config.process_guard().enabled() {
+                    let bundle = LinuxProcessGuardBundle::prepare(config, plan)?;
+                    docker_options = bundle.docker_options();
+                    linux_host_options = bundle.linux_host_options();
+                    guard_bundle = Some(bundle);
+                    environment.push((
+                        String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
+                        config.process_guard().backend().as_str().to_owned(),
+                    ));
+                } else {
+                    environment.push((
+                        String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
+                        String::from("disabled"),
+                    ));
+                }
             }
         }
     }
@@ -387,7 +401,7 @@ struct LinuxProcessGuardBundle {
     host_dir: PathBuf,
     guard_path: PathBuf,
     session_id: String,
-    deny_rules: String,
+    guard_rules: String,
     audit_path: Option<PathBuf>,
     audit_filename: Option<String>,
     terminal_tty: bool,
@@ -409,9 +423,9 @@ impl LinuxProcessGuardBundle {
         fs::set_permissions(&guard_path, fs::Permissions::from_mode(0o755))
             .map_err(SessionExecutionError::guard_io)?;
 
-        let deny_rules = compile_terminal_process_guard_rules(config)
+        let guard_rules = compile_terminal_process_guard_rules(config)
             .map_err(SessionExecutionError::terminal_surface)?
-            .to_docker_env_value();
+            .to_env_value();
         let mut audit_jsonl_path = None;
         let mut audit_filename = None;
 
@@ -439,7 +453,7 @@ impl LinuxProcessGuardBundle {
             host_dir,
             guard_path,
             session_id: plan.session_id().as_str().to_owned(),
-            deny_rules,
+            guard_rules,
             audit_path: audit_jsonl_path,
             audit_filename,
             terminal_tty: plan.terminal().tty(),
@@ -452,7 +466,7 @@ impl LinuxProcessGuardBundle {
             .with_entrypoint(LINUX_PROCESS_GUARD_PATH)
             .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
             .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string())
-            .with_environment("EREBOR_GUARD_DENY_RULES", self.deny_rules.clone());
+            .with_environment("EREBOR_GUARD_RULES", self.guard_rules.clone());
 
         if let Some(audit_path) = self.audit_path.as_ref() {
             let audit_parent = audit_path
@@ -476,7 +490,7 @@ impl LinuxProcessGuardBundle {
             .with_wrapper_program(&self.guard_path)
             .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
             .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string())
-            .with_environment("EREBOR_GUARD_DENY_RULES", self.deny_rules.clone())
+            .with_environment("EREBOR_GUARD_RULES", self.guard_rules.clone())
             .with_environment(
                 "EREBOR_GUARD_CGROUP_DIR",
                 format!(

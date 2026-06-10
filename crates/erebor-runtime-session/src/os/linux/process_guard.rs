@@ -93,10 +93,17 @@ struct UserRegsStruct {
 }
 
 #[derive(Clone, Debug)]
-struct DenyRule {
+struct ProcessRule {
     token: String,
     reason: String,
     rule_id: String,
+    decision: ProcessRuleDecision,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessRuleDecision {
+    Deny,
+    RequireApproval,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -106,7 +113,7 @@ struct PidState {
 }
 
 struct TraceContext {
-    rules: Vec<DenyRule>,
+    rules: Vec<ProcessRule>,
     states: HashMap<Pid, PidState>,
     audit_seq: u64,
     root_pid: Pid,
@@ -138,7 +145,7 @@ fn main() {
     process::exit(launch_new_process_tree(command, rules));
 }
 
-fn launch_new_process_tree(command: Vec<CString>, rules: Vec<DenyRule>) -> i32 {
+fn launch_new_process_tree(command: Vec<CString>, rules: Vec<ProcessRule>) -> i32 {
     let child = unsafe { fork() };
     if child < 0 {
         die(&format!("fork failed: {}", errno_message(errno())));
@@ -165,7 +172,7 @@ fn launch_new_process_tree(command: Vec<CString>, rules: Vec<DenyRule>) -> i32 {
     trace_loop(&mut context)
 }
 
-fn adopt_existing_process_tree(root_pid: Pid, rules: Vec<DenyRule>) -> i32 {
+fn adopt_existing_process_tree(root_pid: Pid, rules: Vec<ProcessRule>) -> i32 {
     let candidate_pids = process_tree_pids(root_pid);
     let mut context = TraceContext {
         rules,
@@ -487,10 +494,20 @@ fn should_deny_exec(
     write_audit(context.audit_seq, pid, &path, &argv, &text, rule.as_ref());
 
     if let Some(rule) = rule {
-        eprintln!(
-            "erebor linux process guard: denied exec: {}: {}",
-            text, rule.reason
-        );
+        match rule.decision {
+            ProcessRuleDecision::Deny => {
+                eprintln!(
+                    "erebor linux process guard: denied exec: {}: {}",
+                    text, rule.reason
+                );
+            }
+            ProcessRuleDecision::RequireApproval => {
+                eprintln!(
+                    "erebor linux process guard: verification required for exec, denied fail-closed: {}: {}",
+                    text, rule.reason
+                );
+            }
+        }
         true
     } else {
         false
@@ -800,12 +817,14 @@ fn command_text(path: &str, argv: &[String]) -> String {
     text
 }
 
-fn parse_rules() -> Vec<DenyRule> {
-    let source = env::var("EREBOR_GUARD_DENY_RULES").unwrap_or_default();
+fn parse_rules() -> Vec<ProcessRule> {
+    let source = env::var("EREBOR_GUARD_RULES")
+        .or_else(|_| env::var("EREBOR_GUARD_DENY_RULES"))
+        .unwrap_or_default();
     parse_rules_from_source(&source)
 }
 
-fn parse_rules_from_source(source: &str) -> Vec<DenyRule> {
+fn parse_rules_from_source(source: &str) -> Vec<ProcessRule> {
     source
         .lines()
         .take(MAX_RULES)
@@ -815,7 +834,7 @@ fn parse_rules_from_source(source: &str) -> Vec<DenyRule> {
             if token.is_empty() {
                 return None;
             }
-            Some(DenyRule {
+            Some(ProcessRule {
                 token: token.to_owned(),
                 reason: fields
                     .next()
@@ -827,6 +846,7 @@ fn parse_rules_from_source(source: &str) -> Vec<DenyRule> {
                     .filter(|rule_id| !rule_id.is_empty())
                     .unwrap_or("erebor-linux-process-guard")
                     .to_owned(),
+                decision: ProcessRuleDecision::from_guard_env(fields.next()),
             })
         })
         .collect()
@@ -838,7 +858,7 @@ fn write_audit(
     path: &str,
     argv: &[String],
     text: &str,
-    rule: Option<&DenyRule>,
+    rule: Option<&ProcessRule>,
 ) {
     let audit_path = match env::var("EREBOR_GUARD_AUDIT_JSONL") {
         Ok(path) if !path.is_empty() => path,
@@ -866,7 +886,8 @@ fn write_audit(
         .display()
         .to_string();
     let event_id = format!("{session_id}-process-exec-{pid}-{sequence}");
-    let decision = if rule.is_some() { "deny" } else { "allow" };
+    let policy_decision = rule.map_or("allow", |rule| rule.decision.policy_decision_type());
+    let final_decision = if rule.is_some() { "deny" } else { "allow" };
     let risk = if rule.is_some() { "high" } else { "medium" };
     let reason = rule.map_or("agent-issued process execution attempt", |rule| {
         rule.reason.as_str()
@@ -898,7 +919,7 @@ fn write_audit(
         risk,
         json_string(reason),
         timestamp,
-        decision
+        policy_decision
     );
     if let Some(rule) = rule {
         let _ = write!(
@@ -907,17 +928,46 @@ fn write_audit(
             json_string(&rule.reason),
             json_string(&rule.rule_id)
         );
+        if rule.decision == ProcessRuleDecision::RequireApproval {
+            let _ = write!(file, ",\"approval_id\":null");
+        }
     }
-    let _ = write!(file, "}},\"final_decision\":{{\"type\":\"{}\"", decision);
+    let _ = write!(
+        file,
+        "}},\"final_decision\":{{\"type\":\"{}\"",
+        final_decision
+    );
     if let Some(rule) = rule {
+        let final_reason = match rule.decision {
+            ProcessRuleDecision::Deny => rule.reason.as_str(),
+            ProcessRuleDecision::RequireApproval => {
+                "process execution requires verification but no terminal approval provider is available"
+            }
+        };
         let _ = write!(
             file,
             ",\"reason\":{},\"rule_id\":{}",
-            json_string(&rule.reason),
+            json_string(final_reason),
             json_string(&rule.rule_id)
         );
     }
     let _ = writeln!(file, "}}}}");
+}
+
+impl ProcessRuleDecision {
+    fn from_guard_env(value: Option<&str>) -> Self {
+        match value.unwrap_or_default() {
+            "require_approval" | "require_verification" => Self::RequireApproval,
+            _ => Self::Deny,
+        }
+    }
+
+    const fn policy_decision_type(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::RequireApproval => "require_approval",
+        }
+    }
 }
 
 fn json_string(value: &str) -> String {
@@ -1000,7 +1050,7 @@ mod tests {
         command_text, json_string, parse_parent_pid_from_stat, parse_rules_from_source,
         ptrace_event, wait_exit_status, wait_exited, wait_signaled, wait_stop_signal,
         wait_stopped, wait_term_signal, CgroupJoinReport, MAX_RULES, MAX_TEXT,
-        PTRACE_EVENT_CLONE, SIGTRAP,
+        ProcessRuleDecision, PTRACE_EVENT_CLONE, SIGTRAP,
     };
 
     #[test]
@@ -1013,12 +1063,27 @@ mod tests {
         assert_eq!(rules[0].token, "remote-debugging-port");
         assert_eq!(rules[0].reason, "raw CDP is denied");
         assert_eq!(rules[0].rule_id, "deny-raw-cdp");
+        assert_eq!(rules[0].decision, ProcessRuleDecision::Deny);
         assert_eq!(rules[1].token, "chromium");
         assert_eq!(
             rules[1].reason,
             "process execution denied by Erebor policy"
         );
         assert_eq!(rules[1].rule_id, "erebor-linux-process-guard");
+        assert_eq!(rules[1].decision, ProcessRuleDecision::Deny);
+    }
+
+    #[test]
+    fn parses_verification_rules_from_guard_environment_format() {
+        let rules = parse_rules_from_source(
+            "git push\tgit push needs verification\tverify-git-push\trequire_approval\n",
+        );
+
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].token, "git push");
+        assert_eq!(rules[0].reason, "git push needs verification");
+        assert_eq!(rules[0].rule_id, "verify-git-push");
+        assert_eq!(rules[0].decision, ProcessRuleDecision::RequireApproval);
     }
 
     #[test]

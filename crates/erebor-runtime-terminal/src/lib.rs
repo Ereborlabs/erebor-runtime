@@ -24,19 +24,25 @@ impl TerminalProcessGuardRules {
     }
 
     #[must_use]
-    pub fn to_docker_env_value(&self) -> String {
+    pub fn to_env_value(&self) -> String {
         self.rules
             .iter()
             .map(|rule| {
                 format!(
-                    "{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}",
                     guard_env_field(rule.match_token()),
                     guard_env_field(rule.reason()),
-                    guard_env_field(rule.rule_id())
+                    guard_env_field(rule.rule_id()),
+                    guard_env_field(rule.decision().as_guard_env())
                 )
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[must_use]
+    pub fn to_docker_env_value(&self) -> String {
+        self.to_env_value()
     }
 }
 
@@ -45,6 +51,7 @@ pub struct TerminalProcessGuardRule {
     match_token: String,
     reason: String,
     rule_id: String,
+    decision: TerminalProcessGuardDecision,
 }
 
 impl TerminalProcessGuardRule {
@@ -53,11 +60,13 @@ impl TerminalProcessGuardRule {
         match_token: impl Into<String>,
         reason: impl Into<String>,
         rule_id: impl Into<String>,
+        decision: TerminalProcessGuardDecision,
     ) -> Self {
         Self {
             match_token: match_token.into(),
             reason: reason.into(),
             rule_id: rule_id.into(),
+            decision,
         }
     }
 
@@ -74,6 +83,27 @@ impl TerminalProcessGuardRule {
     #[must_use]
     pub fn rule_id(&self) -> &str {
         &self.rule_id
+    }
+
+    #[must_use]
+    pub const fn decision(&self) -> TerminalProcessGuardDecision {
+        self.decision
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalProcessGuardDecision {
+    Deny,
+    RequireApproval,
+}
+
+impl TerminalProcessGuardDecision {
+    #[must_use]
+    pub const fn as_guard_env(self) -> &'static str {
+        match self {
+            Self::Deny => "deny",
+            Self::RequireApproval => "require_approval",
+        }
     }
 }
 
@@ -96,13 +126,17 @@ pub fn compile_terminal_process_guard_rules(
             })?;
 
         for rule in policy_rules {
-            if !terminal_process_deny_rule(rule) {
+            let Some(decision) = terminal_process_guard_decision(rule) else {
                 continue;
-            }
+            };
 
             let Some(match_token) = rule
                 .get("match")
-                .and_then(|matcher| matcher.get("payload_contains"))
+                .and_then(|matcher| {
+                    matcher
+                        .get("command_contains")
+                        .or_else(|| matcher.get("payload_contains"))
+                })
                 .and_then(serde_json::Value::as_str)
             else {
                 continue;
@@ -117,7 +151,12 @@ pub fn compile_terminal_process_guard_rules(
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("process execution denied by Erebor policy");
 
-            rules.push(TerminalProcessGuardRule::new(match_token, reason, rule_id));
+            rules.push(TerminalProcessGuardRule::new(
+                match_token,
+                reason,
+                rule_id,
+                decision,
+            ));
         }
     }
 
@@ -159,19 +198,34 @@ fn read_policy_source(path: &Path) -> Result<String, TerminalSurfaceError> {
     })
 }
 
-fn terminal_process_deny_rule(rule: &serde_json::Value) -> bool {
+fn terminal_process_guard_decision(
+    rule: &serde_json::Value,
+) -> Option<TerminalProcessGuardDecision> {
     let matcher = rule.get("match");
-    rule.get("decision")
+    let terminal_process_exec = matcher
+        .and_then(|matcher| matcher.get("surface"))
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|decision| decision == "deny")
-        && matcher
-            .and_then(|matcher| matcher.get("surface"))
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|surface| surface == "terminal")
+        .is_some_and(|surface| surface == "terminal")
         && matcher
             .and_then(|matcher| matcher.get("action"))
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|action| action == "process_exec")
+            .is_some_and(|action| action == "process_exec");
+
+    if !terminal_process_exec {
+        return None;
+    }
+
+    match rule
+        .get("decision")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+    {
+        "deny" => Some(TerminalProcessGuardDecision::Deny),
+        "require_approval" | "require_verification" => {
+            Some(TerminalProcessGuardDecision::RequireApproval)
+        }
+        _ => None,
+    }
 }
 
 fn guard_env_field(value: &str) -> String {
@@ -191,7 +245,8 @@ mod tests {
     use erebor_runtime_core::RuntimeConfig;
 
     use super::{
-        compile_terminal_process_guard_rules, TerminalProcessGuardRule, TerminalProcessGuardRules,
+        compile_terminal_process_guard_rules, TerminalProcessGuardDecision,
+        TerminalProcessGuardRule, TerminalProcessGuardRules,
     };
 
     #[test]
@@ -200,11 +255,12 @@ mod tests {
             "remote-debugging-port",
             "raw CDP\nis denied",
             "deny\tcdp",
+            TerminalProcessGuardDecision::Deny,
         )]);
 
         assert_eq!(
             rules.to_docker_env_value(),
-            "remote-debugging-port\traw CDP is denied\tdeny cdp"
+            "remote-debugging-port\traw CDP is denied\tdeny cdp\tdeny"
         );
     }
 
@@ -225,10 +281,20 @@ mod tests {
                   "match": {
                     "surface": "terminal",
                     "action": "process_exec",
-                    "payload_contains": "remote-debugging-port"
+                    "command_contains": "remote-debugging-port"
                   },
                   "decision": "deny",
                   "reason": "raw CDP is denied"
+                },
+                {
+                  "id": "approve-git-push",
+                  "match": {
+                    "surface": "terminal",
+                    "action": "process_exec",
+                    "command_contains": "git push"
+                  },
+                  "decision": "require_approval",
+                  "reason": "git push needs operator verification"
                 },
                 {
                   "id": "allow-ls",
@@ -248,7 +314,10 @@ mod tests {
             r#"{{
               "policies": ["{}"],
               "surfaces": {{
-                "terminal": {{ "enabled": true }}
+                "terminal": {{
+                  "enabled": true,
+                  "process_guard": {{ "enabled": true }}
+                }}
               }}
             }}"#,
             policy_path.display()
@@ -259,10 +328,24 @@ mod tests {
             .ok_or_else(|| io::Error::other("expected terminal surface config"))?;
         let rules = compile_terminal_process_guard_rules(terminal)?;
 
-        assert_eq!(rules.rules().len(), 1);
+        assert_eq!(rules.rules().len(), 2);
         assert_eq!(rules.rules()[0].match_token(), "remote-debugging-port");
         assert_eq!(rules.rules()[0].reason(), "raw CDP is denied");
         assert_eq!(rules.rules()[0].rule_id(), "deny-raw-cdp");
+        assert_eq!(
+            rules.rules()[0].decision(),
+            TerminalProcessGuardDecision::Deny
+        );
+        assert_eq!(rules.rules()[1].match_token(), "git push");
+        assert_eq!(
+            rules.rules()[1].reason(),
+            "git push needs operator verification"
+        );
+        assert_eq!(rules.rules()[1].rule_id(), "approve-git-push");
+        assert_eq!(
+            rules.rules()[1].decision(),
+            TerminalProcessGuardDecision::RequireApproval
+        );
 
         fs::remove_file(policy_path)?;
         Ok(())

@@ -1195,12 +1195,31 @@ pub struct TerminalSurfaceLayerConfig {
     pub tty: bool,
     #[serde(default)]
     pub policies: Vec<PathBuf>,
+    #[serde(default)]
+    pub process_guard: TerminalProcessGuardLayerConfig,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+pub struct TerminalProcessGuardLayerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub backend: TerminalProcessGuardBackend,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalProcessGuardBackend {
+    #[default]
+    #[serde(alias = "linux-ptrace")]
+    LinuxPtrace,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TerminalSurfaceConfig {
     tty: bool,
     policies: Vec<PathBuf>,
+    process_guard: TerminalProcessGuardConfig,
 }
 
 impl TerminalSurfaceConfig {
@@ -1214,10 +1233,52 @@ impl TerminalSurfaceConfig {
         &self.policies
     }
 
+    #[must_use]
+    pub const fn process_guard(&self) -> &TerminalProcessGuardConfig {
+        &self.process_guard
+    }
+
     fn from_layer(config: &TerminalSurfaceLayerConfig, default_policies: Vec<PathBuf>) -> Self {
         Self {
             tty: config.tty,
             policies: surface_policies(&config.policies, default_policies),
+            process_guard: config.process_guard.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TerminalProcessGuardConfig {
+    enabled: bool,
+    backend: TerminalProcessGuardBackend,
+}
+
+impl TerminalProcessGuardConfig {
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub const fn backend(&self) -> TerminalProcessGuardBackend {
+        self.backend
+    }
+}
+
+impl From<TerminalProcessGuardLayerConfig> for TerminalProcessGuardConfig {
+    fn from(config: TerminalProcessGuardLayerConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            backend: config.backend,
+        }
+    }
+}
+
+impl TerminalProcessGuardBackend {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LinuxPtrace => "linux_ptrace",
         }
     }
 }
@@ -1401,7 +1462,7 @@ mod tests {
     use crate::{
         DockerSessionCommandPlan, LinuxHostSessionCommandOptions, LinuxHostSessionCommandPlan,
         RuntimeConfig, RuntimeConfigError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
-        SessionSurfaceKind,
+        SessionSurfaceKind, TerminalProcessGuardBackend,
     };
 
     #[test]
@@ -1424,6 +1485,55 @@ mod tests {
         assert_eq!(
             config.enabled_surfaces(),
             vec![SessionSurfaceKind::BrowserCdp, SessionSurfaceKind::Terminal]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_process_guard_is_explicit_runtime_config() -> Result<(), RuntimeConfigError> {
+        let default_config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "surfaces": {
+                "terminal": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let default_plan = default_config.surface_start_plan()?;
+        let default_terminal = default_plan
+            .terminal()
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+
+        assert!(!default_terminal.process_guard().enabled());
+
+        let guarded_config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "surfaces": {
+                "terminal": {
+                  "enabled": true,
+                  "process_guard": {
+                    "enabled": true,
+                    "backend": "linux_ptrace"
+                  }
+                }
+              }
+            }
+            "#,
+        )?;
+        let guarded_plan = guarded_config.surface_start_plan()?;
+        let guarded_terminal = guarded_plan
+            .terminal()
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+
+        assert!(guarded_terminal.process_guard().enabled());
+        assert_eq!(
+            guarded_terminal.process_guard().backend(),
+            TerminalProcessGuardBackend::LinuxPtrace
         );
 
         Ok(())

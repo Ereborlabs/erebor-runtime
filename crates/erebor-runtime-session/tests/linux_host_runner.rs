@@ -38,7 +38,10 @@ mod linux_host {
                 "runner": {{ "kind": "linux_host" }}
               }},
               "surfaces": {{
-                "terminal": {{ "enabled": true }}
+                "terminal": {{
+                  "enabled": true,
+                  "process_guard": {{ "enabled": true }}
+                }}
               }}
             }}"#,
             policy_path.display(),
@@ -57,6 +60,54 @@ mod linux_host {
         assert!(outcome.stdout().contains("runner=linux-host"));
         assert!(outcome.stdout().contains("actor=openclaw"));
         assert!(audit_path.exists());
+
+        fs::remove_dir_all(test_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn linux_host_runner_can_disable_process_guard_at_runtime(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let test_dir = test_dir("unguarded")?;
+        let policy_path = write_policy(&test_dir)?;
+        let config = RuntimeConfig::from_json_str(&format!(
+            r#"{{
+              "policies": ["{}"],
+              "session": {{
+                "enabled": true,
+                "actor": {{ "id": "openclaw" }},
+                "diagnostics": [
+                  {{
+                    "name": "metadata",
+                    "command": [
+                      "sh",
+                      "-lc",
+                      "echo terminal_guard=$EREBOR_TERMINAL_PROCESS_GUARD process_guard=${{EREBOR_PROCESS_GUARD:-unset}}"
+                    ]
+                  }}
+                ],
+                "runner": {{ "kind": "linux_host" }}
+              }},
+              "surfaces": {{
+                "terminal": {{
+                  "enabled": true,
+                  "process_guard": {{ "enabled": false }}
+                }}
+              }}
+            }}"#,
+            policy_path.display()
+        ))?;
+        let plan = SessionRunPlan::from_diagnostic(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-linux-host-unguarded"),
+            "metadata",
+        )?;
+
+        let outcome = run_session_diagnostic(&config, &plan)?;
+
+        assert!(outcome.stdout().contains("terminal_guard=disabled"));
+        assert!(outcome.stdout().contains("process_guard=unset"));
 
         fs::remove_dir_all(test_dir)?;
         Ok(())
@@ -83,7 +134,10 @@ mod linux_host {
                 "runner": {{ "kind": "linux_host" }}
               }},
               "surfaces": {{
-                "terminal": {{ "enabled": true }}
+                "terminal": {{
+                  "enabled": true,
+                  "process_guard": {{ "enabled": true }}
+                }}
               }}
             }}"#,
             policy_path.display(),
@@ -142,7 +196,10 @@ mod linux_host {
                 "runner": {{ "kind": "linux_host" }}
               }},
               "surfaces": {{
-                "terminal": {{ "enabled": true }}
+                "terminal": {{
+                  "enabled": true,
+                  "process_guard": {{ "enabled": true }}
+                }}
               }}
             }}"#,
             policy_path.display(),
@@ -180,6 +237,69 @@ mod linux_host {
         Ok(())
     }
 
+    #[test]
+    fn linux_host_runner_fails_closed_for_verification_required_exec(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let test_dir = test_dir("require-approval")?;
+        let policy_path = write_policy(&test_dir)?;
+        let audit_path = test_dir.join("audit.jsonl");
+        let config = RuntimeConfig::from_json_str(&format!(
+            r#"{{
+              "policies": ["{}"],
+              "audit": {{ "jsonl": "{}" }},
+              "session": {{
+                "enabled": true,
+                "actor": {{ "id": "openclaw" }},
+                "diagnostics": [
+                  {{
+                    "name": "git-push",
+                    "command": ["sh", "-lc", "git push origin main"]
+                  }}
+                ],
+                "runner": {{ "kind": "linux_host" }}
+              }},
+              "surfaces": {{
+                "terminal": {{
+                  "enabled": true,
+                  "process_guard": {{ "enabled": true }}
+                }}
+              }}
+            }}"#,
+            policy_path.display(),
+            audit_path.display()
+        ))?;
+        let plan = SessionRunPlan::from_diagnostic(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-linux-host-verify"),
+            "git-push",
+        )?;
+
+        let error = match run_session_diagnostic(&config, &plan) {
+            Ok(outcome) => {
+                return Err(format!(
+                    "diagnostic should fail closed, but stdout was `{}` and stderr was `{}`",
+                    outcome.stdout(),
+                    outcome.stderr()
+                )
+                .into());
+            }
+            Err(error) => error,
+        };
+
+        assert!(
+            matches!(error, SessionExecutionError::DiagnosticFailed { .. }),
+            "expected verification-required diagnostic failure, got {error:?}"
+        );
+        let audit = fs::read_to_string(&audit_path)?;
+        assert!(audit.contains("\"policy_decision\":{\"type\":\"require_approval\""));
+        assert!(audit.contains("\"final_decision\":{\"type\":\"deny\""));
+        assert!(audit.contains("verify-git-push"));
+
+        fs::remove_dir_all(test_dir)?;
+        Ok(())
+    }
+
     fn test_dir(name: &str) -> Result<std::path::PathBuf, std::io::Error> {
         let path =
             std::env::temp_dir().join(format!("erebor-linux-host-runner-{name}-{}", process::id()));
@@ -195,11 +315,21 @@ mod linux_host {
             {
               "rules": [
                 {
+                  "id": "verify-git-push",
+                  "match": {
+                    "surface": "terminal",
+                    "action": "process_exec",
+                    "command_contains": "git push"
+                  },
+                  "decision": "require_approval",
+                  "reason": "git push needs operator verification"
+                },
+                {
                   "id": "deny-raw-cdp",
                   "match": {
                     "surface": "terminal",
                     "action": "process_exec",
-                    "payload_contains": "remote-debugging-port"
+                    "command_contains": "remote-debugging-port"
                   },
                   "decision": "deny",
                   "reason": "raw CDP process launch is denied"
