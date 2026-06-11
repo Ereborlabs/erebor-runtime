@@ -1,4 +1,8 @@
-use std::time::Duration;
+use std::{
+    io::{Read, Write},
+    net::SocketAddr,
+    time::Duration,
+};
 
 use erebor_runtime_core::SessionSurfaceKind;
 use erebor_runtime_e2e::E2eError;
@@ -11,8 +15,8 @@ mod support;
 
 use support::{
     allow_all_policy, create_governed_session_with_mini_upstream, deny_payload_script_eval_policy,
-    deny_script_eval_policy, deny_target_script_eval_policy, real_chrome_available,
-    require_approval_script_eval_policy, CdpE2eHarness,
+    deny_script_eval_policy, deny_target_script_eval_policy, owned_browser_e2e_guard,
+    real_chrome_available, require_approval_script_eval_policy, CdpE2eHarness,
 };
 
 #[tokio::test]
@@ -56,6 +60,70 @@ async fn browser_cdp_runtime_starts_and_forwards_allowed_commands() -> Result<()
     assert_eq!(
         upstream_command.pointer("/method"),
         Some(&Value::String(String::from("Page.navigate")))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_cdp_runtime_exposes_governed_discovery_endpoints() -> Result<(), E2eError> {
+    let harness = CdpE2eHarness::start_runtime_with_mini_upstream(allow_all_policy()?).await?;
+    let endpoint = harness.endpoint().to_owned();
+    let port = governed_endpoint_port(&endpoint)?;
+    let version = http_get_json(port, "/json/version")?;
+    let targets = http_get_json(port, "/json/list")?;
+
+    assert_eq!(
+        version.pointer("/webSocketDebuggerUrl"),
+        Some(&Value::String(endpoint.clone()))
+    );
+    assert_eq!(
+        targets.pointer("/0/webSocketDebuggerUrl"),
+        Some(&Value::String(endpoint))
+    );
+    assert!(
+        !version.to_string().contains("/devtools/browser/"),
+        "discovery must not expose Chrome's private browser endpoint"
+    );
+    assert!(
+        !targets.to_string().contains("/devtools/browser/"),
+        "target discovery must not expose Chrome's private browser endpoint"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_cdp_runtime_masks_owned_browser_discovery_targets() -> Result<(), E2eError> {
+    if !real_chrome_available() {
+        return Ok(());
+    }
+
+    let _owned_browser_guard = owned_browser_e2e_guard().await;
+    let harness = CdpE2eHarness::start_runtime_with_owned_browser(allow_all_policy()?).await?;
+    let endpoint = harness.endpoint().to_owned();
+    let mut client = harness.browser_level_client().await?;
+    client
+        .navigate("data:text/html,erebor-discovery-target")
+        .await?;
+    let targets = http_get_json(governed_endpoint_port(&endpoint)?, "/json/list")?;
+    let target_list = targets.as_array().ok_or_else(|| {
+        E2eError::external(
+            "owned browser discovery target list",
+            std::io::Error::other("expected JSON array"),
+        )
+    })?;
+
+    assert!(target_list.iter().any(|target| {
+        target
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(|url| url.contains("erebor-discovery-target"))
+    }));
+    assert!(target_list.iter().all(|target| {
+        target.pointer("/webSocketDebuggerUrl") == Some(&Value::String(endpoint.clone()))
+    }));
+    assert!(
+        !targets.to_string().contains("/devtools/"),
+        "owned-browser discovery must not expose Chrome's private endpoint paths"
     );
     Ok(())
 }
@@ -358,4 +426,48 @@ async fn browser_cdp_runtime_blocks_real_chrome_script_eval_side_effects() -> Re
         Some(&Value::Null)
     );
     Ok(())
+}
+
+fn governed_endpoint_port(endpoint: &str) -> Result<u16, E2eError> {
+    endpoint
+        .strip_prefix("ws://127.0.0.1:")
+        .and_then(|suffix| suffix.trim_end_matches('/').parse::<u16>().ok())
+        .ok_or_else(|| {
+            E2eError::external(
+                "governed endpoint parsing",
+                std::io::Error::other(format!("unexpected endpoint `{endpoint}`")),
+            )
+        })
+}
+
+fn http_get_json(port: u16, path: &str) -> Result<Value, E2eError> {
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let mut stream = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2))
+        .map_err(E2eError::io)?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(E2eError::io)?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(E2eError::io)?;
+    let request =
+        format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).map_err(E2eError::io)?;
+
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(E2eError::io)?;
+    let Some((status_line, body)) = response.split_once("\r\n\r\n") else {
+        return Err(E2eError::external(
+            "governed discovery response",
+            std::io::Error::other("missing HTTP response body"),
+        ));
+    };
+    if !status_line.starts_with("HTTP/1.1 200 ") {
+        return Err(E2eError::external(
+            "governed discovery status",
+            std::io::Error::other(status_line.to_owned()),
+        ));
+    }
+
+    serde_json::from_str(body).map_err(E2eError::json)
 }

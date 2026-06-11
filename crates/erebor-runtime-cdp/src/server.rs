@@ -12,6 +12,7 @@ use erebor_runtime_policy::{Decision, PolicySet};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout, Duration};
 use tokio_tungstenite::{
@@ -37,6 +38,10 @@ const OBSERVER_PAGE_ENABLE_ID: CallId = 10_003;
 const OBSERVER_RUNTIME_ENABLE_ID: CallId = 10_004;
 const OBSERVER_GET_FRAME_TREE_ID: CallId = 10_005;
 const OBSERVER_TARGET_COMMAND_ID_START: CallId = 20_000;
+const HTTP_DISCOVERY_HEADER_LIMIT: usize = 8192;
+const HTTP_DISCOVERY_PEEK_ATTEMPTS: usize = 8;
+const HTTP_DISCOVERY_PEEK_TIMEOUT: Duration = Duration::from_millis(250);
+const UPSTREAM_HTTP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpProxyServerConfig {
@@ -114,7 +119,16 @@ impl CdpProxyServer {
             let session_state = self.session_state.clone();
             debug!(client = %address, "accepted CDP proxy connection");
             let handle = tokio::spawn(async move {
-                match proxy_connection(stream, browser_url, engine, context, session_state).await {
+                match handle_client_connection(
+                    stream,
+                    local_addr,
+                    browser_url,
+                    engine,
+                    context,
+                    session_state,
+                )
+                .await
+                {
                     Ok(()) => debug!(client = %address, "CDP proxy connection closed"),
                     Err(error) => {
                         warn!(
@@ -128,6 +142,338 @@ impl CdpProxyServer {
             drop(handle);
         }
     }
+}
+
+async fn handle_client_connection(
+    mut stream: TcpStream,
+    local_addr: SocketAddr,
+    browser_url: String,
+    engine: Arc<CdpEngine>,
+    context: CdpSessionContext,
+    session_state: CdpSessionState,
+) -> Result<(), CdpError> {
+    if handle_http_discovery_if_present(&mut stream, local_addr, &browser_url).await? {
+        return Ok(());
+    }
+
+    proxy_connection(stream, browser_url, engine, context, session_state).await
+}
+
+async fn handle_http_discovery_if_present(
+    stream: &mut TcpStream,
+    local_addr: SocketAddr,
+    browser_url: &str,
+) -> Result<bool, CdpError> {
+    let Some(request) = peek_http_request(stream).await? else {
+        return Ok(false);
+    };
+    if is_websocket_upgrade(&request) {
+        return Ok(false);
+    }
+
+    let response = discovery_http_response(&request, local_addr, browser_url).await;
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .map_err(CdpError::io)?;
+    stream.shutdown().await.map_err(CdpError::io)?;
+    Ok(true)
+}
+
+async fn peek_http_request(stream: &TcpStream) -> Result<Option<String>, CdpError> {
+    let mut buffer = [0_u8; HTTP_DISCOVERY_HEADER_LIMIT];
+
+    for _attempt in 0..HTTP_DISCOVERY_PEEK_ATTEMPTS {
+        let bytes_read = match timeout(HTTP_DISCOVERY_PEEK_TIMEOUT, stream.peek(&mut buffer)).await
+        {
+            Ok(Ok(bytes_read)) => bytes_read,
+            Ok(Err(error)) => return Err(CdpError::io(error)),
+            Err(_) => return Ok(None),
+        };
+        if bytes_read == 0 {
+            return Ok(None);
+        }
+        if !looks_like_http_request(&buffer[..bytes_read]) {
+            return Ok(None);
+        }
+        if let Some(header_end) = find_http_header_end(&buffer[..bytes_read]) {
+            return Ok(Some(
+                String::from_utf8_lossy(&buffer[..header_end]).into_owned(),
+            ));
+        }
+
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    Ok(None)
+}
+
+fn looks_like_http_request(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"GET ")
+        || bytes.starts_with(b"PUT ")
+        || bytes.starts_with(b"POST ")
+        || bytes.starts_with(b"OPTIONS ")
+        || bytes.starts_with(b"HEAD ")
+}
+
+fn find_http_header_end(bytes: &[u8]) -> Option<usize> {
+    if let Some(position) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+        return Some(position + 4);
+    }
+
+    bytes
+        .windows(2)
+        .position(|window| window == b"\n\n")
+        .map(|position| position + 2)
+}
+
+fn is_websocket_upgrade(request: &str) -> bool {
+    request.lines().any(|line| {
+        let Some((name, value)) = line.split_once(':') else {
+            return false;
+        };
+
+        name.trim().eq_ignore_ascii_case("upgrade")
+            && value.trim().eq_ignore_ascii_case("websocket")
+    })
+}
+
+async fn discovery_http_response(
+    request: &str,
+    local_addr: SocketAddr,
+    browser_url: &str,
+) -> String {
+    let Some((method, path)) = request_line(request) else {
+        return http_response(
+            400,
+            "Bad Request",
+            "text/plain; charset=utf-8",
+            "bad request",
+        );
+    };
+    let governed_ws_url = governed_websocket_url(request, local_addr);
+
+    match discovery_payload(method, path, &governed_ws_url, browser_url).await {
+        Some(payload) => http_response(
+            200,
+            "OK",
+            "application/json; charset=utf-8",
+            &payload.to_string(),
+        ),
+        None => http_response(404, "Not Found", "text/plain; charset=utf-8", "not found"),
+    }
+}
+
+fn request_line(request: &str) -> Option<(&str, &str)> {
+    let mut parts = request.lines().next()?.split_whitespace();
+    let method = parts.next()?;
+    let path = parts.next()?;
+    Some((method, path))
+}
+
+fn governed_websocket_url(request: &str, local_addr: SocketAddr) -> String {
+    let host = request
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Host: ")
+                .or_else(|| line.strip_prefix("host: "))
+        })
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| socket_host(local_addr));
+
+    format!("ws://{host}/")
+}
+
+fn socket_host(address: SocketAddr) -> String {
+    if address.ip().is_ipv6() {
+        format!("[{}]:{}", address.ip(), address.port())
+    } else {
+        address.to_string()
+    }
+}
+
+async fn discovery_payload(
+    method: &str,
+    path: &str,
+    governed_ws_url: &str,
+    browser_url: &str,
+) -> Option<Value> {
+    let path_without_query = path.split('?').next().unwrap_or(path);
+
+    if method == "GET" && matches!(path_without_query, "/json/version" | "/json" | "/json/list") {
+        if let Some(mut payload) =
+            upstream_discovery_payload(browser_url, method, path_without_query).await
+        {
+            rewrite_discovery_websocket_urls(&mut payload, governed_ws_url);
+            return Some(payload);
+        }
+    }
+
+    match (method, path_without_query) {
+        ("GET", "/json/version") => Some(json!({
+            "Browser": "Erebor Runtime Governed Browser",
+            "Protocol-Version": "1.3",
+            "User-Agent": "Erebor Runtime",
+            "V8-Version": "",
+            "WebKit-Version": "",
+            "webSocketDebuggerUrl": governed_ws_url
+        })),
+        ("GET", "/json") | ("GET", "/json/list") => {
+            Some(json!([target_descriptor(governed_ws_url)]))
+        }
+        ("GET", "/json/protocol") => Some(json!({
+            "version": {
+                "major": "1",
+                "minor": "3"
+            },
+            "domains": []
+        })),
+        _ => None,
+    }
+}
+
+async fn upstream_discovery_payload(browser_url: &str, method: &str, path: &str) -> Option<Value> {
+    let (host, port) = devtools_http_host(browser_url)?;
+    let address = format!("{host}:{port}");
+    let mut stream = timeout(
+        UPSTREAM_HTTP_DISCOVERY_TIMEOUT,
+        TcpStream::connect(address.as_str()),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let request =
+        format!("{method} {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
+    timeout(
+        UPSTREAM_HTTP_DISCOVERY_TIMEOUT,
+        stream.write_all(request.as_bytes()),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    let (head, body) = read_upstream_http_response(&mut stream).await?;
+    if !head.starts_with("HTTP/1.1 200 ") && !head.starts_with("HTTP/1.0 200 ") {
+        return None;
+    }
+
+    serde_json::from_str(&body).ok()
+}
+
+async fn read_upstream_http_response(stream: &mut TcpStream) -> Option<(String, String)> {
+    let mut response = Vec::new();
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let bytes_read = timeout(UPSTREAM_HTTP_DISCOVERY_TIMEOUT, stream.read(&mut buffer))
+            .await
+            .ok()?
+            .ok()?;
+        if bytes_read == 0 {
+            break;
+        }
+        response.extend_from_slice(&buffer[..bytes_read]);
+        if http_response_complete(&response) {
+            break;
+        }
+    }
+
+    split_http_response(&response)
+}
+
+fn http_response_complete(response: &[u8]) -> bool {
+    let Some(header_end) = find_http_header_end(response) else {
+        return false;
+    };
+    let headers = String::from_utf8_lossy(&response[..header_end]);
+    let Some(content_length) = http_content_length(&headers) else {
+        return false;
+    };
+
+    response.len() >= header_end + content_length
+}
+
+fn split_http_response(response: &[u8]) -> Option<(String, String)> {
+    let header_end = find_http_header_end(response)?;
+    let head = String::from_utf8_lossy(&response[..header_end]).into_owned();
+    let body = String::from_utf8(response[header_end..].to_vec()).ok()?;
+    Some((head, body))
+}
+
+fn http_content_length(headers: &str) -> Option<usize> {
+    headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.trim()
+            .eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse().ok())?
+    })
+}
+
+fn devtools_http_host(browser_url: &str) -> Option<(String, u16)> {
+    let without_scheme = browser_url
+        .strip_prefix("ws://")
+        .or_else(|| browser_url.strip_prefix("http://"))?;
+    let authority = without_scheme.split('/').next()?;
+    let (host, port) = authority.rsplit_once(':')?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let port = port.parse().ok()?;
+    Some((host.to_owned(), port))
+}
+
+fn rewrite_discovery_websocket_urls(payload: &mut Value, governed_ws_url: &str) {
+    match payload {
+        Value::Object(map) => {
+            if map.contains_key("webSocketDebuggerUrl") {
+                map.insert(
+                    String::from("webSocketDebuggerUrl"),
+                    Value::String(governed_ws_url.to_owned()),
+                );
+            }
+            if map.contains_key("devtoolsFrontendUrl") {
+                map.insert(
+                    String::from("devtoolsFrontendUrl"),
+                    Value::String(governed_devtools_frontend_url(governed_ws_url)),
+                );
+            }
+            for value in map.values_mut() {
+                rewrite_discovery_websocket_urls(value, governed_ws_url);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                rewrite_discovery_websocket_urls(value, governed_ws_url);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn target_descriptor(governed_ws_url: &str) -> Value {
+    json!({
+        "description": "Erebor governed browser endpoint",
+        "devtoolsFrontendUrl": governed_devtools_frontend_url(governed_ws_url),
+        "id": "erebor-governed-browser",
+        "title": "Erebor Governed Browser",
+        "type": "page",
+        "url": "about:blank",
+        "webSocketDebuggerUrl": governed_ws_url
+    })
+}
+
+fn governed_devtools_frontend_url(governed_ws_url: &str) -> String {
+    format!(
+        "/devtools/inspector.html?ws={}",
+        governed_ws_url.trim_start_matches("ws://")
+    )
+}
+
+fn http_response(status: u16, reason: &str, content_type: &str, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
 }
 
 async fn proxy_connection(
