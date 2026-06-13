@@ -83,6 +83,12 @@ impl RuntimeConfig {
             }
         }
 
+        self.surfaces.terminal.process_mediation.validate(
+            self.surfaces.terminal.enabled,
+            self.surfaces.terminal.process_guard.enabled,
+            &self.surfaces.browser_cdp,
+        )?;
+
         Ok(())
     }
 
@@ -1197,6 +1203,8 @@ pub struct TerminalSurfaceLayerConfig {
     pub policies: Vec<PathBuf>,
     #[serde(default)]
     pub process_guard: TerminalProcessGuardLayerConfig,
+    #[serde(default, alias = "browser_launch_mediation")]
+    pub process_mediation: TerminalProcessMediationLayerConfig,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
@@ -1215,11 +1223,319 @@ pub enum TerminalProcessGuardBackend {
     LinuxPtrace,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+pub struct TerminalProcessMediationLayerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mode: TerminalProcessMediationMode,
+    #[serde(default)]
+    pub handlers: Vec<ProcessMediationHandlerLayerConfig>,
+}
+
+impl TerminalProcessMediationLayerConfig {
+    fn validate(
+        &self,
+        terminal_enabled: bool,
+        process_guard_enabled: bool,
+        browser_cdp: &BrowserCdpSurfaceLayerConfig,
+    ) -> Result<(), RuntimeConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+
+        if !terminal_enabled {
+            return Err(RuntimeConfigError::invalid_process_mediation_config(
+                "terminal surface must be enabled",
+            ));
+        }
+
+        if !process_guard_enabled {
+            return Err(RuntimeConfigError::invalid_process_mediation_config(
+                "terminal process mediation requires process_guard.enabled=true",
+            ));
+        }
+
+        if self.handlers.is_empty() {
+            return Err(RuntimeConfigError::invalid_process_mediation_config(
+                "at least one mediation handler is required",
+            ));
+        }
+
+        let mut ids = HashSet::new();
+        for handler in &self.handlers {
+            handler.validate(browser_cdp)?;
+            if !ids.insert(handler.id.clone()) {
+                return Err(RuntimeConfigError::invalid_process_mediation_config(
+                    format!("process mediation handler `{}` is duplicated", handler.id),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalProcessMediationMode {
+    #[default]
+    Shim,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct ProcessMediationHandlerLayerConfig {
+    pub id: String,
+    pub kind: ProcessMediationHandlerKind,
+    #[serde(rename = "match")]
+    pub matcher: ProcessMediationMatcherLayerConfig,
+    #[serde(default)]
+    pub requested_endpoint: ProcessMediationRequestedEndpointLayerConfig,
+    #[serde(default)]
+    pub replacement: ProcessMediationReplacementLayerConfig,
+    #[serde(default)]
+    pub environment: ProcessMediationEnvironmentLayerConfig,
+    #[serde(default)]
+    pub compatibility: ProcessMediationCompatibilityLayerConfig,
+}
+
+impl ProcessMediationHandlerLayerConfig {
+    fn validate(
+        &self,
+        browser_cdp: &BrowserCdpSurfaceLayerConfig,
+    ) -> Result<(), RuntimeConfigError> {
+        if self.id.trim().is_empty() {
+            return Err(RuntimeConfigError::invalid_process_mediation_config(
+                "process mediation handler id cannot be empty",
+            ));
+        }
+
+        self.matcher.validate(&self.id)?;
+        self.requested_endpoint.validate(&self.id)?;
+        self.environment.validate(&self.id)?;
+
+        if self.kind == ProcessMediationHandlerKind::ManagedBrowserCdp {
+            if self.replacement.surface != ProcessMediationReplacementSurface::BrowserCdp {
+                return Err(RuntimeConfigError::invalid_process_mediation_config(
+                    format!(
+                        "handler `{}` kind managed_browser_cdp must replace with browser_cdp",
+                        self.id
+                    ),
+                ));
+            }
+
+            if !browser_cdp.enabled {
+                return Err(RuntimeConfigError::invalid_process_mediation_config(
+                    format!(
+                        "handler `{}` kind managed_browser_cdp requires browser_cdp surface enabled",
+                        self.id
+                    ),
+                ));
+            }
+
+            if browser_cdp.listen.port() == 0 {
+                return Err(RuntimeConfigError::invalid_process_mediation_config(
+                    format!(
+                        "handler `{}` requires browser_cdp.listen to use a fixed port in v1",
+                        self.id
+                    ),
+                ));
+            }
+
+            if !self.requested_endpoint.allowed_ports.is_empty()
+                && !self
+                    .requested_endpoint
+                    .allowed_ports
+                    .contains(&browser_cdp.listen.port())
+            {
+                return Err(RuntimeConfigError::invalid_process_mediation_config(
+                    format!(
+                        "handler `{}` allowed_ports must include browser_cdp.listen port {}",
+                        self.id,
+                        browser_cdp.listen.port()
+                    ),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessMediationHandlerKind {
+    ManagedBrowserCdp,
+}
+
+impl ProcessMediationHandlerKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ManagedBrowserCdp => "managed_browser_cdp",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+pub struct ProcessMediationMatcherLayerConfig {
+    #[serde(default)]
+    pub executables: Vec<String>,
+    #[serde(default)]
+    pub required_args: Vec<String>,
+    #[serde(default)]
+    pub require_remote_debugging_port: bool,
+}
+
+impl ProcessMediationMatcherLayerConfig {
+    fn validate(&self, handler_id: &str) -> Result<(), RuntimeConfigError> {
+        if self.executables.is_empty() {
+            return Err(RuntimeConfigError::invalid_process_mediation_config(
+                format!("handler `{handler_id}` must include at least one executable matcher"),
+            ));
+        }
+
+        if self
+            .executables
+            .iter()
+            .any(|executable| executable.trim().is_empty())
+        {
+            return Err(RuntimeConfigError::invalid_process_mediation_config(
+                format!("handler `{handler_id}` executable matchers cannot be empty"),
+            ));
+        }
+
+        if self
+            .required_args
+            .iter()
+            .any(|argument| argument.trim().is_empty())
+        {
+            return Err(RuntimeConfigError::invalid_process_mediation_config(
+                format!("handler `{handler_id}` required args cannot be empty"),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct ProcessMediationRequestedEndpointLayerConfig {
+    #[serde(default = "default_process_mediation_endpoint_source")]
+    pub source: ProcessMediationEndpointSource,
+    #[serde(default = "default_loopback_ip")]
+    pub bind: IpAddr,
+    #[serde(default)]
+    pub allowed_ports: Vec<u16>,
+}
+
+impl Default for ProcessMediationRequestedEndpointLayerConfig {
+    fn default() -> Self {
+        Self {
+            source: default_process_mediation_endpoint_source(),
+            bind: default_loopback_ip(),
+            allowed_ports: Vec::new(),
+        }
+    }
+}
+
+impl ProcessMediationRequestedEndpointLayerConfig {
+    fn validate(&self, handler_id: &str) -> Result<(), RuntimeConfigError> {
+        if !self.bind.is_loopback() {
+            return Err(RuntimeConfigError::invalid_process_mediation_config(
+                format!("handler `{handler_id}` requested endpoint bind must be loopback"),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessMediationEndpointSource {
+    #[default]
+    RemoteDebuggingPort,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct ProcessMediationReplacementLayerConfig {
+    #[serde(default = "default_process_mediation_replacement_surface")]
+    pub surface: ProcessMediationReplacementSurface,
+}
+
+impl Default for ProcessMediationReplacementLayerConfig {
+    fn default() -> Self {
+        Self {
+            surface: default_process_mediation_replacement_surface(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessMediationReplacementSurface {
+    BrowserCdp,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct ProcessMediationEnvironmentLayerConfig {
+    #[serde(default = "default_process_mediation_prepend_path")]
+    pub prepend_path: bool,
+    #[serde(default)]
+    pub executable_env: Vec<String>,
+}
+
+impl Default for ProcessMediationEnvironmentLayerConfig {
+    fn default() -> Self {
+        Self {
+            prepend_path: default_process_mediation_prepend_path(),
+            executable_env: Vec::new(),
+        }
+    }
+}
+
+impl ProcessMediationEnvironmentLayerConfig {
+    fn validate(&self, handler_id: &str) -> Result<(), RuntimeConfigError> {
+        if self
+            .executable_env
+            .iter()
+            .any(|variable| variable.trim().is_empty() || variable.contains('='))
+        {
+            return Err(RuntimeConfigError::invalid_process_mediation_config(
+                format!(
+                    "handler `{handler_id}` executable env names cannot be empty or contain `=`"
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+pub struct ProcessMediationCompatibilityLayerConfig {
+    #[serde(default = "default_process_mediation_print_devtools")]
+    pub print_devtools_listening_line: bool,
+    #[serde(default = "default_process_mediation_keepalive")]
+    pub keepalive: bool,
+}
+
+impl Default for ProcessMediationCompatibilityLayerConfig {
+    fn default() -> Self {
+        Self {
+            print_devtools_listening_line: default_process_mediation_print_devtools(),
+            keepalive: default_process_mediation_keepalive(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TerminalSurfaceConfig {
     tty: bool,
     policies: Vec<PathBuf>,
     process_guard: TerminalProcessGuardConfig,
+    process_mediation: TerminalProcessMediationConfig,
 }
 
 impl TerminalSurfaceConfig {
@@ -1238,11 +1554,17 @@ impl TerminalSurfaceConfig {
         &self.process_guard
     }
 
+    #[must_use]
+    pub const fn process_mediation(&self) -> &TerminalProcessMediationConfig {
+        &self.process_mediation
+    }
+
     fn from_layer(config: &TerminalSurfaceLayerConfig, default_policies: Vec<PathBuf>) -> Self {
         Self {
             tty: config.tty,
             policies: surface_policies(&config.policies, default_policies),
             process_guard: config.process_guard.into(),
+            process_mediation: config.process_mediation.clone().into(),
         }
     }
 }
@@ -1270,6 +1592,246 @@ impl From<TerminalProcessGuardLayerConfig> for TerminalProcessGuardConfig {
         Self {
             enabled: config.enabled,
             backend: config.backend,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TerminalProcessMediationConfig {
+    enabled: bool,
+    mode: TerminalProcessMediationMode,
+    handlers: Vec<ProcessMediationHandlerConfig>,
+}
+
+impl TerminalProcessMediationConfig {
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub const fn mode(&self) -> TerminalProcessMediationMode {
+        self.mode
+    }
+
+    #[must_use]
+    pub fn handlers(&self) -> &[ProcessMediationHandlerConfig] {
+        &self.handlers
+    }
+}
+
+impl From<TerminalProcessMediationLayerConfig> for TerminalProcessMediationConfig {
+    fn from(config: TerminalProcessMediationLayerConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            mode: config.mode,
+            handlers: config.handlers.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessMediationHandlerConfig {
+    id: String,
+    kind: ProcessMediationHandlerKind,
+    matcher: ProcessMediationMatcherConfig,
+    requested_endpoint: ProcessMediationRequestedEndpointConfig,
+    replacement: ProcessMediationReplacementConfig,
+    environment: ProcessMediationEnvironmentConfig,
+    compatibility: ProcessMediationCompatibilityConfig,
+}
+
+impl ProcessMediationHandlerConfig {
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> ProcessMediationHandlerKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn matcher(&self) -> &ProcessMediationMatcherConfig {
+        &self.matcher
+    }
+
+    #[must_use]
+    pub const fn requested_endpoint(&self) -> &ProcessMediationRequestedEndpointConfig {
+        &self.requested_endpoint
+    }
+
+    #[must_use]
+    pub const fn replacement(&self) -> &ProcessMediationReplacementConfig {
+        &self.replacement
+    }
+
+    #[must_use]
+    pub const fn environment(&self) -> &ProcessMediationEnvironmentConfig {
+        &self.environment
+    }
+
+    #[must_use]
+    pub const fn compatibility(&self) -> &ProcessMediationCompatibilityConfig {
+        &self.compatibility
+    }
+}
+
+impl From<ProcessMediationHandlerLayerConfig> for ProcessMediationHandlerConfig {
+    fn from(config: ProcessMediationHandlerLayerConfig) -> Self {
+        Self {
+            id: config.id,
+            kind: config.kind,
+            matcher: config.matcher.into(),
+            requested_endpoint: config.requested_endpoint.into(),
+            replacement: config.replacement.into(),
+            environment: config.environment.into(),
+            compatibility: config.compatibility.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessMediationMatcherConfig {
+    executables: Vec<String>,
+    required_args: Vec<String>,
+    require_remote_debugging_port: bool,
+}
+
+impl ProcessMediationMatcherConfig {
+    #[must_use]
+    pub fn executables(&self) -> &[String] {
+        &self.executables
+    }
+
+    #[must_use]
+    pub fn required_args(&self) -> &[String] {
+        &self.required_args
+    }
+
+    #[must_use]
+    pub const fn require_remote_debugging_port(&self) -> bool {
+        self.require_remote_debugging_port
+    }
+}
+
+impl From<ProcessMediationMatcherLayerConfig> for ProcessMediationMatcherConfig {
+    fn from(config: ProcessMediationMatcherLayerConfig) -> Self {
+        Self {
+            executables: config.executables,
+            required_args: config.required_args,
+            require_remote_debugging_port: config.require_remote_debugging_port,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessMediationRequestedEndpointConfig {
+    source: ProcessMediationEndpointSource,
+    bind: IpAddr,
+    allowed_ports: Vec<u16>,
+}
+
+impl ProcessMediationRequestedEndpointConfig {
+    #[must_use]
+    pub const fn source(&self) -> ProcessMediationEndpointSource {
+        self.source
+    }
+
+    #[must_use]
+    pub const fn bind(&self) -> IpAddr {
+        self.bind
+    }
+
+    #[must_use]
+    pub fn allowed_ports(&self) -> &[u16] {
+        &self.allowed_ports
+    }
+}
+
+impl From<ProcessMediationRequestedEndpointLayerConfig>
+    for ProcessMediationRequestedEndpointConfig
+{
+    fn from(config: ProcessMediationRequestedEndpointLayerConfig) -> Self {
+        Self {
+            source: config.source,
+            bind: config.bind,
+            allowed_ports: config.allowed_ports,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProcessMediationReplacementConfig {
+    surface: ProcessMediationReplacementSurface,
+}
+
+impl ProcessMediationReplacementConfig {
+    #[must_use]
+    pub const fn surface(&self) -> ProcessMediationReplacementSurface {
+        self.surface
+    }
+}
+
+impl From<ProcessMediationReplacementLayerConfig> for ProcessMediationReplacementConfig {
+    fn from(config: ProcessMediationReplacementLayerConfig) -> Self {
+        Self {
+            surface: config.surface,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessMediationEnvironmentConfig {
+    prepend_path: bool,
+    executable_env: Vec<String>,
+}
+
+impl ProcessMediationEnvironmentConfig {
+    #[must_use]
+    pub const fn prepend_path(&self) -> bool {
+        self.prepend_path
+    }
+
+    #[must_use]
+    pub fn executable_env(&self) -> &[String] {
+        &self.executable_env
+    }
+}
+
+impl From<ProcessMediationEnvironmentLayerConfig> for ProcessMediationEnvironmentConfig {
+    fn from(config: ProcessMediationEnvironmentLayerConfig) -> Self {
+        Self {
+            prepend_path: config.prepend_path,
+            executable_env: config.executable_env,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProcessMediationCompatibilityConfig {
+    print_devtools_listening_line: bool,
+    keepalive: bool,
+}
+
+impl ProcessMediationCompatibilityConfig {
+    #[must_use]
+    pub const fn print_devtools_listening_line(&self) -> bool {
+        self.print_devtools_listening_line
+    }
+
+    #[must_use]
+    pub const fn keepalive(&self) -> bool {
+        self.keepalive
+    }
+}
+
+impl From<ProcessMediationCompatibilityLayerConfig> for ProcessMediationCompatibilityConfig {
+    fn from(config: ProcessMediationCompatibilityLayerConfig) -> Self {
+        Self {
+            print_devtools_listening_line: config.print_devtools_listening_line,
+            keepalive: config.keepalive,
         }
     }
 }
@@ -1399,6 +1961,10 @@ fn default_browser_cdp_listen() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 0))
 }
 
+const fn default_loopback_ip() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
+}
+
 fn surface_policies(surface_policies: &[PathBuf], default_policies: Vec<PathBuf>) -> Vec<PathBuf> {
     if surface_policies.is_empty() {
         default_policies
@@ -1408,6 +1974,26 @@ fn surface_policies(surface_policies: &[PathBuf], default_policies: Vec<PathBuf>
 }
 
 const fn default_browser_headless() -> bool {
+    true
+}
+
+const fn default_process_mediation_endpoint_source() -> ProcessMediationEndpointSource {
+    ProcessMediationEndpointSource::RemoteDebuggingPort
+}
+
+const fn default_process_mediation_replacement_surface() -> ProcessMediationReplacementSurface {
+    ProcessMediationReplacementSurface::BrowserCdp
+}
+
+const fn default_process_mediation_prepend_path() -> bool {
+    true
+}
+
+const fn default_process_mediation_print_devtools() -> bool {
+    true
+}
+
+const fn default_process_mediation_keepalive() -> bool {
     true
 }
 
@@ -1461,8 +2047,9 @@ mod tests {
 
     use crate::{
         DockerSessionCommandPlan, LinuxHostSessionCommandOptions, LinuxHostSessionCommandPlan,
-        RuntimeConfig, RuntimeConfigError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
-        SessionSurfaceKind, TerminalProcessGuardBackend,
+        ProcessMediationEndpointSource, ProcessMediationHandlerKind, RuntimeConfig,
+        RuntimeConfigError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
+        SessionSurfaceKind, TerminalProcessGuardBackend, TerminalProcessMediationMode,
     };
 
     #[test]
@@ -1537,6 +2124,124 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn terminal_process_mediation_is_generic_runtime_config() -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "surfaces": {
+                "terminal": {
+                  "enabled": true,
+                  "process_guard": {
+                    "enabled": true,
+                    "backend": "linux_ptrace"
+                  },
+                  "process_mediation": {
+                    "enabled": true,
+                    "mode": "shim",
+                    "handlers": [
+                      {
+                        "id": "managed-browser-cdp",
+                        "kind": "managed_browser_cdp",
+                        "match": {
+                          "executables": ["google-chrome", "chromium"],
+                          "required_args": ["--remote-debugging-port"],
+                          "require_remote_debugging_port": true
+                        },
+                        "requested_endpoint": {
+                          "source": "remote_debugging_port",
+                          "bind": "127.0.0.1",
+                          "allowed_ports": [9222]
+                        },
+                        "replacement": {
+                          "surface": "browser_cdp"
+                        },
+                        "environment": {
+                          "prepend_path": true,
+                          "executable_env": ["CHROME_PATH"]
+                        },
+                        "compatibility": {
+                          "print_devtools_listening_line": true,
+                          "keepalive": true
+                        }
+                      }
+                    ]
+                  }
+                },
+                "browser_cdp": {
+                  "enabled": true,
+                  "listen": "127.0.0.1:9222"
+                }
+              }
+            }
+            "#,
+        )?;
+
+        let terminal = config
+            .surface_start_plan()?
+            .terminal()
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?
+            .clone();
+        let mediation = terminal.process_mediation();
+        let handler = mediation
+            .handlers()
+            .first()
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+
+        assert!(mediation.enabled());
+        assert_eq!(mediation.mode(), TerminalProcessMediationMode::Shim);
+        assert_eq!(handler.id(), "managed-browser-cdp");
+        assert_eq!(
+            handler.kind(),
+            ProcessMediationHandlerKind::ManagedBrowserCdp
+        );
+        assert_eq!(
+            handler.requested_endpoint().source(),
+            ProcessMediationEndpointSource::RemoteDebuggingPort
+        );
+        assert_eq!(
+            handler.matcher().executables(),
+            &["google-chrome", "chromium"]
+        );
+        assert_eq!(handler.requested_endpoint().allowed_ports(), &[9222]);
+        assert_eq!(handler.environment().executable_env(), &["CHROME_PATH"]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_process_mediation_without_browser_cdp_surface() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "surfaces": {
+                "terminal": {
+                  "enabled": true,
+                  "process_guard": { "enabled": true },
+                  "process_mediation": {
+                    "enabled": true,
+                    "handlers": [
+                      {
+                        "id": "managed-browser-cdp",
+                        "kind": "managed_browser_cdp",
+                        "match": { "executables": ["google-chrome"] }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+            "#,
+        );
+
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::InvalidProcessMediationConfig { .. })
+        ));
     }
 
     #[test]

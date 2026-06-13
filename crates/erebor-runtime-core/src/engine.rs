@@ -195,7 +195,9 @@ where
         approval_mode: ApprovalMode,
     ) -> Decision {
         match decision {
-            Decision::Allow { .. } | Decision::Deny { .. } => decision.clone(),
+            Decision::Allow { .. } | Decision::Deny { .. } | Decision::Mediate { .. } => {
+                decision.clone()
+            }
             Decision::RequireApproval {
                 reason,
                 rule_id,

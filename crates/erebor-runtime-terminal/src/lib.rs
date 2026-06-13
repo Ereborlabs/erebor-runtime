@@ -23,6 +23,11 @@ impl TerminalProcessGuardRules {
         &self.rules
     }
 
+    pub fn prepend(&mut self, mut rules: Vec<TerminalProcessGuardRule>) {
+        rules.append(&mut self.rules);
+        self.rules = rules;
+    }
+
     #[must_use]
     pub fn to_env_value(&self) -> String {
         self.rules
@@ -93,6 +98,7 @@ impl TerminalProcessGuardRule {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TerminalProcessGuardDecision {
+    Allow,
     Deny,
     RequireApproval,
 }
@@ -101,6 +107,7 @@ impl TerminalProcessGuardDecision {
     #[must_use]
     pub const fn as_guard_env(self) -> &'static str {
         match self {
+            Self::Allow => "allow",
             Self::Deny => "deny",
             Self::RequireApproval => "require_approval",
         }
@@ -220,6 +227,7 @@ fn terminal_process_guard_decision(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
     {
+        "allow" => Some(TerminalProcessGuardDecision::Allow),
         "deny" => Some(TerminalProcessGuardDecision::Deny),
         "require_approval" | "require_verification" => {
             Some(TerminalProcessGuardDecision::RequireApproval)
@@ -251,16 +259,24 @@ mod tests {
 
     #[test]
     fn guard_rules_serialize_for_docker_environment() {
-        let rules = TerminalProcessGuardRules::new(vec![TerminalProcessGuardRule::new(
-            "remote-debugging-port",
-            "raw CDP\nis denied",
-            "deny\tcdp",
-            TerminalProcessGuardDecision::Deny,
-        )]);
+        let rules = TerminalProcessGuardRules::new(vec![
+            TerminalProcessGuardRule::new(
+                "/tmp/erebor/shims/google-chrome",
+                "managed shim launch",
+                "allow-mediated-browser",
+                TerminalProcessGuardDecision::Allow,
+            ),
+            TerminalProcessGuardRule::new(
+                "remote-debugging-port",
+                "raw CDP\nis denied",
+                "deny\tcdp",
+                TerminalProcessGuardDecision::Deny,
+            ),
+        ]);
 
         assert_eq!(
             rules.to_docker_env_value(),
-            "remote-debugging-port\traw CDP is denied\tdeny cdp\tdeny"
+            "/tmp/erebor/shims/google-chrome\tmanaged shim launch\tallow-mediated-browser\tallow\nremote-debugging-port\traw CDP is denied\tdeny cdp\tdeny"
         );
     }
 
@@ -328,7 +344,7 @@ mod tests {
             .ok_or_else(|| io::Error::other("expected terminal surface config"))?;
         let rules = compile_terminal_process_guard_rules(terminal)?;
 
-        assert_eq!(rules.rules().len(), 2);
+        assert_eq!(rules.rules().len(), 3);
         assert_eq!(rules.rules()[0].match_token(), "remote-debugging-port");
         assert_eq!(rules.rules()[0].reason(), "raw CDP is denied");
         assert_eq!(rules.rules()[0].rule_id(), "deny-raw-cdp");
@@ -346,8 +362,40 @@ mod tests {
             rules.rules()[1].decision(),
             TerminalProcessGuardDecision::RequireApproval
         );
+        assert_eq!(rules.rules()[2].match_token(), "ls -la");
+        assert_eq!(
+            rules.rules()[2].decision(),
+            TerminalProcessGuardDecision::Allow
+        );
 
         fs::remove_file(policy_path)?;
         Ok(())
+    }
+
+    #[test]
+    fn guard_rules_can_prepend_generated_allow_rules() {
+        let mut rules = TerminalProcessGuardRules::new(vec![TerminalProcessGuardRule::new(
+            "remote-debugging-port",
+            "raw CDP is denied",
+            "deny-raw-cdp",
+            TerminalProcessGuardDecision::Deny,
+        )]);
+
+        rules.prepend(vec![TerminalProcessGuardRule::new(
+            "/tmp/erebor/shims/google-chrome",
+            "managed browser launch shim",
+            "allow-managed-browser-cdp-shim",
+            TerminalProcessGuardDecision::Allow,
+        )]);
+
+        assert_eq!(rules.rules().len(), 2);
+        assert_eq!(
+            rules.rules()[0].decision(),
+            TerminalProcessGuardDecision::Allow
+        );
+        assert_eq!(
+            rules.rules()[1].decision(),
+            TerminalProcessGuardDecision::Deny
+        );
     }
 }

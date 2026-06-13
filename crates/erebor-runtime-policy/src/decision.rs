@@ -15,6 +15,11 @@ pub enum Decision {
         rule_id: Option<String>,
         approval_id: Option<String>,
     },
+    Mediate {
+        reason: String,
+        rule_id: Option<String>,
+        mediation: Option<serde_json::Value>,
+    },
 }
 
 impl Decision {
@@ -23,7 +28,8 @@ impl Decision {
         match self {
             Self::Allow { rule_id }
             | Self::Deny { rule_id, .. }
-            | Self::RequireApproval { rule_id, .. } => rule_id.as_deref(),
+            | Self::RequireApproval { rule_id, .. }
+            | Self::Mediate { rule_id, .. } => rule_id.as_deref(),
         }
     }
 }

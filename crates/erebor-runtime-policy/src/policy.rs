@@ -118,6 +118,7 @@ struct PolicyRule {
     matcher: EventMatcher,
     decision: RuleDecision,
     reason: Option<String>,
+    mediation: Option<serde_json::Value>,
 }
 
 impl PolicyRule {
@@ -135,6 +136,11 @@ impl PolicyRule {
                 reason,
                 rule_id,
                 approval_id: None,
+            },
+            RuleDecision::Mediate => Decision::Mediate {
+                reason,
+                rule_id,
+                mediation: self.mediation.clone(),
             },
         }
     }
@@ -194,6 +200,7 @@ enum RuleDecision {
     Deny,
     #[serde(alias = "require_verification")]
     RequireApproval,
+    Mediate,
 }
 
 fn target_contains(event: &RuntimeEvent, needle: &str) -> bool {

@@ -84,6 +84,7 @@ where
             Decision::RequireApproval { reason, .. } => {
                 CdpEnforcementAction::AwaitApproval { reason }
             }
+            Decision::Mediate { reason, .. } => CdpEnforcementAction::Block { reason },
         },
     })
 }

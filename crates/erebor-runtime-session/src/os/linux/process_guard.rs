@@ -102,6 +102,7 @@ struct ProcessRule {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProcessRuleDecision {
+    Allow,
     Deny,
     RequireApproval,
 }
@@ -495,6 +496,7 @@ fn should_deny_exec(
 
     if let Some(rule) = rule {
         match rule.decision {
+            ProcessRuleDecision::Allow => {}
             ProcessRuleDecision::Deny => {
                 eprintln!(
                     "erebor linux process guard: denied exec: {}: {}",
@@ -508,7 +510,7 @@ fn should_deny_exec(
                 );
             }
         }
-        true
+        !matches!(rule.decision, ProcessRuleDecision::Allow)
     } else {
         false
     }
@@ -887,8 +889,12 @@ fn write_audit(
         .to_string();
     let event_id = format!("{session_id}-process-exec-{pid}-{sequence}");
     let policy_decision = rule.map_or("allow", |rule| rule.decision.policy_decision_type());
-    let final_decision = if rule.is_some() { "deny" } else { "allow" };
-    let risk = if rule.is_some() { "high" } else { "medium" };
+    let final_decision = rule.map_or("allow", |rule| rule.decision.final_decision_type());
+    let risk = match rule.map(|rule| rule.decision) {
+        Some(ProcessRuleDecision::Allow) => "low",
+        Some(ProcessRuleDecision::Deny | ProcessRuleDecision::RequireApproval) => "high",
+        None => "medium",
+    };
     let reason = rule.map_or("agent-issued process execution attempt", |rule| {
         rule.reason.as_str()
     });
@@ -939,6 +945,7 @@ fn write_audit(
     );
     if let Some(rule) = rule {
         let final_reason = match rule.decision {
+            ProcessRuleDecision::Allow => rule.reason.as_str(),
             ProcessRuleDecision::Deny => rule.reason.as_str(),
             ProcessRuleDecision::RequireApproval => {
                 "process execution requires verification but no terminal approval provider is available"
@@ -957,6 +964,7 @@ fn write_audit(
 impl ProcessRuleDecision {
     fn from_guard_env(value: Option<&str>) -> Self {
         match value.unwrap_or_default() {
+            "allow" => Self::Allow,
             "require_approval" | "require_verification" => Self::RequireApproval,
             _ => Self::Deny,
         }
@@ -964,8 +972,16 @@ impl ProcessRuleDecision {
 
     const fn policy_decision_type(self) -> &'static str {
         match self {
+            Self::Allow => "allow",
             Self::Deny => "deny",
             Self::RequireApproval => "require_approval",
+        }
+    }
+
+    const fn final_decision_type(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny | Self::RequireApproval => "deny",
         }
     }
 }
@@ -1056,21 +1072,25 @@ mod tests {
     #[test]
     fn parses_deny_rules_from_guard_environment_format() {
         let rules = parse_rules_from_source(
-            "remote-debugging-port\traw CDP is denied\tdeny-raw-cdp\nchromium\t\t\n\n",
+            "/tmp/erebor/shims/google-chrome\tmanaged shim\tallow-shim\tallow\nremote-debugging-port\traw CDP is denied\tdeny-raw-cdp\nchromium\t\t\n\n",
         );
 
-        assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0].token, "remote-debugging-port");
-        assert_eq!(rules[0].reason, "raw CDP is denied");
-        assert_eq!(rules[0].rule_id, "deny-raw-cdp");
-        assert_eq!(rules[0].decision, ProcessRuleDecision::Deny);
-        assert_eq!(rules[1].token, "chromium");
+        assert_eq!(rules.len(), 3);
+        assert_eq!(rules[0].token, "/tmp/erebor/shims/google-chrome");
+        assert_eq!(rules[0].reason, "managed shim");
+        assert_eq!(rules[0].rule_id, "allow-shim");
+        assert_eq!(rules[0].decision, ProcessRuleDecision::Allow);
+        assert_eq!(rules[1].token, "remote-debugging-port");
+        assert_eq!(rules[1].reason, "raw CDP is denied");
+        assert_eq!(rules[1].rule_id, "deny-raw-cdp");
+        assert_eq!(rules[1].decision, ProcessRuleDecision::Deny);
+        assert_eq!(rules[2].token, "chromium");
         assert_eq!(
-            rules[1].reason,
+            rules[2].reason,
             "process execution denied by Erebor policy"
         );
-        assert_eq!(rules[1].rule_id, "erebor-linux-process-guard");
-        assert_eq!(rules[1].decision, ProcessRuleDecision::Deny);
+        assert_eq!(rules[2].rule_id, "erebor-linux-process-guard");
+        assert_eq!(rules[2].decision, ProcessRuleDecision::Deny);
     }
 
     #[test]

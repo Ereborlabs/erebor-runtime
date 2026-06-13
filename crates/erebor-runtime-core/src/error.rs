@@ -43,6 +43,8 @@ pub enum RuntimeConfigError {
     NoSessionSurfaces { location: Location },
     #[error("runtime config browser_cdp browser_url must start with ws://")]
     BrowserCdpInvalidBrowserUrl { location: Location },
+    #[error("runtime config terminal process mediation is invalid: {reason}")]
+    InvalidProcessMediationConfig { reason: String, location: Location },
 }
 
 #[derive(Debug, Error)]
@@ -214,6 +216,14 @@ impl RuntimeConfigError {
     #[track_caller]
     pub fn browser_cdp_invalid_browser_url() -> Self {
         Self::BrowserCdpInvalidBrowserUrl {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn invalid_process_mediation_config(reason: impl Into<String>) -> Self {
+        Self::InvalidProcessMediationConfig {
+            reason: reason.into(),
             location: Location::default(),
         }
     }

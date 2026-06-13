@@ -9,19 +9,25 @@ use std::{
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
     DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions,
-    RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError, RuntimeError, SessionActorLayerConfig,
-    SessionAdoptPlan, SessionRunOutcome, SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher,
-    SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
-    SessionSurfaceSupervisor, TerminalSurfaceConfig,
+    ProcessMediationHandlerConfig, ProcessMediationHandlerKind, RuntimeAuditConfig, RuntimeConfig,
+    RuntimeConfigError, RuntimeError, SessionActorLayerConfig, SessionAdoptPlan, SessionRunOutcome,
+    SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher, SessionSurfaceDefinition,
+    SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher, SessionSurfaceSupervisor,
+    TerminalProcessMediationMode, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
-use erebor_runtime_terminal::{compile_terminal_process_guard_rules, TerminalSurfaceError};
+use erebor_runtime_terminal::{
+    compile_terminal_process_guard_rules, TerminalProcessGuardDecision, TerminalProcessGuardRule,
+    TerminalSurfaceError,
+};
 use snafu::Location;
 use thiserror::Error;
 
 const LINUX_PROCESS_GUARD: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/erebor-linux-process-guard"));
+const LINUX_PROCESS_MEDIATOR: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/erebor-process-mediator"));
 const DOCKER_GUARD_DIR: &str = "/erebor/guard";
 const LINUX_PROCESS_GUARD_PATH: &str = "/erebor/guard/erebor-linux-process-guard";
 const DOCKER_AUDIT_DIR: &str = "/erebor/audit";
@@ -114,10 +120,11 @@ pub fn adopt_session_plan(
         )),
         SessionRunnerKind::LinuxHost => {
             let side_resources = start_adopt_session_side_resources(config, plan)?;
+            let linux_host_options = side_resources.linux_host_adopt_options(plan.pid())?;
             SessionRunnerLauncher::adopt_with_linux_host_options(
                 plan,
                 side_resources.environment(),
-                &side_resources.linux_host_adopt_options(plan.pid()),
+                &linux_host_options,
             )
             .map_err(SessionExecutionError::runtime)
         }
@@ -136,10 +143,11 @@ pub fn adopt_session_plan_capture(
         }
         SessionRunnerKind::LinuxHost => {
             let side_resources = start_adopt_session_side_resources(config, plan)?;
+            let linux_host_options = side_resources.linux_host_adopt_options(plan.pid())?;
             SessionRunnerLauncher::adopt_capture_with_linux_host_options(
                 plan,
                 side_resources.environment(),
-                &side_resources.linux_host_adopt_options(plan.pid()),
+                &linux_host_options,
             )
         }
     }
@@ -249,8 +257,6 @@ fn start_session_side_resources_from_start_plan(
     .map_err(SessionExecutionError::runtime)?;
     let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
     let mut environment = Vec::new();
-    let mut docker_options = DockerSessionCommandOptions::default();
-    let mut linux_host_options = LinuxHostSessionCommandOptions::default();
     let mut guard_bundle = None;
 
     for definition in launch_plan.definitions() {
@@ -271,9 +277,14 @@ fn start_session_side_resources_from_start_plan(
                 environment.push((String::from("EREBOR_TERMINAL_TTY"), plan.tty().to_string()));
 
                 if config.process_guard().enabled() {
+                    if config.process_mediation().enabled()
+                        && plan.runner_kind() != SessionRunnerKind::LinuxHost
+                    {
+                        return Err(SessionExecutionError::guard_config(
+                            "terminal process mediation currently supports linux-host sessions only",
+                        ));
+                    }
                     let bundle = LinuxProcessGuardBundle::prepare(config, plan)?;
-                    docker_options = bundle.docker_options();
-                    linux_host_options = bundle.linux_host_options();
                     guard_bundle = Some(bundle);
                     environment.push((
                         String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
@@ -290,19 +301,24 @@ fn start_session_side_resources_from_start_plan(
     }
 
     if launcher.is_empty() {
+        let (docker_options, linux_host_options) =
+            side_resource_command_options(guard_bundle.as_ref(), None)?;
         return Ok(SessionSideResources {
             environment,
             docker_options,
             linux_host_options,
+            browser_cdp_endpoint: None,
             _guard_bundle: guard_bundle,
             _supervisor: None,
         });
     }
 
     let supervisor = launcher.start().map_err(SessionExecutionError::runtime)?;
+    let mut browser_cdp_endpoint = None;
     for runtime in supervisor.running() {
         match runtime.surface() {
             SessionSurfaceKind::BrowserCdp => {
+                browser_cdp_endpoint = Some(runtime.endpoint().to_owned());
                 environment.push((
                     String::from("EREBOR_BROWSER_CDP_URL"),
                     runtime.endpoint().to_owned(),
@@ -321,10 +337,14 @@ fn start_session_side_resources_from_start_plan(
         }
     }
 
+    let (docker_options, linux_host_options) =
+        side_resource_command_options(guard_bundle.as_ref(), browser_cdp_endpoint.as_deref())?;
+
     Ok(SessionSideResources {
         environment,
         docker_options,
         linux_host_options,
+        browser_cdp_endpoint,
         _guard_bundle: guard_bundle,
         _supervisor: Some(supervisor),
     })
@@ -335,6 +355,7 @@ trait SessionPlanContext {
     fn session_id(&self) -> &SessionId;
     fn actor(&self) -> &SessionActorLayerConfig;
     fn terminal(&self) -> &TerminalSurfaceConfig;
+    fn runner_kind(&self) -> SessionRunnerKind;
 
     fn tty(&self) -> bool {
         self.terminal().tty()
@@ -357,6 +378,10 @@ impl SessionPlanContext for SessionRunPlan {
     fn terminal(&self) -> &TerminalSurfaceConfig {
         self.terminal()
     }
+
+    fn runner_kind(&self) -> SessionRunnerKind {
+        self.runner().kind()
+    }
 }
 
 impl SessionPlanContext for SessionAdoptPlan {
@@ -374,6 +399,10 @@ impl SessionPlanContext for SessionAdoptPlan {
 
     fn terminal(&self) -> &TerminalSurfaceConfig {
         self.terminal()
+    }
+
+    fn runner_kind(&self) -> SessionRunnerKind {
+        self.runner().kind()
     }
 }
 
@@ -405,6 +434,7 @@ struct LinuxProcessGuardBundle {
     audit_path: Option<PathBuf>,
     audit_filename: Option<String>,
     terminal_tty: bool,
+    mediation: Option<LinuxProcessMediationBundle>,
 }
 
 impl LinuxProcessGuardBundle {
@@ -423,9 +453,13 @@ impl LinuxProcessGuardBundle {
         fs::set_permissions(&guard_path, fs::Permissions::from_mode(0o755))
             .map_err(SessionExecutionError::guard_io)?;
 
-        let guard_rules = compile_terminal_process_guard_rules(config)
-            .map_err(SessionExecutionError::terminal_surface)?
-            .to_env_value();
+        let mediation = LinuxProcessMediationBundle::prepare(&host_dir, config)?;
+        let mut rules = compile_terminal_process_guard_rules(config)
+            .map_err(SessionExecutionError::terminal_surface)?;
+        if let Some(mediation) = mediation.as_ref() {
+            rules.prepend(mediation.allow_rules());
+        }
+        let guard_rules = rules.to_env_value();
         let mut audit_jsonl_path = None;
         let mut audit_filename = None;
 
@@ -457,6 +491,7 @@ impl LinuxProcessGuardBundle {
             audit_path: audit_jsonl_path,
             audit_filename,
             terminal_tty: plan.terminal().tty(),
+            mediation,
         })
     }
 
@@ -485,7 +520,10 @@ impl LinuxProcessGuardBundle {
         options
     }
 
-    fn linux_host_options(&self) -> LinuxHostSessionCommandOptions {
+    fn linux_host_options(
+        &self,
+        browser_cdp_endpoint: Option<&str>,
+    ) -> Result<LinuxHostSessionCommandOptions, SessionExecutionError> {
         let mut options = LinuxHostSessionCommandOptions::new()
             .with_wrapper_program(&self.guard_path)
             .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
@@ -504,11 +542,227 @@ impl LinuxProcessGuardBundle {
                 .with_environment("EREBOR_GUARD_AUDIT_JSONL", audit_path.display().to_string());
         }
 
-        options
+        if let Some(mediation) = self.mediation.as_ref() {
+            for (key, value) in mediation.environment(browser_cdp_endpoint)? {
+                options = options.with_environment(key, value);
+            }
+        }
+
+        Ok(options)
     }
 
-    fn linux_host_adopt_options(&self, pid: i32) -> LinuxHostSessionCommandOptions {
-        self.linux_host_options().with_adopt_pid(pid)
+    fn linux_host_adopt_options(
+        &self,
+        pid: i32,
+        browser_cdp_endpoint: Option<&str>,
+    ) -> Result<LinuxHostSessionCommandOptions, SessionExecutionError> {
+        Ok(self
+            .linux_host_options(browser_cdp_endpoint)?
+            .with_adopt_pid(pid))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LinuxProcessMediationBundle {
+    shim_dir: PathBuf,
+    handlers: Vec<LinuxProcessMediationHandler>,
+}
+
+impl LinuxProcessMediationBundle {
+    fn prepare(
+        host_dir: &Path,
+        config: &TerminalSurfaceConfig,
+    ) -> Result<Option<Self>, SessionExecutionError> {
+        let mediation = config.process_mediation();
+        if !mediation.enabled() {
+            return Ok(None);
+        }
+
+        match mediation.mode() {
+            TerminalProcessMediationMode::Shim => {}
+        }
+
+        let mediator_path = host_dir.join("erebor-process-mediator");
+        fs::write(&mediator_path, LINUX_PROCESS_MEDIATOR)
+            .map_err(SessionExecutionError::guard_io)?;
+        fs::set_permissions(&mediator_path, fs::Permissions::from_mode(0o755))
+            .map_err(SessionExecutionError::guard_io)?;
+        let shim_dir = host_dir.join("shims");
+        fs::create_dir_all(&shim_dir).map_err(SessionExecutionError::guard_io)?;
+
+        let handlers = mediation
+            .handlers()
+            .iter()
+            .map(|handler| {
+                LinuxProcessMediationHandler::prepare(handler, &mediator_path, &shim_dir)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Some(Self { shim_dir, handlers }))
+    }
+
+    fn allow_rules(&self) -> Vec<TerminalProcessGuardRule> {
+        self.handlers
+            .iter()
+            .flat_map(LinuxProcessMediationHandler::allow_rules)
+            .collect()
+    }
+
+    fn environment(
+        &self,
+        browser_cdp_endpoint: Option<&str>,
+    ) -> Result<Vec<(String, String)>, SessionExecutionError> {
+        let browser_cdp_endpoint = browser_cdp_endpoint.ok_or_else(|| {
+            SessionExecutionError::guard_config(
+                "process mediation requires a running browser_cdp endpoint",
+            )
+        })?;
+        let mut environment = vec![
+            (
+                String::from("EREBOR_PROCESS_MEDIATION"),
+                String::from("shim"),
+            ),
+            (
+                String::from("EREBOR_MANAGED_BROWSER_CDP_URL"),
+                browser_cdp_endpoint.to_owned(),
+            ),
+            (
+                String::from("EREBOR_PROCESS_MEDIATION_HANDLERS"),
+                self.handlers_env(browser_cdp_endpoint)?,
+            ),
+        ];
+
+        if self.handlers.iter().any(|handler| handler.prepend_path) {
+            let path = std::env::var("PATH").unwrap_or_default();
+            let shim_path = self.shim_dir.display().to_string();
+            let value = if path.is_empty() {
+                shim_path
+            } else {
+                format!("{shim_path}:{path}")
+            };
+            environment.push((String::from("PATH"), value));
+        }
+
+        for handler in &self.handlers {
+            let Some(primary_shim) = handler.primary_shim_path() else {
+                continue;
+            };
+            for variable in handler.executable_env_vars() {
+                environment.push((variable, primary_shim.display().to_string()));
+            }
+        }
+
+        Ok(environment)
+    }
+
+    fn handlers_env(&self, browser_cdp_endpoint: &str) -> Result<String, SessionExecutionError> {
+        self.handlers
+            .iter()
+            .map(|handler| handler.to_env_line(browser_cdp_endpoint))
+            .collect::<Result<Vec<_>, _>>()
+            .map(|lines| lines.join("\n"))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LinuxProcessMediationHandler {
+    id: String,
+    kind: ProcessMediationHandlerKind,
+    executables: Vec<String>,
+    allowed_ports: Vec<u16>,
+    executable_env: Vec<String>,
+    print_devtools_listening_line: bool,
+    keepalive: bool,
+    prepend_path: bool,
+    shim_paths: Vec<PathBuf>,
+}
+
+impl LinuxProcessMediationHandler {
+    fn prepare(
+        handler: &ProcessMediationHandlerConfig,
+        mediator_path: &Path,
+        shim_dir: &Path,
+    ) -> Result<Self, SessionExecutionError> {
+        let mut shim_paths = Vec::new();
+        let mut executables = Vec::new();
+
+        for executable in handler.matcher().executables() {
+            let shim_name = executable_basename(executable).ok_or_else(|| {
+                SessionExecutionError::guard_config(format!(
+                    "process mediation handler `{}` executable `{}` is not a valid executable name",
+                    handler.id(),
+                    executable
+                ))
+            })?;
+            let shim_path = shim_dir.join(&shim_name);
+            std::os::unix::fs::symlink(mediator_path, &shim_path)
+                .map_err(SessionExecutionError::guard_io)?;
+            executables.push(shim_name);
+            shim_paths.push(shim_path);
+        }
+
+        Ok(Self {
+            id: handler.id().to_owned(),
+            kind: handler.kind(),
+            executables,
+            allowed_ports: handler.requested_endpoint().allowed_ports().to_vec(),
+            executable_env: process_mediation_executable_env(handler),
+            print_devtools_listening_line: handler.compatibility().print_devtools_listening_line(),
+            keepalive: handler.compatibility().keepalive(),
+            prepend_path: handler.environment().prepend_path(),
+            shim_paths,
+        })
+    }
+
+    fn allow_rules(&self) -> Vec<TerminalProcessGuardRule> {
+        self.shim_paths
+            .iter()
+            .map(|path| {
+                TerminalProcessGuardRule::new(
+                    path.display().to_string(),
+                    "process launch is routed through an Erebor mediation shim",
+                    format!("erebor-process-mediation-{}-shim", self.id),
+                    TerminalProcessGuardDecision::Allow,
+                )
+            })
+            .collect()
+    }
+
+    fn primary_shim_path(&self) -> Option<&Path> {
+        self.shim_paths.first().map(PathBuf::as_path)
+    }
+
+    fn executable_env_vars(&self) -> Vec<String> {
+        self.executable_env.clone()
+    }
+
+    fn to_env_line(&self, browser_cdp_endpoint: &str) -> Result<String, SessionExecutionError> {
+        let allowed_ports = if self.allowed_ports.is_empty() {
+            vec![endpoint_port(browser_cdp_endpoint).ok_or_else(|| {
+                SessionExecutionError::guard_config(
+                    "browser_cdp endpoint does not include a parseable port",
+                )
+            })?]
+        } else {
+            self.allowed_ports.clone()
+        };
+
+        Ok([
+            mediation_env_field(&self.id),
+            mediation_env_field(self.kind.as_str()),
+            mediation_env_field(self.executables.join(",")),
+            mediation_env_field(
+                allowed_ports
+                    .iter()
+                    .map(u16::to_string)
+                    .collect::<Vec<_>>()
+                    .join(","),
+            ),
+            mediation_env_field(browser_cdp_endpoint),
+            mediation_env_field(self.print_devtools_listening_line.to_string()),
+            mediation_env_field(self.keepalive.to_string()),
+        ]
+        .join("\t"))
     }
 }
 
@@ -538,6 +792,67 @@ fn linux_cgroup_component(value: &str) -> String {
             } else {
                 '-'
             }
+        })
+        .collect()
+}
+
+fn side_resource_command_options(
+    guard_bundle: Option<&LinuxProcessGuardBundle>,
+    browser_cdp_endpoint: Option<&str>,
+) -> Result<(DockerSessionCommandOptions, LinuxHostSessionCommandOptions), SessionExecutionError> {
+    match guard_bundle {
+        Some(bundle) => Ok((
+            bundle.docker_options(),
+            bundle.linux_host_options(browser_cdp_endpoint)?,
+        )),
+        None => Ok((
+            DockerSessionCommandOptions::default(),
+            LinuxHostSessionCommandOptions::default(),
+        )),
+    }
+}
+
+fn process_mediation_executable_env(handler: &ProcessMediationHandlerConfig) -> Vec<String> {
+    if !handler.environment().executable_env().is_empty() {
+        return handler.environment().executable_env().to_vec();
+    }
+
+    match handler.kind() {
+        ProcessMediationHandlerKind::ManagedBrowserCdp => [
+            "CHROME_PATH",
+            "BROWSER",
+            "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
+            "PUPPETEER_EXECUTABLE_PATH",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
+    }
+}
+
+fn executable_basename(value: &str) -> Option<String> {
+    Path::new(value)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn endpoint_port(endpoint: &str) -> Option<u16> {
+    let endpoint = endpoint
+        .strip_prefix("ws://")
+        .or_else(|| endpoint.strip_prefix("http://"))?;
+    let host = endpoint.split('/').next().unwrap_or(endpoint);
+    host.rsplit_once(':')?.1.parse().ok()
+}
+
+fn mediation_env_field(value: impl AsRef<str>) -> String {
+    value
+        .as_ref()
+        .chars()
+        .map(|character| match character {
+            '\t' | '\n' | '\r' => ' ',
+            character => character,
         })
         .collect()
 }
@@ -581,6 +896,7 @@ struct SessionSideResources {
     environment: Vec<(String, String)>,
     docker_options: DockerSessionCommandOptions,
     linux_host_options: LinuxHostSessionCommandOptions,
+    browser_cdp_endpoint: Option<String>,
     _guard_bundle: Option<LinuxProcessGuardBundle>,
     _supervisor: Option<SessionSurfaceSupervisor>,
 }
@@ -598,12 +914,14 @@ impl SessionSideResources {
         &self.linux_host_options
     }
 
-    fn linux_host_adopt_options(&self, pid: i32) -> LinuxHostSessionCommandOptions {
-        self._guard_bundle
-            .as_ref()
-            .map_or_else(LinuxHostSessionCommandOptions::default, |bundle| {
-                bundle.linux_host_adopt_options(pid)
-            })
+    fn linux_host_adopt_options(
+        &self,
+        pid: i32,
+    ) -> Result<LinuxHostSessionCommandOptions, SessionExecutionError> {
+        self._guard_bundle.as_ref().map_or_else(
+            || Ok(LinuxHostSessionCommandOptions::default()),
+            |bundle| bundle.linux_host_adopt_options(pid, self.browser_cdp_endpoint.as_deref()),
+        )
     }
 }
 
@@ -701,5 +1019,71 @@ impl SessionExecutionError {
             reason: reason.into(),
             location: Location::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use erebor_runtime_core::RuntimeConfig;
+
+    use super::{endpoint_port, process_mediation_executable_env};
+
+    #[test]
+    fn managed_browser_mediation_defaults_browser_executable_env_vars(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "surfaces": {
+                "terminal": {
+                  "enabled": true,
+                  "process_guard": { "enabled": true },
+                  "process_mediation": {
+                    "enabled": true,
+                    "handlers": [
+                      {
+                        "id": "managed-browser-cdp",
+                        "kind": "managed_browser_cdp",
+                        "match": { "executables": ["google-chrome"] }
+                      }
+                    ]
+                  }
+                },
+                "browser_cdp": {
+                  "enabled": true,
+                  "listen": "127.0.0.1:9222"
+                }
+              }
+            }
+            "#,
+        )?;
+        let terminal = config
+            .surface_start_plan()?
+            .terminal()
+            .ok_or_else(|| std::io::Error::other("missing terminal surface"))?
+            .clone();
+        let handler = terminal
+            .process_mediation()
+            .handlers()
+            .first()
+            .ok_or_else(|| std::io::Error::other("missing process mediation handler"))?;
+
+        let variables = process_mediation_executable_env(handler);
+
+        assert!(variables.contains(&String::from("CHROME_PATH")));
+        assert!(variables.contains(&String::from("BROWSER")));
+        assert!(variables.contains(&String::from("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")));
+        assert!(variables.contains(&String::from("PUPPETEER_EXECUTABLE_PATH")));
+        Ok(())
+    }
+
+    #[test]
+    fn endpoint_port_extracts_governed_cdp_listener_port() {
+        assert_eq!(endpoint_port("ws://127.0.0.1:9222/"), Some(9222));
+        assert_eq!(
+            endpoint_port("ws://127.0.0.1:9222/devtools/browser/demo"),
+            Some(9222)
+        );
     }
 }
