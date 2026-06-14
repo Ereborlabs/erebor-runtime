@@ -1,9 +1,10 @@
 use std::{
     env,
-    fs::OpenOptions,
+    fs::{self, OpenOptions},
     io::Write,
-    path::Path,
-    process,
+    os::unix::{fs::PermissionsExt, process::CommandExt},
+    path::{Path, PathBuf},
+    process::Command,
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -11,8 +12,9 @@ use std::{
 const MAX_HANDLERS: usize = 32;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct MediationHandler {
+struct InterceptionHandler {
     id: String,
+    decision: String,
     kind: String,
     executables: Vec<String>,
     allowed_ports: Vec<u16>,
@@ -21,72 +23,127 @@ struct MediationHandler {
     keepalive: bool,
 }
 
-fn main() {
+pub(super) fn try_handle_configured_interception() -> Option<i32> {
     let args = env::args().collect::<Vec<_>>();
     let invoked = args
         .first()
         .and_then(|arg| executable_name(arg))
         .unwrap_or_else(|| String::from("unknown"));
-    let handlers = parse_handlers();
-    let Some(handler) = handlers
+    let handlers = parse_interception_handlers();
+    let handler = handlers
         .iter()
-        .find(|handler| handler.matches_executable(&invoked))
-    else {
-        fail_closed(
-            "no process mediation handler matched invoked executable",
-            None,
-            &invoked,
-            &args,
+        .find(|handler| handler.matches_executable(&invoked))?;
+
+    Some(handle_interception(handler, &invoked, &args))
+}
+
+fn handle_interception(handler: &InterceptionHandler, invoked: &str, args: &[String]) -> i32 {
+    match handler.decision.as_str() {
+        "mediate" => handle_mediation(handler, invoked, args),
+        "deny" => fail_closed(
+            "configured process interception denied this launch",
+            handler,
+            invoked,
+            args,
+        ),
+        "allow" => handle_allow(handler, invoked, args),
+        _ => fail_closed(
+            "configured process interception decision is not supported by this guard",
+            handler,
+            invoked,
+            args,
+        ),
+    }
+}
+
+fn handle_allow(handler: &InterceptionHandler, invoked: &str, args: &[String]) -> i32 {
+    let Some(target) = real_executable_for_shim(invoked) else {
+        return fail_closed(
+            "configured process interception allowed launch, but no real executable was found after the Erebor shim",
+            handler,
+            invoked,
+            args,
         );
     };
 
+    write_interception_audit(
+        handler,
+        invoked,
+        args,
+        remote_debugging_port(&args[1..]),
+        "allow",
+        "allow",
+        &format!(
+            "process launch allowed through to real executable {}",
+            target.display()
+        ),
+    );
+
+    let error = Command::new(&target).args(&args[1..]).exec();
+    fail_closed(
+        &format!("allowed process exec failed: {error}"),
+        handler,
+        invoked,
+        args,
+    )
+}
+
+fn handle_mediation(handler: &InterceptionHandler, invoked: &str, args: &[String]) -> i32 {
     if handler.kind != "managed_browser_cdp" {
-        fail_closed(
-            "process mediation handler kind is not supported by this shim",
-            Some(handler),
-            &invoked,
-            &args,
+        return fail_closed(
+            "process interception handler kind is not supported by this guard",
+            handler,
+            invoked,
+            args,
         );
     }
 
     let Some(requested_port) = remote_debugging_port(&args[1..]) else {
-        fail_closed(
-            "managed_browser_cdp mediation requires --remote-debugging-port",
-            Some(handler),
-            &invoked,
-            &args,
+        return fail_closed(
+            "managed_browser_cdp interception requires --remote-debugging-port",
+            handler,
+            invoked,
+            args,
         );
     };
     let allowed_ports = handler.effective_allowed_ports();
     if !allowed_ports.contains(&requested_port) {
-        fail_closed(
+        return fail_closed(
             &format!("requested remote debugging port {requested_port} is not allowed"),
-            Some(handler),
-            &invoked,
-            &args,
+            handler,
+            invoked,
+            args,
         );
     }
 
     let Some(endpoint_port) = endpoint_port(&handler.governed_endpoint) else {
-        fail_closed(
+        return fail_closed(
             "governed endpoint does not include a parseable port",
-            Some(handler),
-            &invoked,
-            &args,
+            handler,
+            invoked,
+            args,
         );
     };
     if endpoint_port != requested_port {
-        fail_closed(
+        return fail_closed(
             &format!(
                 "requested port {requested_port} does not match governed endpoint port {endpoint_port}"
             ),
-            Some(handler),
-            &invoked,
-            &args,
+            handler,
+            invoked,
+            args,
         );
     }
 
-    write_mediation_audit(handler, &invoked, &args, requested_port, "allow", "mediate");
+    write_interception_audit(
+        handler,
+        invoked,
+        args,
+        Some(requested_port),
+        "allow",
+        "mediate",
+        "browser launch mediated to Erebor-owned governed CDP",
+    );
 
     if handler.print_devtools_listening_line {
         eprintln!(
@@ -100,9 +157,11 @@ fn main() {
             thread::sleep(Duration::from_secs(60));
         }
     }
+
+    0
 }
 
-impl MediationHandler {
+impl InterceptionHandler {
     fn matches_executable(&self, invoked: &str) -> bool {
         self.executables
             .iter()
@@ -118,12 +177,13 @@ impl MediationHandler {
     }
 }
 
-fn parse_handlers() -> Vec<MediationHandler> {
-    let source = env::var("EREBOR_PROCESS_MEDIATION_HANDLERS").unwrap_or_default();
-    parse_handlers_from_source(&source)
+fn parse_interception_handlers() -> Vec<InterceptionHandler> {
+    let source = env::var("EREBOR_PROCESS_INTERCEPTION_HANDLERS")
+        .unwrap_or_default();
+    parse_interception_handlers_from_source(&source)
 }
 
-fn parse_handlers_from_source(source: &str) -> Vec<MediationHandler> {
+fn parse_interception_handlers_from_source(source: &str) -> Vec<InterceptionHandler> {
     source
         .lines()
         .take(MAX_HANDLERS)
@@ -133,6 +193,7 @@ fn parse_handlers_from_source(source: &str) -> Vec<MediationHandler> {
             if id.is_empty() {
                 return None;
             }
+            let decision = fields.next().unwrap_or_default();
             let kind = fields.next().unwrap_or_default();
             let executables = split_csv(fields.next().unwrap_or_default());
             let allowed_ports = split_csv(fields.next().unwrap_or_default())
@@ -140,12 +201,17 @@ fn parse_handlers_from_source(source: &str) -> Vec<MediationHandler> {
                 .filter_map(|port| port.parse::<u16>().ok())
                 .collect::<Vec<_>>();
             let governed_endpoint = fields.next().unwrap_or_default();
-            if kind.is_empty() || executables.is_empty() || governed_endpoint.is_empty() {
+            if decision.is_empty()
+                || kind.is_empty()
+                || executables.is_empty()
+                || governed_endpoint.is_empty()
+            {
                 return None;
             }
 
-            Some(MediationHandler {
+            Some(InterceptionHandler {
                 id: id.to_owned(),
+                decision: decision.to_owned(),
                 kind: kind.to_owned(),
                 executables,
                 allowed_ports,
@@ -181,6 +247,53 @@ fn executable_name(path: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn real_executable_for_shim(invoked: &str) -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    let shim_dir = env::var_os("EREBOR_PROCESS_INTERCEPTION_SHIM_DIR").map(PathBuf::from);
+    let current_exe = env::current_exe().ok();
+
+    real_executable_for_shim_with_path(
+        invoked,
+        shim_dir.as_deref(),
+        &path,
+        current_exe.as_deref(),
+    )
+}
+
+fn real_executable_for_shim_with_path(
+    invoked: &str,
+    shim_dir: Option<&Path>,
+    path: impl AsRef<std::ffi::OsStr>,
+    current_exe: Option<&Path>,
+) -> Option<PathBuf> {
+    env::split_paths(&path)
+        .filter(|directory| !shim_dir.is_some_and(|shim_dir| paths_equal(directory, shim_dir)))
+        .map(|directory| directory.join(invoked))
+        .filter(|candidate| {
+            !current_exe.is_some_and(|current_exe| paths_equal(candidate, current_exe))
+        })
+        .find(|candidate| is_executable_file(candidate))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+
+    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+
+    match (fs::canonicalize(left), fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
 fn remote_debugging_port(args: &[String]) -> Option<u16> {
     let mut iter = args.iter().peekable();
     while let Some(argument) = iter.next() {
@@ -212,26 +325,31 @@ fn devtools_browser_url(endpoint: &str) -> String {
 
 fn fail_closed(
     reason: &str,
-    handler: Option<&MediationHandler>,
+    handler: &InterceptionHandler,
     invoked: &str,
     args: &[String],
-) -> ! {
-    if let Some(handler) = handler {
-        if let Some(port) = remote_debugging_port(&args[1..]) {
-            write_mediation_audit(handler, invoked, args, port, "deny", "deny");
-        }
-    }
-    eprintln!("erebor process mediator: {reason}");
-    process::exit(126);
+) -> i32 {
+    write_interception_audit(
+        handler,
+        invoked,
+        args,
+        remote_debugging_port(&args[1..]),
+        "deny",
+        "deny",
+        reason,
+    );
+    eprintln!("erebor linux process guard interception: {reason}");
+    126
 }
 
-fn write_mediation_audit(
-    handler: &MediationHandler,
+fn write_interception_audit(
+    handler: &InterceptionHandler,
     invoked: &str,
     args: &[String],
-    requested_port: u16,
+    requested_port: Option<u16>,
     final_decision: &str,
     policy_decision: &str,
+    reason: &str,
 ) {
     let audit_path = match env::var("EREBOR_GUARD_AUDIT_JSONL") {
         Ok(path) if !path.is_empty() => path,
@@ -246,29 +364,31 @@ fn write_mediation_audit(
         return;
     };
 
-    let session_id = env::var("EREBOR_SESSION_ID").unwrap_or_else(|_| String::from("unknown-session"));
+    let session_id =
+        env::var("EREBOR_SESSION_ID").unwrap_or_else(|_| String::from("unknown-session"));
     let actor_id = env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent"));
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs());
     let command = args.join(" ");
-    let event_id = format!("{session_id}-process-mediation-{requested_port}-{timestamp}");
-    let reason = if final_decision == "allow" {
-        "browser launch mediated to Erebor-owned governed CDP"
-    } else {
-        "browser launch mediation failed closed"
-    };
+    let requested_port_label = requested_port
+        .map(|port| port.to_string())
+        .unwrap_or_else(|| String::from("none"));
+    let requested_port_json =
+        requested_port.map_or_else(|| String::from("null"), |port| port.to_string());
+    let event_id = format!("{session_id}-process-interception-{requested_port_label}-{timestamp}");
 
     let _ = write!(
         file,
-        "{{\"event\":{{\"id\":{},\"session_id\":{},\"actor\":{{\"id\":{},\"kind\":\"agent\"}},\"surface\":\"terminal\",\"action\":\"process_exec\",\"target\":{{\"label\":{},\"uri\":null}},\"payload\":{{\"kind\":\"process_launch_mediation\",\"handler_id\":{},\"mediation_kind\":{},\"requested_port\":{},\"governed_endpoint\":{},\"argv_summary\":{},\"command\":[",
+        "{{\"event\":{{\"id\":{},\"session_id\":{},\"actor\":{{\"id\":{},\"kind\":\"agent\"}},\"surface\":\"terminal\",\"action\":\"process_exec\",\"target\":{{\"label\":{},\"uri\":null}},\"payload\":{{\"kind\":\"process_interception\",\"handler_id\":{},\"interception_decision\":{},\"interception_kind\":{},\"requested_port\":{},\"governed_endpoint\":{},\"argv_summary\":{},\"command\":[",
         json_string(&event_id),
         json_string(&session_id),
         json_string(&actor_id),
         json_string(invoked),
         json_string(&handler.id),
+        json_string(&handler.decision),
         json_string(&handler.kind),
-        requested_port,
+        requested_port_json,
         json_string(&handler.governed_endpoint),
         json_string(&command)
     );
@@ -285,10 +405,10 @@ fn write_mediation_audit(
         timestamp,
         policy_decision,
         json_string(reason),
-        json_string(&format!("erebor-process-mediation-{}", handler.id)),
+        json_string(&format!("erebor-process-interception-{}", handler.id)),
         final_decision,
         json_string(reason),
-        json_string(&format!("erebor-process-mediation-{}", handler.id))
+        json_string(&format!("erebor-process-interception-{}", handler.id))
     );
 }
 
@@ -313,19 +433,27 @@ fn json_string(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        env, fs,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
+    };
+
     use super::{
-        devtools_browser_url, endpoint_port, executable_name, parse_handlers_from_source,
+        devtools_browser_url, endpoint_port, executable_name,
+        parse_interception_handlers_from_source, real_executable_for_shim_with_path,
         remote_debugging_port,
     };
 
     #[test]
-    fn parses_handler_environment_format() {
-        let handlers = parse_handlers_from_source(
-            "managed-browser-cdp\tmanaged_browser_cdp\tgoogle-chrome,chromium\t9222\tws://127.0.0.1:9222/\ttrue\tfalse\n",
+    fn parses_process_interception_handler_environment_format() {
+        let handlers = parse_interception_handlers_from_source(
+            "managed-browser-cdp\tmediate\tmanaged_browser_cdp\tgoogle-chrome,chromium\t9222\tws://127.0.0.1:9222/\ttrue\tfalse\n",
         );
 
         assert_eq!(handlers.len(), 1);
         assert_eq!(handlers[0].id, "managed-browser-cdp");
+        assert_eq!(handlers[0].decision, "mediate");
         assert_eq!(handlers[0].kind, "managed_browser_cdp");
         assert_eq!(
             handlers[0].executables,
@@ -370,5 +498,35 @@ mod tests {
             executable_name("/tmp/erebor/shims/google-chrome"),
             Some(String::from("google-chrome"))
         );
+    }
+
+    #[test]
+    fn allow_decision_resolves_real_executable_after_shim_dir() {
+        let root = unique_temp_dir("allow-real-executable");
+        let _ = fs::remove_dir_all(&root);
+        let shim_dir = root.join("shims");
+        let real_dir = root.join("bin");
+        fs::create_dir_all(&shim_dir).expect("create shim dir");
+        fs::create_dir_all(&real_dir).expect("create real dir");
+
+        let real_chrome = real_dir.join("google-chrome");
+        fs::write(&real_chrome, "#!/bin/sh\n").expect("write executable");
+        fs::set_permissions(&real_chrome, fs::Permissions::from_mode(0o755))
+            .expect("mark executable");
+
+        let path = env::join_paths([shim_dir.as_path(), real_dir.as_path()]).expect("join path");
+        let resolved =
+            real_executable_for_shim_with_path("google-chrome", Some(&shim_dir), &path, None);
+
+        assert_eq!(resolved, Some(real_chrome));
+
+        fs::remove_dir_all(root).expect("remove temp dir");
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "erebor-process-interception-{name}-{}",
+            std::process::id()
+        ))
     }
 }

@@ -1203,7 +1203,11 @@ pub struct TerminalSurfaceLayerConfig {
     pub policies: Vec<PathBuf>,
     #[serde(default)]
     pub process_guard: TerminalProcessGuardLayerConfig,
-    #[serde(default, alias = "browser_launch_mediation")]
+    #[serde(
+        default,
+        alias = "process_interception",
+        alias = "browser_launch_mediation"
+    )]
     pub process_mediation: TerminalProcessMediationLayerConfig,
 }
 
@@ -1252,13 +1256,13 @@ impl TerminalProcessMediationLayerConfig {
 
         if !process_guard_enabled {
             return Err(RuntimeConfigError::invalid_process_mediation_config(
-                "terminal process mediation requires process_guard.enabled=true",
+                "terminal process interception requires process_guard.enabled=true",
             ));
         }
 
         if self.handlers.is_empty() {
             return Err(RuntimeConfigError::invalid_process_mediation_config(
-                "at least one mediation handler is required",
+                "at least one process interception handler is required",
             ));
         }
 
@@ -1267,7 +1271,10 @@ impl TerminalProcessMediationLayerConfig {
             handler.validate(browser_cdp)?;
             if !ids.insert(handler.id.clone()) {
                 return Err(RuntimeConfigError::invalid_process_mediation_config(
-                    format!("process mediation handler `{}` is duplicated", handler.id),
+                    format!(
+                        "process interception handler `{}` is duplicated",
+                        handler.id
+                    ),
                 ));
             }
         }
@@ -1283,9 +1290,34 @@ pub enum TerminalProcessMediationMode {
     Shim,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessInterceptionDecision {
+    Allow,
+    Deny,
+    #[serde(alias = "approval_required", alias = "require_verification")]
+    RequireApproval,
+    #[default]
+    Mediate,
+}
+
+impl ProcessInterceptionDecision {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+            Self::RequireApproval => "require_approval",
+            Self::Mediate => "mediate",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 pub struct ProcessMediationHandlerLayerConfig {
     pub id: String,
+    #[serde(default)]
+    pub decision: ProcessInterceptionDecision,
     pub kind: ProcessMediationHandlerKind,
     #[serde(rename = "match")]
     pub matcher: ProcessMediationMatcherLayerConfig,
@@ -1306,7 +1338,7 @@ impl ProcessMediationHandlerLayerConfig {
     ) -> Result<(), RuntimeConfigError> {
         if self.id.trim().is_empty() {
             return Err(RuntimeConfigError::invalid_process_mediation_config(
-                "process mediation handler id cannot be empty",
+                "process interception handler id cannot be empty",
             ));
         }
 
@@ -1559,6 +1591,11 @@ impl TerminalSurfaceConfig {
         &self.process_mediation
     }
 
+    #[must_use]
+    pub const fn process_interception(&self) -> &TerminalProcessMediationConfig {
+        &self.process_mediation
+    }
+
     fn from_layer(config: &TerminalSurfaceLayerConfig, default_policies: Vec<PathBuf>) -> Self {
         Self {
             tty: config.tty,
@@ -1639,6 +1676,7 @@ pub struct ProcessMediationHandlerConfig {
     replacement: ProcessMediationReplacementConfig,
     environment: ProcessMediationEnvironmentConfig,
     compatibility: ProcessMediationCompatibilityConfig,
+    decision: ProcessInterceptionDecision,
 }
 
 impl ProcessMediationHandlerConfig {
@@ -1650,6 +1688,11 @@ impl ProcessMediationHandlerConfig {
     #[must_use]
     pub const fn kind(&self) -> ProcessMediationHandlerKind {
         self.kind
+    }
+
+    #[must_use]
+    pub const fn decision(&self) -> ProcessInterceptionDecision {
+        self.decision
     }
 
     #[must_use]
@@ -1682,6 +1725,7 @@ impl From<ProcessMediationHandlerLayerConfig> for ProcessMediationHandlerConfig 
     fn from(config: ProcessMediationHandlerLayerConfig) -> Self {
         Self {
             id: config.id,
+            decision: config.decision,
             kind: config.kind,
             matcher: config.matcher.into(),
             requested_endpoint: config.requested_endpoint.into(),
@@ -1835,6 +1879,12 @@ impl From<ProcessMediationCompatibilityLayerConfig> for ProcessMediationCompatib
         }
     }
 }
+
+pub type TerminalProcessInterceptionConfig = TerminalProcessMediationConfig;
+pub type TerminalProcessInterceptionLayerConfig = TerminalProcessMediationLayerConfig;
+pub type TerminalProcessInterceptionMode = TerminalProcessMediationMode;
+pub type ProcessInterceptionHandlerConfig = ProcessMediationHandlerConfig;
+pub type ProcessInterceptionHandlerKind = ProcessMediationHandlerKind;
 
 impl TerminalProcessGuardBackend {
     #[must_use]
@@ -2047,8 +2097,8 @@ mod tests {
 
     use crate::{
         DockerSessionCommandPlan, LinuxHostSessionCommandOptions, LinuxHostSessionCommandPlan,
-        ProcessMediationEndpointSource, ProcessMediationHandlerKind, RuntimeConfig,
-        RuntimeConfigError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
+        ProcessInterceptionDecision, ProcessMediationEndpointSource, ProcessMediationHandlerKind,
+        RuntimeConfig, RuntimeConfigError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
         SessionSurfaceKind, TerminalProcessGuardBackend, TerminalProcessMediationMode,
     };
 
@@ -2127,7 +2177,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_process_mediation_is_generic_runtime_config() -> Result<(), RuntimeConfigError> {
+    fn terminal_process_interception_is_generic_runtime_config() -> Result<(), RuntimeConfigError> {
         let config = RuntimeConfig::from_json_str(
             r#"
             {
@@ -2139,12 +2189,13 @@ mod tests {
                     "enabled": true,
                     "backend": "linux_ptrace"
                   },
-                  "process_mediation": {
+                  "process_interception": {
                     "enabled": true,
                     "mode": "shim",
                     "handlers": [
                       {
                         "id": "managed-browser-cdp",
+                        "decision": "mediate",
                         "kind": "managed_browser_cdp",
                         "match": {
                           "executables": ["google-chrome", "chromium"],
@@ -2185,15 +2236,16 @@ mod tests {
             .terminal()
             .ok_or_else(RuntimeConfigError::no_session_surfaces)?
             .clone();
-        let mediation = terminal.process_mediation();
-        let handler = mediation
+        let interception = terminal.process_interception();
+        let handler = interception
             .handlers()
             .first()
             .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
 
-        assert!(mediation.enabled());
-        assert_eq!(mediation.mode(), TerminalProcessMediationMode::Shim);
+        assert!(interception.enabled());
+        assert_eq!(interception.mode(), TerminalProcessMediationMode::Shim);
         assert_eq!(handler.id(), "managed-browser-cdp");
+        assert_eq!(handler.decision(), ProcessInterceptionDecision::Mediate);
         assert_eq!(
             handler.kind(),
             ProcessMediationHandlerKind::ManagedBrowserCdp
@@ -2222,7 +2274,7 @@ mod tests {
                 "terminal": {
                   "enabled": true,
                   "process_guard": { "enabled": true },
-                  "process_mediation": {
+                  "process_interception": {
                     "enabled": true,
                     "handlers": [
                       {

@@ -9,11 +9,11 @@ use std::{
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
     DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions,
-    ProcessMediationHandlerConfig, ProcessMediationHandlerKind, RuntimeAuditConfig, RuntimeConfig,
-    RuntimeConfigError, RuntimeError, SessionActorLayerConfig, SessionAdoptPlan, SessionRunOutcome,
-    SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher, SessionSurfaceDefinition,
-    SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher, SessionSurfaceSupervisor,
-    TerminalProcessMediationMode, TerminalSurfaceConfig,
+    ProcessInterceptionDecision, ProcessInterceptionHandlerConfig, ProcessInterceptionHandlerKind,
+    RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError, RuntimeError, SessionActorLayerConfig,
+    SessionAdoptPlan, SessionRunOutcome, SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher,
+    SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
+    SessionSurfaceSupervisor, TerminalProcessInterceptionMode, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
@@ -26,8 +26,6 @@ use thiserror::Error;
 
 const LINUX_PROCESS_GUARD: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/erebor-linux-process-guard"));
-const LINUX_PROCESS_MEDIATOR: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/erebor-process-mediator"));
 const DOCKER_GUARD_DIR: &str = "/erebor/guard";
 const LINUX_PROCESS_GUARD_PATH: &str = "/erebor/guard/erebor-linux-process-guard";
 const DOCKER_AUDIT_DIR: &str = "/erebor/audit";
@@ -277,11 +275,11 @@ fn start_session_side_resources_from_start_plan(
                 environment.push((String::from("EREBOR_TERMINAL_TTY"), plan.tty().to_string()));
 
                 if config.process_guard().enabled() {
-                    if config.process_mediation().enabled()
+                    if config.process_interception().enabled()
                         && plan.runner_kind() != SessionRunnerKind::LinuxHost
                     {
                         return Err(SessionExecutionError::guard_config(
-                            "terminal process mediation currently supports linux-host sessions only",
+                            "terminal process interception currently supports linux-host sessions only",
                         ));
                     }
                     let bundle = LinuxProcessGuardBundle::prepare(config, plan)?;
@@ -434,7 +432,7 @@ struct LinuxProcessGuardBundle {
     audit_path: Option<PathBuf>,
     audit_filename: Option<String>,
     terminal_tty: bool,
-    mediation: Option<LinuxProcessMediationBundle>,
+    interception: Option<LinuxProcessInterceptionBundle>,
 }
 
 impl LinuxProcessGuardBundle {
@@ -453,11 +451,11 @@ impl LinuxProcessGuardBundle {
         fs::set_permissions(&guard_path, fs::Permissions::from_mode(0o755))
             .map_err(SessionExecutionError::guard_io)?;
 
-        let mediation = LinuxProcessMediationBundle::prepare(&host_dir, config)?;
+        let interception = LinuxProcessInterceptionBundle::prepare(&guard_path, &host_dir, config)?;
         let mut rules = compile_terminal_process_guard_rules(config)
             .map_err(SessionExecutionError::terminal_surface)?;
-        if let Some(mediation) = mediation.as_ref() {
-            rules.prepend(mediation.allow_rules());
+        if let Some(interception) = interception.as_ref() {
+            rules.prepend(interception.allow_rules());
         }
         let guard_rules = rules.to_env_value();
         let mut audit_jsonl_path = None;
@@ -491,7 +489,7 @@ impl LinuxProcessGuardBundle {
             audit_path: audit_jsonl_path,
             audit_filename,
             terminal_tty: plan.terminal().tty(),
-            mediation,
+            interception,
         })
     }
 
@@ -542,8 +540,8 @@ impl LinuxProcessGuardBundle {
                 .with_environment("EREBOR_GUARD_AUDIT_JSONL", audit_path.display().to_string());
         }
 
-        if let Some(mediation) = self.mediation.as_ref() {
-            for (key, value) in mediation.environment(browser_cdp_endpoint)? {
+        if let Some(interception) = self.interception.as_ref() {
+            for (key, value) in interception.environment(browser_cdp_endpoint)? {
                 options = options.with_environment(key, value);
             }
         }
@@ -563,39 +561,33 @@ impl LinuxProcessGuardBundle {
 }
 
 #[derive(Clone, Debug)]
-struct LinuxProcessMediationBundle {
+struct LinuxProcessInterceptionBundle {
     shim_dir: PathBuf,
-    handlers: Vec<LinuxProcessMediationHandler>,
+    handlers: Vec<LinuxProcessInterceptionHandler>,
 }
 
-impl LinuxProcessMediationBundle {
+impl LinuxProcessInterceptionBundle {
     fn prepare(
+        guard_path: &Path,
         host_dir: &Path,
         config: &TerminalSurfaceConfig,
     ) -> Result<Option<Self>, SessionExecutionError> {
-        let mediation = config.process_mediation();
-        if !mediation.enabled() {
+        let interception = config.process_interception();
+        if !interception.enabled() {
             return Ok(None);
         }
 
-        match mediation.mode() {
-            TerminalProcessMediationMode::Shim => {}
+        match interception.mode() {
+            TerminalProcessInterceptionMode::Shim => {}
         }
 
-        let mediator_path = host_dir.join("erebor-process-mediator");
-        fs::write(&mediator_path, LINUX_PROCESS_MEDIATOR)
-            .map_err(SessionExecutionError::guard_io)?;
-        fs::set_permissions(&mediator_path, fs::Permissions::from_mode(0o755))
-            .map_err(SessionExecutionError::guard_io)?;
         let shim_dir = host_dir.join("shims");
         fs::create_dir_all(&shim_dir).map_err(SessionExecutionError::guard_io)?;
 
-        let handlers = mediation
+        let handlers = interception
             .handlers()
             .iter()
-            .map(|handler| {
-                LinuxProcessMediationHandler::prepare(handler, &mediator_path, &shim_dir)
-            })
+            .map(|handler| LinuxProcessInterceptionHandler::prepare(handler, guard_path, &shim_dir))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Some(Self { shim_dir, handlers }))
@@ -604,7 +596,7 @@ impl LinuxProcessMediationBundle {
     fn allow_rules(&self) -> Vec<TerminalProcessGuardRule> {
         self.handlers
             .iter()
-            .flat_map(LinuxProcessMediationHandler::allow_rules)
+            .flat_map(LinuxProcessInterceptionHandler::allow_rules)
             .collect()
     }
 
@@ -614,21 +606,25 @@ impl LinuxProcessMediationBundle {
     ) -> Result<Vec<(String, String)>, SessionExecutionError> {
         let browser_cdp_endpoint = browser_cdp_endpoint.ok_or_else(|| {
             SessionExecutionError::guard_config(
-                "process mediation requires a running browser_cdp endpoint",
+                "process interception requires a running browser_cdp endpoint",
             )
         })?;
         let mut environment = vec![
             (
-                String::from("EREBOR_PROCESS_MEDIATION"),
-                String::from("shim"),
+                String::from("EREBOR_PROCESS_INTERCEPTION"),
+                String::from("linux-ptrace"),
             ),
             (
                 String::from("EREBOR_MANAGED_BROWSER_CDP_URL"),
                 browser_cdp_endpoint.to_owned(),
             ),
             (
-                String::from("EREBOR_PROCESS_MEDIATION_HANDLERS"),
+                String::from("EREBOR_PROCESS_INTERCEPTION_HANDLERS"),
                 self.handlers_env(browser_cdp_endpoint)?,
+            ),
+            (
+                String::from("EREBOR_PROCESS_INTERCEPTION_SHIM_DIR"),
+                self.shim_dir.display().to_string(),
             ),
         ];
 
@@ -665,9 +661,10 @@ impl LinuxProcessMediationBundle {
 }
 
 #[derive(Clone, Debug)]
-struct LinuxProcessMediationHandler {
+struct LinuxProcessInterceptionHandler {
     id: String,
-    kind: ProcessMediationHandlerKind,
+    decision: ProcessInterceptionDecision,
+    kind: ProcessInterceptionHandlerKind,
     executables: Vec<String>,
     allowed_ports: Vec<u16>,
     executable_env: Vec<String>,
@@ -677,10 +674,10 @@ struct LinuxProcessMediationHandler {
     shim_paths: Vec<PathBuf>,
 }
 
-impl LinuxProcessMediationHandler {
+impl LinuxProcessInterceptionHandler {
     fn prepare(
-        handler: &ProcessMediationHandlerConfig,
-        mediator_path: &Path,
+        handler: &ProcessInterceptionHandlerConfig,
+        guard_path: &Path,
         shim_dir: &Path,
     ) -> Result<Self, SessionExecutionError> {
         let mut shim_paths = Vec::new();
@@ -689,13 +686,13 @@ impl LinuxProcessMediationHandler {
         for executable in handler.matcher().executables() {
             let shim_name = executable_basename(executable).ok_or_else(|| {
                 SessionExecutionError::guard_config(format!(
-                    "process mediation handler `{}` executable `{}` is not a valid executable name",
+                    "process interception handler `{}` executable `{}` is not a valid executable name",
                     handler.id(),
                     executable
                 ))
             })?;
             let shim_path = shim_dir.join(&shim_name);
-            std::os::unix::fs::symlink(mediator_path, &shim_path)
+            std::os::unix::fs::symlink(guard_path, &shim_path)
                 .map_err(SessionExecutionError::guard_io)?;
             executables.push(shim_name);
             shim_paths.push(shim_path);
@@ -703,10 +700,11 @@ impl LinuxProcessMediationHandler {
 
         Ok(Self {
             id: handler.id().to_owned(),
+            decision: handler.decision(),
             kind: handler.kind(),
             executables,
             allowed_ports: handler.requested_endpoint().allowed_ports().to_vec(),
-            executable_env: process_mediation_executable_env(handler),
+            executable_env: process_interception_executable_env(handler),
             print_devtools_listening_line: handler.compatibility().print_devtools_listening_line(),
             keepalive: handler.compatibility().keepalive(),
             prepend_path: handler.environment().prepend_path(),
@@ -720,8 +718,8 @@ impl LinuxProcessMediationHandler {
             .map(|path| {
                 TerminalProcessGuardRule::new(
                     path.display().to_string(),
-                    "process launch is routed through an Erebor mediation shim",
-                    format!("erebor-process-mediation-{}-shim", self.id),
+                    "process launch is routed through an Erebor process interception shim",
+                    format!("erebor-process-interception-{}-shim", self.id),
                     TerminalProcessGuardDecision::Allow,
                 )
             })
@@ -748,19 +746,20 @@ impl LinuxProcessMediationHandler {
         };
 
         Ok([
-            mediation_env_field(&self.id),
-            mediation_env_field(self.kind.as_str()),
-            mediation_env_field(self.executables.join(",")),
-            mediation_env_field(
+            interception_env_field(&self.id),
+            interception_env_field(self.decision.as_str()),
+            interception_env_field(self.kind.as_str()),
+            interception_env_field(self.executables.join(",")),
+            interception_env_field(
                 allowed_ports
                     .iter()
                     .map(u16::to_string)
                     .collect::<Vec<_>>()
                     .join(","),
             ),
-            mediation_env_field(browser_cdp_endpoint),
-            mediation_env_field(self.print_devtools_listening_line.to_string()),
-            mediation_env_field(self.keepalive.to_string()),
+            interception_env_field(browser_cdp_endpoint),
+            interception_env_field(self.print_devtools_listening_line.to_string()),
+            interception_env_field(self.keepalive.to_string()),
         ]
         .join("\t"))
     }
@@ -812,13 +811,13 @@ fn side_resource_command_options(
     }
 }
 
-fn process_mediation_executable_env(handler: &ProcessMediationHandlerConfig) -> Vec<String> {
+fn process_interception_executable_env(handler: &ProcessInterceptionHandlerConfig) -> Vec<String> {
     if !handler.environment().executable_env().is_empty() {
         return handler.environment().executable_env().to_vec();
     }
 
     match handler.kind() {
-        ProcessMediationHandlerKind::ManagedBrowserCdp => [
+        ProcessInterceptionHandlerKind::ManagedBrowserCdp => [
             "CHROME_PATH",
             "BROWSER",
             "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH",
@@ -846,7 +845,7 @@ fn endpoint_port(endpoint: &str) -> Option<u16> {
     host.rsplit_once(':')?.1.parse().ok()
 }
 
-fn mediation_env_field(value: impl AsRef<str>) -> String {
+fn interception_env_field(value: impl AsRef<str>) -> String {
     value
         .as_ref()
         .chars()
@@ -1026,10 +1025,10 @@ impl SessionExecutionError {
 mod tests {
     use erebor_runtime_core::RuntimeConfig;
 
-    use super::{endpoint_port, process_mediation_executable_env};
+    use super::{endpoint_port, process_interception_executable_env};
 
     #[test]
-    fn managed_browser_mediation_defaults_browser_executable_env_vars(
+    fn managed_browser_interception_defaults_browser_executable_env_vars(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let config = RuntimeConfig::from_json_str(
             r#"
@@ -1039,7 +1038,7 @@ mod tests {
                 "terminal": {
                   "enabled": true,
                   "process_guard": { "enabled": true },
-                  "process_mediation": {
+                  "process_interception": {
                     "enabled": true,
                     "handlers": [
                       {
@@ -1064,12 +1063,12 @@ mod tests {
             .ok_or_else(|| std::io::Error::other("missing terminal surface"))?
             .clone();
         let handler = terminal
-            .process_mediation()
+            .process_interception()
             .handlers()
             .first()
-            .ok_or_else(|| std::io::Error::other("missing process mediation handler"))?;
+            .ok_or_else(|| std::io::Error::other("missing process interception handler"))?;
 
-        let variables = process_mediation_executable_env(handler);
+        let variables = process_interception_executable_env(handler);
 
         assert!(variables.contains(&String::from("CHROME_PATH")));
         assert!(variables.contains(&String::from("BROWSER")));

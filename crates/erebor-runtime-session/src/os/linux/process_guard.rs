@@ -1,5 +1,8 @@
 #![allow(unsafe_code)]
 
+#[path = "process_guard/interception.rs"]
+mod interception;
+
 use std::{
     collections::HashMap,
     env,
@@ -133,6 +136,10 @@ unsafe extern "C" {
 }
 
 fn main() {
+    if let Some(status) = interception::try_handle_configured_interception() {
+        process::exit(status);
+    }
+
     let rules = parse_rules();
 
     if let Some(root_pid) = adopt_pid_from_env() {
@@ -904,7 +911,7 @@ fn write_audit(
 
     let _ = write!(
         file,
-        "{{\"event\":{{\"id\":{},\"session_id\":{},\"actor\":{{\"id\":{},\"kind\":\"agent\"}},\"surface\":\"terminal\",\"action\":\"process_exec\",\"target\":{{\"label\":{},\"uri\":null}},\"payload\":{{\"kind\":\"agent_process_exec_attempt\",\"terminal\":{{\"surface\":\"terminal\",\"tty\":{},\"mediation_path\":\"linux_ptrace\"}},\"working_directory\":{},\"parent_process\":\"linux-process-guard\",\"argv_summary\":{},\"command\":[",
+        "{{\"event\":{{\"id\":{},\"session_id\":{},\"actor\":{{\"id\":{},\"kind\":\"agent\"}},\"surface\":\"terminal\",\"action\":\"process_exec\",\"target\":{{\"label\":{},\"uri\":null}},\"payload\":{{\"kind\":\"agent_process_exec_attempt\",\"terminal\":{{\"surface\":\"terminal\",\"tty\":{},\"interception_path\":\"linux_ptrace\"}},\"working_directory\":{},\"parent_process\":\"linux-process-guard\",\"argv_summary\":{},\"command\":[",
         json_string(&event_id),
         json_string(&session_id),
         json_string(&actor_id),

@@ -43,7 +43,7 @@ pub enum RuntimeConfigError {
     NoSessionSurfaces { location: Location },
     #[error("runtime config browser_cdp browser_url must start with ws://")]
     BrowserCdpInvalidBrowserUrl { location: Location },
-    #[error("runtime config terminal process mediation is invalid: {reason}")]
+    #[error("runtime config terminal process interception is invalid: {reason}")]
     InvalidProcessMediationConfig { reason: String, location: Location },
 }
 

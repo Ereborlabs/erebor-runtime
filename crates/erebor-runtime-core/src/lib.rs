@@ -14,6 +14,7 @@ pub use config::{
     DockerSessionCommandOptions, DockerSessionCommandPlan, DockerSessionMount,
     DockerSessionRunnerConfig, DockerSessionRunnerLayerConfig, LinuxHostSessionCommandOptions,
     LinuxHostSessionCommandPlan, LinuxHostSessionRunnerConfig, LinuxHostSessionRunnerLayerConfig,
+    ProcessInterceptionDecision, ProcessInterceptionHandlerConfig, ProcessInterceptionHandlerKind,
     ProcessMediationCompatibilityConfig, ProcessMediationCompatibilityLayerConfig,
     ProcessMediationEndpointSource, ProcessMediationEnvironmentConfig,
     ProcessMediationEnvironmentLayerConfig, ProcessMediationHandlerConfig,
@@ -25,9 +26,10 @@ pub use config::{
     SessionDiagnosticLayerConfig, SessionLayerConfig, SessionRunPlan, SessionRunnerConfig,
     SessionRunnerKind, SessionRunnerLayerConfig, SessionSurfaceKind, SessionSurfaceLayers,
     SessionSurfaceStartPlan, SessionSurfaceToggleConfig, TerminalProcessGuardBackend,
-    TerminalProcessGuardConfig, TerminalProcessGuardLayerConfig, TerminalProcessMediationConfig,
-    TerminalProcessMediationLayerConfig, TerminalProcessMediationMode, TerminalSurfaceConfig,
-    TerminalSurfaceLayerConfig,
+    TerminalProcessGuardConfig, TerminalProcessGuardLayerConfig, TerminalProcessInterceptionConfig,
+    TerminalProcessInterceptionLayerConfig, TerminalProcessInterceptionMode,
+    TerminalProcessMediationConfig, TerminalProcessMediationLayerConfig,
+    TerminalProcessMediationMode, TerminalSurfaceConfig, TerminalSurfaceLayerConfig,
 };
 pub use engine::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,

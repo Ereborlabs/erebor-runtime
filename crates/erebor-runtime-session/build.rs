@@ -7,7 +7,7 @@ use std::{
 
 fn main() {
     println!("cargo:rerun-if-changed=src/os/linux/process_guard.rs");
-    println!("cargo:rerun-if-changed=src/os/linux/process_mediator.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/interception.rs");
 
     let out_dir = match env::var("OUT_DIR") {
         Ok(out_dir) => PathBuf::from(out_dir),
@@ -20,11 +20,6 @@ fn main() {
         "Linux process guard",
         "src/os/linux/process_guard.rs",
         &out_dir.join("erebor-linux-process-guard"),
-    );
-    compile_standalone_binary(
-        "Linux process mediator",
-        "src/os/linux/process_mediator.rs",
-        &out_dir.join("erebor-process-mediator"),
     );
 }
 
