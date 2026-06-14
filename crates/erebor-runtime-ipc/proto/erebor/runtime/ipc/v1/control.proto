@@ -6,10 +6,9 @@ message Envelope {
   uint32 protocol_version = 1;
   uint64 message_id = 2;
   uint64 correlation_id = 3;
-  string session_id = 4;
-  string message_kind = 5;
-  bytes payload = 6;
-  repeated Header headers = 7;
+  string message_kind = 4;
+  bytes payload = 5;
+  repeated Header headers = 6;
 }
 
 message Header {
@@ -36,18 +35,17 @@ message GuardHelloAck {
 
 message InterceptionRequest {
   uint64 request_id = 1;
-  string session_id = 2;
-  string actor_id = 3;
-  InterceptionSource source = 4;
-  int64 pid = 5;
-  int64 ppid = 6;
-  string executable = 7;
-  repeated string argv = 8;
-  string cwd = 9;
-  repeated EnvVar selected_env = 10;
-  RequestedEndpoint requested_endpoint = 11;
-  string matched_handler_id = 12;
-  string timestamp = 13;
+  string actor_id = 2;
+  InterceptionSource source = 3;
+  int64 pid = 4;
+  int64 ppid = 5;
+  string executable = 6;
+  repeated string argv = 7;
+  string cwd = 8;
+  repeated EnvVar selected_env = 9;
+  RequestedEndpoint requested_endpoint = 10;
+  string matched_handler_id = 11;
+  string timestamp = 12;
 }
 
 message InterceptionDecision {
@@ -63,16 +61,14 @@ message InterceptionDecision {
 
 message GuardEvent {
   uint64 request_id = 1;
-  string session_id = 2;
-  string message = 3;
-  string timestamp = 4;
+  string message = 2;
+  string timestamp = 3;
 }
 
 message GuardGoodbye {
-  string session_id = 1;
-  int64 guard_pid = 2;
-  int32 exit_code = 3;
-  string reason = 4;
+  int64 guard_pid = 1;
+  int32 exit_code = 2;
+  string reason = 3;
 }
 
 message EnvVar {

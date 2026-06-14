@@ -16,7 +16,6 @@ impl Envelope {
     pub fn wrap_message<T: Message>(
         message_id: u64,
         correlation_id: u64,
-        session_id: impl Into<String>,
         message_kind: impl Into<String>,
         message: &T,
     ) -> Result<Self, IpcProtocolError> {
@@ -29,7 +28,6 @@ impl Envelope {
             protocol_version: PROTOCOL_VERSION,
             message_id,
             correlation_id,
-            session_id: session_id.into(),
             message_kind: message_kind.into(),
             payload,
             headers: Vec::new(),
@@ -78,7 +76,6 @@ pub(crate) mod fixtures {
     pub(crate) fn interception_request() -> InterceptionRequest {
         InterceptionRequest {
             request_id: 7,
-            session_id: String::from("session-fixture"),
             actor_id: String::from("openclaw"),
             source: InterceptionSource::Shim as i32,
             pid: 1001,
@@ -192,7 +189,7 @@ mod tests {
     #[test]
     fn guard_hello_fixture_round_trips_through_envelope_frame() -> Result<(), Box<dyn Error>> {
         let fixture = fixtures::guard_hello();
-        let envelope = Envelope::wrap_message(1, 0, "session-fixture", KIND_GUARD_HELLO, &fixture)?;
+        let envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &fixture)?;
         let frame = envelope.into_frame()?;
         let encoded = frame.encode()?;
         let decoded_frame = EreborIpcFrame::decode(&encoded)?;
@@ -209,8 +206,7 @@ mod tests {
     fn interception_request_fixture_round_trips_through_generic_envelope(
     ) -> Result<(), Box<dyn Error>> {
         let fixture = fixtures::interception_request();
-        let envelope =
-            Envelope::wrap_message(2, 1, "session-fixture", KIND_INTERCEPTION_REQUEST, &fixture)?;
+        let envelope = Envelope::wrap_message(2, 1, KIND_INTERCEPTION_REQUEST, &fixture)?;
         let encoded = envelope.into_frame()?.encode()?;
         let decoded_frame = EreborIpcFrame::decode(&encoded)?;
         let decoded_envelope: Envelope = decoded_frame.decode_payload()?;
@@ -238,7 +234,6 @@ mod tests {
             let envelope = Envelope::wrap_message(
                 3,
                 fixture.request_id,
-                "session-fixture",
                 KIND_INTERCEPTION_DECISION,
                 &fixture,
             )?;
@@ -258,8 +253,7 @@ mod tests {
     #[test]
     fn envelope_decode_fails_closed_on_kind_mismatch() -> Result<(), Box<dyn Error>> {
         let fixture = fixtures::interception_request();
-        let envelope =
-            Envelope::wrap_message(4, 0, "session-fixture", KIND_INTERCEPTION_REQUEST, &fixture)?;
+        let envelope = Envelope::wrap_message(4, 0, KIND_INTERCEPTION_REQUEST, &fixture)?;
         let error = match envelope
             .decode_typed_payload::<InterceptionDecision>(KIND_INTERCEPTION_DECISION)
         {

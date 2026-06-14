@@ -3,8 +3,11 @@ use std::{
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+mod control_broker;
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
@@ -24,11 +27,18 @@ use erebor_runtime_terminal::{
 use snafu::Location;
 use thiserror::Error;
 
+pub use control_broker::{
+    GuardBrokerClient, SessionControlBroker, SessionControlBrokerEndpoint,
+    SessionControlBrokerError, SessionControlRegistration,
+};
+
 const LINUX_PROCESS_GUARD: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/erebor-linux-process-guard"));
 const DOCKER_GUARD_DIR: &str = "/erebor/guard";
+const DOCKER_CONTROL_DIR: &str = "/erebor/control";
 const LINUX_PROCESS_GUARD_PATH: &str = "/erebor/guard/erebor-linux-process-guard";
 const DOCKER_AUDIT_DIR: &str = "/erebor/audit";
+static SESSION_GUARD_BUNDLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionDiagnosticOutcome {
@@ -298,14 +308,20 @@ fn start_session_side_resources_from_start_plan(
         }
     }
 
+    let control_registration = register_session_control_channel(guard_bundle.as_ref(), plan)?;
+
     if launcher.is_empty() {
-        let (docker_options, linux_host_options) =
-            side_resource_command_options(guard_bundle.as_ref(), None)?;
+        let (docker_options, linux_host_options) = side_resource_command_options(
+            guard_bundle.as_ref(),
+            None,
+            control_registration.as_ref(),
+        )?;
         return Ok(SessionSideResources {
             environment,
             docker_options,
             linux_host_options,
             browser_cdp_endpoint: None,
+            _control_registration: control_registration,
             _guard_bundle: guard_bundle,
             _supervisor: None,
         });
@@ -335,14 +351,18 @@ fn start_session_side_resources_from_start_plan(
         }
     }
 
-    let (docker_options, linux_host_options) =
-        side_resource_command_options(guard_bundle.as_ref(), browser_cdp_endpoint.as_deref())?;
+    let (docker_options, linux_host_options) = side_resource_command_options(
+        guard_bundle.as_ref(),
+        browser_cdp_endpoint.as_deref(),
+        control_registration.as_ref(),
+    )?;
 
     Ok(SessionSideResources {
         environment,
         docker_options,
         linux_host_options,
         browser_cdp_endpoint,
+        _control_registration: control_registration,
         _guard_bundle: guard_bundle,
         _supervisor: Some(supervisor),
     })
@@ -440,10 +460,12 @@ impl LinuxProcessGuardBundle {
         config: &TerminalSurfaceConfig,
         plan: &impl SessionPlanContext,
     ) -> Result<Self, SessionExecutionError> {
+        let instance_id = SESSION_GUARD_BUNDLE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let host_dir = std::env::temp_dir().join(format!(
-            "erebor-linux-process-guard-{}-{}",
+            "erebor-linux-process-guard-{}-{}-{}",
             plan.session_id().as_str(),
-            std::process::id()
+            std::process::id(),
+            instance_id
         ));
         fs::create_dir_all(&host_dir).map_err(SessionExecutionError::guard_io)?;
         let guard_path = host_dir.join("erebor-linux-process-guard");
@@ -798,17 +820,70 @@ fn linux_cgroup_component(value: &str) -> String {
 fn side_resource_command_options(
     guard_bundle: Option<&LinuxProcessGuardBundle>,
     browser_cdp_endpoint: Option<&str>,
+    control_registration: Option<&SessionControlRegistration>,
 ) -> Result<(DockerSessionCommandOptions, LinuxHostSessionCommandOptions), SessionExecutionError> {
     match guard_bundle {
-        Some(bundle) => Ok((
-            bundle.docker_options(),
-            bundle.linux_host_options(browser_cdp_endpoint)?,
-        )),
+        Some(bundle) => {
+            let mut docker_options = bundle.docker_options();
+            let mut linux_host_options = bundle.linux_host_options(browser_cdp_endpoint)?;
+            if let Some(control_registration) = control_registration {
+                docker_options = with_environment(
+                    docker_options.with_mount(
+                        DockerSessionMount::new(
+                            control_registration.endpoint().directory(),
+                            DOCKER_CONTROL_DIR,
+                        )
+                        .read_only(),
+                    ),
+                    control_registration
+                        .docker_endpoint(Path::new(DOCKER_CONTROL_DIR))
+                        .environment(),
+                );
+                linux_host_options = with_linux_host_environment(
+                    linux_host_options,
+                    control_registration.endpoint().environment(),
+                );
+            }
+
+            Ok((docker_options, linux_host_options))
+        }
         None => Ok((
             DockerSessionCommandOptions::default(),
             LinuxHostSessionCommandOptions::default(),
         )),
     }
+}
+
+fn register_session_control_channel(
+    guard_bundle: Option<&LinuxProcessGuardBundle>,
+    plan: &impl SessionPlanContext,
+) -> Result<Option<SessionControlRegistration>, SessionExecutionError> {
+    guard_bundle
+        .map(|_bundle| {
+            SessionControlBroker::register_session(plan.session_id().as_str(), &plan.actor().id)
+                .map_err(SessionExecutionError::control_broker)
+        })
+        .transpose()
+}
+
+fn with_environment(
+    mut options: DockerSessionCommandOptions,
+    environment: Vec<(String, String)>,
+) -> DockerSessionCommandOptions {
+    for (key, value) in environment {
+        options = options.with_environment(key, value);
+    }
+    options
+}
+
+fn with_linux_host_environment(
+    mut options: LinuxHostSessionCommandOptions,
+    environment: Vec<(String, String)>,
+) -> LinuxHostSessionCommandOptions {
+    for (key, value) in environment {
+        options = options.with_environment(key, value);
+    }
+    options
 }
 
 fn process_interception_executable_env(handler: &ProcessInterceptionHandlerConfig) -> Vec<String> {
@@ -896,6 +971,7 @@ struct SessionSideResources {
     docker_options: DockerSessionCommandOptions,
     linux_host_options: LinuxHostSessionCommandOptions,
     browser_cdp_endpoint: Option<String>,
+    _control_registration: Option<SessionControlRegistration>,
     _guard_bundle: Option<LinuxProcessGuardBundle>,
     _supervisor: Option<SessionSurfaceSupervisor>,
 }
@@ -919,7 +995,18 @@ impl SessionSideResources {
     ) -> Result<LinuxHostSessionCommandOptions, SessionExecutionError> {
         self._guard_bundle.as_ref().map_or_else(
             || Ok(LinuxHostSessionCommandOptions::default()),
-            |bundle| bundle.linux_host_adopt_options(pid, self.browser_cdp_endpoint.as_deref()),
+            |bundle| {
+                let options =
+                    bundle.linux_host_adopt_options(pid, self.browser_cdp_endpoint.as_deref())?;
+                if let Some(control_registration) = self._control_registration.as_ref() {
+                    Ok(with_linux_host_environment(
+                        options,
+                        control_registration.endpoint().environment(),
+                    ))
+                } else {
+                    Ok(options)
+                }
+            },
         )
     }
 }
@@ -961,6 +1048,11 @@ pub enum SessionExecutionError {
     },
     #[error("Linux process guard config is invalid: {reason}")]
     GuardConfig { reason: String, location: Location },
+    #[error("{source}")]
+    ControlBroker {
+        source: SessionControlBrokerError,
+        location: Location,
+    },
 }
 
 impl SessionExecutionError {
@@ -1019,13 +1111,27 @@ impl SessionExecutionError {
             location: Location::default(),
         }
     }
+
+    #[track_caller]
+    fn control_broker(source: SessionControlBrokerError) -> Self {
+        Self::ControlBroker {
+            source,
+            location: Location::default(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use erebor_runtime_core::RuntimeConfig;
+    use std::{fs, path::Path};
 
-    use super::{endpoint_port, process_interception_executable_env};
+    use erebor_runtime_core::{
+        DockerSessionCommandPlan, LinuxHostSessionCommandPlan, RuntimeConfig, SessionRunPlan,
+        SessionRunnerKind,
+    };
+    use erebor_runtime_events::SessionId;
+
+    use super::{endpoint_port, process_interception_executable_env, start_session_side_resources};
 
     #[test]
     fn managed_browser_interception_defaults_browser_executable_env_vars(
@@ -1084,5 +1190,124 @@ mod tests {
             endpoint_port("ws://127.0.0.1:9222/devtools/browser/demo"),
             Some(9222)
         );
+    }
+
+    #[test]
+    fn session_side_resources_inject_control_broker_environment(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let test_dir = test_dir("control-env")?;
+        let policy_path = write_policy(&test_dir)?;
+        let config = RuntimeConfig::from_json_str(&format!(
+            r#"{{
+              "policies": ["{}"],
+              "session": {{
+                "enabled": true,
+                "actor": {{ "id": "openclaw" }},
+                "runner": {{ "kind": "linux_host" }}
+              }},
+              "surfaces": {{
+                "terminal": {{
+                  "enabled": true,
+                  "process_guard": {{ "enabled": true }}
+                }}
+              }}
+            }}
+            "#,
+            policy_path.display()
+        ))?;
+        let linux_plan = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-control-env"),
+            vec![String::from("true")],
+        )?;
+        let linux_resources = start_session_side_resources(&config, &linux_plan)?;
+        let linux_launch =
+            LinuxHostSessionCommandPlan::from_session_run_plan_with_environment_and_options(
+                &linux_plan,
+                linux_resources.environment(),
+                linux_resources.linux_host_options(),
+            );
+        let linux_control_path =
+            environment_value(linux_launch.environment(), "EREBOR_SESSION_CONTROL_PATH")
+                .ok_or_else(|| std::io::Error::other("missing Linux host control path"))?;
+
+        assert!(linux_launch.environment().contains(&(
+            String::from("EREBOR_SESSION_CONTROL_PROTOCOL"),
+            String::from("erebor_ipc_v1")
+        )));
+        assert!(linux_launch.environment().contains(&(
+            String::from("EREBOR_SESSION_CONTROL_TRANSPORT"),
+            String::from("unix")
+        )));
+        assert!(linux_launch.environment().contains(&(
+            String::from("EREBOR_SESSION_CONTROL_TIMEOUT_MS"),
+            String::from("25")
+        )));
+        assert!(linux_control_path.ends_with("session-control.sock"));
+
+        let docker_plan = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::Docker,
+            SessionId::new("session-control-env-docker"),
+            vec![String::from("true")],
+        )?;
+        let docker_resources = start_session_side_resources(&config, &docker_plan)?;
+        let docker_launch =
+            DockerSessionCommandPlan::from_session_run_plan_with_environment_and_options(
+                &docker_plan,
+                docker_resources.environment(),
+                docker_resources.docker_options(),
+            );
+        let docker_args = docker_launch.args().join("\n");
+
+        assert!(docker_args.contains("EREBOR_SESSION_CONTROL_PROTOCOL=erebor_ipc_v1"));
+        assert!(docker_args.contains("EREBOR_SESSION_CONTROL_TRANSPORT=unix"));
+        assert!(docker_args.contains("EREBOR_SESSION_CONTROL_TIMEOUT_MS=25"));
+        assert!(docker_args
+            .contains("EREBOR_SESSION_CONTROL_PATH=/erebor/control/session-control.sock"));
+        assert!(docker_args.contains("/erebor/control:ro"));
+        fs::remove_dir_all(test_dir)?;
+        Ok(())
+    }
+
+    fn environment_value(environment: &[(String, String)], key: &str) -> Option<String> {
+        environment
+            .iter()
+            .find_map(|(candidate, value)| (candidate == key).then(|| value.clone()))
+    }
+
+    fn test_dir(name: &str) -> Result<std::path::PathBuf, std::io::Error> {
+        let path = std::env::temp_dir().join(format!(
+            "erebor-session-resources-{name}-{}",
+            std::process::id()
+        ));
+        let _result = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path)?;
+        Ok(path)
+    }
+
+    fn write_policy(test_dir: &Path) -> Result<std::path::PathBuf, std::io::Error> {
+        let policy_path = test_dir.join("policy.json");
+        fs::write(
+            &policy_path,
+            r#"
+            {
+              "rules": [
+                {
+                  "id": "deny-raw-cdp",
+                  "match": {
+                    "surface": "terminal",
+                    "action": "process_exec",
+                    "command_contains": "remote-debugging-port"
+                  },
+                  "decision": "deny",
+                  "reason": "raw CDP process launch is denied"
+                }
+              ]
+            }
+            "#,
+        )?;
+        Ok(policy_path)
     }
 }

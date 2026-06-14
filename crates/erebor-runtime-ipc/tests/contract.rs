@@ -21,8 +21,7 @@ fn public_api_round_trips_guard_hello_through_envelope_and_frame() -> Result<(),
         capabilities: vec![String::from("interception_request")],
     };
 
-    let envelope =
-        Envelope::wrap_message(1, 0, "session-public-contract", KIND_GUARD_HELLO, &hello)?;
+    let envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)?;
     let encoded = envelope.into_frame()?.encode()?;
     let decoded_frame = EreborIpcFrame::decode(&encoded)?;
     let decoded_envelope: Envelope = decoded_frame.decode_payload()?;
@@ -38,7 +37,6 @@ fn public_api_round_trips_guard_hello_through_envelope_and_frame() -> Result<(),
 fn public_api_round_trips_interception_request_and_deny_decision() -> Result<(), Box<dyn Error>> {
     let request = InterceptionRequest {
         request_id: 77,
-        session_id: String::from("session-public-contract"),
         actor_id: String::from("openclaw"),
         source: InterceptionSource::Shim as i32,
         pid: 2001,
@@ -54,13 +52,7 @@ fn public_api_round_trips_interception_request_and_deny_decision() -> Result<(),
         matched_handler_id: String::from("managed-browser-cdp"),
         timestamp: String::from("unix:1781200100"),
     };
-    let request_envelope = Envelope::wrap_message(
-        2,
-        0,
-        "session-public-contract",
-        KIND_INTERCEPTION_REQUEST,
-        &request,
-    )?;
+    let request_envelope = Envelope::wrap_message(2, 0, KIND_INTERCEPTION_REQUEST, &request)?;
     let request_frame = EreborIpcFrame::decode(&request_envelope.into_frame()?.encode()?)?;
     let decoded_request_envelope: Envelope = request_frame.decode_payload()?;
     let decoded_request: InterceptionRequest =
@@ -78,13 +70,8 @@ fn public_api_round_trips_interception_request_and_deny_decision() -> Result<(),
         deny: Some(DenyDecision { exit_code: 126 }),
         mediate: None,
     };
-    let decision_envelope = Envelope::wrap_message(
-        3,
-        request.request_id,
-        "session-public-contract",
-        KIND_INTERCEPTION_DECISION,
-        &decision,
-    )?;
+    let decision_envelope =
+        Envelope::wrap_message(3, request.request_id, KIND_INTERCEPTION_DECISION, &decision)?;
     let decision_frame = EreborIpcFrame::decode(&decision_envelope.into_frame()?.encode()?)?;
     let decoded_decision_envelope: Envelope = decision_frame.decode_payload()?;
     let decoded_decision: InterceptionDecision =
@@ -103,7 +90,6 @@ fn frame_header_is_generic_and_future_envelope_kinds_survive_round_trip(
         protocol_version: PROTOCOL_VERSION,
         message_id: 9,
         correlation_id: 8,
-        session_id: String::from("session-public-contract"),
         message_kind: String::from("erebor.runtime.ipc.v1.FuturePayload"),
         payload: vec![1, 2, 3, 4],
         headers: Vec::new(),
@@ -185,7 +171,6 @@ fn public_api_supports_all_phase_zero_decision_kinds() -> Result<(), Box<dyn Err
         let envelope = Envelope::wrap_message(
             10,
             decision.request_id,
-            "session-public-contract",
             KIND_INTERCEPTION_DECISION,
             &decision,
         )?;
@@ -234,4 +219,5 @@ fn proto_contract_file_contains_phase_zero_schema() {
     assert!(proto.contains("message InterceptionDecision"));
     assert!(proto.contains("enum DecisionKind"));
     assert!(proto.contains("DECISION_KIND_REQUIRE_APPROVAL"));
+    assert!(!proto.contains("message Envelope {\n  uint32 protocol_version = 1;\n  uint64 message_id = 2;\n  uint64 correlation_id = 3;\n  string session_id"));
 }
