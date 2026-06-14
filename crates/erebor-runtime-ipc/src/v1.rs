@@ -1,176 +1,58 @@
-use prost::{Enumeration, Message};
+include!(concat!(env!("OUT_DIR"), "/erebor.runtime.ipc.v1.rs"));
+
+use prost::Message;
+
+use crate::{EreborIpcFrame, IpcProtocolError};
 
 pub const PROTOCOL_VERSION: u32 = 1;
+pub const KIND_GUARD_HELLO: &str = "erebor.runtime.ipc.v1.GuardHello";
+pub const KIND_GUARD_HELLO_ACK: &str = "erebor.runtime.ipc.v1.GuardHelloAck";
+pub const KIND_INTERCEPTION_REQUEST: &str = "erebor.runtime.ipc.v1.InterceptionRequest";
+pub const KIND_INTERCEPTION_DECISION: &str = "erebor.runtime.ipc.v1.InterceptionDecision";
+pub const KIND_GUARD_EVENT: &str = "erebor.runtime.ipc.v1.GuardEvent";
+pub const KIND_GUARD_GOODBYE: &str = "erebor.runtime.ipc.v1.GuardGoodbye";
 
-#[derive(Clone, PartialEq, Message)]
-pub struct GuardHello {
-    #[prost(uint32, tag = "1")]
-    pub protocol_version: u32,
-    #[prost(string, tag = "2")]
-    pub session_id: String,
-    #[prost(string, tag = "3")]
-    pub actor_id: String,
-    #[prost(int64, tag = "4")]
-    pub guard_pid: i64,
-    #[prost(string, tag = "5")]
-    pub runner_kind: String,
-    #[prost(string, tag = "6")]
-    pub platform: String,
-    #[prost(string, repeated, tag = "7")]
-    pub capabilities: Vec<String>,
-}
+impl Envelope {
+    pub fn wrap_message<T: Message>(
+        message_id: u64,
+        correlation_id: u64,
+        session_id: impl Into<String>,
+        message_kind: impl Into<String>,
+        message: &T,
+    ) -> Result<Self, IpcProtocolError> {
+        let mut payload = Vec::with_capacity(message.encoded_len());
+        message
+            .encode(&mut payload)
+            .map_err(IpcProtocolError::encode_payload)?;
 
-#[derive(Clone, PartialEq, Message)]
-pub struct GuardHelloAck {
-    #[prost(uint32, tag = "1")]
-    pub protocol_version: u32,
-    #[prost(string, tag = "2")]
-    pub broker_id: String,
-    #[prost(bool, tag = "3")]
-    pub accepted: bool,
-    #[prost(string, tag = "4")]
-    pub reason: String,
-}
+        Ok(Self {
+            protocol_version: PROTOCOL_VERSION,
+            message_id,
+            correlation_id,
+            session_id: session_id.into(),
+            message_kind: message_kind.into(),
+            payload,
+            headers: Vec::new(),
+        })
+    }
 
-#[derive(Clone, PartialEq, Message)]
-pub struct InterceptionRequest {
-    #[prost(uint64, tag = "1")]
-    pub request_id: u64,
-    #[prost(string, tag = "2")]
-    pub session_id: String,
-    #[prost(string, tag = "3")]
-    pub actor_id: String,
-    #[prost(enumeration = "InterceptionSource", tag = "4")]
-    pub source: i32,
-    #[prost(int64, tag = "5")]
-    pub pid: i64,
-    #[prost(int64, tag = "6")]
-    pub ppid: i64,
-    #[prost(string, tag = "7")]
-    pub executable: String,
-    #[prost(string, repeated, tag = "8")]
-    pub argv: Vec<String>,
-    #[prost(string, tag = "9")]
-    pub cwd: String,
-    #[prost(message, repeated, tag = "10")]
-    pub selected_env: Vec<EnvVar>,
-    #[prost(message, optional, tag = "11")]
-    pub requested_endpoint: Option<RequestedEndpoint>,
-    #[prost(string, tag = "12")]
-    pub matched_handler_id: String,
-    #[prost(string, tag = "13")]
-    pub timestamp: String,
-}
+    pub fn decode_typed_payload<T: Message + Default>(
+        &self,
+        expected_kind: &str,
+    ) -> Result<T, IpcProtocolError> {
+        if self.message_kind != expected_kind {
+            return Err(IpcProtocolError::payload_kind_mismatch(
+                expected_kind,
+                self.message_kind.clone(),
+            ));
+        }
 
-#[derive(Clone, PartialEq, Message)]
-pub struct InterceptionDecision {
-    #[prost(uint64, tag = "1")]
-    pub request_id: u64,
-    #[prost(enumeration = "DecisionKind", tag = "2")]
-    pub decision: i32,
-    #[prost(string, tag = "3")]
-    pub rule_id: String,
-    #[prost(string, tag = "4")]
-    pub reason: String,
-    #[prost(uint32, tag = "5")]
-    pub timeout_ms: u32,
-    #[prost(message, optional, tag = "6")]
-    pub allow: Option<AllowDecision>,
-    #[prost(message, optional, tag = "7")]
-    pub deny: Option<DenyDecision>,
-    #[prost(message, optional, tag = "8")]
-    pub mediate: Option<MediateDecision>,
-}
+        T::decode(self.payload.as_slice()).map_err(IpcProtocolError::decode_payload)
+    }
 
-#[derive(Clone, PartialEq, Message)]
-pub struct GuardEvent {
-    #[prost(uint64, tag = "1")]
-    pub request_id: u64,
-    #[prost(string, tag = "2")]
-    pub session_id: String,
-    #[prost(string, tag = "3")]
-    pub message: String,
-    #[prost(string, tag = "4")]
-    pub timestamp: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct GuardGoodbye {
-    #[prost(string, tag = "1")]
-    pub session_id: String,
-    #[prost(int64, tag = "2")]
-    pub guard_pid: i64,
-    #[prost(int32, tag = "3")]
-    pub exit_code: i32,
-    #[prost(string, tag = "4")]
-    pub reason: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct EnvVar {
-    #[prost(string, tag = "1")]
-    pub key: String,
-    #[prost(string, tag = "2")]
-    pub value: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct RequestedEndpoint {
-    #[prost(string, tag = "1")]
-    pub scheme: String,
-    #[prost(string, tag = "2")]
-    pub host: String,
-    #[prost(uint32, tag = "3")]
-    pub port: u32,
-    #[prost(string, tag = "4")]
-    pub path: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct AllowDecision {
-    #[prost(string, tag = "1")]
-    pub exec_target: String,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct DenyDecision {
-    #[prost(int32, tag = "1")]
-    pub exit_code: i32,
-}
-
-#[derive(Clone, PartialEq, Message)]
-pub struct MediateDecision {
-    #[prost(string, tag = "1")]
-    pub kind: String,
-    #[prost(string, tag = "2")]
-    pub replacement_surface: String,
-    #[prost(string, tag = "3")]
-    pub endpoint: String,
-    #[prost(string, tag = "4")]
-    pub lease_id: String,
-    #[prost(string, tag = "5")]
-    pub print_line: String,
-    #[prost(bool, tag = "6")]
-    pub keepalive: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Enumeration)]
-#[repr(i32)]
-pub enum InterceptionSource {
-    Unspecified = 0,
-    Ptrace = 1,
-    Shim = 2,
-    FutureEndpoint = 3,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Enumeration)]
-#[repr(i32)]
-pub enum DecisionKind {
-    Unspecified = 0,
-    Allow = 1,
-    Deny = 2,
-    RequireApproval = 3,
-    Mediate = 4,
+    pub fn into_frame(&self) -> Result<EreborIpcFrame, IpcProtocolError> {
+        EreborIpcFrame::from_message(self)
+    }
 }
 
 #[cfg(test)]
@@ -290,37 +172,60 @@ pub(crate) mod fixtures {
 mod tests {
     use std::error::Error;
 
-    use prost::Message;
+    use crate::{EreborIpcFrame, IpcProtocolError};
 
-    use crate::{EreborIpcFrame, MessageType};
-
-    use super::{fixtures, DecisionKind, GuardHello, InterceptionDecision, InterceptionRequest};
+    use super::{
+        fixtures, DecisionKind, Envelope, GuardHello, InterceptionDecision, InterceptionRequest,
+        KIND_GUARD_HELLO, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
+    };
 
     #[test]
-    fn guard_hello_fixture_round_trips_through_frame() -> Result<(), Box<dyn Error>> {
+    fn proto_file_is_the_v1_contract_artifact() {
+        let proto = include_str!("../proto/erebor/runtime/ipc/v1/control.proto");
+
+        assert!(proto.contains("message Envelope"));
+        assert!(proto.contains("message InterceptionRequest"));
+        assert!(proto.contains("message InterceptionDecision"));
+        assert!(proto.contains("enum DecisionKind"));
+    }
+
+    #[test]
+    fn guard_hello_fixture_round_trips_through_envelope_frame() -> Result<(), Box<dyn Error>> {
         let fixture = fixtures::guard_hello();
-        let encoded = EreborIpcFrame::from_message(MessageType::GuardHello, &fixture)?.encode()?;
-        let frame = EreborIpcFrame::decode(&encoded)?;
-        let decoded: GuardHello = frame.decode_payload(MessageType::GuardHello)?;
+        let envelope = Envelope::wrap_message(1, 0, "session-fixture", KIND_GUARD_HELLO, &fixture)?;
+        let frame = envelope.into_frame()?;
+        let encoded = frame.encode()?;
+        let decoded_frame = EreborIpcFrame::decode(&encoded)?;
+        let decoded_envelope: Envelope = decoded_frame.decode_payload()?;
+        let decoded_payload: GuardHello =
+            decoded_envelope.decode_typed_payload(KIND_GUARD_HELLO)?;
 
-        assert_eq!(decoded, fixture);
+        assert_eq!(decoded_envelope.message_kind, KIND_GUARD_HELLO);
+        assert_eq!(decoded_payload, fixture);
         Ok(())
     }
 
     #[test]
-    fn interception_request_fixture_round_trips_through_protobuf() -> Result<(), Box<dyn Error>> {
+    fn interception_request_fixture_round_trips_through_generic_envelope(
+    ) -> Result<(), Box<dyn Error>> {
         let fixture = fixtures::interception_request();
-        let mut encoded = Vec::new();
-        fixture.encode(&mut encoded)?;
-        let decoded = InterceptionRequest::decode(encoded.as_slice())?;
+        let envelope =
+            Envelope::wrap_message(2, 1, "session-fixture", KIND_INTERCEPTION_REQUEST, &fixture)?;
+        let encoded = envelope.into_frame()?.encode()?;
+        let decoded_frame = EreborIpcFrame::decode(&encoded)?;
+        let decoded_envelope: Envelope = decoded_frame.decode_payload()?;
+        let decoded_payload: InterceptionRequest =
+            decoded_envelope.decode_typed_payload(KIND_INTERCEPTION_REQUEST)?;
 
-        assert_eq!(decoded, fixture);
+        assert_eq!(decoded_envelope.message_id, 2);
+        assert_eq!(decoded_envelope.correlation_id, 1);
+        assert_eq!(decoded_payload, fixture);
         Ok(())
     }
 
     #[test]
-    fn all_interception_decision_fixtures_round_trip_through_frames() -> Result<(), Box<dyn Error>>
-    {
+    fn all_interception_decision_fixtures_round_trip_through_envelope_frames(
+    ) -> Result<(), Box<dyn Error>> {
         for (expected_kind, fixture) in [
             (DecisionKind::Allow, fixtures::allow_decision()),
             (DecisionKind::Deny, fixtures::deny_decision()),
@@ -330,17 +235,44 @@ mod tests {
             ),
             (DecisionKind::Mediate, fixtures::mediate_decision()),
         ] {
-            let encoded =
-                EreborIpcFrame::from_message(MessageType::InterceptionDecision, &fixture)?
-                    .encode()?;
-            let frame = EreborIpcFrame::decode(&encoded)?;
-            let decoded: InterceptionDecision =
-                frame.decode_payload(MessageType::InterceptionDecision)?;
+            let envelope = Envelope::wrap_message(
+                3,
+                fixture.request_id,
+                "session-fixture",
+                KIND_INTERCEPTION_DECISION,
+                &fixture,
+            )?;
+            let encoded = envelope.into_frame()?.encode()?;
+            let decoded_frame = EreborIpcFrame::decode(&encoded)?;
+            let decoded_envelope: Envelope = decoded_frame.decode_payload()?;
+            let decoded_payload: InterceptionDecision =
+                decoded_envelope.decode_typed_payload(KIND_INTERCEPTION_DECISION)?;
 
-            assert_eq!(decoded.decision, expected_kind as i32);
-            assert_eq!(decoded, fixture);
+            assert_eq!(decoded_payload.decision, expected_kind as i32);
+            assert_eq!(decoded_payload, fixture);
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn envelope_decode_fails_closed_on_kind_mismatch() -> Result<(), Box<dyn Error>> {
+        let fixture = fixtures::interception_request();
+        let envelope =
+            Envelope::wrap_message(4, 0, "session-fixture", KIND_INTERCEPTION_REQUEST, &fixture)?;
+        let error = match envelope
+            .decode_typed_payload::<InterceptionDecision>(KIND_INTERCEPTION_DECISION)
+        {
+            Ok(_payload) => {
+                return Err("expected payload kind mismatch".into());
+            }
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            IpcProtocolError::PayloadKindMismatch { .. }
+        ));
         Ok(())
     }
 }

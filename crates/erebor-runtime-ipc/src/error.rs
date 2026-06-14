@@ -1,7 +1,5 @@
 use thiserror::Error;
 
-use crate::MessageType;
-
 #[derive(Debug, Error)]
 pub enum IpcProtocolError {
     #[error("IPC frame payload exceeds maximum size: {actual} > {maximum}")]
@@ -10,15 +8,12 @@ pub enum IpcProtocolError {
     FrameTooShort { actual: usize, minimum: usize },
     #[error("IPC frame magic is invalid")]
     InvalidMagic,
-    #[error("IPC frame message type `{message_type}` is unknown")]
-    UnknownMessageType { message_type: u16 },
+    #[error("IPC frame version `{version}` is not supported")]
+    UnsupportedFrameVersion { version: u16 },
     #[error("IPC frame payload length is invalid: declared {declared}, available {available}")]
     InvalidPayloadLength { declared: usize, available: usize },
-    #[error("IPC frame message type mismatch: expected {expected:?}, actual {actual:?}")]
-    MessageTypeMismatch {
-        expected: MessageType,
-        actual: MessageType,
-    },
+    #[error("IPC envelope payload kind mismatch: expected `{expected}`, actual `{actual}`")]
+    PayloadKindMismatch { expected: String, actual: String },
     #[error("failed to encode protobuf IPC payload: {source}")]
     EncodePayload { source: prost::EncodeError },
     #[error("failed to decode protobuf IPC payload: {source}")]
@@ -41,12 +36,18 @@ impl IpcProtocolError {
         }
     }
 
-    pub(crate) const fn unknown_message_type(message_type: u16) -> Self {
-        Self::UnknownMessageType { message_type }
+    pub(crate) const fn unsupported_frame_version(version: u16) -> Self {
+        Self::UnsupportedFrameVersion { version }
     }
 
-    pub(crate) const fn message_type_mismatch(expected: MessageType, actual: MessageType) -> Self {
-        Self::MessageTypeMismatch { expected, actual }
+    pub(crate) fn payload_kind_mismatch(
+        expected: impl Into<String>,
+        actual: impl Into<String>,
+    ) -> Self {
+        Self::PayloadKindMismatch {
+            expected: expected.into(),
+            actual: actual.into(),
+        }
     }
 
     pub(crate) fn encode_payload(source: prost::EncodeError) -> Self {
