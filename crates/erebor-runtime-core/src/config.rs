@@ -529,6 +529,32 @@ pub struct SessionAdoptPlan {
     terminal: TerminalSurfaceConfig,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SessionAdoptTarget {
+    Pid(i32),
+    ProcessMatch(String),
+}
+
+impl SessionAdoptTarget {
+    #[must_use]
+    pub const fn pid(pid: i32) -> Self {
+        Self::Pid(pid)
+    }
+
+    #[must_use]
+    pub fn process_match(pattern: impl Into<String>) -> Self {
+        Self::ProcessMatch(pattern.into())
+    }
+
+    #[must_use]
+    pub fn display_target(&self) -> String {
+        match self {
+            Self::Pid(pid) => format!("pid={pid}"),
+            Self::ProcessMatch(pattern) => format!("match={pattern}"),
+        }
+    }
+}
+
 impl SessionAdoptPlan {
     pub fn from_config(
         config: &RuntimeConfig,

@@ -7,6 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod adoption;
 mod control_broker;
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
@@ -28,6 +29,7 @@ use erebor_runtime_terminal::{
 use snafu::Location;
 use thiserror::Error;
 
+pub use adoption::adopt_session_target;
 pub use control_broker::{
     BrowserCdpMediationHandler, GuardBrokerClient, SessionControlBroker,
     SessionControlBrokerEndpoint, SessionControlBrokerError, SessionControlRegistration,
@@ -1094,6 +1096,22 @@ pub enum SessionExecutionError {
         source: SessionControlBrokerError,
         location: Location,
     },
+    #[error("failed to read process table `{}`: {source}", path.display())]
+    ReadProcessTable {
+        path: PathBuf,
+        source: io::Error,
+        location: Location,
+    },
+    #[error("invalid session adoption target: {reason}")]
+    InvalidAdoptTarget { reason: String, location: Location },
+    #[error("no running process matched session adoption pattern `{pattern}`")]
+    AdoptMatchNotFound { pattern: String, location: Location },
+    #[error("session adoption pattern `{pattern}` matched multiple processes: {}", matches.join(", "))]
+    AdoptMatchAmbiguous {
+        pattern: String,
+        matches: Vec<String>,
+        location: Location,
+    },
 }
 
 impl SessionExecutionError {
@@ -1160,6 +1178,31 @@ impl SessionExecutionError {
             location: Location::default(),
         }
     }
+
+    #[track_caller]
+    fn invalid_adopt_target(reason: impl Into<String>) -> Self {
+        Self::InvalidAdoptTarget {
+            reason: reason.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn adopt_match_not_found(pattern: impl Into<String>) -> Self {
+        Self::AdoptMatchNotFound {
+            pattern: pattern.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn adopt_match_ambiguous(pattern: impl Into<String>, matches: Vec<String>) -> Self {
+        Self::AdoptMatchAmbiguous {
+            pattern: pattern.into(),
+            matches,
+            location: Location::default(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1221,6 +1264,40 @@ mod tests {
         assert!(variables.contains(&String::from("BROWSER")));
         assert!(variables.contains(&String::from("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")));
         assert!(variables.contains(&String::from("PUPPETEER_EXECUTABLE_PATH")));
+        Ok(())
+    }
+
+    #[test]
+    fn managed_browser_example_uses_session_browser_endpoint_env(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let repo_root = manifest_dir
+            .parent()
+            .and_then(Path::parent)
+            .ok_or_else(|| std::io::Error::other("missing repo root"))?;
+        let config_path =
+            repo_root.join("examples/governed-openclaw-pilot/session-mediated-browser-config.json");
+        let source = fs::read_to_string(config_path)?;
+
+        assert!(source.contains("EREBOR_BROWSER_CDP_URL"));
+        assert!(!source.contains("EREBOR_MANAGED_BROWSER_CDP_URL"));
+        let config = RuntimeConfig::from_json_str(&source)?;
+        let terminal = config
+            .surface_start_plan()?
+            .terminal()
+            .ok_or_else(|| std::io::Error::other("missing terminal surface"))?
+            .clone();
+        let handler = terminal
+            .process_interception()
+            .handlers()
+            .first()
+            .ok_or_else(|| std::io::Error::other("missing process interception handler"))?;
+
+        assert_eq!(handler.id(), "managed-browser-cdp");
+        assert_eq!(
+            handler.replacement().surface(),
+            erebor_runtime_core::ProcessMediationReplacementSurface::BrowserCdp
+        );
         Ok(())
     }
 

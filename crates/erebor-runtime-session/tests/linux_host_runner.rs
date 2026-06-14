@@ -238,6 +238,59 @@ mod linux_host {
     }
 
     #[test]
+    fn linux_host_runner_denies_shell_spawned_child_exec() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let command_json = r#"[
+          "sh",
+          "-lc",
+          "b=s; c=h; r=remote; d=debugging; p=port; \"$b$c\" \"--$r-$d-$p=9222\""
+        ]"#;
+
+        let audit = run_denied_process_diagnostic(
+            "shell-child-deny",
+            "raw-cdp-shell-child",
+            command_json,
+            "session-linux-host-shell-child-deny",
+        )?;
+
+        assert!(audit.contains("\"type\":\"deny\""));
+        assert!(audit.contains("deny-raw-cdp"));
+        Ok(())
+    }
+
+    #[test]
+    fn linux_host_runner_denies_python_subprocess_child_exec(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if Command::new("python3")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_err()
+        {
+            eprintln!("skipping Python subprocess guard test because python3 is unavailable");
+            return Ok(());
+        }
+
+        let command_json = r#"[
+          "python3",
+          "-c",
+          "import subprocess; subprocess.run(['sh', '--remote-debugging-port=9222'], check=True)"
+        ]"#;
+
+        let audit = run_denied_process_diagnostic(
+            "python-child-deny",
+            "raw-cdp-python-child",
+            command_json,
+            "session-linux-host-python-child-deny",
+        )?;
+
+        assert!(audit.contains("\"type\":\"deny\""));
+        assert!(audit.contains("deny-raw-cdp"));
+        Ok(())
+    }
+
+    #[test]
     fn linux_host_runner_fails_closed_for_verification_required_exec(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let test_dir = test_dir("require-approval")?;
@@ -339,6 +392,60 @@ mod linux_host {
             "#,
         )?;
         Ok(policy_path)
+    }
+
+    fn run_denied_process_diagnostic(
+        test_name: &str,
+        diagnostic_name: &str,
+        command_json: &str,
+        session_id: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let test_dir = test_dir(test_name)?;
+        let policy_path = write_policy(&test_dir)?;
+        let audit_path = test_dir.join("audit.jsonl");
+        let config = RuntimeConfig::from_json_str(&format!(
+            r#"{{
+              "policies": ["{}"],
+              "audit": {{ "jsonl": "{}" }},
+              "session": {{
+                "enabled": true,
+                "actor": {{ "id": "openclaw" }},
+                "diagnostics": [
+                  {{
+                    "name": "{}",
+                    "command": {}
+                  }}
+                ],
+                "runner": {{ "kind": "linux_host" }}
+              }},
+              "surfaces": {{
+                "terminal": {{
+                  "enabled": true,
+                  "process_guard": {{ "enabled": true }}
+                }}
+              }}
+            }}"#,
+            policy_path.display(),
+            audit_path.display(),
+            diagnostic_name,
+            command_json
+        ))?;
+        let plan = SessionRunPlan::from_diagnostic(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new(session_id),
+            diagnostic_name,
+        )?;
+
+        let error = run_session_diagnostic(&config, &plan);
+
+        assert!(
+            matches!(error, Err(SessionExecutionError::DiagnosticFailed { .. })),
+            "expected denied diagnostic failure, got {error:?}"
+        );
+        let audit = fs::read_to_string(&audit_path)?;
+        fs::remove_dir_all(test_dir)?;
+        Ok(audit)
     }
 
     fn can_adopt_sibling_process() -> bool {
