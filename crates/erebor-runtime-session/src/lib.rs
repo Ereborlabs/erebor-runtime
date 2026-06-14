@@ -13,10 +13,11 @@ use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
     DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions,
     ProcessInterceptionDecision, ProcessInterceptionHandlerConfig, ProcessInterceptionHandlerKind,
-    RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError, RuntimeError, SessionActorLayerConfig,
-    SessionAdoptPlan, SessionRunOutcome, SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher,
-    SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
-    SessionSurfaceSupervisor, TerminalProcessInterceptionMode, TerminalSurfaceConfig,
+    ProcessMediationReplacementSurface, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
+    RuntimeError, SessionActorLayerConfig, SessionAdoptPlan, SessionRunOutcome, SessionRunPlan,
+    SessionRunnerKind, SessionRunnerLauncher, SessionSurfaceDefinition, SessionSurfaceKind,
+    SessionSurfaceLaunchPlan, SessionSurfaceLauncher, SessionSurfaceSupervisor,
+    TerminalProcessInterceptionMode, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
@@ -28,9 +29,10 @@ use snafu::Location;
 use thiserror::Error;
 
 pub use control_broker::{
-    GuardBrokerClient, SessionControlBroker, SessionControlBrokerEndpoint,
-    SessionControlBrokerError, SessionControlRegistration, SessionInterceptionHandler,
-    SessionInterceptionMediation,
+    BrowserCdpMediationHandler, GuardBrokerClient, SessionControlBroker,
+    SessionControlBrokerEndpoint, SessionControlBrokerError, SessionControlRegistration,
+    SessionInterceptionHandler, SessionMediationIntent, SessionMediationRegistry,
+    SurfaceMediationHandler, SurfaceMediationOutcome,
 };
 
 const LINUX_PROCESS_GUARD: &[u8] =
@@ -587,13 +589,10 @@ impl LinuxProcessGuardBundle {
             .with_adopt_pid(pid))
     }
 
-    fn control_handlers(
-        &self,
-        browser_cdp_endpoint: Option<&str>,
-    ) -> Result<Vec<SessionInterceptionHandler>, SessionExecutionError> {
+    fn control_handlers(&self) -> Result<Vec<SessionInterceptionHandler>, SessionExecutionError> {
         self.interception.as_ref().map_or_else(
             || Ok(Vec::new()),
-            |interception| interception.control_handlers(browser_cdp_endpoint),
+            LinuxProcessInterceptionBundle::control_handlers,
         )
     }
 }
@@ -688,13 +687,10 @@ impl LinuxProcessInterceptionBundle {
             .join("\n")
     }
 
-    fn control_handlers(
-        &self,
-        browser_cdp_endpoint: Option<&str>,
-    ) -> Result<Vec<SessionInterceptionHandler>, SessionExecutionError> {
+    fn control_handlers(&self) -> Result<Vec<SessionInterceptionHandler>, SessionExecutionError> {
         self.handlers
             .iter()
-            .map(|handler| handler.to_control_handler(browser_cdp_endpoint))
+            .map(LinuxProcessInterceptionHandler::to_control_handler)
             .collect()
     }
 }
@@ -704,6 +700,7 @@ struct LinuxProcessInterceptionHandler {
     id: String,
     decision: ProcessInterceptionDecision,
     kind: ProcessInterceptionHandlerKind,
+    replacement_surface: ProcessMediationReplacementSurface,
     executables: Vec<String>,
     allowed_ports: Vec<u16>,
     executable_env: Vec<String>,
@@ -741,6 +738,7 @@ impl LinuxProcessInterceptionHandler {
             id: handler.id().to_owned(),
             decision: handler.decision(),
             kind: handler.kind(),
+            replacement_surface: handler.replacement().surface(),
             executables,
             allowed_ports: handler.requested_endpoint().allowed_ports().to_vec(),
             executable_env: process_interception_executable_env(handler),
@@ -781,10 +779,7 @@ impl LinuxProcessInterceptionHandler {
         .join("\t")
     }
 
-    fn to_control_handler(
-        &self,
-        browser_cdp_endpoint: Option<&str>,
-    ) -> Result<SessionInterceptionHandler, SessionExecutionError> {
+    fn to_control_handler(&self) -> Result<SessionInterceptionHandler, SessionExecutionError> {
         let reason = match self.decision {
             ProcessInterceptionDecision::Allow => "process launch allowed by Erebor broker",
             ProcessInterceptionDecision::Deny => "process launch denied by Erebor broker",
@@ -802,53 +797,21 @@ impl LinuxProcessInterceptionHandler {
             ProcessInterceptionDecision::RequireApproval => {
                 SessionInterceptionHandler::require_approval(&self.id, reason)
             }
-            ProcessInterceptionDecision::Mediate => {
-                let browser_cdp_endpoint = browser_cdp_endpoint.ok_or_else(|| {
-                    SessionExecutionError::guard_config(
-                        "process interception mediation requires a running browser_cdp endpoint",
-                    )
-                })?;
-                let allowed_ports = self.effective_allowed_ports(browser_cdp_endpoint)?;
-                SessionInterceptionHandler::mediate(
-                    &self.id,
-                    reason,
-                    SessionInterceptionMediation::new(
-                        self.kind.as_str(),
-                        "browser_cdp",
-                        browser_cdp_endpoint,
-                    )
-                    .with_lease_id(format!("{}-lease", self.id))
-                    .with_print_line(if self.print_devtools_listening_line {
-                        format!(
-                            "DevTools listening on {}",
-                            devtools_browser_url(browser_cdp_endpoint)
-                        )
-                    } else {
-                        String::new()
-                    })
-                    .with_keepalive(self.keepalive),
+            ProcessInterceptionDecision::Mediate => SessionInterceptionHandler::mediate(
+                &self.id,
+                reason,
+                SessionMediationIntent::new(
+                    self.kind.as_str(),
+                    replacement_surface_name(self.replacement_surface),
                 )
-                .with_allowed_ports(allowed_ports)
-            }
+                .with_lease_id(format!("{}-lease", self.id))
+                .with_allowed_ports(self.allowed_ports.clone())
+                .with_compatibility_line(self.print_devtools_listening_line)
+                .with_keepalive(self.keepalive),
+            ),
         };
 
         Ok(handler)
-    }
-
-    fn effective_allowed_ports(
-        &self,
-        browser_cdp_endpoint: &str,
-    ) -> Result<Vec<u16>, SessionExecutionError> {
-        if !self.allowed_ports.is_empty() {
-            return Ok(self.allowed_ports.clone());
-        }
-        Ok(vec![endpoint_port(browser_cdp_endpoint).ok_or_else(
-            || {
-                SessionExecutionError::guard_config(
-                    "browser_cdp endpoint does not include a parseable port",
-                )
-            },
-        )?])
     }
 }
 
@@ -926,11 +889,12 @@ fn register_session_control_channel(
 ) -> Result<Option<SessionControlRegistration>, SessionExecutionError> {
     guard_bundle
         .map(|bundle| {
-            let handlers = bundle.control_handlers(browser_cdp_endpoint)?;
-            SessionControlBroker::register_session(
+            let handlers = bundle.control_handlers()?;
+            SessionControlBroker::register_session_with_mediators(
                 plan.session_id().as_str(),
                 &plan.actor().id,
                 handlers,
+                session_mediation_registry(browser_cdp_endpoint),
             )
             .map_err(SessionExecutionError::control_broker)
         })
@@ -975,27 +939,26 @@ fn process_interception_executable_env(handler: &ProcessInterceptionHandlerConfi
     }
 }
 
+fn session_mediation_registry(browser_cdp_endpoint: Option<&str>) -> SessionMediationRegistry {
+    let mut registry = SessionMediationRegistry::new();
+    if let Some(endpoint) = browser_cdp_endpoint {
+        registry.register_handler(BrowserCdpMediationHandler::new(endpoint));
+    }
+    registry
+}
+
+fn replacement_surface_name(surface: ProcessMediationReplacementSurface) -> &'static str {
+    match surface {
+        ProcessMediationReplacementSurface::BrowserCdp => "browser_cdp",
+    }
+}
+
 fn executable_basename(value: &str) -> Option<String> {
     Path::new(value)
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
-}
-
-fn endpoint_port(endpoint: &str) -> Option<u16> {
-    let endpoint = endpoint
-        .strip_prefix("ws://")
-        .or_else(|| endpoint.strip_prefix("http://"))?;
-    let host = endpoint.split('/').next().unwrap_or(endpoint);
-    host.rsplit_once(':')?.1.parse().ok()
-}
-
-fn devtools_browser_url(endpoint: &str) -> String {
-    format!(
-        "{}/devtools/browser/erebor-managed-browser",
-        endpoint.trim_end_matches('/')
-    )
 }
 
 fn interception_env_field(value: impl AsRef<str>) -> String {
@@ -1209,7 +1172,7 @@ mod tests {
     };
     use erebor_runtime_events::SessionId;
 
-    use super::{endpoint_port, process_interception_executable_env, start_session_side_resources};
+    use super::{process_interception_executable_env, start_session_side_resources};
 
     #[test]
     fn managed_browser_interception_defaults_browser_executable_env_vars(
@@ -1259,15 +1222,6 @@ mod tests {
         assert!(variables.contains(&String::from("PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH")));
         assert!(variables.contains(&String::from("PUPPETEER_EXECUTABLE_PATH")));
         Ok(())
-    }
-
-    #[test]
-    fn endpoint_port_extracts_governed_cdp_listener_port() {
-        assert_eq!(endpoint_port("ws://127.0.0.1:9222/"), Some(9222));
-        assert_eq!(
-            endpoint_port("ws://127.0.0.1:9222/devtools/browser/demo"),
-            Some(9222)
-        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ members = [
     "crates/erebor-runtime-core",
     "crates/erebor-runtime-e2e",
     "crates/erebor-runtime-events",
+    "crates/erebor-runtime-ipc",
     "crates/erebor-runtime-policy",
 ]
 resolver = "2"
@@ -20,6 +21,8 @@ repository = "https://github.com/Ereborlabs/erebor-runtime"
 cdp-protocol = "0.3.1"
 clap = { version = "4", features = ["derive"] }
 futures-util = "0.3"
+prost = "0.13"
+prost-build = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 snafu = "0.8"

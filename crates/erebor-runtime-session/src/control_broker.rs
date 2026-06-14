@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt,
     fs::{self, File},
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -110,6 +111,7 @@ struct SessionRegistration {
     token: String,
     broker_id: String,
     handlers: HashMap<String, SessionInterceptionHandler>,
+    mediators: SessionMediationRegistry,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -117,8 +119,7 @@ pub struct SessionInterceptionHandler {
     id: String,
     decision: SessionInterceptionDecision,
     reason: String,
-    allowed_ports: Vec<u16>,
-    mediate: Option<SessionInterceptionMediation>,
+    mediate: Option<SessionMediationIntent>,
 }
 
 impl SessionInterceptionHandler {
@@ -128,7 +129,6 @@ impl SessionInterceptionHandler {
             id: id.into(),
             decision: SessionInterceptionDecision::Allow,
             reason: reason.into(),
-            allowed_ports: Vec::new(),
             mediate: None,
         }
     }
@@ -139,7 +139,6 @@ impl SessionInterceptionHandler {
             id: id.into(),
             decision: SessionInterceptionDecision::Deny,
             reason: reason.into(),
-            allowed_ports: Vec::new(),
             mediate: None,
         }
     }
@@ -150,7 +149,6 @@ impl SessionInterceptionHandler {
             id: id.into(),
             decision: SessionInterceptionDecision::RequireApproval,
             reason: reason.into(),
-            allowed_ports: Vec::new(),
             mediate: None,
         }
     }
@@ -159,21 +157,14 @@ impl SessionInterceptionHandler {
     pub fn mediate(
         id: impl Into<String>,
         reason: impl Into<String>,
-        mediation: SessionInterceptionMediation,
+        intent: SessionMediationIntent,
     ) -> Self {
         Self {
             id: id.into(),
             decision: SessionInterceptionDecision::Mediate,
             reason: reason.into(),
-            allowed_ports: Vec::new(),
-            mediate: Some(mediation),
+            mediate: Some(intent),
         }
-    }
-
-    #[must_use]
-    pub fn with_allowed_ports(mut self, ports: Vec<u16>) -> Self {
-        self.allowed_ports = ports;
-        self
     }
 }
 
@@ -186,7 +177,85 @@ pub enum SessionInterceptionDecision {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionInterceptionMediation {
+pub struct SessionMediationIntent {
+    kind: String,
+    replacement_surface: String,
+    lease_id: String,
+    allowed_ports: Vec<u16>,
+    emit_compatibility_line: bool,
+    keepalive: bool,
+}
+
+impl SessionMediationIntent {
+    #[must_use]
+    pub fn new(kind: impl Into<String>, replacement_surface: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            replacement_surface: replacement_surface.into(),
+            lease_id: String::new(),
+            allowed_ports: Vec::new(),
+            emit_compatibility_line: false,
+            keepalive: false,
+        }
+    }
+
+    #[must_use]
+    pub fn with_lease_id(mut self, lease_id: impl Into<String>) -> Self {
+        self.lease_id = lease_id.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_allowed_ports(mut self, ports: Vec<u16>) -> Self {
+        self.allowed_ports = ports;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_compatibility_line(mut self, enabled: bool) -> Self {
+        self.emit_compatibility_line = enabled;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_keepalive(mut self, keepalive: bool) -> Self {
+        self.keepalive = keepalive;
+        self
+    }
+
+    #[must_use]
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    #[must_use]
+    pub fn replacement_surface(&self) -> &str {
+        &self.replacement_surface
+    }
+
+    #[must_use]
+    pub fn lease_id(&self) -> &str {
+        &self.lease_id
+    }
+
+    #[must_use]
+    pub fn allowed_ports(&self) -> &[u16] {
+        &self.allowed_ports
+    }
+
+    #[must_use]
+    pub const fn emit_compatibility_line(&self) -> bool {
+        self.emit_compatibility_line
+    }
+
+    #[must_use]
+    pub const fn keepalive(&self) -> bool {
+        self.keepalive
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceMediationOutcome {
     kind: String,
     replacement_surface: String,
     endpoint: String,
@@ -195,7 +264,7 @@ pub struct SessionInterceptionMediation {
     keepalive: bool,
 }
 
-impl SessionInterceptionMediation {
+impl SurfaceMediationOutcome {
     #[must_use]
     pub fn new(
         kind: impl Into<String>,
@@ -231,6 +300,111 @@ impl SessionInterceptionMediation {
     }
 }
 
+pub trait SurfaceMediationHandler: Send + Sync {
+    fn surface(&self) -> &str;
+
+    fn mediate(
+        &self,
+        request: &InterceptionRequest,
+        intent: &SessionMediationIntent,
+    ) -> Result<SurfaceMediationOutcome, String>;
+}
+
+#[derive(Clone, Default)]
+pub struct SessionMediationRegistry {
+    handlers: HashMap<String, Arc<dyn SurfaceMediationHandler>>,
+}
+
+impl SessionMediationRegistry {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn with_handler(mut self, handler: impl SurfaceMediationHandler + 'static) -> Self {
+        self.register_handler(handler);
+        self
+    }
+
+    pub fn register_handler(&mut self, handler: impl SurfaceMediationHandler + 'static) {
+        self.handlers
+            .insert(handler.surface().to_owned(), Arc::new(handler));
+    }
+
+    fn mediate(
+        &self,
+        request: &InterceptionRequest,
+        intent: &SessionMediationIntent,
+    ) -> Result<SurfaceMediationOutcome, String> {
+        let Some(handler) = self.handlers.get(intent.replacement_surface()) else {
+            return Err(format!(
+                "no mediation handler is registered for replacement surface `{}`",
+                intent.replacement_surface()
+            ));
+        };
+        handler.mediate(request, intent)
+    }
+}
+
+impl fmt::Debug for SessionMediationRegistry {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SessionMediationRegistry")
+            .field("surfaces", &self.handlers.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BrowserCdpMediationHandler {
+    endpoint: String,
+}
+
+impl BrowserCdpMediationHandler {
+    #[must_use]
+    pub fn new(endpoint: impl Into<String>) -> Self {
+        Self {
+            endpoint: endpoint.into(),
+        }
+    }
+}
+
+impl SurfaceMediationHandler for BrowserCdpMediationHandler {
+    fn surface(&self) -> &str {
+        "browser_cdp"
+    }
+
+    fn mediate(
+        &self,
+        request: &InterceptionRequest,
+        intent: &SessionMediationIntent,
+    ) -> Result<SurfaceMediationOutcome, String> {
+        let allowed_ports = effective_browser_cdp_allowed_ports(intent, &self.endpoint)?;
+        if let Some(requested_port) = remote_debugging_port(&request.argv) {
+            if !allowed_ports.contains(&requested_port) {
+                return Err(format!(
+                    "requested remote debugging port {requested_port} is not allowed"
+                ));
+            }
+        }
+
+        Ok(
+            SurfaceMediationOutcome::new(intent.kind(), self.surface(), &self.endpoint)
+                .with_lease_id(intent.lease_id())
+                .with_print_line(if intent.emit_compatibility_line() {
+                    format!(
+                        "DevTools listening on {}",
+                        devtools_browser_url(&self.endpoint)
+                    )
+                } else {
+                    String::new()
+                })
+                .with_keepalive(intent.keepalive()),
+        )
+    }
+}
+
 pub struct SessionControlBroker;
 
 impl SessionControlBroker {
@@ -239,10 +413,25 @@ impl SessionControlBroker {
         actor_id: impl Into<String>,
         handlers: Vec<SessionInterceptionHandler>,
     ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
+        Self::register_session_with_mediators(
+            session_id,
+            actor_id,
+            handlers,
+            SessionMediationRegistry::new(),
+        )
+    }
+
+    pub fn register_session_with_mediators(
+        session_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        handlers: Vec<SessionInterceptionHandler>,
+        mediators: SessionMediationRegistry,
+    ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
         shared_control_broker_server()?.register_session(
             session_id.into(),
             actor_id.into(),
             handlers,
+            mediators,
         )
     }
 }
@@ -340,6 +529,7 @@ impl ControlBrokerServer {
         session_id: String,
         actor_id: String,
         handlers: Vec<SessionInterceptionHandler>,
+        mediators: SessionMediationRegistry,
     ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
         let token = read_control_token()?;
         let registration = SessionRegistration {
@@ -349,6 +539,7 @@ impl ControlBrokerServer {
                 .into_iter()
                 .map(|handler| (handler.id.clone(), handler))
                 .collect(),
+            mediators,
         };
         {
             let mut sessions = self
@@ -607,25 +798,28 @@ fn interception_decision_for_request(
             "interception request arrived before GuardHello",
         ));
     };
-    let sessions = sessions
-        .lock()
-        .map_err(|_error| SessionControlBrokerError::StateLock)?;
-    let Some(registration) = sessions.get(&bound.session_id) else {
-        return Ok(deny_decision(
-            request.request_id,
-            "erebor-control-broker-unknown-session",
-            "session is no longer registered with the control broker",
-        ));
-    };
-    let Some(handler) = registration.handlers.get(&request.matched_handler_id) else {
-        return Ok(deny_decision(
-            request.request_id,
-            "erebor-control-broker-unknown-handler",
-            "interception handler is not registered for this session",
-        ));
+    let (handler, mediators) = {
+        let sessions = sessions
+            .lock()
+            .map_err(|_error| SessionControlBrokerError::StateLock)?;
+        let Some(registration) = sessions.get(&bound.session_id) else {
+            return Ok(deny_decision(
+                request.request_id,
+                "erebor-control-broker-unknown-session",
+                "session is no longer registered with the control broker",
+            ));
+        };
+        let Some(handler) = registration.handlers.get(&request.matched_handler_id) else {
+            return Ok(deny_decision(
+                request.request_id,
+                "erebor-control-broker-unknown-handler",
+                "interception handler is not registered for this session",
+            ));
+        };
+        (handler.clone(), registration.mediators.clone())
     };
 
-    Ok(handler.decision_for_request(request))
+    Ok(handler.decision_for_request(request, &mediators))
 }
 
 fn deny_unexpected_bound_message(
@@ -649,13 +843,11 @@ fn deny_unexpected_bound_message(
 }
 
 impl SessionInterceptionHandler {
-    fn decision_for_request(&self, request: &InterceptionRequest) -> InterceptionDecision {
-        if self.decision == SessionInterceptionDecision::Mediate {
-            if let Some(reason) = self.port_validation_failure(request) {
-                return deny_decision(request.request_id, &self.id, reason);
-            }
-        }
-
+    fn decision_for_request(
+        &self,
+        request: &InterceptionRequest,
+        mediators: &SessionMediationRegistry,
+    ) -> InterceptionDecision {
         match self.decision {
             SessionInterceptionDecision::Allow => InterceptionDecision {
                 request_id: request.request_id,
@@ -683,12 +875,16 @@ impl SessionInterceptionHandler {
                 mediate: None,
             },
             SessionInterceptionDecision::Mediate => {
-                let Some(mediation) = self.mediate.as_ref() else {
+                let Some(intent) = self.mediate.as_ref() else {
                     return deny_decision(
                         request.request_id,
                         &self.id,
-                        "mediate handler has no replacement details",
+                        "mediate handler has no replacement intent",
                     );
+                };
+                let outcome = match mediators.mediate(request, intent) {
+                    Ok(outcome) => outcome,
+                    Err(reason) => return deny_decision(request.request_id, &self.id, reason),
                 };
                 InterceptionDecision {
                     request_id: request.request_id,
@@ -699,29 +895,15 @@ impl SessionInterceptionHandler {
                     allow: None,
                     deny: None,
                     mediate: Some(MediateDecision {
-                        kind: mediation.kind.clone(),
-                        replacement_surface: mediation.replacement_surface.clone(),
-                        endpoint: mediation.endpoint.clone(),
-                        lease_id: mediation.lease_id.clone(),
-                        print_line: mediation.print_line.clone(),
-                        keepalive: mediation.keepalive,
+                        kind: outcome.kind,
+                        replacement_surface: outcome.replacement_surface,
+                        endpoint: outcome.endpoint,
+                        lease_id: outcome.lease_id,
+                        print_line: outcome.print_line,
+                        keepalive: outcome.keepalive,
                     }),
                 }
             }
-        }
-    }
-
-    fn port_validation_failure(&self, request: &InterceptionRequest) -> Option<String> {
-        if self.allowed_ports.is_empty() {
-            return None;
-        }
-        let requested_port = remote_debugging_port(&request.argv)?;
-        if self.allowed_ports.contains(&requested_port) {
-            None
-        } else {
-            Some(format!(
-                "requested remote debugging port {requested_port} is not allowed"
-            ))
         }
     }
 }
@@ -754,6 +936,33 @@ fn remote_debugging_port(args: &[String]) -> Option<u16> {
         }
     }
     None
+}
+
+fn effective_browser_cdp_allowed_ports(
+    intent: &SessionMediationIntent,
+    endpoint: &str,
+) -> Result<Vec<u16>, String> {
+    if !intent.allowed_ports().is_empty() {
+        return Ok(intent.allowed_ports().to_vec());
+    }
+    Ok(vec![endpoint_port(endpoint).ok_or_else(|| {
+        String::from("browser_cdp mediation endpoint does not include a parseable port")
+    })?])
+}
+
+fn endpoint_port(endpoint: &str) -> Option<u16> {
+    let endpoint = endpoint
+        .strip_prefix("ws://")
+        .or_else(|| endpoint.strip_prefix("http://"))?;
+    let host = endpoint.split('/').next().unwrap_or(endpoint);
+    host.rsplit_once(':')?.1.parse().ok()
+}
+
+fn devtools_browser_url(endpoint: &str) -> String {
+    format!(
+        "{}/devtools/browser/erebor-managed-browser",
+        endpoint.trim_end_matches('/')
+    )
 }
 
 #[cfg(unix)]
@@ -1000,8 +1209,10 @@ mod tests {
     };
 
     use super::{
-        GuardBrokerClient, SessionControlBroker, SessionControlBrokerEndpoint,
-        SessionControlBrokerError, SessionInterceptionHandler, SessionInterceptionMediation,
+        BrowserCdpMediationHandler, GuardBrokerClient, SessionControlBroker,
+        SessionControlBrokerEndpoint, SessionControlBrokerError, SessionInterceptionHandler,
+        SessionMediationIntent, SessionMediationRegistry, SurfaceMediationHandler,
+        SurfaceMediationOutcome,
     };
 
     #[test]
@@ -1113,7 +1324,7 @@ mod tests {
     fn broker_returns_interception_decisions_after_guard_hello(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let session_id = session_id("decisions");
-        let broker = SessionControlBroker::register_session(
+        let broker = SessionControlBroker::register_session_with_mediators(
             &session_id,
             "openclaw",
             vec![
@@ -1123,11 +1334,15 @@ mod tests {
                 SessionInterceptionHandler::mediate(
                     "mediate-tool",
                     "route to replacement surface",
-                    SessionInterceptionMediation::new("future_api", "api", "local://replacement")
-                        .with_print_line("replacement ready")
+                    SessionMediationIntent::new("future_api", "api")
+                        .with_lease_id("api-lease")
                         .with_keepalive(false),
                 ),
             ],
+            SessionMediationRegistry::new().with_handler(TestMediationHandler {
+                surface: String::from("api"),
+                endpoint: String::from("local://replacement"),
+            }),
         )?;
 
         let allow = GuardBrokerClient::request_interception_decision(
@@ -1162,6 +1377,97 @@ mod tests {
                 .map(|decision| decision.replacement_surface.as_str()),
             Some("api")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn broker_fails_closed_when_mediation_surface_is_not_registered(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = session_id("missing-mediator");
+        let broker = SessionControlBroker::register_session(
+            &session_id,
+            "openclaw",
+            vec![SessionInterceptionHandler::mediate(
+                "mediate-tool",
+                "route to replacement surface",
+                SessionMediationIntent::new("future_api", "api"),
+            )],
+        )?;
+
+        let decision = GuardBrokerClient::request_interception_decision(
+            broker.endpoint(),
+            hello(&session_id),
+            request("mediate-tool"),
+        )?;
+
+        assert_eq!(decision.decision, DecisionKind::Deny as i32);
+        assert!(decision
+            .reason
+            .contains("no mediation handler is registered for replacement surface `api`"));
+        Ok(())
+    }
+
+    #[test]
+    fn browser_cdp_mediation_handler_owns_endpoint_and_port_validation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = session_id("browser-cdp-mediator");
+        let broker = SessionControlBroker::register_session_with_mediators(
+            &session_id,
+            "openclaw",
+            vec![SessionInterceptionHandler::mediate(
+                "managed-browser-cdp",
+                "route browser launch to governed CDP",
+                SessionMediationIntent::new("managed_browser_cdp", "browser_cdp")
+                    .with_allowed_ports(vec![9222])
+                    .with_lease_id("browser-lease")
+                    .with_compatibility_line(true)
+                    .with_keepalive(true),
+            )],
+            SessionMediationRegistry::new()
+                .with_handler(BrowserCdpMediationHandler::new("ws://127.0.0.1:9222/")),
+        )?;
+
+        let decision = GuardBrokerClient::request_interception_decision(
+            broker.endpoint(),
+            hello(&session_id),
+            request_with_argv(
+                "managed-browser-cdp",
+                &[
+                    String::from("google-chrome"),
+                    String::from("--remote-debugging-port=9222"),
+                ],
+            ),
+        )?;
+
+        let mediation = decision
+            .mediate
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("expected browser_cdp mediation decision"))?;
+        assert_eq!(decision.decision, DecisionKind::Mediate as i32);
+        assert_eq!(mediation.replacement_surface, "browser_cdp");
+        assert_eq!(mediation.endpoint, "ws://127.0.0.1:9222/");
+        assert_eq!(mediation.lease_id, "browser-lease");
+        assert!(mediation
+            .print_line
+            .contains("ws://127.0.0.1:9222/devtools/browser/erebor-managed-browser"));
+        assert!(mediation.keepalive);
+
+        let denied = GuardBrokerClient::request_interception_decision(
+            broker.endpoint(),
+            hello(&session_id),
+            request_with_argv(
+                "managed-browser-cdp",
+                &[
+                    String::from("google-chrome"),
+                    String::from("--remote-debugging-port=9333"),
+                ],
+            ),
+        )?;
+
+        assert_eq!(denied.decision, DecisionKind::Deny as i32);
+        assert!(denied
+            .reason
+            .contains("requested remote debugging port 9333 is not allowed"));
         Ok(())
     }
 
@@ -1209,19 +1515,51 @@ mod tests {
     }
 
     fn request(handler_id: &str) -> InterceptionRequest {
+        request_with_argv(handler_id, &[String::from("tool")])
+    }
+
+    fn request_with_argv(handler_id: &str, argv: &[String]) -> InterceptionRequest {
         InterceptionRequest {
             request_id: 7,
             actor_id: String::from("openclaw"),
             source: InterceptionSource::Shim as i32,
             pid: 100,
             ppid: 99,
-            executable: String::from("tool"),
-            argv: vec![String::from("tool")],
+            executable: argv
+                .first()
+                .cloned()
+                .unwrap_or_else(|| String::from("tool")),
+            argv: argv.to_vec(),
             cwd: String::from("/workspace"),
             selected_env: Vec::new(),
             requested_endpoint: None,
             matched_handler_id: handler_id.to_owned(),
             timestamp: String::from("unix:1"),
+        }
+    }
+
+    struct TestMediationHandler {
+        surface: String,
+        endpoint: String,
+    }
+
+    impl SurfaceMediationHandler for TestMediationHandler {
+        fn surface(&self) -> &str {
+            &self.surface
+        }
+
+        fn mediate(
+            &self,
+            _request: &InterceptionRequest,
+            intent: &SessionMediationIntent,
+        ) -> Result<SurfaceMediationOutcome, String> {
+            Ok(SurfaceMediationOutcome::new(
+                intent.kind(),
+                intent.replacement_surface(),
+                &self.endpoint,
+            )
+            .with_lease_id(intent.lease_id())
+            .with_keepalive(intent.keepalive()))
         }
     }
 
