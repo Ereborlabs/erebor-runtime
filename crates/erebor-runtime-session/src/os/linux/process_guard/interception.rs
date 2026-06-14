@@ -1,10 +1,13 @@
+#[path = "ipc.rs"]
+mod ipc;
+
 use std::{
     env,
     fs::{self, OpenOptions},
     io::Write,
     os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Path, PathBuf},
-    process::Command,
+    process::{self, Command},
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -14,13 +17,7 @@ const MAX_HANDLERS: usize = 32;
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct InterceptionHandler {
     id: String,
-    decision: String,
-    kind: String,
     executables: Vec<String>,
-    allowed_ports: Vec<u16>,
-    governed_endpoint: String,
-    print_devtools_listening_line: bool,
-    keepalive: bool,
 }
 
 pub(super) fn try_handle_configured_interception() -> Option<i32> {
@@ -38,31 +35,67 @@ pub(super) fn try_handle_configured_interception() -> Option<i32> {
 }
 
 fn handle_interception(handler: &InterceptionHandler, invoked: &str, args: &[String]) -> i32 {
-    match handler.decision.as_str() {
-        "mediate" => handle_mediation(handler, invoked, args),
-        "deny" => fail_closed(
-            "configured process interception denied this launch",
+    match request_broker_decision(handler, invoked, args) {
+        Ok(decision) => apply_broker_decision(handler, invoked, args, &decision),
+        Err(reason) => fail_closed(&reason, handler, invoked, args, None),
+    }
+}
+
+fn apply_broker_decision(
+    handler: &InterceptionHandler,
+    invoked: &str,
+    args: &[String],
+    decision: &ipc::InterceptionDecision,
+) -> i32 {
+    match decision.kind {
+        ipc::InterceptionDecisionKind::Allow => handle_allow(handler, invoked, args, decision),
+        ipc::InterceptionDecisionKind::Deny => fail_closed(
+            &decision.reason,
             handler,
             invoked,
             args,
+            decision.deny_exit_code,
         ),
-        "allow" => handle_allow(handler, invoked, args),
-        _ => fail_closed(
-            "configured process interception decision is not supported by this guard",
+        ipc::InterceptionDecisionKind::RequireApproval => fail_closed(
+            &format!(
+                "{}; approval leases are not available to this guard yet",
+                decision.reason
+            ),
             handler,
             invoked,
             args,
+            Some(126),
+        ),
+        ipc::InterceptionDecisionKind::Mediate => handle_mediation(handler, invoked, args, decision),
+        ipc::InterceptionDecisionKind::Unknown => fail_closed(
+            "broker returned an unknown process interception decision",
+            handler,
+            invoked,
+            args,
+            Some(126),
         ),
     }
 }
 
-fn handle_allow(handler: &InterceptionHandler, invoked: &str, args: &[String]) -> i32 {
-    let Some(target) = real_executable_for_shim(invoked) else {
+fn handle_allow(
+    handler: &InterceptionHandler,
+    invoked: &str,
+    args: &[String],
+    decision: &ipc::InterceptionDecision,
+) -> i32 {
+    let target = decision
+        .allow_exec_target
+        .as_deref()
+        .filter(|target| !target.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| real_executable_for_shim(invoked));
+    let Some(target) = target else {
         return fail_closed(
-            "configured process interception allowed launch, but no real executable was found after the Erebor shim",
+            "broker allowed launch, but no real executable was found after the Erebor shim",
             handler,
             invoked,
             args,
+            Some(126),
         );
     };
 
@@ -70,13 +103,10 @@ fn handle_allow(handler: &InterceptionHandler, invoked: &str, args: &[String]) -
         handler,
         invoked,
         args,
-        remote_debugging_port(&args[1..]),
         "allow",
         "allow",
-        &format!(
-            "process launch allowed through to real executable {}",
-            target.display()
-        ),
+        &decision.reason,
+        None,
     );
 
     let error = Command::new(&target).args(&args[1..]).exec();
@@ -85,74 +115,40 @@ fn handle_allow(handler: &InterceptionHandler, invoked: &str, args: &[String]) -
         handler,
         invoked,
         args,
+        Some(126),
     )
 }
 
-fn handle_mediation(handler: &InterceptionHandler, invoked: &str, args: &[String]) -> i32 {
-    if handler.kind != "managed_browser_cdp" {
+fn handle_mediation(
+    handler: &InterceptionHandler,
+    invoked: &str,
+    args: &[String],
+    decision: &ipc::InterceptionDecision,
+) -> i32 {
+    let Some(mediation) = decision.mediate.as_ref() else {
         return fail_closed(
-            "process interception handler kind is not supported by this guard",
+            "broker returned a mediate decision without mediation details",
             handler,
             invoked,
             args,
-        );
-    }
-
-    let Some(requested_port) = remote_debugging_port(&args[1..]) else {
-        return fail_closed(
-            "managed_browser_cdp interception requires --remote-debugging-port",
-            handler,
-            invoked,
-            args,
+            Some(126),
         );
     };
-    let allowed_ports = handler.effective_allowed_ports();
-    if !allowed_ports.contains(&requested_port) {
-        return fail_closed(
-            &format!("requested remote debugging port {requested_port} is not allowed"),
-            handler,
-            invoked,
-            args,
-        );
-    }
-
-    let Some(endpoint_port) = endpoint_port(&handler.governed_endpoint) else {
-        return fail_closed(
-            "governed endpoint does not include a parseable port",
-            handler,
-            invoked,
-            args,
-        );
-    };
-    if endpoint_port != requested_port {
-        return fail_closed(
-            &format!(
-                "requested port {requested_port} does not match governed endpoint port {endpoint_port}"
-            ),
-            handler,
-            invoked,
-            args,
-        );
-    }
-
     write_interception_audit(
         handler,
         invoked,
         args,
-        Some(requested_port),
         "allow",
         "mediate",
-        "browser launch mediated to Erebor-owned governed CDP",
+        &decision.reason,
+        Some(&mediation.endpoint),
     );
 
-    if handler.print_devtools_listening_line {
-        eprintln!(
-            "DevTools listening on {}",
-            devtools_browser_url(&handler.governed_endpoint)
-        );
+    if !mediation.print_line.is_empty() {
+        eprintln!("{}", mediation.print_line);
     }
 
-    if handler.keepalive {
+    if mediation.keepalive {
         loop {
             thread::sleep(Duration::from_secs(60));
         }
@@ -167,14 +163,6 @@ impl InterceptionHandler {
             .iter()
             .any(|executable| executable == invoked)
     }
-
-    fn effective_allowed_ports(&self) -> Vec<u16> {
-        if self.allowed_ports.is_empty() {
-            endpoint_port(&self.governed_endpoint).into_iter().collect()
-        } else {
-            self.allowed_ports.clone()
-        }
-    }
 }
 
 fn parse_interception_handlers() -> Vec<InterceptionHandler> {
@@ -188,36 +176,25 @@ fn parse_interception_handlers_from_source(source: &str) -> Vec<InterceptionHand
         .lines()
         .take(MAX_HANDLERS)
         .filter_map(|line| {
-            let mut fields = line.split('\t');
-            let id = fields.next().unwrap_or_default();
+            let fields = line.split('\t').collect::<Vec<_>>();
+            let id = fields.first().copied().unwrap_or_default();
             if id.is_empty() {
                 return None;
             }
-            let decision = fields.next().unwrap_or_default();
-            let kind = fields.next().unwrap_or_default();
-            let executables = split_csv(fields.next().unwrap_or_default());
-            let allowed_ports = split_csv(fields.next().unwrap_or_default())
-                .into_iter()
-                .filter_map(|port| port.parse::<u16>().ok())
-                .collect::<Vec<_>>();
-            let governed_endpoint = fields.next().unwrap_or_default();
-            if decision.is_empty()
-                || kind.is_empty()
-                || executables.is_empty()
-                || governed_endpoint.is_empty()
-            {
+            let executables = match fields.as_slice() {
+                // Phase 2 format: id<TAB>executable[,executable]
+                [_id, executables] => split_csv(executables),
+                // Phase 1 compatibility: id<TAB>decision<TAB>kind<TAB>executables...
+                [_id, _decision, _kind, executables, ..] => split_csv(executables),
+                _ => Vec::new(),
+            };
+            if executables.is_empty() {
                 return None;
             }
 
             Some(InterceptionHandler {
                 id: id.to_owned(),
-                decision: decision.to_owned(),
-                kind: kind.to_owned(),
                 executables,
-                allowed_ports,
-                governed_endpoint: governed_endpoint.to_owned(),
-                print_devtools_listening_line: parse_bool(fields.next(), true),
-                keepalive: parse_bool(fields.next(), true),
             })
         })
         .collect()
@@ -232,12 +209,82 @@ fn split_csv(source: &str) -> Vec<String> {
         .collect()
 }
 
-fn parse_bool(value: Option<&str>, default: bool) -> bool {
-    match value.unwrap_or_default() {
-        "true" | "1" | "yes" => true,
-        "false" | "0" | "no" => false,
-        _ => default,
+fn request_broker_decision(
+    handler: &InterceptionHandler,
+    invoked: &str,
+    args: &[String],
+) -> Result<ipc::InterceptionDecision, String> {
+    let endpoint = control_endpoint_from_env()?;
+    let hello = guard_hello_from_env()?;
+    let mut connection = ipc::GuardBrokerConnection::connect(&endpoint, hello)?;
+    let request = interception_request_from_invocation(handler, invoked, args);
+    connection.request_decision(&request)
+}
+
+fn control_endpoint_from_env() -> Result<ipc::ControlEndpoint, String> {
+    let path = required_env("EREBOR_SESSION_CONTROL_PATH")?;
+    let token = required_env("EREBOR_SESSION_CONTROL_TOKEN")?;
+    let timeout_ms = env::var("EREBOR_SESSION_CONTROL_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(25);
+
+    Ok(ipc::ControlEndpoint {
+        path,
+        token,
+        timeout_ms,
+    })
+}
+
+fn guard_hello_from_env() -> Result<ipc::GuardHello, String> {
+    Ok(ipc::GuardHello {
+        session_id: required_env("EREBOR_SESSION_ID")?,
+        actor_id: env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent")),
+        guard_pid: process::id() as i64,
+        runner_kind: env::var("EREBOR_SESSION_RUNNER").unwrap_or_else(|_| String::from("linux_host")),
+        platform: String::from("linux-x86_64"),
+        capabilities: vec![String::from("interception_request")],
+    })
+}
+
+fn interception_request_from_invocation(
+    handler: &InterceptionHandler,
+    invoked: &str,
+    args: &[String],
+) -> ipc::InterceptionRequest {
+    ipc::InterceptionRequest {
+        request_id: current_unix_timestamp(),
+        actor_id: env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent")),
+        pid: process::id() as i64,
+        ppid: proc_parent_pid_for_self().unwrap_or(0) as i64,
+        executable: invoked.to_owned(),
+        argv: args.to_vec(),
+        cwd: env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("<unknown>"))
+            .display()
+            .to_string(),
+        matched_handler_id: handler.id.clone(),
+        timestamp: format!("unix:{}", current_unix_timestamp()),
     }
+}
+
+fn required_env(key: &str) -> Result<String, String> {
+    env::var(key)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{key} is required for broker-backed process interception"))
+}
+
+fn proc_parent_pid_for_self() -> Option<i32> {
+    let source = fs::read_to_string("/proc/self/stat").ok()?;
+    let (_command, rest) = source.rsplit_once(')')?;
+    rest.split_whitespace().nth(1)?.parse().ok()
+}
+
+fn current_unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 fn executable_name(path: &str) -> Option<String> {
@@ -294,62 +341,34 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
     }
 }
 
-fn remote_debugging_port(args: &[String]) -> Option<u16> {
-    let mut iter = args.iter().peekable();
-    while let Some(argument) = iter.next() {
-        if let Some(port) = argument.strip_prefix("--remote-debugging-port=") {
-            return port.parse().ok();
-        }
-        if argument == "--remote-debugging-port" {
-            return iter.peek().and_then(|port| port.parse().ok());
-        }
-    }
-
-    None
-}
-
-fn endpoint_port(endpoint: &str) -> Option<u16> {
-    let endpoint = endpoint
-        .strip_prefix("ws://")
-        .or_else(|| endpoint.strip_prefix("http://"))?;
-    let host = endpoint.split('/').next().unwrap_or(endpoint);
-    host.rsplit_once(':')?.1.parse().ok()
-}
-
-fn devtools_browser_url(endpoint: &str) -> String {
-    format!(
-        "{}/devtools/browser/erebor-managed-browser",
-        endpoint.trim_end_matches('/')
-    )
-}
-
 fn fail_closed(
     reason: &str,
     handler: &InterceptionHandler,
     invoked: &str,
     args: &[String],
+    exit_code: Option<i32>,
 ) -> i32 {
     write_interception_audit(
         handler,
         invoked,
         args,
-        remote_debugging_port(&args[1..]),
         "deny",
         "deny",
         reason,
+        None,
     );
     eprintln!("erebor linux process guard interception: {reason}");
-    126
+    exit_code.unwrap_or(126)
 }
 
 fn write_interception_audit(
     handler: &InterceptionHandler,
     invoked: &str,
     args: &[String],
-    requested_port: Option<u16>,
     final_decision: &str,
     policy_decision: &str,
     reason: &str,
+    governed_endpoint: Option<&str>,
 ) {
     let audit_path = match env::var("EREBOR_GUARD_AUDIT_JSONL") {
         Ok(path) if !path.is_empty() => path,
@@ -371,25 +390,21 @@ fn write_interception_audit(
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs());
     let command = args.join(" ");
-    let requested_port_label = requested_port
-        .map(|port| port.to_string())
-        .unwrap_or_else(|| String::from("none"));
-    let requested_port_json =
-        requested_port.map_or_else(|| String::from("null"), |port| port.to_string());
-    let event_id = format!("{session_id}-process-interception-{requested_port_label}-{timestamp}");
+    let event_id = format!(
+        "{}-process-interception-{}-{}",
+        session_id, handler.id, timestamp
+    );
+    let governed_endpoint = governed_endpoint.unwrap_or("");
 
     let _ = write!(
         file,
-        "{{\"event\":{{\"id\":{},\"session_id\":{},\"actor\":{{\"id\":{},\"kind\":\"agent\"}},\"surface\":\"terminal\",\"action\":\"process_exec\",\"target\":{{\"label\":{},\"uri\":null}},\"payload\":{{\"kind\":\"process_interception\",\"handler_id\":{},\"interception_decision\":{},\"interception_kind\":{},\"requested_port\":{},\"governed_endpoint\":{},\"argv_summary\":{},\"command\":[",
+        "{{\"event\":{{\"id\":{},\"session_id\":{},\"actor\":{{\"id\":{},\"kind\":\"agent\"}},\"surface\":\"terminal\",\"action\":\"process_exec\",\"target\":{{\"label\":{},\"uri\":null}},\"payload\":{{\"kind\":\"process_interception\",\"handler_id\":{},\"governed_endpoint\":{},\"argv_summary\":{},\"command\":[",
         json_string(&event_id),
         json_string(&session_id),
         json_string(&actor_id),
         json_string(invoked),
         json_string(&handler.id),
-        json_string(&handler.decision),
-        json_string(&handler.kind),
-        requested_port_json,
-        json_string(&handler.governed_endpoint),
+        json_string(governed_endpoint),
         json_string(&command)
     );
     for (index, argument) in args.iter().enumerate() {
@@ -440,56 +455,42 @@ mod tests {
     };
 
     use super::{
-        devtools_browser_url, endpoint_port, executable_name,
+        apply_broker_decision, executable_name, interception_request_from_invocation,
         parse_interception_handlers_from_source, real_executable_for_shim_with_path,
-        remote_debugging_port,
+        InterceptionHandler,
     };
 
     #[test]
-    fn parses_process_interception_handler_environment_format() {
+    fn parses_process_interception_handler_environment_format_for_matching_only() {
         let handlers = parse_interception_handlers_from_source(
-            "managed-browser-cdp\tmediate\tmanaged_browser_cdp\tgoogle-chrome,chromium\t9222\tws://127.0.0.1:9222/\ttrue\tfalse\n",
+            "managed-browser-cdp\tgoogle-chrome,chromium\nlegacy\tmediate\tmanaged_browser_cdp\tchrome\t9222\tws://127.0.0.1:9222/\ttrue\tfalse\n",
         );
 
-        assert_eq!(handlers.len(), 1);
+        assert_eq!(handlers.len(), 2);
         assert_eq!(handlers[0].id, "managed-browser-cdp");
-        assert_eq!(handlers[0].decision, "mediate");
-        assert_eq!(handlers[0].kind, "managed_browser_cdp");
         assert_eq!(
             handlers[0].executables,
             vec![String::from("google-chrome"), String::from("chromium")]
         );
-        assert_eq!(handlers[0].allowed_ports, vec![9222]);
-        assert_eq!(handlers[0].governed_endpoint, "ws://127.0.0.1:9222/");
-        assert!(handlers[0].print_devtools_listening_line);
-        assert!(!handlers[0].keepalive);
+        assert_eq!(handlers[1].id, "legacy");
+        assert_eq!(handlers[1].executables, vec![String::from("chrome")]);
     }
 
     #[test]
-    fn extracts_remote_debugging_port_from_chrome_argv() {
-        assert_eq!(
-            remote_debugging_port(&[
-                String::from("--headless"),
-                String::from("--remote-debugging-port=9222")
-            ]),
-            Some(9222)
+    fn interception_request_uses_connection_bound_session_model() {
+        let handler = InterceptionHandler {
+            id: String::from("managed-browser-cdp"),
+            executables: vec![String::from("google-chrome")],
+        };
+        let request = interception_request_from_invocation(
+            &handler,
+            "google-chrome",
+            &[String::from("google-chrome"), String::from("--flag")],
         );
-        assert_eq!(
-            remote_debugging_port(&[
-                String::from("--remote-debugging-port"),
-                String::from("9223")
-            ]),
-            Some(9223)
-        );
-    }
 
-    #[test]
-    fn parses_endpoint_port_and_devtools_line() {
-        assert_eq!(endpoint_port("ws://127.0.0.1:9222/"), Some(9222));
-        assert_eq!(
-            devtools_browser_url("ws://127.0.0.1:9222/"),
-            "ws://127.0.0.1:9222/devtools/browser/erebor-managed-browser"
-        );
+        assert_eq!(request.matched_handler_id, "managed-browser-cdp");
+        assert_eq!(request.executable, "google-chrome");
+        assert_eq!(request.argv.len(), 2);
     }
 
     #[test]
@@ -498,6 +499,34 @@ mod tests {
             executable_name("/tmp/erebor/shims/google-chrome"),
             Some(String::from("google-chrome"))
         );
+    }
+
+    #[test]
+    fn applies_generic_broker_mediation_without_browser_specific_kind_check() {
+        let handler = InterceptionHandler {
+            id: String::from("api-mediator"),
+            executables: vec![String::from("tool")],
+        };
+        let decision = super::ipc::InterceptionDecision {
+            request_id: 1,
+            kind: super::ipc::InterceptionDecisionKind::Mediate,
+            rule_id: String::from("mediate-api"),
+            reason: String::from("route launch to mediated surface"),
+            allow_exec_target: None,
+            deny_exit_code: None,
+            mediate: Some(super::ipc::MediateDecision {
+                kind: String::from("future_api"),
+                replacement_surface: String::from("api"),
+                endpoint: String::from("local://api"),
+                lease_id: String::from("lease"),
+                print_line: String::new(),
+                keepalive: false,
+            }),
+        };
+
+        let status = apply_broker_decision(&handler, "tool", &[String::from("tool")], &decision);
+
+        assert_eq!(status, 0);
     }
 
     #[test]

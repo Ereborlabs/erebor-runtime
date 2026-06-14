@@ -29,7 +29,8 @@ use thiserror::Error;
 
 pub use control_broker::{
     GuardBrokerClient, SessionControlBroker, SessionControlBrokerEndpoint,
-    SessionControlBrokerError, SessionControlRegistration,
+    SessionControlBrokerError, SessionControlRegistration, SessionInterceptionHandler,
+    SessionInterceptionMediation,
 };
 
 const LINUX_PROCESS_GUARD: &[u8] =
@@ -308,9 +309,9 @@ fn start_session_side_resources_from_start_plan(
         }
     }
 
-    let control_registration = register_session_control_channel(guard_bundle.as_ref(), plan)?;
-
     if launcher.is_empty() {
+        let control_registration =
+            register_session_control_channel(guard_bundle.as_ref(), plan, None)?;
         let (docker_options, linux_host_options) = side_resource_command_options(
             guard_bundle.as_ref(),
             None,
@@ -351,6 +352,11 @@ fn start_session_side_resources_from_start_plan(
         }
     }
 
+    let control_registration = register_session_control_channel(
+        guard_bundle.as_ref(),
+        plan,
+        browser_cdp_endpoint.as_deref(),
+    )?;
     let (docker_options, linux_host_options) = side_resource_command_options(
         guard_bundle.as_ref(),
         browser_cdp_endpoint.as_deref(),
@@ -580,6 +586,16 @@ impl LinuxProcessGuardBundle {
             .linux_host_options(browser_cdp_endpoint)?
             .with_adopt_pid(pid))
     }
+
+    fn control_handlers(
+        &self,
+        browser_cdp_endpoint: Option<&str>,
+    ) -> Result<Vec<SessionInterceptionHandler>, SessionExecutionError> {
+        self.interception.as_ref().map_or_else(
+            || Ok(Vec::new()),
+            |interception| interception.control_handlers(browser_cdp_endpoint),
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -624,25 +640,16 @@ impl LinuxProcessInterceptionBundle {
 
     fn environment(
         &self,
-        browser_cdp_endpoint: Option<&str>,
+        _browser_cdp_endpoint: Option<&str>,
     ) -> Result<Vec<(String, String)>, SessionExecutionError> {
-        let browser_cdp_endpoint = browser_cdp_endpoint.ok_or_else(|| {
-            SessionExecutionError::guard_config(
-                "process interception requires a running browser_cdp endpoint",
-            )
-        })?;
         let mut environment = vec![
             (
                 String::from("EREBOR_PROCESS_INTERCEPTION"),
                 String::from("linux-ptrace"),
             ),
             (
-                String::from("EREBOR_MANAGED_BROWSER_CDP_URL"),
-                browser_cdp_endpoint.to_owned(),
-            ),
-            (
                 String::from("EREBOR_PROCESS_INTERCEPTION_HANDLERS"),
-                self.handlers_env(browser_cdp_endpoint)?,
+                self.handlers_env(),
             ),
             (
                 String::from("EREBOR_PROCESS_INTERCEPTION_SHIM_DIR"),
@@ -673,12 +680,22 @@ impl LinuxProcessInterceptionBundle {
         Ok(environment)
     }
 
-    fn handlers_env(&self, browser_cdp_endpoint: &str) -> Result<String, SessionExecutionError> {
+    fn handlers_env(&self) -> String {
         self.handlers
             .iter()
-            .map(|handler| handler.to_env_line(browser_cdp_endpoint))
-            .collect::<Result<Vec<_>, _>>()
-            .map(|lines| lines.join("\n"))
+            .map(LinuxProcessInterceptionHandler::to_env_line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn control_handlers(
+        &self,
+        browser_cdp_endpoint: Option<&str>,
+    ) -> Result<Vec<SessionInterceptionHandler>, SessionExecutionError> {
+        self.handlers
+            .iter()
+            .map(|handler| handler.to_control_handler(browser_cdp_endpoint))
+            .collect()
     }
 }
 
@@ -756,34 +773,82 @@ impl LinuxProcessInterceptionHandler {
         self.executable_env.clone()
     }
 
-    fn to_env_line(&self, browser_cdp_endpoint: &str) -> Result<String, SessionExecutionError> {
-        let allowed_ports = if self.allowed_ports.is_empty() {
-            vec![endpoint_port(browser_cdp_endpoint).ok_or_else(|| {
+    fn to_env_line(&self) -> String {
+        [
+            interception_env_field(&self.id),
+            interception_env_field(self.executables.join(",")),
+        ]
+        .join("\t")
+    }
+
+    fn to_control_handler(
+        &self,
+        browser_cdp_endpoint: Option<&str>,
+    ) -> Result<SessionInterceptionHandler, SessionExecutionError> {
+        let reason = match self.decision {
+            ProcessInterceptionDecision::Allow => "process launch allowed by Erebor broker",
+            ProcessInterceptionDecision::Deny => "process launch denied by Erebor broker",
+            ProcessInterceptionDecision::RequireApproval => {
+                "process launch requires approval from Erebor broker"
+            }
+            ProcessInterceptionDecision::Mediate => "process launch mediated by Erebor broker",
+        };
+
+        let handler = match self.decision {
+            ProcessInterceptionDecision::Allow => {
+                SessionInterceptionHandler::allow(&self.id, reason)
+            }
+            ProcessInterceptionDecision::Deny => SessionInterceptionHandler::deny(&self.id, reason),
+            ProcessInterceptionDecision::RequireApproval => {
+                SessionInterceptionHandler::require_approval(&self.id, reason)
+            }
+            ProcessInterceptionDecision::Mediate => {
+                let browser_cdp_endpoint = browser_cdp_endpoint.ok_or_else(|| {
+                    SessionExecutionError::guard_config(
+                        "process interception mediation requires a running browser_cdp endpoint",
+                    )
+                })?;
+                let allowed_ports = self.effective_allowed_ports(browser_cdp_endpoint)?;
+                SessionInterceptionHandler::mediate(
+                    &self.id,
+                    reason,
+                    SessionInterceptionMediation::new(
+                        self.kind.as_str(),
+                        "browser_cdp",
+                        browser_cdp_endpoint,
+                    )
+                    .with_lease_id(format!("{}-lease", self.id))
+                    .with_print_line(if self.print_devtools_listening_line {
+                        format!(
+                            "DevTools listening on {}",
+                            devtools_browser_url(browser_cdp_endpoint)
+                        )
+                    } else {
+                        String::new()
+                    })
+                    .with_keepalive(self.keepalive),
+                )
+                .with_allowed_ports(allowed_ports)
+            }
+        };
+
+        Ok(handler)
+    }
+
+    fn effective_allowed_ports(
+        &self,
+        browser_cdp_endpoint: &str,
+    ) -> Result<Vec<u16>, SessionExecutionError> {
+        if !self.allowed_ports.is_empty() {
+            return Ok(self.allowed_ports.clone());
+        }
+        Ok(vec![endpoint_port(browser_cdp_endpoint).ok_or_else(
+            || {
                 SessionExecutionError::guard_config(
                     "browser_cdp endpoint does not include a parseable port",
                 )
-            })?]
-        } else {
-            self.allowed_ports.clone()
-        };
-
-        Ok([
-            interception_env_field(&self.id),
-            interception_env_field(self.decision.as_str()),
-            interception_env_field(self.kind.as_str()),
-            interception_env_field(self.executables.join(",")),
-            interception_env_field(
-                allowed_ports
-                    .iter()
-                    .map(u16::to_string)
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ),
-            interception_env_field(browser_cdp_endpoint),
-            interception_env_field(self.print_devtools_listening_line.to_string()),
-            interception_env_field(self.keepalive.to_string()),
-        ]
-        .join("\t"))
+            },
+        )?])
     }
 }
 
@@ -857,11 +922,17 @@ fn side_resource_command_options(
 fn register_session_control_channel(
     guard_bundle: Option<&LinuxProcessGuardBundle>,
     plan: &impl SessionPlanContext,
+    browser_cdp_endpoint: Option<&str>,
 ) -> Result<Option<SessionControlRegistration>, SessionExecutionError> {
     guard_bundle
-        .map(|_bundle| {
-            SessionControlBroker::register_session(plan.session_id().as_str(), &plan.actor().id)
-                .map_err(SessionExecutionError::control_broker)
+        .map(|bundle| {
+            let handlers = bundle.control_handlers(browser_cdp_endpoint)?;
+            SessionControlBroker::register_session(
+                plan.session_id().as_str(),
+                &plan.actor().id,
+                handlers,
+            )
+            .map_err(SessionExecutionError::control_broker)
         })
         .transpose()
 }
@@ -918,6 +989,13 @@ fn endpoint_port(endpoint: &str) -> Option<u16> {
         .or_else(|| endpoint.strip_prefix("http://"))?;
     let host = endpoint.split('/').next().unwrap_or(endpoint);
     host.rsplit_once(':')?.1.parse().ok()
+}
+
+fn devtools_browser_url(endpoint: &str) -> String {
+    format!(
+        "{}/devtools/browser/erebor-managed-browser",
+        endpoint.trim_end_matches('/')
+    )
 }
 
 fn interception_env_field(value: impl AsRef<str>) -> String {

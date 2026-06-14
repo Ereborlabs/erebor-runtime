@@ -8,6 +8,7 @@ use std::{
 fn main() {
     println!("cargo:rerun-if-changed=src/os/linux/process_guard.rs");
     println!("cargo:rerun-if-changed=src/os/linux/process_guard/interception.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/ipc.rs");
 
     let out_dir = match env::var("OUT_DIR") {
         Ok(out_dir) => PathBuf::from(out_dir),

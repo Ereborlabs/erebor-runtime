@@ -13,7 +13,9 @@ use std::{
 
 use erebor_runtime_ipc::{
     v1::{
-        Envelope, GuardHello, GuardHelloAck, Header, KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK,
+        AllowDecision, DecisionKind, DenyDecision, Envelope, GuardHello, GuardHelloAck, Header,
+        InterceptionDecision, InterceptionRequest, MediateDecision, KIND_GUARD_HELLO,
+        KIND_GUARD_HELLO_ACK, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
         PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAGIC, MAX_PAYLOAD_LEN,
@@ -107,6 +109,126 @@ impl SessionControlBrokerEndpoint {
 struct SessionRegistration {
     token: String,
     broker_id: String,
+    handlers: HashMap<String, SessionInterceptionHandler>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionInterceptionHandler {
+    id: String,
+    decision: SessionInterceptionDecision,
+    reason: String,
+    allowed_ports: Vec<u16>,
+    mediate: Option<SessionInterceptionMediation>,
+}
+
+impl SessionInterceptionHandler {
+    #[must_use]
+    pub fn allow(id: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            decision: SessionInterceptionDecision::Allow,
+            reason: reason.into(),
+            allowed_ports: Vec::new(),
+            mediate: None,
+        }
+    }
+
+    #[must_use]
+    pub fn deny(id: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            decision: SessionInterceptionDecision::Deny,
+            reason: reason.into(),
+            allowed_ports: Vec::new(),
+            mediate: None,
+        }
+    }
+
+    #[must_use]
+    pub fn require_approval(id: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            decision: SessionInterceptionDecision::RequireApproval,
+            reason: reason.into(),
+            allowed_ports: Vec::new(),
+            mediate: None,
+        }
+    }
+
+    #[must_use]
+    pub fn mediate(
+        id: impl Into<String>,
+        reason: impl Into<String>,
+        mediation: SessionInterceptionMediation,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            decision: SessionInterceptionDecision::Mediate,
+            reason: reason.into(),
+            allowed_ports: Vec::new(),
+            mediate: Some(mediation),
+        }
+    }
+
+    #[must_use]
+    pub fn with_allowed_ports(mut self, ports: Vec<u16>) -> Self {
+        self.allowed_ports = ports;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionInterceptionDecision {
+    Allow,
+    Deny,
+    RequireApproval,
+    Mediate,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionInterceptionMediation {
+    kind: String,
+    replacement_surface: String,
+    endpoint: String,
+    lease_id: String,
+    print_line: String,
+    keepalive: bool,
+}
+
+impl SessionInterceptionMediation {
+    #[must_use]
+    pub fn new(
+        kind: impl Into<String>,
+        replacement_surface: impl Into<String>,
+        endpoint: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: kind.into(),
+            replacement_surface: replacement_surface.into(),
+            endpoint: endpoint.into(),
+            lease_id: String::new(),
+            print_line: String::new(),
+            keepalive: false,
+        }
+    }
+
+    #[must_use]
+    pub fn with_lease_id(mut self, lease_id: impl Into<String>) -> Self {
+        self.lease_id = lease_id.into();
+        self
+    }
+
+    #[must_use]
+    pub fn with_print_line(mut self, print_line: impl Into<String>) -> Self {
+        self.print_line = print_line.into();
+        self
+    }
+
+    #[must_use]
+    pub const fn with_keepalive(mut self, keepalive: bool) -> Self {
+        self.keepalive = keepalive;
+        self
+    }
 }
 
 pub struct SessionControlBroker;
@@ -115,8 +237,13 @@ impl SessionControlBroker {
     pub fn register_session(
         session_id: impl Into<String>,
         actor_id: impl Into<String>,
+        handlers: Vec<SessionInterceptionHandler>,
     ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
-        shared_control_broker_server()?.register_session(session_id.into(), actor_id.into())
+        shared_control_broker_server()?.register_session(
+            session_id.into(),
+            actor_id.into(),
+            handlers,
+        )
     }
 }
 
@@ -159,6 +286,14 @@ impl GuardBrokerClient {
         platform::send_hello(endpoint, hello)
     }
 
+    pub fn request_interception_decision(
+        endpoint: &SessionControlBrokerEndpoint,
+        hello: GuardHello,
+        request: InterceptionRequest,
+    ) -> Result<InterceptionDecision, SessionControlBrokerError> {
+        platform::request_interception_decision(endpoint, hello, request)
+    }
+
     fn connect_raw(
         endpoint: &SessionControlBrokerEndpoint,
     ) -> Result<(), SessionControlBrokerError> {
@@ -174,6 +309,8 @@ pub enum SessionControlBrokerError {
     StateLock,
     #[error("session `{session_id}` is already registered with the control broker")]
     SessionAlreadyRegistered { session_id: String },
+    #[error("session control broker rejected guard hello: {reason}")]
+    RejectedHello { reason: String },
     #[error("session control broker I/O failed: {source}")]
     Io { source: io::Error },
     #[error("session control broker IPC protocol failed: {source}")]
@@ -202,11 +339,16 @@ impl ControlBrokerServer {
         self: &Arc<Self>,
         session_id: String,
         actor_id: String,
+        handlers: Vec<SessionInterceptionHandler>,
     ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
         let token = read_control_token()?;
         let registration = SessionRegistration {
             token: token.clone(),
             broker_id: format!("{session_id}:{actor_id}"),
+            handlers: handlers
+                .into_iter()
+                .map(|handler| (handler.id.clone(), handler))
+                .collect(),
         };
         {
             let mut sessions = self
@@ -241,6 +383,11 @@ impl ControlBrokerServer {
             sessions.remove(session_id);
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct BoundConnection {
+    session_id: String,
 }
 
 impl Drop for ControlBrokerServer {
@@ -362,12 +509,31 @@ fn write_frame_to_stream(
         .map_err(SessionControlBrokerError::io)
 }
 
+fn handle_control_envelope(
+    envelope: Envelope,
+    sessions: &Mutex<HashMap<String, SessionRegistration>>,
+    bound: &mut Option<BoundConnection>,
+) -> Result<Envelope, SessionControlBrokerError> {
+    if bound.is_none() {
+        return handle_hello_envelope(envelope, sessions, bound);
+    }
+
+    match envelope.message_kind.as_str() {
+        KIND_INTERCEPTION_REQUEST => {
+            handle_interception_request_envelope(envelope, sessions, bound)
+        }
+        _ => deny_unexpected_bound_message(envelope),
+    }
+}
+
 fn handle_hello_envelope(
     envelope: Envelope,
     sessions: &Mutex<HashMap<String, SessionRegistration>>,
+    bound: &mut Option<BoundConnection>,
 ) -> Result<Envelope, SessionControlBrokerError> {
     let mut broker_id = String::from("unregistered");
     let mut accepted = false;
+    let mut accepted_session_id = None;
 
     let reason = if envelope.message_kind != KIND_GUARD_HELLO {
         format!("unexpected message kind `{}`", envelope.message_kind)
@@ -382,6 +548,7 @@ fn handle_hello_envelope(
             Some(registration) if control_token(&envelope) == Some(registration.token.as_str()) => {
                 broker_id = registration.broker_id.clone();
                 accepted = true;
+                accepted_session_id = Some(hello.session_id);
                 String::from("accepted")
             }
             Some(_) => String::from("invalid control token"),
@@ -394,6 +561,11 @@ fn handle_hello_envelope(
         accepted,
         reason,
     };
+    if accepted {
+        if let Some(session_id) = accepted_session_id {
+            *bound = Some(BoundConnection { session_id });
+        }
+    }
 
     Envelope::wrap_message(
         envelope.message_id.saturating_add(1),
@@ -402,6 +574,186 @@ fn handle_hello_envelope(
         &ack,
     )
     .map_err(SessionControlBrokerError::protocol)
+}
+
+fn handle_interception_request_envelope(
+    envelope: Envelope,
+    sessions: &Mutex<HashMap<String, SessionRegistration>>,
+    bound: &Option<BoundConnection>,
+) -> Result<Envelope, SessionControlBrokerError> {
+    let request: InterceptionRequest = envelope
+        .decode_typed_payload(KIND_INTERCEPTION_REQUEST)
+        .map_err(SessionControlBrokerError::protocol)?;
+    let decision = interception_decision_for_request(sessions, bound, &request)?;
+
+    Envelope::wrap_message(
+        envelope.message_id.saturating_add(1),
+        request.request_id,
+        KIND_INTERCEPTION_DECISION,
+        &decision,
+    )
+    .map_err(SessionControlBrokerError::protocol)
+}
+
+fn interception_decision_for_request(
+    sessions: &Mutex<HashMap<String, SessionRegistration>>,
+    bound: &Option<BoundConnection>,
+    request: &InterceptionRequest,
+) -> Result<InterceptionDecision, SessionControlBrokerError> {
+    let Some(bound) = bound else {
+        return Ok(deny_decision(
+            request.request_id,
+            "erebor-control-broker-unbound",
+            "interception request arrived before GuardHello",
+        ));
+    };
+    let sessions = sessions
+        .lock()
+        .map_err(|_error| SessionControlBrokerError::StateLock)?;
+    let Some(registration) = sessions.get(&bound.session_id) else {
+        return Ok(deny_decision(
+            request.request_id,
+            "erebor-control-broker-unknown-session",
+            "session is no longer registered with the control broker",
+        ));
+    };
+    let Some(handler) = registration.handlers.get(&request.matched_handler_id) else {
+        return Ok(deny_decision(
+            request.request_id,
+            "erebor-control-broker-unknown-handler",
+            "interception handler is not registered for this session",
+        ));
+    };
+
+    Ok(handler.decision_for_request(request))
+}
+
+fn deny_unexpected_bound_message(
+    envelope: Envelope,
+) -> Result<Envelope, SessionControlBrokerError> {
+    let decision = deny_decision(
+        envelope.message_id,
+        "erebor-control-broker-unexpected-message",
+        format!(
+            "unexpected message kind `{}` on bound guard connection",
+            envelope.message_kind
+        ),
+    );
+    Envelope::wrap_message(
+        envelope.message_id.saturating_add(1),
+        envelope.message_id,
+        KIND_INTERCEPTION_DECISION,
+        &decision,
+    )
+    .map_err(SessionControlBrokerError::protocol)
+}
+
+impl SessionInterceptionHandler {
+    fn decision_for_request(&self, request: &InterceptionRequest) -> InterceptionDecision {
+        if self.decision == SessionInterceptionDecision::Mediate {
+            if let Some(reason) = self.port_validation_failure(request) {
+                return deny_decision(request.request_id, &self.id, reason);
+            }
+        }
+
+        match self.decision {
+            SessionInterceptionDecision::Allow => InterceptionDecision {
+                request_id: request.request_id,
+                decision: DecisionKind::Allow as i32,
+                rule_id: self.id.clone(),
+                reason: self.reason.clone(),
+                timeout_ms: DEFAULT_TIMEOUT_MS as u32,
+                allow: Some(AllowDecision {
+                    exec_target: String::new(),
+                }),
+                deny: None,
+                mediate: None,
+            },
+            SessionInterceptionDecision::Deny => {
+                deny_decision(request.request_id, &self.id, self.reason.clone())
+            }
+            SessionInterceptionDecision::RequireApproval => InterceptionDecision {
+                request_id: request.request_id,
+                decision: DecisionKind::RequireApproval as i32,
+                rule_id: self.id.clone(),
+                reason: self.reason.clone(),
+                timeout_ms: DEFAULT_TIMEOUT_MS as u32,
+                allow: None,
+                deny: None,
+                mediate: None,
+            },
+            SessionInterceptionDecision::Mediate => {
+                let Some(mediation) = self.mediate.as_ref() else {
+                    return deny_decision(
+                        request.request_id,
+                        &self.id,
+                        "mediate handler has no replacement details",
+                    );
+                };
+                InterceptionDecision {
+                    request_id: request.request_id,
+                    decision: DecisionKind::Mediate as i32,
+                    rule_id: self.id.clone(),
+                    reason: self.reason.clone(),
+                    timeout_ms: DEFAULT_TIMEOUT_MS as u32,
+                    allow: None,
+                    deny: None,
+                    mediate: Some(MediateDecision {
+                        kind: mediation.kind.clone(),
+                        replacement_surface: mediation.replacement_surface.clone(),
+                        endpoint: mediation.endpoint.clone(),
+                        lease_id: mediation.lease_id.clone(),
+                        print_line: mediation.print_line.clone(),
+                        keepalive: mediation.keepalive,
+                    }),
+                }
+            }
+        }
+    }
+
+    fn port_validation_failure(&self, request: &InterceptionRequest) -> Option<String> {
+        if self.allowed_ports.is_empty() {
+            return None;
+        }
+        let requested_port = remote_debugging_port(&request.argv)?;
+        if self.allowed_ports.contains(&requested_port) {
+            None
+        } else {
+            Some(format!(
+                "requested remote debugging port {requested_port} is not allowed"
+            ))
+        }
+    }
+}
+
+fn deny_decision(
+    request_id: u64,
+    rule_id: impl Into<String>,
+    reason: impl Into<String>,
+) -> InterceptionDecision {
+    InterceptionDecision {
+        request_id,
+        decision: DecisionKind::Deny as i32,
+        rule_id: rule_id.into(),
+        reason: reason.into(),
+        timeout_ms: DEFAULT_TIMEOUT_MS as u32,
+        allow: None,
+        deny: Some(DenyDecision { exit_code: 126 }),
+        mediate: None,
+    }
+}
+
+fn remote_debugging_port(args: &[String]) -> Option<u16> {
+    let mut iter = args.iter().peekable();
+    while let Some(argument) = iter.next() {
+        if let Some(port) = argument.strip_prefix("--remote-debugging-port=") {
+            return port.parse().ok();
+        }
+        if argument == "--remote-debugging-port" {
+            return iter.peek().and_then(|port| port.parse().ok());
+        }
+    }
+    None
 }
 
 #[cfg(unix)]
@@ -421,13 +773,15 @@ mod platform {
     };
 
     use erebor_runtime_ipc::v1::{
-        Envelope, GuardHello, GuardHelloAck, KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK,
+        Envelope, GuardHello, GuardHelloAck, InterceptionDecision, InterceptionRequest,
+        KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK, KIND_INTERCEPTION_DECISION,
+        KIND_INTERCEPTION_REQUEST,
     };
 
     use super::{
-        envelope_with_token, handle_hello_envelope, read_frame_from_stream, write_frame_to_stream,
-        ControlBrokerServer, SessionControlBrokerEndpoint, SessionControlBrokerError,
-        SessionRegistration, CONTROL_SOCKET_NAME, DEFAULT_TIMEOUT_MS,
+        envelope_with_token, handle_control_envelope, read_frame_from_stream,
+        write_frame_to_stream, BoundConnection, ControlBrokerServer, SessionControlBrokerEndpoint,
+        SessionControlBrokerError, SessionRegistration, CONTROL_SOCKET_NAME, DEFAULT_TIMEOUT_MS,
     };
     use std::collections::HashMap;
 
@@ -454,22 +808,11 @@ mod platform {
             let timeout = Duration::from_millis(DEFAULT_TIMEOUT_MS);
             while !worker_shutdown.load(Ordering::SeqCst) {
                 match listener.accept() {
-                    Ok((mut stream, _addr)) => {
-                        let _result = stream.set_read_timeout(Some(timeout));
-                        let _result = stream.set_write_timeout(Some(timeout));
-                        let Ok(request_frame) = read_frame_from_stream(&mut stream) else {
-                            continue;
-                        };
-                        let Ok(envelope) = request_frame.decode_payload::<Envelope>() else {
-                            continue;
-                        };
-                        let Ok(response) = handle_hello_envelope(envelope, &worker_sessions) else {
-                            continue;
-                        };
-                        let Ok(response_frame) = response.into_frame() else {
-                            continue;
-                        };
-                        let _result = write_frame_to_stream(&mut stream, &response_frame);
+                    Ok((stream, _addr)) => {
+                        let sessions = Arc::clone(&worker_sessions);
+                        thread::spawn(move || {
+                            handle_connection(stream, sessions, timeout);
+                        });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(1));
@@ -487,6 +830,32 @@ mod platform {
             worker: Mutex::new(Some(worker)),
             sessions,
         }))
+    }
+
+    fn handle_connection(
+        mut stream: UnixStream,
+        sessions: Arc<Mutex<HashMap<String, SessionRegistration>>>,
+        timeout: Duration,
+    ) {
+        let _result = stream.set_write_timeout(Some(timeout));
+        let mut bound = None::<BoundConnection>;
+        while let Ok(request_frame) = read_frame_from_stream(&mut stream) {
+            let envelope = match request_frame.decode_payload::<Envelope>() {
+                Ok(envelope) => envelope,
+                Err(_error) => break,
+            };
+            let response = match handle_control_envelope(envelope, &sessions, &mut bound) {
+                Ok(response) => response,
+                Err(_error) => break,
+            };
+            let response_frame = match response.into_frame() {
+                Ok(frame) => frame,
+                Err(_error) => break,
+            };
+            if write_frame_to_stream(&mut stream, &response_frame).is_err() {
+                break;
+            }
+        }
     }
 
     pub(super) fn send_hello(
@@ -518,6 +887,57 @@ mod platform {
             .map_err(SessionControlBrokerError::protocol)
     }
 
+    pub(super) fn request_interception_decision(
+        endpoint: &SessionControlBrokerEndpoint,
+        hello: GuardHello,
+        request: InterceptionRequest,
+    ) -> Result<InterceptionDecision, SessionControlBrokerError> {
+        let mut stream =
+            UnixStream::connect(endpoint.path()).map_err(SessionControlBrokerError::io)?;
+        stream
+            .set_read_timeout(Some(endpoint.timeout()))
+            .map_err(SessionControlBrokerError::io)?;
+        stream
+            .set_write_timeout(Some(endpoint.timeout()))
+            .map_err(SessionControlBrokerError::io)?;
+
+        let hello_envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)
+            .map_err(SessionControlBrokerError::protocol)?;
+        let hello_request = envelope_with_token(hello_envelope, endpoint.token());
+        write_frame_to_stream(
+            &mut stream,
+            &hello_request
+                .into_frame()
+                .map_err(SessionControlBrokerError::protocol)?,
+        )?;
+        let hello_response_frame = read_frame_from_stream(&mut stream)?;
+        let hello_response: Envelope = hello_response_frame
+            .decode_payload()
+            .map_err(SessionControlBrokerError::protocol)?;
+        let ack: GuardHelloAck = hello_response
+            .decode_typed_payload(KIND_GUARD_HELLO_ACK)
+            .map_err(SessionControlBrokerError::protocol)?;
+        if !ack.accepted {
+            return Err(SessionControlBrokerError::RejectedHello { reason: ack.reason });
+        }
+
+        let request_envelope = Envelope::wrap_message(2, 1, KIND_INTERCEPTION_REQUEST, &request)
+            .map_err(SessionControlBrokerError::protocol)?;
+        write_frame_to_stream(
+            &mut stream,
+            &request_envelope
+                .into_frame()
+                .map_err(SessionControlBrokerError::protocol)?,
+        )?;
+        let response_frame = read_frame_from_stream(&mut stream)?;
+        let response_envelope: Envelope = response_frame
+            .decode_payload()
+            .map_err(SessionControlBrokerError::protocol)?;
+        response_envelope
+            .decode_typed_payload(KIND_INTERCEPTION_DECISION)
+            .map_err(SessionControlBrokerError::protocol)
+    }
+
     pub(super) fn connect_raw(
         endpoint: &SessionControlBrokerEndpoint,
     ) -> Result<(), SessionControlBrokerError> {
@@ -531,7 +951,9 @@ mod platform {
 mod platform {
     use std::sync::Arc;
 
-    use erebor_runtime_ipc::v1::{GuardHello, GuardHelloAck};
+    use erebor_runtime_ipc::v1::{
+        GuardHello, GuardHelloAck, InterceptionDecision, InterceptionRequest,
+    };
 
     use super::{ControlBrokerServer, SessionControlBrokerEndpoint, SessionControlBrokerError};
 
@@ -550,6 +972,16 @@ mod platform {
         })
     }
 
+    pub(super) fn request_interception_decision(
+        _endpoint: &SessionControlBrokerEndpoint,
+        _hello: GuardHello,
+        _request: InterceptionRequest,
+    ) -> Result<InterceptionDecision, SessionControlBrokerError> {
+        Err(SessionControlBrokerError::UnsupportedTransport {
+            transport: String::from("windows-named-pipe"),
+        })
+    }
+
     pub(super) fn connect_raw(
         _endpoint: &SessionControlBrokerEndpoint,
     ) -> Result<(), SessionControlBrokerError> {
@@ -563,17 +995,19 @@ mod platform {
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use erebor_runtime_ipc::v1::{GuardHello, PROTOCOL_VERSION};
+    use erebor_runtime_ipc::v1::{
+        DecisionKind, GuardHello, InterceptionRequest, InterceptionSource, PROTOCOL_VERSION,
+    };
 
     use super::{
         GuardBrokerClient, SessionControlBroker, SessionControlBrokerEndpoint,
-        SessionControlBrokerError,
+        SessionControlBrokerError, SessionInterceptionHandler, SessionInterceptionMediation,
     };
 
     #[test]
     fn broker_accepts_guard_hello_with_control_token() -> Result<(), Box<dyn std::error::Error>> {
         let session_id = session_id("accepts-hello");
-        let broker = SessionControlBroker::register_session(&session_id, "openclaw")?;
+        let broker = SessionControlBroker::register_session(&session_id, "openclaw", Vec::new())?;
 
         #[cfg(unix)]
         {
@@ -605,7 +1039,7 @@ mod tests {
     fn broker_rejects_guard_hello_with_bad_control_token() -> Result<(), Box<dyn std::error::Error>>
     {
         let session_id = session_id("rejects-token");
-        let broker = SessionControlBroker::register_session(&session_id, "openclaw")?;
+        let broker = SessionControlBroker::register_session(&session_id, "openclaw", Vec::new())?;
         let bad_endpoint = broker.endpoint().with_path(broker.endpoint().path());
         let bad_endpoint =
             SessionControlBrokerEndpoint::unix(bad_endpoint.path(), "wrong-token", 25);
@@ -622,8 +1056,8 @@ mod tests {
     fn broker_accepts_multiple_sessions_on_one_server() -> Result<(), Box<dyn std::error::Error>> {
         let first_session = session_id("first");
         let second_session = session_id("second");
-        let first = SessionControlBroker::register_session(&first_session, "openclaw")?;
-        let second = SessionControlBroker::register_session(&second_session, "codex")?;
+        let first = SessionControlBroker::register_session(&first_session, "openclaw", Vec::new())?;
+        let second = SessionControlBroker::register_session(&second_session, "codex", Vec::new())?;
 
         assert_eq!(first.endpoint().path(), second.endpoint().path());
         assert_ne!(first.endpoint().token(), second.endpoint().token());
@@ -648,7 +1082,7 @@ mod tests {
     fn broker_unregisters_session_when_registration_drops() -> Result<(), Box<dyn std::error::Error>>
     {
         let session_id = session_id("drop-unregisters");
-        let broker = SessionControlBroker::register_session(&session_id, "openclaw")?;
+        let broker = SessionControlBroker::register_session(&session_id, "openclaw", Vec::new())?;
         let endpoint = broker.endpoint().clone();
         drop(broker);
 
@@ -662,8 +1096,8 @@ mod tests {
     #[test]
     fn broker_rejects_duplicate_session_registration() -> Result<(), Box<dyn std::error::Error>> {
         let session_id = session_id("duplicate");
-        let _broker = SessionControlBroker::register_session(&session_id, "openclaw")?;
-        let error = match SessionControlBroker::register_session(&session_id, "codex") {
+        let _broker = SessionControlBroker::register_session(&session_id, "openclaw", Vec::new())?;
+        let error = match SessionControlBroker::register_session(&session_id, "codex", Vec::new()) {
             Ok(_registration) => return Err("duplicate session id should be rejected".into()),
             Err(error) => error,
         };
@@ -672,6 +1106,79 @@ mod tests {
             error,
             SessionControlBrokerError::SessionAlreadyRegistered { .. }
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn broker_returns_interception_decisions_after_guard_hello(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = session_id("decisions");
+        let broker = SessionControlBroker::register_session(
+            &session_id,
+            "openclaw",
+            vec![
+                SessionInterceptionHandler::allow("allow-tool", "safe tool"),
+                SessionInterceptionHandler::deny("deny-tool", "dangerous tool"),
+                SessionInterceptionHandler::require_approval("approve-tool", "needs approval"),
+                SessionInterceptionHandler::mediate(
+                    "mediate-tool",
+                    "route to replacement surface",
+                    SessionInterceptionMediation::new("future_api", "api", "local://replacement")
+                        .with_print_line("replacement ready")
+                        .with_keepalive(false),
+                ),
+            ],
+        )?;
+
+        let allow = GuardBrokerClient::request_interception_decision(
+            broker.endpoint(),
+            hello(&session_id),
+            request("allow-tool"),
+        )?;
+        let deny = GuardBrokerClient::request_interception_decision(
+            broker.endpoint(),
+            hello(&session_id),
+            request("deny-tool"),
+        )?;
+        let approval = GuardBrokerClient::request_interception_decision(
+            broker.endpoint(),
+            hello(&session_id),
+            request("approve-tool"),
+        )?;
+        let mediate = GuardBrokerClient::request_interception_decision(
+            broker.endpoint(),
+            hello(&session_id),
+            request("mediate-tool"),
+        )?;
+
+        assert_eq!(allow.decision, DecisionKind::Allow as i32);
+        assert_eq!(deny.decision, DecisionKind::Deny as i32);
+        assert_eq!(approval.decision, DecisionKind::RequireApproval as i32);
+        assert_eq!(mediate.decision, DecisionKind::Mediate as i32);
+        assert_eq!(
+            mediate
+                .mediate
+                .as_ref()
+                .map(|decision| decision.replacement_surface.as_str()),
+            Some("api")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn broker_fails_closed_for_unknown_interception_handler(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = session_id("unknown-handler");
+        let broker = SessionControlBroker::register_session(&session_id, "openclaw", Vec::new())?;
+
+        let decision = GuardBrokerClient::request_interception_decision(
+            broker.endpoint(),
+            hello(&session_id),
+            request("missing-handler"),
+        )?;
+
+        assert_eq!(decision.decision, DecisionKind::Deny as i32);
+        assert_eq!(decision.rule_id, "erebor-control-broker-unknown-handler");
         Ok(())
     }
 
@@ -698,6 +1205,23 @@ mod tests {
             runner_kind: String::from("linux_host"),
             platform: String::from("linux-x86_64"),
             capabilities: vec![String::from("interception_request")],
+        }
+    }
+
+    fn request(handler_id: &str) -> InterceptionRequest {
+        InterceptionRequest {
+            request_id: 7,
+            actor_id: String::from("openclaw"),
+            source: InterceptionSource::Shim as i32,
+            pid: 100,
+            ppid: 99,
+            executable: String::from("tool"),
+            argv: vec![String::from("tool")],
+            cwd: String::from("/workspace"),
+            selected_env: Vec::new(),
+            requested_endpoint: None,
+            matched_handler_id: handler_id.to_owned(),
+            timestamp: String::from("unix:1"),
         }
     }
 
