@@ -1101,6 +1101,22 @@ mod tests {
     }
 
     #[test]
+    fn generated_shim_allow_rule_wins_before_raw_cdp_deny() {
+        let rules = parse_rules_from_source(
+            "/tmp/erebor/shims/google-chrome\tmanaged shim\tallow-shim\tallow\nremote-debugging-port\traw CDP is denied\tdeny-raw-cdp\tdeny\n",
+        );
+        let command_text =
+            "/bin/sh sh -c exec \"$0\" \"$@\" /tmp/erebor/shims/google-chrome --remote-debugging-port=1000";
+        let matched = rules
+            .iter()
+            .find(|rule| command_text.contains(&rule.token))
+            .expect("expected shim allow rule to match first");
+
+        assert_eq!(matched.rule_id, "allow-shim");
+        assert_eq!(matched.decision, ProcessRuleDecision::Allow);
+    }
+
+    #[test]
     fn parses_verification_rules_from_guard_environment_format() {
         let rules = parse_rules_from_source(
             "git push\tgit push needs verification\tverify-git-push\trequire_approval\n",

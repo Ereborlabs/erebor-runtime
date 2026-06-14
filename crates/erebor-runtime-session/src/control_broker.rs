@@ -3,15 +3,21 @@ use std::{
     fmt,
     fs::{self, File},
     io::{self, Read, Write},
+    net::SocketAddr,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        mpsc, Arc, Mutex,
     },
     thread::JoinHandle,
     time::Duration,
 };
 
+use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
+use erebor_runtime_core::{
+    BrowserCdpSurfaceConfig, ProcessMediationPrivateEndpointConfig,
+    ProcessMediationPrivatePortStrategy, RunningSessionSurface, SessionSurfaceService,
+};
 use erebor_runtime_ipc::{
     v1::{
         AllowDecision, DecisionKind, DenyDecision, Envelope, GuardHello, GuardHelloAck, Header,
@@ -21,7 +27,9 @@ use erebor_runtime_ipc::{
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAGIC, MAX_PAYLOAD_LEN,
 };
+use erebor_runtime_policy::PolicySet;
 use thiserror::Error;
+use tokio::runtime::Runtime;
 
 const CONTROL_SOCKET_NAME: &str = "session-control.sock";
 const CONTROL_PROTOCOL: &str = "erebor_ipc_v1";
@@ -56,6 +64,16 @@ impl SessionControlBrokerEndpoint {
             path: path.into(),
             token: self.token.clone(),
             timeout_ms: self.timeout_ms,
+        }
+    }
+
+    #[must_use]
+    pub fn with_timeout_ms(&self, timeout_ms: u64) -> Self {
+        Self {
+            transport: self.transport.clone(),
+            path: self.path.clone(),
+            token: self.token.clone(),
+            timeout_ms,
         }
     }
 
@@ -182,6 +200,7 @@ pub struct SessionMediationIntent {
     replacement_surface: String,
     lease_id: String,
     allowed_ports: Vec<u16>,
+    private_endpoint: ProcessMediationPrivateEndpointConfig,
     emit_compatibility_line: bool,
     keepalive: bool,
 }
@@ -194,6 +213,7 @@ impl SessionMediationIntent {
             replacement_surface: replacement_surface.into(),
             lease_id: String::new(),
             allowed_ports: Vec::new(),
+            private_endpoint: ProcessMediationPrivateEndpointConfig::default(),
             emit_compatibility_line: false,
             keepalive: false,
         }
@@ -208,6 +228,15 @@ impl SessionMediationIntent {
     #[must_use]
     pub fn with_allowed_ports(mut self, ports: Vec<u16>) -> Self {
         self.allowed_ports = ports;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_private_endpoint(
+        mut self,
+        private_endpoint: ProcessMediationPrivateEndpointConfig,
+    ) -> Self {
+        self.private_endpoint = private_endpoint;
         self
     }
 
@@ -241,6 +270,11 @@ impl SessionMediationIntent {
     #[must_use]
     pub fn allowed_ports(&self) -> &[u16] {
         &self.allowed_ports
+    }
+
+    #[must_use]
+    pub const fn private_endpoint(&self) -> &ProcessMediationPrivateEndpointConfig {
+        &self.private_endpoint
     }
 
     #[must_use]
@@ -356,16 +390,68 @@ impl fmt::Debug for SessionMediationRegistry {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone)]
 pub struct BrowserCdpMediationHandler {
-    endpoint: String,
+    mode: BrowserCdpMediationMode,
+}
+
+#[derive(Clone)]
+enum BrowserCdpMediationMode {
+    FixedEndpoint { endpoint: String },
+    LazySurface(Arc<LazyBrowserCdpMediation>),
+}
+
+struct LazyBrowserCdpMediation {
+    config_template: BrowserCdpSurfaceConfig,
+    policy_set: PolicySet,
+    context: CdpSessionContext,
+    runtime: Runtime,
+    running: Mutex<HashMap<u16, RunningSessionSurface>>,
 }
 
 impl BrowserCdpMediationHandler {
     #[must_use]
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self {
-            endpoint: endpoint.into(),
+            mode: BrowserCdpMediationMode::FixedEndpoint {
+                endpoint: endpoint.into(),
+            },
+        }
+    }
+
+    pub fn lazy(
+        config_template: BrowserCdpSurfaceConfig,
+        policy_set: PolicySet,
+        context: CdpSessionContext,
+    ) -> Result<Self, io::Error> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?;
+
+        Ok(Self {
+            mode: BrowserCdpMediationMode::LazySurface(Arc::new(LazyBrowserCdpMediation {
+                config_template,
+                policy_set,
+                context,
+                runtime,
+                running: Mutex::new(HashMap::new()),
+            })),
+        })
+    }
+}
+
+impl fmt::Debug for BrowserCdpMediationHandler {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.mode {
+            BrowserCdpMediationMode::FixedEndpoint { endpoint } => formatter
+                .debug_struct("BrowserCdpMediationHandler")
+                .field("mode", &"fixed_endpoint")
+                .field("endpoint", endpoint)
+                .finish(),
+            BrowserCdpMediationMode::LazySurface(_) => formatter
+                .debug_struct("BrowserCdpMediationHandler")
+                .field("mode", &"lazy_surface")
+                .finish(),
         }
     }
 }
@@ -380,28 +466,72 @@ impl SurfaceMediationHandler for BrowserCdpMediationHandler {
         request: &InterceptionRequest,
         intent: &SessionMediationIntent,
     ) -> Result<SurfaceMediationOutcome, String> {
-        let allowed_ports = effective_browser_cdp_allowed_ports(intent, &self.endpoint)?;
-        if let Some(requested_port) = remote_debugging_port(&request.argv) {
-            if !allowed_ports.contains(&requested_port) {
-                return Err(format!(
-                    "requested remote debugging port {requested_port} is not allowed"
-                ));
+        let endpoint = match &self.mode {
+            BrowserCdpMediationMode::FixedEndpoint { endpoint } => {
+                let allowed_ports = effective_browser_cdp_allowed_ports(intent, endpoint)?;
+                if let Some(requested_port) = remote_debugging_port(&request.argv) {
+                    if !allowed_ports.contains(&requested_port) {
+                        return Err(format!(
+                            "requested remote debugging port {requested_port} is not allowed"
+                        ));
+                    }
+                }
+                endpoint.clone()
             }
-        }
+            BrowserCdpMediationMode::LazySurface(lazy) => {
+                let requested_port = remote_debugging_port(&request.argv).ok_or_else(|| {
+                    String::from("managed browser CDP mediation requires --remote-debugging-port")
+                })?;
+                validate_requested_port(intent, requested_port)?;
+                lazy.endpoint_for_requested_port(requested_port, intent)?
+            }
+        };
 
         Ok(
-            SurfaceMediationOutcome::new(intent.kind(), self.surface(), &self.endpoint)
+            SurfaceMediationOutcome::new(intent.kind(), self.surface(), &endpoint)
                 .with_lease_id(intent.lease_id())
                 .with_print_line(if intent.emit_compatibility_line() {
-                    format!(
-                        "DevTools listening on {}",
-                        devtools_browser_url(&self.endpoint)
-                    )
+                    format!("DevTools listening on {}", devtools_browser_url(&endpoint))
                 } else {
                     String::new()
                 })
                 .with_keepalive(intent.keepalive()),
         )
+    }
+}
+
+impl LazyBrowserCdpMediation {
+    fn endpoint_for_requested_port(
+        &self,
+        requested_port: u16,
+        intent: &SessionMediationIntent,
+    ) -> Result<String, String> {
+        let mut running = self
+            .running
+            .lock()
+            .map_err(|_| String::from("browser CDP mediation state is poisoned"))?;
+        if let Some(surface) = running.get(&requested_port) {
+            return Ok(surface.endpoint().to_owned());
+        }
+
+        let listen = SocketAddr::new(self.config_template.listen().ip(), requested_port);
+        let private_remote_debugging_port =
+            private_remote_debugging_port_for_request(intent, requested_port)?;
+        let surface = BrowserCdpSurface::new(
+            self.config_template
+                .clone()
+                .with_listen(listen)
+                .with_browser_remote_debugging_port(private_remote_debugging_port),
+            self.policy_set.clone(),
+            self.context.clone(),
+        );
+        let (failures, _failure_rx) = mpsc::channel();
+        let running_surface = Box::new(surface)
+            .start(&self.runtime, failures)
+            .map_err(|error| error.to_string())?;
+        let endpoint = running_surface.endpoint().to_owned();
+        running.insert(requested_port, running_surface);
+        Ok(endpoint)
     }
 }
 
@@ -446,6 +576,12 @@ impl SessionControlRegistration {
     #[must_use]
     pub fn endpoint(&self) -> &SessionControlBrokerEndpoint {
         &self.endpoint
+    }
+
+    #[must_use]
+    pub(crate) fn with_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.endpoint = self.endpoint.with_timeout_ms(timeout_ms);
+        self
     }
 
     #[must_use]
@@ -950,6 +1086,35 @@ fn effective_browser_cdp_allowed_ports(
     })?])
 }
 
+fn validate_requested_port(
+    intent: &SessionMediationIntent,
+    requested_port: u16,
+) -> Result<(), String> {
+    if !intent.allowed_ports().is_empty() && !intent.allowed_ports().contains(&requested_port) {
+        return Err(format!(
+            "requested remote debugging port {requested_port} is not allowed"
+        ));
+    }
+    Ok(())
+}
+
+fn private_remote_debugging_port_for_request(
+    intent: &SessionMediationIntent,
+    requested_port: u16,
+) -> Result<Option<u16>, String> {
+    match intent.private_endpoint().port_strategy() {
+        ProcessMediationPrivatePortStrategy::Ephemeral => Ok(None),
+        ProcessMediationPrivatePortStrategy::RequestedPlusOffset => {
+            let offset = intent.private_endpoint().port_offset();
+            requested_port.checked_add(offset).map(Some).ok_or_else(|| {
+                format!(
+                    "requested remote debugging port {requested_port} plus private endpoint offset {offset} exceeds u16"
+                )
+            })
+        }
+    }
+}
+
 fn endpoint_port(endpoint: &str) -> Option<u16> {
     let endpoint = endpoint
         .strip_prefix("ws://")
@@ -1202,17 +1367,24 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use std::{fs, net::TcpListener, path::PathBuf};
 
+    use erebor_runtime_cdp::CdpSessionContext;
+    use erebor_runtime_core::{
+        ProcessMediationPrivateEndpointLayerConfig, ProcessMediationPrivatePortStrategy,
+        RuntimeConfig,
+    };
+    use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
     use erebor_runtime_ipc::v1::{
         DecisionKind, GuardHello, InterceptionRequest, InterceptionSource, PROTOCOL_VERSION,
     };
+    use erebor_runtime_policy::PolicySet;
 
     use super::{
-        BrowserCdpMediationHandler, GuardBrokerClient, SessionControlBroker,
-        SessionControlBrokerEndpoint, SessionControlBrokerError, SessionInterceptionHandler,
-        SessionMediationIntent, SessionMediationRegistry, SurfaceMediationHandler,
-        SurfaceMediationOutcome,
+        private_remote_debugging_port_for_request, BrowserCdpMediationHandler, GuardBrokerClient,
+        SessionControlBroker, SessionControlBrokerEndpoint, SessionControlBrokerError,
+        SessionInterceptionHandler, SessionMediationIntent, SessionMediationRegistry,
+        SurfaceMediationHandler, SurfaceMediationOutcome,
     };
 
     #[test]
@@ -1472,6 +1644,90 @@ mod tests {
     }
 
     #[test]
+    fn browser_cdp_lazy_mediation_starts_surface_on_requested_port(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let requested_port = free_tcp_port()?;
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "surfaces": {
+                "browser_cdp": {
+                  "enabled": true,
+                  "listen": "127.0.0.1:0",
+                  "browser_url": "ws://127.0.0.1:9/devtools/browser/fake"
+                }
+              }
+            }
+            "#,
+        )?;
+        let browser_cdp = config
+            .surface_start_plan()?
+            .browser_cdp()
+            .ok_or_else(|| std::io::Error::other("missing browser CDP config"))?
+            .clone();
+        let handler = BrowserCdpMediationHandler::lazy(
+            browser_cdp,
+            PolicySet::default(),
+            CdpSessionContext {
+                session_id: SessionId::new("session-lazy-browser"),
+                actor: ActorIdentity {
+                    id: String::from("openclaw"),
+                    kind: ActorKind::Agent,
+                },
+                timestamp: String::from("unix:1"),
+            },
+        )?;
+
+        let outcome = handler.mediate(
+            &request_with_argv(
+                "managed-browser-cdp",
+                &[
+                    String::from("google-chrome"),
+                    format!("--remote-debugging-port={requested_port}"),
+                ],
+            ),
+            &SessionMediationIntent::new("managed_browser_cdp", "browser_cdp")
+                .with_lease_id("browser-lease")
+                .with_compatibility_line(true)
+                .with_keepalive(true),
+        )?;
+
+        assert_eq!(
+            outcome.endpoint,
+            format!("ws://127.0.0.1:{requested_port}/")
+        );
+        assert!(outcome.print_line.contains(&format!(
+            "ws://127.0.0.1:{requested_port}/devtools/browser/"
+        )));
+        Ok(())
+    }
+
+    #[test]
+    fn private_browser_port_can_follow_requested_port_plus_offset() -> Result<(), String> {
+        let intent = SessionMediationIntent::new("managed_browser_cdp", "browser_cdp")
+            .with_private_endpoint(
+                ProcessMediationPrivateEndpointLayerConfig {
+                    port_strategy: ProcessMediationPrivatePortStrategy::RequestedPlusOffset,
+                    port_offset: 1,
+                }
+                .into(),
+            );
+
+        assert_eq!(
+            private_remote_debugging_port_for_request(&intent, 1000)?,
+            Some(1001)
+        );
+        let overflow = private_remote_debugging_port_for_request(&intent, u16::MAX);
+        let Err(error) = overflow else {
+            return Err(String::from("overflow should fail closed"));
+        };
+        assert!(error.contains("exceeds u16"));
+
+        Ok(())
+    }
+
+    #[test]
     fn broker_fails_closed_for_unknown_interception_handler(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let session_id = session_id("unknown-handler");
@@ -1575,5 +1831,10 @@ mod tests {
         let _result = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory)?;
         Ok(directory)
+    }
+
+    fn free_tcp_port() -> Result<u16, std::io::Error> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        Ok(listener.local_addr()?.port())
     }
 }

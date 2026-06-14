@@ -34,7 +34,6 @@ const DEFAULT_BROWSER_FLAGS: &[&str] = &[
     "--disable-dev-shm-usage",
     "--metrics-recording-only",
     "--remote-debugging-address=127.0.0.1",
-    "--remote-debugging-port=0",
 ];
 
 pub struct BrowserSessionManager {
@@ -222,6 +221,8 @@ impl OwnedBrowserProcess {
         let devtools = wait_for_devtools_endpoint(
             &mut child,
             &launch.user_data_dir.join("DevToolsActivePort"),
+            launch.options.remote_debugging_port,
+            &launch.stderr_log_path,
         )
         .map_err(|error| enrich_browser_launch_error(error, &launch.stderr_log_path))?;
         let page_ws_url =
@@ -267,6 +268,7 @@ impl OwnedBrowserLaunch {
         let options = OwnedBrowserLaunchOptions {
             headless: config.headless(),
             user_data_dir: user_data_dir.clone(),
+            remote_debugging_port: config.remote_debugging_port(),
         };
         let args = build_browser_launch_args(&options);
 
@@ -285,6 +287,7 @@ impl OwnedBrowserLaunch {
 struct OwnedBrowserLaunchOptions {
     headless: bool,
     user_data_dir: PathBuf,
+    remote_debugging_port: Option<u16>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -415,6 +418,13 @@ fn build_browser_launch_args(options: &OwnedBrowserLaunchOptions) -> Vec<String>
     }
     push_unique(
         &mut args,
+        format!(
+            "--remote-debugging-port={}",
+            options.remote_debugging_port.unwrap_or(0)
+        ),
+    );
+    push_unique(
+        &mut args,
         format!("--user-data-dir={}", options.user_data_dir.display()),
     );
     push_unique(&mut args, String::from("about:blank"));
@@ -454,6 +464,12 @@ struct ChromeTargetDescriptor {
 }
 
 #[derive(Debug, Deserialize)]
+struct ChromeVersionDescriptor {
+    #[serde(rename = "webSocketDebuggerUrl")]
+    web_socket_debugger_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct CdpMethodResponse<T> {
     id: u32,
     result: Option<T>,
@@ -468,7 +484,13 @@ struct CdpMethodError {
 fn wait_for_devtools_endpoint(
     child: &mut Child,
     active_port_file: &Path,
+    configured_port: Option<u16>,
+    stderr_log_path: &Path,
 ) -> Result<DevToolsEndpoint, CdpError> {
+    if let Some(port) = configured_port {
+        return wait_for_configured_devtools_endpoint(child, port, stderr_log_path);
+    }
+
     let deadline = Instant::now() + DEVTOOLS_WAIT;
 
     loop {
@@ -515,6 +537,58 @@ fn wait_for_devtools_endpoint(
     }
 }
 
+fn wait_for_configured_devtools_endpoint(
+    child: &mut Child,
+    port: u16,
+    stderr_log_path: &Path,
+) -> Result<DevToolsEndpoint, CdpError> {
+    let deadline = Instant::now() + DEVTOOLS_WAIT;
+    let mut errors = Vec::new();
+
+    loop {
+        if let Some(browser_ws_url) = chrome_stderr_devtools_url(stderr_log_path, port) {
+            return Ok(DevToolsEndpoint {
+                port,
+                browser_ws_url,
+            });
+        }
+
+        match fetch_browser_ws_url(port) {
+            Ok(browser_ws_url) => {
+                return Ok(DevToolsEndpoint {
+                    port,
+                    browser_ws_url,
+                });
+            }
+            Err(
+                error @ (CdpError::Io { .. }
+                | CdpError::InvalidJson { .. }
+                | CdpError::BrowserLaunch { .. }),
+            ) => errors.push(error.to_string()),
+            Err(error) => return Err(error),
+        }
+
+        if child.try_wait().map_err(CdpError::io)?.is_some() {
+            return Err(CdpError::browser_launch(
+                "Chrome exited before fixed-port DevTools became ready",
+            ));
+        }
+
+        if Instant::now() >= deadline {
+            let reason = errors.last().map_or_else(
+                || String::from("timed out waiting for Chrome fixed-port DevTools"),
+                |error| {
+                    format!("timed out waiting for Chrome fixed-port DevTools; last error: {error}")
+                },
+            );
+
+            return Err(CdpError::browser_launch(reason));
+        }
+
+        std::thread::sleep(DEVTOOLS_POLL);
+    }
+}
+
 fn enrich_browser_launch_error(error: CdpError, stderr_log_path: &Path) -> CdpError {
     let CdpError::BrowserLaunch { reason, .. } = error else {
         return error;
@@ -545,6 +619,26 @@ fn chrome_stderr_excerpt(stderr_log_path: &Path) -> Option<String> {
         .collect::<Vec<_>>();
     tail.reverse();
     Some(format!("...{}", tail.into_iter().collect::<String>()))
+}
+
+fn chrome_stderr_devtools_url(stderr_log_path: &Path, expected_port: u16) -> Option<String> {
+    let source = fs::read_to_string(stderr_log_path).ok()?;
+    source.lines().find_map(|line| {
+        let url = line.trim().strip_prefix("DevTools listening on ")?;
+        if endpoint_port(url) == Some(expected_port) {
+            Some(url.to_owned())
+        } else {
+            None
+        }
+    })
+}
+
+fn endpoint_port(endpoint: &str) -> Option<u16> {
+    let endpoint = endpoint
+        .strip_prefix("ws://")
+        .or_else(|| endpoint.strip_prefix("http://"))?;
+    let host = endpoint.split('/').next().unwrap_or(endpoint);
+    host.rsplit_once(':')?.1.parse().ok()
 }
 
 fn create_page_ws_url(browser_ws_url: &str, port: u16) -> Result<String, CdpError> {
@@ -648,6 +742,13 @@ fn fetch_page_ws_url(port: u16) -> Result<String, CdpError> {
     }
 
     create_page_ws_url_via_http(port)
+}
+
+fn fetch_browser_ws_url(port: u16) -> Result<String, CdpError> {
+    let version: ChromeVersionDescriptor = http_get_json(port, "/json/version")?;
+    version.web_socket_debugger_url.ok_or_else(|| {
+        CdpError::browser_launch("Chrome /json/version did not return a browser websocket")
+    })
 }
 
 fn create_page_ws_url_via_http(port: u16) -> Result<String, CdpError> {
@@ -846,9 +947,12 @@ fn sanitize_token_part(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
-    use super::{build_browser_launch_args, OwnedBrowserLaunchOptions, DEFAULT_BROWSER_FLAGS};
+    use super::{
+        build_browser_launch_args, chrome_stderr_devtools_url, OwnedBrowserLaunchOptions,
+        DEFAULT_BROWSER_FLAGS,
+    };
 
     fn has_arg(args: &[String], expected: &str) -> bool {
         args.iter().any(|arg| arg == expected)
@@ -859,6 +963,7 @@ mod tests {
         let args = build_browser_launch_args(&OwnedBrowserLaunchOptions {
             headless: true,
             user_data_dir: PathBuf::from("/tmp/erebor-owned-browser-test"),
+            remote_debugging_port: None,
         });
 
         assert!(has_arg(&args, "--headless=new"));
@@ -877,10 +982,44 @@ mod tests {
         let args = build_browser_launch_args(&OwnedBrowserLaunchOptions {
             headless: false,
             user_data_dir: PathBuf::from("/tmp/erebor-owned-browser-test"),
+            remote_debugging_port: None,
         });
 
         assert!(!has_arg(&args, "--headless=new"));
         assert!(has_arg(&args, "--remote-debugging-address=127.0.0.1"));
         assert!(has_arg(&args, "--remote-debugging-port=0"));
+    }
+
+    #[test]
+    fn browser_launch_args_can_pin_private_debugging_port() {
+        let args = build_browser_launch_args(&OwnedBrowserLaunchOptions {
+            headless: true,
+            user_data_dir: PathBuf::from("/tmp/erebor-owned-browser-test"),
+            remote_debugging_port: Some(1001),
+        });
+
+        assert!(has_arg(&args, "--remote-debugging-address=127.0.0.1"));
+        assert!(has_arg(&args, "--remote-debugging-port=1001"));
+        assert!(!has_arg(&args, "--remote-debugging-port=0"));
+    }
+
+    #[test]
+    fn chrome_stderr_devtools_url_matches_expected_port() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let path =
+            std::env::temp_dir().join(format!("erebor-chrome-stderr-{}.log", std::process::id()));
+        fs::write(
+            &path,
+            "DevTools listening on ws://127.0.0.1:1001/devtools/browser/test\n",
+        )?;
+
+        assert_eq!(
+            chrome_stderr_devtools_url(&path, 1001),
+            Some(String::from("ws://127.0.0.1:1001/devtools/browser/test"))
+        );
+        assert_eq!(chrome_stderr_devtools_url(&path, 1002), None);
+
+        fs::remove_file(path)?;
+        Ok(())
     }
 }

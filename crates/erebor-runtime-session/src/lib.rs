@@ -14,11 +14,11 @@ use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
     DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions,
     ProcessInterceptionDecision, ProcessInterceptionHandlerConfig, ProcessInterceptionHandlerKind,
-    ProcessMediationReplacementSurface, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
-    RuntimeError, SessionActorLayerConfig, SessionAdoptPlan, SessionRunOutcome, SessionRunPlan,
-    SessionRunnerKind, SessionRunnerLauncher, SessionSurfaceDefinition, SessionSurfaceKind,
-    SessionSurfaceLaunchPlan, SessionSurfaceLauncher, SessionSurfaceSupervisor,
-    TerminalProcessInterceptionMode, TerminalSurfaceConfig,
+    ProcessMediationPrivateEndpointConfig, ProcessMediationReplacementSurface, RuntimeAuditConfig,
+    RuntimeConfig, RuntimeConfigError, RuntimeError, SessionActorLayerConfig, SessionAdoptPlan,
+    SessionRunOutcome, SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher,
+    SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
+    SessionSurfaceSupervisor, TerminalProcessInterceptionMode, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
@@ -43,6 +43,7 @@ const DOCKER_GUARD_DIR: &str = "/erebor/guard";
 const DOCKER_CONTROL_DIR: &str = "/erebor/control";
 const LINUX_PROCESS_GUARD_PATH: &str = "/erebor/guard/erebor-linux-process-guard";
 const DOCKER_AUDIT_DIR: &str = "/erebor/audit";
+const LAZY_BROWSER_CDP_CONTROL_TIMEOUT_MS: u64 = 15_000;
 static SESSION_GUARD_BUNDLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -271,16 +272,28 @@ fn start_session_side_resources_from_start_plan(
     let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
     let mut environment = Vec::new();
     let mut guard_bundle = None;
+    let mut lazy_browser_cdp = None;
+    let uses_lazy_browser_cdp = start_plan
+        .terminal()
+        .is_some_and(terminal_uses_managed_browser_cdp_mediation);
 
     for definition in launch_plan.definitions() {
         match definition {
             SessionSurfaceDefinition::BrowserCdp(config) => {
                 let policy_set = read_policy_set(config.policies())?;
-                launcher.add_surface(BrowserCdpSurface::new(
-                    config.clone(),
-                    policy_set,
-                    session_cdp_context(plan),
-                ));
+                if uses_lazy_browser_cdp {
+                    lazy_browser_cdp = Some(LazyBrowserCdpMediationConfig {
+                        config: config.clone(),
+                        policy_set,
+                        context: session_cdp_context(plan),
+                    });
+                } else {
+                    launcher.add_surface(BrowserCdpSurface::new(
+                        config.clone(),
+                        policy_set,
+                        session_cdp_context(plan),
+                    ));
+                }
             }
             SessionSurfaceDefinition::Terminal(config) => {
                 environment.push((
@@ -315,7 +328,7 @@ fn start_session_side_resources_from_start_plan(
 
     if launcher.is_empty() {
         let control_registration =
-            register_session_control_channel(guard_bundle.as_ref(), plan, None)?;
+            register_session_control_channel(guard_bundle.as_ref(), plan, None, lazy_browser_cdp)?;
         let (docker_options, linux_host_options) = side_resource_command_options(
             guard_bundle.as_ref(),
             None,
@@ -360,6 +373,7 @@ fn start_session_side_resources_from_start_plan(
         guard_bundle.as_ref(),
         plan,
         browser_cdp_endpoint.as_deref(),
+        lazy_browser_cdp,
     )?;
     let (docker_options, linux_host_options) = side_resource_command_options(
         guard_bundle.as_ref(),
@@ -703,6 +717,7 @@ struct LinuxProcessInterceptionHandler {
     decision: ProcessInterceptionDecision,
     kind: ProcessInterceptionHandlerKind,
     replacement_surface: ProcessMediationReplacementSurface,
+    private_endpoint: ProcessMediationPrivateEndpointConfig,
     executables: Vec<String>,
     allowed_ports: Vec<u16>,
     executable_env: Vec<String>,
@@ -741,6 +756,7 @@ impl LinuxProcessInterceptionHandler {
             decision: handler.decision(),
             kind: handler.kind(),
             replacement_surface: handler.replacement().surface(),
+            private_endpoint: *handler.replacement().private_endpoint(),
             executables,
             allowed_ports: handler.requested_endpoint().allowed_ports().to_vec(),
             executable_env: process_interception_executable_env(handler),
@@ -808,6 +824,7 @@ impl LinuxProcessInterceptionHandler {
                 )
                 .with_lease_id(format!("{}-lease", self.id))
                 .with_allowed_ports(self.allowed_ports.clone())
+                .with_private_endpoint(self.private_endpoint)
                 .with_compatibility_line(self.print_devtools_listening_line)
                 .with_keepalive(self.keepalive),
             ),
@@ -817,10 +834,26 @@ impl LinuxProcessInterceptionHandler {
     }
 }
 
+#[derive(Clone)]
+struct LazyBrowserCdpMediationConfig {
+    config: erebor_runtime_core::BrowserCdpSurfaceConfig,
+    policy_set: PolicySet,
+    context: CdpSessionContext,
+}
+
 impl Drop for LinuxProcessGuardBundle {
     fn drop(&mut self) {
         let _result = fs::remove_dir_all(&self.host_dir);
     }
+}
+
+fn terminal_uses_managed_browser_cdp_mediation(config: &TerminalSurfaceConfig) -> bool {
+    config.process_interception().enabled()
+        && config
+            .process_interception()
+            .handlers()
+            .iter()
+            .any(|handler| handler.kind() == ProcessInterceptionHandlerKind::ManagedBrowserCdp)
 }
 
 fn session_cdp_context(plan: &impl SessionPlanContext) -> CdpSessionContext {
@@ -888,17 +921,25 @@ fn register_session_control_channel(
     guard_bundle: Option<&LinuxProcessGuardBundle>,
     plan: &impl SessionPlanContext,
     browser_cdp_endpoint: Option<&str>,
+    lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
 ) -> Result<Option<SessionControlRegistration>, SessionExecutionError> {
+    let uses_lazy_browser_cdp = lazy_browser_cdp.is_some();
     guard_bundle
         .map(|bundle| {
             let handlers = bundle.control_handlers()?;
-            SessionControlBroker::register_session_with_mediators(
+            let registration = SessionControlBroker::register_session_with_mediators(
                 plan.session_id().as_str(),
                 &plan.actor().id,
                 handlers,
-                session_mediation_registry(browser_cdp_endpoint),
+                session_mediation_registry(browser_cdp_endpoint, lazy_browser_cdp)?,
             )
-            .map_err(SessionExecutionError::control_broker)
+            .map_err(SessionExecutionError::control_broker)?;
+            let registration = if uses_lazy_browser_cdp {
+                registration.with_timeout_ms(LAZY_BROWSER_CDP_CONTROL_TIMEOUT_MS)
+            } else {
+                registration
+            };
+            Ok(registration)
         })
         .transpose()
 }
@@ -941,12 +982,20 @@ fn process_interception_executable_env(handler: &ProcessInterceptionHandlerConfi
     }
 }
 
-fn session_mediation_registry(browser_cdp_endpoint: Option<&str>) -> SessionMediationRegistry {
+fn session_mediation_registry(
+    browser_cdp_endpoint: Option<&str>,
+    lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
+) -> Result<SessionMediationRegistry, SessionExecutionError> {
     let mut registry = SessionMediationRegistry::new();
-    if let Some(endpoint) = browser_cdp_endpoint {
+    if let Some(lazy) = lazy_browser_cdp {
+        registry.register_handler(
+            BrowserCdpMediationHandler::lazy(lazy.config, lazy.policy_set, lazy.context)
+                .map_err(SessionExecutionError::guard_io)?,
+        );
+    } else if let Some(endpoint) = browser_cdp_endpoint {
         registry.register_handler(BrowserCdpMediationHandler::new(endpoint));
     }
-    registry
+    Ok(registry)
 }
 
 fn replacement_surface_name(surface: ProcessMediationReplacementSurface) -> &'static str {
@@ -1268,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_browser_example_uses_session_browser_endpoint_env(
+    fn managed_browser_example_uses_lazy_requested_browser_endpoint(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let repo_root = manifest_dir
@@ -1279,9 +1328,15 @@ mod tests {
             repo_root.join("examples/governed-openclaw-pilot/session-mediated-browser-config.json");
         let source = fs::read_to_string(config_path)?;
 
-        assert!(source.contains("EREBOR_BROWSER_CDP_URL"));
+        assert!(!source.contains("EREBOR_BROWSER_CDP_URL"));
         assert!(!source.contains("EREBOR_MANAGED_BROWSER_CDP_URL"));
+        assert!(!source.contains("\"cdpPort\""));
         let config = RuntimeConfig::from_json_str(&source)?;
+        let browser_cdp = config
+            .surface_start_plan()?
+            .browser_cdp()
+            .ok_or_else(|| std::io::Error::other("missing browser CDP surface"))?
+            .clone();
         let terminal = config
             .surface_start_plan()?
             .terminal()
@@ -1294,6 +1349,13 @@ mod tests {
             .ok_or_else(|| std::io::Error::other("missing process interception handler"))?;
 
         assert_eq!(handler.id(), "managed-browser-cdp");
+        assert_eq!(browser_cdp.listen().port(), 0);
+        assert!(handler.requested_endpoint().allowed_ports().is_empty());
+        assert_eq!(
+            handler.replacement().private_endpoint().port_strategy(),
+            erebor_runtime_core::ProcessMediationPrivatePortStrategy::RequestedPlusOffset
+        );
+        assert_eq!(handler.replacement().private_endpoint().port_offset(), 1);
         assert_eq!(
             handler.replacement().surface(),
             erebor_runtime_core::ProcessMediationReplacementSurface::BrowserCdp

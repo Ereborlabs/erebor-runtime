@@ -1199,6 +1199,8 @@ pub struct BrowserLaunchLayerConfig {
     pub executable: Option<PathBuf>,
     #[serde(default)]
     pub user_data_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub remote_debugging_port: Option<u16>,
     #[serde(default = "default_browser_headless")]
     pub headless: bool,
 }
@@ -1208,6 +1210,7 @@ impl Default for BrowserLaunchLayerConfig {
         Self {
             executable: None,
             user_data_dir: None,
+            remote_debugging_port: None,
             headless: default_browser_headless(),
         }
     }
@@ -1370,6 +1373,7 @@ impl ProcessMediationHandlerLayerConfig {
 
         self.matcher.validate(&self.id)?;
         self.requested_endpoint.validate(&self.id)?;
+        self.replacement.private_endpoint.validate(&self.id)?;
         self.environment.validate(&self.id)?;
 
         if self.kind == ProcessMediationHandlerKind::ManagedBrowserCdp {
@@ -1391,16 +1395,8 @@ impl ProcessMediationHandlerLayerConfig {
                 ));
             }
 
-            if browser_cdp.listen.port() == 0 {
-                return Err(RuntimeConfigError::invalid_process_mediation_config(
-                    format!(
-                        "handler `{}` requires browser_cdp.listen to use a fixed port in v1",
-                        self.id
-                    ),
-                ));
-            }
-
             if !self.requested_endpoint.allowed_ports.is_empty()
+                && browser_cdp.listen.port() != 0
                 && !self
                     .requested_endpoint
                     .allowed_ports
@@ -1520,12 +1516,15 @@ pub enum ProcessMediationEndpointSource {
 pub struct ProcessMediationReplacementLayerConfig {
     #[serde(default = "default_process_mediation_replacement_surface")]
     pub surface: ProcessMediationReplacementSurface,
+    #[serde(default)]
+    pub private_endpoint: ProcessMediationPrivateEndpointLayerConfig,
 }
 
 impl Default for ProcessMediationReplacementLayerConfig {
     fn default() -> Self {
         Self {
             surface: default_process_mediation_replacement_surface(),
+            private_endpoint: ProcessMediationPrivateEndpointLayerConfig::default(),
         }
     }
 }
@@ -1534,6 +1533,45 @@ impl Default for ProcessMediationReplacementLayerConfig {
 #[serde(rename_all = "snake_case")]
 pub enum ProcessMediationReplacementSurface {
     BrowserCdp,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+pub struct ProcessMediationPrivateEndpointLayerConfig {
+    #[serde(default)]
+    pub port_strategy: ProcessMediationPrivatePortStrategy,
+    #[serde(default = "default_process_mediation_private_port_offset")]
+    pub port_offset: u16,
+}
+
+impl Default for ProcessMediationPrivateEndpointLayerConfig {
+    fn default() -> Self {
+        Self {
+            port_strategy: ProcessMediationPrivatePortStrategy::default(),
+            port_offset: default_process_mediation_private_port_offset(),
+        }
+    }
+}
+
+impl ProcessMediationPrivateEndpointLayerConfig {
+    fn validate(&self, handler_id: &str) -> Result<(), RuntimeConfigError> {
+        if self.port_strategy == ProcessMediationPrivatePortStrategy::RequestedPlusOffset
+            && self.port_offset == 0
+        {
+            return Err(RuntimeConfigError::invalid_process_mediation_config(
+                format!("handler `{handler_id}` private endpoint port_offset must be positive"),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessMediationPrivatePortStrategy {
+    #[default]
+    Ephemeral,
+    RequestedPlusOffset,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
@@ -1835,6 +1873,7 @@ impl From<ProcessMediationRequestedEndpointLayerConfig>
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ProcessMediationReplacementConfig {
     surface: ProcessMediationReplacementSurface,
+    private_endpoint: ProcessMediationPrivateEndpointConfig,
 }
 
 impl ProcessMediationReplacementConfig {
@@ -1842,12 +1881,54 @@ impl ProcessMediationReplacementConfig {
     pub const fn surface(&self) -> ProcessMediationReplacementSurface {
         self.surface
     }
+
+    #[must_use]
+    pub const fn private_endpoint(&self) -> &ProcessMediationPrivateEndpointConfig {
+        &self.private_endpoint
+    }
 }
 
 impl From<ProcessMediationReplacementLayerConfig> for ProcessMediationReplacementConfig {
     fn from(config: ProcessMediationReplacementLayerConfig) -> Self {
         Self {
             surface: config.surface,
+            private_endpoint: config.private_endpoint.into(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ProcessMediationPrivateEndpointConfig {
+    port_strategy: ProcessMediationPrivatePortStrategy,
+    port_offset: u16,
+}
+
+impl Default for ProcessMediationPrivateEndpointConfig {
+    fn default() -> Self {
+        Self {
+            port_strategy: ProcessMediationPrivatePortStrategy::default(),
+            port_offset: default_process_mediation_private_port_offset(),
+        }
+    }
+}
+
+impl ProcessMediationPrivateEndpointConfig {
+    #[must_use]
+    pub const fn port_strategy(&self) -> ProcessMediationPrivatePortStrategy {
+        self.port_strategy
+    }
+
+    #[must_use]
+    pub const fn port_offset(&self) -> u16 {
+        self.port_offset
+    }
+}
+
+impl From<ProcessMediationPrivateEndpointLayerConfig> for ProcessMediationPrivateEndpointConfig {
+    fn from(config: ProcessMediationPrivateEndpointLayerConfig) -> Self {
+        Self {
+            port_strategy: config.port_strategy,
+            port_offset: config.port_offset,
         }
     }
 }
@@ -1941,6 +2022,18 @@ impl BrowserCdpSurfaceConfig {
     }
 
     #[must_use]
+    pub fn with_listen(mut self, listen: SocketAddr) -> Self {
+        self.listen = listen;
+        self
+    }
+
+    #[must_use]
+    pub fn with_browser_remote_debugging_port(mut self, port: Option<u16>) -> Self {
+        self.browser = self.browser.with_remote_debugging_port(port);
+        self
+    }
+
+    #[must_use]
     pub fn browser_url(&self) -> Option<&str> {
         self.browser_url.as_deref()
     }
@@ -1969,6 +2062,7 @@ impl BrowserCdpSurfaceConfig {
 pub struct BrowserLaunchConfig {
     executable: Option<PathBuf>,
     user_data_dir: Option<PathBuf>,
+    remote_debugging_port: Option<u16>,
     headless: bool,
 }
 
@@ -1984,6 +2078,17 @@ impl BrowserLaunchConfig {
     }
 
     #[must_use]
+    pub const fn remote_debugging_port(&self) -> Option<u16> {
+        self.remote_debugging_port
+    }
+
+    #[must_use]
+    pub fn with_remote_debugging_port(mut self, port: Option<u16>) -> Self {
+        self.remote_debugging_port = port;
+        self
+    }
+
+    #[must_use]
     pub const fn headless(&self) -> bool {
         self.headless
     }
@@ -1994,6 +2099,7 @@ impl From<BrowserLaunchLayerConfig> for BrowserLaunchConfig {
         Self {
             executable: config.executable,
             user_data_dir: config.user_data_dir,
+            remote_debugging_port: config.remote_debugging_port,
             headless: config.headless,
         }
     }
@@ -2061,6 +2167,10 @@ const fn default_process_mediation_replacement_surface() -> ProcessMediationRepl
     ProcessMediationReplacementSurface::BrowserCdp
 }
 
+const fn default_process_mediation_private_port_offset() -> u16 {
+    1
+}
+
 const fn default_process_mediation_prepend_path() -> bool {
     true
 }
@@ -2124,8 +2234,9 @@ mod tests {
     use crate::{
         DockerSessionCommandPlan, LinuxHostSessionCommandOptions, LinuxHostSessionCommandPlan,
         ProcessInterceptionDecision, ProcessMediationEndpointSource, ProcessMediationHandlerKind,
-        RuntimeConfig, RuntimeConfigError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
-        SessionSurfaceKind, TerminalProcessGuardBackend, TerminalProcessMediationMode,
+        ProcessMediationPrivatePortStrategy, RuntimeConfig, RuntimeConfigError, SessionAdoptPlan,
+        SessionRunPlan, SessionRunnerKind, SessionSurfaceKind, TerminalProcessGuardBackend,
+        TerminalProcessMediationMode,
     };
 
     #[test]
@@ -2291,6 +2402,76 @@ mod tests {
     }
 
     #[test]
+    fn managed_browser_process_interception_can_use_lazy_requested_port(
+    ) -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "surfaces": {
+                "terminal": {
+                  "enabled": true,
+                  "process_guard": { "enabled": true },
+                  "process_interception": {
+                    "enabled": true,
+                    "handlers": [
+                      {
+                        "id": "managed-browser-cdp",
+                        "decision": "mediate",
+                        "kind": "managed_browser_cdp",
+                        "match": {
+                          "executables": ["google-chrome"],
+                          "required_args": ["--remote-debugging-port"],
+                          "require_remote_debugging_port": true
+                        },
+                        "requested_endpoint": {
+                          "source": "remote_debugging_port",
+                          "bind": "127.0.0.1"
+                        },
+                        "replacement": {
+                          "surface": "browser_cdp",
+                          "private_endpoint": {
+                            "port_strategy": "requested_plus_offset",
+                            "port_offset": 1
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "browser_cdp": {
+                  "enabled": true,
+                  "listen": "127.0.0.1:0"
+                }
+              }
+            }
+            "#,
+        )?;
+
+        let start_plan = config.surface_start_plan()?;
+        let browser = start_plan
+            .browser_cdp()
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+        let handler = start_plan
+            .terminal()
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?
+            .process_interception()
+            .handlers()
+            .first()
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+
+        assert_eq!(browser.listen().port(), 0);
+        assert!(handler.requested_endpoint().allowed_ports().is_empty());
+        assert_eq!(
+            handler.replacement().private_endpoint().port_strategy(),
+            ProcessMediationPrivatePortStrategy::RequestedPlusOffset
+        );
+        assert_eq!(handler.replacement().private_endpoint().port_offset(), 1);
+
+        Ok(())
+    }
+
+    #[test]
     fn rejects_process_mediation_without_browser_cdp_surface() {
         let error = RuntimeConfig::from_json_str(
             r#"
@@ -2320,6 +2501,65 @@ mod tests {
             error,
             Err(RuntimeConfigError::InvalidProcessMediationConfig { .. })
         ));
+    }
+
+    #[test]
+    fn rejects_requested_private_port_offset_zero() -> Result<(), Box<dyn std::error::Error>> {
+        let result = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "surfaces": {
+                "terminal": {
+                  "enabled": true,
+                  "process_guard": { "enabled": true },
+                  "process_interception": {
+                    "enabled": true,
+                    "handlers": [
+                      {
+                        "id": "managed-browser-cdp",
+                        "decision": "mediate",
+                        "kind": "managed_browser_cdp",
+                        "match": {
+                          "executables": ["google-chrome"],
+                          "required_args": ["--remote-debugging-port"],
+                          "require_remote_debugging_port": true
+                        },
+                        "replacement": {
+                          "surface": "browser_cdp",
+                          "private_endpoint": {
+                            "port_strategy": "requested_plus_offset",
+                            "port_offset": 0
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "browser_cdp": {
+                  "enabled": true,
+                  "listen": "127.0.0.1:0"
+                }
+              }
+            }
+            "#,
+        );
+        let error = match result {
+            Ok(_) => {
+                return Err(std::io::Error::other(
+                    "zero private endpoint offset should be rejected",
+                )
+                .into());
+            }
+            Err(error) => error,
+        };
+
+        assert!(matches!(
+            error,
+            RuntimeConfigError::InvalidProcessMediationConfig { .. }
+        ));
+        assert!(error.to_string().contains("port_offset must be positive"));
+        Ok(())
     }
 
     #[test]
