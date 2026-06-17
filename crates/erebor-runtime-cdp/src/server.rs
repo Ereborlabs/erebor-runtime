@@ -1,8 +1,8 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use cdp_protocol::{
-    page, runtime as cdp_runtime, target,
-    types::{CallId, Method},
+    fetch, network, page, runtime as cdp_runtime, target,
+    types::{CallId, Event as ProtocolEvent, Method},
 };
 use erebor_runtime_core::{AuditRecord, LocalEnforcementEngine};
 use erebor_runtime_events::{
@@ -23,9 +23,9 @@ use tokio_tungstenite::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    decode_cdp_command, decode_cdp_event, enforce_cdp_command_with_client_state, observe_cdp_event,
-    BrowserTargetId, CdpCommand, CdpEnforcementAction, CdpError, CdpEvent, CdpSessionContext,
-    CdpSessionState, ClientTargetSessions, GovernedCdpCommand,
+    decode_cdp_command, decode_cdp_event, enforce_cdp_command_with_client_state, enforce_cdp_event,
+    observe_cdp_event, BrowserTargetId, CdpCommand, CdpEnforcementAction, CdpError, CdpEvent,
+    CdpSessionContext, CdpSessionState, ClientTargetSessions, GovernedCdpCommand,
 };
 
 type CdpEngine = LocalEnforcementEngine<PolicySet>;
@@ -37,6 +37,7 @@ const OBSERVER_GET_TARGETS_ID: CallId = 10_002;
 const OBSERVER_PAGE_ENABLE_ID: CallId = 10_003;
 const OBSERVER_RUNTIME_ENABLE_ID: CallId = 10_004;
 const OBSERVER_GET_FRAME_TREE_ID: CallId = 10_005;
+const OBSERVER_FETCH_ENABLE_ID: CallId = 10_006;
 const OBSERVER_TARGET_COMMAND_ID_START: CallId = 20_000;
 const HTTP_DISCOVERY_HEADER_LIMIT: usize = 8192;
 const HTTP_DISCOVERY_PEEK_ATTEMPTS: usize = 8;
@@ -782,11 +783,23 @@ async fn observe_page_state_connection(
     let (mut browser_socket, _response) =
         connect_async(browser_url).await.map_err(websocket_error)?;
     bootstrap_page_state_observer(&mut browser_socket, context, session_state, engine).await?;
+    let mut next_observer_command_id = ObserverCommandIds::default();
 
     while let Some(message) = browser_socket.next().await {
         let message = message.map_err(websocket_error)?;
         if let Message::Text(source) = message {
-            let _event = observe_browser_event_text(context, session_state, None, source.as_ref())?;
+            if let Some(event) =
+                observe_browser_event_text(context, session_state, None, source.as_ref())?
+            {
+                handle_fetch_request_paused(
+                    &mut browser_socket,
+                    engine,
+                    context,
+                    &event,
+                    &mut next_observer_command_id,
+                )
+                .await?;
+            }
         }
     }
 
@@ -815,6 +828,12 @@ async fn bootstrap_page_state_observer(
     .await?;
     send_internal_method(
         browser_socket,
+        fetch_document_request_pausing(),
+        OBSERVER_FETCH_ENABLE_ID,
+    )
+    .await?;
+    send_internal_method(
+        browser_socket,
         page::GetFrameTree(None),
         OBSERVER_GET_FRAME_TREE_ID,
     )
@@ -822,9 +841,10 @@ async fn bootstrap_page_state_observer(
 
     let mut page_enabled = false;
     let mut runtime_enabled = false;
+    let mut fetch_enabled = false;
     let mut frame_tree_loaded = false;
 
-    while !(page_enabled && runtime_enabled && frame_tree_loaded) {
+    while !(page_enabled && runtime_enabled && fetch_enabled && frame_tree_loaded) {
         let message = timeout(OBSERVER_BOOTSTRAP_RESPONSE_TIMEOUT, browser_socket.next())
             .await
             .map_err(|_| CdpError::browser_state_sync("timed out waiting for observer bootstrap"))?
@@ -853,6 +873,10 @@ async fn bootstrap_page_state_observer(
             Some(OBSERVER_RUNTIME_ENABLE_ID) => {
                 parse_internal_method_response::<cdp_runtime::Enable>(&source)?;
                 runtime_enabled = true;
+            }
+            Some(OBSERVER_FETCH_ENABLE_ID) => {
+                parse_internal_method_response::<fetch::Enable>(&source)?;
+                fetch_enabled = true;
             }
             Some(OBSERVER_GET_FRAME_TREE_ID) => {
                 let response = parse_internal_method_response::<page::GetFrameTree>(&source)?;
@@ -897,6 +921,15 @@ async fn observe_browser_level_message(
         return Ok(());
     };
 
+    handle_fetch_request_paused(
+        browser_socket,
+        refs.engine,
+        refs.context,
+        &event,
+        scratch.next_observer_command_id,
+    )
+    .await?;
+
     if let Some((session_id, target_id)) = attached_page_target(&event) {
         send_internal_session_method(
             browser_socket,
@@ -910,6 +943,13 @@ async fn observe_browser_level_message(
         send_internal_session_method(
             browser_socket,
             cdp_runtime::Enable(None),
+            scratch.next_observer_command_id.next(),
+            &session_id,
+        )
+        .await?;
+        send_internal_session_method(
+            browser_socket,
+            fetch_document_request_pausing(),
             scratch.next_observer_command_id.next(),
             &session_id,
         )
@@ -934,6 +974,90 @@ async fn observe_browser_level_message(
     }
 
     Ok(())
+}
+
+async fn handle_fetch_request_paused(
+    browser_socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    engine: &CdpEngine,
+    context: &CdpSessionContext,
+    event: &CdpEvent,
+    next_observer_command_id: &mut ObserverCommandIds,
+) -> Result<(), CdpError> {
+    let Some(paused) = paused_fetch_request(event) else {
+        return Ok(());
+    };
+
+    match enforce_cdp_event(engine, context, event)? {
+        CdpEnforcementAction::Forward => {
+            debug!(
+                request_id = %paused.request_id,
+                url = %paused.url,
+                "continuing observed Fetch request"
+            );
+            send_internal_target_method(
+                browser_socket,
+                fetch::ContinueRequest {
+                    request_id: paused.request_id,
+                    url: None,
+                    method: None,
+                    post_data: None,
+                    headers: None,
+                    intercept_response: None,
+                },
+                next_observer_command_id.next(),
+                paused.session_id.as_deref(),
+            )
+            .await
+        }
+        CdpEnforcementAction::Block { reason } | CdpEnforcementAction::AwaitApproval { reason } => {
+            warn!(
+                request_id = %paused.request_id,
+                url = %paused.url,
+                reason = %reason,
+                "failing observed Fetch request"
+            );
+            send_internal_target_method(
+                browser_socket,
+                fetch::FailRequest {
+                    request_id: paused.request_id,
+                    error_reason: network::ErrorReason::BlockedByClient,
+                },
+                next_observer_command_id.next(),
+                paused.session_id.as_deref(),
+            )
+            .await
+        }
+    }
+}
+
+fn fetch_document_request_pausing() -> fetch::Enable {
+    fetch::Enable {
+        patterns: Some(vec![fetch::RequestPattern {
+            url_pattern: Some(String::from("*")),
+            resource_type: Some(network::ResourceType::Document),
+            request_stage: Some(fetch::RequestStage::Request),
+        }]),
+        handle_auth_requests: Some(false),
+    }
+}
+
+#[derive(Debug)]
+struct PausedFetchRequest {
+    request_id: String,
+    url: String,
+    session_id: Option<String>,
+}
+
+fn paused_fetch_request(event: &CdpEvent) -> Option<PausedFetchRequest> {
+    let ProtocolEvent::FetchRequestPaused(paused) = event.protocol_event() else {
+        return None;
+    };
+
+    Some(PausedFetchRequest {
+        request_id: paused.params.request_id.clone(),
+        url: paused.params.request.url.clone(),
+        session_id: event.session_id().map(ToOwned::to_owned),
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -981,6 +1105,22 @@ where
         .send(Message::Text(payload.to_string().into()))
         .await
         .map_err(websocket_error)
+}
+
+async fn send_internal_target_method<T>(
+    browser_socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+    method: T,
+    id: CallId,
+    session_id: Option<&str>,
+) -> Result<(), CdpError>
+where
+    T: Method + Serialize,
+{
+    if let Some(session_id) = session_id {
+        send_internal_session_method(browser_socket, method, id, session_id).await
+    } else {
+        send_internal_method(browser_socket, method, id).await
+    }
 }
 
 #[derive(Debug, Default)]

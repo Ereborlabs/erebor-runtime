@@ -76,17 +76,54 @@ where
         .enforce_with_deferred_approval(&event)
         .map_err(CdpError::enforcement)?;
 
-    Ok(match outcome.policy_decision {
-        Decision::RequireApproval { reason, .. } => CdpEnforcementAction::AwaitApproval { reason },
-        _ => match outcome.final_decision {
-            Decision::Allow { .. } => CdpEnforcementAction::Forward,
-            Decision::Deny { reason, .. } => CdpEnforcementAction::Block { reason },
-            Decision::RequireApproval { reason, .. } => {
-                CdpEnforcementAction::AwaitApproval { reason }
-            }
-            Decision::Mediate { reason, .. } => CdpEnforcementAction::Block { reason },
+    Ok(enforcement_action_from_decisions(
+        &outcome.policy_decision,
+        &outcome.final_decision,
+    ))
+}
+
+pub fn enforce_cdp_event<E, A, S>(
+    engine: &LocalEnforcementEngine<E, A, S>,
+    context: &CdpSessionContext,
+    event: &CdpEvent,
+) -> Result<CdpEnforcementAction, CdpError>
+where
+    E: PolicyEvaluator,
+    A: ApprovalProvider,
+    S: AuditSink,
+{
+    let runtime_event = observe_cdp_event(context, event)?;
+    let outcome = engine
+        .enforce_with_deferred_approval(&runtime_event)
+        .map_err(CdpError::enforcement)?;
+
+    Ok(enforcement_action_from_decisions(
+        &outcome.policy_decision,
+        &outcome.final_decision,
+    ))
+}
+
+fn enforcement_action_from_decisions(
+    policy_decision: &Decision,
+    final_decision: &Decision,
+) -> CdpEnforcementAction {
+    match policy_decision {
+        Decision::RequireApproval { reason, .. } => CdpEnforcementAction::AwaitApproval {
+            reason: reason.clone(),
         },
-    })
+        _ => match final_decision {
+            Decision::Allow { .. } => CdpEnforcementAction::Forward,
+            Decision::Deny { reason, .. } => CdpEnforcementAction::Block {
+                reason: reason.clone(),
+            },
+            Decision::RequireApproval { reason, .. } => CdpEnforcementAction::AwaitApproval {
+                reason: reason.clone(),
+            },
+            Decision::Mediate { reason, .. } => CdpEnforcementAction::Block {
+                reason: reason.clone(),
+            },
+        },
+    }
 }
 
 fn browser_level_target_is_ambiguous(
@@ -228,8 +265,8 @@ mod tests {
 
     use super::{
         enforce_cdp_command, enforce_cdp_command_with_client_state,
-        enforce_cdp_command_with_session_state, observe_cdp_event, CdpEnforcementAction,
-        CdpSessionContext,
+        enforce_cdp_command_with_session_state, enforce_cdp_event, observe_cdp_event,
+        CdpEnforcementAction, CdpSessionContext,
     };
     use crate::{decode_cdp_command, decode_cdp_event, CdpSessionState, ClientTargetSessions};
 
@@ -668,6 +705,73 @@ mod tests {
         assert_eq!(
             runtime_event.target.and_then(|target| target.uri),
             Some(String::from("https://example.com/sensitive"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn enforces_fetch_request_paused_context() -> Result<(), Box<dyn std::error::Error>> {
+        let sink = RecordingAuditSink::default();
+        let policy = LocalPolicy::from_json_str(
+            r#"
+            {
+              "rules": [
+                {
+                  "id": "deny-callback-request",
+                  "match": {
+                    "surface": "browser_cdp",
+                    "action": "network_request",
+                    "target_contains": "127.0.0.1:5105/oauth/callback"
+                  },
+                  "decision": "deny",
+                  "reason": "callback request denied"
+                }
+              ]
+            }
+            "#,
+        )?;
+        let engine = erebor_runtime_core::LocalEnforcementEngine::with_hooks(
+            policy,
+            ApproveAll,
+            sink.clone(),
+        );
+        let event = decode_cdp_event(
+            r#"
+            {
+              "method": "Fetch.requestPaused",
+              "params": {
+                "requestId": "fetch-1",
+                "request": {
+                  "url": "http://127.0.0.1:5105/oauth/callback?code=redacted",
+                  "method": "GET",
+                  "headers": {},
+                  "initialPriority": "VeryHigh",
+                  "referrerPolicy": "no-referrer"
+                },
+                "frameId": "frame-1",
+                "resourceType": "Document"
+              }
+            }
+            "#,
+        )?
+        .ok_or_else(|| std::io::Error::other("missing event"))?;
+
+        let action = enforce_cdp_event(&engine, &context(), &event)?;
+        let records = sink.records();
+
+        assert_eq!(
+            action,
+            CdpEnforcementAction::Block {
+                reason: String::from("callback request denied")
+            }
+        );
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].final_decision,
+            Decision::Deny {
+                reason: String::from("callback request denied"),
+                rule_id: Some(String::from("deny-callback-request"))
+            }
         );
         Ok(())
     }
