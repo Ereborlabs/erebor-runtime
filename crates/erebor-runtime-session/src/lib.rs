@@ -1,5 +1,6 @@
 use std::{
-    fs, io,
+    fs::{self, File},
+    io::{self, Write},
     net::SocketAddr,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
@@ -508,8 +509,7 @@ impl LinuxProcessGuardBundle {
         ));
         fs::create_dir_all(&host_dir).map_err(SessionExecutionError::guard_io)?;
         let guard_path = host_dir.join("erebor-linux-process-guard");
-        fs::write(&guard_path, LINUX_PROCESS_GUARD).map_err(SessionExecutionError::guard_io)?;
-        fs::set_permissions(&guard_path, fs::Permissions::from_mode(0o755))
+        write_executable_file(&guard_path, LINUX_PROCESS_GUARD, instance_id)
             .map_err(SessionExecutionError::guard_io)?;
 
         let interception = LinuxProcessInterceptionBundle::prepare(&guard_path, &host_dir, config)?;
@@ -649,6 +649,28 @@ impl LinuxProcessGuardBundle {
             LinuxProcessInterceptionBundle::control_handlers,
         )
     }
+}
+
+fn write_executable_file(path: &Path, contents: &[u8], instance_id: u64) -> Result<(), io::Error> {
+    let file_name = path.file_name().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "executable path must include a file name",
+        )
+    })?;
+    let temp_path = path.with_file_name(format!(
+        ".{}.tmp-{instance_id}",
+        file_name.to_string_lossy()
+    ));
+
+    let mut file = File::create(&temp_path)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    drop(file);
+
+    fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o755))?;
+    fs::rename(&temp_path, path)?;
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -1379,12 +1401,7 @@ mod tests {
             .and_then(Path::parent)
             .ok_or_else(|| std::io::Error::other("missing repo root"))?;
         let config_path = repo_root.join("examples/governed-openclaw-pilot/session-config.json");
-        let source = fs::read_to_string(config_path)?;
-
-        assert!(!source.contains("EREBOR_BROWSER_CDP_URL"));
-        assert!(!source.contains("EREBOR_MANAGED_BROWSER_CDP_URL"));
-        assert!(!source.contains("\"cdpPort\""));
-        let config = RuntimeConfig::from_json_str(&source)?;
+        let config = RuntimeConfig::from_json_str(&fs::read_to_string(config_path)?)?;
         assert_eq!(config.audit.jsonl(), Some(Path::new("audit.jsonl")));
         let browser_cdp = config
             .surface_start_plan()?
@@ -1404,6 +1421,8 @@ mod tests {
 
         assert_eq!(handler.id(), "managed-browser-cdp");
         assert_eq!(browser_cdp.listen().port(), 0);
+        assert_eq!(browser_cdp.browser_url(), None);
+        assert!(browser_cdp.owns_browser());
         assert!(handler.requested_endpoint().allowed_ports().is_empty());
         assert_eq!(
             handler.replacement().private_endpoint().port_strategy(),
