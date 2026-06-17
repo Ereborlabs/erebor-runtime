@@ -6,7 +6,10 @@ use std::{
 };
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
-use erebor_runtime_audit::{read_audit_records, AuditLogError};
+use erebor_runtime_audit::{
+    read_audit_records, AuditLogError, EvidenceTraceError, EvidenceTracePaths, EvidenceTraceSink,
+    FileEvidenceTraceSink, MarkdownEvidenceTraceRenderer,
+};
 use erebor_runtime_core::{
     BrowserCdpSurfaceLayerConfig, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
     RuntimeError, SessionAdoptTarget, SessionRunPlan, SessionRunnerKind, SessionSurfaceLaunchPlan,
@@ -14,10 +17,6 @@ use erebor_runtime_core::{
 };
 use erebor_runtime_events::{RuntimeEvent, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicyEvaluator, PolicySet};
-use erebor_runtime_reporting::{
-    EvidenceTraceError, EvidenceTracePaths, EvidenceTraceSink, FileEvidenceTraceSink,
-    MarkdownEvidenceTraceRenderer,
-};
 use erebor_runtime_session::{
     adopt_session_target, run_session_diagnostic, run_session_plan, start_surface_launch_plan,
     SessionDiagnosticOutcome, SessionExecutionError,
@@ -682,7 +681,7 @@ fn execute_audit(args: &AuditArgs) -> Result<(), CliError> {
                 "rendering evidence trace"
             );
             let request =
-                erebor_runtime_reporting::EvidenceTraceRequest::from_paths(EvidenceTracePaths {
+                erebor_runtime_audit::EvidenceTraceRequest::from_paths(EvidenceTracePaths {
                     audit: args.audit.clone(),
                     policy: args.policy.clone(),
                     config: args.config.clone(),

@@ -12,7 +12,6 @@ erebor-runtime-cdp = { path = "../erebor-runtime-cdp" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
-erebor-runtime-reporting = { path = "../erebor-runtime-reporting" }
 erebor-runtime-session = { path = "../erebor-runtime-session" }
 serde_json.workspace = true
 snafu.workspace = true

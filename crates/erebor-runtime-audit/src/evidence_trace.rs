@@ -1,22 +1,21 @@
-//! Evidence reports and report sinks for governed runtime sessions.
+//! Evidence traces derived from governed session audit logs.
 //!
-//! This crate owns report generation and delivery abstractions. CLI, services,
-//! or future workers can call into it, while sinks can later target files,
-//! ClickHouse, Datadog, object storage, or other evidence backends.
+//! JSONL audit records are the source of truth. This module turns those records,
+//! plus the policy/config artifacts for the same run, into DPO-readable evidence
+//! traces and routes them through sink abstractions.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs, io,
+    fs,
     path::{Path, PathBuf},
 };
 
-use erebor_runtime_audit::{read_audit_records, AuditLogError};
 use erebor_runtime_core::AuditRecord;
 use erebor_runtime_events::{ActionKind, ActorIdentity, ActorKind, ExecutionSurface, RuntimeEvent};
 use erebor_runtime_policy::Decision;
 use serde_json::Value;
-use snafu::Location;
-use thiserror::Error;
+
+use crate::{read_audit_records, EvidenceTraceError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EvidenceTraceArtifact {
@@ -257,92 +256,6 @@ impl MarkdownEvidenceTraceRenderer {
             markdown,
             sha256: report_hash,
         })
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum EvidenceTraceError {
-    #[error("{source}")]
-    AuditLog {
-        source: AuditLogError,
-        location: Location,
-    },
-    #[error("failed to read `{}`: {source}", path.display())]
-    ReadFile {
-        path: PathBuf,
-        source: io::Error,
-        location: Location,
-    },
-    #[error("failed to write `{}`: {source}", path.display())]
-    WriteFile {
-        path: PathBuf,
-        source: io::Error,
-        location: Location,
-    },
-    #[error("JSON artifact `{}` is invalid: {source}", path.display())]
-    InvalidJson {
-        path: PathBuf,
-        source: serde_json::Error,
-        location: Location,
-    },
-    #[error("audit file does not contain session records")]
-    NoSessionRecords { location: Location },
-    #[error("audit file does not contain records for session id `{session_id}`")]
-    UnknownSession {
-        session_id: String,
-        location: Location,
-    },
-}
-
-impl EvidenceTraceError {
-    #[track_caller]
-    fn audit_log(source: AuditLogError) -> Self {
-        Self::AuditLog {
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn read_file(path: impl Into<PathBuf>, source: io::Error) -> Self {
-        Self::ReadFile {
-            path: path.into(),
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn write_file(path: impl Into<PathBuf>, source: io::Error) -> Self {
-        Self::WriteFile {
-            path: path.into(),
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn invalid_json(path: impl Into<PathBuf>, source: serde_json::Error) -> Self {
-        Self::InvalidJson {
-            path: path.into(),
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn no_session_records() -> Self {
-        Self::NoSessionRecords {
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn unknown_session(session_id: impl Into<String>) -> Self {
-        Self::UnknownSession {
-            session_id: session_id.into(),
-            location: Location::default(),
-        }
     }
 }
 
@@ -1229,6 +1142,6 @@ mod tests {
 
     fn temp_path(filename: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        Ok(std::env::temp_dir().join(format!("erebor-runtime-reporting-{nanos}-{filename}")))
+        Ok(std::env::temp_dir().join(format!("erebor-runtime-audit-evidence-{nanos}-{filename}")))
     }
 }
