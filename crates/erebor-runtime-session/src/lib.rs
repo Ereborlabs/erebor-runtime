@@ -549,7 +549,7 @@ impl LinuxProcessGuardBundle {
             guard_rules,
             audit_path: audit_jsonl_path,
             audit_filename,
-            audit_terminal_level: plan.audit().surfaces().terminal().command_level(),
+            audit_terminal_level: plan.audit().surfaces().terminal().level(),
             audit_terminal_debug_commands: plan
                 .audit()
                 .surfaces()

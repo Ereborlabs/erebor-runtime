@@ -239,111 +239,93 @@ impl RuntimeAuditConfig {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
 pub struct RuntimeAuditSurfaceLoggingConfig {
-    #[serde(default = "default_terminal_audit_logging")]
-    pub terminal: AuditSurfaceLoggingConfig,
     #[serde(default)]
-    pub browser_cdp: AuditSurfaceLoggingConfig,
+    pub terminal: TerminalAuditSurfaceLoggingConfig,
     #[serde(default)]
-    pub mcp: AuditSurfaceLoggingConfig,
+    pub browser_cdp: BrowserCdpAuditSurfaceLoggingConfig,
     #[serde(default)]
-    pub network: AuditSurfaceLoggingConfig,
+    pub mcp: McpAuditSurfaceLoggingConfig,
     #[serde(default)]
-    pub saas: AuditSurfaceLoggingConfig,
+    pub network: NetworkAuditSurfaceLoggingConfig,
     #[serde(default)]
-    pub desktop: AuditSurfaceLoggingConfig,
+    pub saas: SaaSAuditSurfaceLoggingConfig,
     #[serde(default)]
-    pub internal_system: AuditSurfaceLoggingConfig,
-}
-
-impl Default for RuntimeAuditSurfaceLoggingConfig {
-    fn default() -> Self {
-        Self {
-            terminal: default_terminal_audit_logging(),
-            browser_cdp: AuditSurfaceLoggingConfig::default(),
-            mcp: AuditSurfaceLoggingConfig::default(),
-            network: AuditSurfaceLoggingConfig::default(),
-            saas: AuditSurfaceLoggingConfig::default(),
-            desktop: AuditSurfaceLoggingConfig::default(),
-            internal_system: AuditSurfaceLoggingConfig::default(),
-        }
-    }
+    pub desktop: DesktopAuditSurfaceLoggingConfig,
+    #[serde(default)]
+    pub internal_system: InternalSystemAuditSurfaceLoggingConfig,
 }
 
 impl RuntimeAuditSurfaceLoggingConfig {
     #[must_use]
-    pub const fn terminal(&self) -> &AuditSurfaceLoggingConfig {
+    pub const fn terminal(&self) -> &TerminalAuditSurfaceLoggingConfig {
         &self.terminal
     }
 
     #[must_use]
-    pub const fn browser_cdp(&self) -> &AuditSurfaceLoggingConfig {
+    pub const fn browser_cdp(&self) -> &BrowserCdpAuditSurfaceLoggingConfig {
         &self.browser_cdp
     }
 
     #[must_use]
-    pub const fn mcp(&self) -> &AuditSurfaceLoggingConfig {
+    pub const fn mcp(&self) -> &McpAuditSurfaceLoggingConfig {
         &self.mcp
     }
 
     #[must_use]
-    pub const fn network(&self) -> &AuditSurfaceLoggingConfig {
+    pub const fn network(&self) -> &NetworkAuditSurfaceLoggingConfig {
         &self.network
     }
 
     #[must_use]
-    pub const fn saas(&self) -> &AuditSurfaceLoggingConfig {
+    pub const fn saas(&self) -> &SaaSAuditSurfaceLoggingConfig {
         &self.saas
     }
 
     #[must_use]
-    pub const fn desktop(&self) -> &AuditSurfaceLoggingConfig {
+    pub const fn desktop(&self) -> &DesktopAuditSurfaceLoggingConfig {
         &self.desktop
     }
 
     #[must_use]
-    pub const fn internal_system(&self) -> &AuditSurfaceLoggingConfig {
+    pub const fn internal_system(&self) -> &InternalSystemAuditSurfaceLoggingConfig {
         &self.internal_system
     }
 
     fn validate(&self) -> Result<(), RuntimeConfigError> {
-        for (surface, config) in [
-            ("terminal", &self.terminal),
-            ("browser_cdp", &self.browser_cdp),
-            ("mcp", &self.mcp),
-            ("network", &self.network),
-            ("saas", &self.saas),
-            ("desktop", &self.desktop),
-            ("internal_system", &self.internal_system),
-        ] {
-            config.validate(surface)?;
-        }
+        self.terminal.validate("terminal")?;
+        self.browser_cdp.validate("browser_cdp")?;
+        self.mcp.validate("mcp")?;
+        self.network.validate("network")?;
+        self.saas.validate("saas")?;
+        self.desktop.validate("desktop")?;
+        self.internal_system.validate("internal_system")?;
         Ok(())
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct AuditSurfaceLoggingConfig {
-    #[serde(default = "default_audit_command_level")]
-    pub command_level: AuditCommandLogLevel,
-    #[serde(default)]
+pub struct TerminalAuditSurfaceLoggingConfig {
+    #[serde(default = "default_audit_command_level", alias = "command_level")]
+    pub level: AuditCommandLogLevel,
+    #[serde(default = "default_terminal_debug_commands")]
     pub debug_commands: Vec<String>,
 }
 
-impl Default for AuditSurfaceLoggingConfig {
+impl Default for TerminalAuditSurfaceLoggingConfig {
     fn default() -> Self {
         Self {
-            command_level: default_audit_command_level(),
-            debug_commands: Vec::new(),
+            level: default_audit_command_level(),
+            debug_commands: default_terminal_debug_commands(),
         }
     }
 }
 
-impl AuditSurfaceLoggingConfig {
+impl TerminalAuditSurfaceLoggingConfig {
     #[must_use]
-    pub const fn command_level(&self) -> AuditCommandLogLevel {
-        self.command_level
+    pub const fn level(&self) -> AuditCommandLogLevel {
+        self.level
     }
 
     #[must_use]
@@ -352,13 +334,203 @@ impl AuditSurfaceLoggingConfig {
     }
 
     fn validate(&self, surface: &str) -> Result<(), RuntimeConfigError> {
-        if self
-            .debug_commands
-            .iter()
-            .any(|command| command.trim().is_empty())
-        {
-            return Err(RuntimeConfigError::empty_audit_debug_command(surface));
-        }
+        validate_debug_values(surface, "debug_commands", &self.debug_commands)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct BrowserCdpAuditSurfaceLoggingConfig {
+    #[serde(default = "default_audit_command_level", alias = "command_level")]
+    pub level: AuditCommandLogLevel,
+    #[serde(
+        default = "default_browser_cdp_debug_methods",
+        alias = "debug_commands"
+    )]
+    pub debug_methods: Vec<String>,
+    #[serde(default = "default_browser_cdp_debug_actions")]
+    pub debug_actions: Vec<String>,
+}
+
+impl BrowserCdpAuditSurfaceLoggingConfig {
+    #[must_use]
+    pub const fn level(&self) -> AuditCommandLogLevel {
+        self.level
+    }
+
+    #[must_use]
+    pub fn debug_methods(&self) -> &[String] {
+        &self.debug_methods
+    }
+
+    #[must_use]
+    pub fn debug_actions(&self) -> &[String] {
+        &self.debug_actions
+    }
+
+    fn validate(&self, surface: &str) -> Result<(), RuntimeConfigError> {
+        validate_debug_values(surface, "debug_methods", &self.debug_methods)?;
+        validate_debug_values(surface, "debug_actions", &self.debug_actions)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct McpAuditSurfaceLoggingConfig {
+    #[serde(default = "default_audit_command_level", alias = "command_level")]
+    pub level: AuditCommandLogLevel,
+    #[serde(default = "default_mcp_debug_tools", alias = "debug_commands")]
+    pub debug_tools: Vec<String>,
+    #[serde(default = "default_mcp_debug_actions")]
+    pub debug_actions: Vec<String>,
+}
+
+impl McpAuditSurfaceLoggingConfig {
+    #[must_use]
+    pub const fn level(&self) -> AuditCommandLogLevel {
+        self.level
+    }
+
+    #[must_use]
+    pub fn debug_tools(&self) -> &[String] {
+        &self.debug_tools
+    }
+
+    #[must_use]
+    pub fn debug_actions(&self) -> &[String] {
+        &self.debug_actions
+    }
+
+    fn validate(&self, surface: &str) -> Result<(), RuntimeConfigError> {
+        validate_debug_values(surface, "debug_tools", &self.debug_tools)?;
+        validate_debug_values(surface, "debug_actions", &self.debug_actions)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct NetworkAuditSurfaceLoggingConfig {
+    #[serde(default = "default_audit_command_level", alias = "command_level")]
+    pub level: AuditCommandLogLevel,
+    #[serde(default = "default_network_debug_operations", alias = "debug_commands")]
+    pub debug_operations: Vec<String>,
+    #[serde(default = "default_network_debug_actions")]
+    pub debug_actions: Vec<String>,
+}
+
+impl NetworkAuditSurfaceLoggingConfig {
+    #[must_use]
+    pub const fn level(&self) -> AuditCommandLogLevel {
+        self.level
+    }
+
+    #[must_use]
+    pub fn debug_operations(&self) -> &[String] {
+        &self.debug_operations
+    }
+
+    #[must_use]
+    pub fn debug_actions(&self) -> &[String] {
+        &self.debug_actions
+    }
+
+    fn validate(&self, surface: &str) -> Result<(), RuntimeConfigError> {
+        validate_debug_values(surface, "debug_operations", &self.debug_operations)?;
+        validate_debug_values(surface, "debug_actions", &self.debug_actions)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct SaaSAuditSurfaceLoggingConfig {
+    #[serde(default = "default_audit_command_level", alias = "command_level")]
+    pub level: AuditCommandLogLevel,
+    #[serde(default = "default_saas_debug_operations", alias = "debug_commands")]
+    pub debug_operations: Vec<String>,
+    #[serde(default = "default_saas_debug_actions")]
+    pub debug_actions: Vec<String>,
+}
+
+impl SaaSAuditSurfaceLoggingConfig {
+    #[must_use]
+    pub const fn level(&self) -> AuditCommandLogLevel {
+        self.level
+    }
+
+    #[must_use]
+    pub fn debug_operations(&self) -> &[String] {
+        &self.debug_operations
+    }
+
+    #[must_use]
+    pub fn debug_actions(&self) -> &[String] {
+        &self.debug_actions
+    }
+
+    fn validate(&self, surface: &str) -> Result<(), RuntimeConfigError> {
+        validate_debug_values(surface, "debug_operations", &self.debug_operations)?;
+        validate_debug_values(surface, "debug_actions", &self.debug_actions)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct DesktopAuditSurfaceLoggingConfig {
+    #[serde(default = "default_audit_command_level", alias = "command_level")]
+    pub level: AuditCommandLogLevel,
+    #[serde(default = "default_desktop_debug_actions")]
+    pub debug_actions: Vec<String>,
+}
+
+impl DesktopAuditSurfaceLoggingConfig {
+    #[must_use]
+    pub const fn level(&self) -> AuditCommandLogLevel {
+        self.level
+    }
+
+    #[must_use]
+    pub fn debug_actions(&self) -> &[String] {
+        &self.debug_actions
+    }
+
+    fn validate(&self, surface: &str) -> Result<(), RuntimeConfigError> {
+        validate_debug_values(surface, "debug_actions", &self.debug_actions)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct InternalSystemAuditSurfaceLoggingConfig {
+    #[serde(default = "default_audit_command_level", alias = "command_level")]
+    pub level: AuditCommandLogLevel,
+    #[serde(
+        default = "default_internal_system_debug_operations",
+        alias = "debug_commands"
+    )]
+    pub debug_operations: Vec<String>,
+    #[serde(default = "default_internal_system_debug_actions")]
+    pub debug_actions: Vec<String>,
+}
+
+impl InternalSystemAuditSurfaceLoggingConfig {
+    #[must_use]
+    pub const fn level(&self) -> AuditCommandLogLevel {
+        self.level
+    }
+
+    #[must_use]
+    pub fn debug_operations(&self) -> &[String] {
+        &self.debug_operations
+    }
+
+    #[must_use]
+    pub fn debug_actions(&self) -> &[String] {
+        &self.debug_actions
+    }
+
+    fn validate(&self, surface: &str) -> Result<(), RuntimeConfigError> {
+        validate_debug_values(surface, "debug_operations", &self.debug_operations)?;
+        validate_debug_values(surface, "debug_actions", &self.debug_actions)?;
         Ok(())
     }
 }
@@ -371,15 +543,75 @@ pub enum AuditCommandLogLevel {
     NonAllow,
 }
 
+impl Default for AuditCommandLogLevel {
+    fn default() -> Self {
+        default_audit_command_level()
+    }
+}
+
 fn default_audit_command_level() -> AuditCommandLogLevel {
     AuditCommandLogLevel::Signal
 }
 
-fn default_terminal_audit_logging() -> AuditSurfaceLoggingConfig {
-    AuditSurfaceLoggingConfig {
-        command_level: default_audit_command_level(),
-        debug_commands: vec![String::from("sleep")],
+fn default_terminal_debug_commands() -> Vec<String> {
+    vec![String::from("sleep")]
+}
+
+fn default_browser_cdp_debug_methods() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_browser_cdp_debug_actions() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_mcp_debug_tools() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_mcp_debug_actions() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_network_debug_operations() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_network_debug_actions() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_saas_debug_operations() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_saas_debug_actions() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_desktop_debug_actions() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_internal_system_debug_operations() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_internal_system_debug_actions() -> Vec<String> {
+    Vec::new()
+}
+
+fn validate_debug_values(
+    surface: &str,
+    field: &str,
+    values: &[String],
+) -> Result<(), RuntimeConfigError> {
+    if values.iter().any(|value| value.trim().is_empty()) {
+        return Err(RuntimeConfigError::empty_audit_debug_matcher(format!(
+            "{surface}.{field}"
+        )));
     }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
@@ -2856,7 +3088,7 @@ mod tests {
         assert_eq!(plan.policies(), &[Path::new("policies/browser.json")]);
         assert_eq!(plan.audit().jsonl(), Some(Path::new("audit/pilot.jsonl")));
         assert_eq!(
-            plan.audit().surfaces().terminal().command_level(),
+            plan.audit().surfaces().terminal().level(),
             AuditCommandLogLevel::Signal
         );
         assert_eq!(
@@ -2893,12 +3125,13 @@ mod tests {
                 "jsonl": "audit/pilot.jsonl",
                 "surfaces": {
                   "terminal": {
-                    "command_level": "all",
+                    "level": "all",
                     "debug_commands": []
                   },
                   "browser_cdp": {
-                    "command_level": "non_allow",
-                    "debug_commands": ["Runtime.evaluate"]
+                    "level": "non_allow",
+                    "debug_methods": ["Runtime.evaluate"],
+                    "debug_actions": ["browser_script_eval"]
                   }
                 }
               },
@@ -2910,7 +3143,7 @@ mod tests {
         )?;
 
         assert_eq!(
-            config.audit.surfaces().terminal().command_level(),
+            config.audit.surfaces().terminal().level(),
             AuditCommandLogLevel::All
         );
         assert!(config
@@ -2920,13 +3153,126 @@ mod tests {
             .debug_commands()
             .is_empty());
         assert_eq!(
-            config.audit.surfaces().browser_cdp().command_level(),
+            config.audit.surfaces().browser_cdp().level(),
             AuditCommandLogLevel::NonAllow
         );
         assert_eq!(
-            config.audit.surfaces().browser_cdp().debug_commands(),
+            config.audit.surfaces().browser_cdp().debug_methods(),
             &[String::from("Runtime.evaluate")]
         );
+        assert_eq!(
+            config.audit.surfaces().browser_cdp().debug_actions(),
+            &[String::from("browser_script_eval")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn audit_surface_defaults_are_surface_specific() -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true
+              }
+            }
+            "#,
+        )?;
+
+        assert_eq!(
+            config.audit.surfaces().terminal().debug_commands(),
+            &[String::from("sleep")]
+        );
+        assert!(config
+            .audit
+            .surfaces()
+            .browser_cdp()
+            .debug_methods()
+            .is_empty());
+        assert!(config
+            .audit
+            .surfaces()
+            .browser_cdp()
+            .debug_actions()
+            .is_empty());
+        assert!(config.audit.surfaces().mcp().debug_tools().is_empty());
+        assert!(config
+            .audit
+            .surfaces()
+            .network()
+            .debug_operations()
+            .is_empty());
+        assert!(config.audit.surfaces().saas().debug_operations().is_empty());
+        assert!(config.audit.surfaces().desktop().debug_actions().is_empty());
+        assert!(config
+            .audit
+            .surfaces()
+            .internal_system()
+            .debug_operations()
+            .is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn partial_terminal_audit_config_keeps_default_debug_commands() -> Result<(), RuntimeConfigError>
+    {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "audit": {
+                "surfaces": {
+                  "terminal": {
+                    "level": "signal"
+                  }
+                }
+              },
+              "session": {
+                "enabled": true
+              }
+            }
+            "#,
+        )?;
+
+        assert_eq!(
+            config.audit.surfaces().terminal().level(),
+            AuditCommandLogLevel::Signal
+        );
+        assert_eq!(
+            config.audit.surfaces().terminal().debug_commands(),
+            &[String::from("sleep")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_empty_terminal_debug_commands_override_default() -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "audit": {
+                "surfaces": {
+                  "terminal": {
+                    "debug_commands": []
+                  }
+                }
+              },
+              "session": {
+                "enabled": true
+              }
+            }
+            "#,
+        )?;
+
+        assert!(config
+            .audit
+            .surfaces()
+            .terminal()
+            .debug_commands()
+            .is_empty());
         Ok(())
     }
 
@@ -2952,8 +3298,8 @@ mod tests {
 
         assert!(matches!(
             error,
-            Err(RuntimeConfigError::EmptyAuditDebugCommand { surface, .. })
-                if surface == "terminal"
+            Err(RuntimeConfigError::EmptyAuditDebugMatcher { matcher, .. })
+                if matcher == "terminal.debug_commands"
         ));
     }
 

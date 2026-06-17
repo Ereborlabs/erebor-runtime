@@ -19,8 +19,8 @@ pub enum RuntimeConfigError {
     EmptyPolicyPath { location: Location },
     #[error("runtime config audit jsonl path cannot be empty")]
     EmptyAuditJsonlPath { location: Location },
-    #[error("runtime config audit surface `{surface}` debug command cannot be empty")]
-    EmptyAuditDebugCommand { surface: String, location: Location },
+    #[error("runtime config audit debug matcher `{matcher}` cannot be empty")]
+    EmptyAuditDebugMatcher { matcher: String, location: Location },
     #[error("runtime config session actor id cannot be empty")]
     EmptySessionActorId { location: Location },
     #[error("runtime config session workspace path cannot be empty")]
@@ -136,9 +136,9 @@ impl RuntimeConfigError {
     }
 
     #[track_caller]
-    pub fn empty_audit_debug_command(surface: impl Into<String>) -> Self {
-        Self::EmptyAuditDebugCommand {
-            surface: surface.into(),
+    pub fn empty_audit_debug_matcher(matcher: impl Into<String>) -> Self {
+        Self::EmptyAuditDebugMatcher {
+            matcher: matcher.into(),
             location: Location::default(),
         }
     }

@@ -1824,8 +1824,8 @@ mod tests {
         let audit_path = temp_audit_path("debug-command");
         let _cleanup_before = fs::remove_file(&audit_path);
         let mut audit = RuntimeAuditConfig::default();
-        audit.surfaces.browser_cdp.command_level = AuditCommandLogLevel::Signal;
-        audit.surfaces.browser_cdp.debug_commands = vec![String::from("Runtime.evaluate")];
+        audit.surfaces.browser_cdp.level = AuditCommandLogLevel::Signal;
+        audit.surfaces.browser_cdp.debug_methods = vec![String::from("Runtime.evaluate")];
         let recorder = CdpAuditRecorder::new(audit_path.clone(), audit);
 
         let mut client_targets = ClientTargetSessions::default();
