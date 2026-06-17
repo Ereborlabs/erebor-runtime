@@ -14,6 +14,10 @@ use erebor_runtime_core::{
 };
 use erebor_runtime_events::{RuntimeEvent, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicyEvaluator, PolicySet};
+use erebor_runtime_reporting::{
+    EvidenceTraceError, EvidenceTracePaths, EvidenceTraceSink, FileEvidenceTraceSink,
+    MarkdownEvidenceTraceRenderer,
+};
 use erebor_runtime_session::{
     adopt_session_target, run_session_diagnostic, run_session_plan, start_surface_launch_plan,
     SessionDiagnosticOutcome, SessionExecutionError,
@@ -125,6 +129,16 @@ impl fmt::Display for Command {
             Self::Audit(AuditArgs {
                 command: AuditCommand::Tail(args),
             }) => write!(formatter, "audit tail file={}", args.file.display()),
+            Self::Audit(AuditArgs {
+                command: AuditCommand::EvidenceTrace(args),
+            }) => write!(
+                formatter,
+                "audit evidence-trace audit={} out={}",
+                args.audit.display(),
+                args.out
+                    .as_ref()
+                    .map_or_else(|| String::from("stdout"), |path| path.display().to_string())
+            ),
         }
     }
 }
@@ -296,6 +310,8 @@ struct AuditArgs {
 enum AuditCommand {
     /// Follow a JSONL audit log.
     Tail(AuditTailArgs),
+    /// Render a DPO-readable evidence trace from a governed session audit.
+    EvidenceTrace(AuditEvidenceTraceArgs),
 }
 
 #[derive(Debug, Args)]
@@ -303,6 +319,34 @@ struct AuditTailArgs {
     /// JSONL audit log path.
     #[arg(long, value_parser = parse_non_empty_path)]
     file: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct AuditEvidenceTraceArgs {
+    /// JSONL audit log path.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    audit: PathBuf,
+    /// Policy file used by the governed run.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    policy: PathBuf,
+    /// Session/runtime config used by the governed run.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    config: PathBuf,
+    /// Prompt artifact used by the governed run.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    prompt: Option<PathBuf>,
+    /// Markdown report output path. Omit to print to stdout.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    out: Option<PathBuf>,
+    /// Session id to render. Defaults to the latest session with browser and denied evidence.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    session_id: Option<String>,
+    /// Plain-language purpose for this governed session.
+    #[arg(
+        long,
+        default_value = "OpenClaw support investigation of a local OAuth callback reproduction under Erebor governance."
+    )]
+    purpose: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -630,6 +674,39 @@ fn execute_audit(args: &AuditArgs) -> Result<(), CliError> {
                 );
             }
         }
+        AuditCommand::EvidenceTrace(args) => {
+            tracing::debug!(
+                audit = %args.audit.display(),
+                policy = %args.policy.display(),
+                config = %args.config.display(),
+                "rendering evidence trace"
+            );
+            let request =
+                erebor_runtime_reporting::EvidenceTraceRequest::from_paths(EvidenceTracePaths {
+                    audit: args.audit.clone(),
+                    policy: args.policy.clone(),
+                    config: args.config.clone(),
+                    prompt: args.prompt.clone(),
+                    session_id: args.session_id.clone(),
+                    purpose: args.purpose.clone(),
+                })
+                .map_err(CliError::evidence_trace)?;
+            let report = MarkdownEvidenceTraceRenderer
+                .render(&request)
+                .map_err(CliError::evidence_trace)?;
+
+            if let Some(out) = args.out.as_ref() {
+                let sink = FileEvidenceTraceSink::new(out);
+                let receipt = sink.send(&report).map_err(CliError::evidence_trace)?;
+                println!(
+                    "evidence_trace={} sha256={}",
+                    receipt.destination(),
+                    receipt.report_sha256()
+                );
+            } else {
+                print!("{}", report.markdown());
+            }
+        }
     }
 
     Ok(())
@@ -693,6 +770,11 @@ pub(crate) enum CliError {
     #[error("{source}")]
     AuditLog {
         source: AuditLogError,
+        location: Location,
+    },
+    #[error("{source}")]
+    EvidenceTrace {
+        source: EvidenceTraceError,
         location: Location,
     },
     #[error("failed to encode JSON output: {source}")]
@@ -762,6 +844,14 @@ impl CliError {
     #[track_caller]
     fn audit_log(source: AuditLogError) -> Self {
         Self::AuditLog {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn evidence_trace(source: EvidenceTraceError) -> Self {
+        Self::EvidenceTrace {
             source,
             location: Location::default(),
         }
@@ -1440,6 +1530,27 @@ mod tests {
         assert!(cli.execute().is_err());
         let _result = fs::remove_file(audit_path);
         Ok(())
+    }
+
+    #[test]
+    fn accepts_audit_evidence_trace_command() {
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "audit",
+            "evidence-trace",
+            "--audit",
+            "audit.jsonl",
+            "--policy",
+            "policy.json",
+            "--config",
+            "session-config.json",
+            "--prompt",
+            "prompt.txt",
+            "--out",
+            "evidence-trace.md",
+        ]);
+
+        assert!(cli.is_ok());
     }
 
     #[test]
