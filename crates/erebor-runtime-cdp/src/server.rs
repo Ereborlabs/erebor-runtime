@@ -1,9 +1,10 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use cdp_protocol::{
     fetch, network, page, runtime as cdp_runtime, target,
     types::{CallId, Event as ProtocolEvent, Method},
 };
+use erebor_runtime_audit::append_audit_record;
 use erebor_runtime_core::{AuditRecord, LocalEnforcementEngine};
 use erebor_runtime_events::{
     ActionKind, EventId, ExecutionSurface, RiskLevel, RiskMetadata, TargetRef,
@@ -23,9 +24,10 @@ use tokio_tungstenite::{
 use tracing::{debug, info, warn};
 
 use crate::{
-    decode_cdp_command, decode_cdp_event, enforce_cdp_command_with_client_state, enforce_cdp_event,
-    observe_cdp_event, BrowserTargetId, CdpCommand, CdpEnforcementAction, CdpError, CdpEvent,
-    CdpSessionContext, CdpSessionState, ClientTargetSessions, GovernedCdpCommand,
+    decode_cdp_command, decode_cdp_event, enforce_cdp_command_with_client_state_outcome,
+    enforce_cdp_event_outcome, observe_cdp_event, BrowserTargetId, CdpCommand,
+    CdpEnforcementAction, CdpError, CdpEvent, CdpSessionContext, CdpSessionState,
+    ClientTargetSessions, GovernedCdpCommand,
 };
 
 type CdpEngine = LocalEnforcementEngine<PolicySet>;
@@ -44,11 +46,41 @@ const HTTP_DISCOVERY_PEEK_ATTEMPTS: usize = 8;
 const HTTP_DISCOVERY_PEEK_TIMEOUT: Duration = Duration::from_millis(250);
 const UPSTREAM_HTTP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 
+#[derive(Clone, Debug)]
+struct CdpAuditRecorder {
+    path: PathBuf,
+}
+
+impl CdpAuditRecorder {
+    fn new(path: impl Into<PathBuf>) -> Self {
+        Self { path: path.into() }
+    }
+
+    fn record(&self, record: &AuditRecord) {
+        if let Err(error) = append_audit_record(&self.path, record) {
+            warn!(
+                path = %self.path.display(),
+                error = %error,
+                "failed to append CDP audit record"
+            );
+        }
+    }
+}
+
+fn record_audit_outcome(audit_recorder: Option<&CdpAuditRecorder>, record: Option<&AuditRecord>) {
+    let (Some(audit_recorder), Some(record)) = (audit_recorder, record) else {
+        return;
+    };
+
+    audit_recorder.record(record);
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpProxyServerConfig {
     pub listen: SocketAddr,
     pub browser_url: String,
     pub context: CdpSessionContext,
+    pub audit_jsonl: Option<PathBuf>,
 }
 
 pub struct CdpProxyServer {
@@ -57,6 +89,7 @@ pub struct CdpProxyServer {
     engine: Arc<CdpEngine>,
     context: CdpSessionContext,
     session_state: CdpSessionState,
+    audit_recorder: Option<CdpAuditRecorder>,
 }
 
 impl CdpProxyServer {
@@ -73,14 +106,22 @@ impl CdpProxyServer {
 
         let session_state = CdpSessionState::from_browser_url(&config.browser_url);
         let engine = Arc::new(engine);
+        let audit_recorder = config.audit_jsonl.clone().map(CdpAuditRecorder::new);
         if should_start_browser_state_observer(&config.browser_url) {
             let browser_url = config.browser_url.clone();
             let context = config.context.clone();
             let observer_state = session_state.clone();
             let observer_engine = Arc::clone(&engine);
+            let observer_audit = audit_recorder.clone();
             let handle = tokio::spawn(async move {
-                run_browser_state_observer(browser_url, context, observer_state, observer_engine)
-                    .await;
+                run_browser_state_observer(
+                    browser_url,
+                    context,
+                    observer_state,
+                    observer_engine,
+                    observer_audit,
+                )
+                .await;
             });
             drop(handle);
         } else if should_start_page_state_observer(&config.browser_url) {
@@ -88,9 +129,16 @@ impl CdpProxyServer {
             let context = config.context.clone();
             let observer_state = session_state.clone();
             let observer_engine = Arc::clone(&engine);
+            let observer_audit = audit_recorder.clone();
             let handle = tokio::spawn(async move {
-                run_page_state_observer(browser_url, context, observer_state, observer_engine)
-                    .await;
+                run_page_state_observer(
+                    browser_url,
+                    context,
+                    observer_state,
+                    observer_engine,
+                    observer_audit,
+                )
+                .await;
             });
             drop(handle);
         }
@@ -101,6 +149,7 @@ impl CdpProxyServer {
             engine,
             context: config.context,
             session_state,
+            audit_recorder,
         })
     }
 
@@ -118,6 +167,7 @@ impl CdpProxyServer {
             let engine = Arc::clone(&self.engine);
             let context = self.context.clone();
             let session_state = self.session_state.clone();
+            let audit_recorder = self.audit_recorder.clone();
             debug!(client = %address, "accepted CDP proxy connection");
             let handle = tokio::spawn(async move {
                 match handle_client_connection(
@@ -127,6 +177,7 @@ impl CdpProxyServer {
                     engine,
                     context,
                     session_state,
+                    audit_recorder,
                 )
                 .await
                 {
@@ -152,12 +203,21 @@ async fn handle_client_connection(
     engine: Arc<CdpEngine>,
     context: CdpSessionContext,
     session_state: CdpSessionState,
+    audit_recorder: Option<CdpAuditRecorder>,
 ) -> Result<(), CdpError> {
     if handle_http_discovery_if_present(&mut stream, local_addr, &browser_url).await? {
         return Ok(());
     }
 
-    proxy_connection(stream, browser_url, engine, context, session_state).await
+    proxy_connection(
+        stream,
+        browser_url,
+        engine,
+        context,
+        session_state,
+        audit_recorder,
+    )
+    .await
 }
 
 async fn handle_http_discovery_if_present(
@@ -483,6 +543,7 @@ async fn proxy_connection(
     engine: Arc<CdpEngine>,
     context: CdpSessionContext,
     session_state: CdpSessionState,
+    audit_recorder: Option<CdpAuditRecorder>,
 ) -> Result<(), CdpError> {
     debug!("accepting client websocket");
     let client_socket = accept_async(stream).await.map_err(websocket_error)?;
@@ -504,12 +565,13 @@ async fn proxy_connection(
 
                 if client_message.is_text() {
                     let source = client_message.into_text().map_err(websocket_error)?.to_string();
-                    match handle_client_text(
+                    match handle_client_text_with_audit(
                         engine.as_ref(),
                         &context,
                         &session_state,
                         &mut client_targets,
                         &source,
+                        audit_recorder.as_ref(),
                     )? {
                         ClientTextAction::Forward { payload } => {
                             browser_write
@@ -585,10 +647,17 @@ async fn run_browser_state_observer(
     context: CdpSessionContext,
     session_state: CdpSessionState,
     engine: Arc<CdpEngine>,
+    audit_recorder: Option<CdpAuditRecorder>,
 ) {
     loop {
-        match observe_browser_state_connection(&browser_url, &context, &session_state, &engine)
-            .await
+        match observe_browser_state_connection(
+            &browser_url,
+            &context,
+            &session_state,
+            &engine,
+            audit_recorder.as_ref(),
+        )
+        .await
         {
             Ok(()) => warn!(browser_url = %browser_url, "browser state observer stopped"),
             Err(error) => warn!(
@@ -607,10 +676,18 @@ async fn observe_browser_state_connection(
     context: &CdpSessionContext,
     session_state: &CdpSessionState,
     engine: &CdpEngine,
+    audit_recorder: Option<&CdpAuditRecorder>,
 ) -> Result<(), CdpError> {
     let (mut browser_socket, _response) =
         connect_async(browser_url).await.map_err(websocket_error)?;
-    bootstrap_browser_state_observer(&mut browser_socket, context, session_state, engine).await?;
+    bootstrap_browser_state_observer(
+        &mut browser_socket,
+        context,
+        session_state,
+        engine,
+        audit_recorder,
+    )
+    .await?;
     let mut observer_targets = ClientTargetSessions::default();
     let mut frame_tree_requests = FrameTreeRequests::default();
     let mut next_observer_command_id = ObserverCommandIds::default();
@@ -626,6 +703,7 @@ async fn observe_browser_state_connection(
                 context,
                 session_state,
                 engine,
+                audit_recorder,
             },
             BrowserObserverScratch {
                 observer_targets: &mut observer_targets,
@@ -645,6 +723,7 @@ async fn bootstrap_browser_state_observer(
     context: &CdpSessionContext,
     session_state: &CdpSessionState,
     engine: &CdpEngine,
+    audit_recorder: Option<&CdpAuditRecorder>,
 ) -> Result<(), CdpError> {
     send_internal_method(
         browser_socket,
@@ -705,6 +784,7 @@ async fn bootstrap_browser_state_observer(
                     context,
                     session_state,
                     engine,
+                    audit_recorder,
                 },
                 BrowserObserverScratch {
                     observer_targets: &mut observer_targets,
@@ -731,7 +811,13 @@ async fn bootstrap_browser_state_observer(
                 for target_info in response.target_infos {
                     session_state.record_target_info(&target_info);
                 }
-                audit_state_recovery(engine, context, "browser_observer_bootstrap_targets", None);
+                audit_state_recovery(
+                    engine,
+                    audit_recorder,
+                    context,
+                    "browser_observer_bootstrap_targets",
+                    None,
+                );
                 targets_loaded = true;
             }
             Some(id) => {
@@ -739,6 +825,7 @@ async fn bootstrap_browser_state_observer(
                     let response = parse_internal_method_response::<page::GetFrameTree>(&source)?;
                     audit_state_recovery(
                         engine,
+                        audit_recorder,
                         context,
                         "browser_observer_frame_tree_response",
                         Some(&target_id),
@@ -759,9 +846,18 @@ async fn run_page_state_observer(
     context: CdpSessionContext,
     session_state: CdpSessionState,
     engine: Arc<CdpEngine>,
+    audit_recorder: Option<CdpAuditRecorder>,
 ) {
     loop {
-        match observe_page_state_connection(&browser_url, &context, &session_state, &engine).await {
+        match observe_page_state_connection(
+            &browser_url,
+            &context,
+            &session_state,
+            &engine,
+            audit_recorder.as_ref(),
+        )
+        .await
+        {
             Ok(()) => warn!(browser_url = %browser_url, "page state observer stopped"),
             Err(error) => warn!(
                 browser_url = %browser_url,
@@ -779,10 +875,18 @@ async fn observe_page_state_connection(
     context: &CdpSessionContext,
     session_state: &CdpSessionState,
     engine: &CdpEngine,
+    audit_recorder: Option<&CdpAuditRecorder>,
 ) -> Result<(), CdpError> {
     let (mut browser_socket, _response) =
         connect_async(browser_url).await.map_err(websocket_error)?;
-    bootstrap_page_state_observer(&mut browser_socket, context, session_state, engine).await?;
+    bootstrap_page_state_observer(
+        &mut browser_socket,
+        context,
+        session_state,
+        engine,
+        audit_recorder,
+    )
+    .await?;
     let mut next_observer_command_id = ObserverCommandIds::default();
 
     while let Some(message) = browser_socket.next().await {
@@ -797,6 +901,7 @@ async fn observe_page_state_connection(
                     context,
                     &event,
                     &mut next_observer_command_id,
+                    audit_recorder,
                 )
                 .await?;
             }
@@ -811,6 +916,7 @@ async fn bootstrap_page_state_observer(
     context: &CdpSessionContext,
     session_state: &CdpSessionState,
     engine: &CdpEngine,
+    audit_recorder: Option<&CdpAuditRecorder>,
 ) -> Result<(), CdpError> {
     send_internal_method(
         browser_socket,
@@ -880,7 +986,13 @@ async fn bootstrap_page_state_observer(
             }
             Some(OBSERVER_GET_FRAME_TREE_ID) => {
                 let response = parse_internal_method_response::<page::GetFrameTree>(&source)?;
-                audit_state_recovery(engine, context, "page_observer_bootstrap_frame_tree", None);
+                audit_state_recovery(
+                    engine,
+                    audit_recorder,
+                    context,
+                    "page_observer_bootstrap_frame_tree",
+                    None,
+                );
                 session_state.record_frame_tree(&response.frame_tree);
                 frame_tree_loaded = true;
             }
@@ -902,6 +1014,7 @@ async fn observe_browser_level_message(
         let response = parse_internal_method_response::<page::GetFrameTree>(source)?;
         audit_state_recovery(
             refs.engine,
+            refs.audit_recorder,
             refs.context,
             "browser_observer_frame_tree_response",
             Some(&target_id),
@@ -927,6 +1040,7 @@ async fn observe_browser_level_message(
         refs.context,
         &event,
         scratch.next_observer_command_id,
+        refs.audit_recorder,
     )
     .await?;
 
@@ -957,6 +1071,7 @@ async fn observe_browser_level_message(
         let get_frame_tree_id = scratch.next_observer_command_id.next();
         audit_state_recovery(
             refs.engine,
+            refs.audit_recorder,
             refs.context,
             "browser_observer_target_attach_frame_tree",
             Some(&target_id),
@@ -982,12 +1097,16 @@ async fn handle_fetch_request_paused(
     context: &CdpSessionContext,
     event: &CdpEvent,
     next_observer_command_id: &mut ObserverCommandIds,
+    audit_recorder: Option<&CdpAuditRecorder>,
 ) -> Result<(), CdpError> {
     let Some(paused) = paused_fetch_request(event) else {
         return Ok(());
     };
 
-    match enforce_cdp_event(engine, context, event)? {
+    let outcome = enforce_cdp_event_outcome(engine, context, event)?;
+    record_audit_outcome(audit_recorder, outcome.audit_record());
+
+    match outcome.action() {
         CdpEnforcementAction::Forward => {
             debug!(
                 request_id = %paused.request_id,
@@ -1065,6 +1184,7 @@ struct BrowserObserverRefs<'a> {
     context: &'a CdpSessionContext,
     session_state: &'a CdpSessionState,
     engine: &'a CdpEngine,
+    audit_recorder: Option<&'a CdpAuditRecorder>,
 }
 
 struct BrowserObserverScratch<'a> {
@@ -1199,6 +1319,7 @@ fn attached_page_target(event: &CdpEvent) -> Option<(String, BrowserTargetId)> {
 
 fn audit_state_recovery(
     engine: &CdpEngine,
+    audit_recorder: Option<&CdpAuditRecorder>,
     context: &CdpSessionContext,
     trigger: &'static str,
     target_id: Option<&BrowserTargetId>,
@@ -1246,6 +1367,8 @@ fn audit_state_recovery(
     } else {
         debug!(trigger, "audited CDP state recovery");
     }
+
+    record_audit_outcome(audit_recorder, Some(&record));
 }
 
 #[derive(Debug, Deserialize)]
@@ -1272,6 +1395,7 @@ enum ClientTextAction {
     HoldForApproval,
 }
 
+#[cfg(test)]
 fn handle_client_text(
     engine: &CdpEngine,
     context: &CdpSessionContext,
@@ -1279,15 +1403,28 @@ fn handle_client_text(
     client_targets: &mut ClientTargetSessions,
     source: &str,
 ) -> Result<ClientTextAction, CdpError> {
-    let command = decode_cdp_command(source)?;
+    handle_client_text_with_audit(engine, context, session_state, client_targets, source, None)
+}
 
-    match enforce_cdp_command_with_client_state(
+fn handle_client_text_with_audit(
+    engine: &CdpEngine,
+    context: &CdpSessionContext,
+    session_state: &CdpSessionState,
+    client_targets: &mut ClientTargetSessions,
+    source: &str,
+    audit_recorder: Option<&CdpAuditRecorder>,
+) -> Result<ClientTextAction, CdpError> {
+    let command = decode_cdp_command(source)?;
+    let outcome = enforce_cdp_command_with_client_state_outcome(
         engine,
         context,
         &command,
         session_state,
         Some(client_targets),
-    )? {
+    )?;
+    record_audit_outcome(audit_recorder, outcome.audit_record());
+
+    match outcome.action() {
         CdpEnforcementAction::Forward => {
             if let Some(protocol_command) = command.protocol_command() {
                 record_pending_client_target_command(&command, protocol_command, client_targets);
@@ -1314,7 +1451,7 @@ fn handle_client_text(
                 "blocking CDP command"
             );
             Ok(ClientTextAction::Reply {
-                payload: error_response(&command, -32000, &reason),
+                payload: error_response(&command, -32000, reason),
             })
         }
         CdpEnforcementAction::AwaitApproval { reason } => {
@@ -1432,13 +1569,22 @@ fn websocket_error(error: WebSocketError) -> CdpError {
 
 #[cfg(test)]
 mod tests {
-    use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
-    use erebor_runtime_policy::{LocalPolicy, PolicySet};
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use erebor_runtime_audit::read_audit_records;
+    use erebor_runtime_events::{
+        ActionKind, ActorIdentity, ActorKind, ExecutionSurface, SessionId,
+    };
+    use erebor_runtime_policy::{Decision, LocalPolicy, PolicySet};
     use serde_json::json;
 
     use super::{
-        handle_client_text, observe_browser_event_text, observe_browser_response_text,
-        ClientTextAction,
+        handle_client_text, handle_client_text_with_audit, observe_browser_event_text,
+        observe_browser_response_text, CdpAuditRecorder, ClientTextAction,
     };
     use crate::{BrowserTargetId, CdpSessionContext, CdpSessionState, ClientTargetSessions};
 
@@ -1451,6 +1597,16 @@ mod tests {
             },
             timestamp: String::from("2026-05-13T00:00:00Z"),
         }
+    }
+
+    fn temp_audit_path(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        std::env::temp_dir().join(format!(
+            "erebor-cdp-{label}-{}-{nanos}.jsonl",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -1527,6 +1683,123 @@ mod tests {
                 })
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn client_text_appends_denied_command_audit_jsonl() -> Result<(), Box<dyn std::error::Error>> {
+        let policy = LocalPolicy::from_json_str(
+            r#"
+            {
+              "rules": [
+                {
+                  "id": "deny-script-eval",
+                  "match": {
+                    "surface": "browser_cdp",
+                    "action": "browser_script_eval"
+                  },
+                  "decision": "deny",
+                  "reason": "script evaluation denied"
+                }
+              ]
+            }
+            "#,
+        )?;
+        let engine =
+            erebor_runtime_core::LocalEnforcementEngine::new(PolicySet::from_policies(vec![
+                policy,
+            ]));
+        let source =
+            r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#;
+        let audit_path = temp_audit_path("denied-command");
+        let _cleanup_before = fs::remove_file(&audit_path);
+        let recorder = CdpAuditRecorder::new(audit_path.clone());
+
+        let mut client_targets = ClientTargetSessions::default();
+        let action = handle_client_text_with_audit(
+            &engine,
+            &context(),
+            &CdpSessionState::default(),
+            &mut client_targets,
+            source,
+            Some(&recorder),
+        )?;
+
+        assert_eq!(
+            action,
+            ClientTextAction::Reply {
+                payload: json!({
+                    "id": 1,
+                    "error": {
+                        "code": -32000,
+                        "message": "script evaluation denied"
+                    }
+                })
+            }
+        );
+
+        let records = read_audit_records(&audit_path)?;
+        let _cleanup_after = fs::remove_file(&audit_path);
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.event.session_id, SessionId::new("session-1"));
+        assert_eq!(record.event.surface, ExecutionSurface::BrowserCdp);
+        assert_eq!(record.event.action, ActionKind::BrowserScriptEval);
+        assert_eq!(
+            record.policy_decision,
+            Decision::Deny {
+                reason: String::from("script evaluation denied"),
+                rule_id: Some(String::from("deny-script-eval")),
+            }
+        );
+        assert_eq!(record.final_decision, record.policy_decision);
+        Ok(())
+    }
+
+    #[test]
+    fn client_text_appends_allowed_command_audit_jsonl() -> Result<(), Box<dyn std::error::Error>> {
+        let policy = LocalPolicy::from_json_str(r#"{ "rules": [] }"#)?;
+        let engine =
+            erebor_runtime_core::LocalEnforcementEngine::new(PolicySet::from_policies(vec![
+                policy,
+            ]));
+        let source = r#"{ "id": 1, "method": "Page.navigate", "params": { "url": "https://example.com/" } }"#;
+        let audit_path = temp_audit_path("allowed-command");
+        let _cleanup_before = fs::remove_file(&audit_path);
+        let recorder = CdpAuditRecorder::new(audit_path.clone());
+
+        let mut client_targets = ClientTargetSessions::default();
+        let action = handle_client_text_with_audit(
+            &engine,
+            &context(),
+            &CdpSessionState::default(),
+            &mut client_targets,
+            source,
+            Some(&recorder),
+        )?;
+
+        assert_eq!(
+            action,
+            ClientTextAction::Forward {
+                payload: source.to_owned()
+            }
+        );
+
+        let records = read_audit_records(&audit_path)?;
+        let _cleanup_after = fs::remove_file(&audit_path);
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        assert_eq!(record.event.surface, ExecutionSurface::BrowserCdp);
+        assert_eq!(record.event.action, ActionKind::BrowserNavigate);
+        assert_eq!(
+            record
+                .event
+                .target
+                .as_ref()
+                .and_then(|target| target.uri.as_deref()),
+            Some("https://example.com/")
+        );
+        assert_eq!(record.final_decision, Decision::Allow { rule_id: None });
         Ok(())
     }
 

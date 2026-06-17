@@ -111,6 +111,7 @@ async fn spawn_proxy_server(
             listen: SocketAddr::from(([127, 0, 0, 1], 0)),
             browser_url,
             context: session_context(),
+            audit_jsonl: None,
         },
         engine,
     )

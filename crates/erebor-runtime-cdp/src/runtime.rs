@@ -12,6 +12,7 @@ pub struct BrowserCdpSurface {
     config: BrowserCdpSurfaceConfig,
     policy_set: PolicySet,
     context: CdpSessionContext,
+    audit_jsonl: Option<std::path::PathBuf>,
 }
 
 impl BrowserCdpSurface {
@@ -25,7 +26,14 @@ impl BrowserCdpSurface {
             config,
             policy_set,
             context,
+            audit_jsonl: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_audit_jsonl(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.audit_jsonl = Some(path.into());
+        self
     }
 }
 
@@ -58,11 +66,12 @@ impl SessionSurfaceService for BrowserCdpSurface {
                 "launching owned browser for CDP session surface"
             );
         }
+        let mut manager = BrowserSessionManager::new(self.config, self.policy_set, self.context);
+        if let Some(audit_jsonl) = self.audit_jsonl {
+            manager = manager.with_audit_jsonl(audit_jsonl);
+        }
         let session = runtime
-            .block_on(
-                BrowserSessionManager::new(self.config, self.policy_set, self.context)
-                    .create_session(),
-            )
+            .block_on(manager.create_session())
             .map_err(|error| RuntimeError::surface_start(surface.as_str(), error.to_string()))?;
         let endpoint = session.public_endpoint().to_owned();
         let lease_id = session.lease_id().to_owned();

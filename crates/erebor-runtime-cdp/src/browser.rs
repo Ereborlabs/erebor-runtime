@@ -40,6 +40,7 @@ pub struct BrowserSessionManager {
     config: BrowserCdpSurfaceConfig,
     policy_set: PolicySet,
     context: CdpSessionContext,
+    audit_jsonl: Option<PathBuf>,
 }
 
 impl BrowserSessionManager {
@@ -53,18 +54,30 @@ impl BrowserSessionManager {
             config,
             policy_set,
             context,
+            audit_jsonl: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_audit_jsonl(mut self, path: impl Into<PathBuf>) -> Self {
+        self.audit_jsonl = Some(path.into());
+        self
     }
 
     pub async fn create_session(self) -> Result<GovernedBrowserSession, CdpError> {
         let upstream = BrowserUpstream::prepare(&self.config)?;
         let policy_set_label = format!("local:{} policies", self.policy_set.policy_count());
         let engine = LocalEnforcementEngine::new(self.policy_set);
+        let audit_sink_label = self.audit_jsonl.as_ref().map_or_else(
+            || String::from("runtime"),
+            |path| path.display().to_string(),
+        );
         let server = CdpProxyServer::bind(
             CdpProxyServerConfig {
                 listen: self.config.listen(),
                 browser_url: upstream.endpoint.clone(),
                 context: self.context.clone(),
+                audit_jsonl: self.audit_jsonl,
             },
             engine,
         )
@@ -79,7 +92,7 @@ impl BrowserSessionManager {
             policy_set: policy_set_label,
             browser_profile: upstream.browser_profile(),
             approval_channel: String::from("deferred"),
-            audit_sink: String::from("runtime"),
+            audit_sink: audit_sink_label,
             public_endpoint: public_endpoint.clone(),
             owned_browser: upstream.owned_browser.is_some(),
             lease_id: lease_id.clone(),

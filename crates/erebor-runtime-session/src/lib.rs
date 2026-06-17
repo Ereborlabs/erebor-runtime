@@ -286,13 +286,18 @@ fn start_session_side_resources_from_start_plan(
                         config: config.clone(),
                         policy_set,
                         context: session_cdp_context(plan),
+                        audit_jsonl: plan.audit().jsonl().map(Path::to_path_buf),
                     });
                 } else {
-                    launcher.add_surface(BrowserCdpSurface::new(
+                    let mut surface = BrowserCdpSurface::new(
                         config.clone(),
                         policy_set,
                         session_cdp_context(plan),
-                    ));
+                    );
+                    if let Some(audit_jsonl) = plan.audit().jsonl() {
+                        surface = surface.with_audit_jsonl(audit_jsonl.to_path_buf());
+                    }
+                    launcher.add_surface(surface);
                 }
             }
             SessionSurfaceDefinition::Terminal(config) => {
@@ -839,6 +844,7 @@ struct LazyBrowserCdpMediationConfig {
     config: erebor_runtime_core::BrowserCdpSurfaceConfig,
     policy_set: PolicySet,
     context: CdpSessionContext,
+    audit_jsonl: Option<PathBuf>,
 }
 
 impl Drop for LinuxProcessGuardBundle {
@@ -989,8 +995,13 @@ fn session_mediation_registry(
     let mut registry = SessionMediationRegistry::new();
     if let Some(lazy) = lazy_browser_cdp {
         registry.register_handler(
-            BrowserCdpMediationHandler::lazy(lazy.config, lazy.policy_set, lazy.context)
-                .map_err(SessionExecutionError::guard_io)?,
+            BrowserCdpMediationHandler::lazy(
+                lazy.config,
+                lazy.policy_set,
+                lazy.context,
+                lazy.audit_jsonl,
+            )
+            .map_err(SessionExecutionError::guard_io)?,
         );
     } else if let Some(endpoint) = browser_cdp_endpoint {
         registry.register_handler(BrowserCdpMediationHandler::new(endpoint));
@@ -1324,14 +1335,14 @@ mod tests {
             .parent()
             .and_then(Path::parent)
             .ok_or_else(|| std::io::Error::other("missing repo root"))?;
-        let config_path =
-            repo_root.join("examples/governed-openclaw-pilot/session-mediated-browser-config.json");
+        let config_path = repo_root.join("examples/governed-openclaw-pilot/session-config.json");
         let source = fs::read_to_string(config_path)?;
 
         assert!(!source.contains("EREBOR_BROWSER_CDP_URL"));
         assert!(!source.contains("EREBOR_MANAGED_BROWSER_CDP_URL"));
         assert!(!source.contains("\"cdpPort\""));
         let config = RuntimeConfig::from_json_str(&source)?;
+        assert_eq!(config.audit.jsonl(), Some(Path::new("audit.jsonl")));
         let browser_cdp = config
             .surface_start_plan()?
             .browser_cdp()

@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 cdp-protocol.workspace = true
+erebor-runtime-audit = { path = "../erebor-runtime-audit" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }

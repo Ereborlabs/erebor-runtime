@@ -405,6 +405,7 @@ struct LazyBrowserCdpMediation {
     config_template: BrowserCdpSurfaceConfig,
     policy_set: PolicySet,
     context: CdpSessionContext,
+    audit_jsonl: Option<PathBuf>,
     runtime: Runtime,
     running: Mutex<HashMap<u16, RunningSessionSurface>>,
 }
@@ -423,6 +424,7 @@ impl BrowserCdpMediationHandler {
         config_template: BrowserCdpSurfaceConfig,
         policy_set: PolicySet,
         context: CdpSessionContext,
+        audit_jsonl: Option<PathBuf>,
     ) -> Result<Self, io::Error> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -433,6 +435,7 @@ impl BrowserCdpMediationHandler {
                 config_template,
                 policy_set,
                 context,
+                audit_jsonl,
                 runtime,
                 running: Mutex::new(HashMap::new()),
             })),
@@ -517,7 +520,7 @@ impl LazyBrowserCdpMediation {
         let listen = SocketAddr::new(self.config_template.listen().ip(), requested_port);
         let private_remote_debugging_port =
             private_remote_debugging_port_for_request(intent, requested_port)?;
-        let surface = BrowserCdpSurface::new(
+        let mut surface = BrowserCdpSurface::new(
             self.config_template
                 .clone()
                 .with_listen(listen)
@@ -525,6 +528,9 @@ impl LazyBrowserCdpMediation {
             self.policy_set.clone(),
             self.context.clone(),
         );
+        if let Some(audit_jsonl) = self.audit_jsonl.as_ref() {
+            surface = surface.with_audit_jsonl(audit_jsonl.clone());
+        }
         let (failures, _failure_rx) = mpsc::channel();
         let running_surface = Box::new(surface)
             .start(&self.runtime, failures)
@@ -1677,6 +1683,7 @@ mod tests {
                 },
                 timestamp: String::from("unix:1"),
             },
+            None,
         )?;
 
         let outcome = handler.mediate(

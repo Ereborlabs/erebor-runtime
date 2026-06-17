@@ -1,4 +1,6 @@
-use erebor_runtime_core::{ApprovalProvider, AuditSink, LocalEnforcementEngine, RuntimeError};
+use erebor_runtime_core::{
+    ApprovalProvider, AuditRecord, AuditSink, LocalEnforcementEngine, RuntimeError,
+};
 use erebor_runtime_events::{ActorIdentity, EventId, RiskMetadata, RuntimeEvent, SessionId};
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
 use serde_json::{json, Value};
@@ -20,6 +22,38 @@ pub enum CdpEnforcementAction {
     Forward,
     Block { reason: String },
     AwaitApproval { reason: String },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CdpEnforcementOutcome {
+    action: CdpEnforcementAction,
+    audit_record: Option<AuditRecord>,
+}
+
+impl CdpEnforcementOutcome {
+    #[must_use]
+    pub const fn action(&self) -> &CdpEnforcementAction {
+        &self.action
+    }
+
+    #[must_use]
+    pub const fn audit_record(&self) -> Option<&AuditRecord> {
+        self.audit_record.as_ref()
+    }
+
+    fn without_audit_record(action: CdpEnforcementAction) -> Self {
+        Self {
+            action,
+            audit_record: None,
+        }
+    }
+
+    fn with_audit_record(action: CdpEnforcementAction, audit_record: AuditRecord) -> Self {
+        Self {
+            action,
+            audit_record: Some(audit_record),
+        }
+    }
 }
 
 pub fn enforce_cdp_command<E, A, S>(
@@ -61,14 +95,40 @@ where
     A: ApprovalProvider,
     S: AuditSink,
 {
+    Ok(enforce_cdp_command_with_client_state_outcome(
+        engine,
+        context,
+        command,
+        session_state,
+        client_sessions,
+    )?
+    .action)
+}
+
+pub fn enforce_cdp_command_with_client_state_outcome<E, A, S>(
+    engine: &LocalEnforcementEngine<E, A, S>,
+    context: &CdpSessionContext,
+    command: &CdpCommand,
+    session_state: &CdpSessionState,
+    client_sessions: Option<&ClientTargetSessions>,
+) -> Result<CdpEnforcementOutcome, CdpError>
+where
+    E: PolicyEvaluator,
+    A: ApprovalProvider,
+    S: AuditSink,
+{
     if command.protocol_command().is_none() {
-        return Ok(CdpEnforcementAction::Forward);
+        return Ok(CdpEnforcementOutcome::without_audit_record(
+            CdpEnforcementAction::Forward,
+        ));
     }
 
     if browser_level_target_is_ambiguous(command, client_sessions) {
-        return Ok(CdpEnforcementAction::Block {
-            reason: String::from("browser target is unknown for CDP session"),
-        });
+        return Ok(CdpEnforcementOutcome::without_audit_record(
+            CdpEnforcementAction::Block {
+                reason: String::from("browser target is unknown for CDP session"),
+            },
+        ));
     }
 
     let event = normalize_cdp_command(context, command, session_state, client_sessions)?;
@@ -76,9 +136,12 @@ where
         .enforce_with_deferred_approval(&event)
         .map_err(CdpError::enforcement)?;
 
-    Ok(enforcement_action_from_decisions(
-        &outcome.policy_decision,
-        &outcome.final_decision,
+    let action =
+        enforcement_action_from_decisions(&outcome.policy_decision, &outcome.final_decision);
+    let audit_record = AuditRecord::from_outcome(&outcome);
+    Ok(CdpEnforcementOutcome::with_audit_record(
+        action,
+        audit_record,
     ))
 }
 
@@ -92,14 +155,30 @@ where
     A: ApprovalProvider,
     S: AuditSink,
 {
+    Ok(enforce_cdp_event_outcome(engine, context, event)?.action)
+}
+
+pub fn enforce_cdp_event_outcome<E, A, S>(
+    engine: &LocalEnforcementEngine<E, A, S>,
+    context: &CdpSessionContext,
+    event: &CdpEvent,
+) -> Result<CdpEnforcementOutcome, CdpError>
+where
+    E: PolicyEvaluator,
+    A: ApprovalProvider,
+    S: AuditSink,
+{
     let runtime_event = observe_cdp_event(context, event)?;
     let outcome = engine
         .enforce_with_deferred_approval(&runtime_event)
         .map_err(CdpError::enforcement)?;
 
-    Ok(enforcement_action_from_decisions(
-        &outcome.policy_decision,
-        &outcome.final_decision,
+    let action =
+        enforcement_action_from_decisions(&outcome.policy_decision, &outcome.final_decision);
+    let audit_record = AuditRecord::from_outcome(&outcome);
+    Ok(CdpEnforcementOutcome::with_audit_record(
+        action,
+        audit_record,
     ))
 }
 

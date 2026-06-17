@@ -14,8 +14,9 @@ pub use browser::{BrowserSessionManager, BrowserSessionMetadata, GovernedBrowser
 pub use error::CdpError;
 pub use message::{
     enforce_cdp_command, enforce_cdp_command_with_client_state,
-    enforce_cdp_command_with_session_state, enforce_cdp_event, observe_cdp_event,
-    CdpEnforcementAction, CdpSessionContext,
+    enforce_cdp_command_with_client_state_outcome, enforce_cdp_command_with_session_state,
+    enforce_cdp_event, enforce_cdp_event_outcome, observe_cdp_event, CdpEnforcementAction,
+    CdpEnforcementOutcome, CdpSessionContext,
 };
 pub use protocol::{
     decode_cdp_command, decode_cdp_event, CdpCommand, CdpEvent, GovernedCdpCommand,
