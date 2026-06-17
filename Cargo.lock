@@ -282,6 +282,7 @@ name = "erebor-runtime-cdp"
 version = "0.1.0"
 dependencies = [
  "cdp-protocol",
+ "erebor-runtime-audit",
  "erebor-runtime-core",
  "erebor-runtime-e2e",
  "erebor-runtime-events",
@@ -381,6 +382,7 @@ dependencies = [
  "erebor-runtime-terminal",
  "snafu",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 

@@ -112,6 +112,7 @@ async fn spawn_proxy_server(
             browser_url,
             context: session_context(),
             audit_jsonl: None,
+            audit: erebor_runtime_core::RuntimeAuditConfig::default(),
         },
         engine,
     )

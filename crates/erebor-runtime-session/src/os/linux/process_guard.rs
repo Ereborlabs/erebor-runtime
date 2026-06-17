@@ -110,6 +110,13 @@ enum ProcessRuleDecision {
     RequireApproval,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AuditCommandLogLevel {
+    All,
+    Signal,
+    NonAllow,
+}
+
 #[derive(Clone, Debug, Default)]
 struct PidState {
     in_syscall: bool,
@@ -826,6 +833,71 @@ fn command_text(path: &str, argv: &[String]) -> String {
     text
 }
 
+fn should_write_process_audit(path: &str, argv: &[String], rule: Option<&ProcessRule>) -> bool {
+    if rule.is_some_and(|rule| rule.decision != ProcessRuleDecision::Allow) {
+        return true;
+    }
+
+    match audit_command_log_level() {
+        AuditCommandLogLevel::All => true,
+        AuditCommandLogLevel::NonAllow => false,
+        AuditCommandLogLevel::Signal => !matches_debug_command(path, argv),
+    }
+}
+
+fn audit_command_log_level() -> AuditCommandLogLevel {
+    match env::var("EREBOR_GUARD_AUDIT_TERMINAL_LEVEL")
+        .unwrap_or_else(|_| String::from("signal"))
+        .as_str()
+    {
+        "all" => AuditCommandLogLevel::All,
+        "non_allow" => AuditCommandLogLevel::NonAllow,
+        _ => AuditCommandLogLevel::Signal,
+    }
+}
+
+fn matches_debug_command(path: &str, argv: &[String]) -> bool {
+    let debug_commands = audit_debug_commands();
+    if debug_commands.is_empty() {
+        return false;
+    }
+
+    let mut tokens = Vec::new();
+    tokens.push(path);
+    if let Some(first) = argv.first() {
+        tokens.push(first);
+    }
+
+    tokens.iter().any(|token| {
+        debug_commands
+            .iter()
+            .any(|debug_command| command_token_matches(token, debug_command))
+    })
+}
+
+fn audit_debug_commands() -> Vec<String> {
+    match env::var("EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS") {
+        Ok(source) => source
+            .lines()
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+        Err(_) => vec![String::from("sleep")],
+    }
+}
+
+fn command_token_matches(token: &str, debug_command: &str) -> bool {
+    token == debug_command
+        || basename(token) == debug_command
+        || basename(debug_command) == token
+        || basename(token) == basename(debug_command)
+}
+
+fn basename(value: &str) -> &str {
+    value.rsplit_once('/').map_or(value, |(_prefix, basename)| basename)
+}
+
 fn parse_rules() -> Vec<ProcessRule> {
     let source = env::var("EREBOR_GUARD_RULES")
         .or_else(|_| env::var("EREBOR_GUARD_DENY_RULES"))
@@ -873,6 +945,9 @@ fn write_audit(
         Ok(path) if !path.is_empty() => path,
         _ => return,
     };
+    if !should_write_process_audit(path, argv, rule) {
+        return;
+    }
 
     let Ok(mut file) = OpenOptions::new()
         .append(true)
@@ -1069,11 +1144,13 @@ fn die(message: &str) -> ! {
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+
     use super::{
         command_text, json_string, parse_parent_pid_from_stat, parse_rules_from_source,
-        ptrace_event, wait_exit_status, wait_exited, wait_signaled, wait_stop_signal,
-        wait_stopped, wait_term_signal, CgroupJoinReport, MAX_RULES, MAX_TEXT,
-        ProcessRuleDecision, PTRACE_EVENT_CLONE, SIGTRAP,
+        ptrace_event, should_write_process_audit, wait_exit_status, wait_exited, wait_signaled,
+        wait_stop_signal, wait_stopped, wait_term_signal, CgroupJoinReport, MAX_RULES, MAX_TEXT,
+        ProcessRule, ProcessRuleDecision, PTRACE_EVENT_CLONE, SIGTRAP,
     };
 
     #[test]
@@ -1164,6 +1241,50 @@ mod tests {
 
         assert_eq!(text.len(), MAX_TEXT);
         assert!(text.starts_with("/bin/echo "));
+    }
+
+    #[test]
+    fn default_audit_filter_suppresses_allowed_sleep() {
+        env::remove_var("EREBOR_GUARD_AUDIT_TERMINAL_LEVEL");
+        env::remove_var("EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS");
+
+        assert!(!should_write_process_audit(
+            "/usr/bin/sleep",
+            &[String::from("sleep"), String::from("0.25")],
+            None,
+        ));
+    }
+
+    #[test]
+    fn all_audit_level_logs_allowed_sleep() {
+        env::set_var("EREBOR_GUARD_AUDIT_TERMINAL_LEVEL", "all");
+        env::remove_var("EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS");
+
+        assert!(should_write_process_audit(
+            "/usr/bin/sleep",
+            &[String::from("sleep"), String::from("0.25")],
+            None,
+        ));
+
+        env::remove_var("EREBOR_GUARD_AUDIT_TERMINAL_LEVEL");
+    }
+
+    #[test]
+    fn audit_filter_always_logs_denied_sleep() {
+        env::remove_var("EREBOR_GUARD_AUDIT_TERMINAL_LEVEL");
+        env::remove_var("EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS");
+        let rule = ProcessRule {
+            token: String::from("sleep"),
+            reason: String::from("sleep denied"),
+            rule_id: String::from("deny-sleep"),
+            decision: ProcessRuleDecision::Deny,
+        };
+
+        assert!(should_write_process_audit(
+            "/usr/bin/sleep",
+            &[String::from("sleep"), String::from("0.25")],
+            Some(&rule),
+        ));
     }
 
     #[test]

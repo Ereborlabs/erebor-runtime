@@ -8,8 +8,8 @@ use tokio::runtime::Runtime;
 use tracing::{debug, error, info};
 
 use crate::{
-    BrowserCdpSurfaceConfig, RuntimeError, SessionSurfaceKind, SessionSurfaceStartPlan,
-    TerminalSurfaceConfig,
+    BrowserCdpSurfaceConfig, RuntimeAuditConfig, RuntimeError, SessionSurfaceKind,
+    SessionSurfaceStartPlan, TerminalSurfaceConfig,
 };
 
 pub type SessionSurfaceFailureSender = Sender<SessionSurfaceFailure>;
@@ -133,6 +133,7 @@ impl SessionSurfaceSupervisor {
 pub struct SessionSurfaceLaunchPlan {
     control_listen: SocketAddr,
     policy_paths: Vec<PathBuf>,
+    audit: RuntimeAuditConfig,
     definitions: Vec<SessionSurfaceDefinition>,
 }
 
@@ -170,6 +171,7 @@ impl SessionSurfaceLaunchPlan {
         Ok(Self {
             control_listen,
             policy_paths: plan.policies().to_vec(),
+            audit: plan.audit().clone(),
             definitions,
         })
     }
@@ -182,6 +184,11 @@ impl SessionSurfaceLaunchPlan {
     #[must_use]
     pub fn policy_paths(&self) -> &[PathBuf] {
         &self.policy_paths
+    }
+
+    #[must_use]
+    pub const fn audit(&self) -> &RuntimeAuditConfig {
+        &self.audit
     }
 
     #[must_use]

@@ -12,13 +12,14 @@ mod control_broker;
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
-    DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions,
-    ProcessInterceptionDecision, ProcessInterceptionHandlerConfig, ProcessInterceptionHandlerKind,
-    ProcessMediationPrivateEndpointConfig, ProcessMediationReplacementSurface, RuntimeAuditConfig,
-    RuntimeConfig, RuntimeConfigError, RuntimeError, SessionActorLayerConfig, SessionAdoptPlan,
-    SessionRunOutcome, SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher,
-    SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
-    SessionSurfaceSupervisor, TerminalProcessInterceptionMode, TerminalSurfaceConfig,
+    AuditCommandLogLevel, DockerSessionCommandOptions, DockerSessionMount,
+    LinuxHostSessionCommandOptions, ProcessInterceptionDecision, ProcessInterceptionHandlerConfig,
+    ProcessInterceptionHandlerKind, ProcessMediationPrivateEndpointConfig,
+    ProcessMediationReplacementSurface, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
+    RuntimeError, SessionActorLayerConfig, SessionAdoptPlan, SessionRunOutcome, SessionRunPlan,
+    SessionRunnerKind, SessionRunnerLauncher, SessionSurfaceDefinition, SessionSurfaceKind,
+    SessionSurfaceLaunchPlan, SessionSurfaceLauncher, SessionSurfaceSupervisor,
+    TerminalProcessInterceptionMode, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
@@ -191,11 +192,16 @@ pub fn start_surface_launch_plan(
         match definition {
             SessionSurfaceDefinition::BrowserCdp(config) => {
                 let policy_set = read_policy_set(config.policies())?;
-                launcher.add_surface(BrowserCdpSurface::new(
+                let mut surface = BrowserCdpSurface::new(
                     config.clone(),
                     policy_set,
                     runtime_context("browser-cdp"),
-                ));
+                )
+                .with_audit_config(launch_plan.audit().clone());
+                if let Some(audit_jsonl) = launch_plan.audit().jsonl() {
+                    surface = surface.with_audit_jsonl(audit_jsonl.to_path_buf());
+                }
+                launcher.add_surface(surface);
             }
             SessionSurfaceDefinition::Terminal(_) => {
                 tracing::info!(
@@ -287,13 +293,15 @@ fn start_session_side_resources_from_start_plan(
                         policy_set,
                         context: session_cdp_context(plan),
                         audit_jsonl: plan.audit().jsonl().map(Path::to_path_buf),
+                        audit: plan.audit().clone(),
                     });
                 } else {
                     let mut surface = BrowserCdpSurface::new(
                         config.clone(),
                         policy_set,
                         session_cdp_context(plan),
-                    );
+                    )
+                    .with_audit_config(plan.audit().clone());
                     if let Some(audit_jsonl) = plan.audit().jsonl() {
                         surface = surface.with_audit_jsonl(audit_jsonl.to_path_buf());
                     }
@@ -480,6 +488,8 @@ struct LinuxProcessGuardBundle {
     guard_rules: String,
     audit_path: Option<PathBuf>,
     audit_filename: Option<String>,
+    audit_terminal_level: AuditCommandLogLevel,
+    audit_terminal_debug_commands: Vec<String>,
     terminal_tty: bool,
     interception: Option<LinuxProcessInterceptionBundle>,
 }
@@ -539,6 +549,13 @@ impl LinuxProcessGuardBundle {
             guard_rules,
             audit_path: audit_jsonl_path,
             audit_filename,
+            audit_terminal_level: plan.audit().surfaces().terminal().command_level(),
+            audit_terminal_debug_commands: plan
+                .audit()
+                .surfaces()
+                .terminal()
+                .debug_commands()
+                .to_vec(),
             terminal_tty: plan.terminal().tty(),
             interception,
         })
@@ -563,7 +580,15 @@ impl LinuxProcessGuardBundle {
             let container_audit_path = format!("{DOCKER_AUDIT_DIR}/{audit_filename}");
             options = options
                 .with_mount(DockerSessionMount::new(audit_parent, DOCKER_AUDIT_DIR))
-                .with_environment("EREBOR_GUARD_AUDIT_JSONL", container_audit_path);
+                .with_environment("EREBOR_GUARD_AUDIT_JSONL", container_audit_path)
+                .with_environment(
+                    "EREBOR_GUARD_AUDIT_TERMINAL_LEVEL",
+                    audit_command_level_env(self.audit_terminal_level),
+                )
+                .with_environment(
+                    "EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS",
+                    self.audit_terminal_debug_commands.join("\n"),
+                );
         }
 
         options
@@ -588,7 +613,15 @@ impl LinuxProcessGuardBundle {
 
         if let Some(audit_path) = self.audit_path.as_ref() {
             options = options
-                .with_environment("EREBOR_GUARD_AUDIT_JSONL", audit_path.display().to_string());
+                .with_environment("EREBOR_GUARD_AUDIT_JSONL", audit_path.display().to_string())
+                .with_environment(
+                    "EREBOR_GUARD_AUDIT_TERMINAL_LEVEL",
+                    audit_command_level_env(self.audit_terminal_level),
+                )
+                .with_environment(
+                    "EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS",
+                    self.audit_terminal_debug_commands.join("\n"),
+                );
         }
 
         if let Some(interception) = self.interception.as_ref() {
@@ -845,6 +878,7 @@ struct LazyBrowserCdpMediationConfig {
     policy_set: PolicySet,
     context: CdpSessionContext,
     audit_jsonl: Option<PathBuf>,
+    audit: RuntimeAuditConfig,
 }
 
 impl Drop for LinuxProcessGuardBundle {
@@ -884,6 +918,14 @@ fn linux_cgroup_component(value: &str) -> String {
             }
         })
         .collect()
+}
+
+fn audit_command_level_env(level: AuditCommandLogLevel) -> &'static str {
+    match level {
+        AuditCommandLogLevel::All => "all",
+        AuditCommandLogLevel::Signal => "signal",
+        AuditCommandLogLevel::NonAllow => "non_allow",
+    }
 }
 
 fn side_resource_command_options(
@@ -1000,6 +1042,7 @@ fn session_mediation_registry(
                 lazy.policy_set,
                 lazy.context,
                 lazy.audit_jsonl,
+                lazy.audit,
             )
             .map_err(SessionExecutionError::guard_io)?,
         );

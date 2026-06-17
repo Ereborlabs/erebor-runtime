@@ -1,6 +1,6 @@
 use erebor_runtime_core::{
-    BrowserCdpSurfaceConfig, RunningSessionSurface, RuntimeError, SessionSurfaceFailure,
-    SessionSurfaceFailureSender, SessionSurfaceKind, SessionSurfaceService,
+    BrowserCdpSurfaceConfig, RunningSessionSurface, RuntimeAuditConfig, RuntimeError,
+    SessionSurfaceFailure, SessionSurfaceFailureSender, SessionSurfaceKind, SessionSurfaceService,
 };
 use erebor_runtime_policy::PolicySet;
 use tokio::runtime::Runtime;
@@ -13,6 +13,7 @@ pub struct BrowserCdpSurface {
     policy_set: PolicySet,
     context: CdpSessionContext,
     audit_jsonl: Option<std::path::PathBuf>,
+    audit: RuntimeAuditConfig,
 }
 
 impl BrowserCdpSurface {
@@ -27,12 +28,19 @@ impl BrowserCdpSurface {
             policy_set,
             context,
             audit_jsonl: None,
+            audit: RuntimeAuditConfig::default(),
         }
     }
 
     #[must_use]
     pub fn with_audit_jsonl(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.audit_jsonl = Some(path.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_audit_config(mut self, audit: RuntimeAuditConfig) -> Self {
+        self.audit = audit;
         self
     }
 }
@@ -66,7 +74,8 @@ impl SessionSurfaceService for BrowserCdpSurface {
                 "launching owned browser for CDP session surface"
             );
         }
-        let mut manager = BrowserSessionManager::new(self.config, self.policy_set, self.context);
+        let mut manager = BrowserSessionManager::new(self.config, self.policy_set, self.context)
+            .with_audit_config(self.audit);
         if let Some(audit_jsonl) = self.audit_jsonl {
             manager = manager.with_audit_jsonl(audit_jsonl);
         }

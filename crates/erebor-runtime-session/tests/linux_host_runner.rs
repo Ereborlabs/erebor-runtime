@@ -66,6 +66,57 @@ mod linux_host {
     }
 
     #[test]
+    fn linux_host_runner_suppresses_default_debug_sleep_audit(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let test_dir = test_dir("sleep-audit-filter")?;
+        let policy_path = write_policy(&test_dir)?;
+        let audit_path = test_dir.join("audit.jsonl");
+        let config = RuntimeConfig::from_json_str(&format!(
+            r#"{{
+              "policies": ["{}"],
+              "audit": {{ "jsonl": "{}" }},
+              "session": {{
+                "enabled": true,
+                "actor": {{ "id": "openclaw" }},
+                "diagnostics": [
+                  {{
+                    "name": "sleep",
+                    "command": ["sleep", "0"]
+                  }}
+                ],
+                "runner": {{ "kind": "linux_host" }}
+              }},
+              "surfaces": {{
+                "terminal": {{
+                  "enabled": true,
+                  "process_guard": {{ "enabled": true }}
+                }}
+              }}
+            }}"#,
+            policy_path.display(),
+            audit_path.display()
+        ))?;
+        let plan = SessionRunPlan::from_diagnostic(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-linux-host-sleep-filter"),
+            "sleep",
+        )?;
+
+        let outcome = run_session_diagnostic(&config, &plan)?;
+
+        assert!(outcome.stdout().is_empty());
+        if audit_path.exists() {
+            let audit = fs::read_to_string(&audit_path)?;
+            assert!(!audit.contains("\"/usr/bin/sleep\""));
+            assert!(!audit.contains("\"sleep\",\"0\""));
+        }
+
+        fs::remove_dir_all(test_dir)?;
+        Ok(())
+    }
+
+    #[test]
     fn linux_host_runner_can_disable_process_guard_at_runtime(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let test_dir = test_dir("unguarded")?;

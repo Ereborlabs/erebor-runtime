@@ -4,8 +4,8 @@ use cdp_protocol::{
     fetch, network, page, runtime as cdp_runtime, target,
     types::{CallId, Event as ProtocolEvent, Method},
 };
-use erebor_runtime_audit::append_audit_record;
-use erebor_runtime_core::{AuditRecord, LocalEnforcementEngine};
+use erebor_runtime_audit::{FilteredAuditSink, JsonlAuditSink};
+use erebor_runtime_core::{AuditRecord, AuditSink, LocalEnforcementEngine, RuntimeAuditConfig};
 use erebor_runtime_events::{
     ActionKind, EventId, ExecutionSurface, RiskLevel, RiskMetadata, TargetRef,
 };
@@ -48,18 +48,21 @@ const UPSTREAM_HTTP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug)]
 struct CdpAuditRecorder {
-    path: PathBuf,
+    sink: FilteredAuditSink<JsonlAuditSink>,
 }
 
 impl CdpAuditRecorder {
-    fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+    fn new(path: impl Into<PathBuf>, audit: RuntimeAuditConfig) -> Self {
+        let path = path.into();
+        Self {
+            sink: FilteredAuditSink::new(JsonlAuditSink::new(path), audit),
+        }
     }
 
     fn record(&self, record: &AuditRecord) {
-        if let Err(error) = append_audit_record(&self.path, record) {
+        if let Err(error) = self.sink.record(record) {
             warn!(
-                path = %self.path.display(),
+                path = %self.sink.inner().path().display(),
                 error = %error,
                 "failed to append CDP audit record"
             );
@@ -81,6 +84,7 @@ pub struct CdpProxyServerConfig {
     pub browser_url: String,
     pub context: CdpSessionContext,
     pub audit_jsonl: Option<PathBuf>,
+    pub audit: RuntimeAuditConfig,
 }
 
 pub struct CdpProxyServer {
@@ -106,7 +110,10 @@ impl CdpProxyServer {
 
         let session_state = CdpSessionState::from_browser_url(&config.browser_url);
         let engine = Arc::new(engine);
-        let audit_recorder = config.audit_jsonl.clone().map(CdpAuditRecorder::new);
+        let audit_recorder = config
+            .audit_jsonl
+            .clone()
+            .map(|path| CdpAuditRecorder::new(path, config.audit.clone()));
         if should_start_browser_state_observer(&config.browser_url) {
             let browser_url = config.browser_url.clone();
             let context = config.context.clone();
@@ -1576,6 +1583,7 @@ mod tests {
     };
 
     use erebor_runtime_audit::read_audit_records;
+    use erebor_runtime_core::{AuditCommandLogLevel, RuntimeAuditConfig};
     use erebor_runtime_events::{
         ActionKind, ActorIdentity, ActorKind, ExecutionSurface, SessionId,
     };
@@ -1713,7 +1721,7 @@ mod tests {
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#;
         let audit_path = temp_audit_path("denied-command");
         let _cleanup_before = fs::remove_file(&audit_path);
-        let recorder = CdpAuditRecorder::new(audit_path.clone());
+        let recorder = CdpAuditRecorder::new(audit_path.clone(), RuntimeAuditConfig::default());
 
         let mut client_targets = ClientTargetSessions::default();
         let action = handle_client_text_with_audit(
@@ -1766,7 +1774,7 @@ mod tests {
         let source = r#"{ "id": 1, "method": "Page.navigate", "params": { "url": "https://example.com/" } }"#;
         let audit_path = temp_audit_path("allowed-command");
         let _cleanup_before = fs::remove_file(&audit_path);
-        let recorder = CdpAuditRecorder::new(audit_path.clone());
+        let recorder = CdpAuditRecorder::new(audit_path.clone(), RuntimeAuditConfig::default());
 
         let mut client_targets = ClientTargetSessions::default();
         let action = handle_client_text_with_audit(
@@ -1800,6 +1808,43 @@ mod tests {
             Some("https://example.com/")
         );
         assert_eq!(record.final_decision, Decision::Allow { rule_id: None });
+        Ok(())
+    }
+
+    #[test]
+    fn client_text_skips_allowed_debug_command_audit_jsonl(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let policy = LocalPolicy::from_json_str(r#"{ "rules": [] }"#)?;
+        let engine =
+            erebor_runtime_core::LocalEnforcementEngine::new(PolicySet::from_policies(vec![
+                policy,
+            ]));
+        let source =
+            r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#;
+        let audit_path = temp_audit_path("debug-command");
+        let _cleanup_before = fs::remove_file(&audit_path);
+        let mut audit = RuntimeAuditConfig::default();
+        audit.surfaces.browser_cdp.command_level = AuditCommandLogLevel::Signal;
+        audit.surfaces.browser_cdp.debug_commands = vec![String::from("Runtime.evaluate")];
+        let recorder = CdpAuditRecorder::new(audit_path.clone(), audit);
+
+        let mut client_targets = ClientTargetSessions::default();
+        let action = handle_client_text_with_audit(
+            &engine,
+            &context(),
+            &CdpSessionState::default(),
+            &mut client_targets,
+            source,
+            Some(&recorder),
+        )?;
+
+        assert_eq!(
+            action,
+            ClientTextAction::Forward {
+                payload: source.to_owned()
+            }
+        );
+        assert!(!audit_path.exists());
         Ok(())
     }
 

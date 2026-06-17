@@ -8,7 +8,9 @@ use std::{
 };
 
 use cdp_protocol::{target, types::Method};
-use erebor_runtime_core::{BrowserCdpSurfaceConfig, BrowserLaunchConfig, LocalEnforcementEngine};
+use erebor_runtime_core::{
+    BrowserCdpSurfaceConfig, BrowserLaunchConfig, LocalEnforcementEngine, RuntimeAuditConfig,
+};
 use erebor_runtime_events::{ActorIdentity, SessionId};
 use erebor_runtime_policy::PolicySet;
 use serde::Deserialize;
@@ -41,6 +43,7 @@ pub struct BrowserSessionManager {
     policy_set: PolicySet,
     context: CdpSessionContext,
     audit_jsonl: Option<PathBuf>,
+    audit: RuntimeAuditConfig,
 }
 
 impl BrowserSessionManager {
@@ -55,12 +58,19 @@ impl BrowserSessionManager {
             policy_set,
             context,
             audit_jsonl: None,
+            audit: RuntimeAuditConfig::default(),
         }
     }
 
     #[must_use]
     pub fn with_audit_jsonl(mut self, path: impl Into<PathBuf>) -> Self {
         self.audit_jsonl = Some(path.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_audit_config(mut self, audit: RuntimeAuditConfig) -> Self {
+        self.audit = audit;
         self
     }
 
@@ -78,6 +88,7 @@ impl BrowserSessionManager {
                 browser_url: upstream.endpoint.clone(),
                 context: self.context.clone(),
                 audit_jsonl: self.audit_jsonl,
+                audit: self.audit,
             },
             engine,
         )

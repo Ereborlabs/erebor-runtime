@@ -1,17 +1,23 @@
 use std::{
+    cell::RefCell,
     fs,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use erebor_runtime_core::{AuditRecord, AuditSink};
+use erebor_runtime_core::{
+    AuditCommandLogLevel, AuditError, AuditRecord, AuditSink, RuntimeAuditConfig,
+};
 use erebor_runtime_events::{
     ActionKind, ActorIdentity, ActorKind, EventId, ExecutionSurface, RiskLevel, RiskMetadata,
     RuntimeEvent, SessionId,
 };
 use erebor_runtime_policy::Decision;
 
-use crate::{append_audit_record, read_audit_records, AuditLogError, JsonlAuditSink};
+use crate::{
+    append_audit_record, read_audit_records, should_record_audit_record, AuditLogError,
+    FilteredAuditSink, JsonlAuditSink,
+};
 
 #[test]
 fn writes_and_reads_jsonl_audit_records() -> Result<(), Box<dyn std::error::Error>> {
@@ -65,7 +71,112 @@ fn reports_invalid_jsonl_line() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[test]
+fn default_filter_suppresses_allowed_terminal_sleep() {
+    let record = audit_record_with_command(
+        "evt-sleep",
+        Decision::Allow { rule_id: None },
+        "/usr/bin/sleep",
+        vec!["sleep", "0.25"],
+    );
+
+    assert!(!should_record_audit_record(
+        &record,
+        &RuntimeAuditConfig::default()
+    ));
+}
+
+#[test]
+fn all_level_logs_debug_terminal_commands() {
+    let mut audit = RuntimeAuditConfig::default();
+    audit.surfaces.terminal.command_level = AuditCommandLogLevel::All;
+    let record = audit_record_with_command(
+        "evt-sleep",
+        Decision::Allow { rule_id: None },
+        "/usr/bin/sleep",
+        vec!["sleep", "0.25"],
+    );
+
+    assert!(should_record_audit_record(&record, &audit));
+}
+
+#[test]
+fn debug_command_denials_still_log() {
+    let record = audit_record_with_command(
+        "evt-sleep-denied",
+        Decision::Deny {
+            reason: String::from("sleep denied for test"),
+            rule_id: Some(String::from("deny-sleep")),
+        },
+        "/usr/bin/sleep",
+        vec!["sleep", "0.25"],
+    );
+
+    assert!(should_record_audit_record(
+        &record,
+        &RuntimeAuditConfig::default()
+    ));
+}
+
+#[test]
+fn filtered_sink_wraps_any_audit_sink() -> Result<(), Box<dyn std::error::Error>> {
+    let sink = RecordingAuditSink::default();
+    let filtered = FilteredAuditSink::new(sink, RuntimeAuditConfig::default());
+    let sleep = audit_record_with_command(
+        "evt-sleep",
+        Decision::Allow { rule_id: None },
+        "/usr/bin/sleep",
+        vec!["sleep", "0.25"],
+    );
+    let echo = audit_record_with_command(
+        "evt-echo",
+        Decision::Allow { rule_id: None },
+        "/usr/bin/echo",
+        vec!["echo", "hello"],
+    );
+
+    filtered.record(&sleep)?;
+    filtered.record(&echo)?;
+
+    assert_eq!(filtered.inner().records(), vec![echo]);
+    Ok(())
+}
+
+#[derive(Default)]
+struct RecordingAuditSink {
+    records: RefCell<Vec<AuditRecord>>,
+}
+
+impl RecordingAuditSink {
+    fn records(&self) -> Vec<AuditRecord> {
+        self.records.borrow().clone()
+    }
+}
+
+impl AuditSink for RecordingAuditSink {
+    fn record(&self, record: &AuditRecord) -> Result<(), AuditError> {
+        self.records.borrow_mut().push(record.clone());
+        Ok(())
+    }
+}
+
 fn audit_record(event_id: &str, final_decision: Decision) -> AuditRecord {
+    audit_record_with_command(
+        event_id,
+        final_decision,
+        "/usr/bin/git",
+        vec!["git", "commit"],
+    )
+}
+
+fn audit_record_with_command(
+    event_id: &str,
+    final_decision: Decision,
+    target: &str,
+    command: Vec<&str>,
+) -> AuditRecord {
+    let command = command.into_iter().map(String::from).collect::<Vec<_>>();
+    let argv_summary = command.join(" ");
     AuditRecord {
         event: RuntimeEvent {
             id: EventId::new(event_id),
@@ -76,8 +187,14 @@ fn audit_record(event_id: &str, final_decision: Decision) -> AuditRecord {
             },
             surface: ExecutionSurface::Terminal,
             action: ActionKind::ProcessExec,
-            target: None,
-            payload: serde_json::json!({ "command": "git commit" }),
+            target: Some(erebor_runtime_events::TargetRef {
+                label: Some(target.to_owned()),
+                uri: None,
+            }),
+            payload: serde_json::json!({
+                "command": command,
+                "argv_summary": argv_summary,
+            }),
             risk: RiskMetadata {
                 level: RiskLevel::High,
                 reasons: vec![String::from("commit changes")],

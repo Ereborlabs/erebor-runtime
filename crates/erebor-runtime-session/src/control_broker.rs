@@ -16,7 +16,8 @@ use std::{
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
     BrowserCdpSurfaceConfig, ProcessMediationPrivateEndpointConfig,
-    ProcessMediationPrivatePortStrategy, RunningSessionSurface, SessionSurfaceService,
+    ProcessMediationPrivatePortStrategy, RunningSessionSurface, RuntimeAuditConfig,
+    SessionSurfaceService,
 };
 use erebor_runtime_ipc::{
     v1::{
@@ -406,6 +407,7 @@ struct LazyBrowserCdpMediation {
     policy_set: PolicySet,
     context: CdpSessionContext,
     audit_jsonl: Option<PathBuf>,
+    audit: RuntimeAuditConfig,
     runtime: Runtime,
     running: Mutex<HashMap<u16, RunningSessionSurface>>,
 }
@@ -425,6 +427,7 @@ impl BrowserCdpMediationHandler {
         policy_set: PolicySet,
         context: CdpSessionContext,
         audit_jsonl: Option<PathBuf>,
+        audit: RuntimeAuditConfig,
     ) -> Result<Self, io::Error> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -436,6 +439,7 @@ impl BrowserCdpMediationHandler {
                 policy_set,
                 context,
                 audit_jsonl,
+                audit,
                 runtime,
                 running: Mutex::new(HashMap::new()),
             })),
@@ -527,7 +531,8 @@ impl LazyBrowserCdpMediation {
                 .with_browser_remote_debugging_port(private_remote_debugging_port),
             self.policy_set.clone(),
             self.context.clone(),
-        );
+        )
+        .with_audit_config(self.audit.clone());
         if let Some(audit_jsonl) = self.audit_jsonl.as_ref() {
             surface = surface.with_audit_jsonl(audit_jsonl.clone());
         }
@@ -1378,7 +1383,7 @@ mod tests {
     use erebor_runtime_cdp::CdpSessionContext;
     use erebor_runtime_core::{
         ProcessMediationPrivateEndpointLayerConfig, ProcessMediationPrivatePortStrategy,
-        RuntimeConfig,
+        RuntimeAuditConfig, RuntimeConfig,
     };
     use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
     use erebor_runtime_ipc::v1::{
@@ -1684,6 +1689,7 @@ mod tests {
                 timestamp: String::from("unix:1"),
             },
             None,
+            RuntimeAuditConfig::default(),
         )?;
 
         let outcome = handler.mediate(

@@ -5,7 +5,7 @@ use std::{
 };
 
 use erebor_runtime_events::{ActorKind, SessionId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::RuntimeConfigError;
 
@@ -66,6 +66,7 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::empty_audit_jsonl_path());
         }
+        self.audit.validate()?;
 
         if self.session.enabled {
             self.session.validate()?;
@@ -218,12 +219,166 @@ impl SessionSurfaceStartPlan {
 pub struct RuntimeAuditConfig {
     #[serde(default)]
     pub jsonl: Option<PathBuf>,
+    #[serde(default)]
+    pub surfaces: RuntimeAuditSurfaceLoggingConfig,
 }
 
 impl RuntimeAuditConfig {
     #[must_use]
     pub fn jsonl(&self) -> Option<&Path> {
         self.jsonl.as_deref()
+    }
+
+    #[must_use]
+    pub const fn surfaces(&self) -> &RuntimeAuditSurfaceLoggingConfig {
+        &self.surfaces
+    }
+
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        self.surfaces.validate()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct RuntimeAuditSurfaceLoggingConfig {
+    #[serde(default = "default_terminal_audit_logging")]
+    pub terminal: AuditSurfaceLoggingConfig,
+    #[serde(default)]
+    pub browser_cdp: AuditSurfaceLoggingConfig,
+    #[serde(default)]
+    pub mcp: AuditSurfaceLoggingConfig,
+    #[serde(default)]
+    pub network: AuditSurfaceLoggingConfig,
+    #[serde(default)]
+    pub saas: AuditSurfaceLoggingConfig,
+    #[serde(default)]
+    pub desktop: AuditSurfaceLoggingConfig,
+    #[serde(default)]
+    pub internal_system: AuditSurfaceLoggingConfig,
+}
+
+impl Default for RuntimeAuditSurfaceLoggingConfig {
+    fn default() -> Self {
+        Self {
+            terminal: default_terminal_audit_logging(),
+            browser_cdp: AuditSurfaceLoggingConfig::default(),
+            mcp: AuditSurfaceLoggingConfig::default(),
+            network: AuditSurfaceLoggingConfig::default(),
+            saas: AuditSurfaceLoggingConfig::default(),
+            desktop: AuditSurfaceLoggingConfig::default(),
+            internal_system: AuditSurfaceLoggingConfig::default(),
+        }
+    }
+}
+
+impl RuntimeAuditSurfaceLoggingConfig {
+    #[must_use]
+    pub const fn terminal(&self) -> &AuditSurfaceLoggingConfig {
+        &self.terminal
+    }
+
+    #[must_use]
+    pub const fn browser_cdp(&self) -> &AuditSurfaceLoggingConfig {
+        &self.browser_cdp
+    }
+
+    #[must_use]
+    pub const fn mcp(&self) -> &AuditSurfaceLoggingConfig {
+        &self.mcp
+    }
+
+    #[must_use]
+    pub const fn network(&self) -> &AuditSurfaceLoggingConfig {
+        &self.network
+    }
+
+    #[must_use]
+    pub const fn saas(&self) -> &AuditSurfaceLoggingConfig {
+        &self.saas
+    }
+
+    #[must_use]
+    pub const fn desktop(&self) -> &AuditSurfaceLoggingConfig {
+        &self.desktop
+    }
+
+    #[must_use]
+    pub const fn internal_system(&self) -> &AuditSurfaceLoggingConfig {
+        &self.internal_system
+    }
+
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        for (surface, config) in [
+            ("terminal", &self.terminal),
+            ("browser_cdp", &self.browser_cdp),
+            ("mcp", &self.mcp),
+            ("network", &self.network),
+            ("saas", &self.saas),
+            ("desktop", &self.desktop),
+            ("internal_system", &self.internal_system),
+        ] {
+            config.validate(surface)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+pub struct AuditSurfaceLoggingConfig {
+    #[serde(default = "default_audit_command_level")]
+    pub command_level: AuditCommandLogLevel,
+    #[serde(default)]
+    pub debug_commands: Vec<String>,
+}
+
+impl Default for AuditSurfaceLoggingConfig {
+    fn default() -> Self {
+        Self {
+            command_level: default_audit_command_level(),
+            debug_commands: Vec::new(),
+        }
+    }
+}
+
+impl AuditSurfaceLoggingConfig {
+    #[must_use]
+    pub const fn command_level(&self) -> AuditCommandLogLevel {
+        self.command_level
+    }
+
+    #[must_use]
+    pub fn debug_commands(&self) -> &[String] {
+        &self.debug_commands
+    }
+
+    fn validate(&self, surface: &str) -> Result<(), RuntimeConfigError> {
+        if self
+            .debug_commands
+            .iter()
+            .any(|command| command.trim().is_empty())
+        {
+            return Err(RuntimeConfigError::empty_audit_debug_command(surface));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditCommandLogLevel {
+    All,
+    Signal,
+    NonAllow,
+}
+
+fn default_audit_command_level() -> AuditCommandLogLevel {
+    AuditCommandLogLevel::Signal
+}
+
+fn default_terminal_audit_logging() -> AuditSurfaceLoggingConfig {
+    AuditSurfaceLoggingConfig {
+        command_level: default_audit_command_level(),
+        debug_commands: vec![String::from("sleep")],
     }
 }
 
@@ -2232,11 +2387,11 @@ mod tests {
     use erebor_runtime_events::SessionId;
 
     use crate::{
-        DockerSessionCommandPlan, LinuxHostSessionCommandOptions, LinuxHostSessionCommandPlan,
-        ProcessInterceptionDecision, ProcessMediationEndpointSource, ProcessMediationHandlerKind,
-        ProcessMediationPrivatePortStrategy, RuntimeConfig, RuntimeConfigError, SessionAdoptPlan,
-        SessionRunPlan, SessionRunnerKind, SessionSurfaceKind, TerminalProcessGuardBackend,
-        TerminalProcessMediationMode,
+        AuditCommandLogLevel, DockerSessionCommandPlan, LinuxHostSessionCommandOptions,
+        LinuxHostSessionCommandPlan, ProcessInterceptionDecision, ProcessMediationEndpointSource,
+        ProcessMediationHandlerKind, ProcessMediationPrivatePortStrategy, RuntimeConfig,
+        RuntimeConfigError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
+        SessionSurfaceKind, TerminalProcessGuardBackend, TerminalProcessMediationMode,
     };
 
     #[test]
@@ -2700,6 +2855,14 @@ mod tests {
 
         assert_eq!(plan.policies(), &[Path::new("policies/browser.json")]);
         assert_eq!(plan.audit().jsonl(), Some(Path::new("audit/pilot.jsonl")));
+        assert_eq!(
+            plan.audit().surfaces().terminal().command_level(),
+            AuditCommandLogLevel::Signal
+        );
+        assert_eq!(
+            plan.audit().surfaces().terminal().debug_commands(),
+            &[String::from("sleep")]
+        );
         assert_eq!(plan.session_id().as_str(), "session-1");
         assert_eq!(plan.actor().id, "openclaw");
         assert_eq!(plan.workspace(), Some(Path::new("/tmp/erebor-workspace")));
@@ -2718,6 +2881,80 @@ mod tests {
         assert_eq!(plan.command(), ["openclaw", "--help"]);
 
         Ok(())
+    }
+
+    #[test]
+    fn audit_command_logging_can_be_overridden_per_surface() -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "audit": {
+                "jsonl": "audit/pilot.jsonl",
+                "surfaces": {
+                  "terminal": {
+                    "command_level": "all",
+                    "debug_commands": []
+                  },
+                  "browser_cdp": {
+                    "command_level": "non_allow",
+                    "debug_commands": ["Runtime.evaluate"]
+                  }
+                }
+              },
+              "session": {
+                "enabled": true
+              }
+            }
+            "#,
+        )?;
+
+        assert_eq!(
+            config.audit.surfaces().terminal().command_level(),
+            AuditCommandLogLevel::All
+        );
+        assert!(config
+            .audit
+            .surfaces()
+            .terminal()
+            .debug_commands()
+            .is_empty());
+        assert_eq!(
+            config.audit.surfaces().browser_cdp().command_level(),
+            AuditCommandLogLevel::NonAllow
+        );
+        assert_eq!(
+            config.audit.surfaces().browser_cdp().debug_commands(),
+            &[String::from("Runtime.evaluate")]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn audit_debug_commands_cannot_be_empty() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "audit": {
+                "surfaces": {
+                  "terminal": {
+                    "debug_commands": [""]
+                  }
+                }
+              },
+              "session": {
+                "enabled": true
+              }
+            }
+            "#,
+        );
+
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::EmptyAuditDebugCommand { surface, .. })
+                if surface == "terminal"
+        ));
     }
 
     #[test]
