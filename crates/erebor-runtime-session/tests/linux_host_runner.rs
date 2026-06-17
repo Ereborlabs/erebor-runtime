@@ -310,6 +310,29 @@ mod linux_host {
     }
 
     #[test]
+    fn linux_host_runner_denies_pipeline_spawned_child_exec(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let command_json = r#"[
+          "sh",
+          "-lc",
+          "printf 'hello\n' | \"$0\" \"$@\"",
+          "sh",
+          "--remote-debugging-port=9222"
+        ]"#;
+
+        let audit = run_denied_process_diagnostic(
+            "pipeline-child-deny",
+            "raw-cdp-pipeline-child",
+            command_json,
+            "session-linux-host-pipeline-child-deny",
+        )?;
+
+        assert!(audit.contains("\"type\":\"deny\""));
+        assert!(audit.contains("deny-raw-cdp"));
+        Ok(())
+    }
+
+    #[test]
     fn linux_host_runner_denies_python_subprocess_child_exec(
     ) -> Result<(), Box<dyn std::error::Error>> {
         if Command::new("python3")
