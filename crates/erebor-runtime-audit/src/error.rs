@@ -1,5 +1,6 @@
 use std::{io, path::PathBuf};
 
+use erebor_runtime_core::RuntimeConfigError;
 use snafu::Location;
 use thiserror::Error;
 
@@ -178,6 +179,11 @@ impl EvidenceTraceError {
 
 #[derive(Debug, Error)]
 pub enum SessionReviewError {
+    #[error("{source}")]
+    AuditLog {
+        source: AuditLogError,
+        location: Location,
+    },
     #[error("audit file does not contain session records")]
     NoSessionRecords { location: Location },
     #[error("audit file does not contain records for session id `{session_id}`")]
@@ -191,9 +197,28 @@ pub enum SessionReviewError {
         source: io::Error,
         location: Location,
     },
+    #[error("runtime config `{}` is invalid: {source}", path.display())]
+    InvalidRuntimeConfig {
+        path: PathBuf,
+        source: RuntimeConfigError,
+        location: Location,
+    },
+    #[error("failed to encode session review JSON output: {source}")]
+    EncodeJson {
+        source: serde_json::Error,
+        location: Location,
+    },
 }
 
 impl SessionReviewError {
+    #[track_caller]
+    pub(crate) fn audit_log(source: AuditLogError) -> Self {
+        Self::AuditLog {
+            source,
+            location: Location::default(),
+        }
+    }
+
     #[track_caller]
     pub(crate) fn no_session_records() -> Self {
         Self::NoSessionRecords {
@@ -213,6 +238,26 @@ impl SessionReviewError {
     pub(crate) fn read_file(path: impl Into<PathBuf>, source: io::Error) -> Self {
         Self::ReadFile {
             path: path.into(),
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub(crate) fn invalid_runtime_config(
+        path: impl Into<PathBuf>,
+        source: RuntimeConfigError,
+    ) -> Self {
+        Self::InvalidRuntimeConfig {
+            path: path.into(),
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub(crate) fn encode_json(source: serde_json::Error) -> Self {
+        Self::EncodeJson {
             source,
             location: Location::default(),
         }

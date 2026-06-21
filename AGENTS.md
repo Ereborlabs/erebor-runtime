@@ -47,6 +47,11 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
 - Use `tracing` for runtime logging.
 - Prefer existing crate boundaries and local patterns over inventing new
   abstractions.
+- CLI code is wiring only: parse arguments, translate them into crate-level
+  requests, call the owning crate, and print/return results. Business logic,
+  audit/session/policy/runtime orchestration, feature JSON/text rendering, file
+  artifact handling, and e2e harnesses must live in the appropriate domain or
+  e2e crates, not `erebor-runtime-cli`.
 - Use `cdp-protocol` for CDP commands and events wherever the crate supports
   the shape. Manual JSON handling is only acceptable for unavoidable wire
   envelopes, generic forwarding, or crate gaps.

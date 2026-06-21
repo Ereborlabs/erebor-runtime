@@ -18,7 +18,8 @@ pub use filter::{
 };
 pub use jsonl::{append_audit_record, read_audit_records, JsonlAuditSink};
 pub use session_review::{
-    render_session_describe, render_session_list, render_session_show, review_session,
-    session_summaries, SessionDecisionSummary, SessionReview, SessionReviewArtifacts,
-    SessionSummary, SessionTimelineItem,
+    render_session_describe, render_session_describe_from_paths, render_session_list,
+    render_session_list_from_path, render_session_show, render_session_show_from_paths,
+    review_session, session_summaries, SessionDecisionSummary, SessionReview,
+    SessionReviewArtifacts, SessionReviewOutputFormat, SessionSummary, SessionTimelineItem,
 };

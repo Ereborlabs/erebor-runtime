@@ -7,10 +7,10 @@ use std::{
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use erebor_runtime_audit::{
-    read_audit_records, render_session_describe, render_session_list, render_session_show,
-    review_session, session_summaries, AuditLogError, EvidenceTraceError, EvidenceTracePaths,
-    EvidenceTraceSink, FileEvidenceTraceSink, MarkdownEvidenceTraceRenderer,
-    SessionReviewArtifacts, SessionReviewError,
+    read_audit_records, render_session_describe_from_paths, render_session_list_from_path,
+    render_session_show_from_paths, AuditLogError, EvidenceTraceError, EvidenceTracePaths,
+    EvidenceTraceSink, FileEvidenceTraceSink, MarkdownEvidenceTraceRenderer, SessionReviewError,
+    SessionReviewOutputFormat,
 };
 use erebor_runtime_core::{
     BrowserCdpSurfaceLayerConfig, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
@@ -331,6 +331,15 @@ impl From<SessionRunnerArg> for SessionRunnerKind {
 enum OutputFormat {
     Text,
     Json,
+}
+
+impl From<OutputFormat> for SessionReviewOutputFormat {
+    fn from(value: OutputFormat) -> Self {
+        match value {
+            OutputFormat::Text => Self::Text,
+            OutputFormat::Json => Self::Json,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -662,78 +671,36 @@ fn session_adopt(args: &SessionAdoptArgs) -> Result<(), CliError> {
 }
 
 fn session_ls(args: &SessionLsArgs) -> Result<(), CliError> {
-    let records = read_audit_records(&args.audit).map_err(CliError::audit_log)?;
-    let artifacts = SessionReviewArtifacts::default();
-    match args.format {
-        OutputFormat::Text => {
-            let output =
-                render_session_list(&records, &artifacts).map_err(CliError::session_review)?;
-            print!("{output}");
-        }
-        OutputFormat::Json => {
-            let summaries =
-                session_summaries(&records, &artifacts).map_err(CliError::session_review)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&summaries).map_err(CliError::encode_json)?
-            );
-        }
-    }
+    let output = render_session_list_from_path(&args.audit, args.format.into())
+        .map_err(CliError::session_review)?;
+    print!("{output}");
     Ok(())
 }
 
 fn session_show(args: &SessionShowArgs) -> Result<(), CliError> {
-    let records = read_audit_records(&args.audit).map_err(CliError::audit_log)?;
-    let artifacts = session_review_artifacts(&args.policy, &args.config)?;
-    match args.format {
-        OutputFormat::Text => {
-            let output = render_session_show(&records, &args.session_id, &artifacts)
-                .map_err(CliError::session_review)?;
-            print!("{output}");
-        }
-        OutputFormat::Json => {
-            let review = review_session(&records, &args.session_id, &artifacts)
-                .map_err(CliError::session_review)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&review).map_err(CliError::encode_json)?
-            );
-        }
-    }
+    let output = render_session_show_from_paths(
+        &args.audit,
+        &args.policy,
+        &args.config,
+        &args.session_id,
+        args.format.into(),
+    )
+    .map_err(CliError::session_review)?;
+    print!("{output}");
     Ok(())
 }
 
 fn session_describe(args: &SessionDescribeArgs) -> Result<(), CliError> {
-    let records = read_audit_records(&args.audit).map_err(CliError::audit_log)?;
-    let artifacts = session_review_artifacts(&args.policy, &args.config)?;
-    match args.format {
-        OutputFormat::Text => {
-            let output = render_session_describe(&records, &args.session_id, &artifacts)
-                .map_err(CliError::session_review)?;
-            print!("{output}");
-        }
-        OutputFormat::Json => {
-            let review = review_session(&records, &args.session_id, &artifacts)
-                .map_err(CliError::session_review)?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&review).map_err(CliError::encode_json)?
-            );
-        }
-    }
+    let output = render_session_describe_from_paths(
+        &args.audit,
+        &args.policy,
+        &args.config,
+        &args.session_id,
+        args.format.into(),
+    )
+    .map_err(CliError::session_review)?;
+    print!("{output}");
     Ok(())
-}
-
-fn session_review_artifacts(
-    policy: &Path,
-    config: &Path,
-) -> Result<SessionReviewArtifacts, CliError> {
-    let runtime_config = read_runtime_config(config)?;
-    let runner = runtime_config
-        .session
-        .enabled
-        .then(|| runtime_config.session.runner.kind.as_str().to_owned());
-    SessionReviewArtifacts::from_paths(runner, policy, config).map_err(CliError::session_review)
 }
 
 fn execute_session_run_plan(config: &RuntimeConfig, plan: &SessionRunPlan) -> Result<(), CliError> {
@@ -937,7 +904,7 @@ pub(crate) enum CliError {
     },
     #[error("{source}")]
     SessionReview {
-        source: SessionReviewError,
+        source: Box<SessionReviewError>,
         location: Location,
     },
     #[error("failed to encode JSON output: {source}")]
@@ -1023,7 +990,7 @@ impl CliError {
     #[track_caller]
     fn session_review(source: SessionReviewError) -> Self {
         Self::SessionReview {
-            source,
+            source: Box::new(source),
             location: Location::default(),
         }
     }

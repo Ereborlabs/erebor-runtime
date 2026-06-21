@@ -4,7 +4,7 @@ use std::{
     path::Path,
 };
 
-use erebor_runtime_core::AuditRecord;
+use erebor_runtime_core::{AuditRecord, RuntimeConfig};
 use erebor_runtime_events::{ActionKind, ExecutionSurface, RiskLevel};
 use erebor_runtime_policy::Decision;
 use serde::Serialize;
@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::{
     evidence_trace::{redact, sha256_hex},
-    SessionReviewError,
+    read_audit_records, SessionReviewError,
 };
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -58,6 +58,12 @@ impl SessionReviewArtifacts {
     pub fn config_sha256(&self) -> Option<&str> {
         self.config_sha256.as_deref()
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionReviewOutputFormat {
+    Text,
+    Json,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -232,6 +238,54 @@ pub fn render_session_list(
     Ok(output)
 }
 
+pub fn render_session_list_from_path(
+    audit: &Path,
+    format: SessionReviewOutputFormat,
+) -> Result<String, SessionReviewError> {
+    let records = read_audit_records(audit).map_err(SessionReviewError::audit_log)?;
+    let artifacts = SessionReviewArtifacts::default();
+    match format {
+        SessionReviewOutputFormat::Text => render_session_list(&records, &artifacts),
+        SessionReviewOutputFormat::Json => {
+            encode_json_output(&session_summaries(&records, &artifacts)?)
+        }
+    }
+}
+
+pub fn render_session_show_from_paths(
+    audit: &Path,
+    policy: &Path,
+    config: &Path,
+    session_id: &str,
+    format: SessionReviewOutputFormat,
+) -> Result<String, SessionReviewError> {
+    render_session_from_paths(
+        audit,
+        policy,
+        config,
+        session_id,
+        format,
+        render_session_show,
+    )
+}
+
+pub fn render_session_describe_from_paths(
+    audit: &Path,
+    policy: &Path,
+    config: &Path,
+    session_id: &str,
+    format: SessionReviewOutputFormat,
+) -> Result<String, SessionReviewError> {
+    render_session_from_paths(
+        audit,
+        policy,
+        config,
+        session_id,
+        format,
+        render_session_describe,
+    )
+}
+
 pub fn review_session(
     records: &[AuditRecord],
     session_id: &str,
@@ -386,6 +440,28 @@ pub fn render_session_describe(
     Ok(output)
 }
 
+fn render_session_from_paths(
+    audit: &Path,
+    policy: &Path,
+    config: &Path,
+    session_id: &str,
+    format: SessionReviewOutputFormat,
+    text_renderer: fn(
+        &[AuditRecord],
+        &str,
+        &SessionReviewArtifacts,
+    ) -> Result<String, SessionReviewError>,
+) -> Result<String, SessionReviewError> {
+    let records = read_audit_records(audit).map_err(SessionReviewError::audit_log)?;
+    let artifacts = session_review_artifacts_from_paths(policy, config)?;
+    match format {
+        SessionReviewOutputFormat::Text => text_renderer(&records, session_id, &artifacts),
+        SessionReviewOutputFormat::Json => {
+            encode_json_output(&review_session(&records, session_id, &artifacts)?)
+        }
+    }
+}
+
 fn session_summaries_for_session(
     records: &[&AuditRecord],
     artifacts: &SessionReviewArtifacts,
@@ -432,6 +508,21 @@ fn records_for_session<'a>(
     }
 }
 
+fn session_review_artifacts_from_paths(
+    policy: &Path,
+    config: &Path,
+) -> Result<SessionReviewArtifacts, SessionReviewError> {
+    let config_source = fs::read_to_string(config)
+        .map_err(|source| SessionReviewError::read_file(config, source))?;
+    let runtime_config = RuntimeConfig::from_json_str(&config_source)
+        .map_err(|source| SessionReviewError::invalid_runtime_config(config, source))?;
+    let runner = runtime_config
+        .session
+        .enabled
+        .then(|| runtime_config.session.runner.kind.as_str().to_owned());
+    SessionReviewArtifacts::from_paths(runner, policy, config)
+}
+
 fn session_decision_summary(
     record: &AuditRecord,
     artifacts: &SessionReviewArtifacts,
@@ -476,6 +567,13 @@ fn session_timeline_item(record: &AuditRecord) -> SessionTimelineItem {
 fn file_sha256(path: &Path) -> Result<String, SessionReviewError> {
     let bytes = fs::read(path).map_err(|source| SessionReviewError::read_file(path, source))?;
     Ok(sha256_hex(&bytes))
+}
+
+fn encode_json_output<T: Serialize>(value: &T) -> Result<String, SessionReviewError> {
+    let mut output =
+        serde_json::to_string_pretty(value).map_err(SessionReviewError::encode_json)?;
+    output.push('\n');
+    Ok(output)
 }
 
 fn update_time_bounds(accumulator: &mut SessionAccumulator, timestamp: &str) {
@@ -762,8 +860,9 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        render_session_describe, render_session_list, render_session_show, review_session,
-        session_summaries, SessionReviewArtifacts,
+        render_session_describe, render_session_list, render_session_show,
+        render_session_show_from_paths, review_session, session_summaries, SessionReviewArtifacts,
+        SessionReviewOutputFormat,
     };
 
     #[test]
@@ -814,7 +913,22 @@ mod tests {
     fn session_renderers_include_decision_context_and_hashes(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let policy = temp_file("policy.json", r#"{"rules":[]}"#)?;
-        let config = temp_file("config.json", r#"{"session":{"enabled":true}}"#)?;
+        let config = temp_file(
+            "config.json",
+            &format!(
+                r#"{{
+                    "policies": ["{}"],
+                    "session": {{
+                        "enabled": true,
+                        "runner": {{ "kind": "linux_host" }}
+                    }},
+                    "surfaces": {{
+                        "terminal": {{ "enabled": true }}
+                    }}
+                }}"#,
+                policy.display()
+            ),
+        )?;
         let artifacts =
             SessionReviewArtifacts::from_paths(Some(String::from("linux-host")), &policy, &config)?;
         let records = vec![process_record(
@@ -827,11 +941,22 @@ mod tests {
             },
             "2026-06-21T18:00:01Z",
         )];
+        let audit = temp_file(
+            "audit.jsonl",
+            &format!("{}\n", serde_json::to_string(&records[0])?),
+        )?;
 
         let list = render_session_list(&records, &artifacts)?;
         let show = render_session_show(&records, "session-1", &artifacts)?;
         let describe = render_session_describe(&records, "session-1", &artifacts)?;
         let review = review_session(&records, "session-1", &artifacts)?;
+        let path_json = render_session_show_from_paths(
+            &audit,
+            &policy,
+            &config,
+            "session-1",
+            SessionReviewOutputFormat::Json,
+        )?;
 
         assert!(list.contains("session-1"));
         assert!(list.contains("linux-host"));
@@ -850,9 +975,11 @@ mod tests {
         assert_eq!(review.timeline.len(), 1);
         assert!(review.policy_sha256.is_some());
         assert!(review.config_sha256.is_some());
+        assert!(path_json.contains(r#""controlled_path_backend": "linux_ptrace_process_guard""#));
 
         let _result = fs::remove_file(policy);
         let _result = fs::remove_file(config);
+        let _result = fs::remove_file(audit);
         Ok(())
     }
 
