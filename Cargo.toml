@@ -20,6 +20,7 @@ repository = "https://github.com/Ereborlabs/erebor-runtime"
 [workspace.dependencies]
 cdp-protocol = "0.3.1"
 clap = { version = "4", features = ["derive"] }
+comfy-table = "7.2.1"
 futures-util = "0.3"
 prost = "0.13"
 prost-build = "0.13"

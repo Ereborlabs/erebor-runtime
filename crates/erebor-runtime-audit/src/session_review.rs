@@ -4,6 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use comfy_table::modifiers::UTF8_ROUND_CORNERS;
+use comfy_table::presets::UTF8_FULL;
+use comfy_table::{ContentArrangement, Table};
 use erebor_runtime_core::{
     AuditRecord, RuntimeConfig, SessionRegistry, SessionRegistryRecord,
     DEFAULT_SESSION_REGISTRY_PATH,
@@ -236,7 +239,7 @@ pub fn render_session_list(
     artifacts: &SessionReviewArtifacts,
 ) -> Result<String, SessionReviewError> {
     let summaries = session_summaries(records, artifacts)?;
-    render_session_summary_table(&summaries)
+    Ok(render_session_summary_table(&summaries))
 }
 
 pub fn render_session_list_from_path(
@@ -267,7 +270,7 @@ pub fn render_session_list_from_source(
         .map_err(SessionReviewError::session_registry)?;
     let summaries = registry_session_summaries(&records);
     match format {
-        SessionReviewOutputFormat::Text => render_session_summary_table(&summaries),
+        SessionReviewOutputFormat::Text => Ok(render_session_summary_table(&summaries)),
         SessionReviewOutputFormat::Json => encode_json_output(&summaries),
     }
 }
@@ -514,31 +517,39 @@ fn render_session_from_paths(
     }
 }
 
-fn render_session_summary_table(
-    summaries: &[SessionSummary],
-) -> Result<String, SessionReviewError> {
-    let mut output = String::from(
-        "SESSION       STATUS    ACTOR      RUNNER      SURFACES         ALLOW DENY APPROVAL MEDIATE RISK    START\n",
-    );
+fn render_session_summary_table(summaries: &[SessionSummary]) -> String {
+    let mut table = standard_table();
+    table.set_header([
+        "SESSION", "STATUS", "ACTOR", "RUNNER", "SURFACES", "ALLOW", "DENY", "APPROVAL", "MEDIATE",
+        "RISK", "START",
+    ]);
 
     for summary in summaries {
-        output.push_str(&format!(
-            "{:<13} {:<9} {:<10} {:<11} {:<16} {:>5} {:>4} {:>8} {:>7} {:<7} {}\n",
-            summary.session_id,
-            summary.status,
-            summary.actor,
-            summary.runner,
+        table.add_row([
+            summary.session_id.clone(),
+            summary.status.clone(),
+            summary.actor.clone(),
+            summary.runner.clone(),
             summary.surfaces.join(","),
-            summary.allowed,
-            summary.denied,
-            summary.require_approval,
-            summary.mediated,
-            summary.max_risk,
-            summary.start,
-        ));
+            summary.allowed.to_string(),
+            summary.denied.to_string(),
+            summary.require_approval.to_string(),
+            summary.mediated.to_string(),
+            summary.max_risk.clone(),
+            summary.start.clone(),
+        ]);
     }
 
-    Ok(output)
+    format!("{table}\n")
+}
+
+fn standard_table() -> Table {
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+    table
 }
 
 fn explicit_review_paths(

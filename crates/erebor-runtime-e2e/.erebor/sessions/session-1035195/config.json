@@ -1,0 +1,21 @@
+{
+                  "policies": ["/tmp/erebor-runtime-e2e-session-review-1782020174392224746-1033214/policy.json"],
+                  "audit": { "jsonl": "/tmp/erebor-runtime-e2e-session-review-1782020174392224746-1033214/audit.jsonl" },
+                  "session": {
+                    "enabled": true,
+                    "actor": { "id": "test-agent", "kind": "agent" },
+                    "diagnostics": [
+                      {
+                        "name": "raw-cdp",
+                        "command": ["sh", "--remote-debugging-port=9222"]
+                      }
+                    ],
+                    "runner": { "kind": "linux_host" }
+                  },
+                  "surfaces": {
+                    "terminal": {
+                      "enabled": true,
+                      "process_guard": { "enabled": true }
+                    }
+                  }
+                }
