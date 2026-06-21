@@ -600,7 +600,8 @@ fn validate_debug_values(
     Ok(())
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SessionLayerConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -608,25 +609,10 @@ pub struct SessionLayerConfig {
     pub actor: SessionActorLayerConfig,
     #[serde(default)]
     pub workspace: Option<PathBuf>,
-    #[serde(default = "default_session_registry_path")]
-    pub registry_path: PathBuf,
     #[serde(default)]
     pub diagnostics: Vec<SessionDiagnosticLayerConfig>,
     #[serde(default, alias = "runner")]
     pub runner: SessionRunnerLayerConfig,
-}
-
-impl Default for SessionLayerConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            actor: SessionActorLayerConfig::default(),
-            workspace: None,
-            registry_path: default_session_registry_path(),
-            diagnostics: Vec::new(),
-            runner: SessionRunnerLayerConfig::default(),
-        }
-    }
 }
 
 impl SessionLayerConfig {
@@ -641,10 +627,6 @@ impl SessionLayerConfig {
             .is_some_and(|path| path.as_os_str().is_empty())
         {
             return Err(RuntimeConfigError::empty_session_workspace());
-        }
-
-        if self.registry_path.as_os_str().is_empty() {
-            return Err(RuntimeConfigError::empty_session_registry_path());
         }
 
         let mut diagnostics = HashSet::new();
@@ -831,7 +813,7 @@ impl SessionRunPlan {
             session_id,
             actor: config.session.actor.clone(),
             workspace: config.session.workspace.clone(),
-            registry_path: config.session.registry_path.clone(),
+            registry_path: session_registry_path(config.session.workspace.as_deref()),
             config_path: None,
             runner: runner.into(),
             command,
@@ -2603,8 +2585,11 @@ const fn default_session_actor_kind() -> ActorKind {
     ActorKind::Agent
 }
 
-fn default_session_registry_path() -> PathBuf {
-    PathBuf::from(DEFAULT_SESSION_REGISTRY_PATH)
+fn session_registry_path(workspace: Option<&Path>) -> PathBuf {
+    workspace.map_or_else(
+        || PathBuf::from(DEFAULT_SESSION_REGISTRY_PATH),
+        |path| path.join(DEFAULT_SESSION_REGISTRY_PATH),
+    )
 }
 
 const fn default_session_runner_kind() -> SessionRunnerKind {
@@ -3348,6 +3333,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_session_registry_path_config() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "registry_path": ".erebor/sessions"
+              }
+            }
+            "#,
+        );
+
+        assert!(matches!(error, Err(RuntimeConfigError::InvalidJson { .. })));
+    }
+
+    #[test]
     fn docker_command_plan_wraps_session_command() -> Result<(), RuntimeConfigError> {
         let config = RuntimeConfig::from_json_str(
             r#"
@@ -3378,6 +3380,10 @@ mod tests {
             vec![String::from("openclaw"), String::from("--help")],
         )?;
 
+        assert_eq!(
+            plan.registry_path(),
+            Path::new("/tmp/erebor-workspace/.erebor/sessions")
+        );
         let launch = DockerSessionCommandPlan::from_session_run_plan(&plan);
 
         assert_eq!(launch.program(), "docker");
@@ -3837,6 +3843,10 @@ mod tests {
 
         assert_eq!(plan.diagnostic(), Some("list-workspace"));
         assert_eq!(plan.command(), ["sh", "-lc", "ls -la /workspace | head"]);
+        assert_eq!(
+            plan.registry_path(),
+            Path::new(crate::DEFAULT_SESSION_REGISTRY_PATH)
+        );
         Ok(())
     }
 

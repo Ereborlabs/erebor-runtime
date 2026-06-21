@@ -23,8 +23,6 @@ pub enum RuntimeConfigError {
     EmptySessionActorId { location: Location },
     #[error("runtime config session workspace path cannot be empty")]
     EmptySessionWorkspace { location: Location },
-    #[error("runtime config session registry path cannot be empty")]
-    EmptySessionRegistryPath { location: Location },
     #[error("runtime config session diagnostic name cannot be empty")]
     EmptySessionDiagnosticName { location: Location },
     #[error("runtime config session diagnostic `{name}` is duplicated")]
@@ -263,13 +261,6 @@ impl RuntimeConfigError {
     #[track_caller]
     pub fn empty_session_workspace() -> Self {
         Self::EmptySessionWorkspace {
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    pub fn empty_session_registry_path() -> Self {
-        Self::EmptySessionRegistryPath {
             location: Location::default(),
         }
     }

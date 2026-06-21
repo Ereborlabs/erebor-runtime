@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use erebor_runtime_core::AuditRecord;
+use erebor_runtime_core::{AuditRecord, SessionRegistry, DEFAULT_SESSION_REGISTRY_PATH};
 use erebor_runtime_events::{ActionKind, ActorIdentity, ActorKind, ExecutionSurface, RuntimeEvent};
 use erebor_runtime_policy::Decision;
 use serde_json::Value;
@@ -121,6 +121,63 @@ pub struct EvidenceTracePaths {
     pub prompt: Option<PathBuf>,
     pub session_id: Option<String>,
     pub purpose: String,
+}
+
+impl EvidenceTracePaths {
+    pub fn from_default_session_registry(
+        session_id: &str,
+        prompt: Option<PathBuf>,
+        purpose: impl Into<String>,
+    ) -> Result<Self, EvidenceTraceError> {
+        Self::from_session_registry(
+            Path::new(DEFAULT_SESSION_REGISTRY_PATH),
+            session_id,
+            prompt,
+            purpose,
+        )
+    }
+
+    fn from_session_registry(
+        registry: &Path,
+        session_id: &str,
+        prompt: Option<PathBuf>,
+        purpose: impl Into<String>,
+    ) -> Result<Self, EvidenceTraceError> {
+        let session = SessionRegistry::new(registry.to_path_buf())
+            .load_session(session_id)
+            .map_err(EvidenceTraceError::session_registry)?;
+        let policy = session
+            .primary_policy_artifact_path()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| EvidenceTraceError::missing_policy_artifact(session_id))?;
+        let config = session
+            .config_artifact_path()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| EvidenceTraceError::missing_config_artifact(session_id))?;
+
+        Ok(Self {
+            audit: session.audit_path().to_path_buf(),
+            policy,
+            config,
+            prompt,
+            session_id: Some(session_id.to_owned()),
+            purpose: purpose.into(),
+        })
+    }
+}
+
+pub fn session_audit_path(session_id: &str) -> Result<PathBuf, EvidenceTraceError> {
+    session_audit_path_from_registry(Path::new(DEFAULT_SESSION_REGISTRY_PATH), session_id)
+}
+
+fn session_audit_path_from_registry(
+    registry: &Path,
+    session_id: &str,
+) -> Result<PathBuf, EvidenceTraceError> {
+    let session = SessionRegistry::new(registry.to_path_buf())
+        .load_session(session_id)
+        .map_err(EvidenceTraceError::session_registry)?;
+    Ok(session.audit_path().to_path_buf())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

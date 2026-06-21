@@ -23,7 +23,7 @@ mod linux_host {
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
-                "registry_path": "{}",
+                "workspace": "{}",
                 "diagnostics": [
                   {{
                     "name": "metadata",
@@ -44,7 +44,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            registry_path(&test_dir).display()
+            test_dir.display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -75,7 +75,7 @@ mod linux_host {
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
-                "registry_path": "{}",
+                "workspace": "{}",
                 "diagnostics": [
                   {{
                     "name": "sleep",
@@ -92,7 +92,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            registry_path(&test_dir).display()
+            test_dir.display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -126,7 +126,7 @@ mod linux_host {
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
-                "registry_path": "{}",
+                "workspace": "{}",
                 "diagnostics": [
                   {{
                     "name": "metadata",
@@ -147,7 +147,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            registry_path(&test_dir).display()
+            test_dir.display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -181,7 +181,7 @@ mod linux_host {
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
-                "registry_path": "{}",
+                "workspace": "{}",
                 "runner": {{ "kind": "linux_host" }}
               }},
               "surfaces": {{
@@ -192,7 +192,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            registry_path(&test_dir).display()
+            test_dir.display()
         ))?;
         let mut child = Command::new("sh")
             .arg("-lc")
@@ -236,7 +236,7 @@ mod linux_host {
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
-                "registry_path": "{}",
+                "workspace": "{}",
                 "diagnostics": [
                   {{
                     "name": "raw-cdp",
@@ -253,7 +253,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            registry_path(&test_dir).display()
+            test_dir.display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -375,7 +375,7 @@ mod linux_host {
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
-                "registry_path": "{}",
+                "workspace": "{}",
                 "diagnostics": [
                   {{
                     "name": "git-push",
@@ -392,7 +392,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            registry_path(&test_dir).display()
+            test_dir.display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -481,7 +481,7 @@ mod linux_host {
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
-                "registry_path": "{}",
+                "workspace": "{}",
                 "diagnostics": [
                   {{
                     "name": "{}",
@@ -498,7 +498,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            registry_path(&test_dir).display(),
+            test_dir.display(),
             diagnostic_name,
             command_json
         ))?;

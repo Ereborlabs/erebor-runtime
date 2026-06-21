@@ -123,6 +123,21 @@ pub enum EvidenceTraceError {
         session_id: String,
         location: Location,
     },
+    #[error("{source}")]
+    SessionRegistry {
+        source: SessionRegistryError,
+        location: Location,
+    },
+    #[error("session `{session_id}` registry record does not include a copied policy artifact")]
+    MissingPolicyArtifact {
+        session_id: String,
+        location: Location,
+    },
+    #[error("session `{session_id}` registry record does not include a copied config artifact")]
+    MissingConfigArtifact {
+        session_id: String,
+        location: Location,
+    },
 }
 
 impl EvidenceTraceError {
@@ -175,6 +190,30 @@ impl EvidenceTraceError {
             location: Location::default(),
         }
     }
+
+    #[track_caller]
+    pub(crate) fn session_registry(source: SessionRegistryError) -> Self {
+        Self::SessionRegistry {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub(crate) fn missing_policy_artifact(session_id: impl Into<String>) -> Self {
+        Self::MissingPolicyArtifact {
+            session_id: session_id.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub(crate) fn missing_config_artifact(session_id: impl Into<String>) -> Self {
+        Self::MissingConfigArtifact {
+            session_id: session_id.into(),
+            location: Location::default(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -213,8 +252,6 @@ pub enum SessionReviewError {
         source: SessionRegistryError,
         location: Location,
     },
-    #[error("explicit audit review requires --audit, --policy, and --config")]
-    IncompleteExplicitReviewPaths { location: Location },
     #[error("session `{session_id}` registry record does not include a copied policy artifact")]
     MissingPolicyArtifact {
         session_id: String,
@@ -284,13 +321,6 @@ impl SessionReviewError {
     pub(crate) fn session_registry(source: SessionRegistryError) -> Self {
         Self::SessionRegistry {
             source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    pub(crate) fn incomplete_explicit_review_paths() -> Self {
-        Self::IncompleteExplicitReviewPaths {
             location: Location::default(),
         }
     }

@@ -385,7 +385,7 @@ mod tests {
                     "policies": ["{}"],
                     "session": {{
                         "enabled": true,
-                        "registry_path": "{}",
+                        "workspace": "{}",
                         "runner": {{ "kind": "linux_host" }}
                     }},
                     "surfaces": {{
@@ -393,7 +393,7 @@ mod tests {
                     }}
                 }}"#,
                 policy.display(),
-                root.join(".erebor/sessions").display()
+                root.display()
             ),
         )?;
         let config = RuntimeConfig::from_json_str(&fs::read_to_string(&config_path)?)?;

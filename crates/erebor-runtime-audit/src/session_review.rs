@@ -73,19 +73,13 @@ pub enum SessionReviewOutputFormat {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionReviewSourcePaths {
-    pub audit: Option<PathBuf>,
-    pub policy: Option<PathBuf>,
-    pub config: Option<PathBuf>,
-    pub registry: PathBuf,
+struct SessionReviewSourcePaths {
+    registry: PathBuf,
 }
 
 impl Default for SessionReviewSourcePaths {
     fn default() -> Self {
         Self {
-            audit: None,
-            policy: None,
-            config: None,
             registry: PathBuf::from(DEFAULT_SESSION_REGISTRY_PATH),
         }
     }
@@ -242,28 +236,16 @@ pub fn render_session_list(
     Ok(render_session_summary_table(&summaries))
 }
 
-pub fn render_session_list_from_path(
-    audit: &Path,
+pub fn render_session_list_from_default_registry(
     format: SessionReviewOutputFormat,
 ) -> Result<String, SessionReviewError> {
-    let records = read_audit_records(audit).map_err(SessionReviewError::audit_log)?;
-    let artifacts = SessionReviewArtifacts::default();
-    match format {
-        SessionReviewOutputFormat::Text => render_session_list(&records, &artifacts),
-        SessionReviewOutputFormat::Json => {
-            encode_json_output(&session_summaries(&records, &artifacts)?)
-        }
-    }
+    render_session_list_from_source(&SessionReviewSourcePaths::default(), format)
 }
 
-pub fn render_session_list_from_source(
+fn render_session_list_from_source(
     source: &SessionReviewSourcePaths,
     format: SessionReviewOutputFormat,
 ) -> Result<String, SessionReviewError> {
-    if let Some(audit) = source.audit.as_deref() {
-        return render_session_list_from_path(audit, format);
-    }
-
     let registry = SessionRegistry::new(source.registry.clone());
     let records = registry
         .list_sessions()
@@ -292,20 +274,20 @@ pub fn render_session_show_from_paths(
     )
 }
 
-pub fn render_session_show_from_source(
+pub fn render_session_show_from_default_registry(
+    session_id: &str,
+    format: SessionReviewOutputFormat,
+) -> Result<String, SessionReviewError> {
+    render_session_show_from_source(&SessionReviewSourcePaths::default(), session_id, format)
+}
+
+fn render_session_show_from_source(
     source: &SessionReviewSourcePaths,
     session_id: &str,
     format: SessionReviewOutputFormat,
 ) -> Result<String, SessionReviewError> {
-    match explicit_review_paths(source)? {
-        Some((audit, policy, config)) => {
-            render_session_show_from_paths(audit, policy, config, session_id, format)
-        }
-        None => {
-            let (audit, policy, config) = registry_review_paths(source, session_id)?;
-            render_session_show_from_paths(&audit, &policy, &config, session_id, format)
-        }
-    }
+    let (audit, policy, config) = registry_review_paths(source, session_id)?;
+    render_session_show_from_paths(&audit, &policy, &config, session_id, format)
 }
 
 pub fn render_session_describe_from_paths(
@@ -325,20 +307,20 @@ pub fn render_session_describe_from_paths(
     )
 }
 
-pub fn render_session_describe_from_source(
+pub fn render_session_describe_from_default_registry(
+    session_id: &str,
+    format: SessionReviewOutputFormat,
+) -> Result<String, SessionReviewError> {
+    render_session_describe_from_source(&SessionReviewSourcePaths::default(), session_id, format)
+}
+
+fn render_session_describe_from_source(
     source: &SessionReviewSourcePaths,
     session_id: &str,
     format: SessionReviewOutputFormat,
 ) -> Result<String, SessionReviewError> {
-    match explicit_review_paths(source)? {
-        Some((audit, policy, config)) => {
-            render_session_describe_from_paths(audit, policy, config, session_id, format)
-        }
-        None => {
-            let (audit, policy, config) = registry_review_paths(source, session_id)?;
-            render_session_describe_from_paths(&audit, &policy, &config, session_id, format)
-        }
-    }
+    let (audit, policy, config) = registry_review_paths(source, session_id)?;
+    render_session_describe_from_paths(&audit, &policy, &config, session_id, format)
 }
 
 pub fn review_session(
@@ -550,20 +532,6 @@ fn standard_table() -> Table {
         .apply_modifier(UTF8_ROUND_CORNERS)
         .set_content_arrangement(ContentArrangement::Dynamic);
     table
-}
-
-fn explicit_review_paths(
-    source: &SessionReviewSourcePaths,
-) -> Result<Option<(&Path, &Path, &Path)>, SessionReviewError> {
-    match (
-        source.audit.as_deref(),
-        source.policy.as_deref(),
-        source.config.as_deref(),
-    ) {
-        (None, None, None) => Ok(None),
-        (Some(audit), Some(policy), Some(config)) => Ok(Some((audit, policy, config))),
-        _ => Err(SessionReviewError::incomplete_explicit_review_paths()),
-    }
 }
 
 fn registry_review_paths(
@@ -1178,7 +1146,6 @@ mod tests {
     fn source_renderers_resolve_registry_artifacts() -> Result<(), Box<dyn std::error::Error>> {
         let root = temp_dir("registry-source")?;
         let policy = root.join("policy.json");
-        let registry_root = root.join(".erebor/sessions");
         let config = root.join("config.json");
         fs::write(&policy, r#"{"rules":[]}"#)?;
         fs::write(
@@ -1188,7 +1155,7 @@ mod tests {
                     "policies": ["{}"],
                     "session": {{
                         "enabled": true,
-                        "registry_path": "{}",
+                        "workspace": "{}",
                         "actor": {{ "id": "test-agent", "kind": "agent" }},
                         "runner": {{ "kind": "linux_host" }}
                     }},
@@ -1197,7 +1164,7 @@ mod tests {
                     }}
                 }}"#,
                 policy.display(),
-                registry_root.display(),
+                root.display(),
             ),
         )?;
         let runtime_config = RuntimeConfig::from_json_str(&fs::read_to_string(&config)?)?;
@@ -1234,7 +1201,6 @@ mod tests {
 
         let source = SessionReviewSourcePaths {
             registry: registry.root().to_path_buf(),
-            ..SessionReviewSourcePaths::default()
         };
         let list = render_session_list_from_source(&source, SessionReviewOutputFormat::Text)?;
         let show = render_session_show_from_source(
@@ -1254,45 +1220,6 @@ mod tests {
         assert!(show.contains("Policy sha256:"));
         assert!(describe.contains(r#""session_id": "session-registry-source""#));
         assert!(describe.contains(r#""controlled_path_backend": "linux_ptrace_process_guard""#));
-
-        let explicit = SessionReviewSourcePaths {
-            audit: Some(started.record().audit_path().to_path_buf()),
-            policy: Some(
-                started
-                    .record()
-                    .primary_policy_artifact_path()
-                    .ok_or_else(|| std::io::Error::other("missing policy artifact"))?
-                    .to_path_buf(),
-            ),
-            config: Some(
-                started
-                    .record()
-                    .config_artifact_path()
-                    .ok_or_else(|| std::io::Error::other("missing config artifact"))?
-                    .to_path_buf(),
-            ),
-            registry: root.join("unused"),
-        };
-        let explicit_show = render_session_show_from_source(
-            &explicit,
-            "session-registry-source",
-            SessionReviewOutputFormat::Text,
-        )?;
-        assert!(explicit_show.contains("deny-raw-cdp"));
-
-        let incomplete = SessionReviewSourcePaths {
-            audit: Some(started.record().audit_path().to_path_buf()),
-            ..SessionReviewSourcePaths::default()
-        };
-        let error = render_session_show_from_source(
-            &incomplete,
-            "session-registry-source",
-            SessionReviewOutputFormat::Text,
-        );
-        assert!(matches!(
-            error,
-            Err(crate::SessionReviewError::IncompleteExplicitReviewPaths { .. })
-        ));
 
         fs::remove_dir_all(root)?;
         Ok(())

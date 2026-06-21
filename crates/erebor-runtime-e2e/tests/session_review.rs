@@ -38,59 +38,27 @@ mod linux_host {
         let registry_record = single_registry_record(&test_dir)?;
         let session_id = json_string(&registry_record, "/session_id")?.to_owned();
         let audit_path = PathBuf::from(json_string(&registry_record, "/audit_path")?);
-        let policy_artifact_path =
-            PathBuf::from(json_string(&registry_record, "/policy_artifact_paths/0")?);
-        let config_artifact_path =
-            PathBuf::from(json_string(&registry_record, "/config_artifact_path")?);
-        let list = run_cli(
+        assert!(audit_path.exists());
+        assert!(Path::new(json_string(&registry_record, "/policy_artifact_paths/0")?).exists());
+        assert!(Path::new(json_string(&registry_record, "/config_artifact_path")?).exists());
+        let list = run_cli_in(&erebor_runtime, &test_dir, ["session", "ls"])?;
+        let show = run_cli_in(
             &erebor_runtime,
-            [
-                "session",
-                "ls",
-                "--audit",
-                audit_path.to_string_lossy().as_ref(),
-            ],
+            &test_dir,
+            ["session", "show", session_id.as_str()],
         )?;
-        let show = run_cli(
+        let describe = run_cli_in(
             &erebor_runtime,
-            [
-                "session",
-                "show",
-                session_id.as_str(),
-                "--audit",
-                audit_path.to_string_lossy().as_ref(),
-                "--policy",
-                policy_artifact_path.to_string_lossy().as_ref(),
-                "--config",
-                config_artifact_path.to_string_lossy().as_ref(),
-            ],
+            &test_dir,
+            ["session", "describe", session_id.as_str()],
         )?;
-        let describe = run_cli(
+        let describe_json = run_cli_in(
             &erebor_runtime,
+            &test_dir,
             [
                 "session",
                 "describe",
                 session_id.as_str(),
-                "--audit",
-                audit_path.to_string_lossy().as_ref(),
-                "--policy",
-                policy_artifact_path.to_string_lossy().as_ref(),
-                "--config",
-                config_artifact_path.to_string_lossy().as_ref(),
-            ],
-        )?;
-        let describe_json = run_cli(
-            &erebor_runtime,
-            [
-                "session",
-                "describe",
-                session_id.as_str(),
-                "--audit",
-                audit_path.to_string_lossy().as_ref(),
-                "--policy",
-                policy_artifact_path.to_string_lossy().as_ref(),
-                "--config",
-                config_artifact_path.to_string_lossy().as_ref(),
                 "--format",
                 "json",
             ],
@@ -256,20 +224,6 @@ mod linux_host {
                 ),
             ))
         }
-    }
-
-    fn run_cli<'a>(
-        binary: &Path,
-        args: impl IntoIterator<Item = &'a str>,
-    ) -> Result<String, E2eError> {
-        let output = Command::new(binary)
-            .args(args)
-            .output()
-            .map_err(E2eError::io)?;
-        if !output.status.success() {
-            return Err(command_error("erebor-runtime command", output));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
     fn run_cli_in<'a>(
