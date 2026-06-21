@@ -7,9 +7,7 @@ use std::{
 use erebor_runtime_events::{ActorKind, SessionId};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    RuntimeAuditConfig, RuntimeConfig, SessionRegistryError, SessionRunOutcome, SessionRunPlan,
-};
+use crate::{RuntimeConfig, SessionRegistryError, SessionRunOutcome, SessionRunPlan};
 
 pub const DEFAULT_SESSION_REGISTRY_PATH: &str = ".erebor/sessions";
 const SESSION_RECORD_FILE: &str = "session.json";
@@ -51,11 +49,7 @@ impl SessionRegistry {
 
         let config_artifact_path = copy_optional_config_artifact(&session_dir, plan)?;
         let policy_artifact_paths = copy_policy_artifacts(&session_dir, plan.policies())?;
-        let audit_path = plan
-            .audit()
-            .jsonl()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| session_dir.join(SESSION_AUDIT_FILE));
+        let audit_path = session_dir.join(SESSION_AUDIT_FILE);
         if let Some(parent) = audit_path
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
@@ -64,7 +58,7 @@ impl SessionRegistry {
                 .map_err(|source| SessionRegistryError::create_dir(parent, source))?;
         }
 
-        let mut record = SessionRegistryRecord {
+        let record = SessionRegistryRecord {
             schema_version: 1,
             session_id: plan.session_id().as_str().to_owned(),
             status: SessionRegistryStatus::Running,
@@ -99,19 +93,7 @@ impl SessionRegistry {
             "created session registry record"
         );
 
-        let mut effective_audit = plan.audit().clone();
-        if effective_audit.jsonl.is_none() {
-            effective_audit.jsonl = Some(audit_path);
-        }
-        record.audit_path = effective_audit
-            .jsonl()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| session_dir.join(SESSION_AUDIT_FILE));
-
-        Ok(StartedSessionRegistryRecord {
-            record,
-            effective_audit,
-        })
+        Ok(StartedSessionRegistryRecord { record, audit_path })
     }
 
     pub fn finish_session(
@@ -204,7 +186,7 @@ impl SessionRegistry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartedSessionRegistryRecord {
     record: SessionRegistryRecord,
-    effective_audit: RuntimeAuditConfig,
+    audit_path: PathBuf,
 }
 
 impl StartedSessionRegistryRecord {
@@ -214,8 +196,8 @@ impl StartedSessionRegistryRecord {
     }
 
     #[must_use]
-    pub const fn effective_audit(&self) -> &RuntimeAuditConfig {
-        &self.effective_audit
+    pub fn audit_path(&self) -> &Path {
+        &self.audit_path
     }
 }
 
@@ -433,10 +415,7 @@ mod tests {
             .config_artifact_path()
             .is_some_and(Path::exists));
         assert_eq!(started.record().policy_artifact_paths.len(), 1);
-        assert_eq!(
-            started.effective_audit().jsonl(),
-            Some(started.record().audit_path())
-        );
+        assert_eq!(started.audit_path(), started.record().audit_path());
 
         let finished = registry.finish_session(
             plan.session_id(),

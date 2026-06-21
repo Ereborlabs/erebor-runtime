@@ -17,8 +17,6 @@ pub enum RuntimeConfigError {
     MissingPolicy { location: Location },
     #[error("runtime config policy paths cannot be empty")]
     EmptyPolicyPath { location: Location },
-    #[error("runtime config audit jsonl path cannot be empty")]
-    EmptyAuditJsonlPath { location: Location },
     #[error("runtime config audit debug matcher `{matcher}` cannot be empty")]
     EmptyAuditDebugMatcher { matcher: String, location: Location },
     #[error("runtime config session actor id cannot be empty")]
@@ -243,13 +241,6 @@ impl RuntimeConfigError {
     #[track_caller]
     pub fn empty_policy_path() -> Self {
         Self::EmptyPolicyPath {
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    pub fn empty_audit_jsonl_path() -> Self {
-        Self::EmptyAuditJsonlPath {
             location: Location::default(),
         }
     }

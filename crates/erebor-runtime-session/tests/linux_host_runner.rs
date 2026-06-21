@@ -17,14 +17,13 @@ mod linux_host {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let test_dir = test_dir("relaunch")?;
         let policy_path = write_policy(&test_dir)?;
-        let audit_path = test_dir.join("audit.jsonl");
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
-              "audit": {{ "jsonl": "{}" }},
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
+                "registry_path": "{}",
                 "diagnostics": [
                   {{
                     "name": "metadata",
@@ -45,7 +44,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            audit_path.display()
+            registry_path(&test_dir).display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -59,7 +58,7 @@ mod linux_host {
         assert!(outcome.stdout().contains("guard=linux-ptrace"));
         assert!(outcome.stdout().contains("runner=linux-host"));
         assert!(outcome.stdout().contains("actor=openclaw"));
-        assert!(audit_path.exists());
+        assert!(session_audit_path(&test_dir, "session-linux-host").exists());
 
         fs::remove_dir_all(test_dir)?;
         Ok(())
@@ -70,14 +69,13 @@ mod linux_host {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let test_dir = test_dir("sleep-audit-filter")?;
         let policy_path = write_policy(&test_dir)?;
-        let audit_path = test_dir.join("audit.jsonl");
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
-              "audit": {{ "jsonl": "{}" }},
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
+                "registry_path": "{}",
                 "diagnostics": [
                   {{
                     "name": "sleep",
@@ -94,7 +92,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            audit_path.display()
+            registry_path(&test_dir).display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -106,6 +104,7 @@ mod linux_host {
         let outcome = run_session_diagnostic(&config, &plan)?;
 
         assert!(outcome.stdout().is_empty());
+        let audit_path = session_audit_path(&test_dir, "session-linux-host-sleep-filter");
         if audit_path.exists() {
             let audit = fs::read_to_string(&audit_path)?;
             assert!(!audit.contains("\"/usr/bin/sleep\""));
@@ -127,6 +126,7 @@ mod linux_host {
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
+                "registry_path": "{}",
                 "diagnostics": [
                   {{
                     "name": "metadata",
@@ -146,7 +146,8 @@ mod linux_host {
                 }}
               }}
             }}"#,
-            policy_path.display()
+            policy_path.display(),
+            registry_path(&test_dir).display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -174,14 +175,13 @@ mod linux_host {
 
         let test_dir = test_dir("adopt")?;
         let policy_path = write_policy(&test_dir)?;
-        let audit_path = test_dir.join("audit.jsonl");
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
-              "audit": {{ "jsonl": "{}" }},
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
+                "registry_path": "{}",
                 "runner": {{ "kind": "linux_host" }}
               }},
               "surfaces": {{
@@ -192,7 +192,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            audit_path.display()
+            registry_path(&test_dir).display()
         ))?;
         let mut child = Command::new("sh")
             .arg("-lc")
@@ -230,14 +230,13 @@ mod linux_host {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let test_dir = test_dir("deny")?;
         let policy_path = write_policy(&test_dir)?;
-        let audit_path = test_dir.join("audit.jsonl");
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
-              "audit": {{ "jsonl": "{}" }},
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
+                "registry_path": "{}",
                 "diagnostics": [
                   {{
                     "name": "raw-cdp",
@@ -254,7 +253,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            audit_path.display()
+            registry_path(&test_dir).display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -279,6 +278,7 @@ mod linux_host {
             matches!(error, SessionExecutionError::DiagnosticFailed { .. }),
             "expected denied diagnostic failure, got {error:?}"
         );
+        let audit_path = session_audit_path(&test_dir, "session-linux-host-deny");
         assert!(audit_path.exists());
         let audit = fs::read_to_string(&audit_path)?;
         assert!(audit.contains("\"type\":\"deny\""));
@@ -369,14 +369,13 @@ mod linux_host {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let test_dir = test_dir("require-approval")?;
         let policy_path = write_policy(&test_dir)?;
-        let audit_path = test_dir.join("audit.jsonl");
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
-              "audit": {{ "jsonl": "{}" }},
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
+                "registry_path": "{}",
                 "diagnostics": [
                   {{
                     "name": "git-push",
@@ -393,7 +392,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            audit_path.display()
+            registry_path(&test_dir).display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -418,7 +417,7 @@ mod linux_host {
             matches!(error, SessionExecutionError::DiagnosticFailed { .. }),
             "expected verification-required diagnostic failure, got {error:?}"
         );
-        let audit = fs::read_to_string(&audit_path)?;
+        let audit = fs::read_to_string(session_audit_path(&test_dir, "session-linux-host-verify"))?;
         assert!(audit.contains("\"policy_decision\":{\"type\":\"require_approval\""));
         assert!(audit.contains("\"final_decision\":{\"type\":\"deny\""));
         assert!(audit.contains("verify-git-push"));
@@ -476,14 +475,13 @@ mod linux_host {
     ) -> Result<String, Box<dyn std::error::Error>> {
         let test_dir = test_dir(test_name)?;
         let policy_path = write_policy(&test_dir)?;
-        let audit_path = test_dir.join("audit.jsonl");
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
-              "audit": {{ "jsonl": "{}" }},
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
+                "registry_path": "{}",
                 "diagnostics": [
                   {{
                     "name": "{}",
@@ -500,7 +498,7 @@ mod linux_host {
               }}
             }}"#,
             policy_path.display(),
-            audit_path.display(),
+            registry_path(&test_dir).display(),
             diagnostic_name,
             command_json
         ))?;
@@ -517,9 +515,17 @@ mod linux_host {
             matches!(error, Err(SessionExecutionError::DiagnosticFailed { .. })),
             "expected denied diagnostic failure, got {error:?}"
         );
-        let audit = fs::read_to_string(&audit_path)?;
+        let audit = fs::read_to_string(session_audit_path(&test_dir, session_id))?;
         fs::remove_dir_all(test_dir)?;
         Ok(audit)
+    }
+
+    fn registry_path(test_dir: &Path) -> std::path::PathBuf {
+        test_dir.join(".erebor/sessions")
+    }
+
+    fn session_audit_path(test_dir: &Path, session_id: &str) -> std::path::PathBuf {
+        registry_path(test_dir).join(session_id).join("audit.jsonl")
     }
 
     fn can_adopt_sibling_process() -> bool {

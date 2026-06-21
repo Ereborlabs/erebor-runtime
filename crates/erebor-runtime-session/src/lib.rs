@@ -76,17 +76,18 @@ pub fn run_session_plan(
     config: &RuntimeConfig,
     plan: &SessionRunPlan,
 ) -> Result<SessionRunOutcome, SessionExecutionError> {
-    let (effective_plan, registry) = prepare_registry_session(config, plan)?;
-    let result = run_session_plan_inner(config, &effective_plan);
-    finish_registry_session(&registry, effective_plan.session_id(), &result)?;
+    let prepared_session = prepare_registry_session(config, plan)?;
+    let result = run_session_plan_inner(config, plan, prepared_session.as_ref());
+    finish_registry_session(prepared_session.as_ref(), plan.session_id(), &result)?;
     result
 }
 
 fn run_session_plan_inner(
     config: &RuntimeConfig,
     plan: &SessionRunPlan,
+    prepared_session: Option<&PreparedSession>,
 ) -> Result<SessionRunOutcome, SessionExecutionError> {
-    let side_resources = start_session_side_resources(config, plan)?;
+    let side_resources = start_session_side_resources(config, plan, prepared_session)?;
 
     match plan.runner().kind() {
         SessionRunnerKind::Docker => SessionRunnerLauncher::run_with_docker_options(
@@ -107,22 +108,18 @@ pub fn run_session_diagnostic(
     config: &RuntimeConfig,
     plan: &SessionRunPlan,
 ) -> Result<SessionDiagnosticOutcome, SessionExecutionError> {
-    let (effective_plan, registry) = prepare_registry_session(config, plan)?;
-    let result = run_session_diagnostic_inner(config, &effective_plan);
-    finish_registry_diagnostic(
-        &registry,
-        effective_plan.session_id(),
-        effective_plan.runner().kind(),
-        &result,
-    )?;
+    let prepared_session = prepare_registry_session(config, plan)?;
+    let result = run_session_diagnostic_inner(config, plan, prepared_session.as_ref());
+    finish_registry_diagnostic(prepared_session.as_ref(), plan, &result)?;
     result
 }
 
 fn run_session_diagnostic_inner(
     config: &RuntimeConfig,
     plan: &SessionRunPlan,
+    prepared_session: Option<&PreparedSession>,
 ) -> Result<SessionDiagnosticOutcome, SessionExecutionError> {
-    let side_resources = start_session_side_resources(config, plan)?;
+    let side_resources = start_session_side_resources(config, plan, prepared_session)?;
     let outcome = match plan.runner().kind() {
         SessionRunnerKind::Docker => SessionRunnerLauncher::run_capture_with_docker_options(
             plan,
@@ -152,32 +149,45 @@ fn run_session_diagnostic_inner(
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SessionStorage {
+    audit_path: PathBuf,
+}
+
+impl SessionStorage {
+    fn new(audit_path: PathBuf) -> Self {
+        Self { audit_path }
+    }
+
+    fn audit_path(&self) -> &Path {
+        &self.audit_path
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PreparedSession {
+    registry: SessionRegistry,
+    storage: SessionStorage,
+}
+
 fn prepare_registry_session(
     config: &RuntimeConfig,
     plan: &SessionRunPlan,
-) -> Result<(SessionRunPlan, Option<SessionRegistry>), SessionExecutionError> {
-    let Some(_config_path) = plan.config_path() else {
-        return Ok((plan.clone(), None));
-    };
-
+) -> Result<Option<PreparedSession>, SessionExecutionError> {
     let registry = SessionRegistry::new(plan.registry_path().to_path_buf());
     let started = registry
         .start_session(config, plan)
         .map_err(SessionExecutionError::session_registry)?;
-    let effective_plan = if let Some(audit_path) = started.effective_audit().jsonl() {
-        plan.clone().with_audit_jsonl(audit_path.to_path_buf())
-    } else {
-        plan.clone()
-    };
-    Ok((effective_plan, Some(registry)))
+    let storage = SessionStorage::new(started.audit_path().to_path_buf());
+    Ok(Some(PreparedSession { registry, storage }))
 }
 
 fn finish_registry_session(
-    registry: &Option<SessionRegistry>,
+    prepared_session: Option<&PreparedSession>,
     session_id: &SessionId,
     result: &Result<SessionRunOutcome, SessionExecutionError>,
 ) -> Result<(), SessionExecutionError> {
-    let Some(registry) = registry else {
+    let Some(prepared_session) = prepared_session else {
         return Ok(());
     };
     let update = match result {
@@ -186,29 +196,32 @@ fn finish_registry_session(
             SessionRegistryFinish::failed(session_exit_code_from_error(error), error.to_string())
         }
     };
-    registry
+    prepared_session
+        .registry
         .finish_session(session_id, update)
         .map_err(SessionExecutionError::session_registry)?;
     Ok(())
 }
 
 fn finish_registry_diagnostic(
-    registry: &Option<SessionRegistry>,
-    session_id: &SessionId,
-    runner: SessionRunnerKind,
+    prepared_session: Option<&PreparedSession>,
+    plan: &SessionRunPlan,
     result: &Result<SessionDiagnosticOutcome, SessionExecutionError>,
 ) -> Result<(), SessionExecutionError> {
-    let Some(registry) = registry else {
+    let Some(prepared_session) = prepared_session else {
         return Ok(());
     };
     let update = match result {
-        Ok(_outcome) => SessionRegistryFinish::succeeded(&SessionRunOutcome::new(runner, Some(0))),
+        Ok(_outcome) => {
+            SessionRegistryFinish::succeeded(&SessionRunOutcome::new(plan.runner().kind(), Some(0)))
+        }
         Err(error) => {
             SessionRegistryFinish::failed(session_exit_code_from_error(error), error.to_string())
         }
     };
-    registry
-        .finish_session(session_id, update)
+    prepared_session
+        .registry
+        .finish_session(plan.session_id(), update)
         .map_err(SessionExecutionError::session_registry)?;
     Ok(())
 }
@@ -291,15 +304,12 @@ pub fn start_surface_launch_plan(
         match definition {
             SessionSurfaceDefinition::BrowserCdp(config) => {
                 let policy_set = read_policy_set(config.policies())?;
-                let mut surface = BrowserCdpSurface::new(
+                let surface = BrowserCdpSurface::new(
                     config.clone(),
                     policy_set,
                     runtime_context("browser-cdp"),
                 )
                 .with_audit_config(launch_plan.audit().clone());
-                if let Some(audit_jsonl) = launch_plan.audit().jsonl() {
-                    surface = surface.with_audit_jsonl(audit_jsonl.to_path_buf());
-                }
                 launcher.add_surface(surface);
             }
             SessionSurfaceDefinition::Terminal(_) => {
@@ -335,11 +345,12 @@ pub fn start_surface_launch_plan(
 fn start_session_side_resources(
     config: &RuntimeConfig,
     plan: &SessionRunPlan,
+    prepared_session: Option<&PreparedSession>,
 ) -> Result<SessionSideResources, SessionExecutionError> {
     let start_plan = config
         .surface_start_plan_for_session(plan)
         .map_err(SessionExecutionError::invalid_config)?;
-    start_session_side_resources_from_start_plan(config, plan, start_plan)
+    start_session_side_resources_from_start_plan(config, plan, start_plan, prepared_session)
 }
 
 fn start_adopt_session_side_resources(
@@ -357,13 +368,14 @@ fn start_adopt_session_side_resources(
     let start_plan = config
         .surface_start_plan_for_runner_kind(plan.runner().kind())
         .map_err(SessionExecutionError::invalid_config)?;
-    start_session_side_resources_from_start_plan(config, plan, start_plan)
+    start_session_side_resources_from_start_plan(config, plan, start_plan, None)
 }
 
 fn start_session_side_resources_from_start_plan(
     _config: &RuntimeConfig,
     plan: &impl SessionPlanContext,
     start_plan: erebor_runtime_core::SessionSurfaceStartPlan,
+    prepared_session: Option<&PreparedSession>,
 ) -> Result<SessionSideResources, SessionExecutionError> {
     if start_plan.surfaces().is_empty() {
         return Ok(SessionSideResources::default());
@@ -391,7 +403,8 @@ fn start_session_side_resources_from_start_plan(
                         config: config.clone(),
                         policy_set,
                         context: session_cdp_context(plan),
-                        audit_jsonl: plan.audit().jsonl().map(Path::to_path_buf),
+                        audit_jsonl: prepared_session
+                            .map(|session| session.storage.audit_path().to_path_buf()),
                         audit: plan.audit().clone(),
                     });
                 } else {
@@ -401,7 +414,9 @@ fn start_session_side_resources_from_start_plan(
                         session_cdp_context(plan),
                     )
                     .with_audit_config(plan.audit().clone());
-                    if let Some(audit_jsonl) = plan.audit().jsonl() {
+                    if let Some(audit_jsonl) =
+                        prepared_session.map(|session| session.storage.audit_path())
+                    {
                         surface = surface.with_audit_jsonl(audit_jsonl.to_path_buf());
                     }
                     launcher.add_surface(surface);
@@ -422,7 +437,11 @@ fn start_session_side_resources_from_start_plan(
                             "terminal process interception currently supports linux-host sessions only",
                         ));
                     }
-                    let bundle = LinuxProcessGuardBundle::prepare(config, plan)?;
+                    let bundle = LinuxProcessGuardBundle::prepare(
+                        config,
+                        plan,
+                        prepared_session.map(|session| &session.storage),
+                    )?;
                     guard_bundle = Some(bundle);
                     environment.push((
                         String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
@@ -597,6 +616,7 @@ impl LinuxProcessGuardBundle {
     fn prepare(
         config: &TerminalSurfaceConfig,
         plan: &impl SessionPlanContext,
+        storage: Option<&SessionStorage>,
     ) -> Result<Self, SessionExecutionError> {
         let instance_id = SESSION_GUARD_BUNDLE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let host_dir = std::env::temp_dir().join(format!(
@@ -620,7 +640,7 @@ impl LinuxProcessGuardBundle {
         let mut audit_jsonl_path = None;
         let mut audit_filename = None;
 
-        if let Some(audit_path) = plan.audit().jsonl() {
+        if let Some(audit_path) = storage.map(SessionStorage::audit_path) {
             let audit_parent = audit_path
                 .parent()
                 .filter(|path| !path.as_os_str().is_empty())
@@ -1513,7 +1533,6 @@ mod tests {
             .ok_or_else(|| std::io::Error::other("missing repo root"))?;
         let config_path = repo_root.join("examples/governed-openclaw-pilot/session-config.json");
         let config = RuntimeConfig::from_json_str(&fs::read_to_string(config_path)?)?;
-        assert_eq!(config.audit.jsonl(), Some(Path::new("audit.jsonl")));
         let browser_cdp = config
             .surface_start_plan()?
             .browser_cdp()
@@ -1576,7 +1595,7 @@ mod tests {
             SessionId::new("session-control-env"),
             vec![String::from("true")],
         )?;
-        let linux_resources = start_session_side_resources(&config, &linux_plan)?;
+        let linux_resources = start_session_side_resources(&config, &linux_plan, None)?;
         let linux_launch =
             LinuxHostSessionCommandPlan::from_session_run_plan_with_environment_and_options(
                 &linux_plan,
@@ -1607,7 +1626,7 @@ mod tests {
             SessionId::new("session-control-env-docker"),
             vec![String::from("true")],
         )?;
-        let docker_resources = start_session_side_resources(&config, &docker_plan)?;
+        let docker_resources = start_session_side_resources(&config, &docker_plan, None)?;
         let docker_launch =
             DockerSessionCommandPlan::from_session_run_plan_with_environment_and_options(
                 &docker_plan,

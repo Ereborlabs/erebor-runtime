@@ -564,7 +564,6 @@ fn resolve_config_paths(config_path: &Path, config: &mut RuntimeConfig) {
     for policy in &mut config.policies {
         resolve_config_path(base_dir, policy);
     }
-    resolve_optional_config_path(base_dir, &mut config.audit.jsonl);
     resolve_optional_config_path(base_dir, &mut config.session.workspace);
     resolve_optional_config_path(
         base_dir,
@@ -1471,7 +1470,6 @@ mod tests {
             r#"
             {
               "policies": ["policies/browser.json"],
-              "audit": { "jsonl": "audit/pilot.jsonl" },
               "session": {
                 "enabled": true,
                 "actor": { "id": "openclaw", "kind": "agent" },
@@ -1506,10 +1504,6 @@ mod tests {
         assert_eq!(
             plan.policies(),
             vec![base_dir.join("policies/browser.json")].as_slice()
-        );
-        assert_eq!(
-            plan.audit().jsonl(),
-            Some(base_dir.join("audit/pilot.jsonl").as_path())
         );
         assert_eq!(plan.workspace(), Some(base_dir.join("workspace").as_path()));
         assert_eq!(
@@ -1574,7 +1568,6 @@ mod tests {
             r#"
             {
               "policies": ["policy.json"],
-              "audit": { "jsonl": "pilot-audit.jsonl" },
               "session": {
                 "enabled": true,
                 "workspace": "../.."
@@ -1602,10 +1595,6 @@ mod tests {
         assert_eq!(
             config.policies,
             vec![current_dir.join("examples/governed-openclaw-pilot/policy.json")]
-        );
-        assert_eq!(
-            config.audit.jsonl,
-            Some(current_dir.join("examples/governed-openclaw-pilot/pilot-audit.jsonl"))
         );
         assert_eq!(
             config.session.workspace,

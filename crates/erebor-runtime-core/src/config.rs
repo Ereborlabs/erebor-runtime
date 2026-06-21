@@ -58,14 +58,6 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::empty_policy_path());
         }
 
-        if self
-            .audit
-            .jsonl
-            .as_ref()
-            .is_some_and(|path| path.as_os_str().is_empty())
-        {
-            return Err(RuntimeConfigError::empty_audit_jsonl_path());
-        }
         self.audit.validate()?;
 
         if self.session.enabled {
@@ -216,19 +208,13 @@ impl SessionSurfaceStartPlan {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeAuditConfig {
-    #[serde(default)]
-    pub jsonl: Option<PathBuf>,
     #[serde(default)]
     pub surfaces: RuntimeAuditSurfaceLoggingConfig,
 }
 
 impl RuntimeAuditConfig {
-    #[must_use]
-    pub fn jsonl(&self) -> Option<&Path> {
-        self.jsonl.as_deref()
-    }
-
     #[must_use]
     pub const fn surfaces(&self) -> &RuntimeAuditSurfaceLoggingConfig {
         &self.surfaces
@@ -914,12 +900,6 @@ impl SessionRunPlan {
     #[must_use]
     pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.config_path = Some(path.into());
-        self
-    }
-
-    #[must_use]
-    pub fn with_audit_jsonl(mut self, path: impl Into<PathBuf>) -> Self {
-        self.audit.jsonl = Some(path.into());
         self
     }
 
@@ -3079,7 +3059,6 @@ mod tests {
         let plan = config.surface_start_plan()?;
 
         assert_eq!(plan.policies().len(), 2);
-        assert_eq!(plan.audit().jsonl(), None);
         assert!(plan.contains_surface(SessionSurfaceKind::BrowserCdp));
         assert!(plan.contains_surface(SessionSurfaceKind::Terminal));
         assert!(!plan.contains_surface(SessionSurfaceKind::Mcp));
@@ -3102,7 +3081,6 @@ mod tests {
             r#"
             {
               "policies": ["policies/browser.json"],
-              "audit": { "jsonl": "audit/pilot.jsonl" },
               "session": {
                 "enabled": true,
                 "actor": { "id": "openclaw", "kind": "agent" },
@@ -3135,7 +3113,6 @@ mod tests {
         )?;
 
         assert_eq!(plan.policies(), &[Path::new("policies/browser.json")]);
-        assert_eq!(plan.audit().jsonl(), Some(Path::new("audit/pilot.jsonl")));
         assert_eq!(
             plan.audit().surfaces().terminal().level(),
             AuditCommandLogLevel::Signal
@@ -3171,7 +3148,6 @@ mod tests {
             {
               "policies": ["policies/browser.json"],
               "audit": {
-                "jsonl": "audit/pilot.jsonl",
                 "surfaces": {
                   "terminal": {
                     "level": "all",
@@ -3214,6 +3190,25 @@ mod tests {
             &[String::from("browser_script_eval")]
         );
         Ok(())
+    }
+
+    #[test]
+    fn rejects_config_level_audit_jsonl_storage() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "audit": {
+                "jsonl": "audit/pilot.jsonl"
+              },
+              "session": {
+                "enabled": true
+              }
+            }
+            "#,
+        );
+
+        assert!(matches!(error, Err(RuntimeConfigError::InvalidJson { .. })));
     }
 
     #[test]

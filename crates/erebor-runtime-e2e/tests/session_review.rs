@@ -15,11 +15,11 @@ mod linux_host {
         let erebor_runtime = build_erebor_runtime_binary()?;
         let test_dir = test_dir("session-review")?;
         let policy_path = write_policy(&test_dir)?;
-        let audit_path = test_dir.join("audit.jsonl");
-        let config_path = write_config(&test_dir, &policy_path, &audit_path)?;
+        let config_path = write_config(&test_dir, &policy_path)?;
 
-        let diagnostic = run_cli_expect_failure(
+        let diagnostic = run_cli_expect_failure_in(
             &erebor_runtime,
+            &test_dir,
             [
                 "session",
                 "diagnose",
@@ -35,7 +35,13 @@ mod linux_host {
             "expected governed diagnostic denial, got {diagnostic}"
         );
 
-        let session_id = session_id_from_audit(&audit_path)?;
+        let registry_record = single_registry_record(&test_dir)?;
+        let session_id = json_string(&registry_record, "/session_id")?.to_owned();
+        let audit_path = PathBuf::from(json_string(&registry_record, "/audit_path")?);
+        let policy_artifact_path =
+            PathBuf::from(json_string(&registry_record, "/policy_artifact_paths/0")?);
+        let config_artifact_path =
+            PathBuf::from(json_string(&registry_record, "/config_artifact_path")?);
         let list = run_cli(
             &erebor_runtime,
             [
@@ -54,9 +60,9 @@ mod linux_host {
                 "--audit",
                 audit_path.to_string_lossy().as_ref(),
                 "--policy",
-                policy_path.to_string_lossy().as_ref(),
+                policy_artifact_path.to_string_lossy().as_ref(),
                 "--config",
-                config_path.to_string_lossy().as_ref(),
+                config_artifact_path.to_string_lossy().as_ref(),
             ],
         )?;
         let describe = run_cli(
@@ -68,9 +74,9 @@ mod linux_host {
                 "--audit",
                 audit_path.to_string_lossy().as_ref(),
                 "--policy",
-                policy_path.to_string_lossy().as_ref(),
+                policy_artifact_path.to_string_lossy().as_ref(),
                 "--config",
-                config_path.to_string_lossy().as_ref(),
+                config_artifact_path.to_string_lossy().as_ref(),
             ],
         )?;
         let describe_json = run_cli(
@@ -82,9 +88,9 @@ mod linux_host {
                 "--audit",
                 audit_path.to_string_lossy().as_ref(),
                 "--policy",
-                policy_path.to_string_lossy().as_ref(),
+                policy_artifact_path.to_string_lossy().as_ref(),
                 "--config",
-                config_path.to_string_lossy().as_ref(),
+                config_artifact_path.to_string_lossy().as_ref(),
                 "--format",
                 "json",
             ],
@@ -282,31 +288,6 @@ mod linux_host {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
-    fn run_cli_expect_failure<'a>(
-        binary: &Path,
-        args: impl IntoIterator<Item = &'a str>,
-    ) -> Result<String, E2eError> {
-        let output = Command::new(binary)
-            .args(args)
-            .output()
-            .map_err(E2eError::io)?;
-        if output.status.success() {
-            return Err(E2eError::external(
-                "erebor-runtime command expected failure",
-                std::io::Error::other(format!(
-                    "command unexpectedly succeeded: stdout={} stderr={}",
-                    String::from_utf8_lossy(&output.stdout),
-                    String::from_utf8_lossy(&output.stderr)
-                )),
-            ));
-        }
-        Ok(format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        ))
-    }
-
     fn run_cli_expect_failure_in<'a>(
         binary: &Path,
         cwd: &Path,
@@ -346,35 +327,13 @@ mod linux_host {
         )
     }
 
-    fn session_id_from_audit(audit_path: &Path) -> Result<String, E2eError> {
-        let source = fs::read_to_string(audit_path).map_err(E2eError::io)?;
-        for line in source.lines().filter(|line| !line.trim().is_empty()) {
-            let record = serde_json::from_str::<Value>(line).map_err(E2eError::json)?;
-            if let Some(session_id) = record.pointer("/event/session_id").and_then(Value::as_str) {
-                return Ok(session_id.to_owned());
-            }
-        }
-        Err(E2eError::external(
-            "read session id from audit",
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("no session id in {}", audit_path.display()),
-            ),
-        ))
-    }
-
-    fn write_config(
-        test_dir: &Path,
-        policy_path: &Path,
-        audit_path: &Path,
-    ) -> Result<PathBuf, E2eError> {
+    fn write_config(test_dir: &Path, policy_path: &Path) -> Result<PathBuf, E2eError> {
         let config_path = test_dir.join("session-config.json");
         fs::write(
             &config_path,
             format!(
                 r#"{{
                   "policies": ["{}"],
-                  "audit": {{ "jsonl": "{}" }},
                   "session": {{
                     "enabled": true,
                     "actor": {{ "id": "test-agent", "kind": "agent" }},
@@ -394,7 +353,6 @@ mod linux_host {
                   }}
                 }}"#,
                 policy_path.display(),
-                audit_path.display()
             ),
         )
         .map_err(E2eError::io)?;
