@@ -844,7 +844,7 @@ fn truncate(value: &str, limit: usize) -> String {
     }
 }
 
-fn redact(value: &str) -> String {
+pub(crate) fn redact(value: &str) -> String {
     let mut output = value.to_owned();
     for key in [
         "code",
@@ -878,7 +878,7 @@ fn redact_query_key(value: &str, key: &str) -> String {
     output
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     sha256(bytes)
         .iter()
         .map(|byte| format!("{byte:02x}"))

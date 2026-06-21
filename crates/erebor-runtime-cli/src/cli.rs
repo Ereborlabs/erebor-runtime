@@ -7,8 +7,10 @@ use std::{
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use erebor_runtime_audit::{
-    read_audit_records, AuditLogError, EvidenceTraceError, EvidenceTracePaths, EvidenceTraceSink,
-    FileEvidenceTraceSink, MarkdownEvidenceTraceRenderer,
+    read_audit_records, render_session_describe, render_session_list, render_session_show,
+    review_session, session_summaries, AuditLogError, EvidenceTraceError, EvidenceTracePaths,
+    EvidenceTraceSink, FileEvidenceTraceSink, MarkdownEvidenceTraceRenderer,
+    SessionReviewArtifacts, SessionReviewError,
 };
 use erebor_runtime_core::{
     BrowserCdpSurfaceLayerConfig, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
@@ -107,6 +109,25 @@ impl fmt::Display for Command {
                 args.config.display(),
                 args.target_display()
             ),
+            Self::Session(SessionArgs {
+                command: SessionCommand::Ls(args),
+            }) => write!(formatter, "session ls audit={}", args.audit.display()),
+            Self::Session(SessionArgs {
+                command: SessionCommand::Show(args),
+            }) => write!(
+                formatter,
+                "session show session_id={} audit={}",
+                args.session_id,
+                args.audit.display()
+            ),
+            Self::Session(SessionArgs {
+                command: SessionCommand::Describe(args),
+            }) => write!(
+                formatter,
+                "session describe session_id={} audit={}",
+                args.session_id,
+                args.audit.display()
+            ),
             Self::Dev(DevArgs {
                 command: DevCommand::ProxyCdp(args),
             }) => {
@@ -166,6 +187,12 @@ enum SessionCommand {
     Diagnose(SessionDiagnoseArgs),
     /// Adopt an already-running agent process into a governed session.
     Adopt(SessionAdoptArgs),
+    /// List sessions present in an audit log.
+    Ls(SessionLsArgs),
+    /// Show a buyer-readable summary for one governed session.
+    Show(SessionShowArgs),
+    /// Describe governed session decisions with proof details.
+    Describe(SessionDescribeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -179,6 +206,54 @@ struct SessionRunArgs {
     /// Agent entrypoint to launch inside the governed session runner.
     #[arg(required = true, trailing_var_arg = true, num_args = 1..)]
     command: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct SessionLsArgs {
+    /// JSONL audit log path.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    audit: PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
+struct SessionShowArgs {
+    /// Session id to show.
+    #[arg(value_parser = parse_non_empty_string)]
+    session_id: String,
+    /// JSONL audit log path.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    audit: PathBuf,
+    /// Policy file used by the governed session.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    policy: PathBuf,
+    /// Runtime/session config used by the governed session.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    config: PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
+struct SessionDescribeArgs {
+    /// Session id to describe.
+    #[arg(value_parser = parse_non_empty_string)]
+    session_id: String,
+    /// JSONL audit log path.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    audit: PathBuf,
+    /// Policy file used by the governed session.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    policy: PathBuf,
+    /// Runtime/session config used by the governed session.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    config: PathBuf,
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -250,6 +325,12 @@ impl From<SessionRunnerArg> for SessionRunnerKind {
             SessionRunnerArg::LinuxHost => Self::LinuxHost,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum OutputFormat {
+    Text,
+    Json,
 }
 
 #[derive(Debug, Args)]
@@ -545,6 +626,9 @@ fn execute_session(args: &SessionArgs) -> Result<(), CliError> {
         SessionCommand::Run(args) => session_run(args),
         SessionCommand::Diagnose(args) => session_diagnose(args),
         SessionCommand::Adopt(args) => session_adopt(args),
+        SessionCommand::Ls(args) => session_ls(args),
+        SessionCommand::Show(args) => session_show(args),
+        SessionCommand::Describe(args) => session_describe(args),
     }
 }
 
@@ -575,6 +659,81 @@ fn session_adopt(args: &SessionAdoptArgs) -> Result<(), CliError> {
     adopt_session_target(&config, args.runner.into(), session_id, args.target())
         .map_err(CliError::session_execution)?;
     Ok(())
+}
+
+fn session_ls(args: &SessionLsArgs) -> Result<(), CliError> {
+    let records = read_audit_records(&args.audit).map_err(CliError::audit_log)?;
+    let artifacts = SessionReviewArtifacts::default();
+    match args.format {
+        OutputFormat::Text => {
+            let output =
+                render_session_list(&records, &artifacts).map_err(CliError::session_review)?;
+            print!("{output}");
+        }
+        OutputFormat::Json => {
+            let summaries =
+                session_summaries(&records, &artifacts).map_err(CliError::session_review)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&summaries).map_err(CliError::encode_json)?
+            );
+        }
+    }
+    Ok(())
+}
+
+fn session_show(args: &SessionShowArgs) -> Result<(), CliError> {
+    let records = read_audit_records(&args.audit).map_err(CliError::audit_log)?;
+    let artifacts = session_review_artifacts(&args.policy, &args.config)?;
+    match args.format {
+        OutputFormat::Text => {
+            let output = render_session_show(&records, &args.session_id, &artifacts)
+                .map_err(CliError::session_review)?;
+            print!("{output}");
+        }
+        OutputFormat::Json => {
+            let review = review_session(&records, &args.session_id, &artifacts)
+                .map_err(CliError::session_review)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&review).map_err(CliError::encode_json)?
+            );
+        }
+    }
+    Ok(())
+}
+
+fn session_describe(args: &SessionDescribeArgs) -> Result<(), CliError> {
+    let records = read_audit_records(&args.audit).map_err(CliError::audit_log)?;
+    let artifacts = session_review_artifacts(&args.policy, &args.config)?;
+    match args.format {
+        OutputFormat::Text => {
+            let output = render_session_describe(&records, &args.session_id, &artifacts)
+                .map_err(CliError::session_review)?;
+            print!("{output}");
+        }
+        OutputFormat::Json => {
+            let review = review_session(&records, &args.session_id, &artifacts)
+                .map_err(CliError::session_review)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&review).map_err(CliError::encode_json)?
+            );
+        }
+    }
+    Ok(())
+}
+
+fn session_review_artifacts(
+    policy: &Path,
+    config: &Path,
+) -> Result<SessionReviewArtifacts, CliError> {
+    let runtime_config = read_runtime_config(config)?;
+    let runner = runtime_config
+        .session
+        .enabled
+        .then(|| runtime_config.session.runner.kind.as_str().to_owned());
+    SessionReviewArtifacts::from_paths(runner, policy, config).map_err(CliError::session_review)
 }
 
 fn execute_session_run_plan(config: &RuntimeConfig, plan: &SessionRunPlan) -> Result<(), CliError> {
@@ -776,6 +935,11 @@ pub(crate) enum CliError {
         source: EvidenceTraceError,
         location: Location,
     },
+    #[error("{source}")]
+    SessionReview {
+        source: SessionReviewError,
+        location: Location,
+    },
     #[error("failed to encode JSON output: {source}")]
     EncodeJson {
         source: serde_json::Error,
@@ -851,6 +1015,14 @@ impl CliError {
     #[track_caller]
     fn evidence_trace(source: EvidenceTraceError) -> Self {
         Self::EvidenceTrace {
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn session_review(source: SessionReviewError) -> Self {
+        Self::SessionReview {
             source,
             location: Location::default(),
         }
@@ -1001,6 +1173,109 @@ mod tests {
         ]);
 
         assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn accepts_session_ls_with_audit() {
+        let cli =
+            Cli::try_parse_from(["erebor-runtime", "session", "ls", "--audit", "audit.jsonl"]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn accepts_session_show_with_audit_policy_config() {
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "show",
+            "session-1",
+            "--audit",
+            "audit.jsonl",
+            "--policy",
+            "policy.json",
+            "--config",
+            "session-config.json",
+        ]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn accepts_session_describe_with_audit_policy_config() {
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "describe",
+            "session-1",
+            "--audit",
+            "audit.jsonl",
+            "--policy",
+            "policy.json",
+            "--config",
+            "session-config.json",
+        ]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn accepts_session_review_json_format() {
+        let ls = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "ls",
+            "--audit",
+            "audit.jsonl",
+            "--format",
+            "json",
+        ]);
+        let show = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "show",
+            "session-1",
+            "--audit",
+            "audit.jsonl",
+            "--policy",
+            "policy.json",
+            "--config",
+            "session-config.json",
+            "--format",
+            "json",
+        ]);
+        let describe = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "describe",
+            "session-1",
+            "--audit",
+            "audit.jsonl",
+            "--policy",
+            "policy.json",
+            "--config",
+            "session-config.json",
+            "--format",
+            "json",
+        ]);
+
+        assert!(ls.is_ok());
+        assert!(show.is_ok());
+        assert!(describe.is_ok());
+    }
+
+    #[test]
+    fn session_show_requires_policy_and_config() {
+        let error = Cli::try_parse_from([
+            "erebor-runtime",
+            "session",
+            "show",
+            "session-1",
+            "--audit",
+            "audit.jsonl",
+        ]);
+
+        assert!(error.is_err());
     }
 
     #[test]

@@ -175,3 +175,46 @@ impl EvidenceTraceError {
         }
     }
 }
+
+#[derive(Debug, Error)]
+pub enum SessionReviewError {
+    #[error("audit file does not contain session records")]
+    NoSessionRecords { location: Location },
+    #[error("audit file does not contain records for session id `{session_id}`")]
+    UnknownSession {
+        session_id: String,
+        location: Location,
+    },
+    #[error("failed to read `{}`: {source}", path.display())]
+    ReadFile {
+        path: PathBuf,
+        source: io::Error,
+        location: Location,
+    },
+}
+
+impl SessionReviewError {
+    #[track_caller]
+    pub(crate) fn no_session_records() -> Self {
+        Self::NoSessionRecords {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub(crate) fn unknown_session(session_id: impl Into<String>) -> Self {
+        Self::UnknownSession {
+            session_id: session_id.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub(crate) fn read_file(path: impl Into<PathBuf>, source: io::Error) -> Self {
+        Self::ReadFile {
+            path: path.into(),
+            source,
+            location: Location::default(),
+        }
+    }
+}
