@@ -306,7 +306,6 @@ dependencies = [
  "erebor-runtime-audit",
  "erebor-runtime-cdp",
  "erebor-runtime-core",
- "erebor-runtime-e2e",
  "erebor-runtime-events",
  "erebor-runtime-policy",
  "erebor-runtime-session",

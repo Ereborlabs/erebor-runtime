@@ -19,9 +19,6 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
-[dev-dependencies]
-erebor-runtime-e2e = { path = "../erebor-runtime-e2e" }
-
 [[bin]]
 name = "erebor-runtime"
 path = "src/main.rs"
