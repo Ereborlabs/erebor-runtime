@@ -5,6 +5,7 @@ mod engine;
 mod error;
 mod runtime;
 mod session;
+mod session_registry;
 #[cfg(test)]
 mod tests;
 
@@ -41,7 +42,7 @@ pub use engine::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,
     AuditSink, DenyApprovalProvider, EnforcementOutcome, LocalEnforcementEngine, NoopAuditSink,
 };
-pub use error::{RuntimeConfigError, RuntimeError};
+pub use error::{RuntimeConfigError, RuntimeError, SessionRegistryError};
 pub use runtime::{
     RunningSessionSurface, SessionSurfaceDefinition, SessionSurfaceFailure,
     SessionSurfaceFailureSender, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
@@ -50,4 +51,8 @@ pub use runtime::{
 pub use session::{
     DockerSessionRunner, LinuxHostSessionRunner, SessionCapturedRunOutcome, SessionRunOutcome,
     SessionRunner, SessionRunnerLauncher,
+};
+pub use session_registry::{
+    SessionRegistry, SessionRegistryFinish, SessionRegistryRecord, SessionRegistryStatus,
+    StartedSessionRegistryRecord, DEFAULT_SESSION_REGISTRY_PATH,
 };

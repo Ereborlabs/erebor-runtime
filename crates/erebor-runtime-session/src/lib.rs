@@ -17,10 +17,11 @@ use erebor_runtime_core::{
     LinuxHostSessionCommandOptions, ProcessInterceptionDecision, ProcessInterceptionHandlerConfig,
     ProcessInterceptionHandlerKind, ProcessMediationPrivateEndpointConfig,
     ProcessMediationReplacementSurface, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
-    RuntimeError, SessionActorLayerConfig, SessionAdoptPlan, SessionRunOutcome, SessionRunPlan,
-    SessionRunnerKind, SessionRunnerLauncher, SessionSurfaceDefinition, SessionSurfaceKind,
-    SessionSurfaceLaunchPlan, SessionSurfaceLauncher, SessionSurfaceSupervisor,
-    TerminalProcessInterceptionMode, TerminalSurfaceConfig,
+    RuntimeError, SessionActorLayerConfig, SessionAdoptPlan, SessionRegistry, SessionRegistryError,
+    SessionRegistryFinish, SessionRunOutcome, SessionRunPlan, SessionRunnerKind,
+    SessionRunnerLauncher, SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan,
+    SessionSurfaceLauncher, SessionSurfaceSupervisor, TerminalProcessInterceptionMode,
+    TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
@@ -75,6 +76,16 @@ pub fn run_session_plan(
     config: &RuntimeConfig,
     plan: &SessionRunPlan,
 ) -> Result<SessionRunOutcome, SessionExecutionError> {
+    let (effective_plan, registry) = prepare_registry_session(config, plan)?;
+    let result = run_session_plan_inner(config, &effective_plan);
+    finish_registry_session(&registry, effective_plan.session_id(), &result)?;
+    result
+}
+
+fn run_session_plan_inner(
+    config: &RuntimeConfig,
+    plan: &SessionRunPlan,
+) -> Result<SessionRunOutcome, SessionExecutionError> {
     let side_resources = start_session_side_resources(config, plan)?;
 
     match plan.runner().kind() {
@@ -93,6 +104,21 @@ pub fn run_session_plan(
 }
 
 pub fn run_session_diagnostic(
+    config: &RuntimeConfig,
+    plan: &SessionRunPlan,
+) -> Result<SessionDiagnosticOutcome, SessionExecutionError> {
+    let (effective_plan, registry) = prepare_registry_session(config, plan)?;
+    let result = run_session_diagnostic_inner(config, &effective_plan);
+    finish_registry_diagnostic(
+        &registry,
+        effective_plan.session_id(),
+        effective_plan.runner().kind(),
+        &result,
+    )?;
+    result
+}
+
+fn run_session_diagnostic_inner(
     config: &RuntimeConfig,
     plan: &SessionRunPlan,
 ) -> Result<SessionDiagnosticOutcome, SessionExecutionError> {
@@ -123,6 +149,78 @@ pub fn run_session_diagnostic(
             outcome.run().exit_code(),
             outcome.stderr().trim()
         )))
+    }
+}
+
+fn prepare_registry_session(
+    config: &RuntimeConfig,
+    plan: &SessionRunPlan,
+) -> Result<(SessionRunPlan, Option<SessionRegistry>), SessionExecutionError> {
+    let Some(_config_path) = plan.config_path() else {
+        return Ok((plan.clone(), None));
+    };
+
+    let registry = SessionRegistry::new(plan.registry_path().to_path_buf());
+    let started = registry
+        .start_session(config, plan)
+        .map_err(SessionExecutionError::session_registry)?;
+    let effective_plan = if let Some(audit_path) = started.effective_audit().jsonl() {
+        plan.clone().with_audit_jsonl(audit_path.to_path_buf())
+    } else {
+        plan.clone()
+    };
+    Ok((effective_plan, Some(registry)))
+}
+
+fn finish_registry_session(
+    registry: &Option<SessionRegistry>,
+    session_id: &SessionId,
+    result: &Result<SessionRunOutcome, SessionExecutionError>,
+) -> Result<(), SessionExecutionError> {
+    let Some(registry) = registry else {
+        return Ok(());
+    };
+    let update = match result {
+        Ok(outcome) => SessionRegistryFinish::succeeded(outcome),
+        Err(error) => {
+            SessionRegistryFinish::failed(session_exit_code_from_error(error), error.to_string())
+        }
+    };
+    registry
+        .finish_session(session_id, update)
+        .map_err(SessionExecutionError::session_registry)?;
+    Ok(())
+}
+
+fn finish_registry_diagnostic(
+    registry: &Option<SessionRegistry>,
+    session_id: &SessionId,
+    runner: SessionRunnerKind,
+    result: &Result<SessionDiagnosticOutcome, SessionExecutionError>,
+) -> Result<(), SessionExecutionError> {
+    let Some(registry) = registry else {
+        return Ok(());
+    };
+    let update = match result {
+        Ok(_outcome) => SessionRegistryFinish::succeeded(&SessionRunOutcome::new(runner, Some(0))),
+        Err(error) => {
+            SessionRegistryFinish::failed(session_exit_code_from_error(error), error.to_string())
+        }
+    };
+    registry
+        .finish_session(session_id, update)
+        .map_err(SessionExecutionError::session_registry)?;
+    Ok(())
+}
+
+fn session_exit_code_from_error(error: &SessionExecutionError) -> Option<i32> {
+    match error {
+        SessionExecutionError::Runtime {
+            source: RuntimeError::SessionRunnerExit { code, .. },
+            ..
+        } => *code,
+        SessionExecutionError::DiagnosticFailed { .. } => None,
+        _ => None,
     }
 }
 
@@ -1217,6 +1315,11 @@ pub enum SessionExecutionError {
     #[error("Linux process guard config is invalid: {reason}")]
     GuardConfig { reason: String, location: Location },
     #[error("{source}")]
+    SessionRegistry {
+        source: SessionRegistryError,
+        location: Location,
+    },
+    #[error("{source}")]
     ControlBroker {
         source: SessionControlBrokerError,
         location: Location,
@@ -1292,6 +1395,14 @@ impl SessionExecutionError {
     fn guard_config(reason: impl Into<String>) -> Self {
         Self::GuardConfig {
             reason: reason.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    fn session_registry(source: SessionRegistryError) -> Self {
+        Self::SessionRegistry {
+            source,
             location: Location::default(),
         }
     }

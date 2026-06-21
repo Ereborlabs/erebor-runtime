@@ -7,10 +7,10 @@ use std::{
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use erebor_runtime_audit::{
-    read_audit_records, render_session_describe_from_paths, render_session_list_from_path,
-    render_session_show_from_paths, AuditLogError, EvidenceTraceError, EvidenceTracePaths,
+    read_audit_records, render_session_describe_from_source, render_session_list_from_source,
+    render_session_show_from_source, AuditLogError, EvidenceTraceError, EvidenceTracePaths,
     EvidenceTraceSink, FileEvidenceTraceSink, MarkdownEvidenceTraceRenderer, SessionReviewError,
-    SessionReviewOutputFormat,
+    SessionReviewOutputFormat, SessionReviewSourcePaths,
 };
 use erebor_runtime_core::{
     BrowserCdpSurfaceLayerConfig, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
@@ -111,22 +111,26 @@ impl fmt::Display for Command {
             ),
             Self::Session(SessionArgs {
                 command: SessionCommand::Ls(args),
-            }) => write!(formatter, "session ls audit={}", args.audit.display()),
+            }) => write!(
+                formatter,
+                "session ls source={}",
+                review_source_display(args.audit.as_ref(), &args.registry)
+            ),
             Self::Session(SessionArgs {
                 command: SessionCommand::Show(args),
             }) => write!(
                 formatter,
-                "session show session_id={} audit={}",
+                "session show session_id={} source={}",
                 args.session_id,
-                args.audit.display()
+                review_source_display(args.audit.as_ref(), &args.registry)
             ),
             Self::Session(SessionArgs {
                 command: SessionCommand::Describe(args),
             }) => write!(
                 formatter,
-                "session describe session_id={} audit={}",
+                "session describe session_id={} source={}",
                 args.session_id,
-                args.audit.display()
+                review_source_display(args.audit.as_ref(), &args.registry)
             ),
             Self::Dev(DevArgs {
                 command: DevCommand::ProxyCdp(args),
@@ -210,9 +214,12 @@ struct SessionRunArgs {
 
 #[derive(Debug, Args)]
 struct SessionLsArgs {
-    /// JSONL audit log path.
+    /// JSONL audit log path. Omit to read the local session registry.
     #[arg(long, value_parser = parse_non_empty_path)]
-    audit: PathBuf,
+    audit: Option<PathBuf>,
+    /// Session registry root used when --audit is omitted.
+    #[arg(long, value_parser = parse_non_empty_path, default_value = ".erebor/sessions")]
+    registry: PathBuf,
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
@@ -223,15 +230,18 @@ struct SessionShowArgs {
     /// Session id to show.
     #[arg(value_parser = parse_non_empty_string)]
     session_id: String,
-    /// JSONL audit log path.
+    /// JSONL audit log path. Provide with --policy and --config for explicit artifact review.
     #[arg(long, value_parser = parse_non_empty_path)]
-    audit: PathBuf,
+    audit: Option<PathBuf>,
     /// Policy file used by the governed session.
     #[arg(long, value_parser = parse_non_empty_path)]
-    policy: PathBuf,
+    policy: Option<PathBuf>,
     /// Runtime/session config used by the governed session.
     #[arg(long, value_parser = parse_non_empty_path)]
-    config: PathBuf,
+    config: Option<PathBuf>,
+    /// Session registry root used when explicit artifacts are omitted.
+    #[arg(long, value_parser = parse_non_empty_path, default_value = ".erebor/sessions")]
+    registry: PathBuf,
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
@@ -242,15 +252,18 @@ struct SessionDescribeArgs {
     /// Session id to describe.
     #[arg(value_parser = parse_non_empty_string)]
     session_id: String,
-    /// JSONL audit log path.
+    /// JSONL audit log path. Provide with --policy and --config for explicit artifact review.
     #[arg(long, value_parser = parse_non_empty_path)]
-    audit: PathBuf,
+    audit: Option<PathBuf>,
     /// Policy file used by the governed session.
     #[arg(long, value_parser = parse_non_empty_path)]
-    policy: PathBuf,
+    policy: Option<PathBuf>,
     /// Runtime/session config used by the governed session.
     #[arg(long, value_parser = parse_non_empty_path)]
-    config: PathBuf,
+    config: Option<PathBuf>,
+    /// Session registry root used when explicit artifacts are omitted.
+    #[arg(long, value_parser = parse_non_empty_path, default_value = ".erebor/sessions")]
+    registry: PathBuf,
     /// Output format.
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
@@ -484,6 +497,13 @@ fn parse_positive_pid(value: &str) -> Result<i32, String> {
     }
 }
 
+fn review_source_display(audit: Option<&PathBuf>, registry: &Path) -> String {
+    audit.map_or_else(
+        || format!("registry:{}", registry.display()),
+        |path| format!("audit:{}", path.display()),
+    )
+}
+
 fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, CliError> {
     tracing::debug!(path = %path.display(), "reading runtime config");
     let source = fs::read_to_string(path).map_err(|error| CliError::ReadConfig {
@@ -650,7 +670,8 @@ fn session_run(args: &SessionRunArgs) -> Result<(), CliError> {
         session_id,
         args.command.clone(),
     )
-    .map_err(CliError::invalid_config)?;
+    .map_err(CliError::invalid_config)?
+    .with_config_path(args.config.clone());
     execute_session_run_plan(&config, &plan)
 }
 
@@ -658,7 +679,8 @@ fn session_diagnose(args: &SessionDiagnoseArgs) -> Result<(), CliError> {
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
     let plan = SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
-        .map_err(CliError::invalid_config)?;
+        .map_err(CliError::invalid_config)?
+        .with_config_path(args.config.clone());
     execute_session_diagnostic_plan(&config, &plan)
 }
 
@@ -671,34 +693,39 @@ fn session_adopt(args: &SessionAdoptArgs) -> Result<(), CliError> {
 }
 
 fn session_ls(args: &SessionLsArgs) -> Result<(), CliError> {
-    let output = render_session_list_from_path(&args.audit, args.format.into())
+    let source = SessionReviewSourcePaths {
+        audit: args.audit.clone(),
+        registry: args.registry.clone(),
+        ..SessionReviewSourcePaths::default()
+    };
+    let output = render_session_list_from_source(&source, args.format.into())
         .map_err(CliError::session_review)?;
     print!("{output}");
     Ok(())
 }
 
 fn session_show(args: &SessionShowArgs) -> Result<(), CliError> {
-    let output = render_session_show_from_paths(
-        &args.audit,
-        &args.policy,
-        &args.config,
-        &args.session_id,
-        args.format.into(),
-    )
-    .map_err(CliError::session_review)?;
+    let source = SessionReviewSourcePaths {
+        audit: args.audit.clone(),
+        policy: args.policy.clone(),
+        config: args.config.clone(),
+        registry: args.registry.clone(),
+    };
+    let output = render_session_show_from_source(&source, &args.session_id, args.format.into())
+        .map_err(CliError::session_review)?;
     print!("{output}");
     Ok(())
 }
 
 fn session_describe(args: &SessionDescribeArgs) -> Result<(), CliError> {
-    let output = render_session_describe_from_paths(
-        &args.audit,
-        &args.policy,
-        &args.config,
-        &args.session_id,
-        args.format.into(),
-    )
-    .map_err(CliError::session_review)?;
+    let source = SessionReviewSourcePaths {
+        audit: args.audit.clone(),
+        policy: args.policy.clone(),
+        config: args.config.clone(),
+        registry: args.registry.clone(),
+    };
+    let output = render_session_describe_from_source(&source, &args.session_id, args.format.into())
+        .map_err(CliError::session_review)?;
     print!("{output}");
     Ok(())
 }
@@ -741,6 +768,7 @@ fn build_session_run_plan(args: &SessionRunArgs) -> Result<SessionRunPlan, CliEr
         session_id,
         args.command.clone(),
     )
+    .map(|plan| plan.with_config_path(args.config.clone()))
     .map_err(CliError::invalid_config)
 }
 
@@ -749,6 +777,7 @@ fn build_session_diagnose_plan(args: &SessionDiagnoseArgs) -> Result<SessionRunP
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
     SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
+        .map(|plan| plan.with_config_path(args.config.clone()))
         .map_err(CliError::invalid_config)
 }
 
@@ -1151,6 +1180,13 @@ mod tests {
     }
 
     #[test]
+    fn accepts_session_ls_without_audit_for_registry_mode() {
+        let cli = Cli::try_parse_from(["erebor-runtime", "session", "ls"]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
     fn accepts_session_show_with_audit_policy_config() {
         let cli = Cli::try_parse_from([
             "erebor-runtime",
@@ -1169,6 +1205,13 @@ mod tests {
     }
 
     #[test]
+    fn accepts_session_show_without_artifacts_for_registry_mode() {
+        let cli = Cli::try_parse_from(["erebor-runtime", "session", "show", "session-1"]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
     fn accepts_session_describe_with_audit_policy_config() {
         let cli = Cli::try_parse_from([
             "erebor-runtime",
@@ -1182,6 +1225,13 @@ mod tests {
             "--config",
             "session-config.json",
         ]);
+
+        assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn accepts_session_describe_without_artifacts_for_registry_mode() {
+        let cli = Cli::try_parse_from(["erebor-runtime", "session", "describe", "session-1"]);
 
         assert!(cli.is_ok());
     }
@@ -1232,8 +1282,8 @@ mod tests {
     }
 
     #[test]
-    fn session_show_requires_policy_and_config() {
-        let error = Cli::try_parse_from([
+    fn accepts_incomplete_explicit_session_review_flags_for_domain_validation() {
+        let cli = Cli::try_parse_from([
             "erebor-runtime",
             "session",
             "show",
@@ -1242,7 +1292,7 @@ mod tests {
             "audit.jsonl",
         ]);
 
-        assert!(error.is_err());
+        assert!(cli.is_ok());
     }
 
     #[test]
@@ -1560,6 +1610,10 @@ mod tests {
         assert_eq!(
             config.session.workspace,
             Some(current_dir.join("examples/governed-openclaw-pilot/../.."))
+        );
+        assert_eq!(
+            config.session.registry_path,
+            PathBuf::from(".erebor/sessions")
         );
         assert_eq!(
             config.surfaces.browser_cdp.policies,

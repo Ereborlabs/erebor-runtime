@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "session_id": "session-1004546",
+  "status": "failed",
+  "actor_id": "test-agent",
+  "actor_kind": "agent",
+  "runner": "linux-host",
+  "surfaces": [
+    "terminal"
+  ],
+  "workspace": null,
+  "command": [
+    "sh",
+    "--remote-debugging-port=9222"
+  ],
+  "diagnostic": "raw-cdp",
+  "registry_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/erebor-runtime-e2e/.erebor/sessions",
+  "session_dir": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/erebor-runtime-e2e/.erebor/sessions/session-1004546",
+  "audit_path": "/tmp/erebor-runtime-e2e-session-review-1782019911836235931-1004465/audit.jsonl",
+  "config_artifact_path": "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/erebor-runtime-e2e/.erebor/sessions/session-1004546/config.json",
+  "source_config_path": "/tmp/erebor-runtime-e2e-session-review-1782019911836235931-1004465/session-config.json",
+  "policy_artifact_paths": [
+    "/home/navid/go/src/github.com/Ereborlabs/erebor-runtime/crates/erebor-runtime-e2e/.erebor/sessions/session-1004546/policies/000-policy.json"
+  ],
+  "source_policy_paths": [
+    "/tmp/erebor-runtime-e2e-session-review-1782019911836235931-1004465/policy.json"
+  ],
+  "started_at_unix_ms": 1782019911839,
+  "ended_at_unix_ms": 1782019911851,
+  "exit_code": null,
+  "failure": "guarded session diagnostic failed: guarded linux-host diagnostic exited with code Some(126): erebor linux process guard capability: mode=relaunch root_pid=1004551 ptrace=enabled recursive_attach=complete attached=1 failed_attach=0 yama_ptrace_scope=1 cgroup_v2=true cgroup_requested=true cgroup_dir=/sys/fs/cgroup/erebor/session-1004546 cgroup_joined=0 cgroup_failed=1 cgroup_reason=failed to create cgroup directory: Permission denied (os error 13) residual_risks=preexisting_fds,preexisting_sockets,network_not_enforced\nerebor linux process guard: denied exec: /home/navid/.codex/tmp/arg0/codex-arg0dR9j1D/sh sh --remote-debugging-port=9222: raw CDP process launch is denied\nerebor linux process guard: failed to exec sh: Operation not permitted"
+}

@@ -1,10 +1,13 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
-use erebor_runtime_core::{AuditRecord, RuntimeConfig};
+use erebor_runtime_core::{
+    AuditRecord, RuntimeConfig, SessionRegistry, SessionRegistryRecord,
+    DEFAULT_SESSION_REGISTRY_PATH,
+};
 use erebor_runtime_events::{ActionKind, ExecutionSurface, RiskLevel};
 use erebor_runtime_policy::Decision;
 use serde::Serialize;
@@ -64,6 +67,25 @@ impl SessionReviewArtifacts {
 pub enum SessionReviewOutputFormat {
     Text,
     Json,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionReviewSourcePaths {
+    pub audit: Option<PathBuf>,
+    pub policy: Option<PathBuf>,
+    pub config: Option<PathBuf>,
+    pub registry: PathBuf,
+}
+
+impl Default for SessionReviewSourcePaths {
+    fn default() -> Self {
+        Self {
+            audit: None,
+            policy: None,
+            config: None,
+            registry: PathBuf::from(DEFAULT_SESSION_REGISTRY_PATH),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -214,28 +236,7 @@ pub fn render_session_list(
     artifacts: &SessionReviewArtifacts,
 ) -> Result<String, SessionReviewError> {
     let summaries = session_summaries(records, artifacts)?;
-    let mut output = String::from(
-        "SESSION       STATUS    ACTOR      RUNNER      SURFACES         ALLOW DENY APPROVAL MEDIATE RISK    START\n",
-    );
-
-    for summary in summaries {
-        output.push_str(&format!(
-            "{:<13} {:<9} {:<10} {:<11} {:<16} {:>5} {:>4} {:>8} {:>7} {:<7} {}\n",
-            summary.session_id,
-            summary.status,
-            summary.actor,
-            summary.runner,
-            summary.surfaces.join(","),
-            summary.allowed,
-            summary.denied,
-            summary.require_approval,
-            summary.mediated,
-            summary.max_risk,
-            summary.start,
-        ));
-    }
-
-    Ok(output)
+    render_session_summary_table(&summaries)
 }
 
 pub fn render_session_list_from_path(
@@ -249,6 +250,25 @@ pub fn render_session_list_from_path(
         SessionReviewOutputFormat::Json => {
             encode_json_output(&session_summaries(&records, &artifacts)?)
         }
+    }
+}
+
+pub fn render_session_list_from_source(
+    source: &SessionReviewSourcePaths,
+    format: SessionReviewOutputFormat,
+) -> Result<String, SessionReviewError> {
+    if let Some(audit) = source.audit.as_deref() {
+        return render_session_list_from_path(audit, format);
+    }
+
+    let registry = SessionRegistry::new(source.registry.clone());
+    let records = registry
+        .list_sessions()
+        .map_err(SessionReviewError::session_registry)?;
+    let summaries = registry_session_summaries(&records);
+    match format {
+        SessionReviewOutputFormat::Text => render_session_summary_table(&summaries),
+        SessionReviewOutputFormat::Json => encode_json_output(&summaries),
     }
 }
 
@@ -269,6 +289,22 @@ pub fn render_session_show_from_paths(
     )
 }
 
+pub fn render_session_show_from_source(
+    source: &SessionReviewSourcePaths,
+    session_id: &str,
+    format: SessionReviewOutputFormat,
+) -> Result<String, SessionReviewError> {
+    match explicit_review_paths(source)? {
+        Some((audit, policy, config)) => {
+            render_session_show_from_paths(audit, policy, config, session_id, format)
+        }
+        None => {
+            let (audit, policy, config) = registry_review_paths(source, session_id)?;
+            render_session_show_from_paths(&audit, &policy, &config, session_id, format)
+        }
+    }
+}
+
 pub fn render_session_describe_from_paths(
     audit: &Path,
     policy: &Path,
@@ -284,6 +320,22 @@ pub fn render_session_describe_from_paths(
         format,
         render_session_describe,
     )
+}
+
+pub fn render_session_describe_from_source(
+    source: &SessionReviewSourcePaths,
+    session_id: &str,
+    format: SessionReviewOutputFormat,
+) -> Result<String, SessionReviewError> {
+    match explicit_review_paths(source)? {
+        Some((audit, policy, config)) => {
+            render_session_describe_from_paths(audit, policy, config, session_id, format)
+        }
+        None => {
+            let (audit, policy, config) = registry_review_paths(source, session_id)?;
+            render_session_describe_from_paths(&audit, &policy, &config, session_id, format)
+        }
+    }
 }
 
 pub fn review_session(
@@ -459,6 +511,108 @@ fn render_session_from_paths(
         SessionReviewOutputFormat::Json => {
             encode_json_output(&review_session(&records, session_id, &artifacts)?)
         }
+    }
+}
+
+fn render_session_summary_table(
+    summaries: &[SessionSummary],
+) -> Result<String, SessionReviewError> {
+    let mut output = String::from(
+        "SESSION       STATUS    ACTOR      RUNNER      SURFACES         ALLOW DENY APPROVAL MEDIATE RISK    START\n",
+    );
+
+    for summary in summaries {
+        output.push_str(&format!(
+            "{:<13} {:<9} {:<10} {:<11} {:<16} {:>5} {:>4} {:>8} {:>7} {:<7} {}\n",
+            summary.session_id,
+            summary.status,
+            summary.actor,
+            summary.runner,
+            summary.surfaces.join(","),
+            summary.allowed,
+            summary.denied,
+            summary.require_approval,
+            summary.mediated,
+            summary.max_risk,
+            summary.start,
+        ));
+    }
+
+    Ok(output)
+}
+
+fn explicit_review_paths(
+    source: &SessionReviewSourcePaths,
+) -> Result<Option<(&Path, &Path, &Path)>, SessionReviewError> {
+    match (
+        source.audit.as_deref(),
+        source.policy.as_deref(),
+        source.config.as_deref(),
+    ) {
+        (None, None, None) => Ok(None),
+        (Some(audit), Some(policy), Some(config)) => Ok(Some((audit, policy, config))),
+        _ => Err(SessionReviewError::incomplete_explicit_review_paths()),
+    }
+}
+
+fn registry_review_paths(
+    source: &SessionReviewSourcePaths,
+    session_id: &str,
+) -> Result<(PathBuf, PathBuf, PathBuf), SessionReviewError> {
+    let registry = SessionRegistry::new(source.registry.clone());
+    let record = registry
+        .load_session(session_id)
+        .map_err(SessionReviewError::session_registry)?;
+    let policy = record
+        .primary_policy_artifact_path()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| SessionReviewError::missing_policy_artifact(session_id))?;
+    let config = record
+        .config_artifact_path()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| SessionReviewError::missing_config_artifact(session_id))?;
+    Ok((record.audit_path().to_path_buf(), policy, config))
+}
+
+fn registry_session_summaries(records: &[SessionRegistryRecord]) -> Vec<SessionSummary> {
+    records
+        .iter()
+        .map(|record| {
+            let artifacts = SessionReviewArtifacts::new(Some(record.runner.clone()));
+            read_audit_records(record.audit_path())
+                .ok()
+                .and_then(|audit_records| session_summaries(&audit_records, &artifacts).ok())
+                .and_then(|summaries| {
+                    summaries
+                        .into_iter()
+                        .find(|summary| summary.session_id == record.session_id)
+                })
+                .map(|mut summary| {
+                    summary.status = record.status.as_str().to_owned();
+                    summary
+                })
+                .unwrap_or_else(|| session_summary_from_registry_record(record))
+        })
+        .collect()
+}
+
+fn session_summary_from_registry_record(record: &SessionRegistryRecord) -> SessionSummary {
+    SessionSummary {
+        session_id: record.session_id.clone(),
+        status: record.status.as_str().to_owned(),
+        actor: record.actor_id.clone(),
+        runner: record.runner.clone(),
+        surfaces: record.surfaces.clone(),
+        allowed: 0,
+        denied: 0,
+        require_approval: 0,
+        mediated: 0,
+        max_risk: String::from("unknown"),
+        start: record.started_at_unix_ms.to_string(),
+        end: record
+            .ended_at_unix_ms
+            .map_or_else(|| String::from("unknown"), |time| time.to_string()),
+        record_count: 0,
     }
 }
 
@@ -851,7 +1005,10 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use erebor_runtime_core::AuditRecord;
+    use erebor_runtime_core::{
+        AuditRecord, RuntimeConfig, SessionRegistry, SessionRegistryFinish, SessionRunOutcome,
+        SessionRunPlan, SessionRunnerKind,
+    };
     use erebor_runtime_events::{
         ActionKind, ActorIdentity, ActorKind, EventId, ExecutionSurface, RiskLevel, RiskMetadata,
         RuntimeEvent, SessionId, TargetRef,
@@ -860,9 +1017,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        render_session_describe, render_session_list, render_session_show,
-        render_session_show_from_paths, review_session, session_summaries, SessionReviewArtifacts,
-        SessionReviewOutputFormat,
+        render_session_describe, render_session_describe_from_source, render_session_list,
+        render_session_list_from_source, render_session_show, render_session_show_from_paths,
+        render_session_show_from_source, review_session, session_summaries, SessionReviewArtifacts,
+        SessionReviewOutputFormat, SessionReviewSourcePaths,
     };
 
     #[test]
@@ -1005,6 +1163,130 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn source_renderers_resolve_registry_artifacts() -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_dir("registry-source")?;
+        let policy = root.join("policy.json");
+        let registry_root = root.join(".erebor/sessions");
+        let config = root.join("config.json");
+        fs::write(&policy, r#"{"rules":[]}"#)?;
+        fs::write(
+            &config,
+            format!(
+                r#"{{
+                    "policies": ["{}"],
+                    "session": {{
+                        "enabled": true,
+                        "registry_path": "{}",
+                        "actor": {{ "id": "test-agent", "kind": "agent" }},
+                        "runner": {{ "kind": "linux_host" }}
+                    }},
+                    "surfaces": {{
+                        "terminal": {{ "enabled": true }}
+                    }}
+                }}"#,
+                policy.display(),
+                registry_root.display(),
+            ),
+        )?;
+        let runtime_config = RuntimeConfig::from_json_str(&fs::read_to_string(&config)?)?;
+        let plan = SessionRunPlan::from_config(
+            &runtime_config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-registry-source"),
+            vec![String::from("sh")],
+        )?
+        .with_config_path(config.clone());
+        let registry = SessionRegistry::new(plan.registry_path().to_path_buf());
+        let started = registry.start_session(&runtime_config, &plan)?;
+        let record = process_record(
+            "session-registry-source",
+            "deny-process",
+            "sh --remote-debugging-port=9222",
+            Decision::Deny {
+                reason: String::from("raw CDP process launch is denied"),
+                rule_id: Some(String::from("deny-raw-cdp")),
+            },
+            "2026-06-21T18:00:01Z",
+        );
+        fs::write(
+            started.record().audit_path(),
+            format!("{}\n", serde_json::to_string(&record)?),
+        )?;
+        registry.finish_session(
+            plan.session_id(),
+            SessionRegistryFinish::succeeded(&SessionRunOutcome::new(
+                SessionRunnerKind::LinuxHost,
+                Some(0),
+            )),
+        )?;
+
+        let source = SessionReviewSourcePaths {
+            registry: registry.root().to_path_buf(),
+            ..SessionReviewSourcePaths::default()
+        };
+        let list = render_session_list_from_source(&source, SessionReviewOutputFormat::Text)?;
+        let show = render_session_show_from_source(
+            &source,
+            "session-registry-source",
+            SessionReviewOutputFormat::Text,
+        )?;
+        let describe = render_session_describe_from_source(
+            &source,
+            "session-registry-source",
+            SessionReviewOutputFormat::Json,
+        )?;
+
+        assert!(list.contains("session-registry-source"));
+        assert!(list.contains("succeeded"));
+        assert!(show.contains("deny-raw-cdp"));
+        assert!(show.contains("Policy sha256:"));
+        assert!(describe.contains(r#""session_id": "session-registry-source""#));
+        assert!(describe.contains(r#""controlled_path_backend": "linux_ptrace_process_guard""#));
+
+        let explicit = SessionReviewSourcePaths {
+            audit: Some(started.record().audit_path().to_path_buf()),
+            policy: Some(
+                started
+                    .record()
+                    .primary_policy_artifact_path()
+                    .ok_or_else(|| std::io::Error::other("missing policy artifact"))?
+                    .to_path_buf(),
+            ),
+            config: Some(
+                started
+                    .record()
+                    .config_artifact_path()
+                    .ok_or_else(|| std::io::Error::other("missing config artifact"))?
+                    .to_path_buf(),
+            ),
+            registry: root.join("unused"),
+        };
+        let explicit_show = render_session_show_from_source(
+            &explicit,
+            "session-registry-source",
+            SessionReviewOutputFormat::Text,
+        )?;
+        assert!(explicit_show.contains("deny-raw-cdp"));
+
+        let incomplete = SessionReviewSourcePaths {
+            audit: Some(started.record().audit_path().to_path_buf()),
+            ..SessionReviewSourcePaths::default()
+        };
+        let error = render_session_show_from_source(
+            &incomplete,
+            "session-registry-source",
+            SessionReviewOutputFormat::Text,
+        );
+        assert!(matches!(
+            error,
+            Err(crate::SessionReviewError::IncompleteExplicitReviewPaths { .. })
+        ));
+
+        fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
     struct RecordFixture<'a> {
         session_id: &'a str,
         id: &'a str,
@@ -1107,6 +1389,16 @@ mod tests {
             std::process::id()
         ));
         fs::write(&path, content)?;
+        Ok(path)
+    }
+
+    fn temp_dir(name: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "erebor-session-review-{nanos}-{}-{name}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&path)?;
         Ok(path)
     }
 }

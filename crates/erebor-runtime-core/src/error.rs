@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::PathBuf};
 
 use erebor_runtime_policy::PolicyError;
 use snafu::Location;
@@ -25,6 +25,8 @@ pub enum RuntimeConfigError {
     EmptySessionActorId { location: Location },
     #[error("runtime config session workspace path cannot be empty")]
     EmptySessionWorkspace { location: Location },
+    #[error("runtime config session registry path cannot be empty")]
+    EmptySessionRegistryPath { location: Location },
     #[error("runtime config session diagnostic name cannot be empty")]
     EmptySessionDiagnosticName { location: Location },
     #[error("runtime config session diagnostic `{name}` is duplicated")]
@@ -98,6 +100,123 @@ pub enum RuntimeError {
     },
 }
 
+#[derive(Debug, Error)]
+pub enum SessionRegistryError {
+    #[error("failed to create session registry directory `{}`: {source}", path.display())]
+    CreateDir {
+        path: PathBuf,
+        source: io::Error,
+        location: Location,
+    },
+    #[error("failed to copy session artifact from `{}` to `{}`: {source}", from.display(), to.display())]
+    CopyArtifact {
+        from: PathBuf,
+        to: PathBuf,
+        source: io::Error,
+        location: Location,
+    },
+    #[error("failed to read session registry record `{}`: {source}", path.display())]
+    ReadRecord {
+        path: PathBuf,
+        source: io::Error,
+        location: Location,
+    },
+    #[error("failed to write session registry record `{}`: {source}", path.display())]
+    WriteRecord {
+        path: PathBuf,
+        source: io::Error,
+        location: Location,
+    },
+    #[error("failed to encode session registry record `{}`: {source}", path.display())]
+    EncodeRecord {
+        path: PathBuf,
+        source: serde_json::Error,
+        location: Location,
+    },
+    #[error("failed to decode session registry record `{}`: {source}", path.display())]
+    DecodeRecord {
+        path: PathBuf,
+        source: serde_json::Error,
+        location: Location,
+    },
+    #[error("session registry `{}` does not contain session `{session_id}`", root.display())]
+    UnknownSession {
+        root: PathBuf,
+        session_id: String,
+        location: Location,
+    },
+}
+
+impl SessionRegistryError {
+    #[track_caller]
+    pub fn create_dir(path: impl Into<PathBuf>, source: io::Error) -> Self {
+        Self::CreateDir {
+            path: path.into(),
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn copy_artifact(
+        from: impl Into<PathBuf>,
+        to: impl Into<PathBuf>,
+        source: io::Error,
+    ) -> Self {
+        Self::CopyArtifact {
+            from: from.into(),
+            to: to.into(),
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn read_record(path: impl Into<PathBuf>, source: io::Error) -> Self {
+        Self::ReadRecord {
+            path: path.into(),
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn write_record(path: impl Into<PathBuf>, source: io::Error) -> Self {
+        Self::WriteRecord {
+            path: path.into(),
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn encode_record(path: impl Into<PathBuf>, source: serde_json::Error) -> Self {
+        Self::EncodeRecord {
+            path: path.into(),
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn decode_record(path: impl Into<PathBuf>, source: serde_json::Error) -> Self {
+        Self::DecodeRecord {
+            path: path.into(),
+            source,
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn unknown_session(root: impl Into<PathBuf>, session_id: impl Into<String>) -> Self {
+        Self::UnknownSession {
+            root: root.into(),
+            session_id: session_id.into(),
+            location: Location::default(),
+        }
+    }
+}
+
 impl RuntimeConfigError {
     #[track_caller]
     pub fn empty_config() -> Self {
@@ -153,6 +272,13 @@ impl RuntimeConfigError {
     #[track_caller]
     pub fn empty_session_workspace() -> Self {
         Self::EmptySessionWorkspace {
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn empty_session_registry_path() -> Self {
+        Self::EmptySessionRegistryPath {
             location: Location::default(),
         }
     }

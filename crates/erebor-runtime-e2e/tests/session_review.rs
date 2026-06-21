@@ -135,6 +135,83 @@ mod linux_host {
         Ok(())
     }
 
+    #[test]
+    fn session_run_creates_registry_and_review_commands_read_it() -> Result<(), E2eError> {
+        let erebor_runtime = build_erebor_runtime_binary()?;
+        let test_dir = test_dir("session-registry")?;
+        let policy_path = write_policy(&test_dir)?;
+        let config_path = write_registry_config(&test_dir, &policy_path)?;
+
+        let run = run_cli_expect_failure_in(
+            &erebor_runtime,
+            &test_dir,
+            [
+                "session",
+                "run",
+                "--runner",
+                "linux-host",
+                "--config",
+                config_path.to_string_lossy().as_ref(),
+                "sh",
+                "--remote-debugging-port=9222",
+            ],
+        )?;
+        assert!(
+            run.contains("session runner `linux-host` exited unsuccessfully"),
+            "expected governed run denial, got {run}"
+        );
+
+        let registry_record = single_registry_record(&test_dir)?;
+        let session_id = json_string(&registry_record, "/session_id")?;
+        let registry_path = test_dir.join(".erebor/sessions");
+        assert!(registry_path.join(session_id).join("session.json").exists());
+        assert_eq!(json_string(&registry_record, "/status")?, "failed");
+        assert!(registry_record
+            .pointer("/ended_at_unix_ms")
+            .and_then(Value::as_u64)
+            .is_some());
+        assert!(Path::new(json_string(&registry_record, "/audit_path")?).exists());
+        assert!(Path::new(json_string(&registry_record, "/config_artifact_path")?).exists());
+        assert!(Path::new(json_string(&registry_record, "/policy_artifact_paths/0")?).exists());
+
+        let list = run_cli_in(&erebor_runtime, &test_dir, ["session", "ls"])?;
+        let show = run_cli_in(&erebor_runtime, &test_dir, ["session", "show", session_id])?;
+        let describe_json = run_cli_in(
+            &erebor_runtime,
+            &test_dir,
+            ["session", "describe", session_id, "--format", "json"],
+        )?;
+        let review: Value = serde_json::from_str(&describe_json).map_err(E2eError::json)?;
+
+        assert!(list.contains(session_id));
+        assert!(list.contains("failed"));
+        assert!(list.contains("terminal"));
+        assert!(show.contains("test-agent"));
+        assert!(show.contains("deny-raw-cdp"));
+        assert!(show.contains("Policy sha256:"));
+        assert_eq!(
+            review
+                .pointer("/summary/session_id")
+                .and_then(Value::as_str),
+            Some(session_id)
+        );
+        assert_eq!(
+            review
+                .pointer("/important_decisions/0/rule_id")
+                .and_then(Value::as_str),
+            Some("deny-raw-cdp")
+        );
+        assert_eq!(
+            review
+                .pointer("/important_decisions/0/controlled_path_backend")
+                .and_then(Value::as_str),
+            Some("linux_ptrace_process_guard")
+        );
+
+        fs::remove_dir_all(test_dir).map_err(E2eError::io)?;
+        Ok(())
+    }
+
     fn build_erebor_runtime_binary() -> Result<PathBuf, E2eError> {
         if let Some(binary) = std::env::var_os("CARGO_BIN_EXE_erebor-runtime") {
             return Ok(PathBuf::from(binary));
@@ -189,11 +266,54 @@ mod linux_host {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
+    fn run_cli_in<'a>(
+        binary: &Path,
+        cwd: &Path,
+        args: impl IntoIterator<Item = &'a str>,
+    ) -> Result<String, E2eError> {
+        let output = Command::new(binary)
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .map_err(E2eError::io)?;
+        if !output.status.success() {
+            return Err(command_error("erebor-runtime command", output));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
     fn run_cli_expect_failure<'a>(
         binary: &Path,
         args: impl IntoIterator<Item = &'a str>,
     ) -> Result<String, E2eError> {
         let output = Command::new(binary)
+            .args(args)
+            .output()
+            .map_err(E2eError::io)?;
+        if output.status.success() {
+            return Err(E2eError::external(
+                "erebor-runtime command expected failure",
+                std::io::Error::other(format!(
+                    "command unexpectedly succeeded: stdout={} stderr={}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                )),
+            ));
+        }
+        Ok(format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
+
+    fn run_cli_expect_failure_in<'a>(
+        binary: &Path,
+        cwd: &Path,
+        args: impl IntoIterator<Item = &'a str>,
+    ) -> Result<String, E2eError> {
+        let output = Command::new(binary)
+            .current_dir(cwd)
             .args(args)
             .output()
             .map_err(E2eError::io)?;
@@ -281,6 +401,32 @@ mod linux_host {
         Ok(config_path)
     }
 
+    fn write_registry_config(test_dir: &Path, policy_path: &Path) -> Result<PathBuf, E2eError> {
+        let config_path = test_dir.join("session-config.json");
+        fs::write(
+            &config_path,
+            format!(
+                r#"{{
+                  "policies": ["{}"],
+                  "session": {{
+                    "enabled": true,
+                    "actor": {{ "id": "test-agent", "kind": "agent" }},
+                    "runner": {{ "kind": "linux_host" }}
+                  }},
+                  "surfaces": {{
+                    "terminal": {{
+                      "enabled": true,
+                      "process_guard": {{ "enabled": true }}
+                    }}
+                  }}
+                }}"#,
+                policy_path.display(),
+            ),
+        )
+        .map_err(E2eError::io)?;
+        Ok(config_path)
+    }
+
     fn write_policy(test_dir: &Path) -> Result<PathBuf, E2eError> {
         let policy_path = test_dir.join("policy.json");
         fs::write(
@@ -317,6 +463,42 @@ mod linux_host {
         ));
         fs::create_dir_all(&path).map_err(E2eError::io)?;
         Ok(path)
+    }
+
+    fn single_registry_record(test_dir: &Path) -> Result<Value, E2eError> {
+        let registry = test_dir.join(".erebor/sessions");
+        let mut records = Vec::new();
+        for entry in fs::read_dir(&registry).map_err(E2eError::io)? {
+            let path = entry.map_err(E2eError::io)?.path().join("session.json");
+            if path.exists() {
+                let source = fs::read_to_string(&path).map_err(E2eError::io)?;
+                records.push(serde_json::from_str::<Value>(&source).map_err(E2eError::json)?);
+            }
+        }
+        if records.len() == 1 {
+            Ok(records.remove(0))
+        } else {
+            Err(E2eError::external(
+                "read registry record",
+                std::io::Error::other(format!(
+                    "expected exactly one registry record under {}, got {}",
+                    registry.display(),
+                    records.len()
+                )),
+            ))
+        }
+    }
+
+    fn json_string<'a>(value: &'a Value, pointer: &str) -> Result<&'a str, E2eError> {
+        value
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                E2eError::external(
+                    "read JSON string",
+                    std::io::Error::other(format!("missing string field at {pointer}")),
+                )
+            })
     }
 
     fn workspace_root() -> Result<PathBuf, E2eError> {

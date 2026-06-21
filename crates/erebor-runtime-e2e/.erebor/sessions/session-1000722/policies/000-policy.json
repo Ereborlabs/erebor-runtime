@@ -1,0 +1,16 @@
+
+            {
+              "rules": [
+                {
+                  "id": "deny-raw-cdp",
+                  "match": {
+                    "surface": "terminal",
+                    "action": "process_exec",
+                    "command_contains": "remote-debugging-port"
+                  },
+                  "decision": "deny",
+                  "reason": "raw CDP process launch is denied"
+                }
+              ]
+            }
+            

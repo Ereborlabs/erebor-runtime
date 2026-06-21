@@ -7,7 +7,7 @@ use std::{
 use erebor_runtime_events::{ActorKind, SessionId};
 use serde::{Deserialize, Serialize};
 
-use crate::RuntimeConfigError;
+use crate::{RuntimeConfigError, DEFAULT_SESSION_REGISTRY_PATH};
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 pub struct RuntimeConfig {
@@ -614,7 +614,7 @@ fn validate_debug_values(
     Ok(())
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 pub struct SessionLayerConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -622,10 +622,25 @@ pub struct SessionLayerConfig {
     pub actor: SessionActorLayerConfig,
     #[serde(default)]
     pub workspace: Option<PathBuf>,
+    #[serde(default = "default_session_registry_path")]
+    pub registry_path: PathBuf,
     #[serde(default)]
     pub diagnostics: Vec<SessionDiagnosticLayerConfig>,
     #[serde(default, alias = "runner")]
     pub runner: SessionRunnerLayerConfig,
+}
+
+impl Default for SessionLayerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            actor: SessionActorLayerConfig::default(),
+            workspace: None,
+            registry_path: default_session_registry_path(),
+            diagnostics: Vec::new(),
+            runner: SessionRunnerLayerConfig::default(),
+        }
+    }
 }
 
 impl SessionLayerConfig {
@@ -640,6 +655,10 @@ impl SessionLayerConfig {
             .is_some_and(|path| path.as_os_str().is_empty())
         {
             return Err(RuntimeConfigError::empty_session_workspace());
+        }
+
+        if self.registry_path.as_os_str().is_empty() {
+            return Err(RuntimeConfigError::empty_session_registry_path());
         }
 
         let mut diagnostics = HashSet::new();
@@ -795,6 +814,8 @@ pub struct SessionRunPlan {
     session_id: SessionId,
     actor: SessionActorLayerConfig,
     workspace: Option<PathBuf>,
+    registry_path: PathBuf,
+    config_path: Option<PathBuf>,
     runner: SessionRunnerConfig,
     command: Vec<String>,
     diagnostic: Option<String>,
@@ -824,6 +845,8 @@ impl SessionRunPlan {
             session_id,
             actor: config.session.actor.clone(),
             workspace: config.session.workspace.clone(),
+            registry_path: config.session.registry_path.clone(),
+            config_path: None,
             runner: runner.into(),
             command,
             diagnostic: None,
@@ -876,6 +899,28 @@ impl SessionRunPlan {
     #[must_use]
     pub fn workspace(&self) -> Option<&Path> {
         self.workspace.as_deref()
+    }
+
+    #[must_use]
+    pub fn registry_path(&self) -> &Path {
+        &self.registry_path
+    }
+
+    #[must_use]
+    pub fn config_path(&self) -> Option<&Path> {
+        self.config_path.as_deref()
+    }
+
+    #[must_use]
+    pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config_path = Some(path.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_audit_jsonl(mut self, path: impl Into<PathBuf>) -> Self {
+        self.audit.jsonl = Some(path.into());
+        self
     }
 
     #[must_use]
@@ -2576,6 +2621,10 @@ fn default_session_actor_id() -> String {
 
 const fn default_session_actor_kind() -> ActorKind {
     ActorKind::Agent
+}
+
+fn default_session_registry_path() -> PathBuf {
+    PathBuf::from(DEFAULT_SESSION_REGISTRY_PATH)
 }
 
 const fn default_session_runner_kind() -> SessionRunnerKind {
