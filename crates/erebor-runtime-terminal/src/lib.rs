@@ -513,11 +513,13 @@ mod tests {
 
         let validator = TerminalProcessExecValidator::from_config(terminal)?;
         let argv = vec![String::from("--remote-debugging-port=9222")];
-        let request = ProcessExecInterceptionRequest::new("google-chrome", &argv);
-        let (decision, rule_id, reason) = validator.decide_process_exec(&request).into_parts();
+        let request = ProcessExecInterceptionRequest::new("google-chrome", &argv, "");
+        let (decision, rule_id, reason, mediation) =
+            validator.decide_process_exec(&request).into_parts();
         assert_eq!(decision, SessionInterceptionDecision::Deny);
         assert_eq!(rule_id, "deny-raw-cdp");
         assert_eq!(reason, "raw CDP is denied");
+        assert_eq!(mediation, None);
 
         fs::remove_file(policy_path)?;
         Ok(())

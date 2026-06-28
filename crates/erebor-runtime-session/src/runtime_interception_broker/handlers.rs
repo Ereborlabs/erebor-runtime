@@ -105,8 +105,11 @@ impl SessionInterceptionRouter {
         &self,
         request: &InterceptionRequest,
     ) -> Option<SurfaceInterceptionDecision> {
-        let process_exec_request =
-            ProcessExecInterceptionRequest::new(&request.executable, &request.argv);
+        let process_exec_request = ProcessExecInterceptionRequest::new(
+            &request.executable,
+            &request.argv,
+            &request.matched_handler_id,
+        );
         self.process_exec
             .as_ref()
             .map(|handler| handler.decide_process_exec(&process_exec_request))

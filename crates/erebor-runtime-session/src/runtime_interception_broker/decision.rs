@@ -1,5 +1,7 @@
 use erebor_runtime_core::{SessionInterceptionDecision, SurfaceInterceptionDecision};
-use erebor_runtime_ipc::v1::{AllowDecision, DecisionKind, DenyDecision, InterceptionDecision};
+use erebor_runtime_ipc::v1::{
+    AllowDecision, DecisionKind, DenyDecision, InterceptionDecision, MediateDecision,
+};
 
 use super::constants::DEFAULT_TIMEOUT_MS;
 
@@ -24,7 +26,7 @@ pub(super) fn surface_decision(
     request_id: u64,
     decision: SurfaceInterceptionDecision,
 ) -> InterceptionDecision {
-    let (decision, rule_id, reason) = decision.into_parts();
+    let (decision, rule_id, reason, mediation) = decision.into_parts();
     match decision {
         SessionInterceptionDecision::Allow => InterceptionDecision {
             request_id,
@@ -49,10 +51,33 @@ pub(super) fn surface_decision(
             deny: None,
             mediate: None,
         },
-        SessionInterceptionDecision::Mediate => deny_decision(
-            request_id,
-            rule_id,
-            "surface route returned unsupported mediate decision for direct interception",
-        ),
+        SessionInterceptionDecision::Mediate => {
+            let Some(mediation) = mediation else {
+                return deny_decision(
+                    request_id,
+                    rule_id,
+                    "surface route returned mediate decision without mediation details",
+                );
+            };
+            let (kind, replacement_surface, endpoint, lease_id, print_line, keepalive) =
+                mediation.into_parts();
+            InterceptionDecision {
+                request_id,
+                decision: DecisionKind::Mediate as i32,
+                rule_id,
+                reason,
+                timeout_ms: DEFAULT_TIMEOUT_MS as u32,
+                allow: None,
+                deny: None,
+                mediate: Some(MediateDecision {
+                    kind,
+                    replacement_surface,
+                    endpoint,
+                    lease_id,
+                    print_line,
+                    keepalive,
+                }),
+            }
+        }
     }
 }

@@ -48,7 +48,7 @@ pub use engine::{
 pub use error::{RuntimeConfigError, RuntimeError, SessionRegistryError};
 pub use interception::{
     ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionInterceptionDecision,
-    SurfaceInterceptionDecision,
+    SurfaceInterceptionDecision, SurfaceMediationDecision,
 };
 pub use runtime::{
     RunningSessionSurface, SessionSurfaceDefinition, SessionSurfaceFailure,

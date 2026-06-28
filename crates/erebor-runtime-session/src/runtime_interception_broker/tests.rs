@@ -4,7 +4,7 @@ use erebor_runtime_cdp::CdpSessionContext;
 use erebor_runtime_core::{
     ProcessExecInterceptionRequest, ProcessExecSurfaceHandler,
     ProcessMediationPrivateEndpointLayerConfig, ProcessMediationPrivatePortStrategy,
-    RuntimeAuditConfig, RuntimeConfig, SurfaceInterceptionDecision,
+    RuntimeAuditConfig, RuntimeConfig, SurfaceInterceptionDecision, SurfaceMediationDecision,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_ipc::v1::{
@@ -206,6 +206,72 @@ fn broker_routes_process_exec_requests_without_handler_id() -> Result<(), Box<dy
     assert_eq!(decision.decision, DecisionKind::Deny as i32);
     assert_eq!(decision.rule_id, "test-process-exec-deny");
     assert_eq!(decision.reason, "dangerous process execution");
+    Ok(())
+}
+
+#[test]
+fn broker_routes_process_exec_mediation_without_session_mediation_registry(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id("routes-process-exec-mediate");
+    let router =
+        SessionInterceptionRouter::new().with_process_exec_handler(TestProcessExecMediationHandler);
+    let broker = RuntimeInterceptionBroker::register_session_with_router_and_mediators(
+        &session_id,
+        "openclaw",
+        Vec::new(),
+        router,
+        SessionMediationRegistry::new(),
+    )?;
+
+    let decision = InterceptionBrokerClient::request_interception_decision(
+        broker.endpoint(),
+        hello(&session_id),
+        request_with_argv("", &[String::from("google-chrome")]),
+    )?;
+
+    let mediation = decision
+        .mediate
+        .as_ref()
+        .ok_or_else(|| std::io::Error::other("expected process-exec mediation decision"))?;
+    assert_eq!(decision.decision, DecisionKind::Mediate as i32);
+    assert_eq!(decision.rule_id, "test-process-exec-mediate");
+    assert_eq!(
+        decision.reason,
+        "process execution mediated by surface handler"
+    );
+    assert_eq!(mediation.kind, "managed_browser_cdp");
+    assert_eq!(mediation.replacement_surface, "browser_cdp");
+    assert_eq!(mediation.endpoint, "ws://127.0.0.1:9222/");
+    assert_eq!(mediation.lease_id, "surface-lease");
+    assert_eq!(
+        mediation.print_line,
+        "DevTools listening on ws://127.0.0.1:9222/devtools/browser/surface"
+    );
+    assert!(mediation.keepalive);
+    Ok(())
+}
+
+#[test]
+fn process_exec_router_passes_matched_handler_id_to_surface_handler(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let router = SessionInterceptionRouter::new()
+        .with_process_exec_handler(MatchedHandlerProcessExecHandler);
+
+    let Some(decision) = router.decide_process_exec(&request_with_argv(
+        "managed-browser-cdp",
+        &[String::from("google-chrome")],
+    )) else {
+        return Err("process exec route should be registered".into());
+    };
+    let (decision, rule_id, reason, mediation) = decision.into_parts();
+
+    assert_eq!(
+        decision,
+        erebor_runtime_core::SessionInterceptionDecision::Deny
+    );
+    assert_eq!(rule_id, "matched-handler-id-visible");
+    assert_eq!(reason, "managed-browser-cdp");
+    assert_eq!(mediation, None);
     Ok(())
 }
 
@@ -462,6 +528,10 @@ struct TestMediationHandler {
 
 struct TestProcessExecHandler;
 
+struct TestProcessExecMediationHandler;
+
+struct MatchedHandlerProcessExecHandler;
+
 impl ProcessExecSurfaceHandler for TestProcessExecHandler {
     fn surface(&self) -> &str {
         "terminal"
@@ -472,6 +542,46 @@ impl ProcessExecSurfaceHandler for TestProcessExecHandler {
         _request: &ProcessExecInterceptionRequest<'_>,
     ) -> SurfaceInterceptionDecision {
         SurfaceInterceptionDecision::deny("test-process-exec-deny", "dangerous process execution")
+    }
+}
+
+impl ProcessExecSurfaceHandler for TestProcessExecMediationHandler {
+    fn surface(&self) -> &str {
+        "terminal"
+    }
+
+    fn decide_process_exec(
+        &self,
+        _request: &ProcessExecInterceptionRequest<'_>,
+    ) -> SurfaceInterceptionDecision {
+        SurfaceInterceptionDecision::mediate(
+            "test-process-exec-mediate",
+            "process execution mediated by surface handler",
+            SurfaceMediationDecision::new(
+                "managed_browser_cdp",
+                "browser_cdp",
+                "ws://127.0.0.1:9222/",
+            )
+            .with_lease_id("surface-lease")
+            .with_print_line("DevTools listening on ws://127.0.0.1:9222/devtools/browser/surface")
+            .with_keepalive(true),
+        )
+    }
+}
+
+impl ProcessExecSurfaceHandler for MatchedHandlerProcessExecHandler {
+    fn surface(&self) -> &str {
+        "terminal"
+    }
+
+    fn decide_process_exec(
+        &self,
+        request: &ProcessExecInterceptionRequest<'_>,
+    ) -> SurfaceInterceptionDecision {
+        SurfaceInterceptionDecision::deny(
+            "matched-handler-id-visible",
+            request.matched_handler_id(),
+        )
     }
 }
 
