@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use erebor_runtime_core::TerminalSurfaceConfig;
+use erebor_runtime_core::{
+    ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SurfaceInterceptionDecision,
+    TerminalSurfaceConfig,
+};
 use erebor_runtime_policy::{LocalPolicy, PolicyError};
 use thiserror::Error;
 
@@ -77,6 +80,33 @@ impl TerminalProcessPolicy {
             .map(|rule| {
                 TerminalProcessPolicyDecision::new(rule.rule_id(), rule.reason(), rule.decision())
             })
+    }
+}
+
+pub struct TerminalProcessExecValidator {
+    policy: TerminalProcessPolicy,
+}
+
+impl TerminalProcessExecValidator {
+    pub fn from_config(config: &TerminalSurfaceConfig) -> Result<Self, TerminalSurfaceError> {
+        Ok(Self {
+            policy: TerminalProcessPolicy::from_config(config)?,
+        })
+    }
+}
+
+impl ProcessExecSurfaceHandler for TerminalProcessExecValidator {
+    fn surface(&self) -> &str {
+        "terminal"
+    }
+
+    fn decide_process_exec(
+        &self,
+        request: &ProcessExecInterceptionRequest<'_>,
+    ) -> SurfaceInterceptionDecision {
+        self.policy
+            .decide_process_exec(request.executable(), request.argv())
+            .map_or_else(default_allow_process_exec, surface_decision)
     }
 }
 
@@ -167,6 +197,27 @@ pub enum TerminalProcessGuardDecision {
     Allow,
     Deny,
     RequireApproval,
+}
+
+fn surface_decision(decision: TerminalProcessPolicyDecision) -> SurfaceInterceptionDecision {
+    match decision.decision() {
+        TerminalProcessGuardDecision::Allow => {
+            SurfaceInterceptionDecision::allow(decision.rule_id(), decision.reason())
+        }
+        TerminalProcessGuardDecision::Deny => {
+            SurfaceInterceptionDecision::deny(decision.rule_id(), decision.reason())
+        }
+        TerminalProcessGuardDecision::RequireApproval => {
+            SurfaceInterceptionDecision::require_approval(decision.rule_id(), decision.reason())
+        }
+    }
+}
+
+fn default_allow_process_exec() -> SurfaceInterceptionDecision {
+    SurfaceInterceptionDecision::allow(
+        "terminal-process-exec-default-allow",
+        "process execution allowed by terminal policy",
+    )
 }
 
 impl TerminalProcessGuardDecision {
@@ -328,11 +379,15 @@ fn guard_env_field(value: &str) -> String {
 mod tests {
     use std::{fs, io};
 
-    use erebor_runtime_core::RuntimeConfig;
+    use erebor_runtime_core::{
+        ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, RuntimeConfig,
+        SessionInterceptionDecision,
+    };
 
     use super::{
-        compile_terminal_process_guard_rules, TerminalProcessGuardDecision,
-        TerminalProcessGuardRule, TerminalProcessGuardRules, TerminalProcessPolicy,
+        compile_terminal_process_guard_rules, TerminalProcessExecValidator,
+        TerminalProcessGuardDecision, TerminalProcessGuardRule, TerminalProcessGuardRules,
+        TerminalProcessPolicy,
     };
 
     #[test]
@@ -455,6 +510,14 @@ mod tests {
         assert_eq!(decision.rule_id(), "deny-raw-cdp");
         assert_eq!(decision.reason(), "raw CDP is denied");
         assert_eq!(decision.decision(), TerminalProcessGuardDecision::Deny);
+
+        let validator = TerminalProcessExecValidator::from_config(terminal)?;
+        let argv = vec![String::from("--remote-debugging-port=9222")];
+        let request = ProcessExecInterceptionRequest::new("google-chrome", &argv);
+        let (decision, rule_id, reason) = validator.decide_process_exec(&request).into_parts();
+        assert_eq!(decision, SessionInterceptionDecision::Deny);
+        assert_eq!(rule_id, "deny-raw-cdp");
+        assert_eq!(reason, "raw CDP is denied");
 
         fs::remove_file(policy_path)?;
         Ok(())

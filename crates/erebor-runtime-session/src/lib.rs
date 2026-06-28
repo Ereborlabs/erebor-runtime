@@ -8,7 +8,6 @@ use std::{
 mod adoption;
 mod control_broker;
 mod interception_backend;
-mod terminal_process_exec;
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
@@ -18,23 +17,29 @@ use erebor_runtime_core::{
     SessionRegistry, SessionRegistryError, SessionRegistryFinish, SessionRunOutcome,
     SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher, SessionSurfaceDefinition,
     SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher, SessionSurfaceSupervisor,
-    TerminalSurfaceConfig,
+    TerminalProcessInterceptionMode, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
-use erebor_runtime_terminal::TerminalSurfaceError;
+use erebor_runtime_terminal::{TerminalProcessExecValidator, TerminalSurfaceError};
 use snafu::Location;
 use thiserror::Error;
 
-use crate::interception_backend::SessionInterceptionBackendBundle;
+use crate::interception_backend::{
+    ProcessExecInterceptionInput, ProcessExecMediationInput, ProcessExecMediationMode,
+    SessionInterceptionBackendBundle, SessionInterceptionBackendSurfaceRegistry,
+};
 
 pub use adoption::adopt_session_target;
 pub use control_broker::{
-    BrowserCdpMediationHandler, GuardBrokerClient, ProcessExecSurfaceHandler, SessionControlBroker,
+    BrowserCdpMediationHandler, GuardBrokerClient, SessionControlBroker,
     SessionControlBrokerEndpoint, SessionControlBrokerError, SessionControlRegistration,
     SessionInterceptionHandler, SessionInterceptionRouter, SessionMediationIntent,
-    SessionMediationRegistry, SurfaceInterceptionDecision, SurfaceMediationHandler,
-    SurfaceMediationOutcome,
+    SessionMediationRegistry, SurfaceMediationHandler, SurfaceMediationOutcome,
+};
+pub use erebor_runtime_core::{
+    ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionInterceptionDecision,
+    SurfaceInterceptionDecision,
 };
 
 const DOCKER_CONTROL_DIR: &str = "/erebor/control";
@@ -385,8 +390,7 @@ fn start_session_side_resources_from_start_plan(
     .map_err(SessionExecutionError::runtime)?;
     let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
     let mut environment = Vec::new();
-    let mut process_exec_interception = None;
-    let mut interception_router = SessionInterceptionRouter::new();
+    let mut interception_surfaces = SessionInterceptionBackendSurfaceRegistry::new();
     let mut terminal_surface_present = false;
     let process_exec_supported = start_plan
         .interception()
@@ -436,18 +440,17 @@ fn start_session_side_resources_from_start_plan(
                 ));
 
                 if process_exec_supported {
-                    process_exec_interception = Some(
-                        terminal_process_exec::backend_input_from_surface(config, plan)?,
+                    interception_surfaces.register_process_exec(
+                        terminal_process_exec_input(config, plan)?,
+                        TerminalProcessExecValidator::from_config(config)
+                            .map_err(SessionExecutionError::terminal_surface)?,
                     );
-                    interception_router = terminal_process_exec::register_surface_handler(
-                        interception_router,
-                        config,
-                    )?;
                 }
             }
         }
     }
 
+    let (process_exec_interception, interception_router) = interception_surfaces.into_parts();
     let interception_backend = SessionInterceptionBackendBundle::prepare(
         start_plan.interception(),
         process_exec_interception,
@@ -619,6 +622,35 @@ fn terminal_uses_managed_browser_cdp_mediation(config: &TerminalSurfaceConfig) -
             .handlers()
             .iter()
             .any(|handler| handler.kind() == ProcessInterceptionHandlerKind::ManagedBrowserCdp)
+}
+
+fn terminal_process_exec_input<'a>(
+    config: &'a TerminalSurfaceConfig,
+    plan: &impl SessionPlanContext,
+) -> Result<ProcessExecInterceptionInput<'a>, SessionExecutionError> {
+    let mediation = config.process_interception();
+    if mediation.enabled() && plan.runner_kind() != SessionRunnerKind::LinuxHost {
+        return Err(SessionExecutionError::guard_config(
+            "terminal process interception currently supports linux-host sessions only",
+        ));
+    }
+
+    Ok(ProcessExecInterceptionInput::new(
+        ProcessExecMediationInput::new(
+            mediation.enabled(),
+            process_exec_mediation_mode(mediation.mode()),
+            mediation.handlers(),
+        ),
+        plan.audit().surfaces().terminal().level(),
+        plan.audit().surfaces().terminal().debug_commands().to_vec(),
+        config.tty(),
+    ))
+}
+
+fn process_exec_mediation_mode(mode: TerminalProcessInterceptionMode) -> ProcessExecMediationMode {
+    match mode {
+        TerminalProcessInterceptionMode::Shim => ProcessExecMediationMode::Shim,
+    }
 }
 
 fn session_cdp_context(plan: &impl SessionPlanContext) -> CdpSessionContext {

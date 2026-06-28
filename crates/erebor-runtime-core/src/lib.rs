@@ -3,6 +3,7 @@
 mod config;
 mod engine;
 mod error;
+mod interception;
 mod runtime;
 mod session;
 mod session_registry;
@@ -45,6 +46,10 @@ pub use engine::{
     AuditSink, DenyApprovalProvider, EnforcementOutcome, LocalEnforcementEngine, NoopAuditSink,
 };
 pub use error::{RuntimeConfigError, RuntimeError, SessionRegistryError};
+pub use interception::{
+    ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionInterceptionDecision,
+    SurfaceInterceptionDecision,
+};
 pub use runtime::{
     RunningSessionSurface, SessionSurfaceDefinition, SessionSurfaceFailure,
     SessionSurfaceFailureSender, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,

@@ -7,12 +7,13 @@ use std::{
 
 use erebor_runtime_core::{
     AuditCommandLogLevel, DockerSessionCommandOptions, DockerSessionMount,
-    LinuxHostSessionCommandOptions, ProcessInterceptionDecision, ProcessInterceptionHandlerConfig,
-    ProcessInterceptionHandlerKind, ProcessMediationPrivateEndpointConfig,
-    ProcessMediationReplacementSurface, SessionInterceptionBackendKind, SessionInterceptionConfig,
-    SessionInterceptionOperation,
+    LinuxHostSessionCommandOptions, ProcessExecSurfaceHandler, ProcessInterceptionDecision,
+    ProcessInterceptionHandlerConfig, ProcessInterceptionHandlerKind,
+    ProcessMediationPrivateEndpointConfig, ProcessMediationReplacementSurface,
+    SessionInterceptionBackendKind, SessionInterceptionConfig, SessionInterceptionOperation,
 };
 
+use crate::control_broker::SessionInterceptionRouter;
 use crate::{
     SessionExecutionError, SessionInterceptionHandler, SessionMediationIntent, SessionPlanContext,
     SessionStorage,
@@ -30,6 +31,39 @@ pub(crate) struct SessionInterceptionBackendBundle {
 
 enum SessionInterceptionBackend {
     LinuxPtrace(LinuxPtraceInterceptionBackendBundle),
+}
+
+pub(crate) struct SessionInterceptionBackendSurfaceRegistry<'a> {
+    process_exec: Option<ProcessExecInterceptionInput<'a>>,
+    router: SessionInterceptionRouter,
+}
+
+impl<'a> SessionInterceptionBackendSurfaceRegistry<'a> {
+    pub(crate) fn new() -> Self {
+        Self {
+            process_exec: None,
+            router: SessionInterceptionRouter::new(),
+        }
+    }
+
+    pub(crate) fn register_process_exec(
+        &mut self,
+        input: ProcessExecInterceptionInput<'a>,
+        handler: impl ProcessExecSurfaceHandler + 'static,
+    ) {
+        self.process_exec = Some(input);
+        let router = std::mem::take(&mut self.router);
+        self.router = router.with_process_exec_handler(handler);
+    }
+
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Option<ProcessExecInterceptionInput<'a>>,
+        SessionInterceptionRouter,
+    ) {
+        (self.process_exec, self.router)
+    }
 }
 
 impl SessionInterceptionBackendBundle {

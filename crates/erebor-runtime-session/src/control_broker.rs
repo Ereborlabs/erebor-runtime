@@ -15,9 +15,10 @@ use std::{
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
-    BrowserCdpSurfaceConfig, ProcessMediationPrivateEndpointConfig,
-    ProcessMediationPrivatePortStrategy, RunningSessionSurface, RuntimeAuditConfig,
-    SessionSurfaceService,
+    BrowserCdpSurfaceConfig, ProcessExecInterceptionRequest, ProcessExecSurfaceHandler,
+    ProcessMediationPrivateEndpointConfig, ProcessMediationPrivatePortStrategy,
+    RunningSessionSurface, RuntimeAuditConfig, SessionInterceptionDecision, SessionSurfaceService,
+    SurfaceInterceptionDecision,
 };
 use erebor_runtime_ipc::{
     v1::{
@@ -188,55 +189,6 @@ impl SessionInterceptionHandler {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SessionInterceptionDecision {
-    Allow,
-    Deny,
-    RequireApproval,
-    Mediate,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SurfaceInterceptionDecision {
-    decision: SessionInterceptionDecision,
-    rule_id: String,
-    reason: String,
-}
-
-impl SurfaceInterceptionDecision {
-    #[must_use]
-    pub fn allow(rule_id: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self {
-            decision: SessionInterceptionDecision::Allow,
-            rule_id: rule_id.into(),
-            reason: reason.into(),
-        }
-    }
-
-    #[must_use]
-    pub fn deny(rule_id: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self {
-            decision: SessionInterceptionDecision::Deny,
-            rule_id: rule_id.into(),
-            reason: reason.into(),
-        }
-    }
-
-    #[must_use]
-    pub fn require_approval(rule_id: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self {
-            decision: SessionInterceptionDecision::RequireApproval,
-            rule_id: rule_id.into(),
-            reason: reason.into(),
-        }
-    }
-}
-
-pub trait ProcessExecSurfaceHandler: Send + Sync {
-    fn surface(&self) -> &str;
-    fn decide_process_exec(&self, request: &InterceptionRequest) -> SurfaceInterceptionDecision;
-}
-
 #[derive(Clone, Default)]
 pub struct SessionInterceptionRouter {
     process_exec: Option<Arc<dyn ProcessExecSurfaceHandler>>,
@@ -261,9 +213,11 @@ impl SessionInterceptionRouter {
         &self,
         request: &InterceptionRequest,
     ) -> Option<SurfaceInterceptionDecision> {
+        let process_exec_request =
+            ProcessExecInterceptionRequest::new(&request.executable, &request.argv);
         self.process_exec
             .as_ref()
-            .map(|handler| handler.decide_process_exec(request))
+            .map(|handler| handler.decide_process_exec(&process_exec_request))
     }
 }
 
@@ -1192,12 +1146,13 @@ fn surface_decision(
     request_id: u64,
     decision: SurfaceInterceptionDecision,
 ) -> InterceptionDecision {
-    match decision.decision {
+    let (decision, rule_id, reason) = decision.into_parts();
+    match decision {
         SessionInterceptionDecision::Allow => InterceptionDecision {
             request_id,
             decision: DecisionKind::Allow as i32,
-            rule_id: decision.rule_id,
-            reason: decision.reason,
+            rule_id,
+            reason,
             timeout_ms: DEFAULT_TIMEOUT_MS as u32,
             allow: Some(AllowDecision {
                 exec_target: String::new(),
@@ -1205,14 +1160,12 @@ fn surface_decision(
             deny: None,
             mediate: None,
         },
-        SessionInterceptionDecision::Deny => {
-            deny_decision(request_id, decision.rule_id, decision.reason)
-        }
+        SessionInterceptionDecision::Deny => deny_decision(request_id, rule_id, reason),
         SessionInterceptionDecision::RequireApproval => InterceptionDecision {
             request_id,
             decision: DecisionKind::RequireApproval as i32,
-            rule_id: decision.rule_id,
-            reason: decision.reason,
+            rule_id,
+            reason,
             timeout_ms: DEFAULT_TIMEOUT_MS as u32,
             allow: None,
             deny: None,
@@ -1220,7 +1173,7 @@ fn surface_decision(
         },
         SessionInterceptionDecision::Mediate => deny_decision(
             request_id,
-            decision.rule_id,
+            rule_id,
             "surface route returned unsupported mediate decision for direct interception",
         ),
     }
@@ -1536,8 +1489,8 @@ mod tests {
 
     use erebor_runtime_cdp::CdpSessionContext;
     use erebor_runtime_core::{
-        ProcessMediationPrivateEndpointLayerConfig, ProcessMediationPrivatePortStrategy,
-        RuntimeAuditConfig, RuntimeConfig,
+        ProcessExecInterceptionRequest, ProcessMediationPrivateEndpointLayerConfig,
+        ProcessMediationPrivatePortStrategy, RuntimeAuditConfig, RuntimeConfig,
     };
     use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
     use erebor_runtime_ipc::v1::{
@@ -2002,7 +1955,7 @@ mod tests {
 
         fn decide_process_exec(
             &self,
-            _request: &InterceptionRequest,
+            _request: &ProcessExecInterceptionRequest<'_>,
         ) -> SurfaceInterceptionDecision {
             SurfaceInterceptionDecision::deny(
                 "test-process-exec-deny",
