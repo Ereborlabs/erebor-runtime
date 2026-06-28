@@ -4,26 +4,30 @@ use erebor_runtime_cdp::CdpSessionContext;
 use erebor_runtime_core::{
     ProcessExecInterceptionRequest, ProcessExecSurfaceHandler,
     ProcessMediationPrivateEndpointLayerConfig, ProcessMediationPrivatePortStrategy,
-    RuntimeAuditConfig, RuntimeConfig, SurfaceInterceptionDecision, SurfaceMediationDecision,
+    RuntimeAuditConfig, RuntimeConfig, SessionInterceptionDecision, SurfaceInterceptionDecision,
+    SurfaceMediationDecision, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_ipc::v1::{
     DecisionKind, GuardHello, InterceptionRequest, InterceptionSource, PROTOCOL_VERSION,
 };
 use erebor_runtime_policy::PolicySet;
+use erebor_runtime_terminal::{TerminalProcessExecValidator, TerminalProcessMediationCapability};
 
 use super::{
     browser_cdp_mediation::private_remote_debugging_port_for_request, BrowserCdpMediationHandler,
     InterceptionBrokerClient, RuntimeInterceptionBroker, RuntimeInterceptionBrokerError,
-    RuntimeInterceptionEndpoint, SessionInterceptionHandler, SessionInterceptionRouter,
-    SessionMediationIntent, SessionMediationRegistry, SurfaceMediationHandler,
-    SurfaceMediationOutcome,
+    RuntimeInterceptionEndpoint, SessionInterceptionRouter,
 };
 
 #[test]
 fn broker_accepts_guard_hello_with_interception_token() -> Result<(), Box<dyn std::error::Error>> {
     let session_id = session_id("accepts-hello");
-    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", Vec::new())?;
+    let broker = RuntimeInterceptionBroker::register_session(
+        &session_id,
+        "openclaw",
+        SessionInterceptionRouter::new(),
+    )?;
 
     #[cfg(unix)]
     {
@@ -55,7 +59,11 @@ fn broker_accepts_guard_hello_with_interception_token() -> Result<(), Box<dyn st
 fn broker_rejects_guard_hello_with_bad_interception_token() -> Result<(), Box<dyn std::error::Error>>
 {
     let session_id = session_id("rejects-token");
-    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", Vec::new())?;
+    let broker = RuntimeInterceptionBroker::register_session(
+        &session_id,
+        "openclaw",
+        SessionInterceptionRouter::new(),
+    )?;
     let bad_endpoint = broker.endpoint().with_path(broker.endpoint().path());
     let bad_endpoint = RuntimeInterceptionEndpoint::unix(bad_endpoint.path(), "wrong-token", 25);
 
@@ -71,9 +79,16 @@ fn broker_rejects_guard_hello_with_bad_interception_token() -> Result<(), Box<dy
 fn broker_accepts_multiple_sessions_on_one_server() -> Result<(), Box<dyn std::error::Error>> {
     let first_session = session_id("first");
     let second_session = session_id("second");
-    let first =
-        RuntimeInterceptionBroker::register_session(&first_session, "openclaw", Vec::new())?;
-    let second = RuntimeInterceptionBroker::register_session(&second_session, "codex", Vec::new())?;
+    let first = RuntimeInterceptionBroker::register_session(
+        &first_session,
+        "openclaw",
+        SessionInterceptionRouter::new(),
+    )?;
+    let second = RuntimeInterceptionBroker::register_session(
+        &second_session,
+        "codex",
+        SessionInterceptionRouter::new(),
+    )?;
 
     assert_eq!(first.endpoint().path(), second.endpoint().path());
     assert_ne!(first.endpoint().token(), second.endpoint().token());
@@ -96,7 +111,11 @@ fn broker_accepts_multiple_sessions_on_one_server() -> Result<(), Box<dyn std::e
 #[test]
 fn broker_unregisters_session_when_registration_drops() -> Result<(), Box<dyn std::error::Error>> {
     let session_id = session_id("drop-unregisters");
-    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", Vec::new())?;
+    let broker = RuntimeInterceptionBroker::register_session(
+        &session_id,
+        "openclaw",
+        SessionInterceptionRouter::new(),
+    )?;
     let endpoint = broker.endpoint().clone();
     drop(broker);
 
@@ -110,9 +129,16 @@ fn broker_unregisters_session_when_registration_drops() -> Result<(), Box<dyn st
 #[test]
 fn broker_rejects_duplicate_session_registration() -> Result<(), Box<dyn std::error::Error>> {
     let session_id = session_id("duplicate");
-    let _broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", Vec::new())?;
-    let error = match RuntimeInterceptionBroker::register_session(&session_id, "codex", Vec::new())
-    {
+    let _broker = RuntimeInterceptionBroker::register_session(
+        &session_id,
+        "openclaw",
+        SessionInterceptionRouter::new(),
+    )?;
+    let error = match RuntimeInterceptionBroker::register_session(
+        &session_id,
+        "codex",
+        SessionInterceptionRouter::new(),
+    ) {
         Ok(_registration) => return Err("duplicate session id should be rejected".into()),
         Err(error) => error,
     };
@@ -128,26 +154,9 @@ fn broker_rejects_duplicate_session_registration() -> Result<(), Box<dyn std::er
 fn broker_returns_interception_decisions_after_guard_hello(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_id = session_id("decisions");
-    let broker = RuntimeInterceptionBroker::register_session_with_mediators(
-        &session_id,
-        "openclaw",
-        vec![
-            SessionInterceptionHandler::allow("allow-tool", "safe tool"),
-            SessionInterceptionHandler::deny("deny-tool", "dangerous tool"),
-            SessionInterceptionHandler::require_approval("approve-tool", "needs approval"),
-            SessionInterceptionHandler::mediate(
-                "mediate-tool",
-                "route to replacement surface",
-                SessionMediationIntent::new("future_api", "api")
-                    .with_lease_id("api-lease")
-                    .with_keepalive(false),
-            ),
-        ],
-        SessionMediationRegistry::new().with_handler(TestMediationHandler {
-            surface: String::from("api"),
-            endpoint: String::from("local://replacement"),
-        }),
-    )?;
+    let router =
+        SessionInterceptionRouter::new().with_process_exec_handler(TestProcessExecDecisionHandler);
+    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", router)?;
 
     let allow = InterceptionBrokerClient::request_interception_decision(
         broker.endpoint(),
@@ -179,7 +188,7 @@ fn broker_returns_interception_decisions_after_guard_hello(
             .mediate
             .as_ref()
             .map(|decision| decision.replacement_surface.as_str()),
-        Some("api")
+        Some("browser_cdp")
     );
     Ok(())
 }
@@ -189,13 +198,7 @@ fn broker_routes_process_exec_requests_without_handler_id() -> Result<(), Box<dy
 {
     let session_id = session_id("routes-process-exec");
     let router = SessionInterceptionRouter::new().with_process_exec_handler(TestProcessExecHandler);
-    let broker = RuntimeInterceptionBroker::register_session_with_router_and_mediators(
-        &session_id,
-        "openclaw",
-        Vec::new(),
-        router,
-        SessionMediationRegistry::new(),
-    )?;
+    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", router)?;
 
     let decision = InterceptionBrokerClient::request_interception_decision(
         broker.endpoint(),
@@ -210,18 +213,12 @@ fn broker_routes_process_exec_requests_without_handler_id() -> Result<(), Box<dy
 }
 
 #[test]
-fn broker_routes_process_exec_mediation_without_session_mediation_registry(
+fn broker_routes_process_exec_mediation_from_surface_handler(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_id = session_id("routes-process-exec-mediate");
     let router =
         SessionInterceptionRouter::new().with_process_exec_handler(TestProcessExecMediationHandler);
-    let broker = RuntimeInterceptionBroker::register_session_with_router_and_mediators(
-        &session_id,
-        "openclaw",
-        Vec::new(),
-        router,
-        SessionMediationRegistry::new(),
-    )?;
+    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", router)?;
 
     let decision = InterceptionBrokerClient::request_interception_decision(
         broker.endpoint(),
@@ -252,53 +249,46 @@ fn broker_routes_process_exec_mediation_without_session_mediation_registry(
 }
 
 #[test]
-fn process_exec_router_passes_matched_handler_id_to_surface_handler(
+fn broker_routes_process_exec_requests_with_handler_id_to_surface_handler(
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id("routes-matched-process-exec");
     let router = SessionInterceptionRouter::new()
         .with_process_exec_handler(MatchedHandlerProcessExecHandler);
+    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", router)?;
 
-    let Some(decision) = router.decide_process_exec(&request_with_argv(
-        "managed-browser-cdp",
-        &[String::from("google-chrome")],
-    )) else {
-        return Err("process exec route should be registered".into());
-    };
-    let (decision, rule_id, reason, mediation) = decision.into_parts();
+    let decision = InterceptionBrokerClient::request_interception_decision(
+        broker.endpoint(),
+        hello(&session_id),
+        request_with_argv("managed-browser-cdp", &[String::from("google-chrome")]),
+    )?;
 
-    assert_eq!(
-        decision,
-        erebor_runtime_core::SessionInterceptionDecision::Deny
-    );
-    assert_eq!(rule_id, "matched-handler-id-visible");
-    assert_eq!(reason, "managed-browser-cdp");
-    assert_eq!(mediation, None);
+    assert_eq!(decision.decision, DecisionKind::Deny as i32);
+    assert_eq!(decision.rule_id, "matched-handler-id-visible");
+    assert_eq!(decision.reason, "managed-browser-cdp");
+    assert_eq!(decision.mediate, None);
     Ok(())
 }
 
 #[test]
-fn broker_fails_closed_when_mediation_surface_is_not_registered(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let session_id = session_id("missing-mediator");
+fn broker_fails_closed_for_unrouted_process_exec() -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id("unrouted-process-exec");
     let broker = RuntimeInterceptionBroker::register_session(
         &session_id,
         "openclaw",
-        vec![SessionInterceptionHandler::mediate(
-            "mediate-tool",
-            "route to replacement surface",
-            SessionMediationIntent::new("future_api", "api"),
-        )],
+        SessionInterceptionRouter::new(),
     )?;
 
     let decision = InterceptionBrokerClient::request_interception_decision(
         broker.endpoint(),
         hello(&session_id),
-        request("mediate-tool"),
+        request("missing-handler"),
     )?;
 
     assert_eq!(decision.decision, DecisionKind::Deny as i32);
-    assert!(decision
-        .reason
-        .contains("no mediation handler is registered for replacement surface `api`"));
+    assert_eq!(
+        decision.rule_id,
+        "erebor-runtime-interception-broker-unrouted-process-exec"
+    );
     Ok(())
 }
 
@@ -306,20 +296,13 @@ fn broker_fails_closed_when_mediation_surface_is_not_registered(
 fn browser_cdp_mediation_handler_owns_endpoint_and_port_validation(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_id = session_id("browser-cdp-mediator");
-    let broker = RuntimeInterceptionBroker::register_session_with_mediators(
+    let terminal = terminal_process_mediation_config()?;
+    let validator = TerminalProcessExecValidator::from_config(&terminal)?
+        .with_process_mediation_capability(BrowserCdpMediationHandler::new("ws://127.0.0.1:9222/"));
+    let broker = RuntimeInterceptionBroker::register_session(
         &session_id,
         "openclaw",
-        vec![SessionInterceptionHandler::mediate(
-            "managed-browser-cdp",
-            "route browser launch to governed CDP",
-            SessionMediationIntent::new("managed_browser_cdp", "browser_cdp")
-                .with_allowed_ports(vec![9222])
-                .with_lease_id("browser-lease")
-                .with_compatibility_line(true)
-                .with_keepalive(true),
-        )],
-        SessionMediationRegistry::new()
-            .with_handler(BrowserCdpMediationHandler::new("ws://127.0.0.1:9222/")),
+        SessionInterceptionRouter::new().with_process_exec_handler(validator),
     )?;
 
     let decision = InterceptionBrokerClient::request_interception_decision(
@@ -341,7 +324,7 @@ fn browser_cdp_mediation_handler_owns_endpoint_and_port_validation(
     assert_eq!(decision.decision, DecisionKind::Mediate as i32);
     assert_eq!(mediation.replacement_surface, "browser_cdp");
     assert_eq!(mediation.endpoint, "ws://127.0.0.1:9222/");
-    assert_eq!(mediation.lease_id, "browser-lease");
+    assert_eq!(mediation.lease_id, "managed-browser-cdp-lease");
     assert!(mediation
         .print_line
         .contains("ws://127.0.0.1:9222/devtools/browser/erebor-managed-browser"));
@@ -370,25 +353,22 @@ fn browser_cdp_mediation_handler_owns_endpoint_and_port_validation(
 fn browser_cdp_lazy_mediation_starts_surface_on_requested_port(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let requested_port = free_tcp_port()?;
-    let config = RuntimeConfig::from_json_str(
-        r#"
-            {
-              "policies": ["policies/browser.json"],
-              "surfaces": {
-                "browser_cdp": {
-                  "enabled": true,
-                  "listen": "127.0.0.1:0",
-                  "browser_url": "ws://127.0.0.1:9/devtools/browser/fake"
-                }
-              }
-            }
-            "#,
-    )?;
+    let config = terminal_process_mediation_runtime_config("127.0.0.1:0")?;
     let browser_cdp = config
         .surface_start_plan()?
         .browser_cdp()
         .ok_or_else(|| std::io::Error::other("missing browser CDP config"))?
         .clone();
+    let terminal = config
+        .surface_start_plan()?
+        .terminal()
+        .ok_or_else(|| std::io::Error::other("missing terminal config"))?
+        .clone();
+    let process_handler = terminal
+        .process_interception()
+        .handlers()
+        .first()
+        .ok_or_else(|| std::io::Error::other("missing process mediation handler"))?;
     let handler = BrowserCdpMediationHandler::lazy(
         browser_cdp,
         PolicySet::default(),
@@ -404,46 +384,60 @@ fn browser_cdp_lazy_mediation_starts_surface_on_requested_port(
         RuntimeAuditConfig::default(),
     )?;
 
-    let outcome = handler.mediate(
-        &request_with_argv(
-            "managed-browser-cdp",
-            &[
-                String::from("google-chrome"),
-                format!("--remote-debugging-port={requested_port}"),
-            ],
-        ),
-        &SessionMediationIntent::new("managed_browser_cdp", "browser_cdp")
-            .with_lease_id("browser-lease")
-            .with_compatibility_line(true)
-            .with_keepalive(true),
-    )?;
+    let argv = vec![
+        String::from("google-chrome"),
+        format!("--remote-debugging-port={requested_port}"),
+    ];
+    let request =
+        ProcessExecInterceptionRequest::new("google-chrome", &argv, "managed-browser-cdp");
+    let outcome = handler.mediate_process_exec(&request, process_handler)?;
+    let (_kind, _surface, endpoint, _lease_id, print_line, _keepalive) = outcome.into_parts();
 
-    assert_eq!(
-        outcome.endpoint,
-        format!("ws://127.0.0.1:{requested_port}/")
-    );
-    assert!(outcome.print_line.contains(&format!(
+    assert_eq!(endpoint, format!("ws://127.0.0.1:{requested_port}/"));
+    assert!(print_line.contains(&format!(
         "ws://127.0.0.1:{requested_port}/devtools/browser/"
     )));
     Ok(())
 }
 
 #[test]
+fn terminal_process_surface_fails_closed_for_missing_browser_cdp_capability(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let terminal = terminal_process_mediation_config()?;
+    let validator = TerminalProcessExecValidator::from_config(&terminal)?;
+
+    let argv = vec![
+        String::from("google-chrome"),
+        String::from("--remote-debugging-port=9222"),
+    ];
+    let request =
+        ProcessExecInterceptionRequest::new("google-chrome", &argv, "managed-browser-cdp");
+    let (decision, rule_id, reason, mediation) =
+        validator.decide_process_exec(&request).into_parts();
+
+    assert_eq!(decision, SessionInterceptionDecision::Deny);
+    assert_eq!(rule_id, "managed-browser-cdp");
+    assert_eq!(
+        reason,
+        "browser_cdp process mediation capability is unavailable"
+    );
+    assert_eq!(mediation, None);
+    Ok(())
+}
+
+#[test]
 fn private_browser_port_can_follow_requested_port_plus_offset() -> Result<(), String> {
-    let intent = SessionMediationIntent::new("managed_browser_cdp", "browser_cdp")
-        .with_private_endpoint(
-            ProcessMediationPrivateEndpointLayerConfig {
-                port_strategy: ProcessMediationPrivatePortStrategy::RequestedPlusOffset,
-                port_offset: 1,
-            }
-            .into(),
-        );
+    let private_endpoint = ProcessMediationPrivateEndpointLayerConfig {
+        port_strategy: ProcessMediationPrivatePortStrategy::RequestedPlusOffset,
+        port_offset: 1,
+    }
+    .into();
 
     assert_eq!(
-        private_remote_debugging_port_for_request(&intent, 1000)?,
+        private_remote_debugging_port_for_request(&private_endpoint, 1000)?,
         Some(1001)
     );
-    let overflow = private_remote_debugging_port_for_request(&intent, u16::MAX);
+    let overflow = private_remote_debugging_port_for_request(&private_endpoint, u16::MAX);
     let Err(error) = overflow else {
         return Err(String::from("overflow should fail closed"));
     };
@@ -453,10 +447,16 @@ fn private_browser_port_can_follow_requested_port_plus_offset() -> Result<(), St
 }
 
 #[test]
-fn broker_fails_closed_for_unknown_interception_handler() -> Result<(), Box<dyn std::error::Error>>
-{
+fn terminal_process_surface_fails_closed_for_unknown_matched_handler(
+) -> Result<(), Box<dyn std::error::Error>> {
     let session_id = session_id("unknown-handler");
-    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", Vec::new())?;
+    let terminal = terminal_process_mediation_config()?;
+    let validator = TerminalProcessExecValidator::from_config(&terminal)?;
+    let broker = RuntimeInterceptionBroker::register_session(
+        &session_id,
+        "openclaw",
+        SessionInterceptionRouter::new().with_process_exec_handler(validator),
+    )?;
 
     let decision = InterceptionBrokerClient::request_interception_decision(
         broker.endpoint(),
@@ -467,7 +467,7 @@ fn broker_fails_closed_for_unknown_interception_handler() -> Result<(), Box<dyn 
     assert_eq!(decision.decision, DecisionKind::Deny as i32);
     assert_eq!(
         decision.rule_id,
-        "erebor-runtime-interception-broker-unknown-handler"
+        "terminal-process-exec-unknown-interception-handler"
     );
     Ok(())
 }
@@ -521,12 +521,97 @@ fn request_with_argv(handler_id: &str, argv: &[String]) -> InterceptionRequest {
     }
 }
 
-struct TestMediationHandler {
-    surface: String,
-    endpoint: String,
+fn terminal_process_mediation_config() -> Result<TerminalSurfaceConfig, Box<dyn std::error::Error>>
+{
+    let config = terminal_process_mediation_runtime_config_with_allowed_ports(
+        "127.0.0.1:9222",
+        r#",
+                          "allowed_ports": [9222]"#,
+    )?;
+    Ok(config
+        .surface_start_plan()?
+        .terminal()
+        .ok_or_else(|| std::io::Error::other("missing terminal config"))?
+        .clone())
+}
+
+fn terminal_process_mediation_runtime_config(
+    browser_cdp_listen: &str,
+) -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
+    terminal_process_mediation_runtime_config_with_allowed_ports(browser_cdp_listen, "")
+}
+
+fn terminal_process_mediation_runtime_config_with_allowed_ports(
+    browser_cdp_listen: &str,
+    allowed_ports_fragment: &str,
+) -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
+    let policy_path = std::env::temp_dir().join(format!(
+        "erebor-broker-mediation-policy-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    fs::write(&policy_path, r#"{"rules":[]}"#)?;
+
+    Ok(RuntimeConfig::from_json_str(&format!(
+        r#"
+            {{
+              "policies": ["{}"],
+              "session": {{
+                "interception": {{
+                  "enabled": true
+                }}
+              }},
+              "surfaces": {{
+                "terminal": {{
+                  "enabled": true,
+                  "process_interception": {{
+                    "enabled": true,
+                    "handlers": [
+                      {{
+                        "id": "managed-browser-cdp",
+                        "decision": "mediate",
+                        "kind": "managed_browser_cdp",
+                        "match": {{
+                          "executables": ["google-chrome"],
+                          "required_args": ["--remote-debugging-port"],
+                          "require_remote_debugging_port": true
+                        }},
+                        "requested_endpoint": {{
+                          "source": "remote_debugging_port",
+                          "bind": "127.0.0.1"{allowed_ports_fragment}
+                        }},
+                        "replacement": {{
+                          "surface": "browser_cdp",
+                          "private_endpoint": {{
+                            "port_strategy": "requested_plus_offset",
+                            "port_offset": 1
+                          }}
+                        }},
+                        "compatibility": {{
+                          "print_devtools_listening_line": true,
+                          "keepalive": true
+                        }}
+                      }}
+                    ]
+                  }}
+                }},
+                "browser_cdp": {{
+                  "enabled": true,
+                  "listen": "{browser_cdp_listen}",
+                  "browser_url": "ws://127.0.0.1:9/devtools/browser/fake"
+                }}
+              }}
+            }}
+            "#,
+        policy_path.display(),
+    ))?)
 }
 
 struct TestProcessExecHandler;
+
+struct TestProcessExecDecisionHandler;
 
 struct TestProcessExecMediationHandler;
 
@@ -542,6 +627,34 @@ impl ProcessExecSurfaceHandler for TestProcessExecHandler {
         _request: &ProcessExecInterceptionRequest<'_>,
     ) -> SurfaceInterceptionDecision {
         SurfaceInterceptionDecision::deny("test-process-exec-deny", "dangerous process execution")
+    }
+}
+
+impl ProcessExecSurfaceHandler for TestProcessExecDecisionHandler {
+    fn surface(&self) -> &str {
+        "terminal"
+    }
+
+    fn decide_process_exec(
+        &self,
+        request: &ProcessExecInterceptionRequest<'_>,
+    ) -> SurfaceInterceptionDecision {
+        match request.matched_handler_id() {
+            "allow-tool" => SurfaceInterceptionDecision::allow("allow-tool", "safe tool"),
+            "deny-tool" => SurfaceInterceptionDecision::deny("deny-tool", "dangerous tool"),
+            "approve-tool" => {
+                SurfaceInterceptionDecision::require_approval("approve-tool", "needs approval")
+            }
+            "mediate-tool" => SurfaceInterceptionDecision::mediate(
+                "mediate-tool",
+                "route to replacement surface",
+                SurfaceMediationDecision::new("future_api", "browser_cdp", "local://replacement"),
+            ),
+            handler_id => SurfaceInterceptionDecision::deny(
+                "test-process-exec-unknown-handler",
+                format!("unexpected handler id `{handler_id}`"),
+            ),
+        }
     }
 }
 
@@ -582,26 +695,6 @@ impl ProcessExecSurfaceHandler for MatchedHandlerProcessExecHandler {
             "matched-handler-id-visible",
             request.matched_handler_id(),
         )
-    }
-}
-
-impl SurfaceMediationHandler for TestMediationHandler {
-    fn surface(&self) -> &str {
-        &self.surface
-    }
-
-    fn mediate(
-        &self,
-        _request: &InterceptionRequest,
-        intent: &SessionMediationIntent,
-    ) -> Result<SurfaceMediationOutcome, String> {
-        Ok(SurfaceMediationOutcome::new(
-            intent.kind(),
-            intent.replacement_surface(),
-            &self.endpoint,
-        )
-        .with_lease_id(intent.lease_id())
-        .with_keepalive(intent.keepalive()))
     }
 }
 

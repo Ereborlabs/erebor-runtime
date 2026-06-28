@@ -20,8 +20,7 @@ use super::{
     constants::{DEFAULT_TIMEOUT_MS, RUNTIME_INTERCEPTION_SOCKET_NAME},
     decision::{deny_decision, surface_decision},
     endpoint::RuntimeInterceptionEndpoint,
-    handlers::{SessionInterceptionHandler, SessionInterceptionRouter, SessionRegistration},
-    mediation::SessionMediationRegistry,
+    handlers::{SessionInterceptionRouter, SessionRegistration},
     platform::{
         Platform, RuntimeInterceptionBrokerPlatform, RuntimeInterceptionBrokerServerPlatform,
     },
@@ -37,44 +36,12 @@ impl RuntimeInterceptionBroker {
     pub fn register_session(
         session_id: impl Into<String>,
         actor_id: impl Into<String>,
-        handlers: Vec<SessionInterceptionHandler>,
-    ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
-        Self::register_session_with_mediators(
-            session_id,
-            actor_id,
-            handlers,
-            SessionMediationRegistry::new(),
-        )
-    }
-
-    pub fn register_session_with_mediators(
-        session_id: impl Into<String>,
-        actor_id: impl Into<String>,
-        handlers: Vec<SessionInterceptionHandler>,
-        mediators: SessionMediationRegistry,
-    ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
-        Self::register_session_with_router_and_mediators(
-            session_id,
-            actor_id,
-            handlers,
-            SessionInterceptionRouter::new(),
-            mediators,
-        )
-    }
-
-    pub fn register_session_with_router_and_mediators(
-        session_id: impl Into<String>,
-        actor_id: impl Into<String>,
-        handlers: Vec<SessionInterceptionHandler>,
         router: SessionInterceptionRouter,
-        mediators: SessionMediationRegistry,
     ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
         shared_runtime_interception_broker_server()?.register_session(
             session_id.into(),
             actor_id.into(),
-            handlers,
             router,
-            mediators,
         )
     }
 }
@@ -169,21 +136,14 @@ impl RuntimeInterceptionBrokerServer {
         self: &Arc<Self>,
         session_id: String,
         actor_id: String,
-        handlers: Vec<SessionInterceptionHandler>,
         router: SessionInterceptionRouter,
-        mediators: SessionMediationRegistry,
     ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
         let endpoint_path = self.endpoint_path()?;
         let token = read_interception_token()?;
         let registration = SessionRegistration {
             token: token.clone(),
             broker_id: format!("{session_id}:{actor_id}"),
-            handlers: handlers
-                .into_iter()
-                .map(|handler| (handler.id().to_owned(), handler))
-                .collect(),
             router,
-            mediators,
         };
         {
             let mut sessions = self
@@ -388,7 +348,7 @@ impl RuntimeInterceptionBrokerServer {
                 "interception request arrived before GuardHello",
             ));
         };
-        let (handler, mediators) = {
+        {
             let sessions = self
                 .sessions
                 .lock()
@@ -400,30 +360,18 @@ impl RuntimeInterceptionBrokerServer {
                     "session is no longer registered with the runtime interception broker",
                 ));
             };
-            if request.matched_handler_id.is_empty() {
-                return Ok(registration
-                    .router
-                    .decide_process_exec(request)
-                    .map(|decision| surface_decision(request.request_id, decision))
-                    .unwrap_or_else(|| {
-                        deny_decision(
-                            request.request_id,
-                            "erebor-runtime-interception-broker-unrouted-process-exec",
-                            "no surface is registered for process_exec interception",
-                        )
-                    }));
-            }
-            let Some(handler) = registration.handlers.get(&request.matched_handler_id) else {
-                return Ok(deny_decision(
-                    request.request_id,
-                    "erebor-runtime-interception-broker-unknown-handler",
-                    "interception handler is not registered for this session",
-                ));
-            };
-            (handler.clone(), registration.mediators.clone())
-        };
-
-        Ok(handler.decision_for_request(request, &mediators))
+            Ok(registration
+                .router
+                .decide_process_exec(request)
+                .map(|decision| surface_decision(request.request_id, decision))
+                .unwrap_or_else(|| {
+                    deny_decision(
+                        request.request_id,
+                        "erebor-runtime-interception-broker-unrouted-process-exec",
+                        "no surface is registered for process_exec interception",
+                    )
+                }))
+        }
     }
 }
 

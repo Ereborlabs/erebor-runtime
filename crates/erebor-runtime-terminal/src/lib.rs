@@ -1,11 +1,13 @@
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use erebor_runtime_core::{
-    ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SurfaceInterceptionDecision,
-    TerminalSurfaceConfig,
+    ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, ProcessInterceptionDecision,
+    ProcessMediationHandlerConfig, ProcessMediationReplacementSurface, SurfaceInterceptionDecision,
+    SurfaceMediationDecision, TerminalSurfaceConfig,
 };
 use erebor_runtime_policy::{LocalPolicy, PolicyError};
 use thiserror::Error;
@@ -85,13 +87,24 @@ impl TerminalProcessPolicy {
 
 pub struct TerminalProcessExecValidator {
     policy: TerminalProcessPolicy,
+    mediation: TerminalProcessMediationPolicy,
 }
 
 impl TerminalProcessExecValidator {
     pub fn from_config(config: &TerminalSurfaceConfig) -> Result<Self, TerminalSurfaceError> {
         Ok(Self {
             policy: TerminalProcessPolicy::from_config(config)?,
+            mediation: TerminalProcessMediationPolicy::from_config(config),
         })
+    }
+
+    #[must_use]
+    pub fn with_process_mediation_capability(
+        mut self,
+        capability: impl TerminalProcessMediationCapability + 'static,
+    ) -> Self {
+        self.mediation.capability = Some(Arc::new(capability));
+        self
     }
 }
 
@@ -104,9 +117,99 @@ impl ProcessExecSurfaceHandler for TerminalProcessExecValidator {
         &self,
         request: &ProcessExecInterceptionRequest<'_>,
     ) -> SurfaceInterceptionDecision {
+        if !request.matched_handler_id().is_empty() {
+            return self.mediation.decide_process_exec(request);
+        }
+
         self.policy
             .decide_process_exec(request.executable(), request.argv())
             .map_or_else(default_allow_process_exec, surface_decision)
+    }
+}
+
+pub trait TerminalProcessMediationCapability: Send + Sync {
+    fn mediate_process_exec(
+        &self,
+        request: &ProcessExecInterceptionRequest<'_>,
+        handler: &ProcessMediationHandlerConfig,
+    ) -> Result<SurfaceMediationDecision, String>;
+}
+
+#[derive(Default)]
+struct TerminalProcessMediationPolicy {
+    handlers: Vec<ProcessMediationHandlerConfig>,
+    capability: Option<Arc<dyn TerminalProcessMediationCapability>>,
+}
+
+impl TerminalProcessMediationPolicy {
+    fn from_config(config: &TerminalSurfaceConfig) -> Self {
+        let handlers = if config.process_interception().enabled() {
+            config.process_interception().handlers().to_vec()
+        } else {
+            Vec::new()
+        };
+
+        Self {
+            handlers,
+            capability: None,
+        }
+    }
+
+    fn decide_process_exec(
+        &self,
+        request: &ProcessExecInterceptionRequest<'_>,
+    ) -> SurfaceInterceptionDecision {
+        let handler_id = request.matched_handler_id();
+        let Some(handler) = self
+            .handlers
+            .iter()
+            .find(|handler| handler.id() == handler_id)
+        else {
+            return SurfaceInterceptionDecision::deny(
+                "terminal-process-exec-unknown-interception-handler",
+                format!("process interception handler `{handler_id}` is not configured"),
+            );
+        };
+
+        match handler.decision() {
+            ProcessInterceptionDecision::Allow => SurfaceInterceptionDecision::allow(
+                handler.id(),
+                process_interception_decision_reason(handler.decision()),
+            ),
+            ProcessInterceptionDecision::Deny => SurfaceInterceptionDecision::deny(
+                handler.id(),
+                process_interception_decision_reason(handler.decision()),
+            ),
+            ProcessInterceptionDecision::RequireApproval => {
+                SurfaceInterceptionDecision::require_approval(
+                    handler.id(),
+                    process_interception_decision_reason(handler.decision()),
+                )
+            }
+            ProcessInterceptionDecision::Mediate => self.decide_mediation(request, handler),
+        }
+    }
+
+    fn decide_mediation(
+        &self,
+        request: &ProcessExecInterceptionRequest<'_>,
+        handler: &ProcessMediationHandlerConfig,
+    ) -> SurfaceInterceptionDecision {
+        let Some(capability) = self.capability.as_ref() else {
+            return SurfaceInterceptionDecision::deny(
+                handler.id(),
+                missing_mediation_capability_reason(handler.replacement().surface()),
+            );
+        };
+
+        match capability.mediate_process_exec(request, handler) {
+            Ok(mediation) => SurfaceInterceptionDecision::mediate(
+                handler.id(),
+                process_interception_decision_reason(handler.decision()),
+                mediation,
+            ),
+            Err(reason) => SurfaceInterceptionDecision::deny(handler.id(), reason),
+        }
     }
 }
 
@@ -218,6 +321,27 @@ fn default_allow_process_exec() -> SurfaceInterceptionDecision {
         "terminal-process-exec-default-allow",
         "process execution allowed by terminal policy",
     )
+}
+
+fn process_interception_decision_reason(decision: ProcessInterceptionDecision) -> &'static str {
+    match decision {
+        ProcessInterceptionDecision::Allow => "process launch allowed by terminal process surface",
+        ProcessInterceptionDecision::Deny => "process launch denied by terminal process surface",
+        ProcessInterceptionDecision::RequireApproval => {
+            "process launch requires approval from terminal process surface"
+        }
+        ProcessInterceptionDecision::Mediate => {
+            "process launch mediated by terminal process surface"
+        }
+    }
+}
+
+fn missing_mediation_capability_reason(surface: ProcessMediationReplacementSurface) -> String {
+    match surface {
+        ProcessMediationReplacementSurface::BrowserCdp => {
+            String::from("browser_cdp process mediation capability is unavailable")
+        }
+    }
 }
 
 impl TerminalProcessGuardDecision {
@@ -381,13 +505,13 @@ mod tests {
 
     use erebor_runtime_core::{
         ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, RuntimeConfig,
-        SessionInterceptionDecision,
+        SessionInterceptionDecision, SurfaceMediationDecision,
     };
 
     use super::{
         compile_terminal_process_guard_rules, TerminalProcessExecValidator,
         TerminalProcessGuardDecision, TerminalProcessGuardRule, TerminalProcessGuardRules,
-        TerminalProcessPolicy,
+        TerminalProcessMediationCapability, TerminalProcessPolicy,
     };
 
     #[test]
@@ -550,5 +674,145 @@ mod tests {
             rules.rules()[1].decision(),
             TerminalProcessGuardDecision::Deny
         );
+    }
+
+    #[test]
+    fn terminal_process_interception_handlers_own_surface_decisions(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let policy_path = std::env::temp_dir().join(format!(
+            "erebor-terminal-mediation-policy-{}.json",
+            std::process::id()
+        ));
+        fs::write(&policy_path, r#"{"rules":[]}"#)?;
+
+        let config_source = r#"
+            {
+              "policies": ["__POLICY_PATH__"],
+              "session": {
+                "interception": {
+                  "enabled": true
+                }
+              },
+              "surfaces": {
+                "terminal": {
+                  "enabled": true,
+                  "process_interception": {
+                    "enabled": true,
+                    "handlers": [
+                      {
+                        "id": "allow-browser",
+                        "decision": "allow",
+                        "kind": "managed_browser_cdp",
+                        "match": { "executables": ["google-chrome"] }
+                      },
+                      {
+                        "id": "deny-browser",
+                        "decision": "deny",
+                        "kind": "managed_browser_cdp",
+                        "match": { "executables": ["google-chrome"] }
+                      },
+                      {
+                        "id": "approve-browser",
+                        "decision": "require_approval",
+                        "kind": "managed_browser_cdp",
+                        "match": { "executables": ["google-chrome"] }
+                      },
+                      {
+                        "id": "mediate-browser",
+                        "decision": "mediate",
+                        "kind": "managed_browser_cdp",
+                        "match": { "executables": ["google-chrome"] },
+                        "compatibility": {
+                          "print_devtools_listening_line": true,
+                          "keepalive": true
+                        }
+                      }
+                    ]
+                  }
+                },
+                "browser_cdp": {
+                  "enabled": true,
+                  "listen": "127.0.0.1:9222"
+                }
+              }
+            }
+            "#
+        .replace("__POLICY_PATH__", &policy_path.display().to_string());
+        let config = RuntimeConfig::from_json_str(&config_source)?;
+        let terminal = config
+            .surface_start_plan()?
+            .terminal()
+            .ok_or_else(|| io::Error::other("expected terminal surface config"))?
+            .clone();
+        let validator = TerminalProcessExecValidator::from_config(&terminal)?
+            .with_process_mediation_capability(TestMediationCapability);
+        let argv = vec![String::from("google-chrome")];
+
+        let (decision, rule_id, _reason, mediation) = validator
+            .decide_process_exec(&ProcessExecInterceptionRequest::new(
+                "google-chrome",
+                &argv,
+                "allow-browser",
+            ))
+            .into_parts();
+        assert_eq!(decision, SessionInterceptionDecision::Allow);
+        assert_eq!(rule_id, "allow-browser");
+        assert_eq!(mediation, None);
+
+        let (decision, rule_id, _reason, mediation) = validator
+            .decide_process_exec(&ProcessExecInterceptionRequest::new(
+                "google-chrome",
+                &argv,
+                "deny-browser",
+            ))
+            .into_parts();
+        assert_eq!(decision, SessionInterceptionDecision::Deny);
+        assert_eq!(rule_id, "deny-browser");
+        assert_eq!(mediation, None);
+
+        let (decision, rule_id, _reason, mediation) = validator
+            .decide_process_exec(&ProcessExecInterceptionRequest::new(
+                "google-chrome",
+                &argv,
+                "approve-browser",
+            ))
+            .into_parts();
+        assert_eq!(decision, SessionInterceptionDecision::RequireApproval);
+        assert_eq!(rule_id, "approve-browser");
+        assert_eq!(mediation, None);
+
+        let (decision, rule_id, reason, mediation) = validator
+            .decide_process_exec(&ProcessExecInterceptionRequest::new(
+                "google-chrome",
+                &argv,
+                "mediate-browser",
+            ))
+            .into_parts();
+        assert_eq!(decision, SessionInterceptionDecision::Mediate);
+        assert_eq!(rule_id, "mediate-browser");
+        assert_eq!(
+            reason,
+            "process launch mediated by terminal process surface"
+        );
+        assert!(mediation.is_some());
+
+        fs::remove_file(policy_path)?;
+        Ok(())
+    }
+
+    struct TestMediationCapability;
+
+    impl TerminalProcessMediationCapability for TestMediationCapability {
+        fn mediate_process_exec(
+            &self,
+            _request: &ProcessExecInterceptionRequest<'_>,
+            handler: &erebor_runtime_core::ProcessMediationHandlerConfig,
+        ) -> Result<SurfaceMediationDecision, String> {
+            Ok(SurfaceMediationDecision::new(
+                handler.kind().as_str(),
+                "browser_cdp",
+                "ws://127.0.0.1:9222/",
+            ))
+        }
     }
 }

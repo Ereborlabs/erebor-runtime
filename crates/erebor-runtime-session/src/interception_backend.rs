@@ -7,17 +7,12 @@ use std::{
 
 use erebor_runtime_core::{
     AuditCommandLogLevel, DockerSessionCommandOptions, DockerSessionMount,
-    LinuxHostSessionCommandOptions, ProcessExecSurfaceHandler, ProcessInterceptionDecision,
-    ProcessInterceptionHandlerConfig, ProcessInterceptionHandlerKind,
-    ProcessMediationPrivateEndpointConfig, ProcessMediationReplacementSurface,
-    SessionInterceptionBackendKind, SessionInterceptionConfig, SessionInterceptionOperation,
+    LinuxHostSessionCommandOptions, ProcessInterceptionHandlerConfig,
+    ProcessInterceptionHandlerKind, SessionInterceptionBackendKind, SessionInterceptionConfig,
+    SessionInterceptionOperation,
 };
 
-use crate::runtime_interception_broker::SessionInterceptionRouter;
-use crate::{
-    SessionExecutionError, SessionInterceptionHandler, SessionMediationIntent, SessionPlanContext,
-    SessionStorage,
-};
+use crate::{SessionExecutionError, SessionPlanContext, SessionStorage};
 
 const LINUX_PROCESS_GUARD_BINARY: &str = "erebor-linux-process-guard";
 const DOCKER_GUARD_DIR: &str = "/erebor/guard";
@@ -31,39 +26,6 @@ pub(crate) struct SessionInterceptionBackendBundle {
 
 enum SessionInterceptionBackend {
     LinuxPtrace(LinuxPtraceInterceptionBackendBundle),
-}
-
-pub(crate) struct SessionInterceptionBackendSurfaceRegistry<'a> {
-    process_exec: Option<ProcessExecInterceptionInput<'a>>,
-    router: SessionInterceptionRouter,
-}
-
-impl<'a> SessionInterceptionBackendSurfaceRegistry<'a> {
-    pub(crate) fn new() -> Self {
-        Self {
-            process_exec: None,
-            router: SessionInterceptionRouter::new(),
-        }
-    }
-
-    pub(crate) fn register_process_exec(
-        &mut self,
-        input: ProcessExecInterceptionInput<'a>,
-        handler: impl ProcessExecSurfaceHandler + 'static,
-    ) {
-        self.process_exec = Some(input);
-        let router = std::mem::take(&mut self.router);
-        self.router = router.with_process_exec_handler(handler);
-    }
-
-    pub(crate) fn into_parts(
-        self,
-    ) -> (
-        Option<ProcessExecInterceptionInput<'a>>,
-        SessionInterceptionRouter,
-    ) {
-        (self.process_exec, self.router)
-    }
 }
 
 impl SessionInterceptionBackendBundle {
@@ -125,14 +87,6 @@ impl SessionInterceptionBackendBundle {
             SessionInterceptionBackend::LinuxPtrace(bundle) => {
                 bundle.linux_host_adopt_options(pid, browser_cdp_endpoint)
             }
-        }
-    }
-
-    pub(crate) fn control_handlers(
-        &self,
-    ) -> Result<Vec<SessionInterceptionHandler>, SessionExecutionError> {
-        match &self.backend {
-            SessionInterceptionBackend::LinuxPtrace(bundle) => bundle.control_handlers(),
         }
     }
 }
@@ -362,13 +316,6 @@ impl LinuxPtraceInterceptionBackendBundle {
             .linux_host_options(browser_cdp_endpoint)?
             .with_adopt_pid(pid))
     }
-
-    fn control_handlers(&self) -> Result<Vec<SessionInterceptionHandler>, SessionExecutionError> {
-        self.interception.as_ref().map_or_else(
-            || Ok(Vec::new()),
-            LinuxProcessInterceptionBundle::control_handlers,
-        )
-    }
 }
 
 impl Drop for LinuxPtraceInterceptionBackendBundle {
@@ -455,27 +402,13 @@ impl LinuxProcessInterceptionBundle {
             .collect::<Vec<_>>()
             .join("\n")
     }
-
-    fn control_handlers(&self) -> Result<Vec<SessionInterceptionHandler>, SessionExecutionError> {
-        self.handlers
-            .iter()
-            .map(LinuxProcessInterceptionHandler::to_control_handler)
-            .collect()
-    }
 }
 
 #[derive(Clone, Debug)]
 struct LinuxProcessInterceptionHandler {
     id: String,
-    decision: ProcessInterceptionDecision,
-    kind: ProcessInterceptionHandlerKind,
-    replacement_surface: ProcessMediationReplacementSurface,
-    private_endpoint: ProcessMediationPrivateEndpointConfig,
     executables: Vec<String>,
-    allowed_ports: Vec<u16>,
     executable_env: Vec<String>,
-    print_devtools_listening_line: bool,
-    keepalive: bool,
     prepend_path: bool,
     shim_paths: Vec<PathBuf>,
 }
@@ -506,15 +439,8 @@ impl LinuxProcessInterceptionHandler {
 
         Ok(Self {
             id: handler.id().to_owned(),
-            decision: handler.decision(),
-            kind: handler.kind(),
-            replacement_surface: handler.replacement().surface(),
-            private_endpoint: *handler.replacement().private_endpoint(),
             executables,
-            allowed_ports: handler.requested_endpoint().allowed_ports().to_vec(),
             executable_env: process_interception_executable_env(handler),
-            print_devtools_listening_line: handler.compatibility().print_devtools_listening_line(),
-            keepalive: handler.compatibility().keepalive(),
             prepend_path: handler.environment().prepend_path(),
             shim_paths,
         })
@@ -534,42 +460,6 @@ impl LinuxProcessInterceptionHandler {
             interception_env_field(self.executables.join(",")),
         ]
         .join("\t")
-    }
-
-    fn to_control_handler(&self) -> Result<SessionInterceptionHandler, SessionExecutionError> {
-        let reason = match self.decision {
-            ProcessInterceptionDecision::Allow => "process launch allowed by Erebor broker",
-            ProcessInterceptionDecision::Deny => "process launch denied by Erebor broker",
-            ProcessInterceptionDecision::RequireApproval => {
-                "process launch requires approval from Erebor broker"
-            }
-            ProcessInterceptionDecision::Mediate => "process launch mediated by Erebor broker",
-        };
-
-        let handler = match self.decision {
-            ProcessInterceptionDecision::Allow => {
-                SessionInterceptionHandler::allow(&self.id, reason)
-            }
-            ProcessInterceptionDecision::Deny => SessionInterceptionHandler::deny(&self.id, reason),
-            ProcessInterceptionDecision::RequireApproval => {
-                SessionInterceptionHandler::require_approval(&self.id, reason)
-            }
-            ProcessInterceptionDecision::Mediate => SessionInterceptionHandler::mediate(
-                &self.id,
-                reason,
-                SessionMediationIntent::new(
-                    self.kind.as_str(),
-                    replacement_surface_name(self.replacement_surface),
-                )
-                .with_lease_id(format!("{}-lease", self.id))
-                .with_allowed_ports(self.allowed_ports.clone())
-                .with_private_endpoint(self.private_endpoint)
-                .with_compatibility_line(self.print_devtools_listening_line)
-                .with_keepalive(self.keepalive),
-            ),
-        };
-
-        Ok(handler)
     }
 }
 
@@ -689,12 +579,6 @@ pub(crate) fn process_interception_executable_env(
         .into_iter()
         .map(String::from)
         .collect(),
-    }
-}
-
-fn replacement_surface_name(surface: ProcessMediationReplacementSurface) -> &'static str {
-    match surface {
-        ProcessMediationReplacementSurface::BrowserCdp => "browser_cdp",
     }
 }
 

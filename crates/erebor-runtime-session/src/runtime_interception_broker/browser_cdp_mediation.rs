@@ -8,14 +8,14 @@ use std::{
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
-    BrowserCdpSurfaceConfig, ProcessMediationPrivatePortStrategy, RunningSessionSurface,
-    RuntimeAuditConfig, SessionSurfaceService,
+    BrowserCdpSurfaceConfig, ProcessExecInterceptionRequest, ProcessMediationHandlerConfig,
+    ProcessMediationPrivateEndpointConfig, ProcessMediationPrivatePortStrategy,
+    ProcessMediationReplacementSurface, RunningSessionSurface, RuntimeAuditConfig,
+    SessionSurfaceService, SurfaceMediationDecision,
 };
-use erebor_runtime_ipc::v1::InterceptionRequest;
 use erebor_runtime_policy::PolicySet;
+use erebor_runtime_terminal::TerminalProcessMediationCapability;
 use tokio::runtime::Runtime;
-
-use super::mediation::{SessionMediationIntent, SurfaceMediationHandler, SurfaceMediationOutcome};
 
 #[derive(Clone)]
 pub struct BrowserCdpMediationHandler {
@@ -89,20 +89,20 @@ impl fmt::Debug for BrowserCdpMediationHandler {
     }
 }
 
-impl SurfaceMediationHandler for BrowserCdpMediationHandler {
-    fn surface(&self) -> &str {
-        "browser_cdp"
-    }
-
-    fn mediate(
+impl TerminalProcessMediationCapability for BrowserCdpMediationHandler {
+    fn mediate_process_exec(
         &self,
-        request: &InterceptionRequest,
-        intent: &SessionMediationIntent,
-    ) -> Result<SurfaceMediationOutcome, String> {
+        request: &ProcessExecInterceptionRequest<'_>,
+        handler: &ProcessMediationHandlerConfig,
+    ) -> Result<SurfaceMediationDecision, String> {
+        match handler.replacement().surface() {
+            ProcessMediationReplacementSurface::BrowserCdp => {}
+        }
+
         let endpoint = match &self.mode {
             BrowserCdpMediationMode::FixedEndpoint { endpoint } => {
-                let allowed_ports = effective_browser_cdp_allowed_ports(intent, endpoint)?;
-                if let Some(requested_port) = remote_debugging_port(&request.argv) {
+                let allowed_ports = effective_browser_cdp_allowed_ports(handler, endpoint)?;
+                if let Some(requested_port) = remote_debugging_port(request.argv()) {
                     if !allowed_ports.contains(&requested_port) {
                         return Err(format!(
                             "requested remote debugging port {requested_port} is not allowed"
@@ -112,23 +112,23 @@ impl SurfaceMediationHandler for BrowserCdpMediationHandler {
                 endpoint.clone()
             }
             BrowserCdpMediationMode::LazySurface(lazy) => {
-                let requested_port = remote_debugging_port(&request.argv).ok_or_else(|| {
+                let requested_port = remote_debugging_port(request.argv()).ok_or_else(|| {
                     String::from("managed browser CDP mediation requires --remote-debugging-port")
                 })?;
-                validate_requested_port(intent, requested_port)?;
-                lazy.endpoint_for_requested_port(requested_port, intent)?
+                validate_requested_port(handler, requested_port)?;
+                lazy.endpoint_for_requested_port(requested_port, handler)?
             }
         };
 
         Ok(
-            SurfaceMediationOutcome::new(intent.kind(), self.surface(), &endpoint)
-                .with_lease_id(intent.lease_id())
-                .with_print_line(if intent.emit_compatibility_line() {
+            SurfaceMediationDecision::new(handler.kind().as_str(), "browser_cdp", &endpoint)
+                .with_lease_id(format!("{}-lease", handler.id()))
+                .with_print_line(if handler.compatibility().print_devtools_listening_line() {
                     format!("DevTools listening on {}", devtools_browser_url(&endpoint))
                 } else {
                     String::new()
                 })
-                .with_keepalive(intent.keepalive()),
+                .with_keepalive(handler.compatibility().keepalive()),
         )
     }
 }
@@ -137,7 +137,7 @@ impl LazyBrowserCdpMediation {
     fn endpoint_for_requested_port(
         &self,
         requested_port: u16,
-        intent: &SessionMediationIntent,
+        handler: &ProcessMediationHandlerConfig,
     ) -> Result<String, String> {
         let mut running = self
             .running
@@ -148,8 +148,10 @@ impl LazyBrowserCdpMediation {
         }
 
         let listen = SocketAddr::new(self.config_template.listen().ip(), requested_port);
-        let private_remote_debugging_port =
-            private_remote_debugging_port_for_request(intent, requested_port)?;
+        let private_remote_debugging_port = private_remote_debugging_port_for_request(
+            handler.replacement().private_endpoint(),
+            requested_port,
+        )?;
         let mut surface = BrowserCdpSurface::new(
             self.config_template
                 .clone()
@@ -186,11 +188,11 @@ fn remote_debugging_port(args: &[String]) -> Option<u16> {
 }
 
 fn effective_browser_cdp_allowed_ports(
-    intent: &SessionMediationIntent,
+    handler: &ProcessMediationHandlerConfig,
     endpoint: &str,
 ) -> Result<Vec<u16>, String> {
-    if !intent.allowed_ports().is_empty() {
-        return Ok(intent.allowed_ports().to_vec());
+    if !handler.requested_endpoint().allowed_ports().is_empty() {
+        return Ok(handler.requested_endpoint().allowed_ports().to_vec());
     }
     Ok(vec![endpoint_port(endpoint).ok_or_else(|| {
         String::from("browser_cdp mediation endpoint does not include a parseable port")
@@ -198,10 +200,15 @@ fn effective_browser_cdp_allowed_ports(
 }
 
 fn validate_requested_port(
-    intent: &SessionMediationIntent,
+    handler: &ProcessMediationHandlerConfig,
     requested_port: u16,
 ) -> Result<(), String> {
-    if !intent.allowed_ports().is_empty() && !intent.allowed_ports().contains(&requested_port) {
+    if !handler.requested_endpoint().allowed_ports().is_empty()
+        && !handler
+            .requested_endpoint()
+            .allowed_ports()
+            .contains(&requested_port)
+    {
         return Err(format!(
             "requested remote debugging port {requested_port} is not allowed"
         ));
@@ -210,13 +217,13 @@ fn validate_requested_port(
 }
 
 pub(super) fn private_remote_debugging_port_for_request(
-    intent: &SessionMediationIntent,
+    private_endpoint: &ProcessMediationPrivateEndpointConfig,
     requested_port: u16,
 ) -> Result<Option<u16>, String> {
-    match intent.private_endpoint().port_strategy() {
+    match private_endpoint.port_strategy() {
         ProcessMediationPrivatePortStrategy::Ephemeral => Ok(None),
         ProcessMediationPrivatePortStrategy::RequestedPlusOffset => {
-            let offset = intent.private_endpoint().port_offset();
+            let offset = private_endpoint.port_offset();
             requested_port.checked_add(offset).map(Some).ok_or_else(|| {
                 format!(
                     "requested remote debugging port {requested_port} plus private endpoint offset {offset} exceeds u16"

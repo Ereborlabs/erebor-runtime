@@ -27,7 +27,7 @@ use thiserror::Error;
 
 use crate::interception_backend::{
     ProcessExecInterceptionInput, ProcessExecMediationInput, ProcessExecMediationMode,
-    SessionInterceptionBackendBundle, SessionInterceptionBackendSurfaceRegistry,
+    SessionInterceptionBackendBundle,
 };
 
 pub use adoption::adopt_session_target;
@@ -37,9 +37,8 @@ pub use erebor_runtime_core::{
 };
 pub use runtime_interception_broker::{
     BrowserCdpMediationHandler, InterceptionBrokerClient, RuntimeInterceptionBroker,
-    RuntimeInterceptionBrokerError, RuntimeInterceptionEndpoint, SessionInterceptionHandler,
-    SessionInterceptionRegistration, SessionInterceptionRouter, SessionMediationIntent,
-    SessionMediationRegistry, SurfaceMediationHandler, SurfaceMediationOutcome,
+    RuntimeInterceptionBrokerError, RuntimeInterceptionEndpoint, SessionInterceptionRegistration,
+    SessionInterceptionRouter,
 };
 
 const DOCKER_INTERCEPTION_DIR: &str = "/erebor/interception";
@@ -390,8 +389,9 @@ fn start_session_side_resources_from_start_plan(
     .map_err(SessionExecutionError::runtime)?;
     let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
     let mut environment = Vec::new();
-    let mut interception_surfaces = SessionInterceptionBackendSurfaceRegistry::new();
     let mut terminal_surface_present = false;
+    let mut terminal_process_exec_config = None::<TerminalSurfaceConfig>;
+    let mut process_exec_interception = None;
     let process_exec_supported = start_plan
         .interception()
         .operation_supported(SessionInterceptionOperation::ProcessExec);
@@ -440,17 +440,13 @@ fn start_session_side_resources_from_start_plan(
                 ));
 
                 if process_exec_supported {
-                    interception_surfaces.register_process_exec(
-                        terminal_process_exec_input(config, plan)?,
-                        TerminalProcessExecValidator::from_config(config)
-                            .map_err(SessionExecutionError::terminal_surface)?,
-                    );
+                    process_exec_interception = Some(terminal_process_exec_input(config, plan)?);
+                    terminal_process_exec_config = Some(config.clone());
                 }
             }
         }
     }
 
-    let (process_exec_interception, interception_router) = interception_surfaces.into_parts();
     let interception_backend = SessionInterceptionBackendBundle::prepare(
         start_plan.interception(),
         process_exec_interception,
@@ -472,12 +468,17 @@ fn start_session_side_resources_from_start_plan(
     }
 
     if launcher.is_empty() {
-        let interception_registration = register_session_interception(
-            interception_backend.as_ref(),
-            interception_router.clone(),
-            plan,
+        let uses_lazy_browser_cdp = lazy_browser_cdp.is_some();
+        let interception_router = terminal_process_exec_router(
+            terminal_process_exec_config.as_ref(),
             None,
             lazy_browser_cdp,
+        )?;
+        let interception_registration = register_session_interception(
+            interception_backend.as_ref(),
+            interception_router,
+            plan,
+            uses_lazy_browser_cdp,
         )?;
         let (docker_options, linux_host_options) = side_resource_command_options(
             interception_backend.as_ref(),
@@ -521,10 +522,13 @@ fn start_session_side_resources_from_start_plan(
 
     let interception_registration = register_session_interception(
         interception_backend.as_ref(),
-        interception_router,
+        terminal_process_exec_router(
+            terminal_process_exec_config.as_ref(),
+            browser_cdp_endpoint.as_deref(),
+            lazy_browser_cdp,
+        )?,
         plan,
-        browser_cdp_endpoint.as_deref(),
-        lazy_browser_cdp,
+        uses_lazy_browser_cdp,
     )?;
     let (docker_options, linux_host_options) = side_resource_command_options(
         interception_backend.as_ref(),
@@ -653,6 +657,51 @@ fn process_exec_mediation_mode(mode: TerminalProcessInterceptionMode) -> Process
     }
 }
 
+fn terminal_process_exec_router(
+    terminal: Option<&TerminalSurfaceConfig>,
+    browser_cdp_endpoint: Option<&str>,
+    lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
+) -> Result<SessionInterceptionRouter, SessionExecutionError> {
+    let Some(terminal) = terminal else {
+        return Ok(SessionInterceptionRouter::new());
+    };
+
+    let mut validator = TerminalProcessExecValidator::from_config(terminal)
+        .map_err(SessionExecutionError::terminal_surface)?;
+
+    if let Some(capability) =
+        browser_cdp_process_mediation_capability(terminal, browser_cdp_endpoint, lazy_browser_cdp)?
+    {
+        validator = validator.with_process_mediation_capability(capability);
+    }
+
+    Ok(SessionInterceptionRouter::new().with_process_exec_handler(validator))
+}
+
+fn browser_cdp_process_mediation_capability(
+    terminal: &TerminalSurfaceConfig,
+    browser_cdp_endpoint: Option<&str>,
+    lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
+) -> Result<Option<BrowserCdpMediationHandler>, SessionExecutionError> {
+    if !terminal_uses_managed_browser_cdp_mediation(terminal) {
+        return Ok(None);
+    }
+
+    if let Some(lazy) = lazy_browser_cdp {
+        return BrowserCdpMediationHandler::lazy(
+            lazy.config,
+            lazy.policy_set,
+            lazy.context,
+            lazy.audit_jsonl,
+            lazy.audit,
+        )
+        .map(Some)
+        .map_err(SessionExecutionError::guard_io);
+    }
+
+    Ok(browser_cdp_endpoint.map(BrowserCdpMediationHandler::new))
+}
+
 fn session_cdp_context(plan: &impl SessionPlanContext) -> CdpSessionContext {
     CdpSessionContext {
         session_id: plan.session_id().clone(),
@@ -705,22 +754,16 @@ fn register_session_interception(
     interception_backend: Option<&SessionInterceptionBackendBundle>,
     interception_router: SessionInterceptionRouter,
     plan: &impl SessionPlanContext,
-    browser_cdp_endpoint: Option<&str>,
-    lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
+    uses_lazy_browser_cdp: bool,
 ) -> Result<Option<SessionInterceptionRegistration>, SessionExecutionError> {
-    let uses_lazy_browser_cdp = lazy_browser_cdp.is_some();
     interception_backend
-        .map(|backend| {
-            let handlers = backend.control_handlers()?;
-            let registration =
-                RuntimeInterceptionBroker::register_session_with_router_and_mediators(
-                    plan.session_id().as_str(),
-                    &plan.actor().id,
-                    handlers,
-                    interception_router,
-                    session_mediation_registry(browser_cdp_endpoint, lazy_browser_cdp)?,
-                )
-                .map_err(SessionExecutionError::runtime_interception_broker)?;
+        .map(|_backend| {
+            let registration = RuntimeInterceptionBroker::register_session(
+                plan.session_id().as_str(),
+                &plan.actor().id,
+                interception_router,
+            )
+            .map_err(SessionExecutionError::runtime_interception_broker)?;
             let registration = if uses_lazy_browser_cdp {
                 registration.with_timeout_ms(LAZY_BROWSER_CDP_INTERCEPTION_TIMEOUT_MS)
             } else {
@@ -749,28 +792,6 @@ fn with_linux_host_environment(
         options = options.with_environment(key, value);
     }
     options
-}
-
-fn session_mediation_registry(
-    browser_cdp_endpoint: Option<&str>,
-    lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
-) -> Result<SessionMediationRegistry, SessionExecutionError> {
-    let mut registry = SessionMediationRegistry::new();
-    if let Some(lazy) = lazy_browser_cdp {
-        registry.register_handler(
-            BrowserCdpMediationHandler::lazy(
-                lazy.config,
-                lazy.policy_set,
-                lazy.context,
-                lazy.audit_jsonl,
-                lazy.audit,
-            )
-            .map_err(SessionExecutionError::guard_io)?,
-        );
-    } else if let Some(endpoint) = browser_cdp_endpoint {
-        registry.register_handler(BrowserCdpMediationHandler::new(endpoint));
-    }
-    Ok(registry)
 }
 
 fn runtime_context(session_prefix: &str) -> CdpSessionContext {
