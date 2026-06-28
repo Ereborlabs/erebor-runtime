@@ -1,6 +1,5 @@
 use std::{
-    fs::{self, File},
-    io::{self, Write},
+    fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -19,12 +18,11 @@ use crate::{
     SessionStorage,
 };
 
-const LINUX_PROCESS_GUARD: &[u8] =
-    include_bytes!(concat!(env!("OUT_DIR"), "/erebor-linux-process-guard"));
+const LINUX_PROCESS_GUARD_BINARY: &str = "erebor-linux-process-guard";
 const DOCKER_GUARD_DIR: &str = "/erebor/guard";
 const LINUX_PROCESS_GUARD_PATH: &str = "/erebor/guard/erebor-linux-process-guard";
 const DOCKER_AUDIT_DIR: &str = "/erebor/audit";
-static SESSION_GUARD_BUNDLE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static SESSION_BACKEND_BUNDLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct SessionInterceptionBackendBundle {
     backend: SessionInterceptionBackend,
@@ -184,7 +182,7 @@ impl<'a> ProcessExecInterceptionInput<'a> {
 }
 
 struct LinuxPtraceInterceptionBackendBundle {
-    host_dir: PathBuf,
+    session_dir: PathBuf,
     guard_path: PathBuf,
     session_id: String,
     audit_path: Option<PathBuf>,
@@ -201,16 +199,13 @@ impl LinuxPtraceInterceptionBackendBundle {
         plan: &impl SessionPlanContext,
         storage: Option<&SessionStorage>,
     ) -> Result<Self, SessionExecutionError> {
-        let instance_id = SESSION_GUARD_BUNDLE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let host_dir = linux_process_guard_host_dir(plan.session_id().as_str(), instance_id);
-        fs::create_dir_all(&host_dir).map_err(SessionExecutionError::guard_io)?;
-        let guard_path = host_dir.join("erebor-linux-process-guard");
-        write_executable_file(&guard_path, LINUX_PROCESS_GUARD, instance_id)
-            .map_err(SessionExecutionError::guard_io)?;
+        let guard_path = linux_process_guard_executable()?;
+        let instance_id = SESSION_BACKEND_BUNDLE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let session_dir = linux_ptrace_backend_session_dir(plan.session_id().as_str(), instance_id);
 
         let interception = LinuxProcessInterceptionBundle::prepare(
             &guard_path,
-            &host_dir,
+            &session_dir,
             process_exec.mediation(),
         )?;
         let mut audit_jsonl_path = None;
@@ -237,7 +232,7 @@ impl LinuxPtraceInterceptionBackendBundle {
         }
 
         Ok(Self {
-            host_dir,
+            session_dir,
             guard_path,
             session_id: plan.session_id().as_str().to_owned(),
             audit_path: audit_jsonl_path,
@@ -250,8 +245,13 @@ impl LinuxPtraceInterceptionBackendBundle {
     }
 
     fn docker_options(&self) -> DockerSessionCommandOptions {
+        let guard_host_dir = self
+            .guard_path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
         let mut options = DockerSessionCommandOptions::new()
-            .with_mount(DockerSessionMount::new(&self.host_dir, DOCKER_GUARD_DIR).read_only())
+            .with_mount(DockerSessionMount::new(guard_host_dir, DOCKER_GUARD_DIR).read_only())
             .with_entrypoint(LINUX_PROCESS_GUARD_PATH)
             .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
             .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string());
@@ -339,30 +339,8 @@ impl LinuxPtraceInterceptionBackendBundle {
 
 impl Drop for LinuxPtraceInterceptionBackendBundle {
     fn drop(&mut self) {
-        let _result = fs::remove_dir_all(&self.host_dir);
+        let _result = fs::remove_dir_all(&self.session_dir);
     }
-}
-
-fn write_executable_file(path: &Path, contents: &[u8], instance_id: u64) -> Result<(), io::Error> {
-    let file_name = path.file_name().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "executable path must include a file name",
-        )
-    })?;
-    let temp_path = path.with_file_name(format!(
-        ".{}.tmp-{instance_id}",
-        file_name.to_string_lossy()
-    ));
-
-    let mut file = File::create(&temp_path)?;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    drop(file);
-
-    fs::set_permissions(&temp_path, fs::Permissions::from_mode(0o755))?;
-    fs::rename(&temp_path, path)?;
-    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -374,7 +352,7 @@ struct LinuxProcessInterceptionBundle {
 impl LinuxProcessInterceptionBundle {
     fn prepare(
         guard_path: &Path,
-        host_dir: &Path,
+        session_dir: &Path,
         process_exec: &ProcessExecMediationInput<'_>,
     ) -> Result<Option<Self>, SessionExecutionError> {
         if !process_exec.enabled() {
@@ -382,7 +360,7 @@ impl LinuxProcessInterceptionBundle {
         }
         process_exec.ensure_supported_mode();
 
-        let shim_dir = host_dir.join("shims");
+        let shim_dir = session_dir.join("shims");
         fs::create_dir_all(&shim_dir).map_err(SessionExecutionError::guard_io)?;
 
         let handlers = process_exec
@@ -574,7 +552,54 @@ fn linux_cgroup_component(value: &str) -> String {
         .collect()
 }
 
-fn linux_process_guard_host_dir(session_id: &str, instance_id: u64) -> PathBuf {
+fn linux_process_guard_executable() -> Result<PathBuf, SessionExecutionError> {
+    let current_exe = std::env::current_exe().map_err(SessionExecutionError::guard_io)?;
+    let candidates = linux_process_guard_executable_candidates(&current_exe);
+    candidates
+        .iter()
+        .find(|candidate| is_executable_file(candidate))
+        .cloned()
+        .ok_or_else(|| {
+            let searched = candidates
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            SessionExecutionError::guard_config(format!(
+                "could not find shipped `{LINUX_PROCESS_GUARD_BINARY}` executable; searched: {searched}"
+            ))
+        })
+}
+
+fn linux_process_guard_executable_candidates(current_exe: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(binary_dir) = current_exe.parent() {
+        candidates.push(binary_dir.join(LINUX_PROCESS_GUARD_BINARY));
+
+        if binary_dir
+            .file_name()
+            .is_some_and(|name| name == std::ffi::OsStr::new("deps"))
+        {
+            if let Some(target_dir) = binary_dir.parent() {
+                candidates.push(target_dir.join(LINUX_PROCESS_GUARD_BINARY));
+            }
+        }
+    }
+
+    if let Some(build_process_guard) = option_env!("EREBOR_BUILD_LINUX_PROCESS_GUARD") {
+        candidates.push(PathBuf::from(build_process_guard));
+    }
+
+    candidates
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+fn linux_ptrace_backend_session_dir(session_id: &str, instance_id: u64) -> PathBuf {
     std::env::temp_dir()
         .join("erebor-runtime")
         .join("sessions")

@@ -17,10 +17,15 @@ fn main() {
             process::exit(1);
         }
     };
+    let process_guard = out_dir.join("erebor-linux-process-guard");
     compile_standalone_binary(
         "Linux process guard",
         "src/os/linux/process_guard.rs",
-        &out_dir.join("erebor-linux-process-guard"),
+        &process_guard,
+    );
+    println!(
+        "cargo:rustc-env=EREBOR_BUILD_LINUX_PROCESS_GUARD={}",
+        process_guard.display()
     );
 }
 
