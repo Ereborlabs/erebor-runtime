@@ -104,10 +104,7 @@ pub(super) struct GuardBrokerConnection {
 }
 
 impl GuardBrokerConnection {
-    pub(super) fn connect(
-        endpoint: &ControlEndpoint,
-        hello: GuardHello,
-    ) -> Result<Self, String> {
+    pub(super) fn connect(endpoint: &ControlEndpoint, hello: GuardHello) -> Result<Self, String> {
         let mut stream = UnixStream::connect(Path::new(&endpoint.path)).map_err(|error| {
             format!(
                 "failed to connect to Erebor control broker at {}: {error}",
@@ -145,7 +142,10 @@ impl GuardBrokerConnection {
         }
         let ack = decode_guard_hello_ack(&response.payload)?;
         if !ack.accepted {
-            return Err(format!("control broker rejected guard hello: {}", ack.reason));
+            return Err(format!(
+                "control broker rejected guard hello: {}",
+                ack.reason
+            ));
         }
 
         Ok(Self {
@@ -561,7 +561,9 @@ mod tests {
 
         let encoded = encode_interception_request(&request);
 
-        assert!(encoded.windows("openclaw".len()).any(|window| window == b"openclaw"));
+        assert!(encoded
+            .windows("openclaw".len())
+            .any(|window| window == b"openclaw"));
         assert!(!encoded
             .windows("session".len())
             .any(|window| window == b"session"));

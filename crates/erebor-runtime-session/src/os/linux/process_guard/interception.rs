@@ -66,7 +66,9 @@ fn apply_broker_decision(
             args,
             Some(126),
         ),
-        ipc::InterceptionDecisionKind::Mediate => handle_mediation(handler, invoked, args, decision),
+        ipc::InterceptionDecisionKind::Mediate => {
+            handle_mediation(handler, invoked, args, decision)
+        }
         ipc::InterceptionDecisionKind::Unknown => fail_closed(
             "broker returned an unknown process interception decision",
             handler,
@@ -166,8 +168,7 @@ impl InterceptionHandler {
 }
 
 fn parse_interception_handlers() -> Vec<InterceptionHandler> {
-    let source = env::var("EREBOR_PROCESS_INTERCEPTION_HANDLERS")
-        .unwrap_or_default();
+    let source = env::var("EREBOR_PROCESS_INTERCEPTION_HANDLERS").unwrap_or_default();
     parse_interception_handlers_from_source(&source)
 }
 
@@ -241,7 +242,8 @@ fn guard_hello_from_env() -> Result<ipc::GuardHello, String> {
         session_id: required_env("EREBOR_SESSION_ID")?,
         actor_id: env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent")),
         guard_pid: process::id() as i64,
-        runner_kind: env::var("EREBOR_SESSION_RUNNER").unwrap_or_else(|_| String::from("linux_host")),
+        runner_kind: env::var("EREBOR_SESSION_RUNNER")
+            .unwrap_or_else(|_| String::from("linux_host")),
         platform: String::from("linux-x86_64"),
         capabilities: vec![String::from("interception_request")],
     })
@@ -299,12 +301,7 @@ fn real_executable_for_shim(invoked: &str) -> Option<PathBuf> {
     let shim_dir = env::var_os("EREBOR_PROCESS_INTERCEPTION_SHIM_DIR").map(PathBuf::from);
     let current_exe = env::current_exe().ok();
 
-    real_executable_for_shim_with_path(
-        invoked,
-        shim_dir.as_deref(),
-        &path,
-        current_exe.as_deref(),
-    )
+    real_executable_for_shim_with_path(invoked, shim_dir.as_deref(), &path, current_exe.as_deref())
 }
 
 fn real_executable_for_shim_with_path(
@@ -348,15 +345,7 @@ fn fail_closed(
     args: &[String],
     exit_code: Option<i32>,
 ) -> i32 {
-    write_interception_audit(
-        handler,
-        invoked,
-        args,
-        "deny",
-        "deny",
-        reason,
-        None,
-    );
+    write_interception_audit(handler, invoked, args, "deny", "deny", reason, None);
     eprintln!("erebor linux process guard interception: {reason}");
     exit_code.unwrap_or(126)
 }
@@ -448,11 +437,7 @@ fn json_string(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        env, fs,
-        os::unix::fs::PermissionsExt,
-        path::PathBuf,
-    };
+    use std::{env, fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
     use super::{
         apply_broker_decision, executable_name, interception_request_from_invocation,

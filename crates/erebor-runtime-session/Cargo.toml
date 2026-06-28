@@ -17,5 +17,17 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
+[features]
+# Expose the standalone process guard to rust-analyzer without changing the
+# build-script-produced runtime artifact.
+editor-process-guard-target = []
+
+[[bin]]
+name = "erebor-linux-process-guard"
+path = "src/os/linux/process_guard.rs"
+required-features = ["editor-process-guard-target"]
+test = false
+bench = false
+
 [lints]
 workspace = true

@@ -301,8 +301,8 @@ fn command_args() -> Result<Vec<CString>, String> {
     let mut args = Vec::new();
     for arg in env::args_os().skip(1) {
         let bytes = arg.into_vec();
-        let c_string = CString::new(bytes)
-            .map_err(|_| String::from("session command contains a NUL byte"))?;
+        let c_string =
+            CString::new(bytes).map_err(|_| String::from("session command contains a NUL byte"))?;
         args.push(c_string);
     }
 
@@ -329,7 +329,10 @@ fn child_exec(command: Vec<CString>) -> ! {
         )
     } != 0
     {
-        die(&format!("PTRACE_TRACEME failed: {}", errno_message(errno())));
+        die(&format!(
+            "PTRACE_TRACEME failed: {}",
+            errno_message(errno())
+        ));
     }
     unsafe {
         raise(SIGSTOP);
@@ -351,7 +354,10 @@ fn wait_for_initial_stop(child: Pid) {
     let mut status = 0;
     let waited = unsafe { waitpid(child, &mut status, 0) };
     if waited < 0 {
-        die(&format!("initial waitpid failed: {}", errno_message(errno())));
+        die(&format!(
+            "initial waitpid failed: {}",
+            errno_message(errno())
+        ));
     }
     if !wait_stopped(status) {
         die("child did not stop for tracing");
@@ -476,15 +482,13 @@ fn handle_syscall_stop(context: &mut TraceContext, pid: Pid) {
                 set_regs(pid, &regs);
             }
         }
-    } else {
-        if let Some(state) = context.states.get_mut(&pid) {
-            if state.denied_pending {
-                regs.rax = (-(EPERM as i64)) as u64;
-                state.denied_pending = false;
-                set_regs(pid, &regs);
-            }
-            state.in_syscall = false;
+    } else if let Some(state) = context.states.get_mut(&pid) {
+        if state.denied_pending {
+            regs.rax = (-(EPERM as i64)) as u64;
+            state.denied_pending = false;
+            set_regs(pid, &regs);
         }
+        state.in_syscall = false;
     }
 }
 
@@ -895,7 +899,9 @@ fn command_token_matches(token: &str, debug_command: &str) -> bool {
 }
 
 fn basename(value: &str) -> &str {
-    value.rsplit_once('/').map_or(value, |(_prefix, basename)| basename)
+    value
+        .rsplit_once('/')
+        .map_or(value, |(_prefix, basename)| basename)
 }
 
 fn parse_rules() -> Vec<ProcessRule> {
@@ -962,7 +968,8 @@ fn write_audit(
         return;
     };
 
-    let session_id = env::var("EREBOR_SESSION_ID").unwrap_or_else(|_| String::from("unknown-session"));
+    let session_id =
+        env::var("EREBOR_SESSION_ID").unwrap_or_else(|_| String::from("unknown-session"));
     let actor_id = env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent"));
     let tty = env::var("EREBOR_TERMINAL_TTY").unwrap_or_else(|_| String::from("false"));
     let cwd = env::current_dir()
@@ -1149,8 +1156,8 @@ mod tests {
     use super::{
         command_text, json_string, parse_parent_pid_from_stat, parse_rules_from_source,
         ptrace_event, should_write_process_audit, wait_exit_status, wait_exited, wait_signaled,
-        wait_stop_signal, wait_stopped, wait_term_signal, CgroupJoinReport, MAX_RULES, MAX_TEXT,
-        ProcessRule, ProcessRuleDecision, PTRACE_EVENT_CLONE, SIGTRAP,
+        wait_stop_signal, wait_stopped, wait_term_signal, CgroupJoinReport, ProcessRule,
+        ProcessRuleDecision, MAX_RULES, MAX_TEXT, PTRACE_EVENT_CLONE, SIGTRAP,
     };
 
     #[test]
@@ -1169,10 +1176,7 @@ mod tests {
         assert_eq!(rules[1].rule_id, "deny-raw-cdp");
         assert_eq!(rules[1].decision, ProcessRuleDecision::Deny);
         assert_eq!(rules[2].token, "chromium");
-        assert_eq!(
-            rules[2].reason,
-            "process execution denied by Erebor policy"
-        );
+        assert_eq!(rules[2].reason, "process execution denied by Erebor policy");
         assert_eq!(rules[2].rule_id, "erebor-linux-process-guard");
         assert_eq!(rules[2].decision, ProcessRuleDecision::Deny);
     }
@@ -1218,7 +1222,10 @@ mod tests {
 
         assert_eq!(rules.len(), MAX_RULES);
         assert_eq!(rules[0].token, "token-0");
-        assert_eq!(rules[MAX_RULES - 1].rule_id, format!("rule-{}", MAX_RULES - 1));
+        assert_eq!(
+            rules[MAX_RULES - 1].rule_id,
+            format!("rule-{}", MAX_RULES - 1)
+        );
     }
 
     #[test]
