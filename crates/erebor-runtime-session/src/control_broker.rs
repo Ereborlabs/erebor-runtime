@@ -130,6 +130,7 @@ struct SessionRegistration {
     token: String,
     broker_id: String,
     handlers: HashMap<String, SessionInterceptionHandler>,
+    router: SessionInterceptionRouter,
     mediators: SessionMediationRegistry,
 }
 
@@ -193,6 +194,89 @@ pub enum SessionInterceptionDecision {
     Deny,
     RequireApproval,
     Mediate,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SurfaceInterceptionDecision {
+    decision: SessionInterceptionDecision,
+    rule_id: String,
+    reason: String,
+}
+
+impl SurfaceInterceptionDecision {
+    #[must_use]
+    pub fn allow(rule_id: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            decision: SessionInterceptionDecision::Allow,
+            rule_id: rule_id.into(),
+            reason: reason.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn deny(rule_id: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            decision: SessionInterceptionDecision::Deny,
+            rule_id: rule_id.into(),
+            reason: reason.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn require_approval(rule_id: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            decision: SessionInterceptionDecision::RequireApproval,
+            rule_id: rule_id.into(),
+            reason: reason.into(),
+        }
+    }
+}
+
+pub trait ProcessExecSurfaceHandler: Send + Sync {
+    fn surface(&self) -> &str;
+    fn decide_process_exec(&self, request: &InterceptionRequest) -> SurfaceInterceptionDecision;
+}
+
+#[derive(Clone, Default)]
+pub struct SessionInterceptionRouter {
+    process_exec: Option<Arc<dyn ProcessExecSurfaceHandler>>,
+}
+
+impl SessionInterceptionRouter {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn with_process_exec_handler(
+        mut self,
+        handler: impl ProcessExecSurfaceHandler + 'static,
+    ) -> Self {
+        self.process_exec = Some(Arc::new(handler));
+        self
+    }
+
+    fn decide_process_exec(
+        &self,
+        request: &InterceptionRequest,
+    ) -> Option<SurfaceInterceptionDecision> {
+        self.process_exec
+            .as_ref()
+            .map(|handler| handler.decide_process_exec(request))
+    }
+}
+
+impl fmt::Debug for SessionInterceptionRouter {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SessionInterceptionRouter")
+            .field(
+                "process_exec",
+                &self.process_exec.as_ref().map(|handler| handler.surface()),
+            )
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -568,10 +652,27 @@ impl SessionControlBroker {
         handlers: Vec<SessionInterceptionHandler>,
         mediators: SessionMediationRegistry,
     ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
+        Self::register_session_with_router_and_mediators(
+            session_id,
+            actor_id,
+            handlers,
+            SessionInterceptionRouter::new(),
+            mediators,
+        )
+    }
+
+    pub fn register_session_with_router_and_mediators(
+        session_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        handlers: Vec<SessionInterceptionHandler>,
+        router: SessionInterceptionRouter,
+        mediators: SessionMediationRegistry,
+    ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
         shared_control_broker_server()?.register_session(
             session_id.into(),
             actor_id.into(),
             handlers,
+            router,
             mediators,
         )
     }
@@ -676,6 +777,7 @@ impl ControlBrokerServer {
         session_id: String,
         actor_id: String,
         handlers: Vec<SessionInterceptionHandler>,
+        router: SessionInterceptionRouter,
         mediators: SessionMediationRegistry,
     ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
         let token = read_control_token()?;
@@ -686,6 +788,7 @@ impl ControlBrokerServer {
                 .into_iter()
                 .map(|handler| (handler.id.clone(), handler))
                 .collect(),
+            router,
             mediators,
         };
         {
@@ -956,6 +1059,19 @@ fn interception_decision_for_request(
                 "session is no longer registered with the control broker",
             ));
         };
+        if request.matched_handler_id.is_empty() {
+            return Ok(registration
+                .router
+                .decide_process_exec(request)
+                .map(|decision| surface_decision(request.request_id, decision))
+                .unwrap_or_else(|| {
+                    deny_decision(
+                        request.request_id,
+                        "erebor-control-broker-unrouted-process-exec",
+                        "no surface is registered for process_exec interception",
+                    )
+                }));
+        }
         let Some(handler) = registration.handlers.get(&request.matched_handler_id) else {
             return Ok(deny_decision(
                 request.request_id,
@@ -1069,6 +1185,44 @@ fn deny_decision(
         allow: None,
         deny: Some(DenyDecision { exit_code: 126 }),
         mediate: None,
+    }
+}
+
+fn surface_decision(
+    request_id: u64,
+    decision: SurfaceInterceptionDecision,
+) -> InterceptionDecision {
+    match decision.decision {
+        SessionInterceptionDecision::Allow => InterceptionDecision {
+            request_id,
+            decision: DecisionKind::Allow as i32,
+            rule_id: decision.rule_id,
+            reason: decision.reason,
+            timeout_ms: DEFAULT_TIMEOUT_MS as u32,
+            allow: Some(AllowDecision {
+                exec_target: String::new(),
+            }),
+            deny: None,
+            mediate: None,
+        },
+        SessionInterceptionDecision::Deny => {
+            deny_decision(request_id, decision.rule_id, decision.reason)
+        }
+        SessionInterceptionDecision::RequireApproval => InterceptionDecision {
+            request_id,
+            decision: DecisionKind::RequireApproval as i32,
+            rule_id: decision.rule_id,
+            reason: decision.reason,
+            timeout_ms: DEFAULT_TIMEOUT_MS as u32,
+            allow: None,
+            deny: None,
+            mediate: None,
+        },
+        SessionInterceptionDecision::Mediate => deny_decision(
+            request_id,
+            decision.rule_id,
+            "surface route returned unsupported mediate decision for direct interception",
+        ),
     }
 }
 
@@ -1393,8 +1547,9 @@ mod tests {
 
     use super::{
         private_remote_debugging_port_for_request, BrowserCdpMediationHandler, GuardBrokerClient,
-        SessionControlBroker, SessionControlBrokerEndpoint, SessionControlBrokerError,
-        SessionInterceptionHandler, SessionMediationIntent, SessionMediationRegistry,
+        ProcessExecSurfaceHandler, SessionControlBroker, SessionControlBrokerEndpoint,
+        SessionControlBrokerError, SessionInterceptionHandler, SessionInterceptionRouter,
+        SessionMediationIntent, SessionMediationRegistry, SurfaceInterceptionDecision,
         SurfaceMediationHandler, SurfaceMediationOutcome,
     };
 
@@ -1560,6 +1715,32 @@ mod tests {
                 .map(|decision| decision.replacement_surface.as_str()),
             Some("api")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn broker_routes_process_exec_requests_without_handler_id(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = session_id("routes-process-exec");
+        let router =
+            SessionInterceptionRouter::new().with_process_exec_handler(TestProcessExecHandler);
+        let broker = SessionControlBroker::register_session_with_router_and_mediators(
+            &session_id,
+            "openclaw",
+            Vec::new(),
+            router,
+            SessionMediationRegistry::new(),
+        )?;
+
+        let decision = GuardBrokerClient::request_interception_decision(
+            broker.endpoint(),
+            hello(&session_id),
+            request_with_argv("", &[String::from("danger-tool")]),
+        )?;
+
+        assert_eq!(decision.decision, DecisionKind::Deny as i32);
+        assert_eq!(decision.rule_id, "test-process-exec-deny");
+        assert_eq!(decision.reason, "dangerous process execution");
         Ok(())
     }
 
@@ -1810,6 +1991,24 @@ mod tests {
     struct TestMediationHandler {
         surface: String,
         endpoint: String,
+    }
+
+    struct TestProcessExecHandler;
+
+    impl ProcessExecSurfaceHandler for TestProcessExecHandler {
+        fn surface(&self) -> &str {
+            "terminal"
+        }
+
+        fn decide_process_exec(
+            &self,
+            _request: &InterceptionRequest,
+        ) -> SurfaceInterceptionDecision {
+            SurfaceInterceptionDecision::deny(
+                "test-process-exec-deny",
+                "dangerous process execution",
+            )
+        }
     }
 
     impl SurfaceMediationHandler for TestMediationHandler {

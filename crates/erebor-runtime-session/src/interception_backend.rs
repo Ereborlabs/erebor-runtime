@@ -10,12 +10,8 @@ use erebor_runtime_core::{
     AuditCommandLogLevel, DockerSessionCommandOptions, DockerSessionMount,
     LinuxHostSessionCommandOptions, ProcessInterceptionDecision, ProcessInterceptionHandlerConfig,
     ProcessInterceptionHandlerKind, ProcessMediationPrivateEndpointConfig,
-    ProcessMediationReplacementSurface, SessionInterceptionBackendKind,
-    SessionInterceptionOperation, SessionRunnerKind, TerminalProcessInterceptionMode,
-    TerminalSurfaceConfig,
-};
-use erebor_runtime_terminal::{
-    compile_terminal_process_guard_rules, TerminalProcessGuardDecision, TerminalProcessGuardRule,
+    ProcessMediationReplacementSurface, SessionInterceptionBackendKind, SessionInterceptionConfig,
+    SessionInterceptionOperation,
 };
 
 use crate::{
@@ -40,32 +36,22 @@ enum SessionInterceptionBackend {
 
 impl SessionInterceptionBackendBundle {
     pub(crate) fn prepare(
-        start_plan: &erebor_runtime_core::SessionSurfaceStartPlan,
+        interception: &SessionInterceptionConfig,
+        process_exec: Option<ProcessExecInterceptionInput<'_>>,
         plan: &impl SessionPlanContext,
         storage: Option<&SessionStorage>,
     ) -> Result<Option<Self>, SessionExecutionError> {
-        if !start_plan
-            .interception()
-            .operation_supported(SessionInterceptionOperation::ProcessExec)
-        {
+        if !interception.operation_supported(SessionInterceptionOperation::ProcessExec) {
             return Ok(None);
         }
 
-        let Some(terminal) = start_plan.terminal() else {
+        let Some(process_exec) = process_exec else {
             return Ok(None);
         };
 
-        if terminal.process_interception().enabled()
-            && plan.runner_kind() != SessionRunnerKind::LinuxHost
-        {
-            return Err(SessionExecutionError::guard_config(
-                "terminal process interception currently supports linux-host sessions only",
-            ));
-        }
-
-        match start_plan.interception().backend() {
+        match interception.backend() {
             SessionInterceptionBackendKind::LinuxPtrace => {
-                LinuxPtraceInterceptionBackendBundle::prepare(terminal, plan, storage)
+                LinuxPtraceInterceptionBackendBundle::prepare(process_exec, plan, storage)
                     .map(SessionInterceptionBackend::LinuxPtrace)
                     .map(|backend| Self { backend })
                     .map(Some)
@@ -73,7 +59,7 @@ impl SessionInterceptionBackendBundle {
         }
     }
 
-    pub(crate) fn terminal_process_guard(&self) -> &'static str {
+    pub(crate) fn backend_kind(&self) -> &'static str {
         match &self.backend {
             SessionInterceptionBackend::LinuxPtrace(_) => {
                 SessionInterceptionBackendKind::LinuxPtrace.as_str()
@@ -119,11 +105,88 @@ impl SessionInterceptionBackendBundle {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProcessExecMediationMode {
+    Shim,
+}
+
+pub(crate) struct ProcessExecMediationInput<'a> {
+    enabled: bool,
+    mode: ProcessExecMediationMode,
+    handlers: &'a [ProcessInterceptionHandlerConfig],
+}
+
+impl<'a> ProcessExecMediationInput<'a> {
+    pub(crate) const fn new(
+        enabled: bool,
+        mode: ProcessExecMediationMode,
+        handlers: &'a [ProcessInterceptionHandlerConfig],
+    ) -> Self {
+        Self {
+            enabled,
+            mode,
+            handlers,
+        }
+    }
+
+    const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    const fn ensure_supported_mode(&self) {
+        match self.mode {
+            ProcessExecMediationMode::Shim => {}
+        }
+    }
+
+    fn handlers(&self) -> &[ProcessInterceptionHandlerConfig] {
+        self.handlers
+    }
+}
+
+pub(crate) struct ProcessExecInterceptionInput<'a> {
+    mediation: ProcessExecMediationInput<'a>,
+    audit_level: AuditCommandLogLevel,
+    audit_debug_commands: Vec<String>,
+    tty: bool,
+}
+
+impl<'a> ProcessExecInterceptionInput<'a> {
+    pub(crate) fn new(
+        mediation: ProcessExecMediationInput<'a>,
+        audit_level: AuditCommandLogLevel,
+        audit_debug_commands: Vec<String>,
+        tty: bool,
+    ) -> Self {
+        Self {
+            mediation,
+            audit_level,
+            audit_debug_commands,
+            tty,
+        }
+    }
+
+    const fn mediation(&self) -> &ProcessExecMediationInput<'a> {
+        &self.mediation
+    }
+
+    const fn audit_level(&self) -> AuditCommandLogLevel {
+        self.audit_level
+    }
+
+    fn audit_debug_commands(&self) -> &[String] {
+        &self.audit_debug_commands
+    }
+
+    const fn tty(&self) -> bool {
+        self.tty
+    }
+}
+
 struct LinuxPtraceInterceptionBackendBundle {
     host_dir: PathBuf,
     guard_path: PathBuf,
     session_id: String,
-    guard_rules: String,
     audit_path: Option<PathBuf>,
     audit_filename: Option<String>,
     audit_terminal_level: AuditCommandLogLevel,
@@ -134,7 +197,7 @@ struct LinuxPtraceInterceptionBackendBundle {
 
 impl LinuxPtraceInterceptionBackendBundle {
     fn prepare(
-        config: &TerminalSurfaceConfig,
+        process_exec: ProcessExecInterceptionInput<'_>,
         plan: &impl SessionPlanContext,
         storage: Option<&SessionStorage>,
     ) -> Result<Self, SessionExecutionError> {
@@ -150,13 +213,11 @@ impl LinuxPtraceInterceptionBackendBundle {
         write_executable_file(&guard_path, LINUX_PROCESS_GUARD, instance_id)
             .map_err(SessionExecutionError::guard_io)?;
 
-        let interception = LinuxProcessInterceptionBundle::prepare(&guard_path, &host_dir, config)?;
-        let mut rules = compile_terminal_process_guard_rules(config)
-            .map_err(SessionExecutionError::terminal_surface)?;
-        if let Some(interception) = interception.as_ref() {
-            rules.prepend(interception.allow_rules());
-        }
-        let guard_rules = rules.to_env_value();
+        let interception = LinuxProcessInterceptionBundle::prepare(
+            &guard_path,
+            &host_dir,
+            process_exec.mediation(),
+        )?;
         let mut audit_jsonl_path = None;
         let mut audit_filename = None;
 
@@ -184,17 +245,11 @@ impl LinuxPtraceInterceptionBackendBundle {
             host_dir,
             guard_path,
             session_id: plan.session_id().as_str().to_owned(),
-            guard_rules,
             audit_path: audit_jsonl_path,
             audit_filename,
-            audit_terminal_level: plan.audit().surfaces().terminal().level(),
-            audit_terminal_debug_commands: plan
-                .audit()
-                .surfaces()
-                .terminal()
-                .debug_commands()
-                .to_vec(),
-            terminal_tty: plan.terminal().tty(),
+            audit_terminal_level: process_exec.audit_level(),
+            audit_terminal_debug_commands: process_exec.audit_debug_commands().to_vec(),
+            terminal_tty: process_exec.tty(),
             interception,
         })
     }
@@ -204,8 +259,7 @@ impl LinuxPtraceInterceptionBackendBundle {
             .with_mount(DockerSessionMount::new(&self.host_dir, DOCKER_GUARD_DIR).read_only())
             .with_entrypoint(LINUX_PROCESS_GUARD_PATH)
             .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
-            .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string())
-            .with_environment("EREBOR_GUARD_RULES", self.guard_rules.clone());
+            .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string());
 
         if let Some(audit_path) = self.audit_path.as_ref() {
             let audit_parent = audit_path
@@ -240,7 +294,6 @@ impl LinuxPtraceInterceptionBackendBundle {
             .with_wrapper_program(&self.guard_path)
             .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
             .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string())
-            .with_environment("EREBOR_GUARD_RULES", self.guard_rules.clone())
             .with_environment(
                 "EREBOR_GUARD_CGROUP_DIR",
                 format!(
@@ -327,34 +380,23 @@ impl LinuxProcessInterceptionBundle {
     fn prepare(
         guard_path: &Path,
         host_dir: &Path,
-        config: &TerminalSurfaceConfig,
+        process_exec: &ProcessExecMediationInput<'_>,
     ) -> Result<Option<Self>, SessionExecutionError> {
-        let interception = config.process_interception();
-        if !interception.enabled() {
+        if !process_exec.enabled() {
             return Ok(None);
         }
-
-        match interception.mode() {
-            TerminalProcessInterceptionMode::Shim => {}
-        }
+        process_exec.ensure_supported_mode();
 
         let shim_dir = host_dir.join("shims");
         fs::create_dir_all(&shim_dir).map_err(SessionExecutionError::guard_io)?;
 
-        let handlers = interception
+        let handlers = process_exec
             .handlers()
             .iter()
             .map(|handler| LinuxProcessInterceptionHandler::prepare(handler, guard_path, &shim_dir))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Some(Self { shim_dir, handlers }))
-    }
-
-    fn allow_rules(&self) -> Vec<TerminalProcessGuardRule> {
-        self.handlers
-            .iter()
-            .flat_map(LinuxProcessInterceptionHandler::allow_rules)
-            .collect()
     }
 
     fn environment(
@@ -469,20 +511,6 @@ impl LinuxProcessInterceptionHandler {
             prepend_path: handler.environment().prepend_path(),
             shim_paths,
         })
-    }
-
-    fn allow_rules(&self) -> Vec<TerminalProcessGuardRule> {
-        self.shim_paths
-            .iter()
-            .map(|path| {
-                TerminalProcessGuardRule::new(
-                    path.display().to_string(),
-                    "process launch is routed through an Erebor process interception shim",
-                    format!("erebor-process-interception-{}-shim", self.id),
-                    TerminalProcessGuardDecision::Allow,
-                )
-            })
-            .collect()
     }
 
     fn primary_shim_path(&self) -> Option<&Path> {

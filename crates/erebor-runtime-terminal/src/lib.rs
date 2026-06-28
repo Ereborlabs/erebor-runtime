@@ -52,6 +52,72 @@ impl TerminalProcessGuardRules {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalProcessPolicy {
+    rules: TerminalProcessGuardRules,
+}
+
+impl TerminalProcessPolicy {
+    pub fn from_config(config: &TerminalSurfaceConfig) -> Result<Self, TerminalSurfaceError> {
+        Ok(Self {
+            rules: compile_terminal_process_guard_rules(config)?,
+        })
+    }
+
+    #[must_use]
+    pub fn decide_process_exec(
+        &self,
+        executable: &str,
+        argv: &[String],
+    ) -> Option<TerminalProcessPolicyDecision> {
+        let text = terminal_process_command_text(executable, argv);
+        self.rules
+            .rules()
+            .iter()
+            .find(|rule| text.contains(rule.match_token()))
+            .map(|rule| {
+                TerminalProcessPolicyDecision::new(rule.rule_id(), rule.reason(), rule.decision())
+            })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalProcessPolicyDecision {
+    rule_id: String,
+    reason: String,
+    decision: TerminalProcessGuardDecision,
+}
+
+impl TerminalProcessPolicyDecision {
+    #[must_use]
+    pub fn new(
+        rule_id: impl Into<String>,
+        reason: impl Into<String>,
+        decision: TerminalProcessGuardDecision,
+    ) -> Self {
+        Self {
+            rule_id: rule_id.into(),
+            reason: reason.into(),
+            decision,
+        }
+    }
+
+    #[must_use]
+    pub fn rule_id(&self) -> &str {
+        &self.rule_id
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
+
+    #[must_use]
+    pub const fn decision(&self) -> TerminalProcessGuardDecision {
+        self.decision
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TerminalProcessGuardRule {
     match_token: String,
     reason: String,
@@ -205,6 +271,18 @@ fn read_policy_source(path: &Path) -> Result<String, TerminalSurfaceError> {
     })
 }
 
+fn terminal_process_command_text(executable: &str, argv: &[String]) -> String {
+    let mut text = String::new();
+    text.push_str(executable);
+    for argument in argv {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(argument);
+    }
+    text
+}
+
 fn terminal_process_guard_decision(
     rule: &serde_json::Value,
 ) -> Option<TerminalProcessGuardDecision> {
@@ -254,7 +332,7 @@ mod tests {
 
     use super::{
         compile_terminal_process_guard_rules, TerminalProcessGuardDecision,
-        TerminalProcessGuardRule, TerminalProcessGuardRules,
+        TerminalProcessGuardRule, TerminalProcessGuardRules, TerminalProcessPolicy,
     };
 
     #[test]
@@ -366,6 +444,17 @@ mod tests {
             rules.rules()[2].decision(),
             TerminalProcessGuardDecision::Allow
         );
+
+        let policy = TerminalProcessPolicy::from_config(terminal)?;
+        let decision = policy
+            .decide_process_exec(
+                "google-chrome",
+                &[String::from("--remote-debugging-port=9222")],
+            )
+            .ok_or_else(|| io::Error::other("expected terminal process decision"))?;
+        assert_eq!(decision.rule_id(), "deny-raw-cdp");
+        assert_eq!(decision.reason(), "raw CDP is denied");
+        assert_eq!(decision.decision(), TerminalProcessGuardDecision::Deny);
 
         fs::remove_file(policy_path)?;
         Ok(())

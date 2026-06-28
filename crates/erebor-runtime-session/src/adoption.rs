@@ -135,12 +135,14 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
-        time::{SystemTime, UNIX_EPOCH},
+        sync::atomic::{AtomicU64, Ordering},
     };
 
     use erebor_runtime_core::SessionAdoptTarget;
 
     use super::{resolve_session_adopt_target, SessionExecutionError};
+
+    static FAKE_PROC_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn adopt_match_resolves_unique_process() -> Result<(), Box<dyn std::error::Error>> {
@@ -199,11 +201,12 @@ mod tests {
     fn create_fake_proc(
         processes: &[(i32, &str, &[&str])],
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let instance = FAKE_PROC_COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "erebor-runtime-session-proc-{nanos}-{}",
-            std::process::id()
+            "erebor-runtime-session-proc-{}-{instance}",
+            std::process::id(),
         ));
+        let _result = fs::remove_dir_all(&root);
         fs::create_dir_all(&root)?;
         for (pid, comm, argv) in processes {
             write_fake_process(&root, *pid, comm, argv)?;

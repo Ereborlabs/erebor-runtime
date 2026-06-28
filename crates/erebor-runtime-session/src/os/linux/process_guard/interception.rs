@@ -1,6 +1,3 @@
-#[path = "ipc.rs"]
-mod ipc;
-
 use std::{
     env,
     fs::{self, OpenOptions},
@@ -11,6 +8,8 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use super::ipc;
 
 const MAX_HANDLERS: usize = 32;
 

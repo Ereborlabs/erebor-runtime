@@ -2,6 +2,8 @@
 
 #[path = "process_guard/interception.rs"]
 mod interception;
+#[path = "process_guard/ipc.rs"]
+mod ipc;
 
 use std::{
     collections::HashMap,
@@ -503,11 +505,23 @@ fn should_deny_exec(
     let path = read_cstring(pid, path_address, MAX_STRING);
     let argv = read_argv(pid, argv_address);
     let text = command_text(&path, &argv);
-    let rule = context
-        .rules
-        .iter()
-        .find(|rule| text.contains(&rule.token))
-        .cloned();
+    let rule = match broker_rule_for_exec(pid, &path, &argv) {
+        Ok(Some(rule)) => Some(rule),
+        Ok(None) => context
+            .rules
+            .iter()
+            .find(|rule| text.contains(&rule.token))
+            .cloned(),
+        Err(reason) => {
+            eprintln!("erebor linux process guard: broker process_exec decision failed: {reason}");
+            Some(ProcessRule {
+                token: text.clone(),
+                reason,
+                rule_id: String::from("erebor-control-broker-process-exec-fail-closed"),
+                decision: ProcessRuleDecision::Deny,
+            })
+        }
+    };
 
     context.audit_seq += 1;
     write_audit(context.audit_seq, pid, &path, &argv, &text, rule.as_ref());
@@ -532,6 +546,129 @@ fn should_deny_exec(
     } else {
         false
     }
+}
+
+fn broker_rule_for_exec(
+    pid: Pid,
+    path: &str,
+    argv: &[String],
+) -> Result<Option<ProcessRule>, String> {
+    let Some(endpoint) = control_endpoint_from_env()? else {
+        return Ok(None);
+    };
+    let hello = guard_hello_from_env()?;
+    let mut connection = ipc::GuardBrokerConnection::connect(&endpoint, hello)?;
+    let request = interception_request_from_exec(pid, path, argv);
+    connection
+        .request_decision(&request)
+        .map(|decision| Some(process_rule_from_broker_decision(&decision)))
+}
+
+fn control_endpoint_from_env() -> Result<Option<ipc::ControlEndpoint>, String> {
+    let path = match env::var("EREBOR_SESSION_CONTROL_PATH") {
+        Ok(path) if !path.is_empty() => path,
+        _ => return Ok(None),
+    };
+    let token = env::var("EREBOR_SESSION_CONTROL_TOKEN")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| String::from("EREBOR_SESSION_CONTROL_TOKEN is required"))?;
+    let timeout_ms = env::var("EREBOR_SESSION_CONTROL_TIMEOUT_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(25);
+
+    Ok(Some(ipc::ControlEndpoint {
+        path,
+        token,
+        timeout_ms,
+    }))
+}
+
+fn guard_hello_from_env() -> Result<ipc::GuardHello, String> {
+    Ok(ipc::GuardHello {
+        session_id: required_env("EREBOR_SESSION_ID")?,
+        actor_id: env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent")),
+        guard_pid: process::id() as i64,
+        runner_kind: env::var("EREBOR_SESSION_RUNNER")
+            .unwrap_or_else(|_| String::from("linux_host")),
+        platform: String::from("linux-x86_64"),
+        capabilities: vec![String::from("process_exec_router")],
+    })
+}
+
+fn interception_request_from_exec(
+    pid: Pid,
+    path: &str,
+    argv: &[String],
+) -> ipc::InterceptionRequest {
+    let timestamp = current_unix_timestamp();
+    ipc::InterceptionRequest {
+        request_id: timestamp,
+        actor_id: env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent")),
+        pid: i64::from(pid),
+        ppid: proc_parent_pid(pid).map_or(0, i64::from),
+        executable: path.to_owned(),
+        argv: argv.to_vec(),
+        cwd: proc_cwd(pid),
+        matched_handler_id: String::new(),
+        timestamp: format!("unix:{timestamp}"),
+    }
+}
+
+fn process_rule_from_broker_decision(decision: &ipc::InterceptionDecision) -> ProcessRule {
+    let (decision_kind, default_reason) = match decision.kind {
+        ipc::InterceptionDecisionKind::Allow => (
+            ProcessRuleDecision::Allow,
+            "process execution allowed by routed surface",
+        ),
+        ipc::InterceptionDecisionKind::Deny => (
+            ProcessRuleDecision::Deny,
+            "process execution denied by routed surface",
+        ),
+        ipc::InterceptionDecisionKind::RequireApproval => (
+            ProcessRuleDecision::RequireApproval,
+            "process execution requires approval from routed surface",
+        ),
+        ipc::InterceptionDecisionKind::Mediate | ipc::InterceptionDecisionKind::Unknown => (
+            ProcessRuleDecision::Deny,
+            "routed surface returned unsupported process execution decision",
+        ),
+    };
+    ProcessRule {
+        token: String::new(),
+        reason: if decision.reason.is_empty() {
+            String::from(default_reason)
+        } else {
+            decision.reason.clone()
+        },
+        rule_id: if decision.rule_id.is_empty() {
+            String::from("erebor-routed-process-exec")
+        } else {
+            decision.rule_id.clone()
+        },
+        decision: decision_kind,
+    }
+}
+
+fn required_env(key: &str) -> Result<String, String> {
+    env::var(key)
+        .ok()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{key} is required"))
+}
+
+fn proc_cwd(pid: Pid) -> String {
+    fs::read_link(format!("/proc/{pid}/cwd"))
+        .unwrap_or_else(|_| PathBuf::from("<unknown>"))
+        .display()
+        .to_string()
+}
+
+fn current_unix_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
 }
 
 fn set_trace_options(pid: Pid) {

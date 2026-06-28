@@ -8,6 +8,7 @@ use std::{
 mod adoption;
 mod control_broker;
 mod interception_backend;
+mod terminal_process_exec;
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
@@ -29,10 +30,11 @@ use crate::interception_backend::SessionInterceptionBackendBundle;
 
 pub use adoption::adopt_session_target;
 pub use control_broker::{
-    BrowserCdpMediationHandler, GuardBrokerClient, SessionControlBroker,
+    BrowserCdpMediationHandler, GuardBrokerClient, ProcessExecSurfaceHandler, SessionControlBroker,
     SessionControlBrokerEndpoint, SessionControlBrokerError, SessionControlRegistration,
-    SessionInterceptionHandler, SessionMediationIntent, SessionMediationRegistry,
-    SurfaceMediationHandler, SurfaceMediationOutcome,
+    SessionInterceptionHandler, SessionInterceptionRouter, SessionMediationIntent,
+    SessionMediationRegistry, SurfaceInterceptionDecision, SurfaceMediationHandler,
+    SurfaceMediationOutcome,
 };
 
 const DOCKER_CONTROL_DIR: &str = "/erebor/control";
@@ -383,8 +385,12 @@ fn start_session_side_resources_from_start_plan(
     .map_err(SessionExecutionError::runtime)?;
     let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
     let mut environment = Vec::new();
+    let process_exec_interception =
+        terminal_process_exec::backend_input_from_start_plan(&start_plan, plan)?;
+    let interception_router = terminal_process_exec::router_from_start_plan(&start_plan)?;
     let interception_backend = SessionInterceptionBackendBundle::prepare(
-        &start_plan,
+        start_plan.interception(),
+        process_exec_interception,
         plan,
         prepared_session.map(|session| &session.storage),
     )?;
@@ -421,17 +427,20 @@ fn start_session_side_resources_from_start_plan(
                     launcher.add_surface(surface);
                 }
             }
-            SessionSurfaceDefinition::Terminal(_) => {
+            SessionSurfaceDefinition::Terminal(config) => {
                 environment.push((
                     String::from("EREBOR_TERMINAL_SURFACE"),
                     String::from("terminal"),
                 ));
-                environment.push((String::from("EREBOR_TERMINAL_TTY"), plan.tty().to_string()));
+                environment.push((
+                    String::from("EREBOR_TERMINAL_TTY"),
+                    config.tty().to_string(),
+                ));
 
                 if let Some(interception_backend) = interception_backend.as_ref() {
                     environment.push((
                         String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
-                        interception_backend.terminal_process_guard().to_owned(),
+                        interception_backend.backend_kind().to_owned(),
                     ));
                 } else {
                     environment.push((
@@ -446,6 +455,7 @@ fn start_session_side_resources_from_start_plan(
     if launcher.is_empty() {
         let control_registration = register_session_control_channel(
             interception_backend.as_ref(),
+            interception_router.clone(),
             plan,
             None,
             lazy_browser_cdp,
@@ -492,6 +502,7 @@ fn start_session_side_resources_from_start_plan(
 
     let control_registration = register_session_control_channel(
         interception_backend.as_ref(),
+        interception_router,
         plan,
         browser_cdp_endpoint.as_deref(),
         lazy_browser_cdp,
@@ -517,12 +528,7 @@ trait SessionPlanContext {
     fn audit(&self) -> &RuntimeAuditConfig;
     fn session_id(&self) -> &SessionId;
     fn actor(&self) -> &SessionActorLayerConfig;
-    fn terminal(&self) -> &TerminalSurfaceConfig;
     fn runner_kind(&self) -> SessionRunnerKind;
-
-    fn tty(&self) -> bool {
-        self.terminal().tty()
-    }
 }
 
 impl SessionPlanContext for SessionRunPlan {
@@ -536,10 +542,6 @@ impl SessionPlanContext for SessionRunPlan {
 
     fn actor(&self) -> &SessionActorLayerConfig {
         self.actor()
-    }
-
-    fn terminal(&self) -> &TerminalSurfaceConfig {
-        self.terminal()
     }
 
     fn runner_kind(&self) -> SessionRunnerKind {
@@ -558,10 +560,6 @@ impl SessionPlanContext for SessionAdoptPlan {
 
     fn actor(&self) -> &SessionActorLayerConfig {
         self.actor()
-    }
-
-    fn terminal(&self) -> &TerminalSurfaceConfig {
-        self.terminal()
     }
 
     fn runner_kind(&self) -> SessionRunnerKind {
@@ -657,6 +655,7 @@ fn side_resource_command_options(
 
 fn register_session_control_channel(
     interception_backend: Option<&SessionInterceptionBackendBundle>,
+    interception_router: SessionInterceptionRouter,
     plan: &impl SessionPlanContext,
     browser_cdp_endpoint: Option<&str>,
     lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
@@ -665,10 +664,11 @@ fn register_session_control_channel(
     interception_backend
         .map(|backend| {
             let handlers = backend.control_handlers()?;
-            let registration = SessionControlBroker::register_session_with_mediators(
+            let registration = SessionControlBroker::register_session_with_router_and_mediators(
                 plan.session_id().as_str(),
                 &plan.actor().id,
                 handlers,
+                interception_router,
                 session_mediation_registry(browser_cdp_endpoint, lazy_browser_cdp)?,
             )
             .map_err(SessionExecutionError::control_broker)?;
