@@ -1,6 +1,5 @@
 use erebor_runtime_core::{
-    SessionInterceptionOperation, SessionRunnerKind, SessionSurfaceStartPlan,
-    TerminalProcessInterceptionMode, TerminalSurfaceConfig,
+    SessionRunnerKind, TerminalProcessInterceptionMode, TerminalSurfaceConfig,
 };
 use erebor_runtime_ipc::v1::InterceptionRequest;
 use erebor_runtime_terminal::{
@@ -15,46 +14,10 @@ use crate::interception_backend::{
 };
 use crate::{SessionExecutionError, SessionPlanContext};
 
-pub(crate) fn backend_input_from_start_plan<'a>(
-    start_plan: &'a SessionSurfaceStartPlan,
+pub(crate) fn backend_input_from_surface<'a>(
+    terminal: &'a TerminalSurfaceConfig,
     plan: &impl SessionPlanContext,
-) -> Result<Option<ProcessExecInterceptionInput<'a>>, SessionExecutionError> {
-    if !start_plan
-        .interception()
-        .operation_supported(SessionInterceptionOperation::ProcessExec)
-    {
-        return Ok(None);
-    }
-
-    backend_input_from_terminal(start_plan.terminal(), plan)
-}
-
-pub(crate) fn router_from_start_plan(
-    start_plan: &SessionSurfaceStartPlan,
-) -> Result<SessionInterceptionRouter, SessionExecutionError> {
-    if !start_plan
-        .interception()
-        .operation_supported(SessionInterceptionOperation::ProcessExec)
-    {
-        return Ok(SessionInterceptionRouter::new());
-    }
-
-    let Some(terminal) = start_plan.terminal() else {
-        return Ok(SessionInterceptionRouter::new());
-    };
-
-    Ok(SessionInterceptionRouter::new()
-        .with_process_exec_handler(TerminalProcessExecSurfaceHandler::new(terminal)?))
-}
-
-fn backend_input_from_terminal<'a>(
-    terminal: Option<&'a TerminalSurfaceConfig>,
-    plan: &impl SessionPlanContext,
-) -> Result<Option<ProcessExecInterceptionInput<'a>>, SessionExecutionError> {
-    let Some(terminal) = terminal else {
-        return Ok(None);
-    };
-
+) -> Result<ProcessExecInterceptionInput<'a>, SessionExecutionError> {
     let mediation = terminal.process_interception();
     if mediation.enabled() && plan.runner_kind() != SessionRunnerKind::LinuxHost {
         return Err(SessionExecutionError::guard_config(
@@ -62,7 +25,7 @@ fn backend_input_from_terminal<'a>(
         ));
     }
 
-    Ok(Some(ProcessExecInterceptionInput::new(
+    Ok(ProcessExecInterceptionInput::new(
         ProcessExecMediationInput::new(
             mediation.enabled(),
             process_exec_mediation_mode(mediation.mode()),
@@ -71,7 +34,14 @@ fn backend_input_from_terminal<'a>(
         plan.audit().surfaces().terminal().level(),
         plan.audit().surfaces().terminal().debug_commands().to_vec(),
         terminal.tty(),
-    )))
+    ))
+}
+
+pub(crate) fn register_surface_handler(
+    router: SessionInterceptionRouter,
+    terminal: &TerminalSurfaceConfig,
+) -> Result<SessionInterceptionRouter, SessionExecutionError> {
+    Ok(router.with_process_exec_handler(TerminalProcessExecSurfaceHandler::new(terminal)?))
 }
 
 struct TerminalProcessExecSurfaceHandler {

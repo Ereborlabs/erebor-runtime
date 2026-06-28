@@ -385,15 +385,12 @@ fn start_session_side_resources_from_start_plan(
     .map_err(SessionExecutionError::runtime)?;
     let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
     let mut environment = Vec::new();
-    let process_exec_interception =
-        terminal_process_exec::backend_input_from_start_plan(&start_plan, plan)?;
-    let interception_router = terminal_process_exec::router_from_start_plan(&start_plan)?;
-    let interception_backend = SessionInterceptionBackendBundle::prepare(
-        start_plan.interception(),
-        process_exec_interception,
-        plan,
-        prepared_session.map(|session| &session.storage),
-    )?;
+    let mut process_exec_interception = None;
+    let mut interception_router = SessionInterceptionRouter::new();
+    let mut terminal_surface_present = false;
+    let process_exec_supported = start_plan
+        .interception()
+        .operation_supported(SessionInterceptionOperation::ProcessExec);
     let mut lazy_browser_cdp = None;
     let uses_lazy_browser_cdp = start_plan
         .terminal()
@@ -428,6 +425,7 @@ fn start_session_side_resources_from_start_plan(
                 }
             }
             SessionSurfaceDefinition::Terminal(config) => {
+                terminal_surface_present = true;
                 environment.push((
                     String::from("EREBOR_TERMINAL_SURFACE"),
                     String::from("terminal"),
@@ -437,18 +435,36 @@ fn start_session_side_resources_from_start_plan(
                     config.tty().to_string(),
                 ));
 
-                if let Some(interception_backend) = interception_backend.as_ref() {
-                    environment.push((
-                        String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
-                        interception_backend.backend_kind().to_owned(),
-                    ));
-                } else {
-                    environment.push((
-                        String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
-                        String::from("disabled"),
-                    ));
+                if process_exec_supported {
+                    process_exec_interception = Some(
+                        terminal_process_exec::backend_input_from_surface(config, plan)?,
+                    );
+                    interception_router = terminal_process_exec::register_surface_handler(
+                        interception_router,
+                        config,
+                    )?;
                 }
             }
+        }
+    }
+
+    let interception_backend = SessionInterceptionBackendBundle::prepare(
+        start_plan.interception(),
+        process_exec_interception,
+        plan,
+        prepared_session.map(|session| &session.storage),
+    )?;
+    if terminal_surface_present {
+        if let Some(interception_backend) = interception_backend.as_ref() {
+            environment.push((
+                String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
+                interception_backend.backend_kind().to_owned(),
+            ));
+        } else {
+            environment.push((
+                String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
+                String::from("disabled"),
+            ));
         }
     }
 
