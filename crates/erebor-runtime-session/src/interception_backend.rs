@@ -202,12 +202,7 @@ impl LinuxPtraceInterceptionBackendBundle {
         storage: Option<&SessionStorage>,
     ) -> Result<Self, SessionExecutionError> {
         let instance_id = SESSION_GUARD_BUNDLE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let host_dir = std::env::temp_dir().join(format!(
-            "erebor-linux-process-guard-{}-{}-{}",
-            plan.session_id().as_str(),
-            std::process::id(),
-            instance_id
-        ));
+        let host_dir = linux_process_guard_host_dir(plan.session_id().as_str(), instance_id);
         fs::create_dir_all(&host_dir).map_err(SessionExecutionError::guard_io)?;
         let guard_path = host_dir.join("erebor-linux-process-guard");
         write_executable_file(&guard_path, LINUX_PROCESS_GUARD, instance_id)
@@ -577,6 +572,37 @@ fn linux_cgroup_component(value: &str) -> String {
             }
         })
         .collect()
+}
+
+fn linux_process_guard_host_dir(session_id: &str, instance_id: u64) -> PathBuf {
+    std::env::temp_dir()
+        .join("erebor-runtime")
+        .join("sessions")
+        .join(path_component(session_id, "unknown-session"))
+        .join("interception")
+        .join(SessionInterceptionBackendKind::LinuxPtrace.as_str())
+        .join("process-guard")
+        .join(std::process::id().to_string())
+        .join(instance_id.to_string())
+}
+
+fn path_component(value: &str, fallback: &str) -> String {
+    let component = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+
+    if component.is_empty() || matches!(component.as_str(), "." | "..") {
+        fallback.to_owned()
+    } else {
+        component
+    }
 }
 
 fn audit_command_level_env(level: AuditCommandLogLevel) -> &'static str {
