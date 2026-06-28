@@ -517,7 +517,9 @@ fn should_deny_exec(
             Some(ProcessRule {
                 token: text.clone(),
                 reason,
-                rule_id: String::from("erebor-control-broker-process-exec-fail-closed"),
+                rule_id: String::from(
+                    "erebor-runtime-interception-broker-process-exec-fail-closed",
+                ),
                 decision: ProcessRuleDecision::Deny,
             })
         }
@@ -553,32 +555,33 @@ fn broker_rule_for_exec(
     path: &str,
     argv: &[String],
 ) -> Result<Option<ProcessRule>, String> {
-    let Some(endpoint) = control_endpoint_from_env()? else {
+    let Some(endpoint) = runtime_interception_endpoint_from_env()? else {
         return Ok(None);
     };
     let hello = guard_hello_from_env()?;
-    let mut connection = ipc::GuardBrokerConnection::connect(&endpoint, hello)?;
+    let mut connection = ipc::RuntimeInterceptionConnection::connect(&endpoint, hello)?;
     let request = interception_request_from_exec(pid, path, argv);
     connection
         .request_decision(&request)
         .map(|decision| Some(process_rule_from_broker_decision(&decision)))
 }
 
-fn control_endpoint_from_env() -> Result<Option<ipc::ControlEndpoint>, String> {
-    let path = match env::var("EREBOR_SESSION_CONTROL_PATH") {
+fn runtime_interception_endpoint_from_env(
+) -> Result<Option<ipc::RuntimeInterceptionEndpoint>, String> {
+    let path = match env::var("EREBOR_RUNTIME_INTERCEPTION_PATH") {
         Ok(path) if !path.is_empty() => path,
         _ => return Ok(None),
     };
-    let token = env::var("EREBOR_SESSION_CONTROL_TOKEN")
+    let token = env::var("EREBOR_RUNTIME_INTERCEPTION_TOKEN")
         .ok()
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| String::from("EREBOR_SESSION_CONTROL_TOKEN is required"))?;
-    let timeout_ms = env::var("EREBOR_SESSION_CONTROL_TIMEOUT_MS")
+        .ok_or_else(|| String::from("EREBOR_RUNTIME_INTERCEPTION_TOKEN is required"))?;
+    let timeout_ms = env::var("EREBOR_RUNTIME_INTERCEPTION_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(25);
 
-    Ok(Some(ipc::ControlEndpoint {
+    Ok(Some(ipc::RuntimeInterceptionEndpoint {
         path,
         token,
         timeout_ms,

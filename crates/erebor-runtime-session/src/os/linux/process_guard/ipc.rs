@@ -10,7 +10,7 @@ const FRAME_VERSION: u16 = 1;
 const HEADER_LEN: usize = 12;
 const MAX_PAYLOAD_LEN: usize = 64 * 1024;
 const PROTOCOL_VERSION: u32 = 1;
-const CONTROL_TOKEN_HEADER: &str = "control_token";
+const INTERCEPTION_TOKEN_HEADER: &str = "interception_token";
 
 const KIND_GUARD_HELLO: &str = "erebor.runtime.ipc.v1.GuardHello";
 const KIND_GUARD_HELLO_ACK: &str = "erebor.runtime.ipc.v1.GuardHelloAck";
@@ -24,7 +24,7 @@ const DECISION_MEDIATE: i32 = 4;
 const INTERCEPTION_SOURCE_SHIM: i32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ControlEndpoint {
+pub(super) struct RuntimeInterceptionEndpoint {
     pub(super) path: String,
     pub(super) token: String,
     pub(super) timeout_ms: u64,
@@ -98,26 +98,29 @@ struct Envelope {
     headers: Vec<Header>,
 }
 
-pub(super) struct GuardBrokerConnection {
+pub(super) struct RuntimeInterceptionConnection {
     stream: UnixStream,
     next_message_id: u64,
 }
 
-impl GuardBrokerConnection {
-    pub(super) fn connect(endpoint: &ControlEndpoint, hello: GuardHello) -> Result<Self, String> {
+impl RuntimeInterceptionConnection {
+    pub(super) fn connect(
+        endpoint: &RuntimeInterceptionEndpoint,
+        hello: GuardHello,
+    ) -> Result<Self, String> {
         let mut stream = UnixStream::connect(Path::new(&endpoint.path)).map_err(|error| {
             format!(
-                "failed to connect to Erebor control broker at {}: {error}",
+                "failed to connect to Erebor runtime interception broker at {}: {error}",
                 endpoint.path
             )
         })?;
         let timeout = Duration::from_millis(endpoint.timeout_ms);
-        stream
-            .set_read_timeout(Some(timeout))
-            .map_err(|error| format!("failed to set control broker read timeout: {error}"))?;
-        stream
-            .set_write_timeout(Some(timeout))
-            .map_err(|error| format!("failed to set control broker write timeout: {error}"))?;
+        stream.set_read_timeout(Some(timeout)).map_err(|error| {
+            format!("failed to set runtime interception broker read timeout: {error}")
+        })?;
+        stream.set_write_timeout(Some(timeout)).map_err(|error| {
+            format!("failed to set runtime interception broker write timeout: {error}")
+        })?;
 
         let payload = encode_guard_hello(&hello);
         let mut envelope = Envelope {
@@ -128,7 +131,7 @@ impl GuardBrokerConnection {
             headers: Vec::new(),
         };
         envelope.headers.push(Header {
-            key: String::from(CONTROL_TOKEN_HEADER),
+            key: String::from(INTERCEPTION_TOKEN_HEADER),
             value: endpoint.token.clone(),
         });
         write_envelope(&mut stream, &envelope)?;
@@ -136,14 +139,14 @@ impl GuardBrokerConnection {
         let response = read_envelope(&mut stream)?;
         if response.message_kind != KIND_GUARD_HELLO_ACK {
             return Err(format!(
-                "control broker returned unexpected response `{}` to GuardHello",
+                "runtime interception broker returned unexpected response `{}` to GuardHello",
                 response.message_kind
             ));
         }
         let ack = decode_guard_hello_ack(&response.payload)?;
         if !ack.accepted {
             return Err(format!(
-                "control broker rejected guard hello: {}",
+                "runtime interception broker rejected guard hello: {}",
                 ack.reason
             ));
         }
@@ -172,7 +175,7 @@ impl GuardBrokerConnection {
         let response = read_envelope(&mut self.stream)?;
         if response.message_kind != KIND_INTERCEPTION_DECISION {
             return Err(format!(
-                "control broker returned unexpected response `{}` to InterceptionRequest",
+                "runtime interception broker returned unexpected response `{}` to InterceptionRequest",
                 response.message_kind
             ));
         }
@@ -189,7 +192,9 @@ struct GuardHelloAck {
 fn write_envelope(stream: &mut UnixStream, envelope: &Envelope) -> Result<(), String> {
     let payload = encode_envelope(envelope);
     if payload.len() > MAX_PAYLOAD_LEN {
-        return Err(String::from("control broker frame payload is too large"));
+        return Err(String::from(
+            "runtime interception broker frame payload is too large",
+        ));
     }
     let mut frame = Vec::with_capacity(HEADER_LEN + payload.len());
     frame.extend_from_slice(MAGIC);
@@ -199,31 +204,35 @@ fn write_envelope(stream: &mut UnixStream, envelope: &Envelope) -> Result<(), St
     frame.extend_from_slice(&payload);
     stream
         .write_all(&frame)
-        .map_err(|error| format!("failed to write control broker frame: {error}"))
+        .map_err(|error| format!("failed to write runtime interception broker frame: {error}"))
 }
 
 fn read_envelope(stream: &mut UnixStream) -> Result<Envelope, String> {
     let mut header = [0_u8; HEADER_LEN];
-    stream
-        .read_exact(&mut header)
-        .map_err(|error| format!("failed to read control broker frame header: {error}"))?;
+    stream.read_exact(&mut header).map_err(|error| {
+        format!("failed to read runtime interception broker frame header: {error}")
+    })?;
     if &header[0..4] != MAGIC {
-        return Err(String::from("control broker frame has invalid magic"));
+        return Err(String::from(
+            "runtime interception broker frame has invalid magic",
+        ));
     }
     let version = u16::from_le_bytes([header[4], header[5]]);
     if version != FRAME_VERSION {
         return Err(format!(
-            "control broker frame version {version} is not supported"
+            "runtime interception broker frame version {version} is not supported"
         ));
     }
     let payload_len = u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
     if payload_len > MAX_PAYLOAD_LEN {
-        return Err(String::from("control broker frame payload is too large"));
+        return Err(String::from(
+            "runtime interception broker frame payload is too large",
+        ));
     }
     let mut payload = vec![0_u8; payload_len];
-    stream
-        .read_exact(&mut payload)
-        .map_err(|error| format!("failed to read control broker frame payload: {error}"))?;
+    stream.read_exact(&mut payload).map_err(|error| {
+        format!("failed to read runtime interception broker frame payload: {error}")
+    })?;
     decode_envelope(&payload)
 }
 
@@ -535,7 +544,7 @@ mod tests {
             message_kind: String::from(KIND_INTERCEPTION_REQUEST),
             payload: vec![1, 2, 3],
             headers: vec![Header {
-                key: String::from("control_token"),
+                key: String::from("interception_token"),
                 value: String::from("token"),
             }],
         };

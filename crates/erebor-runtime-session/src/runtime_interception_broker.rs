@@ -33,22 +33,23 @@ use erebor_runtime_policy::PolicySet;
 use thiserror::Error;
 use tokio::runtime::Runtime;
 
-const CONTROL_SOCKET_NAME: &str = "session-control.sock";
-const CONTROL_PROTOCOL: &str = "erebor_ipc_v1";
-const CONTROL_TOKEN_HEADER: &str = "control_token";
+const RUNTIME_INTERCEPTION_SOCKET_NAME: &str = "runtime-interception.sock";
+const RUNTIME_INTERCEPTION_PROTOCOL: &str = "erebor_ipc_v1";
+const INTERCEPTION_TOKEN_HEADER: &str = "interception_token";
 const DEFAULT_TIMEOUT_MS: u64 = 25;
 
-static CONTROL_BROKER_SERVER: Mutex<Option<Arc<ControlBrokerServer>>> = Mutex::new(None);
+static RUNTIME_INTERCEPTION_BROKER_SERVER: Mutex<Option<Arc<RuntimeInterceptionBrokerServer>>> =
+    Mutex::new(None);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionControlBrokerEndpoint {
+pub struct RuntimeInterceptionEndpoint {
     transport: String,
     path: PathBuf,
     token: String,
     timeout_ms: u64,
 }
 
-impl SessionControlBrokerEndpoint {
+impl RuntimeInterceptionEndpoint {
     #[must_use]
     pub fn unix(path: impl Into<PathBuf>, token: impl Into<String>, timeout_ms: u64) -> Self {
         Self {
@@ -83,23 +84,23 @@ impl SessionControlBrokerEndpoint {
     pub fn environment(&self) -> Vec<(String, String)> {
         vec![
             (
-                String::from("EREBOR_SESSION_CONTROL_PROTOCOL"),
-                String::from(CONTROL_PROTOCOL),
+                String::from("EREBOR_RUNTIME_INTERCEPTION_PROTOCOL"),
+                String::from(RUNTIME_INTERCEPTION_PROTOCOL),
             ),
             (
-                String::from("EREBOR_SESSION_CONTROL_TRANSPORT"),
+                String::from("EREBOR_RUNTIME_INTERCEPTION_TRANSPORT"),
                 self.transport.clone(),
             ),
             (
-                String::from("EREBOR_SESSION_CONTROL_PATH"),
+                String::from("EREBOR_RUNTIME_INTERCEPTION_PATH"),
                 self.path.display().to_string(),
             ),
             (
-                String::from("EREBOR_SESSION_CONTROL_TOKEN"),
+                String::from("EREBOR_RUNTIME_INTERCEPTION_TOKEN"),
                 self.token.clone(),
             ),
             (
-                String::from("EREBOR_SESSION_CONTROL_TIMEOUT_MS"),
+                String::from("EREBOR_RUNTIME_INTERCEPTION_TIMEOUT_MS"),
                 self.timeout_ms.to_string(),
             ),
         ]
@@ -584,14 +585,14 @@ impl LazyBrowserCdpMediation {
     }
 }
 
-pub struct SessionControlBroker;
+pub struct RuntimeInterceptionBroker;
 
-impl SessionControlBroker {
+impl RuntimeInterceptionBroker {
     pub fn register_session(
         session_id: impl Into<String>,
         actor_id: impl Into<String>,
         handlers: Vec<SessionInterceptionHandler>,
-    ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
+    ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
         Self::register_session_with_mediators(
             session_id,
             actor_id,
@@ -605,7 +606,7 @@ impl SessionControlBroker {
         actor_id: impl Into<String>,
         handlers: Vec<SessionInterceptionHandler>,
         mediators: SessionMediationRegistry,
-    ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
+    ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
         Self::register_session_with_router_and_mediators(
             session_id,
             actor_id,
@@ -621,8 +622,8 @@ impl SessionControlBroker {
         handlers: Vec<SessionInterceptionHandler>,
         router: SessionInterceptionRouter,
         mediators: SessionMediationRegistry,
-    ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
-        shared_control_broker_server()?.register_session(
+    ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
+        shared_runtime_interception_broker_server()?.register_session(
             session_id.into(),
             actor_id.into(),
             handlers,
@@ -632,15 +633,15 @@ impl SessionControlBroker {
     }
 }
 
-pub struct SessionControlRegistration {
-    endpoint: SessionControlBrokerEndpoint,
-    server: Arc<ControlBrokerServer>,
+pub struct SessionInterceptionRegistration {
+    endpoint: RuntimeInterceptionEndpoint,
+    server: Arc<RuntimeInterceptionBrokerServer>,
     session_id: String,
 }
 
-impl SessionControlRegistration {
+impl SessionInterceptionRegistration {
     #[must_use]
-    pub fn endpoint(&self) -> &SessionControlBrokerEndpoint {
+    pub fn endpoint(&self) -> &RuntimeInterceptionEndpoint {
         &self.endpoint
     }
 
@@ -654,61 +655,64 @@ impl SessionControlRegistration {
     pub fn docker_endpoint(
         &self,
         container_directory: impl AsRef<Path>,
-    ) -> SessionControlBrokerEndpoint {
-        self.endpoint
-            .with_path(container_directory.as_ref().join(CONTROL_SOCKET_NAME))
+    ) -> RuntimeInterceptionEndpoint {
+        self.endpoint.with_path(
+            container_directory
+                .as_ref()
+                .join(RUNTIME_INTERCEPTION_SOCKET_NAME),
+        )
     }
 }
 
-impl Drop for SessionControlRegistration {
+impl Drop for SessionInterceptionRegistration {
     fn drop(&mut self) {
         self.server
             .unregister_session(&self.session_id, self.endpoint.token());
     }
 }
 
-pub struct GuardBrokerClient;
+pub struct InterceptionBrokerClient;
 
-impl GuardBrokerClient {
+impl InterceptionBrokerClient {
     pub fn send_hello(
-        endpoint: &SessionControlBrokerEndpoint,
+        endpoint: &RuntimeInterceptionEndpoint,
         hello: GuardHello,
-    ) -> Result<GuardHelloAck, SessionControlBrokerError> {
+    ) -> Result<GuardHelloAck, RuntimeInterceptionBrokerError> {
         platform::send_hello(endpoint, hello)
     }
 
     pub fn request_interception_decision(
-        endpoint: &SessionControlBrokerEndpoint,
+        endpoint: &RuntimeInterceptionEndpoint,
         hello: GuardHello,
         request: InterceptionRequest,
-    ) -> Result<InterceptionDecision, SessionControlBrokerError> {
+    ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
         platform::request_interception_decision(endpoint, hello, request)
     }
 
     fn connect_raw(
-        endpoint: &SessionControlBrokerEndpoint,
-    ) -> Result<(), SessionControlBrokerError> {
+        endpoint: &RuntimeInterceptionEndpoint,
+    ) -> Result<(), RuntimeInterceptionBrokerError> {
         platform::connect_raw(endpoint)
     }
 }
 
 #[derive(Debug, Error)]
-pub enum SessionControlBrokerError {
-    #[error("session control broker transport `{transport}` is unsupported on this platform")]
+pub enum RuntimeInterceptionBrokerError {
+    #[error("runtime interception broker transport `{transport}` is unsupported on this platform")]
     UnsupportedTransport { transport: String },
-    #[error("session control broker state lock failed")]
+    #[error("runtime interception broker state lock failed")]
     StateLock,
-    #[error("session `{session_id}` is already registered with the control broker")]
+    #[error("session `{session_id}` is already registered with the runtime interception broker")]
     SessionAlreadyRegistered { session_id: String },
-    #[error("session control broker rejected guard hello: {reason}")]
+    #[error("runtime interception broker rejected guard hello: {reason}")]
     RejectedHello { reason: String },
-    #[error("session control broker I/O failed: {source}")]
+    #[error("runtime interception broker I/O failed: {source}")]
     Io { source: io::Error },
-    #[error("session control broker IPC protocol failed: {source}")]
+    #[error("runtime interception broker IPC protocol failed: {source}")]
     Protocol { source: IpcProtocolError },
 }
 
-impl SessionControlBrokerError {
+impl RuntimeInterceptionBrokerError {
     fn io(source: io::Error) -> Self {
         Self::Io { source }
     }
@@ -718,14 +722,14 @@ impl SessionControlBrokerError {
     }
 }
 
-struct ControlBrokerServer {
+struct RuntimeInterceptionBrokerServer {
     endpoint_path: PathBuf,
     shutdown: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
     sessions: Arc<Mutex<HashMap<String, SessionRegistration>>>,
 }
 
-impl ControlBrokerServer {
+impl RuntimeInterceptionBrokerServer {
     fn register_session(
         self: &Arc<Self>,
         session_id: String,
@@ -733,8 +737,8 @@ impl ControlBrokerServer {
         handlers: Vec<SessionInterceptionHandler>,
         router: SessionInterceptionRouter,
         mediators: SessionMediationRegistry,
-    ) -> Result<SessionControlRegistration, SessionControlBrokerError> {
-        let token = read_control_token()?;
+    ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
+        let token = read_interception_token()?;
         let registration = SessionRegistration {
             token: token.clone(),
             broker_id: format!("{session_id}:{actor_id}"),
@@ -749,15 +753,17 @@ impl ControlBrokerServer {
             let mut sessions = self
                 .sessions
                 .lock()
-                .map_err(|_error| SessionControlBrokerError::StateLock)?;
+                .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
             if sessions.contains_key(&session_id) {
-                return Err(SessionControlBrokerError::SessionAlreadyRegistered { session_id });
+                return Err(RuntimeInterceptionBrokerError::SessionAlreadyRegistered {
+                    session_id,
+                });
             }
             sessions.insert(session_id.clone(), registration);
         }
 
-        Ok(SessionControlRegistration {
-            endpoint: SessionControlBrokerEndpoint::unix(
+        Ok(SessionInterceptionRegistration {
+            endpoint: RuntimeInterceptionEndpoint::unix(
                 &self.endpoint_path,
                 token,
                 DEFAULT_TIMEOUT_MS,
@@ -785,10 +791,10 @@ struct BoundConnection {
     session_id: String,
 }
 
-impl Drop for ControlBrokerServer {
+impl Drop for RuntimeInterceptionBrokerServer {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
-        let _result = GuardBrokerClient::connect_raw(&SessionControlBrokerEndpoint::unix(
+        let _result = InterceptionBrokerClient::connect_raw(&RuntimeInterceptionEndpoint::unix(
             &self.endpoint_path,
             "",
             DEFAULT_TIMEOUT_MS,
@@ -802,10 +808,11 @@ impl Drop for ControlBrokerServer {
     }
 }
 
-fn shared_control_broker_server() -> Result<Arc<ControlBrokerServer>, SessionControlBrokerError> {
-    let mut server = CONTROL_BROKER_SERVER
+fn shared_runtime_interception_broker_server(
+) -> Result<Arc<RuntimeInterceptionBrokerServer>, RuntimeInterceptionBrokerError> {
+    let mut server = RUNTIME_INTERCEPTION_BROKER_SERVER
         .lock()
-        .map_err(|_error| SessionControlBrokerError::StateLock)?;
+        .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
     if let Some(server) = server.as_ref() {
         return Ok(Arc::clone(server));
     }
@@ -815,11 +822,11 @@ fn shared_control_broker_server() -> Result<Arc<ControlBrokerServer>, SessionCon
     Ok(started)
 }
 
-fn read_control_token() -> Result<String, SessionControlBrokerError> {
+fn read_interception_token() -> Result<String, RuntimeInterceptionBrokerError> {
     let mut random = [0_u8; 16];
     File::open("/dev/urandom")
         .and_then(|mut file| file.read_exact(&mut random))
-        .map_err(SessionControlBrokerError::io)?;
+        .map_err(RuntimeInterceptionBrokerError::io)?;
 
     Ok(hex_encode(&random))
 }
@@ -834,17 +841,17 @@ fn hex_encode(bytes: &[u8]) -> String {
     output
 }
 
-fn control_token(envelope: &Envelope) -> Option<&str> {
+fn interception_token(envelope: &Envelope) -> Option<&str> {
     envelope
         .headers
         .iter()
-        .find(|header| header.key == CONTROL_TOKEN_HEADER)
+        .find(|header| header.key == INTERCEPTION_TOKEN_HEADER)
         .map(|header| header.value.as_str())
 }
 
 fn envelope_with_token(mut envelope: Envelope, token: impl Into<String>) -> Envelope {
     envelope.headers.push(Header {
-        key: String::from(CONTROL_TOKEN_HEADER),
+        key: String::from(INTERCEPTION_TOKEN_HEADER),
         value: token.into(),
     });
     envelope
@@ -852,28 +859,28 @@ fn envelope_with_token(mut envelope: Envelope, token: impl Into<String>) -> Enve
 
 fn read_frame_from_stream(
     stream: &mut impl Read,
-) -> Result<EreborIpcFrame, SessionControlBrokerError> {
+) -> Result<EreborIpcFrame, RuntimeInterceptionBrokerError> {
     let mut header = [0_u8; HEADER_LEN];
     stream
         .read_exact(&mut header)
-        .map_err(SessionControlBrokerError::io)?;
+        .map_err(RuntimeInterceptionBrokerError::io)?;
 
     if header[0..4] != MAGIC {
-        return Err(SessionControlBrokerError::protocol(
+        return Err(RuntimeInterceptionBrokerError::protocol(
             IpcProtocolError::InvalidMagic,
         ));
     }
 
     let version = u16::from_le_bytes([header[4], header[5]]);
     if version != FRAME_VERSION {
-        return Err(SessionControlBrokerError::protocol(
+        return Err(RuntimeInterceptionBrokerError::protocol(
             IpcProtocolError::UnsupportedFrameVersion { version },
         ));
     }
 
     let payload_len = u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
     if payload_len > MAX_PAYLOAD_LEN {
-        return Err(SessionControlBrokerError::protocol(
+        return Err(RuntimeInterceptionBrokerError::protocol(
             IpcProtocolError::PayloadTooLarge {
                 actual: payload_len,
                 maximum: MAX_PAYLOAD_LEN,
@@ -886,29 +893,29 @@ fn read_frame_from_stream(
     frame.resize(HEADER_LEN + payload_len, 0);
     stream
         .read_exact(&mut frame[HEADER_LEN..])
-        .map_err(SessionControlBrokerError::io)?;
+        .map_err(RuntimeInterceptionBrokerError::io)?;
 
-    EreborIpcFrame::decode(&frame).map_err(SessionControlBrokerError::protocol)
+    EreborIpcFrame::decode(&frame).map_err(RuntimeInterceptionBrokerError::protocol)
 }
 
 fn write_frame_to_stream(
     stream: &mut impl Write,
     frame: &EreborIpcFrame,
-) -> Result<(), SessionControlBrokerError> {
+) -> Result<(), RuntimeInterceptionBrokerError> {
     stream
         .write_all(
             &frame
                 .encode()
-                .map_err(SessionControlBrokerError::protocol)?,
+                .map_err(RuntimeInterceptionBrokerError::protocol)?,
         )
-        .map_err(SessionControlBrokerError::io)
+        .map_err(RuntimeInterceptionBrokerError::io)
 }
 
-fn handle_control_envelope(
+fn handle_runtime_interception_envelope(
     envelope: Envelope,
     sessions: &Mutex<HashMap<String, SessionRegistration>>,
     bound: &mut Option<BoundConnection>,
-) -> Result<Envelope, SessionControlBrokerError> {
+) -> Result<Envelope, RuntimeInterceptionBrokerError> {
     if bound.is_none() {
         return handle_hello_envelope(envelope, sessions, bound);
     }
@@ -925,7 +932,7 @@ fn handle_hello_envelope(
     envelope: Envelope,
     sessions: &Mutex<HashMap<String, SessionRegistration>>,
     bound: &mut Option<BoundConnection>,
-) -> Result<Envelope, SessionControlBrokerError> {
+) -> Result<Envelope, RuntimeInterceptionBrokerError> {
     let mut broker_id = String::from("unregistered");
     let mut accepted = false;
     let mut accepted_session_id = None;
@@ -935,18 +942,20 @@ fn handle_hello_envelope(
     } else {
         let hello: GuardHello = envelope
             .decode_typed_payload(KIND_GUARD_HELLO)
-            .map_err(SessionControlBrokerError::protocol)?;
+            .map_err(RuntimeInterceptionBrokerError::protocol)?;
         let sessions = sessions
             .lock()
-            .map_err(|_error| SessionControlBrokerError::StateLock)?;
+            .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
         match sessions.get(&hello.session_id) {
-            Some(registration) if control_token(&envelope) == Some(registration.token.as_str()) => {
+            Some(registration)
+                if interception_token(&envelope) == Some(registration.token.as_str()) =>
+            {
                 broker_id = registration.broker_id.clone();
                 accepted = true;
                 accepted_session_id = Some(hello.session_id);
                 String::from("accepted")
             }
-            Some(_) => String::from("invalid control token"),
+            Some(_) => String::from("invalid interception token"),
             None => String::from("unknown session"),
         }
     };
@@ -968,17 +977,17 @@ fn handle_hello_envelope(
         KIND_GUARD_HELLO_ACK,
         &ack,
     )
-    .map_err(SessionControlBrokerError::protocol)
+    .map_err(RuntimeInterceptionBrokerError::protocol)
 }
 
 fn handle_interception_request_envelope(
     envelope: Envelope,
     sessions: &Mutex<HashMap<String, SessionRegistration>>,
     bound: &Option<BoundConnection>,
-) -> Result<Envelope, SessionControlBrokerError> {
+) -> Result<Envelope, RuntimeInterceptionBrokerError> {
     let request: InterceptionRequest = envelope
         .decode_typed_payload(KIND_INTERCEPTION_REQUEST)
-        .map_err(SessionControlBrokerError::protocol)?;
+        .map_err(RuntimeInterceptionBrokerError::protocol)?;
     let decision = interception_decision_for_request(sessions, bound, &request)?;
 
     Envelope::wrap_message(
@@ -987,30 +996,30 @@ fn handle_interception_request_envelope(
         KIND_INTERCEPTION_DECISION,
         &decision,
     )
-    .map_err(SessionControlBrokerError::protocol)
+    .map_err(RuntimeInterceptionBrokerError::protocol)
 }
 
 fn interception_decision_for_request(
     sessions: &Mutex<HashMap<String, SessionRegistration>>,
     bound: &Option<BoundConnection>,
     request: &InterceptionRequest,
-) -> Result<InterceptionDecision, SessionControlBrokerError> {
+) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
     let Some(bound) = bound else {
         return Ok(deny_decision(
             request.request_id,
-            "erebor-control-broker-unbound",
+            "erebor-runtime-interception-broker-unbound",
             "interception request arrived before GuardHello",
         ));
     };
     let (handler, mediators) = {
         let sessions = sessions
             .lock()
-            .map_err(|_error| SessionControlBrokerError::StateLock)?;
+            .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
         let Some(registration) = sessions.get(&bound.session_id) else {
             return Ok(deny_decision(
                 request.request_id,
-                "erebor-control-broker-unknown-session",
-                "session is no longer registered with the control broker",
+                "erebor-runtime-interception-broker-unknown-session",
+                "session is no longer registered with the runtime interception broker",
             ));
         };
         if request.matched_handler_id.is_empty() {
@@ -1021,7 +1030,7 @@ fn interception_decision_for_request(
                 .unwrap_or_else(|| {
                     deny_decision(
                         request.request_id,
-                        "erebor-control-broker-unrouted-process-exec",
+                        "erebor-runtime-interception-broker-unrouted-process-exec",
                         "no surface is registered for process_exec interception",
                     )
                 }));
@@ -1029,7 +1038,7 @@ fn interception_decision_for_request(
         let Some(handler) = registration.handlers.get(&request.matched_handler_id) else {
             return Ok(deny_decision(
                 request.request_id,
-                "erebor-control-broker-unknown-handler",
+                "erebor-runtime-interception-broker-unknown-handler",
                 "interception handler is not registered for this session",
             ));
         };
@@ -1041,10 +1050,10 @@ fn interception_decision_for_request(
 
 fn deny_unexpected_bound_message(
     envelope: Envelope,
-) -> Result<Envelope, SessionControlBrokerError> {
+) -> Result<Envelope, RuntimeInterceptionBrokerError> {
     let decision = deny_decision(
         envelope.message_id,
-        "erebor-control-broker-unexpected-message",
+        "erebor-runtime-interception-broker-unexpected-message",
         format!(
             "unexpected message kind `{}` on bound guard connection",
             envelope.message_kind
@@ -1056,7 +1065,7 @@ fn deny_unexpected_bound_message(
         KIND_INTERCEPTION_DECISION,
         &decision,
     )
-    .map_err(SessionControlBrokerError::protocol)
+    .map_err(RuntimeInterceptionBrokerError::protocol)
 }
 
 impl SessionInterceptionHandler {
@@ -1271,26 +1280,31 @@ mod platform {
     };
 
     use super::{
-        envelope_with_token, handle_control_envelope, read_frame_from_stream,
-        write_frame_to_stream, BoundConnection, ControlBrokerServer, SessionControlBrokerEndpoint,
-        SessionControlBrokerError, SessionRegistration, CONTROL_SOCKET_NAME, DEFAULT_TIMEOUT_MS,
+        envelope_with_token, handle_runtime_interception_envelope, read_frame_from_stream,
+        write_frame_to_stream, BoundConnection, RuntimeInterceptionBrokerError,
+        RuntimeInterceptionBrokerServer, RuntimeInterceptionEndpoint, SessionRegistration,
+        DEFAULT_TIMEOUT_MS, RUNTIME_INTERCEPTION_SOCKET_NAME,
     };
     use std::collections::HashMap;
 
-    pub(super) fn start_server() -> Result<Arc<ControlBrokerServer>, SessionControlBrokerError> {
-        let directory =
-            std::env::temp_dir().join(format!("erebor-session-control-{}", std::process::id()));
-        fs::create_dir_all(&directory).map_err(SessionControlBrokerError::io)?;
+    pub(super) fn start_server(
+    ) -> Result<Arc<RuntimeInterceptionBrokerServer>, RuntimeInterceptionBrokerError> {
+        let directory = std::env::temp_dir()
+            .join("erebor-runtime")
+            .join("interception")
+            .join(std::process::id().to_string());
+        fs::create_dir_all(&directory).map_err(RuntimeInterceptionBrokerError::io)?;
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-            .map_err(SessionControlBrokerError::io)?;
-        let socket_path = directory.join(CONTROL_SOCKET_NAME);
+            .map_err(RuntimeInterceptionBrokerError::io)?;
+        let socket_path = directory.join(RUNTIME_INTERCEPTION_SOCKET_NAME);
         let _result = fs::remove_file(&socket_path);
-        let listener = UnixListener::bind(&socket_path).map_err(SessionControlBrokerError::io)?;
+        let listener =
+            UnixListener::bind(&socket_path).map_err(RuntimeInterceptionBrokerError::io)?;
         fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
-            .map_err(SessionControlBrokerError::io)?;
+            .map_err(RuntimeInterceptionBrokerError::io)?;
         listener
             .set_nonblocking(true)
-            .map_err(SessionControlBrokerError::io)?;
+            .map_err(RuntimeInterceptionBrokerError::io)?;
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = Arc::clone(&shutdown);
         let sessions: Arc<Mutex<HashMap<String, SessionRegistration>>> =
@@ -1316,7 +1330,7 @@ mod platform {
             }
         });
 
-        Ok(Arc::new(ControlBrokerServer {
+        Ok(Arc::new(RuntimeInterceptionBrokerServer {
             endpoint_path: socket_path,
             shutdown,
             worker: Mutex::new(Some(worker)),
@@ -1336,10 +1350,11 @@ mod platform {
                 Ok(envelope) => envelope,
                 Err(_error) => break,
             };
-            let response = match handle_control_envelope(envelope, &sessions, &mut bound) {
-                Ok(response) => response,
-                Err(_error) => break,
-            };
+            let response =
+                match handle_runtime_interception_envelope(envelope, &sessions, &mut bound) {
+                    Ok(response) => response,
+                    Err(_error) => break,
+                };
             let response_frame = match response.into_frame() {
                 Ok(frame) => frame,
                 Err(_error) => break,
@@ -1351,90 +1366,90 @@ mod platform {
     }
 
     pub(super) fn send_hello(
-        endpoint: &SessionControlBrokerEndpoint,
+        endpoint: &RuntimeInterceptionEndpoint,
         hello: GuardHello,
-    ) -> Result<GuardHelloAck, SessionControlBrokerError> {
+    ) -> Result<GuardHelloAck, RuntimeInterceptionBrokerError> {
         let mut stream =
-            UnixStream::connect(endpoint.path()).map_err(SessionControlBrokerError::io)?;
+            UnixStream::connect(endpoint.path()).map_err(RuntimeInterceptionBrokerError::io)?;
         stream
             .set_read_timeout(Some(endpoint.timeout()))
-            .map_err(SessionControlBrokerError::io)?;
+            .map_err(RuntimeInterceptionBrokerError::io)?;
         stream
             .set_write_timeout(Some(endpoint.timeout()))
-            .map_err(SessionControlBrokerError::io)?;
+            .map_err(RuntimeInterceptionBrokerError::io)?;
         let envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)
-            .map_err(SessionControlBrokerError::protocol)?;
+            .map_err(RuntimeInterceptionBrokerError::protocol)?;
         let request = envelope_with_token(envelope, endpoint.token());
         let request_frame = request
             .into_frame()
-            .map_err(SessionControlBrokerError::protocol)?;
+            .map_err(RuntimeInterceptionBrokerError::protocol)?;
         write_frame_to_stream(&mut stream, &request_frame)?;
 
         let response_frame = read_frame_from_stream(&mut stream)?;
         let response_envelope: Envelope = response_frame
             .decode_payload()
-            .map_err(SessionControlBrokerError::protocol)?;
+            .map_err(RuntimeInterceptionBrokerError::protocol)?;
         response_envelope
             .decode_typed_payload(KIND_GUARD_HELLO_ACK)
-            .map_err(SessionControlBrokerError::protocol)
+            .map_err(RuntimeInterceptionBrokerError::protocol)
     }
 
     pub(super) fn request_interception_decision(
-        endpoint: &SessionControlBrokerEndpoint,
+        endpoint: &RuntimeInterceptionEndpoint,
         hello: GuardHello,
         request: InterceptionRequest,
-    ) -> Result<InterceptionDecision, SessionControlBrokerError> {
+    ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
         let mut stream =
-            UnixStream::connect(endpoint.path()).map_err(SessionControlBrokerError::io)?;
+            UnixStream::connect(endpoint.path()).map_err(RuntimeInterceptionBrokerError::io)?;
         stream
             .set_read_timeout(Some(endpoint.timeout()))
-            .map_err(SessionControlBrokerError::io)?;
+            .map_err(RuntimeInterceptionBrokerError::io)?;
         stream
             .set_write_timeout(Some(endpoint.timeout()))
-            .map_err(SessionControlBrokerError::io)?;
+            .map_err(RuntimeInterceptionBrokerError::io)?;
 
         let hello_envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)
-            .map_err(SessionControlBrokerError::protocol)?;
+            .map_err(RuntimeInterceptionBrokerError::protocol)?;
         let hello_request = envelope_with_token(hello_envelope, endpoint.token());
         write_frame_to_stream(
             &mut stream,
             &hello_request
                 .into_frame()
-                .map_err(SessionControlBrokerError::protocol)?,
+                .map_err(RuntimeInterceptionBrokerError::protocol)?,
         )?;
         let hello_response_frame = read_frame_from_stream(&mut stream)?;
         let hello_response: Envelope = hello_response_frame
             .decode_payload()
-            .map_err(SessionControlBrokerError::protocol)?;
+            .map_err(RuntimeInterceptionBrokerError::protocol)?;
         let ack: GuardHelloAck = hello_response
             .decode_typed_payload(KIND_GUARD_HELLO_ACK)
-            .map_err(SessionControlBrokerError::protocol)?;
+            .map_err(RuntimeInterceptionBrokerError::protocol)?;
         if !ack.accepted {
-            return Err(SessionControlBrokerError::RejectedHello { reason: ack.reason });
+            return Err(RuntimeInterceptionBrokerError::RejectedHello { reason: ack.reason });
         }
 
         let request_envelope = Envelope::wrap_message(2, 1, KIND_INTERCEPTION_REQUEST, &request)
-            .map_err(SessionControlBrokerError::protocol)?;
+            .map_err(RuntimeInterceptionBrokerError::protocol)?;
         write_frame_to_stream(
             &mut stream,
             &request_envelope
                 .into_frame()
-                .map_err(SessionControlBrokerError::protocol)?,
+                .map_err(RuntimeInterceptionBrokerError::protocol)?,
         )?;
         let response_frame = read_frame_from_stream(&mut stream)?;
         let response_envelope: Envelope = response_frame
             .decode_payload()
-            .map_err(SessionControlBrokerError::protocol)?;
+            .map_err(RuntimeInterceptionBrokerError::protocol)?;
         response_envelope
             .decode_typed_payload(KIND_INTERCEPTION_DECISION)
-            .map_err(SessionControlBrokerError::protocol)
+            .map_err(RuntimeInterceptionBrokerError::protocol)
     }
 
     pub(super) fn connect_raw(
-        endpoint: &SessionControlBrokerEndpoint,
-    ) -> Result<(), SessionControlBrokerError> {
+        endpoint: &RuntimeInterceptionEndpoint,
+    ) -> Result<(), RuntimeInterceptionBrokerError> {
         let _stream =
-            UnixStream::connect(endpoint.path()).map_err(SessionControlBrokerError::io)?;
+            UnixStream::connect(endpoint.path()).map_err(RuntimeInterceptionBrokerError::io)?;
         Ok(())
     }
 }
@@ -1447,37 +1462,41 @@ mod platform {
         GuardHello, GuardHelloAck, InterceptionDecision, InterceptionRequest,
     };
 
-    use super::{ControlBrokerServer, SessionControlBrokerEndpoint, SessionControlBrokerError};
+    use super::{
+        RuntimeInterceptionBrokerError, RuntimeInterceptionBrokerServer,
+        RuntimeInterceptionEndpoint,
+    };
 
-    pub(super) fn start_server() -> Result<Arc<ControlBrokerServer>, SessionControlBrokerError> {
-        Err(SessionControlBrokerError::UnsupportedTransport {
+    pub(super) fn start_server(
+    ) -> Result<Arc<RuntimeInterceptionBrokerServer>, RuntimeInterceptionBrokerError> {
+        Err(RuntimeInterceptionBrokerError::UnsupportedTransport {
             transport: String::from("windows-named-pipe"),
         })
     }
 
     pub(super) fn send_hello(
-        _endpoint: &SessionControlBrokerEndpoint,
+        _endpoint: &RuntimeInterceptionEndpoint,
         _hello: GuardHello,
-    ) -> Result<GuardHelloAck, SessionControlBrokerError> {
-        Err(SessionControlBrokerError::UnsupportedTransport {
+    ) -> Result<GuardHelloAck, RuntimeInterceptionBrokerError> {
+        Err(RuntimeInterceptionBrokerError::UnsupportedTransport {
             transport: String::from("windows-named-pipe"),
         })
     }
 
     pub(super) fn request_interception_decision(
-        _endpoint: &SessionControlBrokerEndpoint,
+        _endpoint: &RuntimeInterceptionEndpoint,
         _hello: GuardHello,
         _request: InterceptionRequest,
-    ) -> Result<InterceptionDecision, SessionControlBrokerError> {
-        Err(SessionControlBrokerError::UnsupportedTransport {
+    ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
+        Err(RuntimeInterceptionBrokerError::UnsupportedTransport {
             transport: String::from("windows-named-pipe"),
         })
     }
 
     pub(super) fn connect_raw(
-        _endpoint: &SessionControlBrokerEndpoint,
-    ) -> Result<(), SessionControlBrokerError> {
-        Err(SessionControlBrokerError::UnsupportedTransport {
+        _endpoint: &RuntimeInterceptionEndpoint,
+    ) -> Result<(), RuntimeInterceptionBrokerError> {
+        Err(RuntimeInterceptionBrokerError::UnsupportedTransport {
             transport: String::from("windows-named-pipe"),
         })
     }
@@ -1499,17 +1518,19 @@ mod tests {
     use erebor_runtime_policy::PolicySet;
 
     use super::{
-        private_remote_debugging_port_for_request, BrowserCdpMediationHandler, GuardBrokerClient,
-        ProcessExecSurfaceHandler, SessionControlBroker, SessionControlBrokerEndpoint,
-        SessionControlBrokerError, SessionInterceptionHandler, SessionInterceptionRouter,
-        SessionMediationIntent, SessionMediationRegistry, SurfaceInterceptionDecision,
-        SurfaceMediationHandler, SurfaceMediationOutcome,
+        private_remote_debugging_port_for_request, BrowserCdpMediationHandler,
+        InterceptionBrokerClient, ProcessExecSurfaceHandler, RuntimeInterceptionBroker,
+        RuntimeInterceptionBrokerError, RuntimeInterceptionEndpoint, SessionInterceptionHandler,
+        SessionInterceptionRouter, SessionMediationIntent, SessionMediationRegistry,
+        SurfaceInterceptionDecision, SurfaceMediationHandler, SurfaceMediationOutcome,
     };
 
     #[test]
-    fn broker_accepts_guard_hello_with_control_token() -> Result<(), Box<dyn std::error::Error>> {
+    fn broker_accepts_guard_hello_with_interception_token() -> Result<(), Box<dyn std::error::Error>>
+    {
         let session_id = session_id("accepts-hello");
-        let broker = SessionControlBroker::register_session(&session_id, "openclaw", Vec::new())?;
+        let broker =
+            RuntimeInterceptionBroker::register_session(&session_id, "openclaw", Vec::new())?;
 
         #[cfg(unix)]
         {
@@ -1528,7 +1549,7 @@ mod tests {
             );
         }
 
-        let ack = GuardBrokerClient::send_hello(broker.endpoint(), hello(&session_id))?;
+        let ack = InterceptionBrokerClient::send_hello(broker.endpoint(), hello(&session_id))?;
 
         assert!(ack.accepted);
         assert_eq!(ack.protocol_version, PROTOCOL_VERSION);
@@ -1538,18 +1559,19 @@ mod tests {
     }
 
     #[test]
-    fn broker_rejects_guard_hello_with_bad_control_token() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn broker_rejects_guard_hello_with_bad_interception_token(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let session_id = session_id("rejects-token");
-        let broker = SessionControlBroker::register_session(&session_id, "openclaw", Vec::new())?;
+        let broker =
+            RuntimeInterceptionBroker::register_session(&session_id, "openclaw", Vec::new())?;
         let bad_endpoint = broker.endpoint().with_path(broker.endpoint().path());
         let bad_endpoint =
-            SessionControlBrokerEndpoint::unix(bad_endpoint.path(), "wrong-token", 25);
+            RuntimeInterceptionEndpoint::unix(bad_endpoint.path(), "wrong-token", 25);
 
-        let ack = GuardBrokerClient::send_hello(&bad_endpoint, hello(&session_id))?;
+        let ack = InterceptionBrokerClient::send_hello(&bad_endpoint, hello(&session_id))?;
 
         assert!(!ack.accepted);
-        assert_eq!(ack.reason, "invalid control token");
+        assert_eq!(ack.reason, "invalid interception token");
 
         Ok(())
     }
@@ -1558,25 +1580,30 @@ mod tests {
     fn broker_accepts_multiple_sessions_on_one_server() -> Result<(), Box<dyn std::error::Error>> {
         let first_session = session_id("first");
         let second_session = session_id("second");
-        let first = SessionControlBroker::register_session(&first_session, "openclaw", Vec::new())?;
-        let second = SessionControlBroker::register_session(&second_session, "codex", Vec::new())?;
+        let first =
+            RuntimeInterceptionBroker::register_session(&first_session, "openclaw", Vec::new())?;
+        let second =
+            RuntimeInterceptionBroker::register_session(&second_session, "codex", Vec::new())?;
 
         assert_eq!(first.endpoint().path(), second.endpoint().path());
         assert_ne!(first.endpoint().token(), second.endpoint().token());
 
-        let first_ack = GuardBrokerClient::send_hello(first.endpoint(), hello(&first_session))?;
-        let second_ack = GuardBrokerClient::send_hello(second.endpoint(), hello(&second_session))?;
-        let crossed_endpoint = SessionControlBrokerEndpoint::unix(
+        let first_ack =
+            InterceptionBrokerClient::send_hello(first.endpoint(), hello(&first_session))?;
+        let second_ack =
+            InterceptionBrokerClient::send_hello(second.endpoint(), hello(&second_session))?;
+        let crossed_endpoint = RuntimeInterceptionEndpoint::unix(
             first.endpoint().path(),
             second.endpoint().token(),
             25,
         );
-        let crossed_ack = GuardBrokerClient::send_hello(&crossed_endpoint, hello(&first_session))?;
+        let crossed_ack =
+            InterceptionBrokerClient::send_hello(&crossed_endpoint, hello(&first_session))?;
 
         assert!(first_ack.accepted);
         assert!(second_ack.accepted);
         assert!(!crossed_ack.accepted);
-        assert_eq!(crossed_ack.reason, "invalid control token");
+        assert_eq!(crossed_ack.reason, "invalid interception token");
         Ok(())
     }
 
@@ -1584,11 +1611,12 @@ mod tests {
     fn broker_unregisters_session_when_registration_drops() -> Result<(), Box<dyn std::error::Error>>
     {
         let session_id = session_id("drop-unregisters");
-        let broker = SessionControlBroker::register_session(&session_id, "openclaw", Vec::new())?;
+        let broker =
+            RuntimeInterceptionBroker::register_session(&session_id, "openclaw", Vec::new())?;
         let endpoint = broker.endpoint().clone();
         drop(broker);
 
-        let ack = GuardBrokerClient::send_hello(&endpoint, hello(&session_id))?;
+        let ack = InterceptionBrokerClient::send_hello(&endpoint, hello(&session_id))?;
 
         assert!(!ack.accepted);
         assert_eq!(ack.reason, "unknown session");
@@ -1598,15 +1626,17 @@ mod tests {
     #[test]
     fn broker_rejects_duplicate_session_registration() -> Result<(), Box<dyn std::error::Error>> {
         let session_id = session_id("duplicate");
-        let _broker = SessionControlBroker::register_session(&session_id, "openclaw", Vec::new())?;
-        let error = match SessionControlBroker::register_session(&session_id, "codex", Vec::new()) {
-            Ok(_registration) => return Err("duplicate session id should be rejected".into()),
-            Err(error) => error,
-        };
+        let _broker =
+            RuntimeInterceptionBroker::register_session(&session_id, "openclaw", Vec::new())?;
+        let error =
+            match RuntimeInterceptionBroker::register_session(&session_id, "codex", Vec::new()) {
+                Ok(_registration) => return Err("duplicate session id should be rejected".into()),
+                Err(error) => error,
+            };
 
         assert!(matches!(
             error,
-            SessionControlBrokerError::SessionAlreadyRegistered { .. }
+            RuntimeInterceptionBrokerError::SessionAlreadyRegistered { .. }
         ));
         Ok(())
     }
@@ -1615,7 +1645,7 @@ mod tests {
     fn broker_returns_interception_decisions_after_guard_hello(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let session_id = session_id("decisions");
-        let broker = SessionControlBroker::register_session_with_mediators(
+        let broker = RuntimeInterceptionBroker::register_session_with_mediators(
             &session_id,
             "openclaw",
             vec![
@@ -1636,22 +1666,22 @@ mod tests {
             }),
         )?;
 
-        let allow = GuardBrokerClient::request_interception_decision(
+        let allow = InterceptionBrokerClient::request_interception_decision(
             broker.endpoint(),
             hello(&session_id),
             request("allow-tool"),
         )?;
-        let deny = GuardBrokerClient::request_interception_decision(
+        let deny = InterceptionBrokerClient::request_interception_decision(
             broker.endpoint(),
             hello(&session_id),
             request("deny-tool"),
         )?;
-        let approval = GuardBrokerClient::request_interception_decision(
+        let approval = InterceptionBrokerClient::request_interception_decision(
             broker.endpoint(),
             hello(&session_id),
             request("approve-tool"),
         )?;
-        let mediate = GuardBrokerClient::request_interception_decision(
+        let mediate = InterceptionBrokerClient::request_interception_decision(
             broker.endpoint(),
             hello(&session_id),
             request("mediate-tool"),
@@ -1677,7 +1707,7 @@ mod tests {
         let session_id = session_id("routes-process-exec");
         let router =
             SessionInterceptionRouter::new().with_process_exec_handler(TestProcessExecHandler);
-        let broker = SessionControlBroker::register_session_with_router_and_mediators(
+        let broker = RuntimeInterceptionBroker::register_session_with_router_and_mediators(
             &session_id,
             "openclaw",
             Vec::new(),
@@ -1685,7 +1715,7 @@ mod tests {
             SessionMediationRegistry::new(),
         )?;
 
-        let decision = GuardBrokerClient::request_interception_decision(
+        let decision = InterceptionBrokerClient::request_interception_decision(
             broker.endpoint(),
             hello(&session_id),
             request_with_argv("", &[String::from("danger-tool")]),
@@ -1701,7 +1731,7 @@ mod tests {
     fn broker_fails_closed_when_mediation_surface_is_not_registered(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let session_id = session_id("missing-mediator");
-        let broker = SessionControlBroker::register_session(
+        let broker = RuntimeInterceptionBroker::register_session(
             &session_id,
             "openclaw",
             vec![SessionInterceptionHandler::mediate(
@@ -1711,7 +1741,7 @@ mod tests {
             )],
         )?;
 
-        let decision = GuardBrokerClient::request_interception_decision(
+        let decision = InterceptionBrokerClient::request_interception_decision(
             broker.endpoint(),
             hello(&session_id),
             request("mediate-tool"),
@@ -1728,7 +1758,7 @@ mod tests {
     fn browser_cdp_mediation_handler_owns_endpoint_and_port_validation(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let session_id = session_id("browser-cdp-mediator");
-        let broker = SessionControlBroker::register_session_with_mediators(
+        let broker = RuntimeInterceptionBroker::register_session_with_mediators(
             &session_id,
             "openclaw",
             vec![SessionInterceptionHandler::mediate(
@@ -1744,7 +1774,7 @@ mod tests {
                 .with_handler(BrowserCdpMediationHandler::new("ws://127.0.0.1:9222/")),
         )?;
 
-        let decision = GuardBrokerClient::request_interception_decision(
+        let decision = InterceptionBrokerClient::request_interception_decision(
             broker.endpoint(),
             hello(&session_id),
             request_with_argv(
@@ -1769,7 +1799,7 @@ mod tests {
             .contains("ws://127.0.0.1:9222/devtools/browser/erebor-managed-browser"));
         assert!(mediation.keepalive);
 
-        let denied = GuardBrokerClient::request_interception_decision(
+        let denied = InterceptionBrokerClient::request_interception_decision(
             broker.endpoint(),
             hello(&session_id),
             request_with_argv(
@@ -1878,16 +1908,20 @@ mod tests {
     fn broker_fails_closed_for_unknown_interception_handler(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let session_id = session_id("unknown-handler");
-        let broker = SessionControlBroker::register_session(&session_id, "openclaw", Vec::new())?;
+        let broker =
+            RuntimeInterceptionBroker::register_session(&session_id, "openclaw", Vec::new())?;
 
-        let decision = GuardBrokerClient::request_interception_decision(
+        let decision = InterceptionBrokerClient::request_interception_decision(
             broker.endpoint(),
             hello(&session_id),
             request("missing-handler"),
         )?;
 
         assert_eq!(decision.decision, DecisionKind::Deny as i32);
-        assert_eq!(decision.rule_id, "erebor-control-broker-unknown-handler");
+        assert_eq!(
+            decision.rule_id,
+            "erebor-runtime-interception-broker-unknown-handler"
+        );
         Ok(())
     }
 
@@ -1895,9 +1929,9 @@ mod tests {
     fn client_fails_closed_when_broker_is_unavailable() -> Result<(), Box<dyn std::error::Error>> {
         let directory = test_dir("unavailable")?;
         let endpoint =
-            SessionControlBrokerEndpoint::unix(directory.join("missing.sock"), "token", 25);
+            RuntimeInterceptionEndpoint::unix(directory.join("missing.sock"), "token", 25);
 
-        let error = GuardBrokerClient::send_hello(&endpoint, hello("missing-session"));
+        let error = InterceptionBrokerClient::send_hello(&endpoint, hello("missing-session"));
 
         assert!(error.is_err());
 
@@ -1990,7 +2024,7 @@ mod tests {
 
     fn test_dir(name: &str) -> Result<PathBuf, std::io::Error> {
         let directory = std::env::temp_dir().join(format!(
-            "erebor-control-broker-{name}-{}",
+            "erebor-runtime-interception-broker-{name}-{}",
             std::process::id()
         ));
         let _result = fs::remove_dir_all(&directory);

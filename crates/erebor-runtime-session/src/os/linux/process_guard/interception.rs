@@ -214,22 +214,22 @@ fn request_broker_decision(
     invoked: &str,
     args: &[String],
 ) -> Result<ipc::InterceptionDecision, String> {
-    let endpoint = control_endpoint_from_env()?;
+    let endpoint = runtime_interception_endpoint_from_env()?;
     let hello = guard_hello_from_env()?;
-    let mut connection = ipc::GuardBrokerConnection::connect(&endpoint, hello)?;
+    let mut connection = ipc::RuntimeInterceptionConnection::connect(&endpoint, hello)?;
     let request = interception_request_from_invocation(handler, invoked, args);
     connection.request_decision(&request)
 }
 
-fn control_endpoint_from_env() -> Result<ipc::ControlEndpoint, String> {
-    let path = required_env("EREBOR_SESSION_CONTROL_PATH")?;
-    let token = required_env("EREBOR_SESSION_CONTROL_TOKEN")?;
-    let timeout_ms = env::var("EREBOR_SESSION_CONTROL_TIMEOUT_MS")
+fn runtime_interception_endpoint_from_env() -> Result<ipc::RuntimeInterceptionEndpoint, String> {
+    let path = required_env("EREBOR_RUNTIME_INTERCEPTION_PATH")?;
+    let token = required_env("EREBOR_RUNTIME_INTERCEPTION_TOKEN")?;
+    let timeout_ms = env::var("EREBOR_RUNTIME_INTERCEPTION_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(25);
 
-    Ok(ipc::ControlEndpoint {
+    Ok(ipc::RuntimeInterceptionEndpoint {
         path,
         token,
         timeout_ms,

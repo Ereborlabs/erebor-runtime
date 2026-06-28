@@ -13,7 +13,7 @@ use erebor_runtime_core::{
     SessionInterceptionBackendKind, SessionInterceptionConfig, SessionInterceptionOperation,
 };
 
-use crate::control_broker::SessionInterceptionRouter;
+use crate::runtime_interception_broker::SessionInterceptionRouter;
 use crate::{
     SessionExecutionError, SessionInterceptionHandler, SessionMediationIntent, SessionPlanContext,
     SessionStorage,
@@ -608,6 +608,10 @@ fn linux_process_guard_executable() -> Result<PathBuf, SessionExecutionError> {
 fn linux_process_guard_executable_candidates(current_exe: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
+    if let Some(build_process_guard) = option_env!("EREBOR_BUILD_LINUX_PROCESS_GUARD") {
+        candidates.push(PathBuf::from(build_process_guard));
+    }
+
     if let Some(binary_dir) = current_exe.parent() {
         candidates.push(binary_dir.join(LINUX_PROCESS_GUARD_BINARY));
 
@@ -619,10 +623,6 @@ fn linux_process_guard_executable_candidates(current_exe: &Path) -> Vec<PathBuf>
                 candidates.push(target_dir.join(LINUX_PROCESS_GUARD_BINARY));
             }
         }
-    }
-
-    if let Some(build_process_guard) = option_env!("EREBOR_BUILD_LINUX_PROCESS_GUARD") {
-        candidates.push(PathBuf::from(build_process_guard));
     }
 
     candidates
@@ -715,4 +715,26 @@ fn interception_env_field(value: impl AsRef<str>) -> String {
             character => character,
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::linux_process_guard_executable_candidates;
+
+    #[test]
+    fn process_guard_candidates_prefer_current_build_output() {
+        let Some(build_process_guard) = option_env!("EREBOR_BUILD_LINUX_PROCESS_GUARD") else {
+            return;
+        };
+
+        let candidates =
+            linux_process_guard_executable_candidates(Path::new("/tmp/target/debug/deps/test-bin"));
+
+        assert_eq!(
+            candidates.first(),
+            Some(&PathBuf::from(build_process_guard))
+        );
+    }
 }

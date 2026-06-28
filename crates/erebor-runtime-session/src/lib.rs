@@ -6,8 +6,8 @@ use std::{
 };
 
 mod adoption;
-mod control_broker;
 mod interception_backend;
+mod runtime_interception_broker;
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
@@ -31,19 +31,19 @@ use crate::interception_backend::{
 };
 
 pub use adoption::adopt_session_target;
-pub use control_broker::{
-    BrowserCdpMediationHandler, GuardBrokerClient, SessionControlBroker,
-    SessionControlBrokerEndpoint, SessionControlBrokerError, SessionControlRegistration,
-    SessionInterceptionHandler, SessionInterceptionRouter, SessionMediationIntent,
-    SessionMediationRegistry, SurfaceMediationHandler, SurfaceMediationOutcome,
-};
 pub use erebor_runtime_core::{
     ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionInterceptionDecision,
     SurfaceInterceptionDecision,
 };
+pub use runtime_interception_broker::{
+    BrowserCdpMediationHandler, InterceptionBrokerClient, RuntimeInterceptionBroker,
+    RuntimeInterceptionBrokerError, RuntimeInterceptionEndpoint, SessionInterceptionHandler,
+    SessionInterceptionRegistration, SessionInterceptionRouter, SessionMediationIntent,
+    SessionMediationRegistry, SurfaceMediationHandler, SurfaceMediationOutcome,
+};
 
-const DOCKER_CONTROL_DIR: &str = "/erebor/control";
-const LAZY_BROWSER_CDP_CONTROL_TIMEOUT_MS: u64 = 15_000;
+const DOCKER_INTERCEPTION_DIR: &str = "/erebor/interception";
+const LAZY_BROWSER_CDP_INTERCEPTION_TIMEOUT_MS: u64 = 15_000;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SessionDiagnosticOutcome {
@@ -472,7 +472,7 @@ fn start_session_side_resources_from_start_plan(
     }
 
     if launcher.is_empty() {
-        let control_registration = register_session_control_channel(
+        let interception_registration = register_session_interception(
             interception_backend.as_ref(),
             interception_router.clone(),
             plan,
@@ -482,14 +482,14 @@ fn start_session_side_resources_from_start_plan(
         let (docker_options, linux_host_options) = side_resource_command_options(
             interception_backend.as_ref(),
             None,
-            control_registration.as_ref(),
+            interception_registration.as_ref(),
         )?;
         return Ok(SessionSideResources {
             environment,
             docker_options,
             linux_host_options,
             browser_cdp_endpoint: None,
-            _control_registration: control_registration,
+            _interception_registration: interception_registration,
             _interception_backend: interception_backend,
             _supervisor: None,
         });
@@ -519,7 +519,7 @@ fn start_session_side_resources_from_start_plan(
         }
     }
 
-    let control_registration = register_session_control_channel(
+    let interception_registration = register_session_interception(
         interception_backend.as_ref(),
         interception_router,
         plan,
@@ -529,7 +529,7 @@ fn start_session_side_resources_from_start_plan(
     let (docker_options, linux_host_options) = side_resource_command_options(
         interception_backend.as_ref(),
         browser_cdp_endpoint.as_deref(),
-        control_registration.as_ref(),
+        interception_registration.as_ref(),
     )?;
 
     Ok(SessionSideResources {
@@ -537,7 +537,7 @@ fn start_session_side_resources_from_start_plan(
         docker_options,
         linux_host_options,
         browser_cdp_endpoint,
-        _control_registration: control_registration,
+        _interception_registration: interception_registration,
         _interception_backend: interception_backend,
         _supervisor: Some(supervisor),
     })
@@ -667,28 +667,28 @@ fn session_cdp_context(plan: &impl SessionPlanContext) -> CdpSessionContext {
 fn side_resource_command_options(
     interception_backend: Option<&SessionInterceptionBackendBundle>,
     browser_cdp_endpoint: Option<&str>,
-    control_registration: Option<&SessionControlRegistration>,
+    interception_registration: Option<&SessionInterceptionRegistration>,
 ) -> Result<(DockerSessionCommandOptions, LinuxHostSessionCommandOptions), SessionExecutionError> {
     match interception_backend {
         Some(backend) => {
             let mut docker_options = backend.docker_options();
             let mut linux_host_options = backend.linux_host_options(browser_cdp_endpoint)?;
-            if let Some(control_registration) = control_registration {
+            if let Some(interception_registration) = interception_registration {
                 docker_options = with_environment(
                     docker_options.with_mount(
                         DockerSessionMount::new(
-                            control_registration.endpoint().directory(),
-                            DOCKER_CONTROL_DIR,
+                            interception_registration.endpoint().directory(),
+                            DOCKER_INTERCEPTION_DIR,
                         )
                         .read_only(),
                     ),
-                    control_registration
-                        .docker_endpoint(Path::new(DOCKER_CONTROL_DIR))
+                    interception_registration
+                        .docker_endpoint(Path::new(DOCKER_INTERCEPTION_DIR))
                         .environment(),
                 );
                 linux_host_options = with_linux_host_environment(
                     linux_host_options,
-                    control_registration.endpoint().environment(),
+                    interception_registration.endpoint().environment(),
                 );
             }
 
@@ -701,27 +701,28 @@ fn side_resource_command_options(
     }
 }
 
-fn register_session_control_channel(
+fn register_session_interception(
     interception_backend: Option<&SessionInterceptionBackendBundle>,
     interception_router: SessionInterceptionRouter,
     plan: &impl SessionPlanContext,
     browser_cdp_endpoint: Option<&str>,
     lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
-) -> Result<Option<SessionControlRegistration>, SessionExecutionError> {
+) -> Result<Option<SessionInterceptionRegistration>, SessionExecutionError> {
     let uses_lazy_browser_cdp = lazy_browser_cdp.is_some();
     interception_backend
         .map(|backend| {
             let handlers = backend.control_handlers()?;
-            let registration = SessionControlBroker::register_session_with_router_and_mediators(
-                plan.session_id().as_str(),
-                &plan.actor().id,
-                handlers,
-                interception_router,
-                session_mediation_registry(browser_cdp_endpoint, lazy_browser_cdp)?,
-            )
-            .map_err(SessionExecutionError::control_broker)?;
+            let registration =
+                RuntimeInterceptionBroker::register_session_with_router_and_mediators(
+                    plan.session_id().as_str(),
+                    &plan.actor().id,
+                    handlers,
+                    interception_router,
+                    session_mediation_registry(browser_cdp_endpoint, lazy_browser_cdp)?,
+                )
+                .map_err(SessionExecutionError::runtime_interception_broker)?;
             let registration = if uses_lazy_browser_cdp {
-                registration.with_timeout_ms(LAZY_BROWSER_CDP_CONTROL_TIMEOUT_MS)
+                registration.with_timeout_ms(LAZY_BROWSER_CDP_INTERCEPTION_TIMEOUT_MS)
             } else {
                 registration
             };
@@ -812,7 +813,7 @@ struct SessionSideResources {
     docker_options: DockerSessionCommandOptions,
     linux_host_options: LinuxHostSessionCommandOptions,
     browser_cdp_endpoint: Option<String>,
-    _control_registration: Option<SessionControlRegistration>,
+    _interception_registration: Option<SessionInterceptionRegistration>,
     _interception_backend: Option<SessionInterceptionBackendBundle>,
     _supervisor: Option<SessionSurfaceSupervisor>,
 }
@@ -839,10 +840,10 @@ impl SessionSideResources {
             |backend| {
                 let options =
                     backend.linux_host_adopt_options(pid, self.browser_cdp_endpoint.as_deref())?;
-                if let Some(control_registration) = self._control_registration.as_ref() {
+                if let Some(interception_registration) = self._interception_registration.as_ref() {
                     Ok(with_linux_host_environment(
                         options,
-                        control_registration.endpoint().environment(),
+                        interception_registration.endpoint().environment(),
                     ))
                 } else {
                     Ok(options)
@@ -895,8 +896,8 @@ pub enum SessionExecutionError {
         location: Location,
     },
     #[error("{source}")]
-    ControlBroker {
-        source: SessionControlBrokerError,
+    RuntimeInterceptionBroker {
+        source: RuntimeInterceptionBrokerError,
         location: Location,
     },
     #[error("failed to read process table `{}`: {source}", path.display())]
@@ -983,8 +984,8 @@ impl SessionExecutionError {
     }
 
     #[track_caller]
-    fn control_broker(source: SessionControlBrokerError) -> Self {
-        Self::ControlBroker {
+    fn runtime_interception_broker(source: RuntimeInterceptionBrokerError) -> Self {
+        Self::RuntimeInterceptionBroker {
             source,
             location: Location::default(),
         }
@@ -1128,9 +1129,9 @@ mod tests {
     }
 
     #[test]
-    fn session_side_resources_inject_control_broker_environment(
+    fn session_side_resources_inject_runtime_interception_broker_environment(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let test_dir = test_dir("control-env")?;
+        let test_dir = test_dir("runtime-interception-env")?;
         let policy_path = write_policy(&test_dir)?;
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
@@ -1153,7 +1154,7 @@ mod tests {
         let linux_plan = SessionRunPlan::from_config(
             &config,
             SessionRunnerKind::LinuxHost,
-            SessionId::new("session-control-env"),
+            SessionId::new("runtime-interception-env"),
             vec![String::from("true")],
         )?;
         let linux_resources = start_session_side_resources(&config, &linux_plan, None)?;
@@ -1163,28 +1164,30 @@ mod tests {
                 linux_resources.environment(),
                 linux_resources.linux_host_options(),
             );
-        let linux_control_path =
-            environment_value(linux_launch.environment(), "EREBOR_SESSION_CONTROL_PATH")
-                .ok_or_else(|| std::io::Error::other("missing Linux host control path"))?;
+        let linux_interception_path = environment_value(
+            linux_launch.environment(),
+            "EREBOR_RUNTIME_INTERCEPTION_PATH",
+        )
+        .ok_or_else(|| std::io::Error::other("missing Linux host runtime interception path"))?;
 
         assert!(linux_launch.environment().contains(&(
-            String::from("EREBOR_SESSION_CONTROL_PROTOCOL"),
+            String::from("EREBOR_RUNTIME_INTERCEPTION_PROTOCOL"),
             String::from("erebor_ipc_v1")
         )));
         assert!(linux_launch.environment().contains(&(
-            String::from("EREBOR_SESSION_CONTROL_TRANSPORT"),
+            String::from("EREBOR_RUNTIME_INTERCEPTION_TRANSPORT"),
             String::from("unix")
         )));
         assert!(linux_launch.environment().contains(&(
-            String::from("EREBOR_SESSION_CONTROL_TIMEOUT_MS"),
+            String::from("EREBOR_RUNTIME_INTERCEPTION_TIMEOUT_MS"),
             String::from("25")
         )));
-        assert!(linux_control_path.ends_with("session-control.sock"));
+        assert!(linux_interception_path.ends_with("runtime-interception.sock"));
 
         let docker_plan = SessionRunPlan::from_config(
             &config,
             SessionRunnerKind::Docker,
-            SessionId::new("session-control-env-docker"),
+            SessionId::new("runtime-interception-env-docker"),
             vec![String::from("true")],
         )?;
         let docker_resources = start_session_side_resources(&config, &docker_plan, None)?;
@@ -1196,12 +1199,13 @@ mod tests {
             );
         let docker_args = docker_launch.args().join("\n");
 
-        assert!(docker_args.contains("EREBOR_SESSION_CONTROL_PROTOCOL=erebor_ipc_v1"));
-        assert!(docker_args.contains("EREBOR_SESSION_CONTROL_TRANSPORT=unix"));
-        assert!(docker_args.contains("EREBOR_SESSION_CONTROL_TIMEOUT_MS=25"));
-        assert!(docker_args
-            .contains("EREBOR_SESSION_CONTROL_PATH=/erebor/control/session-control.sock"));
-        assert!(docker_args.contains("/erebor/control:ro"));
+        assert!(docker_args.contains("EREBOR_RUNTIME_INTERCEPTION_PROTOCOL=erebor_ipc_v1"));
+        assert!(docker_args.contains("EREBOR_RUNTIME_INTERCEPTION_TRANSPORT=unix"));
+        assert!(docker_args.contains("EREBOR_RUNTIME_INTERCEPTION_TIMEOUT_MS=25"));
+        assert!(docker_args.contains(
+            "EREBOR_RUNTIME_INTERCEPTION_PATH=/erebor/interception/runtime-interception.sock"
+        ));
+        assert!(docker_args.contains("/erebor/interception:ro"));
         fs::remove_dir_all(test_dir)?;
         Ok(())
     }
