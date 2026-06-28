@@ -32,7 +32,7 @@ impl SessionInterceptionRouter {
         self
     }
 
-    pub(super) fn decide_process_exec(
+    pub(super) fn route_interception(
         &self,
         request: &InterceptionRequest,
     ) -> Option<SurfaceInterceptionDecision> {

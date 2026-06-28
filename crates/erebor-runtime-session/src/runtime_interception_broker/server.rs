@@ -362,7 +362,7 @@ impl RuntimeInterceptionBrokerServer {
             };
             Ok(registration
                 .router
-                .decide_process_exec(request)
+                .route_interception(request)
                 .map(|decision| surface_decision(request.request_id, decision))
                 .unwrap_or_else(|| {
                     deny_decision(
