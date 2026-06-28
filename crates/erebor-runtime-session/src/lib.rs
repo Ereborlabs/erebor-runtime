@@ -17,11 +17,11 @@ use erebor_runtime_core::{
     LinuxHostSessionCommandOptions, ProcessInterceptionDecision, ProcessInterceptionHandlerConfig,
     ProcessInterceptionHandlerKind, ProcessMediationPrivateEndpointConfig,
     ProcessMediationReplacementSurface, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
-    RuntimeError, SessionActorLayerConfig, SessionAdoptPlan, SessionRegistry, SessionRegistryError,
-    SessionRegistryFinish, SessionRunOutcome, SessionRunPlan, SessionRunnerKind,
-    SessionRunnerLauncher, SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan,
-    SessionSurfaceLauncher, SessionSurfaceSupervisor, TerminalProcessInterceptionMode,
-    TerminalSurfaceConfig,
+    RuntimeError, SessionActorLayerConfig, SessionAdoptPlan, SessionInterceptionOperation,
+    SessionRegistry, SessionRegistryError, SessionRegistryFinish, SessionRunOutcome,
+    SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher, SessionSurfaceDefinition,
+    SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher, SessionSurfaceSupervisor,
+    TerminalProcessInterceptionMode, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
@@ -357,11 +357,17 @@ fn start_adopt_session_side_resources(
     config: &RuntimeConfig,
     plan: &SessionAdoptPlan,
 ) -> Result<SessionSideResources, SessionExecutionError> {
-    if plan.runner().kind() == SessionRunnerKind::LinuxHost
-        && (!config.surfaces.terminal.enabled || !config.surfaces.terminal.process_guard.enabled)
-    {
+    let process_exec_interception = config
+        .session_interception_capabilities()
+        .operations()
+        .iter()
+        .any(|operation| {
+            operation.operation() == SessionInterceptionOperation::ProcessExec
+                && operation.effective()
+        });
+    if plan.runner().kind() == SessionRunnerKind::LinuxHost && !process_exec_interception {
         return Err(SessionExecutionError::guard_config(
-            "linux-host adoption requires surfaces.terminal.process_guard.enabled=true",
+            "linux-host adoption requires session.interception process_exec support",
         ));
     }
 
@@ -429,7 +435,10 @@ fn start_session_side_resources_from_start_plan(
                 ));
                 environment.push((String::from("EREBOR_TERMINAL_TTY"), plan.tty().to_string()));
 
-                if config.process_guard().enabled() {
+                if start_plan
+                    .interception()
+                    .operation_supported(SessionInterceptionOperation::ProcessExec)
+                {
                     if config.process_interception().enabled()
                         && plan.runner_kind() != SessionRunnerKind::LinuxHost
                     {
@@ -445,7 +454,7 @@ fn start_session_side_resources_from_start_plan(
                     guard_bundle = Some(bundle);
                     environment.push((
                         String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
-                        config.process_guard().backend().as_str().to_owned(),
+                        start_plan.interception().backend().as_str().to_owned(),
                     ));
                 } else {
                     environment.push((
@@ -1480,10 +1489,14 @@ mod tests {
             r#"
             {
               "policies": ["policies/browser.json"],
+              "session": {
+                "interception": {
+                  "enabled": true
+                }
+              },
               "surfaces": {
                 "terminal": {
                   "enabled": true,
-                  "process_guard": { "enabled": true },
                   "process_interception": {
                     "enabled": true,
                     "handlers": [
@@ -1577,12 +1590,12 @@ mod tests {
               "session": {{
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
-                "runner": {{ "kind": "linux_host" }}
+                "runner": {{ "kind": "linux_host" }},
+                "interception": {{ "enabled": true }}
               }},
               "surfaces": {{
                 "terminal": {{
-                  "enabled": true,
-                  "process_guard": {{ "enabled": true }}
+                  "enabled": true
                 }}
               }}
             }}

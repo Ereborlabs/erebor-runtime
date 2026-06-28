@@ -297,12 +297,12 @@ mod linux_host {
                         "command": ["sh", "--remote-debugging-port=9222"]
                       }}
                     ],
-                    "runner": {{ "kind": "linux_host" }}
+                    "runner": {{ "kind": "linux_host" }},
+                    "interception": {{ "enabled": true }}
                   }},
                   "surfaces": {{
                     "terminal": {{
-                      "enabled": true,
-                      "process_guard": {{ "enabled": true }}
+                      "enabled": true
                     }}
                   }}
                 }}"#,
@@ -323,12 +323,12 @@ mod linux_host {
                   "session": {{
                     "enabled": true,
                     "actor": {{ "id": "test-agent", "kind": "agent" }},
-                    "runner": {{ "kind": "linux_host" }}
+                    "runner": {{ "kind": "linux_host" }},
+                    "interception": {{ "enabled": true }}
                   }},
                   "surfaces": {{
                     "terminal": {{
-                      "enabled": true,
-                      "process_guard": {{ "enabled": true }}
+                      "enabled": true
                     }}
                   }}
                 }}"#,

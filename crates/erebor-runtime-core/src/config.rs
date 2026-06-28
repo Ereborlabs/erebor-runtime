@@ -60,11 +60,14 @@ impl RuntimeConfig {
 
         self.audit.validate()?;
 
-        if self.session.enabled {
+        if self.session.enabled || self.session.interception.enabled {
             self.session.validate()?;
         }
 
-        if self.surfaces.enabled_surfaces().is_empty() && !self.session.enabled {
+        if self.surfaces.enabled_surfaces().is_empty()
+            && !self.session.enabled
+            && !self.session.interception.enabled
+        {
             return Err(RuntimeConfigError::no_session_surfaces());
         }
 
@@ -76,9 +79,10 @@ impl RuntimeConfig {
             }
         }
 
+        let session_interception = self.session_interception();
         self.surfaces.terminal.process_mediation.validate(
             self.surfaces.terminal.enabled,
-            self.surfaces.terminal.process_guard.enabled,
+            session_interception.operation_supported(SessionInterceptionOperation::ProcessExec),
             &self.surfaces.browser_cdp,
         )?;
 
@@ -88,6 +92,17 @@ impl RuntimeConfig {
     #[must_use]
     pub fn enabled_surfaces(&self) -> Vec<SessionSurfaceKind> {
         self.surfaces.enabled_surfaces()
+    }
+
+    #[must_use]
+    pub fn session_interception(&self) -> SessionInterceptionConfig {
+        SessionInterceptionConfig::from_runtime_config(self)
+    }
+
+    #[must_use]
+    pub fn session_interception_capabilities(&self) -> SessionInterceptionCapabilityReport {
+        let interception = self.session_interception();
+        interception.capability_report(&self.surfaces)
     }
 
     pub fn surface_start_plan(&self) -> Result<SessionSurfaceStartPlan, RuntimeConfigError> {
@@ -113,6 +128,7 @@ impl RuntimeConfig {
 pub struct SessionSurfaceStartPlan {
     policies: Vec<PathBuf>,
     audit: RuntimeAuditConfig,
+    interception: SessionInterceptionConfig,
     surfaces: Vec<SessionSurfaceKind>,
     browser_cdp: Option<BrowserCdpSurfaceConfig>,
     terminal: Option<TerminalSurfaceConfig>,
@@ -125,6 +141,7 @@ impl SessionSurfaceStartPlan {
         Ok(Self {
             policies: config.policies.clone(),
             audit: config.audit.clone(),
+            interception: config.session_interception(),
             surfaces: config.enabled_surfaces(),
             browser_cdp: config.surfaces.browser_cdp.enabled.then(|| {
                 BrowserCdpSurfaceConfig::from_layer(
@@ -184,6 +201,11 @@ impl SessionSurfaceStartPlan {
     #[must_use]
     pub const fn audit(&self) -> &RuntimeAuditConfig {
         &self.audit
+    }
+
+    #[must_use]
+    pub const fn interception(&self) -> &SessionInterceptionConfig {
+        &self.interception
     }
 
     #[must_use]
@@ -610,6 +632,8 @@ pub struct SessionLayerConfig {
     #[serde(default)]
     pub workspace: Option<PathBuf>,
     #[serde(default)]
+    pub interception: SessionInterceptionLayerConfig,
+    #[serde(default)]
     pub diagnostics: Vec<SessionDiagnosticLayerConfig>,
     #[serde(default, alias = "runner")]
     pub runner: SessionRunnerLayerConfig,
@@ -639,6 +663,7 @@ impl SessionLayerConfig {
             }
         }
 
+        self.interception.validate()?;
         self.runner.validate()
     }
 
@@ -646,6 +671,260 @@ impl SessionLayerConfig {
         self.diagnostics
             .iter()
             .find(|diagnostic| diagnostic.name == name)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+pub struct SessionInterceptionLayerConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub backend: SessionInterceptionBackendKind,
+    #[serde(default = "default_session_interception_operations")]
+    pub operations: Vec<SessionInterceptionOperation>,
+}
+
+impl Default for SessionInterceptionLayerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: SessionInterceptionBackendKind::default(),
+            operations: default_session_interception_operations(),
+        }
+    }
+}
+
+impl SessionInterceptionLayerConfig {
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        if self.enabled && self.operations.is_empty() {
+            return Err(RuntimeConfigError::invalid_session_interception_config(
+                "session interception operations cannot be empty when interception is enabled",
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionInterceptionBackendKind {
+    #[default]
+    #[serde(alias = "linux-ptrace")]
+    LinuxPtrace,
+}
+
+impl SessionInterceptionBackendKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LinuxPtrace => "linux_ptrace",
+        }
+    }
+
+    #[must_use]
+    pub const fn supports_operation(self, operation: SessionInterceptionOperation) -> bool {
+        match self {
+            Self::LinuxPtrace => matches!(operation, SessionInterceptionOperation::ProcessExec),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionInterceptionOperation {
+    ProcessExec,
+    FileOpen,
+    FileRead,
+    FileMutation,
+    SocketConnect,
+}
+
+impl SessionInterceptionOperation {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProcessExec => "process_exec",
+            Self::FileOpen => "file_open",
+            Self::FileRead => "file_read",
+            Self::FileMutation => "file_mutation",
+            Self::SocketConnect => "socket_connect",
+        }
+    }
+
+    #[must_use]
+    pub const fn owning_surface(self) -> &'static str {
+        match self {
+            Self::ProcessExec => SessionSurfaceKind::Terminal.as_str(),
+            Self::FileOpen | Self::FileRead | Self::FileMutation => "filesystem",
+            Self::SocketConnect => SessionSurfaceKind::Network.as_str(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionInterceptionConfig {
+    enabled: bool,
+    backend: SessionInterceptionBackendKind,
+    operations: Vec<SessionInterceptionOperation>,
+    source: SessionInterceptionConfigSource,
+}
+
+impl SessionInterceptionConfig {
+    #[must_use]
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            backend: SessionInterceptionBackendKind::LinuxPtrace,
+            operations: Vec::new(),
+            source: SessionInterceptionConfigSource::Default,
+        }
+    }
+
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub const fn backend(&self) -> SessionInterceptionBackendKind {
+        self.backend
+    }
+
+    #[must_use]
+    pub fn operations(&self) -> &[SessionInterceptionOperation] {
+        &self.operations
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> SessionInterceptionConfigSource {
+        self.source
+    }
+
+    #[must_use]
+    pub fn operation_enabled(&self, operation: SessionInterceptionOperation) -> bool {
+        self.enabled && self.operations.contains(&operation)
+    }
+
+    #[must_use]
+    pub fn operation_supported(&self, operation: SessionInterceptionOperation) -> bool {
+        self.operation_enabled(operation) && self.backend.supports_operation(operation)
+    }
+
+    fn from_runtime_config(config: &RuntimeConfig) -> Self {
+        let explicit = &config.session.interception;
+        if explicit.enabled {
+            return Self {
+                enabled: true,
+                backend: explicit.backend,
+                operations: dedupe_session_interception_operations(explicit.operations.clone()),
+                source: SessionInterceptionConfigSource::SessionConfig,
+            };
+        }
+
+        Self::disabled()
+    }
+
+    fn capability_report(
+        &self,
+        surfaces: &SessionSurfaceLayers,
+    ) -> SessionInterceptionCapabilityReport {
+        let operations = self
+            .operations
+            .iter()
+            .copied()
+            .map(|operation| {
+                let backend_supported = self.operation_supported(operation);
+                let surface_enabled = surfaces.operation_surface_enabled(operation);
+                SessionInterceptionOperationCapability {
+                    operation,
+                    backend_supported,
+                    owning_surface: operation.owning_surface(),
+                    surface_enabled,
+                    effective: backend_supported && surface_enabled,
+                }
+            })
+            .collect();
+
+        SessionInterceptionCapabilityReport {
+            enabled: self.enabled,
+            backend: self.backend,
+            source: self.source,
+            operations,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SessionInterceptionConfigSource {
+    #[default]
+    Default,
+    SessionConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionInterceptionCapabilityReport {
+    enabled: bool,
+    backend: SessionInterceptionBackendKind,
+    source: SessionInterceptionConfigSource,
+    operations: Vec<SessionInterceptionOperationCapability>,
+}
+
+impl SessionInterceptionCapabilityReport {
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub const fn backend(&self) -> SessionInterceptionBackendKind {
+        self.backend
+    }
+
+    #[must_use]
+    pub const fn source(&self) -> SessionInterceptionConfigSource {
+        self.source
+    }
+
+    #[must_use]
+    pub fn operations(&self) -> &[SessionInterceptionOperationCapability] {
+        &self.operations
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionInterceptionOperationCapability {
+    operation: SessionInterceptionOperation,
+    backend_supported: bool,
+    owning_surface: &'static str,
+    surface_enabled: bool,
+    effective: bool,
+}
+
+impl SessionInterceptionOperationCapability {
+    #[must_use]
+    pub const fn operation(&self) -> SessionInterceptionOperation {
+        self.operation
+    }
+
+    #[must_use]
+    pub const fn backend_supported(&self) -> bool {
+        self.backend_supported
+    }
+
+    #[must_use]
+    pub const fn owning_surface(&self) -> &'static str {
+        self.owning_surface
+    }
+
+    #[must_use]
+    pub const fn surface_enabled(&self) -> bool {
+        self.surface_enabled
+    }
+
+    #[must_use]
+    pub const fn effective(&self) -> bool {
+        self.effective
     }
 }
 
@@ -779,6 +1058,7 @@ impl DockerSessionRunnerLayerConfig {
 pub struct SessionRunPlan {
     policies: Vec<PathBuf>,
     audit: RuntimeAuditConfig,
+    interception: SessionInterceptionConfig,
     session_id: SessionId,
     actor: SessionActorLayerConfig,
     workspace: Option<PathBuf>,
@@ -810,6 +1090,7 @@ impl SessionRunPlan {
         Ok(Self {
             policies: config.policies.clone(),
             audit: config.audit.clone(),
+            interception: config.session_interception(),
             session_id,
             actor: config.session.actor.clone(),
             workspace: config.session.workspace.clone(),
@@ -852,6 +1133,11 @@ impl SessionRunPlan {
     #[must_use]
     pub const fn audit(&self) -> &RuntimeAuditConfig {
         &self.audit
+    }
+
+    #[must_use]
+    pub const fn interception(&self) -> &SessionInterceptionConfig {
+        &self.interception
     }
 
     #[must_use]
@@ -915,6 +1201,7 @@ impl SessionRunPlan {
 pub struct SessionAdoptPlan {
     policies: Vec<PathBuf>,
     audit: RuntimeAuditConfig,
+    interception: SessionInterceptionConfig,
     session_id: SessionId,
     actor: SessionActorLayerConfig,
     workspace: Option<PathBuf>,
@@ -969,6 +1256,7 @@ impl SessionAdoptPlan {
         Ok(Self {
             policies: config.policies.clone(),
             audit: config.audit.clone(),
+            interception: config.session_interception(),
             session_id,
             actor: config.session.actor.clone(),
             workspace: config.session.workspace.clone(),
@@ -989,6 +1277,11 @@ impl SessionAdoptPlan {
     #[must_use]
     pub const fn audit(&self) -> &RuntimeAuditConfig {
         &self.audit
+    }
+
+    #[must_use]
+    pub const fn interception(&self) -> &SessionInterceptionConfig {
+        &self.interception
     }
 
     #[must_use]
@@ -1559,6 +1852,16 @@ impl SessionSurfaceLayers {
             .filter_map(|(layer, enabled)| enabled.then_some(layer))
             .collect()
     }
+
+    fn operation_surface_enabled(&self, operation: SessionInterceptionOperation) -> bool {
+        match operation {
+            SessionInterceptionOperation::ProcessExec => self.terminal.enabled,
+            SessionInterceptionOperation::FileOpen
+            | SessionInterceptionOperation::FileRead
+            | SessionInterceptionOperation::FileMutation => false,
+            SessionInterceptionOperation::SocketConnect => self.network.enabled,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
@@ -1624,30 +1927,12 @@ pub struct TerminalSurfaceLayerConfig {
     pub tty: bool,
     #[serde(default)]
     pub policies: Vec<PathBuf>,
-    #[serde(default)]
-    pub process_guard: TerminalProcessGuardLayerConfig,
     #[serde(
         default,
         alias = "process_interception",
         alias = "browser_launch_mediation"
     )]
     pub process_mediation: TerminalProcessMediationLayerConfig,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
-pub struct TerminalProcessGuardLayerConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
-    pub backend: TerminalProcessGuardBackend,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TerminalProcessGuardBackend {
-    #[default]
-    #[serde(alias = "linux-ptrace")]
-    LinuxPtrace,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
@@ -1664,7 +1949,7 @@ impl TerminalProcessMediationLayerConfig {
     fn validate(
         &self,
         terminal_enabled: bool,
-        process_guard_enabled: bool,
+        process_exec_interception_enabled: bool,
         browser_cdp: &BrowserCdpSurfaceLayerConfig,
     ) -> Result<(), RuntimeConfigError> {
         if !self.enabled {
@@ -1677,9 +1962,9 @@ impl TerminalProcessMediationLayerConfig {
             ));
         }
 
-        if !process_guard_enabled {
+        if !process_exec_interception_enabled {
             return Err(RuntimeConfigError::invalid_process_mediation_config(
-                "terminal process interception requires process_guard.enabled=true",
+                "terminal process interception requires session.interception process_exec support",
             ));
         }
 
@@ -2024,7 +2309,6 @@ impl Default for ProcessMediationCompatibilityLayerConfig {
 pub struct TerminalSurfaceConfig {
     tty: bool,
     policies: Vec<PathBuf>,
-    process_guard: TerminalProcessGuardConfig,
     process_mediation: TerminalProcessMediationConfig,
 }
 
@@ -2037,11 +2321,6 @@ impl TerminalSurfaceConfig {
     #[must_use]
     pub fn policies(&self) -> &[PathBuf] {
         &self.policies
-    }
-
-    #[must_use]
-    pub const fn process_guard(&self) -> &TerminalProcessGuardConfig {
-        &self.process_guard
     }
 
     #[must_use]
@@ -2058,35 +2337,7 @@ impl TerminalSurfaceConfig {
         Self {
             tty: config.tty,
             policies: surface_policies(&config.policies, default_policies),
-            process_guard: config.process_guard.into(),
             process_mediation: config.process_mediation.clone().into(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct TerminalProcessGuardConfig {
-    enabled: bool,
-    backend: TerminalProcessGuardBackend,
-}
-
-impl TerminalProcessGuardConfig {
-    #[must_use]
-    pub const fn enabled(&self) -> bool {
-        self.enabled
-    }
-
-    #[must_use]
-    pub const fn backend(&self) -> TerminalProcessGuardBackend {
-        self.backend
-    }
-}
-
-impl From<TerminalProcessGuardLayerConfig> for TerminalProcessGuardConfig {
-    fn from(config: TerminalProcessGuardLayerConfig) -> Self {
-        Self {
-            enabled: config.enabled,
-            backend: config.backend,
         }
     }
 }
@@ -2387,15 +2638,6 @@ pub type TerminalProcessInterceptionMode = TerminalProcessMediationMode;
 pub type ProcessInterceptionHandlerConfig = ProcessMediationHandlerConfig;
 pub type ProcessInterceptionHandlerKind = ProcessMediationHandlerKind;
 
-impl TerminalProcessGuardBackend {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::LinuxPtrace => "linux_ptrace",
-        }
-    }
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BrowserCdpSurfaceConfig {
     policies: Vec<PathBuf>,
@@ -2596,6 +2838,25 @@ const fn default_session_runner_kind() -> SessionRunnerKind {
     SessionRunnerKind::Docker
 }
 
+fn default_session_interception_operations() -> Vec<SessionInterceptionOperation> {
+    vec![SessionInterceptionOperation::ProcessExec]
+}
+
+fn dedupe_session_interception_operations(
+    operations: Vec<SessionInterceptionOperation>,
+) -> Vec<SessionInterceptionOperation> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+
+    for operation in operations {
+        if seen.insert(operation) {
+            deduped.push(operation);
+        }
+    }
+
+    deduped
+}
+
 fn default_docker_session_image() -> String {
     String::from("alpine:3.20")
 }
@@ -2636,8 +2897,9 @@ mod tests {
         AuditCommandLogLevel, DockerSessionCommandPlan, LinuxHostSessionCommandOptions,
         LinuxHostSessionCommandPlan, ProcessInterceptionDecision, ProcessMediationEndpointSource,
         ProcessMediationHandlerKind, ProcessMediationPrivatePortStrategy, RuntimeConfig,
-        RuntimeConfigError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
-        SessionSurfaceKind, TerminalProcessGuardBackend, TerminalProcessMediationMode,
+        RuntimeConfigError, SessionAdoptPlan, SessionInterceptionBackendKind,
+        SessionInterceptionConfigSource, SessionInterceptionOperation, SessionRunPlan,
+        SessionRunnerKind, SessionSurfaceKind, TerminalProcessMediationMode,
     };
 
     #[test]
@@ -2666,7 +2928,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_process_guard_is_explicit_runtime_config() -> Result<(), RuntimeConfigError> {
+    fn session_interception_is_explicit_runtime_config() -> Result<(), RuntimeConfigError> {
         let default_config = RuntimeConfig::from_json_str(
             r#"
             {
@@ -2678,40 +2940,147 @@ mod tests {
             "#,
         )?;
         let default_plan = default_config.surface_start_plan()?;
-        let default_terminal = default_plan
-            .terminal()
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
 
-        assert!(!default_terminal.process_guard().enabled());
+        assert!(!default_config.session_interception().enabled());
+        assert!(!default_plan.interception().enabled());
 
         let guarded_config = RuntimeConfig::from_json_str(
             r#"
             {
               "policies": ["policies/browser.json"],
-              "surfaces": {
-                "terminal": {
+              "session": {
+                "interception": {
                   "enabled": true,
-                  "process_guard": {
-                    "enabled": true,
-                    "backend": "linux_ptrace"
-                  }
+                  "backend": "linux_ptrace",
+                  "operations": [
+                    "process_exec",
+                    "file_read",
+                    "process_exec",
+                    "socket_connect"
+                  ]
                 }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true },
+                "network": { "enabled": true }
               }
             }
             "#,
         )?;
         let guarded_plan = guarded_config.surface_start_plan()?;
-        let guarded_terminal = guarded_plan
-            .terminal()
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+        let interception = guarded_plan.interception();
+        let capabilities = guarded_config.session_interception_capabilities();
 
-        assert!(guarded_terminal.process_guard().enabled());
+        assert!(interception.enabled());
         assert_eq!(
-            guarded_terminal.process_guard().backend(),
-            TerminalProcessGuardBackend::LinuxPtrace
+            interception.source(),
+            SessionInterceptionConfigSource::SessionConfig
         );
+        assert_eq!(
+            interception.backend(),
+            SessionInterceptionBackendKind::LinuxPtrace
+        );
+        assert_eq!(
+            interception.operations(),
+            &[
+                SessionInterceptionOperation::ProcessExec,
+                SessionInterceptionOperation::FileRead,
+                SessionInterceptionOperation::SocketConnect
+            ]
+        );
+        assert_eq!(capabilities.operations().len(), 3);
+        assert!(capabilities
+            .operations()
+            .iter()
+            .any(
+                |operation| operation.operation() == SessionInterceptionOperation::ProcessExec
+                    && operation.backend_supported()
+                    && operation.surface_enabled()
+                    && operation.effective()
+            ));
+        assert!(capabilities
+            .operations()
+            .iter()
+            .any(
+                |operation| operation.operation() == SessionInterceptionOperation::FileRead
+                    && operation.owning_surface() == "filesystem"
+                    && !operation.backend_supported()
+                    && !operation.surface_enabled()
+                    && !operation.effective()
+            ));
 
         Ok(())
+    }
+
+    #[test]
+    fn session_interception_capabilities_distinguish_backend_and_surface_support(
+    ) -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "interception": {
+                  "enabled": true,
+                  "operations": ["process_exec", "file_read", "socket_connect"]
+                }
+              },
+              "surfaces": {
+                "network": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let capabilities = config.session_interception_capabilities();
+        let process_exec = capabilities
+            .operations()
+            .iter()
+            .find(|operation| operation.operation() == SessionInterceptionOperation::ProcessExec)
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+        let file_read = capabilities
+            .operations()
+            .iter()
+            .find(|operation| operation.operation() == SessionInterceptionOperation::FileRead)
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+        let socket_connect = capabilities
+            .operations()
+            .iter()
+            .find(|operation| operation.operation() == SessionInterceptionOperation::SocketConnect)
+            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+
+        assert!(process_exec.backend_supported());
+        assert!(!process_exec.surface_enabled());
+        assert!(!process_exec.effective());
+        assert!(!file_read.backend_supported());
+        assert!(!file_read.surface_enabled());
+        assert!(!file_read.effective());
+        assert!(!socket_connect.backend_supported());
+        assert!(socket_connect.surface_enabled());
+        assert!(!socket_connect.effective());
+
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_enabled_session_interception_without_operations() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "interception": {
+                  "enabled": true,
+                  "operations": []
+                }
+              }
+            }
+            "#,
+        );
+
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::InvalidSessionInterceptionConfig { .. })
+        ));
     }
 
     #[test]
@@ -2720,13 +3089,14 @@ mod tests {
             r#"
             {
               "policies": ["policies/browser.json"],
+              "session": {
+                "interception": {
+                  "enabled": true
+                }
+              },
               "surfaces": {
                 "terminal": {
                   "enabled": true,
-                  "process_guard": {
-                    "enabled": true,
-                    "backend": "linux_ptrace"
-                  },
                   "process_interception": {
                     "enabled": true,
                     "mode": "shim",
@@ -2809,10 +3179,14 @@ mod tests {
             r#"
             {
               "policies": ["policies/browser.json"],
+              "session": {
+                "interception": {
+                  "enabled": true
+                }
+              },
               "surfaces": {
                 "terminal": {
                   "enabled": true,
-                  "process_guard": { "enabled": true },
                   "process_interception": {
                     "enabled": true,
                     "handlers": [
@@ -2873,7 +3247,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_process_mediation_without_browser_cdp_surface() {
+    fn rejects_process_mediation_without_session_interception() {
         let error = RuntimeConfig::from_json_str(
             r#"
             {
@@ -2881,7 +3255,46 @@ mod tests {
               "surfaces": {
                 "terminal": {
                   "enabled": true,
-                  "process_guard": { "enabled": true },
+                  "process_interception": {
+                    "enabled": true,
+                    "handlers": [
+                      {
+                        "id": "managed-browser-cdp",
+                        "kind": "managed_browser_cdp",
+                        "match": { "executables": ["google-chrome"] }
+                      }
+                    ]
+                  }
+                },
+                "browser_cdp": {
+                  "enabled": true,
+                  "listen": "127.0.0.1:0"
+                }
+              }
+            }
+            "#,
+        );
+
+        assert!(matches!(
+            error,
+            Err(RuntimeConfigError::InvalidProcessMediationConfig { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_process_mediation_without_browser_cdp_surface() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "interception": {
+                  "enabled": true
+                }
+              },
+              "surfaces": {
+                "terminal": {
+                  "enabled": true,
                   "process_interception": {
                     "enabled": true,
                     "handlers": [
@@ -2910,10 +3323,14 @@ mod tests {
             r#"
             {
               "policies": ["policies/browser.json"],
+              "session": {
+                "interception": {
+                  "enabled": true
+                }
+              },
               "surfaces": {
                 "terminal": {
                   "enabled": true,
-                  "process_guard": { "enabled": true },
                   "process_interception": {
                     "enabled": true,
                     "handlers": [

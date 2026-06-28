@@ -34,12 +34,12 @@ mod linux_host {
                     ]
                   }}
                 ],
-                "runner": {{ "kind": "linux_host" }}
+                "runner": {{ "kind": "linux_host" }},
+                "interception": {{ "enabled": true }}
               }},
               "surfaces": {{
                 "terminal": {{
-                  "enabled": true,
-                  "process_guard": {{ "enabled": true }}
+                  "enabled": true
                 }}
               }}
             }}"#,
@@ -82,12 +82,12 @@ mod linux_host {
                     "command": ["sleep", "0"]
                   }}
                 ],
-                "runner": {{ "kind": "linux_host" }}
+                "runner": {{ "kind": "linux_host" }},
+                "interception": {{ "enabled": true }}
               }},
               "surfaces": {{
                 "terminal": {{
-                  "enabled": true,
-                  "process_guard": {{ "enabled": true }}
+                  "enabled": true
                 }}
               }}
             }}"#,
@@ -141,8 +141,7 @@ mod linux_host {
               }},
               "surfaces": {{
                 "terminal": {{
-                  "enabled": true,
-                  "process_guard": {{ "enabled": false }}
+                  "enabled": true
                 }}
               }}
             }}"#,
@@ -182,12 +181,12 @@ mod linux_host {
                 "enabled": true,
                 "actor": {{ "id": "openclaw" }},
                 "workspace": "{}",
-                "runner": {{ "kind": "linux_host" }}
+                "runner": {{ "kind": "linux_host" }},
+                "interception": {{ "enabled": true }}
               }},
               "surfaces": {{
                 "terminal": {{
-                  "enabled": true,
-                  "process_guard": {{ "enabled": true }}
+                  "enabled": true
                 }}
               }}
             }}"#,
@@ -243,12 +242,12 @@ mod linux_host {
                     "command": ["sh", "--remote-debugging-port=9222"]
                   }}
                 ],
-                "runner": {{ "kind": "linux_host" }}
+                "runner": {{ "kind": "linux_host" }},
+                "interception": {{ "enabled": true }}
               }},
               "surfaces": {{
                 "terminal": {{
-                  "enabled": true,
-                  "process_guard": {{ "enabled": true }}
+                  "enabled": true
                 }}
               }}
             }}"#,
@@ -382,12 +381,12 @@ mod linux_host {
                     "command": ["sh", "-lc", "git push origin main"]
                   }}
                 ],
-                "runner": {{ "kind": "linux_host" }}
+                "runner": {{ "kind": "linux_host" }},
+                "interception": {{ "enabled": true }}
               }},
               "surfaces": {{
                 "terminal": {{
-                  "enabled": true,
-                  "process_guard": {{ "enabled": true }}
+                  "enabled": true
                 }}
               }}
             }}"#,
@@ -488,12 +487,12 @@ mod linux_host {
                     "command": {}
                   }}
                 ],
-                "runner": {{ "kind": "linux_host" }}
+                "runner": {{ "kind": "linux_host" }},
+                "interception": {{ "enabled": true }}
               }},
               "surfaces": {{
                 "terminal": {{
-                  "enabled": true,
-                  "process_guard": {{ "enabled": true }}
+                  "enabled": true
                 }}
               }}
             }}"#,

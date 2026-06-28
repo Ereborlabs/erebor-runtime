@@ -45,6 +45,8 @@ pub enum RuntimeConfigError {
     BrowserCdpInvalidBrowserUrl { location: Location },
     #[error("runtime config terminal process interception is invalid: {reason}")]
     InvalidProcessMediationConfig { reason: String, location: Location },
+    #[error("runtime config session interception is invalid: {reason}")]
+    InvalidSessionInterceptionConfig { reason: String, location: Location },
 }
 
 #[derive(Debug, Error)]
@@ -341,6 +343,14 @@ impl RuntimeConfigError {
     #[track_caller]
     pub fn invalid_process_mediation_config(reason: impl Into<String>) -> Self {
         Self::InvalidProcessMediationConfig {
+            reason: reason.into(),
+            location: Location::default(),
+        }
+    }
+
+    #[track_caller]
+    pub fn invalid_session_interception_config(reason: impl Into<String>) -> Self {
+        Self::InvalidSessionInterceptionConfig {
             reason: reason.into(),
             location: Location::default(),
         }

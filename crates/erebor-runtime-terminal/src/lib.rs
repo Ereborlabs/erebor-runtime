@@ -331,8 +331,7 @@ mod tests {
               "policies": ["{}"],
               "surfaces": {{
                 "terminal": {{
-                  "enabled": true,
-                  "process_guard": {{ "enabled": true }}
+                  "enabled": true
                 }}
               }}
             }}"#,
