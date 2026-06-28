@@ -1,15 +1,11 @@
 use std::{
     collections::HashMap,
     fmt,
-    fs::{self, File},
+    fs::File,
     io::{self, Read, Write},
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
-    },
-    thread::JoinHandle,
+    sync::{mpsc, Arc, Mutex},
     time::Duration,
 };
 
@@ -678,7 +674,7 @@ impl InterceptionBrokerClient {
         endpoint: &RuntimeInterceptionEndpoint,
         hello: GuardHello,
     ) -> Result<GuardHelloAck, RuntimeInterceptionBrokerError> {
-        platform::send_hello(endpoint, hello)
+        <platform::Platform as RuntimeInterceptionBrokerPlatform>::send_hello(endpoint, hello)
     }
 
     pub fn request_interception_decision(
@@ -686,13 +682,9 @@ impl InterceptionBrokerClient {
         hello: GuardHello,
         request: InterceptionRequest,
     ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
-        platform::request_interception_decision(endpoint, hello, request)
-    }
-
-    fn connect_raw(
-        endpoint: &RuntimeInterceptionEndpoint,
-    ) -> Result<(), RuntimeInterceptionBrokerError> {
-        platform::connect_raw(endpoint)
+        <platform::Platform as RuntimeInterceptionBrokerPlatform>::request_interception_decision(
+            endpoint, hello, request,
+        )
     }
 }
 
@@ -704,6 +696,8 @@ pub enum RuntimeInterceptionBrokerError {
     StateLock,
     #[error("session `{session_id}` is already registered with the runtime interception broker")]
     SessionAlreadyRegistered { session_id: String },
+    #[error("runtime interception broker server platform is not started")]
+    ServerNotStarted,
     #[error("runtime interception broker rejected guard hello: {reason}")]
     RejectedHello { reason: String },
     #[error("runtime interception broker I/O failed: {source}")]
@@ -722,14 +716,49 @@ impl RuntimeInterceptionBrokerError {
     }
 }
 
+trait RuntimeInterceptionBrokerPlatform {
+    fn start_server(
+        server: Arc<RuntimeInterceptionBrokerServer>,
+    ) -> Result<Box<dyn RuntimeInterceptionBrokerServerPlatform>, RuntimeInterceptionBrokerError>;
+
+    fn send_hello(
+        endpoint: &RuntimeInterceptionEndpoint,
+        hello: GuardHello,
+    ) -> Result<GuardHelloAck, RuntimeInterceptionBrokerError>;
+
+    fn request_interception_decision(
+        endpoint: &RuntimeInterceptionEndpoint,
+        hello: GuardHello,
+        request: InterceptionRequest,
+    ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError>;
+}
+
+trait RuntimeInterceptionBrokerServerPlatform: Send + Sync {
+    fn endpoint_path(&self) -> &Path;
+    fn shutdown(self: Box<Self>);
+}
+
 struct RuntimeInterceptionBrokerServer {
-    endpoint_path: PathBuf,
-    shutdown: Arc<AtomicBool>,
-    worker: Mutex<Option<JoinHandle<()>>>,
-    sessions: Arc<Mutex<HashMap<String, SessionRegistration>>>,
+    platform: Mutex<Option<Box<dyn RuntimeInterceptionBrokerServerPlatform>>>,
+    sessions: Mutex<HashMap<String, SessionRegistration>>,
 }
 
 impl RuntimeInterceptionBrokerServer {
+    fn start() -> Result<Arc<Self>, RuntimeInterceptionBrokerError> {
+        let server = Arc::new(Self {
+            platform: Mutex::new(None),
+            sessions: Mutex::new(HashMap::new()),
+        });
+        let platform = <platform::Platform as RuntimeInterceptionBrokerPlatform>::start_server(
+            Arc::clone(&server),
+        )?;
+        *server
+            .platform
+            .lock()
+            .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)? = Some(platform);
+        Ok(server)
+    }
+
     fn register_session(
         self: &Arc<Self>,
         session_id: String,
@@ -738,6 +767,7 @@ impl RuntimeInterceptionBrokerServer {
         router: SessionInterceptionRouter,
         mediators: SessionMediationRegistry,
     ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
+        let endpoint_path = self.endpoint_path()?;
         let token = read_interception_token()?;
         let registration = SessionRegistration {
             token: token.clone(),
@@ -763,11 +793,7 @@ impl RuntimeInterceptionBrokerServer {
         }
 
         Ok(SessionInterceptionRegistration {
-            endpoint: RuntimeInterceptionEndpoint::unix(
-                &self.endpoint_path,
-                token,
-                DEFAULT_TIMEOUT_MS,
-            ),
+            endpoint: RuntimeInterceptionEndpoint::unix(endpoint_path, token, DEFAULT_TIMEOUT_MS),
             server: Arc::clone(self),
             session_id,
         })
@@ -784,28 +810,53 @@ impl RuntimeInterceptionBrokerServer {
             sessions.remove(session_id);
         }
     }
+
+    fn endpoint_path(&self) -> Result<PathBuf, RuntimeInterceptionBrokerError> {
+        let platform = self
+            .platform
+            .lock()
+            .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
+        let Some(platform) = platform.as_ref() else {
+            return Err(RuntimeInterceptionBrokerError::ServerNotStarted);
+        };
+        Ok(platform.endpoint_path().to_path_buf())
+    }
+
+    fn handle_stream(&self, stream: &mut (impl Read + Write)) {
+        let mut bound = None::<BoundConnection>;
+        while let Ok(request_frame) = read_frame_from_stream(stream) {
+            let envelope = match request_frame.decode_payload::<Envelope>() {
+                Ok(envelope) => envelope,
+                Err(_error) => break,
+            };
+            let response = match self.handle_runtime_interception_envelope(envelope, &mut bound) {
+                Ok(response) => response,
+                Err(_error) => break,
+            };
+            let response_frame = match response.into_frame() {
+                Ok(frame) => frame,
+                Err(_error) => break,
+            };
+            if write_frame_to_stream(stream, &response_frame).is_err() {
+                break;
+            }
+        }
+    }
+}
+
+impl Drop for RuntimeInterceptionBrokerServer {
+    fn drop(&mut self) {
+        if let Ok(mut platform) = self.platform.lock() {
+            if let Some(platform) = platform.take() {
+                platform.shutdown();
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct BoundConnection {
     session_id: String,
-}
-
-impl Drop for RuntimeInterceptionBrokerServer {
-    fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::SeqCst);
-        let _result = InterceptionBrokerClient::connect_raw(&RuntimeInterceptionEndpoint::unix(
-            &self.endpoint_path,
-            "",
-            DEFAULT_TIMEOUT_MS,
-        ));
-        if let Ok(mut worker) = self.worker.lock() {
-            if let Some(worker) = worker.take() {
-                let _result = worker.join();
-            }
-        }
-        let _result = fs::remove_file(&self.endpoint_path);
-    }
 }
 
 fn shared_runtime_interception_broker_server(
@@ -817,7 +868,7 @@ fn shared_runtime_interception_broker_server(
         return Ok(Arc::clone(server));
     }
 
-    let started = platform::start_server()?;
+    let started = RuntimeInterceptionBrokerServer::start()?;
     *server = Some(Arc::clone(&started));
     Ok(started)
 }
@@ -911,141 +962,143 @@ fn write_frame_to_stream(
         .map_err(RuntimeInterceptionBrokerError::io)
 }
 
-fn handle_runtime_interception_envelope(
-    envelope: Envelope,
-    sessions: &Mutex<HashMap<String, SessionRegistration>>,
-    bound: &mut Option<BoundConnection>,
-) -> Result<Envelope, RuntimeInterceptionBrokerError> {
-    if bound.is_none() {
-        return handle_hello_envelope(envelope, sessions, bound);
-    }
-
-    match envelope.message_kind.as_str() {
-        KIND_INTERCEPTION_REQUEST => {
-            handle_interception_request_envelope(envelope, sessions, bound)
+impl RuntimeInterceptionBrokerServer {
+    fn handle_runtime_interception_envelope(
+        &self,
+        envelope: Envelope,
+        bound: &mut Option<BoundConnection>,
+    ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
+        if bound.is_none() {
+            return self.handle_hello_envelope(envelope, bound);
         }
-        _ => deny_unexpected_bound_message(envelope),
+
+        match envelope.message_kind.as_str() {
+            KIND_INTERCEPTION_REQUEST => self.handle_interception_request_envelope(envelope, bound),
+            _ => deny_unexpected_bound_message(envelope),
+        }
     }
-}
 
-fn handle_hello_envelope(
-    envelope: Envelope,
-    sessions: &Mutex<HashMap<String, SessionRegistration>>,
-    bound: &mut Option<BoundConnection>,
-) -> Result<Envelope, RuntimeInterceptionBrokerError> {
-    let mut broker_id = String::from("unregistered");
-    let mut accepted = false;
-    let mut accepted_session_id = None;
+    fn handle_hello_envelope(
+        &self,
+        envelope: Envelope,
+        bound: &mut Option<BoundConnection>,
+    ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
+        let mut broker_id = String::from("unregistered");
+        let mut accepted = false;
+        let mut accepted_session_id = None;
 
-    let reason = if envelope.message_kind != KIND_GUARD_HELLO {
-        format!("unexpected message kind `{}`", envelope.message_kind)
-    } else {
-        let hello: GuardHello = envelope
-            .decode_typed_payload(KIND_GUARD_HELLO)
-            .map_err(RuntimeInterceptionBrokerError::protocol)?;
-        let sessions = sessions
-            .lock()
-            .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
-        match sessions.get(&hello.session_id) {
-            Some(registration)
-                if interception_token(&envelope) == Some(registration.token.as_str()) =>
-            {
-                broker_id = registration.broker_id.clone();
-                accepted = true;
-                accepted_session_id = Some(hello.session_id);
-                String::from("accepted")
+        let reason = if envelope.message_kind != KIND_GUARD_HELLO {
+            format!("unexpected message kind `{}`", envelope.message_kind)
+        } else {
+            let hello: GuardHello = envelope
+                .decode_typed_payload(KIND_GUARD_HELLO)
+                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
+            match sessions.get(&hello.session_id) {
+                Some(registration)
+                    if interception_token(&envelope) == Some(registration.token.as_str()) =>
+                {
+                    broker_id = registration.broker_id.clone();
+                    accepted = true;
+                    accepted_session_id = Some(hello.session_id);
+                    String::from("accepted")
+                }
+                Some(_) => String::from("invalid interception token"),
+                None => String::from("unknown session"),
             }
-            Some(_) => String::from("invalid interception token"),
-            None => String::from("unknown session"),
+        };
+        let ack = GuardHelloAck {
+            protocol_version: PROTOCOL_VERSION,
+            broker_id,
+            accepted,
+            reason,
+        };
+        if accepted {
+            if let Some(session_id) = accepted_session_id {
+                *bound = Some(BoundConnection { session_id });
+            }
         }
-    };
-    let ack = GuardHelloAck {
-        protocol_version: PROTOCOL_VERSION,
-        broker_id,
-        accepted,
-        reason,
-    };
-    if accepted {
-        if let Some(session_id) = accepted_session_id {
-            *bound = Some(BoundConnection { session_id });
-        }
+
+        Envelope::wrap_message(
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_GUARD_HELLO_ACK,
+            &ack,
+        )
+        .map_err(RuntimeInterceptionBrokerError::protocol)
     }
 
-    Envelope::wrap_message(
-        envelope.message_id.saturating_add(1),
-        envelope.message_id,
-        KIND_GUARD_HELLO_ACK,
-        &ack,
-    )
-    .map_err(RuntimeInterceptionBrokerError::protocol)
-}
+    fn handle_interception_request_envelope(
+        &self,
+        envelope: Envelope,
+        bound: &Option<BoundConnection>,
+    ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
+        let request: InterceptionRequest = envelope
+            .decode_typed_payload(KIND_INTERCEPTION_REQUEST)
+            .map_err(RuntimeInterceptionBrokerError::protocol)?;
+        let decision = self.interception_decision_for_request(bound, &request)?;
 
-fn handle_interception_request_envelope(
-    envelope: Envelope,
-    sessions: &Mutex<HashMap<String, SessionRegistration>>,
-    bound: &Option<BoundConnection>,
-) -> Result<Envelope, RuntimeInterceptionBrokerError> {
-    let request: InterceptionRequest = envelope
-        .decode_typed_payload(KIND_INTERCEPTION_REQUEST)
-        .map_err(RuntimeInterceptionBrokerError::protocol)?;
-    let decision = interception_decision_for_request(sessions, bound, &request)?;
-
-    Envelope::wrap_message(
-        envelope.message_id.saturating_add(1),
-        request.request_id,
-        KIND_INTERCEPTION_DECISION,
-        &decision,
-    )
-    .map_err(RuntimeInterceptionBrokerError::protocol)
-}
-
-fn interception_decision_for_request(
-    sessions: &Mutex<HashMap<String, SessionRegistration>>,
-    bound: &Option<BoundConnection>,
-    request: &InterceptionRequest,
-) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
-    let Some(bound) = bound else {
-        return Ok(deny_decision(
+        Envelope::wrap_message(
+            envelope.message_id.saturating_add(1),
             request.request_id,
-            "erebor-runtime-interception-broker-unbound",
-            "interception request arrived before GuardHello",
-        ));
-    };
-    let (handler, mediators) = {
-        let sessions = sessions
-            .lock()
-            .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
-        let Some(registration) = sessions.get(&bound.session_id) else {
-            return Ok(deny_decision(
-                request.request_id,
-                "erebor-runtime-interception-broker-unknown-session",
-                "session is no longer registered with the runtime interception broker",
-            ));
-        };
-        if request.matched_handler_id.is_empty() {
-            return Ok(registration
-                .router
-                .decide_process_exec(request)
-                .map(|decision| surface_decision(request.request_id, decision))
-                .unwrap_or_else(|| {
-                    deny_decision(
-                        request.request_id,
-                        "erebor-runtime-interception-broker-unrouted-process-exec",
-                        "no surface is registered for process_exec interception",
-                    )
-                }));
-        }
-        let Some(handler) = registration.handlers.get(&request.matched_handler_id) else {
-            return Ok(deny_decision(
-                request.request_id,
-                "erebor-runtime-interception-broker-unknown-handler",
-                "interception handler is not registered for this session",
-            ));
-        };
-        (handler.clone(), registration.mediators.clone())
-    };
+            KIND_INTERCEPTION_DECISION,
+            &decision,
+        )
+        .map_err(RuntimeInterceptionBrokerError::protocol)
+    }
 
-    Ok(handler.decision_for_request(request, &mediators))
+    fn interception_decision_for_request(
+        &self,
+        bound: &Option<BoundConnection>,
+        request: &InterceptionRequest,
+    ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
+        let Some(bound) = bound else {
+            return Ok(deny_decision(
+                request.request_id,
+                "erebor-runtime-interception-broker-unbound",
+                "interception request arrived before GuardHello",
+            ));
+        };
+        let (handler, mediators) = {
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
+            let Some(registration) = sessions.get(&bound.session_id) else {
+                return Ok(deny_decision(
+                    request.request_id,
+                    "erebor-runtime-interception-broker-unknown-session",
+                    "session is no longer registered with the runtime interception broker",
+                ));
+            };
+            if request.matched_handler_id.is_empty() {
+                return Ok(registration
+                    .router
+                    .decide_process_exec(request)
+                    .map(|decision| surface_decision(request.request_id, decision))
+                    .unwrap_or_else(|| {
+                        deny_decision(
+                            request.request_id,
+                            "erebor-runtime-interception-broker-unrouted-process-exec",
+                            "no surface is registered for process_exec interception",
+                        )
+                    }));
+            }
+            let Some(handler) = registration.handlers.get(&request.matched_handler_id) else {
+                return Ok(deny_decision(
+                    request.request_id,
+                    "erebor-runtime-interception-broker-unknown-handler",
+                    "interception handler is not registered for this session",
+                ));
+            };
+            (handler.clone(), registration.mediators.clone())
+        };
+
+        Ok(handler.decision_for_request(request, &mediators))
+    }
 }
 
 fn deny_unexpected_bound_message(
@@ -1265,11 +1318,12 @@ mod platform {
             fs::PermissionsExt,
             net::{UnixListener, UnixStream},
         },
+        path::{Path, PathBuf},
         sync::{
             atomic::{AtomicBool, Ordering},
             Arc, Mutex,
         },
-        thread,
+        thread::{self, JoinHandle},
         time::Duration,
     };
 
@@ -1280,177 +1334,168 @@ mod platform {
     };
 
     use super::{
-        envelope_with_token, handle_runtime_interception_envelope, read_frame_from_stream,
-        write_frame_to_stream, BoundConnection, RuntimeInterceptionBrokerError,
-        RuntimeInterceptionBrokerServer, RuntimeInterceptionEndpoint, SessionRegistration,
-        DEFAULT_TIMEOUT_MS, RUNTIME_INTERCEPTION_SOCKET_NAME,
+        envelope_with_token, read_frame_from_stream, write_frame_to_stream,
+        RuntimeInterceptionBrokerError, RuntimeInterceptionBrokerPlatform,
+        RuntimeInterceptionBrokerServer, RuntimeInterceptionBrokerServerPlatform,
+        RuntimeInterceptionEndpoint, DEFAULT_TIMEOUT_MS, RUNTIME_INTERCEPTION_SOCKET_NAME,
     };
-    use std::collections::HashMap;
 
-    pub(super) fn start_server(
-    ) -> Result<Arc<RuntimeInterceptionBrokerServer>, RuntimeInterceptionBrokerError> {
-        let directory = std::env::temp_dir()
-            .join("erebor-runtime")
-            .join("interception")
-            .join(std::process::id().to_string());
-        fs::create_dir_all(&directory).map_err(RuntimeInterceptionBrokerError::io)?;
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-            .map_err(RuntimeInterceptionBrokerError::io)?;
-        let socket_path = directory.join(RUNTIME_INTERCEPTION_SOCKET_NAME);
-        let _result = fs::remove_file(&socket_path);
-        let listener =
-            UnixListener::bind(&socket_path).map_err(RuntimeInterceptionBrokerError::io)?;
-        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
-            .map_err(RuntimeInterceptionBrokerError::io)?;
-        listener
-            .set_nonblocking(true)
-            .map_err(RuntimeInterceptionBrokerError::io)?;
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let worker_shutdown = Arc::clone(&shutdown);
-        let sessions: Arc<Mutex<HashMap<String, SessionRegistration>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        let worker_sessions = Arc::clone(&sessions);
-        let worker = thread::spawn(move || {
-            let timeout = Duration::from_millis(DEFAULT_TIMEOUT_MS);
-            while !worker_shutdown.load(Ordering::SeqCst) {
-                match listener.accept() {
-                    Ok((stream, _addr)) => {
-                        let sessions = Arc::clone(&worker_sessions);
-                        thread::spawn(move || {
-                            handle_connection(stream, sessions, timeout);
-                        });
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(1));
-                    }
-                    Err(_error) => {
-                        thread::sleep(Duration::from_millis(1));
+    pub(super) struct Platform;
+
+    struct UnixRuntimeInterceptionBrokerServer {
+        endpoint_path: PathBuf,
+        shutdown: Arc<AtomicBool>,
+        worker: Mutex<Option<JoinHandle<()>>>,
+    }
+
+    impl RuntimeInterceptionBrokerPlatform for Platform {
+        fn start_server(
+            server: Arc<RuntimeInterceptionBrokerServer>,
+        ) -> Result<Box<dyn RuntimeInterceptionBrokerServerPlatform>, RuntimeInterceptionBrokerError>
+        {
+            let directory = std::env::temp_dir()
+                .join("erebor-runtime")
+                .join("interception")
+                .join(std::process::id().to_string());
+            fs::create_dir_all(&directory).map_err(RuntimeInterceptionBrokerError::io)?;
+            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+                .map_err(RuntimeInterceptionBrokerError::io)?;
+            let socket_path = directory.join(RUNTIME_INTERCEPTION_SOCKET_NAME);
+            let _result = fs::remove_file(&socket_path);
+            let listener =
+                UnixListener::bind(&socket_path).map_err(RuntimeInterceptionBrokerError::io)?;
+            fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
+                .map_err(RuntimeInterceptionBrokerError::io)?;
+            listener
+                .set_nonblocking(true)
+                .map_err(RuntimeInterceptionBrokerError::io)?;
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let worker_shutdown = Arc::clone(&shutdown);
+            let worker = thread::spawn(move || {
+                let timeout = Duration::from_millis(DEFAULT_TIMEOUT_MS);
+                while !worker_shutdown.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((mut stream, _addr)) => {
+                            let server = Arc::clone(&server);
+                            thread::spawn(move || {
+                                let _result = stream.set_write_timeout(Some(timeout));
+                                server.handle_stream(&mut stream);
+                            });
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(_error) => {
+                            thread::sleep(Duration::from_millis(1));
+                        }
                     }
                 }
-            }
-        });
+            });
 
-        Ok(Arc::new(RuntimeInterceptionBrokerServer {
-            endpoint_path: socket_path,
-            shutdown,
-            worker: Mutex::new(Some(worker)),
-            sessions,
-        }))
-    }
+            Ok(Box::new(UnixRuntimeInterceptionBrokerServer {
+                endpoint_path: socket_path,
+                shutdown,
+                worker: Mutex::new(Some(worker)),
+            }))
+        }
 
-    fn handle_connection(
-        mut stream: UnixStream,
-        sessions: Arc<Mutex<HashMap<String, SessionRegistration>>>,
-        timeout: Duration,
-    ) {
-        let _result = stream.set_write_timeout(Some(timeout));
-        let mut bound = None::<BoundConnection>;
-        while let Ok(request_frame) = read_frame_from_stream(&mut stream) {
-            let envelope = match request_frame.decode_payload::<Envelope>() {
-                Ok(envelope) => envelope,
-                Err(_error) => break,
-            };
-            let response =
-                match handle_runtime_interception_envelope(envelope, &sessions, &mut bound) {
-                    Ok(response) => response,
-                    Err(_error) => break,
-                };
-            let response_frame = match response.into_frame() {
-                Ok(frame) => frame,
-                Err(_error) => break,
-            };
-            if write_frame_to_stream(&mut stream, &response_frame).is_err() {
-                break;
+        fn send_hello(
+            endpoint: &RuntimeInterceptionEndpoint,
+            hello: GuardHello,
+        ) -> Result<GuardHelloAck, RuntimeInterceptionBrokerError> {
+            let mut stream =
+                UnixStream::connect(endpoint.path()).map_err(RuntimeInterceptionBrokerError::io)?;
+            stream
+                .set_read_timeout(Some(endpoint.timeout()))
+                .map_err(RuntimeInterceptionBrokerError::io)?;
+            stream
+                .set_write_timeout(Some(endpoint.timeout()))
+                .map_err(RuntimeInterceptionBrokerError::io)?;
+            let envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)
+                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            let request = envelope_with_token(envelope, endpoint.token());
+            let request_frame = request
+                .into_frame()
+                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            write_frame_to_stream(&mut stream, &request_frame)?;
+
+            let response_frame = read_frame_from_stream(&mut stream)?;
+            let response_envelope: Envelope = response_frame
+                .decode_payload()
+                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            response_envelope
+                .decode_typed_payload(KIND_GUARD_HELLO_ACK)
+                .map_err(RuntimeInterceptionBrokerError::protocol)
+        }
+
+        fn request_interception_decision(
+            endpoint: &RuntimeInterceptionEndpoint,
+            hello: GuardHello,
+            request: InterceptionRequest,
+        ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
+            let mut stream =
+                UnixStream::connect(endpoint.path()).map_err(RuntimeInterceptionBrokerError::io)?;
+            stream
+                .set_read_timeout(Some(endpoint.timeout()))
+                .map_err(RuntimeInterceptionBrokerError::io)?;
+            stream
+                .set_write_timeout(Some(endpoint.timeout()))
+                .map_err(RuntimeInterceptionBrokerError::io)?;
+
+            let hello_envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)
+                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            let hello_request = envelope_with_token(hello_envelope, endpoint.token());
+            write_frame_to_stream(
+                &mut stream,
+                &hello_request
+                    .into_frame()
+                    .map_err(RuntimeInterceptionBrokerError::protocol)?,
+            )?;
+            let hello_response_frame = read_frame_from_stream(&mut stream)?;
+            let hello_response: Envelope = hello_response_frame
+                .decode_payload()
+                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            let ack: GuardHelloAck = hello_response
+                .decode_typed_payload(KIND_GUARD_HELLO_ACK)
+                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            if !ack.accepted {
+                return Err(RuntimeInterceptionBrokerError::RejectedHello { reason: ack.reason });
             }
+
+            let request_envelope =
+                Envelope::wrap_message(2, 1, KIND_INTERCEPTION_REQUEST, &request)
+                    .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            write_frame_to_stream(
+                &mut stream,
+                &request_envelope
+                    .into_frame()
+                    .map_err(RuntimeInterceptionBrokerError::protocol)?,
+            )?;
+            let response_frame = read_frame_from_stream(&mut stream)?;
+            let response_envelope: Envelope = response_frame
+                .decode_payload()
+                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            response_envelope
+                .decode_typed_payload(KIND_INTERCEPTION_DECISION)
+                .map_err(RuntimeInterceptionBrokerError::protocol)
         }
     }
 
-    pub(super) fn send_hello(
-        endpoint: &RuntimeInterceptionEndpoint,
-        hello: GuardHello,
-    ) -> Result<GuardHelloAck, RuntimeInterceptionBrokerError> {
-        let mut stream =
-            UnixStream::connect(endpoint.path()).map_err(RuntimeInterceptionBrokerError::io)?;
-        stream
-            .set_read_timeout(Some(endpoint.timeout()))
-            .map_err(RuntimeInterceptionBrokerError::io)?;
-        stream
-            .set_write_timeout(Some(endpoint.timeout()))
-            .map_err(RuntimeInterceptionBrokerError::io)?;
-        let envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)
-            .map_err(RuntimeInterceptionBrokerError::protocol)?;
-        let request = envelope_with_token(envelope, endpoint.token());
-        let request_frame = request
-            .into_frame()
-            .map_err(RuntimeInterceptionBrokerError::protocol)?;
-        write_frame_to_stream(&mut stream, &request_frame)?;
-
-        let response_frame = read_frame_from_stream(&mut stream)?;
-        let response_envelope: Envelope = response_frame
-            .decode_payload()
-            .map_err(RuntimeInterceptionBrokerError::protocol)?;
-        response_envelope
-            .decode_typed_payload(KIND_GUARD_HELLO_ACK)
-            .map_err(RuntimeInterceptionBrokerError::protocol)
-    }
-
-    pub(super) fn request_interception_decision(
-        endpoint: &RuntimeInterceptionEndpoint,
-        hello: GuardHello,
-        request: InterceptionRequest,
-    ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
-        let mut stream =
-            UnixStream::connect(endpoint.path()).map_err(RuntimeInterceptionBrokerError::io)?;
-        stream
-            .set_read_timeout(Some(endpoint.timeout()))
-            .map_err(RuntimeInterceptionBrokerError::io)?;
-        stream
-            .set_write_timeout(Some(endpoint.timeout()))
-            .map_err(RuntimeInterceptionBrokerError::io)?;
-
-        let hello_envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)
-            .map_err(RuntimeInterceptionBrokerError::protocol)?;
-        let hello_request = envelope_with_token(hello_envelope, endpoint.token());
-        write_frame_to_stream(
-            &mut stream,
-            &hello_request
-                .into_frame()
-                .map_err(RuntimeInterceptionBrokerError::protocol)?,
-        )?;
-        let hello_response_frame = read_frame_from_stream(&mut stream)?;
-        let hello_response: Envelope = hello_response_frame
-            .decode_payload()
-            .map_err(RuntimeInterceptionBrokerError::protocol)?;
-        let ack: GuardHelloAck = hello_response
-            .decode_typed_payload(KIND_GUARD_HELLO_ACK)
-            .map_err(RuntimeInterceptionBrokerError::protocol)?;
-        if !ack.accepted {
-            return Err(RuntimeInterceptionBrokerError::RejectedHello { reason: ack.reason });
+    impl RuntimeInterceptionBrokerServerPlatform for UnixRuntimeInterceptionBrokerServer {
+        fn endpoint_path(&self) -> &Path {
+            &self.endpoint_path
         }
 
-        let request_envelope = Envelope::wrap_message(2, 1, KIND_INTERCEPTION_REQUEST, &request)
-            .map_err(RuntimeInterceptionBrokerError::protocol)?;
-        write_frame_to_stream(
-            &mut stream,
-            &request_envelope
-                .into_frame()
-                .map_err(RuntimeInterceptionBrokerError::protocol)?,
-        )?;
-        let response_frame = read_frame_from_stream(&mut stream)?;
-        let response_envelope: Envelope = response_frame
-            .decode_payload()
-            .map_err(RuntimeInterceptionBrokerError::protocol)?;
-        response_envelope
-            .decode_typed_payload(KIND_INTERCEPTION_DECISION)
-            .map_err(RuntimeInterceptionBrokerError::protocol)
-    }
-
-    pub(super) fn connect_raw(
-        endpoint: &RuntimeInterceptionEndpoint,
-    ) -> Result<(), RuntimeInterceptionBrokerError> {
-        let _stream =
-            UnixStream::connect(endpoint.path()).map_err(RuntimeInterceptionBrokerError::io)?;
-        Ok(())
+        fn shutdown(self: Box<Self>) {
+            self.shutdown.store(true, Ordering::SeqCst);
+            let _result = UnixStream::connect(&self.endpoint_path);
+            if let Ok(mut worker) = self.worker.lock() {
+                if let Some(worker) = worker.take() {
+                    let _result = worker.join();
+                }
+            }
+            let _result = fs::remove_file(&self.endpoint_path);
+        }
     }
 }
 
@@ -1463,39 +1508,38 @@ mod platform {
     };
 
     use super::{
-        RuntimeInterceptionBrokerError, RuntimeInterceptionBrokerServer,
+        RuntimeInterceptionBrokerError, RuntimeInterceptionBrokerPlatform,
+        RuntimeInterceptionBrokerServer, RuntimeInterceptionBrokerServerPlatform,
         RuntimeInterceptionEndpoint,
     };
 
-    pub(super) fn start_server(
-    ) -> Result<Arc<RuntimeInterceptionBrokerServer>, RuntimeInterceptionBrokerError> {
-        Err(RuntimeInterceptionBrokerError::UnsupportedTransport {
-            transport: String::from("windows-named-pipe"),
-        })
+    pub(super) struct Platform;
+
+    impl RuntimeInterceptionBrokerPlatform for Platform {
+        fn start_server(
+            _server: Arc<RuntimeInterceptionBrokerServer>,
+        ) -> Result<Box<dyn RuntimeInterceptionBrokerServerPlatform>, RuntimeInterceptionBrokerError>
+        {
+            unsupported()
+        }
+
+        fn send_hello(
+            _endpoint: &RuntimeInterceptionEndpoint,
+            _hello: GuardHello,
+        ) -> Result<GuardHelloAck, RuntimeInterceptionBrokerError> {
+            unsupported()
+        }
+
+        fn request_interception_decision(
+            _endpoint: &RuntimeInterceptionEndpoint,
+            _hello: GuardHello,
+            _request: InterceptionRequest,
+        ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
+            unsupported()
+        }
     }
 
-    pub(super) fn send_hello(
-        _endpoint: &RuntimeInterceptionEndpoint,
-        _hello: GuardHello,
-    ) -> Result<GuardHelloAck, RuntimeInterceptionBrokerError> {
-        Err(RuntimeInterceptionBrokerError::UnsupportedTransport {
-            transport: String::from("windows-named-pipe"),
-        })
-    }
-
-    pub(super) fn request_interception_decision(
-        _endpoint: &RuntimeInterceptionEndpoint,
-        _hello: GuardHello,
-        _request: InterceptionRequest,
-    ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
-        Err(RuntimeInterceptionBrokerError::UnsupportedTransport {
-            transport: String::from("windows-named-pipe"),
-        })
-    }
-
-    pub(super) fn connect_raw(
-        _endpoint: &RuntimeInterceptionEndpoint,
-    ) -> Result<(), RuntimeInterceptionBrokerError> {
+    fn unsupported<T>() -> Result<T, RuntimeInterceptionBrokerError> {
         Err(RuntimeInterceptionBrokerError::UnsupportedTransport {
             transport: String::from("windows-named-pipe"),
         })
