@@ -8,6 +8,7 @@ use std::{
 mod adoption;
 mod interception_backend;
 mod runtime_interception_broker;
+mod surfaces;
 
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
@@ -36,10 +37,10 @@ pub use erebor_runtime_core::{
     SurfaceInterceptionDecision,
 };
 pub use runtime_interception_broker::{
-    BrowserCdpMediationHandler, InterceptionBrokerClient, RuntimeInterceptionBroker,
-    RuntimeInterceptionBrokerError, RuntimeInterceptionEndpoint, SessionInterceptionRegistration,
-    SessionInterceptionRouter,
+    InterceptionBrokerClient, RuntimeInterceptionBroker, RuntimeInterceptionBrokerError,
+    RuntimeInterceptionEndpoint, SessionInterceptionRegistration, SessionInterceptionRouter,
 };
+pub use surfaces::terminal::browser_cdp_process_mediation::BrowserCdpProcessMediationCapability;
 
 const DOCKER_INTERCEPTION_DIR: &str = "/erebor/interception";
 const LAZY_BROWSER_CDP_INTERCEPTION_TIMEOUT_MS: u64 = 15_000;
@@ -682,13 +683,13 @@ fn browser_cdp_process_mediation_capability(
     terminal: &TerminalSurfaceConfig,
     browser_cdp_endpoint: Option<&str>,
     lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
-) -> Result<Option<BrowserCdpMediationHandler>, SessionExecutionError> {
+) -> Result<Option<BrowserCdpProcessMediationCapability>, SessionExecutionError> {
     if !terminal_uses_managed_browser_cdp_mediation(terminal) {
         return Ok(None);
     }
 
     if let Some(lazy) = lazy_browser_cdp {
-        return BrowserCdpMediationHandler::lazy(
+        return BrowserCdpProcessMediationCapability::lazy(
             lazy.config,
             lazy.policy_set,
             lazy.context,
@@ -699,7 +700,7 @@ fn browser_cdp_process_mediation_capability(
         .map_err(SessionExecutionError::guard_io);
     }
 
-    Ok(browser_cdp_endpoint.map(BrowserCdpMediationHandler::new))
+    Ok(browser_cdp_endpoint.map(BrowserCdpProcessMediationCapability::new))
 }
 
 fn session_cdp_context(plan: &impl SessionPlanContext) -> CdpSessionContext {

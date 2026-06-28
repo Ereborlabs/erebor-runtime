@@ -15,9 +15,11 @@ use erebor_runtime_policy::PolicySet;
 use erebor_runtime_terminal::{TerminalProcessExecValidator, TerminalProcessMediationCapability};
 
 use super::{
-    browser_cdp_mediation::private_remote_debugging_port_for_request, BrowserCdpMediationHandler,
     InterceptionBrokerClient, RuntimeInterceptionBroker, RuntimeInterceptionBrokerError,
     RuntimeInterceptionEndpoint, SessionInterceptionRouter,
+};
+use crate::surfaces::terminal::browser_cdp_process_mediation::{
+    private_remote_debugging_port_for_request, BrowserCdpProcessMediationCapability,
 };
 
 #[test]
@@ -293,12 +295,14 @@ fn broker_fails_closed_for_unrouted_process_exec() -> Result<(), Box<dyn std::er
 }
 
 #[test]
-fn browser_cdp_mediation_handler_owns_endpoint_and_port_validation(
+fn browser_cdp_process_mediation_capability_owns_endpoint_and_port_validation(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_id = session_id("browser-cdp-mediator");
     let terminal = terminal_process_mediation_config()?;
     let validator = TerminalProcessExecValidator::from_config(&terminal)?
-        .with_process_mediation_capability(BrowserCdpMediationHandler::new("ws://127.0.0.1:9222/"));
+        .with_process_mediation_capability(BrowserCdpProcessMediationCapability::new(
+            "ws://127.0.0.1:9222/",
+        ));
     let broker = RuntimeInterceptionBroker::register_session(
         &session_id,
         "openclaw",
@@ -369,7 +373,7 @@ fn browser_cdp_lazy_mediation_starts_surface_on_requested_port(
         .handlers()
         .first()
         .ok_or_else(|| std::io::Error::other("missing process mediation handler"))?;
-    let handler = BrowserCdpMediationHandler::lazy(
+    let handler = BrowserCdpProcessMediationCapability::lazy(
         browser_cdp,
         PolicySet::default(),
         CdpSessionContext {

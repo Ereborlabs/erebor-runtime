@@ -18,7 +18,7 @@ use erebor_runtime_terminal::TerminalProcessMediationCapability;
 use tokio::runtime::Runtime;
 
 #[derive(Clone)]
-pub struct BrowserCdpMediationHandler {
+pub struct BrowserCdpProcessMediationCapability {
     mode: BrowserCdpMediationMode,
 }
 
@@ -38,7 +38,7 @@ struct LazyBrowserCdpMediation {
     running: Mutex<HashMap<u16, RunningSessionSurface>>,
 }
 
-impl BrowserCdpMediationHandler {
+impl BrowserCdpProcessMediationCapability {
     #[must_use]
     pub fn new(endpoint: impl Into<String>) -> Self {
         Self {
@@ -73,23 +73,23 @@ impl BrowserCdpMediationHandler {
     }
 }
 
-impl fmt::Debug for BrowserCdpMediationHandler {
+impl fmt::Debug for BrowserCdpProcessMediationCapability {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.mode {
             BrowserCdpMediationMode::FixedEndpoint { endpoint } => formatter
-                .debug_struct("BrowserCdpMediationHandler")
+                .debug_struct("BrowserCdpProcessMediationCapability")
                 .field("mode", &"fixed_endpoint")
                 .field("endpoint", endpoint)
                 .finish(),
             BrowserCdpMediationMode::LazySurface(_) => formatter
-                .debug_struct("BrowserCdpMediationHandler")
+                .debug_struct("BrowserCdpProcessMediationCapability")
                 .field("mode", &"lazy_surface")
                 .finish(),
         }
     }
 }
 
-impl TerminalProcessMediationCapability for BrowserCdpMediationHandler {
+impl TerminalProcessMediationCapability for BrowserCdpProcessMediationCapability {
     fn mediate_process_exec(
         &self,
         request: &ProcessExecInterceptionRequest<'_>,
@@ -216,7 +216,7 @@ fn validate_requested_port(
     Ok(())
 }
 
-pub(super) fn private_remote_debugging_port_for_request(
+pub(crate) fn private_remote_debugging_port_for_request(
     private_endpoint: &ProcessMediationPrivateEndpointConfig,
     requested_port: u16,
 ) -> Result<Option<u16>, String> {
