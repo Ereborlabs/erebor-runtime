@@ -31,7 +31,7 @@ pub use config::{
     RuntimeAuditSurfaceLoggingConfig, RuntimeConfig, SaaSAuditSurfaceLoggingConfig,
     SessionActorLayerConfig, SessionAdoptPlan, SessionAdoptTarget, SessionDiagnosticLayerConfig,
     SessionInterceptionBackendKind, SessionInterceptionCapabilityReport, SessionInterceptionConfig,
-    SessionInterceptionConfigSource, SessionInterceptionLayerConfig, SessionInterceptionOperation,
+    SessionInterceptionLayerConfig, SessionInterceptionOperation,
     SessionInterceptionOperationCapability, SessionLayerConfig, SessionRunPlan,
     SessionRunnerConfig, SessionRunnerKind, SessionRunnerLayerConfig, SessionSurfaceKind,
     SessionSurfaceLayers, SessionSurfaceStartPlan, SessionSurfaceToggleConfig,

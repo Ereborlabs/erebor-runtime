@@ -1,4 +1,4 @@
-use std::process::Command as ProcessCommand;
+use std::{io, process::Command as ProcessCommand, thread, time::Duration};
 
 use tracing::info;
 
@@ -6,6 +6,9 @@ use crate::{
     DockerSessionCommandOptions, DockerSessionCommandPlan, LinuxHostSessionCommandOptions,
     LinuxHostSessionCommandPlan, RuntimeError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
 };
+
+const LINUX_HOST_TEXT_BUSY_RETRIES: usize = 5;
+const LINUX_HOST_TEXT_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 
 pub trait SessionRunner {
     fn kind(&self) -> SessionRunnerKind;
@@ -287,7 +290,7 @@ impl DockerSessionRunner {
 
         match output_mode {
             DockerSessionOutputMode::Inherit => {
-                let status = command.status().map_err(|source| {
+                let status = retry_linux_host_text_busy(|| command.status()).map_err(|source| {
                     RuntimeError::session_runner_launch(
                         self.kind().as_str(),
                         launch.program().to_owned(),
@@ -309,7 +312,7 @@ impl DockerSessionRunner {
                 }
             }
             DockerSessionOutputMode::Capture => {
-                let output = command.output().map_err(|source| {
+                let output = retry_linux_host_text_busy(|| command.output()).map_err(|source| {
                     RuntimeError::session_runner_launch(
                         self.kind().as_str(),
                         launch.program().to_owned(),
@@ -386,7 +389,7 @@ impl LinuxHostSessionRunner {
 
         match output_mode {
             LinuxHostSessionOutputMode::Inherit => {
-                let status = command.status().map_err(|source| {
+                let status = retry_linux_host_text_busy(|| command.status()).map_err(|source| {
                     RuntimeError::session_runner_launch(
                         self.kind().as_str(),
                         launch.program().to_owned(),
@@ -408,7 +411,7 @@ impl LinuxHostSessionRunner {
                 }
             }
             LinuxHostSessionOutputMode::Capture => {
-                let output = command.output().map_err(|source| {
+                let output = retry_linux_host_text_busy(|| command.output()).map_err(|source| {
                     RuntimeError::session_runner_launch(
                         self.kind().as_str(),
                         launch.program().to_owned(),
@@ -489,6 +492,24 @@ impl LinuxHostSessionRunner {
                     String::from_utf8_lossy(&output.stderr).to_string(),
                 ))
             }
+        }
+    }
+}
+
+fn retry_linux_host_text_busy<T>(
+    mut launch: impl FnMut() -> Result<T, io::Error>,
+) -> Result<T, io::Error> {
+    let mut retries = 0;
+    loop {
+        match launch() {
+            Err(error)
+                if error.kind() == io::ErrorKind::ExecutableFileBusy
+                    && retries < LINUX_HOST_TEXT_BUSY_RETRIES =>
+            {
+                retries += 1;
+                thread::sleep(LINUX_HOST_TEXT_BUSY_RETRY_DELAY);
+            }
+            result => return result,
         }
     }
 }

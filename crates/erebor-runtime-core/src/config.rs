@@ -723,7 +723,7 @@ impl SessionInterceptionBackendKind {
     }
 
     #[must_use]
-    pub const fn supports_operation(self, operation: SessionInterceptionOperation) -> bool {
+    const fn supports_operation(self, operation: SessionInterceptionOperation) -> bool {
         match self {
             Self::LinuxPtrace => matches!(operation, SessionInterceptionOperation::ProcessExec),
         }
@@ -742,18 +742,7 @@ pub enum SessionInterceptionOperation {
 
 impl SessionInterceptionOperation {
     #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ProcessExec => "process_exec",
-            Self::FileOpen => "file_open",
-            Self::FileRead => "file_read",
-            Self::FileMutation => "file_mutation",
-            Self::SocketConnect => "socket_connect",
-        }
-    }
-
-    #[must_use]
-    pub const fn owning_surface(self) -> &'static str {
+    const fn owning_surface(self) -> &'static str {
         match self {
             Self::ProcessExec => SessionSurfaceKind::Terminal.as_str(),
             Self::FileOpen | Self::FileRead | Self::FileMutation => "filesystem",
@@ -767,17 +756,15 @@ pub struct SessionInterceptionConfig {
     enabled: bool,
     backend: SessionInterceptionBackendKind,
     operations: Vec<SessionInterceptionOperation>,
-    source: SessionInterceptionConfigSource,
 }
 
 impl SessionInterceptionConfig {
     #[must_use]
-    pub fn disabled() -> Self {
+    fn disabled() -> Self {
         Self {
             enabled: false,
             backend: SessionInterceptionBackendKind::LinuxPtrace,
             operations: Vec::new(),
-            source: SessionInterceptionConfigSource::Default,
         }
     }
 
@@ -796,13 +783,7 @@ impl SessionInterceptionConfig {
         &self.operations
     }
 
-    #[must_use]
-    pub const fn source(&self) -> SessionInterceptionConfigSource {
-        self.source
-    }
-
-    #[must_use]
-    pub fn operation_enabled(&self, operation: SessionInterceptionOperation) -> bool {
+    fn operation_enabled(&self, operation: SessionInterceptionOperation) -> bool {
         self.enabled && self.operations.contains(&operation)
     }
 
@@ -818,7 +799,6 @@ impl SessionInterceptionConfig {
                 enabled: true,
                 backend: explicit.backend,
                 operations: dedupe_session_interception_operations(explicit.operations.clone()),
-                source: SessionInterceptionConfigSource::SessionConfig,
             };
         }
 
@@ -846,46 +826,16 @@ impl SessionInterceptionConfig {
             })
             .collect();
 
-        SessionInterceptionCapabilityReport {
-            enabled: self.enabled,
-            backend: self.backend,
-            source: self.source,
-            operations,
-        }
+        SessionInterceptionCapabilityReport { operations }
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum SessionInterceptionConfigSource {
-    #[default]
-    Default,
-    SessionConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionInterceptionCapabilityReport {
-    enabled: bool,
-    backend: SessionInterceptionBackendKind,
-    source: SessionInterceptionConfigSource,
     operations: Vec<SessionInterceptionOperationCapability>,
 }
 
 impl SessionInterceptionCapabilityReport {
-    #[must_use]
-    pub const fn enabled(&self) -> bool {
-        self.enabled
-    }
-
-    #[must_use]
-    pub const fn backend(&self) -> SessionInterceptionBackendKind {
-        self.backend
-    }
-
-    #[must_use]
-    pub const fn source(&self) -> SessionInterceptionConfigSource {
-        self.source
-    }
-
     #[must_use]
     pub fn operations(&self) -> &[SessionInterceptionOperationCapability] {
         &self.operations
@@ -1058,7 +1008,6 @@ impl DockerSessionRunnerLayerConfig {
 pub struct SessionRunPlan {
     policies: Vec<PathBuf>,
     audit: RuntimeAuditConfig,
-    interception: SessionInterceptionConfig,
     session_id: SessionId,
     actor: SessionActorLayerConfig,
     workspace: Option<PathBuf>,
@@ -1090,7 +1039,6 @@ impl SessionRunPlan {
         Ok(Self {
             policies: config.policies.clone(),
             audit: config.audit.clone(),
-            interception: config.session_interception(),
             session_id,
             actor: config.session.actor.clone(),
             workspace: config.session.workspace.clone(),
@@ -1133,11 +1081,6 @@ impl SessionRunPlan {
     #[must_use]
     pub const fn audit(&self) -> &RuntimeAuditConfig {
         &self.audit
-    }
-
-    #[must_use]
-    pub const fn interception(&self) -> &SessionInterceptionConfig {
-        &self.interception
     }
 
     #[must_use]
@@ -1201,7 +1144,6 @@ impl SessionRunPlan {
 pub struct SessionAdoptPlan {
     policies: Vec<PathBuf>,
     audit: RuntimeAuditConfig,
-    interception: SessionInterceptionConfig,
     session_id: SessionId,
     actor: SessionActorLayerConfig,
     workspace: Option<PathBuf>,
@@ -1256,7 +1198,6 @@ impl SessionAdoptPlan {
         Ok(Self {
             policies: config.policies.clone(),
             audit: config.audit.clone(),
-            interception: config.session_interception(),
             session_id,
             actor: config.session.actor.clone(),
             workspace: config.session.workspace.clone(),
@@ -1277,11 +1218,6 @@ impl SessionAdoptPlan {
     #[must_use]
     pub const fn audit(&self) -> &RuntimeAuditConfig {
         &self.audit
-    }
-
-    #[must_use]
-    pub const fn interception(&self) -> &SessionInterceptionConfig {
-        &self.interception
     }
 
     #[must_use]
@@ -1920,6 +1856,7 @@ pub struct SessionSurfaceToggleConfig {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TerminalSurfaceLayerConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -2898,8 +2835,8 @@ mod tests {
         LinuxHostSessionCommandPlan, ProcessInterceptionDecision, ProcessMediationEndpointSource,
         ProcessMediationHandlerKind, ProcessMediationPrivatePortStrategy, RuntimeConfig,
         RuntimeConfigError, SessionAdoptPlan, SessionInterceptionBackendKind,
-        SessionInterceptionConfigSource, SessionInterceptionOperation, SessionRunPlan,
-        SessionRunnerKind, SessionSurfaceKind, TerminalProcessMediationMode,
+        SessionInterceptionOperation, SessionRunPlan, SessionRunnerKind, SessionSurfaceKind,
+        TerminalProcessMediationMode,
     };
 
     #[test]
@@ -2972,10 +2909,6 @@ mod tests {
         let capabilities = guarded_config.session_interception_capabilities();
 
         assert!(interception.enabled());
-        assert_eq!(
-            interception.source(),
-            SessionInterceptionConfigSource::SessionConfig
-        );
         assert_eq!(
             interception.backend(),
             SessionInterceptionBackendKind::LinuxPtrace
@@ -3081,6 +3014,25 @@ mod tests {
             error,
             Err(RuntimeConfigError::InvalidSessionInterceptionConfig { .. })
         ));
+    }
+
+    #[test]
+    fn rejects_terminal_process_guard_config() {
+        let error = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "surfaces": {
+                "terminal": {
+                  "enabled": true,
+                  "process_guard": { "enabled": true }
+                }
+              }
+            }
+            "#,
+        );
+
+        assert!(matches!(error, Err(RuntimeConfigError::InvalidJson { .. })));
     }
 
     #[test]
