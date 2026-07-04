@@ -2,18 +2,22 @@ use std::collections::HashSet;
 
 use erebor_runtime_events::{ActionKind, ExecutionSurface, RiskLevel, RuntimeEvent};
 use serde::Deserialize;
+use snafu::{ensure, ResultExt};
 
-use crate::{Decision, PolicyError};
+use crate::error::{
+    DuplicateRuleSnafu, EmptyPolicySnafu, InvalidPolicySyntaxSnafu, InvalidRuleSnafu,
+};
+use crate::{Decision, Result};
 
 pub trait PolicyEvaluator {
-    fn evaluate(&self, event: &RuntimeEvent) -> Result<Decision, PolicyError>;
+    fn evaluate(&self, event: &RuntimeEvent) -> Result<Decision>;
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct AllowAllPolicy;
 
 impl PolicyEvaluator for AllowAllPolicy {
-    fn evaluate(&self, _event: &RuntimeEvent) -> Result<Decision, PolicyError> {
+    fn evaluate(&self, _event: &RuntimeEvent) -> Result<Decision> {
         Ok(Decision::Allow { rule_id: None })
     }
 }
@@ -36,7 +40,7 @@ impl PolicySet {
 }
 
 impl PolicyEvaluator for PolicySet {
-    fn evaluate(&self, event: &RuntimeEvent) -> Result<Decision, PolicyError> {
+    fn evaluate(&self, event: &RuntimeEvent) -> Result<Decision> {
         for policy in &self.policies {
             let decision = policy.evaluate(event)?;
             if decision.rule_id().is_some() {
@@ -54,38 +58,41 @@ pub struct LocalPolicy {
 }
 
 impl LocalPolicy {
-    pub fn from_json_str(source: &str) -> Result<Self, PolicyError> {
-        if source.trim().is_empty() {
-            return Err(PolicyError::empty_policy());
-        }
+    pub fn from_json_str(source: &str) -> Result<Self> {
+        ensure!(!source.trim().is_empty(), EmptyPolicySnafu);
 
         let document: PolicyDocument =
-            serde_json::from_str(source).map_err(PolicyError::invalid_policy_syntax)?;
+            serde_json::from_str(source).context(InvalidPolicySyntaxSnafu)?;
 
         Self::from_document(document)
     }
 
-    fn from_document(document: PolicyDocument) -> Result<Self, PolicyError> {
+    fn from_document(document: PolicyDocument) -> Result<Self> {
         let mut seen = HashSet::new();
 
         for rule in &document.rules {
-            if rule.id.trim().is_empty() {
-                return Err(PolicyError::invalid_rule(
-                    rule.id.clone(),
-                    "rule id cannot be empty",
-                ));
-            }
+            ensure!(
+                !rule.id.trim().is_empty(),
+                InvalidRuleSnafu {
+                    rule_id: rule.id.clone(),
+                    reason: String::from("rule id cannot be empty")
+                }
+            );
 
-            if !seen.insert(rule.id.clone()) {
-                return Err(PolicyError::duplicate_rule(rule.id.clone()));
-            }
+            ensure!(
+                seen.insert(rule.id.clone()),
+                DuplicateRuleSnafu {
+                    rule_id: rule.id.clone()
+                }
+            );
 
-            if rule.matcher.is_empty() {
-                return Err(PolicyError::invalid_rule(
-                    rule.id.clone(),
-                    "rule must declare at least one match criterion",
-                ));
-            }
+            ensure!(
+                !rule.matcher.is_empty(),
+                InvalidRuleSnafu {
+                    rule_id: rule.id.clone(),
+                    reason: String::from("rule must declare at least one match criterion")
+                }
+            );
         }
 
         Ok(Self {
@@ -95,7 +102,7 @@ impl LocalPolicy {
 }
 
 impl PolicyEvaluator for LocalPolicy {
-    fn evaluate(&self, event: &RuntimeEvent) -> Result<Decision, PolicyError> {
+    fn evaluate(&self, event: &RuntimeEvent) -> Result<Decision> {
         let decision = self
             .rules
             .iter()

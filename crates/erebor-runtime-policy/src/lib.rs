@@ -7,5 +7,5 @@ mod policy;
 mod tests;
 
 pub use decision::Decision;
-pub use error::PolicyError;
+pub use error::{PolicyError, Result};
 pub use policy::{AllowAllPolicy, LocalPolicy, PolicyEvaluator, PolicySet};

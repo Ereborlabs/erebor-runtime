@@ -1,6 +1,11 @@
 use prost::Message;
+use snafu::ResultExt;
 
-use crate::IpcProtocolError;
+use crate::error::{
+    DecodePayloadSnafu, EncodePayloadSnafu, FrameTooShortSnafu, InvalidMagicSnafu,
+    InvalidPayloadLengthSnafu, PayloadTooLargeSnafu, UnsupportedFrameVersionSnafu,
+};
+use crate::Result;
 
 pub const MAGIC: [u8; 4] = *b"ERB1";
 pub const FRAME_VERSION: u16 = 1;
@@ -14,22 +19,21 @@ pub struct EreborIpcFrame {
 }
 
 impl EreborIpcFrame {
-    pub fn new(flags: u16, payload: Vec<u8>) -> Result<Self, IpcProtocolError> {
+    pub fn new(flags: u16, payload: Vec<u8>) -> Result<Self> {
         if payload.len() > MAX_PAYLOAD_LEN {
-            return Err(IpcProtocolError::payload_too_large(
-                payload.len(),
-                MAX_PAYLOAD_LEN,
-            ));
+            return PayloadTooLargeSnafu {
+                actual: payload.len(),
+                maximum: MAX_PAYLOAD_LEN,
+            }
+            .fail();
         }
 
         Ok(Self { flags, payload })
     }
 
-    pub fn from_message<T: Message>(message: &T) -> Result<Self, IpcProtocolError> {
+    pub fn from_message<T: Message>(message: &T) -> Result<Self> {
         let mut payload = Vec::with_capacity(message.encoded_len());
-        message
-            .encode(&mut payload)
-            .map_err(IpcProtocolError::encode_payload)?;
+        message.encode(&mut payload).context(EncodePayloadSnafu)?;
         Self::new(0, payload)
     }
 
@@ -43,21 +47,20 @@ impl EreborIpcFrame {
         &self.payload
     }
 
-    pub fn decode_payload<T: Message + Default>(&self) -> Result<T, IpcProtocolError> {
-        T::decode(self.payload.as_slice()).map_err(IpcProtocolError::decode_payload)
+    pub fn decode_payload<T: Message + Default>(&self) -> Result<T> {
+        T::decode(self.payload.as_slice()).context(DecodePayloadSnafu)
     }
 
-    pub fn encode(&self) -> Result<Vec<u8>, IpcProtocolError> {
+    pub fn encode(&self) -> Result<Vec<u8>> {
         if self.payload.len() > MAX_PAYLOAD_LEN {
-            return Err(IpcProtocolError::payload_too_large(
-                self.payload.len(),
-                MAX_PAYLOAD_LEN,
-            ));
+            return PayloadTooLargeSnafu {
+                actual: self.payload.len(),
+                maximum: MAX_PAYLOAD_LEN,
+            }
+            .fail();
         }
 
-        let payload_len = u32::try_from(self.payload.len()).map_err(|_error| {
-            IpcProtocolError::payload_too_large(self.payload.len(), MAX_PAYLOAD_LEN)
-        })?;
+        let payload_len = self.payload.len() as u32;
         let mut output = Vec::with_capacity(HEADER_LEN + self.payload.len());
         output.extend_from_slice(&MAGIC);
         output.extend_from_slice(&FRAME_VERSION.to_le_bytes());
@@ -68,18 +71,22 @@ impl EreborIpcFrame {
         Ok(output)
     }
 
-    pub fn decode(source: &[u8]) -> Result<Self, IpcProtocolError> {
+    pub fn decode(source: &[u8]) -> Result<Self> {
         if source.len() < HEADER_LEN {
-            return Err(IpcProtocolError::frame_too_short(source.len(), HEADER_LEN));
+            return FrameTooShortSnafu {
+                actual: source.len(),
+                minimum: HEADER_LEN,
+            }
+            .fail();
         }
 
         if source[0..4] != MAGIC {
-            return Err(IpcProtocolError::InvalidMagic);
+            return InvalidMagicSnafu.fail();
         }
 
         let version = u16::from_le_bytes([source[4], source[5]]);
         if version != FRAME_VERSION {
-            return Err(IpcProtocolError::unsupported_frame_version(version));
+            return UnsupportedFrameVersionSnafu { version }.fail();
         }
 
         let flags = u16::from_le_bytes([source[6], source[7]]);
@@ -88,17 +95,19 @@ impl EreborIpcFrame {
         let available = source.len() - HEADER_LEN;
 
         if payload_len > MAX_PAYLOAD_LEN {
-            return Err(IpcProtocolError::payload_too_large(
-                payload_len,
-                MAX_PAYLOAD_LEN,
-            ));
+            return PayloadTooLargeSnafu {
+                actual: payload_len,
+                maximum: MAX_PAYLOAD_LEN,
+            }
+            .fail();
         }
 
         if payload_len != available {
-            return Err(IpcProtocolError::invalid_payload_length(
-                payload_len,
+            return InvalidPayloadLengthSnafu {
+                declared: payload_len,
                 available,
-            ));
+            }
+            .fail();
         }
 
         Self::new(flags, source[HEADER_LEN..HEADER_LEN + payload_len].to_vec())
@@ -136,7 +145,7 @@ mod tests {
         invalid_magic.extend_from_slice(&0u32.to_le_bytes());
         assert!(matches!(
             EreborIpcFrame::decode(&invalid_magic),
-            Err(IpcProtocolError::InvalidMagic)
+            Err(IpcProtocolError::InvalidMagic { .. })
         ));
 
         let mut unsupported_version = Vec::from(MAGIC);
@@ -145,7 +154,7 @@ mod tests {
         unsupported_version.extend_from_slice(&0u32.to_le_bytes());
         assert!(matches!(
             EreborIpcFrame::decode(&unsupported_version),
-            Err(IpcProtocolError::UnsupportedFrameVersion { version: 99 })
+            Err(IpcProtocolError::UnsupportedFrameVersion { version: 99, .. })
         ));
 
         let mut oversized = Vec::from(MAGIC);

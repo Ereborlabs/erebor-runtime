@@ -1,16 +1,16 @@
-use std::{
-    fs, io,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{fs, path::Path, sync::Arc};
 
 use erebor_runtime_core::{
     ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, ProcessInterceptionDecision,
     ProcessMediationHandlerConfig, ProcessMediationReplacementSurface, SurfaceInterceptionDecision,
     SurfaceMediationDecision, TerminalSurfaceConfig,
 };
-use erebor_runtime_policy::{LocalPolicy, PolicyError};
-use thiserror::Error;
+use erebor_runtime_policy::LocalPolicy;
+use snafu::{OptionExt, ResultExt};
+
+mod error;
+
+pub use error::{Error as TerminalSurfaceError, Result as TerminalSurfaceResult};
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TerminalProcessGuardRules {
@@ -62,7 +62,7 @@ pub struct TerminalProcessPolicy {
 }
 
 impl TerminalProcessPolicy {
-    pub fn from_config(config: &TerminalSurfaceConfig) -> Result<Self, TerminalSurfaceError> {
+    pub fn from_config(config: &TerminalSurfaceConfig) -> TerminalSurfaceResult<Self> {
         Ok(Self {
             rules: compile_terminal_process_guard_rules(config)?,
         })
@@ -91,7 +91,7 @@ pub struct TerminalProcessExecValidator {
 }
 
 impl TerminalProcessExecValidator {
-    pub fn from_config(config: &TerminalSurfaceConfig) -> Result<Self, TerminalSurfaceError> {
+    pub fn from_config(config: &TerminalSurfaceConfig) -> TerminalSurfaceResult<Self> {
         Ok(Self {
             policy: TerminalProcessPolicy::from_config(config)?,
             mediation: TerminalProcessMediationPolicy::from_config(config),
@@ -357,20 +357,19 @@ impl TerminalProcessGuardDecision {
 
 pub fn compile_terminal_process_guard_rules(
     config: &TerminalSurfaceConfig,
-) -> Result<TerminalProcessGuardRules, TerminalSurfaceError> {
+) -> TerminalSurfaceResult<TerminalProcessGuardRules> {
     let mut rules = Vec::new();
 
     for path in config.policies() {
         let source = read_policy_source(path)?;
-        let _policy =
-            LocalPolicy::from_json_str(&source).map_err(TerminalSurfaceError::invalid_policy)?;
+        let _policy = LocalPolicy::from_json_str(&source).context(error::InvalidPolicySnafu)?;
         let document: serde_json::Value =
-            serde_json::from_str(&source).map_err(TerminalSurfaceError::policy_json)?;
+            serde_json::from_str(&source).context(error::PolicyJsonSnafu)?;
         let policy_rules = document
             .get("rules")
             .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| {
-                TerminalSurfaceError::invalid_guard_config("policy JSON must contain rules array")
+            .context(error::InvalidGuardConfigSnafu {
+                reason: String::from("policy JSON must contain rules array"),
             })?;
 
         for rule in policy_rules {
@@ -411,38 +410,9 @@ pub fn compile_terminal_process_guard_rules(
     Ok(TerminalProcessGuardRules::new(rules))
 }
 
-#[derive(Debug, Error)]
-pub enum TerminalSurfaceError {
-    #[error("failed to read terminal policy `{}`: {source}", path.display())]
-    ReadPolicy { path: PathBuf, source: io::Error },
-    #[error("{source}")]
-    InvalidPolicy { source: PolicyError },
-    #[error("failed to parse terminal policy JSON: {source}")]
-    PolicyJson { source: serde_json::Error },
-    #[error("terminal process guard config is invalid: {reason}")]
-    InvalidGuardConfig { reason: String },
-}
-
-impl TerminalSurfaceError {
-    fn invalid_policy(source: PolicyError) -> Self {
-        Self::InvalidPolicy { source }
-    }
-
-    fn policy_json(source: serde_json::Error) -> Self {
-        Self::PolicyJson { source }
-    }
-
-    fn invalid_guard_config(reason: impl Into<String>) -> Self {
-        Self::InvalidGuardConfig {
-            reason: reason.into(),
-        }
-    }
-}
-
-fn read_policy_source(path: &Path) -> Result<String, TerminalSurfaceError> {
-    fs::read_to_string(path).map_err(|error| TerminalSurfaceError::ReadPolicy {
+fn read_policy_source(path: &Path) -> TerminalSurfaceResult<String> {
+    fs::read_to_string(path).context(error::ReadPolicySnafu {
         path: path.to_path_buf(),
-        source: error,
     })
 }
 

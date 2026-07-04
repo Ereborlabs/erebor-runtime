@@ -1,60 +1,89 @@
-use thiserror::Error;
+use std::any::Any;
 
-#[derive(Debug, Error)]
+use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
+use snafu::{Location, Snafu};
+
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum IpcProtocolError {
-    #[error("IPC frame payload exceeds maximum size: {actual} > {maximum}")]
-    PayloadTooLarge { actual: usize, maximum: usize },
-    #[error("IPC frame is too short: {actual} < {minimum}")]
-    FrameTooShort { actual: usize, minimum: usize },
-    #[error("IPC frame magic is invalid")]
-    InvalidMagic,
-    #[error("IPC frame version `{version}` is not supported")]
-    UnsupportedFrameVersion { version: u16 },
-    #[error("IPC frame payload length is invalid: declared {declared}, available {available}")]
-    InvalidPayloadLength { declared: usize, available: usize },
-    #[error("IPC envelope payload kind mismatch: expected `{expected}`, actual `{actual}`")]
-    PayloadKindMismatch { expected: String, actual: String },
-    #[error("failed to encode protobuf IPC payload: {source}")]
-    EncodePayload { source: prost::EncodeError },
-    #[error("failed to decode protobuf IPC payload: {source}")]
-    DecodePayload { source: prost::DecodeError },
+    #[snafu(display("IPC frame payload exceeds maximum size: {actual} > {maximum}"))]
+    PayloadTooLarge {
+        actual: usize,
+        maximum: usize,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("IPC frame is too short: {actual} < {minimum}"))]
+    FrameTooShort {
+        actual: usize,
+        minimum: usize,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("IPC frame magic is invalid"))]
+    InvalidMagic {
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("IPC frame version `{version}` is not supported"))]
+    UnsupportedFrameVersion {
+        version: u16,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "IPC frame payload length is invalid: declared {declared}, available {available}"
+    ))]
+    InvalidPayloadLength {
+        declared: usize,
+        available: usize,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "IPC envelope payload kind mismatch: expected `{expected}`, actual `{actual}`"
+    ))]
+    PayloadKindMismatch {
+        expected: String,
+        actual: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to encode protobuf IPC payload: {source}"))]
+    EncodePayload {
+        source: prost::EncodeError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to decode protobuf IPC payload: {source}"))]
+    DecodePayload {
+        source: prost::DecodeError,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
-impl IpcProtocolError {
-    pub(crate) const fn payload_too_large(actual: usize, maximum: usize) -> Self {
-        Self::PayloadTooLarge { actual, maximum }
-    }
+pub type Result<T> = std::result::Result<T, IpcProtocolError>;
 
-    pub(crate) const fn frame_too_short(actual: usize, minimum: usize) -> Self {
-        Self::FrameTooShort { actual, minimum }
-    }
-
-    pub(crate) const fn invalid_payload_length(declared: usize, available: usize) -> Self {
-        Self::InvalidPayloadLength {
-            declared,
-            available,
+impl ErrorExt for IpcProtocolError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::UnsupportedFrameVersion { .. } => StatusCode::Unsupported,
+            Self::EncodePayload { .. } => StatusCode::Unexpected,
+            Self::PayloadTooLarge { .. }
+            | Self::FrameTooShort { .. }
+            | Self::InvalidMagic { .. }
+            | Self::InvalidPayloadLength { .. }
+            | Self::PayloadKindMismatch { .. }
+            | Self::DecodePayload { .. } => StatusCode::InvalidArguments,
         }
     }
 
-    pub(crate) const fn unsupported_frame_version(version: u16) -> Self {
-        Self::UnsupportedFrameVersion { version }
+    fn retry_hint(&self) -> RetryHint {
+        RetryHint::NonRetryable
     }
 
-    pub(crate) fn payload_kind_mismatch(
-        expected: impl Into<String>,
-        actual: impl Into<String>,
-    ) -> Self {
-        Self::PayloadKindMismatch {
-            expected: expected.into(),
-            actual: actual.into(),
-        }
-    }
-
-    pub(crate) fn encode_payload(source: prost::EncodeError) -> Self {
-        Self::EncodePayload { source }
-    }
-
-    pub(crate) fn decode_payload(source: prost::DecodeError) -> Self {
-        Self::DecodePayload { source }
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

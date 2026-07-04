@@ -1,8 +1,10 @@
 include!(concat!(env!("OUT_DIR"), "/erebor.runtime.ipc.v1.rs"));
 
 use prost::Message;
+use snafu::ResultExt;
 
-use crate::{EreborIpcFrame, IpcProtocolError};
+use crate::error::{DecodePayloadSnafu, EncodePayloadSnafu, PayloadKindMismatchSnafu};
+use crate::EreborIpcFrame;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const KIND_GUARD_HELLO: &str = "erebor.runtime.ipc.v1.GuardHello";
@@ -18,11 +20,9 @@ impl Envelope {
         correlation_id: u64,
         message_kind: impl Into<String>,
         message: &T,
-    ) -> Result<Self, IpcProtocolError> {
+    ) -> crate::Result<Self> {
         let mut payload = Vec::with_capacity(message.encoded_len());
-        message
-            .encode(&mut payload)
-            .map_err(IpcProtocolError::encode_payload)?;
+        message.encode(&mut payload).context(EncodePayloadSnafu)?;
 
         Ok(Self {
             protocol_version: PROTOCOL_VERSION,
@@ -37,18 +37,19 @@ impl Envelope {
     pub fn decode_typed_payload<T: Message + Default>(
         &self,
         expected_kind: &str,
-    ) -> Result<T, IpcProtocolError> {
+    ) -> crate::Result<T> {
         if self.message_kind != expected_kind {
-            return Err(IpcProtocolError::payload_kind_mismatch(
-                expected_kind,
-                self.message_kind.clone(),
-            ));
+            return PayloadKindMismatchSnafu {
+                expected: expected_kind.to_string(),
+                actual: self.message_kind.clone(),
+            }
+            .fail();
         }
 
-        T::decode(self.payload.as_slice()).map_err(IpcProtocolError::decode_payload)
+        T::decode(self.payload.as_slice()).context(DecodePayloadSnafu)
     }
 
-    pub fn into_frame(&self) -> Result<EreborIpcFrame, IpcProtocolError> {
+    pub fn into_frame(&self) -> crate::Result<EreborIpcFrame> {
         EreborIpcFrame::from_message(self)
     }
 }

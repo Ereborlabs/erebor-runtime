@@ -4,6 +4,7 @@ use erebor_runtime_ipc::{
     v1::{Envelope, Header},
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAGIC, MAX_PAYLOAD_LEN,
 };
+use snafu::Location;
 
 use super::{constants::INTERCEPTION_TOKEN_HEADER, server::RuntimeInterceptionBrokerError};
 
@@ -43,14 +44,19 @@ pub(super) fn read_frame_from_stream(
 
     if header[0..4] != MAGIC {
         return Err(RuntimeInterceptionBrokerError::protocol(
-            IpcProtocolError::InvalidMagic,
+            IpcProtocolError::InvalidMagic {
+                location: Location::default(),
+            },
         ));
     }
 
     let version = u16::from_le_bytes([header[4], header[5]]);
     if version != FRAME_VERSION {
         return Err(RuntimeInterceptionBrokerError::protocol(
-            IpcProtocolError::UnsupportedFrameVersion { version },
+            IpcProtocolError::UnsupportedFrameVersion {
+                version,
+                location: Location::default(),
+            },
         ));
     }
 
@@ -60,6 +66,7 @@ pub(super) fn read_frame_from_stream(
             IpcProtocolError::PayloadTooLarge {
                 actual: payload_len,
                 maximum: MAX_PAYLOAD_LEN,
+                location: Location::default(),
             },
         ));
     }

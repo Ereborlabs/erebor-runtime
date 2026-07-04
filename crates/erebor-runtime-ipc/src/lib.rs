@@ -4,5 +4,5 @@ mod error;
 mod frame;
 pub mod v1;
 
-pub use error::IpcProtocolError;
+pub use error::{IpcProtocolError, Result};
 pub use frame::{EreborIpcFrame, FRAME_VERSION, HEADER_LEN, MAGIC, MAX_PAYLOAD_LEN};

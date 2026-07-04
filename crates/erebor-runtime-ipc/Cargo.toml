@@ -6,8 +6,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+erebor-runtime-error = { path = "../erebor-runtime-error" }
 prost.workspace = true
-thiserror.workspace = true
+snafu.workspace = true
 
 [build-dependencies]
 prost-build.workspace = true

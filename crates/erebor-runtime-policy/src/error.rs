@@ -1,55 +1,53 @@
-use snafu::Location;
-use thiserror::Error;
+use std::any::Any;
 
-#[derive(Debug, Error)]
+use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
+use snafu::{Location, Snafu};
+
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum PolicyError {
-    #[error("policy source is empty")]
-    EmptyPolicy { location: Location },
-    #[error("policy syntax is invalid: {source}")]
-    InvalidPolicySyntax {
-        source: serde_json::Error,
+    #[snafu(display("policy source is empty"))]
+    EmptyPolicy {
+        #[snafu(implicit)]
         location: Location,
     },
-    #[error("policy rule `{rule_id}` is invalid: {reason}")]
+    #[snafu(display("policy syntax is invalid: {source}"))]
+    InvalidPolicySyntax {
+        source: serde_json::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("policy rule `{rule_id}` is invalid: {reason}"))]
     InvalidRule {
         rule_id: String,
         reason: String,
+        #[snafu(implicit)]
         location: Location,
     },
-    #[error("policy rule `{rule_id}` is duplicated")]
-    DuplicateRule { rule_id: String, location: Location },
+    #[snafu(display("policy rule `{rule_id}` is duplicated"))]
+    DuplicateRule {
+        rule_id: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
-impl PolicyError {
-    #[track_caller]
-    pub fn empty_policy() -> Self {
-        Self::EmptyPolicy {
-            location: Location::default(),
+pub type Result<T> = std::result::Result<T, PolicyError>;
+
+impl ErrorExt for PolicyError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::EmptyPolicy { .. } | Self::InvalidRule { .. } => StatusCode::InvalidArguments,
+            Self::InvalidPolicySyntax { .. } => StatusCode::InvalidSyntax,
+            Self::DuplicateRule { .. } => StatusCode::AlreadyExists,
         }
     }
 
-    #[track_caller]
-    pub fn invalid_policy_syntax(source: serde_json::Error) -> Self {
-        Self::InvalidPolicySyntax {
-            source,
-            location: Location::default(),
-        }
+    fn retry_hint(&self) -> RetryHint {
+        RetryHint::NonRetryable
     }
 
-    #[track_caller]
-    pub fn invalid_rule(rule_id: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self::InvalidRule {
-            rule_id: rule_id.into(),
-            reason: reason.into(),
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    pub fn duplicate_rule(rule_id: impl Into<String>) -> Self {
-        Self::DuplicateRule {
-            rule_id: rule_id.into(),
-            location: Location::default(),
-        }
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
