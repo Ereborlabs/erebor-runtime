@@ -5,9 +5,10 @@ pub use execution::SessionExecutionError;
 pub use interception_broker::RuntimeInterceptionBrokerError;
 
 pub(crate) use execution::{
-    AdoptMatchAmbiguousSnafu, AdoptMatchNotFoundSnafu, DiagnosticFailedSnafu, GuardConfigSnafu,
-    GuardIoSnafu, InvalidAdoptTargetSnafu, InvalidConfigSnafu, InvalidPolicySnafu, ReadPolicySnafu,
-    RuntimeInterceptionBrokerSnafu, RuntimeSnafu, SessionRegistrySnafu, TerminalSurfaceSnafu,
+    AdoptMatchAmbiguousSnafu, AdoptMatchNotFoundSnafu, DiagnosticFailedSnafu,
+    FilesystemSurfaceSnafu, GuardConfigSnafu, GuardIoSnafu, InvalidAdoptTargetSnafu,
+    InvalidConfigSnafu, InvalidPolicySnafu, ReadPolicySnafu, RuntimeInterceptionBrokerSnafu,
+    RuntimeSnafu, SessionRegistrySnafu, TerminalSurfaceSnafu,
 };
 #[cfg(windows)]
 pub(crate) use interception_broker::UnsupportedTransportSnafu as BrokerUnsupportedTransportSnafu;

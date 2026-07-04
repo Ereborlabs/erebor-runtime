@@ -151,6 +151,19 @@ fn start_session_side_resources_from_start_plan(
                     String::from("EREBOR_FILESYSTEM_SURFACE"),
                     String::from("filesystem"),
                 ));
+                if let Some(storage) = prepared_session
+                    .map(PreparedSession::storage)
+                    .and_then(|storage| storage.filesystem())
+                {
+                    environment.push((
+                        String::from("EREBOR_FILESYSTEM_SESSION_DIR"),
+                        storage.root().display().to_string(),
+                    ));
+                    environment.push((
+                        String::from("EREBOR_FILESYSTEM_REPO"),
+                        storage.repo_path().display().to_string(),
+                    ));
+                }
             }
         }
     }

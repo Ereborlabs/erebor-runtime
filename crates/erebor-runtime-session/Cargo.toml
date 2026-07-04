@@ -11,6 +11,7 @@ erebor-runtime-cdp = { path = "../erebor-runtime-cdp" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
+erebor-runtime-filesystem = { path = "../erebor-runtime-filesystem" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 erebor-runtime-terminal = { path = "../erebor-runtime-terminal" }

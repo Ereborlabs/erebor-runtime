@@ -1,28 +1,39 @@
 use std::path::{Path, PathBuf};
 
 use erebor_runtime_core::{
-    RuntimeConfig, RuntimeError, SessionRegistry, SessionRegistryFinish, SessionRunOutcome,
-    SessionRunPlan,
+    FilesystemSurfaceConfig, RuntimeConfig, RuntimeError, SessionRegistry, SessionRegistryFinish,
+    SessionRunOutcome, SessionRunPlan,
 };
 use erebor_runtime_events::SessionId;
+use erebor_runtime_filesystem::{FilesystemSessionStorage, FilesystemVolumeStorageRequest};
 use snafu::ResultExt;
 
 use crate::{
-    diagnostic::SessionDiagnosticOutcome, error::SessionRegistrySnafu, SessionExecutionError,
+    diagnostic::SessionDiagnosticOutcome,
+    error::{FilesystemSurfaceSnafu, InvalidConfigSnafu, SessionRegistrySnafu},
+    SessionExecutionError,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SessionStorage {
     audit_path: PathBuf,
+    filesystem: Option<FilesystemSessionStorage>,
 }
 
 impl SessionStorage {
-    fn new(audit_path: PathBuf) -> Self {
-        Self { audit_path }
+    fn new(audit_path: PathBuf, filesystem: Option<FilesystemSessionStorage>) -> Self {
+        Self {
+            audit_path,
+            filesystem,
+        }
     }
 
     pub(crate) fn audit_path(&self) -> &Path {
         &self.audit_path
+    }
+
+    pub(crate) fn filesystem(&self) -> Option<&FilesystemSessionStorage> {
+        self.filesystem.as_ref()
     }
 }
 
@@ -46,8 +57,51 @@ pub(crate) fn prepare_registry_session(
     let started = registry
         .start_session(config, plan)
         .context(SessionRegistrySnafu)?;
-    let storage = SessionStorage::new(started.audit_path().to_path_buf());
+    let surface_plan = config
+        .surface_start_plan_for_session(plan)
+        .context(InvalidConfigSnafu)?;
+    let filesystem_result = surface_plan.filesystem().map_or(Ok(None), |filesystem| {
+        prepare_filesystem_storage(started.record().session_dir.as_path(), filesystem)
+    });
+    let filesystem = match filesystem_result {
+        Ok(filesystem) => filesystem,
+        Err(error) => {
+            let _result = registry.finish_session(
+                plan.session_id(),
+                SessionRegistryFinish::failed(None, error.to_string()),
+            );
+            return Err(error);
+        }
+    };
+    let storage = SessionStorage::new(started.audit_path().to_path_buf(), filesystem);
     Ok(Some(PreparedSession { registry, storage }))
+}
+
+fn prepare_filesystem_storage(
+    session_dir: &Path,
+    filesystem: &FilesystemSurfaceConfig,
+) -> Result<Option<FilesystemSessionStorage>, SessionExecutionError> {
+    if filesystem.volumes().is_empty() {
+        return Ok(None);
+    }
+
+    let volumes = filesystem
+        .volumes()
+        .iter()
+        .map(|volume| {
+            FilesystemVolumeStorageRequest::new(
+                volume.id(),
+                volume.host_path(),
+                volume.session_path(),
+                volume.mode(),
+            )
+            .context(FilesystemSurfaceSnafu)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    FilesystemSessionStorage::prepare(session_dir, volumes)
+        .map(Some)
+        .context(FilesystemSurfaceSnafu)
 }
 
 pub(crate) fn finish_registry_session(

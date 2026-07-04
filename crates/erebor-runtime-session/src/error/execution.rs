@@ -2,6 +2,7 @@ use std::{any::Any, io, path::PathBuf};
 
 use erebor_runtime_core::{RuntimeConfigError, RuntimeError, SessionRegistryError};
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
+use erebor_runtime_filesystem::FilesystemError;
 use erebor_runtime_policy::PolicyError;
 use erebor_runtime_terminal::TerminalSurfaceError;
 use snafu::{Location, Snafu};
@@ -67,6 +68,13 @@ pub enum SessionExecutionError {
         location: Location,
     },
     #[snafu(display("{source}"))]
+    FilesystemSurface {
+        #[snafu(source(from(FilesystemError, Box::new)))]
+        source: Box<FilesystemError>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("{source}"))]
     RuntimeInterceptionBroker {
         source: RuntimeInterceptionBrokerError,
         #[snafu(implicit)]
@@ -115,6 +123,7 @@ impl ErrorExt for SessionExecutionError {
             Self::GuardIo { .. } => StatusCode::External,
             Self::GuardConfig { .. } => StatusCode::InvalidArguments,
             Self::SessionRegistry { source, .. } => source.status_code(),
+            Self::FilesystemSurface { source, .. } => source.status_code(),
             Self::RuntimeInterceptionBroker { source, .. } => source.status_code(),
             Self::ReadProcessTable { .. } => StatusCode::External,
             Self::InvalidAdoptTarget { .. } => StatusCode::InvalidArguments,
@@ -133,6 +142,7 @@ impl ErrorExt for SessionExecutionError {
             Self::Runtime { source, .. } => source.retry_hint(),
             Self::TerminalSurface { source, .. } => source.retry_hint(),
             Self::SessionRegistry { source, .. } => source.retry_hint(),
+            Self::FilesystemSurface { source, .. } => source.retry_hint(),
             Self::RuntimeInterceptionBroker { source, .. } => source.retry_hint(),
             Self::DiagnosticFailed { .. }
             | Self::GuardConfig { .. }
@@ -152,6 +162,7 @@ mod tests {
     use std::{io, path::PathBuf};
 
     use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
+    use erebor_runtime_filesystem::FilesystemError;
     use snafu::Location;
 
     use super::SessionExecutionError;
@@ -189,5 +200,15 @@ mod tests {
             location: Location::default(),
         };
         assert_eq!(process_table.status_code(), StatusCode::External);
+
+        let filesystem = SessionExecutionError::FilesystemSurface {
+            source: Box::new(FilesystemError::InvalidVolumeId {
+                id: String::from("bad/id"),
+                reason: String::from("must be a safe path component"),
+                location: Location::default(),
+            }),
+            location: Location::default(),
+        };
+        assert_eq!(filesystem.status_code(), StatusCode::InvalidArguments);
     }
 }
