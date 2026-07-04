@@ -7,6 +7,8 @@ making the rules easy to reference.
 
 - [engineering.md](engineering.md): coding standards, crate boundaries, CLI
   rules, error/logging style, and commit behavior.
+- [planning.md](planning.md): phase-plan style, current-code grounding,
+  verification claims, and follow-up tracking.
 - [browser-cdp.md](browser-cdp.md): browser governance, CDP proxy rules,
   browser state authority, Playwright/browser-use validation, and future
   process/endpoint governance.

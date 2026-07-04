@@ -4,11 +4,14 @@
 
 - Follow the active plan, milestone, stage, or step exactly.
 - Ask before moving to a different phase or changing architecture direction.
+- When creating or rewriting plans, follow `planning.md` and use the repository
+  phase-plan style.
 - Do not add placeholders just to make a folder look complete.
 - Do not leave unused variables, dead code, test-only wiring in production code,
   or functions that are not plugged into the current behavior.
 - Keep file organization intentional: related structs can share a file; errors
-  belong in each crate's `error.rs`; avoid dumping everything into `lib.rs`.
+  belong in each crate's `error.rs` or a thin `error.rs` module root with
+  focused `error/*.rs` submodules; avoid dumping everything into `lib.rs`.
 
 ## Runtime Architecture
 
@@ -24,10 +27,18 @@
 ## Rust Quality
 
 - Prefer the repository's existing crate patterns and APIs.
-- Use `thiserror` for error enums.
-- Include enriched context with `snafu::Location` or the local crate's existing
-  context pattern.
-- Use `tracing` for logs. Avoid `println!` except CLI user output.
+- Use `snafu::Snafu` for crate-owned error enums. `thiserror` is allowed only
+  for narrow test helpers or temporary external glue when an approved phase says
+  so.
+- Include enriched context with `snafu::Location` and structured context fields.
+- Keep a crate-local `Result<T>` alias when a crate has one primary error type.
+- Map public/domain errors to `erebor_runtime_error::ErrorExt` status/category
+  and retry-hint implementations.
+- Use repository telemetry wrappers for runtime logs. Direct `tracing` usage
+  should stay inside telemetry setup/internals or narrow CLI logging setup.
+  Avoid `println!` except CLI user output.
+- Log errors once at the owning boundary with structured fields; lower layers
+  return enriched errors instead of logging and rethrowing.
 - Keep public APIs small and useful for the current phase.
 - Avoid manual string parsing when a structured parser or protocol crate exists.
 - Keep comments sparse and useful.
