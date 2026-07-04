@@ -2,14 +2,17 @@ use std::{fs, net::TcpListener, path::PathBuf};
 
 use erebor_runtime_cdp::CdpSessionContext;
 use erebor_runtime_core::{
-    ProcessExecInterceptionRequest, ProcessExecSurfaceHandler,
-    ProcessMediationPrivateEndpointLayerConfig, ProcessMediationPrivatePortStrategy,
-    RuntimeAuditConfig, RuntimeConfig, SessionInterceptionDecision, SurfaceInterceptionDecision,
-    SurfaceMediationDecision, TerminalSurfaceConfig,
+    FileInterceptionRequest, FileOperationSurfaceHandler, ProcessExecInterceptionRequest,
+    ProcessExecSurfaceHandler, ProcessMediationPrivateEndpointLayerConfig,
+    ProcessMediationPrivatePortStrategy, RuntimeAuditConfig, RuntimeConfig,
+    SessionInterceptionDecision, SocketConnectInterceptionRequest, SocketConnectSurfaceHandler,
+    SurfaceInterceptionDecision, SurfaceMediationDecision, TerminalSurfaceConfig,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_ipc::v1::{
-    DecisionKind, GuardHello, InterceptionRequest, InterceptionSource, PROTOCOL_VERSION,
+    DecisionKind, FileOperation, FileOperationKind, GuardHello, InterceptionOperation,
+    InterceptionRequest, InterceptionSource, ProcessExecOperation, SocketOperation,
+    SocketOperationKind, PROTOCOL_VERSION,
 };
 use erebor_runtime_policy::PolicySet;
 use erebor_runtime_terminal::{TerminalProcessExecValidator, TerminalProcessMediationCapability};
@@ -295,6 +298,93 @@ fn broker_fails_closed_for_unrouted_process_exec() -> Result<(), Box<dyn std::er
 }
 
 #[test]
+fn broker_routes_file_operation_to_registered_surface_handler(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id("routes-file-operation");
+    let router = SessionInterceptionRouter::new().with_file_operation_handler(TestFileHandler);
+    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", router)?;
+
+    let decision = InterceptionBrokerClient::request_interception_decision(
+        broker.endpoint(),
+        hello(&session_id),
+        file_request(FileOperationKind::Read, "/workspace/secret.txt"),
+    )?;
+
+    assert_eq!(decision.decision, DecisionKind::Deny as i32);
+    assert_eq!(decision.rule_id, "filesystem-file-read-visible");
+    assert_eq!(decision.reason, "/workspace/secret.txt@/workspace:100");
+    Ok(())
+}
+
+#[test]
+fn broker_fails_closed_for_mismatched_file_operation_payload(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id("mismatched-file-operation");
+    let router = SessionInterceptionRouter::new().with_file_operation_handler(TestFileHandler);
+    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", router)?;
+    let mut request = file_request(FileOperationKind::Read, "/workspace/secret.txt");
+    request.operation = InterceptionOperation::FileOpen as i32;
+
+    let decision = InterceptionBrokerClient::request_interception_decision(
+        broker.endpoint(),
+        hello(&session_id),
+        request,
+    )?;
+
+    assert_eq!(decision.decision, DecisionKind::Deny as i32);
+    assert_eq!(
+        decision.rule_id,
+        "erebor-runtime-interception-broker-invalid-operation-payload"
+    );
+    assert!(decision.reason.contains("file.kind"));
+    Ok(())
+}
+
+#[test]
+fn broker_fails_closed_for_unrouted_socket_connect() -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id("unrouted-socket-connect");
+    let broker = RuntimeInterceptionBroker::register_session(
+        &session_id,
+        "openclaw",
+        SessionInterceptionRouter::new(),
+    )?;
+
+    let decision = InterceptionBrokerClient::request_interception_decision(
+        broker.endpoint(),
+        hello(&session_id),
+        socket_connect_request("api.example.test", 443),
+    )?;
+
+    assert_eq!(decision.decision, DecisionKind::Deny as i32);
+    assert_eq!(
+        decision.rule_id,
+        "erebor-runtime-interception-broker-unrouted-operation"
+    );
+    assert!(decision.reason.contains("socket_connect"));
+    Ok(())
+}
+
+#[test]
+fn broker_routes_socket_connect_to_registered_surface_handler(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let session_id = session_id("routes-socket-connect");
+    let router =
+        SessionInterceptionRouter::new().with_socket_connect_handler(TestSocketConnectHandler);
+    let broker = RuntimeInterceptionBroker::register_session(&session_id, "openclaw", router)?;
+
+    let decision = InterceptionBrokerClient::request_interception_decision(
+        broker.endpoint(),
+        hello(&session_id),
+        socket_connect_request("api.example.test", 443),
+    )?;
+
+    assert_eq!(decision.decision, DecisionKind::Deny as i32);
+    assert_eq!(decision.rule_id, "network-socket-connect-visible");
+    assert_eq!(decision.reason, "tcp://api.example.test:443");
+    Ok(())
+}
+
+#[test]
 fn browser_cdp_process_mediation_capability_owns_endpoint_and_port_validation(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_id = session_id("browser-cdp-mediator");
@@ -522,6 +612,74 @@ fn request_with_argv(handler_id: &str, argv: &[String]) -> InterceptionRequest {
         requested_endpoint: None,
         matched_handler_id: handler_id.to_owned(),
         timestamp: String::from("unix:1"),
+        operation: InterceptionOperation::ProcessExec as i32,
+        process_exec: Some(ProcessExecOperation {
+            executable: argv
+                .first()
+                .cloned()
+                .unwrap_or_else(|| String::from("tool")),
+            argv: argv.to_vec(),
+            requested_endpoint: None,
+            matched_handler_id: handler_id.to_owned(),
+        }),
+        file: None,
+        socket: None,
+    }
+}
+
+fn file_request(kind: FileOperationKind, path: &str) -> InterceptionRequest {
+    InterceptionRequest {
+        request_id: 11,
+        actor_id: String::from("openclaw"),
+        source: InterceptionSource::Ptrace as i32,
+        pid: 100,
+        ppid: 99,
+        executable: String::new(),
+        argv: Vec::new(),
+        cwd: String::from("/workspace"),
+        selected_env: Vec::new(),
+        requested_endpoint: None,
+        matched_handler_id: String::new(),
+        timestamp: String::from("unix:1"),
+        operation: match kind {
+            FileOperationKind::Open => InterceptionOperation::FileOpen,
+            FileOperationKind::Read => InterceptionOperation::FileRead,
+            FileOperationKind::Mutation => InterceptionOperation::FileMutation,
+            FileOperationKind::Unspecified => InterceptionOperation::Unspecified,
+        } as i32,
+        process_exec: None,
+        file: Some(FileOperation {
+            kind: kind as i32,
+            path: path.to_owned(),
+        }),
+        socket: None,
+    }
+}
+
+fn socket_connect_request(host: &str, port: u32) -> InterceptionRequest {
+    InterceptionRequest {
+        request_id: 12,
+        actor_id: String::from("openclaw"),
+        source: InterceptionSource::Ptrace as i32,
+        pid: 100,
+        ppid: 99,
+        executable: String::new(),
+        argv: Vec::new(),
+        cwd: String::from("/workspace"),
+        selected_env: Vec::new(),
+        requested_endpoint: None,
+        matched_handler_id: String::new(),
+        timestamp: String::from("unix:1"),
+        operation: InterceptionOperation::SocketConnect as i32,
+        process_exec: None,
+        file: None,
+        socket: Some(SocketOperation {
+            kind: SocketOperationKind::Connect as i32,
+            scheme: String::from("tcp"),
+            host: host.to_owned(),
+            port,
+            path: String::new(),
+        }),
     }
 }
 
@@ -621,6 +779,10 @@ struct TestProcessExecMediationHandler;
 
 struct MatchedHandlerProcessExecHandler;
 
+struct TestFileHandler;
+
+struct TestSocketConnectHandler;
+
 impl ProcessExecSurfaceHandler for TestProcessExecHandler {
     fn surface(&self) -> &str {
         "terminal"
@@ -698,6 +860,43 @@ impl ProcessExecSurfaceHandler for MatchedHandlerProcessExecHandler {
         SurfaceInterceptionDecision::deny(
             "matched-handler-id-visible",
             request.matched_handler_id(),
+        )
+    }
+}
+
+impl FileOperationSurfaceHandler for TestFileHandler {
+    fn surface(&self) -> &str {
+        "filesystem"
+    }
+
+    fn decide_file_operation(
+        &self,
+        request: &FileInterceptionRequest<'_>,
+    ) -> SurfaceInterceptionDecision {
+        SurfaceInterceptionDecision::deny(
+            "filesystem-file-read-visible",
+            format!("{}@{}:{}", request.path(), request.cwd(), request.pid()),
+        )
+    }
+}
+
+impl SocketConnectSurfaceHandler for TestSocketConnectHandler {
+    fn surface(&self) -> &str {
+        "network"
+    }
+
+    fn decide_socket_connect(
+        &self,
+        request: &SocketConnectInterceptionRequest<'_>,
+    ) -> SurfaceInterceptionDecision {
+        SurfaceInterceptionDecision::deny(
+            "network-socket-connect-visible",
+            format!(
+                "{}://{}:{}",
+                request.scheme(),
+                request.host(),
+                request.port()
+            ),
         )
     }
 }

@@ -4,6 +4,7 @@ mod decision;
 mod endpoint;
 mod handlers;
 mod platform;
+mod protocol;
 mod server;
 mod wire;
 

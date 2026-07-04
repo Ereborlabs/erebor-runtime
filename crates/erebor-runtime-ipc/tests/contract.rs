@@ -3,8 +3,9 @@ use std::error::Error;
 use erebor_runtime_ipc::{
     v1::{
         AllowDecision, DecisionKind, DenyDecision, Envelope, GuardHello, InterceptionDecision,
-        InterceptionRequest, InterceptionSource, MediateDecision, KIND_GUARD_HELLO,
-        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, PROTOCOL_VERSION,
+        InterceptionOperation, InterceptionRequest, InterceptionSource, MediateDecision,
+        ProcessExecOperation, KIND_GUARD_HELLO, KIND_INTERCEPTION_DECISION,
+        KIND_INTERCEPTION_REQUEST, PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
 };
@@ -51,6 +52,18 @@ fn public_api_round_trips_interception_request_and_deny_decision() -> Result<(),
         requested_endpoint: None,
         matched_handler_id: String::from("managed-browser-cdp"),
         timestamp: String::from("unix:1781200100"),
+        operation: InterceptionOperation::ProcessExec as i32,
+        process_exec: Some(ProcessExecOperation {
+            executable: String::from("google-chrome"),
+            argv: vec![
+                String::from("google-chrome"),
+                String::from("--remote-debugging-port=9222"),
+            ],
+            requested_endpoint: None,
+            matched_handler_id: String::from("managed-browser-cdp"),
+        }),
+        file: None,
+        socket: None,
     };
     let request_envelope = Envelope::wrap_message(2, 0, KIND_INTERCEPTION_REQUEST, &request)?;
     let request_frame = EreborIpcFrame::decode(&request_envelope.into_frame()?.encode()?)?;
@@ -217,6 +230,9 @@ fn proto_contract_file_contains_phase_zero_schema() {
     assert!(proto.contains("message Envelope"));
     assert!(proto.contains("message InterceptionRequest"));
     assert!(proto.contains("message InterceptionDecision"));
+    assert!(proto.contains("message FileOperation"));
+    assert!(proto.contains("message SocketOperation"));
+    assert!(proto.contains("enum InterceptionOperation"));
     assert!(proto.contains("enum DecisionKind"));
     assert!(proto.contains("DECISION_KIND_REQUIRE_APPROVAL"));
     assert!(!proto.contains("message Envelope {\n  uint32 protocol_version = 1;\n  uint64 message_id = 2;\n  uint64 correlation_id = 3;\n  string session_id"));

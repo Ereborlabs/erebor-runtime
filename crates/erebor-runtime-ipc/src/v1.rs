@@ -1,5 +1,9 @@
 include!(concat!(env!("OUT_DIR"), "/erebor.runtime.ipc.v1.rs"));
 
+mod operation;
+
+pub use operation::operation_name;
+
 use prost::Message;
 use snafu::ResultExt;
 
@@ -58,8 +62,8 @@ impl Envelope {
 pub(crate) mod fixtures {
     use super::{
         AllowDecision, DecisionKind, DenyDecision, EnvVar, GuardHello, InterceptionDecision,
-        InterceptionRequest, InterceptionSource, MediateDecision, RequestedEndpoint,
-        PROTOCOL_VERSION,
+        InterceptionOperation, InterceptionRequest, InterceptionSource, MediateDecision,
+        ProcessExecOperation, RequestedEndpoint, PROTOCOL_VERSION,
     };
 
     pub(crate) fn guard_hello() -> GuardHello {
@@ -99,6 +103,23 @@ pub(crate) mod fixtures {
             }),
             matched_handler_id: String::from("managed-browser-cdp"),
             timestamp: String::from("unix:1781200000"),
+            operation: InterceptionOperation::ProcessExec as i32,
+            process_exec: Some(ProcessExecOperation {
+                executable: String::from("google-chrome"),
+                argv: vec![
+                    String::from("google-chrome"),
+                    String::from("--remote-debugging-port=9222"),
+                ],
+                requested_endpoint: Some(RequestedEndpoint {
+                    scheme: String::from("ws"),
+                    host: String::from("127.0.0.1"),
+                    port: 9222,
+                    path: String::from("/"),
+                }),
+                matched_handler_id: String::from("managed-browser-cdp"),
+            }),
+            file: None,
+            socket: None,
         }
     }
 

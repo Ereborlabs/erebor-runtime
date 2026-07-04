@@ -380,12 +380,12 @@ name = "erebor-runtime-e2e"
 version = "0.1.0"
 dependencies = [
  "erebor-runtime-error",
+ "erebor-runtime-telemetry",
  "futures-util",
  "serde_json",
  "snafu",
  "tokio",
  "tokio-tungstenite",
- "tracing",
 ]
 
 [[package]]

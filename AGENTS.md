@@ -12,6 +12,8 @@ Read these files before making non-trivial changes:
 - [.agents/README.md](.agents/README.md) for the instruction map.
 - [.agents/engineering.md](.agents/engineering.md) for Rust, CLI, SNAFU
   errors, logging, tests, and commit behavior.
+- [.agents/planning.md](.agents/planning.md) before creating or rewriting
+  project plans.
 - [.agents/browser-cdp.md](.agents/browser-cdp.md) before touching CDP,
   browser ownership, Playwright/browser-use validation, or browser state.
 - [.agents/verification.md](.agents/verification.md) before claiming a phase or
@@ -21,6 +23,8 @@ Project plans are authoritative. If a request is tied to a milestone, stage, or
 step, implement that scope and do not jump ahead without explicit approval.
 Current planning documents live under [docs/](docs/) and
 [docs/plans/](docs/plans/).
+When creating or rewriting plans, follow the phase-plan style in
+[.agents/planning.md](.agents/planning.md).
 
 ## Product Direction
 
@@ -51,11 +55,14 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
   split it before adding more behavior.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings` must
   be clean.
-- Use crate-local SNAFU error modules: returned Rust errors
-  belong in each crate's `src/error.rs` or a thin `src/error.rs` plus
-  `src/error/*.rs` submodules, with `snafu::Location` context and a local
-  `Result<T>` alias where the crate has one primary error.
-- Use `tracing` or the repository telemetry wrappers for runtime logging.
+- Use crate-local SNAFU error modules: returned Rust errors belong in each
+  crate's `src/error.rs` or a thin `src/error.rs` plus `src/error/*.rs`
+  submodules, with `snafu::Location` context, `erebor_runtime_error::ErrorExt`
+  mappings, and a local `Result<T>` alias where the crate has one primary
+  error.
+- Use repository telemetry wrappers for runtime logging. Direct `tracing`
+  usage should stay inside telemetry setup/internals or narrow CLI logging
+  setup.
 - Prefer existing crate boundaries and local patterns over inventing new
   abstractions.
 - CLI code is wiring only: parse arguments, translate them into crate-level
@@ -75,20 +82,21 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
 
 - Prefer `snafu::Snafu` for crate-owned error enums. `thiserror` is allowed only
   for narrow test helpers or temporary external glue that a current approved
-  phase explicitly keeps.
+  phase explicitly keeps and documents.
 - Every crate that returns domain errors owns those errors in `error.rs`. If
   that file would exceed 300 lines, make `error.rs` a module root and split the
   variants by responsibility under `src/error/`.
 - Error variants should carry structured context fields, `source` errors, and
   `snafu::Location`; avoid untyped string-only errors at public boundaries
   unless they are wrapped in a typed variant.
-- Each public/domain error should map to a stable status/category and retry
-  hint once the common error crate exists. Policy denials, invalid user input,
-  and infrastructure failures must not collapse into one generic error class.
+- Each public/domain error should implement `erebor_runtime_error::ErrorExt`
+  with stable status/category and retry-hint mappings. Policy denials, invalid
+  user input, and infrastructure failures must not collapse into one generic
+  error class.
 - Log errors once at the owning boundary with structured fields. Lower layers
   should return enriched errors instead of logging and rethrowing.
-- Use `error!(err; "...")`/`warn!(err; "...")` style telemetry wrappers once
-  available, or direct `tracing` fields such as `error = ?err` until then.
+- Use `error!(err; "...")`/`warn!(err; "...")` style telemetry wrappers at
+  runtime boundaries, with structured fields for operational context.
 - `println!`/`eprintln!` are for CLI user output only. Runtime diagnostics use
   structured tracing.
 

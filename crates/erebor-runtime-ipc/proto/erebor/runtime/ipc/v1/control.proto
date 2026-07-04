@@ -46,6 +46,10 @@ message InterceptionRequest {
   RequestedEndpoint requested_endpoint = 10;
   string matched_handler_id = 11;
   string timestamp = 12;
+  InterceptionOperation operation = 13;
+  ProcessExecOperation process_exec = 14;
+  FileOperation file = 15;
+  SocketOperation socket = 16;
 }
 
 message InterceptionDecision {
@@ -83,6 +87,26 @@ message RequestedEndpoint {
   string path = 4;
 }
 
+message ProcessExecOperation {
+  string executable = 1;
+  repeated string argv = 2;
+  RequestedEndpoint requested_endpoint = 3;
+  string matched_handler_id = 4;
+}
+
+message FileOperation {
+  FileOperationKind kind = 1;
+  string path = 2;
+}
+
+message SocketOperation {
+  SocketOperationKind kind = 1;
+  string scheme = 2;
+  string host = 3;
+  uint32 port = 4;
+  string path = 5;
+}
+
 message AllowDecision {
   string exec_target = 1;
 }
@@ -105,6 +129,27 @@ enum InterceptionSource {
   INTERCEPTION_SOURCE_PTRACE = 1;
   INTERCEPTION_SOURCE_SHIM = 2;
   INTERCEPTION_SOURCE_FUTURE_ENDPOINT = 3;
+}
+
+enum InterceptionOperation {
+  INTERCEPTION_OPERATION_UNSPECIFIED = 0;
+  INTERCEPTION_OPERATION_PROCESS_EXEC = 1;
+  INTERCEPTION_OPERATION_FILE_OPEN = 2;
+  INTERCEPTION_OPERATION_FILE_READ = 3;
+  INTERCEPTION_OPERATION_FILE_MUTATION = 4;
+  INTERCEPTION_OPERATION_SOCKET_CONNECT = 5;
+}
+
+enum FileOperationKind {
+  FILE_OPERATION_KIND_UNSPECIFIED = 0;
+  FILE_OPERATION_KIND_OPEN = 1;
+  FILE_OPERATION_KIND_READ = 2;
+  FILE_OPERATION_KIND_MUTATION = 3;
+}
+
+enum SocketOperationKind {
+  SOCKET_OPERATION_KIND_UNSPECIFIED = 0;
+  SOCKET_OPERATION_KIND_CONNECT = 1;
 }
 
 enum DecisionKind {
