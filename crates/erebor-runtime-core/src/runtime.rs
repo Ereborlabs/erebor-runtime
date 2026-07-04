@@ -78,7 +78,7 @@ impl SessionSurfaceLauncher {
 
         for session_surface in self.surfaces {
             let surface = session_surface.surface();
-            debug!(surface = surface.as_str(), "starting session surface");
+            debug!("starting session surface", surface = %surface.as_str());
             let surface_status = session_surface.start(&runtime, failures.clone())?;
             info!(
                 surface = surface_status.surface().as_str(),

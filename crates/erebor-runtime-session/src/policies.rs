@@ -13,7 +13,7 @@ use crate::{
 };
 
 fn read_policy(path: &Path) -> Result<LocalPolicy, SessionExecutionError> {
-    debug!(path = %path.display(), "reading session policy");
+    debug!("reading session policy", path = %path.display());
     let source = fs::read_to_string(path).context(ReadPolicySnafu {
         path: path.to_path_buf(),
     })?;

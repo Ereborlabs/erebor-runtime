@@ -74,7 +74,7 @@ pub fn append_audit_record(
 
 pub fn read_audit_records(path: impl AsRef<Path>) -> Result<Vec<AuditRecord>, AuditLogError> {
     let path = path.as_ref();
-    debug!(path = %path.display(), "reading audit records");
+    debug!("reading audit records", path = %path.display());
     let file = File::open(path).context(AuditOpenSnafu {
         path: path.to_path_buf(),
     })?;

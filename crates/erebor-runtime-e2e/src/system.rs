@@ -1,7 +1,7 @@
 use std::future::Future;
 
+use erebor_runtime_telemetry::{debug, warn};
 use tokio::task::JoinHandle;
-use tracing::{debug, warn};
 
 use crate::{websocket::JsonWebSocketHandler, E2eError, MiniJsonWebSocketServer};
 
@@ -21,7 +21,7 @@ impl MiniSystem {
         F: Future<Output = ()> + Send + 'static,
     {
         let name = name.into();
-        debug!(task = %name, "spawning e2e mini-system task");
+        debug!("spawning e2e mini-system task", task = %name);
         self.tasks.push(MiniTask {
             name,
             handle: tokio::spawn(future),
@@ -44,10 +44,10 @@ struct MiniTask {
 impl Drop for MiniTask {
     fn drop(&mut self) {
         if !self.handle.is_finished() {
-            debug!(task = %self.name, "aborting e2e mini-system task");
+            debug!("aborting e2e mini-system task", task = %self.name);
             self.handle.abort();
         } else {
-            warn!(task = %self.name, "e2e mini-system task already finished");
+            warn!("e2e mini-system task already finished", task = %self.name);
         }
     }
 }

@@ -1,5 +1,6 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
+use erebor_runtime_telemetry::{debug, error, info, warn};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use snafu::ResultExt;
@@ -12,7 +13,6 @@ use tokio_tungstenite::{
     accept_async, connect_async,
     tungstenite::{Error as WebSocketError, Message},
 };
-use tracing::{debug, error, info, warn};
 
 use crate::{
     error::{
@@ -49,7 +49,7 @@ impl MiniJsonWebSocketServer {
             run_json_websocket_server(listener, handler, received_tx),
         );
 
-        info!(endpoint = %endpoint, "started e2e mini JSON websocket server");
+        info!("started e2e mini JSON websocket server", endpoint = %endpoint);
         Ok(Self { endpoint, received })
     }
 
@@ -124,7 +124,7 @@ async fn run_json_websocket_server(
         let (stream, address) = match listener.accept().await {
             Ok(connection) => connection,
             Err(error) => {
-                error!(error = %error, "mini JSON websocket accept failed");
+                error!(%error; "mini JSON websocket accept failed");
                 break;
             }
         };
@@ -133,9 +133,9 @@ async fn run_json_websocket_server(
         tokio::spawn(async move {
             if let Err(error) = handle_json_websocket_connection(stream, handler, received).await {
                 warn!(
+                    error;
+                    "mini JSON websocket connection failed",
                     client = %address,
-                    error = %error,
-                    "mini JSON websocket connection failed"
                 );
             }
         });
@@ -161,7 +161,7 @@ async fn handle_json_websocket_connection(
 
         let source = message.into_text().context(WebSocketSnafu)?.to_string();
         let request: Value = serde_json::from_str(&source).context(JsonSnafu)?;
-        debug!(request = %request, "mini JSON websocket received request");
+        debug!("mini JSON websocket received request", request = %request);
         let _result = received.send(request.clone());
 
         if let Some(response) = handler(request) {
