@@ -21,8 +21,8 @@ use erebor_runtime_core::{
 use erebor_runtime_events::{RuntimeEvent, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicyEvaluator, PolicySet};
 use erebor_runtime_session::{
-    adopt_session_target, run_session_diagnostic, run_session_plan, start_surface_launch_plan,
-    SessionDiagnosticOutcome, SessionExecutionError,
+    SessionAdoptionService, SessionDiagnosticOutcome, SessionExecutionError,
+    SessionExecutionService, SurfaceServiceRunner,
 };
 use snafu::Location;
 use thiserror::Error;
@@ -646,7 +646,7 @@ fn session_diagnose(args: &SessionDiagnoseArgs) -> Result<(), CliError> {
 fn session_adopt(args: &SessionAdoptArgs) -> Result<(), CliError> {
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
-    adopt_session_target(&config, args.runner.into(), session_id, args.target())
+    SessionAdoptionService::adopt_target(&config, args.runner.into(), session_id, args.target())
         .map_err(CliError::session_execution)?;
     Ok(())
 }
@@ -674,7 +674,7 @@ fn session_describe(args: &SessionDescribeArgs) -> Result<(), CliError> {
 }
 
 fn execute_session_run_plan(config: &RuntimeConfig, plan: &SessionRunPlan) -> Result<(), CliError> {
-    run_session_plan(config, plan).map_err(CliError::session_execution)?;
+    SessionExecutionService::run_plan(config, plan).map_err(CliError::session_execution)?;
     Ok(())
 }
 
@@ -682,7 +682,8 @@ fn execute_session_diagnostic_plan(
     config: &RuntimeConfig,
     plan: &SessionRunPlan,
 ) -> Result<(), CliError> {
-    let outcome = run_session_diagnostic(config, plan).map_err(CliError::session_execution)?;
+    let outcome = SessionExecutionService::run_diagnostic(config, plan)
+        .map_err(CliError::session_execution)?;
     write_session_diagnostic_outcome(&outcome)
 }
 
@@ -734,7 +735,7 @@ fn execute_dev(args: &DevArgs) -> Result<(), CliError> {
 }
 
 fn start_runtime_from_launch_plan(launch_plan: SessionSurfaceLaunchPlan) -> Result<(), CliError> {
-    start_surface_launch_plan(launch_plan).map_err(CliError::session_execution)
+    SurfaceServiceRunner::start(launch_plan).map_err(CliError::session_execution)
 }
 
 fn execute_policy(args: &PolicyArgs) -> Result<(), CliError> {

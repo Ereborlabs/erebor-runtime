@@ -16,7 +16,7 @@ mod surfaces;
 #[cfg(test)]
 mod tests;
 
-pub use adoption::adopt_session_target;
+pub use adoption::SessionAdoptionService;
 pub use diagnostic::SessionDiagnosticOutcome;
 pub use erebor_runtime_core::{
     ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionInterceptionDecision,
@@ -27,10 +27,8 @@ pub use runtime_interception_broker::{
     InterceptionBrokerClient, RuntimeInterceptionBroker, RuntimeInterceptionBrokerError,
     RuntimeInterceptionEndpoint, SessionInterceptionRegistration, SessionInterceptionRouter,
 };
-pub use session_run::{
-    adopt_session_plan, adopt_session_plan_capture, run_session_diagnostic, run_session_plan,
-};
-pub use surface_services::start_surface_launch_plan;
+pub use session_run::SessionExecutionService;
+pub use surface_services::SurfaceServiceRunner;
 pub use surfaces::terminal::browser_cdp_process_mediation::BrowserCdpProcessMediationCapability;
 
 pub(crate) use registry_lifecycle::SessionStorage;

@@ -6,51 +6,127 @@ use erebor_runtime_core::{
 use erebor_runtime_events::SessionId;
 use snafu::Location;
 
-use crate::{adopt_session_plan, SessionExecutionError};
+use crate::{session_run::SessionExecutionService, SessionExecutionError};
 
-pub fn adopt_session_target(
-    config: &RuntimeConfig,
-    runner_kind: SessionRunnerKind,
-    session_id: SessionId,
-    target: SessionAdoptTarget,
-) -> Result<SessionRunOutcome, SessionExecutionError> {
-    let plan = build_session_adopt_plan_for_target(config, runner_kind, session_id, target)?;
-    adopt_session_plan(config, &plan)
-}
+pub struct SessionAdoptionService;
 
-fn build_session_adopt_plan_for_target(
-    config: &RuntimeConfig,
-    runner_kind: SessionRunnerKind,
-    session_id: SessionId,
-    target: SessionAdoptTarget,
-) -> Result<SessionAdoptPlan, SessionExecutionError> {
-    let pid = resolve_session_adopt_target(&target, Path::new("/proc"))?;
-    SessionAdoptPlan::from_config(config, runner_kind, session_id, pid)
-        .map_err(SessionExecutionError::invalid_config)
-}
+impl SessionAdoptionService {
+    pub fn adopt_target(
+        config: &RuntimeConfig,
+        runner_kind: SessionRunnerKind,
+        session_id: SessionId,
+        target: SessionAdoptTarget,
+    ) -> Result<SessionRunOutcome, SessionExecutionError> {
+        let plan = Self::build_plan_for_target(config, runner_kind, session_id, target)?;
+        SessionExecutionService::adopt_plan(config, &plan)
+    }
 
-fn resolve_session_adopt_target(
-    target: &SessionAdoptTarget,
-    proc_root: &Path,
-) -> Result<i32, SessionExecutionError> {
-    match target {
-        SessionAdoptTarget::Pid(pid) => Ok(*pid),
-        SessionAdoptTarget::ProcessMatch(pattern) => resolve_process_match(pattern, proc_root),
+    fn build_plan_for_target(
+        config: &RuntimeConfig,
+        runner_kind: SessionRunnerKind,
+        session_id: SessionId,
+        target: SessionAdoptTarget,
+    ) -> Result<SessionAdoptPlan, SessionExecutionError> {
+        let pid = SessionAdoptTargetResolver::for_proc_root(Path::new("/proc")).resolve(&target)?;
+        SessionAdoptPlan::from_config(config, runner_kind, session_id, pid)
+            .map_err(SessionExecutionError::invalid_config)
     }
 }
 
-fn resolve_process_match(pattern: &str, proc_root: &Path) -> Result<i32, SessionExecutionError> {
-    let candidates = matching_processes(pattern, proc_root)?;
-    match candidates.as_slice() {
-        [] => Err(SessionExecutionError::adopt_match_not_found(pattern)),
-        [candidate] => Ok(candidate.pid),
-        _ => Err(SessionExecutionError::adopt_match_ambiguous(
-            pattern,
-            candidates
-                .iter()
-                .map(ProcessMatch::display)
-                .collect::<Vec<_>>(),
-        )),
+struct SessionAdoptTargetResolver<'a> {
+    proc_root: &'a Path,
+}
+
+impl<'a> SessionAdoptTargetResolver<'a> {
+    fn for_proc_root(proc_root: &'a Path) -> Self {
+        Self { proc_root }
+    }
+
+    fn resolve(&self, target: &SessionAdoptTarget) -> Result<i32, SessionExecutionError> {
+        match target {
+            SessionAdoptTarget::Pid(pid) => Ok(*pid),
+            SessionAdoptTarget::ProcessMatch(pattern) => self.resolve_process_match(pattern),
+        }
+    }
+
+    fn resolve_process_match(&self, pattern: &str) -> Result<i32, SessionExecutionError> {
+        let candidates = self.matching_processes(pattern)?;
+        match candidates.as_slice() {
+            [] => Err(SessionExecutionError::adopt_match_not_found(pattern)),
+            [candidate] => Ok(candidate.pid),
+            _ => Err(SessionExecutionError::adopt_match_ambiguous(
+                pattern,
+                candidates
+                    .iter()
+                    .map(ProcessMatch::display)
+                    .collect::<Vec<_>>(),
+            )),
+        }
+    }
+
+    fn matching_processes(
+        &self,
+        pattern: &str,
+    ) -> Result<Vec<ProcessMatch>, SessionExecutionError> {
+        let pattern = pattern.trim();
+        if pattern.is_empty() {
+            return Err(SessionExecutionError::invalid_adopt_target(
+                "process match pattern cannot be empty",
+            ));
+        }
+
+        let entries =
+            fs::read_dir(self.proc_root).map_err(|error| self.read_process_table(error))?;
+        let current_pid = std::process::id() as i32;
+        let mut matches = Vec::new();
+
+        for entry in entries {
+            let entry = entry.map_err(|error| self.read_process_table(error))?;
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|value| value.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            if pid == current_pid {
+                continue;
+            }
+
+            let process_dir = entry.path();
+            let comm = fs::read_to_string(process_dir.join("comm"))
+                .unwrap_or_default()
+                .trim()
+                .to_owned();
+            let cmdline = fs::read(process_dir.join("cmdline"))
+                .ok()
+                .map(|bytes| Self::format_cmdline(&bytes))
+                .unwrap_or_default();
+            if comm.contains(pattern) || cmdline.contains(pattern) {
+                let label = if cmdline.is_empty() { comm } else { cmdline };
+                matches.push(ProcessMatch { pid, label });
+            }
+        }
+
+        matches.sort_by_key(|candidate| candidate.pid);
+        Ok(matches)
+    }
+
+    fn read_process_table(&self, source: io::Error) -> SessionExecutionError {
+        SessionExecutionError::ReadProcessTable {
+            path: self.proc_root.to_path_buf(),
+            source,
+            location: Location::default(),
+        }
+    }
+
+    fn format_cmdline(bytes: &[u8]) -> String {
+        bytes
+            .split(|byte| *byte == 0)
+            .filter(|part| !part.is_empty())
+            .map(|part| String::from_utf8_lossy(part).to_string())
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 }
 
@@ -66,70 +142,6 @@ impl ProcessMatch {
     }
 }
 
-fn matching_processes(
-    pattern: &str,
-    proc_root: &Path,
-) -> Result<Vec<ProcessMatch>, SessionExecutionError> {
-    let pattern = pattern.trim();
-    if pattern.is_empty() {
-        return Err(SessionExecutionError::invalid_adopt_target(
-            "process match pattern cannot be empty",
-        ));
-    }
-
-    let entries = fs::read_dir(proc_root).map_err(|error| read_process_table(proc_root, error))?;
-    let current_pid = std::process::id() as i32;
-    let mut matches = Vec::new();
-
-    for entry in entries {
-        let entry = entry.map_err(|error| read_process_table(proc_root, error))?;
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|value| value.parse::<i32>().ok())
-        else {
-            continue;
-        };
-        if pid == current_pid {
-            continue;
-        }
-
-        let process_dir = entry.path();
-        let comm = fs::read_to_string(process_dir.join("comm"))
-            .unwrap_or_default()
-            .trim()
-            .to_owned();
-        let cmdline = fs::read(process_dir.join("cmdline"))
-            .ok()
-            .map(|bytes| format_cmdline(&bytes))
-            .unwrap_or_default();
-        if comm.contains(pattern) || cmdline.contains(pattern) {
-            let label = if cmdline.is_empty() { comm } else { cmdline };
-            matches.push(ProcessMatch { pid, label });
-        }
-    }
-
-    matches.sort_by_key(|candidate| candidate.pid);
-    Ok(matches)
-}
-
-fn read_process_table(path: &Path, source: io::Error) -> SessionExecutionError {
-    SessionExecutionError::ReadProcessTable {
-        path: path.to_path_buf(),
-        source,
-        location: Location::default(),
-    }
-}
-
-fn format_cmdline(bytes: &[u8]) -> String {
-    bytes
-        .split(|byte| *byte == 0)
-        .filter(|part| !part.is_empty())
-        .map(|part| String::from_utf8_lossy(part).to_string())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -140,7 +152,7 @@ mod tests {
 
     use erebor_runtime_core::SessionAdoptTarget;
 
-    use super::{resolve_session_adopt_target, SessionExecutionError};
+    use super::{SessionAdoptTargetResolver, SessionExecutionError};
 
     static FAKE_PROC_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -151,10 +163,8 @@ mod tests {
             (2234, "bash", &["bash"][..]),
         ])?;
 
-        let pid = resolve_session_adopt_target(
-            &SessionAdoptTarget::process_match("openclaw"),
-            &proc_root,
-        )?;
+        let pid = SessionAdoptTargetResolver::for_proc_root(&proc_root)
+            .resolve(&SessionAdoptTarget::process_match("openclaw"))?;
 
         assert_eq!(pid, 1234);
         let _result = fs::remove_dir_all(proc_root);
@@ -168,10 +178,8 @@ mod tests {
             (2234, "node", &["node", "/tmp/openclaw-worker.js"][..]),
         ])?;
 
-        let error = resolve_session_adopt_target(
-            &SessionAdoptTarget::process_match("openclaw"),
-            &proc_root,
-        );
+        let error = SessionAdoptTargetResolver::for_proc_root(&proc_root)
+            .resolve(&SessionAdoptTarget::process_match("openclaw"));
 
         assert!(matches!(
             error,
@@ -185,10 +193,8 @@ mod tests {
     fn adopt_match_fails_when_no_process_matches() -> Result<(), Box<dyn std::error::Error>> {
         let proc_root = create_fake_proc(&[(1234, "bash", &["bash"][..])])?;
 
-        let error = resolve_session_adopt_target(
-            &SessionAdoptTarget::process_match("openclaw"),
-            &proc_root,
-        );
+        let error = SessionAdoptTargetResolver::for_proc_root(&proc_root)
+            .resolve(&SessionAdoptTarget::process_match("openclaw"));
 
         assert!(matches!(
             error,

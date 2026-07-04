@@ -8,9 +8,7 @@ mod linux_host {
 
     use erebor_runtime_core::{RuntimeConfig, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind};
     use erebor_runtime_events::SessionId;
-    use erebor_runtime_session::{
-        adopt_session_plan_capture, run_session_diagnostic, SessionExecutionError,
-    };
+    use erebor_runtime_session::{SessionExecutionError, SessionExecutionService};
 
     #[test]
     fn linux_host_runner_relaunches_diagnostic_through_process_guard(
@@ -53,7 +51,7 @@ mod linux_host {
             "metadata",
         )?;
 
-        let outcome = run_session_diagnostic(&config, &plan)?;
+        let outcome = SessionExecutionService::run_diagnostic(&config, &plan)?;
 
         assert!(outcome.stdout().contains("guard=linux-ptrace"));
         assert!(outcome.stdout().contains("runner=linux-host"));
@@ -101,7 +99,7 @@ mod linux_host {
             "sleep",
         )?;
 
-        let outcome = run_session_diagnostic(&config, &plan)?;
+        let outcome = SessionExecutionService::run_diagnostic(&config, &plan)?;
 
         assert!(outcome.stdout().is_empty());
         let audit_path = session_audit_path(&test_dir, "session-linux-host-sleep-filter");
@@ -155,7 +153,7 @@ mod linux_host {
             "metadata",
         )?;
 
-        let outcome = run_session_diagnostic(&config, &plan)?;
+        let outcome = SessionExecutionService::run_diagnostic(&config, &plan)?;
 
         assert!(outcome.stdout().contains("terminal_guard=disabled"));
         assert!(outcome.stdout().contains("process_guard=unset"));
@@ -207,7 +205,7 @@ mod linux_host {
             child.id() as i32,
         )?;
 
-        let outcome = adopt_session_plan_capture(&config, &plan);
+        let outcome = SessionExecutionService::adopt_plan_capture(&config, &plan);
         if outcome.is_err() {
             let _result = child.kill();
             let _result = child.wait();
@@ -261,7 +259,7 @@ mod linux_host {
             "raw-cdp",
         )?;
 
-        let error = match run_session_diagnostic(&config, &plan) {
+        let error = match SessionExecutionService::run_diagnostic(&config, &plan) {
             Ok(outcome) => {
                 return Err(format!(
                     "diagnostic should fail, but stdout was `{}` and stderr was `{}`",
@@ -400,7 +398,7 @@ mod linux_host {
             "git-push",
         )?;
 
-        let error = match run_session_diagnostic(&config, &plan) {
+        let error = match SessionExecutionService::run_diagnostic(&config, &plan) {
             Ok(outcome) => {
                 return Err(format!(
                     "diagnostic should fail closed, but stdout was `{}` and stderr was `{}`",
@@ -508,7 +506,7 @@ mod linux_host {
             diagnostic_name,
         )?;
 
-        let error = run_session_diagnostic(&config, &plan);
+        let error = SessionExecutionService::run_diagnostic(&config, &plan);
 
         assert!(
             matches!(error, Err(SessionExecutionError::DiagnosticFailed { .. })),
