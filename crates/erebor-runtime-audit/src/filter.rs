@@ -1,9 +1,9 @@
 use erebor_runtime_core::{
     AuditCommandLogLevel, AuditError, AuditRecord, AuditSink, BrowserCdpAuditSurfaceLoggingConfig,
-    DesktopAuditSurfaceLoggingConfig, InternalSystemAuditSurfaceLoggingConfig,
-    McpAuditSurfaceLoggingConfig, NetworkAuditSurfaceLoggingConfig, RuntimeAuditConfig,
-    RuntimeAuditSurfaceLoggingConfig, SaaSAuditSurfaceLoggingConfig,
-    TerminalAuditSurfaceLoggingConfig,
+    DesktopAuditSurfaceLoggingConfig, FilesystemAuditSurfaceLoggingConfig,
+    InternalSystemAuditSurfaceLoggingConfig, McpAuditSurfaceLoggingConfig,
+    NetworkAuditSurfaceLoggingConfig, RuntimeAuditConfig, RuntimeAuditSurfaceLoggingConfig,
+    SaaSAuditSurfaceLoggingConfig, TerminalAuditSurfaceLoggingConfig,
 };
 use erebor_runtime_events::{ActionKind, ExecutionSurface};
 use erebor_runtime_policy::Decision;
@@ -66,6 +66,7 @@ pub fn should_record_with_surface_logging(
         ExecutionSurface::BrowserCdp => should_record_browser_cdp(record, surfaces.browser_cdp()),
         ExecutionSurface::Mcp => should_record_mcp(record, surfaces.mcp()),
         ExecutionSurface::Terminal => should_record_terminal(record, surfaces.terminal()),
+        ExecutionSurface::Filesystem => should_record_filesystem(record, surfaces.filesystem()),
         ExecutionSurface::Network => should_record_network(record, surfaces.network()),
         ExecutionSurface::SaaS => should_record_saas(record, surfaces.saas()),
         ExecutionSurface::Desktop => should_record_desktop(record, surfaces.desktop()),
@@ -109,6 +110,19 @@ fn should_record_mcp(record: &AuditRecord, logging: &McpAuditSurfaceLoggingConfi
         AuditCommandLogLevel::All => true,
         AuditCommandLogLevel::NonAllow => false,
         AuditCommandLogLevel::Signal => !matches_mcp_debug(record, logging),
+    }
+}
+
+fn should_record_filesystem(
+    record: &AuditRecord,
+    logging: &FilesystemAuditSurfaceLoggingConfig,
+) -> bool {
+    match logging.level() {
+        AuditCommandLogLevel::All => true,
+        AuditCommandLogLevel::NonAllow => false,
+        AuditCommandLogLevel::Signal => {
+            !matches_operation_debug(record, logging.debug_operations(), logging.debug_actions())
+        }
     }
 }
 
@@ -283,8 +297,10 @@ fn action_name(action: &ActionKind) -> &'static str {
         ActionKind::BrowserStateRecovery => "browser_state_recovery",
         ActionKind::NetworkRequest => "network_request",
         ActionKind::ProcessExec => "process_exec",
+        ActionKind::FileOpen => "file_open",
         ActionKind::FileRead => "file_read",
         ActionKind::FileWrite => "file_write",
+        ActionKind::FileMutation => "file_mutation",
         ActionKind::ToolInvoke => "tool_invoke",
         ActionKind::SaaSMutation => "saas_mutation",
         ActionKind::DesktopInput => "desktop_input",

@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
+erebor-runtime-filesystem = { path = "../erebor-runtime-filesystem" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
 serde.workspace = true

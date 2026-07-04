@@ -11,9 +11,10 @@ pub(crate) use config::{
     EmptyAuditDebugMatcherSnafu, EmptyConfigSnafu, EmptyDockerSessionImageSnafu,
     EmptyDockerSessionNetworkSnafu, EmptyPolicyPathSnafu, EmptySessionActorIdSnafu,
     EmptySessionCommandSnafu, EmptySessionDiagnosticCommandSnafu, EmptySessionDiagnosticNameSnafu,
-    EmptySessionWorkspaceSnafu, InvalidJsonSnafu, InvalidProcessMediationConfigSnafu,
-    InvalidSessionAdoptPidSnafu, InvalidSessionInterceptionConfigSnafu, MissingPolicySnafu,
-    NoSessionSurfacesSnafu, UnknownSessionDiagnosticSnafu,
+    EmptySessionWorkspaceSnafu, InvalidFilesystemSurfaceConfigSnafu, InvalidJsonSnafu,
+    InvalidProcessMediationConfigSnafu, InvalidSessionAdoptPidSnafu,
+    InvalidSessionInterceptionConfigSnafu, MissingPolicySnafu, NoSessionSurfacesSnafu,
+    UnknownSessionDiagnosticSnafu,
 };
 pub(crate) use runtime::{
     BuildAsyncRuntimeSnafu, NoSessionSurfaceServicesSnafu, PolicySnafu, SessionRunnerExitSnafu,

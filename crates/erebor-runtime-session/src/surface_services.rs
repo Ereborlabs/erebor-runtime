@@ -34,6 +34,12 @@ impl SurfaceServiceRunner {
                         "terminal/process surface is enforced by session runners and has no standalone service"
                     );
                 }
+                SessionSurfaceDefinition::Filesystem(_) => {
+                    info!(
+                        surface = SessionSurfaceKind::Filesystem.as_str(),
+                        "filesystem surface is configured and has no standalone service in this phase"
+                    );
+                }
             }
         }
 

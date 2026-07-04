@@ -538,6 +538,13 @@ fn resolve_config_paths(config_path: &Path, config: &mut RuntimeConfig) {
     for policy in &mut config.surfaces.terminal.policies {
         resolve_config_path(base_dir, policy);
     }
+    for policy in &mut config.surfaces.filesystem.policies {
+        resolve_config_path(base_dir, policy);
+    }
+    for volume in &mut config.surfaces.filesystem.volumes {
+        resolve_config_path(base_dir, &mut volume.host_path);
+        resolve_config_path(base_dir, &mut volume.session_path);
+    }
 }
 
 fn config_base_dir(config_path: &Path) -> Option<PathBuf> {
@@ -1175,6 +1182,9 @@ mod tests {
             SessionSurfaceDefinition::Terminal(_) => {
                 return Err(std::io::Error::other("expected browser CDP surface").into());
             }
+            SessionSurfaceDefinition::Filesystem(_) => {
+                return Err(std::io::Error::other("expected browser CDP surface").into());
+            }
         };
         assert_eq!(browser_cdp.listen(), "127.0.0.1:3738".parse()?);
         assert_eq!(
@@ -1347,6 +1357,18 @@ mod tests {
                 "terminal": {
                   "enabled": true,
                   "policies": ["terminal-policy.json"]
+                },
+                "filesystem": {
+                  "enabled": true,
+                  "policies": ["filesystem-policy.json"],
+                  "volumes": [
+                    {
+                      "id": "workspace",
+                      "host_path": "host-workspace",
+                      "session_path": "session-workspace",
+                      "mode": "writable"
+                    }
+                  ]
                 }
               }
             }
@@ -1374,6 +1396,18 @@ mod tests {
         assert_eq!(
             config.surfaces.terminal.policies,
             vec![current_dir.join("examples/governed-openclaw-pilot/terminal-policy.json")]
+        );
+        assert_eq!(
+            config.surfaces.filesystem.policies,
+            vec![current_dir.join("examples/governed-openclaw-pilot/filesystem-policy.json")]
+        );
+        assert_eq!(
+            config.surfaces.filesystem.volumes[0].host_path,
+            current_dir.join("examples/governed-openclaw-pilot/host-workspace")
+        );
+        assert_eq!(
+            config.surfaces.filesystem.volumes[0].session_path,
+            current_dir.join("examples/governed-openclaw-pilot/session-workspace")
         );
         Ok(())
     }
@@ -1444,6 +1478,9 @@ mod tests {
         let browser_cdp = match &plan.definitions()[0] {
             SessionSurfaceDefinition::BrowserCdp(browser_cdp) => browser_cdp,
             SessionSurfaceDefinition::Terminal(_) => {
+                return Err(std::io::Error::other("expected browser CDP surface").into());
+            }
+            SessionSurfaceDefinition::Filesystem(_) => {
                 return Err(std::io::Error::other("expected browser CDP surface").into());
             }
         };

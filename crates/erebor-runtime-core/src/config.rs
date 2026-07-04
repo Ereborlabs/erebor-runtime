@@ -4,7 +4,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod filesystem_surface;
+
 use erebor_runtime_events::{ActorKind, SessionId};
+pub use filesystem_surface::{
+    FilesystemBackendConfig, FilesystemBackendKind, FilesystemBackendLayerConfig,
+    FilesystemRevertConfig, FilesystemRevertLayerConfig, FilesystemSurfaceConfig,
+    FilesystemSurfaceLayerConfig, FilesystemVolumeConfig, FilesystemVolumeLayerConfig,
+    FilesystemVolumeMode,
+};
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, OptionExt, ResultExt};
 
@@ -59,6 +67,12 @@ impl RuntimeConfig {
                     .terminal
                     .policies
                     .iter()
+                    .any(|policy| policy.as_os_str().is_empty())
+                && !self
+                    .surfaces
+                    .filesystem
+                    .policies
+                    .iter()
                     .any(|policy| policy.as_os_str().is_empty()),
             EmptyPolicyPathSnafu
         );
@@ -91,6 +105,7 @@ impl RuntimeConfig {
             session_interception.operation_supported(SessionInterceptionOperation::ProcessExec),
             &self.surfaces.browser_cdp,
         )?;
+        self.surfaces.filesystem.validate()?;
 
         Ok(())
     }
@@ -138,6 +153,7 @@ pub struct SessionSurfaceStartPlan {
     surfaces: Vec<SessionSurfaceKind>,
     browser_cdp: Option<BrowserCdpSurfaceConfig>,
     terminal: Option<TerminalSurfaceConfig>,
+    filesystem: Option<FilesystemSurfaceConfig>,
 }
 
 impl SessionSurfaceStartPlan {
@@ -158,6 +174,12 @@ impl SessionSurfaceStartPlan {
             terminal: config.surfaces.terminal.enabled.then(|| {
                 TerminalSurfaceConfig::from_layer(
                     &config.surfaces.terminal,
+                    config.policies.clone(),
+                )
+            }),
+            filesystem: config.surfaces.filesystem.enabled.then(|| {
+                FilesystemSurfaceConfig::from_layer(
+                    &config.surfaces.filesystem,
                     config.policies.clone(),
                 )
             }),
@@ -233,6 +255,11 @@ impl SessionSurfaceStartPlan {
     pub fn terminal(&self) -> Option<&TerminalSurfaceConfig> {
         self.terminal.as_ref()
     }
+
+    #[must_use]
+    pub fn filesystem(&self) -> Option<&FilesystemSurfaceConfig> {
+        self.filesystem.as_ref()
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
@@ -260,6 +287,8 @@ pub struct RuntimeAuditSurfaceLoggingConfig {
     #[serde(default)]
     pub browser_cdp: BrowserCdpAuditSurfaceLoggingConfig,
     #[serde(default)]
+    pub filesystem: FilesystemAuditSurfaceLoggingConfig,
+    #[serde(default)]
     pub mcp: McpAuditSurfaceLoggingConfig,
     #[serde(default)]
     pub network: NetworkAuditSurfaceLoggingConfig,
@@ -280,6 +309,11 @@ impl RuntimeAuditSurfaceLoggingConfig {
     #[must_use]
     pub const fn browser_cdp(&self) -> &BrowserCdpAuditSurfaceLoggingConfig {
         &self.browser_cdp
+    }
+
+    #[must_use]
+    pub const fn filesystem(&self) -> &FilesystemAuditSurfaceLoggingConfig {
+        &self.filesystem
     }
 
     #[must_use]
@@ -310,6 +344,7 @@ impl RuntimeAuditSurfaceLoggingConfig {
     fn validate(&self) -> Result<(), RuntimeConfigError> {
         self.terminal.validate("terminal")?;
         self.browser_cdp.validate("browser_cdp")?;
+        self.filesystem.validate("filesystem")?;
         self.mcp.validate("mcp")?;
         self.network.validate("network")?;
         self.saas.validate("saas")?;
@@ -384,6 +419,42 @@ impl BrowserCdpAuditSurfaceLoggingConfig {
 
     fn validate(&self, surface: &str) -> Result<(), RuntimeConfigError> {
         validate_debug_values(surface, "debug_methods", &self.debug_methods)?;
+        validate_debug_values(surface, "debug_actions", &self.debug_actions)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct FilesystemAuditSurfaceLoggingConfig {
+    #[serde(default = "default_audit_command_level", alias = "command_level")]
+    pub level: AuditCommandLogLevel,
+    #[serde(
+        default = "default_filesystem_debug_operations",
+        alias = "debug_commands"
+    )]
+    pub debug_operations: Vec<String>,
+    #[serde(default = "default_filesystem_debug_actions")]
+    pub debug_actions: Vec<String>,
+}
+
+impl FilesystemAuditSurfaceLoggingConfig {
+    #[must_use]
+    pub const fn level(&self) -> AuditCommandLogLevel {
+        self.level
+    }
+
+    #[must_use]
+    pub fn debug_operations(&self) -> &[String] {
+        &self.debug_operations
+    }
+
+    #[must_use]
+    pub fn debug_actions(&self) -> &[String] {
+        &self.debug_actions
+    }
+
+    fn validate(&self, surface: &str) -> Result<(), RuntimeConfigError> {
+        validate_debug_values(surface, "debug_operations", &self.debug_operations)?;
         validate_debug_values(surface, "debug_actions", &self.debug_actions)?;
         Ok(())
     }
@@ -579,6 +650,14 @@ fn default_browser_cdp_debug_actions() -> Vec<String> {
     Vec::new()
 }
 
+fn default_filesystem_debug_operations() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_filesystem_debug_actions() -> Vec<String> {
+    Vec::new()
+}
+
 fn default_mcp_debug_tools() -> Vec<String> {
     Vec::new()
 }
@@ -754,7 +833,9 @@ impl SessionInterceptionOperation {
     const fn owning_surface(self) -> &'static str {
         match self {
             Self::ProcessExec => SessionSurfaceKind::Terminal.as_str(),
-            Self::FileOpen | Self::FileRead | Self::FileMutation => "filesystem",
+            Self::FileOpen | Self::FileRead | Self::FileMutation => {
+                SessionSurfaceKind::Filesystem.as_str()
+            }
             Self::SocketConnect => SessionSurfaceKind::Network.as_str(),
         }
     }
@@ -1766,6 +1847,8 @@ pub struct SessionSurfaceLayers {
     #[serde(default)]
     pub terminal: TerminalSurfaceLayerConfig,
     #[serde(default)]
+    pub filesystem: FilesystemSurfaceLayerConfig,
+    #[serde(default)]
     pub network: SessionSurfaceToggleConfig,
     #[serde(default)]
     pub saas: SessionSurfaceToggleConfig,
@@ -1782,6 +1865,7 @@ impl SessionSurfaceLayers {
             (SessionSurfaceKind::BrowserCdp, self.browser_cdp.enabled),
             (SessionSurfaceKind::Mcp, self.mcp.enabled),
             (SessionSurfaceKind::Terminal, self.terminal.enabled),
+            (SessionSurfaceKind::Filesystem, self.filesystem.enabled),
             (SessionSurfaceKind::Network, self.network.enabled),
             (SessionSurfaceKind::Saas, self.saas.enabled),
             (SessionSurfaceKind::Desktop, self.desktop.enabled),
@@ -1802,7 +1886,7 @@ impl SessionSurfaceLayers {
             SessionInterceptionOperation::ProcessExec => self.terminal.enabled,
             SessionInterceptionOperation::FileOpen
             | SessionInterceptionOperation::FileRead
-            | SessionInterceptionOperation::FileMutation => false,
+            | SessionInterceptionOperation::FileMutation => self.filesystem.enabled,
             SessionInterceptionOperation::SocketConnect => self.network.enabled,
         }
     }
@@ -2706,6 +2790,7 @@ pub enum SessionSurfaceKind {
     BrowserCdp,
     Mcp,
     Terminal,
+    Filesystem,
     Network,
     Saas,
     Desktop,
@@ -2719,6 +2804,7 @@ impl SessionSurfaceKind {
             Self::BrowserCdp => "browser_cdp",
             Self::Mcp => "mcp",
             Self::Terminal => "terminal",
+            Self::Filesystem => "filesystem",
             Self::Network => "network",
             Self::Saas => "saas",
             Self::Desktop => "desktop",

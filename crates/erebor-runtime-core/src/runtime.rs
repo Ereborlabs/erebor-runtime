@@ -13,8 +13,8 @@ use crate::error::{
     UnsupportedSessionSurfaceSnafu,
 };
 use crate::{
-    BrowserCdpSurfaceConfig, RuntimeAuditConfig, RuntimeError, SessionSurfaceKind,
-    SessionSurfaceStartPlan, TerminalSurfaceConfig,
+    BrowserCdpSurfaceConfig, FilesystemSurfaceConfig, RuntimeAuditConfig, RuntimeError,
+    SessionSurfaceKind, SessionSurfaceStartPlan, TerminalSurfaceConfig,
 };
 
 pub type SessionSurfaceFailureSender = Sender<SessionSurfaceFailure>;
@@ -165,6 +165,15 @@ impl SessionSurfaceLaunchPlan {
                     };
                     definitions.push(SessionSurfaceDefinition::Terminal(terminal));
                 }
+                SessionSurfaceKind::Filesystem => {
+                    let Some(filesystem) = plan.filesystem().cloned() else {
+                        return UnsupportedSessionSurfaceSnafu {
+                            surface: surface.as_str().to_owned(),
+                        }
+                        .fail();
+                    };
+                    definitions.push(SessionSurfaceDefinition::Filesystem(filesystem));
+                }
                 SessionSurfaceKind::Mcp
                 | SessionSurfaceKind::Network
                 | SessionSurfaceKind::Saas
@@ -219,6 +228,7 @@ impl SessionSurfaceLaunchPlan {
 pub enum SessionSurfaceDefinition {
     BrowserCdp(BrowserCdpSurfaceConfig),
     Terminal(TerminalSurfaceConfig),
+    Filesystem(FilesystemSurfaceConfig),
 }
 
 impl SessionSurfaceDefinition {
@@ -227,6 +237,7 @@ impl SessionSurfaceDefinition {
         match self {
             Self::BrowserCdp(_) => SessionSurfaceKind::BrowserCdp,
             Self::Terminal(_) => SessionSurfaceKind::Terminal,
+            Self::Filesystem(_) => SessionSurfaceKind::Filesystem,
         }
     }
 }

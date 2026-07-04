@@ -880,7 +880,9 @@ fn command_summary(payload: &Value) -> Option<String> {
 
 fn inferred_mode(record: &AuditRecord) -> &'static str {
     match record.event.surface {
-        ExecutionSurface::BrowserCdp | ExecutionSurface::Terminal => "enforced",
+        ExecutionSurface::BrowserCdp
+        | ExecutionSurface::Terminal
+        | ExecutionSurface::Filesystem => "enforced",
         _ => "observed",
     }
 }
@@ -895,6 +897,7 @@ fn inferred_backend(record: &AuditRecord) -> &'static str {
             }
         }
         (ExecutionSurface::Terminal, _) => "terminal_process_guard",
+        (ExecutionSurface::Filesystem, _) => "filesystem_surface",
         (ExecutionSurface::BrowserCdp, ActionKind::NetworkRequest) => "browser_cdp_observer",
         (ExecutionSurface::BrowserCdp, _) => "browser_cdp_proxy",
         (ExecutionSurface::Mcp, _) => "mcp_gateway",
@@ -947,6 +950,7 @@ fn surface_name(surface: &ExecutionSurface) -> &'static str {
         ExecutionSurface::BrowserCdp => "browser_cdp",
         ExecutionSurface::Mcp => "mcp",
         ExecutionSurface::Terminal => "terminal",
+        ExecutionSurface::Filesystem => "filesystem",
         ExecutionSurface::Network => "network",
         ExecutionSurface::SaaS => "saas",
         ExecutionSurface::Desktop => "desktop",
@@ -964,8 +968,10 @@ fn action_name(action: &ActionKind) -> &'static str {
         ActionKind::BrowserStateRecovery => "browser_state_recovery",
         ActionKind::NetworkRequest => "network_request",
         ActionKind::ProcessExec => "process_exec",
+        ActionKind::FileOpen => "file_open",
         ActionKind::FileRead => "file_read",
         ActionKind::FileWrite => "file_write",
+        ActionKind::FileMutation => "file_mutation",
         ActionKind::ToolInvoke => "tool_invoke",
         ActionKind::SaaSMutation => "saas_mutation",
         ActionKind::DesktopInput => "desktop_input",

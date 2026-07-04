@@ -8,6 +8,7 @@ members = [
     "crates/erebor-runtime-error",
     "crates/erebor-runtime-telemetry",
     "crates/erebor-runtime-events",
+    "crates/erebor-runtime-filesystem",
     "crates/erebor-runtime-ipc",
     "crates/erebor-runtime-policy",
 ]

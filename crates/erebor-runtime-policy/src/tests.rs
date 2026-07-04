@@ -325,6 +325,48 @@ fn payload_matcher_can_target_specific_protocol_params() -> Result<(), PolicyErr
 }
 
 #[test]
+fn filesystem_surface_and_file_actions_parse() -> Result<(), PolicyError> {
+    let policy = LocalPolicy::from_json_str(
+        r#"
+        {
+          "rules": [
+            {
+              "id": "deny-secret-open",
+              "match": {
+                "surface": "filesystem",
+                "action": "file_open",
+                "target_contains": "secret.txt"
+              },
+              "decision": "deny",
+              "reason": "secret opens are denied"
+            }
+          ]
+        }
+        "#,
+    )?;
+    let mut file_open = event(
+        ExecutionSurface::Filesystem,
+        ActionKind::FileOpen,
+        RiskLevel::Medium,
+    );
+    file_open.target = Some(TargetRef {
+        label: Some(String::from("secret.txt")),
+        uri: Some(String::from("file:///tmp/secret.txt")),
+    });
+    let decision = policy.evaluate(&file_open)?;
+
+    assert_eq!(
+        decision,
+        Decision::Deny {
+            reason: String::from("secret opens are denied"),
+            rule_id: Some(String::from("deny-secret-open"))
+        }
+    );
+
+    Ok(())
+}
+
+#[test]
 fn duplicate_rules_are_rejected() {
     let error = LocalPolicy::from_json_str(
         r#"

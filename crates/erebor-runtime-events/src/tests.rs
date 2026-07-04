@@ -31,6 +31,7 @@ fn fixture_events_cover_planned_surfaces() {
     let fixtures = [
         fixture(ExecutionSurface::BrowserCdp, ActionKind::BrowserNavigate),
         fixture(ExecutionSurface::Terminal, ActionKind::ProcessExec),
+        fixture(ExecutionSurface::Filesystem, ActionKind::FileOpen),
         fixture(ExecutionSurface::Mcp, ActionKind::ToolInvoke),
         fixture(ExecutionSurface::Network, ActionKind::NetworkRequest),
         fixture(ExecutionSurface::SaaS, ActionKind::SaaSMutation),
@@ -41,7 +42,7 @@ fn fixture_events_cover_planned_surfaces() {
         ),
     ];
 
-    assert_eq!(fixtures.len(), 7);
+    assert_eq!(fixtures.len(), 8);
     assert!(fixtures
         .iter()
         .all(|event| event.actor.kind == ActorKind::Agent));
@@ -56,6 +57,18 @@ fn serializes_event_contract() -> Result<(), serde_json::Error> {
     assert_eq!(decoded.surface, ExecutionSurface::BrowserCdp);
     assert_eq!(decoded.action, ActionKind::BrowserScriptEval);
     assert_eq!(decoded.risk.level, RiskLevel::Medium);
+
+    Ok(())
+}
+
+#[test]
+fn serializes_filesystem_event_contract() -> Result<(), serde_json::Error> {
+    let event = fixture(ExecutionSurface::Filesystem, ActionKind::FileMutation);
+    let encoded = serde_json::to_string(&event)?;
+    let decoded: RuntimeEvent = serde_json::from_str(&encoded)?;
+
+    assert_eq!(decoded.surface, ExecutionSurface::Filesystem);
+    assert_eq!(decoded.action, ActionKind::FileMutation);
 
     Ok(())
 }

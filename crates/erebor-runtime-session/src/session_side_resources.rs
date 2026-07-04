@@ -130,6 +130,12 @@ fn start_session_side_resources_from_start_plan(
                     process_exec_interception = terminal_process_surface.backend_input(plan)?;
                 }
             }
+            SessionSurfaceDefinition::Filesystem(_) => {
+                environment.push((
+                    String::from("EREBOR_FILESYSTEM_SURFACE"),
+                    String::from("filesystem"),
+                ));
+            }
         }
     }
 
@@ -179,6 +185,7 @@ fn start_session_side_resources_from_start_plan(
                 ));
             }
             SessionSurfaceKind::Terminal => {}
+            SessionSurfaceKind::Filesystem => {}
             SessionSurfaceKind::Mcp
             | SessionSurfaceKind::Network
             | SessionSurfaceKind::Saas

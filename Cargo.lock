@@ -367,6 +367,7 @@ version = "0.1.0"
 dependencies = [
  "erebor-runtime-error",
  "erebor-runtime-events",
+ "erebor-runtime-filesystem",
  "erebor-runtime-policy",
  "erebor-runtime-telemetry",
  "serde",
@@ -401,6 +402,13 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "erebor-runtime-filesystem"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

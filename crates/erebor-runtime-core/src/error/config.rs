@@ -102,6 +102,12 @@ pub enum RuntimeConfigError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("runtime config filesystem surface is invalid: {reason}"))]
+    InvalidFilesystemSurfaceConfig {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("runtime config session interception is invalid: {reason}"))]
     InvalidSessionInterceptionConfig {
         reason: String,
@@ -131,6 +137,7 @@ impl ErrorExt for RuntimeConfigError {
             | Self::NoSessionSurfaces { .. }
             | Self::BrowserCdpInvalidBrowserUrl { .. }
             | Self::InvalidProcessMediationConfig { .. }
+            | Self::InvalidFilesystemSurfaceConfig { .. }
             | Self::InvalidSessionInterceptionConfig { .. } => StatusCode::InvalidArguments,
         }
     }
