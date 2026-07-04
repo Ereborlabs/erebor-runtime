@@ -9,24 +9,27 @@ use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use erebor_runtime_audit::{
     read_audit_records, render_session_describe_from_default_registry,
     render_session_list_from_default_registry, render_session_show_from_default_registry,
-    session_audit_path, AuditLogError, EvidenceTraceError, EvidenceTracePaths, EvidenceTraceSink,
-    FileEvidenceTraceSink, MarkdownEvidenceTraceRenderer, SessionReviewError,
-    SessionReviewOutputFormat,
+    session_audit_path, EvidenceTracePaths, EvidenceTraceSink, FileEvidenceTraceSink,
+    MarkdownEvidenceTraceRenderer, SessionReviewOutputFormat,
 };
 use erebor_runtime_core::{
-    BrowserCdpSurfaceLayerConfig, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
-    RuntimeError, SessionAdoptTarget, SessionRunPlan, SessionRunnerKind, SessionSurfaceLaunchPlan,
-    SessionSurfaceLayers, SessionSurfaceStartPlan,
+    BrowserCdpSurfaceLayerConfig, RuntimeAuditConfig, RuntimeConfig, SessionAdoptTarget,
+    SessionRunPlan, SessionRunnerKind, SessionSurfaceLaunchPlan, SessionSurfaceLayers,
+    SessionSurfaceStartPlan,
 };
 use erebor_runtime_events::{RuntimeEvent, SessionId};
-use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicyEvaluator, PolicySet};
+use erebor_runtime_policy::{LocalPolicy, PolicyEvaluator, PolicySet};
 use erebor_runtime_session::{
-    SessionAdoptionService, SessionDiagnosticOutcome, SessionExecutionError,
-    SessionExecutionService, SurfaceServiceRunner,
+    SessionAdoptionService, SessionDiagnosticOutcome, SessionExecutionService, SurfaceServiceRunner,
 };
-use snafu::Location;
-use thiserror::Error;
+use snafu::ResultExt;
 
+use crate::error::{
+    AuditLogSnafu, CliError, EncodeJsonSnafu, EvidenceTraceSnafu, InvalidConfigSnafu,
+    InvalidEventSnafu, InvalidPolicySnafu, PolicyEvaluationSnafu, ReadConfigSnafu, ReadEventSnafu,
+    ReadPolicySnafu, RuntimeSnafu, SessionExecutionSnafu, SessionReviewSnafu,
+    WriteSessionOutputSnafu,
+};
 use crate::logging::{init_tracing, LoggingArgs};
 
 #[derive(Debug, Parser)]
@@ -466,13 +469,11 @@ fn parse_positive_pid(value: &str) -> Result<i32, String> {
 
 fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, CliError> {
     tracing::debug!(path = %path.display(), "reading runtime config");
-    let source = fs::read_to_string(path).map_err(|error| CliError::ReadConfig {
+    let source = fs::read_to_string(path).context(ReadConfigSnafu {
         path: path.to_path_buf(),
-        source: error,
-        location: Location::default(),
     })?;
     let mut config: RuntimeConfig =
-        RuntimeConfig::from_json_str(&source).map_err(CliError::invalid_config)?;
+        RuntimeConfig::from_json_str(&source).context(InvalidConfigSnafu)?;
     resolve_config_paths(path, &mut config);
 
     Ok(config)
@@ -481,7 +482,7 @@ fn read_runtime_config(path: &Path) -> Result<RuntimeConfig, CliError> {
 fn build_start_plan(path: &Path) -> Result<SessionSurfaceStartPlan, CliError> {
     read_runtime_config(path)?
         .surface_start_plan()
-        .map_err(CliError::invalid_config)
+        .context(InvalidConfigSnafu)
 }
 
 fn build_runtime_launch_plan(args: &StartArgs) -> Result<SessionSurfaceLaunchPlan, CliError> {
@@ -492,7 +493,7 @@ fn build_runtime_launch_plan(args: &StartArgs) -> Result<SessionSurfaceLaunchPla
         policy_count = plan.policies().len(),
         "building session surface launch plan"
     );
-    SessionSurfaceLaunchPlan::from_start_plan(args.listen, &plan).map_err(CliError::runtime)
+    SessionSurfaceLaunchPlan::from_start_plan(args.listen, &plan).context(RuntimeSnafu)
 }
 
 fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<SessionSurfaceLaunchPlan, CliError> {
@@ -511,11 +512,9 @@ fn build_dev_proxy_launch_plan(args: &ProxyCdpArgs) -> Result<SessionSurfaceLaun
             ..SessionSurfaceLayers::default()
         },
     };
-    let plan = config
-        .surface_start_plan()
-        .map_err(CliError::invalid_config)?;
+    let plan = config.surface_start_plan().context(InvalidConfigSnafu)?;
 
-    SessionSurfaceLaunchPlan::from_start_plan(args.listen, &plan).map_err(CliError::runtime)
+    SessionSurfaceLaunchPlan::from_start_plan(args.listen, &plan).context(RuntimeSnafu)
 }
 
 fn resolve_config_paths(config_path: &Path, config: &mut RuntimeConfig) {
@@ -575,13 +574,11 @@ fn resolve_config_path(base_dir: Option<&Path>, path: &mut PathBuf) {
 
 fn read_policy(path: &Path) -> Result<LocalPolicy, CliError> {
     tracing::debug!(path = %path.display(), "reading policy");
-    let source = fs::read_to_string(path).map_err(|error| CliError::ReadPolicy {
+    let source = fs::read_to_string(path).context(ReadPolicySnafu {
         path: path.to_path_buf(),
-        source: error,
-        location: Location::default(),
     })?;
 
-    LocalPolicy::from_json_str(&source).map_err(CliError::invalid_policy)
+    LocalPolicy::from_json_str(&source).context(InvalidPolicySnafu)
 }
 
 fn read_policy_set(paths: &[PathBuf]) -> Result<PolicySet, CliError> {
@@ -595,13 +592,11 @@ fn read_policy_set(paths: &[PathBuf]) -> Result<PolicySet, CliError> {
 
 fn read_event(path: &Path) -> Result<RuntimeEvent, CliError> {
     tracing::debug!(path = %path.display(), "reading runtime event fixture");
-    let source = fs::read_to_string(path).map_err(|error| CliError::ReadEvent {
+    let source = fs::read_to_string(path).context(ReadEventSnafu {
         path: path.to_path_buf(),
-        source: error,
-        location: Location::default(),
     })?;
 
-    serde_json::from_str(&source).map_err(CliError::invalid_event)
+    serde_json::from_str(&source).context(InvalidEventSnafu)
 }
 
 fn start_runtime(args: &StartArgs) -> Result<(), CliError> {
@@ -629,7 +624,7 @@ fn session_run(args: &SessionRunArgs) -> Result<(), CliError> {
         session_id,
         args.command.clone(),
     )
-    .map_err(CliError::invalid_config)?
+    .context(InvalidConfigSnafu)?
     .with_config_path(args.config.clone());
     execute_session_run_plan(&config, &plan)
 }
@@ -638,7 +633,7 @@ fn session_diagnose(args: &SessionDiagnoseArgs) -> Result<(), CliError> {
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
     let plan = SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
-        .map_err(CliError::invalid_config)?
+        .context(InvalidConfigSnafu)?
         .with_config_path(args.config.clone());
     execute_session_diagnostic_plan(&config, &plan)
 }
@@ -647,20 +642,20 @@ fn session_adopt(args: &SessionAdoptArgs) -> Result<(), CliError> {
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
     SessionAdoptionService::adopt_target(&config, args.runner.into(), session_id, args.target())
-        .map_err(CliError::session_execution)?;
+        .context(SessionExecutionSnafu)?;
     Ok(())
 }
 
 fn session_ls(args: &SessionLsArgs) -> Result<(), CliError> {
     let output = render_session_list_from_default_registry(args.format.into())
-        .map_err(CliError::session_review)?;
+        .context(SessionReviewSnafu)?;
     print!("{output}");
     Ok(())
 }
 
 fn session_show(args: &SessionShowArgs) -> Result<(), CliError> {
     let output = render_session_show_from_default_registry(&args.session_id, args.format.into())
-        .map_err(CliError::session_review)?;
+        .context(SessionReviewSnafu)?;
     print!("{output}");
     Ok(())
 }
@@ -668,13 +663,13 @@ fn session_show(args: &SessionShowArgs) -> Result<(), CliError> {
 fn session_describe(args: &SessionDescribeArgs) -> Result<(), CliError> {
     let output =
         render_session_describe_from_default_registry(&args.session_id, args.format.into())
-            .map_err(CliError::session_review)?;
+            .context(SessionReviewSnafu)?;
     print!("{output}");
     Ok(())
 }
 
 fn execute_session_run_plan(config: &RuntimeConfig, plan: &SessionRunPlan) -> Result<(), CliError> {
-    SessionExecutionService::run_plan(config, plan).map_err(CliError::session_execution)?;
+    SessionExecutionService::run_plan(config, plan).context(SessionExecutionSnafu)?;
     Ok(())
 }
 
@@ -682,8 +677,8 @@ fn execute_session_diagnostic_plan(
     config: &RuntimeConfig,
     plan: &SessionRunPlan,
 ) -> Result<(), CliError> {
-    let outcome = SessionExecutionService::run_diagnostic(config, plan)
-        .map_err(CliError::session_execution)?;
+    let outcome =
+        SessionExecutionService::run_diagnostic(config, plan).context(SessionExecutionSnafu)?;
     write_session_diagnostic_outcome(&outcome)
 }
 
@@ -691,12 +686,12 @@ fn write_session_diagnostic_outcome(outcome: &SessionDiagnosticOutcome) -> Resul
     if !outcome.stdout().is_empty() {
         io::stdout()
             .write_all(outcome.stdout().as_bytes())
-            .map_err(CliError::write_session_output)?;
+            .context(WriteSessionOutputSnafu)?;
     }
     if !outcome.stderr().is_empty() {
         io::stderr()
             .write_all(outcome.stderr().as_bytes())
-            .map_err(CliError::write_session_output)?;
+            .context(WriteSessionOutputSnafu)?;
     }
 
     Ok(())
@@ -713,7 +708,7 @@ fn build_session_run_plan(args: &SessionRunArgs) -> Result<SessionRunPlan, CliEr
         args.command.clone(),
     )
     .map(|plan| plan.with_config_path(args.config.clone()))
-    .map_err(CliError::invalid_config)
+    .context(InvalidConfigSnafu)
 }
 
 #[cfg(test)]
@@ -722,7 +717,7 @@ fn build_session_diagnose_plan(args: &SessionDiagnoseArgs) -> Result<SessionRunP
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
     SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
         .map(|plan| plan.with_config_path(args.config.clone()))
-        .map_err(CliError::invalid_config)
+        .context(InvalidConfigSnafu)
 }
 
 fn execute_dev(args: &DevArgs) -> Result<(), CliError> {
@@ -735,7 +730,7 @@ fn execute_dev(args: &DevArgs) -> Result<(), CliError> {
 }
 
 fn start_runtime_from_launch_plan(launch_plan: SessionSurfaceLaunchPlan) -> Result<(), CliError> {
-    SurfaceServiceRunner::start(launch_plan).map_err(CliError::session_execution)
+    SurfaceServiceRunner::start(launch_plan).context(SessionExecutionSnafu)
 }
 
 fn execute_policy(args: &PolicyArgs) -> Result<(), CliError> {
@@ -748,12 +743,10 @@ fn execute_policy(args: &PolicyArgs) -> Result<(), CliError> {
             );
             let policy_set = read_policy_set(std::slice::from_ref(&args.policy))?;
             let event = read_event(&args.event)?;
-            let decision = policy_set
-                .evaluate(&event)
-                .map_err(CliError::policy_evaluation)?;
+            let decision = policy_set.evaluate(&event).context(PolicyEvaluationSnafu)?;
             println!(
                 "{}",
-                serde_json::to_string(&decision).map_err(CliError::encode_json)?
+                serde_json::to_string(&decision).context(EncodeJsonSnafu)?
             );
         }
     }
@@ -764,17 +757,16 @@ fn execute_policy(args: &PolicyArgs) -> Result<(), CliError> {
 fn execute_audit(args: &AuditArgs) -> Result<(), CliError> {
     match &args.command {
         AuditCommand::Tail(args) => {
-            let audit_path =
-                session_audit_path(&args.session_id).map_err(CliError::evidence_trace)?;
+            let audit_path = session_audit_path(&args.session_id).context(EvidenceTraceSnafu)?;
             tracing::debug!(
                 session = %args.session_id,
                 audit = %audit_path.display(),
                 "reading session audit records"
             );
-            for record in read_audit_records(&audit_path).map_err(CliError::audit_log)? {
+            for record in read_audit_records(&audit_path).context(AuditLogSnafu)? {
                 println!(
                     "{}",
-                    serde_json::to_string(&record).map_err(CliError::encode_json)?
+                    serde_json::to_string(&record).context(EncodeJsonSnafu)?
                 );
             }
         }
@@ -789,16 +781,16 @@ fn execute_audit(args: &AuditArgs) -> Result<(), CliError> {
                     args.prompt.clone(),
                     args.purpose.clone(),
                 )
-                .map_err(CliError::evidence_trace)?,
+                .context(EvidenceTraceSnafu)?,
             )
-            .map_err(CliError::evidence_trace)?;
+            .context(EvidenceTraceSnafu)?;
             let report = MarkdownEvidenceTraceRenderer
                 .render(&request)
-                .map_err(CliError::evidence_trace)?;
+                .context(EvidenceTraceSnafu)?;
 
             if let Some(out) = args.out.as_ref() {
                 let sink = FileEvidenceTraceSink::new(out);
-                let receipt = sink.send(&report).map_err(CliError::evidence_trace)?;
+                let receipt = sink.send(&report).context(EvidenceTraceSnafu)?;
                 println!(
                     "evidence_trace={} sha256={}",
                     receipt.destination(),
@@ -811,173 +803,6 @@ fn execute_audit(args: &AuditArgs) -> Result<(), CliError> {
     }
 
     Ok(())
-}
-
-#[derive(Debug, Error)]
-pub(crate) enum CliError {
-    #[error("failed to read runtime config `{}`: {source}", path.display())]
-    ReadConfig {
-        path: PathBuf,
-        source: io::Error,
-        location: Location,
-    },
-    #[error("{source}")]
-    InvalidConfig {
-        source: RuntimeConfigError,
-        location: Location,
-    },
-    #[error("failed to read policy `{}`: {source}", path.display())]
-    ReadPolicy {
-        path: PathBuf,
-        source: io::Error,
-        location: Location,
-    },
-    #[error("{source}")]
-    InvalidPolicy {
-        source: PolicyError,
-        location: Location,
-    },
-    #[error("policy evaluation failed: {source}")]
-    PolicyEvaluation {
-        source: PolicyError,
-        location: Location,
-    },
-    #[error("failed to read event `{}`: {source}", path.display())]
-    ReadEvent {
-        path: PathBuf,
-        source: io::Error,
-        location: Location,
-    },
-    #[error("event fixture JSON is invalid: {source}")]
-    InvalidEvent {
-        source: serde_json::Error,
-        location: Location,
-    },
-    #[error("{source}")]
-    Runtime {
-        source: RuntimeError,
-        location: Location,
-    },
-    #[error("{source}")]
-    SessionExecution {
-        source: Box<SessionExecutionError>,
-        location: Location,
-    },
-    #[error("failed to write session diagnostic output: {source}")]
-    WriteSessionOutput {
-        source: io::Error,
-        location: Location,
-    },
-    #[error("{source}")]
-    AuditLog {
-        source: AuditLogError,
-        location: Location,
-    },
-    #[error("{source}")]
-    EvidenceTrace {
-        source: Box<EvidenceTraceError>,
-        location: Location,
-    },
-    #[error("{source}")]
-    SessionReview {
-        source: Box<SessionReviewError>,
-        location: Location,
-    },
-    #[error("failed to encode JSON output: {source}")]
-    EncodeJson {
-        source: serde_json::Error,
-        location: Location,
-    },
-}
-
-impl CliError {
-    #[track_caller]
-    fn invalid_config(source: RuntimeConfigError) -> Self {
-        Self::InvalidConfig {
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn invalid_policy(source: PolicyError) -> Self {
-        Self::InvalidPolicy {
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn policy_evaluation(source: PolicyError) -> Self {
-        Self::PolicyEvaluation {
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn invalid_event(source: serde_json::Error) -> Self {
-        Self::InvalidEvent {
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn runtime(source: RuntimeError) -> Self {
-        Self::Runtime {
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn session_execution(source: SessionExecutionError) -> Self {
-        Self::SessionExecution {
-            source: Box::new(source),
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn write_session_output(source: io::Error) -> Self {
-        Self::WriteSessionOutput {
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn audit_log(source: AuditLogError) -> Self {
-        Self::AuditLog {
-            source,
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn evidence_trace(source: EvidenceTraceError) -> Self {
-        Self::EvidenceTrace {
-            source: Box::new(source),
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn session_review(source: SessionReviewError) -> Self {
-        Self::SessionReview {
-            source: Box::new(source),
-            location: Location::default(),
-        }
-    }
-
-    #[track_caller]
-    fn encode_json(source: serde_json::Error) -> Self {
-        Self::EncodeJson {
-            source,
-            location: Location::default(),
-        }
-    }
 }
 
 #[cfg(test)]
