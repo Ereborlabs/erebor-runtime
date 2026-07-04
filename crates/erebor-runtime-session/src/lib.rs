@@ -29,6 +29,7 @@ pub use runtime_interception_broker::{
 };
 pub use session_run::SessionExecutionService;
 pub use surface_services::SurfaceServiceRunner;
+pub use surfaces::filesystem::{FilesystemFileOperationHandler, FilesystemSessionContext};
 pub use surfaces::terminal::browser_cdp_process_mediation::BrowserCdpProcessMediationCapability;
 
 pub(crate) use registry_lifecycle::SessionStorage;

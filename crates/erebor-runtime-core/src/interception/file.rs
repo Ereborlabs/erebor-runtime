@@ -25,6 +25,30 @@ pub struct FileInterceptionRequest<'a> {
     cwd: &'a str,
     pid: i64,
     ppid: i64,
+    resolved_identity: Option<FileResolvedIdentity>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileResolvedIdentity {
+    device: u64,
+    inode: u64,
+}
+
+impl FileResolvedIdentity {
+    #[must_use]
+    pub const fn new(device: u64, inode: u64) -> Self {
+        Self { device, inode }
+    }
+
+    #[must_use]
+    pub const fn device(&self) -> u64 {
+        self.device
+    }
+
+    #[must_use]
+    pub const fn inode(&self) -> u64 {
+        self.inode
+    }
 }
 
 impl<'a> FileInterceptionRequest<'a> {
@@ -42,7 +66,14 @@ impl<'a> FileInterceptionRequest<'a> {
             cwd,
             pid,
             ppid,
+            resolved_identity: None,
         }
+    }
+
+    #[must_use]
+    pub const fn with_resolved_identity(mut self, identity: FileResolvedIdentity) -> Self {
+        self.resolved_identity = Some(identity);
+        self
     }
 
     #[must_use]
@@ -68,6 +99,11 @@ impl<'a> FileInterceptionRequest<'a> {
     #[must_use]
     pub const fn ppid(&self) -> i64 {
         self.ppid
+    }
+
+    #[must_use]
+    pub const fn resolved_identity(&self) -> Option<FileResolvedIdentity> {
+        self.resolved_identity
     }
 }
 

@@ -51,9 +51,9 @@ pub use engine::{
 pub use error::{RuntimeConfigError, RuntimeError, SessionRegistryError};
 pub use interception::{
     FileInterceptionOperationKind, FileInterceptionRequest, FileOperationSurfaceHandler,
-    ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionInterceptionDecision,
-    SocketConnectInterceptionRequest, SocketConnectSurfaceHandler, SurfaceInterceptionDecision,
-    SurfaceMediationDecision,
+    FileResolvedIdentity, ProcessExecInterceptionRequest, ProcessExecSurfaceHandler,
+    SessionInterceptionDecision, SocketConnectInterceptionRequest, SocketConnectSurfaceHandler,
+    SurfaceInterceptionDecision, SurfaceMediationDecision,
 };
 pub use runtime::{
     RunningSessionSurface, SessionSurfaceDefinition, SessionSurfaceFailure,

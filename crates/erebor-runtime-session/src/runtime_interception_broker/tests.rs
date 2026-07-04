@@ -651,6 +651,7 @@ fn file_request(kind: FileOperationKind, path: &str) -> InterceptionRequest {
         file: Some(FileOperation {
             kind: kind as i32,
             path: path.to_owned(),
+            resolved_identity: None,
         }),
         socket: None,
     }

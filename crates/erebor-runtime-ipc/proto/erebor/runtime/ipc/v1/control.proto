@@ -97,6 +97,12 @@ message ProcessExecOperation {
 message FileOperation {
   FileOperationKind kind = 1;
   string path = 2;
+  FileIdentity resolved_identity = 3;
+}
+
+message FileIdentity {
+  uint64 device = 1;
+  uint64 inode = 2;
 }
 
 message SocketOperation {

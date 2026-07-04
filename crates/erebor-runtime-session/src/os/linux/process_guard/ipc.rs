@@ -5,6 +5,11 @@ use std::{
     time::Duration,
 };
 
+#[path = "ipc/file.rs"]
+mod file;
+
+pub(super) use file::{FileIdentity, FileOperation, FileOperationKind};
+
 const MAGIC: &[u8; 4] = b"ERB1";
 const FRAME_VERSION: u16 = 1;
 const HEADER_LEN: usize = 12;
@@ -21,7 +26,12 @@ const DECISION_ALLOW: i32 = 1;
 const DECISION_DENY: i32 = 2;
 const DECISION_REQUIRE_APPROVAL: i32 = 3;
 const DECISION_MEDIATE: i32 = 4;
+const INTERCEPTION_SOURCE_PTRACE: i32 = 1;
 const INTERCEPTION_SOURCE_SHIM: i32 = 2;
+const INTERCEPTION_OPERATION_PROCESS_EXEC: i32 = 1;
+const INTERCEPTION_OPERATION_FILE_OPEN: i32 = 2;
+const INTERCEPTION_OPERATION_FILE_READ: i32 = 3;
+const INTERCEPTION_OPERATION_FILE_MUTATION: i32 = 4;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RuntimeInterceptionEndpoint {
@@ -44,6 +54,7 @@ pub(super) struct GuardHello {
 pub(super) struct InterceptionRequest {
     pub(super) request_id: u64,
     pub(super) actor_id: String,
+    pub(super) source: InterceptionSource,
     pub(super) pid: i64,
     pub(super) ppid: i64,
     pub(super) executable: String,
@@ -51,6 +62,8 @@ pub(super) struct InterceptionRequest {
     pub(super) cwd: String,
     pub(super) matched_handler_id: String,
     pub(super) timestamp: String,
+    pub(super) operation: InterceptionOperation,
+    pub(super) file: Option<FileOperation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,6 +84,42 @@ pub(super) enum InterceptionDecisionKind {
     RequireApproval,
     Mediate,
     Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InterceptionSource {
+    Ptrace,
+    Shim,
+}
+
+impl InterceptionSource {
+    const fn as_i32(self) -> i32 {
+        match self {
+            Self::Ptrace => INTERCEPTION_SOURCE_PTRACE,
+            Self::Shim => INTERCEPTION_SOURCE_SHIM,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum InterceptionOperation {
+    Unspecified,
+    ProcessExec,
+    FileOpen,
+    FileRead,
+    FileMutation,
+}
+
+impl InterceptionOperation {
+    const fn as_i32(self) -> i32 {
+        match self {
+            Self::Unspecified => 0,
+            Self::ProcessExec => INTERCEPTION_OPERATION_PROCESS_EXEC,
+            Self::FileOpen => INTERCEPTION_OPERATION_FILE_OPEN,
+            Self::FileRead => INTERCEPTION_OPERATION_FILE_READ,
+            Self::FileMutation => INTERCEPTION_OPERATION_FILE_MUTATION,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -336,7 +385,7 @@ fn encode_interception_request(request: &InterceptionRequest) -> Vec<u8> {
     let mut output = Vec::new();
     write_varint_field(&mut output, 1, request.request_id);
     write_string_field(&mut output, 2, &request.actor_id);
-    write_varint_field(&mut output, 3, INTERCEPTION_SOURCE_SHIM as u64);
+    write_varint_field(&mut output, 3, request.source.as_i32() as u64);
     write_varint_field(&mut output, 4, request.pid as u64);
     write_varint_field(&mut output, 5, request.ppid as u64);
     write_string_field(&mut output, 6, &request.executable);
@@ -346,6 +395,12 @@ fn encode_interception_request(request: &InterceptionRequest) -> Vec<u8> {
     write_string_field(&mut output, 8, &request.cwd);
     write_string_field(&mut output, 11, &request.matched_handler_id);
     write_string_field(&mut output, 12, &request.timestamp);
+    if request.operation != InterceptionOperation::Unspecified {
+        write_varint_field(&mut output, 13, request.operation.as_i32() as u64);
+    }
+    if let Some(file) = request.file.as_ref() {
+        write_bytes_field(&mut output, 15, &file::encode_file_operation(file));
+    }
     output
 }
 
@@ -532,8 +587,9 @@ fn skip_field(bytes: &[u8], cursor: &mut usize, wire: u64) -> Result<(), String>
 mod tests {
     use super::{
         decode_envelope, decode_interception_decision, encode_envelope,
-        encode_interception_request, Envelope, Header, InterceptionDecisionKind,
-        InterceptionRequest, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
+        encode_interception_request, Envelope, FileIdentity, FileOperation, FileOperationKind,
+        Header, InterceptionDecisionKind, InterceptionOperation, InterceptionRequest,
+        InterceptionSource, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
     };
 
     #[test]
@@ -559,6 +615,7 @@ mod tests {
         let request = InterceptionRequest {
             request_id: 7,
             actor_id: String::from("openclaw"),
+            source: InterceptionSource::Shim,
             pid: 10,
             ppid: 9,
             executable: String::from("google-chrome"),
@@ -566,6 +623,8 @@ mod tests {
             cwd: String::from("/tmp"),
             matched_handler_id: String::from("managed-browser"),
             timestamp: String::from("unix:1"),
+            operation: InterceptionOperation::ProcessExec,
+            file: None,
         };
 
         let encoded = encode_interception_request(&request);
@@ -576,6 +635,40 @@ mod tests {
         assert!(!encoded
             .windows("session".len())
             .any(|window| window == b"session"));
+    }
+
+    #[test]
+    fn file_interception_request_encodes_operation_and_identity() {
+        let request = InterceptionRequest {
+            request_id: 8,
+            actor_id: String::from("openclaw"),
+            source: InterceptionSource::Ptrace,
+            pid: 11,
+            ppid: 10,
+            executable: String::new(),
+            argv: Vec::new(),
+            cwd: String::from("/workspace"),
+            matched_handler_id: String::new(),
+            timestamp: String::from("unix:2"),
+            operation: InterceptionOperation::FileRead,
+            file: Some(FileOperation {
+                kind: FileOperationKind::Read,
+                path: String::from("/workspace/secret.txt"),
+                resolved_identity: Some(FileIdentity {
+                    device: 123,
+                    inode: 456,
+                }),
+            }),
+        };
+
+        let encoded = encode_interception_request(&request);
+
+        assert!(encoded
+            .windows("secret.txt".len())
+            .any(|window| window == b"secret.txt"));
+        assert!(encoded
+            .windows(2)
+            .any(|window| window == [13 << 3, InterceptionOperation::FileRead.as_i32() as u8]));
     }
 
     #[test]

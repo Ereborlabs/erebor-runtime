@@ -8,6 +8,7 @@ pub use decision::{
 };
 pub use file::{
     FileInterceptionOperationKind, FileInterceptionRequest, FileOperationSurfaceHandler,
+    FileResolvedIdentity,
 };
 pub use process::{ProcessExecInterceptionRequest, ProcessExecSurfaceHandler};
 pub use socket::{SocketConnectInterceptionRequest, SocketConnectSurfaceHandler};

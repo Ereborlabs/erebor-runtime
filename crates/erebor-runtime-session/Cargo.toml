@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+erebor-runtime-audit = { path = "../erebor-runtime-audit" }
 erebor-runtime-cdp = { path = "../erebor-runtime-cdp" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
@@ -14,6 +15,7 @@ erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 erebor-runtime-terminal = { path = "../erebor-runtime-terminal" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
+serde_json.workspace = true
 snafu.workspace = true
 tokio.workspace = true
 

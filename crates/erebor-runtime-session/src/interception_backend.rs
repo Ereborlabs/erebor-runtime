@@ -36,23 +36,30 @@ impl SessionInterceptionBackendBundle {
     pub(crate) fn prepare(
         interception: &SessionInterceptionConfig,
         process_exec: Option<ProcessExecInterceptionInput<'_>>,
+        file_operations: FileOperationInterceptionInput,
         plan: &impl SessionPlanContext,
         storage: Option<&SessionStorage>,
     ) -> Result<Option<Self>, SessionExecutionError> {
-        if !interception.operation_supported(SessionInterceptionOperation::ProcessExec) {
+        let operations = LinuxPtraceInterceptionOperations::from_inputs(
+            interception,
+            process_exec.as_ref(),
+            file_operations,
+        );
+        if !operations.any() {
             return Ok(None);
         }
 
-        let Some(process_exec) = process_exec else {
-            return Ok(None);
-        };
-
         match interception.backend() {
             SessionInterceptionBackendKind::LinuxPtrace => {
-                LinuxPtraceInterceptionBackendBundle::prepare(process_exec, plan, storage)
-                    .map(SessionInterceptionBackend::LinuxPtrace)
-                    .map(|backend| Self { backend })
-                    .map(Some)
+                LinuxPtraceInterceptionBackendBundle::prepare(
+                    process_exec,
+                    operations,
+                    plan,
+                    storage,
+                )
+                .map(SessionInterceptionBackend::LinuxPtrace)
+                .map(|backend| Self { backend })
+                .map(Some)
             }
         }
     }
@@ -91,6 +98,23 @@ impl SessionInterceptionBackendBundle {
             SessionInterceptionBackend::LinuxPtrace(bundle) => {
                 bundle.linux_host_adopt_options(pid, browser_cdp_endpoint)
             }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct FileOperationInterceptionInput {
+    open: bool,
+    read: bool,
+    mutation: bool,
+}
+
+impl FileOperationInterceptionInput {
+    pub(crate) const fn new(open: bool, read: bool, mutation: bool) -> Self {
+        Self {
+            open,
+            read,
+            mutation,
         }
     }
 }
@@ -177,6 +201,7 @@ struct LinuxPtraceInterceptionBackendBundle {
     session_dir: PathBuf,
     guard_path: PathBuf,
     session_id: String,
+    operations: LinuxPtraceInterceptionOperations,
     audit_path: Option<PathBuf>,
     audit_filename: Option<String>,
     audit_terminal_level: AuditCommandLogLevel,
@@ -185,9 +210,58 @@ struct LinuxPtraceInterceptionBackendBundle {
     interception: Option<LinuxProcessInterceptionBundle>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct LinuxPtraceInterceptionOperations {
+    process_exec: bool,
+    file_open: bool,
+    file_read: bool,
+    file_mutation: bool,
+}
+
+impl LinuxPtraceInterceptionOperations {
+    fn from_inputs(
+        interception: &SessionInterceptionConfig,
+        process_exec: Option<&ProcessExecInterceptionInput<'_>>,
+        file_operations: FileOperationInterceptionInput,
+    ) -> Self {
+        Self {
+            process_exec: process_exec.is_some()
+                && interception.operation_supported(SessionInterceptionOperation::ProcessExec),
+            file_open: file_operations.open
+                && interception.operation_supported(SessionInterceptionOperation::FileOpen),
+            file_read: file_operations.read
+                && interception.operation_supported(SessionInterceptionOperation::FileRead),
+            file_mutation: file_operations.mutation
+                && interception.operation_supported(SessionInterceptionOperation::FileMutation),
+        }
+    }
+
+    const fn any(self) -> bool {
+        self.process_exec || self.file_open || self.file_read || self.file_mutation
+    }
+
+    fn env_value(self) -> String {
+        let mut operations = Vec::new();
+        if self.process_exec {
+            operations.push("process_exec");
+        }
+        if self.file_open {
+            operations.push("file_open");
+        }
+        if self.file_read {
+            operations.push("file_read");
+        }
+        if self.file_mutation {
+            operations.push("file_mutation");
+        }
+        operations.join("\n")
+    }
+}
+
 impl LinuxPtraceInterceptionBackendBundle {
     fn prepare(
-        process_exec: ProcessExecInterceptionInput<'_>,
+        process_exec: Option<ProcessExecInterceptionInput<'_>>,
+        operations: LinuxPtraceInterceptionOperations,
         plan: &impl SessionPlanContext,
         storage: Option<&SessionStorage>,
     ) -> Result<Self, SessionExecutionError> {
@@ -198,7 +272,9 @@ impl LinuxPtraceInterceptionBackendBundle {
         let interception = LinuxProcessInterceptionBundle::prepare(
             &guard_path,
             &session_dir,
-            process_exec.mediation(),
+            process_exec
+                .as_ref()
+                .map(ProcessExecInterceptionInput::mediation),
         )?;
         let mut audit_jsonl_path = None;
         let mut audit_filename = None;
@@ -228,11 +304,19 @@ impl LinuxPtraceInterceptionBackendBundle {
             session_dir,
             guard_path,
             session_id: plan.session_id().as_str().to_owned(),
+            operations,
             audit_path: audit_jsonl_path,
             audit_filename,
-            audit_terminal_level: process_exec.audit_level(),
-            audit_terminal_debug_commands: process_exec.audit_debug_commands().to_vec(),
-            terminal_tty: process_exec.tty(),
+            audit_terminal_level: process_exec.as_ref().map_or(
+                AuditCommandLogLevel::Signal,
+                ProcessExecInterceptionInput::audit_level,
+            ),
+            audit_terminal_debug_commands: process_exec
+                .as_ref()
+                .map_or_else(Vec::new, |input| input.audit_debug_commands().to_vec()),
+            terminal_tty: process_exec
+                .as_ref()
+                .is_some_and(ProcessExecInterceptionInput::tty),
             interception,
         })
     }
@@ -247,6 +331,10 @@ impl LinuxPtraceInterceptionBackendBundle {
             .with_mount(DockerSessionMount::new(guard_host_dir, DOCKER_GUARD_DIR).read_only())
             .with_entrypoint(LINUX_PROCESS_GUARD_PATH)
             .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
+            .with_environment(
+                "EREBOR_GUARD_INTERCEPTION_OPERATIONS",
+                self.operations.env_value(),
+            )
             .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string());
 
         if let Some(audit_path) = self.audit_path.as_ref() {
@@ -281,6 +369,10 @@ impl LinuxPtraceInterceptionBackendBundle {
         let mut options = LinuxHostSessionCommandOptions::new()
             .with_wrapper_program(&self.guard_path)
             .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
+            .with_environment(
+                "EREBOR_GUARD_INTERCEPTION_OPERATIONS",
+                self.operations.env_value(),
+            )
             .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string())
             .with_environment(
                 "EREBOR_GUARD_CGROUP_DIR",
@@ -339,8 +431,11 @@ impl LinuxProcessInterceptionBundle {
     fn prepare(
         guard_path: &Path,
         session_dir: &Path,
-        process_exec: &ProcessExecMediationInput<'_>,
+        process_exec: Option<&ProcessExecMediationInput<'_>>,
     ) -> Result<Option<Self>, SessionExecutionError> {
+        let Some(process_exec) = process_exec else {
+            return Ok(None);
+        };
         if !process_exec.enabled() {
             return Ok(None);
         }

@@ -231,6 +231,7 @@ fn proto_contract_file_contains_phase_zero_schema() {
     assert!(proto.contains("message InterceptionRequest"));
     assert!(proto.contains("message InterceptionDecision"));
     assert!(proto.contains("message FileOperation"));
+    assert!(proto.contains("message FileIdentity"));
     assert!(proto.contains("message SocketOperation"));
     assert!(proto.contains("enum InterceptionOperation"));
     assert!(proto.contains("enum DecisionKind"));

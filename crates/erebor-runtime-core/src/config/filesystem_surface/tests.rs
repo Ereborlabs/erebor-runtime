@@ -79,8 +79,8 @@ fn accepts_filesystem_surface_config_and_reports_file_capabilities(
         let capability = capability_for(capabilities.operations(), operation)?;
         assert_eq!(capability.owning_surface(), "filesystem");
         assert!(capability.surface_enabled());
-        assert!(!capability.backend_supported());
-        assert!(!capability.effective());
+        assert!(capability.backend_supported());
+        assert!(capability.effective());
     }
 
     Ok(())

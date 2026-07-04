@@ -256,6 +256,7 @@ fn interception_request_from_invocation(
     ipc::InterceptionRequest {
         request_id: current_unix_timestamp(),
         actor_id: env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent")),
+        source: ipc::InterceptionSource::Shim,
         pid: process::id() as i64,
         ppid: proc_parent_pid_for_self().unwrap_or(0) as i64,
         executable: invoked.to_owned(),
@@ -266,6 +267,8 @@ fn interception_request_from_invocation(
             .to_string(),
         matched_handler_id: handler.id.clone(),
         timestamp: format!("unix:{}", current_unix_timestamp()),
+        operation: ipc::InterceptionOperation::ProcessExec,
+        file: None,
     }
 }
 

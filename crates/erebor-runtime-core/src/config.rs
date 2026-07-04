@@ -813,7 +813,13 @@ impl SessionInterceptionBackendKind {
     #[must_use]
     const fn supports_operation(self, operation: SessionInterceptionOperation) -> bool {
         match self {
-            Self::LinuxPtrace => matches!(operation, SessionInterceptionOperation::ProcessExec),
+            Self::LinuxPtrace => matches!(
+                operation,
+                SessionInterceptionOperation::ProcessExec
+                    | SessionInterceptionOperation::FileOpen
+                    | SessionInterceptionOperation::FileRead
+                    | SessionInterceptionOperation::FileMutation
+            ),
         }
     }
 }
@@ -3045,7 +3051,7 @@ mod tests {
             .any(
                 |operation| operation.operation() == SessionInterceptionOperation::FileRead
                     && operation.owning_surface() == "filesystem"
-                    && !operation.backend_supported()
+                    && operation.backend_supported()
                     && !operation.surface_enabled()
                     && !operation.effective()
             ));
@@ -3092,7 +3098,7 @@ mod tests {
         assert!(process_exec.backend_supported());
         assert!(!process_exec.surface_enabled());
         assert!(!process_exec.effective());
-        assert!(!file_read.backend_supported());
+        assert!(file_read.backend_supported());
         assert!(!file_read.surface_enabled());
         assert!(!file_read.effective());
         assert!(!socket_connect.backend_supported());

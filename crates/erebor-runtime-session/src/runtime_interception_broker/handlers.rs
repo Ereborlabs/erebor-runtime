@@ -2,8 +2,8 @@ use std::{fmt, sync::Arc};
 
 use erebor_runtime_core::{
     FileInterceptionOperationKind, FileInterceptionRequest, FileOperationSurfaceHandler,
-    ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SocketConnectInterceptionRequest,
-    SocketConnectSurfaceHandler, SurfaceInterceptionDecision,
+    FileResolvedIdentity, ProcessExecInterceptionRequest, ProcessExecSurfaceHandler,
+    SocketConnectInterceptionRequest, SocketConnectSurfaceHandler, SurfaceInterceptionDecision,
 };
 use erebor_runtime_ipc::v1::{
     operation_name, FileOperationKind, InterceptionOperation, InterceptionRequest,
@@ -117,13 +117,17 @@ impl SessionInterceptionRouter {
                 "does not match operation family",
             );
         }
-        let file_request = FileInterceptionRequest::new(
+        let mut file_request = FileInterceptionRequest::new(
             operation,
             &file.path,
             &request.cwd,
             request.pid,
             request.ppid,
         );
+        if let Some(identity) = file.resolved_identity.as_ref() {
+            file_request = file_request
+                .with_resolved_identity(FileResolvedIdentity::new(identity.device, identity.inode));
+        }
         self.file_operation
             .as_ref()
             .map(|handler| {

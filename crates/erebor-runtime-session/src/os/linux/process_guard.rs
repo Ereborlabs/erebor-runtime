@@ -1,5 +1,7 @@
 #![allow(unsafe_code)]
 
+#[path = "process_guard/file_interception.rs"]
+mod file_interception;
 #[path = "process_guard/interception.rs"]
 mod interception;
 #[path = "process_guard/ipc.rs"]
@@ -473,7 +475,16 @@ fn handle_syscall_stop(context: &mut TraceContext, pid: Pid) {
     };
 
     if entering_syscall {
-        if regs.orig_rax == SYS_EXECVE || regs.orig_rax == SYS_EXECVEAT {
+        if file_interception::should_deny_file_syscall(pid, &regs) {
+            regs.orig_rax = (-1i64) as u64;
+            regs.rax = (-(EPERM as i64)) as u64;
+            if let Some(state) = context.states.get_mut(&pid) {
+                state.denied_pending = true;
+            }
+            set_regs(pid, &regs);
+        } else if interception_operation_enabled("process_exec")
+            && (regs.orig_rax == SYS_EXECVE || regs.orig_rax == SYS_EXECVEAT)
+        {
             let deny = should_deny_exec(context, pid, &regs, regs.orig_rax == SYS_EXECVEAT);
             if deny {
                 regs.orig_rax = (-1i64) as u64;
@@ -596,8 +607,18 @@ fn guard_hello_from_env() -> Result<ipc::GuardHello, String> {
         runner_kind: env::var("EREBOR_SESSION_RUNNER")
             .unwrap_or_else(|_| String::from("linux_host")),
         platform: String::from("linux-x86_64"),
-        capabilities: vec![String::from("process_exec_router")],
+        capabilities: guard_capabilities(),
     })
+}
+
+fn guard_capabilities() -> Vec<String> {
+    let mut capabilities = vec![String::from("interception_request")];
+    for operation in ["process_exec", "file_open", "file_read", "file_mutation"] {
+        if interception_operation_enabled(operation) {
+            capabilities.push(format!("{operation}_router"));
+        }
+    }
+    capabilities
 }
 
 fn interception_request_from_exec(
@@ -609,6 +630,7 @@ fn interception_request_from_exec(
     ipc::InterceptionRequest {
         request_id: timestamp,
         actor_id: env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent")),
+        source: ipc::InterceptionSource::Ptrace,
         pid: i64::from(pid),
         ppid: proc_parent_pid(pid).map_or(0, i64::from),
         executable: path.to_owned(),
@@ -616,6 +638,8 @@ fn interception_request_from_exec(
         cwd: proc_cwd(pid),
         matched_handler_id: String::new(),
         timestamp: format!("unix:{timestamp}"),
+        operation: ipc::InterceptionOperation::ProcessExec,
+        file: None,
     }
 }
 
@@ -672,6 +696,15 @@ fn current_unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs())
+}
+
+fn interception_operation_enabled(operation: &str) -> bool {
+    match env::var("EREBOR_GUARD_INTERCEPTION_OPERATIONS") {
+        Ok(source) => source
+            .split(|character: char| character == ',' || character.is_ascii_whitespace())
+            .any(|value| value == operation),
+        Err(_) => operation == "process_exec",
+    }
 }
 
 fn set_trace_options(pid: Pid) {
