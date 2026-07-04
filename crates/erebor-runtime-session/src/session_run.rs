@@ -2,10 +2,11 @@ use erebor_runtime_core::{
     RuntimeConfig, RuntimeError, SessionAdoptPlan, SessionRunOutcome, SessionRunPlan,
     SessionRunnerKind, SessionRunnerLauncher,
 };
-use snafu::Location;
+use snafu::{Location, ResultExt};
 
 use crate::{
     diagnostic::SessionDiagnosticOutcome,
+    error::{DiagnosticFailedSnafu, RuntimeSnafu},
     registry_lifecycle::{
         finish_registry_diagnostic, finish_registry_session, prepare_registry_session,
         PreparedSession,
@@ -46,7 +47,7 @@ impl SessionExecutionService {
                 side_resources.linux_host_options(),
             ),
         }
-        .map_err(SessionExecutionError::runtime)
+        .context(RuntimeSnafu)
     }
 
     pub fn run_diagnostic(
@@ -79,7 +80,7 @@ impl SessionExecutionService {
                 )
             }
         }
-        .map_err(SessionExecutionError::runtime)?;
+        .context(RuntimeSnafu)?;
 
         if outcome.run().exit_code() == Some(0) {
             Ok(SessionDiagnosticOutcome::new(
@@ -87,12 +88,15 @@ impl SessionExecutionService {
                 outcome.stderr().to_owned(),
             ))
         } else {
-            Err(SessionExecutionError::diagnostic_failed(format!(
-                "guarded {} diagnostic exited with code {:?}: {}",
-                plan.runner().kind().as_str(),
-                outcome.run().exit_code(),
-                outcome.stderr().trim()
-            )))
+            DiagnosticFailedSnafu {
+                reason: format!(
+                    "guarded {} diagnostic exited with code {:?}: {}",
+                    plan.runner().kind().as_str(),
+                    outcome.run().exit_code(),
+                    outcome.stderr().trim()
+                ),
+            }
+            .fail()
         }
     }
 
@@ -101,13 +105,14 @@ impl SessionExecutionService {
         plan: &SessionAdoptPlan,
     ) -> Result<SessionRunOutcome, SessionExecutionError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => Err(SessionExecutionError::runtime(
-                RuntimeError::UnsupportedSessionRunnerOperation {
+            SessionRunnerKind::Docker => Err(SessionExecutionError::Runtime {
+                source: RuntimeError::UnsupportedSessionRunnerOperation {
                     runner: String::from("docker"),
                     operation: String::from("adopt"),
                     location: Location::default(),
                 },
-            )),
+                location: Location::default(),
+            }),
             SessionRunnerKind::LinuxHost => {
                 let side_resources = start_adopt_session_side_resources(config, plan)?;
                 let linux_host_options = side_resources.linux_host_adopt_options(plan.pid())?;
@@ -116,7 +121,7 @@ impl SessionExecutionService {
                     side_resources.environment(),
                     &linux_host_options,
                 )
-                .map_err(SessionExecutionError::runtime)
+                .context(RuntimeSnafu)
             }
         }
     }
@@ -127,13 +132,14 @@ impl SessionExecutionService {
     ) -> Result<SessionDiagnosticOutcome, SessionExecutionError> {
         let outcome = match plan.runner().kind() {
             SessionRunnerKind::Docker => {
-                return Err(SessionExecutionError::runtime(
-                    RuntimeError::UnsupportedSessionRunnerOperation {
+                return Err(SessionExecutionError::Runtime {
+                    source: RuntimeError::UnsupportedSessionRunnerOperation {
                         runner: String::from("docker"),
                         operation: String::from("adopt"),
                         location: Location::default(),
                     },
-                ));
+                    location: Location::default(),
+                });
             }
             SessionRunnerKind::LinuxHost => {
                 let side_resources = start_adopt_session_side_resources(config, plan)?;
@@ -145,7 +151,7 @@ impl SessionExecutionService {
                 )
             }
         }
-        .map_err(SessionExecutionError::runtime)?;
+        .context(RuntimeSnafu)?;
 
         if outcome.run().exit_code() == Some(0) {
             Ok(SessionDiagnosticOutcome::new(
@@ -153,12 +159,15 @@ impl SessionExecutionService {
                 outcome.stderr().to_owned(),
             ))
         } else {
-            Err(SessionExecutionError::diagnostic_failed(format!(
-                "guarded {} adoption exited with code {:?}: {}",
-                plan.runner().kind().as_str(),
-                outcome.run().exit_code(),
-                outcome.stderr().trim()
-            )))
+            DiagnosticFailedSnafu {
+                reason: format!(
+                    "guarded {} adoption exited with code {:?}: {}",
+                    plan.runner().kind().as_str(),
+                    outcome.run().exit_code(),
+                    outcome.stderr().trim()
+                ),
+            }
+            .fail()
         }
     }
 }

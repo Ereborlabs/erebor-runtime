@@ -7,8 +7,12 @@ mod linux_host {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use erebor_runtime_e2e::E2eError;
+    use erebor_runtime_e2e::{
+        error::{IoSnafu, JsonSnafu},
+        E2eError,
+    };
     use serde_json::Value;
+    use snafu::{Location, ResultExt};
 
     #[test]
     fn session_review_commands_render_governed_process_audit() -> Result<(), E2eError> {
@@ -63,7 +67,7 @@ mod linux_host {
                 "json",
             ],
         )?;
-        let review: Value = serde_json::from_str(&describe_json).map_err(E2eError::json)?;
+        let review: Value = serde_json::from_str(&describe_json).context(JsonSnafu)?;
 
         assert!(list.contains(session_id.as_str()));
         assert!(list.contains("terminal"));
@@ -105,7 +109,7 @@ mod linux_host {
             .unwrap_or_default();
         assert_eq!(raw_payload_sha256.len(), 64);
 
-        fs::remove_dir_all(test_dir).map_err(E2eError::io)?;
+        fs::remove_dir_all(test_dir).context(IoSnafu)?;
         Ok(())
     }
 
@@ -155,7 +159,7 @@ mod linux_host {
             &test_dir,
             ["session", "describe", session_id, "--format", "json"],
         )?;
-        let review: Value = serde_json::from_str(&describe_json).map_err(E2eError::json)?;
+        let review: Value = serde_json::from_str(&describe_json).context(JsonSnafu)?;
 
         assert!(list.contains(session_id));
         assert!(list.contains("failed"));
@@ -182,7 +186,7 @@ mod linux_host {
             Some("linux_ptrace_process_guard")
         );
 
-        fs::remove_dir_all(test_dir).map_err(E2eError::io)?;
+        fs::remove_dir_all(test_dir).context(IoSnafu)?;
         Ok(())
     }
 
@@ -202,7 +206,7 @@ mod linux_host {
             ])
             .current_dir(&workspace_root)
             .output()
-            .map_err(E2eError::io)?;
+            .context(IoSnafu)?;
         if !output.status.success() {
             return Err(command_error("cargo build erebor-runtime", output));
         }
@@ -216,7 +220,7 @@ mod linux_host {
         if binary.exists() {
             Ok(binary)
         } else {
-            Err(E2eError::external(
+            Err(external_error(
                 "locate erebor-runtime binary",
                 std::io::Error::new(
                     std::io::ErrorKind::NotFound,
@@ -235,7 +239,7 @@ mod linux_host {
             .current_dir(cwd)
             .args(args)
             .output()
-            .map_err(E2eError::io)?;
+            .context(IoSnafu)?;
         if !output.status.success() {
             return Err(command_error("erebor-runtime command", output));
         }
@@ -251,9 +255,9 @@ mod linux_host {
             .current_dir(cwd)
             .args(args)
             .output()
-            .map_err(E2eError::io)?;
+            .context(IoSnafu)?;
         if output.status.success() {
-            return Err(E2eError::external(
+            return Err(external_error(
                 "erebor-runtime command expected failure",
                 std::io::Error::other(format!(
                     "command unexpectedly succeeded: stdout={} stderr={}",
@@ -270,7 +274,7 @@ mod linux_host {
     }
 
     fn command_error(operation: &str, output: Output) -> E2eError {
-        E2eError::external(
+        external_error(
             operation,
             std::io::Error::other(format!(
                 "status={} stdout={} stderr={}",
@@ -309,7 +313,7 @@ mod linux_host {
                 policy_path.display(),
             ),
         )
-        .map_err(E2eError::io)?;
+        .context(IoSnafu)?;
         Ok(config_path)
     }
 
@@ -335,7 +339,7 @@ mod linux_host {
                 policy_path.display(),
             ),
         )
-        .map_err(E2eError::io)?;
+        .context(IoSnafu)?;
         Ok(config_path)
     }
 
@@ -360,37 +364,37 @@ mod linux_host {
             }
             "#,
         )
-        .map_err(E2eError::io)?;
+        .context(IoSnafu)?;
         Ok(policy_path)
     }
 
     fn test_dir(name: &str) -> Result<PathBuf, E2eError> {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_err(|error| E2eError::external("system clock", error))?
+            .map_err(|error| external_error("system clock", error))?
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
             "erebor-runtime-e2e-{name}-{nanos}-{}",
             process::id()
         ));
-        fs::create_dir_all(&path).map_err(E2eError::io)?;
+        fs::create_dir_all(&path).context(IoSnafu)?;
         Ok(path)
     }
 
     fn single_registry_record(test_dir: &Path) -> Result<Value, E2eError> {
         let registry = test_dir.join(".erebor/sessions");
         let mut records = Vec::new();
-        for entry in fs::read_dir(&registry).map_err(E2eError::io)? {
-            let path = entry.map_err(E2eError::io)?.path().join("session.json");
+        for entry in fs::read_dir(&registry).context(IoSnafu)? {
+            let path = entry.context(IoSnafu)?.path().join("session.json");
             if path.exists() {
-                let source = fs::read_to_string(&path).map_err(E2eError::io)?;
-                records.push(serde_json::from_str::<Value>(&source).map_err(E2eError::json)?);
+                let source = fs::read_to_string(&path).context(IoSnafu)?;
+                records.push(serde_json::from_str::<Value>(&source).context(JsonSnafu)?);
             }
         }
         if records.len() == 1 {
             Ok(records.remove(0))
         } else {
-            Err(E2eError::external(
+            Err(external_error(
                 "read registry record",
                 std::io::Error::other(format!(
                     "expected exactly one registry record under {}, got {}",
@@ -406,11 +410,22 @@ mod linux_host {
             .pointer(pointer)
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                E2eError::external(
+                external_error(
                     "read JSON string",
                     std::io::Error::other(format!("missing string field at {pointer}")),
                 )
             })
+    }
+
+    fn external_error(
+        operation: impl Into<String>,
+        source: impl std::error::Error + Send + Sync + 'static,
+    ) -> E2eError {
+        E2eError::External {
+            operation: operation.into(),
+            source: Box::new(source),
+            location: Location::default(),
+        }
     }
 
     fn workspace_root() -> Result<PathBuf, E2eError> {
@@ -419,7 +434,7 @@ mod linux_host {
             .and_then(Path::parent)
             .map(Path::to_path_buf)
             .ok_or_else(|| {
-                E2eError::external(
+                external_error(
                     "resolve workspace root",
                     std::io::Error::other("e2e crate is not under workspace crates directory"),
                 )

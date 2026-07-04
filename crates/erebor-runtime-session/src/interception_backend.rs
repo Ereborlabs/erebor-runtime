@@ -11,8 +11,12 @@ use erebor_runtime_core::{
     ProcessInterceptionHandlerKind, SessionInterceptionBackendKind, SessionInterceptionConfig,
     SessionInterceptionOperation,
 };
+use snafu::ResultExt;
 
-use crate::{SessionExecutionError, SessionPlanContext, SessionStorage};
+use crate::{
+    error::{GuardConfigSnafu, GuardIoSnafu},
+    SessionExecutionError, SessionPlanContext, SessionStorage,
+};
 
 const LINUX_PROCESS_GUARD_BINARY: &str = "erebor-linux-process-guard";
 const DOCKER_GUARD_DIR: &str = "/erebor/guard";
@@ -204,14 +208,15 @@ impl LinuxPtraceInterceptionBackendBundle {
                 .parent()
                 .filter(|path| !path.as_os_str().is_empty())
                 .unwrap_or_else(|| Path::new("."));
-            fs::create_dir_all(audit_parent).map_err(SessionExecutionError::guard_io)?;
+            fs::create_dir_all(audit_parent).context(GuardIoSnafu)?;
             audit_filename = Some(
                 audit_path
                     .file_name()
                     .ok_or_else(|| {
-                        SessionExecutionError::guard_config(
-                            "audit JSONL path must include a file name",
-                        )
+                        GuardConfigSnafu {
+                            reason: String::from("audit JSONL path must include a file name"),
+                        }
+                        .build()
                     })?
                     .to_string_lossy()
                     .to_string(),
@@ -342,7 +347,7 @@ impl LinuxProcessInterceptionBundle {
         process_exec.ensure_supported_mode();
 
         let shim_dir = session_dir.join("shims");
-        fs::create_dir_all(&shim_dir).map_err(SessionExecutionError::guard_io)?;
+        fs::create_dir_all(&shim_dir).context(GuardIoSnafu)?;
 
         let handlers = process_exec
             .handlers()
@@ -424,15 +429,17 @@ impl LinuxProcessInterceptionHandler {
 
         for executable in handler.matcher().executables() {
             let shim_name = executable_basename(executable).ok_or_else(|| {
-                SessionExecutionError::guard_config(format!(
-                    "process interception handler `{}` executable `{}` is not a valid executable name",
-                    handler.id(),
-                    executable
-                ))
+                GuardConfigSnafu {
+                    reason: format!(
+                        "process interception handler `{}` executable `{}` is not a valid executable name",
+                        handler.id(),
+                        executable
+                    ),
+                }
+                .build()
             })?;
             let shim_path = shim_dir.join(&shim_name);
-            std::os::unix::fs::symlink(guard_path, &shim_path)
-                .map_err(SessionExecutionError::guard_io)?;
+            std::os::unix::fs::symlink(guard_path, &shim_path).context(GuardIoSnafu)?;
             executables.push(shim_name);
             shim_paths.push(shim_path);
         }
@@ -477,7 +484,7 @@ fn linux_cgroup_component(value: &str) -> String {
 }
 
 fn linux_process_guard_executable() -> Result<PathBuf, SessionExecutionError> {
-    let current_exe = std::env::current_exe().map_err(SessionExecutionError::guard_io)?;
+    let current_exe = std::env::current_exe().context(GuardIoSnafu)?;
     let candidates = linux_process_guard_executable_candidates(&current_exe);
     candidates
         .iter()
@@ -489,9 +496,12 @@ fn linux_process_guard_executable() -> Result<PathBuf, SessionExecutionError> {
                 .map(|path| path.display().to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
-            SessionExecutionError::guard_config(format!(
-                "could not find shipped `{LINUX_PROCESS_GUARD_BINARY}` executable; searched: {searched}"
-            ))
+            GuardConfigSnafu {
+                reason: format!(
+                    "could not find shipped `{LINUX_PROCESS_GUARD_BINARY}` executable; searched: {searched}"
+                ),
+            }
+            .build()
         })
 }
 

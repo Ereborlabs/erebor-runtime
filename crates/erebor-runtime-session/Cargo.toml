@@ -8,12 +8,12 @@ repository.workspace = true
 [dependencies]
 erebor-runtime-cdp = { path = "../erebor-runtime-cdp" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
+erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 erebor-runtime-terminal = { path = "../erebor-runtime-terminal" }
 snafu.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

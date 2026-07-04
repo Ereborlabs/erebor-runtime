@@ -5,14 +5,19 @@ use std::{
 };
 
 use erebor_runtime_core::SessionSurfaceKind;
-use erebor_runtime_e2e::E2eError;
+use erebor_runtime_e2e::{
+    error::{IoSnafu, JsonSnafu},
+    E2eError,
+};
 use serde_json::{json, Value};
+use snafu::ResultExt;
 
 #[path = "support/common.rs"]
 mod common;
 #[path = "support/runtime.rs"]
 mod support;
 
+use common::external_error;
 use support::{
     allow_all_policy, create_governed_session_with_mini_upstream, deny_payload_script_eval_policy,
     deny_script_eval_policy, deny_target_script_eval_policy, owned_browser_e2e_guard,
@@ -106,7 +111,7 @@ async fn browser_cdp_runtime_masks_owned_browser_discovery_targets() -> Result<(
         .await?;
     let targets = http_get_json(governed_endpoint_port(&endpoint)?, "/json/list")?;
     let target_list = targets.as_array().ok_or_else(|| {
-        E2eError::external(
+        external_error(
             "owned browser discovery target list",
             std::io::Error::other("expected JSON array"),
         )
@@ -433,7 +438,7 @@ fn governed_endpoint_port(endpoint: &str) -> Result<u16, E2eError> {
         .strip_prefix("ws://127.0.0.1:")
         .and_then(|suffix| suffix.trim_end_matches('/').parse::<u16>().ok())
         .ok_or_else(|| {
-            E2eError::external(
+            external_error(
                 "governed endpoint parsing",
                 std::io::Error::other(format!("unexpected endpoint `{endpoint}`")),
             )
@@ -442,32 +447,32 @@ fn governed_endpoint_port(endpoint: &str) -> Result<u16, E2eError> {
 
 fn http_get_json(port: u16, path: &str) -> Result<Value, E2eError> {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
-    let mut stream = std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2))
-        .map_err(E2eError::io)?;
+    let mut stream =
+        std::net::TcpStream::connect_timeout(&address, Duration::from_secs(2)).context(IoSnafu)?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
-        .map_err(E2eError::io)?;
+        .context(IoSnafu)?;
     stream
         .set_write_timeout(Some(Duration::from_secs(2)))
-        .map_err(E2eError::io)?;
+        .context(IoSnafu)?;
     let request =
         format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).map_err(E2eError::io)?;
+    stream.write_all(request.as_bytes()).context(IoSnafu)?;
 
     let mut response = String::new();
-    stream.read_to_string(&mut response).map_err(E2eError::io)?;
+    stream.read_to_string(&mut response).context(IoSnafu)?;
     let Some((status_line, body)) = response.split_once("\r\n\r\n") else {
-        return Err(E2eError::external(
+        return Err(external_error(
             "governed discovery response",
             std::io::Error::other("missing HTTP response body"),
         ));
     };
     if !status_line.starts_with("HTTP/1.1 200 ") {
-        return Err(E2eError::external(
+        return Err(external_error(
             "governed discovery status",
             std::io::Error::other(status_line.to_owned()),
         ));
     }
 
-    serde_json::from_str(body).map_err(E2eError::json)
+    serde_json::from_str(body).context(JsonSnafu)
 }

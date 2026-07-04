@@ -4,10 +4,12 @@ use erebor_runtime_core::{
 use erebor_runtime_events::{ActorIdentity, EventId, RiskMetadata, RuntimeEvent, SessionId};
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
 use serde_json::{json, Value};
+use snafu::{Location, ResultExt};
 
 use crate::{
-    classify_cdp_method, CdpCommand, CdpError, CdpEvent, CdpSessionState, ClientTargetSessions,
-    GovernedCdpCommand,
+    classify_cdp_method,
+    error::{EnforcementSnafu, UnsupportedMethodSnafu},
+    CdpCommand, CdpError, CdpEvent, CdpSessionState, ClientTargetSessions, GovernedCdpCommand,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -134,7 +136,7 @@ where
     let event = normalize_cdp_command(context, command, session_state, client_sessions)?;
     let outcome = engine
         .enforce_with_deferred_approval(&event)
-        .map_err(CdpError::enforcement)?;
+        .context(EnforcementSnafu)?;
 
     let action =
         enforcement_action_from_decisions(&outcome.policy_decision, &outcome.final_decision);
@@ -171,7 +173,7 @@ where
     let runtime_event = observe_cdp_event(context, event)?;
     let outcome = engine
         .enforce_with_deferred_approval(&runtime_event)
-        .map_err(CdpError::enforcement)?;
+        .context(EnforcementSnafu)?;
 
     let action =
         enforcement_action_from_decisions(&outcome.policy_decision, &outcome.final_decision);
@@ -239,11 +241,18 @@ fn normalize_cdp_command(
     session_state: &CdpSessionState,
     client_sessions: Option<&ClientTargetSessions>,
 ) -> Result<RuntimeEvent, CdpError> {
-    let classification = classify_cdp_method(&command.method)
-        .ok_or_else(|| CdpError::unsupported_method(command.method.clone()))?;
-    let protocol_command = command
-        .protocol_command()
-        .ok_or_else(|| CdpError::unsupported_method(command.method.clone()))?;
+    let classification = classify_cdp_method(&command.method).ok_or_else(|| {
+        UnsupportedMethodSnafu {
+            method: command.method.clone(),
+        }
+        .build()
+    })?;
+    let protocol_command = command.protocol_command().ok_or_else(|| {
+        UnsupportedMethodSnafu {
+            method: command.method.clone(),
+        }
+        .build()
+    })?;
     let event_id = event_id_from_command(command)?;
 
     Ok(RuntimeEvent {
@@ -277,8 +286,12 @@ fn normalize_cdp_event(
     context: &CdpSessionContext,
     event: &CdpEvent,
 ) -> Result<RuntimeEvent, CdpError> {
-    let classification = classify_cdp_method(event.method())
-        .ok_or_else(|| CdpError::unsupported_method(event.method()))?;
+    let classification = classify_cdp_method(event.method()).ok_or_else(|| {
+        UnsupportedMethodSnafu {
+            method: event.method(),
+        }
+        .build()
+    })?;
 
     Ok(RuntimeEvent {
         id: EventId::new(event.event_id()),
@@ -301,9 +314,12 @@ fn event_id_from_command(command: &CdpCommand) -> Result<String, CdpError> {
 }
 
 fn command_payload(command: &CdpCommand, page_context: Value) -> Result<Value, CdpError> {
-    let params = command
-        .params()
-        .ok_or_else(|| CdpError::unsupported_method(command.method.clone()))?;
+    let params = command.params().ok_or_else(|| {
+        UnsupportedMethodSnafu {
+            method: command.method.clone(),
+        }
+        .build()
+    })?;
 
     Ok(json!({
         "kind": "command",
@@ -327,7 +343,10 @@ fn event_payload(event: &CdpEvent) -> Value {
 
 impl From<RuntimeError> for CdpError {
     fn from(error: RuntimeError) -> Self {
-        Self::enforcement(error)
+        Self::Enforcement {
+            source: Box::new(error),
+            location: Location::default(),
+        }
     }
 }
 

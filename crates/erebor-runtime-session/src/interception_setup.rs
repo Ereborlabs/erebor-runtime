@@ -4,8 +4,10 @@ use erebor_runtime_core::{
     DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions,
     SessionSurfaceSupervisor,
 };
+use snafu::ResultExt;
 
 use crate::{
+    error::RuntimeInterceptionBrokerSnafu,
     interception_backend::SessionInterceptionBackendBundle,
     runtime_interception_broker::{
         RuntimeInterceptionBroker, SessionInterceptionRegistration, SessionInterceptionRouter,
@@ -45,7 +47,7 @@ impl SessionInterceptionSetup {
                     &plan.actor().id,
                     router,
                 )
-                .map_err(SessionExecutionError::runtime_interception_broker)?;
+                .context(RuntimeInterceptionBrokerSnafu)?;
                 let registration = if uses_lazy_browser_cdp {
                     registration.with_timeout_ms(LAZY_BROWSER_CDP_INTERCEPTION_TIMEOUT_MS)
                 } else {

@@ -13,6 +13,7 @@ use erebor_runtime_policy::{Decision, PolicySet};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use snafu::{Location, ResultExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout, Duration};
@@ -25,9 +26,10 @@ use tracing::{debug, info, warn};
 
 use crate::{
     decode_cdp_command, decode_cdp_event, enforce_cdp_command_with_client_state_outcome,
-    enforce_cdp_event_outcome, observe_cdp_event, BrowserTargetId, CdpCommand,
-    CdpEnforcementAction, CdpError, CdpEvent, CdpSessionContext, CdpSessionState,
-    ClientTargetSessions, GovernedCdpCommand,
+    enforce_cdp_event_outcome,
+    error::{BrowserStateSyncSnafu, InvalidProtocolSnafu, IoSnafu},
+    observe_cdp_event, BrowserTargetId, CdpCommand, CdpEnforcementAction, CdpError, CdpEvent,
+    CdpSessionContext, CdpSessionState, ClientTargetSessions, GovernedCdpCommand,
 };
 
 type CdpEngine = LocalEnforcementEngine<PolicySet>;
@@ -98,10 +100,8 @@ pub struct CdpProxyServer {
 
 impl CdpProxyServer {
     pub async fn bind(config: CdpProxyServerConfig, engine: CdpEngine) -> Result<Self, CdpError> {
-        let listener = TcpListener::bind(config.listen)
-            .await
-            .map_err(CdpError::io)?;
-        let local_addr = listener.local_addr().map_err(CdpError::io)?;
+        let listener = TcpListener::bind(config.listen).await.context(IoSnafu)?;
+        let local_addr = listener.local_addr().context(IoSnafu)?;
 
         info!(
             listen = %local_addr,
@@ -161,7 +161,7 @@ impl CdpProxyServer {
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr, CdpError> {
-        self.listener.local_addr().map_err(CdpError::io)
+        self.listener.local_addr().context(IoSnafu)
     }
 
     pub async fn run(self) -> Result<(), CdpError> {
@@ -169,7 +169,7 @@ impl CdpProxyServer {
         info!(listen = %local_addr, "CDP proxy server accepting connections");
 
         loop {
-            let (stream, address) = self.listener.accept().await.map_err(CdpError::io)?;
+            let (stream, address) = self.listener.accept().await.context(IoSnafu)?;
             let browser_url = self.browser_url.clone();
             let engine = Arc::clone(&self.engine);
             let context = self.context.clone();
@@ -243,8 +243,8 @@ async fn handle_http_discovery_if_present(
     stream
         .write_all(response.as_bytes())
         .await
-        .map_err(CdpError::io)?;
-    stream.shutdown().await.map_err(CdpError::io)?;
+        .context(IoSnafu)?;
+    stream.shutdown().await.context(IoSnafu)?;
     Ok(true)
 }
 
@@ -255,7 +255,12 @@ async fn peek_http_request(stream: &TcpStream) -> Result<Option<String>, CdpErro
         let bytes_read = match timeout(HTTP_DISCOVERY_PEEK_TIMEOUT, stream.peek(&mut buffer)).await
         {
             Ok(Ok(bytes_read)) => bytes_read,
-            Ok(Err(error)) => return Err(CdpError::io(error)),
+            Ok(Err(error)) => {
+                return Err(CdpError::Io {
+                    source: error,
+                    location: Location::default(),
+                });
+            }
             Err(_) => return Ok(None),
         };
         if bytes_read == 0 {
@@ -770,10 +775,16 @@ async fn bootstrap_browser_state_observer(
         let message = timeout(OBSERVER_BOOTSTRAP_RESPONSE_TIMEOUT, browser_socket.next())
             .await
             .map_err(|_| {
-                CdpError::browser_state_sync("timed out waiting for browser observer bootstrap")
+                BrowserStateSyncSnafu {
+                    reason: String::from("timed out waiting for browser observer bootstrap"),
+                }
+                .build()
             })?
             .ok_or_else(|| {
-                CdpError::browser_state_sync("browser socket closed during observer bootstrap")
+                BrowserStateSyncSnafu {
+                    reason: String::from("browser socket closed during observer bootstrap"),
+                }
+                .build()
             })?
             .map_err(websocket_error)?;
 
@@ -782,7 +793,7 @@ async fn bootstrap_browser_state_observer(
         };
         let source = source.to_string();
         let head = serde_json::from_str::<ObserverBootstrapMessageHead>(&source)
-            .map_err(CdpError::invalid_protocol)?;
+            .context(InvalidProtocolSnafu)?;
 
         if head.method.is_some() {
             observe_browser_level_message(
@@ -960,9 +971,17 @@ async fn bootstrap_page_state_observer(
     while !(page_enabled && runtime_enabled && fetch_enabled && frame_tree_loaded) {
         let message = timeout(OBSERVER_BOOTSTRAP_RESPONSE_TIMEOUT, browser_socket.next())
             .await
-            .map_err(|_| CdpError::browser_state_sync("timed out waiting for observer bootstrap"))?
+            .map_err(|_| {
+                BrowserStateSyncSnafu {
+                    reason: String::from("timed out waiting for observer bootstrap"),
+                }
+                .build()
+            })?
             .ok_or_else(|| {
-                CdpError::browser_state_sync("browser socket closed during observer bootstrap")
+                BrowserStateSyncSnafu {
+                    reason: String::from("browser socket closed during observer bootstrap"),
+                }
+                .build()
             })?
             .map_err(websocket_error)?;
 
@@ -971,7 +990,7 @@ async fn bootstrap_page_state_observer(
         };
         let source = source.to_string();
         let head = serde_json::from_str::<ObserverBootstrapMessageHead>(&source)
-            .map_err(CdpError::invalid_protocol)?;
+            .context(InvalidProtocolSnafu)?;
 
         if head.method.is_some() {
             let _event = observe_browser_event_text(context, session_state, None, &source)?;
@@ -1209,7 +1228,7 @@ where
     T: Method + Serialize,
 {
     let payload =
-        serde_json::to_string(&method.to_method_call(id)).map_err(CdpError::invalid_protocol)?;
+        serde_json::to_string(&method.to_method_call(id)).context(InvalidProtocolSnafu)?;
     browser_socket
         .send(Message::Text(payload.into()))
         .await
@@ -1226,7 +1245,7 @@ where
     T: Method + Serialize,
 {
     let mut payload =
-        serde_json::to_value(method.to_method_call(id)).map_err(CdpError::invalid_protocol)?;
+        serde_json::to_value(method.to_method_call(id)).context(InvalidProtocolSnafu)?;
     payload["sessionId"] = Value::String(session_id.to_owned());
     browser_socket
         .send(Message::Text(payload.to_string().into()))
@@ -1291,18 +1310,20 @@ where
     M: Method,
 {
     let response: ObserverBootstrapMethodResponse<M::ReturnObject> =
-        serde_json::from_str(source).map_err(CdpError::invalid_protocol)?;
+        serde_json::from_str(source).context(InvalidProtocolSnafu)?;
     if let Some(error) = response.error {
-        return Err(CdpError::browser_state_sync(format!(
-            "{} failed: {}",
-            M::NAME,
-            error.message
-        )));
+        return BrowserStateSyncSnafu {
+            reason: format!("{} failed: {}", M::NAME, error.message),
+        }
+        .fail();
     }
 
-    response
-        .result
-        .ok_or_else(|| CdpError::browser_state_sync(format!("{} did not return a result", M::NAME)))
+    response.result.ok_or_else(|| {
+        BrowserStateSyncSnafu {
+            reason: format!("{} did not return a result", M::NAME),
+        }
+        .build()
+    })
 }
 
 fn frame_tree_response_target(
@@ -1310,7 +1331,7 @@ fn frame_tree_response_target(
     frame_tree_requests: &mut FrameTreeRequests,
 ) -> Result<Option<BrowserTargetId>, CdpError> {
     let response: ObserverBootstrapMessageHead =
-        serde_json::from_str(source).map_err(CdpError::invalid_protocol)?;
+        serde_json::from_str(source).context(InvalidProtocolSnafu)?;
     Ok(response.id.and_then(|id| frame_tree_requests.remove(id)))
 }
 
@@ -1503,9 +1524,17 @@ fn observe_browser_response_text(
         Ok(response) => response,
         Err(error) if error.is_data() => return Ok(()),
         Err(error) if error.is_syntax() || error.is_eof() => {
-            return Err(CdpError::invalid_json(error));
+            return Err(CdpError::InvalidJson {
+                source: error,
+                location: Location::default(),
+            });
         }
-        Err(error) => return Err(CdpError::invalid_protocol(error)),
+        Err(error) => {
+            return Err(CdpError::InvalidProtocol {
+                source: error,
+                location: Location::default(),
+            });
+        }
     };
 
     let Some(session_id) = response
@@ -1571,7 +1600,10 @@ struct ClientTargetMethodResult {
 }
 
 fn websocket_error(error: WebSocketError) -> CdpError {
-    CdpError::websocket(error)
+    CdpError::WebSocket {
+        source: Box::new(error),
+        location: Location::default(),
+    }
 }
 
 #[cfg(test)]

@@ -10,16 +10,20 @@ use std::{
 };
 
 use erebor_runtime_cdp::CdpSessionContext;
-use erebor_runtime_e2e::{E2eError, JsonWebSocketHandler};
+use erebor_runtime_e2e::{
+    error::{IoSnafu, JsonSnafu},
+    E2eError, JsonWebSocketHandler,
+};
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::LocalPolicy;
 use serde_json::json;
+use snafu::{Location, ResultExt};
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub fn allow_all_policy() -> Result<LocalPolicy, E2eError> {
     LocalPolicy::from_json_str(r#"{ "rules": [] }"#)
-        .map_err(|error| E2eError::external("allow-all policy setup", error))
+        .map_err(|error| external_error("allow-all policy setup", error))
 }
 
 pub fn deny_script_eval_policy() -> Result<LocalPolicy, E2eError> {
@@ -40,7 +44,7 @@ pub fn deny_script_eval_policy() -> Result<LocalPolicy, E2eError> {
         }
         "#,
     )
-    .map_err(|error| E2eError::external("deny-script-eval policy setup", error))
+    .map_err(|error| external_error("deny-script-eval policy setup", error))
 }
 
 pub fn require_approval_script_eval_policy() -> Result<LocalPolicy, E2eError> {
@@ -61,7 +65,7 @@ pub fn require_approval_script_eval_policy() -> Result<LocalPolicy, E2eError> {
         }
         "#,
     )
-    .map_err(|error| E2eError::external("require-approval-script-eval policy setup", error))
+    .map_err(|error| external_error("require-approval-script-eval policy setup", error))
 }
 
 pub fn session_context() -> CdpSessionContext {
@@ -72,6 +76,31 @@ pub fn session_context() -> CdpSessionContext {
             kind: ActorKind::System,
         },
         timestamp: String::from("2026-05-14T00:00:00Z"),
+    }
+}
+
+pub(crate) fn external_error(
+    operation: impl Into<String>,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> E2eError {
+    E2eError::External {
+        operation: operation.into(),
+        source: Box::new(source),
+        location: Location::default(),
+    }
+}
+
+pub(crate) fn timeout_error(operation: impl Into<String>) -> E2eError {
+    E2eError::Timeout {
+        operation: operation.into(),
+        location: Location::default(),
+    }
+}
+
+pub(crate) fn closed_error(operation: impl Into<String>) -> E2eError {
+    E2eError::Closed {
+        operation: operation.into(),
+        location: Location::default(),
     }
 }
 
@@ -103,13 +132,13 @@ pub struct RealChromeInstance {
 impl RealChromeInstance {
     pub fn launch() -> Result<Self, E2eError> {
         let Some(binary) = chrome_binary_path() else {
-            return Err(E2eError::external(
+            return Err(external_error(
                 "real Chrome binary discovery",
                 MissingChromeBinary,
             ));
         };
         let user_data_dir = temp_profile_dir();
-        fs::create_dir_all(&user_data_dir).map_err(E2eError::io)?;
+        fs::create_dir_all(&user_data_dir).context(IoSnafu)?;
         let mut command = Command::new(binary);
         command
             .arg("--headless=new")
@@ -126,7 +155,7 @@ impl RealChromeInstance {
             .arg("about:blank")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let mut child = command.spawn().map_err(E2eError::io)?;
+        let mut child = command.spawn().context(IoSnafu)?;
         let port = wait_for_devtools_port(&mut child, &user_data_dir.join("DevToolsActivePort"))?;
         let page_ws_url = wait_for_page_ws_url(&mut child, port)?;
 
@@ -153,29 +182,52 @@ impl Drop for RealChromeInstance {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("no local Chrome or Chromium binary was found for CDP e2e")]
-struct MissingChromeBinary;
+macro_rules! simple_error {
+    ($name:ident, $message:literal) => {
+        #[derive(Debug)]
+        struct $name;
 
-#[derive(Debug, thiserror::Error)]
-#[error("real Chrome exited before CDP became ready")]
-struct ChromeExitedEarly;
+        impl std::fmt::Display for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str($message)
+            }
+        }
 
-#[derive(Debug, thiserror::Error)]
-#[error("real Chrome DevToolsActivePort file did not include a port")]
-struct MissingDevToolsPort;
+        impl std::error::Error for $name {}
+    };
+}
 
-#[derive(Debug, thiserror::Error)]
-#[error("real Chrome did not expose a page target")]
-struct MissingPageTarget;
+simple_error!(
+    MissingChromeBinary,
+    "no local Chrome or Chromium binary was found for CDP e2e"
+);
+simple_error!(
+    ChromeExitedEarly,
+    "real Chrome exited before CDP became ready"
+);
+simple_error!(
+    MissingDevToolsPort,
+    "real Chrome DevToolsActivePort file did not include a port"
+);
+simple_error!(
+    MissingPageTarget,
+    "real Chrome did not expose a page target"
+);
+simple_error!(
+    InvalidHttpResponse,
+    "real Chrome returned an invalid HTTP response"
+);
 
-#[derive(Debug, thiserror::Error)]
-#[error("real Chrome returned an invalid HTTP response")]
-struct InvalidHttpResponse;
-
-#[derive(Debug, thiserror::Error)]
-#[error("real Chrome returned HTTP status `{0}`")]
+#[derive(Debug)]
 struct HttpStatus(String);
+
+impl std::fmt::Display for HttpStatus {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "real Chrome returned HTTP status `{}`", self.0)
+    }
+}
+
+impl std::error::Error for HttpStatus {}
 
 #[derive(Debug, serde::Deserialize)]
 struct ChromeTargetDescriptor {
@@ -234,7 +286,7 @@ fn wait_for_devtools_port(child: &mut Child, active_port_file: &Path) -> Result<
     loop {
         if let Ok(contents) = fs::read_to_string(active_port_file) {
             let Some(port_line) = contents.lines().next() else {
-                return Err(E2eError::external(
+                return Err(external_error(
                     "real Chrome DevTools port file",
                     MissingDevToolsPort,
                 ));
@@ -242,15 +294,15 @@ fn wait_for_devtools_port(child: &mut Child, active_port_file: &Path) -> Result<
 
             return port_line
                 .parse::<u16>()
-                .map_err(|error| E2eError::external("real Chrome DevTools port parse", error));
+                .map_err(|error| external_error("real Chrome DevTools port parse", error));
         }
 
-        if child.try_wait().map_err(E2eError::io)?.is_some() {
-            return Err(E2eError::external("real Chrome startup", ChromeExitedEarly));
+        if child.try_wait().context(IoSnafu)?.is_some() {
+            return Err(external_error("real Chrome startup", ChromeExitedEarly));
         }
 
         if Instant::now() >= deadline {
-            return Err(E2eError::timeout("real Chrome DevTools startup"));
+            return Err(timeout_error("real Chrome DevTools startup"));
         }
 
         std::thread::sleep(Duration::from_millis(50));
@@ -272,8 +324,8 @@ fn wait_for_page_ws_url(child: &mut Child, port: u16) -> Result<String, E2eError
             Err(error) => return Err(error),
         }
 
-        if child.try_wait().map_err(E2eError::io)?.is_some() {
-            return Err(E2eError::external("real Chrome startup", ChromeExitedEarly));
+        if child.try_wait().context(IoSnafu)?.is_some() {
+            return Err(external_error("real Chrome startup", ChromeExitedEarly));
         }
 
         if Instant::now() >= deadline {
@@ -282,7 +334,7 @@ fn wait_for_page_ws_url(child: &mut Child, port: u16) -> Result<String, E2eError
                 |error| format!("real Chrome page websocket; last error: {error}"),
             );
 
-            return Err(E2eError::timeout(operation));
+            return Err(timeout_error(operation));
         }
 
         std::thread::sleep(Duration::from_millis(50));
@@ -308,7 +360,7 @@ fn create_page_ws_url(port: u16) -> Result<String, E2eError> {
 
     target
         .web_socket_debugger_url
-        .ok_or_else(|| E2eError::external("real Chrome page target", MissingPageTarget))
+        .ok_or_else(|| external_error("real Chrome page target", MissingPageTarget))
 }
 
 fn http_get_json<T>(port: u16, path: &str) -> Result<T, E2eError>
@@ -331,32 +383,32 @@ where
 {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream =
-        std::net::TcpStream::connect_timeout(&address, HTTP_TIMEOUT).map_err(E2eError::io)?;
+        std::net::TcpStream::connect_timeout(&address, HTTP_TIMEOUT).context(IoSnafu)?;
     stream
         .set_read_timeout(Some(HTTP_TIMEOUT))
-        .map_err(E2eError::io)?;
+        .context(IoSnafu)?;
     stream
         .set_write_timeout(Some(HTTP_TIMEOUT))
-        .map_err(E2eError::io)?;
+        .context(IoSnafu)?;
     let request =
         format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).map_err(E2eError::io)?;
+    stream.write_all(request.as_bytes()).context(IoSnafu)?;
     let response = read_http_response(&mut stream)?;
     let Some((status_line, body)) = split_http_response(&response) else {
-        return Err(E2eError::external(
+        return Err(external_error(
             "real Chrome HTTP response",
             InvalidHttpResponse,
         ));
     };
 
     if !is_success_status(status_line) {
-        return Err(E2eError::external(
+        return Err(external_error(
             "real Chrome HTTP status",
             HttpStatus(status_line.to_owned()),
         ));
     }
 
-    serde_json::from_str(body).map_err(E2eError::json)
+    serde_json::from_str(body).context(JsonSnafu)
 }
 
 fn read_http_response(stream: &mut std::net::TcpStream) -> Result<String, E2eError> {
@@ -384,15 +436,22 @@ fn read_http_response(stream: &mut std::net::TcpStream) -> Result<String, E2eErr
                 }
 
                 if Instant::now() >= deadline {
-                    return Err(E2eError::io(error));
+                    return Err(E2eError::Io {
+                        source: error,
+                        location: Location::default(),
+                    });
                 }
             }
-            Err(error) => return Err(E2eError::io(error)),
+            Err(error) => {
+                return Err(E2eError::Io {
+                    source: error,
+                    location: Location::default(),
+                });
+            }
         }
     }
 
-    String::from_utf8(response)
-        .map_err(|error| E2eError::external("real Chrome HTTP response", error))
+    String::from_utf8(response).map_err(|error| external_error("real Chrome HTTP response", error))
 }
 
 fn http_response_complete(response: &[u8]) -> bool {

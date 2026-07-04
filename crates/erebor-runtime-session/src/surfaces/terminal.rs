@@ -9,9 +9,11 @@ use erebor_runtime_core::{
 };
 use erebor_runtime_policy::PolicySet;
 use erebor_runtime_terminal::TerminalProcessExecValidator;
+use snafu::ResultExt;
 
 use self::browser_cdp_process_mediation::BrowserCdpProcessMediationCapability;
 use crate::{
+    error::{GuardConfigSnafu, GuardIoSnafu, TerminalSurfaceSnafu},
     interception_backend::{
         ProcessExecInterceptionInput, ProcessExecMediationInput, ProcessExecMediationMode,
     },
@@ -54,9 +56,12 @@ impl<'a> TerminalProcessSurface<'a> {
 
         let mediation = config.process_interception();
         if mediation.enabled() && plan.runner_kind() != SessionRunnerKind::LinuxHost {
-            return Err(SessionExecutionError::guard_config(
-                "terminal process interception currently supports linux-host sessions only",
-            ));
+            return GuardConfigSnafu {
+                reason: String::from(
+                    "terminal process interception currently supports linux-host sessions only",
+                ),
+            }
+            .fail();
         }
 
         Ok(Some(ProcessExecInterceptionInput::new(
@@ -80,8 +85,8 @@ impl<'a> TerminalProcessSurface<'a> {
             return Ok(SessionInterceptionRouter::new());
         };
 
-        let mut validator = TerminalProcessExecValidator::from_config(config)
-            .map_err(SessionExecutionError::terminal_surface)?;
+        let mut validator =
+            TerminalProcessExecValidator::from_config(config).context(TerminalSurfaceSnafu)?;
 
         if let Some(capability) =
             self.browser_cdp_process_mediation_capability(browser_cdp_endpoint, lazy_browser_cdp)?
@@ -149,7 +154,7 @@ impl LazyBrowserCdpProcessMediation {
             self.audit_jsonl,
             self.audit,
         )
-        .map_err(SessionExecutionError::guard_io)
+        .context(GuardIoSnafu)
     }
 }
 

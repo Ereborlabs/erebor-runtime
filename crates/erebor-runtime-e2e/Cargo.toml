@@ -7,10 +7,10 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+erebor-runtime-error = { path = "../erebor-runtime-error" }
 futures-util.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true

@@ -13,7 +13,9 @@ pub use crate::common::{
     allow_all_policy, deny_script_eval_policy, real_chrome_available,
     require_approval_script_eval_policy,
 };
-use crate::common::{mini_cdp_handler, session_context, RealChromeInstance};
+use crate::common::{
+    closed_error, external_error, mini_cdp_handler, session_context, RealChromeInstance,
+};
 
 pub struct CdpE2eHarness {
     _system: MiniSystem,
@@ -43,7 +45,7 @@ impl CdpE2eHarness {
     pub async fn start_proxy_with_real_chrome(policy: LocalPolicy) -> Result<Self, E2eError> {
         let browser = tokio::task::spawn_blocking(RealChromeInstance::launch)
             .await
-            .map_err(|error| E2eError::external("real Chrome launch task", error))??;
+            .map_err(|error| external_error("real Chrome launch task", error))??;
         let direct_browser_endpoint = browser.page_ws_url().to_owned();
         let mut system = MiniSystem::new();
         let endpoint = spawn_proxy_server(&mut system, policy, direct_browser_endpoint.clone())
@@ -77,7 +79,7 @@ impl CdpE2eHarness {
         let endpoint = self
             .direct_browser_endpoint
             .as_deref()
-            .ok_or_else(|| E2eError::closed("direct browser CDP endpoint"))?;
+            .ok_or_else(|| closed_error("direct browser CDP endpoint"))?;
 
         send_json_request(endpoint, command).await
     }
@@ -85,7 +87,7 @@ impl CdpE2eHarness {
     pub async fn next_upstream_command(&mut self) -> Result<Value, E2eError> {
         self.upstream
             .as_mut()
-            .ok_or_else(|| E2eError::external("mini CDP upstream access", MissingMiniUpstream))?
+            .ok_or_else(|| external_error("mini CDP upstream access", MissingMiniUpstream))?
             .next_message()
             .await
     }
@@ -93,7 +95,7 @@ impl CdpE2eHarness {
     pub async fn assert_no_upstream_command(&mut self, duration: Duration) -> Result<(), E2eError> {
         self.upstream
             .as_mut()
-            .ok_or_else(|| E2eError::external("mini CDP upstream access", MissingMiniUpstream))?
+            .ok_or_else(|| external_error("mini CDP upstream access", MissingMiniUpstream))?
             .assert_no_message(duration)
             .await
     }
@@ -117,10 +119,10 @@ async fn spawn_proxy_server(
         engine,
     )
     .await
-    .map_err(|error| E2eError::external("CDP proxy bind", error))?;
+    .map_err(|error| external_error("CDP proxy bind", error))?;
     let proxy_addr = server
         .local_addr()
-        .map_err(|error| E2eError::external("CDP proxy local address", error))?;
+        .map_err(|error| external_error("CDP proxy local address", error))?;
 
     system.spawn("cdp-proxy-server", async move {
         if let Err(error) = server.run().await {
@@ -131,6 +133,13 @@ async fn spawn_proxy_server(
     Ok(proxy_addr)
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("mini upstream is not configured for this CDP harness")]
+#[derive(Debug)]
 struct MissingMiniUpstream;
+
+impl std::fmt::Display for MissingMiniUpstream {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("mini upstream is not configured for this CDP harness")
+    }
+}
+
+impl std::error::Error for MissingMiniUpstream {}

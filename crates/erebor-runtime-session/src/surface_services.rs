@@ -2,9 +2,11 @@ use erebor_runtime_cdp::BrowserCdpSurface;
 use erebor_runtime_core::{
     SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
 };
+use snafu::ResultExt;
 
 use crate::{
-    policies::read_policy_set, session_context::CdpSessionContexts, SessionExecutionError,
+    error::RuntimeSnafu, policies::read_policy_set, session_context::CdpSessionContexts,
+    SessionExecutionError,
 };
 
 pub struct SurfaceServiceRunner;
@@ -43,7 +45,7 @@ impl SurfaceServiceRunner {
             return Ok(());
         }
 
-        let supervisor = launcher.start().map_err(SessionExecutionError::runtime)?;
+        let supervisor = launcher.start().context(RuntimeSnafu)?;
         tracing::info!(
             control = %supervisor.control_listen(),
             surfaces = %Self::format_surfaces(supervisor.running().iter().map(erebor_runtime_core::RunningSessionSurface::surface)),
@@ -51,7 +53,7 @@ impl SurfaceServiceRunner {
             "session surfaces started"
         );
 
-        supervisor.wait().map_err(SessionExecutionError::runtime)?;
+        supervisor.wait().context(RuntimeSnafu)?;
         Ok(())
     }
 

@@ -5,8 +5,11 @@ use erebor_runtime_core::{
     SessionRunPlan,
 };
 use erebor_runtime_events::SessionId;
+use snafu::ResultExt;
 
-use crate::{diagnostic::SessionDiagnosticOutcome, SessionExecutionError};
+use crate::{
+    diagnostic::SessionDiagnosticOutcome, error::SessionRegistrySnafu, SessionExecutionError,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SessionStorage {
@@ -42,7 +45,7 @@ pub(crate) fn prepare_registry_session(
     let registry = SessionRegistry::new(plan.registry_path().to_path_buf());
     let started = registry
         .start_session(config, plan)
-        .map_err(SessionExecutionError::session_registry)?;
+        .context(SessionRegistrySnafu)?;
     let storage = SessionStorage::new(started.audit_path().to_path_buf());
     Ok(Some(PreparedSession { registry, storage }))
 }
@@ -64,7 +67,7 @@ pub(crate) fn finish_registry_session(
     prepared_session
         .registry
         .finish_session(session_id, update)
-        .map_err(SessionExecutionError::session_registry)?;
+        .context(SessionRegistrySnafu)?;
     Ok(())
 }
 
@@ -87,7 +90,7 @@ pub(crate) fn finish_registry_diagnostic(
     prepared_session
         .registry
         .finish_session(plan.session_id(), update)
-        .map_err(SessionExecutionError::session_registry)?;
+        .context(SessionRegistrySnafu)?;
     Ok(())
 }
 

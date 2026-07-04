@@ -14,10 +14,14 @@ use erebor_runtime_core::{
 use erebor_runtime_events::{ActorIdentity, SessionId};
 use erebor_runtime_policy::PolicySet;
 use serde::Deserialize;
+use snafu::ResultExt;
 use tokio_tungstenite::tungstenite::{connect, Message};
 use tracing::{debug, info};
 
-use crate::{CdpError, CdpProxyServer, CdpProxyServerConfig, CdpSessionContext};
+use crate::{
+    error::{BrowserLaunchSnafu, InvalidJsonSnafu, InvalidProtocolSnafu, IoSnafu, WebSocketSnafu},
+    CdpError, CdpProxyServer, CdpProxyServerConfig, CdpSessionContext,
+};
 
 const DEVTOOLS_WAIT: Duration = Duration::from_secs(10);
 const DEVTOOLS_POLL: Duration = Duration::from_millis(50);
@@ -224,7 +228,7 @@ struct OwnedBrowserProcess {
 impl OwnedBrowserProcess {
     fn launch(config: &BrowserLaunchConfig) -> Result<Self, CdpError> {
         let launch = OwnedBrowserLaunch::from_config(config)?;
-        let stderr_log = fs::File::create(&launch.stderr_log_path).map_err(CdpError::io)?;
+        let stderr_log = fs::File::create(&launch.stderr_log_path).context(IoSnafu)?;
 
         let mut command = Command::new(&launch.executable.path);
         command
@@ -241,7 +245,7 @@ impl OwnedBrowserProcess {
             args = ?launch.args,
             "launching owned browser"
         );
-        let mut child = command.spawn().map_err(CdpError::io)?;
+        let mut child = command.spawn().context(IoSnafu)?;
         let devtools = wait_for_devtools_endpoint(
             &mut child,
             &launch.user_data_dir.join("DevToolsActivePort"),
@@ -252,10 +256,13 @@ impl OwnedBrowserProcess {
         let page_ws_url =
             create_page_ws_url(&devtools.browser_ws_url, devtools.port).or_else(|ws_error| {
                 wait_for_page_ws_url(&mut child, devtools.port).map_err(|http_error| {
-                    CdpError::browser_launch(format!(
-                        "could not create Chrome page target through browser websocket \
+                    BrowserLaunchSnafu {
+                        reason: format!(
+                            "could not create Chrome page target through browser websocket \
                          ({ws_error}) or HTTP discovery ({http_error})"
-                    ))
+                        ),
+                    }
+                    .build()
                 })
             })?;
 
@@ -286,7 +293,7 @@ impl OwnedBrowserLaunch {
             Some(path) => (path.to_path_buf(), false),
             None => (temp_profile_dir(), true),
         };
-        fs::create_dir_all(&user_data_dir).map_err(CdpError::io)?;
+        fs::create_dir_all(&user_data_dir).context(IoSnafu)?;
 
         let stderr_log_path = user_data_dir.join(CHROME_STDERR_LOG);
         let options = OwnedBrowserLaunchOptions {
@@ -328,7 +335,12 @@ impl BrowserExecutable {
 
         browser_executable_from_env()
             .or_else(discover_browser_executable)
-            .ok_or_else(|| CdpError::browser_launch("no local Chrome or Chromium binary was found"))
+            .ok_or_else(|| {
+                BrowserLaunchSnafu {
+                    reason: String::from("no local Chrome or Chromium binary was found"),
+                }
+                .build()
+            })
     }
 
     fn label(&self) -> &'static str {
@@ -390,10 +402,13 @@ impl BrowserType {
 
 fn browser_executable_from_config(path: &Path) -> Result<BrowserExecutable, CdpError> {
     if !is_executable(path) {
-        return Err(CdpError::browser_launch(format!(
-            "configured browser executable `{}` was not found or is not executable",
-            path.display()
-        )));
+        return BrowserLaunchSnafu {
+            reason: format!(
+                "configured browser executable `{}` was not found or is not executable",
+                path.display()
+            ),
+        }
+        .fail();
     }
 
     Ok(BrowserExecutable {
@@ -521,17 +536,24 @@ fn wait_for_devtools_endpoint(
         if let Ok(contents) = fs::read_to_string(active_port_file) {
             let mut lines = contents.lines();
             let Some(port_line) = lines.next() else {
-                return Err(CdpError::browser_launch(
-                    "Chrome DevToolsActivePort file did not include a port",
-                ));
+                return BrowserLaunchSnafu {
+                    reason: String::from("Chrome DevToolsActivePort file did not include a port"),
+                }
+                .fail();
             };
-            let port = port_line
-                .parse::<u16>()
-                .map_err(|error| CdpError::browser_launch(error.to_string()))?;
+            let port = port_line.parse::<u16>().map_err(|error| {
+                BrowserLaunchSnafu {
+                    reason: error.to_string(),
+                }
+                .build()
+            })?;
             let Some(browser_path) = lines.next() else {
-                return Err(CdpError::browser_launch(
-                    "Chrome DevToolsActivePort file did not include a browser websocket path",
-                ));
+                return BrowserLaunchSnafu {
+                    reason: String::from(
+                        "Chrome DevToolsActivePort file did not include a browser websocket path",
+                    ),
+                }
+                .fail();
             };
             let browser_ws_url = if browser_path.starts_with("ws://") {
                 browser_path.to_owned()
@@ -545,16 +567,18 @@ fn wait_for_devtools_endpoint(
             });
         }
 
-        if child.try_wait().map_err(CdpError::io)?.is_some() {
-            return Err(CdpError::browser_launch(
-                "Chrome exited before DevTools became ready",
-            ));
+        if child.try_wait().context(IoSnafu)?.is_some() {
+            return BrowserLaunchSnafu {
+                reason: String::from("Chrome exited before DevTools became ready"),
+            }
+            .fail();
         }
 
         if Instant::now() >= deadline {
-            return Err(CdpError::browser_launch(
-                "timed out waiting for Chrome DevToolsActivePort",
-            ));
+            return BrowserLaunchSnafu {
+                reason: String::from("timed out waiting for Chrome DevToolsActivePort"),
+            }
+            .fail();
         }
 
         std::thread::sleep(DEVTOOLS_POLL);
@@ -592,10 +616,11 @@ fn wait_for_configured_devtools_endpoint(
             Err(error) => return Err(error),
         }
 
-        if child.try_wait().map_err(CdpError::io)?.is_some() {
-            return Err(CdpError::browser_launch(
-                "Chrome exited before fixed-port DevTools became ready",
-            ));
+        if child.try_wait().context(IoSnafu)?.is_some() {
+            return BrowserLaunchSnafu {
+                reason: String::from("Chrome exited before fixed-port DevTools became ready"),
+            }
+            .fail();
         }
 
         if Instant::now() >= deadline {
@@ -606,7 +631,7 @@ fn wait_for_configured_devtools_endpoint(
                 },
             );
 
-            return Err(CdpError::browser_launch(reason));
+            return BrowserLaunchSnafu { reason }.fail();
         }
 
         std::thread::sleep(DEVTOOLS_POLL);
@@ -619,10 +644,13 @@ fn enrich_browser_launch_error(error: CdpError, stderr_log_path: &Path) -> CdpEr
     };
 
     let Some(stderr) = chrome_stderr_excerpt(stderr_log_path) else {
-        return CdpError::browser_launch(reason);
+        return BrowserLaunchSnafu { reason }.build();
     };
 
-    CdpError::browser_launch(format!("{reason}; Chrome stderr: {stderr}"))
+    BrowserLaunchSnafu {
+        reason: format!("{reason}; Chrome stderr: {stderr}"),
+    }
+    .build()
 }
 
 fn chrome_stderr_excerpt(stderr_log_path: &Path) -> Option<String> {
@@ -666,7 +694,7 @@ fn endpoint_port(endpoint: &str) -> Option<u16> {
 }
 
 fn create_page_ws_url(browser_ws_url: &str, port: u16) -> Result<String, CdpError> {
-    let (mut socket, _response) = connect(browser_ws_url).map_err(CdpError::websocket)?;
+    let (mut socket, _response) = connect(browser_ws_url).context(WebSocketSnafu)?;
     let create_target = target::CreateTarget {
         url: String::from("about:blank"),
         left: None,
@@ -682,33 +710,36 @@ fn create_page_ws_url(browser_ws_url: &str, port: u16) -> Result<String, CdpErro
         hidden: None,
         focus: None,
     };
-    let payload = serde_json::to_string(&create_target.to_method_call(1))
-        .map_err(CdpError::invalid_protocol)?;
+    let payload =
+        serde_json::to_string(&create_target.to_method_call(1)).context(InvalidProtocolSnafu)?;
     socket
         .send(Message::Text(payload.into()))
-        .map_err(CdpError::websocket)?;
+        .context(WebSocketSnafu)?;
 
     loop {
-        let message = socket.read().map_err(CdpError::websocket)?;
+        let message = socket.read().context(WebSocketSnafu)?;
         let Message::Text(text) = message else {
             continue;
         };
         let response: CdpMethodResponse<target::CreateTargetReturnObject> =
-            serde_json::from_str(text.as_ref()).map_err(CdpError::invalid_protocol)?;
+            serde_json::from_str(text.as_ref()).context(InvalidProtocolSnafu)?;
 
         if response.id != 1 {
             continue;
         }
 
         if let Some(error) = response.error {
-            return Err(CdpError::browser_launch(format!(
-                "Chrome rejected Target.createTarget: {}",
-                error.message
-            )));
+            return BrowserLaunchSnafu {
+                reason: format!("Chrome rejected Target.createTarget: {}", error.message),
+            }
+            .fail();
         }
 
         let result = response.result.ok_or_else(|| {
-            CdpError::browser_launch("Chrome Target.createTarget response did not include result")
+            BrowserLaunchSnafu {
+                reason: String::from("Chrome Target.createTarget response did not include result"),
+            }
+            .build()
         })?;
 
         return Ok(format!(
@@ -735,10 +766,11 @@ fn wait_for_page_ws_url(child: &mut Child, port: u16) -> Result<String, CdpError
             Err(error) => return Err(error),
         }
 
-        if child.try_wait().map_err(CdpError::io)?.is_some() {
-            return Err(CdpError::browser_launch(
-                "Chrome exited before page target became ready",
-            ));
+        if child.try_wait().context(IoSnafu)?.is_some() {
+            return BrowserLaunchSnafu {
+                reason: String::from("Chrome exited before page target became ready"),
+            }
+            .fail();
         }
 
         if Instant::now() >= deadline {
@@ -747,7 +779,7 @@ fn wait_for_page_ws_url(child: &mut Child, port: u16) -> Result<String, CdpError
                 |error| format!("timed out waiting for Chrome page websocket; last error: {error}"),
             );
 
-            return Err(CdpError::browser_launch(reason));
+            return BrowserLaunchSnafu { reason }.fail();
         }
 
         std::thread::sleep(DEVTOOLS_POLL);
@@ -771,7 +803,10 @@ fn fetch_page_ws_url(port: u16) -> Result<String, CdpError> {
 fn fetch_browser_ws_url(port: u16) -> Result<String, CdpError> {
     let version: ChromeVersionDescriptor = http_get_json(port, "/json/version")?;
     version.web_socket_debugger_url.ok_or_else(|| {
-        CdpError::browser_launch("Chrome /json/version did not return a browser websocket")
+        BrowserLaunchSnafu {
+            reason: String::from("Chrome /json/version did not return a browser websocket"),
+        }
+        .build()
     })
 }
 
@@ -779,7 +814,10 @@ fn create_page_ws_url_via_http(port: u16) -> Result<String, CdpError> {
     let target: ChromeTargetDescriptor = http_put_json(port, "/json/new?about:blank")?;
 
     target.web_socket_debugger_url.ok_or_else(|| {
-        CdpError::browser_launch("Chrome target creation did not return a page websocket")
+        BrowserLaunchSnafu {
+            reason: String::from("Chrome target creation did not return a page websocket"),
+        }
+        .build()
     })
 }
 
@@ -803,30 +841,32 @@ where
 {
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let mut stream =
-        std::net::TcpStream::connect_timeout(&address, HTTP_TIMEOUT).map_err(CdpError::io)?;
+        std::net::TcpStream::connect_timeout(&address, HTTP_TIMEOUT).context(IoSnafu)?;
     stream
         .set_read_timeout(Some(HTTP_TIMEOUT))
-        .map_err(CdpError::io)?;
+        .context(IoSnafu)?;
     stream
         .set_write_timeout(Some(HTTP_TIMEOUT))
-        .map_err(CdpError::io)?;
+        .context(IoSnafu)?;
     let request =
         format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).map_err(CdpError::io)?;
+    stream.write_all(request.as_bytes()).context(IoSnafu)?;
     let response = read_http_response(&mut stream)?;
     let Some((status_line, body)) = split_http_response(&response) else {
-        return Err(CdpError::browser_launch(
-            "Chrome returned an invalid HTTP response",
-        ));
+        return BrowserLaunchSnafu {
+            reason: String::from("Chrome returned an invalid HTTP response"),
+        }
+        .fail();
     };
 
     if !is_success_status(status_line) {
-        return Err(CdpError::browser_launch(format!(
-            "Chrome returned HTTP status `{status_line}`"
-        )));
+        return BrowserLaunchSnafu {
+            reason: format!("Chrome returned HTTP status `{status_line}`"),
+        }
+        .fail();
     }
 
-    serde_json::from_str(body).map_err(CdpError::invalid_json)
+    serde_json::from_str(body).context(InvalidJsonSnafu)
 }
 
 fn read_http_response(stream: &mut std::net::TcpStream) -> Result<String, CdpError> {
@@ -854,17 +894,26 @@ fn read_http_response(stream: &mut std::net::TcpStream) -> Result<String, CdpErr
                 }
 
                 if Instant::now() >= deadline {
-                    return Err(CdpError::io(error));
+                    return Err(CdpError::Io {
+                        source: error,
+                        location: snafu::Location::default(),
+                    });
                 }
             }
-            Err(error) => return Err(CdpError::io(error)),
+            Err(error) => {
+                return Err(CdpError::Io {
+                    source: error,
+                    location: snafu::Location::default(),
+                });
+            }
         }
     }
 
     String::from_utf8(response).map_err(|error| {
-        CdpError::browser_launch(format!(
-            "Chrome returned a non-UTF-8 HTTP response: {error}"
-        ))
+        BrowserLaunchSnafu {
+            reason: format!("Chrome returned a non-UTF-8 HTTP response: {error}"),
+        }
+        .build()
     })
 }
 

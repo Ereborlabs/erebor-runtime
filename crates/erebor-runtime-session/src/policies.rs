@@ -4,19 +4,20 @@ use std::{
 };
 
 use erebor_runtime_policy::{LocalPolicy, PolicySet};
-use snafu::Location;
+use snafu::ResultExt;
 
-use crate::SessionExecutionError;
+use crate::{
+    error::{InvalidPolicySnafu, ReadPolicySnafu},
+    SessionExecutionError,
+};
 
 fn read_policy(path: &Path) -> Result<LocalPolicy, SessionExecutionError> {
     tracing::debug!(path = %path.display(), "reading session policy");
-    let source = fs::read_to_string(path).map_err(|error| SessionExecutionError::ReadPolicy {
+    let source = fs::read_to_string(path).context(ReadPolicySnafu {
         path: path.to_path_buf(),
-        source: error,
-        location: Location::default(),
     })?;
 
-    LocalPolicy::from_json_str(&source).map_err(SessionExecutionError::invalid_policy)
+    LocalPolicy::from_json_str(&source).context(InvalidPolicySnafu)
 }
 
 pub(crate) fn read_policy_set(paths: &[PathBuf]) -> Result<PolicySet, SessionExecutionError> {

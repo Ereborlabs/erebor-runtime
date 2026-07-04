@@ -6,8 +6,10 @@ use erebor_runtime_core::{
     SessionRunnerKind, SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan,
     SessionSurfaceLauncher,
 };
+use snafu::ResultExt;
 
 use crate::{
+    error::{GuardConfigSnafu, InvalidConfigSnafu, RuntimeSnafu},
     interception_backend::SessionInterceptionBackendBundle,
     interception_setup::SessionInterceptionSetup,
     policies::read_policy_set,
@@ -25,7 +27,7 @@ pub(crate) fn start_session_side_resources(
 ) -> Result<SessionSideResources, SessionExecutionError> {
     let start_plan = config
         .surface_start_plan_for_session(plan)
-        .map_err(SessionExecutionError::invalid_config)?;
+        .context(InvalidConfigSnafu)?;
     start_session_side_resources_from_start_plan(config, plan, start_plan, prepared_session)
 }
 
@@ -42,14 +44,17 @@ pub(crate) fn start_adopt_session_side_resources(
                 && operation.effective()
         });
     if plan.runner().kind() == SessionRunnerKind::LinuxHost && !process_exec_interception {
-        return Err(SessionExecutionError::guard_config(
-            "linux-host adoption requires session.interception process_exec support",
-        ));
+        return GuardConfigSnafu {
+            reason: String::from(
+                "linux-host adoption requires session.interception process_exec support",
+            ),
+        }
+        .fail();
     }
 
     let start_plan = config
         .surface_start_plan_for_runner_kind(plan.runner().kind())
-        .map_err(SessionExecutionError::invalid_config)?;
+        .context(InvalidConfigSnafu)?;
     start_session_side_resources_from_start_plan(config, plan, start_plan, None)
 }
 
@@ -67,7 +72,7 @@ fn start_session_side_resources_from_start_plan(
         SocketAddr::from(([127, 0, 0, 1], 0)),
         &start_plan,
     )
-    .map_err(SessionExecutionError::runtime)?;
+    .context(RuntimeSnafu)?;
     let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
     let mut environment = Vec::new();
     let mut terminal_surface_present = false;
@@ -158,7 +163,7 @@ fn start_session_side_resources_from_start_plan(
         );
     }
 
-    let supervisor = launcher.start().map_err(SessionExecutionError::runtime)?;
+    let supervisor = launcher.start().context(RuntimeSnafu)?;
     let mut browser_cdp_endpoint = None;
     for runtime in supervisor.running() {
         match runtime.surface() {

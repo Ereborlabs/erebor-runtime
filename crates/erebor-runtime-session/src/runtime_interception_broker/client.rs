@@ -5,8 +5,8 @@ use erebor_runtime_ipc::v1::{
 use super::{
     endpoint::RuntimeInterceptionEndpoint,
     platform::{Platform, RuntimeInterceptionBrokerPlatform},
-    server::RuntimeInterceptionBrokerError,
 };
+use crate::error::RuntimeInterceptionBrokerError;
 
 pub struct InterceptionBrokerClient;
 

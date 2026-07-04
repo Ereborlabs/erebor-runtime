@@ -5,6 +5,8 @@ members = [
     "crates/erebor-runtime-cli",
     "crates/erebor-runtime-core",
     "crates/erebor-runtime-e2e",
+    "crates/erebor-runtime-error",
+    "crates/erebor-runtime-telemetry",
     "crates/erebor-runtime-events",
     "crates/erebor-runtime-ipc",
     "crates/erebor-runtime-policy",

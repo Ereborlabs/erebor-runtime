@@ -1,20 +1,22 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{self, Read, Write},
+    io::{Read, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
-use erebor_runtime_ipc::{
-    v1::{
-        Envelope, GuardHello, GuardHelloAck, InterceptionDecision, InterceptionRequest,
-        KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK, KIND_INTERCEPTION_DECISION,
-        KIND_INTERCEPTION_REQUEST, PROTOCOL_VERSION,
-    },
-    IpcProtocolError,
+use erebor_runtime_ipc::v1::{
+    Envelope, GuardHello, GuardHelloAck, InterceptionDecision, InterceptionRequest,
+    KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
+    PROTOCOL_VERSION,
 };
-use thiserror::Error;
+use snafu::ResultExt;
+
+use crate::error::{
+    BrokerIoSnafu, BrokerProtocolSnafu, BrokerServerNotStartedSnafu,
+    BrokerSessionAlreadyRegisteredSnafu, BrokerStateLockSnafu, RuntimeInterceptionBrokerError,
+};
 
 use super::{
     constants::{DEFAULT_TIMEOUT_MS, RUNTIME_INTERCEPTION_SOCKET_NAME},
@@ -84,34 +86,6 @@ impl Drop for SessionInterceptionRegistration {
     }
 }
 
-#[derive(Debug, Error)]
-pub enum RuntimeInterceptionBrokerError {
-    #[error("runtime interception broker transport `{transport}` is unsupported on this platform")]
-    UnsupportedTransport { transport: String },
-    #[error("runtime interception broker state lock failed")]
-    StateLock,
-    #[error("session `{session_id}` is already registered with the runtime interception broker")]
-    SessionAlreadyRegistered { session_id: String },
-    #[error("runtime interception broker server platform is not started")]
-    ServerNotStarted,
-    #[error("runtime interception broker rejected guard hello: {reason}")]
-    RejectedHello { reason: String },
-    #[error("runtime interception broker I/O failed: {source}")]
-    Io { source: io::Error },
-    #[error("runtime interception broker IPC protocol failed: {source}")]
-    Protocol { source: IpcProtocolError },
-}
-
-impl RuntimeInterceptionBrokerError {
-    pub(super) fn io(source: io::Error) -> Self {
-        Self::Io { source }
-    }
-
-    pub(super) fn protocol(source: IpcProtocolError) -> Self {
-        Self::Protocol { source }
-    }
-}
-
 pub(super) struct RuntimeInterceptionBrokerServer {
     platform: Mutex<Option<Box<dyn RuntimeInterceptionBrokerServerPlatform>>>,
     sessions: Mutex<HashMap<String, SessionRegistration>>,
@@ -128,7 +102,7 @@ impl RuntimeInterceptionBrokerServer {
         *server
             .platform
             .lock()
-            .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)? = Some(platform);
+            .map_err(|_error| BrokerStateLockSnafu.build())? = Some(platform);
         Ok(server)
     }
 
@@ -149,11 +123,9 @@ impl RuntimeInterceptionBrokerServer {
             let mut sessions = self
                 .sessions
                 .lock()
-                .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
+                .map_err(|_error| BrokerStateLockSnafu.build())?;
             if sessions.contains_key(&session_id) {
-                return Err(RuntimeInterceptionBrokerError::SessionAlreadyRegistered {
-                    session_id,
-                });
+                return BrokerSessionAlreadyRegisteredSnafu { session_id }.fail();
             }
             sessions.insert(session_id.clone(), registration);
         }
@@ -181,9 +153,9 @@ impl RuntimeInterceptionBrokerServer {
         let platform = self
             .platform
             .lock()
-            .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
+            .map_err(|_error| BrokerStateLockSnafu.build())?;
         let Some(platform) = platform.as_ref() else {
-            return Err(RuntimeInterceptionBrokerError::ServerNotStarted);
+            return BrokerServerNotStartedSnafu.fail();
         };
         Ok(platform.endpoint_path().to_path_buf())
     }
@@ -229,7 +201,7 @@ fn shared_runtime_interception_broker_server(
 ) -> Result<Arc<RuntimeInterceptionBrokerServer>, RuntimeInterceptionBrokerError> {
     let mut server = RUNTIME_INTERCEPTION_BROKER_SERVER
         .lock()
-        .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
+        .map_err(|_error| BrokerStateLockSnafu.build())?;
     if let Some(server) = server.as_ref() {
         return Ok(Arc::clone(server));
     }
@@ -243,7 +215,7 @@ fn read_interception_token() -> Result<String, RuntimeInterceptionBrokerError> {
     let mut random = [0_u8; 16];
     File::open("/dev/urandom")
         .and_then(|mut file| file.read_exact(&mut random))
-        .map_err(RuntimeInterceptionBrokerError::io)?;
+        .context(BrokerIoSnafu)?;
 
     Ok(hex_encode(&random))
 }
@@ -278,11 +250,11 @@ impl RuntimeInterceptionBrokerServer {
         } else {
             let hello: GuardHello = envelope
                 .decode_typed_payload(KIND_GUARD_HELLO)
-                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+                .context(BrokerProtocolSnafu)?;
             let sessions = self
                 .sessions
                 .lock()
-                .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
+                .map_err(|_error| BrokerStateLockSnafu.build())?;
             match sessions.get(&hello.session_id) {
                 Some(registration)
                     if interception_token(&envelope) == Some(registration.token.as_str()) =>
@@ -314,7 +286,7 @@ impl RuntimeInterceptionBrokerServer {
             KIND_GUARD_HELLO_ACK,
             &ack,
         )
-        .map_err(RuntimeInterceptionBrokerError::protocol)
+        .context(BrokerProtocolSnafu)
     }
 
     fn handle_interception_request_envelope(
@@ -324,7 +296,7 @@ impl RuntimeInterceptionBrokerServer {
     ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
         let request: InterceptionRequest = envelope
             .decode_typed_payload(KIND_INTERCEPTION_REQUEST)
-            .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            .context(BrokerProtocolSnafu)?;
         let decision = self.interception_decision_for_request(bound, &request)?;
 
         Envelope::wrap_message(
@@ -333,7 +305,7 @@ impl RuntimeInterceptionBrokerServer {
             KIND_INTERCEPTION_DECISION,
             &decision,
         )
-        .map_err(RuntimeInterceptionBrokerError::protocol)
+        .context(BrokerProtocolSnafu)
     }
 
     fn interception_decision_for_request(
@@ -352,7 +324,7 @@ impl RuntimeInterceptionBrokerServer {
             let sessions = self
                 .sessions
                 .lock()
-                .map_err(|_error| RuntimeInterceptionBrokerError::StateLock)?;
+                .map_err(|_error| BrokerStateLockSnafu.build())?;
             let Some(registration) = sessions.get(&bound.session_id) else {
                 return Ok(deny_decision(
                     request.request_id,
@@ -392,5 +364,5 @@ fn deny_unexpected_bound_message(
         KIND_INTERCEPTION_DECISION,
         &decision,
     )
-    .map_err(RuntimeInterceptionBrokerError::protocol)
+    .context(BrokerProtocolSnafu)
 }

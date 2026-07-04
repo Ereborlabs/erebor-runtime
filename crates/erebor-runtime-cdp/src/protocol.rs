@@ -5,8 +5,12 @@ use cdp_protocol::{
 use erebor_runtime_events::TargetRef;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{Map, Value};
+use snafu::{Location, ResultExt};
 
-use crate::CdpError;
+use crate::{
+    error::{InvalidProtocolSnafu, UnexpectedMethodSnafu, UnsupportedMethodSnafu},
+    CdpError,
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpCommand {
@@ -366,7 +370,7 @@ pub fn decode_cdp_event(source: &str) -> Result<Option<CdpEvent>, CdpError> {
 
     let event: ProtocolEvent = deserialize_wire(source)?;
     CdpEvent::from_protocol(event, head.session_id)?
-        .ok_or_else(|| CdpError::unsupported_method(method))
+        .ok_or_else(|| UnsupportedMethodSnafu { method }.build())
         .map(Some)
 }
 
@@ -615,7 +619,11 @@ where
 {
     let call: IncomingMethodCall<T> = deserialize_wire(source)?;
     if call.method != T::NAME {
-        return Err(CdpError::unexpected_method(T::NAME, call.method));
+        return UnexpectedMethodSnafu {
+            expected: T::NAME,
+            actual: call.method,
+        }
+        .fail();
     }
 
     Ok(call)
@@ -630,14 +638,18 @@ where
 {
     let call: IncomingRawMethodCall = deserialize_wire(source)?;
     if call.method != T::NAME {
-        return Err(CdpError::unexpected_method(T::NAME, call.method));
+        return UnexpectedMethodSnafu {
+            expected: T::NAME,
+            actual: call.method,
+        }
+        .fail();
     }
 
     let params = match call.params {
         Some(Value::Null) | None => default_params,
         Some(params) => params,
     };
-    let params = serde_json::from_value(params).map_err(CdpError::invalid_protocol)?;
+    let params = serde_json::from_value(params).context(InvalidProtocolSnafu)?;
 
     Ok(IncomingMethodCall {
         id: call.id,
@@ -652,9 +664,15 @@ where
 {
     serde_json::from_str(source).map_err(|error| {
         if error.is_syntax() || error.is_eof() {
-            CdpError::invalid_json(error)
+            CdpError::InvalidJson {
+                source: error,
+                location: Location::default(),
+            }
         } else {
-            CdpError::invalid_protocol(error)
+            CdpError::InvalidProtocol {
+                source: error,
+                location: Location::default(),
+            }
         }
     })
 }
@@ -663,7 +681,7 @@ fn params_value<T>(params: &T) -> Result<Value, CdpError>
 where
     T: Serialize,
 {
-    serde_json::to_value(params).map_err(CdpError::invalid_protocol)
+    serde_json::to_value(params).context(InvalidProtocolSnafu)
 }
 
 fn target_ref(label: Option<String>, uri: Option<String>) -> Option<TargetRef> {
@@ -761,8 +779,10 @@ struct DecodedGovernedCommand {
 #[cfg(test)]
 mod tests {
     use cdp_protocol::{page, types::Method};
+    use snafu::ResultExt;
 
     use super::{decode_cdp_command, decode_cdp_event, GovernedCdpCommand, IncomingMethodCall};
+    use crate::error::{InvalidProtocolSnafu, UnsupportedMethodSnafu};
     use crate::CdpError;
 
     #[test]
@@ -774,8 +794,8 @@ mod tests {
             frame_id: None,
             referrer_policy: None,
         };
-        let source = serde_json::to_string(&navigate.to_method_call(1))
-            .map_err(CdpError::invalid_protocol)?;
+        let source =
+            serde_json::to_string(&navigate.to_method_call(1)).context(InvalidProtocolSnafu)?;
         let command = decode_cdp_command(&source)?;
 
         assert!(matches!(
@@ -836,7 +856,10 @@ mod tests {
 
         let Some(GovernedCdpCommand::TargetManagement(target_command)) = command.protocol_command()
         else {
-            return Err(CdpError::unsupported_method("Target.setAutoAttach"));
+            return UnsupportedMethodSnafu {
+                method: String::from("Target.setAutoAttach"),
+            }
+            .fail();
         };
         assert_eq!(target_command.method(), "Target.setAutoAttach");
         assert_eq!(
@@ -852,7 +875,10 @@ mod tests {
 
         let Some(GovernedCdpCommand::TargetManagement(target_command)) = command.protocol_command()
         else {
-            return Err(CdpError::unsupported_method("Target.getTargets"));
+            return UnsupportedMethodSnafu {
+                method: String::from("Target.getTargets"),
+            }
+            .fail();
         };
         assert!(matches!(
             target_command.as_ref(),
@@ -898,7 +924,12 @@ mod tests {
             }
             "#,
         )?
-        .ok_or_else(|| CdpError::unsupported_method("Network.loadingFailed"))?;
+        .ok_or_else(|| {
+            UnsupportedMethodSnafu {
+                method: String::from("Network.loadingFailed"),
+            }
+            .build()
+        })?;
 
         assert_eq!(event.method(), "Network.loadingFailed");
         assert_eq!(event.event_id(), "network-1");

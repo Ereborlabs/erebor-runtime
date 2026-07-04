@@ -2,6 +2,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
+use snafu::ResultExt;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::mpsc,
@@ -13,7 +14,14 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::{system::MiniSystem, E2eError};
+use crate::{
+    error::{
+        ClosedSnafu, IoSnafu, JsonSnafu, TimeoutSnafu, UnexpectedMessageSnafu,
+        UnsupportedWebSocketMessageSnafu, WebSocketSnafu,
+    },
+    system::MiniSystem,
+    E2eError,
+};
 
 pub const DEFAULT_E2E_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -31,8 +39,8 @@ impl MiniJsonWebSocketServer {
     ) -> Result<Self, E2eError> {
         let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
             .await
-            .map_err(E2eError::io)?;
-        let local_addr = listener.local_addr().map_err(E2eError::io)?;
+            .context(IoSnafu)?;
+        let local_addr = listener.local_addr().context(IoSnafu)?;
         let endpoint = format!("ws://{local_addr}");
         let (received_tx, received) = mpsc::unbounded_channel();
 
@@ -53,28 +61,42 @@ impl MiniJsonWebSocketServer {
     pub async fn next_message(&mut self) -> Result<Value, E2eError> {
         timeout(DEFAULT_E2E_TIMEOUT, self.received.recv())
             .await
-            .map_err(|_| E2eError::timeout("mini JSON websocket message"))?
-            .ok_or_else(|| E2eError::closed("mini JSON websocket message"))
+            .map_err(|_| {
+                TimeoutSnafu {
+                    operation: String::from("mini JSON websocket message"),
+                }
+                .build()
+            })?
+            .ok_or_else(|| {
+                ClosedSnafu {
+                    operation: String::from("mini JSON websocket message"),
+                }
+                .build()
+            })
     }
 
     pub async fn assert_no_message(&mut self, duration: Duration) -> Result<(), E2eError> {
         match timeout(duration, self.received.recv()).await {
             Err(_) => Ok(()),
-            Ok(None) => Err(E2eError::closed("mini JSON websocket message")),
-            Ok(Some(message)) => Err(E2eError::unexpected_message(
-                "mini JSON websocket",
-                message.to_string(),
-            )),
+            Ok(None) => ClosedSnafu {
+                operation: String::from("mini JSON websocket message"),
+            }
+            .fail(),
+            Ok(Some(message)) => UnexpectedMessageSnafu {
+                channel: String::from("mini JSON websocket"),
+                message: message.to_string(),
+            }
+            .fail(),
         }
     }
 }
 
 pub async fn send_json_request(endpoint: &str, request: Value) -> Result<Value, E2eError> {
-    let (mut socket, _response) = connect_async(endpoint).await.map_err(E2eError::websocket)?;
+    let (mut socket, _response) = connect_async(endpoint).await.context(WebSocketSnafu)?;
     socket
         .send(Message::Text(request.to_string().into()))
         .await
-        .map_err(E2eError::websocket)?;
+        .context(WebSocketSnafu)?;
 
     read_json_message(&mut socket, "JSON websocket response").await
 }
@@ -84,11 +106,11 @@ pub async fn assert_json_request_has_no_response(
     request: Value,
     duration: Duration,
 ) -> Result<(), E2eError> {
-    let (mut socket, _response) = connect_async(endpoint).await.map_err(E2eError::websocket)?;
+    let (mut socket, _response) = connect_async(endpoint).await.context(WebSocketSnafu)?;
     socket
         .send(Message::Text(request.to_string().into()))
         .await
-        .map_err(E2eError::websocket)?;
+        .context(WebSocketSnafu)?;
 
     assert_no_json_message(&mut socket, "JSON websocket response", duration).await
 }
@@ -125,11 +147,11 @@ async fn handle_json_websocket_connection(
     handler: JsonWebSocketHandler,
     received: mpsc::UnboundedSender<Value>,
 ) -> Result<(), E2eError> {
-    let socket = accept_async(stream).await.map_err(E2eError::websocket)?;
+    let socket = accept_async(stream).await.context(WebSocketSnafu)?;
     let (mut write, mut read) = socket.split();
 
     while let Some(message) = read.next().await {
-        let message = message.map_err(E2eError::websocket)?;
+        let message = message.context(WebSocketSnafu)?;
         if message.is_close() {
             break;
         }
@@ -137,11 +159,8 @@ async fn handle_json_websocket_connection(
             continue;
         }
 
-        let source = message
-            .into_text()
-            .map_err(E2eError::websocket)?
-            .to_string();
-        let request: Value = serde_json::from_str(&source).map_err(E2eError::json)?;
+        let source = message.into_text().context(WebSocketSnafu)?.to_string();
+        let request: Value = serde_json::from_str(&source).context(JsonSnafu)?;
         debug!(request = %request, "mini JSON websocket received request");
         let _result = received.send(request.clone());
 
@@ -149,7 +168,7 @@ async fn handle_json_websocket_connection(
             write
                 .send(Message::Text(response.to_string().into()))
                 .await
-                .map_err(E2eError::websocket)?;
+                .context(WebSocketSnafu)?;
         }
     }
 
@@ -162,19 +181,29 @@ where
 {
     let message = timeout(DEFAULT_E2E_TIMEOUT, socket.next())
         .await
-        .map_err(|_| E2eError::timeout(operation))?
-        .ok_or_else(|| E2eError::closed(operation))?
-        .map_err(E2eError::websocket)?;
+        .map_err(|_| {
+            TimeoutSnafu {
+                operation: operation.to_owned(),
+            }
+            .build()
+        })?
+        .ok_or_else(|| {
+            ClosedSnafu {
+                operation: operation.to_owned(),
+            }
+            .build()
+        })?
+        .context(WebSocketSnafu)?;
 
     if !message.is_text() {
-        return Err(E2eError::unsupported_websocket_message(operation));
+        return UnsupportedWebSocketMessageSnafu {
+            operation: operation.to_owned(),
+        }
+        .fail();
     }
 
-    let source = message
-        .into_text()
-        .map_err(E2eError::websocket)?
-        .to_string();
-    serde_json::from_str(&source).map_err(E2eError::json)
+    let source = message.into_text().context(WebSocketSnafu)?.to_string();
+    serde_json::from_str(&source).context(JsonSnafu)
 }
 
 async fn assert_no_json_message<S>(
@@ -187,8 +216,18 @@ where
 {
     match timeout(duration, socket.next()).await {
         Err(_) => Ok(()),
-        Ok(None) => Err(E2eError::closed(operation)),
-        Ok(Some(Err(error))) => Err(E2eError::websocket(error)),
-        Ok(Some(Ok(message))) => Err(E2eError::unexpected_message(operation, message.to_string())),
+        Ok(None) => ClosedSnafu {
+            operation: operation.to_owned(),
+        }
+        .fail(),
+        Ok(Some(Err(error))) => Err(E2eError::WebSocket {
+            source: Box::new(error),
+            location: snafu::Location::default(),
+        }),
+        Ok(Some(Ok(message))) => UnexpectedMessageSnafu {
+            channel: operation.to_owned(),
+            message: message.to_string(),
+        }
+        .fail(),
     }
 }

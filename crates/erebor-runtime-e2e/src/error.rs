@@ -1,132 +1,149 @@
-use std::io;
+use std::{any::Any, io};
 
-use snafu::Location;
-use thiserror::Error;
+use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
+use snafu::{Location, Snafu};
 use tokio_tungstenite::tungstenite::Error as WebSocketError;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Snafu)]
+#[snafu(visibility(pub))]
 pub enum E2eError {
-    #[error("e2e I/O failed: {source}")]
+    #[snafu(display("e2e I/O failed: {source}"))]
     Io {
         source: io::Error,
+        #[snafu(implicit)]
         location: Location,
     },
-    #[error("e2e websocket failed: {source}")]
+    #[snafu(display("e2e websocket failed: {source}"))]
     WebSocket {
+        #[snafu(source(from(WebSocketError, Box::new)))]
         source: Box<WebSocketError>,
+        #[snafu(implicit)]
         location: Location,
     },
-    #[error("{operation} failed: {source}")]
+    #[snafu(display("{operation} failed: {source}"))]
     External {
         operation: String,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        #[snafu(implicit)]
         location: Location,
     },
-    #[error("e2e JSON failed: {source}")]
+    #[snafu(display("e2e JSON failed: {source}"))]
     Json {
         source: serde_json::Error,
+        #[snafu(implicit)]
         location: Location,
     },
-    #[error("timed out while waiting for {operation}")]
+    #[snafu(display("timed out while waiting for {operation}"))]
     Timeout {
         operation: String,
+        #[snafu(implicit)]
         location: Location,
     },
-    #[error("websocket closed while waiting for {operation}")]
+    #[snafu(display("websocket closed while waiting for {operation}"))]
     Closed {
         operation: String,
+        #[snafu(implicit)]
         location: Location,
     },
-    #[error("expected no message on `{channel}` but received {message}")]
+    #[snafu(display("expected no message on `{channel}` but received {message}"))]
     UnexpectedMessage {
         channel: String,
         message: String,
+        #[snafu(implicit)]
         location: Location,
     },
-    #[error("unsupported websocket message while waiting for {operation}")]
+    #[snafu(display("unsupported websocket message while waiting for {operation}"))]
     UnsupportedWebSocketMessage {
         operation: String,
+        #[snafu(implicit)]
         location: Location,
     },
-    #[error("environment variable `{name}` is not configured")]
-    MissingEnv { name: String, location: Location },
+    #[snafu(display("environment variable `{name}` is not configured"))]
+    MissingEnv {
+        name: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
-impl E2eError {
-    #[track_caller]
-    pub fn io(source: io::Error) -> Self {
-        Self::Io {
-            source,
-            location: Location::default(),
+impl ErrorExt for E2eError {
+    fn status_code(&self) -> StatusCode {
+        match self {
+            Self::Io { .. } | Self::WebSocket { .. } | Self::External { .. } => {
+                StatusCode::External
+            }
+            Self::Json { .. } => StatusCode::InvalidSyntax,
+            Self::Timeout { .. } => StatusCode::DeadlineExceeded,
+            Self::Closed { .. } => StatusCode::Unavailable,
+            Self::UnexpectedMessage { .. } => StatusCode::Unexpected,
+            Self::UnsupportedWebSocketMessage { .. } => StatusCode::Unsupported,
+            Self::MissingEnv { .. } => StatusCode::InvalidArguments,
         }
     }
 
-    #[track_caller]
-    pub fn websocket(source: WebSocketError) -> Self {
-        Self::WebSocket {
-            source: Box::new(source),
-            location: Location::default(),
+    fn retry_hint(&self) -> RetryHint {
+        match self {
+            Self::Io { source, .. } => RetryHint::from_io_error(source),
+            Self::WebSocket { source, .. } => websocket_retry_hint(source),
+            Self::External { .. }
+            | Self::Json { .. }
+            | Self::Timeout { .. }
+            | Self::Closed { .. }
+            | Self::UnexpectedMessage { .. }
+            | Self::UnsupportedWebSocketMessage { .. }
+            | Self::MissingEnv { .. } => RetryHint::NonRetryable,
         }
     }
 
-    #[track_caller]
-    pub fn external(
-        operation: impl Into<String>,
-        source: impl std::error::Error + Send + Sync + 'static,
-    ) -> Self {
-        Self::External {
-            operation: operation.into(),
-            source: Box::new(source),
-            location: Location::default(),
-        }
+    fn as_any(&self) -> &dyn Any {
+        self
     }
+}
 
-    #[track_caller]
-    pub fn json(source: serde_json::Error) -> Self {
-        Self::Json {
-            source,
-            location: Location::default(),
-        }
+fn websocket_retry_hint(error: &WebSocketError) -> RetryHint {
+    match error {
+        WebSocketError::Io(source) => RetryHint::from_io_error(source),
+        _ => RetryHint::NonRetryable,
     }
+}
 
-    #[track_caller]
-    pub fn timeout(operation: impl Into<String>) -> Self {
-        Self::Timeout {
-            operation: operation.into(),
-            location: Location::default(),
-        }
-    }
+#[cfg(test)]
+mod tests {
+    use std::io;
 
-    #[track_caller]
-    pub fn closed(operation: impl Into<String>) -> Self {
-        Self::Closed {
-            operation: operation.into(),
-            location: Location::default(),
-        }
-    }
+    use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
+    use snafu::Location;
 
-    #[track_caller]
-    pub fn unexpected_message(channel: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::UnexpectedMessage {
-            channel: channel.into(),
-            message: message.into(),
-            location: Location::default(),
-        }
-    }
+    use super::E2eError;
 
-    #[track_caller]
-    pub fn unsupported_websocket_message(operation: impl Into<String>) -> Self {
-        Self::UnsupportedWebSocketMessage {
-            operation: operation.into(),
+    #[test]
+    fn e2e_statuses_cover_io_json_timeout_and_harness_state() {
+        let io_error = E2eError::Io {
+            source: io::Error::from(io::ErrorKind::TimedOut),
             location: Location::default(),
-        }
-    }
+        };
+        assert_eq!(io_error.status_code(), StatusCode::External);
+        assert_eq!(io_error.retry_hint(), RetryHint::Retryable);
 
-    #[track_caller]
-    pub fn missing_env(name: impl Into<String>) -> Self {
-        Self::MissingEnv {
-            name: name.into(),
+        let json = match serde_json::from_str::<serde_json::Value>("{") {
+            Ok(_) => return,
+            Err(source) => E2eError::Json {
+                source,
+                location: Location::default(),
+            },
+        };
+        assert_eq!(json.status_code(), StatusCode::InvalidSyntax);
+
+        let timeout = E2eError::Timeout {
+            operation: String::from("browser CDP response"),
             location: Location::default(),
-        }
+        };
+        assert_eq!(timeout.status_code(), StatusCode::DeadlineExceeded);
+
+        let unsupported = E2eError::UnsupportedWebSocketMessage {
+            operation: String::from("mini upstream"),
+            location: Location::default(),
+        };
+        assert_eq!(unsupported.status_code(), StatusCode::Unsupported);
     }
 }

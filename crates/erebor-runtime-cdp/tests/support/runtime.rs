@@ -9,13 +9,14 @@ use erebor_runtime_core::{
     SessionSurfaceStartPlan,
 };
 use erebor_runtime_e2e::{
-    assert_json_request_has_no_response, send_json_request, E2eError, MiniJsonWebSocketServer,
-    MiniSystem,
+    assert_json_request_has_no_response,
+    error::{JsonSnafu, WebSocketSnafu},
+    send_json_request, E2eError, MiniJsonWebSocketServer, MiniSystem,
 };
 use erebor_runtime_policy::{LocalPolicy, PolicySet};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use snafu::Location;
+use snafu::{Location, ResultExt};
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
 use tokio::sync::{Mutex, MutexGuard};
@@ -26,7 +27,10 @@ pub use crate::common::{
     allow_all_policy, deny_script_eval_policy, real_chrome_available,
     require_approval_script_eval_policy,
 };
-use crate::common::{mini_cdp_handler, session_context, RealChromeInstance};
+use crate::common::{
+    closed_error, external_error, mini_cdp_handler, session_context, timeout_error,
+    RealChromeInstance,
+};
 
 pub struct CdpE2eHarness {
     _system: MiniSystem,
@@ -56,7 +60,7 @@ impl CdpE2eHarness {
         let (runtime_host, running_runtime) =
             tokio::task::spawn_blocking(move || start_browser_cdp_runtime(policy, config))
                 .await
-                .map_err(|error| E2eError::external("CDP runtime task", error))??;
+                .map_err(|error| external_error("CDP runtime task", error))??;
 
         Ok(Self {
             _system: system,
@@ -72,13 +76,13 @@ impl CdpE2eHarness {
     pub async fn start_runtime_with_real_chrome(policy: LocalPolicy) -> Result<Self, E2eError> {
         let browser = tokio::task::spawn_blocking(RealChromeInstance::launch)
             .await
-            .map_err(|error| E2eError::external("real Chrome launch task", error))??;
+            .map_err(|error| external_error("real Chrome launch task", error))??;
         let direct_browser_endpoint = browser.page_ws_url().to_owned();
         let config = browser_cdp_runtime_config(&direct_browser_endpoint)?;
         let (runtime_host, running_runtime) =
             tokio::task::spawn_blocking(move || start_browser_cdp_runtime(policy, config))
                 .await
-                .map_err(|error| E2eError::external("CDP runtime task", error))??;
+                .map_err(|error| external_error("CDP runtime task", error))??;
 
         Ok(Self {
             _system: MiniSystem::new(),
@@ -96,7 +100,7 @@ impl CdpE2eHarness {
         let (runtime_host, running_runtime) =
             tokio::task::spawn_blocking(move || start_browser_cdp_runtime(policy, config))
                 .await
-                .map_err(|error| E2eError::external("CDP runtime task", error))??;
+                .map_err(|error| external_error("CDP runtime task", error))??;
 
         Ok(Self {
             _system: MiniSystem::new(),
@@ -132,7 +136,7 @@ impl CdpE2eHarness {
         let endpoint = self
             .direct_browser_endpoint
             .as_deref()
-            .ok_or_else(|| E2eError::closed("direct browser CDP endpoint"))?;
+            .ok_or_else(|| closed_error("direct browser CDP endpoint"))?;
 
         send_json_request(endpoint, command).await
     }
@@ -140,7 +144,7 @@ impl CdpE2eHarness {
     pub async fn next_upstream_command(&mut self) -> Result<Value, E2eError> {
         self.upstream
             .as_mut()
-            .ok_or_else(|| E2eError::external("mini CDP upstream access", MissingMiniUpstream))?
+            .ok_or_else(|| external_error("mini CDP upstream access", MissingMiniUpstream))?
             .next_message()
             .await
     }
@@ -148,7 +152,7 @@ impl CdpE2eHarness {
     pub async fn assert_no_upstream_command(&mut self, duration: Duration) -> Result<(), E2eError> {
         self.upstream
             .as_mut()
-            .ok_or_else(|| E2eError::external("mini CDP upstream access", MissingMiniUpstream))?
+            .ok_or_else(|| external_error("mini CDP upstream access", MissingMiniUpstream))?
             .assert_no_message(duration)
             .await
     }
@@ -171,7 +175,7 @@ pub struct BrowserLevelCdpClient {
 
 impl BrowserLevelCdpClient {
     async fn connect(endpoint: &str) -> Result<Self, E2eError> {
-        let (socket, _response) = connect_async(endpoint).await.map_err(E2eError::websocket)?;
+        let (socket, _response) = connect_async(endpoint).await.context(WebSocketSnafu)?;
         let mut client = Self {
             socket,
             next_id: 1,
@@ -186,7 +190,7 @@ impl BrowserLevelCdpClient {
     }
 
     pub async fn reconnect_to(endpoint: &str, target_id: String) -> Result<Self, E2eError> {
-        let (socket, _response) = connect_async(endpoint).await.map_err(E2eError::websocket)?;
+        let (socket, _response) = connect_async(endpoint).await.context(WebSocketSnafu)?;
         let mut client = Self {
             socket,
             next_id: 1,
@@ -216,7 +220,7 @@ impl BrowserLevelCdpClient {
             .pointer("/result/targetId")
             .and_then(Value::as_str)
             .map(str::to_owned)
-            .ok_or_else(|| E2eError::external("browser-level CDP target creation", MissingTargetId))
+            .ok_or_else(|| external_error("browser-level CDP target creation", MissingTargetId))
     }
 
     pub async fn close_target(&mut self, target_id: &str) -> Result<Value, E2eError> {
@@ -275,7 +279,7 @@ impl BrowserLevelCdpClient {
             .pointer("/result/sessionId")
             .and_then(Value::as_str)
             .map(str::to_owned)
-            .ok_or_else(|| E2eError::external("browser-level CDP attach", MissingSessionId))?;
+            .ok_or_else(|| external_error("browser-level CDP attach", MissingSessionId))?;
         self.target_id = target_id;
 
         Ok(())
@@ -316,7 +320,7 @@ impl BrowserLevelCdpClient {
         self.socket
             .send(Message::Text(payload.to_string().into()))
             .await
-            .map_err(E2eError::websocket)?;
+            .context(WebSocketSnafu)?;
 
         loop {
             let response = read_browser_level_message(&mut self.socket).await?;
@@ -332,20 +336,17 @@ async fn read_browser_level_message(
 ) -> Result<Value, E2eError> {
     let message = timeout(Duration::from_secs(2), socket.next())
         .await
-        .map_err(|_| E2eError::timeout("browser-level CDP response"))?
-        .ok_or_else(|| E2eError::closed("browser-level CDP response"))?
-        .map_err(E2eError::websocket)?;
+        .map_err(|_| timeout_error("browser-level CDP response"))?
+        .ok_or_else(|| closed_error("browser-level CDP response"))?
+        .context(WebSocketSnafu)?;
     if !message.is_text() {
-        return Err(E2eError::unsupported_websocket_message(
+        return Err(unsupported_websocket_message_error(
             "browser-level CDP response",
         ));
     }
 
-    let source = message
-        .into_text()
-        .map_err(E2eError::websocket)?
-        .to_string();
-    serde_json::from_str(&source).map_err(E2eError::json)
+    let source = message.into_text().context(WebSocketSnafu)?.to_string();
+    serde_json::from_str(&source).context(JsonSnafu)
 }
 
 pub fn deny_payload_script_eval_policy(needle: &str) -> Result<LocalPolicy, E2eError> {
@@ -366,7 +367,7 @@ pub fn deny_payload_script_eval_policy(needle: &str) -> Result<LocalPolicy, E2eE
         })
         .to_string(),
     )
-    .map_err(|error| E2eError::external("deny-payload-script-eval policy setup", error))
+    .map_err(|error| external_error("deny-payload-script-eval policy setup", error))
 }
 
 pub fn deny_target_script_eval_policy(target: &str) -> Result<LocalPolicy, E2eError> {
@@ -387,7 +388,7 @@ pub fn deny_target_script_eval_policy(target: &str) -> Result<LocalPolicy, E2eEr
         })
         .to_string(),
     )
-    .map_err(|error| E2eError::external("deny-target-script-eval policy setup", error))
+    .map_err(|error| external_error("deny-target-script-eval policy setup", error))
 }
 
 pub async fn create_governed_session_with_mini_upstream(
@@ -404,7 +405,7 @@ pub async fn create_governed_session_with_mini_upstream(
     )
     .create_session()
     .await
-    .map_err(|error| E2eError::external("governed browser session creation", error))
+    .map_err(|error| external_error("governed browser session creation", error))
 }
 
 fn start_browser_cdp_runtime(
@@ -418,7 +419,7 @@ fn start_browser_cdp_runtime(
             source,
             location: Location::default(),
         })
-        .map_err(|error| E2eError::external("CDP runtime executor", error))?;
+        .map_err(|error| external_error("CDP runtime executor", error))?;
     let (failures, _failure_rx) = mpsc::channel();
     let browser_runtime = BrowserCdpSurface::new(
         config,
@@ -427,7 +428,7 @@ fn start_browser_cdp_runtime(
     );
     let running_runtime = Box::new(browser_runtime)
         .start(&runtime, failures)
-        .map_err(|error| E2eError::external("CDP runtime start", error))?;
+        .map_err(|error| external_error("CDP runtime start", error))?;
 
     Ok((RuntimeHost::new(runtime), running_runtime))
 }
@@ -448,14 +449,14 @@ fn browser_cdp_runtime_config(
         })
         .to_string(),
     )
-    .map_err(|error| E2eError::external("browser CDP runtime config", error))?;
+    .map_err(|error| external_error("browser CDP runtime config", error))?;
     let start_plan = SessionSurfaceStartPlan::from_config(&config)
-        .map_err(|error| E2eError::external("browser CDP runtime start plan", error))?;
+        .map_err(|error| external_error("browser CDP runtime start plan", error))?;
 
     start_plan
         .browser_cdp()
         .cloned()
-        .ok_or_else(|| E2eError::external("browser CDP runtime start plan", MissingRuntimeConfig))
+        .ok_or_else(|| external_error("browser CDP runtime start plan", MissingRuntimeConfig))
 }
 
 fn owned_browser_cdp_runtime_config(
@@ -475,13 +476,14 @@ fn owned_browser_cdp_runtime_config(
         })
         .to_string(),
     )
-    .map_err(|error| E2eError::external("owned browser CDP runtime config", error))?;
+    .map_err(|error| external_error("owned browser CDP runtime config", error))?;
     let start_plan = SessionSurfaceStartPlan::from_config(&config)
-        .map_err(|error| E2eError::external("owned browser CDP runtime start plan", error))?;
+        .map_err(|error| external_error("owned browser CDP runtime start plan", error))?;
 
-    start_plan.browser_cdp().cloned().ok_or_else(|| {
-        E2eError::external("owned browser CDP runtime start plan", MissingRuntimeConfig)
-    })
+    start_plan
+        .browser_cdp()
+        .cloned()
+        .ok_or_else(|| external_error("owned browser CDP runtime start plan", MissingRuntimeConfig))
 }
 
 struct RuntimeHost {
@@ -504,18 +506,41 @@ impl Drop for RuntimeHost {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("mini upstream is not configured for this CDP harness")]
-struct MissingMiniUpstream;
+macro_rules! simple_error {
+    ($name:ident, $message:literal) => {
+        #[derive(Debug)]
+        struct $name;
 
-#[derive(Debug, thiserror::Error)]
-#[error("browser CDP runtime config was missing from the start plan")]
-struct MissingRuntimeConfig;
+        impl std::fmt::Display for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str($message)
+            }
+        }
 
-#[derive(Debug, thiserror::Error)]
-#[error("browser-level CDP response did not include a target id")]
-struct MissingTargetId;
+        impl std::error::Error for $name {}
+    };
+}
 
-#[derive(Debug, thiserror::Error)]
-#[error("browser-level CDP response did not include a session id")]
-struct MissingSessionId;
+simple_error!(
+    MissingMiniUpstream,
+    "mini upstream is not configured for this CDP harness"
+);
+simple_error!(
+    MissingRuntimeConfig,
+    "browser CDP runtime config was missing from the start plan"
+);
+simple_error!(
+    MissingTargetId,
+    "browser-level CDP response did not include a target id"
+);
+simple_error!(
+    MissingSessionId,
+    "browser-level CDP response did not include a session id"
+);
+
+fn unsupported_websocket_message_error(operation: impl Into<String>) -> E2eError {
+    E2eError::UnsupportedWebSocketMessage {
+        operation: operation.into(),
+        location: Location::default(),
+    }
+}

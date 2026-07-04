@@ -313,12 +313,12 @@ version = "0.1.0"
 dependencies = [
  "comfy-table",
  "erebor-runtime-core",
+ "erebor-runtime-error",
  "erebor-runtime-events",
  "erebor-runtime-policy",
  "serde",
  "serde_json",
  "snafu",
- "thiserror",
  "tracing",
 ]
 
@@ -364,12 +364,12 @@ dependencies = [
 name = "erebor-runtime-core"
 version = "0.1.0"
 dependencies = [
+ "erebor-runtime-error",
  "erebor-runtime-events",
  "erebor-runtime-policy",
  "serde",
  "serde_json",
  "snafu",
- "thiserror",
  "tokio",
  "tracing",
 ]
@@ -388,6 +388,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "erebor-runtime-error"
+version = "0.1.0"
+dependencies = [
+ "snafu",
+]
+
+[[package]]
 name = "erebor-runtime-events"
 version = "0.1.0"
 dependencies = [
@@ -399,20 +406,21 @@ dependencies = [
 name = "erebor-runtime-ipc"
 version = "0.1.0"
 dependencies = [
+ "erebor-runtime-error",
  "prost",
  "prost-build",
- "thiserror",
+ "snafu",
 ]
 
 [[package]]
 name = "erebor-runtime-policy"
 version = "0.1.0"
 dependencies = [
+ "erebor-runtime-error",
  "erebor-runtime-events",
  "serde",
  "serde_json",
  "snafu",
- "thiserror",
 ]
 
 [[package]]
@@ -421,14 +429,23 @@ version = "0.1.0"
 dependencies = [
  "erebor-runtime-cdp",
  "erebor-runtime-core",
+ "erebor-runtime-error",
  "erebor-runtime-events",
  "erebor-runtime-ipc",
  "erebor-runtime-policy",
  "erebor-runtime-terminal",
  "snafu",
- "thiserror",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "erebor-runtime-telemetry"
+version = "0.1.0"
+dependencies = [
+ "erebor-runtime-error",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -436,10 +453,11 @@ name = "erebor-runtime-terminal"
 version = "0.1.0"
 dependencies = [
  "erebor-runtime-core",
+ "erebor-runtime-error",
  "erebor-runtime-events",
  "erebor-runtime-policy",
  "serde_json",
- "thiserror",
+ "snafu",
 ]
 
 [[package]]

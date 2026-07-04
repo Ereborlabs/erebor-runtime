@@ -10,8 +10,8 @@ instructions and should not be edited unless the task explicitly asks for it.
 Read these files before making non-trivial changes:
 
 - [.agents/README.md](.agents/README.md) for the instruction map.
-- [.agents/engineering.md](.agents/engineering.md) for Rust, CLI, errors,
-  logging, tests, and commit behavior.
+- [.agents/engineering.md](.agents/engineering.md) for Rust, CLI, SNAFU
+  errors, logging, tests, and commit behavior.
 - [.agents/browser-cdp.md](.agents/browser-cdp.md) before touching CDP,
   browser ownership, Playwright/browser-use validation, or browser state.
 - [.agents/verification.md](.agents/verification.md) before claiming a phase or
@@ -38,13 +38,24 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
 - Do not commit. The user commits. Always provide a short commit message at the
   end of code-changing work.
 - No cosmetic churn. Keep changes scoped to the requested phase or bug.
+- Do not make architecture decisions on the user's behalf. Provide honest
+  analysis, tradeoffs, and recommendations when useful; the user decides the
+  architecture.
+- When implementing a documented phase, update the relevant plan/status
+  document before final handoff with a detailed current-status note, explicit
+  verification results, and a clear `Done`, `Not done`, or `Blocked` state.
 - No dead code, unused wiring, or placeholder skeletons that do not serve the
   current phase.
+- Strong file-size rule: code files should stay under 300 lines. Treat this as
+  almost non-negotiable; if a file must exceed it temporarily, document why and
+  split it before adding more behavior.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings` must
   be clean.
-- Use `thiserror` for error types and `snafu::Location` or similar context where
-  the crate pattern expects enriched errors.
-- Use `tracing` for runtime logging.
+- Use crate-local SNAFU error modules: returned Rust errors
+  belong in each crate's `src/error.rs` or a thin `src/error.rs` plus
+  `src/error/*.rs` submodules, with `snafu::Location` context and a local
+  `Result<T>` alias where the crate has one primary error.
+- Use `tracing` or the repository telemetry wrappers for runtime logging.
 - Prefer existing crate boundaries and local patterns over inventing new
   abstractions.
 - CLI code is wiring only: parse arguments, translate them into crate-level
@@ -52,11 +63,34 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
   audit/session/policy/runtime orchestration, feature JSON/text rendering, file
   artifact handling, and e2e harnesses must live in the appropriate domain or
   e2e crates, not `erebor-runtime-cli`.
-- Use `cdp-protocol` for CDP commands and events wherever the crate supports
-  the shape. Manual JSON handling is only acceptable for unavoidable wire
-  envelopes, generic forwarding, or crate gaps.
+- Prefer upstream crates and mature protocol/domain libraries over hand-rolled
+  implementations wherever they reasonably fit the problem and crate boundary.
+  For CDP, use `cdp-protocol` for commands and events wherever the crate
+  supports the shape. Manual JSON handling is only acceptable for unavoidable
+  wire envelopes, generic forwarding, or crate gaps.
 - The Playwright CDP demo acceptance criterion is that the example works against
   an Erebor-owned browser through the governed endpoint.
+
+## Error And Logging Style
+
+- Prefer `snafu::Snafu` for crate-owned error enums. `thiserror` is allowed only
+  for narrow test helpers or temporary external glue that a current approved
+  phase explicitly keeps.
+- Every crate that returns domain errors owns those errors in `error.rs`. If
+  that file would exceed 300 lines, make `error.rs` a module root and split the
+  variants by responsibility under `src/error/`.
+- Error variants should carry structured context fields, `source` errors, and
+  `snafu::Location`; avoid untyped string-only errors at public boundaries
+  unless they are wrapped in a typed variant.
+- Each public/domain error should map to a stable status/category and retry
+  hint once the common error crate exists. Policy denials, invalid user input,
+  and infrastructure failures must not collapse into one generic error class.
+- Log errors once at the owning boundary with structured fields. Lower layers
+  should return enriched errors instead of logging and rethrowing.
+- Use `error!(err; "...")`/`warn!(err; "...")` style telemetry wrappers once
+  available, or direct `tracing` fields such as `error = ?err` until then.
+- `println!`/`eprintln!` are for CLI user output only. Runtime diagnostics use
+  structured tracing.
 
 ## Working Style
 

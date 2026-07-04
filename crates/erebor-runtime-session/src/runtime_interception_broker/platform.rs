@@ -4,10 +4,8 @@ use erebor_runtime_ipc::v1::{
     GuardHello, GuardHelloAck, InterceptionDecision, InterceptionRequest,
 };
 
-use super::{
-    endpoint::RuntimeInterceptionEndpoint,
-    server::{RuntimeInterceptionBrokerError, RuntimeInterceptionBrokerServer},
-};
+use super::{endpoint::RuntimeInterceptionEndpoint, server::RuntimeInterceptionBrokerServer};
+use crate::error::RuntimeInterceptionBrokerError;
 
 pub(super) trait RuntimeInterceptionBrokerPlatform {
     fn start_server(
@@ -53,14 +51,17 @@ mod unix {
         KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK, KIND_INTERCEPTION_DECISION,
         KIND_INTERCEPTION_REQUEST,
     };
+    use snafu::ResultExt;
 
     use super::{RuntimeInterceptionBrokerPlatform, RuntimeInterceptionBrokerServerPlatform};
+    use crate::error::{BrokerIoSnafu, BrokerProtocolSnafu, BrokerRejectedHelloSnafu};
     use crate::runtime_interception_broker::{
         constants::{DEFAULT_TIMEOUT_MS, RUNTIME_INTERCEPTION_SOCKET_NAME},
         endpoint::RuntimeInterceptionEndpoint,
-        server::{RuntimeInterceptionBrokerError, RuntimeInterceptionBrokerServer},
+        server::RuntimeInterceptionBrokerServer,
         wire::{envelope_with_token, read_frame_from_stream, write_frame_to_stream},
     };
+    use crate::RuntimeInterceptionBrokerError;
 
     pub(in crate::runtime_interception_broker) struct Platform;
 
@@ -79,18 +80,15 @@ mod unix {
                 .join("erebor-runtime")
                 .join("interception")
                 .join(std::process::id().to_string());
-            fs::create_dir_all(&directory).map_err(RuntimeInterceptionBrokerError::io)?;
+            fs::create_dir_all(&directory).context(BrokerIoSnafu)?;
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-                .map_err(RuntimeInterceptionBrokerError::io)?;
+                .context(BrokerIoSnafu)?;
             let socket_path = directory.join(RUNTIME_INTERCEPTION_SOCKET_NAME);
             let _result = fs::remove_file(&socket_path);
-            let listener =
-                UnixListener::bind(&socket_path).map_err(RuntimeInterceptionBrokerError::io)?;
+            let listener = UnixListener::bind(&socket_path).context(BrokerIoSnafu)?;
             fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
-                .map_err(RuntimeInterceptionBrokerError::io)?;
-            listener
-                .set_nonblocking(true)
-                .map_err(RuntimeInterceptionBrokerError::io)?;
+                .context(BrokerIoSnafu)?;
+            listener.set_nonblocking(true).context(BrokerIoSnafu)?;
             let shutdown = Arc::new(AtomicBool::new(false));
             let worker_shutdown = Arc::clone(&shutdown);
             let worker = thread::spawn(move || {
@@ -125,29 +123,26 @@ mod unix {
             endpoint: &RuntimeInterceptionEndpoint,
             hello: GuardHello,
         ) -> Result<GuardHelloAck, RuntimeInterceptionBrokerError> {
-            let mut stream =
-                UnixStream::connect(endpoint.path()).map_err(RuntimeInterceptionBrokerError::io)?;
+            let mut stream = UnixStream::connect(endpoint.path()).context(BrokerIoSnafu)?;
             stream
                 .set_read_timeout(Some(endpoint.timeout()))
-                .map_err(RuntimeInterceptionBrokerError::io)?;
+                .context(BrokerIoSnafu)?;
             stream
                 .set_write_timeout(Some(endpoint.timeout()))
-                .map_err(RuntimeInterceptionBrokerError::io)?;
+                .context(BrokerIoSnafu)?;
             let envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)
-                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+                .context(BrokerProtocolSnafu)?;
             let request = envelope_with_token(envelope, endpoint.token());
-            let request_frame = request
-                .into_frame()
-                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+            let request_frame = request.into_frame().context(BrokerProtocolSnafu)?;
             write_frame_to_stream(&mut stream, &request_frame)?;
 
             let response_frame = read_frame_from_stream(&mut stream)?;
             let response_envelope: Envelope = response_frame
                 .decode_payload()
-                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+                .context(BrokerProtocolSnafu)?;
             response_envelope
                 .decode_typed_payload(KIND_GUARD_HELLO_ACK)
-                .map_err(RuntimeInterceptionBrokerError::protocol)
+                .context(BrokerProtocolSnafu)
         }
 
         fn request_interception_decision(
@@ -155,51 +150,46 @@ mod unix {
             hello: GuardHello,
             request: InterceptionRequest,
         ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
-            let mut stream =
-                UnixStream::connect(endpoint.path()).map_err(RuntimeInterceptionBrokerError::io)?;
+            let mut stream = UnixStream::connect(endpoint.path()).context(BrokerIoSnafu)?;
             stream
                 .set_read_timeout(Some(endpoint.timeout()))
-                .map_err(RuntimeInterceptionBrokerError::io)?;
+                .context(BrokerIoSnafu)?;
             stream
                 .set_write_timeout(Some(endpoint.timeout()))
-                .map_err(RuntimeInterceptionBrokerError::io)?;
+                .context(BrokerIoSnafu)?;
 
             let hello_envelope = Envelope::wrap_message(1, 0, KIND_GUARD_HELLO, &hello)
-                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+                .context(BrokerProtocolSnafu)?;
             let hello_request = envelope_with_token(hello_envelope, endpoint.token());
             write_frame_to_stream(
                 &mut stream,
-                &hello_request
-                    .into_frame()
-                    .map_err(RuntimeInterceptionBrokerError::protocol)?,
+                &hello_request.into_frame().context(BrokerProtocolSnafu)?,
             )?;
             let hello_response_frame = read_frame_from_stream(&mut stream)?;
             let hello_response: Envelope = hello_response_frame
                 .decode_payload()
-                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+                .context(BrokerProtocolSnafu)?;
             let ack: GuardHelloAck = hello_response
                 .decode_typed_payload(KIND_GUARD_HELLO_ACK)
-                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+                .context(BrokerProtocolSnafu)?;
             if !ack.accepted {
-                return Err(RuntimeInterceptionBrokerError::RejectedHello { reason: ack.reason });
+                return BrokerRejectedHelloSnafu { reason: ack.reason }.fail();
             }
 
             let request_envelope =
                 Envelope::wrap_message(2, 1, KIND_INTERCEPTION_REQUEST, &request)
-                    .map_err(RuntimeInterceptionBrokerError::protocol)?;
+                    .context(BrokerProtocolSnafu)?;
             write_frame_to_stream(
                 &mut stream,
-                &request_envelope
-                    .into_frame()
-                    .map_err(RuntimeInterceptionBrokerError::protocol)?,
+                &request_envelope.into_frame().context(BrokerProtocolSnafu)?,
             )?;
             let response_frame = read_frame_from_stream(&mut stream)?;
             let response_envelope: Envelope = response_frame
                 .decode_payload()
-                .map_err(RuntimeInterceptionBrokerError::protocol)?;
+                .context(BrokerProtocolSnafu)?;
             response_envelope
                 .decode_typed_payload(KIND_INTERCEPTION_DECISION)
-                .map_err(RuntimeInterceptionBrokerError::protocol)
+                .context(BrokerProtocolSnafu)
         }
     }
 
@@ -233,9 +223,9 @@ mod windows {
     };
 
     use super::{RuntimeInterceptionBrokerPlatform, RuntimeInterceptionBrokerServerPlatform};
+    use crate::error::{BrokerUnsupportedTransportSnafu, RuntimeInterceptionBrokerError};
     use crate::runtime_interception_broker::{
-        endpoint::RuntimeInterceptionEndpoint,
-        server::{RuntimeInterceptionBrokerError, RuntimeInterceptionBrokerServer},
+        endpoint::RuntimeInterceptionEndpoint, server::RuntimeInterceptionBrokerServer,
     };
 
     pub(in crate::runtime_interception_broker) struct Platform;
@@ -265,9 +255,10 @@ mod windows {
     }
 
     fn unsupported<T>() -> Result<T, RuntimeInterceptionBrokerError> {
-        Err(RuntimeInterceptionBrokerError::UnsupportedTransport {
+        BrokerUnsupportedTransportSnafu {
             transport: String::from("windows-named-pipe"),
-        })
+        }
+        .fail()
     }
 }
 

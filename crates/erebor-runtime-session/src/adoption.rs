@@ -4,9 +4,16 @@ use erebor_runtime_core::{
     RuntimeConfig, SessionAdoptPlan, SessionAdoptTarget, SessionRunOutcome, SessionRunnerKind,
 };
 use erebor_runtime_events::SessionId;
-use snafu::Location;
+use snafu::{Location, ResultExt};
 
-use crate::{session_run::SessionExecutionService, SessionExecutionError};
+use crate::{
+    error::{
+        AdoptMatchAmbiguousSnafu, AdoptMatchNotFoundSnafu, InvalidAdoptTargetSnafu,
+        InvalidConfigSnafu,
+    },
+    session_run::SessionExecutionService,
+    SessionExecutionError,
+};
 
 pub struct SessionAdoptionService;
 
@@ -29,7 +36,7 @@ impl SessionAdoptionService {
     ) -> Result<SessionAdoptPlan, SessionExecutionError> {
         let pid = SessionAdoptTargetResolver::for_proc_root(Path::new("/proc")).resolve(&target)?;
         SessionAdoptPlan::from_config(config, runner_kind, session_id, pid)
-            .map_err(SessionExecutionError::invalid_config)
+            .context(InvalidConfigSnafu)
     }
 }
 
@@ -52,15 +59,19 @@ impl<'a> SessionAdoptTargetResolver<'a> {
     fn resolve_process_match(&self, pattern: &str) -> Result<i32, SessionExecutionError> {
         let candidates = self.matching_processes(pattern)?;
         match candidates.as_slice() {
-            [] => Err(SessionExecutionError::adopt_match_not_found(pattern)),
+            [] => AdoptMatchNotFoundSnafu {
+                pattern: pattern.to_owned(),
+            }
+            .fail(),
             [candidate] => Ok(candidate.pid),
-            _ => Err(SessionExecutionError::adopt_match_ambiguous(
-                pattern,
-                candidates
+            _ => AdoptMatchAmbiguousSnafu {
+                pattern: pattern.to_owned(),
+                matches: candidates
                     .iter()
                     .map(ProcessMatch::display)
                     .collect::<Vec<_>>(),
-            )),
+            }
+            .fail(),
         }
     }
 
@@ -70,9 +81,10 @@ impl<'a> SessionAdoptTargetResolver<'a> {
     ) -> Result<Vec<ProcessMatch>, SessionExecutionError> {
         let pattern = pattern.trim();
         if pattern.is_empty() {
-            return Err(SessionExecutionError::invalid_adopt_target(
-                "process match pattern cannot be empty",
-            ));
+            return InvalidAdoptTargetSnafu {
+                reason: String::from("process match pattern cannot be empty"),
+            }
+            .fail();
         }
 
         let entries =
