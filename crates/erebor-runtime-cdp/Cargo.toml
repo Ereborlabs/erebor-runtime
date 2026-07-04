@@ -12,13 +12,13 @@ erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
+erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
 futures-util.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 snafu.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 erebor-runtime-e2e = { path = "../erebor-runtime-e2e" }

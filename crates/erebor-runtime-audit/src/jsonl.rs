@@ -5,8 +5,8 @@ use std::{
 };
 
 use erebor_runtime_core::{AuditError, AuditRecord, AuditSink};
+use erebor_runtime_telemetry::debug;
 use snafu::{Location, ResultExt};
-use tracing::debug;
 
 use crate::error::{
     AuditInvalidRecordSnafu, AuditOpenSnafu, AuditReadSnafu, AuditSerializeRecordSnafu,
@@ -47,6 +47,7 @@ pub fn append_audit_record(
     let path = path.as_ref();
     debug!(
         path = %path.display(),
+        session_id = %record.event.session_id.as_str(),
         event_id = record.event.id.as_str(),
         "appending audit record"
     );

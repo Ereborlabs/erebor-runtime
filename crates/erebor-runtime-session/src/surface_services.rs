@@ -2,6 +2,7 @@ use erebor_runtime_cdp::BrowserCdpSurface;
 use erebor_runtime_core::{
     SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
 };
+use erebor_runtime_telemetry::info;
 use snafu::ResultExt;
 
 use crate::{
@@ -28,7 +29,7 @@ impl SurfaceServiceRunner {
                     launcher.add_surface(surface);
                 }
                 SessionSurfaceDefinition::Terminal(_) => {
-                    tracing::info!(
+                    info!(
                         surface = SessionSurfaceKind::Terminal.as_str(),
                         "terminal/process surface is enforced by session runners and has no standalone service"
                     );
@@ -37,7 +38,7 @@ impl SurfaceServiceRunner {
         }
 
         if launcher.is_empty() {
-            tracing::info!(
+            info!(
                 control = %launch_plan.control_listen(),
                 surfaces = %Self::format_surfaces(launch_plan.surfaces().into_iter()),
                 "no long-lived session surface services to start"
@@ -46,7 +47,7 @@ impl SurfaceServiceRunner {
         }
 
         let supervisor = launcher.start().context(RuntimeSnafu)?;
-        tracing::info!(
+        info!(
             control = %supervisor.control_listen(),
             surfaces = %Self::format_surfaces(supervisor.running().iter().map(erebor_runtime_core::RunningSessionSurface::surface)),
             endpoints = %Self::format_endpoints(supervisor.running()),

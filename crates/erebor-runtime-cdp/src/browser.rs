@@ -13,10 +13,10 @@ use erebor_runtime_core::{
 };
 use erebor_runtime_events::{ActorIdentity, SessionId};
 use erebor_runtime_policy::PolicySet;
+use erebor_runtime_telemetry::{debug, info};
 use serde::Deserialize;
 use snafu::ResultExt;
 use tokio_tungstenite::tungstenite::{connect, Message};
-use tracing::{debug, info};
 
 use crate::{
     error::{BrowserLaunchSnafu, InvalidJsonSnafu, InvalidProtocolSnafu, IoSnafu, WebSocketSnafu},
@@ -114,6 +114,7 @@ impl BrowserSessionManager {
         };
 
         info!(
+            session_id = %metadata.session_id.as_str(),
             endpoint = %public_endpoint,
             owned_browser = metadata.owned_browser,
             lease_id = %lease_id,

@@ -5,6 +5,7 @@ use std::{
 };
 
 use erebor_runtime_events::{ActorKind, SessionId};
+use erebor_runtime_telemetry::info;
 use serde::{Deserialize, Serialize};
 use snafu::{Location, ResultExt};
 
@@ -93,8 +94,8 @@ impl SessionRegistry {
             failure: None,
         };
         self.write_record(&record)?;
-        tracing::info!(
-            session = %record.session_id,
+        info!(
+            session_id = %record.session_id,
             registry = %self.root.display(),
             audit = %record.audit_path.display(),
             "created session registry record"
@@ -114,8 +115,8 @@ impl SessionRegistry {
         record.exit_code = update.exit_code;
         record.failure = update.failure;
         self.write_record(&record)?;
-        tracing::info!(
-            session = %record.session_id,
+        info!(
+            session_id = %record.session_id,
             status = record.status.as_str(),
             exit_code = ?record.exit_code,
             "updated session registry record"

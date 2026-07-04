@@ -10,6 +10,7 @@ use erebor_runtime_events::{
     ActionKind, EventId, ExecutionSurface, RiskLevel, RiskMetadata, TargetRef,
 };
 use erebor_runtime_policy::{Decision, PolicySet};
+use erebor_runtime_telemetry::{debug, info, warn};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -22,7 +23,6 @@ use tokio_tungstenite::{
     tungstenite::{Error as WebSocketError, Message},
     MaybeTlsStream, WebSocketStream,
 };
-use tracing::{debug, info, warn};
 
 use crate::{
     decode_cdp_command, decode_cdp_event, enforce_cdp_command_with_client_state_outcome,
@@ -64,9 +64,11 @@ impl CdpAuditRecorder {
     fn record(&self, record: &AuditRecord) {
         if let Err(error) = self.sink.record(record) {
             warn!(
+                error;
+                "failed to append CDP audit record",
                 path = %self.sink.inner().path().display(),
-                error = %error,
-                "failed to append CDP audit record"
+                session_id = %record.event.session_id.as_str(),
+                event_id = %record.event.id.as_str()
             );
         }
     }
@@ -105,6 +107,7 @@ impl CdpProxyServer {
 
         info!(
             listen = %local_addr,
+            session_id = %config.context.session_id.as_str(),
             "CDP proxy server bound"
         );
 
@@ -166,7 +169,11 @@ impl CdpProxyServer {
 
     pub async fn run(self) -> Result<(), CdpError> {
         let local_addr = self.local_addr()?;
-        info!(listen = %local_addr, "CDP proxy server accepting connections");
+        info!(
+            listen = %local_addr,
+            session_id = %self.context.session_id.as_str(),
+            "CDP proxy server accepting connections"
+        );
 
         loop {
             let (stream, address) = self.listener.accept().await.context(IoSnafu)?;
@@ -175,7 +182,12 @@ impl CdpProxyServer {
             let context = self.context.clone();
             let session_state = self.session_state.clone();
             let audit_recorder = self.audit_recorder.clone();
-            debug!(client = %address, "accepted CDP proxy connection");
+            let session_id = context.session_id.as_str().to_owned();
+            debug!(
+                client = %address,
+                session_id = %session_id,
+                "accepted CDP proxy connection"
+            );
             let handle = tokio::spawn(async move {
                 match handle_client_connection(
                     stream,
@@ -188,12 +200,17 @@ impl CdpProxyServer {
                 )
                 .await
                 {
-                    Ok(()) => debug!(client = %address, "CDP proxy connection closed"),
+                    Ok(()) => debug!(
+                        client = %address,
+                        session_id = %session_id,
+                        "CDP proxy connection closed"
+                    ),
                     Err(error) => {
                         warn!(
+                            error;
+                            "CDP proxy connection failed",
                             client = %address,
-                            error = %error,
-                            "CDP proxy connection failed"
+                            session_id = %session_id
                         );
                     }
                 }
@@ -557,9 +574,16 @@ async fn proxy_connection(
     session_state: CdpSessionState,
     audit_recorder: Option<CdpAuditRecorder>,
 ) -> Result<(), CdpError> {
-    debug!("accepting client websocket");
+    debug!(
+        session_id = %context.session_id.as_str(),
+        "accepting client websocket"
+    );
     let client_socket = accept_async(stream).await.map_err(websocket_error)?;
-    debug!(browser_url = %browser_url, "connecting to upstream CDP websocket");
+    debug!(
+        browser_url = %browser_url,
+        session_id = %context.session_id.as_str(),
+        "connecting to upstream CDP websocket"
+    );
     let (browser_socket, _response) = connect_async(browser_url.as_str())
         .await
         .map_err(websocket_error)?;
@@ -671,11 +695,16 @@ async fn run_browser_state_observer(
         )
         .await
         {
-            Ok(()) => warn!(browser_url = %browser_url, "browser state observer stopped"),
-            Err(error) => warn!(
+            Ok(()) => warn!(
+                "browser state observer stopped",
                 browser_url = %browser_url,
-                error = %error,
-                "browser state observer failed"
+                session_id = %context.session_id.as_str()
+            ),
+            Err(error) => warn!(
+                error;
+                "browser state observer failed",
+                browser_url = %browser_url,
+                session_id = %context.session_id.as_str()
             ),
         }
 
@@ -876,11 +905,16 @@ async fn run_page_state_observer(
         )
         .await
         {
-            Ok(()) => warn!(browser_url = %browser_url, "page state observer stopped"),
-            Err(error) => warn!(
+            Ok(()) => warn!(
+                "page state observer stopped",
                 browser_url = %browser_url,
-                error = %error,
-                "page state observer failed"
+                session_id = %context.session_id.as_str()
+            ),
+            Err(error) => warn!(
+                error;
+                "page state observer failed",
+                browser_url = %browser_url,
+                session_id = %context.session_id.as_str()
             ),
         }
 
@@ -1131,10 +1165,16 @@ async fn handle_fetch_request_paused(
 
     let outcome = enforce_cdp_event_outcome(engine, context, event)?;
     record_audit_outcome(audit_recorder, outcome.audit_record());
+    let rule_id = outcome
+        .audit_record()
+        .and_then(|record| record.final_decision.rule_id())
+        .unwrap_or("none");
 
     match outcome.action() {
         CdpEnforcementAction::Forward => {
             debug!(
+                session_id = %context.session_id.as_str(),
+                method = %event.method(),
                 request_id = %paused.request_id,
                 url = %paused.url,
                 "continuing observed Fetch request"
@@ -1155,10 +1195,13 @@ async fn handle_fetch_request_paused(
             .await
         }
         CdpEnforcementAction::Block { reason } | CdpEnforcementAction::AwaitApproval { reason } => {
-            warn!(
+            info!(
+                session_id = %context.session_id.as_str(),
+                method = %event.method(),
                 request_id = %paused.request_id,
                 url = %paused.url,
                 reason = %reason,
+                rule_id = %rule_id,
                 "failing observed Fetch request"
             );
             send_internal_target_method(
@@ -1388,12 +1431,17 @@ fn audit_state_recovery(
 
     if let Some(error) = engine.record_audit_record(&record) {
         warn!(
-            trigger,
-            error = %error,
-            "failed to audit CDP state recovery"
+            error;
+            "failed to audit CDP state recovery",
+            trigger = %trigger,
+            session_id = %context.session_id.as_str()
         );
     } else {
-        debug!(trigger, "audited CDP state recovery");
+        debug!(
+            "audited CDP state recovery",
+            trigger = %trigger,
+            session_id = %context.session_id.as_str()
+        );
     }
 
     record_audit_outcome(audit_recorder, Some(&record));
@@ -1451,6 +1499,10 @@ fn handle_client_text_with_audit(
         Some(client_targets),
     )?;
     record_audit_outcome(audit_recorder, outcome.audit_record());
+    let rule_id = outcome
+        .audit_record()
+        .and_then(|record| record.final_decision.rule_id())
+        .unwrap_or("none");
 
     match outcome.action() {
         CdpEnforcementAction::Forward => {
@@ -1463,6 +1515,7 @@ fn handle_client_text_with_audit(
                 );
             }
             debug!(
+                session_id = %context.session_id.as_str(),
                 method = %command.method,
                 id = ?command.id,
                 "forwarding CDP command"
@@ -1472,10 +1525,12 @@ fn handle_client_text_with_audit(
             })
         }
         CdpEnforcementAction::Block { reason } => {
-            warn!(
+            info!(
+                session_id = %context.session_id.as_str(),
                 method = %command.method,
                 id = ?command.id,
                 reason = %reason,
+                rule_id = %rule_id,
                 "blocking CDP command"
             );
             Ok(ClientTextAction::Reply {
@@ -1484,9 +1539,11 @@ fn handle_client_text_with_audit(
         }
         CdpEnforcementAction::AwaitApproval { reason } => {
             info!(
+                session_id = %context.session_id.as_str(),
                 method = %command.method,
                 id = ?command.id,
                 reason = %reason,
+                rule_id = %rule_id,
                 "holding CDP command for approval"
             );
             Ok(ClientTextAction::HoldForApproval)
@@ -1508,6 +1565,7 @@ fn observe_browser_event_text(
     session_state.record_browser_event_for_client_session(&event, client_targets);
     let runtime_event = observe_cdp_event(context, &event)?;
     debug!(
+        session_id = %context.session_id.as_str(),
         method = %event.method(),
         event_id = %runtime_event.id.as_str(),
         "observed CDP context message"

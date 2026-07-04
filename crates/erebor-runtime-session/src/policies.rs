@@ -4,6 +4,7 @@ use std::{
 };
 
 use erebor_runtime_policy::{LocalPolicy, PolicySet};
+use erebor_runtime_telemetry::debug;
 use snafu::ResultExt;
 
 use crate::{
@@ -12,7 +13,7 @@ use crate::{
 };
 
 fn read_policy(path: &Path) -> Result<LocalPolicy, SessionExecutionError> {
-    tracing::debug!(path = %path.display(), "reading session policy");
+    debug!(path = %path.display(), "reading session policy");
     let source = fs::read_to_string(path).context(ReadPolicySnafu {
         path: path.to_path_buf(),
     })?;

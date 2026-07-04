@@ -3,9 +3,9 @@ use erebor_runtime_core::{
     SessionSurfaceFailure, SessionSurfaceFailureSender, SessionSurfaceKind, SessionSurfaceService,
 };
 use erebor_runtime_policy::PolicySet;
+use erebor_runtime_telemetry::{debug, info};
 use snafu::Location;
 use tokio::runtime::Runtime;
-use tracing::{debug, error, info};
 
 use crate::{BrowserSessionManager, CdpSessionContext};
 
@@ -88,16 +88,9 @@ impl SessionSurfaceService for BrowserCdpSurface {
                 location: Location::default(),
             })?;
         let endpoint = session.public_endpoint().to_owned();
-        let lease_id = session.lease_id().to_owned();
 
         let handle = runtime.spawn(async move {
             if let Err(error) = session.run().await {
-                error!(
-                    surface = surface.as_str(),
-                    lease_id = %lease_id,
-                    error = %error,
-                    "browser CDP session surface failed"
-                );
                 let _result = failures.send(SessionSurfaceFailure::new(surface, error.to_string()));
             }
         });

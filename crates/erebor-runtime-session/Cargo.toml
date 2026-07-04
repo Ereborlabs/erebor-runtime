@@ -13,9 +13,9 @@ erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 erebor-runtime-terminal = { path = "../erebor-runtime-terminal" }
+erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
 snafu.workspace = true
 tokio.workspace = true
-tracing.workspace = true
 
 [features]
 # Expose the standalone process guard to rust-analyzer without changing the

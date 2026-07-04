@@ -1,7 +1,7 @@
 use std::{io, process::Command as ProcessCommand, thread, time::Duration};
 
+use erebor_runtime_telemetry::info;
 use snafu::ResultExt;
-use tracing::info;
 
 use crate::error::{
     SessionRunnerExitSnafu, SessionRunnerLaunchSnafu, UnsupportedSessionRunnerOperationSnafu,
@@ -201,8 +201,9 @@ impl SessionRunner for DockerSessionRunner {
         let launch =
             DockerSessionCommandPlan::from_session_run_plan_with_environment(plan, environment);
         info!(
-            session = %plan.session_id().as_str(),
+            session_id = %plan.session_id().as_str(),
             actor = %plan.actor().id,
+            runner = %self.kind().as_str(),
             image = %plan.runner().docker().image(),
             tty = plan.tty(),
             "launching Docker/OCI session runner"
@@ -281,8 +282,9 @@ impl DockerSessionRunner {
             options,
         );
         info!(
-            session = %plan.session_id().as_str(),
+            session_id = %plan.session_id().as_str(),
             actor = %plan.actor().id,
+            runner = %self.kind().as_str(),
             image = %plan.runner().docker().image(),
             tty = plan.tty(),
             guarded = true,
@@ -376,8 +378,9 @@ impl LinuxHostSessionRunner {
                 options,
             );
         info!(
-            session = %plan.session_id().as_str(),
+            session_id = %plan.session_id().as_str(),
             actor = %plan.actor().id,
+            runner = %self.kind().as_str(),
             program = %launch.program(),
             tty = plan.tty(),
             "launching Linux host session runner"
@@ -443,8 +446,9 @@ impl LinuxHostSessionRunner {
                 options,
             );
         info!(
-            session = %plan.session_id().as_str(),
+            session_id = %plan.session_id().as_str(),
             actor = %plan.actor().id,
+            runner = %self.kind().as_str(),
             pid = plan.pid(),
             program = %launch.program(),
             "adopting process into Linux host session runner"

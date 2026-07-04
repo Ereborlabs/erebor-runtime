@@ -4,9 +4,9 @@ use std::{
     sync::mpsc::{self, Receiver, Sender},
 };
 
+use erebor_runtime_telemetry::{debug, info};
 use snafu::ResultExt;
 use tokio::runtime::Runtime;
-use tracing::{debug, error, info};
 
 use crate::error::{
     BuildAsyncRuntimeSnafu, NoSessionSurfaceServicesSnafu, SurfaceExitedSnafu,
@@ -122,11 +122,6 @@ impl SessionSurfaceSupervisor {
             Err(_error) => return NoSessionSurfaceServicesSnafu.fail(),
         };
 
-        error!(
-            surface = failure.surface.as_str(),
-            reason = %failure.reason,
-            "session surface exited"
-        );
         SurfaceExitedSnafu {
             surface: failure.surface.as_str().to_owned(),
             reason: failure.reason,

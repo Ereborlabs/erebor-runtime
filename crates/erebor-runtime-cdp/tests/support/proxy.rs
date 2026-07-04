@@ -6,8 +6,8 @@ use erebor_runtime_e2e::{
     MiniSystem,
 };
 use erebor_runtime_policy::{LocalPolicy, PolicySet};
+use erebor_runtime_telemetry::error;
 use serde_json::Value;
-use tracing::error;
 
 pub use crate::common::{
     allow_all_policy, deny_script_eval_policy, real_chrome_available,
@@ -126,7 +126,7 @@ async fn spawn_proxy_server(
 
     system.spawn("cdp-proxy-server", async move {
         if let Err(error) = server.run().await {
-            error!(error = %error, "CDP e2e proxy server exited");
+            error!(%error; "CDP e2e proxy server exited");
         }
     });
 
