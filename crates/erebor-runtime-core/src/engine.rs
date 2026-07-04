@@ -1,9 +1,10 @@
+use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use erebor_runtime_events::RuntimeEvent;
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
 use serde::{Deserialize, Serialize};
-use snafu::Location;
-use thiserror::Error;
+use snafu::{Location, ResultExt, Snafu};
 
+use crate::error::PolicySnafu;
 use crate::RuntimeError;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -43,19 +44,28 @@ pub enum ApprovalResponse {
     Unavailable { reason: String },
 }
 
-#[derive(Clone, Debug, Error)]
+#[derive(Clone, Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum ApprovalError {
-    #[error("approval provider unavailable: {reason}")]
-    Unavailable { reason: String, location: Location },
+    #[snafu(display("approval provider unavailable: {reason}"))]
+    ProviderUnavailable {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
-impl ApprovalError {
-    #[track_caller]
-    pub fn unavailable(reason: impl Into<String>) -> Self {
-        Self::Unavailable {
-            reason: reason.into(),
-            location: Location::default(),
-        }
+impl ErrorExt for ApprovalError {
+    fn status_code(&self) -> StatusCode {
+        StatusCode::Unavailable
+    }
+
+    fn retry_hint(&self) -> RetryHint {
+        RetryHint::NonRetryable
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -90,19 +100,28 @@ impl AuditSink for NoopAuditSink {
     }
 }
 
-#[derive(Clone, Debug, Error)]
+#[derive(Clone, Debug, Snafu)]
+#[snafu(visibility(pub(crate)))]
 pub enum AuditError {
-    #[error("audit sink unavailable: {reason}")]
-    Unavailable { reason: String, location: Location },
+    #[snafu(display("audit sink unavailable: {reason}"))]
+    SinkUnavailable {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
-impl AuditError {
-    #[track_caller]
-    pub fn unavailable(reason: impl Into<String>) -> Self {
-        Self::Unavailable {
-            reason: reason.into(),
-            location: Location::default(),
-        }
+impl ErrorExt for AuditError {
+    fn status_code(&self) -> StatusCode {
+        StatusCode::Unavailable
+    }
+
+    fn retry_hint(&self) -> RetryHint {
+        RetryHint::NonRetryable
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -168,10 +187,7 @@ where
         event: &RuntimeEvent,
         approval_mode: ApprovalMode,
     ) -> Result<EnforcementOutcome, RuntimeError> {
-        let policy_decision = self
-            .evaluator
-            .evaluate(event)
-            .map_err(RuntimeError::policy)?;
+        let policy_decision = self.evaluator.evaluate(event).context(PolicySnafu)?;
         let final_decision = self.resolve_decision(event, &policy_decision, approval_mode);
         let mut outcome = EnforcementOutcome {
             event: event.clone(),
@@ -219,10 +235,12 @@ where
                         Ok(ApprovalResponse::Denied { reason })
                         | Ok(ApprovalResponse::TimedOut { reason })
                         | Ok(ApprovalResponse::Unavailable { reason })
-                        | Err(ApprovalError::Unavailable { reason, .. }) => Decision::Deny {
-                            reason,
-                            rule_id: rule_id.clone(),
-                        },
+                        | Err(ApprovalError::ProviderUnavailable { reason, .. }) => {
+                            Decision::Deny {
+                                reason,
+                                rule_id: rule_id.clone(),
+                            }
+                        }
                     }
                 }
             },

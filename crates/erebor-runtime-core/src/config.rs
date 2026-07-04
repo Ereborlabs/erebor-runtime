@@ -6,7 +6,17 @@ use std::{
 
 use erebor_runtime_events::{ActorKind, SessionId};
 use serde::{Deserialize, Serialize};
+use snafu::{ensure, OptionExt, ResultExt};
 
+use crate::error::{
+    BrowserCdpInvalidBrowserUrlSnafu, DuplicateSessionDiagnosticNameSnafu,
+    EmptyAuditDebugMatcherSnafu, EmptyConfigSnafu, EmptyDockerSessionImageSnafu,
+    EmptyDockerSessionNetworkSnafu, EmptyPolicyPathSnafu, EmptySessionActorIdSnafu,
+    EmptySessionCommandSnafu, EmptySessionDiagnosticCommandSnafu, EmptySessionDiagnosticNameSnafu,
+    EmptySessionWorkspaceSnafu, InvalidJsonSnafu, InvalidProcessMediationConfigSnafu,
+    InvalidSessionAdoptPidSnafu, InvalidSessionInterceptionConfigSnafu, MissingPolicySnafu,
+    NoSessionSurfacesSnafu, UnknownSessionDiagnosticSnafu,
+};
 use crate::{RuntimeConfigError, DEFAULT_SESSION_REGISTRY_PATH};
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
@@ -22,41 +32,36 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     pub fn from_json_str(source: &str) -> Result<Self, RuntimeConfigError> {
-        if source.trim().is_empty() {
-            return Err(RuntimeConfigError::empty_config());
-        }
+        ensure!(!source.trim().is_empty(), EmptyConfigSnafu);
 
-        let config: Self =
-            serde_json::from_str(source).map_err(RuntimeConfigError::invalid_json)?;
+        let config: Self = serde_json::from_str(source).context(InvalidJsonSnafu)?;
         config.validate()?;
 
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<(), RuntimeConfigError> {
-        if self.policies.is_empty() {
-            return Err(RuntimeConfigError::missing_policy());
-        }
+        ensure!(!self.policies.is_empty(), MissingPolicySnafu);
 
-        if self
-            .policies
-            .iter()
-            .any(|policy| policy.as_os_str().is_empty())
-            || self
-                .surfaces
-                .browser_cdp
+        ensure!(
+            !self
                 .policies
                 .iter()
                 .any(|policy| policy.as_os_str().is_empty())
-            || self
-                .surfaces
-                .terminal
-                .policies
-                .iter()
-                .any(|policy| policy.as_os_str().is_empty())
-        {
-            return Err(RuntimeConfigError::empty_policy_path());
-        }
+                && !self
+                    .surfaces
+                    .browser_cdp
+                    .policies
+                    .iter()
+                    .any(|policy| policy.as_os_str().is_empty())
+                && !self
+                    .surfaces
+                    .terminal
+                    .policies
+                    .iter()
+                    .any(|policy| policy.as_os_str().is_empty()),
+            EmptyPolicyPathSnafu
+        );
 
         self.audit.validate()?;
 
@@ -64,18 +69,19 @@ impl RuntimeConfig {
             self.session.validate()?;
         }
 
-        if self.surfaces.enabled_surfaces().is_empty()
-            && !self.session.enabled
-            && !self.session.interception.enabled
-        {
-            return Err(RuntimeConfigError::no_session_surfaces());
-        }
+        ensure!(
+            !(self.surfaces.enabled_surfaces().is_empty()
+                && !self.session.enabled
+                && !self.session.interception.enabled),
+            NoSessionSurfacesSnafu
+        );
 
         if self.surfaces.browser_cdp.enabled {
             if let Some(browser_url) = self.surfaces.browser_cdp.browser_url.as_deref() {
-                if !browser_url.starts_with("ws://") {
-                    return Err(RuntimeConfigError::browser_cdp_invalid_browser_url());
-                }
+                ensure!(
+                    browser_url.starts_with("ws://"),
+                    BrowserCdpInvalidBrowserUrlSnafu
+                );
             }
         }
 
@@ -614,11 +620,12 @@ fn validate_debug_values(
     field: &str,
     values: &[String],
 ) -> Result<(), RuntimeConfigError> {
-    if values.iter().any(|value| value.trim().is_empty()) {
-        return Err(RuntimeConfigError::empty_audit_debug_matcher(format!(
-            "{surface}.{field}"
-        )));
-    }
+    ensure!(
+        !values.iter().any(|value| value.trim().is_empty()),
+        EmptyAuditDebugMatcherSnafu {
+            matcher: format!("{surface}.{field}")
+        }
+    );
     Ok(())
 }
 
@@ -641,26 +648,25 @@ pub struct SessionLayerConfig {
 
 impl SessionLayerConfig {
     fn validate(&self) -> Result<(), RuntimeConfigError> {
-        if self.actor.id.trim().is_empty() {
-            return Err(RuntimeConfigError::empty_session_actor_id());
-        }
+        ensure!(!self.actor.id.trim().is_empty(), EmptySessionActorIdSnafu);
 
-        if self
-            .workspace
-            .as_ref()
-            .is_some_and(|path| path.as_os_str().is_empty())
-        {
-            return Err(RuntimeConfigError::empty_session_workspace());
-        }
+        ensure!(
+            !self
+                .workspace
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty()),
+            EmptySessionWorkspaceSnafu
+        );
 
         let mut diagnostics = HashSet::new();
         for diagnostic in &self.diagnostics {
             diagnostic.validate()?;
-            if !diagnostics.insert(diagnostic.name.clone()) {
-                return Err(RuntimeConfigError::duplicate_session_diagnostic_name(
-                    diagnostic.name.clone(),
-                ));
-            }
+            ensure!(
+                diagnostics.insert(diagnostic.name.clone()),
+                DuplicateSessionDiagnosticNameSnafu {
+                    name: diagnostic.name.clone()
+                }
+            );
         }
 
         self.interception.validate()?;
@@ -696,11 +702,14 @@ impl Default for SessionInterceptionLayerConfig {
 
 impl SessionInterceptionLayerConfig {
     fn validate(&self) -> Result<(), RuntimeConfigError> {
-        if self.enabled && self.operations.is_empty() {
-            return Err(RuntimeConfigError::invalid_session_interception_config(
-                "session interception operations cannot be empty when interception is enabled",
-            ));
-        }
+        ensure!(
+            !(self.enabled && self.operations.is_empty()),
+            InvalidSessionInterceptionConfigSnafu {
+                reason: String::from(
+                    "session interception operations cannot be empty when interception is enabled"
+                )
+            }
+        );
 
         Ok(())
     }
@@ -905,20 +914,21 @@ pub struct SessionDiagnosticLayerConfig {
 
 impl SessionDiagnosticLayerConfig {
     fn validate(&self) -> Result<(), RuntimeConfigError> {
-        if self.name.trim().is_empty() {
-            return Err(RuntimeConfigError::empty_session_diagnostic_name());
-        }
+        ensure!(
+            !self.name.trim().is_empty(),
+            EmptySessionDiagnosticNameSnafu
+        );
 
-        if self.command.is_empty()
-            || self
-                .command
-                .iter()
-                .any(|argument| argument.trim().is_empty())
-        {
-            return Err(RuntimeConfigError::empty_session_diagnostic_command(
-                self.name.clone(),
-            ));
-        }
+        ensure!(
+            !(self.command.is_empty()
+                || self
+                    .command
+                    .iter()
+                    .any(|argument| argument.trim().is_empty())),
+            EmptySessionDiagnosticCommandSnafu {
+                name: self.name.clone()
+            }
+        );
 
         Ok(())
     }
@@ -992,13 +1002,12 @@ impl Default for DockerSessionRunnerLayerConfig {
 
 impl DockerSessionRunnerLayerConfig {
     fn validate(&self) -> Result<(), RuntimeConfigError> {
-        if self.image.trim().is_empty() {
-            return Err(RuntimeConfigError::empty_docker_session_image());
-        }
+        ensure!(!self.image.trim().is_empty(), EmptyDockerSessionImageSnafu);
 
-        if self.network.trim().is_empty() {
-            return Err(RuntimeConfigError::empty_docker_session_network());
-        }
+        ensure!(
+            !self.network.trim().is_empty(),
+            EmptyDockerSessionNetworkSnafu
+        );
 
         Ok(())
     }
@@ -1028,9 +1037,7 @@ impl SessionRunPlan {
     ) -> Result<Self, RuntimeConfigError> {
         config.validate()?;
 
-        if command.is_empty() {
-            return Err(RuntimeConfigError::empty_session_command());
-        }
+        ensure!(!command.is_empty(), EmptySessionCommandSnafu);
 
         let mut runner = config.session.runner.clone();
         runner.kind = runtime_kind;
@@ -1062,10 +1069,13 @@ impl SessionRunPlan {
     ) -> Result<Self, RuntimeConfigError> {
         config.validate()?;
 
-        let diagnostic = config
-            .session
-            .diagnostic(diagnostic_name)
-            .ok_or_else(|| RuntimeConfigError::unknown_session_diagnostic(diagnostic_name))?;
+        let diagnostic =
+            config
+                .session
+                .diagnostic(diagnostic_name)
+                .context(UnknownSessionDiagnosticSnafu {
+                    name: diagnostic_name.to_string(),
+                })?;
         let mut plan =
             Self::from_config(config, runtime_kind, session_id, diagnostic.command.clone())?;
         plan.diagnostic = Some(diagnostic.name.clone());
@@ -1187,9 +1197,7 @@ impl SessionAdoptPlan {
     ) -> Result<Self, RuntimeConfigError> {
         config.validate()?;
 
-        if pid <= 0 {
-            return Err(RuntimeConfigError::invalid_session_adopt_pid());
-        }
+        ensure!(pid > 0, InvalidSessionAdoptPidSnafu);
 
         let mut runner = config.session.runner.clone();
         runner.kind = runtime_kind;
@@ -1893,35 +1901,41 @@ impl TerminalProcessMediationLayerConfig {
             return Ok(());
         }
 
-        if !terminal_enabled {
-            return Err(RuntimeConfigError::invalid_process_mediation_config(
-                "terminal surface must be enabled",
-            ));
-        }
+        ensure!(
+            terminal_enabled,
+            InvalidProcessMediationConfigSnafu {
+                reason: String::from("terminal surface must be enabled")
+            }
+        );
 
-        if !process_exec_interception_enabled {
-            return Err(RuntimeConfigError::invalid_process_mediation_config(
-                "terminal process interception requires session.interception process_exec support",
-            ));
-        }
+        ensure!(
+            process_exec_interception_enabled,
+            InvalidProcessMediationConfigSnafu {
+                reason: String::from(
+                    "terminal process interception requires session.interception process_exec support"
+                )
+            }
+        );
 
-        if self.handlers.is_empty() {
-            return Err(RuntimeConfigError::invalid_process_mediation_config(
-                "at least one process interception handler is required",
-            ));
-        }
+        ensure!(
+            !self.handlers.is_empty(),
+            InvalidProcessMediationConfigSnafu {
+                reason: String::from("at least one process interception handler is required")
+            }
+        );
 
         let mut ids = HashSet::new();
         for handler in &self.handlers {
             handler.validate(browser_cdp)?;
-            if !ids.insert(handler.id.clone()) {
-                return Err(RuntimeConfigError::invalid_process_mediation_config(
-                    format!(
+            ensure!(
+                ids.insert(handler.id.clone()),
+                InvalidProcessMediationConfigSnafu {
+                    reason: format!(
                         "process interception handler `{}` is duplicated",
                         handler.id
-                    ),
-                ));
-            }
+                    )
+                }
+            );
         }
 
         Ok(())
@@ -1981,11 +1995,12 @@ impl ProcessMediationHandlerLayerConfig {
         &self,
         browser_cdp: &BrowserCdpSurfaceLayerConfig,
     ) -> Result<(), RuntimeConfigError> {
-        if self.id.trim().is_empty() {
-            return Err(RuntimeConfigError::invalid_process_mediation_config(
-                "process interception handler id cannot be empty",
-            ));
-        }
+        ensure!(
+            !self.id.trim().is_empty(),
+            InvalidProcessMediationConfigSnafu {
+                reason: String::from("process interception handler id cannot be empty")
+            }
+        );
 
         self.matcher.validate(&self.id)?;
         self.requested_endpoint.validate(&self.id)?;
@@ -1993,39 +2008,41 @@ impl ProcessMediationHandlerLayerConfig {
         self.environment.validate(&self.id)?;
 
         if self.kind == ProcessMediationHandlerKind::ManagedBrowserCdp {
-            if self.replacement.surface != ProcessMediationReplacementSurface::BrowserCdp {
-                return Err(RuntimeConfigError::invalid_process_mediation_config(
-                    format!(
+            ensure!(
+                self.replacement.surface == ProcessMediationReplacementSurface::BrowserCdp,
+                InvalidProcessMediationConfigSnafu {
+                    reason: format!(
                         "handler `{}` kind managed_browser_cdp must replace with browser_cdp",
                         self.id
-                    ),
-                ));
-            }
+                    )
+                }
+            );
 
-            if !browser_cdp.enabled {
-                return Err(RuntimeConfigError::invalid_process_mediation_config(
-                    format!(
+            ensure!(
+                browser_cdp.enabled,
+                InvalidProcessMediationConfigSnafu {
+                    reason: format!(
                         "handler `{}` kind managed_browser_cdp requires browser_cdp surface enabled",
                         self.id
-                    ),
-                ));
-            }
+                    )
+                }
+            );
 
-            if !self.requested_endpoint.allowed_ports.is_empty()
-                && browser_cdp.listen.port() != 0
-                && !self
-                    .requested_endpoint
-                    .allowed_ports
-                    .contains(&browser_cdp.listen.port())
-            {
-                return Err(RuntimeConfigError::invalid_process_mediation_config(
-                    format!(
+            ensure!(
+                !(!self.requested_endpoint.allowed_ports.is_empty()
+                    && browser_cdp.listen.port() != 0
+                    && !self
+                        .requested_endpoint
+                        .allowed_ports
+                        .contains(&browser_cdp.listen.port())),
+                InvalidProcessMediationConfigSnafu {
+                    reason: format!(
                         "handler `{}` allowed_ports must include browser_cdp.listen port {}",
                         self.id,
                         browser_cdp.listen.port()
-                    ),
-                ));
-            }
+                    )
+                }
+            );
         }
 
         Ok(())
@@ -2059,31 +2076,34 @@ pub struct ProcessMediationMatcherLayerConfig {
 
 impl ProcessMediationMatcherLayerConfig {
     fn validate(&self, handler_id: &str) -> Result<(), RuntimeConfigError> {
-        if self.executables.is_empty() {
-            return Err(RuntimeConfigError::invalid_process_mediation_config(
-                format!("handler `{handler_id}` must include at least one executable matcher"),
-            ));
-        }
+        ensure!(
+            !self.executables.is_empty(),
+            InvalidProcessMediationConfigSnafu {
+                reason: format!(
+                    "handler `{handler_id}` must include at least one executable matcher"
+                )
+            }
+        );
 
-        if self
-            .executables
-            .iter()
-            .any(|executable| executable.trim().is_empty())
-        {
-            return Err(RuntimeConfigError::invalid_process_mediation_config(
-                format!("handler `{handler_id}` executable matchers cannot be empty"),
-            ));
-        }
+        ensure!(
+            !self
+                .executables
+                .iter()
+                .any(|executable| executable.trim().is_empty()),
+            InvalidProcessMediationConfigSnafu {
+                reason: format!("handler `{handler_id}` executable matchers cannot be empty")
+            }
+        );
 
-        if self
-            .required_args
-            .iter()
-            .any(|argument| argument.trim().is_empty())
-        {
-            return Err(RuntimeConfigError::invalid_process_mediation_config(
-                format!("handler `{handler_id}` required args cannot be empty"),
-            ));
-        }
+        ensure!(
+            !self
+                .required_args
+                .iter()
+                .any(|argument| argument.trim().is_empty()),
+            InvalidProcessMediationConfigSnafu {
+                reason: format!("handler `{handler_id}` required args cannot be empty")
+            }
+        );
 
         Ok(())
     }
@@ -2111,11 +2131,12 @@ impl Default for ProcessMediationRequestedEndpointLayerConfig {
 
 impl ProcessMediationRequestedEndpointLayerConfig {
     fn validate(&self, handler_id: &str) -> Result<(), RuntimeConfigError> {
-        if !self.bind.is_loopback() {
-            return Err(RuntimeConfigError::invalid_process_mediation_config(
-                format!("handler `{handler_id}` requested endpoint bind must be loopback"),
-            ));
-        }
+        ensure!(
+            self.bind.is_loopback(),
+            InvalidProcessMediationConfigSnafu {
+                reason: format!("handler `{handler_id}` requested endpoint bind must be loopback")
+            }
+        );
 
         Ok(())
     }
@@ -2170,13 +2191,15 @@ impl Default for ProcessMediationPrivateEndpointLayerConfig {
 
 impl ProcessMediationPrivateEndpointLayerConfig {
     fn validate(&self, handler_id: &str) -> Result<(), RuntimeConfigError> {
-        if self.port_strategy == ProcessMediationPrivatePortStrategy::RequestedPlusOffset
-            && self.port_offset == 0
-        {
-            return Err(RuntimeConfigError::invalid_process_mediation_config(
-                format!("handler `{handler_id}` private endpoint port_offset must be positive"),
-            ));
-        }
+        ensure!(
+            !((self.port_strategy == ProcessMediationPrivatePortStrategy::RequestedPlusOffset)
+                && self.port_offset == 0),
+            InvalidProcessMediationConfigSnafu {
+                reason: format!(
+                    "handler `{handler_id}` private endpoint port_offset must be positive"
+                )
+            }
+        );
 
         Ok(())
     }
@@ -2209,17 +2232,17 @@ impl Default for ProcessMediationEnvironmentLayerConfig {
 
 impl ProcessMediationEnvironmentLayerConfig {
     fn validate(&self, handler_id: &str) -> Result<(), RuntimeConfigError> {
-        if self
-            .executable_env
-            .iter()
-            .any(|variable| variable.trim().is_empty() || variable.contains('='))
-        {
-            return Err(RuntimeConfigError::invalid_process_mediation_config(
-                format!(
+        ensure!(
+            !self
+                .executable_env
+                .iter()
+                .any(|variable| variable.trim().is_empty() || variable.contains('=')),
+            InvalidProcessMediationConfigSnafu {
+                reason: format!(
                     "handler `{handler_id}` executable env names cannot be empty or contain `=`"
-                ),
-            ));
-        }
+                )
+            }
+        );
 
         Ok(())
     }
@@ -2705,11 +2728,8 @@ impl SessionSurfaceKind {
 }
 
 pub fn validate_policy_path(path: &Path) -> Result<(), RuntimeConfigError> {
-    if path.as_os_str().is_empty() {
-        Err(RuntimeConfigError::empty_policy_path())
-    } else {
-        Ok(())
-    }
+    ensure!(!path.as_os_str().is_empty(), EmptyPolicyPathSnafu);
+    Ok(())
 }
 
 fn default_browser_cdp_listen() -> SocketAddr {
@@ -2829,7 +2849,9 @@ mod tests {
     };
 
     use erebor_runtime_events::SessionId;
+    use snafu::OptionExt;
 
+    use crate::error::NoSessionSurfacesSnafu;
     use crate::{
         AuditCommandLogLevel, DockerSessionCommandPlan, LinuxHostSessionCommandOptions,
         LinuxHostSessionCommandPlan, ProcessInterceptionDecision, ProcessMediationEndpointSource,
@@ -2969,17 +2991,17 @@ mod tests {
             .operations()
             .iter()
             .find(|operation| operation.operation() == SessionInterceptionOperation::ProcessExec)
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+            .context(NoSessionSurfacesSnafu)?;
         let file_read = capabilities
             .operations()
             .iter()
             .find(|operation| operation.operation() == SessionInterceptionOperation::FileRead)
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+            .context(NoSessionSurfacesSnafu)?;
         let socket_connect = capabilities
             .operations()
             .iter()
             .find(|operation| operation.operation() == SessionInterceptionOperation::SocketConnect)
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+            .context(NoSessionSurfacesSnafu)?;
 
         assert!(process_exec.backend_supported());
         assert!(!process_exec.surface_enabled());
@@ -3094,13 +3116,13 @@ mod tests {
         let terminal = config
             .surface_start_plan()?
             .terminal()
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?
+            .context(NoSessionSurfacesSnafu)?
             .clone();
         let interception = terminal.process_interception();
         let handler = interception
             .handlers()
             .first()
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+            .context(NoSessionSurfacesSnafu)?;
 
         assert!(interception.enabled());
         assert_eq!(interception.mode(), TerminalProcessMediationMode::Shim);
@@ -3176,16 +3198,14 @@ mod tests {
         )?;
 
         let start_plan = config.surface_start_plan()?;
-        let browser = start_plan
-            .browser_cdp()
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+        let browser = start_plan.browser_cdp().context(NoSessionSurfacesSnafu)?;
         let handler = start_plan
             .terminal()
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?
+            .context(NoSessionSurfacesSnafu)?
             .process_interception()
             .handlers()
             .first()
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+            .context(NoSessionSurfacesSnafu)?;
 
         assert_eq!(browser.listen().port(), 0);
         assert!(handler.requested_endpoint().allowed_ports().is_empty());
@@ -4382,9 +4402,7 @@ mod tests {
             "#,
         )?;
         let start_plan = config.surface_start_plan()?;
-        let browser_cdp = start_plan
-            .browser_cdp()
-            .ok_or_else(RuntimeConfigError::no_session_surfaces)?;
+        let browser_cdp = start_plan.browser_cdp().context(NoSessionSurfacesSnafu)?;
 
         assert_eq!(browser_cdp.browser_url(), None);
         assert!(browser_cdp.owns_browser());

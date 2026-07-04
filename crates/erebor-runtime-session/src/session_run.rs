@@ -2,6 +2,7 @@ use erebor_runtime_core::{
     RuntimeConfig, RuntimeError, SessionAdoptPlan, SessionRunOutcome, SessionRunPlan,
     SessionRunnerKind, SessionRunnerLauncher,
 };
+use snafu::Location;
 
 use crate::{
     diagnostic::SessionDiagnosticOutcome,
@@ -101,7 +102,11 @@ impl SessionExecutionService {
     ) -> Result<SessionRunOutcome, SessionExecutionError> {
         match plan.runner().kind() {
             SessionRunnerKind::Docker => Err(SessionExecutionError::runtime(
-                RuntimeError::unsupported_session_runner_operation("docker", "adopt"),
+                RuntimeError::UnsupportedSessionRunnerOperation {
+                    runner: String::from("docker"),
+                    operation: String::from("adopt"),
+                    location: Location::default(),
+                },
             )),
             SessionRunnerKind::LinuxHost => {
                 let side_resources = start_adopt_session_side_resources(config, plan)?;
@@ -123,7 +128,11 @@ impl SessionExecutionService {
         let outcome = match plan.runner().kind() {
             SessionRunnerKind::Docker => {
                 return Err(SessionExecutionError::runtime(
-                    RuntimeError::unsupported_session_runner_operation("docker", "adopt"),
+                    RuntimeError::UnsupportedSessionRunnerOperation {
+                        runner: String::from("docker"),
+                        operation: String::from("adopt"),
+                        location: Location::default(),
+                    },
                 ));
             }
             SessionRunnerKind::LinuxHost => {

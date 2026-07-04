@@ -15,7 +15,14 @@ use erebor_runtime_events::{ActionKind, ExecutionSurface, RiskLevel};
 use erebor_runtime_policy::Decision;
 use serde::Serialize;
 use serde_json::Value;
+use snafu::{OptionExt, ResultExt};
 
+use crate::error::{
+    ReviewAuditLogSnafu, ReviewEncodeJsonSnafu, ReviewInvalidRuntimeConfigSnafu,
+    ReviewMissingConfigArtifactSnafu, ReviewMissingPolicyArtifactSnafu,
+    ReviewNoSessionRecordsSnafu, ReviewReadFileSnafu, ReviewSessionRegistrySnafu,
+    ReviewUnknownSessionSnafu,
+};
 use crate::{
     evidence_trace::{redact, sha256_hex},
     read_audit_records, SessionReviewError,
@@ -164,7 +171,7 @@ pub fn session_summaries(
     artifacts: &SessionReviewArtifacts,
 ) -> Result<Vec<SessionSummary>, SessionReviewError> {
     if records.is_empty() {
-        return Err(SessionReviewError::no_session_records());
+        return ReviewNoSessionRecordsSnafu.fail();
     }
 
     let mut sessions = BTreeMap::<String, SessionAccumulator>::new();
@@ -249,7 +256,7 @@ fn render_session_list_from_source(
     let registry = SessionRegistry::new(source.registry.clone());
     let records = registry
         .list_sessions()
-        .map_err(SessionReviewError::session_registry)?;
+        .context(ReviewSessionRegistrySnafu)?;
     let summaries = registry_session_summaries(&records);
     match format {
         SessionReviewOutputFormat::Text => Ok(render_session_summary_table(&summaries)),
@@ -489,7 +496,7 @@ fn render_session_from_paths(
         &SessionReviewArtifacts,
     ) -> Result<String, SessionReviewError>,
 ) -> Result<String, SessionReviewError> {
-    let records = read_audit_records(audit).map_err(SessionReviewError::audit_log)?;
+    let records = read_audit_records(audit).context(ReviewAuditLogSnafu)?;
     let artifacts = session_review_artifacts_from_paths(policy, config)?;
     match format {
         SessionReviewOutputFormat::Text => text_renderer(&records, session_id, &artifacts),
@@ -541,15 +548,19 @@ fn registry_review_paths(
     let registry = SessionRegistry::new(source.registry.clone());
     let record = registry
         .load_session(session_id)
-        .map_err(SessionReviewError::session_registry)?;
+        .context(ReviewSessionRegistrySnafu)?;
     let policy = record
         .primary_policy_artifact_path()
         .map(Path::to_path_buf)
-        .ok_or_else(|| SessionReviewError::missing_policy_artifact(session_id))?;
+        .context(ReviewMissingPolicyArtifactSnafu {
+            session_id: session_id.to_owned(),
+        })?;
     let config = record
         .config_artifact_path()
         .map(Path::to_path_buf)
-        .ok_or_else(|| SessionReviewError::missing_config_artifact(session_id))?;
+        .context(ReviewMissingConfigArtifactSnafu {
+            session_id: session_id.to_owned(),
+        })?;
     Ok((record.audit_path().to_path_buf(), policy, config))
 }
 
@@ -628,14 +639,17 @@ fn records_for_session<'a>(
     session_id: &str,
 ) -> Result<Vec<&'a AuditRecord>, SessionReviewError> {
     if records.is_empty() {
-        return Err(SessionReviewError::no_session_records());
+        return ReviewNoSessionRecordsSnafu.fail();
     }
     let session_records = records
         .iter()
         .filter(|record| record.event.session_id.as_str() == session_id)
         .collect::<Vec<_>>();
     if session_records.is_empty() {
-        Err(SessionReviewError::unknown_session(session_id))
+        ReviewUnknownSessionSnafu {
+            session_id: session_id.to_owned(),
+        }
+        .fail()
     } else {
         Ok(session_records)
     }
@@ -645,10 +659,13 @@ fn session_review_artifacts_from_paths(
     policy: &Path,
     config: &Path,
 ) -> Result<SessionReviewArtifacts, SessionReviewError> {
-    let config_source = fs::read_to_string(config)
-        .map_err(|source| SessionReviewError::read_file(config, source))?;
-    let runtime_config = RuntimeConfig::from_json_str(&config_source)
-        .map_err(|source| SessionReviewError::invalid_runtime_config(config, source))?;
+    let config_source = fs::read_to_string(config).context(ReviewReadFileSnafu {
+        path: config.to_path_buf(),
+    })?;
+    let runtime_config =
+        RuntimeConfig::from_json_str(&config_source).context(ReviewInvalidRuntimeConfigSnafu {
+            path: config.to_path_buf(),
+        })?;
     let runner = runtime_config
         .session
         .enabled
@@ -698,13 +715,14 @@ fn session_timeline_item(record: &AuditRecord) -> SessionTimelineItem {
 }
 
 fn file_sha256(path: &Path) -> Result<String, SessionReviewError> {
-    let bytes = fs::read(path).map_err(|source| SessionReviewError::read_file(path, source))?;
+    let bytes = fs::read(path).context(ReviewReadFileSnafu {
+        path: path.to_path_buf(),
+    })?;
     Ok(sha256_hex(&bytes))
 }
 
 fn encode_json_output<T: Serialize>(value: &T) -> Result<String, SessionReviewError> {
-    let mut output =
-        serde_json::to_string_pretty(value).map_err(SessionReviewError::encode_json)?;
+    let mut output = serde_json::to_string_pretty(value).context(ReviewEncodeJsonSnafu)?;
     output.push('\n');
     Ok(output)
 }

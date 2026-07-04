@@ -15,6 +15,7 @@ use erebor_runtime_e2e::{
 use erebor_runtime_policy::{LocalPolicy, PolicySet};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
+use snafu::Location;
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
 use tokio::sync::{Mutex, MutexGuard};
@@ -413,7 +414,10 @@ fn start_browser_cdp_runtime(
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .map_err(RuntimeError::build_async_runtime)
+        .map_err(|source| RuntimeError::BuildAsyncRuntime {
+            source,
+            location: Location::default(),
+        })
         .map_err(|error| E2eError::external("CDP runtime executor", error))?;
     let (failures, _failure_rx) = mpsc::channel();
     let browser_runtime = BrowserCdpSurface::new(

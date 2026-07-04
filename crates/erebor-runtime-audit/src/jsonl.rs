@@ -5,8 +5,13 @@ use std::{
 };
 
 use erebor_runtime_core::{AuditError, AuditRecord, AuditSink};
+use snafu::{Location, ResultExt};
 use tracing::debug;
 
+use crate::error::{
+    AuditInvalidRecordSnafu, AuditOpenSnafu, AuditReadSnafu, AuditSerializeRecordSnafu,
+    AuditWriteSnafu,
+};
 use crate::AuditLogError;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,8 +33,10 @@ impl JsonlAuditSink {
 
 impl AuditSink for JsonlAuditSink {
     fn record(&self, record: &AuditRecord) -> Result<(), AuditError> {
-        append_audit_record(&self.path, record)
-            .map_err(|error| AuditError::unavailable(error.to_string()))
+        append_audit_record(&self.path, record).map_err(|error| AuditError::SinkUnavailable {
+            reason: error.to_string(),
+            location: Location::default(),
+        })
     }
 }
 
@@ -47,14 +54,19 @@ pub fn append_audit_record(
         .create(true)
         .append(true)
         .open(path)
-        .map_err(|source| AuditLogError::open(path.to_path_buf(), source))?;
+        .context(AuditOpenSnafu {
+            path: path.to_path_buf(),
+        })?;
 
-    serde_json::to_writer(&mut file, record)
-        .map_err(|source| AuditLogError::serialize_record(path.to_path_buf(), source))?;
-    file.write_all(b"\n")
-        .map_err(|source| AuditLogError::write(path.to_path_buf(), source))?;
-    file.flush()
-        .map_err(|source| AuditLogError::write(path.to_path_buf(), source))?;
+    serde_json::to_writer(&mut file, record).context(AuditSerializeRecordSnafu {
+        path: path.to_path_buf(),
+    })?;
+    file.write_all(b"\n").context(AuditWriteSnafu {
+        path: path.to_path_buf(),
+    })?;
+    file.flush().context(AuditWriteSnafu {
+        path: path.to_path_buf(),
+    })?;
 
     Ok(())
 }
@@ -62,20 +74,24 @@ pub fn append_audit_record(
 pub fn read_audit_records(path: impl AsRef<Path>) -> Result<Vec<AuditRecord>, AuditLogError> {
     let path = path.as_ref();
     debug!(path = %path.display(), "reading audit records");
-    let file =
-        File::open(path).map_err(|source| AuditLogError::open(path.to_path_buf(), source))?;
+    let file = File::open(path).context(AuditOpenSnafu {
+        path: path.to_path_buf(),
+    })?;
     let reader = BufReader::new(file);
     let mut records = Vec::new();
 
     for (index, line) in reader.lines().enumerate() {
-        let line = line.map_err(|source| AuditLogError::read(path.to_path_buf(), source))?;
+        let line = line.context(AuditReadSnafu {
+            path: path.to_path_buf(),
+        })?;
 
         if line.trim().is_empty() {
             continue;
         }
 
-        let record = serde_json::from_str(&line).map_err(|source| {
-            AuditLogError::invalid_record(path.to_path_buf(), index + 1, source)
+        let record = serde_json::from_str(&line).context(AuditInvalidRecordSnafu {
+            path: path.to_path_buf(),
+            line: index + 1,
         })?;
         records.push(record);
     }

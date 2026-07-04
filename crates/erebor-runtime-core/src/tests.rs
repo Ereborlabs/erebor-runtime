@@ -5,7 +5,9 @@ use erebor_runtime_events::{
     RuntimeEvent, SessionId,
 };
 use erebor_runtime_policy::{Decision, LocalPolicy};
+use snafu::{Location, ResultExt};
 
+use crate::error::PolicySnafu;
 use crate::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,
     AuditSink, LocalEnforcementEngine, RuntimeError,
@@ -145,7 +147,10 @@ fn approval_backend_error_fails_closed() -> Result<(), RuntimeError> {
     let engine = LocalEnforcementEngine::with_hooks(
         approval_policy()?,
         StaticApprovalProvider {
-            response: Err(ApprovalError::unavailable("socket closed")),
+            response: Err(ApprovalError::ProviderUnavailable {
+                reason: String::from("socket closed"),
+                location: Location::default(),
+            }),
         },
         RecordingAuditSink::default(),
     );
@@ -208,7 +213,7 @@ fn approval_policy() -> Result<LocalPolicy, RuntimeError> {
         }
         "#,
     )
-    .map_err(RuntimeError::policy)
+    .context(PolicySnafu)
 }
 
 #[derive(Clone, Debug)]
@@ -248,6 +253,9 @@ struct FailingAuditSink;
 
 impl AuditSink for FailingAuditSink {
     fn record(&self, _record: &AuditRecord) -> Result<(), AuditError> {
-        Err(AuditError::unavailable("disk full"))
+        Err(AuditError::SinkUnavailable {
+            reason: String::from("disk full"),
+            location: Location::default(),
+        })
     }
 }

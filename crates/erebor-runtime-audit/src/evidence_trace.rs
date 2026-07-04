@@ -14,7 +14,13 @@ use erebor_runtime_core::{AuditRecord, SessionRegistry, DEFAULT_SESSION_REGISTRY
 use erebor_runtime_events::{ActionKind, ActorIdentity, ActorKind, ExecutionSurface, RuntimeEvent};
 use erebor_runtime_policy::Decision;
 use serde_json::Value;
+use snafu::{OptionExt, ResultExt};
 
+use crate::error::{
+    EvidenceAuditLogSnafu, EvidenceInvalidJsonSnafu, EvidenceMissingConfigArtifactSnafu,
+    EvidenceMissingPolicyArtifactSnafu, EvidenceNoSessionRecordsSnafu, EvidenceReadFileSnafu,
+    EvidenceSessionRegistrySnafu, EvidenceUnknownSessionSnafu, EvidenceWriteFileSnafu,
+};
 use crate::{read_audit_records, EvidenceTraceError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,7 +90,7 @@ impl EvidenceTraceRequest {
     }
 
     pub fn from_paths(paths: EvidenceTracePaths) -> Result<Self, EvidenceTraceError> {
-        let records = read_audit_records(&paths.audit).map_err(EvidenceTraceError::audit_log)?;
+        let records = read_audit_records(&paths.audit).context(EvidenceAuditLogSnafu)?;
         let policy = read_json(&paths.policy)?;
         let config = read_json(&paths.config)?;
         let mut artifacts = vec![
@@ -145,15 +151,19 @@ impl EvidenceTracePaths {
     ) -> Result<Self, EvidenceTraceError> {
         let session = SessionRegistry::new(registry.to_path_buf())
             .load_session(session_id)
-            .map_err(EvidenceTraceError::session_registry)?;
+            .context(EvidenceSessionRegistrySnafu)?;
         let policy = session
             .primary_policy_artifact_path()
             .map(Path::to_path_buf)
-            .ok_or_else(|| EvidenceTraceError::missing_policy_artifact(session_id))?;
+            .context(EvidenceMissingPolicyArtifactSnafu {
+                session_id: session_id.to_owned(),
+            })?;
         let config = session
             .config_artifact_path()
             .map(Path::to_path_buf)
-            .ok_or_else(|| EvidenceTraceError::missing_config_artifact(session_id))?;
+            .context(EvidenceMissingConfigArtifactSnafu {
+                session_id: session_id.to_owned(),
+            })?;
 
         Ok(Self {
             audit: session.audit_path().to_path_buf(),
@@ -176,7 +186,7 @@ fn session_audit_path_from_registry(
 ) -> Result<PathBuf, EvidenceTraceError> {
     let session = SessionRegistry::new(registry.to_path_buf())
         .load_session(session_id)
-        .map_err(EvidenceTraceError::session_registry)?;
+        .context(EvidenceSessionRegistrySnafu)?;
     Ok(session.audit_path().to_path_buf())
 }
 
@@ -275,11 +285,13 @@ impl EvidenceTraceSink for FileEvidenceTraceSink {
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
         {
-            fs::create_dir_all(parent)
-                .map_err(|source| EvidenceTraceError::write_file(parent, source))?;
+            fs::create_dir_all(parent).context(EvidenceWriteFileSnafu {
+                path: parent.to_path_buf(),
+            })?;
         }
-        fs::write(&self.path, report.markdown())
-            .map_err(|source| EvidenceTraceError::write_file(&self.path, source))?;
+        fs::write(&self.path, report.markdown()).context(EvidenceWriteFileSnafu {
+            path: self.path.clone(),
+        })?;
         Ok(EvidenceTraceReceipt::new(
             self.path.display().to_string(),
             report.markdown().len(),
@@ -317,13 +329,18 @@ impl MarkdownEvidenceTraceRenderer {
 }
 
 fn read_json(path: &Path) -> Result<Value, EvidenceTraceError> {
-    let source =
-        fs::read_to_string(path).map_err(|source| EvidenceTraceError::read_file(path, source))?;
-    serde_json::from_str(&source).map_err(|source| EvidenceTraceError::invalid_json(path, source))
+    let source = fs::read_to_string(path).context(EvidenceReadFileSnafu {
+        path: path.to_path_buf(),
+    })?;
+    serde_json::from_str(&source).context(EvidenceInvalidJsonSnafu {
+        path: path.to_path_buf(),
+    })
 }
 
 fn file_artifact(label: &str, path: &Path) -> Result<EvidenceTraceArtifact, EvidenceTraceError> {
-    let bytes = fs::read(path).map_err(|source| EvidenceTraceError::read_file(path, source))?;
+    let bytes = fs::read(path).context(EvidenceReadFileSnafu {
+        path: path.to_path_buf(),
+    })?;
     Ok(EvidenceTraceArtifact::new(
         label,
         path.to_path_buf(),
@@ -342,7 +359,10 @@ fn select_session_id(
         {
             return Ok(requested.to_owned());
         }
-        return Err(EvidenceTraceError::unknown_session(requested));
+        return EvidenceUnknownSessionSnafu {
+            session_id: requested.to_owned(),
+        }
+        .fail();
     }
 
     let mut summaries = BTreeMap::<&str, SessionSummary>::new();
@@ -370,7 +390,7 @@ fn select_session_id(
             )
         })
         .map(|(session_id, _summary)| session_id.to_owned())
-        .ok_or_else(EvidenceTraceError::no_session_records)
+        .context(EvidenceNoSessionRecordsSnafu)
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

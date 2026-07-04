@@ -3,6 +3,7 @@ use erebor_runtime_core::{
     SessionSurfaceFailure, SessionSurfaceFailureSender, SessionSurfaceKind, SessionSurfaceService,
 };
 use erebor_runtime_policy::PolicySet;
+use snafu::Location;
 use tokio::runtime::Runtime;
 use tracing::{debug, error, info};
 
@@ -81,7 +82,11 @@ impl SessionSurfaceService for BrowserCdpSurface {
         }
         let session = runtime
             .block_on(manager.create_session())
-            .map_err(|error| RuntimeError::surface_start(surface.as_str(), error.to_string()))?;
+            .map_err(|error| RuntimeError::SurfaceStart {
+                surface: surface.as_str().to_owned(),
+                reason: error.to_string(),
+                location: Location::default(),
+            })?;
         let endpoint = session.public_endpoint().to_owned();
         let lease_id = session.lease_id().to_owned();
 

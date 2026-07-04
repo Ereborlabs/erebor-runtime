@@ -1,7 +1,11 @@
 use std::{io, process::Command as ProcessCommand, thread, time::Duration};
 
+use snafu::ResultExt;
 use tracing::info;
 
+use crate::error::{
+    SessionRunnerExitSnafu, SessionRunnerLaunchSnafu, UnsupportedSessionRunnerOperationSnafu,
+};
 use crate::{
     DockerSessionCommandOptions, DockerSessionCommandPlan, LinuxHostSessionCommandOptions,
     LinuxHostSessionCommandPlan, RuntimeError, SessionAdoptPlan, SessionRunPlan, SessionRunnerKind,
@@ -144,10 +148,11 @@ impl SessionRunnerLauncher {
         options: &LinuxHostSessionCommandOptions,
     ) -> Result<SessionRunOutcome, RuntimeError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => Err(RuntimeError::unsupported_session_runner_operation(
-                SessionRunnerKind::Docker.as_str(),
-                "adopt",
-            )),
+            SessionRunnerKind::Docker => UnsupportedSessionRunnerOperationSnafu {
+                runner: SessionRunnerKind::Docker.as_str().to_owned(),
+                operation: String::from("adopt"),
+            }
+            .fail(),
             SessionRunnerKind::LinuxHost => LinuxHostSessionRunner
                 .adopt_with_options(
                     plan,
@@ -165,10 +170,11 @@ impl SessionRunnerLauncher {
         options: &LinuxHostSessionCommandOptions,
     ) -> Result<SessionCapturedRunOutcome, RuntimeError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => Err(RuntimeError::unsupported_session_runner_operation(
-                SessionRunnerKind::Docker.as_str(),
-                "adopt",
-            )),
+            SessionRunnerKind::Docker => UnsupportedSessionRunnerOperationSnafu {
+                runner: SessionRunnerKind::Docker.as_str().to_owned(),
+                operation: String::from("adopt"),
+            }
+            .fail(),
             SessionRunnerKind::LinuxHost => LinuxHostSessionRunner.adopt_with_options(
                 plan,
                 environment,
@@ -205,21 +211,19 @@ impl SessionRunner for DockerSessionRunner {
         let status = ProcessCommand::new(launch.program())
             .args(launch.args())
             .status()
-            .map_err(|source| {
-                RuntimeError::session_runner_launch(
-                    self.kind().as_str(),
-                    launch.program().to_owned(),
-                    source,
-                )
+            .context(SessionRunnerLaunchSnafu {
+                runner: self.kind().as_str().to_owned(),
+                program: launch.program().to_owned(),
             })?;
 
         if status.success() {
             Ok(SessionRunOutcome::new(self.kind(), status.code()))
         } else {
-            Err(RuntimeError::session_runner_exit(
-                self.kind().as_str(),
-                status.code(),
-            ))
+            SessionRunnerExitSnafu {
+                runner: self.kind().as_str().to_owned(),
+                code: status.code(),
+            }
+            .fail()
         }
     }
 }
@@ -290,13 +294,12 @@ impl DockerSessionRunner {
 
         match output_mode {
             DockerSessionOutputMode::Inherit => {
-                let status = retry_linux_host_text_busy(|| command.status()).map_err(|source| {
-                    RuntimeError::session_runner_launch(
-                        self.kind().as_str(),
-                        launch.program().to_owned(),
-                        source,
-                    )
-                })?;
+                let status = retry_linux_host_text_busy(|| command.status()).context(
+                    SessionRunnerLaunchSnafu {
+                        runner: self.kind().as_str().to_owned(),
+                        program: launch.program().to_owned(),
+                    },
+                )?;
 
                 if status.success() {
                     Ok(SessionCapturedRunOutcome::new(
@@ -305,20 +308,20 @@ impl DockerSessionRunner {
                         String::new(),
                     ))
                 } else {
-                    Err(RuntimeError::session_runner_exit(
-                        self.kind().as_str(),
-                        status.code(),
-                    ))
+                    SessionRunnerExitSnafu {
+                        runner: self.kind().as_str().to_owned(),
+                        code: status.code(),
+                    }
+                    .fail()
                 }
             }
             DockerSessionOutputMode::Capture => {
-                let output = retry_linux_host_text_busy(|| command.output()).map_err(|source| {
-                    RuntimeError::session_runner_launch(
-                        self.kind().as_str(),
-                        launch.program().to_owned(),
-                        source,
-                    )
-                })?;
+                let output = retry_linux_host_text_busy(|| command.output()).context(
+                    SessionRunnerLaunchSnafu {
+                        runner: self.kind().as_str().to_owned(),
+                        program: launch.program().to_owned(),
+                    },
+                )?;
                 Ok(SessionCapturedRunOutcome::new(
                     SessionRunOutcome::new(self.kind(), output.status.code()),
                     String::from_utf8_lossy(&output.stdout).to_string(),
@@ -389,13 +392,12 @@ impl LinuxHostSessionRunner {
 
         match output_mode {
             LinuxHostSessionOutputMode::Inherit => {
-                let status = retry_linux_host_text_busy(|| command.status()).map_err(|source| {
-                    RuntimeError::session_runner_launch(
-                        self.kind().as_str(),
-                        launch.program().to_owned(),
-                        source,
-                    )
-                })?;
+                let status = retry_linux_host_text_busy(|| command.status()).context(
+                    SessionRunnerLaunchSnafu {
+                        runner: self.kind().as_str().to_owned(),
+                        program: launch.program().to_owned(),
+                    },
+                )?;
 
                 if status.success() {
                     Ok(SessionCapturedRunOutcome::new(
@@ -404,20 +406,20 @@ impl LinuxHostSessionRunner {
                         String::new(),
                     ))
                 } else {
-                    Err(RuntimeError::session_runner_exit(
-                        self.kind().as_str(),
-                        status.code(),
-                    ))
+                    SessionRunnerExitSnafu {
+                        runner: self.kind().as_str().to_owned(),
+                        code: status.code(),
+                    }
+                    .fail()
                 }
             }
             LinuxHostSessionOutputMode::Capture => {
-                let output = retry_linux_host_text_busy(|| command.output()).map_err(|source| {
-                    RuntimeError::session_runner_launch(
-                        self.kind().as_str(),
-                        launch.program().to_owned(),
-                        source,
-                    )
-                })?;
+                let output = retry_linux_host_text_busy(|| command.output()).context(
+                    SessionRunnerLaunchSnafu {
+                        runner: self.kind().as_str().to_owned(),
+                        program: launch.program().to_owned(),
+                    },
+                )?;
                 Ok(SessionCapturedRunOutcome::new(
                     SessionRunOutcome::new(self.kind(), output.status.code()),
                     String::from_utf8_lossy(&output.stdout).to_string(),
@@ -457,12 +459,9 @@ impl LinuxHostSessionRunner {
 
         match output_mode {
             LinuxHostSessionOutputMode::Inherit => {
-                let status = command.status().map_err(|source| {
-                    RuntimeError::session_runner_launch(
-                        self.kind().as_str(),
-                        launch.program().to_owned(),
-                        source,
-                    )
+                let status = command.status().context(SessionRunnerLaunchSnafu {
+                    runner: self.kind().as_str().to_owned(),
+                    program: launch.program().to_owned(),
                 })?;
 
                 if status.success() {
@@ -472,19 +471,17 @@ impl LinuxHostSessionRunner {
                         String::new(),
                     ))
                 } else {
-                    Err(RuntimeError::session_runner_exit(
-                        self.kind().as_str(),
-                        status.code(),
-                    ))
+                    SessionRunnerExitSnafu {
+                        runner: self.kind().as_str().to_owned(),
+                        code: status.code(),
+                    }
+                    .fail()
                 }
             }
             LinuxHostSessionOutputMode::Capture => {
-                let output = command.output().map_err(|source| {
-                    RuntimeError::session_runner_launch(
-                        self.kind().as_str(),
-                        launch.program().to_owned(),
-                        source,
-                    )
+                let output = command.output().context(SessionRunnerLaunchSnafu {
+                    runner: self.kind().as_str().to_owned(),
+                    program: launch.program().to_owned(),
                 })?;
                 Ok(SessionCapturedRunOutcome::new(
                     SessionRunOutcome::new(self.kind(), output.status.code()),

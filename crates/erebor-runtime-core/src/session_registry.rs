@@ -6,7 +6,12 @@ use std::{
 
 use erebor_runtime_events::{ActorKind, SessionId};
 use serde::{Deserialize, Serialize};
+use snafu::{Location, ResultExt};
 
+use crate::error::{
+    CopyArtifactSnafu, CreateDirSnafu, DecodeRecordSnafu, EncodeRecordSnafu, ReadRecordSnafu,
+    UnknownSessionSnafu, WriteRecordSnafu,
+};
 use crate::{RuntimeConfig, SessionRegistryError, SessionRunOutcome, SessionRunPlan};
 
 pub const DEFAULT_SESSION_REGISTRY_PATH: &str = ".erebor/sessions";
@@ -44,8 +49,9 @@ impl SessionRegistry {
         plan: &SessionRunPlan,
     ) -> Result<StartedSessionRegistryRecord, SessionRegistryError> {
         let session_dir = self.session_dir(plan.session_id());
-        fs::create_dir_all(&session_dir)
-            .map_err(|source| SessionRegistryError::create_dir(&session_dir, source))?;
+        fs::create_dir_all(&session_dir).context(CreateDirSnafu {
+            path: session_dir.clone(),
+        })?;
 
         let config_artifact_path = copy_optional_config_artifact(&session_dir, plan)?;
         let policy_artifact_paths = copy_policy_artifacts(&session_dir, plan.policies())?;
@@ -54,8 +60,9 @@ impl SessionRegistry {
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
         {
-            fs::create_dir_all(parent)
-                .map_err(|source| SessionRegistryError::create_dir(parent, source))?;
+            fs::create_dir_all(parent).context(CreateDirSnafu {
+                path: parent.to_path_buf(),
+            })?;
         }
 
         let record = SessionRegistryRecord {
@@ -121,12 +128,19 @@ impl SessionRegistry {
         let entries = match fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(records),
-            Err(source) => return Err(SessionRegistryError::read_record(&self.root, source)),
+            Err(source) => {
+                return Err(SessionRegistryError::ReadRecord {
+                    path: self.root.clone(),
+                    source,
+                    location: Location::default(),
+                });
+            }
         };
 
         for entry in entries {
-            let entry =
-                entry.map_err(|source| SessionRegistryError::read_record(&self.root, source))?;
+            let entry = entry.context(ReadRecordSnafu {
+                path: self.root.clone(),
+            })?;
             let path = entry.path().join(SESSION_RECORD_FILE);
             if path.exists() {
                 records.push(self.read_record(&path)?);
@@ -150,9 +164,11 @@ impl SessionRegistry {
             .session_dir_for_id(session_id)
             .join(SESSION_RECORD_FILE);
         if !path.exists() {
-            return Err(SessionRegistryError::unknown_session(
-                &self.root, session_id,
-            ));
+            return UnknownSessionSnafu {
+                root: self.root.clone(),
+                session_id: session_id.to_owned(),
+            }
+            .fail();
         }
         self.read_record(&path)
     }
@@ -166,20 +182,22 @@ impl SessionRegistry {
     }
 
     fn write_record(&self, record: &SessionRegistryRecord) -> Result<(), SessionRegistryError> {
-        fs::create_dir_all(&record.session_dir)
-            .map_err(|source| SessionRegistryError::create_dir(&record.session_dir, source))?;
+        fs::create_dir_all(&record.session_dir).context(CreateDirSnafu {
+            path: record.session_dir.clone(),
+        })?;
         let path = record.session_dir.join(SESSION_RECORD_FILE);
         let source = serde_json::to_string_pretty(record)
-            .map_err(|source| SessionRegistryError::encode_record(&path, source))?;
-        fs::write(&path, format!("{source}\n"))
-            .map_err(|source| SessionRegistryError::write_record(&path, source))
+            .context(EncodeRecordSnafu { path: path.clone() })?;
+        fs::write(&path, format!("{source}\n")).context(WriteRecordSnafu { path })
     }
 
     fn read_record(&self, path: &Path) -> Result<SessionRegistryRecord, SessionRegistryError> {
-        let source = fs::read_to_string(path)
-            .map_err(|source| SessionRegistryError::read_record(path, source))?;
-        serde_json::from_str(&source)
-            .map_err(|source| SessionRegistryError::decode_record(path, source))
+        let source = fs::read_to_string(path).context(ReadRecordSnafu {
+            path: path.to_path_buf(),
+        })?;
+        serde_json::from_str(&source).context(DecodeRecordSnafu {
+            path: path.to_path_buf(),
+        })
     }
 }
 
@@ -297,8 +315,10 @@ fn copy_optional_config_artifact(
         return Ok(None);
     };
     let destination = session_dir.join(SESSION_CONFIG_FILE);
-    fs::copy(source, &destination)
-        .map_err(|error| SessionRegistryError::copy_artifact(source, &destination, error))?;
+    fs::copy(source, &destination).context(CopyArtifactSnafu {
+        from: source.to_path_buf(),
+        to: destination.clone(),
+    })?;
     Ok(Some(destination))
 }
 
@@ -307,8 +327,9 @@ fn copy_policy_artifacts(
     policies: &[PathBuf],
 ) -> Result<Vec<PathBuf>, SessionRegistryError> {
     let policy_dir = session_dir.join(SESSION_POLICIES_DIR);
-    fs::create_dir_all(&policy_dir)
-        .map_err(|source| SessionRegistryError::create_dir(&policy_dir, source))?;
+    fs::create_dir_all(&policy_dir).context(CreateDirSnafu {
+        path: policy_dir.clone(),
+    })?;
 
     policies
         .iter()
@@ -320,8 +341,9 @@ fn copy_policy_artifacts(
                 .map(|name| name.to_string_lossy().to_string())
                 .unwrap_or_else(|| String::from("policy.json"));
             let destination = policy_dir.join(format!("{index:03}-{file_name}"));
-            fs::copy(source, &destination).map_err(|error| {
-                SessionRegistryError::copy_artifact(source, &destination, error)
+            fs::copy(source, &destination).context(CopyArtifactSnafu {
+                from: source.to_path_buf(),
+                to: destination.clone(),
             })?;
             Ok(destination)
         })

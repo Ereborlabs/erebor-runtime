@@ -4,9 +4,14 @@ use std::{
     sync::mpsc::{self, Receiver, Sender},
 };
 
+use snafu::ResultExt;
 use tokio::runtime::Runtime;
 use tracing::{debug, error, info};
 
+use crate::error::{
+    BuildAsyncRuntimeSnafu, NoSessionSurfaceServicesSnafu, SurfaceExitedSnafu,
+    UnsupportedSessionSurfaceSnafu,
+};
 use crate::{
     BrowserCdpSurfaceConfig, RuntimeAuditConfig, RuntimeError, SessionSurfaceKind,
     SessionSurfaceStartPlan, TerminalSurfaceConfig,
@@ -56,7 +61,7 @@ impl SessionSurfaceLauncher {
 
     pub fn start(self) -> Result<SessionSurfaceSupervisor, RuntimeError> {
         if self.surfaces.is_empty() {
-            return Err(RuntimeError::no_session_surface_services());
+            return NoSessionSurfaceServicesSnafu.fail();
         }
 
         info!(
@@ -67,7 +72,7 @@ impl SessionSurfaceLauncher {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
-            .map_err(RuntimeError::build_async_runtime)?;
+            .context(BuildAsyncRuntimeSnafu)?;
         let (failures, failure_rx) = mpsc::channel();
         let mut running = Vec::new();
 
@@ -112,20 +117,21 @@ impl SessionSurfaceSupervisor {
     }
 
     pub fn wait(self) -> Result<(), RuntimeError> {
-        let failure = self
-            .failure_rx
-            .recv()
-            .map_err(|_| RuntimeError::no_session_surface_services())?;
+        let failure = match self.failure_rx.recv() {
+            Ok(failure) => failure,
+            Err(_error) => return NoSessionSurfaceServicesSnafu.fail(),
+        };
 
         error!(
             surface = failure.surface.as_str(),
             reason = %failure.reason,
             "session surface exited"
         );
-        Err(RuntimeError::surface_exited(
-            failure.surface.as_str(),
-            failure.reason,
-        ))
+        SurfaceExitedSnafu {
+            surface: failure.surface.as_str().to_owned(),
+            reason: failure.reason,
+        }
+        .fail()
     }
 }
 
@@ -148,13 +154,19 @@ impl SessionSurfaceLaunchPlan {
             match surface {
                 SessionSurfaceKind::BrowserCdp => {
                     let Some(browser_cdp) = plan.browser_cdp().cloned() else {
-                        return Err(RuntimeError::unsupported_session_surface(surface.as_str()));
+                        return UnsupportedSessionSurfaceSnafu {
+                            surface: surface.as_str().to_owned(),
+                        }
+                        .fail();
                     };
                     definitions.push(SessionSurfaceDefinition::BrowserCdp(browser_cdp));
                 }
                 SessionSurfaceKind::Terminal => {
                     let Some(terminal) = plan.terminal().cloned() else {
-                        return Err(RuntimeError::unsupported_session_surface(surface.as_str()));
+                        return UnsupportedSessionSurfaceSnafu {
+                            surface: surface.as_str().to_owned(),
+                        }
+                        .fail();
                     };
                     definitions.push(SessionSurfaceDefinition::Terminal(terminal));
                 }
@@ -163,7 +175,10 @@ impl SessionSurfaceLaunchPlan {
                 | SessionSurfaceKind::Saas
                 | SessionSurfaceKind::Desktop
                 | SessionSurfaceKind::InternalSystem => {
-                    return Err(RuntimeError::unsupported_session_surface(surface.as_str()));
+                    return UnsupportedSessionSurfaceSnafu {
+                        surface: surface.as_str().to_owned(),
+                    }
+                    .fail();
                 }
             }
         }
