@@ -13,23 +13,20 @@ mod surfaces;
 use erebor_runtime_cdp::{BrowserCdpSurface, CdpSessionContext};
 use erebor_runtime_core::{
     DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions,
-    ProcessInterceptionHandlerKind, RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError,
-    RuntimeError, SessionActorLayerConfig, SessionAdoptPlan, SessionInterceptionOperation,
-    SessionRegistry, SessionRegistryError, SessionRegistryFinish, SessionRunOutcome,
-    SessionRunPlan, SessionRunnerKind, SessionRunnerLauncher, SessionSurfaceDefinition,
-    SessionSurfaceKind, SessionSurfaceLaunchPlan, SessionSurfaceLauncher, SessionSurfaceSupervisor,
-    TerminalProcessInterceptionMode, TerminalSurfaceConfig,
+    RuntimeAuditConfig, RuntimeConfig, RuntimeConfigError, RuntimeError, SessionActorLayerConfig,
+    SessionAdoptPlan, SessionInterceptionOperation, SessionRegistry, SessionRegistryError,
+    SessionRegistryFinish, SessionRunOutcome, SessionRunPlan, SessionRunnerKind,
+    SessionRunnerLauncher, SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan,
+    SessionSurfaceLauncher, SessionSurfaceSupervisor,
 };
 use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_policy::{LocalPolicy, PolicyError, PolicySet};
-use erebor_runtime_terminal::{TerminalProcessExecValidator, TerminalSurfaceError};
+use erebor_runtime_terminal::TerminalSurfaceError;
 use snafu::Location;
 use thiserror::Error;
 
-use crate::interception_backend::{
-    ProcessExecInterceptionInput, ProcessExecMediationInput, ProcessExecMediationMode,
-    SessionInterceptionBackendBundle,
-};
+use crate::interception_backend::SessionInterceptionBackendBundle;
+use crate::surfaces::terminal::{LazyBrowserCdpProcessMediation, TerminalProcessSurface};
 
 pub use adoption::adopt_session_target;
 pub use erebor_runtime_core::{
@@ -303,7 +300,7 @@ pub fn start_surface_launch_plan(
                 let surface = BrowserCdpSurface::new(
                     config.clone(),
                     policy_set,
-                    runtime_context("browser-cdp"),
+                    CdpSessionContexts::runtime("browser-cdp"),
                 )
                 .with_audit_config(launch_plan.audit().clone());
                 launcher.add_surface(surface);
@@ -391,7 +388,7 @@ fn start_session_side_resources_from_start_plan(
     let mut launcher = SessionSurfaceLauncher::new(launch_plan.control_listen());
     let mut environment = Vec::new();
     let mut terminal_surface_present = false;
-    let mut terminal_process_exec_config = None::<TerminalSurfaceConfig>;
+    let mut terminal_process_surface = TerminalProcessSurface::absent();
     let mut process_exec_interception = None;
     let process_exec_supported = start_plan
         .interception()
@@ -399,26 +396,25 @@ fn start_session_side_resources_from_start_plan(
     let mut lazy_browser_cdp = None;
     let uses_lazy_browser_cdp = start_plan
         .terminal()
-        .is_some_and(terminal_uses_managed_browser_cdp_mediation);
+        .is_some_and(TerminalProcessSurface::uses_managed_browser_cdp_mediation);
 
     for definition in launch_plan.definitions() {
         match definition {
             SessionSurfaceDefinition::BrowserCdp(config) => {
                 let policy_set = read_policy_set(config.policies())?;
                 if uses_lazy_browser_cdp {
-                    lazy_browser_cdp = Some(LazyBrowserCdpMediationConfig {
-                        config: config.clone(),
+                    lazy_browser_cdp = Some(LazyBrowserCdpProcessMediation::new(
+                        config.clone(),
                         policy_set,
-                        context: session_cdp_context(plan),
-                        audit_jsonl: prepared_session
-                            .map(|session| session.storage.audit_path().to_path_buf()),
-                        audit: plan.audit().clone(),
-                    });
+                        CdpSessionContexts::from_plan(plan),
+                        prepared_session.map(|session| session.storage.audit_path().to_path_buf()),
+                        plan.audit().clone(),
+                    ));
                 } else {
                     let mut surface = BrowserCdpSurface::new(
                         config.clone(),
                         policy_set,
-                        session_cdp_context(plan),
+                        CdpSessionContexts::from_plan(plan),
                     )
                     .with_audit_config(plan.audit().clone());
                     if let Some(audit_jsonl) =
@@ -441,60 +437,41 @@ fn start_session_side_resources_from_start_plan(
                 ));
 
                 if process_exec_supported {
-                    process_exec_interception = Some(terminal_process_exec_input(config, plan)?);
-                    terminal_process_exec_config = Some(config.clone());
+                    terminal_process_surface = TerminalProcessSurface::present(config);
+                    process_exec_interception = terminal_process_surface.backend_input(plan)?;
                 }
             }
         }
     }
 
-    let interception_backend = SessionInterceptionBackendBundle::prepare(
-        start_plan.interception(),
-        process_exec_interception,
-        plan,
-        prepared_session.map(|session| &session.storage),
-    )?;
+    let interception_setup =
+        SessionInterceptionSetup::new(SessionInterceptionBackendBundle::prepare(
+            start_plan.interception(),
+            process_exec_interception,
+            plan,
+            prepared_session.map(|session| &session.storage),
+        )?);
     if terminal_surface_present {
-        if let Some(interception_backend) = interception_backend.as_ref() {
-            environment.push((
-                String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
-                interception_backend.backend_kind().to_owned(),
-            ));
-        } else {
-            environment.push((
-                String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
-                String::from("disabled"),
-            ));
-        }
+        environment.push((
+            String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
+            interception_setup
+                .backend_kind()
+                .unwrap_or("disabled")
+                .to_owned(),
+        ));
     }
 
     if launcher.is_empty() {
         let uses_lazy_browser_cdp = lazy_browser_cdp.is_some();
-        let interception_router = terminal_process_exec_router(
-            terminal_process_exec_config.as_ref(),
-            None,
-            lazy_browser_cdp,
-        )?;
-        let interception_registration = register_session_interception(
-            interception_backend.as_ref(),
-            interception_router,
-            plan,
-            uses_lazy_browser_cdp,
-        )?;
-        let (docker_options, linux_host_options) = side_resource_command_options(
-            interception_backend.as_ref(),
-            None,
-            interception_registration.as_ref(),
-        )?;
-        return Ok(SessionSideResources {
+        let interception_router = terminal_process_surface.router(None, lazy_browser_cdp)?;
+        let interception_registration =
+            interception_setup.register(interception_router, plan, uses_lazy_browser_cdp)?;
+        return interception_setup.into_side_resources(
             environment,
-            docker_options,
-            linux_host_options,
-            browser_cdp_endpoint: None,
-            _interception_registration: interception_registration,
-            _interception_backend: interception_backend,
-            _supervisor: None,
-        });
+            None,
+            interception_registration,
+            None,
+        );
     }
 
     let supervisor = launcher.start().map_err(SessionExecutionError::runtime)?;
@@ -521,31 +498,18 @@ fn start_session_side_resources_from_start_plan(
         }
     }
 
-    let interception_registration = register_session_interception(
-        interception_backend.as_ref(),
-        terminal_process_exec_router(
-            terminal_process_exec_config.as_ref(),
-            browser_cdp_endpoint.as_deref(),
-            lazy_browser_cdp,
-        )?,
+    let interception_registration = interception_setup.register(
+        terminal_process_surface.router(browser_cdp_endpoint.as_deref(), lazy_browser_cdp)?,
         plan,
         uses_lazy_browser_cdp,
     )?;
-    let (docker_options, linux_host_options) = side_resource_command_options(
-        interception_backend.as_ref(),
-        browser_cdp_endpoint.as_deref(),
-        interception_registration.as_ref(),
-    )?;
 
-    Ok(SessionSideResources {
+    interception_setup.into_side_resources(
         environment,
-        docker_options,
-        linux_host_options,
         browser_cdp_endpoint,
-        _interception_registration: interception_registration,
-        _interception_backend: interception_backend,
-        _supervisor: Some(supervisor),
-    })
+        interception_registration,
+        Some(supervisor),
+    )
 }
 
 trait SessionPlanContext {
@@ -611,207 +575,137 @@ fn read_policy_set(paths: &[PathBuf]) -> Result<PolicySet, SessionExecutionError
     Ok(PolicySet::from_policies(policies))
 }
 
-#[derive(Clone)]
-struct LazyBrowserCdpMediationConfig {
-    config: erebor_runtime_core::BrowserCdpSurfaceConfig,
-    policy_set: PolicySet,
-    context: CdpSessionContext,
-    audit_jsonl: Option<PathBuf>,
-    audit: RuntimeAuditConfig,
-}
+struct CdpSessionContexts;
 
-fn terminal_uses_managed_browser_cdp_mediation(config: &TerminalSurfaceConfig) -> bool {
-    config.process_interception().enabled()
-        && config
-            .process_interception()
-            .handlers()
-            .iter()
-            .any(|handler| handler.kind() == ProcessInterceptionHandlerKind::ManagedBrowserCdp)
-}
-
-fn terminal_process_exec_input<'a>(
-    config: &'a TerminalSurfaceConfig,
-    plan: &impl SessionPlanContext,
-) -> Result<ProcessExecInterceptionInput<'a>, SessionExecutionError> {
-    let mediation = config.process_interception();
-    if mediation.enabled() && plan.runner_kind() != SessionRunnerKind::LinuxHost {
-        return Err(SessionExecutionError::guard_config(
-            "terminal process interception currently supports linux-host sessions only",
-        ));
-    }
-
-    Ok(ProcessExecInterceptionInput::new(
-        ProcessExecMediationInput::new(
-            mediation.enabled(),
-            process_exec_mediation_mode(mediation.mode()),
-            mediation.handlers(),
-        ),
-        plan.audit().surfaces().terminal().level(),
-        plan.audit().surfaces().terminal().debug_commands().to_vec(),
-        config.tty(),
-    ))
-}
-
-fn process_exec_mediation_mode(mode: TerminalProcessInterceptionMode) -> ProcessExecMediationMode {
-    match mode {
-        TerminalProcessInterceptionMode::Shim => ProcessExecMediationMode::Shim,
-    }
-}
-
-fn terminal_process_exec_router(
-    terminal: Option<&TerminalSurfaceConfig>,
-    browser_cdp_endpoint: Option<&str>,
-    lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
-) -> Result<SessionInterceptionRouter, SessionExecutionError> {
-    let Some(terminal) = terminal else {
-        return Ok(SessionInterceptionRouter::new());
-    };
-
-    let mut validator = TerminalProcessExecValidator::from_config(terminal)
-        .map_err(SessionExecutionError::terminal_surface)?;
-
-    if let Some(capability) =
-        browser_cdp_process_mediation_capability(terminal, browser_cdp_endpoint, lazy_browser_cdp)?
-    {
-        validator = validator.with_process_mediation_capability(capability);
-    }
-
-    Ok(SessionInterceptionRouter::new().with_process_exec_handler(validator))
-}
-
-fn browser_cdp_process_mediation_capability(
-    terminal: &TerminalSurfaceConfig,
-    browser_cdp_endpoint: Option<&str>,
-    lazy_browser_cdp: Option<LazyBrowserCdpMediationConfig>,
-) -> Result<Option<BrowserCdpProcessMediationCapability>, SessionExecutionError> {
-    if !terminal_uses_managed_browser_cdp_mediation(terminal) {
-        return Ok(None);
-    }
-
-    if let Some(lazy) = lazy_browser_cdp {
-        return BrowserCdpProcessMediationCapability::lazy(
-            lazy.config,
-            lazy.policy_set,
-            lazy.context,
-            lazy.audit_jsonl,
-            lazy.audit,
-        )
-        .map(Some)
-        .map_err(SessionExecutionError::guard_io);
-    }
-
-    Ok(browser_cdp_endpoint.map(BrowserCdpProcessMediationCapability::new))
-}
-
-fn session_cdp_context(plan: &impl SessionPlanContext) -> CdpSessionContext {
-    CdpSessionContext {
-        session_id: plan.session_id().clone(),
-        actor: ActorIdentity {
-            id: plan.actor().id.clone(),
-            kind: plan.actor().kind.clone(),
-        },
-        timestamp: runtime_timestamp(),
-    }
-}
-
-fn side_resource_command_options(
-    interception_backend: Option<&SessionInterceptionBackendBundle>,
-    browser_cdp_endpoint: Option<&str>,
-    interception_registration: Option<&SessionInterceptionRegistration>,
-) -> Result<(DockerSessionCommandOptions, LinuxHostSessionCommandOptions), SessionExecutionError> {
-    match interception_backend {
-        Some(backend) => {
-            let mut docker_options = backend.docker_options();
-            let mut linux_host_options = backend.linux_host_options(browser_cdp_endpoint)?;
-            if let Some(interception_registration) = interception_registration {
-                docker_options = with_environment(
-                    docker_options.with_mount(
-                        DockerSessionMount::new(
-                            interception_registration.endpoint().directory(),
-                            DOCKER_INTERCEPTION_DIR,
-                        )
-                        .read_only(),
-                    ),
-                    interception_registration
-                        .docker_endpoint(Path::new(DOCKER_INTERCEPTION_DIR))
-                        .environment(),
-                );
-                linux_host_options = with_linux_host_environment(
-                    linux_host_options,
-                    interception_registration.endpoint().environment(),
-                );
-            }
-
-            Ok((docker_options, linux_host_options))
+impl CdpSessionContexts {
+    fn from_plan(plan: &impl SessionPlanContext) -> CdpSessionContext {
+        CdpSessionContext {
+            session_id: plan.session_id().clone(),
+            actor: ActorIdentity {
+                id: plan.actor().id.clone(),
+                kind: plan.actor().kind.clone(),
+            },
+            timestamp: Self::timestamp(),
         }
-        None => Ok((
-            DockerSessionCommandOptions::default(),
-            LinuxHostSessionCommandOptions::default(),
-        )),
+    }
+
+    fn runtime(session_prefix: &str) -> CdpSessionContext {
+        CdpSessionContext {
+            session_id: SessionId::new(format!("{session_prefix}-{}", std::process::id())),
+            actor: ActorIdentity {
+                id: String::from("erebor-runtime-session"),
+                kind: ActorKind::System,
+            },
+            timestamp: Self::timestamp(),
+        }
+    }
+
+    fn timestamp() -> String {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs());
+
+        format!("unix:{seconds}")
     }
 }
 
-fn register_session_interception(
-    interception_backend: Option<&SessionInterceptionBackendBundle>,
-    interception_router: SessionInterceptionRouter,
-    plan: &impl SessionPlanContext,
-    uses_lazy_browser_cdp: bool,
-) -> Result<Option<SessionInterceptionRegistration>, SessionExecutionError> {
-    interception_backend
-        .map(|_backend| {
-            let registration = RuntimeInterceptionBroker::register_session(
-                plan.session_id().as_str(),
-                &plan.actor().id,
-                interception_router,
-            )
-            .map_err(SessionExecutionError::runtime_interception_broker)?;
-            let registration = if uses_lazy_browser_cdp {
-                registration.with_timeout_ms(LAZY_BROWSER_CDP_INTERCEPTION_TIMEOUT_MS)
-            } else {
-                registration
-            };
-            Ok(registration)
+struct SessionInterceptionSetup {
+    backend: Option<SessionInterceptionBackendBundle>,
+}
+
+impl SessionInterceptionSetup {
+    fn new(backend: Option<SessionInterceptionBackendBundle>) -> Self {
+        Self { backend }
+    }
+
+    fn backend_kind(&self) -> Option<&str> {
+        self.backend.as_ref().map(|backend| backend.backend_kind())
+    }
+
+    fn register(
+        &self,
+        router: SessionInterceptionRouter,
+        plan: &impl SessionPlanContext,
+        uses_lazy_browser_cdp: bool,
+    ) -> Result<Option<SessionInterceptionRegistration>, SessionExecutionError> {
+        self.backend
+            .as_ref()
+            .map(|_backend| {
+                let registration = RuntimeInterceptionBroker::register_session(
+                    plan.session_id().as_str(),
+                    &plan.actor().id,
+                    router,
+                )
+                .map_err(SessionExecutionError::runtime_interception_broker)?;
+                let registration = if uses_lazy_browser_cdp {
+                    registration.with_timeout_ms(LAZY_BROWSER_CDP_INTERCEPTION_TIMEOUT_MS)
+                } else {
+                    registration
+                };
+                Ok(registration)
+            })
+            .transpose()
+    }
+
+    fn into_side_resources(
+        self,
+        environment: Vec<(String, String)>,
+        browser_cdp_endpoint: Option<String>,
+        interception_registration: Option<SessionInterceptionRegistration>,
+        supervisor: Option<SessionSurfaceSupervisor>,
+    ) -> Result<SessionSideResources, SessionExecutionError> {
+        let (docker_options, linux_host_options) = self.command_options(
+            browser_cdp_endpoint.as_deref(),
+            interception_registration.as_ref(),
+        )?;
+
+        Ok(SessionSideResources {
+            environment,
+            docker_options,
+            linux_host_options,
+            browser_cdp_endpoint,
+            _interception_registration: interception_registration,
+            _interception_backend: self.backend,
+            _supervisor: supervisor,
         })
-        .transpose()
-}
-
-fn with_environment(
-    mut options: DockerSessionCommandOptions,
-    environment: Vec<(String, String)>,
-) -> DockerSessionCommandOptions {
-    for (key, value) in environment {
-        options = options.with_environment(key, value);
     }
-    options
-}
 
-fn with_linux_host_environment(
-    mut options: LinuxHostSessionCommandOptions,
-    environment: Vec<(String, String)>,
-) -> LinuxHostSessionCommandOptions {
-    for (key, value) in environment {
-        options = options.with_environment(key, value);
+    fn command_options(
+        &self,
+        browser_cdp_endpoint: Option<&str>,
+        interception_registration: Option<&SessionInterceptionRegistration>,
+    ) -> Result<(DockerSessionCommandOptions, LinuxHostSessionCommandOptions), SessionExecutionError>
+    {
+        let Some(backend) = self.backend.as_ref() else {
+            return Ok((
+                DockerSessionCommandOptions::default(),
+                LinuxHostSessionCommandOptions::default(),
+            ));
+        };
+
+        let mut docker_options = backend.docker_options();
+        let mut linux_host_options = backend.linux_host_options(browser_cdp_endpoint)?;
+        if let Some(interception_registration) = interception_registration {
+            docker_options = docker_options.with_mount(
+                DockerSessionMount::new(
+                    interception_registration.endpoint().directory(),
+                    DOCKER_INTERCEPTION_DIR,
+                )
+                .read_only(),
+            );
+            for (key, value) in interception_registration
+                .docker_endpoint(Path::new(DOCKER_INTERCEPTION_DIR))
+                .environment()
+            {
+                docker_options = docker_options.with_environment(key, value);
+            }
+            for (key, value) in interception_registration.endpoint().environment() {
+                linux_host_options = linux_host_options.with_environment(key, value);
+            }
+        }
+
+        Ok((docker_options, linux_host_options))
     }
-    options
-}
-
-fn runtime_context(session_prefix: &str) -> CdpSessionContext {
-    CdpSessionContext {
-        session_id: SessionId::new(format!("{session_prefix}-{}", std::process::id())),
-        actor: ActorIdentity {
-            id: String::from("erebor-runtime-session"),
-            kind: ActorKind::System,
-        },
-        timestamp: runtime_timestamp(),
-    }
-}
-
-fn runtime_timestamp() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-
-    format!("unix:{seconds}")
 }
 
 fn format_surfaces(surfaces: impl Iterator<Item = SessionSurfaceKind>) -> String {
@@ -860,16 +754,14 @@ impl SessionSideResources {
         self._interception_backend.as_ref().map_or_else(
             || Ok(LinuxHostSessionCommandOptions::default()),
             |backend| {
-                let options =
+                let mut options =
                     backend.linux_host_adopt_options(pid, self.browser_cdp_endpoint.as_deref())?;
                 if let Some(interception_registration) = self._interception_registration.as_ref() {
-                    Ok(with_linux_host_environment(
-                        options,
-                        interception_registration.endpoint().environment(),
-                    ))
-                } else {
-                    Ok(options)
+                    for (key, value) in interception_registration.endpoint().environment() {
+                        options = options.with_environment(key, value);
+                    }
                 }
+                Ok(options)
             },
         )
     }
