@@ -55,6 +55,24 @@ pub enum FilesystemLayerOperation {
     Delete {
         path: String,
     },
+    OpaqueReplace {
+        path: String,
+        entry: FilesystemLayerEntry,
+        marker: FilesystemOpaqueMarker,
+        replacement_entry_count: u64,
+    },
+}
+
+impl FilesystemLayerOperation {
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Create { path, .. }
+            | Self::Replace { path, .. }
+            | Self::Delete { path }
+            | Self::OpaqueReplace { path, .. } => path,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -98,6 +116,13 @@ pub struct FilesystemLayerUnsupported {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FilesystemXattr {
+    pub name: String,
+    pub value: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FilesystemOpaqueMarker {
+    pub kind: String,
     pub name: String,
     pub value: Vec<u8>,
 }

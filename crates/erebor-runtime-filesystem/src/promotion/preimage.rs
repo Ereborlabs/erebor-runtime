@@ -3,7 +3,7 @@ use std::{fs, os::unix::fs::symlink, path::Path};
 use snafu::{ensure, ResultExt};
 
 use crate::{
-    error::{PromotionHostDriftSnafu, PromotionIoSnafu, PromotionPreimageTooLargeSnafu},
+    error::{PromotionHostDriftSnafu, PromotionIoSnafu},
     manifest::FilesystemLayerOperation,
     metadata, FilesystemLayerManifest, FilesystemVolumeStorage, Result,
 };
@@ -14,6 +14,7 @@ use super::{
         FilesystemPreimageManifest,
     },
     path::{create_parent, safe_relative},
+    preimage_size::add_bytes,
 };
 
 const FILES_DIR: &str = "files";
@@ -32,13 +33,16 @@ pub(super) fn capture_volume_preimage(
         volume.host_path().display().to_string(),
     );
     for operation in &layer.operations {
-        let path = operation_path(operation);
+        let path = operation.path();
         match operation {
             FilesystemLayerOperation::Create { .. } => {
                 capture_absent(volume, path, &mut manifest)?;
             }
             FilesystemLayerOperation::Replace { .. } | FilesystemLayerOperation::Delete { .. } => {
                 capture_present(stage_root, volume, path, limit_bytes, &mut manifest)?;
+            }
+            FilesystemLayerOperation::OpaqueReplace { .. } => {
+                capture_present_or_absent(stage_root, volume, path, limit_bytes, &mut manifest)?;
             }
         }
     }
@@ -192,6 +196,26 @@ fn capture_present(
     Ok(())
 }
 
+fn capture_present_or_absent(
+    stage_root: &Path,
+    volume: &FilesystemVolumeStorage,
+    path: &str,
+    limit_bytes: u64,
+    manifest: &mut FilesystemPreimageManifest,
+) -> Result<()> {
+    let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
+    match fs::symlink_metadata(&host_path) {
+        Ok(_) => capture_present(stage_root, volume, path, limit_bytes, manifest),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            capture_absent(volume, path, manifest)
+        }
+        Err(source) => Err(source).context(PromotionIoSnafu {
+            action: "inspect opaque host preimage path",
+            path: host_path.as_path(),
+        }),
+    }
+}
+
 fn copy_directory(
     source: &Path,
     target: &Path,
@@ -254,33 +278,4 @@ fn copy_directory(
     }
     crate::metadata::copy_path_metadata(source, target)?;
     Ok(FilesystemPreimageEntryType::Directory)
-}
-
-fn add_bytes(
-    volume: &FilesystemVolumeStorage,
-    path: &str,
-    bytes: u64,
-    limit_bytes: u64,
-    manifest: &mut FilesystemPreimageManifest,
-) -> Result<()> {
-    let next = manifest.total_bytes.saturating_add(bytes);
-    ensure!(
-        next <= limit_bytes,
-        PromotionPreimageTooLargeSnafu {
-            volume_id: volume.id().to_owned(),
-            path: path.to_owned(),
-            size_bytes: next,
-            limit_bytes
-        }
-    );
-    manifest.total_bytes = next;
-    Ok(())
-}
-
-fn operation_path(operation: &FilesystemLayerOperation) -> &str {
-    match operation {
-        FilesystemLayerOperation::Create { path, .. }
-        | FilesystemLayerOperation::Replace { path, .. }
-        | FilesystemLayerOperation::Delete { path } => path,
-    }
 }

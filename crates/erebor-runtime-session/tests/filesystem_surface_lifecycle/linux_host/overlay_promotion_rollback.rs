@@ -94,6 +94,91 @@ fn linux_host_overlay_promotion_and_rollback_restore_host() -> Result<(), Box<dy
     Ok(())
 }
 
+#[test]
+fn linux_host_opaque_directory_promotion_and_rollback_restore_host(
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !support::require_overlay_lifecycle(
+        "linux_host_opaque_directory_promotion_and_rollback_restore_host",
+    )? {
+        return Ok(());
+    }
+
+    let test_dir = support::test_dir("overlay-opaque-promotion-rollback")?;
+    let workspace = test_dir.join("workspace");
+    let host_project = test_dir.join("host/project");
+    let session_project = workspace.join("project");
+    fs::create_dir_all(host_project.join("docs/nested"))?;
+    fs::create_dir_all(&session_project)?;
+    fs::write(host_project.join("docs/old.txt"), "old\n")?;
+    fs::write(host_project.join("docs/common.txt"), "old common\n")?;
+    fs::write(host_project.join("docs/nested/lower.txt"), "lower\n")?;
+    let policy_path = support::write_empty_policy(&test_dir)?;
+
+    let session_id = "session-filesystem-opaque-promotion-rollback";
+    let command = "set -eu; cd project; test -f docs/old.txt; \
+         rm -rf docs; mkdir -p docs/fresh; \
+         printf 'new\\n' > docs/fresh/new.txt; \
+         printf 'new common\\n' > docs/common.txt";
+    let config = support::overlay_promoting_config(
+        &policy_path,
+        &workspace,
+        &host_project,
+        &session_project,
+        "overlay-opaque-promotion-rollback",
+        command,
+    )?;
+    let plan = SessionRunPlan::from_diagnostic(
+        &config,
+        SessionRunnerKind::LinuxHost,
+        SessionId::new(session_id),
+        "overlay-opaque-promotion-rollback",
+    )?;
+
+    SessionExecutionService::run_diagnostic(&config, &plan)?;
+
+    let manifest_path = support::project_layer_manifest_path(&workspace, session_id);
+    let manifest: Value = serde_json::from_str(&fs::read_to_string(manifest_path)?)?;
+    assert_layer_operation(&manifest, "opaque_replace", "docs");
+    assert_eq!(
+        fs::read_to_string(host_project.join("docs/fresh/new.txt"))?,
+        "new\n"
+    );
+    assert_eq!(
+        fs::read_to_string(host_project.join("docs/common.txt"))?,
+        "new common\n"
+    );
+    assert!(!host_project.join("docs/old.txt").exists());
+    assert!(!host_project.join("docs/nested/lower.txt").exists());
+    let repo = support::session_filesystem_path(&workspace, session_id).join("repo");
+    let preimage_ref = format!("erebor/promotions/{session_id}/volumes/project/preimage");
+    let preimage = ostree_output(&repo, &["cat", &preimage_ref, "/erebor-preimage.json"])?;
+    let preimage: Value = serde_json::from_str(&preimage)?;
+    assert_preimage_entry(&preimage, "docs", "present");
+
+    let storage = reopen_storage(&workspace, session_id, &host_project, &session_project)?;
+    fs::remove_dir_all(storage.work_path().join("promotions").join(session_id))?;
+    rollback_promotion(&storage, session_id)?;
+
+    assert_eq!(
+        fs::read_to_string(host_project.join("docs/old.txt"))?,
+        "old\n"
+    );
+    assert_eq!(
+        fs::read_to_string(host_project.join("docs/common.txt"))?,
+        "old common\n"
+    );
+    assert_eq!(
+        fs::read_to_string(host_project.join("docs/nested/lower.txt"))?,
+        "lower\n"
+    );
+    assert!(!host_project.join("docs/fresh/new.txt").exists());
+    support::assert_not_mountpoint(&session_project)?;
+    support::assert_not_mountpoint(&host_project)?;
+
+    support::cleanup_overlay_test_dir(&test_dir, &workspace, session_id)?;
+    Ok(())
+}
+
 fn reopen_storage(
     workspace: &Path,
     session_id: &str,
@@ -110,6 +195,28 @@ fn reopen_storage(
         workspace.join(".erebor/sessions").join(session_id),
         vec![request],
     )?)
+}
+
+fn assert_layer_operation(manifest: &Value, expected_op: &str, expected_path: &str) {
+    assert!(
+        manifest["operations"].as_array().is_some_and(|operations| {
+            operations.iter().any(|operation| {
+                operation["op"] == expected_op && operation["path"] == expected_path
+            })
+        }),
+        "missing {expected_op} operation for {expected_path}: {manifest:#}"
+    );
+}
+
+fn assert_preimage_entry(preimage: &Value, expected_path: &str, expected_state: &str) {
+    assert!(
+        preimage["entries"].as_array().is_some_and(|entries| {
+            entries
+                .iter()
+                .any(|entry| entry["path"] == expected_path && entry["state"] == expected_state)
+        }),
+        "missing {expected_state} preimage entry for {expected_path}: {preimage:#}"
+    );
 }
 
 fn ostree_output(repo: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {

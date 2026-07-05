@@ -12,10 +12,10 @@ use crate::{
 };
 
 mod entry;
+mod opaque;
 mod proc;
-mod xattrs;
 
-use entry::{normalize_entry, operation_path};
+use entry::normalize_entry;
 
 #[cfg(test)]
 mod tests;
@@ -40,7 +40,7 @@ fn normalize_volume_layer(volume: &FilesystemVolumeStorage) -> Result<Filesystem
     walk_upperdir(volume, volume.overlay().upper_path(), &mut manifest)?;
     manifest
         .operations
-        .sort_by(|left, right| operation_path(left).cmp(operation_path(right)));
+        .sort_by(|left, right| left.path().cmp(right.path()));
     manifest.unsupported.sort_by(|left, right| {
         left.path
             .cmp(&right.path)

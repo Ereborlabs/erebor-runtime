@@ -8,6 +8,7 @@ mod manifest;
 mod metadata;
 mod normalizer;
 mod ostree;
+mod overlay;
 mod promotion;
 mod storage;
 
@@ -22,7 +23,7 @@ pub use linux_overlay_session::LinuxOverlaySessionView;
 pub use manifest::{
     FilesystemLayerEntry, FilesystemLayerManifest, FilesystemLayerMetadata,
     FilesystemLayerMetadataSidecar, FilesystemLayerOperation, FilesystemLayerUnsupported,
-    FilesystemXattr, LAYER_MANIFEST_FILE, LAYER_MANIFEST_KIND,
+    FilesystemOpaqueMarker, FilesystemXattr, LAYER_MANIFEST_FILE, LAYER_MANIFEST_KIND,
 };
 pub use normalizer::normalize_session_layers;
 pub use promotion::{

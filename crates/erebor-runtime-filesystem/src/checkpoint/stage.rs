@@ -12,7 +12,7 @@ use crate::{
         FilesystemLayerEntry, FilesystemLayerManifest, FilesystemLayerOperation,
         LAYER_MANIFEST_FILE,
     },
-    metadata, FilesystemVolumeStorage, Result,
+    metadata, overlay, FilesystemVolumeStorage, Result,
 };
 
 const FILES_DIR: &str = "files";
@@ -30,6 +30,9 @@ pub(super) fn stage_volume_layer(
             FilesystemLayerOperation::Create { path, entry }
             | FilesystemLayerOperation::Replace { path, entry } => {
                 stage_entry(stage_root, volume, path, entry)?;
+            }
+            FilesystemLayerOperation::OpaqueReplace { path, .. } => {
+                stage_opaque_replace(stage_root, volume, path)?;
             }
             FilesystemLayerOperation::Delete { .. } => {}
         }
@@ -113,9 +116,88 @@ fn directory_metadata(
         | FilesystemLayerOperation::Replace {
             path,
             entry: FilesystemLayerEntry::Directory { metadata },
+        }
+        | FilesystemLayerOperation::OpaqueReplace {
+            path,
+            entry: FilesystemLayerEntry::Directory { metadata },
+            ..
         } => Some((path, metadata)),
         _ => None,
     }
+}
+
+fn stage_opaque_replace(
+    stage_root: &Path,
+    volume: &FilesystemVolumeStorage,
+    path: &str,
+) -> Result<()> {
+    let relative = safe_relative(path)?;
+    let source = volume.overlay().upper_path().join(&relative);
+    let target = stage_root.join(FILES_DIR).join(relative);
+    stage_visible_tree(&source, &target)
+}
+
+fn stage_visible_tree(source: &Path, target: &Path) -> Result<()> {
+    fs::create_dir_all(target).context(CheckpointIoSnafu {
+        action: "create checkpoint opaque directory",
+        path: target,
+    })?;
+    for entry in fs::read_dir(source).context(CheckpointIoSnafu {
+        action: "read checkpoint opaque directory",
+        path: source,
+    })? {
+        let entry = entry.context(CheckpointIoSnafu {
+            action: "read checkpoint opaque directory entry",
+            path: source,
+        })?;
+        let source_path = entry.path();
+        let file_metadata = fs::symlink_metadata(&source_path).context(CheckpointIoSnafu {
+            action: "inspect checkpoint opaque entry",
+            path: source_path.as_path(),
+        })?;
+        if overlay::is_whiteout_entry(&source_path, &file_metadata)? {
+            continue;
+        }
+        let target_path = target.join(entry.file_name());
+        if file_metadata.is_dir() {
+            stage_visible_tree(&source_path, &target_path)?;
+        } else if file_metadata.is_file() {
+            fs::copy(&source_path, &target_path).context(CheckpointIoSnafu {
+                action: "copy checkpoint opaque regular entry",
+                path: source_path.as_path(),
+            })?;
+            apply_source_metadata(&source_path, &target_path, &file_metadata)?;
+        } else if file_metadata.file_type().is_symlink() {
+            let link = fs::read_link(&source_path).context(CheckpointIoSnafu {
+                action: "read checkpoint opaque symlink entry",
+                path: source_path.as_path(),
+            })?;
+            symlink(link, &target_path).context(CheckpointIoSnafu {
+                action: "copy checkpoint opaque symlink entry",
+                path: target_path.as_path(),
+            })?;
+            apply_source_metadata(&source_path, &target_path, &file_metadata)?;
+        } else {
+            return UnsupportedLayerSnafu {
+                volume_id: String::from("<checkpoint>"),
+                reason: format!(
+                    "opaque replacement `{}` contains a special file",
+                    source.display()
+                ),
+            }
+            .fail();
+        }
+    }
+    let directory_metadata = fs::symlink_metadata(source).context(CheckpointIoSnafu {
+        action: "inspect checkpoint opaque directory metadata",
+        path: source,
+    })?;
+    apply_source_metadata(source, target, &directory_metadata)
+}
+
+fn apply_source_metadata(source: &Path, target: &Path, metadata: &fs::Metadata) -> Result<()> {
+    let metadata = metadata::layer_metadata(source, metadata)?;
+    metadata::apply_layer_metadata(target, &metadata)
 }
 
 fn copy_regular(volume: &FilesystemVolumeStorage, source: &str, target: &Path) -> Result<()> {

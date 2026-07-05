@@ -24,6 +24,7 @@ mod lock;
 mod manifest;
 mod path;
 mod preimage;
+mod preimage_size;
 mod rollback;
 mod types;
 

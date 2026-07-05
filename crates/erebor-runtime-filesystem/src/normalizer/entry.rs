@@ -12,10 +12,8 @@ use crate::{
         FilesystemLayerEntry, FilesystemLayerManifest, FilesystemLayerMetadata,
         FilesystemLayerMetadataSidecar, FilesystemLayerOperation, FilesystemLayerUnsupported,
     },
-    metadata, FilesystemVolumeStorage, Result,
+    metadata, overlay, FilesystemVolumeStorage, Result,
 };
-
-use super::xattrs;
 
 pub(super) fn normalize_entry(
     volume: &FilesystemVolumeStorage,
@@ -25,15 +23,7 @@ pub(super) fn normalize_entry(
 ) -> Result<()> {
     let relative = manifest_path(volume.overlay().upper_path(), path)?;
     let file_type = metadata.file_type();
-    if path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == ".wh..wh..opq")
-    {
-        manifest.push_unsupported(FilesystemLayerUnsupported {
-            path: relative.clone(),
-            reason: String::from("opaque directory marker is not promotable in this phase"),
-        });
+    if overlay::is_opaque_marker_file(path) {
         return Ok(());
     }
 
@@ -46,13 +36,13 @@ pub(super) fn normalize_entry(
         return Ok(());
     }
 
-    for reason in xattrs::unsupported_reasons(path)? {
+    for reason in overlay::unsupported_reasons(path)? {
         manifest.push_unsupported(FilesystemLayerUnsupported {
             path: relative.clone(),
             reason,
         });
     }
-    for name in xattrs::metadata_sidecars(path)? {
+    for name in overlay::metadata_sidecars(path)? {
         manifest
             .metadata_sidecars
             .push(FilesystemLayerMetadataSidecar {
@@ -61,14 +51,11 @@ pub(super) fn normalize_entry(
             });
     }
 
-    if xattrs::is_opaque_directory(path)? {
-        manifest.push_unsupported(FilesystemLayerUnsupported {
-            path: relative.clone(),
-            reason: String::from("opaque directories are not promotable in this phase"),
-        });
-    }
-
     if file_type.is_dir() {
+        if let Some(operation) = super::opaque::opaque_operation(path, &relative, metadata)? {
+            manifest.operations.push(operation);
+            return Ok(());
+        }
         let operation = create_or_replace_operation(
             volume,
             &relative,
@@ -97,14 +84,6 @@ pub(super) fn normalize_entry(
         });
     }
     Ok(())
-}
-
-pub(super) fn operation_path(operation: &FilesystemLayerOperation) -> &str {
-    match operation {
-        FilesystemLayerOperation::Create { path, .. }
-        | FilesystemLayerOperation::Replace { path, .. }
-        | FilesystemLayerOperation::Delete { path } => path,
-    }
 }
 
 fn normalize_symlink(
@@ -160,7 +139,8 @@ fn whiteout_delete_path(
     metadata: &fs::Metadata,
     relative: &str,
 ) -> Result<Option<String>> {
-    if metadata.file_type().is_char_device() && metadata.rdev() == 0 || xattrs::is_whiteout(path)? {
+    if metadata.file_type().is_char_device() && metadata.rdev() == 0 || overlay::is_whiteout(path)?
+    {
         return Ok(Some(relative.to_owned()));
     }
 

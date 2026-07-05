@@ -13,6 +13,7 @@ use crate::{
 mod hardening;
 mod metadata;
 mod multivolume;
+mod opaque;
 mod support;
 mod transaction_catalog;
 

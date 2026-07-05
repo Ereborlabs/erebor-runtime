@@ -167,6 +167,9 @@ fn change_from_operation(operation: &FilesystemLayerOperation) -> FilesystemTran
         FilesystemLayerOperation::Delete { path } => {
             FilesystemTransactionChange::new("delete", path)
         }
+        FilesystemLayerOperation::OpaqueReplace { path, .. } => {
+            FilesystemTransactionChange::new("opaque_replace", path)
+        }
     }
 }
 

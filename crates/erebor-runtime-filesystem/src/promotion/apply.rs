@@ -32,7 +32,7 @@ pub(super) fn apply_volume_layer(
         apply_operation(layer_stage, volume, operation)?;
         journal
             .applied_operations
-            .push(format!("{}:{}", volume.id(), operation_path(operation)));
+            .push(format!("{}:{}", volume.id(), operation.path()));
         journal.write(journal_root)?;
     }
     apply_layer_directory_metadata(volume, layer)?;
@@ -67,6 +67,14 @@ fn apply_operation(
         FilesystemLayerOperation::Delete { path } => {
             let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
             remove_path(&host_path)
+        }
+        FilesystemLayerOperation::OpaqueReplace { path, .. } => {
+            let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
+            let source = layer_stage
+                .join(FILES_DIR)
+                .join(safe_relative(volume.id(), path)?);
+            remove_path(&host_path)?;
+            copy_directory(&source, &host_path)
         }
     }
 }
@@ -133,6 +141,11 @@ fn directory_metadata(
         | FilesystemLayerOperation::Replace {
             path,
             entry: FilesystemLayerEntry::Directory { metadata },
+        }
+        | FilesystemLayerOperation::OpaqueReplace {
+            path,
+            entry: FilesystemLayerEntry::Directory { metadata },
+            ..
         } => Some((path, metadata)),
         _ => None,
     }
@@ -227,12 +240,4 @@ fn copy_directory(source: &Path, target: &Path) -> Result<()> {
         }
     }
     crate::metadata::copy_path_metadata(source, target)
-}
-
-fn operation_path(operation: &FilesystemLayerOperation) -> &str {
-    match operation {
-        FilesystemLayerOperation::Create { path, .. }
-        | FilesystemLayerOperation::Replace { path, .. }
-        | FilesystemLayerOperation::Delete { path } => path,
-    }
 }

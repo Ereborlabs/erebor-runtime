@@ -65,20 +65,63 @@ fn normalizes_create_replace_delete_symlink_and_metadata() -> TestResult {
 }
 
 #[test]
-fn opaque_directory_writes_manifest_and_fails_closed() -> TestResult {
+fn opaque_xattr_directory_writes_promotable_opaque_replace() -> TestResult {
     let fixture = fixture()?;
     fs::create_dir_all(fixture.upper().join("opaque"))?;
+    fs::write(fixture.upper().join("opaque/new.txt"), "new\n")?;
+    File::create(fixture.upper().join("opaque/.wh.old.txt"))?;
     set_existing_marker(fixture.upper().join("opaque"), "user.overlay.opaque")?;
 
-    let error = normalize_error(&fixture)?;
+    let manifests = normalize_session_layers(&fixture.storage)?;
 
-    assert!(matches!(error, FilesystemError::UnsupportedLayer { .. }));
+    assert_eq!(manifests.len(), 1);
     let manifest = read_manifest(fixture.volume().layer_manifest_path())?;
-    assert!(!manifest.promotable);
-    assert!(manifest
-        .unsupported
+    assert!(manifest.promotable);
+    assert!(manifest.unsupported.is_empty());
+    let operation = manifest
+        .operations
         .iter()
-        .any(|entry| entry.path == "opaque" && entry.reason.contains("opaque directories")));
+        .find(|operation| operation.path() == "opaque")
+        .ok_or_else(|| std::io::Error::other("missing opaque operation"))?;
+    assert!(matches!(
+        operation,
+        FilesystemLayerOperation::OpaqueReplace {
+            marker,
+            replacement_entry_count: 1,
+            ..
+        } if marker.kind == "xattr" && marker.name == "user.overlay.opaque"
+    ));
+    assert_eq!(manifest.operations.len(), 1);
+    assert!(!manifest
+        .operations
+        .iter()
+        .any(|operation| operation.path().contains(".wh.")));
+    Ok(())
+}
+
+#[test]
+fn opaque_marker_file_writes_promotable_opaque_replace() -> TestResult {
+    let fixture = fixture()?;
+    fs::create_dir_all(fixture.upper().join("opaque/nested"))?;
+    File::create(fixture.upper().join("opaque/.wh..wh..opq"))?;
+    File::create(fixture.upper().join("opaque/nested/.wh..wh..opq"))?;
+    fs::write(fixture.upper().join("opaque/nested/new.txt"), "new\n")?;
+
+    let manifests = normalize_session_layers(&fixture.storage)?;
+
+    assert_eq!(manifests.len(), 1);
+    let manifest = read_manifest(fixture.volume().layer_manifest_path())?;
+    assert!(manifest.promotable);
+    assert!(manifest.unsupported.is_empty());
+    assert!(matches!(
+        manifest.operations.as_slice(),
+        [FilesystemLayerOperation::OpaqueReplace {
+            path,
+            marker,
+            replacement_entry_count: 2,
+            ..
+        }] if path == "opaque" && marker.kind == "whiteout_file"
+    ));
     Ok(())
 }
 
@@ -221,6 +264,9 @@ fn assert_operation(operations: &[FilesystemLayerOperation], kind: &str, expecte
         FilesystemLayerOperation::Create { path, .. } => kind == "create" && path == expected,
         FilesystemLayerOperation::Replace { path, .. } => kind == "replace" && path == expected,
         FilesystemLayerOperation::Delete { path } => kind == "delete" && path == expected,
+        FilesystemLayerOperation::OpaqueReplace { path, .. } => {
+            kind == "opaque_replace" && path == expected
+        }
     });
     assert!(
         found,
