@@ -81,6 +81,7 @@ pub struct FilesystemLayerMetadata {
     pub size: u64,
     pub mtime_sec: i64,
     pub mtime_nsec: i64,
+    pub xattrs: Vec<FilesystemXattr>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -93,4 +94,10 @@ pub struct FilesystemLayerMetadataSidecar {
 pub struct FilesystemLayerUnsupported {
     pub path: String,
     pub reason: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FilesystemXattr {
+    pub name: String,
+    pub value: Vec<u8>,
 }

@@ -210,14 +210,16 @@ fn copy_tree(source: &Path, target: &Path) -> crate::Result<()> {
         } else if metadata.is_file() {
             fs::copy(&source_path, &target_path)
                 .map_err(|source| test_io_source("copy fake tree file", &source_path, source))?;
+            crate::metadata::copy_path_metadata(&source_path, &target_path)?;
         } else if metadata.file_type().is_symlink() {
             let link = fs::read_link(&source_path)
                 .map_err(|source| test_io_source("read fake tree symlink", &source_path, source))?;
             symlink(link, &target_path)
                 .map_err(|source| test_io_source("copy fake tree symlink", &target_path, source))?;
+            crate::metadata::copy_path_metadata(&source_path, &target_path)?;
         }
     }
-    Ok(())
+    crate::metadata::copy_path_metadata(source, target)
 }
 
 fn test_io(reason: &'static str, path: &Path) -> FilesystemError {

@@ -5,6 +5,8 @@ use erebor_runtime_core::{RuntimeConfig, SessionRunPlan, SessionRunnerKind};
 use erebor_runtime_events::{ActionKind, SessionId};
 use erebor_runtime_session::{SessionExecutionError, SessionExecutionService};
 
+#[path = "linux_host/metadata.rs"]
+mod metadata;
 #[path = "linux_host/overlay_layer_manifest.rs"]
 mod overlay_layer_manifest;
 #[path = "linux_host/overlay_multivolume.rs"]

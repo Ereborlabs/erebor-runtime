@@ -12,7 +12,7 @@ use crate::{
         FilesystemLayerEntry, FilesystemLayerManifest, FilesystemLayerMetadata,
         FilesystemLayerMetadataSidecar, FilesystemLayerOperation, FilesystemLayerUnsupported,
     },
-    FilesystemVolumeStorage, Result,
+    metadata, FilesystemVolumeStorage, Result,
 };
 
 use super::xattrs;
@@ -73,7 +73,7 @@ pub(super) fn normalize_entry(
             volume,
             &relative,
             FilesystemLayerEntry::Directory {
-                metadata: layer_metadata(metadata),
+                metadata: layer_metadata(path, metadata)?,
             },
         );
         manifest.operations.push(operation);
@@ -84,7 +84,7 @@ pub(super) fn normalize_entry(
             &relative,
             FilesystemLayerEntry::Regular {
                 source: relative.clone(),
-                metadata: layer_metadata(metadata),
+                metadata: layer_metadata(path, metadata)?,
             },
         );
         manifest.operations.push(operation);
@@ -122,7 +122,7 @@ fn normalize_symlink(
                 relative,
                 FilesystemLayerEntry::Symlink {
                     target,
-                    metadata: layer_metadata(metadata),
+                    metadata: layer_metadata(path, metadata)?,
                 },
             );
             manifest.operations.push(operation);
@@ -244,13 +244,6 @@ fn unsupported_path(reason: &str) -> Result<()> {
     .fail()
 }
 
-fn layer_metadata(metadata: &fs::Metadata) -> FilesystemLayerMetadata {
-    FilesystemLayerMetadata {
-        mode: metadata.mode(),
-        uid: metadata.uid(),
-        gid: metadata.gid(),
-        size: metadata.len(),
-        mtime_sec: metadata.mtime(),
-        mtime_nsec: metadata.mtime_nsec(),
-    }
+fn layer_metadata(path: &Path, metadata: &fs::Metadata) -> Result<FilesystemLayerMetadata> {
+    metadata::layer_metadata(path, metadata)
 }

@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::FilesystemXattr;
+
 pub const PREIMAGE_MANIFEST_FILE: &str = "erebor-preimage.json";
 pub const PREIMAGE_MANIFEST_KIND: &str = "erebor.filesystem.preimage";
 pub const PROMOTION_MANIFEST_FILE: &str = "erebor-promotion.json";
@@ -112,4 +114,5 @@ pub struct FilesystemHostMetadata {
     pub mtime_nsec: i64,
     pub device: u64,
     pub inode: u64,
+    pub xattrs: Vec<FilesystemXattr>,
 }

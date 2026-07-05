@@ -12,7 +12,7 @@ use crate::{
         FilesystemLayerEntry, FilesystemLayerManifest, FilesystemLayerOperation,
         LAYER_MANIFEST_FILE,
     },
-    FilesystemVolumeStorage, Result,
+    metadata, FilesystemVolumeStorage, Result,
 };
 
 const FILES_DIR: &str = "files";
@@ -34,6 +34,7 @@ pub(super) fn stage_volume_layer(
             FilesystemLayerOperation::Delete { .. } => {}
         }
     }
+    apply_directory_metadata(stage_root, manifest)?;
     Ok(())
 }
 
@@ -75,14 +76,46 @@ fn stage_entry(
                 path: target.as_path(),
             })?;
         }
-        FilesystemLayerEntry::Regular { source, .. } => {
+        FilesystemLayerEntry::Regular { source, metadata } => {
             copy_regular(volume, source, &target)?;
+            metadata::apply_layer_metadata(&target, metadata)?;
         }
-        FilesystemLayerEntry::Symlink { target: source, .. } => {
+        FilesystemLayerEntry::Symlink {
+            target: source,
+            metadata,
+        } => {
             write_symlink(source, &target)?;
+            metadata::apply_layer_metadata(&target, metadata)?;
         }
     }
     Ok(())
+}
+
+fn apply_directory_metadata(stage_root: &Path, manifest: &FilesystemLayerManifest) -> Result<()> {
+    for operation in manifest.operations.iter().rev() {
+        let Some((path, metadata)) = directory_metadata(operation) else {
+            continue;
+        };
+        let target = stage_root.join(FILES_DIR).join(safe_relative(path)?);
+        metadata::apply_layer_metadata(&target, metadata)?;
+    }
+    Ok(())
+}
+
+fn directory_metadata(
+    operation: &FilesystemLayerOperation,
+) -> Option<(&str, &crate::FilesystemLayerMetadata)> {
+    match operation {
+        FilesystemLayerOperation::Create {
+            path,
+            entry: FilesystemLayerEntry::Directory { metadata },
+        }
+        | FilesystemLayerOperation::Replace {
+            path,
+            entry: FilesystemLayerEntry::Directory { metadata },
+        } => Some((path, metadata)),
+        _ => None,
+    }
 }
 
 fn copy_regular(volume: &FilesystemVolumeStorage, source: &str, target: &Path) -> Result<()> {

@@ -22,7 +22,6 @@ mod journal;
 mod layer;
 mod lock;
 mod manifest;
-mod metadata;
 mod path;
 mod preimage;
 mod rollback;
@@ -42,10 +41,10 @@ pub(crate) use catalog::{
 };
 pub use ids::{promotion_manifest_ref, promotion_preimage_ref};
 pub use manifest::{
-    FilesystemPreimageEntry, FilesystemPreimageEntryState, FilesystemPreimageEntryType,
-    FilesystemPreimageManifest, FilesystemPromotionManifest, FilesystemPromotionState,
-    FilesystemPromotionVolume, PREIMAGE_MANIFEST_FILE, PREIMAGE_MANIFEST_KIND,
-    PROMOTION_MANIFEST_FILE, PROMOTION_MANIFEST_KIND,
+    FilesystemHostMetadata, FilesystemPreimageEntry, FilesystemPreimageEntryState,
+    FilesystemPreimageEntryType, FilesystemPreimageManifest, FilesystemPromotionManifest,
+    FilesystemPromotionState, FilesystemPromotionVolume, PREIMAGE_MANIFEST_FILE,
+    PREIMAGE_MANIFEST_KIND, PROMOTION_MANIFEST_FILE, PROMOTION_MANIFEST_KIND,
 };
 pub use rollback::rollback_promotion;
 pub use types::{FilesystemPromotion, FilesystemPromotionOptions, FilesystemRollback};

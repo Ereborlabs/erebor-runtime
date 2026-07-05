@@ -14,15 +14,6 @@ use crate::{
 const OVERLAY_WHITEOUT: &[&str] = &["trusted.overlay.whiteout", "user.overlay.whiteout"];
 const OVERLAY_OPAQUE: &[&str] = &["trusted.overlay.opaque", "user.overlay.opaque"];
 const OVERLAY_SIDECARS: &[&str] = &["trusted.overlay.origin", "user.overlay.origin"];
-const KNOWN_OVERLAY_XATTRS: &[&str] = &[
-    "trusted.overlay.whiteout",
-    "trusted.overlay.opaque",
-    "trusted.overlay.origin",
-    "user.overlay.whiteout",
-    "user.overlay.opaque",
-    "user.overlay.origin",
-];
-
 pub(super) fn is_whiteout(path: &Path) -> Result<bool> {
     has_overlay_marker(path, OVERLAY_WHITEOUT)
 }
@@ -32,11 +23,8 @@ pub(super) fn is_opaque_directory(path: &Path) -> Result<bool> {
 }
 
 pub(super) fn unsupported_reasons(path: &Path) -> Result<Vec<String>> {
-    Ok(list_xattrs(path)?
-        .into_iter()
-        .filter(|name| !KNOWN_OVERLAY_XATTRS.contains(&name.as_str()))
-        .map(|name| unsupported_reason(&name))
-        .collect())
+    let _xattrs = list_xattrs(path)?;
+    Ok(Vec::new())
 }
 
 pub(super) fn metadata_sidecars(path: &Path) -> Result<Vec<String>> {
@@ -87,14 +75,4 @@ fn list_xattrs(path: &Path) -> Result<Vec<String>> {
 
 fn missing_or_unsupported(error: Errno) -> bool {
     matches!(error, Errno::NODATA | Errno::NOTSUP)
-}
-
-fn unsupported_reason(name: &str) -> String {
-    if name == "security.capability" {
-        String::from("file capabilities are not supported in this phase")
-    } else if name.starts_with("system.posix_acl") {
-        String::from("POSIX ACLs are not supported in this phase")
-    } else {
-        format!("unsupported xattr `{name}`")
-    }
 }

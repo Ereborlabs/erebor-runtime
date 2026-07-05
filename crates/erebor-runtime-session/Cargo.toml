@@ -25,6 +25,9 @@ tokio.workspace = true
 # build-script-produced runtime artifact.
 editor-process-guard-target = []
 
+[dev-dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
 [[bin]]
 name = "erebor-linux-process-guard"
 path = "src/os/linux/process_guard.rs"

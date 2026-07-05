@@ -5,7 +5,7 @@ use snafu::{ensure, ResultExt};
 use crate::{
     error::{PromotionHostDriftSnafu, PromotionIoSnafu, PromotionPreimageTooLargeSnafu},
     manifest::FilesystemLayerOperation,
-    FilesystemLayerManifest, FilesystemVolumeStorage, Result,
+    metadata, FilesystemLayerManifest, FilesystemVolumeStorage, Result,
 };
 
 use super::{
@@ -13,7 +13,6 @@ use super::{
         FilesystemPreimageEntry, FilesystemPreimageEntryState, FilesystemPreimageEntryType,
         FilesystemPreimageManifest,
     },
-    metadata::host_metadata,
     path::{create_parent, safe_relative},
 };
 
@@ -78,7 +77,7 @@ pub(super) fn verify_preimage_matches_host(
                 let Some(expected) = &entry.metadata else {
                     continue;
                 };
-                let current = host_metadata(&current);
+                let current = metadata::host_metadata(&host_path, &current)?;
                 ensure!(
                     current == *expected,
                     PromotionHostDriftSnafu {
@@ -160,6 +159,7 @@ fn capture_present(
             action: "copy promotion regular preimage",
             path: host_path.as_path(),
         })?;
+        metadata::copy_path_metadata(&host_path, &target)?;
         FilesystemPreimageEntryType::Regular {
             source: path.to_owned(),
         }
@@ -173,6 +173,7 @@ fn capture_present(
             action: "copy promotion symlink preimage",
             path: target.as_path(),
         })?;
+        metadata::copy_path_metadata(&host_path, &target)?;
         FilesystemPreimageEntryType::Symlink {
             target: target_path.display().to_string(),
         }
@@ -186,7 +187,7 @@ fn capture_present(
     manifest.entries.push(FilesystemPreimageEntry {
         path: path.to_owned(),
         state: FilesystemPreimageEntryState::Present { entry_type },
-        metadata: Some(host_metadata(&metadata)),
+        metadata: Some(metadata::host_metadata(&host_path, &metadata)?),
     });
     Ok(())
 }
@@ -232,6 +233,7 @@ fn copy_directory(
                 action: "copy promotion directory file preimage",
                 path: source_path.as_path(),
             })?;
+            crate::metadata::copy_path_metadata(&source_path, &target_path)?;
         } else if metadata.file_type().is_symlink() {
             let link_target = fs::read_link(&source_path).context(PromotionIoSnafu {
                 action: "read promotion directory symlink preimage",
@@ -241,6 +243,7 @@ fn copy_directory(
                 action: "copy promotion directory symlink preimage",
                 path: target_path.as_path(),
             })?;
+            crate::metadata::copy_path_metadata(&source_path, &target_path)?;
         } else {
             return crate::error::UnsupportedLayerSnafu {
                 volume_id: volume.id().to_owned(),
@@ -249,6 +252,7 @@ fn copy_directory(
             .fail();
         }
     }
+    crate::metadata::copy_path_metadata(source, target)?;
     Ok(FilesystemPreimageEntryType::Directory)
 }
 

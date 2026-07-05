@@ -11,6 +11,7 @@ use crate::{
 };
 
 mod hardening;
+mod metadata;
 mod multivolume;
 mod support;
 mod transaction_catalog;

@@ -5,7 +5,7 @@ use snafu::ResultExt;
 use crate::{
     error::PromotionIoSnafu,
     manifest::{FilesystemLayerEntry, FilesystemLayerOperation},
-    FilesystemLayerManifest, FilesystemVolumeStorage, Result,
+    metadata, FilesystemLayerManifest, FilesystemVolumeStorage, Result,
 };
 
 use super::{
@@ -35,6 +35,7 @@ pub(super) fn apply_volume_layer(
             .push(format!("{}:{}", volume.id(), operation_path(operation)));
         journal.write(journal_root)?;
     }
+    apply_layer_directory_metadata(volume, layer)?;
     Ok(())
 }
 
@@ -84,7 +85,7 @@ fn write_layer_entry(
                 path: host_path.as_path(),
             })?;
         }
-        FilesystemLayerEntry::Regular { source, .. } => {
+        FilesystemLayerEntry::Regular { source, metadata } => {
             let upper = layer_stage
                 .join(FILES_DIR)
                 .join(safe_relative(volume.id(), source)?);
@@ -93,16 +94,48 @@ fn write_layer_entry(
                 action: "copy promotion regular file",
                 path: upper.as_path(),
             })?;
+            metadata::apply_layer_metadata(&host_path, metadata)?;
         }
-        FilesystemLayerEntry::Symlink { target, .. } => {
+        FilesystemLayerEntry::Symlink { target, metadata } => {
             create_parent(&host_path)?;
             symlink(target, &host_path).context(PromotionIoSnafu {
                 action: "create promotion symlink",
                 path: host_path.as_path(),
             })?;
+            metadata::apply_layer_metadata(&host_path, metadata)?;
         }
     }
     Ok(())
+}
+
+fn apply_layer_directory_metadata(
+    volume: &FilesystemVolumeStorage,
+    layer: &FilesystemLayerManifest,
+) -> Result<()> {
+    for operation in layer.operations.iter().rev() {
+        let Some((path, metadata)) = directory_metadata(operation) else {
+            continue;
+        };
+        let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
+        metadata::apply_layer_metadata(&host_path, metadata)?;
+    }
+    Ok(())
+}
+
+fn directory_metadata(
+    operation: &FilesystemLayerOperation,
+) -> Option<(&str, &crate::FilesystemLayerMetadata)> {
+    match operation {
+        FilesystemLayerOperation::Create {
+            path,
+            entry: FilesystemLayerEntry::Directory { metadata },
+        }
+        | FilesystemLayerOperation::Replace {
+            path,
+            entry: FilesystemLayerEntry::Directory { metadata },
+        } => Some((path, metadata)),
+        _ => None,
+    }
 }
 
 fn rollback_entry(
@@ -118,7 +151,11 @@ fn rollback_entry(
             remove_path(&host_path)?;
             match entry_type {
                 FilesystemPreimageEntryType::Directory => {
-                    copy_directory(&stage_root.join(FILES_DIR).join(&relative), &host_path)
+                    copy_directory(&stage_root.join(FILES_DIR).join(&relative), &host_path)?;
+                    if let Some(metadata) = &entry.metadata {
+                        metadata::apply_host_metadata(&host_path, metadata)?;
+                    }
+                    Ok(())
                 }
                 FilesystemPreimageEntryType::Regular { source } => {
                     let source = stage_root
@@ -129,6 +166,9 @@ fn rollback_entry(
                         action: "restore rollback regular file",
                         path: source.as_path(),
                     })?;
+                    if let Some(metadata) = &entry.metadata {
+                        metadata::apply_host_metadata(&host_path, metadata)?;
+                    }
                     Ok(())
                 }
                 FilesystemPreimageEntryType::Symlink { target } => {
@@ -136,7 +176,11 @@ fn rollback_entry(
                     symlink(target, &host_path).context(PromotionIoSnafu {
                         action: "restore rollback symlink",
                         path: host_path.as_path(),
-                    })
+                    })?;
+                    if let Some(metadata) = &entry.metadata {
+                        metadata::apply_host_metadata(&host_path, metadata)?;
+                    }
+                    Ok(())
                 }
             }
         }
@@ -169,6 +213,7 @@ fn copy_directory(source: &Path, target: &Path) -> Result<()> {
                 action: "restore rollback directory file",
                 path: source_path.as_path(),
             })?;
+            crate::metadata::copy_path_metadata(&source_path, &target_path)?;
         } else if metadata.file_type().is_symlink() {
             let target_link = fs::read_link(&source_path).context(PromotionIoSnafu {
                 action: "read rollback directory symlink",
@@ -178,9 +223,10 @@ fn copy_directory(source: &Path, target: &Path) -> Result<()> {
                 action: "restore rollback directory symlink",
                 path: target_path.as_path(),
             })?;
+            crate::metadata::copy_path_metadata(&source_path, &target_path)?;
         }
     }
-    Ok(())
+    crate::metadata::copy_path_metadata(source, target)
 }
 
 fn operation_path(operation: &FilesystemLayerOperation) -> &str {
