@@ -1,15 +1,22 @@
-use std::{cell::RefCell, fs, path::PathBuf};
+use std::{
+    cell::RefCell,
+    fs,
+    os::unix::fs::symlink,
+    path::{Path, PathBuf},
+};
 
 use crate::{
     checkpoint::{
         checkpoint_manifest_ref, commit_normalized_session_checkpoint_with_runner,
         volume_layer_ref, FilesystemCheckpointManifest,
     },
+    manifest::{FilesystemLayerManifest, LAYER_MANIFEST_FILE},
     normalizer::normalize_session_layers,
     ostree::{OstreeCommandOutput, OstreeCommandRunner},
     storage::prepare_with_initializer,
     FilesystemError, FilesystemVolumeMode, FilesystemVolumeStorageRequest,
 };
+use rustix::fs::{lsetxattr, XattrFlags};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -39,8 +46,13 @@ fn stages_layer_content_and_commits_checkpoint_refs() -> TestResult {
         fixture.upper().join("settings.json"),
         "{\"theme\":\"dark\"}\n",
     )?;
+    set_existing_marker(fixture.upper().join("settings.json"), "user.overlay.origin")?;
     fs::create_dir_all(fixture.upper().join("generated"))?;
     fs::write(fixture.upper().join("generated/token.txt"), "token\n")?;
+    symlink(
+        "generated/token.txt",
+        fixture.upper().join("generated-token-shortcut"),
+    )?;
     fs::write(fixture.upper().join(".wh.old-cache.txt"), "")?;
     let manifests = normalize_session_layers(&fixture.storage)?;
     let runner = FakeOstreeRunner::successful();
@@ -74,7 +86,16 @@ fn stages_layer_content_and_commits_checkpoint_refs() -> TestResult {
         fs::read_to_string(layer_stage.join("files/generated/token.txt"))?,
         "token\n"
     );
+    assert_eq!(
+        fs::read_link(layer_stage.join("files/generated-token-shortcut"))?,
+        PathBuf::from("generated/token.txt")
+    );
     assert!(layer_stage.join("erebor-layer.json").is_file());
+    let layer_manifest: FilesystemLayerManifest =
+        serde_json::from_str(&fs::read_to_string(layer_stage.join(LAYER_MANIFEST_FILE))?)?;
+    assert!(layer_manifest.metadata_sidecars.iter().any(|sidecar| {
+        sidecar.path == "settings.json" && sidecar.name == "user.overlay.origin"
+    }));
     assert!(!storage_tree_contains_file_named(
         &layer_stage,
         ".wh.old-cache.txt"
@@ -86,6 +107,10 @@ fn stages_layer_content_and_commits_checkpoint_refs() -> TestResult {
     let commands = runner.commands.borrow();
     assert_eq!(commands.len(), 2);
     assert!(commands.iter().flatten().all(|arg| !arg.contains("/base")));
+    let layer_stage_arg = format!("--tree=dir={}", layer_stage.display());
+    assert!(commands
+        .iter()
+        .any(|args| args.iter().any(|arg| arg == &layer_stage_arg)));
     assert!(commands.iter().any(|args| {
         args.iter()
             .any(|arg| arg == "--branch=erebor/checkpoints/session-1/volumes/project/layer")
@@ -98,7 +123,7 @@ fn stages_layer_content_and_commits_checkpoint_refs() -> TestResult {
 }
 
 #[test]
-fn ostree_command_failure_is_typed() -> TestResult {
+fn layer_commit_failure_is_typed() -> TestResult {
     let fixture = fixture()?;
     fs::write(fixture.upper().join("settings.json"), "changed\n")?;
     let manifests = normalize_session_layers(&fixture.storage)?;
@@ -127,6 +152,39 @@ fn ostree_command_failure_is_typed() -> TestResult {
             assert_eq!(stderr, "commit failed");
         }
         other => return Err(format!("expected ostree command failure, got {other:?}").into()),
+    }
+    Ok(())
+}
+
+#[test]
+fn manifest_commit_failure_is_typed() -> TestResult {
+    let fixture = fixture()?;
+    fs::write(fixture.upper().join("settings.json"), "changed\n")?;
+    let manifests = normalize_session_layers(&fixture.storage)?;
+    let runner = FakeOstreeRunner::with_outputs(vec![
+        OstreeCommandOutput::new(true, Some(0), ""),
+        OstreeCommandOutput::new(false, Some(43), "manifest commit failed"),
+    ]);
+
+    let result = commit_normalized_session_checkpoint_with_runner(
+        &fixture.storage,
+        "session-1",
+        &manifests,
+        &runner,
+    );
+
+    match result {
+        Err(FilesystemError::OstreeCommandFailed {
+            operation,
+            code,
+            stderr,
+            ..
+        }) => {
+            assert_eq!(operation, "commit checkpoint manifest");
+            assert_eq!(code, Some(43));
+            assert_eq!(stderr, "manifest commit failed");
+        }
+        other => return Err(format!("expected manifest commit failure, got {other:?}").into()),
     }
     Ok(())
 }
@@ -161,8 +219,9 @@ impl Drop for Fixture {
 
 fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
     let root = std::env::temp_dir().join(format!(
-        "erebor-filesystem-checkpoint-{}",
-        std::process::id()
+        "erebor-filesystem-checkpoint-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
     ));
     let _result = fs::remove_dir_all(&root);
     let host_path = root.join("host/project");
@@ -183,10 +242,12 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
     })
 }
 
-fn storage_tree_contains_file_named(
-    root: &std::path::Path,
-    name: &str,
-) -> Result<bool, std::io::Error> {
+fn set_existing_marker(path: PathBuf, name: &str) -> TestResult {
+    lsetxattr(&path, name, b"y", XattrFlags::empty()).map_err(std::io::Error::from)?;
+    Ok(())
+}
+
+fn storage_tree_contains_file_named(root: &Path, name: &str) -> Result<bool, std::io::Error> {
     let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
