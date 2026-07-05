@@ -5,7 +5,9 @@ use std::{
 
 use snafu::ResultExt;
 
-use crate::{error::CreateStorageDirSnafu, FilesystemVolumeMode, Result};
+use crate::{
+    error::CreateStorageDirSnafu, manifest::LAYER_MANIFEST_FILE, FilesystemVolumeMode, Result,
+};
 
 mod ostree;
 mod validation;
@@ -138,6 +140,11 @@ impl FilesystemVolumeStorage {
     #[must_use]
     pub const fn mode(&self) -> FilesystemVolumeMode {
         self.mode
+    }
+
+    #[must_use]
+    pub fn layer_manifest_path(&self) -> PathBuf {
+        self.root.join(LAYER_MANIFEST_FILE)
     }
 }
 

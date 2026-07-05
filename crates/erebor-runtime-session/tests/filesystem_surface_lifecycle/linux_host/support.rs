@@ -5,7 +5,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 use erebor_runtime_core::AuditRecord;
+use erebor_runtime_core::RuntimeConfig;
 use erebor_runtime_events::{ActionKind, ExecutionSurface};
 
 pub(super) fn test_dir(name: &str) -> Result<PathBuf, io::Error> {
@@ -51,6 +55,14 @@ pub(super) fn session_filesystem_path(workspace: &Path, session_id: &str) -> Pat
         .join(".erebor/sessions")
         .join(session_id)
         .join("filesystem")
+}
+
+pub(super) fn project_upper_path(workspace: &Path, session_id: &str) -> PathBuf {
+    session_filesystem_path(workspace, session_id).join("work/volumes/project/overlay/upper")
+}
+
+pub(super) fn project_layer_manifest_path(workspace: &Path, session_id: &str) -> PathBuf {
+    session_filesystem_path(workspace, session_id).join("work/volumes/project/erebor-layer.json")
 }
 
 pub(super) fn filesystem_audit_record<'a>(
@@ -166,6 +178,83 @@ pub(super) fn assert_not_mountpoint(path: &Path) -> Result<(), io::Error> {
     Ok(())
 }
 
+pub(super) fn overlay_config(
+    policy_path: &Path,
+    workspace: &Path,
+    host_project: &Path,
+    session_project: &Path,
+    diagnostic_name: &str,
+    shell_command: &str,
+    empty_policy_only: bool,
+) -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
+    let interception = if empty_policy_only {
+        r#""operations": ["process_exec", "file_open", "file_read", "file_mutation"]"#
+    } else {
+        r#""operations": ["process_exec", "file_mutation"]"#
+    };
+    Ok(RuntimeConfig::from_json_str(&format!(
+        r#"{{
+          "policies": ["{}"],
+          "session": {{
+            "enabled": true,
+            "actor": {{ "id": "openclaw" }},
+            "workspace": "{}",
+            "diagnostics": [
+              {{
+                "name": "{}",
+                "command": ["sh", "-lc", "{}"]
+              }}
+            ],
+            "runner": {{ "kind": "linux_host" }},
+            "interception": {{
+              "enabled": true,
+              "backend": "linux_ptrace",
+              {}
+            }}
+          }},
+          "surfaces": {{
+            "terminal": {{ "enabled": true }},
+            "filesystem": {{
+              "enabled": true,
+              "backend": {{ "kind": "linux_ostree_overlay" }},
+              "volumes": [
+                {{
+                  "id": "project",
+                  "host_path": "{}",
+                  "session_path": "{}",
+                  "mode": "writable"
+                }}
+              ]
+            }}
+          }}
+        }}"#,
+        policy_path.display(),
+        workspace.display(),
+        diagnostic_name,
+        json_escape(shell_command),
+        interception,
+        host_project.display(),
+        session_project.display()
+    ))?)
+}
+
+pub(super) fn cleanup_overlay_test_dir(
+    test_dir: &Path,
+    workspace: &Path,
+    session_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    {
+        let private_work = session_filesystem_path(workspace, session_id)
+            .join("work/volumes/project/overlay/workdir/work");
+        if private_work.exists() {
+            fs::set_permissions(&private_work, fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    fs::remove_dir_all(test_dir)?;
+    Ok(())
+}
+
 fn ostree_available() -> bool {
     Command::new("ostree")
         .arg("--version")
@@ -194,4 +283,8 @@ fn command_available(command: &str) -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|status| status.success())
+}
+
+fn json_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }

@@ -5,7 +5,9 @@ use erebor_runtime_core::{
     SessionRunOutcome, SessionRunPlan,
 };
 use erebor_runtime_events::SessionId;
-use erebor_runtime_filesystem::{FilesystemSessionStorage, FilesystemVolumeStorageRequest};
+use erebor_runtime_filesystem::{
+    normalize_session_layers, FilesystemSessionStorage, FilesystemVolumeStorageRequest,
+};
 use snafu::ResultExt;
 
 use crate::{
@@ -112,9 +114,12 @@ pub(crate) fn finish_registry_session(
     let Some(prepared_session) = prepared_session else {
         return Ok(());
     };
-    let update = match result {
-        Ok(outcome) => SessionRegistryFinish::succeeded(outcome),
-        Err(error) => {
+    let filesystem_result =
+        normalize_successful_filesystem_layers(prepared_session, result.is_ok());
+    let update = match (result, &filesystem_result) {
+        (Ok(outcome), Ok(())) => SessionRegistryFinish::succeeded(outcome),
+        (Ok(_outcome), Err(error)) => SessionRegistryFinish::failed(None, error.to_string()),
+        (Err(error), _) => {
             SessionRegistryFinish::failed(session_exit_code_from_error(error), error.to_string())
         }
     };
@@ -122,7 +127,7 @@ pub(crate) fn finish_registry_session(
         .registry
         .finish_session(session_id, update)
         .context(SessionRegistrySnafu)?;
-    Ok(())
+    filesystem_result
 }
 
 pub(crate) fn finish_registry_diagnostic(
@@ -133,11 +138,14 @@ pub(crate) fn finish_registry_diagnostic(
     let Some(prepared_session) = prepared_session else {
         return Ok(());
     };
-    let update = match result {
-        Ok(_outcome) => {
+    let filesystem_result =
+        normalize_successful_filesystem_layers(prepared_session, result.is_ok());
+    let update = match (result, &filesystem_result) {
+        (Ok(_outcome), Ok(())) => {
             SessionRegistryFinish::succeeded(&SessionRunOutcome::new(plan.runner().kind(), Some(0)))
         }
-        Err(error) => {
+        (Ok(_outcome), Err(error)) => SessionRegistryFinish::failed(None, error.to_string()),
+        (Err(error), _) => {
             SessionRegistryFinish::failed(session_exit_code_from_error(error), error.to_string())
         }
     };
@@ -145,6 +153,19 @@ pub(crate) fn finish_registry_diagnostic(
         .registry
         .finish_session(plan.session_id(), update)
         .context(SessionRegistrySnafu)?;
+    filesystem_result
+}
+
+fn normalize_successful_filesystem_layers(
+    prepared_session: &PreparedSession,
+    successful: bool,
+) -> Result<(), SessionExecutionError> {
+    if !successful {
+        return Ok(());
+    }
+    if let Some(storage) = prepared_session.storage().filesystem() {
+        normalize_session_layers(storage).context(FilesystemSurfaceSnafu)?;
+    }
     Ok(())
 }
 

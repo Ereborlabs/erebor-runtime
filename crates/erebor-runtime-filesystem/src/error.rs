@@ -1,6 +1,7 @@
 use std::{any::Any, io, path::PathBuf};
 
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
+use serde_json::Error as JsonError;
 use snafu::{Location, Snafu};
 
 pub type Result<T> = std::result::Result<T, FilesystemError>;
@@ -93,6 +94,53 @@ pub enum FilesystemError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("failed to read filesystem layer path `{}`: {source}", path.display()))]
+    ReadLayerPath {
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to inspect filesystem layer path `{}`: {source}", path.display()))]
+    InspectLayerPath {
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "filesystem volume `{volume_id}` cannot normalize layer while pid {pid} fd {fd} has a writer open under `{}`",
+        path.display()
+    ))]
+    ActiveLayerWriter {
+        volume_id: String,
+        path: PathBuf,
+        pid: u32,
+        fd: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("filesystem volume `{volume_id}` layer is not promotable: {reason}"))]
+    UnsupportedLayer {
+        volume_id: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to write filesystem layer manifest `{}`: {source}", path.display()))]
+    WriteLayerManifest {
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to encode filesystem layer manifest `{}`: {source}", path.display()))]
+    EncodeLayerManifest {
+        path: PathBuf,
+        source: JsonError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to start ostree for repo `{}`: {source}", repo.display()))]
     StartOstree {
         repo: PathBuf,
@@ -128,8 +176,14 @@ impl ErrorExt for FilesystemError {
             | Self::CreateOverlaySessionDir { .. }
             | Self::WriteOverlayWrapper { .. }
             | Self::SetOverlayWrapperPermissions { .. }
+            | Self::ReadLayerPath { .. }
+            | Self::InspectLayerPath { .. }
+            | Self::ActiveLayerWriter { .. }
+            | Self::WriteLayerManifest { .. }
+            | Self::EncodeLayerManifest { .. }
             | Self::StartOstree { .. }
             | Self::OstreeInitFailed { .. } => StatusCode::External,
+            Self::UnsupportedLayer { .. } => StatusCode::InvalidArguments,
         }
     }
 
@@ -140,12 +194,18 @@ impl ErrorExt for FilesystemError {
             | Self::CreateOverlaySessionDir { source, .. }
             | Self::WriteOverlayWrapper { source, .. }
             | Self::SetOverlayWrapperPermissions { source, .. }
+            | Self::ReadLayerPath { source, .. }
+            | Self::InspectLayerPath { source, .. }
+            | Self::WriteLayerManifest { source, .. }
             | Self::StartOstree { source, .. } => RetryHint::from_io_error(source),
             Self::InvalidVolumeId { .. }
             | Self::InvalidVolumePath { .. }
             | Self::UnsupportedOverlayPlatform { .. }
             | Self::MissingOverlayCommand { .. }
             | Self::InvalidOverlaySessionView { .. }
+            | Self::ActiveLayerWriter { .. }
+            | Self::UnsupportedLayer { .. }
+            | Self::EncodeLayerManifest { .. }
             | Self::OstreeInitFailed { .. } => RetryHint::NonRetryable,
         }
     }

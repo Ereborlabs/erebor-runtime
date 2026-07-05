@@ -7,7 +7,9 @@ repository.workspace = true
 
 [dependencies]
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+rustix = { version = "1.1.4", features = ["fs"] }
 serde.workspace = true
+serde_json.workspace = true
 snafu.workspace = true
 
 [lints]

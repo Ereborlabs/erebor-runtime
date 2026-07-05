@@ -1,10 +1,7 @@
 use std::fs;
 
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-
 use erebor_runtime_audit::read_audit_records;
-use erebor_runtime_core::{RuntimeConfig, SessionRunPlan, SessionRunnerKind};
+use erebor_runtime_core::{SessionRunPlan, SessionRunnerKind};
 use erebor_runtime_events::{ActionKind, SessionId};
 use erebor_runtime_session::{SessionExecutionError, SessionExecutionService};
 
@@ -40,7 +37,7 @@ fn linux_host_overlay_session_view_writes_through_upperdir_without_host_mutation
          if printf bypass > '{}/settings.json'; then exit 72; fi",
         host_project.display()
     );
-    let config = overlay_config(
+    let config = support::overlay_config(
         &policy_path,
         &workspace,
         &host_project,
@@ -58,7 +55,7 @@ fn linux_host_overlay_session_view_writes_through_upperdir_without_host_mutation
 
     SessionExecutionService::run_diagnostic(&config, &plan)?;
 
-    let upper = project_upper_path(&workspace, session_id);
+    let upper = support::project_upper_path(&workspace, session_id);
     assert_eq!(
         fs::read_to_string(upper.join("settings.json"))?,
         "{\"theme\":\"dark\"}\n"
@@ -79,7 +76,7 @@ fn linux_host_overlay_session_view_writes_through_upperdir_without_host_mutation
     support::assert_not_mountpoint(&session_project)?;
     support::assert_not_mountpoint(&host_project)?;
 
-    cleanup_overlay_test_dir(&test_dir, &workspace, session_id)?;
+    support::cleanup_overlay_test_dir(&test_dir, &workspace, session_id)?;
     Ok(())
 }
 
@@ -121,7 +118,7 @@ fn linux_host_denied_overlay_mutation_does_not_create_upperdir_change(
     )?;
 
     let session_id = "session-filesystem-overlay-deny";
-    let config = overlay_config(
+    let config = support::overlay_config(
         &policy_path,
         &workspace,
         &host_project,
@@ -153,7 +150,7 @@ fn linux_host_denied_overlay_mutation_does_not_create_upperdir_change(
         ActionKind::FileMutation,
         "deny-overlay-settings-mutation",
     )?;
-    let upper = project_upper_path(&workspace, session_id);
+    let upper = support::project_upper_path(&workspace, session_id);
     assert!(!support::storage_tree_contains_file_named(
         &upper,
         "settings.json"
@@ -161,92 +158,6 @@ fn linux_host_denied_overlay_mutation_does_not_create_upperdir_change(
     support::assert_not_mountpoint(&session_project)?;
     support::assert_not_mountpoint(&host_project)?;
 
-    cleanup_overlay_test_dir(&test_dir, &workspace, session_id)?;
+    support::cleanup_overlay_test_dir(&test_dir, &workspace, session_id)?;
     Ok(())
-}
-
-fn overlay_config(
-    policy_path: &std::path::Path,
-    workspace: &std::path::Path,
-    host_project: &std::path::Path,
-    session_project: &std::path::Path,
-    diagnostic_name: &str,
-    shell_command: &str,
-    empty_policy_only: bool,
-) -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
-    let interception = if empty_policy_only {
-        r#""operations": ["process_exec", "file_open", "file_read", "file_mutation"]"#
-    } else {
-        r#""operations": ["process_exec", "file_mutation"]"#
-    };
-    Ok(RuntimeConfig::from_json_str(&format!(
-        r#"{{
-          "policies": ["{}"],
-          "session": {{
-            "enabled": true,
-            "actor": {{ "id": "openclaw" }},
-            "workspace": "{}",
-            "diagnostics": [
-              {{
-                "name": "{}",
-                "command": ["sh", "-lc", "{}"]
-              }}
-            ],
-            "runner": {{ "kind": "linux_host" }},
-            "interception": {{
-              "enabled": true,
-              "backend": "linux_ptrace",
-              {}
-            }}
-          }},
-          "surfaces": {{
-            "terminal": {{ "enabled": true }},
-            "filesystem": {{
-              "enabled": true,
-              "backend": {{ "kind": "linux_ostree_overlay" }},
-              "volumes": [
-                {{
-                  "id": "project",
-                  "host_path": "{}",
-                  "session_path": "{}",
-                  "mode": "writable"
-                }}
-              ]
-            }}
-          }}
-        }}"#,
-        policy_path.display(),
-        workspace.display(),
-        diagnostic_name,
-        json_escape(shell_command),
-        interception,
-        host_project.display(),
-        session_project.display()
-    ))?)
-}
-
-fn project_upper_path(workspace: &std::path::Path, session_id: &str) -> std::path::PathBuf {
-    support::session_filesystem_path(workspace, session_id)
-        .join("work/volumes/project/overlay/upper")
-}
-
-fn cleanup_overlay_test_dir(
-    test_dir: &std::path::Path,
-    workspace: &std::path::Path,
-    session_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(unix)]
-    {
-        let private_work = support::session_filesystem_path(workspace, session_id)
-            .join("work/volumes/project/overlay/workdir/work");
-        if private_work.exists() {
-            fs::set_permissions(&private_work, fs::Permissions::from_mode(0o700))?;
-        }
-    }
-    fs::remove_dir_all(test_dir)?;
-    Ok(())
-}
-
-fn json_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
