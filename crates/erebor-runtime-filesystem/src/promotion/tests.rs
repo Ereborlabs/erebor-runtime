@@ -11,6 +11,7 @@ use crate::{
 };
 
 mod hardening;
+mod multivolume;
 mod support;
 
 use support::{commit_checkpoint, fixture, FakeOstreeRunner, TestResult};

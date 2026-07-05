@@ -408,7 +408,11 @@ dependencies = [
 name = "erebor-runtime-filesystem"
 version = "0.1.0"
 dependencies = [
+ "erebor-runtime-error",
+ "rustix",
  "serde",
+ "serde_json",
+ "snafu",
 ]
 
 [[package]]
@@ -436,14 +440,17 @@ dependencies = [
 name = "erebor-runtime-session"
 version = "0.1.0"
 dependencies = [
+ "erebor-runtime-audit",
  "erebor-runtime-cdp",
  "erebor-runtime-core",
  "erebor-runtime-error",
  "erebor-runtime-events",
+ "erebor-runtime-filesystem",
  "erebor-runtime-ipc",
  "erebor-runtime-policy",
  "erebor-runtime-telemetry",
  "erebor-runtime-terminal",
+ "serde_json",
  "snafu",
  "tokio",
 ]

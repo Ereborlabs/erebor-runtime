@@ -7,6 +7,12 @@ use erebor_runtime_session::{SessionExecutionError, SessionExecutionService};
 
 #[path = "linux_host/overlay_layer_manifest.rs"]
 mod overlay_layer_manifest;
+#[path = "linux_host/overlay_multivolume.rs"]
+mod overlay_multivolume;
+#[path = "linux_host/overlay_multivolume_failure.rs"]
+mod overlay_multivolume_failure;
+#[path = "linux_host/overlay_multivolume_support.rs"]
+mod overlay_multivolume_support;
 #[path = "linux_host/overlay_promotion_rollback.rs"]
 mod overlay_promotion_rollback;
 #[path = "linux_host/overlay_session_view.rs"]
@@ -269,7 +275,13 @@ fn linux_host_filesystem_storage_layout_is_prepared_without_host_copy(
 
     let filesystem = support::session_filesystem_path(&workspace, session_id);
     support::assert_storage_layout(&filesystem, "project")?;
-    support::assert_empty_ostree_repo(&filesystem.join("repo"))?;
+    let refs = support::ostree_refs(&filesystem.join("repo"))?;
+    let manifest_ref = format!("erebor/checkpoints/{session_id}/manifest");
+    let layer_ref = format!("erebor/checkpoints/{session_id}/volumes/project/layer");
+    assert!(refs.lines().any(|line| line == manifest_ref));
+    assert!(refs.lines().any(|line| line == layer_ref));
+    assert!(!refs.contains("/base"));
+    support::relax_project_overlay_workdir_permissions(&workspace, session_id)?;
     assert!(!support::storage_tree_contains_file_named(
         &filesystem,
         "settings.json"
@@ -279,6 +291,6 @@ fn linux_host_filesystem_storage_layout_is_prepared_without_host_copy(
         "phase4-host-sentinel\n"
     );
 
-    fs::remove_dir_all(test_dir)?;
+    support::cleanup_overlay_test_dir(&test_dir, &workspace, session_id)?;
     Ok(())
 }

@@ -103,17 +103,14 @@ pub(super) fn assert_storage_layout(filesystem: &Path, volume_id: &str) -> Resul
     Ok(())
 }
 
-pub(super) fn assert_empty_ostree_repo(repo: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub(super) fn ostree_refs(repo: &Path) -> Result<String, Box<dyn std::error::Error>> {
     let refs = Command::new("ostree")
         .arg(format!("--repo={}", repo.display()))
         .arg("refs")
         .arg("--list")
         .output()?;
     assert!(refs.status.success());
-    let refs = String::from_utf8_lossy(&refs.stdout);
-    assert!(refs.trim().is_empty());
-    assert!(!refs.contains("base"));
-    Ok(())
+    Ok(String::from_utf8(refs.stdout)?)
 }
 
 pub(super) fn storage_tree_contains_file_named(
@@ -269,6 +266,15 @@ pub(super) fn cleanup_overlay_test_dir(
     workspace: &Path,
     session_id: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    relax_project_overlay_workdir_permissions(workspace, session_id)?;
+    fs::remove_dir_all(test_dir)?;
+    Ok(())
+}
+
+pub(super) fn relax_project_overlay_workdir_permissions(
+    workspace: &Path,
+    session_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(unix)]
     {
         let private_work = session_filesystem_path(workspace, session_id)
@@ -277,7 +283,6 @@ pub(super) fn cleanup_overlay_test_dir(
             fs::set_permissions(&private_work, fs::Permissions::from_mode(0o700))?;
         }
     }
-    fs::remove_dir_all(test_dir)?;
     Ok(())
 }
 
