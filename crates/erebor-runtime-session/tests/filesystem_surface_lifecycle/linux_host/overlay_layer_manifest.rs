@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, path::Path, process::Command};
 
 use erebor_runtime_core::{SessionRunPlan, SessionRunnerKind};
 use erebor_runtime_events::SessionId;
@@ -59,6 +59,23 @@ fn linux_host_overlay_session_writes_layer_manifest() -> Result<(), Box<dyn std:
     assert_operation(&manifest, "create", "generated/token.txt");
     assert_operation(&manifest, "delete", "old-cache.txt");
     assert!(!operation_path_contains(&manifest, ".wh."));
+    let repo = support::session_filesystem_path(&workspace, session_id).join("repo");
+    let layer_ref = format!("erebor/checkpoints/{session_id}/volumes/project/layer");
+    let checkpoint_ref = format!("erebor/checkpoints/{session_id}/manifest");
+    let refs = ostree_output(&repo, &["refs", "--list"])?;
+    assert!(refs.lines().any(|line| line == layer_ref));
+    assert!(refs.lines().any(|line| line == checkpoint_ref));
+    assert!(!refs.lines().any(|line| line.ends_with("/base")));
+    let layer_root = ostree_output(&repo, &["ls", &layer_ref, "/"])?;
+    assert!(layer_root.contains("erebor-layer.json"));
+    assert!(layer_root.contains("files"));
+    let settings = ostree_output(&repo, &["cat", &layer_ref, "/files/settings.json"])?;
+    assert_eq!(settings, "{\"theme\":\"dark\"}\n");
+    let checkpoint = ostree_output(&repo, &["cat", &checkpoint_ref, "/erebor-checkpoint.json"])?;
+    let checkpoint: Value = serde_json::from_str(&checkpoint)?;
+    assert_eq!(checkpoint["kind"], "erebor.filesystem.checkpoint");
+    assert_eq!(checkpoint["checkpoint_id"], session_id);
+    assert_eq!(checkpoint["volumes"][0]["layer_ref"], layer_ref);
     assert_eq!(
         fs::read_to_string(host_project.join("settings.json"))?,
         "{\"theme\":\"light\"}\n"
@@ -95,4 +112,18 @@ fn operation_path_contains(manifest: &Value, needle: &str) -> bool {
                 .as_str()
                 .is_some_and(|path| path.contains(needle))
         })
+}
+
+fn ostree_output(repo: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
+    let output = Command::new("ostree")
+        .arg(format!("--repo={}", repo.display()))
+        .args(args)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "ostree {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(String::from_utf8(output.stdout)?)
 }

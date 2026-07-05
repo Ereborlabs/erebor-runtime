@@ -6,7 +6,7 @@ use erebor_runtime_core::{
 };
 use erebor_runtime_events::SessionId;
 use erebor_runtime_filesystem::{
-    normalize_session_layers, FilesystemSessionStorage, FilesystemVolumeStorageRequest,
+    commit_session_checkpoint, FilesystemSessionStorage, FilesystemVolumeStorageRequest,
 };
 use snafu::ResultExt;
 
@@ -115,7 +115,7 @@ pub(crate) fn finish_registry_session(
         return Ok(());
     };
     let filesystem_result =
-        normalize_successful_filesystem_layers(prepared_session, result.is_ok());
+        checkpoint_successful_filesystem_layers(prepared_session, session_id, result.is_ok());
     let update = match (result, &filesystem_result) {
         (Ok(outcome), Ok(())) => SessionRegistryFinish::succeeded(outcome),
         (Ok(_outcome), Err(error)) => SessionRegistryFinish::failed(None, error.to_string()),
@@ -138,8 +138,11 @@ pub(crate) fn finish_registry_diagnostic(
     let Some(prepared_session) = prepared_session else {
         return Ok(());
     };
-    let filesystem_result =
-        normalize_successful_filesystem_layers(prepared_session, result.is_ok());
+    let filesystem_result = checkpoint_successful_filesystem_layers(
+        prepared_session,
+        plan.session_id(),
+        result.is_ok(),
+    );
     let update = match (result, &filesystem_result) {
         (Ok(_outcome), Ok(())) => {
             SessionRegistryFinish::succeeded(&SessionRunOutcome::new(plan.runner().kind(), Some(0)))
@@ -156,15 +159,16 @@ pub(crate) fn finish_registry_diagnostic(
     filesystem_result
 }
 
-fn normalize_successful_filesystem_layers(
+fn checkpoint_successful_filesystem_layers(
     prepared_session: &PreparedSession,
+    session_id: &SessionId,
     successful: bool,
 ) -> Result<(), SessionExecutionError> {
     if !successful {
         return Ok(());
     }
     if let Some(storage) = prepared_session.storage().filesystem() {
-        normalize_session_layers(storage).context(FilesystemSurfaceSnafu)?;
+        commit_session_checkpoint(storage, session_id.as_str()).context(FilesystemSurfaceSnafu)?;
     }
     Ok(())
 }

@@ -141,6 +141,28 @@ pub enum FilesystemError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("filesystem checkpoint id `{checkpoint_id}` is invalid: {reason}"))]
+    InvalidCheckpointId {
+        checkpoint_id: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to {action} filesystem checkpoint path `{}`: {source}", path.display()))]
+    CheckpointIo {
+        action: &'static str,
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to encode filesystem checkpoint manifest `{}`: {source}", path.display()))]
+    EncodeCheckpointManifest {
+        path: PathBuf,
+        source: JsonError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to start ostree for repo `{}`: {source}", repo.display()))]
     StartOstree {
         repo: PathBuf,
@@ -161,6 +183,20 @@ pub enum FilesystemError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display(
+        "ostree {operation} failed for repo `{}` with exit code {:?}: {}",
+        repo.display(),
+        code,
+        stderr
+    ))]
+    OstreeCommandFailed {
+        repo: PathBuf,
+        operation: &'static str,
+        code: Option<i32>,
+        stderr: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for FilesystemError {
@@ -170,7 +206,8 @@ impl ErrorExt for FilesystemError {
             | Self::InvalidVolumePath { .. }
             | Self::UnsupportedOverlayPlatform { .. }
             | Self::MissingOverlayCommand { .. }
-            | Self::InvalidOverlaySessionView { .. } => StatusCode::InvalidArguments,
+            | Self::InvalidOverlaySessionView { .. }
+            | Self::InvalidCheckpointId { .. } => StatusCode::InvalidArguments,
             Self::CreateStorageDir { .. }
             | Self::InspectOverlaySessionPath { .. }
             | Self::CreateOverlaySessionDir { .. }
@@ -181,8 +218,11 @@ impl ErrorExt for FilesystemError {
             | Self::ActiveLayerWriter { .. }
             | Self::WriteLayerManifest { .. }
             | Self::EncodeLayerManifest { .. }
+            | Self::CheckpointIo { .. }
+            | Self::EncodeCheckpointManifest { .. }
             | Self::StartOstree { .. }
-            | Self::OstreeInitFailed { .. } => StatusCode::External,
+            | Self::OstreeInitFailed { .. }
+            | Self::OstreeCommandFailed { .. } => StatusCode::External,
             Self::UnsupportedLayer { .. } => StatusCode::InvalidArguments,
         }
     }
@@ -197,16 +237,20 @@ impl ErrorExt for FilesystemError {
             | Self::ReadLayerPath { source, .. }
             | Self::InspectLayerPath { source, .. }
             | Self::WriteLayerManifest { source, .. }
+            | Self::CheckpointIo { source, .. }
             | Self::StartOstree { source, .. } => RetryHint::from_io_error(source),
             Self::InvalidVolumeId { .. }
             | Self::InvalidVolumePath { .. }
             | Self::UnsupportedOverlayPlatform { .. }
             | Self::MissingOverlayCommand { .. }
             | Self::InvalidOverlaySessionView { .. }
+            | Self::InvalidCheckpointId { .. }
             | Self::ActiveLayerWriter { .. }
             | Self::UnsupportedLayer { .. }
             | Self::EncodeLayerManifest { .. }
-            | Self::OstreeInitFailed { .. } => RetryHint::NonRetryable,
+            | Self::EncodeCheckpointManifest { .. }
+            | Self::OstreeInitFailed { .. }
+            | Self::OstreeCommandFailed { .. } => RetryHint::NonRetryable,
         }
     }
 

@@ -1,12 +1,19 @@
 //! Filesystem surface domain contracts.
 
+mod checkpoint;
 mod config;
 mod error;
 mod linux_overlay_session;
 mod manifest;
 mod normalizer;
+mod ostree;
 mod storage;
 
+pub use checkpoint::{
+    checkpoint_manifest_ref, commit_session_checkpoint, volume_layer_ref,
+    FilesystemCheckpointCommit, FilesystemCheckpointManifest, FilesystemCheckpointVolume,
+    CHECKPOINT_MANIFEST_FILE, CHECKPOINT_MANIFEST_KIND,
+};
 pub use config::{FilesystemBackendKind, FilesystemVolumeMode};
 pub use error::{FilesystemError, Result};
 pub use linux_overlay_session::LinuxOverlaySessionView;
