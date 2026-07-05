@@ -1192,13 +1192,13 @@ mod tests {
             ),
         )?;
         let runtime_config = RuntimeConfig::from_json_str(&fs::read_to_string(&config)?)?;
-        let plan = SessionRunPlan::from_config(
+        let mut plan = SessionRunPlan::from_config(
             &runtime_config,
             SessionRunnerKind::LinuxHost,
             SessionId::new("session-registry-source"),
             vec![String::from("sh")],
-        )?
-        .with_config_path(config.clone());
+        )?;
+        plan.set_config_path(config.clone());
         let registry = SessionRegistry::new(plan.registry_path().to_path_buf());
         let started = registry.start_session(&runtime_config, &plan)?;
         let record = process_record(

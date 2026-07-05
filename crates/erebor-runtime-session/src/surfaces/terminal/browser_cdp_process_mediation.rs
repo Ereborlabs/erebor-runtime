@@ -153,10 +153,11 @@ impl LazyBrowserCdpMediation {
             requested_port,
         )?;
         let mut surface = BrowserCdpSurface::new(
-            self.config_template
-                .clone()
-                .with_listen(listen)
-                .with_browser_remote_debugging_port(private_remote_debugging_port),
+            BrowserCdpSurfaceConfig::from_template_for_runtime_browser(
+                &self.config_template,
+                listen,
+                private_remote_debugging_port,
+            ),
             self.policy_set.clone(),
             self.context.clone(),
         )

@@ -35,13 +35,13 @@ fn linux_host_transaction_catalog_cli_rolls_back_subtransactions(
         cli::config_source(&fixture, &policy_path, "transaction-catalog", command),
     )?;
     let config = RuntimeConfig::from_json_str(&fs::read_to_string(&config_path)?)?;
-    let plan = SessionRunPlan::from_diagnostic(
+    let mut plan = SessionRunPlan::from_diagnostic(
         &config,
         SessionRunnerKind::LinuxHost,
         SessionId::new(session_id),
         "transaction-catalog",
-    )?
-    .with_config_path(config_path);
+    )?;
+    plan.set_config_path(config_path);
 
     SessionExecutionService::run_diagnostic(&config, &plan)?;
     assert_promoted(&fixture)?;

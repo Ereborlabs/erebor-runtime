@@ -7,7 +7,7 @@ pub use erebor_runtime_filesystem::{FilesystemBackendKind, FilesystemVolumeMode}
 use serde::Deserialize;
 use snafu::ensure;
 
-use super::surface_policies;
+use super::SurfacePolicyResolver;
 use crate::error::InvalidFilesystemSurfaceConfigSnafu;
 use crate::RuntimeConfigError;
 
@@ -70,19 +70,19 @@ pub struct FilesystemVolumeLayerConfig {
 impl FilesystemVolumeLayerConfig {
     fn validate(&self) -> Result<(), RuntimeConfigError> {
         ensure!(
-            valid_volume_id(&self.id),
+            self.has_valid_id(),
             InvalidFilesystemSurfaceConfigSnafu {
                 reason: format!("filesystem volume id `{}` is invalid", self.id)
             }
         );
         ensure!(
-            path_present(&self.host_path),
+            self.has_host_path(),
             InvalidFilesystemSurfaceConfigSnafu {
                 reason: format!("filesystem volume `{}` host_path cannot be empty", self.id)
             }
         );
         ensure!(
-            path_present(&self.session_path),
+            self.has_session_path(),
             InvalidFilesystemSurfaceConfigSnafu {
                 reason: format!(
                     "filesystem volume `{}` session_path cannot be empty",
@@ -93,25 +93,38 @@ impl FilesystemVolumeLayerConfig {
 
         Ok(())
     }
+
+    fn has_valid_id(&self) -> bool {
+        !self.id.trim().is_empty()
+            && self.id.chars().all(|character| {
+                character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            })
+    }
+
+    fn has_host_path(&self) -> bool {
+        !self.host_path.as_os_str().is_empty()
+    }
+
+    fn has_session_path(&self) -> bool {
+        !self.session_path.as_os_str().is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct FilesystemRevertLayerConfig {
-    #[serde(default = "default_promote_on_session_finish")]
     pub promote_on_session_finish: bool,
-    #[serde(default = "default_retain_layers")]
     pub retain_layers: bool,
-    #[serde(default = "default_preimage_size_limit_bytes")]
     pub preimage_size_limit_bytes: u64,
 }
 
 impl Default for FilesystemRevertLayerConfig {
     fn default() -> Self {
         Self {
-            promote_on_session_finish: default_promote_on_session_finish(),
-            retain_layers: default_retain_layers(),
-            preimage_size_limit_bytes: default_preimage_size_limit_bytes(),
+            promote_on_session_finish: true,
+            retain_layers: true,
+            preimage_size_limit_bytes: 104_857_600,
         }
     }
 }
@@ -150,7 +163,7 @@ impl FilesystemSurfaceConfig {
         default_policies: Vec<PathBuf>,
     ) -> Self {
         Self {
-            policies: surface_policies(&config.policies, default_policies),
+            policies: SurfacePolicyResolver::resolve(&config.policies, default_policies),
             backend: config.backend.into(),
             volumes: config.volumes.iter().map(Into::into).collect(),
             revert: config.revert.into(),
@@ -249,29 +262,6 @@ impl From<FilesystemRevertLayerConfig> for FilesystemRevertConfig {
             preimage_size_limit_bytes: config.preimage_size_limit_bytes,
         }
     }
-}
-
-fn valid_volume_id(id: &str) -> bool {
-    !id.trim().is_empty()
-        && id
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
-}
-
-fn path_present(path: &Path) -> bool {
-    !path.as_os_str().is_empty()
-}
-
-const fn default_promote_on_session_finish() -> bool {
-    true
-}
-
-const fn default_retain_layers() -> bool {
-    true
-}
-
-const fn default_preimage_size_limit_bytes() -> u64 {
-    104_857_600
 }
 
 #[cfg(test)]

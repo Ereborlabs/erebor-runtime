@@ -53,9 +53,8 @@ impl SessionSideResources {
         &self.linux_host_options
     }
 
-    pub(crate) fn with_linux_host_outer_wrapper(mut self, wrapper: PathBuf) -> Self {
-        self.linux_host_options = self.linux_host_options.with_outer_wrapper_program(wrapper);
-        self
+    pub(crate) fn add_linux_host_outer_wrapper(&mut self, wrapper: PathBuf) {
+        self.linux_host_options.add_outer_wrapper_program(wrapper);
     }
 
     pub(crate) fn linux_host_adopt_options(
@@ -69,7 +68,7 @@ impl SessionSideResources {
                     backend.linux_host_adopt_options(pid, self.browser_cdp_endpoint.as_deref())?;
                 if let Some(interception_registration) = self.interception_registration.as_ref() {
                     for (key, value) in interception_registration.endpoint().environment() {
-                        options = options.with_environment(key, value);
+                        options.add_environment(key, value);
                     }
                 }
                 Ok(options)

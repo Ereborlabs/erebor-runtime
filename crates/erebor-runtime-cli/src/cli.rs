@@ -633,23 +633,24 @@ fn execute_session(args: &SessionArgs) -> Result<(), CliError> {
 fn session_run(args: &SessionRunArgs) -> Result<(), CliError> {
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
-    let plan = SessionRunPlan::from_config(
+    let mut plan = SessionRunPlan::from_config(
         &config,
         args.runner.into(),
         session_id,
         args.command.clone(),
     )
-    .context(InvalidConfigSnafu)?
-    .with_config_path(args.config.clone());
+    .context(InvalidConfigSnafu)?;
+    plan.set_config_path(args.config.clone());
     execute_session_run_plan(&config, &plan)
 }
 
 fn session_diagnose(args: &SessionDiagnoseArgs) -> Result<(), CliError> {
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
-    let plan = SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
-        .context(InvalidConfigSnafu)?
-        .with_config_path(args.config.clone());
+    let mut plan =
+        SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
+            .context(InvalidConfigSnafu)?;
+    plan.set_config_path(args.config.clone());
     execute_session_diagnostic_plan(&config, &plan)
 }
 
@@ -716,23 +717,26 @@ fn write_session_diagnostic_outcome(outcome: &SessionDiagnosticOutcome) -> Resul
 fn build_session_run_plan(args: &SessionRunArgs) -> Result<SessionRunPlan, CliError> {
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
-    SessionRunPlan::from_config(
+    let mut plan = SessionRunPlan::from_config(
         &config,
         args.runner.into(),
         session_id,
         args.command.clone(),
     )
-    .map(|plan| plan.with_config_path(args.config.clone()))
-    .context(InvalidConfigSnafu)
+    .context(InvalidConfigSnafu)?;
+    plan.set_config_path(args.config.clone());
+    Ok(plan)
 }
 
 #[cfg(test)]
 fn build_session_diagnose_plan(args: &SessionDiagnoseArgs) -> Result<SessionRunPlan, CliError> {
     let config = read_runtime_config(&args.config)?;
     let session_id = SessionId::new(format!("session-{}", std::process::id()));
-    SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
-        .map(|plan| plan.with_config_path(args.config.clone()))
-        .context(InvalidConfigSnafu)
+    let mut plan =
+        SessionRunPlan::from_diagnostic(&config, args.runner.into(), session_id, &args.name)
+            .context(InvalidConfigSnafu)?;
+    plan.set_config_path(args.config.clone());
+    Ok(plan)
 }
 
 fn execute_dev(args: &DevArgs) -> Result<(), CliError> {

@@ -327,15 +327,19 @@ impl LinuxPtraceInterceptionBackendBundle {
             .parent()
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
-        let mut options = DockerSessionCommandOptions::new()
-            .with_mount(DockerSessionMount::new(guard_host_dir, DOCKER_GUARD_DIR).read_only())
-            .with_entrypoint(LINUX_PROCESS_GUARD_PATH)
-            .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
-            .with_environment(
-                "EREBOR_GUARD_INTERCEPTION_OPERATIONS",
-                self.operations.env_value(),
-            )
-            .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string());
+        let mut options = DockerSessionCommandOptions::default();
+        options.add_mount(DockerSessionMount::new(
+            guard_host_dir,
+            DOCKER_GUARD_DIR,
+            true,
+        ));
+        options.set_entrypoint(LINUX_PROCESS_GUARD_PATH);
+        options.add_environment("EREBOR_PROCESS_GUARD", "linux-ptrace");
+        options.add_environment(
+            "EREBOR_GUARD_INTERCEPTION_OPERATIONS",
+            self.operations.env_value(),
+        );
+        options.add_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string());
 
         if let Some(audit_path) = self.audit_path.as_ref() {
             let audit_parent = audit_path
@@ -346,17 +350,20 @@ impl LinuxPtraceInterceptionBackendBundle {
                 return options;
             };
             let container_audit_path = format!("{DOCKER_AUDIT_DIR}/{audit_filename}");
-            options = options
-                .with_mount(DockerSessionMount::new(audit_parent, DOCKER_AUDIT_DIR))
-                .with_environment("EREBOR_GUARD_AUDIT_JSONL", container_audit_path)
-                .with_environment(
-                    "EREBOR_GUARD_AUDIT_TERMINAL_LEVEL",
-                    audit_command_level_env(self.audit_terminal_level),
-                )
-                .with_environment(
-                    "EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS",
-                    self.audit_terminal_debug_commands.join("\n"),
-                );
+            options.add_mount(DockerSessionMount::new(
+                audit_parent,
+                DOCKER_AUDIT_DIR,
+                false,
+            ));
+            options.add_environment("EREBOR_GUARD_AUDIT_JSONL", container_audit_path);
+            options.add_environment(
+                "EREBOR_GUARD_AUDIT_TERMINAL_LEVEL",
+                audit_command_level_env(self.audit_terminal_level),
+            );
+            options.add_environment(
+                "EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS",
+                self.audit_terminal_debug_commands.join("\n"),
+            );
         }
 
         options
@@ -366,38 +373,37 @@ impl LinuxPtraceInterceptionBackendBundle {
         &self,
         browser_cdp_endpoint: Option<&str>,
     ) -> Result<LinuxHostSessionCommandOptions, SessionExecutionError> {
-        let mut options = LinuxHostSessionCommandOptions::new()
-            .with_wrapper_program(&self.guard_path)
-            .with_environment("EREBOR_PROCESS_GUARD", "linux-ptrace")
-            .with_environment(
-                "EREBOR_GUARD_INTERCEPTION_OPERATIONS",
-                self.operations.env_value(),
-            )
-            .with_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string())
-            .with_environment(
-                "EREBOR_GUARD_CGROUP_DIR",
-                format!(
-                    "/sys/fs/cgroup/erebor/{}",
-                    linux_cgroup_component(&self.session_id)
-                ),
-            );
+        let mut options = LinuxHostSessionCommandOptions::default();
+        options.add_wrapper_program(&self.guard_path);
+        options.add_environment("EREBOR_PROCESS_GUARD", "linux-ptrace");
+        options.add_environment(
+            "EREBOR_GUARD_INTERCEPTION_OPERATIONS",
+            self.operations.env_value(),
+        );
+        options.add_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string());
+        options.add_environment(
+            "EREBOR_GUARD_CGROUP_DIR",
+            format!(
+                "/sys/fs/cgroup/erebor/{}",
+                linux_cgroup_component(&self.session_id)
+            ),
+        );
 
         if let Some(audit_path) = self.audit_path.as_ref() {
-            options = options
-                .with_environment("EREBOR_GUARD_AUDIT_JSONL", audit_path.display().to_string())
-                .with_environment(
-                    "EREBOR_GUARD_AUDIT_TERMINAL_LEVEL",
-                    audit_command_level_env(self.audit_terminal_level),
-                )
-                .with_environment(
-                    "EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS",
-                    self.audit_terminal_debug_commands.join("\n"),
-                );
+            options.add_environment("EREBOR_GUARD_AUDIT_JSONL", audit_path.display().to_string());
+            options.add_environment(
+                "EREBOR_GUARD_AUDIT_TERMINAL_LEVEL",
+                audit_command_level_env(self.audit_terminal_level),
+            );
+            options.add_environment(
+                "EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS",
+                self.audit_terminal_debug_commands.join("\n"),
+            );
         }
 
         if let Some(interception) = self.interception.as_ref() {
             for (key, value) in interception.environment(browser_cdp_endpoint)? {
-                options = options.with_environment(key, value);
+                options.add_environment(key, value);
             }
         }
 
@@ -409,9 +415,9 @@ impl LinuxPtraceInterceptionBackendBundle {
         pid: i32,
         browser_cdp_endpoint: Option<&str>,
     ) -> Result<LinuxHostSessionCommandOptions, SessionExecutionError> {
-        Ok(self
-            .linux_host_options(browser_cdp_endpoint)?
-            .with_adopt_pid(pid))
+        let mut options = self.linux_host_options(browser_cdp_endpoint)?;
+        options.set_adopt_pid(pid);
+        Ok(options)
     }
 }
 

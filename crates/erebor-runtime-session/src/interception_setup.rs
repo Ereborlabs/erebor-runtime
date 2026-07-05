@@ -97,21 +97,19 @@ impl SessionInterceptionSetup {
         let mut docker_options = backend.docker_options();
         let mut linux_host_options = backend.linux_host_options(browser_cdp_endpoint)?;
         if let Some(interception_registration) = interception_registration {
-            docker_options = docker_options.with_mount(
-                DockerSessionMount::new(
-                    interception_registration.endpoint().directory(),
-                    DOCKER_INTERCEPTION_DIR,
-                )
-                .read_only(),
-            );
+            docker_options.add_mount(DockerSessionMount::new(
+                interception_registration.endpoint().directory(),
+                DOCKER_INTERCEPTION_DIR,
+                true,
+            ));
             for (key, value) in interception_registration
                 .docker_endpoint(Path::new(DOCKER_INTERCEPTION_DIR))
                 .environment()
             {
-                docker_options = docker_options.with_environment(key, value);
+                docker_options.add_environment(key, value);
             }
             for (key, value) in interception_registration.endpoint().environment() {
-                linux_host_options = linux_host_options.with_environment(key, value);
+                linux_host_options.add_environment(key, value);
             }
         }
 

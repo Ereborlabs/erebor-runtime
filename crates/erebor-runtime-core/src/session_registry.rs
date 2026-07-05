@@ -1,25 +1,33 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use erebor_runtime_events::{ActorKind, SessionId};
 use erebor_runtime_telemetry::info;
 use serde::{Deserialize, Serialize};
-use snafu::{Location, ResultExt};
+use snafu::ResultExt;
 
-use crate::error::{
-    CopyArtifactSnafu, CreateDirSnafu, DecodeRecordSnafu, EncodeRecordSnafu, ReadRecordSnafu,
-    UnknownSessionSnafu, WriteRecordSnafu,
-};
+mod artifacts;
+mod clock;
+mod paths;
+mod record_io;
+#[cfg(test)]
+mod tests;
+
+use artifacts::SessionArtifactCopier;
+use clock::SessionRegistryClock;
+use paths::SessionRegistryPath;
+use record_io::SessionRecordIo;
+
+use crate::error::{CreateDirSnafu, UnknownSessionSnafu};
 use crate::{RuntimeConfig, SessionRegistryError, SessionRunOutcome, SessionRunPlan};
 
 pub const DEFAULT_SESSION_REGISTRY_PATH: &str = ".erebor/sessions";
-const SESSION_RECORD_FILE: &str = "session.json";
+pub(super) const SESSION_RECORD_FILE: &str = "session.json";
 const SESSION_AUDIT_FILE: &str = "audit.jsonl";
-const SESSION_CONFIG_FILE: &str = "config.json";
-const SESSION_POLICIES_DIR: &str = "policies";
+pub(super) const SESSION_CONFIG_FILE: &str = "config.json";
+pub(super) const SESSION_POLICIES_DIR: &str = "policies";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionRegistry {
@@ -30,7 +38,7 @@ impl SessionRegistry {
     #[must_use]
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
-            root: absolute_registry_root(root.into()),
+            root: SessionRegistryPath::absolute_root(root.into()),
         }
     }
 
@@ -54,8 +62,9 @@ impl SessionRegistry {
             path: session_dir.clone(),
         })?;
 
-        let config_artifact_path = copy_optional_config_artifact(&session_dir, plan)?;
-        let policy_artifact_paths = copy_policy_artifacts(&session_dir, plan.policies())?;
+        let artifacts = SessionArtifactCopier::new(&session_dir);
+        let config_artifact_path = artifacts.copy_config(plan)?;
+        let policy_artifact_paths = artifacts.copy_policies(plan.policies())?;
         let audit_path = session_dir.join(SESSION_AUDIT_FILE);
         if let Some(parent) = audit_path
             .parent()
@@ -88,12 +97,12 @@ impl SessionRegistry {
             source_config_path: plan.config_path().map(Path::to_path_buf),
             policy_artifact_paths,
             source_policy_paths: plan.policies().to_vec(),
-            started_at_unix_ms: unix_time_ms(),
+            started_at_unix_ms: SessionRegistryClock::unix_time_ms(),
             ended_at_unix_ms: None,
             exit_code: None,
             failure: None,
         };
-        self.write_record(&record)?;
+        self.record_io().write_record(&record)?;
         info!(
             session_id = %record.session_id,
             registry = %self.root.display(),
@@ -111,10 +120,10 @@ impl SessionRegistry {
     ) -> Result<SessionRegistryRecord, SessionRegistryError> {
         let mut record = self.load_session(session_id.as_str())?;
         record.status = update.status;
-        record.ended_at_unix_ms = Some(unix_time_ms());
+        record.ended_at_unix_ms = Some(SessionRegistryClock::unix_time_ms());
         record.exit_code = update.exit_code;
         record.failure = update.failure;
-        self.write_record(&record)?;
+        self.record_io().write_record(&record)?;
         info!(
             session_id = %record.session_id,
             status = record.status.as_str(),
@@ -125,36 +134,7 @@ impl SessionRegistry {
     }
 
     pub fn list_sessions(&self) -> Result<Vec<SessionRegistryRecord>, SessionRegistryError> {
-        let mut records = Vec::new();
-        let entries = match fs::read_dir(&self.root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(records),
-            Err(source) => {
-                return Err(SessionRegistryError::ReadRecord {
-                    path: self.root.clone(),
-                    source,
-                    location: Location::default(),
-                });
-            }
-        };
-
-        for entry in entries {
-            let entry = entry.context(ReadRecordSnafu {
-                path: self.root.clone(),
-            })?;
-            let path = entry.path().join(SESSION_RECORD_FILE);
-            if path.exists() {
-                records.push(self.read_record(&path)?);
-            }
-        }
-
-        records.sort_by(|left, right| {
-            right
-                .started_at_unix_ms
-                .cmp(&left.started_at_unix_ms)
-                .then_with(|| left.session_id.cmp(&right.session_id))
-        });
-        Ok(records)
+        self.record_io().list_sessions()
     }
 
     pub fn load_session(
@@ -171,7 +151,7 @@ impl SessionRegistry {
             }
             .fail();
         }
-        self.read_record(&path)
+        self.record_io().read_record(&path)
     }
 
     fn session_dir(&self, session_id: &SessionId) -> PathBuf {
@@ -179,26 +159,12 @@ impl SessionRegistry {
     }
 
     fn session_dir_for_id(&self, session_id: &str) -> PathBuf {
-        self.root.join(safe_session_dir_name(session_id))
+        self.root
+            .join(SessionRegistryPath::safe_dir_name(session_id))
     }
 
-    fn write_record(&self, record: &SessionRegistryRecord) -> Result<(), SessionRegistryError> {
-        fs::create_dir_all(&record.session_dir).context(CreateDirSnafu {
-            path: record.session_dir.clone(),
-        })?;
-        let path = record.session_dir.join(SESSION_RECORD_FILE);
-        let source = serde_json::to_string_pretty(record)
-            .context(EncodeRecordSnafu { path: path.clone() })?;
-        fs::write(&path, format!("{source}\n")).context(WriteRecordSnafu { path })
-    }
-
-    fn read_record(&self, path: &Path) -> Result<SessionRegistryRecord, SessionRegistryError> {
-        let source = fs::read_to_string(path).context(ReadRecordSnafu {
-            path: path.to_path_buf(),
-        })?;
-        serde_json::from_str(&source).context(DecodeRecordSnafu {
-            path: path.to_path_buf(),
-        })
+    fn record_io(&self) -> SessionRecordIo<'_> {
+        SessionRecordIo::new(&self.root)
     }
 }
 
@@ -305,165 +271,5 @@ impl SessionRegistryRecord {
     #[must_use]
     pub fn audit_path(&self) -> &Path {
         &self.audit_path
-    }
-}
-
-fn copy_optional_config_artifact(
-    session_dir: &Path,
-    plan: &SessionRunPlan,
-) -> Result<Option<PathBuf>, SessionRegistryError> {
-    let Some(source) = plan.config_path() else {
-        return Ok(None);
-    };
-    let destination = session_dir.join(SESSION_CONFIG_FILE);
-    fs::copy(source, &destination).context(CopyArtifactSnafu {
-        from: source.to_path_buf(),
-        to: destination.clone(),
-    })?;
-    Ok(Some(destination))
-}
-
-fn copy_policy_artifacts(
-    session_dir: &Path,
-    policies: &[PathBuf],
-) -> Result<Vec<PathBuf>, SessionRegistryError> {
-    let policy_dir = session_dir.join(SESSION_POLICIES_DIR);
-    fs::create_dir_all(&policy_dir).context(CreateDirSnafu {
-        path: policy_dir.clone(),
-    })?;
-
-    policies
-        .iter()
-        .enumerate()
-        .map(|(index, source)| {
-            let file_name = source
-                .file_name()
-                .filter(|name| !name.is_empty())
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| String::from("policy.json"));
-            let destination = policy_dir.join(format!("{index:03}-{file_name}"));
-            fs::copy(source, &destination).context(CopyArtifactSnafu {
-                from: source.to_path_buf(),
-                to: destination.clone(),
-            })?;
-            Ok(destination)
-        })
-        .collect()
-}
-
-fn safe_session_dir_name(session_id: &str) -> String {
-    session_id
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}
-
-fn unix_time_ms() -> u64 {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis());
-    u64::try_from(millis).unwrap_or(u64::MAX)
-}
-
-fn absolute_registry_root(root: PathBuf) -> PathBuf {
-    if root.is_absolute() {
-        return root;
-    }
-    match std::env::current_dir() {
-        Ok(current_dir) => current_dir.join(root),
-        Err(_error) => root,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::{
-        fs,
-        path::Path,
-        time::{SystemTime, UNIX_EPOCH},
-    };
-
-    use crate::{
-        RuntimeConfig, SessionRegistry, SessionRegistryFinish, SessionRegistryStatus,
-        SessionRunOutcome, SessionRunPlan, SessionRunnerKind,
-    };
-    use erebor_runtime_events::SessionId;
-
-    #[test]
-    fn registry_creates_session_record_and_artifacts() -> Result<(), Box<dyn std::error::Error>> {
-        let root = temp_dir("registry")?;
-        let policy = root.join("policy.json");
-        let config_path = root.join("runtime.json");
-        fs::write(&policy, r#"{"rules":[]}"#)?;
-        fs::write(
-            &config_path,
-            format!(
-                r#"{{
-                    "policies": ["{}"],
-                    "session": {{
-                        "enabled": true,
-                        "workspace": "{}",
-                        "runner": {{ "kind": "linux_host" }}
-                    }},
-                    "surfaces": {{
-                        "terminal": {{ "enabled": true }}
-                    }}
-                }}"#,
-                policy.display(),
-                root.display()
-            ),
-        )?;
-        let config = RuntimeConfig::from_json_str(&fs::read_to_string(&config_path)?)?;
-        let plan = SessionRunPlan::from_config(
-            &config,
-            SessionRunnerKind::LinuxHost,
-            SessionId::new("session-registry-test"),
-            vec![String::from("true")],
-        )?
-        .with_config_path(config_path.clone());
-        let registry = SessionRegistry::new(plan.registry_path().to_path_buf());
-
-        let started = registry.start_session(&config, &plan)?;
-
-        assert_eq!(started.record().status, SessionRegistryStatus::Running);
-        assert!(started.record().session_dir.join("session.json").exists());
-        assert!(started
-            .record()
-            .config_artifact_path()
-            .is_some_and(Path::exists));
-        assert_eq!(started.record().policy_artifact_paths.len(), 1);
-        assert_eq!(started.audit_path(), started.record().audit_path());
-
-        let finished = registry.finish_session(
-            plan.session_id(),
-            SessionRegistryFinish::succeeded(&SessionRunOutcome::new(
-                SessionRunnerKind::LinuxHost,
-                Some(0),
-            )),
-        )?;
-
-        assert_eq!(finished.status, SessionRegistryStatus::Succeeded);
-        assert_eq!(finished.exit_code, Some(0));
-        assert!(finished.ended_at_unix_ms.is_some());
-        assert_eq!(registry.list_sessions()?.len(), 1);
-
-        fs::remove_dir_all(root)?;
-        Ok(())
-    }
-
-    fn temp_dir(name: &str) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "erebor-session-registry-{name}-{nanos}-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&path)?;
-        Ok(path)
     }
 }

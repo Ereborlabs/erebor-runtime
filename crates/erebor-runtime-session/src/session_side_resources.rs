@@ -208,16 +208,16 @@ fn start_session_side_resources_from_start_plan(
         )?;
         let interception_registration =
             interception_setup.register(interception_router, plan, uses_lazy_browser_cdp)?;
-        let resources = interception_setup.into_side_resources(
+        let mut resources = interception_setup.into_side_resources(
             environment,
             None,
             interception_registration,
             None,
         )?;
-        return Ok(match filesystem_overlay_wrapper {
-            Some(wrapper) => resources.with_linux_host_outer_wrapper(wrapper),
-            None => resources,
-        });
+        if let Some(wrapper) = filesystem_overlay_wrapper {
+            resources.add_linux_host_outer_wrapper(wrapper);
+        }
+        return Ok(resources);
     }
 
     let supervisor = launcher.start().context(RuntimeSnafu)?;
@@ -254,16 +254,16 @@ fn start_session_side_resources_from_start_plan(
     let interception_registration =
         interception_setup.register(interception_router, plan, uses_lazy_browser_cdp)?;
 
-    let resources = interception_setup.into_side_resources(
+    let mut resources = interception_setup.into_side_resources(
         environment,
         browser_cdp_endpoint,
         interception_registration,
         Some(supervisor),
     )?;
-    Ok(match filesystem_overlay_wrapper {
-        Some(wrapper) => resources.with_linux_host_outer_wrapper(wrapper),
-        None => resources,
-    })
+    if let Some(wrapper) = filesystem_overlay_wrapper {
+        resources.add_linux_host_outer_wrapper(wrapper);
+    }
+    Ok(resources)
 }
 
 fn file_operation_interception_input(
