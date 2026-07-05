@@ -13,7 +13,9 @@ impl ErrorExt for FilesystemError {
             | Self::MissingOverlayCommand { .. }
             | Self::InvalidOverlaySessionView { .. }
             | Self::InvalidCheckpointId { .. }
-            | Self::InvalidPromotionId { .. } => StatusCode::InvalidArguments,
+            | Self::InvalidPromotionId { .. }
+            | Self::InvalidTransactionHandle { .. }
+            | Self::InvalidTransactionName { .. } => StatusCode::InvalidArguments,
             Self::CreateStorageDir { .. }
             | Self::InspectOverlaySessionPath { .. }
             | Self::CreateOverlaySessionDir { .. }
@@ -26,8 +28,10 @@ impl ErrorExt for FilesystemError {
             | Self::EncodeLayerManifest { .. }
             | Self::CheckpointIo { .. }
             | Self::PromotionIo { .. }
+            | Self::TransactionCatalogIo { .. }
             | Self::EncodeCheckpointManifest { .. }
             | Self::EncodePromotionManifest { .. }
+            | Self::EncodeTransactionCatalog { .. }
             | Self::StartOstree { .. }
             | Self::OstreeInitFailed { .. }
             | Self::OstreeCommandFailed { .. } => StatusCode::External,
@@ -50,6 +54,7 @@ impl ErrorExt for FilesystemError {
             | Self::WriteLayerManifest { source, .. }
             | Self::CheckpointIo { source, .. }
             | Self::PromotionIo { source, .. }
+            | Self::TransactionCatalogIo { source, .. }
             | Self::StartOstree { source, .. } => RetryHint::from_io_error(source),
             Self::InvalidVolumeId { .. }
             | Self::InvalidVolumePath { .. }
@@ -58,6 +63,8 @@ impl ErrorExt for FilesystemError {
             | Self::InvalidOverlaySessionView { .. }
             | Self::InvalidCheckpointId { .. }
             | Self::InvalidPromotionId { .. }
+            | Self::InvalidTransactionHandle { .. }
+            | Self::InvalidTransactionName { .. }
             | Self::ActiveLayerWriter { .. }
             | Self::UnsupportedLayer { .. }
             | Self::PromotionPreimageTooLarge { .. }
@@ -66,6 +73,7 @@ impl ErrorExt for FilesystemError {
             | Self::EncodeLayerManifest { .. }
             | Self::EncodeCheckpointManifest { .. }
             | Self::EncodePromotionManifest { .. }
+            | Self::EncodeTransactionCatalog { .. }
             | Self::OstreeInitFailed { .. }
             | Self::OstreeCommandFailed { .. } => RetryHint::NonRetryable,
         }

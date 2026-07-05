@@ -14,6 +14,7 @@ use crate::{
 };
 
 mod apply;
+mod catalog;
 mod checkout;
 mod ids;
 mod io;
@@ -27,6 +28,18 @@ mod preimage;
 mod rollback;
 mod types;
 
+pub use catalog::{
+    list_transaction_catalog, rename_transaction_target, rollback_transaction_target,
+    show_transaction_target, FilesystemSubtransaction, FilesystemSubtransactionState,
+    FilesystemTransaction, FilesystemTransactionCatalog, FilesystemTransactionChange,
+    FilesystemTransactionRename, FilesystemTransactionRollback, FilesystemTransactionState,
+    FilesystemTransactionTarget,
+};
+#[cfg(test)]
+pub(crate) use catalog::{
+    list_transaction_catalog_with_runner, rename_transaction_target_with_runner,
+    rollback_transaction_target_with_runner, show_transaction_target_with_runner,
+};
 pub use ids::{promotion_manifest_ref, promotion_preimage_ref};
 pub use manifest::{
     FilesystemPreimageEntry, FilesystemPreimageEntryState, FilesystemPreimageEntryType,

@@ -32,6 +32,10 @@ use crate::error::{
 };
 use crate::logging::{init_tracing, LoggingArgs};
 
+mod filesystem;
+
+use filesystem::FilesystemArgs;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "erebor-runtime",
@@ -57,6 +61,7 @@ impl Cli {
             Command::Dev(args) => execute_dev(args)?,
             Command::Policy(args) => execute_policy(args)?,
             Command::Audit(args) => execute_audit(args)?,
+            Command::Filesystem(args) => filesystem::execute(args)?,
         }
 
         Ok(())
@@ -75,6 +80,8 @@ enum Command {
     Policy(PolicyArgs),
     /// Audit log commands.
     Audit(AuditArgs),
+    /// Filesystem revert transaction commands.
+    Filesystem(FilesystemArgs),
 }
 
 impl fmt::Display for Command {
@@ -163,6 +170,7 @@ impl fmt::Display for Command {
                     .as_ref()
                     .map_or_else(|| String::from("stdout"), |path| path.display().to_string())
             ),
+            Self::Filesystem(args) => formatter.write_str(&args.display()),
         }
     }
 }
@@ -1038,6 +1046,76 @@ mod tests {
         assert!(ls.is_ok());
         assert!(show.is_ok());
         assert!(describe.is_ok());
+    }
+
+    #[test]
+    fn accepts_filesystem_transaction_catalog_commands() {
+        let list = Cli::try_parse_from([
+            "erebor-runtime",
+            "filesystem",
+            "transactions",
+            "list",
+            "--registry",
+            ".erebor/sessions",
+            "--session",
+            "session-1",
+        ]);
+        let show = Cli::try_parse_from([
+            "erebor-runtime",
+            "filesystem",
+            "transactions",
+            "show",
+            "--registry",
+            ".erebor/sessions",
+            "--session",
+            "session-1",
+            "tx@{0}.sub@{1}",
+            "--format",
+            "json",
+        ]);
+        let rename = Cli::try_parse_from([
+            "erebor-runtime",
+            "filesystem",
+            "transactions",
+            "rename",
+            "--registry",
+            ".erebor/sessions",
+            "--session",
+            "session-1",
+            "tx@{0}",
+            "before dependency update",
+        ]);
+        let rollback = Cli::try_parse_from([
+            "erebor-runtime",
+            "filesystem",
+            "transactions",
+            "rollback",
+            "--registry",
+            ".erebor/sessions",
+            "--session",
+            "session-1",
+            "tx@{0}.sub@{1}",
+        ]);
+
+        assert!(list.is_ok());
+        assert!(show.is_ok());
+        assert!(rename.is_ok());
+        assert!(rollback.is_ok());
+    }
+
+    #[test]
+    fn rejects_incomplete_filesystem_transaction_command() {
+        let cli = Cli::try_parse_from([
+            "erebor-runtime",
+            "filesystem",
+            "transactions",
+            "rollback",
+            "--registry",
+            ".erebor/sessions",
+            "tx@{0}",
+        ]);
+
+        assert!(cli.is_err());
     }
 
     #[test]

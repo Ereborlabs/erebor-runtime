@@ -13,6 +13,7 @@ use crate::{
 mod hardening;
 mod multivolume;
 mod support;
+mod transaction_catalog;
 
 use support::{commit_checkpoint, fixture, FakeOstreeRunner, TestResult};
 

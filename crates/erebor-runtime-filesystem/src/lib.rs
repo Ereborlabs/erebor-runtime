@@ -25,11 +25,16 @@ pub use manifest::{
 };
 pub use normalizer::normalize_session_layers;
 pub use promotion::{
-    promote_session_checkpoint, promotion_manifest_ref, promotion_preimage_ref, rollback_promotion,
-    FilesystemPreimageEntry, FilesystemPreimageEntryState, FilesystemPreimageEntryType,
-    FilesystemPreimageManifest, FilesystemPromotion, FilesystemPromotionManifest,
-    FilesystemPromotionOptions, FilesystemPromotionState, FilesystemPromotionVolume,
-    FilesystemRollback, PREIMAGE_MANIFEST_FILE, PREIMAGE_MANIFEST_KIND, PROMOTION_MANIFEST_FILE,
+    list_transaction_catalog, promote_session_checkpoint, promotion_manifest_ref,
+    promotion_preimage_ref, rename_transaction_target, rollback_promotion,
+    rollback_transaction_target, show_transaction_target, FilesystemPreimageEntry,
+    FilesystemPreimageEntryState, FilesystemPreimageEntryType, FilesystemPreimageManifest,
+    FilesystemPromotion, FilesystemPromotionManifest, FilesystemPromotionOptions,
+    FilesystemPromotionState, FilesystemPromotionVolume, FilesystemRollback,
+    FilesystemSubtransaction, FilesystemSubtransactionState, FilesystemTransaction,
+    FilesystemTransactionCatalog, FilesystemTransactionChange, FilesystemTransactionRename,
+    FilesystemTransactionRollback, FilesystemTransactionState, FilesystemTransactionTarget,
+    PREIMAGE_MANIFEST_FILE, PREIMAGE_MANIFEST_KIND, PROMOTION_MANIFEST_FILE,
     PROMOTION_MANIFEST_KIND,
 };
 pub use storage::{

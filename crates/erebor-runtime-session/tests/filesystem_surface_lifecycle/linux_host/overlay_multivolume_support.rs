@@ -18,8 +18,8 @@ pub(super) struct LifecycleFixture {
     pub(super) workspace: PathBuf,
     pub(super) host_project: PathBuf,
     pub(super) host_cache: PathBuf,
-    session_project: PathBuf,
-    session_cache: PathBuf,
+    pub(super) session_project: PathBuf,
+    pub(super) session_cache: PathBuf,
 }
 
 impl LifecycleFixture {

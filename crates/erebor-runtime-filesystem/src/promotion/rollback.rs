@@ -27,6 +27,15 @@ pub(crate) fn rollback_promotion_with_runner(
     promotion_id: &str,
     runner: &impl OstreeCommandRunner,
 ) -> Result<FilesystemRollback> {
+    rollback_promotion_volumes_with_runner(storage, promotion_id, &[], runner)
+}
+
+pub(crate) fn rollback_promotion_volumes_with_runner(
+    storage: &FilesystemSessionStorage,
+    promotion_id: &str,
+    selected_volume_ids: &[String],
+    runner: &impl OstreeCommandRunner,
+) -> Result<FilesystemRollback> {
     validate_promotion_id(promotion_id)?;
     let local_root = promotion_root(storage, promotion_id);
     ensure_local_journal_not_incomplete(promotion_id, &local_root)?;
@@ -44,7 +53,14 @@ pub(crate) fn rollback_promotion_with_runner(
     journal::ensure_manifest_or_journal_applied(promotion_id, &manifest, journal.as_ref())?;
 
     let mut restored = Vec::new();
+    let selected = selected_volume_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     for volume_ref in manifest.volumes.iter().rev() {
+        if !selected.is_empty() && !selected.contains(&volume_ref.volume_id.as_str()) {
+            continue;
+        }
         let volume = volume_for_id(storage, &volume_ref.volume_id)?;
         let stage = preimage_stage_root(&root, volume.id());
         checkout_tree(

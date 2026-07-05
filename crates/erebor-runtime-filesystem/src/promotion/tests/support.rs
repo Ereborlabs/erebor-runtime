@@ -95,6 +95,7 @@ fn nonce() -> u128 {
 pub(super) struct FakeOstreeRunner {
     pub commands: RefCell<Vec<Vec<String>>>,
     outputs: RefCell<Vec<OstreeCommandOutput>>,
+    refs: RefCell<Vec<String>>,
     root: PathBuf,
 }
 
@@ -113,6 +114,7 @@ impl FakeOstreeRunner {
         Self {
             commands: RefCell::new(Vec::new()),
             outputs: RefCell::new(outputs),
+            refs: RefCell::new(Vec::new()),
             root,
         }
     }
@@ -132,6 +134,10 @@ impl FakeOstreeRunner {
     fn mirror_commit(&self, args: &[String]) -> crate::Result<()> {
         let ref_name = arg_value(args, "--branch=")?;
         let tree = PathBuf::from(arg_value(args, "--tree=dir=")?);
+        let mut refs = self.refs.borrow_mut();
+        if !refs.iter().any(|existing| existing == ref_name) {
+            refs.push(ref_name.to_owned());
+        }
         copy_tree(&tree, &self.commit_path(ref_name))
     }
 
@@ -155,6 +161,16 @@ impl Drop for FakeOstreeRunner {
 impl OstreeCommandRunner for FakeOstreeRunner {
     fn run(&self, _repo: &Path, args: &[String]) -> crate::Result<OstreeCommandOutput> {
         self.commands.borrow_mut().push(args.to_owned());
+        if args.len() == 2 && args[0] == "refs" && args[1] == "--list" {
+            let mut refs = self.refs.borrow().clone();
+            refs.sort();
+            return Ok(OstreeCommandOutput::with_stdout(
+                true,
+                Some(0),
+                refs.join("\n"),
+                "",
+            ));
+        }
         let mut outputs = self.outputs.borrow_mut();
         let output = if outputs.is_empty() {
             OstreeCommandOutput::new(true, Some(0), "")

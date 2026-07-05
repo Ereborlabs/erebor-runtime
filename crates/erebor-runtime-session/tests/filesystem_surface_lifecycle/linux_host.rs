@@ -19,6 +19,10 @@ mod overlay_promotion_rollback;
 mod overlay_session_view;
 #[path = "linux_host/support.rs"]
 mod support;
+#[path = "linux_host/transaction_catalog.rs"]
+mod transaction_catalog;
+#[path = "linux_host/transaction_catalog_cli.rs"]
+mod transaction_catalog_cli;
 
 #[test]
 fn linux_host_cat_secret_is_denied_by_filesystem_policy() -> Result<(), Box<dyn std::error::Error>>

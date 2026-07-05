@@ -8,14 +8,26 @@ use crate::{error::StartOstreeSnafu, Result};
 pub(crate) struct OstreeCommandOutput {
     success: bool,
     code: Option<i32>,
+    stdout: String,
     stderr: String,
 }
 
 impl OstreeCommandOutput {
+    #[cfg(test)]
     pub(crate) fn new(success: bool, code: Option<i32>, stderr: impl Into<String>) -> Self {
+        Self::with_stdout(success, code, "", stderr)
+    }
+
+    pub(crate) fn with_stdout(
+        success: bool,
+        code: Option<i32>,
+        stdout: impl Into<String>,
+        stderr: impl Into<String>,
+    ) -> Self {
         Self {
             success,
             code,
+            stdout: stdout.into(),
             stderr: stderr.into(),
         }
     }
@@ -26,6 +38,10 @@ impl OstreeCommandOutput {
 
     pub(crate) const fn code(&self) -> Option<i32> {
         self.code
+    }
+
+    pub(crate) fn stdout(&self) -> &str {
+        &self.stdout
     }
 
     pub(crate) fn stderr(&self) -> &str {
@@ -49,12 +65,17 @@ impl OstreeCommandRunner for SystemOstreeCommandRunner {
             .context(StartOstreeSnafu {
                 repo: repo.to_path_buf(),
             })?;
-        Ok(OstreeCommandOutput::new(
+        Ok(OstreeCommandOutput::with_stdout(
             output.status.success(),
             output.status.code(),
+            command_stdout(&output.stdout),
             command_stderr(&output.stderr),
         ))
     }
+}
+
+fn command_stdout(stdout: &[u8]) -> String {
+    String::from_utf8_lossy(stdout).to_string()
 }
 
 fn command_stderr(stderr: &[u8]) -> String {

@@ -212,6 +212,35 @@ pub enum FilesystemError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("filesystem transaction handle `{handle}` is invalid: {reason}"))]
+    InvalidTransactionHandle {
+        handle: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("filesystem transaction name `{name}` is invalid: {reason}"))]
+    InvalidTransactionName {
+        name: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to {action} filesystem transaction catalog path `{}`: {source}", path.display()))]
+    TransactionCatalogIo {
+        action: &'static str,
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to encode filesystem transaction catalog `{}`: {source}", path.display()))]
+    EncodeTransactionCatalog {
+        path: PathBuf,
+        source: JsonError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to start ostree for repo `{}`: {source}", repo.display()))]
     StartOstree {
         repo: PathBuf,

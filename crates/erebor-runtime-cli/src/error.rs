@@ -1,8 +1,9 @@
 use std::{any::Any, io, path::PathBuf};
 
 use erebor_runtime_audit::{AuditLogError, EvidenceTraceError, SessionReviewError};
-use erebor_runtime_core::{RuntimeConfigError, RuntimeError};
+use erebor_runtime_core::{RuntimeConfigError, RuntimeError, SessionRegistryError};
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
+use erebor_runtime_filesystem::FilesystemError;
 use erebor_runtime_policy::PolicyError;
 use erebor_runtime_session::SessionExecutionError;
 use snafu::{Location, Snafu};
@@ -94,6 +95,25 @@ pub(crate) enum CliError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("{source}"))]
+    SessionRegistry {
+        source: SessionRegistryError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("{source}"))]
+    Filesystem {
+        #[snafu(source(from(FilesystemError, Box::new)))]
+        source: Box<FilesystemError>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("filesystem command is invalid: {reason}"))]
+    InvalidFilesystemCommand {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to encode JSON output: {source}"))]
     EncodeJson {
         source: serde_json::Error,
@@ -119,6 +139,9 @@ impl ErrorExt for CliError {
             Self::AuditLog { source, .. } => source.status_code(),
             Self::EvidenceTrace { source, .. } => source.status_code(),
             Self::SessionReview { source, .. } => source.status_code(),
+            Self::SessionRegistry { source, .. } => source.status_code(),
+            Self::Filesystem { source, .. } => source.status_code(),
+            Self::InvalidFilesystemCommand { .. } => StatusCode::InvalidArguments,
             Self::EncodeJson { .. } => StatusCode::Internal,
         }
     }
@@ -139,6 +162,9 @@ impl ErrorExt for CliError {
             Self::AuditLog { source, .. } => source.retry_hint(),
             Self::EvidenceTrace { source, .. } => source.retry_hint(),
             Self::SessionReview { source, .. } => source.retry_hint(),
+            Self::SessionRegistry { source, .. } => source.retry_hint(),
+            Self::Filesystem { source, .. } => source.retry_hint(),
+            Self::InvalidFilesystemCommand { .. } => RetryHint::NonRetryable,
             Self::EncodeJson { .. } => RetryHint::NonRetryable,
         }
     }
@@ -162,10 +188,13 @@ impl ErrorExt for CliError {
                 Self::AuditLog { source, .. } => source.to_string(),
                 Self::EvidenceTrace { source, .. } => source.to_string(),
                 Self::SessionReview { source, .. } => source.to_string(),
+                Self::SessionRegistry { source, .. } => source.to_string(),
+                Self::Filesystem { source, .. } => source.to_string(),
                 Self::ReadConfig { .. }
                 | Self::ReadPolicy { .. }
                 | Self::ReadEvent { .. }
                 | Self::InvalidEvent { .. }
+                | Self::InvalidFilesystemCommand { .. }
                 | Self::WriteSessionOutput { .. }
                 | Self::EncodeJson { .. } => self.to_string(),
             },

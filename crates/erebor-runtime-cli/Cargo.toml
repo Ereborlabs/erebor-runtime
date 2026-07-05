@@ -7,14 +7,17 @@ repository.workspace = true
 
 [dependencies]
 clap.workspace = true
+comfy-table.workspace = true
 erebor-runtime-audit = { path = "../erebor-runtime-audit" }
 erebor-runtime-cdp = { path = "../erebor-runtime-cdp" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
+erebor-runtime-filesystem = { path = "../erebor-runtime-filesystem" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 erebor-runtime-session = { path = "../erebor-runtime-session" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
+serde.workspace = true
 serde_json.workspace = true
 snafu.workspace = true
 tracing.workspace = true
