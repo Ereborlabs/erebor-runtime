@@ -34,6 +34,65 @@ pub enum FilesystemError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("filesystem overlay session view is unsupported on `{platform}`"))]
+    UnsupportedOverlayPlatform {
+        platform: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("filesystem overlay session view requires `{command}` in PATH"))]
+    MissingOverlayCommand {
+        command: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("filesystem volume `{volume_id}` overlay session view is invalid: {reason}"))]
+    InvalidOverlaySessionView {
+        volume_id: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "failed to inspect filesystem volume `{volume_id}` {field} path `{}`: {source}",
+        path.display()
+    ))]
+    InspectOverlaySessionPath {
+        volume_id: String,
+        field: &'static str,
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "failed to create filesystem volume `{volume_id}` overlay session directory `{}`: {source}",
+        path.display()
+    ))]
+    CreateOverlaySessionDir {
+        volume_id: String,
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to write filesystem overlay wrapper `{}`: {source}", path.display()))]
+    WriteOverlayWrapper {
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "failed to set filesystem overlay wrapper permissions `{}`: {source}",
+        path.display()
+    ))]
+    SetOverlayWrapperPermissions {
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to start ostree for repo `{}`: {source}", repo.display()))]
     StartOstree {
         repo: PathBuf,
@@ -59,10 +118,16 @@ pub enum FilesystemError {
 impl ErrorExt for FilesystemError {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::InvalidVolumeId { .. } | Self::InvalidVolumePath { .. } => {
-                StatusCode::InvalidArguments
-            }
+            Self::InvalidVolumeId { .. }
+            | Self::InvalidVolumePath { .. }
+            | Self::UnsupportedOverlayPlatform { .. }
+            | Self::MissingOverlayCommand { .. }
+            | Self::InvalidOverlaySessionView { .. } => StatusCode::InvalidArguments,
             Self::CreateStorageDir { .. }
+            | Self::InspectOverlaySessionPath { .. }
+            | Self::CreateOverlaySessionDir { .. }
+            | Self::WriteOverlayWrapper { .. }
+            | Self::SetOverlayWrapperPermissions { .. }
             | Self::StartOstree { .. }
             | Self::OstreeInitFailed { .. } => StatusCode::External,
         }
@@ -70,11 +135,17 @@ impl ErrorExt for FilesystemError {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
-            Self::CreateStorageDir { source, .. } | Self::StartOstree { source, .. } => {
-                RetryHint::from_io_error(source)
-            }
+            Self::CreateStorageDir { source, .. }
+            | Self::InspectOverlaySessionPath { source, .. }
+            | Self::CreateOverlaySessionDir { source, .. }
+            | Self::WriteOverlayWrapper { source, .. }
+            | Self::SetOverlayWrapperPermissions { source, .. }
+            | Self::StartOstree { source, .. } => RetryHint::from_io_error(source),
             Self::InvalidVolumeId { .. }
             | Self::InvalidVolumePath { .. }
+            | Self::UnsupportedOverlayPlatform { .. }
+            | Self::MissingOverlayCommand { .. }
+            | Self::InvalidOverlaySessionView { .. }
             | Self::OstreeInitFailed { .. } => RetryHint::NonRetryable,
         }
     }

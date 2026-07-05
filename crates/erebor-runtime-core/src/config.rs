@@ -1702,7 +1702,7 @@ pub struct LinuxHostSessionCommandPlan {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LinuxHostSessionCommandOptions {
     extra_environment: Vec<(String, String)>,
-    wrapper_program: Option<PathBuf>,
+    wrapper_programs: Vec<PathBuf>,
     adopt_pid: Option<i32>,
 }
 
@@ -1720,7 +1720,13 @@ impl LinuxHostSessionCommandOptions {
 
     #[must_use]
     pub fn with_wrapper_program(mut self, wrapper: impl Into<PathBuf>) -> Self {
-        self.wrapper_program = Some(wrapper.into());
+        self.wrapper_programs.push(wrapper.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_outer_wrapper_program(mut self, wrapper: impl Into<PathBuf>) -> Self {
+        self.wrapper_programs.insert(0, wrapper.into());
         self
     }
 
@@ -1760,18 +1766,21 @@ impl LinuxHostSessionCommandPlan {
         combined_environment.extend(environment.iter().cloned());
         combined_environment.extend(options.extra_environment.iter().cloned());
 
-        let (program, args) = if let Some(wrapper) = options.wrapper_program.as_ref() {
-            (
-                wrapper.display().to_string(),
-                plan.command().iter().map(ToOwned::to_owned).collect(),
-            )
-        } else {
-            let command = plan.command();
-            (
-                command[0].clone(),
-                command.iter().skip(1).map(ToOwned::to_owned).collect(),
-            )
-        };
+        let (program, args) =
+            if let Some((wrapper, wrappers)) = options.wrapper_programs.split_first() {
+                let mut args = wrappers
+                    .iter()
+                    .map(|wrapper| wrapper.display().to_string())
+                    .collect::<Vec<_>>();
+                args.extend(plan.command().iter().map(ToOwned::to_owned));
+                (wrapper.display().to_string(), args)
+            } else {
+                let command = plan.command();
+                (
+                    command[0].clone(),
+                    command.iter().skip(1).map(ToOwned::to_owned).collect(),
+                )
+            };
 
         Self {
             program,
@@ -1796,14 +1805,22 @@ impl LinuxHostSessionCommandPlan {
             options.adopt_pid.unwrap_or_else(|| plan.pid()).to_string(),
         ));
 
-        let program = options
-            .wrapper_program
-            .as_ref()
-            .map_or_else(String::new, |wrapper| wrapper.display().to_string());
+        let (program, args) = options.wrapper_programs.split_first().map_or_else(
+            || (String::new(), Vec::new()),
+            |(wrapper, wrappers)| {
+                (
+                    wrapper.display().to_string(),
+                    wrappers
+                        .iter()
+                        .map(|wrapper| wrapper.display().to_string())
+                        .collect(),
+                )
+            },
+        );
 
         Self {
             program,
-            args: Vec::new(),
+            args,
             environment: combined_environment,
             current_dir: plan.workspace().map(Path::to_path_buf),
         }
@@ -4004,6 +4021,59 @@ mod tests {
             String::from("EREBOR_PROCESS_GUARD"),
             String::from("linux-ptrace")
         )));
+        Ok(())
+    }
+
+    #[test]
+    fn linux_host_command_plan_can_stack_outer_wrapper_before_process_guard(
+    ) -> Result<(), RuntimeConfigError> {
+        let config = RuntimeConfig::from_json_str(
+            r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": {
+                "enabled": true,
+                "runner": {
+                  "kind": "linux-host"
+                }
+              },
+              "surfaces": {
+                "terminal": { "enabled": true }
+              }
+            }
+            "#,
+        )?;
+        let plan = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-wrapper-stack"),
+            vec![
+                String::from("python3"),
+                String::from("-c"),
+                String::from("print('hello')"),
+            ],
+        )?;
+        let options = LinuxHostSessionCommandOptions::new()
+            .with_wrapper_program("/tmp/erebor-linux-process-guard")
+            .with_outer_wrapper_program("/tmp/erebor-filesystem-overlay");
+
+        let launch =
+            LinuxHostSessionCommandPlan::from_session_run_plan_with_environment_and_options(
+                &plan,
+                &[],
+                &options,
+            );
+
+        assert_eq!(launch.program(), "/tmp/erebor-filesystem-overlay");
+        assert_eq!(
+            launch.args(),
+            &[
+                "/tmp/erebor-linux-process-guard",
+                "python3",
+                "-c",
+                "print('hello')"
+            ]
+        );
         Ok(())
     }
 

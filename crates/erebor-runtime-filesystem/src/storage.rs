@@ -171,7 +171,7 @@ impl FilesystemOverlayStorage {
     }
 }
 
-fn prepare_with_initializer(
+pub(crate) fn prepare_with_initializer(
     session_dir: &Path,
     volumes: Vec<FilesystemVolumeStorageRequest>,
     initialize_repo: impl FnOnce(&Path) -> Result<()>,

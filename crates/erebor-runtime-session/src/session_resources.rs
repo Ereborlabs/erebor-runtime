@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use erebor_runtime_core::{
     DockerSessionCommandOptions, LinuxHostSessionCommandOptions, SessionSurfaceSupervisor,
 };
@@ -49,6 +51,11 @@ impl SessionSideResources {
 
     pub(crate) fn linux_host_options(&self) -> &LinuxHostSessionCommandOptions {
         &self.linux_host_options
+    }
+
+    pub(crate) fn with_linux_host_outer_wrapper(mut self, wrapper: PathBuf) -> Self {
+        self.linux_host_options = self.linux_host_options.with_outer_wrapper_program(wrapper);
+        self
     }
 
     pub(crate) fn linux_host_adopt_options(

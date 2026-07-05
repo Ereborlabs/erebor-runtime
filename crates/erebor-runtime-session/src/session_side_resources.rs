@@ -6,10 +6,11 @@ use erebor_runtime_core::{
     SessionRunnerKind, SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan,
     SessionSurfaceLauncher,
 };
+use erebor_runtime_filesystem::LinuxOverlaySessionView;
 use snafu::ResultExt;
 
 use crate::{
-    error::{GuardConfigSnafu, InvalidConfigSnafu, RuntimeSnafu},
+    error::{FilesystemSurfaceSnafu, GuardConfigSnafu, InvalidConfigSnafu, RuntimeSnafu},
     interception_backend::{FileOperationInterceptionInput, SessionInterceptionBackendBundle},
     interception_setup::SessionInterceptionSetup,
     policies::read_policy_set,
@@ -81,6 +82,7 @@ fn start_session_side_resources_from_start_plan(
     let mut terminal_surface_present = false;
     let mut terminal_process_surface = TerminalProcessSurface::absent();
     let mut filesystem_handler = None;
+    let mut filesystem_overlay_wrapper = None;
     let mut process_exec_interception = None;
     let process_exec_supported = start_plan
         .interception()
@@ -163,6 +165,16 @@ fn start_session_side_resources_from_start_plan(
                         String::from("EREBOR_FILESYSTEM_REPO"),
                         storage.repo_path().display().to_string(),
                     ));
+                    if plan.runner_kind() == SessionRunnerKind::LinuxHost {
+                        let overlay_view = LinuxOverlaySessionView::prepare(storage)
+                            .context(FilesystemSurfaceSnafu)?;
+                        let wrapper_path = overlay_view.wrapper_path().to_path_buf();
+                        environment.push((
+                            String::from("EREBOR_FILESYSTEM_OVERLAY_WRAPPER"),
+                            wrapper_path.display().to_string(),
+                        ));
+                        filesystem_overlay_wrapper = Some(wrapper_path);
+                    }
                 }
             }
         }
@@ -196,12 +208,16 @@ fn start_session_side_resources_from_start_plan(
         )?;
         let interception_registration =
             interception_setup.register(interception_router, plan, uses_lazy_browser_cdp)?;
-        return interception_setup.into_side_resources(
+        let resources = interception_setup.into_side_resources(
             environment,
             None,
             interception_registration,
             None,
-        );
+        )?;
+        return Ok(match filesystem_overlay_wrapper {
+            Some(wrapper) => resources.with_linux_host_outer_wrapper(wrapper),
+            None => resources,
+        });
     }
 
     let supervisor = launcher.start().context(RuntimeSnafu)?;
@@ -238,12 +254,16 @@ fn start_session_side_resources_from_start_plan(
     let interception_registration =
         interception_setup.register(interception_router, plan, uses_lazy_browser_cdp)?;
 
-    interception_setup.into_side_resources(
+    let resources = interception_setup.into_side_resources(
         environment,
         browser_cdp_endpoint,
         interception_registration,
         Some(supervisor),
-    )
+    )?;
+    Ok(match filesystem_overlay_wrapper {
+        Some(wrapper) => resources.with_linux_host_outer_wrapper(wrapper),
+        None => resources,
+    })
 }
 
 fn file_operation_interception_input(

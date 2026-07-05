@@ -5,6 +5,8 @@ use erebor_runtime_core::{RuntimeConfig, SessionRunPlan, SessionRunnerKind};
 use erebor_runtime_events::{ActionKind, SessionId};
 use erebor_runtime_session::{SessionExecutionError, SessionExecutionService};
 
+#[path = "linux_host/phase5.rs"]
+mod phase5;
 #[path = "linux_host/support.rs"]
 mod support;
 
