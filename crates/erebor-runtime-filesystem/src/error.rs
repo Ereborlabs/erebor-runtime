@@ -1,6 +1,5 @@
-use std::{any::Any, io, path::PathBuf};
+use std::{io, path::PathBuf};
 
-use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use serde_json::Error as JsonError;
 use snafu::{Location, Snafu};
 
@@ -148,8 +147,23 @@ pub enum FilesystemError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("filesystem promotion id `{promotion_id}` is invalid: {reason}"))]
+    InvalidPromotionId {
+        promotion_id: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to {action} filesystem checkpoint path `{}`: {source}", path.display()))]
     CheckpointIo {
+        action: &'static str,
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to {action} filesystem promotion path `{}`: {source}", path.display()))]
+    PromotionIo {
         action: &'static str,
         path: PathBuf,
         source: io::Error,
@@ -160,6 +174,41 @@ pub enum FilesystemError {
     EncodeCheckpointManifest {
         path: PathBuf,
         source: JsonError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to encode filesystem promotion manifest `{}`: {source}", path.display()))]
+    EncodePromotionManifest {
+        path: PathBuf,
+        source: JsonError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "filesystem volume `{volume_id}` preimage `{path}` is {size_bytes} bytes, over limit {limit_bytes}"
+    ))]
+    PromotionPreimageTooLarge {
+        volume_id: String,
+        path: String,
+        size_bytes: u64,
+        limit_bytes: u64,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "filesystem volume `{volume_id}` host path `{path}` drifted before promotion: {reason}"
+    ))]
+    PromotionHostDrift {
+        volume_id: String,
+        path: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("filesystem promotion `{promotion_id}` is incomplete: {reason}"))]
+    IncompletePromotion {
+        promotion_id: String,
+        reason: String,
         #[snafu(implicit)]
         location: Location,
     },
@@ -199,91 +248,8 @@ pub enum FilesystemError {
     },
 }
 
-impl ErrorExt for FilesystemError {
-    fn status_code(&self) -> StatusCode {
-        match self {
-            Self::InvalidVolumeId { .. }
-            | Self::InvalidVolumePath { .. }
-            | Self::UnsupportedOverlayPlatform { .. }
-            | Self::MissingOverlayCommand { .. }
-            | Self::InvalidOverlaySessionView { .. }
-            | Self::InvalidCheckpointId { .. } => StatusCode::InvalidArguments,
-            Self::CreateStorageDir { .. }
-            | Self::InspectOverlaySessionPath { .. }
-            | Self::CreateOverlaySessionDir { .. }
-            | Self::WriteOverlayWrapper { .. }
-            | Self::SetOverlayWrapperPermissions { .. }
-            | Self::ReadLayerPath { .. }
-            | Self::InspectLayerPath { .. }
-            | Self::ActiveLayerWriter { .. }
-            | Self::WriteLayerManifest { .. }
-            | Self::EncodeLayerManifest { .. }
-            | Self::CheckpointIo { .. }
-            | Self::EncodeCheckpointManifest { .. }
-            | Self::StartOstree { .. }
-            | Self::OstreeInitFailed { .. }
-            | Self::OstreeCommandFailed { .. } => StatusCode::External,
-            Self::UnsupportedLayer { .. } => StatusCode::InvalidArguments,
-        }
-    }
-
-    fn retry_hint(&self) -> RetryHint {
-        match self {
-            Self::CreateStorageDir { source, .. }
-            | Self::InspectOverlaySessionPath { source, .. }
-            | Self::CreateOverlaySessionDir { source, .. }
-            | Self::WriteOverlayWrapper { source, .. }
-            | Self::SetOverlayWrapperPermissions { source, .. }
-            | Self::ReadLayerPath { source, .. }
-            | Self::InspectLayerPath { source, .. }
-            | Self::WriteLayerManifest { source, .. }
-            | Self::CheckpointIo { source, .. }
-            | Self::StartOstree { source, .. } => RetryHint::from_io_error(source),
-            Self::InvalidVolumeId { .. }
-            | Self::InvalidVolumePath { .. }
-            | Self::UnsupportedOverlayPlatform { .. }
-            | Self::MissingOverlayCommand { .. }
-            | Self::InvalidOverlaySessionView { .. }
-            | Self::InvalidCheckpointId { .. }
-            | Self::ActiveLayerWriter { .. }
-            | Self::UnsupportedLayer { .. }
-            | Self::EncodeLayerManifest { .. }
-            | Self::EncodeCheckpointManifest { .. }
-            | Self::OstreeInitFailed { .. }
-            | Self::OstreeCommandFailed { .. } => RetryHint::NonRetryable,
-        }
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
+mod ext;
 
 #[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
-    use snafu::Location;
-
-    use super::FilesystemError;
-
-    #[test]
-    fn filesystem_errors_have_status_and_retry_hints() {
-        let invalid = FilesystemError::InvalidVolumeId {
-            id: String::from("bad/id"),
-            reason: String::from("must be a safe path component"),
-            location: Location::default(),
-        };
-        assert_eq!(invalid.status_code(), StatusCode::InvalidArguments);
-        assert_eq!(invalid.retry_hint(), RetryHint::NonRetryable);
-
-        let io_error = FilesystemError::CreateStorageDir {
-            path: PathBuf::from("/tmp/erebor"),
-            source: std::io::Error::from(std::io::ErrorKind::TimedOut),
-            location: Location::default(),
-        };
-        assert_eq!(io_error.status_code(), StatusCode::External);
-        assert_eq!(io_error.retry_hint(), RetryHint::Retryable);
-    }
-}
+#[path = "error/tests.rs"]
+mod tests;

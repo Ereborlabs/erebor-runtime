@@ -7,6 +7,8 @@ use erebor_runtime_session::{SessionExecutionError, SessionExecutionService};
 
 #[path = "linux_host/overlay_layer_manifest.rs"]
 mod overlay_layer_manifest;
+#[path = "linux_host/overlay_promotion_rollback.rs"]
+mod overlay_promotion_rollback;
 #[path = "linux_host/overlay_session_view.rs"]
 mod overlay_session_view;
 #[path = "linux_host/support.rs"]

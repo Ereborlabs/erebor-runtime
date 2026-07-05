@@ -172,7 +172,7 @@ fn write_checkpoint_manifest(
     Ok(path)
 }
 
-fn commit_tree(
+pub(crate) fn commit_tree(
     runner: &impl OstreeCommandRunner,
     repo: &Path,
     ref_name: &str,

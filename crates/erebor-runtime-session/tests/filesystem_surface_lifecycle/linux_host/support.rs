@@ -12,6 +12,11 @@ use erebor_runtime_core::AuditRecord;
 use erebor_runtime_core::RuntimeConfig;
 use erebor_runtime_events::{ActionKind, ExecutionSurface};
 
+#[path = "support/requirements.rs"]
+mod requirements;
+
+pub(crate) use requirements::{require_ostree, require_overlay_lifecycle};
+
 pub(super) fn test_dir(name: &str) -> Result<PathBuf, io::Error> {
     let path = std::env::temp_dir().join(format!(
         "erebor-filesystem-lifecycle-{name}-{}-{}",
@@ -134,37 +139,6 @@ pub(super) fn storage_tree_contains_file_named(
     Ok(false)
 }
 
-pub(super) fn require_ostree(test_name: &str) -> Result<bool, io::Error> {
-    if ostree_available() {
-        return Ok(true);
-    }
-
-    let message = format!("skipping {test_name}: ostree CLI is not available in PATH");
-    if std::env::var("EREBOR_REQUIRE_FILESYSTEM_LIFECYCLE").as_deref() == Ok("1") {
-        return Err(io::Error::other(message));
-    }
-    eprintln!("{message}");
-    Ok(false)
-}
-
-pub(super) fn require_overlay_lifecycle(test_name: &str) -> Result<bool, io::Error> {
-    if std::env::var("EREBOR_RUN_FILESYSTEM_OVERLAY_LIFECYCLE").as_deref() != Ok("1") {
-        let message = format!(
-            "skipping {test_name}: set EREBOR_RUN_FILESYSTEM_OVERLAY_LIFECYCLE=1 to run mount lifecycle checks"
-        );
-        if std::env::var("EREBOR_REQUIRE_FILESYSTEM_LIFECYCLE").as_deref() == Ok("1") {
-            return Err(io::Error::other(message));
-        }
-        eprintln!("{message}");
-        return Ok(false);
-    }
-
-    for command in ["ostree", "unshare", "mount", "umount", "findmnt"] {
-        require_command(test_name, command)?;
-    }
-    Ok(true)
-}
-
 pub(super) fn assert_not_mountpoint(path: &Path) -> Result<(), io::Error> {
     let status = Command::new("findmnt")
         .arg("--mountpoint")
@@ -187,7 +161,53 @@ pub(super) fn overlay_config(
     shell_command: &str,
     empty_policy_only: bool,
 ) -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
-    let interception = if empty_policy_only {
+    overlay_config_from_request(OverlayConfigRequest {
+        policy_path,
+        workspace,
+        host_project,
+        session_project,
+        diagnostic_name,
+        shell_command,
+        empty_policy_only,
+        promote_on_session_finish: false,
+    })
+}
+
+pub(super) fn overlay_promoting_config(
+    policy_path: &Path,
+    workspace: &Path,
+    host_project: &Path,
+    session_project: &Path,
+    diagnostic_name: &str,
+    shell_command: &str,
+) -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
+    overlay_config_from_request(OverlayConfigRequest {
+        policy_path,
+        workspace,
+        host_project,
+        session_project,
+        diagnostic_name,
+        shell_command,
+        empty_policy_only: true,
+        promote_on_session_finish: true,
+    })
+}
+
+struct OverlayConfigRequest<'a> {
+    policy_path: &'a Path,
+    workspace: &'a Path,
+    host_project: &'a Path,
+    session_project: &'a Path,
+    diagnostic_name: &'a str,
+    shell_command: &'a str,
+    empty_policy_only: bool,
+    promote_on_session_finish: bool,
+}
+
+fn overlay_config_from_request(
+    request: OverlayConfigRequest<'_>,
+) -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
+    let interception = if request.empty_policy_only {
         r#""operations": ["process_exec", "file_open", "file_read", "file_mutation"]"#
     } else {
         r#""operations": ["process_exec", "file_mutation"]"#
@@ -224,17 +244,23 @@ pub(super) fn overlay_config(
                   "session_path": "{}",
                   "mode": "writable"
                 }}
-              ]
+              ],
+              "revert": {{
+                "promote_on_session_finish": {},
+                "retain_layers": true,
+                "preimage_size_limit_bytes": 104857600
+              }}
             }}
           }}
         }}"#,
-        policy_path.display(),
-        workspace.display(),
-        diagnostic_name,
-        json_escape(shell_command),
+        request.policy_path.display(),
+        request.workspace.display(),
+        request.diagnostic_name,
+        json_escape(request.shell_command),
         interception,
-        host_project.display(),
-        session_project.display()
+        request.host_project.display(),
+        request.session_project.display(),
+        request.promote_on_session_finish
     ))?)
 }
 
@@ -253,36 +279,6 @@ pub(super) fn cleanup_overlay_test_dir(
     }
     fs::remove_dir_all(test_dir)?;
     Ok(())
-}
-
-fn ostree_available() -> bool {
-    Command::new("ostree")
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-fn require_command(test_name: &str, command: &str) -> Result<(), io::Error> {
-    if command_available(command) {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "{test_name} requires `{command}` in PATH"
-        )))
-    }
-}
-
-fn command_available(command: &str) -> bool {
-    Command::new(command)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
 }
 
 fn json_escape(value: &str) -> String {

@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 
 use erebor_runtime_core::{
-    FilesystemSurfaceConfig, RuntimeConfig, RuntimeError, SessionRegistry, SessionRegistryFinish,
-    SessionRunOutcome, SessionRunPlan,
+    FilesystemRevertConfig, FilesystemSurfaceConfig, RuntimeConfig, RuntimeError, SessionRegistry,
+    SessionRegistryFinish, SessionRunOutcome, SessionRunPlan,
 };
 use erebor_runtime_events::SessionId;
 use erebor_runtime_filesystem::{
-    commit_session_checkpoint, FilesystemSessionStorage, FilesystemVolumeStorageRequest,
+    commit_session_checkpoint, promote_session_checkpoint, FilesystemPromotionOptions,
+    FilesystemSessionStorage, FilesystemVolumeStorageRequest,
 };
 use snafu::ResultExt;
 
@@ -19,11 +20,11 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SessionStorage {
     audit_path: PathBuf,
-    filesystem: Option<FilesystemSessionStorage>,
+    filesystem: Option<PreparedFilesystemStorage>,
 }
 
 impl SessionStorage {
-    fn new(audit_path: PathBuf, filesystem: Option<FilesystemSessionStorage>) -> Self {
+    fn new(audit_path: PathBuf, filesystem: Option<PreparedFilesystemStorage>) -> Self {
         Self {
             audit_path,
             filesystem,
@@ -35,7 +36,29 @@ impl SessionStorage {
     }
 
     pub(crate) fn filesystem(&self) -> Option<&FilesystemSessionStorage> {
-        self.filesystem.as_ref()
+        self.filesystem
+            .as_ref()
+            .map(PreparedFilesystemStorage::storage)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PreparedFilesystemStorage {
+    storage: FilesystemSessionStorage,
+    revert: FilesystemRevertConfig,
+}
+
+impl PreparedFilesystemStorage {
+    fn new(storage: FilesystemSessionStorage, revert: FilesystemRevertConfig) -> Self {
+        Self { storage, revert }
+    }
+
+    fn storage(&self) -> &FilesystemSessionStorage {
+        &self.storage
+    }
+
+    fn revert(&self) -> &FilesystemRevertConfig {
+        &self.revert
     }
 }
 
@@ -82,7 +105,7 @@ pub(crate) fn prepare_registry_session(
 fn prepare_filesystem_storage(
     session_dir: &Path,
     filesystem: &FilesystemSurfaceConfig,
-) -> Result<Option<FilesystemSessionStorage>, SessionExecutionError> {
+) -> Result<Option<PreparedFilesystemStorage>, SessionExecutionError> {
     if filesystem.volumes().is_empty() {
         return Ok(None);
     }
@@ -102,7 +125,12 @@ fn prepare_filesystem_storage(
         .collect::<Result<Vec<_>, _>>()?;
 
     FilesystemSessionStorage::prepare(session_dir, volumes)
-        .map(Some)
+        .map(|storage| {
+            Some(PreparedFilesystemStorage::new(
+                storage,
+                *filesystem.revert(),
+            ))
+        })
         .context(FilesystemSurfaceSnafu)
 }
 
@@ -167,8 +195,16 @@ fn checkpoint_successful_filesystem_layers(
     if !successful {
         return Ok(());
     }
-    if let Some(storage) = prepared_session.storage().filesystem() {
-        commit_session_checkpoint(storage, session_id.as_str()).context(FilesystemSurfaceSnafu)?;
+    if let Some(filesystem) = prepared_session.storage().filesystem.as_ref() {
+        if filesystem.revert().promote_on_session_finish() {
+            let options =
+                FilesystemPromotionOptions::new(filesystem.revert().preimage_size_limit_bytes());
+            promote_session_checkpoint(filesystem.storage(), session_id.as_str(), options)
+                .context(FilesystemSurfaceSnafu)?;
+        } else {
+            commit_session_checkpoint(filesystem.storage(), session_id.as_str())
+                .context(FilesystemSurfaceSnafu)?;
+        }
     }
     Ok(())
 }

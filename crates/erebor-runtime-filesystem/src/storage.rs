@@ -74,6 +74,13 @@ impl FilesystemSessionStorage {
         prepare_with_initializer(session_dir.as_ref(), volumes, initialize_ostree_repo)
     }
 
+    pub fn open_existing(
+        session_dir: impl AsRef<Path>,
+        volumes: impl IntoIterator<Item = FilesystemVolumeStorageRequest>,
+    ) -> Result<Self> {
+        storage_plan(session_dir.as_ref(), volumes.into_iter().collect())
+    }
+
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
