@@ -53,6 +53,30 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
 - Strong file-size rule: code files should stay under 300 lines. Treat this as
   almost non-negotiable; if a file must exceed it temporarily, document why and
   split it before adding more behavior.
+- Ownership-first code shape is required. Domain behavior belongs on the struct
+  that owns the state or behind a narrow trait at a real platform, runtime,
+  protocol, policy, sink, or test-double seam. Loose production free functions
+  are prohibited by default.
+- A free helper is acceptable only when it is private, stateless, local to the
+  owner that uses it, and makes the owner easier to read. If it needs config,
+  paths, policy, runtime handles, sinks, clocks, IO, validation state, or
+  lifecycle state, make it an owner method or an owner collaborator instead.
+- Validation should be part of the validated type or a named validator owner.
+  Avoid stray `validate_*` functions that make ownership unclear.
+- Real defaults belong in `Default` impls or derives. Do not add `default_*`
+  helper functions unless a serialization framework requires that exact hook;
+  keep those hooks private and route them through the owning `Default`.
+- Avoid decorative builder-style `with_*` APIs. Use a constructor when a value
+  can be built in one shot, and use explicit mutating methods such as `add_*`
+  or `set_*` when an owner is accumulated over time. Do not introduce extra
+  clones or moves just to support a fluent API.
+- Do not introduce unnecessary copies during organization work. Borrow by
+  reference for read-only access, move values at natural ownership boundaries,
+  and use `Arc`/cloning only for real shared async or lifetime needs.
+- Keep sibling concepts in the same module family. Surfaces live under the
+  surface root, runners under the runner root, session plans under the session
+  root, and tests beside the owner they exercise. One-off top-level files for a
+  sibling concept are not acceptable unless the file is the family root.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings` must
   be clean.
 - Use crate-local SNAFU error modules: returned Rust errors belong in each
@@ -65,6 +89,10 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
   setup.
 - Prefer existing crate boundaries and local patterns over inventing new
   abstractions.
+- When learning from external codebases, distill the practice into local
+  Erebor-specific guidance. Do not name or copy external repository style
+  instructions into phase plans unless the user explicitly asks for that
+  citation.
 - CLI code is wiring only: parse arguments, translate them into crate-level
   requests, call the owning crate, and print/return results. Business logic,
   audit/session/policy/runtime orchestration, feature JSON/text rendering, file

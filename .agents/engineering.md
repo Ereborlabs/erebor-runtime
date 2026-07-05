@@ -12,6 +12,50 @@
 - Keep file organization intentional: related structs can share a file; errors
   belong in each crate's `error.rs` or a thin `error.rs` module root with
   focused `error/*.rs` submodules; avoid dumping everything into `lib.rs`.
+- Keep sibling domain concepts in the same module family. If browser,
+  terminal, and filesystem are all surfaces, they belong under the surface
+  owner; if Docker and Linux-host are runners, they belong under the runner
+  owner. Avoid one-off top-level files for a sibling concept unless the file is
+  itself the family root.
+- Prefer ownership-oriented organization over clusters of unrelated free
+  functions. Loose production free functions are prohibited by default. When
+  several operations repeatedly need the same state, config, paths, policy,
+  engine, sink, clock, IO handle, or runtime handle, introduce a small owner
+  struct and make those operations methods on that owner.
+- Pure helper functions are allowed only when they are truly stateless, private,
+  local to the owner that uses them, and make that owner easier to read. If a
+  helper needs repeated context, mutates lifecycle state, coordinates IO, owns
+  path/clock/copy decisions, or crosses a policy/protocol boundary, it should
+  become an owner method or move behind an existing domain trait.
+- Validation belongs to the validated type or to a named validator owner. Avoid
+  stray `validate_*` functions unless they are private framework hooks wrapped
+  by an owner.
+- Real defaults belong in `Default` impls or derives. Avoid `default_*` helper
+  functions unless a serde or protocol hook requires that spelling; such hooks
+  should be private and delegate to the owning `Default`.
+- Avoid decorative builder-style `with_*` APIs. Use a constructor for complete
+  values, and use explicit mutating owner methods such as `add_*` or `set_*`
+  for accumulated options. Do not add clones or moves merely to support fluent
+  chaining.
+- Put traits at real seams: runtime/platform seams, policy or sink contracts,
+  protocol boundaries, and test doubles. Do not add traits only to hide a large
+  module split or to make a local helper look abstract.
+- Avoid extra ownership churn while reorganizing. Pass references where the
+  callee only reads, move values when ownership naturally transfers, and use
+  `Arc`/clone only for actual shared async or lifetime boundaries.
+- Keep module roots thin. Prefer `module.rs` plus `module/*.rs` for large
+  domains, with the root declaring modules and re-exporting the public surface
+  intentionally.
+- Put owner tests beside the owner where practical. A small test prelude may
+  centralize imports, but scenario tests should not drift into a generic bucket
+  when an obvious owner module exists.
+- Keep plans and phase files grounded in the current source tree. When a split
+  moves a concept into a family directory, update the phase text to use the new
+  path and remove stale one-off module names from future instructions.
+- If external codebases are used for taste or organization research, translate
+  the lesson into local engineering rules. Do not name or copy external repo
+  style instructions into phase plans unless the user explicitly requests the
+  citation.
 
 ## Runtime Architecture
 
