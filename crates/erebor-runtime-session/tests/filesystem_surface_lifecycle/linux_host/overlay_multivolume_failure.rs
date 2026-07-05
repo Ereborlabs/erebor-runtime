@@ -47,6 +47,12 @@ fn linux_host_overlay_multivolume_preimage_failure_blocks_host_mutation(
     drop(listener);
     let repo = support::session_filesystem_path(&fixture.workspace, session_id).join("repo");
     let refs = ostree_output(&repo, &["refs", "--list"])?;
+    assert!(refs.contains(&format!(
+        "erebor/promotions/{session_id}/volumes/project/preimage"
+    )));
+    assert!(!refs.contains(&format!(
+        "erebor/promotions/{session_id}/volumes/cache/preimage"
+    )));
     assert!(!refs.contains(&format!("erebor/promotions/{session_id}/manifest")));
     fixture.assert_unmounted()?;
     cleanup(&fixture, session_id)?;
