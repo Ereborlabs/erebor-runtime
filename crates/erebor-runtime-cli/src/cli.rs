@@ -7,10 +7,8 @@ use std::{
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use erebor_runtime_audit::{
-    read_audit_records, render_session_describe_from_default_registry,
-    render_session_list_from_default_registry, render_session_show_from_default_registry,
-    session_audit_path, EvidenceTracePaths, EvidenceTraceSink, FileEvidenceTraceSink,
-    MarkdownEvidenceTraceRenderer, SessionReviewOutputFormat,
+    read_audit_records, EvidenceTraceSink, EvidenceTraceSource, FileEvidenceTraceSink,
+    MarkdownEvidenceTraceRenderer, SessionReviewOutputFormat, SessionReviewSource,
 };
 use erebor_runtime_core::{
     BrowserCdpSurfaceLayerConfig, RuntimeAuditConfig, RuntimeConfig, SessionAdoptTarget,
@@ -663,23 +661,25 @@ fn session_adopt(args: &SessionAdoptArgs) -> Result<(), CliError> {
 }
 
 fn session_ls(args: &SessionLsArgs) -> Result<(), CliError> {
-    let output = render_session_list_from_default_registry(args.format.into())
+    let output = SessionReviewSource::default()
+        .render_list(args.format.into())
         .context(SessionReviewSnafu)?;
     print!("{output}");
     Ok(())
 }
 
 fn session_show(args: &SessionShowArgs) -> Result<(), CliError> {
-    let output = render_session_show_from_default_registry(&args.session_id, args.format.into())
+    let output = SessionReviewSource::default()
+        .render_show(&args.session_id, args.format.into())
         .context(SessionReviewSnafu)?;
     print!("{output}");
     Ok(())
 }
 
 fn session_describe(args: &SessionDescribeArgs) -> Result<(), CliError> {
-    let output =
-        render_session_describe_from_default_registry(&args.session_id, args.format.into())
-            .context(SessionReviewSnafu)?;
+    let output = SessionReviewSource::default()
+        .render_describe(&args.session_id, args.format.into())
+        .context(SessionReviewSnafu)?;
     print!("{output}");
     Ok(())
 }
@@ -776,7 +776,9 @@ fn execute_policy(args: &PolicyArgs) -> Result<(), CliError> {
 fn execute_audit(args: &AuditArgs) -> Result<(), CliError> {
     match &args.command {
         AuditCommand::Tail(args) => {
-            let audit_path = session_audit_path(&args.session_id).context(EvidenceTraceSnafu)?;
+            let audit_path = EvidenceTraceSource::default()
+                .audit_path(&args.session_id)
+                .context(EvidenceTraceSnafu)?;
             tracing::debug!(
                 session = %args.session_id,
                 audit = %audit_path.display(),
@@ -795,12 +797,9 @@ fn execute_audit(args: &AuditArgs) -> Result<(), CliError> {
                 "rendering evidence trace"
             );
             let request = erebor_runtime_audit::EvidenceTraceRequest::from_paths(
-                EvidenceTracePaths::from_default_session_registry(
-                    &args.session_id,
-                    args.prompt.clone(),
-                    args.purpose.clone(),
-                )
-                .context(EvidenceTraceSnafu)?,
+                EvidenceTraceSource::default()
+                    .paths(&args.session_id, args.prompt.clone(), args.purpose.clone())
+                    .context(EvidenceTraceSnafu)?,
             )
             .context(EvidenceTraceSnafu)?;
             let report = MarkdownEvidenceTraceRenderer

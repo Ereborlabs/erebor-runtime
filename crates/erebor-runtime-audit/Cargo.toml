@@ -14,6 +14,7 @@ erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 snafu.workspace = true
 
 [lints]

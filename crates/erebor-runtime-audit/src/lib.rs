@@ -10,19 +10,14 @@ mod tests;
 
 pub use error::{AuditLogError, EvidenceTraceError, SessionReviewError};
 pub use evidence_trace::{
-    session_audit_path, EvidenceTraceArtifact, EvidenceTracePaths, EvidenceTraceReceipt,
-    EvidenceTraceReport, EvidenceTraceRequest, EvidenceTraceSink, FileEvidenceTraceSink,
+    EvidenceTraceArtifact, EvidenceTracePaths, EvidenceTraceReceipt, EvidenceTraceReport,
+    EvidenceTraceRequest, EvidenceTraceSink, EvidenceTraceSource, FileEvidenceTraceSink,
     MarkdownEvidenceTraceRenderer,
 };
-pub use filter::{
-    should_record_audit_record, should_record_with_surface_logging, FilteredAuditSink,
-};
+pub use filter::{AuditFilter, FilteredAuditSink};
 pub use jsonl::{append_audit_record, read_audit_records, JsonlAuditSink};
 pub use session_review::{
-    render_session_describe, render_session_describe_from_default_registry,
-    render_session_describe_from_paths, render_session_list,
-    render_session_list_from_default_registry, render_session_show,
-    render_session_show_from_default_registry, render_session_show_from_paths, review_session,
-    session_summaries, SessionDecisionSummary, SessionReview, SessionReviewArtifacts,
-    SessionReviewOutputFormat, SessionSummary, SessionTimelineItem,
+    SessionDecisionSummary, SessionReview, SessionReviewArtifacts, SessionReviewOutputFormat,
+    SessionReviewRenderer, SessionReviewSource, SessionSummary, SessionSummaryBuilder,
+    SessionTimelineItem,
 };
