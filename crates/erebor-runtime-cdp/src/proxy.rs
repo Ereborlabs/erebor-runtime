@@ -2,7 +2,7 @@ use erebor_runtime_core::{ApprovalProvider, AuditSink, LocalEnforcementEngine};
 use erebor_runtime_policy::PolicyEvaluator;
 use serde_json::Value;
 
-use crate::{enforce_cdp_command, CdpCommand, CdpEnforcementAction, CdpError, CdpSessionContext};
+use crate::{CdpCommand, CdpCommandEnforcer, CdpEnforcementAction, CdpError, CdpSessionContext};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CdpBackendResponse {
@@ -20,26 +20,30 @@ pub enum CdpProxyAction {
     AwaitApproval { reason: String },
 }
 
-pub fn proxy_cdp_message<E, A, S, B>(
-    engine: &LocalEnforcementEngine<E, A, S>,
-    context: &CdpSessionContext,
-    backend: &B,
-    command: &CdpCommand,
-) -> Result<CdpProxyAction, CdpError>
-where
-    E: PolicyEvaluator,
-    A: ApprovalProvider,
-    S: AuditSink,
-    B: CdpBackend,
-{
-    match enforce_cdp_command(engine, context, command)? {
-        CdpEnforcementAction::Forward => {
-            let response = backend.forward(command)?;
-            Ok(CdpProxyAction::Forwarded { response })
-        }
-        CdpEnforcementAction::Block { reason } => Ok(CdpProxyAction::Block { reason }),
-        CdpEnforcementAction::AwaitApproval { reason } => {
-            Ok(CdpProxyAction::AwaitApproval { reason })
+pub struct CdpMessageProxy;
+
+impl CdpMessageProxy {
+    pub fn proxy<E, A, S, B>(
+        engine: &LocalEnforcementEngine<E, A, S>,
+        context: &CdpSessionContext,
+        backend: &B,
+        command: &CdpCommand,
+    ) -> Result<CdpProxyAction, CdpError>
+    where
+        E: PolicyEvaluator,
+        A: ApprovalProvider,
+        S: AuditSink,
+        B: CdpBackend,
+    {
+        match CdpCommandEnforcer::enforce(engine, context, command)? {
+            CdpEnforcementAction::Forward => {
+                let response = backend.forward(command)?;
+                Ok(CdpProxyAction::Forwarded { response })
+            }
+            CdpEnforcementAction::Block { reason } => Ok(CdpProxyAction::Block { reason }),
+            CdpEnforcementAction::AwaitApproval { reason } => {
+                Ok(CdpProxyAction::AwaitApproval { reason })
+            }
         }
     }
 }
@@ -54,10 +58,10 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        proxy_cdp_message, CdpBackend, CdpBackendResponse, CdpCommand, CdpProxyAction,
+        CdpBackend, CdpBackendResponse, CdpCommand, CdpMessageProxy, CdpProxyAction,
         CdpSessionContext,
     };
-    use crate::decode_cdp_command;
+    use crate::CdpCommandDecoder;
 
     fn context() -> CdpSessionContext {
         CdpSessionContext {
@@ -75,9 +79,9 @@ mod tests {
         let policy = LocalPolicy::from_json_str(r#"{ "rules": [] }"#)?;
         let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
         let backend = RecordingBackend::default();
-        let command = decode_cdp_command(r#"{ "id": 1, "method": "Browser.getVersion" }"#)?;
+        let command = CdpCommandDecoder::decode(r#"{ "id": 1, "method": "Browser.getVersion" }"#)?;
 
-        let action = proxy_cdp_message(&engine, &context(), &backend, &command)?;
+        let action = CdpMessageProxy::proxy(&engine, &context(), &backend, &command)?;
 
         assert_eq!(backend.forwarded.get(), 1);
         assert_eq!(
@@ -112,11 +116,11 @@ mod tests {
         )?;
         let engine = erebor_runtime_core::LocalEnforcementEngine::new(policy);
         let backend = RecordingBackend::default();
-        let command = decode_cdp_command(
+        let command = CdpCommandDecoder::decode(
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#,
         )?;
 
-        let action = proxy_cdp_message(&engine, &context(), &backend, &command)?;
+        let action = CdpMessageProxy::proxy(&engine, &context(), &backend, &command)?;
 
         assert_eq!(backend.forwarded.get(), 0);
         assert_eq!(
@@ -153,11 +157,11 @@ mod tests {
             erebor_runtime_core::NoopAuditSink,
         );
         let backend = RecordingBackend::default();
-        let command = decode_cdp_command(
+        let command = CdpCommandDecoder::decode(
             r#"{ "id": 1, "method": "Runtime.evaluate", "params": { "expression": "1 + 1" } }"#,
         )?;
 
-        let action = proxy_cdp_message(&engine, &context(), &backend, &command)?;
+        let action = CdpMessageProxy::proxy(&engine, &context(), &backend, &command)?;
 
         assert_eq!(backend.forwarded.get(), 0);
         assert_eq!(

@@ -75,10 +75,10 @@ impl SessionSurfaceService for BrowserCdpSurface {
                 "launching owned browser for CDP session surface"
             );
         }
-        let mut manager = BrowserSessionManager::new(self.config, self.policy_set, self.context)
-            .with_audit_config(self.audit);
+        let mut manager = BrowserSessionManager::new(self.config, self.policy_set, self.context);
+        manager.set_audit_config(self.audit);
         if let Some(audit_jsonl) = self.audit_jsonl {
-            manager = manager.with_audit_jsonl(audit_jsonl);
+            manager.set_audit_jsonl(audit_jsonl);
         }
         let session = runtime
             .block_on(manager.create_session())
