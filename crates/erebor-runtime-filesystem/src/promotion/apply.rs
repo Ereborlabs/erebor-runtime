@@ -21,6 +21,7 @@ const FILES_DIR: &str = "files";
 
 pub(super) fn apply_volume_layer(
     journal_root: &Path,
+    layer_stage: &Path,
     volume: &FilesystemVolumeStorage,
     layer: &FilesystemLayerManifest,
     journal: &mut PromotionJournal,
@@ -28,7 +29,7 @@ pub(super) fn apply_volume_layer(
     journal.state = PromotionJournalState::Applying;
     journal.write(journal_root)?;
     for operation in &layer.operations {
-        apply_operation(volume, operation)?;
+        apply_operation(layer_stage, volume, operation)?;
         journal
             .applied_operations
             .push(format!("{}:{}", volume.id(), operation_path(operation)));
@@ -49,15 +50,18 @@ pub(super) fn rollback_volume(
 }
 
 fn apply_operation(
+    layer_stage: &Path,
     volume: &FilesystemVolumeStorage,
     operation: &FilesystemLayerOperation,
 ) -> Result<()> {
     match operation {
-        FilesystemLayerOperation::Create { path, entry } => write_layer_entry(volume, path, entry),
+        FilesystemLayerOperation::Create { path, entry } => {
+            write_layer_entry(layer_stage, volume, path, entry)
+        }
         FilesystemLayerOperation::Replace { path, entry } => {
             let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
             remove_path(&host_path)?;
-            write_layer_entry(volume, path, entry)
+            write_layer_entry(layer_stage, volume, path, entry)
         }
         FilesystemLayerOperation::Delete { path } => {
             let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
@@ -67,6 +71,7 @@ fn apply_operation(
 }
 
 fn write_layer_entry(
+    layer_stage: &Path,
     volume: &FilesystemVolumeStorage,
     path: &str,
     entry: &FilesystemLayerEntry,
@@ -80,9 +85,8 @@ fn write_layer_entry(
             })?;
         }
         FilesystemLayerEntry::Regular { source, .. } => {
-            let upper = volume
-                .overlay()
-                .upper_path()
+            let upper = layer_stage
+                .join(FILES_DIR)
                 .join(safe_relative(volume.id(), source)?);
             create_parent(&host_path)?;
             fs::copy(&upper, &host_path).context(PromotionIoSnafu {

@@ -3,25 +3,28 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use snafu::{ensure, ResultExt};
+use snafu::ResultExt;
 
 use crate::{
     checkpoint::{commit_normalized_session_checkpoint_with_runner, commit_tree},
-    error::{IncompletePromotionSnafu, PromotionIoSnafu},
+    error::PromotionIoSnafu,
     normalizer::normalize_session_layers,
     ostree::{OstreeCommandRunner, SystemOstreeCommandRunner},
     FilesystemLayerManifest, FilesystemSessionStorage, Result,
 };
 
 mod apply;
+mod checkout;
 mod ids;
 mod io;
 mod journal;
+mod layer;
 mod lock;
 mod manifest;
 mod metadata;
 mod path;
 mod preimage;
+mod rollback;
 mod types;
 
 pub use ids::{promotion_manifest_ref, promotion_preimage_ref};
@@ -31,14 +34,17 @@ pub use manifest::{
     FilesystemPromotionVolume, PREIMAGE_MANIFEST_FILE, PREIMAGE_MANIFEST_KIND,
     PROMOTION_MANIFEST_FILE, PROMOTION_MANIFEST_KIND,
 };
+pub use rollback::rollback_promotion;
 pub use types::{FilesystemPromotion, FilesystemPromotionOptions, FilesystemRollback};
 
+#[cfg(test)]
+pub(crate) use rollback::rollback_promotion_with_runner;
+
+use checkout::checkout_tree;
 use ids::{manifest_for_volume, validate_promotion_id, volume_for_id};
-use io::{
-    read_preimage_manifest, read_promotion_manifest, write_preimage_manifest,
-    write_promotion_manifest,
-};
+use io::{read_preimage_manifest, write_preimage_manifest, write_promotion_manifest};
 use journal::{PromotionJournal, PromotionJournalState};
+use layer::ensure_layer_promotable;
 use lock::PromotionLock;
 use preimage::{capture_volume_preimage, verify_preimage_matches_host};
 
@@ -62,36 +68,6 @@ pub fn promote_session_checkpoint(
         options,
         &SystemOstreeCommandRunner,
     )
-}
-
-pub fn rollback_promotion(
-    storage: &FilesystemSessionStorage,
-    promotion_id: &str,
-) -> Result<FilesystemRollback> {
-    validate_promotion_id(promotion_id)?;
-    let _lock = PromotionLock::acquire(storage.work_path())?;
-    let root = promotion_root(storage, promotion_id);
-    let journal = PromotionJournal::read(&root)?;
-    ensure!(
-        journal.state == PromotionJournalState::Applied,
-        IncompletePromotionSnafu {
-            promotion_id: promotion_id.to_owned(),
-            reason: format!(
-                "journal state is {:?} with applied operations {:?}",
-                journal.state, journal.applied_operations
-            )
-        }
-    );
-    let manifest = read_promotion_manifest(&root)?;
-    let mut restored = Vec::new();
-    for volume_ref in manifest.volumes.iter().rev() {
-        let volume = volume_for_id(storage, &volume_ref.volume_id)?;
-        let stage = preimage_stage_root(&root, volume.id());
-        let preimage = read_preimage_manifest(&stage)?;
-        apply::rollback_volume(&stage, volume, &preimage)?;
-        restored.push(volume.id().to_owned());
-    }
-    Ok(FilesystemRollback::new(promotion_id, restored))
 }
 
 pub(crate) fn promote_normalized_session_checkpoint_with_runner(
@@ -131,7 +107,7 @@ pub(crate) fn promote_with_hook(
     validate_promotion_id(promotion_id)?;
     let _lock = PromotionLock::acquire(storage.work_path())?;
     let root = promotion_root(storage, promotion_id);
-    fail_if_existing_incomplete(&root, promotion_id)?;
+    journal::fail_if_existing_incomplete(&root, promotion_id)?;
     fs::create_dir_all(&root).context(PromotionIoSnafu {
         action: "create promotion work directory",
         path: root.as_path(),
@@ -152,7 +128,7 @@ pub(crate) fn promote_with_hook(
     verify_all_preimages(storage, &root, &volumes)?;
     hook.before_apply()?;
     verify_all_preimages(storage, &root, &volumes)?;
-    apply_all_volumes(storage, manifests, &root, &mut journal)?;
+    apply_all_volumes(storage, manifests, &volumes, &root, runner, &mut journal)?;
     journal.state = PromotionJournalState::Applied;
     journal.write(&root)?;
     let manifest_path = commit_promotion_manifest(
@@ -183,6 +159,7 @@ fn commit_preimages(
     let mut volumes = Vec::new();
     for volume in storage.volumes() {
         let manifest = manifest_for_volume(manifests, volume)?;
+        ensure_layer_promotable(manifest)?;
         let preimage_ref = promotion_preimage_ref(promotion_id, volume.id())?;
         let stage = preimage_stage_root(root, volume.id());
         let preimage = capture_volume_preimage(
@@ -240,12 +217,23 @@ fn commit_promotion_manifest(
 fn apply_all_volumes(
     storage: &FilesystemSessionStorage,
     manifests: &[FilesystemLayerManifest],
+    volumes: &[FilesystemPromotionVolume],
     root: &Path,
+    runner: &impl OstreeCommandRunner,
     journal: &mut PromotionJournal,
 ) -> Result<()> {
-    for volume in storage.volumes() {
+    for volume_ref in volumes {
+        let volume = volume_for_id(storage, &volume_ref.volume_id)?;
         let manifest = manifest_for_volume(manifests, volume)?;
-        apply::apply_volume_layer(root, volume, manifest, journal)?;
+        let layer_stage = root.join("layers").join(volume.id()).join("layer");
+        checkout_tree(
+            runner,
+            storage.repo_path(),
+            &volume_ref.layer_ref,
+            &layer_stage,
+            "checkout checkpoint layer",
+        )?;
+        apply::apply_volume_layer(root, &layer_stage, volume, manifest, journal)?;
     }
     Ok(())
 }
@@ -264,27 +252,11 @@ fn verify_all_preimages(
     Ok(())
 }
 
-fn fail_if_existing_incomplete(root: &Path, promotion_id: &str) -> Result<()> {
-    let path = PromotionJournal::path(root);
-    if !path.exists() {
-        return Ok(());
-    }
-    let journal = PromotionJournal::read(root)?;
-    IncompletePromotionSnafu {
-        promotion_id: promotion_id.to_owned(),
-        reason: format!(
-            "existing journal state is {:?} with applied operations {:?}",
-            journal.state, journal.applied_operations
-        ),
-    }
-    .fail()
-}
-
-fn promotion_root(storage: &FilesystemSessionStorage, promotion_id: &str) -> PathBuf {
+pub(super) fn promotion_root(storage: &FilesystemSessionStorage, promotion_id: &str) -> PathBuf {
     storage.work_path().join("promotions").join(promotion_id)
 }
 
-fn preimage_stage_root(root: &Path, volume_id: &str) -> PathBuf {
+pub(super) fn preimage_stage_root(root: &Path, volume_id: &str) -> PathBuf {
     root.join("volumes").join(volume_id).join("preimage")
 }
 

@@ -75,6 +75,7 @@ fn linux_host_overlay_promotion_and_rollback_restore_host() -> Result<(), Box<dy
     assert_eq!(promotion["state"], "applied");
 
     let storage = reopen_storage(&workspace, session_id, &host_project, &session_project)?;
+    fs::remove_dir_all(storage.work_path().join("promotions").join(session_id))?;
     rollback_promotion(&storage, session_id)?;
 
     assert_eq!(
