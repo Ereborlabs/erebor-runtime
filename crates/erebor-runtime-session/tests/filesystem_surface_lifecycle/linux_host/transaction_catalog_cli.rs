@@ -17,6 +17,27 @@ pub(super) fn run(
     Ok(String::from_utf8(output.stdout)?)
 }
 
+pub(super) fn run_failure(
+    binary: &Path,
+    cwd: &Path,
+    args: &[impl AsRef<std::ffi::OsStr>],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let output = Command::new(binary).current_dir(cwd).args(args).output()?;
+    if output.status.success() {
+        return Err(std::io::Error::other(format!(
+            "erebor-runtime command unexpectedly succeeded: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ))
+        .into());
+    }
+    Ok(format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
 pub(super) fn erebor_runtime_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
     if let Some(binary) = std::env::var_os("CARGO_BIN_EXE_erebor-runtime") {
         return Ok(PathBuf::from(binary));
@@ -49,6 +70,24 @@ pub(super) fn transaction_args<const N: usize>(
     let mut args = vec![
         String::from("filesystem"),
         String::from("transactions"),
+        String::from(tail[0]),
+        String::from("--registry"),
+        registry.display().to_string(),
+        String::from("--session"),
+        session_id.to_owned(),
+    ];
+    args.extend(tail.into_iter().skip(1).map(ToOwned::to_owned));
+    args
+}
+
+pub(super) fn retention_args<const N: usize>(
+    registry: &Path,
+    session_id: &str,
+    tail: [&str; N],
+) -> Vec<String> {
+    let mut args = vec![
+        String::from("filesystem"),
+        String::from("retention"),
         String::from(tail[0]),
         String::from("--registry"),
         registry.display().to_string(),

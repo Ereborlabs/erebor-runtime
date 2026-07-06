@@ -264,6 +264,35 @@ pub enum FilesystemError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("filesystem retention target `{target}` is invalid: {reason}"))]
+    InvalidRetentionTarget {
+        target: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("filesystem retention target `{target}` is protected: {reason}"))]
+    ProtectedRetentionTarget {
+        target: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to {action} filesystem retention path `{}`: {source}", path.display()))]
+    RetentionIo {
+        action: &'static str,
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to encode filesystem retention artifact `{}`: {source}", path.display()))]
+    EncodeRetention {
+        path: PathBuf,
+        source: JsonError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to start ostree for repo `{}`: {source}", repo.display()))]
     StartOstree {
         repo: PathBuf,

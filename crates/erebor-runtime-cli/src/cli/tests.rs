@@ -199,6 +199,47 @@ fn accepts_filesystem_transaction_catalog_commands() {
 }
 
 #[test]
+fn accepts_filesystem_retention_commands() {
+    let list = Cli::try_parse_from([
+        "erebor-runtime",
+        "filesystem",
+        "retention",
+        "list",
+        "--registry",
+        ".erebor/sessions",
+        "--session",
+        "session-1",
+    ]);
+    let prune = Cli::try_parse_from([
+        "erebor-runtime",
+        "filesystem",
+        "retention",
+        "prune",
+        "--registry",
+        ".erebor/sessions",
+        "--session",
+        "session-1",
+        "tx@{0}",
+    ]);
+    let json = Cli::try_parse_from([
+        "erebor-runtime",
+        "filesystem",
+        "retention",
+        "list",
+        "--registry",
+        ".erebor/sessions",
+        "--session",
+        "session-1",
+        "--format",
+        "json",
+    ]);
+
+    assert!(list.is_ok());
+    assert!(prune.is_ok());
+    assert!(json.is_ok());
+}
+
+#[test]
 fn accepts_policy_and_audit_commands() {
     let policy = Cli::try_parse_from([
         "erebor-runtime",

@@ -6,6 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::ostree::OstreePruneSummary;
 use crate::{
     checkpoint::FilesystemCheckpointCommit,
     metadata::FilesystemPathMetadataCopier,
@@ -178,6 +179,12 @@ impl FakeOstreeRepository {
         self.commit_path(ref_name)
     }
 
+    pub(super) fn forget_ref(&self, ref_name: &str) {
+        self.refs
+            .borrow_mut()
+            .retain(|existing| existing != ref_name);
+    }
+
     fn next_outcome(&self) -> FakeOstreeOutcome {
         let mut outcomes = self.outcomes.borrow_mut();
         if outcomes.is_empty() {
@@ -210,6 +217,21 @@ impl FakeOstreeRepository {
             String::from("--user-mode"),
             checkout.ref_name().to_owned(),
             checkout.destination().display().to_string(),
+        ]);
+    }
+
+    fn record_delete_ref(&self, repo: &Path, ref_name: &str) {
+        self.commands.borrow_mut().push(vec![
+            String::from("delete-ref"),
+            format!("--repo={}", repo.display()),
+            ref_name.to_owned(),
+        ]);
+    }
+
+    fn record_prune(&self, repo: &Path) {
+        self.commands.borrow_mut().push(vec![
+            String::from("prune"),
+            format!("--repo={}", repo.display()),
         ]);
     }
 
@@ -274,6 +296,33 @@ impl OstreeRepository for FakeOstreeRepository {
         let mut refs = self.refs.borrow().clone();
         refs.sort();
         Ok(refs)
+    }
+
+    fn delete_ref(&self, repo: &Path, ref_name: &str) -> crate::Result<()> {
+        self.record_delete_ref(repo, ref_name);
+        let outcome = self.next_outcome();
+        if !outcome.success {
+            return Err(Self::failure(repo, "delete retained ref", outcome));
+        }
+        self.refs
+            .borrow_mut()
+            .retain(|existing| existing != ref_name);
+        let commit_path = self.commit_path(ref_name);
+        if commit_path.exists() {
+            fs::remove_dir_all(&commit_path)
+                .map_err(|error| test_io_source("remove fake ref tree", &commit_path, error))?;
+        }
+        Ok(())
+    }
+
+    fn prune(&self, repo: &Path) -> crate::Result<OstreePruneSummary> {
+        self.record_prune(repo);
+        let outcome = self.next_outcome();
+        if outcome.success {
+            Ok(OstreePruneSummary::new(0, 0, 0))
+        } else {
+            Err(Self::failure(repo, "prune retained objects", outcome))
+        }
     }
 }
 

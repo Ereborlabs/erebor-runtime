@@ -25,15 +25,19 @@ pub use manifest::{
     FilesystemOpaqueMarker, FilesystemXattr, LAYER_MANIFEST_FILE, LAYER_MANIFEST_KIND,
 };
 pub use promotion::{
-    FilesystemDirectoryPreimageFile, FilesystemHostMetadata, FilesystemPreimageEntry,
-    FilesystemPreimageEntryState, FilesystemPreimageEntryType, FilesystemPreimageManifest,
-    FilesystemPromotion, FilesystemPromotionManifest, FilesystemPromotionOptions,
-    FilesystemPromotionState, FilesystemPromotionVolume, FilesystemRegularPreimage,
-    FilesystemRollback, FilesystemSubtransaction, FilesystemSubtransactionState,
-    FilesystemTransaction, FilesystemTransactionCatalog, FilesystemTransactionChange,
-    FilesystemTransactionRename, FilesystemTransactionRollback, FilesystemTransactionState,
-    FilesystemTransactionTarget, PREIMAGE_MANIFEST_FILE, PREIMAGE_MANIFEST_KIND,
-    PROMOTION_MANIFEST_FILE, PROMOTION_MANIFEST_KIND,
+    FilesystemDirectoryPreimageFile, FilesystemHostMetadata, FilesystemOstreePrune,
+    FilesystemPreimageEntry, FilesystemPreimageEntryState, FilesystemPreimageEntryType,
+    FilesystemPreimageManifest, FilesystemPromotion, FilesystemPromotionManifest,
+    FilesystemPromotionOptions, FilesystemPromotionState, FilesystemPromotionVolume,
+    FilesystemRegularPreimage, FilesystemRetainedArtifactStatus, FilesystemRetainedLocalArtifact,
+    FilesystemRetainedLocalKind, FilesystemRetainedRef, FilesystemRetainedRefKind,
+    FilesystemRetentionInventory, FilesystemRetentionPrune, FilesystemRetentionState,
+    FilesystemRetentionSubtransaction, FilesystemRetentionTransaction, FilesystemRollback,
+    FilesystemSubtransaction, FilesystemSubtransactionState, FilesystemTransaction,
+    FilesystemTransactionCatalog, FilesystemTransactionChange, FilesystemTransactionRename,
+    FilesystemTransactionRollback, FilesystemTransactionState, FilesystemTransactionTarget,
+    PREIMAGE_MANIFEST_FILE, PREIMAGE_MANIFEST_KIND, PROMOTION_MANIFEST_FILE,
+    PROMOTION_MANIFEST_KIND,
 };
 pub use storage::{
     FilesystemOverlayStorage, FilesystemSessionStorage, FilesystemVolumeStorage,

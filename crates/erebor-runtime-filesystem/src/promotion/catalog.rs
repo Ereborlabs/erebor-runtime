@@ -9,7 +9,7 @@ mod journal;
 mod load;
 mod model;
 mod resolve;
-mod state;
+pub(super) mod state;
 
 pub use model::{
     FilesystemSubtransaction, FilesystemSubtransactionState, FilesystemTransaction,

@@ -13,6 +13,25 @@ pub(crate) trait OstreeRepository {
     fn commit_tree(&self, commit: &OstreeTreeCommit<'_>) -> Result<()>;
     fn checkout_tree(&self, checkout: &OstreeTreeCheckout<'_>) -> Result<()>;
     fn list_refs(&self, repo: &Path) -> Result<Vec<String>>;
+    fn delete_ref(&self, repo: &Path, _ref_name: &str) -> Result<()> {
+        OstreeCommandFailedSnafu {
+            repo: repo.to_path_buf(),
+            operation: "delete retained ref",
+            code: None,
+            stderr: String::from("retained ref deletion is not implemented by this repository"),
+        }
+        .fail()
+    }
+
+    fn prune(&self, repo: &Path) -> Result<OstreePruneSummary> {
+        OstreeCommandFailedSnafu {
+            repo: repo.to_path_buf(),
+            operation: "prune retained objects",
+            code: None,
+            stderr: String::from("retained object pruning is not implemented by this repository"),
+        }
+        .fail()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -110,11 +129,15 @@ impl OstreeRepository for SystemOstreeRepository {
             overwrite_mode: ::ostree::RepoCheckoutOverwriteMode::None,
             ..Default::default()
         };
+        let checksum = repo
+            .resolve_rev(checkout.ref_name, false)
+            .map_err(|error| checkout.error(error))?
+            .ok_or_else(|| checkout.error("ostree ref resolved to no commit"))?;
         repo.checkout_at(
             Some(&options),
             ::ostree::AT_FDCWD,
             checkout.destination,
-            checkout.ref_name,
+            checksum.as_str(),
             ::ostree::gio::Cancellable::NONE,
         )
         .map_err(|error| checkout.error(error))
@@ -138,6 +161,58 @@ impl OstreeRepository for SystemOstreeRepository {
         refs.sort();
         Ok(refs)
     }
+
+    fn delete_ref(&self, repo_path: &Path, ref_name: &str) -> Result<()> {
+        let repo = Self::open_repo(repo_path, "delete retained ref")?;
+        let transaction = repo
+            .auto_transaction(::ostree::gio::Cancellable::NONE)
+            .map_err(|error| {
+                OstreeCommandFailedSnafu {
+                    repo: repo_path.to_path_buf(),
+                    operation: "delete retained ref",
+                    code: None,
+                    stderr: error.to_string(),
+                }
+                .build()
+            })?;
+        repo.transaction_set_ref(None, ref_name, None);
+        transaction
+            .commit(::ostree::gio::Cancellable::NONE)
+            .map_err(|error| {
+                OstreeCommandFailedSnafu {
+                    repo: repo_path.to_path_buf(),
+                    operation: "delete retained ref",
+                    code: None,
+                    stderr: error.to_string(),
+                }
+                .build()
+            })
+            .map(|_| ())
+    }
+
+    fn prune(&self, repo_path: &Path) -> Result<OstreePruneSummary> {
+        let repo = Self::open_repo(repo_path, "prune retained objects")?;
+        let (objects_total, objects_pruned, pruned_object_size_total) = repo
+            .prune(
+                ::ostree::RepoPruneFlags::NONE,
+                -1,
+                ::ostree::gio::Cancellable::NONE,
+            )
+            .map_err(|error| {
+                OstreeCommandFailedSnafu {
+                    repo: repo_path.to_path_buf(),
+                    operation: "prune retained objects",
+                    code: None,
+                    stderr: error.to_string(),
+                }
+                .build()
+            })?;
+        Ok(OstreePruneSummary::new(
+            objects_total,
+            objects_pruned,
+            pruned_object_size_total,
+        ))
+    }
 }
 
 impl SystemOstreeRepository {
@@ -151,6 +226,39 @@ impl SystemOstreeRepository {
                 repo: repo_path.to_path_buf(),
             })?;
         Ok(repo)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+pub(crate) struct OstreePruneSummary {
+    objects_total: i32,
+    objects_pruned: i32,
+    pruned_object_size_total: u64,
+}
+
+impl OstreePruneSummary {
+    pub(crate) const fn new(
+        objects_total: i32,
+        objects_pruned: i32,
+        pruned_object_size_total: u64,
+    ) -> Self {
+        Self {
+            objects_total,
+            objects_pruned,
+            pruned_object_size_total,
+        }
+    }
+
+    pub(crate) const fn objects_total(self) -> i32 {
+        self.objects_total
+    }
+
+    pub(crate) const fn objects_pruned(self) -> i32 {
+        self.objects_pruned
+    }
+
+    pub(crate) const fn pruned_object_size_total(self) -> u64 {
+        self.pruned_object_size_total
     }
 }
 

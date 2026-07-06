@@ -13,6 +13,7 @@ mod large_file;
 mod metadata;
 mod multivolume;
 mod opaque;
+mod retention;
 mod support;
 mod transaction_catalog;
 

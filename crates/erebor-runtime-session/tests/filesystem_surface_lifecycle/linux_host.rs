@@ -21,6 +21,8 @@ mod overlay_multivolume_support;
 mod overlay_promotion_rollback;
 #[path = "linux_host/overlay_session_view.rs"]
 mod overlay_session_view;
+#[path = "linux_host/retention.rs"]
+mod retention;
 #[path = "linux_host/support.rs"]
 mod support;
 #[path = "linux_host/transaction_catalog.rs"]

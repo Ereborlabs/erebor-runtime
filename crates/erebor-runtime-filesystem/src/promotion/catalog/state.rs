@@ -18,7 +18,7 @@ const CATALOG_DIR: &str = "transaction-catalog";
 const CATALOG_FILE: &str = "erebor-transaction-catalog.json";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub(super) struct CatalogState {
+pub(in crate::promotion) struct CatalogState {
     #[serde(default = "CatalogState::current_version")]
     version: u32,
     #[serde(default)]
@@ -38,7 +38,7 @@ impl Default for CatalogState {
 }
 
 impl CatalogState {
-    pub(super) fn read(storage: &FilesystemSessionStorage) -> Result<Self> {
+    pub(in crate::promotion) fn read(storage: &FilesystemSessionStorage) -> Result<Self> {
         CatalogStateStore::new(storage).read()
     }
 
@@ -46,7 +46,7 @@ impl CatalogState {
         CatalogStateStore::new(storage).write(self)
     }
 
-    pub(super) fn name_for(&self, key: &CatalogTargetKey) -> Option<&str> {
+    pub(in crate::promotion) fn name_for(&self, key: &CatalogTargetKey) -> Option<&str> {
         self.names
             .iter()
             .find(|entry| entry.key == *key)
@@ -61,7 +61,7 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn is_restored(&self, promotion_id: &str, volume_id: &str) -> bool {
+    pub(in crate::promotion) fn is_restored(&self, promotion_id: &str, volume_id: &str) -> bool {
         self.restored
             .iter()
             .any(|entry| entry.promotion_id == promotion_id && entry.volume_id == volume_id)
@@ -151,7 +151,7 @@ impl<'a> CatalogStateStore<'a> {
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(super) enum CatalogTargetKey {
+pub(in crate::promotion) enum CatalogTargetKey {
     Transaction {
         promotion_id: String,
     },
@@ -162,20 +162,20 @@ pub(super) enum CatalogTargetKey {
 }
 
 impl CatalogTargetKey {
-    pub(super) fn transaction(promotion_id: &str) -> Self {
+    pub(in crate::promotion) fn transaction(promotion_id: &str) -> Self {
         Self::Transaction {
             promotion_id: promotion_id.to_owned(),
         }
     }
 
-    pub(super) fn subtransaction(promotion_id: &str, volume_id: &str) -> Self {
+    pub(in crate::promotion) fn subtransaction(promotion_id: &str, volume_id: &str) -> Self {
         Self::Subtransaction {
             promotion_id: promotion_id.to_owned(),
             volume_id: volume_id.to_owned(),
         }
     }
 
-    pub(super) fn promotion_id(&self) -> &str {
+    pub(in crate::promotion) fn promotion_id(&self) -> &str {
         match self {
             Self::Transaction { promotion_id } | Self::Subtransaction { promotion_id, .. } => {
                 promotion_id

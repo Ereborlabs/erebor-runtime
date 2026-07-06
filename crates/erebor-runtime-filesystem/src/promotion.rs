@@ -24,6 +24,7 @@ mod path;
 mod preimage;
 mod preimage_artifact;
 mod preimage_size;
+mod retention;
 mod rollback;
 mod types;
 
@@ -38,6 +39,12 @@ pub use manifest::{
     FilesystemPromotionManifest, FilesystemPromotionState, FilesystemPromotionVolume,
     FilesystemRegularPreimage, PREIMAGE_MANIFEST_FILE, PREIMAGE_MANIFEST_KIND,
     PROMOTION_MANIFEST_FILE, PROMOTION_MANIFEST_KIND,
+};
+pub use retention::{
+    FilesystemOstreePrune, FilesystemRetainedArtifactStatus, FilesystemRetainedLocalArtifact,
+    FilesystemRetainedLocalKind, FilesystemRetainedRef, FilesystemRetainedRefKind,
+    FilesystemRetentionInventory, FilesystemRetentionPrune, FilesystemRetentionState,
+    FilesystemRetentionSubtransaction, FilesystemRetentionTransaction,
 };
 pub use types::{FilesystemPromotion, FilesystemPromotionOptions, FilesystemRollback};
 

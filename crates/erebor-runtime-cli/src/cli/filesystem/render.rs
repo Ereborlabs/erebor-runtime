@@ -11,6 +11,10 @@ use crate::error::{CliError, EncodeJsonSnafu};
 
 use super::super::OutputFormat;
 
+mod retention;
+
+pub(super) use retention::{print_retention_inventory, print_retention_prune};
+
 pub(super) fn print_catalog(
     catalog: &FilesystemTransactionCatalog,
     format: OutputFormat,
