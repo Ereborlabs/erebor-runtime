@@ -1,4 +1,5 @@
 use std::{
+    ffi::OsString,
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -62,9 +63,19 @@ impl EreborCliFixture {
         cwd: &Path,
         args: impl IntoIterator<Item = &'a str>,
     ) -> Result<String, E2eError> {
+        self.run_expect_failure_in_env(cwd, args, std::iter::empty::<(String, OsString)>())
+    }
+
+    pub fn run_expect_failure_in_env<'a>(
+        &self,
+        cwd: &Path,
+        args: impl IntoIterator<Item = &'a str>,
+        env: impl IntoIterator<Item = (String, OsString)>,
+    ) -> Result<String, E2eError> {
         let output = Command::new(&self.binary)
             .current_dir(cwd)
             .args(args)
+            .envs(env)
             .output()
             .context(IoSnafu)?;
         if output.status.success() {
