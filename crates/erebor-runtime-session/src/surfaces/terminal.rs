@@ -91,7 +91,7 @@ impl<'a> TerminalProcessSurface<'a> {
         if let Some(capability) =
             self.browser_cdp_process_mediation_capability(browser_cdp_endpoint, lazy_browser_cdp)?
         {
-            validator = validator.with_process_mediation_capability(capability);
+            validator.set_process_mediation_capability(capability);
         }
 
         Ok(SessionInterceptionRouter::new().with_process_exec_handler(validator))

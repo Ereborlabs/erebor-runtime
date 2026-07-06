@@ -2,6 +2,8 @@
 
 mod error;
 mod frame;
+#[cfg(test)]
+mod standalone;
 pub mod v1;
 
 pub use error::{IpcProtocolError, Result};

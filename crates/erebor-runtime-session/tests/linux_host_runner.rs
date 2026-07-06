@@ -286,6 +286,80 @@ mod linux_host {
     }
 
     #[test]
+    fn linux_host_runner_lifecycle_allows_safe_exec_and_denies_raw_cdp(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let test_dir = test_dir("lifecycle")?;
+        let policy_path = write_policy(&test_dir)?;
+        let config = RuntimeConfig::from_json_str(&format!(
+            r#"{{
+              "policies": ["{}"],
+              "session": {{
+                "enabled": true,
+                "actor": {{ "id": "openclaw" }},
+                "workspace": "{}",
+                "diagnostics": [
+                  {{
+                    "name": "allowed",
+                    "command": [
+                      "sh",
+                      "-lc",
+                      "echo erebor-lifecycle-allowed guard=$EREBOR_PROCESS_GUARD"
+                    ]
+                  }},
+                  {{
+                    "name": "raw-cdp",
+                    "command": ["sh", "--remote-debugging-port=9222"]
+                  }}
+                ],
+                "runner": {{ "kind": "linux_host" }},
+                "interception": {{ "enabled": true }}
+              }},
+              "surfaces": {{
+                "terminal": {{
+                  "enabled": true
+                }}
+              }}
+            }}"#,
+            policy_path.display(),
+            test_dir.display()
+        ))?;
+
+        let allowed_plan = SessionRunPlan::from_diagnostic(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-linux-host-lifecycle-allow"),
+            "allowed",
+        )?;
+        let allowed = SessionExecutionService::run_diagnostic(&config, &allowed_plan)?;
+
+        assert!(allowed.stdout().contains("erebor-lifecycle-allowed"));
+        assert!(allowed.stdout().contains("guard=linux-ptrace"));
+
+        let denied_plan = SessionRunPlan::from_diagnostic(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-linux-host-lifecycle-deny"),
+            "raw-cdp",
+        )?;
+        let error = SessionExecutionService::run_diagnostic(&config, &denied_plan);
+
+        assert!(
+            matches!(error, Err(SessionExecutionError::DiagnosticFailed { .. })),
+            "expected raw CDP lifecycle diagnostic to fail closed, got {error:?}"
+        );
+        let audit = fs::read_to_string(session_audit_path(
+            &test_dir,
+            "session-linux-host-lifecycle-deny",
+        ))?;
+        assert!(audit.contains("\"type\":\"deny\""));
+        assert!(audit.contains("deny-raw-cdp"));
+        assert!(audit.contains("raw CDP process launch is denied"));
+
+        fs::remove_dir_all(test_dir)?;
+        Ok(())
+    }
+
+    #[test]
     fn linux_host_runner_denies_shell_spawned_child_exec() -> Result<(), Box<dyn std::error::Error>>
     {
         let command_json = r#"[

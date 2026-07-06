@@ -5,9 +5,12 @@ use std::{
 };
 
 use super::{
-    current_unix_timestamp, guard_hello_from_env, interception_operation_enabled, ipc, proc_cwd,
-    proc_parent_pid, read_cstring, read_pointer, runtime_interception_endpoint_from_env, Pid,
-    UserRegsStruct, MAX_STRING,
+    broker::GuardBrokerEnvironment,
+    ipc,
+    memory::{read_cstring, read_pointer},
+    proc_parent_pid,
+    sys::{Pid, UserRegsStruct},
+    MAX_STRING,
 };
 
 const SYS_OPEN: u64 = 2;
@@ -36,7 +39,7 @@ pub(super) fn should_deny_file_syscall(pid: Pid, regs: &UserRegsStruct) -> bool 
     let Some(request) = file_request_from_syscall(pid, regs) else {
         return false;
     };
-    if !interception_operation_enabled(request.operation.as_str()) {
+    if !GuardBrokerEnvironment::operation_enabled(request.operation.as_str()) {
         return false;
     }
 
@@ -88,9 +91,9 @@ fn broker_decision_for_file(
     pid: Pid,
     request: &FileSyscallRequest,
 ) -> Result<ipc::InterceptionDecision, String> {
-    let endpoint = runtime_interception_endpoint_from_env()?
+    let endpoint = GuardBrokerEnvironment::endpoint()?
         .ok_or_else(|| String::from("runtime interception endpoint is not configured"))?;
-    let hello = guard_hello_from_env()?;
+    let hello = GuardBrokerEnvironment::hello()?;
     let mut connection = ipc::RuntimeInterceptionConnection::connect(&endpoint, hello)?;
     connection.request_decision(&interception_request_from_file(pid, request))
 }
@@ -99,7 +102,7 @@ fn interception_request_from_file(
     pid: Pid,
     request: &FileSyscallRequest,
 ) -> ipc::InterceptionRequest {
-    let timestamp = current_unix_timestamp();
+    let timestamp = GuardBrokerEnvironment::current_unix_timestamp();
     ipc::InterceptionRequest {
         request_id: timestamp,
         actor_id: env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent")),
@@ -126,7 +129,7 @@ fn file_request_from_syscall(pid: Pid, regs: &UserRegsStruct) -> Option<FileSysc
     if raw_path.is_empty() {
         return None;
     }
-    let cwd = proc_cwd(pid);
+    let cwd = GuardBrokerEnvironment::proc_cwd(pid);
     let path = resolve_request_path(pid, syscall.dirfd, &cwd, &raw_path);
     let resolved_identity = resolved_identity(pid, &path);
 

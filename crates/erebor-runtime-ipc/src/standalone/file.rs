@@ -46,17 +46,18 @@ pub(crate) struct FileIdentity {
 
 pub(crate) fn encode_file_operation(file: &FileOperation) -> Vec<u8> {
     let mut output = Vec::new();
-    super::write_varint_field(&mut output, 1, file.kind.as_i32() as u64);
-    super::write_string_field(&mut output, 2, &file.path);
+    write_varint_field(&mut output, 1, file.kind.as_i32() as u64);
+    write_string_field(&mut output, 2, &file.path);
     if let Some(identity) = file.resolved_identity {
-        super::write_bytes_field(&mut output, 3, &encode_file_identity(identity));
+        write_bytes_field(&mut output, 3, &encode_file_identity(identity));
     }
     output
 }
 
 fn encode_file_identity(identity: FileIdentity) -> Vec<u8> {
     let mut output = Vec::new();
-    super::write_varint_field(&mut output, 1, identity.device);
-    super::write_varint_field(&mut output, 2, identity.inode);
+    write_varint_field(&mut output, 1, identity.device);
+    write_varint_field(&mut output, 2, identity.inode);
     output
 }
+use super::codec::{write_bytes_field, write_string_field, write_varint_field};

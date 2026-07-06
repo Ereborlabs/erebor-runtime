@@ -389,10 +389,10 @@ fn browser_cdp_process_mediation_capability_owns_endpoint_and_port_validation(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let session_id = session_id("browser-cdp-mediator");
     let terminal = terminal_process_mediation_config()?;
-    let validator = TerminalProcessExecValidator::from_config(&terminal)?
-        .with_process_mediation_capability(BrowserCdpProcessMediationCapability::new(
-            "ws://127.0.0.1:9222/",
-        ));
+    let mut validator = TerminalProcessExecValidator::from_config(&terminal)?;
+    validator.set_process_mediation_capability(BrowserCdpProcessMediationCapability::new(
+        "ws://127.0.0.1:9222/",
+    ));
     let broker = RuntimeInterceptionBroker::register_session(
         &session_id,
         "openclaw",

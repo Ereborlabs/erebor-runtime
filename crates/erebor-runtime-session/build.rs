@@ -6,11 +6,28 @@ use std::{
 };
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(erebor_runtime_ipc_contract_tests)");
     println!("cargo:rerun-if-changed=src/os/linux/process_guard.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/audit.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/broker.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/cgroup.rs");
     println!("cargo:rerun-if-changed=src/os/linux/process_guard/file_interception.rs");
     println!("cargo:rerun-if-changed=src/os/linux/process_guard/interception.rs");
-    println!("cargo:rerun-if-changed=src/os/linux/process_guard/ipc.rs");
-    println!("cargo:rerun-if-changed=src/os/linux/process_guard/ipc/file.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/interception/audit.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/interception/broker.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/interception/executable.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/interception/handlers.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/memory.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/rules.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/status.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/sys.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/trace.rs");
+    println!("cargo:rerun-if-changed=../erebor-runtime-ipc/src/standalone/mod.rs");
+    println!("cargo:rerun-if-changed=../erebor-runtime-ipc/src/standalone/codec.rs");
+    println!("cargo:rerun-if-changed=../erebor-runtime-ipc/src/standalone/decision.rs");
+    println!("cargo:rerun-if-changed=../erebor-runtime-ipc/src/standalone/envelope.rs");
+    println!("cargo:rerun-if-changed=../erebor-runtime-ipc/src/standalone/file.rs");
+    println!("cargo:rerun-if-changed=../erebor-runtime-ipc/src/standalone/request.rs");
 
     let out_dir = match env::var("OUT_DIR") {
         Ok(out_dir) => PathBuf::from(out_dir),
