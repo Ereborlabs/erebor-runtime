@@ -6,18 +6,14 @@ use std::{
 };
 
 use crate::{
-    checkpoint::commit_normalized_session_checkpoint_with_runner,
-    normalizer::normalize_session_layers,
-    promotion::{
-        promote_with_hook, rollback_promotion_with_runner, FilesystemPromotionOptions,
-        PromotionHook,
-    },
-    storage::prepare_with_initializer,
+    checkpoint::FilesystemCheckpointCommit,
+    promotion::{FilesystemPromotionOptions, FilesystemRollback, PromotionHook},
+    storage::FilesystemStoragePreparer,
     FilesystemError, FilesystemLayerManifest, FilesystemSessionStorage, FilesystemVolumeMode,
     FilesystemVolumeStorageRequest,
 };
 
-use super::support::{FakeOstreeRunner, TestResult};
+use super::support::{FakeOstreeRepository, PromotionTestWorkflow, TestResult};
 
 #[test]
 fn multivolume_promotion_and_rollback_restore_all_volumes() -> TestResult {
@@ -32,19 +28,18 @@ fn multivolume_promotion_and_rollback_restore_all_volumes() -> TestResult {
     write_upper(&fixture, "cache", "cache.txt", "warm\n")?;
     fs::write(fixture.upper("cache")?.join(".wh.stale.bin"), "")?;
     write_upper(&fixture, "cache", "warmed/index.txt", "index\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture.storage, &manifests, &runner)?;
 
-    let promotion = promote_with_hook(
+    let promotion = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    )?;
+    )
+    .promote()?;
 
     assert_eq!(volume_ids(promotion.volumes()), ["cache", "project"]);
     assert_eq!(
@@ -67,7 +62,11 @@ fn multivolume_promotion_and_rollback_restore_all_volumes() -> TestResult {
     );
     fs::remove_dir_all(fixture.storage.work_path().join("promotions/session-1"))?;
 
-    let rollback = rollback_promotion_with_runner(&fixture.storage, "session-1", &runner)?;
+    let rollback = FilesystemRollback::rollback_promotion_using_repository(
+        &fixture.storage,
+        "session-1",
+        &runner,
+    )?;
 
     assert_eq!(
         sorted_strings(rollback.restored_volumes()),
@@ -102,19 +101,18 @@ fn multivolume_preimage_failure_blocks_all_host_mutation() -> TestResult {
     let listener = UnixListener::bind(&socket)?;
     write_upper(&fixture, "project", "settings.txt", "dark\n")?;
     fs::write(fixture.upper("cache")?.join(".wh.stale.sock"), "")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture.storage, &manifests, &runner)?;
 
-    let result = promote_with_hook(
+    let result = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    );
+    )
+    .promote();
 
     assert!(matches!(
         result,
@@ -165,7 +163,8 @@ impl MultiVolumeFixture {
                 FilesystemVolumeMode::Writable,
             )?,
         ];
-        let storage = prepare_with_initializer(&root.join("session"), requests, |_| Ok(()))?;
+        let storage =
+            FilesystemStoragePreparer::new(&root.join("session"), requests).prepare(|_| Ok(()))?;
         Ok(Self {
             storage,
             root,
@@ -207,9 +206,14 @@ impl Drop for MultiVolumeFixture {
 fn commit_checkpoint(
     storage: &FilesystemSessionStorage,
     manifests: &[FilesystemLayerManifest],
-    runner: &FakeOstreeRunner,
+    runner: &FakeOstreeRepository,
 ) -> crate::Result<()> {
-    commit_normalized_session_checkpoint_with_runner(storage, "session-1", manifests, runner)?;
+    FilesystemCheckpointCommit::commit_normalized_using_repository(
+        storage,
+        "session-1",
+        manifests,
+        runner,
+    )?;
     Ok(())
 }
 
@@ -231,7 +235,7 @@ fn write_file(path: PathBuf, source: &str) -> TestResult {
     Ok(())
 }
 
-fn assert_command_branch(runner: &FakeOstreeRunner, branch: &str) {
+fn assert_command_branch(runner: &FakeOstreeRepository, branch: &str) {
     assert!(runner
         .commands
         .borrow()

@@ -1,7 +1,7 @@
 use erebor_runtime_audit::read_audit_records;
 use erebor_runtime_core::{SessionRunPlan, SessionRunnerKind};
 use erebor_runtime_events::{ActionKind, SessionId};
-use erebor_runtime_filesystem::rollback_promotion;
+use erebor_runtime_filesystem::FilesystemRollback;
 use erebor_runtime_session::SessionExecutionService;
 use serde_json::Value;
 
@@ -71,7 +71,7 @@ fn linux_host_overlay_multivolume_promotes_and_rolls_back() -> Result<(), Box<dy
     assert_committed_artifacts(&fixture, session_id)?;
     let storage = reopen_storage(&fixture, session_id)?;
     std::fs::remove_dir_all(storage.work_path().join("promotions").join(session_id))?;
-    let rollback = rollback_promotion(&storage, session_id)?;
+    let rollback = FilesystemRollback::rollback_promotion(&storage, session_id)?;
     assert_eq!(sorted(rollback.restored_volumes()), ["cache", "project"]);
     assert_restored(&fixture)?;
     fixture.assert_unmounted()?;

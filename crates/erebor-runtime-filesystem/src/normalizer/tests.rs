@@ -8,10 +8,9 @@ use std::{
 
 use rustix::fs::{lsetxattr, XattrFlags};
 
-use super::normalize_session_layers;
 use crate::{
     manifest::{FilesystemLayerEntry, FilesystemLayerOperation},
-    storage::prepare_with_initializer,
+    storage::FilesystemStoragePreparer,
     FilesystemError, FilesystemVolumeMode, FilesystemVolumeStorageRequest,
 };
 
@@ -37,7 +36,7 @@ fn normalizes_create_replace_delete_symlink_and_metadata() -> TestResult {
         "user.overlay.whiteout",
     )?;
 
-    let manifests = normalize_session_layers(&fixture.storage)?;
+    let manifests = fixture.storage.normalize_layers()?;
 
     assert_eq!(manifests.len(), 1);
     let manifest = read_manifest(fixture.volume().layer_manifest_path())?;
@@ -72,7 +71,7 @@ fn opaque_xattr_directory_writes_promotable_opaque_replace() -> TestResult {
     File::create(fixture.upper().join("opaque/.wh.old.txt"))?;
     set_existing_marker(fixture.upper().join("opaque"), "user.overlay.opaque")?;
 
-    let manifests = normalize_session_layers(&fixture.storage)?;
+    let manifests = fixture.storage.normalize_layers()?;
 
     assert_eq!(manifests.len(), 1);
     let manifest = read_manifest(fixture.volume().layer_manifest_path())?;
@@ -107,7 +106,7 @@ fn opaque_marker_file_writes_promotable_opaque_replace() -> TestResult {
     File::create(fixture.upper().join("opaque/nested/.wh..wh..opq"))?;
     fs::write(fixture.upper().join("opaque/nested/new.txt"), "new\n")?;
 
-    let manifests = normalize_session_layers(&fixture.storage)?;
+    let manifests = fixture.storage.normalize_layers()?;
 
     assert_eq!(manifests.len(), 1);
     let manifest = read_manifest(fixture.volume().layer_manifest_path())?;
@@ -220,7 +219,8 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         &session_path,
         FilesystemVolumeMode::Writable,
     )?;
-    let storage = prepare_with_initializer(&session_dir, vec![request], |_| Ok(()))?;
+    let storage =
+        FilesystemStoragePreparer::new(&session_dir, vec![request]).prepare(|_| Ok(()))?;
     Ok(Fixture {
         storage,
         root,
@@ -253,7 +253,7 @@ fn read_manifest(
 }
 
 fn normalize_error(fixture: &Fixture) -> Result<FilesystemError, Box<dyn std::error::Error>> {
-    match normalize_session_layers(&fixture.storage) {
+    match fixture.storage.normalize_layers() {
         Ok(manifests) => Err(format!("expected normalization error, got {manifests:#?}").into()),
         Err(error) => Ok(error),
     }

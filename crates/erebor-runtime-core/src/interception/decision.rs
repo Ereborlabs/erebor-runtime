@@ -42,6 +42,25 @@ impl SurfaceMediationDecision {
     }
 
     #[must_use]
+    pub fn from_parts(
+        kind: impl Into<String>,
+        replacement_surface: impl Into<String>,
+        endpoint: impl Into<String>,
+        lease_id: impl Into<String>,
+        print_line: impl Into<String>,
+        keepalive: bool,
+    ) -> Self {
+        Self {
+            kind: kind.into(),
+            replacement_surface: replacement_surface.into(),
+            endpoint: endpoint.into(),
+            lease_id: lease_id.into(),
+            print_line: print_line.into(),
+            keepalive,
+        }
+    }
+
+    #[must_use]
     pub fn with_lease_id(mut self, lease_id: impl Into<String>) -> Self {
         self.lease_id = lease_id.into();
         self

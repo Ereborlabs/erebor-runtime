@@ -5,7 +5,8 @@ use snafu::ResultExt;
 use crate::{
     error::PromotionIoSnafu,
     manifest::{FilesystemLayerEntry, FilesystemLayerOperation},
-    metadata, FilesystemLayerManifest, FilesystemVolumeStorage, Result,
+    metadata::{FilesystemMetadataApplier, FilesystemPathMetadataCopier},
+    FilesystemLayerManifest, FilesystemLayerMetadata, FilesystemVolumeStorage, Result,
 };
 
 use super::{
@@ -14,230 +15,264 @@ use super::{
         FilesystemPreimageEntry, FilesystemPreimageEntryState, FilesystemPreimageEntryType,
         FilesystemPreimageManifest,
     },
-    path::{create_parent, remove_path, safe_relative},
+    path::{PromotionPath, PromotionTargetPath},
 };
 
 const FILES_DIR: &str = "files";
 
-pub(super) fn apply_volume_layer(
-    journal_root: &Path,
-    layer_stage: &Path,
-    volume: &FilesystemVolumeStorage,
-    layer: &FilesystemLayerManifest,
-    journal: &mut PromotionJournal,
-) -> Result<()> {
-    journal.state = PromotionJournalState::Applying;
-    journal.write(journal_root)?;
-    for operation in &layer.operations {
-        apply_operation(layer_stage, volume, operation)?;
-        journal
-            .applied_operations
-            .push(format!("{}:{}", volume.id(), operation.path()));
-        journal.write(journal_root)?;
-    }
-    apply_layer_directory_metadata(volume, layer)?;
-    Ok(())
+pub(super) struct PromotionVolumeApplier<'a> {
+    journal_root: &'a Path,
+    layer_stage: &'a Path,
+    volume: &'a FilesystemVolumeStorage,
+    layer: &'a FilesystemLayerManifest,
+    journal: &'a mut PromotionJournal,
 }
 
-pub(super) fn rollback_volume(
-    stage_root: &Path,
-    volume: &FilesystemVolumeStorage,
-    manifest: &FilesystemPreimageManifest,
-) -> Result<()> {
-    for entry in manifest.entries.iter().rev() {
-        rollback_entry(stage_root, volume, entry)?;
-    }
-    Ok(())
-}
-
-fn apply_operation(
-    layer_stage: &Path,
-    volume: &FilesystemVolumeStorage,
-    operation: &FilesystemLayerOperation,
-) -> Result<()> {
-    match operation {
-        FilesystemLayerOperation::Create { path, entry } => {
-            write_layer_entry(layer_stage, volume, path, entry)
-        }
-        FilesystemLayerOperation::Replace { path, entry } => {
-            let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
-            remove_path(&host_path)?;
-            write_layer_entry(layer_stage, volume, path, entry)
-        }
-        FilesystemLayerOperation::Delete { path } => {
-            let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
-            remove_path(&host_path)
-        }
-        FilesystemLayerOperation::OpaqueReplace { path, .. } => {
-            let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
-            let source = layer_stage
-                .join(FILES_DIR)
-                .join(safe_relative(volume.id(), path)?);
-            remove_path(&host_path)?;
-            copy_directory(&source, &host_path)
+impl<'a> PromotionVolumeApplier<'a> {
+    pub(super) fn new(
+        journal_root: &'a Path,
+        layer_stage: &'a Path,
+        volume: &'a FilesystemVolumeStorage,
+        layer: &'a FilesystemLayerManifest,
+        journal: &'a mut PromotionJournal,
+    ) -> Self {
+        Self {
+            journal_root,
+            layer_stage,
+            volume,
+            layer,
+            journal,
         }
     }
-}
 
-fn write_layer_entry(
-    layer_stage: &Path,
-    volume: &FilesystemVolumeStorage,
-    path: &str,
-    entry: &FilesystemLayerEntry,
-) -> Result<()> {
-    let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
-    match entry {
-        FilesystemLayerEntry::Directory { .. } => {
-            fs::create_dir_all(&host_path).context(PromotionIoSnafu {
-                action: "create promotion directory",
-                path: host_path.as_path(),
+    pub(super) fn apply(&mut self) -> Result<()> {
+        self.journal.state = PromotionJournalState::Applying;
+        self.journal.write(self.journal_root)?;
+        for operation in &self.layer.operations {
+            self.apply_operation(operation)?;
+            self.journal.applied_operations.push(format!(
+                "{}:{}",
+                self.volume.id(),
+                operation.path()
+            ));
+            self.journal.write(self.journal_root)?;
+        }
+        self.apply_layer_directory_metadata()
+    }
+
+    fn apply_operation(&self, operation: &FilesystemLayerOperation) -> Result<()> {
+        match operation {
+            FilesystemLayerOperation::Create { path, entry } => self.write_layer_entry(path, entry),
+            FilesystemLayerOperation::Replace { path, entry } => {
+                let host_path = self.host_path(path)?;
+                PromotionTargetPath::new(&host_path).remove()?;
+                self.write_layer_entry(path, entry)
+            }
+            FilesystemLayerOperation::Delete { path } => {
+                let host_path = self.host_path(path)?;
+                PromotionTargetPath::new(&host_path).remove()
+            }
+            FilesystemLayerOperation::OpaqueReplace { path, .. } => {
+                let host_path = self.host_path(path)?;
+                let source = self.layer_stage.join(FILES_DIR).join(self.relative(path)?);
+                PromotionTargetPath::new(&host_path).remove()?;
+                Self::copy_directory(&source, &host_path)
+            }
+        }
+    }
+
+    fn write_layer_entry(&self, path: &str, entry: &FilesystemLayerEntry) -> Result<()> {
+        let host_path = self.host_path(path)?;
+        match entry {
+            FilesystemLayerEntry::Directory { .. } => {
+                fs::create_dir_all(&host_path).context(PromotionIoSnafu {
+                    action: "create promotion directory",
+                    path: host_path.as_path(),
+                })?;
+            }
+            FilesystemLayerEntry::Regular { source, metadata } => {
+                let upper = self
+                    .layer_stage
+                    .join(FILES_DIR)
+                    .join(self.relative(source)?);
+                PromotionTargetPath::new(&host_path).create_parent()?;
+                fs::copy(&upper, &host_path).context(PromotionIoSnafu {
+                    action: "copy promotion regular file",
+                    path: upper.as_path(),
+                })?;
+                FilesystemMetadataApplier::new(&host_path).apply_layer_metadata(metadata)?;
+            }
+            FilesystemLayerEntry::Symlink { target, metadata } => {
+                PromotionTargetPath::new(&host_path).create_parent()?;
+                symlink(target, &host_path).context(PromotionIoSnafu {
+                    action: "create promotion symlink",
+                    path: host_path.as_path(),
+                })?;
+                FilesystemMetadataApplier::new(&host_path).apply_layer_metadata(metadata)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_layer_directory_metadata(&self) -> Result<()> {
+        for operation in self.layer.operations.iter().rev() {
+            let Some((path, metadata)) = Self::directory_metadata(operation) else {
+                continue;
+            };
+            let host_path = self.host_path(path)?;
+            FilesystemMetadataApplier::new(&host_path).apply_layer_metadata(metadata)?;
+        }
+        Ok(())
+    }
+
+    fn directory_metadata(
+        operation: &FilesystemLayerOperation,
+    ) -> Option<(&str, &FilesystemLayerMetadata)> {
+        match operation {
+            FilesystemLayerOperation::Create {
+                path,
+                entry: FilesystemLayerEntry::Directory { metadata },
+            }
+            | FilesystemLayerOperation::Replace {
+                path,
+                entry: FilesystemLayerEntry::Directory { metadata },
+            }
+            | FilesystemLayerOperation::OpaqueReplace {
+                path,
+                entry: FilesystemLayerEntry::Directory { metadata },
+                ..
+            } => Some((path, metadata)),
+            _ => None,
+        }
+    }
+
+    fn host_path(&self, value: &str) -> Result<std::path::PathBuf> {
+        Ok(self.volume.host_path().join(self.relative(value)?))
+    }
+
+    fn relative(&self, value: &str) -> Result<std::path::PathBuf> {
+        PromotionPath::new(self.volume.id(), value).relative()
+    }
+
+    fn copy_directory(source: &Path, target: &Path) -> Result<()> {
+        fs::create_dir_all(target).context(PromotionIoSnafu {
+            action: "restore rollback directory",
+            path: target,
+        })?;
+        for entry in fs::read_dir(source).context(PromotionIoSnafu {
+            action: "read rollback directory",
+            path: source,
+        })? {
+            let entry = entry.context(PromotionIoSnafu {
+                action: "read rollback directory entry",
+                path: source,
             })?;
-        }
-        FilesystemLayerEntry::Regular { source, metadata } => {
-            let upper = layer_stage
-                .join(FILES_DIR)
-                .join(safe_relative(volume.id(), source)?);
-            create_parent(&host_path)?;
-            fs::copy(&upper, &host_path).context(PromotionIoSnafu {
-                action: "copy promotion regular file",
-                path: upper.as_path(),
+            let source_path = entry.path();
+            let target_path = target.join(entry.file_name());
+            let metadata = fs::symlink_metadata(&source_path).context(PromotionIoSnafu {
+                action: "inspect rollback directory entry",
+                path: source_path.as_path(),
             })?;
-            metadata::apply_layer_metadata(&host_path, metadata)?;
+            if metadata.is_dir() {
+                Self::copy_directory(&source_path, &target_path)?;
+            } else if metadata.is_file() {
+                fs::copy(&source_path, &target_path).context(PromotionIoSnafu {
+                    action: "restore rollback directory file",
+                    path: source_path.as_path(),
+                })?;
+                FilesystemPathMetadataCopier::new(&source_path, &target_path).copy()?;
+            } else if metadata.file_type().is_symlink() {
+                let target_link = fs::read_link(&source_path).context(PromotionIoSnafu {
+                    action: "read rollback directory symlink",
+                    path: source_path.as_path(),
+                })?;
+                symlink(target_link, &target_path).context(PromotionIoSnafu {
+                    action: "restore rollback directory symlink",
+                    path: target_path.as_path(),
+                })?;
+                FilesystemPathMetadataCopier::new(&source_path, &target_path).copy()?;
+            }
         }
-        FilesystemLayerEntry::Symlink { target, metadata } => {
-            create_parent(&host_path)?;
-            symlink(target, &host_path).context(PromotionIoSnafu {
-                action: "create promotion symlink",
-                path: host_path.as_path(),
-            })?;
-            metadata::apply_layer_metadata(&host_path, metadata)?;
-        }
-    }
-    Ok(())
-}
-
-fn apply_layer_directory_metadata(
-    volume: &FilesystemVolumeStorage,
-    layer: &FilesystemLayerManifest,
-) -> Result<()> {
-    for operation in layer.operations.iter().rev() {
-        let Some((path, metadata)) = directory_metadata(operation) else {
-            continue;
-        };
-        let host_path = volume.host_path().join(safe_relative(volume.id(), path)?);
-        metadata::apply_layer_metadata(&host_path, metadata)?;
-    }
-    Ok(())
-}
-
-fn directory_metadata(
-    operation: &FilesystemLayerOperation,
-) -> Option<(&str, &crate::FilesystemLayerMetadata)> {
-    match operation {
-        FilesystemLayerOperation::Create {
-            path,
-            entry: FilesystemLayerEntry::Directory { metadata },
-        }
-        | FilesystemLayerOperation::Replace {
-            path,
-            entry: FilesystemLayerEntry::Directory { metadata },
-        }
-        | FilesystemLayerOperation::OpaqueReplace {
-            path,
-            entry: FilesystemLayerEntry::Directory { metadata },
-            ..
-        } => Some((path, metadata)),
-        _ => None,
+        FilesystemPathMetadataCopier::new(source, target).copy()
     }
 }
 
-fn rollback_entry(
-    stage_root: &Path,
-    volume: &FilesystemVolumeStorage,
-    entry: &FilesystemPreimageEntry,
-) -> Result<()> {
-    let relative = safe_relative(volume.id(), &entry.path)?;
-    let host_path = volume.host_path().join(&relative);
-    match &entry.state {
-        FilesystemPreimageEntryState::Absent => remove_path(&host_path),
-        FilesystemPreimageEntryState::Present { entry_type } => {
-            remove_path(&host_path)?;
-            match entry_type {
-                FilesystemPreimageEntryType::Directory => {
-                    copy_directory(&stage_root.join(FILES_DIR).join(&relative), &host_path)?;
-                    if let Some(metadata) = &entry.metadata {
-                        metadata::apply_host_metadata(&host_path, metadata)?;
+pub(super) struct PromotionVolumeRollback<'a> {
+    stage_root: &'a Path,
+    volume: &'a FilesystemVolumeStorage,
+    manifest: &'a FilesystemPreimageManifest,
+}
+
+impl<'a> PromotionVolumeRollback<'a> {
+    pub(super) const fn new(
+        stage_root: &'a Path,
+        volume: &'a FilesystemVolumeStorage,
+        manifest: &'a FilesystemPreimageManifest,
+    ) -> Self {
+        Self {
+            stage_root,
+            volume,
+            manifest,
+        }
+    }
+
+    pub(super) fn rollback(&self) -> Result<()> {
+        for entry in self.manifest.entries.iter().rev() {
+            self.rollback_entry(entry)?;
+        }
+        Ok(())
+    }
+
+    fn rollback_entry(&self, entry: &FilesystemPreimageEntry) -> Result<()> {
+        let relative = self.relative(&entry.path)?;
+        let host_path = self.volume.host_path().join(&relative);
+        match &entry.state {
+            FilesystemPreimageEntryState::Absent => PromotionTargetPath::new(&host_path).remove(),
+            FilesystemPreimageEntryState::Present { entry_type } => {
+                PromotionTargetPath::new(&host_path).remove()?;
+                match entry_type {
+                    FilesystemPreimageEntryType::Directory => {
+                        PromotionVolumeApplier::copy_directory(
+                            &self.stage_root.join(FILES_DIR).join(&relative),
+                            &host_path,
+                        )?;
+                        if let Some(metadata) = &entry.metadata {
+                            FilesystemMetadataApplier::new(&host_path)
+                                .apply_host_metadata(metadata)?;
+                        }
+                        Ok(())
                     }
-                    Ok(())
-                }
-                FilesystemPreimageEntryType::Regular { source } => {
-                    let source = stage_root
-                        .join(FILES_DIR)
-                        .join(safe_relative(volume.id(), source)?);
-                    create_parent(&host_path)?;
-                    fs::copy(&source, &host_path).context(PromotionIoSnafu {
-                        action: "restore rollback regular file",
-                        path: source.as_path(),
-                    })?;
-                    if let Some(metadata) = &entry.metadata {
-                        metadata::apply_host_metadata(&host_path, metadata)?;
+                    FilesystemPreimageEntryType::Regular { source } => {
+                        let source = self.stage_root.join(FILES_DIR).join(self.relative(source)?);
+                        PromotionTargetPath::new(&host_path).create_parent()?;
+                        fs::copy(&source, &host_path).context(PromotionIoSnafu {
+                            action: "restore rollback regular file",
+                            path: source.as_path(),
+                        })?;
+                        if let Some(metadata) = &entry.metadata {
+                            FilesystemMetadataApplier::new(&host_path)
+                                .apply_host_metadata(metadata)?;
+                        }
+                        Ok(())
                     }
-                    Ok(())
-                }
-                FilesystemPreimageEntryType::Symlink { target } => {
-                    create_parent(&host_path)?;
-                    symlink(target, &host_path).context(PromotionIoSnafu {
-                        action: "restore rollback symlink",
-                        path: host_path.as_path(),
-                    })?;
-                    if let Some(metadata) = &entry.metadata {
-                        metadata::apply_host_metadata(&host_path, metadata)?;
+                    FilesystemPreimageEntryType::Symlink { target } => {
+                        PromotionTargetPath::new(&host_path).create_parent()?;
+                        symlink(target, &host_path).context(PromotionIoSnafu {
+                            action: "restore rollback symlink",
+                            path: host_path.as_path(),
+                        })?;
+                        if let Some(metadata) = &entry.metadata {
+                            FilesystemMetadataApplier::new(&host_path)
+                                .apply_host_metadata(metadata)?;
+                        }
+                        Ok(())
                     }
-                    Ok(())
                 }
             }
         }
     }
-}
 
-fn copy_directory(source: &Path, target: &Path) -> Result<()> {
-    fs::create_dir_all(target).context(PromotionIoSnafu {
-        action: "restore rollback directory",
-        path: target,
-    })?;
-    for entry in fs::read_dir(source).context(PromotionIoSnafu {
-        action: "read rollback directory",
-        path: source,
-    })? {
-        let entry = entry.context(PromotionIoSnafu {
-            action: "read rollback directory entry",
-            path: source,
-        })?;
-        let source_path = entry.path();
-        let target_path = target.join(entry.file_name());
-        let metadata = fs::symlink_metadata(&source_path).context(PromotionIoSnafu {
-            action: "inspect rollback directory entry",
-            path: source_path.as_path(),
-        })?;
-        if metadata.is_dir() {
-            copy_directory(&source_path, &target_path)?;
-        } else if metadata.is_file() {
-            fs::copy(&source_path, &target_path).context(PromotionIoSnafu {
-                action: "restore rollback directory file",
-                path: source_path.as_path(),
-            })?;
-            crate::metadata::copy_path_metadata(&source_path, &target_path)?;
-        } else if metadata.file_type().is_symlink() {
-            let target_link = fs::read_link(&source_path).context(PromotionIoSnafu {
-                action: "read rollback directory symlink",
-                path: source_path.as_path(),
-            })?;
-            symlink(target_link, &target_path).context(PromotionIoSnafu {
-                action: "restore rollback directory symlink",
-                path: target_path.as_path(),
-            })?;
-            crate::metadata::copy_path_metadata(&source_path, &target_path)?;
-        }
+    fn relative(&self, value: &str) -> Result<std::path::PathBuf> {
+        PromotionPath::new(self.volume.id(), value).relative()
     }
-    crate::metadata::copy_path_metadata(source, target)
 }

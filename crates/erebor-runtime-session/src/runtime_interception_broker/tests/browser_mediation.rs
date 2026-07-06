@@ -16,7 +16,7 @@ use super::{
     },
 };
 use crate::surfaces::terminal::browser_cdp_process_mediation::{
-    private_remote_debugging_port_for_request, BrowserCdpProcessMediationCapability,
+    BrowserCdpProcessMediationCapability, PrivateRemoteDebuggingPort,
 };
 
 #[test]
@@ -157,11 +157,9 @@ fn private_browser_port_can_follow_requested_port_plus_offset() -> Result<(), St
     }
     .into();
 
-    assert_eq!(
-        private_remote_debugging_port_for_request(&private_endpoint, 1000)?,
-        Some(1001)
-    );
-    let overflow = private_remote_debugging_port_for_request(&private_endpoint, u16::MAX);
+    let private_port = PrivateRemoteDebuggingPort::new(&private_endpoint);
+    assert_eq!(private_port.for_requested_port(1000)?, Some(1001));
+    let overflow = private_port.for_requested_port(u16::MAX);
     let Err(error) = overflow else {
         return Err(String::from("overflow should fail closed"));
     };

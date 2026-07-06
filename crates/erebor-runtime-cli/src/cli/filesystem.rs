@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use erebor_runtime_filesystem::{
-    list_transaction_catalog, rename_transaction_target, rollback_transaction_target,
-    show_transaction_target,
+    FilesystemTransactionCatalog, FilesystemTransactionRename, FilesystemTransactionRollback,
+    FilesystemTransactionTarget,
 };
 use snafu::ResultExt;
 
@@ -144,26 +144,26 @@ fn execute_transactions(args: &TransactionArgs) -> Result<(), CliError> {
     match &args.command {
         TransactionCommand::List(args) => {
             let storage = open_storage(&args.session.registry, &args.session.session)?;
-            let catalog = list_transaction_catalog(&storage).context(FilesystemSnafu)?;
+            let catalog = FilesystemTransactionCatalog::load(&storage).context(FilesystemSnafu)?;
             print_catalog(&catalog, args.format)
         }
         TransactionCommand::Show(args) => {
             let storage = open_storage(&args.session.registry, &args.session.session)?;
-            let target =
-                show_transaction_target(&storage, &args.target).context(FilesystemSnafu)?;
+            let target = FilesystemTransactionTarget::show(&storage, &args.target)
+                .context(FilesystemSnafu)?;
             print_target(&target, args.format)
         }
         TransactionCommand::Rename(args) => {
             let storage = open_storage(&args.session.registry, &args.session.session)?;
-            let rename = rename_transaction_target(&storage, &args.target, &args.name)
+            let rename = FilesystemTransactionRename::rename(&storage, &args.target, &args.name)
                 .context(FilesystemSnafu)?;
             println!("renamed {} {}", rename.handle(), rename.name());
             Ok(())
         }
         TransactionCommand::Rollback(args) => {
             let storage = open_storage(&args.session.registry, &args.session.session)?;
-            let rollback =
-                rollback_transaction_target(&storage, &args.target).context(FilesystemSnafu)?;
+            let rollback = FilesystemTransactionRollback::rollback(&storage, &args.target)
+                .context(FilesystemSnafu)?;
             print_rollback(&rollback, args.format)
         }
     }

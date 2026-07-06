@@ -12,16 +12,14 @@ use rustix::{
 };
 
 use crate::{
-    normalizer::normalize_session_layers,
-    promotion::{
-        promote_with_hook, rollback_promotion_with_runner, FilesystemPromotionOptions,
-        PromotionHook,
-    },
+    promotion::{FilesystemPromotionOptions, FilesystemRollback, PromotionHook},
     FilesystemError,
 };
 
 use super::{
-    support::{commit_checkpoint, fixture, FakeOstreeRunner, TestResult},
+    support::{
+        commit_checkpoint, fixture, FakeOstreeRepository, PromotionTestWorkflow, TestResult,
+    },
     NoopHook,
 };
 
@@ -53,18 +51,17 @@ fn promotion_and_rollback_restore_supported_metadata() -> TestResult {
         set_user_xattr(&fixture.upper().join("settings.txt"), b"after")?;
     }
 
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
-    promote_with_hook(
+    PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    )?;
+    )
+    .promote()?;
 
     assert_file_metadata(&fixture.host().join("settings.txt"), 0o600, NEW_MTIME)?;
     assert_file_metadata(&fixture.host().join("docs/readme.txt"), 0o600, NEW_MTIME)?;
@@ -78,7 +75,11 @@ fn promotion_and_rollback_restore_supported_metadata() -> TestResult {
         assert_user_xattr(&fixture.host().join("settings.txt"), b"after")?;
     }
 
-    rollback_promotion_with_runner(&fixture.storage, "session-1", &runner)?;
+    FilesystemRollback::rollback_promotion_using_repository(
+        &fixture.storage,
+        "session-1",
+        &runner,
+    )?;
 
     assert_eq!(
         fs::read_to_string(fixture.host().join("settings.txt"))?,
@@ -110,22 +111,21 @@ fn xattr_drift_blocks_before_promotion_apply() -> TestResult {
         return Ok(());
     }
     fs::write(fixture.upper().join("settings.txt"), "changed\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
     let hook = XattrDriftHook {
         path: fixture.host().join("settings.txt"),
     };
 
-    let result = promote_with_hook(
+    let result = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &hook,
-    );
+    )
+    .promote();
 
     assert!(matches!(
         result,

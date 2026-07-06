@@ -7,7 +7,7 @@ use std::{
 use erebor_runtime_core::{SessionRunPlan, SessionRunnerKind};
 use erebor_runtime_events::SessionId;
 use erebor_runtime_filesystem::{
-    rollback_promotion, FilesystemSessionStorage, FilesystemVolumeMode,
+    FilesystemRollback, FilesystemSessionStorage, FilesystemVolumeMode,
     FilesystemVolumeStorageRequest,
 };
 use erebor_runtime_session::SessionExecutionService;
@@ -78,7 +78,7 @@ fn linux_host_overlay_metadata_promotes_and_rolls_back() -> Result<(), Box<dyn s
     );
 
     let storage = reopen_storage(&workspace, session_id, &host_project, &session_project)?;
-    rollback_promotion(&storage, session_id)?;
+    FilesystemRollback::rollback_promotion(&storage, session_id)?;
 
     assert_eq!(
         fs::read_to_string(host_project.join("settings.txt"))?,

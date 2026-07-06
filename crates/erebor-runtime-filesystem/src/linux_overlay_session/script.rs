@@ -2,95 +2,105 @@ use super::plan::LinuxOverlayVolumeMount;
 
 const CHILD_ARG: &str = "--erebor-overlay-child";
 
-pub(super) fn render_wrapper(mounts: &[LinuxOverlayVolumeMount]) -> String {
-    let mut script = String::from("#!/bin/sh\nset -eu\n\n");
-    push_identity_functions(&mut script);
-    script.push_str(&format!("if [ \"${{1:-}}\" = '{}' ]; then\n", CHILD_ARG));
-    script.push_str("  shift\n  cleanup() {\n    set +e\n");
-    for mount in mounts.iter().rev() {
-        push_cleanup(&mut script, mount);
-    }
-    script.push_str("  }\n  trap cleanup EXIT INT TERM\n");
-    script.push_str("  prepare_session_identity\n");
-    for mount in mounts {
-        push_mount_commands(&mut script, mount);
-    }
-    script.push_str("  set +e\n  run_session_command \"$@\"\n");
-    script.push_str("  status=$?\n  set -e\n  exit \"$status\"\nfi\n\n");
-    script.push_str("command -v unshare >/dev/null 2>&1\n");
-    script.push_str("command -v mount >/dev/null 2>&1\n");
-    script.push_str("command -v umount >/dev/null 2>&1\n");
-    script.push_str("if [ \"$(id -u)\" != \"0\" ] && ");
-    script.push_str("unshare -U --map-current-user --keep-caps -m true >/dev/null 2>&1; then\n");
-    script.push_str(&format!(
-        "  exec unshare -U --map-current-user --keep-caps -m --propagation private -- \"$0\" '{}' \"$@\"\n",
-        CHILD_ARG
-    ));
-    script.push_str("fi\n");
-    script.push_str(&format!(
-        "exec unshare -m --propagation private -- \"$0\" '{}' \"$@\"\n",
-        CHILD_ARG
-    ));
-    script
+pub(super) struct LinuxOverlayWrapperScript<'a> {
+    mounts: &'a [LinuxOverlayVolumeMount],
 }
 
-fn push_cleanup(script: &mut String, mount: &LinuxOverlayVolumeMount) {
-    for path in [
-        &mount.session_path,
-        &mount.host_path,
-        &mount.merged_path,
-        &mount.lower_ro_path,
-    ] {
+impl<'a> LinuxOverlayWrapperScript<'a> {
+    pub(super) const fn new(mounts: &'a [LinuxOverlayVolumeMount]) -> Self {
+        Self { mounts }
+    }
+
+    pub(super) fn render(&self) -> String {
+        let mut script = String::from("#!/bin/sh\nset -eu\n\n");
+        self.push_identity_functions(&mut script);
+        script.push_str(&format!("if [ \"${{1:-}}\" = '{}' ]; then\n", CHILD_ARG));
+        script.push_str("  shift\n  cleanup() {\n    set +e\n");
+        for mount in self.mounts.iter().rev() {
+            self.push_cleanup(&mut script, mount);
+        }
+        script.push_str("  }\n  trap cleanup EXIT INT TERM\n");
+        script.push_str("  prepare_session_identity\n");
+        for mount in self.mounts {
+            self.push_mount_commands(&mut script, mount);
+        }
+        script.push_str("  set +e\n  run_session_command \"$@\"\n");
+        script.push_str("  status=$?\n  set -e\n  exit \"$status\"\nfi\n\n");
+        script.push_str("command -v unshare >/dev/null 2>&1\n");
+        script.push_str("command -v mount >/dev/null 2>&1\n");
+        script.push_str("command -v umount >/dev/null 2>&1\n");
+        script.push_str("if [ \"$(id -u)\" != \"0\" ] && ");
+        script
+            .push_str("unshare -U --map-current-user --keep-caps -m true >/dev/null 2>&1; then\n");
         script.push_str(&format!(
-            "    umount {} >/dev/null 2>&1 || true\n",
-            sh(path)
+            "  exec unshare -U --map-current-user --keep-caps -m --propagation private -- \"$0\" '{}' \"$@\"\n",
+            CHILD_ARG
         ));
+        script.push_str("fi\n");
+        script.push_str(&format!(
+            "exec unshare -m --propagation private -- \"$0\" '{}' \"$@\"\n",
+            CHILD_ARG
+        ));
+        script
     }
-}
 
-fn push_mount_commands(script: &mut String, mount: &LinuxOverlayVolumeMount) {
-    script.push_str(&format!(
-        "  mount --bind {} {}\n",
-        sh(&mount.host_path),
-        sh(&mount.lower_ro_path)
-    ));
-    script.push_str(&format!(
-        "  mount -o remount,bind,ro {}\n",
-        sh(&mount.lower_ro_path)
-    ));
-    script.push_str(&format!(
-        "  mount -t overlay overlay -o {} {}\n",
-        sh(&format!(
-            "lowerdir={},upperdir={},workdir={}",
-            mount.lower_ro_path, mount.upper_path, mount.workdir_path
-        )),
-        sh(&mount.merged_path)
-    ));
-    script.push_str(&format!(
-        "  mount --bind {} {}\n",
-        sh(&mount.mask_path),
-        sh(&mount.host_path)
-    ));
-    script.push_str(&format!(
-        "  mount -o remount,bind,ro {}\n",
-        sh(&mount.host_path)
-    ));
-    script.push_str(&format!(
-        "  mount --bind {} {}\n",
-        sh(&mount.merged_path),
-        sh(&mount.session_path)
-    ));
-    if mount.read_only {
+    fn push_cleanup(&self, script: &mut String, mount: &LinuxOverlayVolumeMount) {
+        for path in [
+            &mount.session_path,
+            &mount.host_path,
+            &mount.merged_path,
+            &mount.lower_ro_path,
+        ] {
+            script.push_str(&format!(
+                "    umount {} >/dev/null 2>&1 || true\n",
+                Self::sh(path)
+            ));
+        }
+    }
+
+    fn push_mount_commands(&self, script: &mut String, mount: &LinuxOverlayVolumeMount) {
+        script.push_str(&format!(
+            "  mount --bind {} {}\n",
+            Self::sh(&mount.host_path),
+            Self::sh(&mount.lower_ro_path)
+        ));
         script.push_str(&format!(
             "  mount -o remount,bind,ro {}\n",
-            sh(&mount.session_path)
+            Self::sh(&mount.lower_ro_path)
         ));
+        script.push_str(&format!(
+            "  mount -t overlay overlay -o {} {}\n",
+            Self::sh(&format!(
+                "lowerdir={},upperdir={},workdir={}",
+                mount.lower_ro_path, mount.upper_path, mount.workdir_path
+            )),
+            Self::sh(&mount.merged_path)
+        ));
+        script.push_str(&format!(
+            "  mount --bind {} {}\n",
+            Self::sh(&mount.mask_path),
+            Self::sh(&mount.host_path)
+        ));
+        script.push_str(&format!(
+            "  mount -o remount,bind,ro {}\n",
+            Self::sh(&mount.host_path)
+        ));
+        script.push_str(&format!(
+            "  mount --bind {} {}\n",
+            Self::sh(&mount.merged_path),
+            Self::sh(&mount.session_path)
+        ));
+        if mount.read_only {
+            script.push_str(&format!(
+                "  mount -o remount,bind,ro {}\n",
+                Self::sh(&mount.session_path)
+            ));
+        }
     }
-}
 
-fn push_identity_functions(script: &mut String) {
-    script.push_str(
-        r#"
+    fn push_identity_functions(&self, script: &mut String) {
+        script.push_str(
+            r#"
 prepare_session_identity() {
   session_uid="$(id -u)"
   session_gid="$(id -g)"
@@ -120,9 +130,10 @@ run_session_command() {
 }
 
 "#,
-    );
-}
+        );
+    }
 
-fn sh(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
+    fn sh(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
 }

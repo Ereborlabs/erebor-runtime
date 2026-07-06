@@ -10,7 +10,7 @@ use snafu::ResultExt;
 use crate::error::{BrokerProtocolSnafu, BrokerStateLockSnafu, RuntimeInterceptionBrokerError};
 
 use super::{
-    decision::{deny_decision, surface_decision},
+    decision::InterceptionDecisionReply,
     handlers::RoutedInterception,
     server::RuntimeInterceptionBrokerServer,
     wire::{interception_token, read_frame_from_stream, write_frame_to_stream},
@@ -135,9 +135,9 @@ impl RuntimeInterceptionBrokerServer {
         bound: &Option<BoundConnection>,
         request: &InterceptionRequest,
     ) -> Result<InterceptionDecision, RuntimeInterceptionBrokerError> {
+        let reply = InterceptionDecisionReply::new(request.request_id);
         let Some(bound) = bound else {
-            return Ok(deny_decision(
-                request.request_id,
+            return Ok(reply.deny(
                 "erebor-runtime-interception-broker-unbound",
                 "interception request arrived before GuardHello",
             ));
@@ -147,19 +147,14 @@ impl RuntimeInterceptionBrokerServer {
             .lock()
             .map_err(|_error| BrokerStateLockSnafu.build())?;
         let Some(registration) = sessions.get(&bound.session_id) else {
-            return Ok(deny_decision(
-                request.request_id,
+            return Ok(reply.deny(
                 "erebor-runtime-interception-broker-unknown-session",
                 "session is no longer registered with the runtime interception broker",
             ));
         };
         Ok(match registration.router.route_interception(request) {
-            RoutedInterception::Decision(decision) => {
-                surface_decision(request.request_id, decision)
-            }
-            RoutedInterception::Unrouted { rule_id, reason } => {
-                deny_decision(request.request_id, rule_id, reason)
-            }
+            RoutedInterception::Decision(decision) => reply.surface(decision),
+            RoutedInterception::Unrouted { rule_id, reason } => reply.deny(rule_id, reason),
         })
     }
 }
@@ -167,8 +162,7 @@ impl RuntimeInterceptionBrokerServer {
 fn deny_unexpected_bound_message(
     envelope: Envelope,
 ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
-    let decision = deny_decision(
-        envelope.message_id,
+    let decision = InterceptionDecisionReply::new(envelope.message_id).deny(
         "erebor-runtime-interception-broker-unexpected-message",
         format!(
             "unexpected message kind `{}` on bound guard connection",

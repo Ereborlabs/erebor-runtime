@@ -24,8 +24,13 @@ pub struct TerminalProcessPolicy {
 impl TerminalProcessPolicy {
     pub fn from_config(config: &TerminalSurfaceConfig) -> TerminalSurfaceResult<Self> {
         Ok(Self {
-            rules: compile_terminal_process_guard_rules(config)?,
+            rules: TerminalProcessGuardRuleCompiler::new(config).compile()?,
         })
+    }
+
+    #[must_use]
+    pub fn rules(&self) -> &TerminalProcessGuardRules {
+        &self.rules
     }
 
     #[must_use]
@@ -142,21 +147,29 @@ impl TerminalProcessPolicyDecision {
     }
 }
 
-pub fn compile_terminal_process_guard_rules(
-    config: &TerminalSurfaceConfig,
-) -> TerminalSurfaceResult<TerminalProcessGuardRules> {
-    let mut rules = Vec::new();
+struct TerminalProcessGuardRuleCompiler<'a> {
+    config: &'a TerminalSurfaceConfig,
+}
 
-    for path in config.policies() {
-        let document = TerminalPolicyDocument::read(path)?;
-        for rule in document.rules()? {
-            if let Ok(rule) = TerminalPolicyRule::try_from(rule) {
-                rules.push(rule.into());
-            }
-        }
+impl<'a> TerminalProcessGuardRuleCompiler<'a> {
+    const fn new(config: &'a TerminalSurfaceConfig) -> Self {
+        Self { config }
     }
 
-    Ok(TerminalProcessGuardRules::new(rules))
+    fn compile(&self) -> TerminalSurfaceResult<TerminalProcessGuardRules> {
+        let mut rules = Vec::new();
+
+        for path in self.config.policies() {
+            let document = TerminalPolicyDocument::read(path)?;
+            for rule in document.rules()? {
+                if let Ok(rule) = TerminalPolicyRule::try_from(rule) {
+                    rules.push(rule.into());
+                }
+            }
+        }
+
+        Ok(TerminalProcessGuardRules::new(rules))
+    }
 }
 
 struct TerminalPolicyDocument {

@@ -2,7 +2,7 @@ use std::{fs, path::Path, process::Command};
 
 use crate::{FilesystemError, FilesystemVolumeMode};
 
-use super::{prepare_with_initializer, FilesystemSessionStorage, FilesystemVolumeStorageRequest};
+use super::{FilesystemSessionStorage, FilesystemStoragePreparer, FilesystemVolumeStorageRequest};
 
 #[test]
 fn prepare_creates_expected_layout_without_copying_host_tree(
@@ -20,8 +20,8 @@ fn prepare_creates_expected_layout_without_copying_host_tree(
         &session_path,
         FilesystemVolumeMode::Writable,
     )?;
-    let storage =
-        prepare_with_initializer(&test_dir.join("session-record"), vec![request], |_| Ok(()))?;
+    let storage = FilesystemStoragePreparer::new(&test_dir.join("session-record"), vec![request])
+        .prepare(|_| Ok(()))?;
 
     assert_eq!(
         storage.root(),
@@ -101,7 +101,7 @@ fn dropping_storage_handle_preserves_repo_directory() -> Result<(), Box<dyn std:
         "/tmp/session",
         FilesystemVolumeMode::Writable,
     )?;
-    let storage = prepare_with_initializer(&test_dir, vec![request], |_| Ok(()))?;
+    let storage = FilesystemStoragePreparer::new(&test_dir, vec![request]).prepare(|_| Ok(()))?;
     let repo_path = storage.repo_path().to_path_buf();
     drop(storage);
 

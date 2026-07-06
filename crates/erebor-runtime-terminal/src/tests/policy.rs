@@ -5,10 +5,7 @@ use erebor_runtime_core::{
     SessionInterceptionDecision,
 };
 
-use crate::{
-    compile_terminal_process_guard_rules, TerminalProcessExecValidator,
-    TerminalProcessGuardDecision, TerminalProcessPolicy,
-};
+use crate::{TerminalProcessExecValidator, TerminalProcessGuardDecision, TerminalProcessPolicy};
 
 #[test]
 fn terminal_policy_compiles_deny_rules_for_process_guard() -> Result<(), Box<dyn std::error::Error>>
@@ -29,7 +26,8 @@ fn terminal_policy_compiles_deny_rules_for_process_guard() -> Result<(), Box<dyn
     let terminal = start_plan
         .terminal()
         .ok_or_else(|| io::Error::other("expected terminal surface config"))?;
-    let rules = compile_terminal_process_guard_rules(terminal)?;
+    let policy = TerminalProcessPolicy::from_config(terminal)?;
+    let rules = policy.rules();
 
     assert_eq!(rules.rules().len(), 3);
     assert_eq!(rules.rules()[0].match_token(), "remote-debugging-port");
@@ -55,7 +53,6 @@ fn terminal_policy_compiles_deny_rules_for_process_guard() -> Result<(), Box<dyn
         TerminalProcessGuardDecision::Allow
     );
 
-    let policy = TerminalProcessPolicy::from_config(terminal)?;
     let decision = policy
         .decide_process_exec(
             "google-chrome",

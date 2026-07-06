@@ -20,7 +20,7 @@ mod mediation;
 mod path;
 
 use crate::SessionPlanContext;
-use mediation::mediation_decision;
+use mediation::FilesystemMediationDocument;
 use path::normalize_request_path;
 
 pub struct FilesystemFileOperationHandler {
@@ -60,7 +60,7 @@ impl FilesystemFileOperationHandler {
         };
         let final_decision = policy_decision.clone();
         self.record_audit(&event, &policy_decision, &final_decision);
-        surface_decision(policy_decision)
+        Self::surface_decision(policy_decision)
     }
 
     fn event_for_request(&self, request: &FileInterceptionRequest<'_>) -> RuntimeEvent {
@@ -79,7 +79,7 @@ impl FilesystemFileOperationHandler {
             session_id: self.context.session_id.clone(),
             actor: self.context.actor.clone(),
             surface: ExecutionSurface::Filesystem,
-            action: action_for_operation(request.operation()),
+            action: Self::action_for_operation(request.operation()),
             target: Some(TargetRef {
                 label: Some(normalized_path.clone()),
                 uri: normalized_path
@@ -96,8 +96,8 @@ impl FilesystemFileOperationHandler {
                 "ppid": request.ppid(),
                 "resolved_identity": resolved_identity,
             }),
-            risk: risk_for_operation(request.operation()),
-            timestamp: timestamp(),
+            risk: Self::risk_for_operation(request.operation()),
+            timestamp: Self::timestamp(),
         }
     }
 
@@ -133,6 +133,75 @@ impl FilesystemFileOperationHandler {
                 event_id = %event.id.as_str()
             );
         }
+    }
+
+    fn surface_decision(decision: Decision) -> SurfaceInterceptionDecision {
+        match decision {
+            Decision::Allow { rule_id } => SurfaceInterceptionDecision::allow(
+                rule_id.unwrap_or_else(|| String::from("filesystem-file-operation-default-allow")),
+                "file operation allowed by filesystem policy",
+            ),
+            Decision::Deny { reason, rule_id } => SurfaceInterceptionDecision::deny(
+                rule_id.unwrap_or_else(|| String::from("filesystem-file-operation-deny")),
+                reason,
+            ),
+            Decision::RequireApproval {
+                reason, rule_id, ..
+            } => SurfaceInterceptionDecision::require_approval(
+                rule_id
+                    .unwrap_or_else(|| String::from("filesystem-file-operation-require-approval")),
+                reason,
+            ),
+            Decision::Mediate {
+                reason,
+                rule_id,
+                mediation,
+            } => match mediation.and_then(|value| {
+                FilesystemMediationDocument::new(&value)
+                    .into_decision()
+                    .ok()
+            }) {
+                Some(mediation) => SurfaceInterceptionDecision::mediate(
+                    rule_id.unwrap_or_else(|| String::from("filesystem-file-operation-mediate")),
+                    reason,
+                    mediation,
+                ),
+                None => SurfaceInterceptionDecision::deny(
+                    rule_id.unwrap_or_else(|| {
+                        String::from("filesystem-file-operation-invalid-mediation")
+                    }),
+                    "filesystem mediation metadata is missing or invalid",
+                ),
+            },
+        }
+    }
+
+    fn action_for_operation(operation: FileInterceptionOperationKind) -> ActionKind {
+        match operation {
+            FileInterceptionOperationKind::Open => ActionKind::FileOpen,
+            FileInterceptionOperationKind::Read => ActionKind::FileRead,
+            FileInterceptionOperationKind::Mutation => ActionKind::FileMutation,
+        }
+    }
+
+    fn risk_for_operation(operation: FileInterceptionOperationKind) -> RiskMetadata {
+        let level = match operation {
+            FileInterceptionOperationKind::Open | FileInterceptionOperationKind::Read => {
+                RiskLevel::Low
+            }
+            FileInterceptionOperationKind::Mutation => RiskLevel::Medium,
+        };
+        RiskMetadata {
+            level,
+            reasons: vec![operation.as_str().to_owned()],
+        }
+    }
+
+    fn timestamp() -> String {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs());
+        format!("unix:{seconds}")
     }
 }
 
@@ -186,67 +255,6 @@ impl FilesystemAuditRecorder {
     fn record(&self, record: &AuditRecord) -> Result<(), erebor_runtime_core::AuditError> {
         self.sink.record(record)
     }
-}
-
-fn surface_decision(decision: Decision) -> SurfaceInterceptionDecision {
-    match decision {
-        Decision::Allow { rule_id } => SurfaceInterceptionDecision::allow(
-            rule_id.unwrap_or_else(|| String::from("filesystem-file-operation-default-allow")),
-            "file operation allowed by filesystem policy",
-        ),
-        Decision::Deny { reason, rule_id } => SurfaceInterceptionDecision::deny(
-            rule_id.unwrap_or_else(|| String::from("filesystem-file-operation-deny")),
-            reason,
-        ),
-        Decision::RequireApproval {
-            reason, rule_id, ..
-        } => SurfaceInterceptionDecision::require_approval(
-            rule_id.unwrap_or_else(|| String::from("filesystem-file-operation-require-approval")),
-            reason,
-        ),
-        Decision::Mediate {
-            reason,
-            rule_id,
-            mediation,
-        } => match mediation.and_then(|value| mediation_decision(&value).ok()) {
-            Some(mediation) => SurfaceInterceptionDecision::mediate(
-                rule_id.unwrap_or_else(|| String::from("filesystem-file-operation-mediate")),
-                reason,
-                mediation,
-            ),
-            None => SurfaceInterceptionDecision::deny(
-                rule_id
-                    .unwrap_or_else(|| String::from("filesystem-file-operation-invalid-mediation")),
-                "filesystem mediation metadata is missing or invalid",
-            ),
-        },
-    }
-}
-
-fn action_for_operation(operation: FileInterceptionOperationKind) -> ActionKind {
-    match operation {
-        FileInterceptionOperationKind::Open => ActionKind::FileOpen,
-        FileInterceptionOperationKind::Read => ActionKind::FileRead,
-        FileInterceptionOperationKind::Mutation => ActionKind::FileMutation,
-    }
-}
-
-fn risk_for_operation(operation: FileInterceptionOperationKind) -> RiskMetadata {
-    let level = match operation {
-        FileInterceptionOperationKind::Open | FileInterceptionOperationKind::Read => RiskLevel::Low,
-        FileInterceptionOperationKind::Mutation => RiskLevel::Medium,
-    };
-    RiskMetadata {
-        level,
-        reasons: vec![operation.as_str().to_owned()],
-    }
-}
-
-fn timestamp() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs());
-    format!("unix:{seconds}")
 }
 
 #[cfg(test)]

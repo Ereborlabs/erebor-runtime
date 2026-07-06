@@ -5,21 +5,18 @@ use std::{
 };
 
 use crate::{
-    checkpoint::commit_normalized_session_checkpoint_with_runner,
-    normalizer::normalize_session_layers,
+    checkpoint::FilesystemCheckpointCommit,
     promotion::{
-        list_transaction_catalog_with_runner, promote_with_hook,
-        rename_transaction_target_with_runner, rollback_transaction_target_with_runner,
-        show_transaction_target_with_runner, FilesystemPromotionOptions,
-        FilesystemSubtransactionState, FilesystemTransactionState, FilesystemTransactionTarget,
-        PromotionHook,
+        FilesystemPromotionOptions, FilesystemSubtransactionState, FilesystemTransactionCatalog,
+        FilesystemTransactionRename, FilesystemTransactionRollback, FilesystemTransactionState,
+        FilesystemTransactionTarget, PromotionHook,
     },
-    storage::prepare_with_initializer,
+    storage::FilesystemStoragePreparer,
     FilesystemLayerManifest, FilesystemSessionStorage, FilesystemVolumeMode,
     FilesystemVolumeStorageRequest,
 };
 
-use super::support::{FakeOstreeRunner, TestResult};
+use super::support::{FakeOstreeRepository, PromotionTestWorkflow, TestResult};
 
 #[test]
 fn catalog_lists_renames_and_rolls_back_subtransactions() -> TestResult {
@@ -30,21 +27,20 @@ fn catalog_lists_renames_and_rolls_back_subtransactions() -> TestResult {
     write_upper(&fixture, "project", "settings.txt", "dark\n")?;
     fs::write(fixture.upper("project")?.join(".wh.old-cache.txt"), "")?;
     write_upper(&fixture, "cache", "cache.txt", "warm\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture.storage, &manifests, &runner)?;
-    promote_with_hook(
+    PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    )?;
+    )
+    .promote()?;
     fs::remove_dir_all(fixture.storage.work_path().join("promotions/session-1"))?;
 
-    let catalog = list_transaction_catalog_with_runner(&fixture.storage, &runner)?;
+    let catalog = FilesystemTransactionCatalog::load_using_repository(&fixture.storage, &runner)?;
 
     assert_eq!(catalog.transactions().len(), 1);
     let transaction = &catalog.transactions()[0];
@@ -60,7 +56,7 @@ fn catalog_lists_renames_and_rolls_back_subtransactions() -> TestResult {
         .ok_or_else(|| std::io::Error::other("missing project subtransaction"))?
         .handle()
         .to_owned();
-    rename_transaction_target_with_runner(
+    FilesystemTransactionRename::rename_using_repository(
         &fixture.storage,
         &project_handle,
         "project restore",
@@ -68,8 +64,11 @@ fn catalog_lists_renames_and_rolls_back_subtransactions() -> TestResult {
     )?;
     assert_project_show_by_name(&fixture, &runner)?;
 
-    let rollback =
-        rollback_transaction_target_with_runner(&fixture.storage, "project restore", &runner)?;
+    let rollback = FilesystemTransactionRollback::rollback_using_repository(
+        &fixture.storage,
+        "project restore",
+        &runner,
+    )?;
 
     assert_eq!(rollback.restored_volumes(), &[String::from("project")]);
     assert_eq!(
@@ -80,7 +79,7 @@ fn catalog_lists_renames_and_rolls_back_subtransactions() -> TestResult {
         fs::read_to_string(fixture.host("cache")?.join("cache.txt"))?,
         "warm\n"
     );
-    let catalog = list_transaction_catalog_with_runner(&fixture.storage, &runner)?;
+    let catalog = FilesystemTransactionCatalog::load_using_repository(&fixture.storage, &runner)?;
     assert_eq!(
         catalog.transactions()[0].state(),
         FilesystemTransactionState::PartiallyRestored
@@ -92,15 +91,22 @@ fn catalog_lists_renames_and_rolls_back_subtransactions() -> TestResult {
         .ok_or_else(|| std::io::Error::other("missing project subtransaction"))?;
     assert_eq!(project.state(), FilesystemSubtransactionState::Restored);
 
-    let rollback = rollback_transaction_target_with_runner(&fixture.storage, "tx@{0}", &runner)?;
+    let rollback = FilesystemTransactionRollback::rollback_using_repository(
+        &fixture.storage,
+        "tx@{0}",
+        &runner,
+    )?;
 
     assert_eq!(rollback.restored_volumes(), &[String::from("cache")]);
     assert_eq!(
         fs::read_to_string(fixture.host("cache")?.join("cache.txt"))?,
         "cold\n"
     );
-    let rollback =
-        rollback_transaction_target_with_runner(&fixture.storage, "project restore", &runner)?;
+    let rollback = FilesystemTransactionRollback::rollback_using_repository(
+        &fixture.storage,
+        "project restore",
+        &runner,
+    )?;
     assert!(rollback.restored_volumes().is_empty());
     assert_transaction_journal(&fixture)?;
     Ok(())
@@ -126,9 +132,13 @@ fn assert_transaction_journal(fixture: &MultiVolumeFixture) -> TestResult {
 
 fn assert_project_show_by_name(
     fixture: &MultiVolumeFixture,
-    runner: &FakeOstreeRunner,
+    runner: &FakeOstreeRepository,
 ) -> TestResult {
-    let target = show_transaction_target_with_runner(&fixture.storage, "project restore", runner)?;
+    let target = FilesystemTransactionTarget::show_using_repository(
+        &fixture.storage,
+        "project restore",
+        runner,
+    )?;
     let FilesystemTransactionTarget::Subtransaction(subtransaction) = target else {
         return Err(std::io::Error::other("expected subtransaction target").into());
     };
@@ -180,7 +190,8 @@ impl MultiVolumeFixture {
                 FilesystemVolumeMode::Writable,
             )?,
         ];
-        let storage = prepare_with_initializer(&root.join("session"), requests, |_| Ok(()))?;
+        let storage =
+            FilesystemStoragePreparer::new(&root.join("session"), requests).prepare(|_| Ok(()))?;
         Ok(Self {
             storage,
             root,
@@ -220,9 +231,14 @@ impl Drop for MultiVolumeFixture {
 fn commit_checkpoint(
     storage: &FilesystemSessionStorage,
     manifests: &[FilesystemLayerManifest],
-    runner: &FakeOstreeRunner,
+    runner: &FakeOstreeRepository,
 ) -> crate::Result<()> {
-    commit_normalized_session_checkpoint_with_runner(storage, "session-1", manifests, runner)?;
+    FilesystemCheckpointCommit::commit_normalized_using_repository(
+        storage,
+        "session-1",
+        manifests,
+        runner,
+    )?;
     Ok(())
 }
 

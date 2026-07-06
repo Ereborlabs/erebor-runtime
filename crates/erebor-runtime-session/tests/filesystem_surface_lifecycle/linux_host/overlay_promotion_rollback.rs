@@ -3,7 +3,7 @@ use std::{fs, path::Path, process::Command};
 use erebor_runtime_core::{SessionRunPlan, SessionRunnerKind};
 use erebor_runtime_events::SessionId;
 use erebor_runtime_filesystem::{
-    rollback_promotion, FilesystemSessionStorage, FilesystemVolumeMode,
+    FilesystemRollback, FilesystemSessionStorage, FilesystemVolumeMode,
     FilesystemVolumeStorageRequest,
 };
 use erebor_runtime_session::SessionExecutionService;
@@ -76,7 +76,7 @@ fn linux_host_overlay_promotion_and_rollback_restore_host() -> Result<(), Box<dy
 
     let storage = reopen_storage(&workspace, session_id, &host_project, &session_project)?;
     fs::remove_dir_all(storage.work_path().join("promotions").join(session_id))?;
-    rollback_promotion(&storage, session_id)?;
+    FilesystemRollback::rollback_promotion(&storage, session_id)?;
 
     assert_eq!(
         fs::read_to_string(host_project.join("settings.json"))?,
@@ -157,7 +157,7 @@ fn linux_host_opaque_directory_promotion_and_rollback_restore_host(
 
     let storage = reopen_storage(&workspace, session_id, &host_project, &session_project)?;
     fs::remove_dir_all(storage.work_path().join("promotions").join(session_id))?;
-    rollback_promotion(&storage, session_id)?;
+    FilesystemRollback::rollback_promotion(&storage, session_id)?;
 
     assert_eq!(
         fs::read_to_string(host_project.join("docs/old.txt"))?,

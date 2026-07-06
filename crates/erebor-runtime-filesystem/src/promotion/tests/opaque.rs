@@ -1,13 +1,14 @@
 use std::{fs, os::unix::net::UnixListener};
 
 use crate::{
-    normalizer::normalize_session_layers,
-    promotion::{promote_with_hook, FilesystemPromotionOptions, PromotionHook},
+    promotion::{FilesystemPromotionOptions, FilesystemRollback, PromotionHook},
     FilesystemError, FilesystemLayerOperation, FilesystemPreimageEntryState,
     PREIMAGE_MANIFEST_FILE,
 };
 
-use super::support::{commit_checkpoint, fixture, FakeOstreeRunner, TestResult};
+use super::support::{
+    commit_checkpoint, fixture, FakeOstreeRepository, PromotionTestWorkflow, TestResult,
+};
 
 #[test]
 fn opaque_replace_promotion_and_rollback_restore_hidden_subtree() -> TestResult {
@@ -21,23 +22,22 @@ fn opaque_replace_promotion_and_rollback_restore_hidden_subtree() -> TestResult 
     fs::write(fixture.upper().join("opaque/common.txt"), "new common\n")?;
     fs::write(fixture.upper().join("opaque/new.txt"), "new\n")?;
     fs::write(fixture.upper().join("opaque/sub/new.txt"), "nested\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
+    let manifests = fixture.storage.normalize_layers()?;
     assert!(matches!(
         manifests[0].operations.as_slice(),
         [FilesystemLayerOperation::OpaqueReplace { path, .. }] if path == "opaque"
     ));
-    let runner = FakeOstreeRunner::successful();
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
 
-    promote_with_hook(
+    PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    )?;
+    )
+    .promote()?;
 
     assert!(!fixture.host().join("opaque/old.txt").exists());
     assert!(!fixture.host().join("opaque/.wh.old.txt").exists());
@@ -56,7 +56,11 @@ fn opaque_replace_promotion_and_rollback_restore_hidden_subtree() -> TestResult 
             && matches!(entry.state, FilesystemPreimageEntryState::Present { .. })
     }));
 
-    crate::promotion::rollback_promotion_with_runner(&fixture.storage, "session-1", &runner)?;
+    FilesystemRollback::rollback_promotion_using_repository(
+        &fixture.storage,
+        "session-1",
+        &runner,
+    )?;
 
     assert_eq!(
         fs::read_to_string(fixture.host().join("opaque/old.txt"))?,
@@ -81,19 +85,18 @@ fn opaque_replace_preimage_size_limit_blocks_before_mutation() -> TestResult {
     fs::create_dir_all(fixture.upper().join("opaque"))?;
     fs::write(fixture.upper().join("opaque/.wh..wh..opq"), "")?;
     fs::write(fixture.upper().join("opaque/new.txt"), "new\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
 
-    let result = promote_with_hook(
+    let result = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(2),
         &runner,
         &NoopHook,
-    );
+    )
+    .promote();
 
     assert!(matches!(
         result,
@@ -115,19 +118,18 @@ fn opaque_replace_special_hidden_entry_blocks_before_mutation() -> TestResult {
     fs::create_dir_all(fixture.upper().join("opaque"))?;
     fs::write(fixture.upper().join("opaque/.wh..wh..opq"), "")?;
     fs::write(fixture.upper().join("opaque/new.txt"), "new\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
 
-    let result = promote_with_hook(
+    let result = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    );
+    )
+    .promote();
 
     drop(listener);
     assert!(matches!(

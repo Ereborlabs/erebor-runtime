@@ -1,9 +1,9 @@
 use crate::{
-    ostree::{OstreeCommandRunner, SystemOstreeCommandRunner},
+    ostree::{OstreeRepository, SystemOstreeRepository},
     FilesystemSessionStorage, Result,
 };
 
-use super::rollback::rollback_promotion_volumes_with_runner;
+use super::FilesystemRollback;
 
 mod journal;
 mod load;
@@ -18,101 +18,102 @@ pub use model::{
 };
 
 use journal::CatalogRollbackJournal;
-use load::load_catalog;
-use resolve::{ensure_unique_name, resolve_target, selected_volumes, target_key, validate_name};
+use load::TransactionCatalogLoader;
+use resolve::{CatalogTargetResolver, TransactionTargetName};
 use state::CatalogState;
 
-pub fn list_transaction_catalog(
-    storage: &FilesystemSessionStorage,
-) -> Result<FilesystemTransactionCatalog> {
-    list_transaction_catalog_with_runner(storage, &SystemOstreeCommandRunner)
-}
-
-pub fn show_transaction_target(
-    storage: &FilesystemSessionStorage,
-    selector: &str,
-) -> Result<FilesystemTransactionTarget> {
-    show_transaction_target_with_runner(storage, selector, &SystemOstreeCommandRunner)
-}
-
-pub fn rename_transaction_target(
-    storage: &FilesystemSessionStorage,
-    selector: &str,
-    name: &str,
-) -> Result<FilesystemTransactionRename> {
-    rename_transaction_target_with_runner(storage, selector, name, &SystemOstreeCommandRunner)
-}
-
-pub fn rollback_transaction_target(
-    storage: &FilesystemSessionStorage,
-    selector: &str,
-) -> Result<FilesystemTransactionRollback> {
-    rollback_transaction_target_with_runner(storage, selector, &SystemOstreeCommandRunner)
-}
-
-pub(crate) fn list_transaction_catalog_with_runner(
-    storage: &FilesystemSessionStorage,
-    runner: &impl OstreeCommandRunner,
-) -> Result<FilesystemTransactionCatalog> {
-    load_catalog(storage, runner)
-}
-
-pub(crate) fn show_transaction_target_with_runner(
-    storage: &FilesystemSessionStorage,
-    selector: &str,
-    runner: &impl OstreeCommandRunner,
-) -> Result<FilesystemTransactionTarget> {
-    let catalog = load_catalog(storage, runner)?;
-    resolve_target(&catalog, selector)
-}
-
-pub(crate) fn rename_transaction_target_with_runner(
-    storage: &FilesystemSessionStorage,
-    selector: &str,
-    name: &str,
-    runner: &impl OstreeCommandRunner,
-) -> Result<FilesystemTransactionRename> {
-    let name = validate_name(name)?;
-    let catalog = load_catalog(storage, runner)?;
-    let target = resolve_target(&catalog, selector)?;
-    let key = target_key(&target);
-    ensure_unique_name(&catalog, &key, &name)?;
-    let mut metadata = CatalogState::read(storage)?;
-    metadata.set_name(key, name.clone());
-    metadata.write(storage)?;
-    metadata.append_rename_event(storage, selector, &name)?;
-    Ok(FilesystemTransactionRename::new(selector, name))
-}
-
-pub(crate) fn rollback_transaction_target_with_runner(
-    storage: &FilesystemSessionStorage,
-    selector: &str,
-    runner: &impl OstreeCommandRunner,
-) -> Result<FilesystemTransactionRollback> {
-    let catalog = load_catalog(storage, runner)?;
-    let target = resolve_target(&catalog, selector)?;
-    let key = target_key(&target);
-    let mut metadata = CatalogState::read(storage)?;
-    let promotion_id = key.promotion_id().to_owned();
-    let selected = selected_volumes(&target);
-    let pending = selected
-        .iter()
-        .filter(|volume_id| !metadata.is_restored(&promotion_id, volume_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    if pending.is_empty() {
-        metadata.append_rollback_event(
-            storage,
-            CatalogRollbackJournal::already_restored(selector, &promotion_id, &selected),
-        )?;
-        return Ok(FilesystemTransactionRollback::new(
-            promotion_id,
-            selector,
-            Vec::new(),
-        ));
+impl FilesystemTransactionCatalog {
+    pub fn load(storage: &FilesystemSessionStorage) -> Result<Self> {
+        Self::load_using_repository(storage, &SystemOstreeRepository)
     }
-    let rollback =
-        match rollback_promotion_volumes_with_runner(storage, &promotion_id, &pending, runner) {
+
+    pub(crate) fn load_using_repository(
+        storage: &FilesystemSessionStorage,
+        repository: &impl OstreeRepository,
+    ) -> Result<Self> {
+        TransactionCatalogLoader::new(storage, repository)?.load()
+    }
+}
+
+impl FilesystemTransactionTarget {
+    pub fn show(storage: &FilesystemSessionStorage, selector: &str) -> Result<Self> {
+        Self::show_using_repository(storage, selector, &SystemOstreeRepository)
+    }
+
+    pub(crate) fn show_using_repository(
+        storage: &FilesystemSessionStorage,
+        selector: &str,
+        repository: &impl OstreeRepository,
+    ) -> Result<Self> {
+        let catalog = FilesystemTransactionCatalog::load_using_repository(storage, repository)?;
+        CatalogTargetResolver::new(&catalog).resolve(selector)
+    }
+}
+
+impl FilesystemTransactionRename {
+    pub fn rename(storage: &FilesystemSessionStorage, selector: &str, name: &str) -> Result<Self> {
+        Self::rename_using_repository(storage, selector, name, &SystemOstreeRepository)
+    }
+
+    pub(crate) fn rename_using_repository(
+        storage: &FilesystemSessionStorage,
+        selector: &str,
+        name: &str,
+        repository: &impl OstreeRepository,
+    ) -> Result<Self> {
+        let catalog = FilesystemTransactionCatalog::load_using_repository(storage, repository)?;
+        let resolver = CatalogTargetResolver::new(&catalog);
+        let target = resolver.resolve(selector)?;
+        let key = target.catalog_key();
+        let name = TransactionTargetName::new(name)?;
+        resolver.ensure_unique_name(&key, &name)?;
+        let name = name.into_string();
+        let mut metadata = CatalogState::read(storage)?;
+        metadata.set_name(key, name.clone());
+        metadata.write(storage)?;
+        metadata.append_rename_event(storage, selector, &name)?;
+        Ok(FilesystemTransactionRename::new(selector, name))
+    }
+}
+
+impl FilesystemTransactionRollback {
+    pub fn rollback(storage: &FilesystemSessionStorage, selector: &str) -> Result<Self> {
+        Self::rollback_using_repository(storage, selector, &SystemOstreeRepository)
+    }
+
+    pub(crate) fn rollback_using_repository(
+        storage: &FilesystemSessionStorage,
+        selector: &str,
+        repository: &impl OstreeRepository,
+    ) -> Result<Self> {
+        let catalog = FilesystemTransactionCatalog::load_using_repository(storage, repository)?;
+        let target = CatalogTargetResolver::new(&catalog).resolve(selector)?;
+        let key = target.catalog_key();
+        let mut metadata = CatalogState::read(storage)?;
+        let promotion_id = key.promotion_id().to_owned();
+        let selected = target.selected_volumes();
+        let pending = selected
+            .iter()
+            .filter(|volume_id| !metadata.is_restored(&promotion_id, volume_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            metadata.append_rollback_event(
+                storage,
+                CatalogRollbackJournal::already_restored(selector, &promotion_id, &selected),
+            )?;
+            return Ok(FilesystemTransactionRollback::new(
+                promotion_id,
+                selector,
+                Vec::new(),
+            ));
+        }
+        let rollback = match FilesystemRollback::rollback_promotion_volumes_using_repository(
+            storage,
+            &promotion_id,
+            &pending,
+            repository,
+        ) {
             Ok(rollback) => rollback,
             Err(error) => {
                 metadata.append_rollback_event(
@@ -128,22 +129,23 @@ pub(crate) fn rollback_transaction_target_with_runner(
                 return Err(error);
             }
         };
-    for volume_id in rollback.restored_volumes() {
-        metadata.mark_restored(&promotion_id, volume_id);
-    }
-    metadata.write(storage)?;
-    metadata.append_rollback_event(
-        storage,
-        CatalogRollbackJournal::succeeded(
+        for volume_id in rollback.restored_volumes() {
+            metadata.mark_restored(&promotion_id, volume_id);
+        }
+        metadata.write(storage)?;
+        metadata.append_rollback_event(
+            storage,
+            CatalogRollbackJournal::succeeded(
+                selector,
+                &promotion_id,
+                &selected,
+                rollback.restored_volumes(),
+            ),
+        )?;
+        Ok(FilesystemTransactionRollback::new(
+            promotion_id,
             selector,
-            &promotion_id,
-            &selected,
-            rollback.restored_volumes(),
-        ),
-    )?;
-    Ok(FilesystemTransactionRollback::new(
-        promotion_id,
-        selector,
-        rollback.restored_volumes().to_vec(),
-    ))
+            rollback.restored_volumes().to_vec(),
+        ))
+    }
 }

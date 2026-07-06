@@ -1,93 +1,130 @@
-use std::path::PathBuf;
-
 use crate::{
-    ostree::{OstreeCommandRunner, SystemOstreeCommandRunner},
+    ostree::{OstreeRepository, OstreeTreeCheckout, SystemOstreeRepository},
     FilesystemSessionStorage, Result,
 };
 
 use super::{
-    apply,
-    checkout::checkout_tree,
-    ids::{validate_promotion_id, volume_for_id},
-    io::{read_preimage_manifest, read_promotion_manifest},
-    journal::{self, PromotionJournal},
+    apply::PromotionVolumeRollback,
+    ids::{PromotionId, PromotionStorageLookup},
+    io::{PromotionManifestCheckout, PromotionManifestStore},
+    journal::{PromotionJournal, PromotionJournalVerifier},
     lock::PromotionLock,
-    preimage_stage_root, promotion_manifest_ref, promotion_root, FilesystemRollback,
+    FilesystemRollback, PromotionWorkspace,
 };
 
-pub fn rollback_promotion(
-    storage: &FilesystemSessionStorage,
-    promotion_id: &str,
-) -> Result<FilesystemRollback> {
-    rollback_promotion_with_runner(storage, promotion_id, &SystemOstreeCommandRunner)
+impl FilesystemRollback {
+    pub fn rollback_promotion(
+        storage: &FilesystemSessionStorage,
+        promotion_id: &str,
+    ) -> Result<Self> {
+        Self::rollback_promotion_using_repository(storage, promotion_id, &SystemOstreeRepository)
+    }
+
+    pub(crate) fn rollback_promotion_using_repository(
+        storage: &FilesystemSessionStorage,
+        promotion_id: &str,
+        repository: &impl OstreeRepository,
+    ) -> Result<Self> {
+        Self::rollback_promotion_volumes_using_repository(storage, promotion_id, &[], repository)
+    }
+
+    pub(crate) fn rollback_promotion_volumes_using_repository(
+        storage: &FilesystemSessionStorage,
+        promotion_id: &str,
+        selected_volume_ids: &[String],
+        repository: &impl OstreeRepository,
+    ) -> Result<Self> {
+        PromotionRollbackWorkflow::new(storage, promotion_id, selected_volume_ids, repository)?
+            .rollback()
+    }
 }
 
-pub(crate) fn rollback_promotion_with_runner(
-    storage: &FilesystemSessionStorage,
-    promotion_id: &str,
-    runner: &impl OstreeCommandRunner,
-) -> Result<FilesystemRollback> {
-    rollback_promotion_volumes_with_runner(storage, promotion_id, &[], runner)
+struct PromotionRollbackWorkflow<'a, R>
+where
+    R: OstreeRepository,
+{
+    storage: &'a FilesystemSessionStorage,
+    promotion_id: PromotionId<'a>,
+    selected_volume_ids: &'a [String],
+    repository: &'a R,
+    workspace: PromotionWorkspace<'a>,
 }
 
-pub(crate) fn rollback_promotion_volumes_with_runner(
-    storage: &FilesystemSessionStorage,
-    promotion_id: &str,
-    selected_volume_ids: &[String],
-    runner: &impl OstreeCommandRunner,
-) -> Result<FilesystemRollback> {
-    validate_promotion_id(promotion_id)?;
-    let local_root = promotion_root(storage, promotion_id);
-    ensure_local_journal_not_incomplete(promotion_id, &local_root)?;
-    let _lock = PromotionLock::acquire(storage.work_path())?;
-    let journal = ensure_local_journal_not_incomplete(promotion_id, &local_root)?;
-    let root = rollback_root(storage, promotion_id);
-    checkout_tree(
-        runner,
-        storage.repo_path(),
-        &promotion_manifest_ref(promotion_id)?,
-        &root.join("manifest"),
-        "checkout promotion manifest",
-    )?;
-    let manifest = read_promotion_manifest(&root)?;
-    journal::ensure_manifest_or_journal_applied(promotion_id, &manifest, journal.as_ref())?;
+impl<'a, R> PromotionRollbackWorkflow<'a, R>
+where
+    R: OstreeRepository,
+{
+    fn new(
+        storage: &'a FilesystemSessionStorage,
+        promotion_id: &'a str,
+        selected_volume_ids: &'a [String],
+        repository: &'a R,
+    ) -> Result<Self> {
+        let promotion_id = PromotionId::new(promotion_id)?;
+        Ok(Self {
+            storage,
+            promotion_id,
+            selected_volume_ids,
+            repository,
+            workspace: PromotionWorkspace::new(storage, promotion_id.as_str()),
+        })
+    }
 
-    let mut restored = Vec::new();
-    let selected = selected_volume_ids
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    for volume_ref in manifest.volumes.iter().rev() {
-        if !selected.is_empty() && !selected.contains(&volume_ref.volume_id.as_str()) {
-            continue;
+    fn rollback(&self) -> Result<FilesystemRollback> {
+        let local_root = self.workspace.promotion_root();
+        self.ensure_local_journal_not_incomplete(&local_root)?;
+        let _lock = PromotionLock::acquire(self.storage.work_path())?;
+        let journal = self.ensure_local_journal_not_incomplete(&local_root)?;
+        let root = self.workspace.rollback_root();
+        OstreeTreeCheckout::new(
+            self.storage.repo_path(),
+            &self.promotion_id.manifest_ref(),
+            &root.join("manifest"),
+            "checkout promotion manifest",
+        )
+        .checkout(self.repository)?;
+        let manifest = PromotionManifestCheckout::new(&root).read_promotion()?;
+        PromotionJournalVerifier::new(self.promotion_id.as_str())
+            .ensure_manifest_or_journal_applied(&manifest, journal.as_ref())?;
+
+        let mut restored = Vec::new();
+        let selected = self
+            .selected_volume_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        for volume_ref in manifest.volumes.iter().rev() {
+            if !selected.is_empty() && !selected.contains(&volume_ref.volume_id.as_str()) {
+                continue;
+            }
+            let volume = PromotionStorageLookup::new(self.storage).volume(&volume_ref.volume_id)?;
+            let stage = PromotionWorkspace::preimage_stage_root(&root, volume.id());
+            OstreeTreeCheckout::new(
+                self.storage.repo_path(),
+                &volume_ref.preimage_ref,
+                &stage,
+                "checkout promotion preimage",
+            )
+            .checkout(self.repository)?;
+            let preimage = PromotionManifestStore::new(&stage).read_preimage()?;
+            PromotionVolumeRollback::new(&stage, volume, &preimage).rollback()?;
+            restored.push(volume.id().to_owned());
         }
-        let volume = volume_for_id(storage, &volume_ref.volume_id)?;
-        let stage = preimage_stage_root(&root, volume.id());
-        checkout_tree(
-            runner,
-            storage.repo_path(),
-            &volume_ref.preimage_ref,
-            &stage,
-            "checkout promotion preimage",
-        )?;
-        let preimage = read_preimage_manifest(&stage)?;
-        apply::rollback_volume(&stage, volume, &preimage)?;
-        restored.push(volume.id().to_owned());
+        Ok(FilesystemRollback::new(
+            self.promotion_id.as_str(),
+            restored,
+        ))
     }
-    Ok(FilesystemRollback::new(promotion_id, restored))
-}
 
-fn ensure_local_journal_not_incomplete(
-    promotion_id: &str,
-    local_root: &std::path::Path,
-) -> Result<Option<PromotionJournal>> {
-    let journal = PromotionJournal::read_optional(local_root)?;
-    if let Some(journal) = &journal {
-        journal::ensure_journal_applied(promotion_id, journal)?;
+    fn ensure_local_journal_not_incomplete(
+        &self,
+        local_root: &std::path::Path,
+    ) -> Result<Option<PromotionJournal>> {
+        let journal = PromotionJournal::read_optional(local_root)?;
+        if let Some(journal) = &journal {
+            PromotionJournalVerifier::new(self.promotion_id.as_str())
+                .ensure_journal_applied(journal)?;
+        }
+        Ok(journal)
     }
-    Ok(journal)
-}
-
-fn rollback_root(storage: &FilesystemSessionStorage, promotion_id: &str) -> PathBuf {
-    storage.work_path().join("rollbacks").join(promotion_id)
 }

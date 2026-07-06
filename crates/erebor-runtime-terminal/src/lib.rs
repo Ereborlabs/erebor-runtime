@@ -13,6 +13,5 @@ pub use guard_rules::{
 };
 pub use mediation::TerminalProcessMediationCapability;
 pub use policy::{
-    compile_terminal_process_guard_rules, TerminalProcessExecValidator, TerminalProcessPolicy,
-    TerminalProcessPolicyDecision,
+    TerminalProcessExecValidator, TerminalProcessPolicy, TerminalProcessPolicyDecision,
 };

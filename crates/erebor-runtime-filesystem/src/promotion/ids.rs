@@ -5,67 +5,94 @@ use crate::{
     FilesystemVolumeStorage, Result,
 };
 
-pub(super) fn validate_promotion_id(promotion_id: &str) -> Result<()> {
-    if promotion_id.is_empty() {
-        return invalid_promotion_id(promotion_id, "must not be empty");
+#[derive(Clone, Copy)]
+pub(super) struct PromotionId<'a> {
+    value: &'a str,
+}
+
+impl<'a> PromotionId<'a> {
+    pub(super) fn new(value: &'a str) -> Result<Self> {
+        if value.is_empty() {
+            return Self::invalid(value, "must not be empty");
+        }
+        if !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Self::invalid(
+                value,
+                "must contain only ASCII letters, digits, dot, underscore, or dash",
+            );
+        }
+        Ok(Self { value })
     }
-    if !promotion_id
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-    {
-        return invalid_promotion_id(
-            promotion_id,
-            "must contain only ASCII letters, digits, dot, underscore, or dash",
-        );
+
+    pub(super) const fn as_str(self) -> &'a str {
+        self.value
     }
-    Ok(())
+
+    pub(super) fn manifest_ref(self) -> String {
+        format!("erebor/promotions/{}/manifest", self.value)
+    }
+
+    pub(super) fn preimage_ref(self, volume_id: &str) -> String {
+        format!(
+            "erebor/promotions/{}/volumes/{volume_id}/preimage",
+            self.value
+        )
+    }
+
+    fn invalid<T>(promotion_id: &str, reason: &str) -> Result<T> {
+        InvalidPromotionIdSnafu {
+            promotion_id: promotion_id.to_owned(),
+            reason: reason.to_owned(),
+        }
+        .fail()
+    }
 }
 
-pub fn promotion_manifest_ref(promotion_id: &str) -> Result<String> {
-    validate_promotion_id(promotion_id)?;
-    Ok(format!("erebor/promotions/{promotion_id}/manifest"))
-}
-
-pub fn promotion_preimage_ref(promotion_id: &str, volume_id: &str) -> Result<String> {
-    validate_promotion_id(promotion_id)?;
-    Ok(format!(
-        "erebor/promotions/{promotion_id}/volumes/{volume_id}/preimage"
-    ))
-}
-
-pub(super) fn volume_for_id<'a>(
+pub(super) struct PromotionStorageLookup<'a> {
     storage: &'a FilesystemSessionStorage,
-    volume_id: &str,
-) -> Result<&'a FilesystemVolumeStorage> {
-    storage
-        .volumes()
-        .iter()
-        .find(|volume| volume.id() == volume_id)
-        .ok_or_else(|| crate::FilesystemError::UnsupportedLayer {
-            volume_id: volume_id.to_owned(),
-            reason: String::from("promotion references an unknown volume"),
-            location: Location::default(),
-        })
 }
 
-pub(super) fn manifest_for_volume<'a>(
-    manifests: &'a [FilesystemLayerManifest],
-    volume: &FilesystemVolumeStorage,
-) -> Result<&'a FilesystemLayerManifest> {
-    manifests
-        .iter()
-        .find(|manifest| manifest.volume_id == volume.id())
-        .ok_or_else(|| crate::FilesystemError::UnsupportedLayer {
-            volume_id: volume.id().to_owned(),
-            reason: String::from("missing normalized layer manifest for promotion"),
-            location: Location::default(),
-        })
-}
-
-fn invalid_promotion_id(promotion_id: &str, reason: &str) -> Result<()> {
-    InvalidPromotionIdSnafu {
-        promotion_id: promotion_id.to_owned(),
-        reason: reason.to_owned(),
+impl<'a> PromotionStorageLookup<'a> {
+    pub(super) const fn new(storage: &'a FilesystemSessionStorage) -> Self {
+        Self { storage }
     }
-    .fail()
+
+    pub(super) fn volume(&self, volume_id: &str) -> Result<&'a FilesystemVolumeStorage> {
+        self.storage
+            .volumes()
+            .iter()
+            .find(|volume| volume.id() == volume_id)
+            .ok_or_else(|| crate::FilesystemError::UnsupportedLayer {
+                volume_id: volume_id.to_owned(),
+                reason: String::from("promotion references an unknown volume"),
+                location: Location::default(),
+            })
+    }
+}
+
+pub(super) struct PromotionLayerLookup<'a> {
+    manifests: &'a [FilesystemLayerManifest],
+}
+
+impl<'a> PromotionLayerLookup<'a> {
+    pub(super) const fn new(manifests: &'a [FilesystemLayerManifest]) -> Self {
+        Self { manifests }
+    }
+
+    pub(super) fn manifest_for_volume(
+        &self,
+        volume: &FilesystemVolumeStorage,
+    ) -> Result<&'a FilesystemLayerManifest> {
+        self.manifests
+            .iter()
+            .find(|manifest| manifest.volume_id == volume.id())
+            .ok_or_else(|| crate::FilesystemError::UnsupportedLayer {
+                volume_id: volume.id().to_owned(),
+                reason: String::from("missing normalized layer manifest for promotion"),
+                location: Location::default(),
+            })
+    }
 }

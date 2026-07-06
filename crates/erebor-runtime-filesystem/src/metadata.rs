@@ -24,228 +24,259 @@ const OVERLAY_XATTRS: &[&str] = &[
     "user.overlay.origin",
 ];
 
-pub(crate) fn layer_metadata(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<FilesystemLayerMetadata> {
-    Ok(FilesystemLayerMetadata {
-        mode: metadata.mode(),
-        uid: metadata.uid(),
-        gid: metadata.gid(),
-        size: metadata.len(),
-        mtime_sec: metadata.mtime(),
-        mtime_nsec: metadata.mtime_nsec(),
-        xattrs: restorable_xattrs(path)?,
-    })
+pub(crate) struct FilesystemMetadataReader<'a> {
+    path: &'a Path,
+    metadata: &'a fs::Metadata,
 }
 
-pub(crate) fn host_metadata(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<FilesystemHostMetadata> {
-    Ok(FilesystemHostMetadata {
-        file_type: file_type(metadata),
-        mode: metadata.mode(),
-        uid: metadata.uid(),
-        gid: metadata.gid(),
-        size: metadata.len(),
-        mtime_sec: metadata.mtime(),
-        mtime_nsec: metadata.mtime_nsec(),
-        device: metadata.dev(),
-        inode: metadata.ino(),
-        xattrs: restorable_xattrs(path)?,
-    })
-}
-
-pub(crate) fn apply_layer_metadata(path: &Path, metadata: &FilesystemLayerMetadata) -> Result<()> {
-    apply_metadata(
-        path,
-        metadata.mode,
-        metadata.uid,
-        metadata.gid,
-        metadata.mtime_sec,
-        metadata.mtime_nsec,
-        &metadata.xattrs,
-    )
-}
-
-pub(crate) fn apply_host_metadata(path: &Path, metadata: &FilesystemHostMetadata) -> Result<()> {
-    apply_metadata(
-        path,
-        metadata.mode,
-        metadata.uid,
-        metadata.gid,
-        metadata.mtime_sec,
-        metadata.mtime_nsec,
-        &metadata.xattrs,
-    )
-}
-
-pub(crate) fn copy_path_metadata(source: &Path, target: &Path) -> Result<()> {
-    let metadata = fs::symlink_metadata(source).context(PromotionIoSnafu {
-        action: "inspect source metadata",
-        path: source,
-    })?;
-    let metadata = host_metadata(source, &metadata)?;
-    apply_host_metadata(target, &metadata)
-}
-
-fn apply_metadata(
-    path: &Path,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-    mtime_sec: i64,
-    mtime_nsec: i64,
-    xattrs: &[FilesystemXattr],
-) -> Result<()> {
-    apply_ownership(path, uid, gid)?;
-    apply_xattrs(path, xattrs)?;
-    apply_mode(path, mode)?;
-    apply_mtime(path, mtime_sec, mtime_nsec)
-}
-
-fn apply_ownership(path: &Path, uid: u32, gid: u32) -> Result<()> {
-    let current = fs::symlink_metadata(path).context(PromotionIoSnafu {
-        action: "inspect restored metadata owner",
-        path,
-    })?;
-    if current.uid() == uid && current.gid() == gid {
-        return Ok(());
+impl<'a> FilesystemMetadataReader<'a> {
+    pub(crate) const fn new(path: &'a Path, metadata: &'a fs::Metadata) -> Self {
+        Self { path, metadata }
     }
-    chownat(
-        CWD,
-        path,
-        Some(Uid::from_raw(uid)),
-        Some(Gid::from_raw(gid)),
-        AtFlags::SYMLINK_NOFOLLOW,
-    )
-    .map_err(std::io::Error::from)
-    .context(PromotionIoSnafu {
-        action: "restore metadata owner",
-        path,
-    })
-}
 
-fn apply_mode(path: &Path, mode: u32) -> Result<()> {
-    if fs::symlink_metadata(path)
-        .context(PromotionIoSnafu {
-            action: "inspect restored metadata mode",
-            path,
-        })?
-        .file_type()
-        .is_symlink()
-    {
-        return Ok(());
+    pub(crate) fn layer_metadata(&self) -> Result<FilesystemLayerMetadata> {
+        Ok(FilesystemLayerMetadata {
+            mode: self.metadata.mode(),
+            uid: self.metadata.uid(),
+            gid: self.metadata.gid(),
+            size: self.metadata.len(),
+            mtime_sec: self.metadata.mtime(),
+            mtime_nsec: self.metadata.mtime_nsec(),
+            xattrs: self.restorable_xattrs()?,
+        })
     }
-    chmodat(
-        CWD,
-        path,
-        Mode::from_raw_mode(mode & 0o7777),
-        AtFlags::empty(),
-    )
-    .map_err(std::io::Error::from)
-    .context(PromotionIoSnafu {
-        action: "restore metadata mode",
-        path,
-    })
+
+    pub(crate) fn host_metadata(&self) -> Result<FilesystemHostMetadata> {
+        Ok(FilesystemHostMetadata {
+            file_type: self.file_type(),
+            mode: self.metadata.mode(),
+            uid: self.metadata.uid(),
+            gid: self.metadata.gid(),
+            size: self.metadata.len(),
+            mtime_sec: self.metadata.mtime(),
+            mtime_nsec: self.metadata.mtime_nsec(),
+            device: self.metadata.dev(),
+            inode: self.metadata.ino(),
+            xattrs: self.restorable_xattrs()?,
+        })
+    }
+
+    fn restorable_xattrs(&self) -> Result<Vec<FilesystemXattr>> {
+        let mut xattrs = Vec::new();
+        for name in self.list_xattrs()? {
+            if OVERLAY_XATTRS.contains(&name.as_str()) {
+                continue;
+            }
+            xattrs.push(FilesystemXattr {
+                value: self.read_xattr(&name)?,
+                name,
+            });
+        }
+        xattrs.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(xattrs)
+    }
+
+    fn list_xattrs(&self) -> Result<Vec<String>> {
+        let mut buffer = vec![0_u8; 8192];
+        loop {
+            match llistxattr(self.path, &mut buffer) {
+                Ok(len) => {
+                    buffer.truncate(len);
+                    return Ok(buffer
+                        .split(|byte| *byte == 0)
+                        .filter(|name| !name.is_empty())
+                        .map(|name| String::from_utf8_lossy(name).to_string())
+                        .collect());
+                }
+                Err(error) if Self::missing_or_unsupported(error) => return Ok(Vec::new()),
+                Err(Errno::RANGE) => buffer.resize(buffer.len() * 2, 0),
+                Err(source) => {
+                    return Err(std::io::Error::from(source))
+                        .context(ReadLayerPathSnafu { path: self.path });
+                }
+            }
+        }
+    }
+
+    fn read_xattr(&self, name: &str) -> Result<Vec<u8>> {
+        let mut buffer = vec![0_u8; 256];
+        loop {
+            match lgetxattr(self.path, name, &mut buffer) {
+                Ok(len) => {
+                    buffer.truncate(len);
+                    return Ok(buffer);
+                }
+                Err(Errno::RANGE) => buffer.resize(buffer.len() * 2, 0),
+                Err(source) => {
+                    return Err(std::io::Error::from(source))
+                        .context(InspectLayerPathSnafu { path: self.path });
+                }
+            }
+        }
+    }
+
+    fn file_type(&self) -> String {
+        if self.metadata.is_dir() {
+            String::from("directory")
+        } else if self.metadata.is_file() {
+            String::from("regular")
+        } else if self.metadata.file_type().is_symlink() {
+            String::from("symlink")
+        } else {
+            String::from("special")
+        }
+    }
+
+    const fn missing_or_unsupported(error: Errno) -> bool {
+        matches!(error, Errno::NODATA | Errno::NOTSUP)
+    }
 }
 
-fn apply_mtime(path: &Path, mtime_sec: i64, mtime_nsec: i64) -> Result<()> {
-    let times = Timestamps {
-        last_access: Timespec {
-            tv_sec: 0,
-            tv_nsec: UTIME_OMIT,
-        },
-        last_modification: Timespec {
-            tv_sec: mtime_sec,
-            tv_nsec: mtime_nsec as _,
-        },
-    };
-    utimensat(CWD, path, &times, AtFlags::SYMLINK_NOFOLLOW)
+pub(crate) struct FilesystemMetadataApplier<'a> {
+    path: &'a Path,
+}
+
+impl<'a> FilesystemMetadataApplier<'a> {
+    pub(crate) const fn new(path: &'a Path) -> Self {
+        Self { path }
+    }
+
+    pub(crate) fn apply_layer_metadata(&self, metadata: &FilesystemLayerMetadata) -> Result<()> {
+        self.apply_metadata(
+            metadata.mode,
+            metadata.uid,
+            metadata.gid,
+            metadata.mtime_sec,
+            metadata.mtime_nsec,
+            &metadata.xattrs,
+        )
+    }
+
+    pub(crate) fn apply_host_metadata(&self, metadata: &FilesystemHostMetadata) -> Result<()> {
+        self.apply_metadata(
+            metadata.mode,
+            metadata.uid,
+            metadata.gid,
+            metadata.mtime_sec,
+            metadata.mtime_nsec,
+            &metadata.xattrs,
+        )
+    }
+
+    fn apply_metadata(
+        &self,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+        mtime_sec: i64,
+        mtime_nsec: i64,
+        xattrs: &[FilesystemXattr],
+    ) -> Result<()> {
+        self.apply_ownership(uid, gid)?;
+        self.apply_xattrs(xattrs)?;
+        self.apply_mode(mode)?;
+        self.apply_mtime(mtime_sec, mtime_nsec)
+    }
+
+    fn apply_ownership(&self, uid: u32, gid: u32) -> Result<()> {
+        let current = fs::symlink_metadata(self.path).context(PromotionIoSnafu {
+            action: "inspect restored metadata owner",
+            path: self.path,
+        })?;
+        if current.uid() == uid && current.gid() == gid {
+            return Ok(());
+        }
+        chownat(
+            CWD,
+            self.path,
+            Some(Uid::from_raw(uid)),
+            Some(Gid::from_raw(gid)),
+            AtFlags::SYMLINK_NOFOLLOW,
+        )
         .map_err(std::io::Error::from)
         .context(PromotionIoSnafu {
-            action: "restore metadata mtime",
-            path,
+            action: "restore metadata owner",
+            path: self.path,
         })
-}
+    }
 
-fn apply_xattrs(path: &Path, xattrs: &[FilesystemXattr]) -> Result<()> {
-    for xattr in xattrs {
-        lsetxattr(path, xattr.name.as_str(), &xattr.value, XattrFlags::empty())
+    fn apply_mode(&self, mode: u32) -> Result<()> {
+        if fs::symlink_metadata(self.path)
+            .context(PromotionIoSnafu {
+                action: "inspect restored metadata mode",
+                path: self.path,
+            })?
+            .file_type()
+            .is_symlink()
+        {
+            return Ok(());
+        }
+        chmodat(
+            CWD,
+            self.path,
+            Mode::from_raw_mode(mode & 0o7777),
+            AtFlags::empty(),
+        )
+        .map_err(std::io::Error::from)
+        .context(PromotionIoSnafu {
+            action: "restore metadata mode",
+            path: self.path,
+        })
+    }
+
+    fn apply_mtime(&self, mtime_sec: i64, mtime_nsec: i64) -> Result<()> {
+        let times = Timestamps {
+            last_access: Timespec {
+                tv_sec: 0,
+                tv_nsec: UTIME_OMIT,
+            },
+            last_modification: Timespec {
+                tv_sec: mtime_sec,
+                tv_nsec: mtime_nsec as _,
+            },
+        };
+        utimensat(CWD, self.path, &times, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(std::io::Error::from)
+            .context(PromotionIoSnafu {
+                action: "restore metadata mtime",
+                path: self.path,
+            })
+    }
+
+    fn apply_xattrs(&self, xattrs: &[FilesystemXattr]) -> Result<()> {
+        for xattr in xattrs {
+            lsetxattr(
+                self.path,
+                xattr.name.as_str(),
+                &xattr.value,
+                XattrFlags::empty(),
+            )
             .map_err(std::io::Error::from)
             .context(PromotionIoSnafu {
                 action: "restore metadata xattr",
-                path,
+                path: self.path,
             })?;
-    }
-    Ok(())
-}
-
-fn restorable_xattrs(path: &Path) -> Result<Vec<FilesystemXattr>> {
-    let mut xattrs = Vec::new();
-    for name in list_xattrs(path)? {
-        if OVERLAY_XATTRS.contains(&name.as_str()) {
-            continue;
         }
-        xattrs.push(FilesystemXattr {
-            value: read_xattr(path, &name)?,
-            name,
-        });
-    }
-    xattrs.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(xattrs)
-}
-
-fn list_xattrs(path: &Path) -> Result<Vec<String>> {
-    let mut buffer = vec![0_u8; 8192];
-    loop {
-        match llistxattr(path, &mut buffer) {
-            Ok(len) => {
-                buffer.truncate(len);
-                return Ok(buffer
-                    .split(|byte| *byte == 0)
-                    .filter(|name| !name.is_empty())
-                    .map(|name| String::from_utf8_lossy(name).to_string())
-                    .collect());
-            }
-            Err(error) if missing_or_unsupported(error) => return Ok(Vec::new()),
-            Err(Errno::RANGE) => buffer.resize(buffer.len() * 2, 0),
-            Err(source) => {
-                return Err(std::io::Error::from(source)).context(ReadLayerPathSnafu { path });
-            }
-        }
+        Ok(())
     }
 }
 
-fn read_xattr(path: &Path, name: &str) -> Result<Vec<u8>> {
-    let mut buffer = vec![0_u8; 256];
-    loop {
-        match lgetxattr(path, name, &mut buffer) {
-            Ok(len) => {
-                buffer.truncate(len);
-                return Ok(buffer);
-            }
-            Err(Errno::RANGE) => buffer.resize(buffer.len() * 2, 0),
-            Err(source) => {
-                return Err(std::io::Error::from(source)).context(InspectLayerPathSnafu { path });
-            }
-        }
+pub(crate) struct FilesystemPathMetadataCopier<'a> {
+    source: &'a Path,
+    target: &'a Path,
+}
+
+impl<'a> FilesystemPathMetadataCopier<'a> {
+    pub(crate) const fn new(source: &'a Path, target: &'a Path) -> Self {
+        Self { source, target }
     }
-}
 
-fn missing_or_unsupported(error: Errno) -> bool {
-    matches!(error, Errno::NODATA | Errno::NOTSUP)
-}
-
-fn file_type(metadata: &fs::Metadata) -> String {
-    if metadata.is_dir() {
-        String::from("directory")
-    } else if metadata.is_file() {
-        String::from("regular")
-    } else if metadata.file_type().is_symlink() {
-        String::from("symlink")
-    } else {
-        String::from("special")
+    pub(crate) fn copy(&self) -> Result<()> {
+        let metadata = fs::symlink_metadata(self.source).context(PromotionIoSnafu {
+            action: "inspect source metadata",
+            path: self.source,
+        })?;
+        let metadata = FilesystemMetadataReader::new(self.source, &metadata).host_metadata()?;
+        FilesystemMetadataApplier::new(self.target).apply_host_metadata(&metadata)
     }
 }

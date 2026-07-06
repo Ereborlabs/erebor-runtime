@@ -3,18 +3,20 @@ use std::{fs, path::PathBuf};
 use rustix::fs::{lsetxattr, XattrFlags};
 
 use crate::{
-    normalizer::normalize_session_layers,
-    ostree::OstreeCommandOutput,
+    ostree::OstreeTreeCommit,
     promotion::{
-        io::write_promotion_manifest, journal::PromotionJournal, promote_with_hook,
-        rollback_promotion_with_runner, FilesystemPromotionManifest, FilesystemPromotionOptions,
-        FilesystemPromotionState, PromotionHook,
+        ids::PromotionId, io::PromotionManifestStore, journal::PromotionJournal,
+        FilesystemPromotionManifest, FilesystemPromotionOptions, FilesystemPromotionState,
+        FilesystemRollback, PromotionHook,
     },
     FilesystemError,
 };
 
 use super::{
-    support::{commit_checkpoint, fixture, FakeOstreeRunner, TestResult},
+    support::{
+        commit_checkpoint, fixture, FakeOstreeOutcome, FakeOstreeRepository, PromotionTestWorkflow,
+        TestResult,
+    },
     NoopHook,
 };
 
@@ -30,26 +32,29 @@ fn metadata_sidecars_are_audited_without_blocking_promotion() -> TestResult {
         XattrFlags::empty(),
     )
     .map_err(std::io::Error::from)?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
+    let manifests = fixture.storage.normalize_layers()?;
     assert!(!manifests[0].metadata_sidecars.is_empty());
-    let runner = FakeOstreeRunner::successful();
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
 
-    promote_with_hook(
+    PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    )?;
+    )
+    .promote()?;
 
     assert_eq!(
         fs::read_to_string(fixture.host().join("settings.json"))?,
         "changed\n"
     );
-    rollback_promotion_with_runner(&fixture.storage, "session-1", &runner)?;
+    FilesystemRollback::rollback_promotion_using_repository(
+        &fixture.storage,
+        "session-1",
+        &runner,
+    )?;
     assert_eq!(
         fs::read_to_string(fixture.host().join("settings.json"))?,
         "original\n"
@@ -62,24 +67,23 @@ fn promotion_manifest_commit_failure_before_apply_leaves_host_unchanged() -> Tes
     let fixture = fixture()?;
     fixture.seed_host("settings.json", "original\n")?;
     fs::write(fixture.upper().join("settings.json"), "changed\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::with_outputs(vec![
-        OstreeCommandOutput::new(true, Some(0), ""),
-        OstreeCommandOutput::new(true, Some(0), ""),
-        OstreeCommandOutput::new(true, Some(0), ""),
-        OstreeCommandOutput::new(false, Some(44), "pre-apply manifest failed"),
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::from_outcomes(vec![
+        FakeOstreeOutcome::success(),
+        FakeOstreeOutcome::success(),
+        FakeOstreeOutcome::success(),
+        FakeOstreeOutcome::failed(Some(44), "pre-apply manifest failed"),
     ]);
     commit_checkpoint(&fixture, &manifests, &runner)?;
 
-    let result = promote_with_hook(
+    let result = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    );
+    )
+    .promote();
 
     assert!(matches!(
         result,
@@ -103,26 +107,25 @@ fn final_manifest_commit_failure_keeps_rollback_possible() -> TestResult {
     let fixture = fixture()?;
     fixture.seed_host("settings.json", "original\n")?;
     fs::write(fixture.upper().join("settings.json"), "changed\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::with_outputs(vec![
-        OstreeCommandOutput::new(true, Some(0), ""),
-        OstreeCommandOutput::new(true, Some(0), ""),
-        OstreeCommandOutput::new(true, Some(0), ""),
-        OstreeCommandOutput::new(true, Some(0), ""),
-        OstreeCommandOutput::new(true, Some(0), ""),
-        OstreeCommandOutput::new(false, Some(45), "final manifest failed"),
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::from_outcomes(vec![
+        FakeOstreeOutcome::success(),
+        FakeOstreeOutcome::success(),
+        FakeOstreeOutcome::success(),
+        FakeOstreeOutcome::success(),
+        FakeOstreeOutcome::success(),
+        FakeOstreeOutcome::failed(Some(45), "final manifest failed"),
     ]);
     commit_checkpoint(&fixture, &manifests, &runner)?;
 
-    let result = promote_with_hook(
+    let result = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    );
+    )
+    .promote();
 
     assert!(matches!(
         result,
@@ -135,7 +138,11 @@ fn final_manifest_commit_failure_keeps_rollback_possible() -> TestResult {
         fs::read_to_string(fixture.host().join("settings.json"))?,
         "changed\n"
     );
-    rollback_promotion_with_runner(&fixture.storage, "session-1", &runner)?;
+    FilesystemRollback::rollback_promotion_using_repository(
+        &fixture.storage,
+        "session-1",
+        &runner,
+    )?;
     assert_eq!(
         fs::read_to_string(fixture.host().join("settings.json"))?,
         "original\n"
@@ -148,22 +155,21 @@ fn promotion_applies_committed_layer_after_upperdir_mutation() -> TestResult {
     let fixture = fixture()?;
     fixture.seed_host("settings.json", "original\n")?;
     fs::write(fixture.upper().join("settings.json"), "checkpoint\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
     let hook = UpperdirDriftHook {
         path: fixture.upper().join("settings.json"),
     };
 
-    promote_with_hook(
+    PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &hook,
-    )?;
+    )
+    .promote()?;
 
     assert_eq!(
         fs::read_to_string(fixture.host().join("settings.json"))?,
@@ -177,22 +183,25 @@ fn rollback_uses_committed_preimage_after_workdir_deleted() -> TestResult {
     let fixture = fixture()?;
     fixture.seed_host("settings.json", "original\n")?;
     fs::write(fixture.upper().join("settings.json"), "changed\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
 
-    promote_with_hook(
+    PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    )?;
+    )
+    .promote()?;
     fs::remove_dir_all(fixture.storage.work_path().join("promotions/session-1"))?;
 
-    rollback_promotion_with_runner(&fixture.storage, "session-1", &runner)?;
+    FilesystemRollback::rollback_promotion_using_repository(
+        &fixture.storage,
+        "session-1",
+        &runner,
+    )?;
 
     assert_eq!(
         fs::read_to_string(fixture.host().join("settings.json"))?,
@@ -211,17 +220,21 @@ fn rollback_refuses_preimage_committed_manifest_without_applied_journal() -> Tes
         FilesystemPromotionState::PreimageCommitted,
         Vec::new(),
     );
-    write_promotion_manifest(&root.join("manifest"), &manifest)?;
-    let runner = FakeOstreeRunner::successful();
-    crate::checkpoint::commit_tree(
-        &runner,
+    PromotionManifestStore::new(&root.join("manifest")).write_promotion(&manifest)?;
+    let runner = FakeOstreeRepository::successful();
+    OstreeTreeCommit::new(
         fixture.storage.repo_path(),
-        &crate::promotion_manifest_ref("session-1")?,
+        &PromotionId::new("session-1")?.manifest_ref(),
         &root.join("manifest"),
         "commit promotion manifest",
         "test preimage committed promotion manifest",
-    )?;
-    let result = rollback_promotion_with_runner(&fixture.storage, "session-1", &runner);
+    )
+    .commit(&runner)?;
+    let result = FilesystemRollback::rollback_promotion_using_repository(
+        &fixture.storage,
+        "session-1",
+        &runner,
+    );
 
     assert!(matches!(
         result,

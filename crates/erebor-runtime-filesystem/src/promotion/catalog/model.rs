@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use super::state::CatalogTargetKey;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct FilesystemTransactionCatalog {
     transactions: Vec<FilesystemTransaction>,
@@ -181,6 +183,33 @@ pub enum FilesystemSubtransactionState {
 pub enum FilesystemTransactionTarget {
     Transaction(FilesystemTransaction),
     Subtransaction(FilesystemSubtransaction),
+}
+
+impl FilesystemTransactionTarget {
+    pub(super) fn catalog_key(&self) -> CatalogTargetKey {
+        match self {
+            Self::Transaction(transaction) => {
+                CatalogTargetKey::transaction(transaction.promotion_id())
+            }
+            Self::Subtransaction(subtransaction) => CatalogTargetKey::subtransaction(
+                subtransaction.promotion_id(),
+                subtransaction.volume_id(),
+            ),
+        }
+    }
+
+    pub(super) fn selected_volumes(&self) -> Vec<String> {
+        match self {
+            Self::Transaction(transaction) => transaction
+                .subtransactions()
+                .iter()
+                .map(|subtransaction| subtransaction.volume_id().to_owned())
+                .collect(),
+            Self::Subtransaction(subtransaction) => {
+                vec![subtransaction.volume_id().to_owned()]
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

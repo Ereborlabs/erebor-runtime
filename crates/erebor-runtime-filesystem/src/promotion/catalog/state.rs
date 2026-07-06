@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -12,14 +12,14 @@ use crate::{
     FilesystemSessionStorage, Result,
 };
 
-use super::journal::{append_rename_event, append_rollback_event, CatalogRollbackJournal};
+use super::journal::{CatalogRollbackJournal, TransactionCatalogJournal};
 
 const CATALOG_DIR: &str = "transaction-catalog";
 const CATALOG_FILE: &str = "erebor-transaction-catalog.json";
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub(super) struct CatalogState {
-    #[serde(default = "catalog_version")]
+    #[serde(default = "CatalogState::current_version")]
     version: u32,
     #[serde(default)]
     names: Vec<CatalogName>,
@@ -27,31 +27,23 @@ pub(super) struct CatalogState {
     restored: Vec<CatalogRestoredSubtransaction>,
 }
 
+impl Default for CatalogState {
+    fn default() -> Self {
+        Self {
+            version: Self::current_version(),
+            names: Vec::new(),
+            restored: Vec::new(),
+        }
+    }
+}
+
 impl CatalogState {
     pub(super) fn read(storage: &FilesystemSessionStorage) -> Result<Self> {
-        let path = catalog_path(storage);
-        if !path.exists() {
-            return Ok(Self {
-                version: catalog_version(),
-                ..Self::default()
-            });
-        }
-        let source = fs::read_to_string(&path).context(TransactionCatalogIoSnafu {
-            action: "read transaction catalog",
-            path: path.as_path(),
-        })?;
-        serde_json::from_str(&source).context(EncodeTransactionCatalogSnafu { path })
+        CatalogStateStore::new(storage).read()
     }
 
     pub(super) fn write(&self, storage: &FilesystemSessionStorage) -> Result<()> {
-        let path = catalog_path(storage);
-        create_parent(&path)?;
-        let source = serde_json::to_vec_pretty(self)
-            .context(EncodeTransactionCatalogSnafu { path: path.clone() })?;
-        fs::write(&path, source).context(TransactionCatalogIoSnafu {
-            action: "write transaction catalog",
-            path: path.as_path(),
-        })
+        CatalogStateStore::new(storage).write(self)
     }
 
     pub(super) fn name_for(&self, key: &CatalogTargetKey) -> Option<&str> {
@@ -82,7 +74,7 @@ impl CatalogState {
         self.restored.push(CatalogRestoredSubtransaction {
             promotion_id: promotion_id.to_owned(),
             volume_id: volume_id.to_owned(),
-            restored_at_unix_ms: unix_time_ms(),
+            restored_at_unix_ms: CatalogClock::unix_time_ms(),
         });
     }
 
@@ -92,7 +84,7 @@ impl CatalogState {
         selector: &str,
         name: &str,
     ) -> Result<()> {
-        append_rename_event(storage, selector, name)
+        TransactionCatalogJournal::new(storage).append_rename(selector, name)
     }
 
     pub(super) fn append_rollback_event(
@@ -100,7 +92,60 @@ impl CatalogState {
         storage: &FilesystemSessionStorage,
         event: CatalogRollbackJournal<'_>,
     ) -> Result<()> {
-        append_rollback_event(storage, event)
+        TransactionCatalogJournal::new(storage).append_rollback(event)
+    }
+
+    const fn current_version() -> u32 {
+        1
+    }
+}
+
+struct CatalogStateStore<'a> {
+    storage: &'a FilesystemSessionStorage,
+}
+
+impl<'a> CatalogStateStore<'a> {
+    const fn new(storage: &'a FilesystemSessionStorage) -> Self {
+        Self { storage }
+    }
+
+    fn read(&self) -> Result<CatalogState> {
+        let path = self.path();
+        if !path.exists() {
+            return Ok(CatalogState::default());
+        }
+        let source = fs::read_to_string(&path).context(TransactionCatalogIoSnafu {
+            action: "read transaction catalog",
+            path: path.as_path(),
+        })?;
+        serde_json::from_str(&source).context(EncodeTransactionCatalogSnafu { path })
+    }
+
+    fn write(&self, state: &CatalogState) -> Result<()> {
+        let path = self.path();
+        self.create_parent()?;
+        let source = serde_json::to_vec_pretty(state)
+            .context(EncodeTransactionCatalogSnafu { path: path.clone() })?;
+        fs::write(&path, source).context(TransactionCatalogIoSnafu {
+            action: "write transaction catalog",
+            path: path.as_path(),
+        })
+    }
+
+    fn path(&self) -> PathBuf {
+        self.catalog_dir().join(CATALOG_FILE)
+    }
+
+    fn catalog_dir(&self) -> PathBuf {
+        self.storage.root().join(CATALOG_DIR)
+    }
+
+    fn create_parent(&self) -> Result<()> {
+        let dir = self.catalog_dir();
+        fs::create_dir_all(&dir).context(TransactionCatalogIoSnafu {
+            action: "create transaction catalog directory",
+            path: dir.as_path(),
+        })
     }
 }
 
@@ -153,28 +198,12 @@ struct CatalogRestoredSubtransaction {
     restored_at_unix_ms: u64,
 }
 
-fn catalog_path(storage: &FilesystemSessionStorage) -> PathBuf {
-    catalog_dir(storage).join(CATALOG_FILE)
-}
+struct CatalogClock;
 
-fn catalog_dir(storage: &FilesystemSessionStorage) -> PathBuf {
-    storage.root().join(CATALOG_DIR)
-}
-
-fn create_parent(path: &Path) -> Result<()> {
-    let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
-    fs::create_dir_all(&parent).context(TransactionCatalogIoSnafu {
-        action: "create transaction catalog directory",
-        path: parent.as_path(),
-    })
-}
-
-fn catalog_version() -> u32 {
-    1
-}
-
-fn unix_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as u64)
+impl CatalogClock {
+    fn unix_time_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis() as u64)
+    }
 }

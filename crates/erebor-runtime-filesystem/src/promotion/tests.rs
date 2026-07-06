@@ -1,11 +1,9 @@
 use std::{fs, os::unix::net::UnixListener, path::PathBuf};
 
 use crate::{
-    normalizer::normalize_session_layers,
     promotion::{
         journal::{PromotionJournal, PromotionJournalState},
-        promote_with_hook, rollback_promotion, rollback_promotion_with_runner,
-        FilesystemPromotionOptions, PromotionHook, PREIMAGE_MANIFEST_FILE,
+        FilesystemPromotionOptions, FilesystemRollback, PromotionHook, PREIMAGE_MANIFEST_FILE,
     },
     FilesystemError, FilesystemPreimageEntryState,
 };
@@ -17,7 +15,9 @@ mod opaque;
 mod support;
 mod transaction_catalog;
 
-use support::{commit_checkpoint, fixture, FakeOstreeRunner, TestResult};
+use support::{
+    commit_checkpoint, fixture, FakeOstreeRepository, PromotionTestWorkflow, TestResult,
+};
 
 #[test]
 fn promotion_applies_and_rollback_restores_create_replace_delete() -> TestResult {
@@ -31,19 +31,18 @@ fn promotion_applies_and_rollback_restores_create_replace_delete() -> TestResult
     fs::write(fixture.upper().join(".wh.old-cache.txt"), "")?;
     fs::create_dir_all(fixture.upper().join("generated"))?;
     fs::write(fixture.upper().join("generated/token.txt"), "token\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
 
-    let promotion = promote_with_hook(
+    let promotion = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    )?;
+    )
+    .promote()?;
 
     assert_eq!(promotion.promotion_id(), "session-1");
     assert_eq!(
@@ -78,7 +77,11 @@ fn promotion_applies_and_rollback_restores_create_replace_delete() -> TestResult
             .any(|arg| arg == "--branch=erebor/promotions/session-1/manifest")
     }));
 
-    let rollback = rollback_promotion_with_runner(&fixture.storage, "session-1", &runner)?;
+    let rollback = FilesystemRollback::rollback_promotion_using_repository(
+        &fixture.storage,
+        "session-1",
+        &runner,
+    )?;
 
     assert_eq!(rollback.restored_volumes(), &[String::from("project")]);
     assert_eq!(
@@ -98,19 +101,18 @@ fn preimage_size_limit_blocks_before_host_mutation() -> TestResult {
     let fixture = fixture()?;
     fixture.seed_host("settings.json", "too-large\n")?;
     fs::write(fixture.upper().join("settings.json"), "changed\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
 
-    let result = promote_with_hook(
+    let result = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(2),
         &runner,
         &NoopHook,
-    );
+    )
+    .promote();
 
     assert!(matches!(
         result,
@@ -128,19 +130,18 @@ fn preimage_capture_failure_blocks_before_host_mutation() -> TestResult {
     let fixture = fixture()?;
     let listener = UnixListener::bind(fixture.host().join("old-cache.txt"))?;
     fs::write(fixture.upper().join(".wh.old-cache.txt"), "")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
 
-    let result = promote_with_hook(
+    let result = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &NoopHook,
-    );
+    )
+    .promote();
 
     drop(listener);
     assert!(matches!(
@@ -156,22 +157,21 @@ fn host_drift_after_preimage_commit_blocks_apply() -> TestResult {
     let fixture = fixture()?;
     fixture.seed_host("settings.json", "original\n")?;
     fs::write(fixture.upper().join("settings.json"), "changed\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let runner = FakeOstreeRepository::successful();
     commit_checkpoint(&fixture, &manifests, &runner)?;
     let hook = DriftHook {
         path: fixture.host().join("settings.json"),
     };
 
-    let result = promote_with_hook(
+    let result = PromotionTestWorkflow::new(
         &fixture.storage,
-        "session-1",
-        "erebor/checkpoints/session-1/manifest",
         &manifests,
         FilesystemPromotionOptions::new(1024 * 1024),
         &runner,
         &hook,
-    );
+    )
+    .promote();
 
     assert!(matches!(
         result,
@@ -195,7 +195,7 @@ fn rollback_refuses_incomplete_promotion_journal() -> TestResult {
         .push(String::from("project:settings.json"));
     journal.write(&root)?;
 
-    let result = rollback_promotion(&fixture.storage, "session-1");
+    let result = FilesystemRollback::rollback_promotion(&fixture.storage, "session-1");
 
     assert!(matches!(
         result,

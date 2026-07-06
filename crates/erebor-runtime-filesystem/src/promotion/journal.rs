@@ -68,62 +68,72 @@ impl PromotionJournal {
     }
 }
 
-pub(super) fn fail_if_existing_incomplete(root: &Path, promotion_id: &str) -> Result<()> {
-    let path = PromotionJournal::path(root);
-    if !path.exists() {
-        return Ok(());
-    }
-    let journal = PromotionJournal::read(root)?;
-    IncompletePromotionSnafu {
-        promotion_id: promotion_id.to_owned(),
-        reason: format!(
-            "existing journal state is {:?} with applied operations {:?}",
-            journal.state, journal.applied_operations
-        ),
-    }
-    .fail()
+pub(super) struct PromotionJournalVerifier<'a> {
+    promotion_id: &'a str,
 }
 
-pub(super) fn ensure_journal_applied(promotion_id: &str, journal: &PromotionJournal) -> Result<()> {
-    if journal.state != PromotionJournalState::Applied {
-        return IncompletePromotionSnafu {
-            promotion_id: promotion_id.to_owned(),
+impl<'a> PromotionJournalVerifier<'a> {
+    pub(super) const fn new(promotion_id: &'a str) -> Self {
+        Self { promotion_id }
+    }
+
+    pub(super) fn fail_if_existing_incomplete(&self, root: &Path) -> Result<()> {
+        let path = PromotionJournal::path(root);
+        if !path.exists() {
+            return Ok(());
+        }
+        let journal = PromotionJournal::read(root)?;
+        IncompletePromotionSnafu {
+            promotion_id: self.promotion_id.to_owned(),
             reason: format!(
-                "journal state is {:?} with applied operations {:?}",
+                "existing journal state is {:?} with applied operations {:?}",
                 journal.state, journal.applied_operations
             ),
         }
-        .fail();
+        .fail()
     }
-    Ok(())
-}
 
-pub(super) fn ensure_manifest_applied(
-    promotion_id: &str,
-    manifest: &FilesystemPromotionManifest,
-) -> Result<()> {
-    if manifest.state != FilesystemPromotionState::Applied {
-        return IncompletePromotionSnafu {
-            promotion_id: promotion_id.to_owned(),
-            reason: format!("promotion manifest state is {:?}", manifest.state),
+    pub(super) fn ensure_journal_applied(&self, journal: &PromotionJournal) -> Result<()> {
+        if journal.state != PromotionJournalState::Applied {
+            return IncompletePromotionSnafu {
+                promotion_id: self.promotion_id.to_owned(),
+                reason: format!(
+                    "journal state is {:?} with applied operations {:?}",
+                    journal.state, journal.applied_operations
+                ),
+            }
+            .fail();
         }
-        .fail();
+        Ok(())
     }
-    Ok(())
-}
 
-pub(super) fn ensure_manifest_or_journal_applied(
-    promotion_id: &str,
-    manifest: &FilesystemPromotionManifest,
-    journal: Option<&PromotionJournal>,
-) -> Result<()> {
-    if manifest.state == FilesystemPromotionState::Applied {
-        return Ok(());
+    pub(super) fn ensure_manifest_applied(
+        &self,
+        manifest: &FilesystemPromotionManifest,
+    ) -> Result<()> {
+        if manifest.state != FilesystemPromotionState::Applied {
+            return IncompletePromotionSnafu {
+                promotion_id: self.promotion_id.to_owned(),
+                reason: format!("promotion manifest state is {:?}", manifest.state),
+            }
+            .fail();
+        }
+        Ok(())
     }
-    if journal.is_some_and(|journal| journal.state == PromotionJournalState::Applied) {
-        return Ok(());
+
+    pub(super) fn ensure_manifest_or_journal_applied(
+        &self,
+        manifest: &FilesystemPromotionManifest,
+        journal: Option<&PromotionJournal>,
+    ) -> Result<()> {
+        if manifest.state == FilesystemPromotionState::Applied {
+            return Ok(());
+        }
+        if journal.is_some_and(|journal| journal.state == PromotionJournalState::Applied) {
+            return Ok(());
+        }
+        self.ensure_manifest_applied(manifest)
     }
-    ensure_manifest_applied(promotion_id, manifest)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

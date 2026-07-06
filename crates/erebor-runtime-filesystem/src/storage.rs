@@ -3,17 +3,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use snafu::ResultExt;
+use snafu::{ensure, ResultExt};
 
 use crate::{
-    error::CreateStorageDirSnafu, manifest::LAYER_MANIFEST_FILE, FilesystemVolumeMode, Result,
+    error::{CreateStorageDirSnafu, InvalidVolumeIdSnafu, InvalidVolumePathSnafu},
+    manifest::LAYER_MANIFEST_FILE,
+    ostree::{OstreeRepository, SystemOstreeRepository},
+    FilesystemVolumeMode, Result,
 };
-
-mod ostree;
-mod validation;
-
-use ostree::initialize_ostree_repo;
-use validation::{validate_volume_id, validate_volume_path};
 
 const FILESYSTEM_DIR: &str = "filesystem";
 const REPO_DIR: &str = "repo";
@@ -51,9 +48,51 @@ impl FilesystemVolumeStorageRequest {
     }
 
     fn validate(&self) -> Result<()> {
-        validate_volume_id(&self.id)?;
-        validate_volume_path(&self.id, "host_path", &self.host_path)?;
-        validate_volume_path(&self.id, "session_path", &self.session_path)
+        self.validate_id()?;
+        self.validate_path("host_path", &self.host_path)?;
+        self.validate_path("session_path", &self.session_path)
+    }
+
+    fn validate_id(&self) -> Result<()> {
+        ensure!(
+            !self.id.trim().is_empty(),
+            InvalidVolumeIdSnafu {
+                id: self.id.clone(),
+                reason: String::from("id cannot be empty")
+            }
+        );
+        ensure!(
+            self.id.chars().all(
+                |character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
+            ),
+            InvalidVolumeIdSnafu {
+                id: self.id.clone(),
+                reason: String::from("id must be a safe single path component")
+            }
+        );
+        Ok(())
+    }
+
+    fn validate_path(&self, field: &'static str, path: &Path) -> Result<()> {
+        ensure!(
+            !path.as_os_str().is_empty(),
+            InvalidVolumePathSnafu {
+                volume_id: self.id.clone(),
+                field,
+                path: path.to_path_buf(),
+                reason: String::from("path cannot be empty")
+            }
+        );
+        ensure!(
+            path.is_absolute(),
+            InvalidVolumePathSnafu {
+                volume_id: self.id.clone(),
+                field,
+                path: path.to_path_buf(),
+                reason: String::from("path must be absolute")
+            }
+        );
+        Ok(())
     }
 }
 
@@ -70,15 +109,15 @@ impl FilesystemSessionStorage {
         session_dir: impl AsRef<Path>,
         volumes: impl IntoIterator<Item = FilesystemVolumeStorageRequest>,
     ) -> Result<Self> {
-        let volumes = volumes.into_iter().collect();
-        prepare_with_initializer(session_dir.as_ref(), volumes, initialize_ostree_repo)
+        FilesystemStoragePreparer::new(session_dir.as_ref(), volumes.into_iter().collect())
+            .prepare(|repo| SystemOstreeRepository.initialize(repo))
     }
 
     pub fn open_existing(
         session_dir: impl AsRef<Path>,
         volumes: impl IntoIterator<Item = FilesystemVolumeStorageRequest>,
     ) -> Result<Self> {
-        storage_plan(session_dir.as_ref(), volumes.into_iter().collect())
+        FilesystemStoragePreparer::new(session_dir.as_ref(), volumes.into_iter().collect()).plan()
     }
 
     #[must_use]
@@ -185,79 +224,90 @@ impl FilesystemOverlayStorage {
     }
 }
 
-pub(crate) fn prepare_with_initializer(
-    session_dir: &Path,
+pub(crate) struct FilesystemStoragePreparer<'a> {
+    session_dir: &'a Path,
     volumes: Vec<FilesystemVolumeStorageRequest>,
-    initialize_repo: impl FnOnce(&Path) -> Result<()>,
-) -> Result<FilesystemSessionStorage> {
-    let storage = storage_plan(session_dir, volumes)?;
-    for path in required_directories(&storage) {
-        fs::create_dir_all(&path).context(CreateStorageDirSnafu { path })?;
+}
+
+impl<'a> FilesystemStoragePreparer<'a> {
+    pub(crate) fn new(session_dir: &'a Path, volumes: Vec<FilesystemVolumeStorageRequest>) -> Self {
+        Self {
+            session_dir,
+            volumes,
+        }
     }
-    initialize_repo(&storage.repo_path)?;
-    Ok(storage)
-}
 
-fn storage_plan(
-    session_dir: &Path,
-    volumes: Vec<FilesystemVolumeStorageRequest>,
-) -> Result<FilesystemSessionStorage> {
-    let root = session_dir.join(FILESYSTEM_DIR);
-    let repo_path = root.join(REPO_DIR);
-    let work_path = root.join(WORK_DIR);
-    let volume_root = work_path.join(VOLUMES_DIR);
-    let volumes = volumes
-        .into_iter()
-        .map(|volume| volume_storage_plan(&volume_root, volume))
-        .collect::<Result<Vec<_>>>()?;
-
-    Ok(FilesystemSessionStorage {
-        root,
-        repo_path,
-        work_path,
-        volumes,
-    })
-}
-
-fn volume_storage_plan(
-    volume_root: &Path,
-    volume: FilesystemVolumeStorageRequest,
-) -> Result<FilesystemVolumeStorage> {
-    volume.validate()?;
-    let root = volume_root.join(&volume.id);
-    let lower_ro_path = root.join(LOWER_RO_DIR);
-    let overlay_root = root.join(OVERLAY_DIR);
-    let overlay = FilesystemOverlayStorage {
-        root: overlay_root.clone(),
-        upper_path: overlay_root.join(UPPER_DIR),
-        workdir_path: overlay_root.join(WORKDIR_DIR),
-        merged_path: overlay_root.join(MERGED_DIR),
-    };
-    Ok(FilesystemVolumeStorage {
-        id: volume.id,
-        host_path: volume.host_path,
-        session_path: volume.session_path,
-        root,
-        lower_ro_path,
-        overlay,
-        mode: volume.mode,
-    })
-}
-
-fn required_directories(storage: &FilesystemSessionStorage) -> Vec<PathBuf> {
-    let mut paths = vec![
-        storage.repo_path.clone(),
-        storage.work_path.join(VOLUMES_DIR),
-    ];
-    for volume in &storage.volumes {
-        paths.extend([
-            volume.lower_ro_path.clone(),
-            volume.overlay.upper_path.clone(),
-            volume.overlay.workdir_path.clone(),
-            volume.overlay.merged_path.clone(),
-        ]);
+    pub(crate) fn prepare(
+        self,
+        initialize_repo: impl FnOnce(&Path) -> Result<()>,
+    ) -> Result<FilesystemSessionStorage> {
+        let storage = self.plan()?;
+        for path in Self::required_directories(&storage) {
+            fs::create_dir_all(&path).context(CreateStorageDirSnafu { path })?;
+        }
+        initialize_repo(&storage.repo_path)?;
+        Ok(storage)
     }
-    paths
+
+    fn plan(self) -> Result<FilesystemSessionStorage> {
+        let root = self.session_dir.join(FILESYSTEM_DIR);
+        let repo_path = root.join(REPO_DIR);
+        let work_path = root.join(WORK_DIR);
+        let volume_root = work_path.join(VOLUMES_DIR);
+        let volumes = self
+            .volumes
+            .into_iter()
+            .map(|volume| Self::volume_plan(&volume_root, volume))
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(FilesystemSessionStorage {
+            root,
+            repo_path,
+            work_path,
+            volumes,
+        })
+    }
+
+    fn volume_plan(
+        volume_root: &Path,
+        volume: FilesystemVolumeStorageRequest,
+    ) -> Result<FilesystemVolumeStorage> {
+        volume.validate()?;
+        let root = volume_root.join(&volume.id);
+        let lower_ro_path = root.join(LOWER_RO_DIR);
+        let overlay_root = root.join(OVERLAY_DIR);
+        let overlay = FilesystemOverlayStorage {
+            root: overlay_root.clone(),
+            upper_path: overlay_root.join(UPPER_DIR),
+            workdir_path: overlay_root.join(WORKDIR_DIR),
+            merged_path: overlay_root.join(MERGED_DIR),
+        };
+        Ok(FilesystemVolumeStorage {
+            id: volume.id,
+            host_path: volume.host_path,
+            session_path: volume.session_path,
+            root,
+            lower_ro_path,
+            overlay,
+            mode: volume.mode,
+        })
+    }
+
+    fn required_directories(storage: &FilesystemSessionStorage) -> Vec<PathBuf> {
+        let mut paths = vec![
+            storage.repo_path.clone(),
+            storage.work_path.join(VOLUMES_DIR),
+        ];
+        for volume in &storage.volumes {
+            paths.extend([
+                volume.lower_ro_path.clone(),
+                volume.overlay.upper_path.clone(),
+                volume.overlay.workdir_path.clone(),
+                volume.overlay.merged_path.clone(),
+            ]);
+        }
+        paths
+    }
 }
 
 #[cfg(test)]

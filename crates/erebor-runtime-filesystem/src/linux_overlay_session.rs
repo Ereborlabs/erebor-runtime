@@ -17,6 +17,9 @@ use crate::{
     FilesystemSessionStorage, Result,
 };
 
+use plan::LinuxOverlaySessionPlanner;
+use script::LinuxOverlayWrapperScript;
+
 mod plan;
 mod script;
 
@@ -33,17 +36,12 @@ pub struct LinuxOverlaySessionView {
 
 impl LinuxOverlaySessionView {
     pub fn prepare(storage: &FilesystemSessionStorage) -> Result<Self> {
-        ensure_linux_platform()?;
-        ensure_required_commands()?;
+        LinuxOverlayHostRequirements::ensure()?;
 
-        let mounts = plan::prepare_mounts(storage)?;
+        let mounts = LinuxOverlaySessionPlanner::new(storage)?.prepare_mounts()?;
         let wrapper_path = storage.work_path().join(WRAPPER_FILE);
-        fs::write(&wrapper_path, script::render_wrapper(&mounts)).context(
-            WriteOverlayWrapperSnafu {
-                path: &wrapper_path,
-            },
-        )?;
-        set_wrapper_permissions(&wrapper_path)?;
+        LinuxOverlayWrapperFile::new(&wrapper_path)
+            .write(LinuxOverlayWrapperScript::new(&mounts))?;
 
         Ok(Self { wrapper_path })
     }
@@ -54,46 +52,72 @@ impl LinuxOverlaySessionView {
     }
 }
 
-fn ensure_linux_platform() -> Result<()> {
-    ensure!(
-        cfg!(target_os = "linux"),
-        UnsupportedOverlayPlatformSnafu {
-            platform: std::env::consts::OS
-        }
-    );
-    Ok(())
-}
+struct LinuxOverlayHostRequirements;
 
-fn ensure_required_commands() -> Result<()> {
-    for &command in REQUIRED_COMMANDS {
-        ensure!(
-            command_available(command),
-            MissingOverlayCommandSnafu { command }
-        );
+impl LinuxOverlayHostRequirements {
+    fn ensure() -> Result<()> {
+        Self::ensure_linux_platform()?;
+        Self::ensure_required_commands()
     }
-    Ok(())
+
+    fn ensure_linux_platform() -> Result<()> {
+        ensure!(
+            cfg!(target_os = "linux"),
+            UnsupportedOverlayPlatformSnafu {
+                platform: std::env::consts::OS
+            }
+        );
+        Ok(())
+    }
+
+    fn ensure_required_commands() -> Result<()> {
+        for &command in REQUIRED_COMMANDS {
+            ensure!(
+                Self::command_available(command),
+                MissingOverlayCommandSnafu { command }
+            );
+        }
+        Ok(())
+    }
+
+    fn command_available(command: &str) -> bool {
+        Command::new(command)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success())
+    }
 }
 
-fn command_available(command: &str) -> bool {
-    Command::new(command)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+struct LinuxOverlayWrapperFile<'a> {
+    path: &'a Path,
 }
 
-#[cfg(unix)]
-fn set_wrapper_permissions(path: &Path) -> Result<()> {
-    let mut permissions = fs::metadata(path)
-        .context(SetOverlayWrapperPermissionsSnafu { path })?
-        .permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(path, permissions).context(SetOverlayWrapperPermissionsSnafu { path })
-}
+impl<'a> LinuxOverlayWrapperFile<'a> {
+    const fn new(path: &'a Path) -> Self {
+        Self { path }
+    }
 
-#[cfg(not(unix))]
-fn set_wrapper_permissions(_path: &Path) -> Result<()> {
-    Ok(())
+    fn write(&self, script: LinuxOverlayWrapperScript<'_>) -> Result<()> {
+        fs::write(self.path, script.render())
+            .context(WriteOverlayWrapperSnafu { path: self.path })?;
+        self.set_permissions()
+    }
+
+    #[cfg(unix)]
+    fn set_permissions(&self) -> Result<()> {
+        let mut permissions = fs::metadata(self.path)
+            .context(SetOverlayWrapperPermissionsSnafu { path: self.path })?
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(self.path, permissions)
+            .context(SetOverlayWrapperPermissionsSnafu { path: self.path })
+    }
+
+    #[cfg(not(unix))]
+    fn set_permissions(&self) -> Result<()> {
+        Ok(())
+    }
 }

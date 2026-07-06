@@ -7,10 +7,15 @@ use std::{
 };
 
 use crate::{
-    checkpoint::commit_normalized_session_checkpoint_with_runner,
-    ostree::{OstreeCommandOutput, OstreeCommandRunner},
-    storage::prepare_with_initializer,
-    FilesystemError, FilesystemLayerManifest, FilesystemVolumeMode, FilesystemVolumeStorageRequest,
+    checkpoint::FilesystemCheckpointCommit,
+    metadata::FilesystemPathMetadataCopier,
+    ostree::{OstreeRepository, OstreeTreeCheckout, OstreeTreeCommit},
+    promotion::{
+        FilesystemPromotion, FilesystemPromotionOptions, PromotionHook, PromotionWorkflow,
+    },
+    storage::FilesystemStoragePreparer,
+    FilesystemError, FilesystemLayerManifest, FilesystemSessionStorage, FilesystemVolumeMode,
+    FilesystemVolumeStorageRequest,
 };
 
 pub(super) type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -64,7 +69,8 @@ pub(super) fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         &session_path,
         FilesystemVolumeMode::Writable,
     )?;
-    let storage = prepare_with_initializer(&root.join("session"), vec![request], |_| Ok(()))?;
+    let storage =
+        FilesystemStoragePreparer::new(&root.join("session"), vec![request]).prepare(|_| Ok(()))?;
     Ok(Fixture {
         storage,
         root,
@@ -75,15 +81,60 @@ pub(super) fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
 pub(super) fn commit_checkpoint(
     fixture: &Fixture,
     manifests: &[FilesystemLayerManifest],
-    runner: &FakeOstreeRunner,
+    repository: &FakeOstreeRepository,
 ) -> crate::Result<()> {
-    commit_normalized_session_checkpoint_with_runner(
+    FilesystemCheckpointCommit::commit_normalized_using_repository(
         &fixture.storage,
         "session-1",
         manifests,
-        runner,
+        repository,
     )?;
     Ok(())
+}
+
+pub(super) struct PromotionTestWorkflow<'a, H>
+where
+    H: PromotionHook,
+{
+    storage: &'a FilesystemSessionStorage,
+    manifests: &'a [FilesystemLayerManifest],
+    options: FilesystemPromotionOptions,
+    repository: &'a FakeOstreeRepository,
+    hook: &'a H,
+}
+
+impl<'a, H> PromotionTestWorkflow<'a, H>
+where
+    H: PromotionHook,
+{
+    pub(super) fn new(
+        storage: &'a FilesystemSessionStorage,
+        manifests: &'a [FilesystemLayerManifest],
+        options: FilesystemPromotionOptions,
+        repository: &'a FakeOstreeRepository,
+        hook: &'a H,
+    ) -> Self {
+        Self {
+            storage,
+            manifests,
+            options,
+            repository,
+            hook,
+        }
+    }
+
+    pub(super) fn promote(&self) -> crate::Result<FilesystemPromotion> {
+        PromotionWorkflow::new(
+            self.storage,
+            "session-1",
+            "erebor/checkpoints/session-1/manifest",
+            self.manifests,
+            self.options,
+            self.repository,
+            self.hook,
+        )
+        .promote()
+    }
 }
 
 fn nonce() -> u128 {
@@ -92,19 +143,19 @@ fn nonce() -> u128 {
         .map_or(0, |duration| duration.as_nanos())
 }
 
-pub(super) struct FakeOstreeRunner {
+pub(super) struct FakeOstreeRepository {
     pub commands: RefCell<Vec<Vec<String>>>,
-    outputs: RefCell<Vec<OstreeCommandOutput>>,
+    outcomes: RefCell<Vec<FakeOstreeOutcome>>,
     refs: RefCell<Vec<String>>,
     root: PathBuf,
 }
 
-impl FakeOstreeRunner {
+impl FakeOstreeRepository {
     pub(super) fn successful() -> Self {
-        Self::with_outputs(Vec::new())
+        Self::from_outcomes(Vec::new())
     }
 
-    pub(super) fn with_outputs(outputs: Vec<OstreeCommandOutput>) -> Self {
+    pub(super) fn from_outcomes(outcomes: Vec<FakeOstreeOutcome>) -> Self {
         let root = std::env::temp_dir().join(format!(
             "erebor-fake-ostree-{}-{}",
             std::process::id(),
@@ -113,7 +164,7 @@ impl FakeOstreeRunner {
         let _result = fs::remove_dir_all(&root);
         Self {
             commands: RefCell::new(Vec::new()),
-            outputs: RefCell::new(outputs),
+            outcomes: RefCell::new(outcomes),
             refs: RefCell::new(Vec::new()),
             root,
         }
@@ -123,71 +174,128 @@ impl FakeOstreeRunner {
         self.root.join("commits").join(ref_name)
     }
 
-    fn mirror_successful_command(&self, args: &[String]) -> crate::Result<()> {
-        match args.first().map(String::as_str) {
-            Some("commit") => self.mirror_commit(args),
-            Some("checkout") => self.mirror_checkout(args),
-            _ => Ok(()),
+    fn next_outcome(&self) -> FakeOstreeOutcome {
+        let mut outcomes = self.outcomes.borrow_mut();
+        if outcomes.is_empty() {
+            FakeOstreeOutcome::success()
+        } else {
+            outcomes.remove(0)
         }
     }
 
-    fn mirror_commit(&self, args: &[String]) -> crate::Result<()> {
-        let ref_name = arg_value(args, "--branch=")?;
-        let tree = PathBuf::from(arg_value(args, "--tree=dir=")?);
+    fn record_commit(&self, commit: &OstreeTreeCommit<'_>) {
+        self.commands.borrow_mut().push(vec![
+            String::from("commit"),
+            format!("--branch={}", commit.ref_name()),
+            format!("--tree=dir={}", commit.tree().display()),
+            format!("--subject={}", commit.subject()),
+        ]);
+    }
+
+    fn mirror_commit(&self, commit: &OstreeTreeCommit<'_>) -> crate::Result<()> {
         let mut refs = self.refs.borrow_mut();
-        if !refs.iter().any(|existing| existing == ref_name) {
-            refs.push(ref_name.to_owned());
+        if !refs.iter().any(|existing| existing == commit.ref_name()) {
+            refs.push(commit.ref_name().to_owned());
         }
-        copy_tree(&tree, &self.commit_path(ref_name))
+        copy_tree(commit.tree(), &self.commit_path(commit.ref_name()))
     }
 
-    fn mirror_checkout(&self, args: &[String]) -> crate::Result<()> {
-        let ref_name = args
-            .get(2)
-            .ok_or_else(|| test_io("fake ostree checkout missing ref", &self.root))?;
-        let target = args
-            .get(3)
-            .ok_or_else(|| test_io("fake ostree checkout missing target", &self.root))?;
-        copy_tree(&self.commit_path(ref_name), Path::new(target))
+    fn record_checkout(&self, checkout: &OstreeTreeCheckout<'_>) {
+        self.commands.borrow_mut().push(vec![
+            String::from("checkout"),
+            String::from("--user-mode"),
+            checkout.ref_name().to_owned(),
+            checkout.destination().display().to_string(),
+        ]);
+    }
+
+    fn mirror_checkout(&self, checkout: &OstreeTreeCheckout<'_>) -> crate::Result<()> {
+        copy_tree(
+            &self.commit_path(checkout.ref_name()),
+            checkout.destination(),
+        )
+    }
+
+    fn failure(
+        repo: &Path,
+        operation: &'static str,
+        outcome: FakeOstreeOutcome,
+    ) -> FilesystemError {
+        FilesystemError::OstreeCommandFailed {
+            repo: repo.to_path_buf(),
+            operation,
+            code: outcome.code,
+            stderr: outcome.stderr,
+            location: snafu::Location::default(),
+        }
     }
 }
 
-impl Drop for FakeOstreeRunner {
+impl Drop for FakeOstreeRepository {
     fn drop(&mut self) {
         let _result = fs::remove_dir_all(&self.root);
     }
 }
 
-impl OstreeCommandRunner for FakeOstreeRunner {
-    fn run(&self, _repo: &Path, args: &[String]) -> crate::Result<OstreeCommandOutput> {
-        self.commands.borrow_mut().push(args.to_owned());
-        if args.len() == 2 && args[0] == "refs" && args[1] == "--list" {
-            let mut refs = self.refs.borrow().clone();
-            refs.sort();
-            return Ok(OstreeCommandOutput::with_stdout(
-                true,
-                Some(0),
-                refs.join("\n"),
-                "",
-            ));
-        }
-        let mut outputs = self.outputs.borrow_mut();
-        let output = if outputs.is_empty() {
-            OstreeCommandOutput::new(true, Some(0), "")
+impl OstreeRepository for FakeOstreeRepository {
+    fn initialize(&self, _repo: &Path) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn commit_tree(&self, commit: &OstreeTreeCommit<'_>) -> crate::Result<()> {
+        self.record_commit(commit);
+        let outcome = self.next_outcome();
+        if outcome.success {
+            self.mirror_commit(commit)
         } else {
-            outputs.remove(0)
-        };
-        if output.success() {
-            self.mirror_successful_command(args)?;
+            Err(Self::failure(commit.repo(), commit.operation(), outcome))
         }
-        Ok(output)
+    }
+
+    fn checkout_tree(&self, checkout: &OstreeTreeCheckout<'_>) -> crate::Result<()> {
+        self.record_checkout(checkout);
+        let outcome = self.next_outcome();
+        if outcome.success {
+            self.mirror_checkout(checkout)
+        } else {
+            Err(Self::failure(
+                checkout.repo(),
+                checkout.operation(),
+                outcome,
+            ))
+        }
+    }
+
+    fn list_refs(&self, _repo: &Path) -> crate::Result<Vec<String>> {
+        let mut refs = self.refs.borrow().clone();
+        refs.sort();
+        Ok(refs)
     }
 }
 
-fn arg_value<'a>(args: &'a [String], prefix: &str) -> crate::Result<&'a str> {
-    args.iter()
-        .find_map(|arg| arg.strip_prefix(prefix))
-        .ok_or_else(|| test_io("fake ostree command missing argument", Path::new(prefix)))
+#[derive(Clone)]
+pub(super) struct FakeOstreeOutcome {
+    success: bool,
+    code: Option<i32>,
+    stderr: String,
+}
+
+impl FakeOstreeOutcome {
+    pub(super) fn success() -> Self {
+        Self {
+            success: true,
+            code: Some(0),
+            stderr: String::new(),
+        }
+    }
+
+    pub(super) fn failed(code: Option<i32>, stderr: &str) -> Self {
+        Self {
+            success: false,
+            code,
+            stderr: stderr.to_owned(),
+        }
+    }
 }
 
 fn copy_tree(source: &Path, target: &Path) -> crate::Result<()> {
@@ -210,20 +318,16 @@ fn copy_tree(source: &Path, target: &Path) -> crate::Result<()> {
         } else if metadata.is_file() {
             fs::copy(&source_path, &target_path)
                 .map_err(|source| test_io_source("copy fake tree file", &source_path, source))?;
-            crate::metadata::copy_path_metadata(&source_path, &target_path)?;
+            FilesystemPathMetadataCopier::new(&source_path, &target_path).copy()?;
         } else if metadata.file_type().is_symlink() {
             let link = fs::read_link(&source_path)
                 .map_err(|source| test_io_source("read fake tree symlink", &source_path, source))?;
             symlink(link, &target_path)
                 .map_err(|source| test_io_source("copy fake tree symlink", &target_path, source))?;
-            crate::metadata::copy_path_metadata(&source_path, &target_path)?;
+            FilesystemPathMetadataCopier::new(&source_path, &target_path).copy()?;
         }
     }
-    crate::metadata::copy_path_metadata(source, target)
-}
-
-fn test_io(reason: &'static str, path: &Path) -> FilesystemError {
-    test_io_source(reason, path, std::io::Error::other(reason))
+    FilesystemPathMetadataCopier::new(source, target).copy()
 }
 
 fn test_io_source(action: &'static str, path: &Path, source: std::io::Error) -> FilesystemError {

@@ -9,135 +9,127 @@ use super::{
     state::CatalogTargetKey,
 };
 
-pub(super) fn resolve_target(
-    catalog: &FilesystemTransactionCatalog,
-    selector: &str,
-) -> Result<FilesystemTransactionTarget> {
-    if let Some(target) = resolve_handle(catalog, selector) {
-        return Ok(target);
-    }
-    resolve_name(catalog, selector)
+pub(super) struct CatalogTargetResolver<'a> {
+    catalog: &'a FilesystemTransactionCatalog,
 }
 
-pub(super) fn target_key(target: &FilesystemTransactionTarget) -> CatalogTargetKey {
-    match target {
-        FilesystemTransactionTarget::Transaction(transaction) => {
-            CatalogTargetKey::transaction(transaction.promotion_id())
-        }
-        FilesystemTransactionTarget::Subtransaction(subtransaction) => {
-            CatalogTargetKey::subtransaction(
-                subtransaction.promotion_id(),
-                subtransaction.volume_id(),
-            )
-        }
+impl<'a> CatalogTargetResolver<'a> {
+    pub(super) const fn new(catalog: &'a FilesystemTransactionCatalog) -> Self {
+        Self { catalog }
     }
-}
 
-pub(super) fn selected_volumes(target: &FilesystemTransactionTarget) -> Vec<String> {
-    match target {
-        FilesystemTransactionTarget::Transaction(transaction) => transaction
-            .subtransactions()
-            .iter()
-            .map(|subtransaction| subtransaction.volume_id().to_owned())
-            .collect(),
-        FilesystemTransactionTarget::Subtransaction(subtransaction) => {
-            vec![subtransaction.volume_id().to_owned()]
+    pub(super) fn resolve(&self, selector: &str) -> Result<FilesystemTransactionTarget> {
+        if let Some(target) = self.resolve_handle(selector) {
+            return Ok(target);
         }
+        self.resolve_name(selector)
     }
-}
 
-pub(super) fn ensure_unique_name(
-    catalog: &FilesystemTransactionCatalog,
-    target: &CatalogTargetKey,
-    name: &str,
-) -> Result<()> {
-    let mut owners = BTreeSet::new();
-    for transaction in catalog.transactions() {
-        if transaction.name() == Some(name) {
-            owners.insert(CatalogTargetKey::transaction(transaction.promotion_id()));
-        }
-        for subtransaction in transaction.subtransactions() {
-            if subtransaction.name() == Some(name) {
-                owners.insert(CatalogTargetKey::subtransaction(
-                    transaction.promotion_id(),
-                    subtransaction.volume_id(),
-                ));
+    pub(super) fn ensure_unique_name(
+        &self,
+        target: &CatalogTargetKey,
+        name: &TransactionTargetName,
+    ) -> Result<()> {
+        let mut owners = BTreeSet::new();
+        for transaction in self.catalog.transactions() {
+            if transaction.name() == Some(name.as_str()) {
+                owners.insert(CatalogTargetKey::transaction(transaction.promotion_id()));
+            }
+            for subtransaction in transaction.subtransactions() {
+                if subtransaction.name() == Some(name.as_str()) {
+                    owners.insert(CatalogTargetKey::subtransaction(
+                        transaction.promotion_id(),
+                        subtransaction.volume_id(),
+                    ));
+                }
             }
         }
+        ensure!(
+            owners.is_empty() || owners == BTreeSet::from([target.clone()]),
+            crate::error::InvalidTransactionNameSnafu {
+                name: name.as_str().to_owned(),
+                reason: String::from("name is already used by another transaction target"),
+            }
+        );
+        Ok(())
     }
-    ensure!(
-        owners.is_empty() || owners == BTreeSet::from([target.clone()]),
-        crate::error::InvalidTransactionNameSnafu {
-            name: name.to_owned(),
-            reason: String::from("name is already used by another transaction target"),
-        }
-    );
-    Ok(())
-}
 
-pub(super) fn validate_name(name: &str) -> Result<String> {
-    let name = name.trim();
-    ensure!(
-        !name.is_empty() && !name.contains('\n'),
-        crate::error::InvalidTransactionNameSnafu {
-            name: name.to_owned(),
-            reason: String::from("name must be non-empty and single-line"),
-        }
-    );
-    Ok(name.to_owned())
-}
-
-fn resolve_handle(
-    catalog: &FilesystemTransactionCatalog,
-    selector: &str,
-) -> Option<FilesystemTransactionTarget> {
-    for transaction in catalog.transactions() {
-        if transaction.handle() == selector {
-            return Some(FilesystemTransactionTarget::Transaction(
-                transaction.clone(),
-            ));
-        }
-        for subtransaction in transaction.subtransactions() {
-            if subtransaction.handle() == selector {
-                return Some(FilesystemTransactionTarget::Subtransaction(
-                    subtransaction.clone(),
+    fn resolve_handle(&self, selector: &str) -> Option<FilesystemTransactionTarget> {
+        for transaction in self.catalog.transactions() {
+            if transaction.handle() == selector {
+                return Some(FilesystemTransactionTarget::Transaction(
+                    transaction.clone(),
                 ));
             }
-        }
-    }
-    None
-}
-
-fn resolve_name(
-    catalog: &FilesystemTransactionCatalog,
-    selector: &str,
-) -> Result<FilesystemTransactionTarget> {
-    let mut matches = Vec::new();
-    for transaction in catalog.transactions() {
-        if transaction.name() == Some(selector) {
-            matches.push(FilesystemTransactionTarget::Transaction(
-                transaction.clone(),
-            ));
-        }
-        for subtransaction in transaction.subtransactions() {
-            if subtransaction.name() == Some(selector) {
-                matches.push(FilesystemTransactionTarget::Subtransaction(
-                    subtransaction.clone(),
-                ));
+            for subtransaction in transaction.subtransactions() {
+                if subtransaction.handle() == selector {
+                    return Some(FilesystemTransactionTarget::Subtransaction(
+                        subtransaction.clone(),
+                    ));
+                }
             }
         }
+        None
     }
-    match matches.len() {
-        1 => Ok(matches.remove(0)),
-        0 => crate::error::InvalidTransactionHandleSnafu {
-            handle: selector.to_owned(),
-            reason: String::from("no transaction or subtransaction matches this handle or name"),
+
+    fn resolve_name(&self, selector: &str) -> Result<FilesystemTransactionTarget> {
+        let mut matches = Vec::new();
+        for transaction in self.catalog.transactions() {
+            if transaction.name() == Some(selector) {
+                matches.push(FilesystemTransactionTarget::Transaction(
+                    transaction.clone(),
+                ));
+            }
+            for subtransaction in transaction.subtransactions() {
+                if subtransaction.name() == Some(selector) {
+                    matches.push(FilesystemTransactionTarget::Subtransaction(
+                        subtransaction.clone(),
+                    ));
+                }
+            }
         }
-        .fail(),
-        _ => crate::error::InvalidTransactionHandleSnafu {
-            handle: selector.to_owned(),
-            reason: String::from("transaction or subtransaction name is ambiguous"),
+        match matches.len() {
+            1 => Ok(matches.remove(0)),
+            0 => crate::error::InvalidTransactionHandleSnafu {
+                handle: selector.to_owned(),
+                reason: String::from(
+                    "no transaction or subtransaction matches this handle or name",
+                ),
+            }
+            .fail(),
+            _ => crate::error::InvalidTransactionHandleSnafu {
+                handle: selector.to_owned(),
+                reason: String::from("transaction or subtransaction name is ambiguous"),
+            }
+            .fail(),
         }
-        .fail(),
+    }
+}
+
+pub(super) struct TransactionTargetName {
+    value: String,
+}
+
+impl TransactionTargetName {
+    pub(super) fn new(value: &str) -> Result<Self> {
+        let value = value.trim();
+        ensure!(
+            !value.is_empty() && !value.contains('\n'),
+            crate::error::InvalidTransactionNameSnafu {
+                name: value.to_owned(),
+                reason: String::from("name must be non-empty and single-line"),
+            }
+        );
+        Ok(Self {
+            value: value.to_owned(),
+        })
+    }
+
+    pub(super) fn as_str(&self) -> &str {
+        &self.value
+    }
+
+    pub(super) fn into_string(self) -> String {
+        self.value
     }
 }

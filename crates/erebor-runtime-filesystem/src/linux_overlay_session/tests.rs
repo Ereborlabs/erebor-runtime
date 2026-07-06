@@ -4,7 +4,7 @@ use std::{fs, path::Path};
 use std::os::unix::fs::PermissionsExt;
 
 use crate::{
-    storage::prepare_with_initializer, FilesystemError, FilesystemVolumeMode,
+    storage::FilesystemStoragePreparer, FilesystemError, FilesystemVolumeMode,
     FilesystemVolumeStorageRequest, LinuxOverlaySessionView,
 };
 
@@ -110,7 +110,8 @@ fn storage_for(
         session_path,
         FilesystemVolumeMode::Writable,
     )?;
-    prepare_with_initializer(&test_dir.join("session-record"), vec![request], |_| Ok(()))
+    FilesystemStoragePreparer::new(&test_dir.join("session-record"), vec![request])
+        .prepare(|_| Ok(()))
 }
 
 fn required_commands_available() -> bool {

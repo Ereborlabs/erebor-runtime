@@ -6,14 +6,10 @@ use std::{
 };
 
 use crate::{
-    checkpoint::{
-        checkpoint_manifest_ref, commit_normalized_session_checkpoint_with_runner,
-        volume_layer_ref, FilesystemCheckpointManifest,
-    },
+    checkpoint::{CheckpointId, FilesystemCheckpointCommit, FilesystemCheckpointManifest},
     manifest::{FilesystemLayerManifest, LAYER_MANIFEST_FILE},
-    normalizer::normalize_session_layers,
-    ostree::{OstreeCommandOutput, OstreeCommandRunner},
-    storage::prepare_with_initializer,
+    ostree::{OstreeRepository, OstreeTreeCheckout, OstreeTreeCommit},
+    storage::FilesystemStoragePreparer,
     FilesystemError, FilesystemVolumeMode, FilesystemVolumeStorageRequest,
 };
 use rustix::fs::{lsetxattr, XattrFlags};
@@ -23,15 +19,15 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 #[test]
 fn checkpoint_refs_are_hierarchical_and_do_not_create_base_ref() -> TestResult {
     assert_eq!(
-        checkpoint_manifest_ref("session-1")?,
+        CheckpointId::new("session-1")?.manifest_ref(),
         "erebor/checkpoints/session-1/manifest"
     );
     assert_eq!(
-        volume_layer_ref("session-1", "project")?,
+        CheckpointId::new("session-1")?.volume_layer_ref("project"),
         "erebor/checkpoints/session-1/volumes/project/layer"
     );
     assert!(matches!(
-        checkpoint_manifest_ref("bad/id"),
+        CheckpointId::new("bad/id").map(CheckpointId::manifest_ref),
         Err(FilesystemError::InvalidCheckpointId { .. })
     ));
     Ok(())
@@ -54,14 +50,14 @@ fn stages_layer_content_and_commits_checkpoint_refs() -> TestResult {
         fixture.upper().join("generated-token-shortcut"),
     )?;
     fs::write(fixture.upper().join(".wh.old-cache.txt"), "")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::successful();
+    let manifests = fixture.storage.normalize_layers()?;
+    let repository = FakeOstreeRepository::successful();
 
-    let commit = commit_normalized_session_checkpoint_with_runner(
+    let commit = FilesystemCheckpointCommit::commit_normalized_using_repository(
         &fixture.storage,
         "session-1",
         &manifests,
-        &runner,
+        &repository,
     )?;
 
     assert_eq!(commit.checkpoint_id(), "session-1");
@@ -104,7 +100,7 @@ fn stages_layer_content_and_commits_checkpoint_refs() -> TestResult {
         serde_json::from_str(&fs::read_to_string(commit.manifest_path())?)?;
     assert_eq!(manifest.checkpoint_id, "session-1");
     assert_eq!(manifest.volumes[0].layer_ref, commit.volumes()[0].layer_ref);
-    let commands = runner.commands.borrow();
+    let commands = repository.commands.borrow();
     assert_eq!(commands.len(), 2);
     assert!(commands.iter().flatten().all(|arg| !arg.contains("/base")));
     let layer_stage_arg = format!("--tree=dir={}", layer_stage.display());
@@ -126,18 +122,17 @@ fn stages_layer_content_and_commits_checkpoint_refs() -> TestResult {
 fn layer_commit_failure_is_typed() -> TestResult {
     let fixture = fixture()?;
     fs::write(fixture.upper().join("settings.json"), "changed\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::with_outputs(vec![OstreeCommandOutput::new(
-        false,
+    let manifests = fixture.storage.normalize_layers()?;
+    let repository = FakeOstreeRepository::from_outcomes(vec![FakeOstreeOutcome::failed(
         Some(42),
         "commit failed",
     )]);
 
-    let result = commit_normalized_session_checkpoint_with_runner(
+    let result = FilesystemCheckpointCommit::commit_normalized_using_repository(
         &fixture.storage,
         "session-1",
         &manifests,
-        &runner,
+        &repository,
     );
 
     match result {
@@ -160,17 +155,17 @@ fn layer_commit_failure_is_typed() -> TestResult {
 fn manifest_commit_failure_is_typed() -> TestResult {
     let fixture = fixture()?;
     fs::write(fixture.upper().join("settings.json"), "changed\n")?;
-    let manifests = normalize_session_layers(&fixture.storage)?;
-    let runner = FakeOstreeRunner::with_outputs(vec![
-        OstreeCommandOutput::new(true, Some(0), ""),
-        OstreeCommandOutput::new(false, Some(43), "manifest commit failed"),
+    let manifests = fixture.storage.normalize_layers()?;
+    let repository = FakeOstreeRepository::from_outcomes(vec![
+        FakeOstreeOutcome::success(),
+        FakeOstreeOutcome::failed(Some(43), "manifest commit failed"),
     ]);
 
-    let result = commit_normalized_session_checkpoint_with_runner(
+    let result = FilesystemCheckpointCommit::commit_normalized_using_repository(
         &fixture.storage,
         "session-1",
         &manifests,
-        &runner,
+        &repository,
     );
 
     match result {
@@ -234,7 +229,8 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         &session_path,
         FilesystemVolumeMode::Writable,
     )?;
-    let storage = prepare_with_initializer(&root.join("session"), vec![request], |_| Ok(()))?;
+    let storage =
+        FilesystemStoragePreparer::new(&root.join("session"), vec![request]).prepare(|_| Ok(()))?;
     Ok(Fixture {
         storage,
         root,
@@ -265,32 +261,89 @@ fn storage_tree_contains_file_named(root: &Path, name: &str) -> Result<bool, std
     Ok(false)
 }
 
-struct FakeOstreeRunner {
+struct FakeOstreeRepository {
     commands: RefCell<Vec<Vec<String>>>,
-    outputs: RefCell<Vec<OstreeCommandOutput>>,
+    outcomes: RefCell<Vec<FakeOstreeOutcome>>,
 }
 
-impl FakeOstreeRunner {
+impl FakeOstreeRepository {
     fn successful() -> Self {
-        Self::with_outputs(Vec::new())
+        Self::from_outcomes(Vec::new())
     }
 
-    fn with_outputs(outputs: Vec<OstreeCommandOutput>) -> Self {
+    fn from_outcomes(outcomes: Vec<FakeOstreeOutcome>) -> Self {
         Self {
             commands: RefCell::new(Vec::new()),
-            outputs: RefCell::new(outputs),
+            outcomes: RefCell::new(outcomes),
+        }
+    }
+
+    fn next_outcome(&self) -> FakeOstreeOutcome {
+        let mut outcomes = self.outcomes.borrow_mut();
+        if outcomes.is_empty() {
+            FakeOstreeOutcome::success()
+        } else {
+            outcomes.remove(0)
         }
     }
 }
 
-impl OstreeCommandRunner for FakeOstreeRunner {
-    fn run(&self, _repo: &std::path::Path, args: &[String]) -> crate::Result<OstreeCommandOutput> {
-        self.commands.borrow_mut().push(args.to_owned());
-        let mut outputs = self.outputs.borrow_mut();
-        if outputs.is_empty() {
-            Ok(OstreeCommandOutput::new(true, Some(0), ""))
+impl OstreeRepository for FakeOstreeRepository {
+    fn initialize(&self, _repo: &Path) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn commit_tree(&self, commit: &OstreeTreeCommit<'_>) -> crate::Result<()> {
+        self.commands.borrow_mut().push(vec![
+            String::from("commit"),
+            format!("--branch={}", commit.ref_name()),
+            format!("--tree=dir={}", commit.tree().display()),
+            format!("--subject={}", commit.subject()),
+        ]);
+        let outcome = self.next_outcome();
+        if outcome.success {
+            Ok(())
         } else {
-            Ok(outputs.remove(0))
+            Err(FilesystemError::OstreeCommandFailed {
+                repo: commit.repo().to_path_buf(),
+                operation: commit.operation(),
+                code: outcome.code,
+                stderr: outcome.stderr,
+                location: snafu::Location::default(),
+            })
+        }
+    }
+
+    fn checkout_tree(&self, _checkout: &OstreeTreeCheckout<'_>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn list_refs(&self, _repo: &Path) -> crate::Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Clone)]
+struct FakeOstreeOutcome {
+    success: bool,
+    code: Option<i32>,
+    stderr: String,
+}
+
+impl FakeOstreeOutcome {
+    fn success() -> Self {
+        Self {
+            success: true,
+            code: Some(0),
+            stderr: String::new(),
+        }
+    }
+
+    fn failed(code: Option<i32>, stderr: &str) -> Self {
+        Self {
+            success: false,
+            code,
+            stderr: stderr.to_owned(),
         }
     }
 }
