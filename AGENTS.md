@@ -48,6 +48,12 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
 - When implementing a documented phase, update the relevant plan/status
   document before final handoff with a detailed current-status note, explicit
   verification results, and a clear `Done`, `Not done`, or `Blocked` state.
+- Every implementation phase must add or update real code-backed tests. Put
+  crate-local tests beside the owner when behavior stays inside one crate; use
+  `erebor-runtime-e2e` fixtures when the behavior crosses crates, the CLI
+  binary, sessions, browsers, process mediation, or lifecycle boundaries.
+  Manual probes and shell scripts are evidence, not substitutes for committed
+  Rust tests.
 - No dead code, unused wiring, or placeholder skeletons that do not serve the
   current phase.
 - Readability-first file-size guidance: code files should usually stay around
@@ -55,7 +61,9 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
   not an absolute law. If splitting a cohesive owner, command family, or test
   scenario would make the code harder to follow, keep it together, document the
   reason in the phase result or review notes, and avoid adding unrelated
-  behavior to that file.
+  behavior to that file. A readable 700-line file with a clear responsibility
+  is preferable to several loosely organized 200-line files that fragment the
+  logic and make it harder to follow.
 - Ownership-first code shape is required. Domain behavior belongs on the struct
   that owns the state or behind a narrow trait at a real platform, runtime,
   protocol, policy, sink, or test-double seam. Loose production free functions

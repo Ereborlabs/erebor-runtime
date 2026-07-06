@@ -9,6 +9,12 @@
 - Do not add placeholders just to make a folder look complete.
 - Do not leave unused variables, dead code, test-only wiring in production code,
   or functions that are not plugged into the current behavior.
+- Every implementation phase needs real code-backed tests for the behavior it
+  changes. Put tests beside the crate owner when the behavior is crate-local;
+  put fixtures and tests in `erebor-runtime-e2e` when the proof crosses crates,
+  process boundaries, the CLI binary, browser/CDP, session mediation, or other
+  lifecycle boundaries. Shell probes and manual runs support the evidence but
+  do not replace committed Rust tests.
 - Keep file organization intentional: related structs can share a file; errors
   belong in each crate's `error.rs` or a thin `error.rs` module root with
   focused `error/*.rs` submodules when that improves readability; avoid
@@ -17,7 +23,9 @@
   absolute law. Prefer files around or under 300 lines when ownership remains
   clear, but do not split cohesive owners, command families, or scenario tests
   into tiny fragments just to satisfy a count. If a larger file is clearer,
-  document why and keep unrelated behavior out of it.
+  document why and keep unrelated behavior out of it. A readable 700-line file
+  with a clear responsibility is preferable to several loosely organized
+  200-line files that fragment the logic and make it harder to follow.
 - Keep sibling domain concepts in the same module family. If browser,
   terminal, and filesystem are all surfaces, they belong under the surface
   owner; if Docker and Linux-host are runners, they belong under the runner
