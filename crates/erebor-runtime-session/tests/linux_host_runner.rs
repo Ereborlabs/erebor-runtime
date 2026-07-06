@@ -13,8 +13,7 @@ mod linux_host {
     #[test]
     fn linux_host_runner_relaunches_diagnostic_through_process_guard(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let test_dir = test_dir("relaunch")?;
-        let policy_path = write_policy(&test_dir)?;
+        let fixture = LinuxHostRunnerFixture::new("relaunch")?;
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
@@ -41,8 +40,8 @@ mod linux_host {
                 }}
               }}
             }}"#,
-            policy_path.display(),
-            test_dir.display()
+            fixture.policy_path().display(),
+            fixture.test_dir().display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -56,17 +55,15 @@ mod linux_host {
         assert!(outcome.stdout().contains("guard=linux-ptrace"));
         assert!(outcome.stdout().contains("runner=linux-host"));
         assert!(outcome.stdout().contains("actor=openclaw"));
-        assert!(session_audit_path(&test_dir, "session-linux-host").exists());
+        assert!(fixture.session_audit_path("session-linux-host").exists());
 
-        fs::remove_dir_all(test_dir)?;
         Ok(())
     }
 
     #[test]
     fn linux_host_runner_suppresses_default_debug_sleep_audit(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let test_dir = test_dir("sleep-audit-filter")?;
-        let policy_path = write_policy(&test_dir)?;
+        let fixture = LinuxHostRunnerFixture::new("sleep-audit-filter")?;
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
@@ -89,8 +86,8 @@ mod linux_host {
                 }}
               }}
             }}"#,
-            policy_path.display(),
-            test_dir.display()
+            fixture.policy_path().display(),
+            fixture.test_dir().display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -102,22 +99,20 @@ mod linux_host {
         let outcome = SessionExecutionService::run_diagnostic(&config, &plan)?;
 
         assert!(outcome.stdout().is_empty());
-        let audit_path = session_audit_path(&test_dir, "session-linux-host-sleep-filter");
+        let audit_path = fixture.session_audit_path("session-linux-host-sleep-filter");
         if audit_path.exists() {
             let audit = fs::read_to_string(&audit_path)?;
             assert!(!audit.contains("\"/usr/bin/sleep\""));
             assert!(!audit.contains("\"sleep\",\"0\""));
         }
 
-        fs::remove_dir_all(test_dir)?;
         Ok(())
     }
 
     #[test]
     fn linux_host_runner_can_disable_process_guard_at_runtime(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let test_dir = test_dir("unguarded")?;
-        let policy_path = write_policy(&test_dir)?;
+        let fixture = LinuxHostRunnerFixture::new("unguarded")?;
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
@@ -143,8 +138,8 @@ mod linux_host {
                 }}
               }}
             }}"#,
-            policy_path.display(),
-            test_dir.display()
+            fixture.policy_path().display(),
+            fixture.test_dir().display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -158,7 +153,6 @@ mod linux_host {
         assert!(outcome.stdout().contains("terminal_guard=disabled"));
         assert!(outcome.stdout().contains("process_guard=unset"));
 
-        fs::remove_dir_all(test_dir)?;
         Ok(())
     }
 
@@ -170,8 +164,7 @@ mod linux_host {
             return Ok(());
         }
 
-        let test_dir = test_dir("adopt")?;
-        let policy_path = write_policy(&test_dir)?;
+        let fixture = LinuxHostRunnerFixture::new("adopt")?;
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
@@ -188,8 +181,8 @@ mod linux_host {
                 }}
               }}
             }}"#,
-            policy_path.display(),
-            test_dir.display()
+            fixture.policy_path().display(),
+            fixture.test_dir().display()
         ))?;
         let mut child = Command::new("sh")
             .arg("-lc")
@@ -218,15 +211,13 @@ mod linux_host {
             .contains("erebor linux process guard capability: mode=adopt"));
         assert!(outcome.stderr().contains("ptrace=enabled"));
 
-        fs::remove_dir_all(test_dir)?;
         Ok(())
     }
 
     #[test]
     fn linux_host_runner_denies_risky_exec_before_command_runs(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let test_dir = test_dir("deny")?;
-        let policy_path = write_policy(&test_dir)?;
+        let fixture = LinuxHostRunnerFixture::new("deny")?;
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
@@ -249,8 +240,8 @@ mod linux_host {
                 }}
               }}
             }}"#,
-            policy_path.display(),
-            test_dir.display()
+            fixture.policy_path().display(),
+            fixture.test_dir().display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -275,21 +266,19 @@ mod linux_host {
             matches!(error, SessionExecutionError::DiagnosticFailed { .. }),
             "expected denied diagnostic failure, got {error:?}"
         );
-        let audit_path = session_audit_path(&test_dir, "session-linux-host-deny");
+        let audit_path = fixture.session_audit_path("session-linux-host-deny");
         assert!(audit_path.exists());
         let audit = fs::read_to_string(&audit_path)?;
         assert!(audit.contains("\"type\":\"deny\""));
         assert!(audit.contains("deny-raw-cdp"));
 
-        fs::remove_dir_all(test_dir)?;
         Ok(())
     }
 
     #[test]
     fn linux_host_runner_lifecycle_allows_safe_exec_and_denies_raw_cdp(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let test_dir = test_dir("lifecycle")?;
-        let policy_path = write_policy(&test_dir)?;
+        let fixture = LinuxHostRunnerFixture::new("lifecycle")?;
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
@@ -320,8 +309,8 @@ mod linux_host {
                 }}
               }}
             }}"#,
-            policy_path.display(),
-            test_dir.display()
+            fixture.policy_path().display(),
+            fixture.test_dir().display()
         ))?;
 
         let allowed_plan = SessionRunPlan::from_diagnostic(
@@ -347,15 +336,12 @@ mod linux_host {
             matches!(error, Err(SessionExecutionError::DiagnosticFailed { .. })),
             "expected raw CDP lifecycle diagnostic to fail closed, got {error:?}"
         );
-        let audit = fs::read_to_string(session_audit_path(
-            &test_dir,
-            "session-linux-host-lifecycle-deny",
-        ))?;
+        let audit =
+            fs::read_to_string(fixture.session_audit_path("session-linux-host-lifecycle-deny"))?;
         assert!(audit.contains("\"type\":\"deny\""));
         assert!(audit.contains("deny-raw-cdp"));
         assert!(audit.contains("raw CDP process launch is denied"));
 
-        fs::remove_dir_all(test_dir)?;
         Ok(())
     }
 
@@ -368,7 +354,7 @@ mod linux_host {
           "b=s; c=h; r=remote; d=debugging; p=port; \"$b$c\" \"--$r-$d-$p=9222\""
         ]"#;
 
-        let audit = run_denied_process_diagnostic(
+        let audit = LinuxHostRunnerFixture::run_denied_process_diagnostic(
             "shell-child-deny",
             "raw-cdp-shell-child",
             command_json,
@@ -391,7 +377,7 @@ mod linux_host {
           "--remote-debugging-port=9222"
         ]"#;
 
-        let audit = run_denied_process_diagnostic(
+        let audit = LinuxHostRunnerFixture::run_denied_process_diagnostic(
             "pipeline-child-deny",
             "raw-cdp-pipeline-child",
             command_json,
@@ -423,7 +409,7 @@ mod linux_host {
           "import subprocess; subprocess.run(['sh', '--remote-debugging-port=9222'], check=True)"
         ]"#;
 
-        let audit = run_denied_process_diagnostic(
+        let audit = LinuxHostRunnerFixture::run_denied_process_diagnostic(
             "python-child-deny",
             "raw-cdp-python-child",
             command_json,
@@ -438,8 +424,7 @@ mod linux_host {
     #[test]
     fn linux_host_runner_fails_closed_for_verification_required_exec(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let test_dir = test_dir("require-approval")?;
-        let policy_path = write_policy(&test_dir)?;
+        let fixture = LinuxHostRunnerFixture::new("require-approval")?;
         let config = RuntimeConfig::from_json_str(&format!(
             r#"{{
               "policies": ["{}"],
@@ -462,8 +447,8 @@ mod linux_host {
                 }}
               }}
             }}"#,
-            policy_path.display(),
-            test_dir.display()
+            fixture.policy_path().display(),
+            fixture.test_dir().display()
         ))?;
         let plan = SessionRunPlan::from_diagnostic(
             &config,
@@ -488,115 +473,133 @@ mod linux_host {
             matches!(error, SessionExecutionError::DiagnosticFailed { .. }),
             "expected verification-required diagnostic failure, got {error:?}"
         );
-        let audit = fs::read_to_string(session_audit_path(&test_dir, "session-linux-host-verify"))?;
+        let audit = fs::read_to_string(fixture.session_audit_path("session-linux-host-verify"))?;
         assert!(audit.contains("\"policy_decision\":{\"type\":\"require_approval\""));
         assert!(audit.contains("\"final_decision\":{\"type\":\"deny\""));
         assert!(audit.contains("verify-git-push"));
 
-        fs::remove_dir_all(test_dir)?;
         Ok(())
     }
 
-    fn test_dir(name: &str) -> Result<std::path::PathBuf, std::io::Error> {
-        let path =
-            std::env::temp_dir().join(format!("erebor-linux-host-runner-{name}-{}", process::id()));
-        fs::create_dir_all(&path)?;
-        Ok(path)
+    struct LinuxHostRunnerFixture {
+        test_dir: std::path::PathBuf,
+        policy_path: std::path::PathBuf,
     }
 
-    fn write_policy(test_dir: &Path) -> Result<std::path::PathBuf, std::io::Error> {
-        let policy_path = test_dir.join("policy.json");
-        fs::write(
-            &policy_path,
-            r#"
-            {
-              "rules": [
-                {
-                  "id": "verify-git-push",
-                  "match": {
-                    "surface": "terminal",
-                    "action": "process_exec",
-                    "command_contains": "git push"
-                  },
-                  "decision": "require_approval",
-                  "reason": "git push needs operator verification"
-                },
-                {
-                  "id": "deny-raw-cdp",
-                  "match": {
-                    "surface": "terminal",
-                    "action": "process_exec",
-                    "command_contains": "remote-debugging-port"
-                  },
-                  "decision": "deny",
-                  "reason": "raw CDP process launch is denied"
-                }
-              ]
-            }
-            "#,
-        )?;
-        Ok(policy_path)
-    }
+    impl LinuxHostRunnerFixture {
+        fn new(name: &str) -> Result<Self, std::io::Error> {
+            let test_dir = std::env::temp_dir()
+                .join(format!("erebor-linux-host-runner-{name}-{}", process::id()));
+            let _result = fs::remove_dir_all(&test_dir);
+            fs::create_dir_all(&test_dir)?;
+            let policy_path = test_dir.join("policy.json");
+            fs::write(&policy_path, Self::policy_source())?;
+            Ok(Self {
+                test_dir,
+                policy_path,
+            })
+        }
 
-    fn run_denied_process_diagnostic(
-        test_name: &str,
-        diagnostic_name: &str,
-        command_json: &str,
-        session_id: &str,
-    ) -> Result<String, Box<dyn std::error::Error>> {
-        let test_dir = test_dir(test_name)?;
-        let policy_path = write_policy(&test_dir)?;
-        let config = RuntimeConfig::from_json_str(&format!(
-            r#"{{
-              "policies": ["{}"],
-              "session": {{
-                "enabled": true,
-                "actor": {{ "id": "openclaw" }},
-                "workspace": "{}",
-                "diagnostics": [
-                  {{
-                    "name": "{}",
-                    "command": {}
+        fn test_dir(&self) -> &Path {
+            &self.test_dir
+        }
+
+        fn policy_path(&self) -> &Path {
+            &self.policy_path
+        }
+
+        fn session_audit_path(&self, session_id: &str) -> std::path::PathBuf {
+            self.registry_path().join(session_id).join("audit.jsonl")
+        }
+
+        fn run_denied_process_diagnostic(
+            test_name: &str,
+            diagnostic_name: &str,
+            command_json: &str,
+            session_id: &str,
+        ) -> Result<String, Box<dyn std::error::Error>> {
+            let fixture = Self::new(test_name)?;
+            let config = RuntimeConfig::from_json_str(&format!(
+                r#"{{
+                  "policies": ["{}"],
+                  "session": {{
+                    "enabled": true,
+                    "actor": {{ "id": "openclaw" }},
+                    "workspace": "{}",
+                    "diagnostics": [
+                      {{
+                        "name": "{}",
+                        "command": {}
+                      }}
+                    ],
+                    "runner": {{ "kind": "linux_host" }},
+                    "interception": {{ "enabled": true }}
+                  }},
+                  "surfaces": {{
+                    "terminal": {{
+                      "enabled": true
+                    }}
                   }}
-                ],
-                "runner": {{ "kind": "linux_host" }},
-                "interception": {{ "enabled": true }}
-              }},
-              "surfaces": {{
-                "terminal": {{
-                  "enabled": true
-                }}
-              }}
-            }}"#,
-            policy_path.display(),
-            test_dir.display(),
-            diagnostic_name,
-            command_json
-        ))?;
-        let plan = SessionRunPlan::from_diagnostic(
-            &config,
-            SessionRunnerKind::LinuxHost,
-            SessionId::new(session_id),
-            diagnostic_name,
-        )?;
+                }}"#,
+                fixture.policy_path().display(),
+                fixture.test_dir().display(),
+                diagnostic_name,
+                command_json
+            ))?;
+            let plan = SessionRunPlan::from_diagnostic(
+                &config,
+                SessionRunnerKind::LinuxHost,
+                SessionId::new(session_id),
+                diagnostic_name,
+            )?;
 
-        let error = SessionExecutionService::run_diagnostic(&config, &plan);
+            let error = SessionExecutionService::run_diagnostic(&config, &plan);
 
-        assert!(
-            matches!(error, Err(SessionExecutionError::DiagnosticFailed { .. })),
-            "expected denied diagnostic failure, got {error:?}"
-        );
-        let audit = fs::read_to_string(session_audit_path(&test_dir, session_id))?;
-        fs::remove_dir_all(test_dir)?;
-        Ok(audit)
+            assert!(
+                matches!(error, Err(SessionExecutionError::DiagnosticFailed { .. })),
+                "expected denied diagnostic failure, got {error:?}"
+            );
+            Ok(fs::read_to_string(fixture.session_audit_path(session_id))?)
+        }
+
+        fn registry_path(&self) -> std::path::PathBuf {
+            self.test_dir.join(".erebor/sessions")
+        }
+
+        fn policy_source() -> &'static str {
+            r#"
+                {
+                  "rules": [
+                    {
+                      "id": "verify-git-push",
+                      "match": {
+                        "surface": "terminal",
+                        "action": "process_exec",
+                        "command_contains": "git push"
+                      },
+                      "decision": "require_approval",
+                      "reason": "git push needs operator verification"
+                    },
+                    {
+                      "id": "deny-raw-cdp",
+                      "match": {
+                        "surface": "terminal",
+                        "action": "process_exec",
+                        "command_contains": "remote-debugging-port"
+                      },
+                      "decision": "deny",
+                      "reason": "raw CDP process launch is denied"
+                    }
+                  ]
+                }
+                "#
+        }
     }
 
-    fn registry_path(test_dir: &Path) -> std::path::PathBuf {
-        test_dir.join(".erebor/sessions")
-    }
-
-    fn session_audit_path(test_dir: &Path, session_id: &str) -> std::path::PathBuf {
-        registry_path(test_dir).join(session_id).join("audit.jsonl")
+    impl Drop for LinuxHostRunnerFixture {
+        fn drop(&mut self) {
+            let _result = fs::remove_dir_all(&self.test_dir);
+        }
     }
 
     fn can_adopt_sibling_process() -> bool {
