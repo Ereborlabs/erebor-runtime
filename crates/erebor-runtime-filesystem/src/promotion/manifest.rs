@@ -98,9 +98,37 @@ pub enum FilesystemPreimageEntryState {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "entry_type", rename_all = "snake_case")]
 pub enum FilesystemPreimageEntryType {
-    Directory,
-    Regular { source: String },
-    Symlink { target: String },
+    Directory {
+        external_files: Vec<FilesystemDirectoryPreimageFile>,
+    },
+    Regular {
+        source: String,
+        preimage: FilesystemRegularPreimage,
+    },
+    Symlink {
+        target: String,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FilesystemDirectoryPreimageFile {
+    pub path: String,
+    pub preimage: FilesystemRegularPreimage,
+    pub metadata: FilesystemHostMetadata,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "preimage_backend", rename_all = "snake_case")]
+pub enum FilesystemRegularPreimage {
+    OstreeBytes,
+    LinuxReflink {
+        artifact: String,
+        size_bytes: u64,
+        mtime_sec: i64,
+        mtime_nsec: i64,
+        device: u64,
+        inode: u64,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

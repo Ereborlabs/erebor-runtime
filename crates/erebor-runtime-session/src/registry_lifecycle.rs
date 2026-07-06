@@ -197,8 +197,10 @@ fn checkpoint_successful_filesystem_layers(
     }
     if let Some(filesystem) = prepared_session.storage().filesystem.as_ref() {
         if filesystem.revert().promote_on_session_finish() {
-            let options =
-                FilesystemPromotionOptions::new(filesystem.revert().preimage_size_limit_bytes());
+            let options = FilesystemPromotionOptions::from_parts(
+                filesystem.revert().preimage_size_limit_bytes(),
+                filesystem.revert().preimage_backend(),
+            );
             FilesystemPromotion::promote_checkpoint(
                 filesystem.storage(),
                 session_id.as_str(),

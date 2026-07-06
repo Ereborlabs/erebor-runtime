@@ -1,23 +1,43 @@
 use std::path::{Path, PathBuf};
 
+use crate::FilesystemPreimageBackendKind;
+
 use super::manifest::FilesystemPromotionVolume;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FilesystemPromotionOptions {
     preimage_size_limit_bytes: u64,
+    preimage_backend: FilesystemPreimageBackendKind,
 }
 
 impl FilesystemPromotionOptions {
     #[must_use]
     pub const fn new(preimage_size_limit_bytes: u64) -> Self {
+        Self::from_parts(
+            preimage_size_limit_bytes,
+            FilesystemPreimageBackendKind::OstreeBytes,
+        )
+    }
+
+    #[must_use]
+    pub const fn from_parts(
+        preimage_size_limit_bytes: u64,
+        preimage_backend: FilesystemPreimageBackendKind,
+    ) -> Self {
         Self {
             preimage_size_limit_bytes,
+            preimage_backend,
         }
     }
 
     #[must_use]
     pub const fn preimage_size_limit_bytes(self) -> u64 {
         self.preimage_size_limit_bytes
+    }
+
+    #[must_use]
+    pub const fn preimage_backend(self) -> FilesystemPreimageBackendKind {
+        self.preimage_backend
     }
 }
 

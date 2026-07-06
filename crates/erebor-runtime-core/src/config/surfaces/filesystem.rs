@@ -3,7 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use erebor_runtime_filesystem::{FilesystemBackendKind, FilesystemVolumeMode};
+pub use erebor_runtime_filesystem::{
+    FilesystemBackendKind, FilesystemPreimageBackendKind, FilesystemVolumeMode,
+};
 use serde::Deserialize;
 use snafu::ensure;
 
@@ -34,6 +36,7 @@ impl FilesystemSurfaceLayerConfig {
                 reason: String::from("unsupported filesystem backend kind")
             }
         );
+        self.revert.validate()?;
 
         let mut ids = HashSet::new();
         for volume in &self.volumes {
@@ -117,6 +120,7 @@ pub struct FilesystemRevertLayerConfig {
     pub promote_on_session_finish: bool,
     pub retain_layers: bool,
     pub preimage_size_limit_bytes: u64,
+    pub preimage_backend: FilesystemPreimageBackendKind,
 }
 
 impl Default for FilesystemRevertLayerConfig {
@@ -125,7 +129,20 @@ impl Default for FilesystemRevertLayerConfig {
             promote_on_session_finish: true,
             retain_layers: true,
             preimage_size_limit_bytes: 104_857_600,
+            preimage_backend: FilesystemPreimageBackendKind::OstreeBytes,
         }
+    }
+}
+
+impl FilesystemRevertLayerConfig {
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        ensure!(
+            self.preimage_backend.is_supported(),
+            InvalidFilesystemSurfaceConfigSnafu {
+                reason: String::from("unsupported filesystem preimage backend kind")
+            }
+        );
+        Ok(())
     }
 }
 
@@ -235,6 +252,7 @@ pub struct FilesystemRevertConfig {
     promote_on_session_finish: bool,
     retain_layers: bool,
     preimage_size_limit_bytes: u64,
+    preimage_backend: FilesystemPreimageBackendKind,
 }
 
 impl FilesystemRevertConfig {
@@ -252,6 +270,11 @@ impl FilesystemRevertConfig {
     pub const fn preimage_size_limit_bytes(&self) -> u64 {
         self.preimage_size_limit_bytes
     }
+
+    #[must_use]
+    pub const fn preimage_backend(&self) -> FilesystemPreimageBackendKind {
+        self.preimage_backend
+    }
 }
 
 impl From<FilesystemRevertLayerConfig> for FilesystemRevertConfig {
@@ -260,6 +283,7 @@ impl From<FilesystemRevertLayerConfig> for FilesystemRevertConfig {
             promote_on_session_finish: config.promote_on_session_finish,
             retain_layers: config.retain_layers,
             preimage_size_limit_bytes: config.preimage_size_limit_bytes,
+            preimage_backend: config.preimage_backend,
         }
     }
 }

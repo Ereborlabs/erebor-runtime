@@ -30,9 +30,9 @@ pub use session::{SessionAdoptPlan, SessionAdoptTarget, SessionRunPlan};
 pub use surfaces::{
     BrowserCdpSurfaceConfig, BrowserCdpSurfaceLayerConfig, BrowserLaunchConfig,
     BrowserLaunchLayerConfig, FilesystemBackendConfig, FilesystemBackendKind,
-    FilesystemBackendLayerConfig, FilesystemRevertConfig, FilesystemRevertLayerConfig,
-    FilesystemSurfaceConfig, FilesystemSurfaceLayerConfig, FilesystemVolumeConfig,
-    FilesystemVolumeLayerConfig, FilesystemVolumeMode, PolicyPathValidator,
+    FilesystemBackendLayerConfig, FilesystemPreimageBackendKind, FilesystemRevertConfig,
+    FilesystemRevertLayerConfig, FilesystemSurfaceConfig, FilesystemSurfaceLayerConfig,
+    FilesystemVolumeConfig, FilesystemVolumeLayerConfig, FilesystemVolumeMode, PolicyPathValidator,
     ProcessInterceptionDecision, ProcessInterceptionHandlerConfig, ProcessInterceptionHandlerKind,
     ProcessMediationCompatibilityConfig, ProcessMediationCompatibilityLayerConfig,
     ProcessMediationEndpointSource, ProcessMediationEnvironmentConfig,

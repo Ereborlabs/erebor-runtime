@@ -9,6 +9,7 @@ use crate::{
 };
 
 mod hardening;
+mod large_file;
 mod metadata;
 mod multivolume;
 mod opaque;

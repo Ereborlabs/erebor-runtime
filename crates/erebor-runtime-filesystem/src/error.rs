@@ -196,6 +196,29 @@ pub enum FilesystemError {
         location: Location,
     },
     #[snafu(display(
+        "filesystem volume `{volume_id}` preimage backend `{backend}` cannot protect `{path}`: {reason}"
+    ))]
+    PromotionPreimageBackendUnavailable {
+        volume_id: String,
+        path: String,
+        backend: &'static str,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "filesystem volume `{volume_id}` preimage artifact `{}` for `{path}` is invalid: {reason}",
+        artifact.display()
+    ))]
+    PromotionPreimageArtifactInvalid {
+        volume_id: String,
+        path: String,
+        artifact: PathBuf,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
         "filesystem volume `{volume_id}` host path `{path}` drifted before promotion: {reason}"
     ))]
     PromotionHostDrift {

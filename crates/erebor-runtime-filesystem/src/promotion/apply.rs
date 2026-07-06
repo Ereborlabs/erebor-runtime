@@ -13,9 +13,10 @@ use super::{
     journal::{PromotionJournal, PromotionJournalState},
     manifest::{
         FilesystemPreimageEntry, FilesystemPreimageEntryState, FilesystemPreimageEntryType,
-        FilesystemPreimageManifest,
+        FilesystemPreimageManifest, FilesystemRegularPreimage,
     },
     path::{PromotionPath, PromotionTargetPath},
+    preimage_artifact::LinuxReflinkPreimageStore,
 };
 
 const FILES_DIR: &str = "files";
@@ -199,6 +200,7 @@ impl<'a> PromotionVolumeApplier<'a> {
 
 pub(super) struct PromotionVolumeRollback<'a> {
     stage_root: &'a Path,
+    work_root: &'a Path,
     volume: &'a FilesystemVolumeStorage,
     manifest: &'a FilesystemPreimageManifest,
 }
@@ -206,11 +208,13 @@ pub(super) struct PromotionVolumeRollback<'a> {
 impl<'a> PromotionVolumeRollback<'a> {
     pub(super) const fn new(
         stage_root: &'a Path,
+        work_root: &'a Path,
         volume: &'a FilesystemVolumeStorage,
         manifest: &'a FilesystemPreimageManifest,
     ) -> Self {
         Self {
             stage_root,
+            work_root,
             volume,
             manifest,
         }
@@ -229,9 +233,10 @@ impl<'a> PromotionVolumeRollback<'a> {
         match &entry.state {
             FilesystemPreimageEntryState::Absent => PromotionTargetPath::new(&host_path).remove(),
             FilesystemPreimageEntryState::Present { entry_type } => {
+                self.validate_external_artifacts(entry_type)?;
                 PromotionTargetPath::new(&host_path).remove()?;
                 match entry_type {
-                    FilesystemPreimageEntryType::Directory => {
+                    FilesystemPreimageEntryType::Directory { external_files } => {
                         PromotionVolumeApplier::copy_directory(
                             &self.stage_root.join(FILES_DIR).join(&relative),
                             &host_path,
@@ -240,15 +245,21 @@ impl<'a> PromotionVolumeRollback<'a> {
                             FilesystemMetadataApplier::new(&host_path)
                                 .apply_host_metadata(metadata)?;
                         }
+                        for external in external_files {
+                            let target =
+                                self.volume.host_path().join(self.relative(&external.path)?);
+                            self.restore_regular_preimage(
+                                &target,
+                                &external.path,
+                                &external.preimage,
+                            )?;
+                            FilesystemMetadataApplier::new(&target)
+                                .apply_host_metadata(&external.metadata)?;
+                        }
                         Ok(())
                     }
-                    FilesystemPreimageEntryType::Regular { source } => {
-                        let source = self.stage_root.join(FILES_DIR).join(self.relative(source)?);
-                        PromotionTargetPath::new(&host_path).create_parent()?;
-                        fs::copy(&source, &host_path).context(PromotionIoSnafu {
-                            action: "restore rollback regular file",
-                            path: source.as_path(),
-                        })?;
+                    FilesystemPreimageEntryType::Regular { source, preimage } => {
+                        self.restore_regular_preimage(&host_path, source, preimage)?;
                         if let Some(metadata) = &entry.metadata {
                             FilesystemMetadataApplier::new(&host_path)
                                 .apply_host_metadata(metadata)?;
@@ -270,6 +281,56 @@ impl<'a> PromotionVolumeRollback<'a> {
                 }
             }
         }
+    }
+
+    fn validate_external_artifacts(&self, entry_type: &FilesystemPreimageEntryType) -> Result<()> {
+        let store = LinuxReflinkPreimageStore::new(self.work_root, self.volume.id());
+        match entry_type {
+            FilesystemPreimageEntryType::Directory { external_files } => {
+                for external in external_files {
+                    store.validate_regular_preimage(&external.path, &external.preimage)?;
+                }
+            }
+            FilesystemPreimageEntryType::Regular { source, preimage } => {
+                store.validate_regular_preimage(source, preimage)?;
+            }
+            FilesystemPreimageEntryType::Symlink { .. } => {}
+        }
+        Ok(())
+    }
+
+    fn restore_regular_preimage(
+        &self,
+        host_path: &Path,
+        source: &str,
+        preimage: &FilesystemRegularPreimage,
+    ) -> Result<()> {
+        let source = match preimage {
+            FilesystemRegularPreimage::OstreeBytes => {
+                self.stage_root.join(FILES_DIR).join(self.relative(source)?)
+            }
+            FilesystemRegularPreimage::LinuxReflink { .. } => {
+                LinuxReflinkPreimageStore::new(self.work_root, self.volume.id())
+                    .validate_regular_preimage(source, preimage)?
+                    .ok_or_else(
+                        || crate::FilesystemError::PromotionPreimageArtifactInvalid {
+                            volume_id: self.volume.id().to_owned(),
+                            path: source.to_owned(),
+                            artifact: self.work_root.to_path_buf(),
+                            reason: String::from(
+                                "linux reflink preimage did not resolve an artifact",
+                            ),
+                            location: snafu::Location::default(),
+                        },
+                    )?
+            }
+        };
+        PromotionTargetPath::new(host_path).create_parent()?;
+        fs::copy(&source, host_path).context(PromotionIoSnafu {
+            action: "restore rollback regular file",
+            path: source.as_path(),
+        })?;
+        Ok(())
     }
 
     fn relative(&self, value: &str) -> Result<std::path::PathBuf> {

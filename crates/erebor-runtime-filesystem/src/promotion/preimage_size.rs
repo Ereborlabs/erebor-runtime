@@ -25,7 +25,7 @@ impl<'a> PreimageSizeBudget<'a> {
     ) -> Result<()> {
         let next = manifest.total_bytes.saturating_add(bytes);
         ensure!(
-            next <= self.limit_bytes,
+            self.can_add_bytes(bytes, manifest),
             PromotionPreimageTooLargeSnafu {
                 volume_id: self.volume.id().to_owned(),
                 path: path.to_owned(),
@@ -35,5 +35,13 @@ impl<'a> PreimageSizeBudget<'a> {
         );
         manifest.total_bytes = next;
         Ok(())
+    }
+
+    pub(super) const fn can_add_bytes(
+        &self,
+        bytes: u64,
+        manifest: &FilesystemPreimageManifest,
+    ) -> bool {
+        manifest.total_bytes.saturating_add(bytes) <= self.limit_bytes
     }
 }

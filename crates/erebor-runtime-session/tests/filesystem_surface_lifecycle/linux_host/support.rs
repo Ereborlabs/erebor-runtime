@@ -104,13 +104,23 @@ pub(super) fn assert_storage_layout(filesystem: &Path, volume_id: &str) -> Resul
 }
 
 pub(super) fn ostree_refs(repo: &Path) -> Result<String, Box<dyn std::error::Error>> {
-    let refs = Command::new("ostree")
-        .arg(format!("--repo={}", repo.display()))
-        .arg("refs")
-        .arg("--list")
-        .output()?;
-    assert!(refs.status.success());
-    Ok(String::from_utf8(refs.stdout)?)
+    ostree_output(repo, &["refs", "--list"])
+}
+
+pub(super) fn ostree_output(
+    repo: &Path,
+    args: &[&str],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut command = Command::new("ostree");
+    command.arg(format!("--repo={}", repo.display())).args(args);
+    let output = command.output()?;
+    assert!(
+        output.status.success(),
+        "ostree {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(String::from_utf8(output.stdout)?)
 }
 
 pub(super) fn storage_tree_contains_file_named(
@@ -167,6 +177,8 @@ pub(super) fn overlay_config(
         shell_command,
         empty_policy_only,
         promote_on_session_finish: false,
+        preimage_size_limit_bytes: 104_857_600,
+        preimage_backend: "ostree_bytes",
     })
 }
 
@@ -187,6 +199,36 @@ pub(super) fn overlay_promoting_config(
         shell_command,
         empty_policy_only: true,
         promote_on_session_finish: true,
+        preimage_size_limit_bytes: 104_857_600,
+        preimage_backend: "ostree_bytes",
+    })
+}
+
+pub(super) struct OverlayPromotingRevertConfigRequest<'a> {
+    pub(super) policy_path: &'a Path,
+    pub(super) workspace: &'a Path,
+    pub(super) host_project: &'a Path,
+    pub(super) session_project: &'a Path,
+    pub(super) diagnostic_name: &'a str,
+    pub(super) shell_command: &'a str,
+    pub(super) preimage_size_limit_bytes: u64,
+    pub(super) preimage_backend: &'a str,
+}
+
+pub(super) fn overlay_promoting_config_with_revert(
+    request: OverlayPromotingRevertConfigRequest<'_>,
+) -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
+    overlay_config_from_request(OverlayConfigRequest {
+        policy_path: request.policy_path,
+        workspace: request.workspace,
+        host_project: request.host_project,
+        session_project: request.session_project,
+        diagnostic_name: request.diagnostic_name,
+        shell_command: request.shell_command,
+        empty_policy_only: true,
+        promote_on_session_finish: true,
+        preimage_size_limit_bytes: request.preimage_size_limit_bytes,
+        preimage_backend: request.preimage_backend,
     })
 }
 
@@ -199,6 +241,8 @@ struct OverlayConfigRequest<'a> {
     shell_command: &'a str,
     empty_policy_only: bool,
     promote_on_session_finish: bool,
+    preimage_size_limit_bytes: u64,
+    preimage_backend: &'a str,
 }
 
 fn overlay_config_from_request(
@@ -245,7 +289,8 @@ fn overlay_config_from_request(
               "revert": {{
                 "promote_on_session_finish": {},
                 "retain_layers": true,
-                "preimage_size_limit_bytes": 104857600
+                "preimage_size_limit_bytes": {},
+                "preimage_backend": "{}"
               }}
             }}
           }}
@@ -257,7 +302,9 @@ fn overlay_config_from_request(
         interception,
         request.host_project.display(),
         request.session_project.display(),
-        request.promote_on_session_finish
+        request.promote_on_session_finish,
+        request.preimage_size_limit_bytes,
+        request.preimage_backend
     ))?)
 }
 

@@ -1,8 +1,9 @@
 use std::io;
 
 use crate::{
-    FilesystemBackendKind, FilesystemVolumeMode, RuntimeConfig, RuntimeConfigError,
-    SessionInterceptionOperation, SessionInterceptionOperationCapability, SessionSurfaceKind,
+    FilesystemBackendKind, FilesystemPreimageBackendKind, FilesystemVolumeMode, RuntimeConfig,
+    RuntimeConfigError, SessionInterceptionOperation, SessionInterceptionOperationCapability,
+    SessionSurfaceKind,
 };
 
 #[test]
@@ -35,7 +36,8 @@ fn accepts_filesystem_surface_config_and_reports_file_capabilities(
               "revert": {
                 "promote_on_session_finish": true,
                 "retain_layers": true,
-                "preimage_size_limit_bytes": 104857600
+                "preimage_size_limit_bytes": 104857600,
+                "preimage_backend": "linux_reflink"
               }
             }
           }
@@ -69,6 +71,10 @@ fn accepts_filesystem_surface_config_and_reports_file_capabilities(
     assert!(filesystem.revert().promote_on_session_finish());
     assert!(filesystem.revert().retain_layers());
     assert_eq!(filesystem.revert().preimage_size_limit_bytes(), 104_857_600);
+    assert_eq!(
+        filesystem.revert().preimage_backend(),
+        FilesystemPreimageBackendKind::LinuxReflink
+    );
 
     let capabilities = config.session_interception_capabilities();
     for operation in [
@@ -111,6 +117,10 @@ fn accepts_enabled_filesystem_surface_without_declared_volumes(
         vec![SessionSurfaceKind::Filesystem]
     );
     assert!(filesystem.volumes().is_empty());
+    assert_eq!(
+        filesystem.revert().preimage_backend(),
+        FilesystemPreimageBackendKind::OstreeBytes
+    );
 
     Ok(())
 }
@@ -199,6 +209,32 @@ fn rejects_unsupported_filesystem_backend_kinds() {
             "filesystem": {
               "enabled": true,
               "backend": { "kind": "docker_overlay" },
+              "volumes": [
+                {
+                  "id": "workspace",
+                  "host_path": "/tmp/host",
+                  "session_path": "/tmp/session"
+                }
+              ]
+            }
+          }
+        }
+        "#,
+    );
+}
+
+#[test]
+fn rejects_unsupported_filesystem_preimage_backend_kinds() {
+    assert_invalid_filesystem_config(
+        r#"
+        {
+          "policies": ["policy.json"],
+          "surfaces": {
+            "filesystem": {
+              "enabled": true,
+              "revert": {
+                "preimage_backend": "zfs_snapshot"
+              },
               "volumes": [
                 {
                   "id": "workspace",

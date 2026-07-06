@@ -14,9 +14,9 @@ pub use browser::{
 };
 pub use filesystem::{
     FilesystemBackendConfig, FilesystemBackendKind, FilesystemBackendLayerConfig,
-    FilesystemRevertConfig, FilesystemRevertLayerConfig, FilesystemSurfaceConfig,
-    FilesystemSurfaceLayerConfig, FilesystemVolumeConfig, FilesystemVolumeLayerConfig,
-    FilesystemVolumeMode,
+    FilesystemPreimageBackendKind, FilesystemRevertConfig, FilesystemRevertLayerConfig,
+    FilesystemSurfaceConfig, FilesystemSurfaceLayerConfig, FilesystemVolumeConfig,
+    FilesystemVolumeLayerConfig, FilesystemVolumeMode,
 };
 pub use start_plan::SessionSurfaceStartPlan;
 pub use terminal::{

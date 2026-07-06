@@ -174,6 +174,10 @@ impl FakeOstreeRepository {
         self.root.join("commits").join(ref_name)
     }
 
+    pub(super) fn committed_tree(&self, ref_name: &str) -> PathBuf {
+        self.commit_path(ref_name)
+    }
+
     fn next_outcome(&self) -> FakeOstreeOutcome {
         let mut outcomes = self.outcomes.borrow_mut();
         if outcomes.is_empty() {

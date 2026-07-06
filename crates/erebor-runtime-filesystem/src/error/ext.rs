@@ -37,6 +37,8 @@ impl ErrorExt for FilesystemError {
             | Self::OstreeCommandFailed { .. } => StatusCode::External,
             Self::UnsupportedLayer { .. }
             | Self::PromotionPreimageTooLarge { .. }
+            | Self::PromotionPreimageBackendUnavailable { .. }
+            | Self::PromotionPreimageArtifactInvalid { .. }
             | Self::PromotionHostDrift { .. }
             | Self::IncompletePromotion { .. } => StatusCode::InvalidArguments,
         }
@@ -68,6 +70,8 @@ impl ErrorExt for FilesystemError {
             | Self::ActiveLayerWriter { .. }
             | Self::UnsupportedLayer { .. }
             | Self::PromotionPreimageTooLarge { .. }
+            | Self::PromotionPreimageBackendUnavailable { .. }
+            | Self::PromotionPreimageArtifactInvalid { .. }
             | Self::PromotionHostDrift { .. }
             | Self::IncompletePromotion { .. }
             | Self::EncodeLayerManifest { .. }

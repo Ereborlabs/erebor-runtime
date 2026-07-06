@@ -107,7 +107,8 @@ where
             )
             .checkout(self.repository)?;
             let preimage = PromotionManifestStore::new(&stage).read_preimage()?;
-            PromotionVolumeRollback::new(&stage, volume, &preimage).rollback()?;
+            PromotionVolumeRollback::new(&stage, self.storage.work_path(), volume, &preimage)
+                .rollback()?;
             restored.push(volume.id().to_owned());
         }
         Ok(FilesystemRollback::new(

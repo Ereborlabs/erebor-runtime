@@ -22,6 +22,7 @@ mod lock;
 mod manifest;
 mod path;
 mod preimage;
+mod preimage_artifact;
 mod preimage_size;
 mod rollback;
 mod types;
@@ -32,10 +33,11 @@ pub use catalog::{
     FilesystemTransactionRollback, FilesystemTransactionState, FilesystemTransactionTarget,
 };
 pub use manifest::{
-    FilesystemHostMetadata, FilesystemPreimageEntry, FilesystemPreimageEntryState,
-    FilesystemPreimageEntryType, FilesystemPreimageManifest, FilesystemPromotionManifest,
-    FilesystemPromotionState, FilesystemPromotionVolume, PREIMAGE_MANIFEST_FILE,
-    PREIMAGE_MANIFEST_KIND, PROMOTION_MANIFEST_FILE, PROMOTION_MANIFEST_KIND,
+    FilesystemDirectoryPreimageFile, FilesystemHostMetadata, FilesystemPreimageEntry,
+    FilesystemPreimageEntryState, FilesystemPreimageEntryType, FilesystemPreimageManifest,
+    FilesystemPromotionManifest, FilesystemPromotionState, FilesystemPromotionVolume,
+    FilesystemRegularPreimage, PREIMAGE_MANIFEST_FILE, PREIMAGE_MANIFEST_KIND,
+    PROMOTION_MANIFEST_FILE, PROMOTION_MANIFEST_KIND,
 };
 pub use types::{FilesystemPromotion, FilesystemPromotionOptions, FilesystemRollback};
 
@@ -45,7 +47,9 @@ use io::PromotionManifestStore;
 use journal::{PromotionJournal, PromotionJournalState, PromotionJournalVerifier};
 use layer::PromotionLayerGuard;
 use lock::PromotionLock;
-use preimage::{PromotionPreimageCapture, PromotionPreimageVerifier};
+use preimage::{
+    PromotionPreimageCapture, PromotionPreimageCaptureRequest, PromotionPreimageVerifier,
+};
 
 impl FilesystemPromotion {
     pub fn promote_checkpoint(
@@ -165,13 +169,17 @@ where
             let promotion_id = PromotionId::new(self.promotion_id)?;
             let preimage_ref = promotion_id.preimage_ref(volume.id());
             let stage = PromotionWorkspace::preimage_stage_root(root, volume.id());
-            let preimage = PromotionPreimageCapture::new(
-                &stage,
-                self.promotion_id,
+            let artifact_root = self.workspace.cow_preimage_artifact_root(volume.id());
+            let preimage = PromotionPreimageCapture::new(PromotionPreimageCaptureRequest {
+                stage_root: &stage,
+                work_root: self.storage.work_path(),
+                artifact_root: &artifact_root,
+                promotion_id: self.promotion_id,
                 volume,
-                manifest,
-                self.options.preimage_size_limit_bytes(),
-            )
+                layer: manifest,
+                limit_bytes: self.options.preimage_size_limit_bytes(),
+                preimage_backend: self.options.preimage_backend(),
+            })
             .capture()?;
             PromotionManifestStore::new(&stage).write_preimage(&preimage)?;
             let subject = format!(
@@ -254,7 +262,7 @@ where
             let volume = PromotionStorageLookup::new(self.storage).volume(&volume_ref.volume_id)?;
             let stage = PromotionWorkspace::preimage_stage_root(root, volume.id());
             let preimage = PromotionManifestStore::new(&stage).read_preimage()?;
-            PromotionPreimageVerifier::new(volume, &preimage).verify()?;
+            PromotionPreimageVerifier::new(self.storage.work_path(), volume, &preimage).verify()?;
         }
         Ok(())
     }
@@ -285,6 +293,15 @@ impl<'a> PromotionWorkspace<'a> {
             .work_path()
             .join("rollbacks")
             .join(self.promotion_id)
+    }
+
+    pub(super) fn cow_preimage_artifact_root(&self, volume_id: &str) -> PathBuf {
+        self.storage
+            .work_path()
+            .join("cow-preimages")
+            .join(self.promotion_id)
+            .join("volumes")
+            .join(volume_id)
     }
 
     pub(super) fn preimage_stage_root(root: &Path, volume_id: &str) -> PathBuf {
