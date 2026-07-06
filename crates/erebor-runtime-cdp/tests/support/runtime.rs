@@ -4,33 +4,35 @@ use std::{
 };
 
 use erebor_runtime_cdp::{BrowserCdpSurface, BrowserSessionManager, GovernedBrowserSession};
-use erebor_runtime_core::{
-    RunningSessionSurface, RuntimeConfig, RuntimeError, SessionSurfaceService,
-    SessionSurfaceStartPlan,
-};
+use erebor_runtime_core::{RunningSessionSurface, RuntimeError, SessionSurfaceService};
 use erebor_runtime_e2e::{
-    assert_json_request_has_no_response,
-    error::{JsonSnafu, WebSocketSnafu},
-    send_json_request, E2eError, MiniJsonWebSocketServer, MiniSystem,
+    assert_json_request_has_no_response, send_json_request, E2eError, MiniJsonWebSocketServer,
+    MiniSystem,
 };
 use erebor_runtime_policy::{LocalPolicy, PolicySet};
-use futures_util::{SinkExt, StreamExt};
-use serde_json::{json, Value};
-use snafu::{Location, ResultExt};
-use tokio::net::TcpStream;
+use serde_json::Value;
+use snafu::Location;
 use tokio::runtime::Runtime;
 use tokio::sync::{Mutex, MutexGuard};
-use tokio::time::timeout;
-use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
+
+#[path = "browser_client.rs"]
+mod browser_client;
+#[path = "discovery.rs"]
+mod discovery;
+#[path = "runtime_config.rs"]
+mod runtime_config;
 
 pub use crate::common::{
-    allow_all_policy, deny_script_eval_policy, real_chrome_available,
-    require_approval_script_eval_policy,
+    allow_all_policy, deny_payload_script_eval_policy, deny_script_eval_policy,
+    deny_target_script_eval_policy, real_chrome_available, require_approval_script_eval_policy,
 };
+pub use browser_client::BrowserLevelCdpClient;
+pub use discovery::GovernedDiscoveryClient;
+
 use crate::common::{
-    closed_error, external_error, mini_cdp_handler, session_context, timeout_error,
-    RealChromeInstance,
+    closed_error, external_error, mini_cdp_handler, session_context, RealChromeInstance,
 };
+use runtime_config::BrowserCdpRuntimeConfigFixture;
 
 pub struct CdpE2eHarness {
     _system: MiniSystem,
@@ -56,7 +58,7 @@ impl CdpE2eHarness {
         let mut system = MiniSystem::new();
         let upstream = system.json_websocket_server(mini_cdp_handler()).await?;
         let browser_url = upstream.endpoint().to_owned();
-        let config = browser_cdp_runtime_config(&browser_url)?;
+        let config = BrowserCdpRuntimeConfigFixture::for_upstream(&browser_url)?;
         let (runtime_host, running_runtime) =
             tokio::task::spawn_blocking(move || start_browser_cdp_runtime(policy, config))
                 .await
@@ -78,7 +80,7 @@ impl CdpE2eHarness {
             .await
             .map_err(|error| external_error("real Chrome launch task", error))??;
         let direct_browser_endpoint = browser.page_ws_url().to_owned();
-        let config = browser_cdp_runtime_config(&direct_browser_endpoint)?;
+        let config = BrowserCdpRuntimeConfigFixture::for_upstream(&direct_browser_endpoint)?;
         let (runtime_host, running_runtime) =
             tokio::task::spawn_blocking(move || start_browser_cdp_runtime(policy, config))
                 .await
@@ -96,7 +98,7 @@ impl CdpE2eHarness {
     }
 
     pub async fn start_runtime_with_owned_browser(policy: LocalPolicy) -> Result<Self, E2eError> {
-        let config = owned_browser_cdp_runtime_config()?;
+        let config = BrowserCdpRuntimeConfigFixture::owned_browser()?;
         let (runtime_host, running_runtime) =
             tokio::task::spawn_blocking(move || start_browser_cdp_runtime(policy, config))
                 .await
@@ -166,237 +168,12 @@ impl CdpE2eHarness {
     }
 }
 
-pub struct BrowserLevelCdpClient {
-    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
-    next_id: u32,
-    target_id: String,
-    session_id: String,
-}
-
-impl BrowserLevelCdpClient {
-    async fn connect(endpoint: &str) -> Result<Self, E2eError> {
-        let (socket, _response) = connect_async(endpoint).await.context(WebSocketSnafu)?;
-        let mut client = Self {
-            socket,
-            next_id: 1,
-            target_id: String::new(),
-            session_id: String::new(),
-        };
-        let target_id = client.find_or_create_page_target().await?;
-        client.attach_to_target(target_id).await?;
-        client.enable_page_domains().await?;
-
-        Ok(client)
-    }
-
-    pub async fn reconnect_to(endpoint: &str, target_id: String) -> Result<Self, E2eError> {
-        let (socket, _response) = connect_async(endpoint).await.context(WebSocketSnafu)?;
-        let mut client = Self {
-            socket,
-            next_id: 1,
-            target_id: String::new(),
-            session_id: String::new(),
-        };
-        client.attach_to_target(target_id).await?;
-        client.enable_page_domains().await?;
-
-        Ok(client)
-    }
-
-    pub fn target_id(&self) -> &str {
-        &self.target_id
-    }
-
-    pub async fn navigate(&mut self, url: &str) -> Result<Value, E2eError> {
-        self.session_command("Page.navigate", json!({ "url": url }))
-            .await
-    }
-
-    pub async fn create_page_target(&mut self, url: &str) -> Result<String, E2eError> {
-        let created = self
-            .command("Target.createTarget", json!({ "url": url }))
-            .await?;
-        created
-            .pointer("/result/targetId")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or_else(|| external_error("browser-level CDP target creation", MissingTargetId))
-    }
-
-    pub async fn close_target(&mut self, target_id: &str) -> Result<Value, E2eError> {
-        self.command("Target.closeTarget", json!({ "targetId": target_id }))
-            .await
-    }
-
-    pub async fn evaluate(&mut self, expression: &str) -> Result<Value, E2eError> {
-        self.session_command(
-            "Runtime.evaluate",
-            json!({
-                "expression": expression,
-                "returnByValue": true
-            }),
-        )
-        .await
-    }
-
-    async fn find_or_create_page_target(&mut self) -> Result<String, E2eError> {
-        let targets = self.command("Target.getTargets", json!({})).await?;
-        if let Some(target_id) = targets
-            .pointer("/result/targetInfos")
-            .and_then(Value::as_array)
-            .and_then(|targets| {
-                targets.iter().find_map(|target| {
-                    let is_page = target
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .is_some_and(|kind| kind == "page");
-                    is_page.then(|| {
-                        target
-                            .get("targetId")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })?
-                })
-            })
-        {
-            return Ok(target_id);
-        }
-
-        self.create_page_target("about:blank").await
-    }
-
-    async fn attach_to_target(&mut self, target_id: String) -> Result<(), E2eError> {
-        let attached = self
-            .command(
-                "Target.attachToTarget",
-                json!({
-                    "targetId": target_id.clone(),
-                    "flatten": true
-                }),
-            )
-            .await?;
-        self.session_id = attached
-            .pointer("/result/sessionId")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
-            .ok_or_else(|| external_error("browser-level CDP attach", MissingSessionId))?;
-        self.target_id = target_id;
-
-        Ok(())
-    }
-
-    async fn enable_page_domains(&mut self) -> Result<(), E2eError> {
-        let _runtime = self.session_command("Runtime.enable", json!({})).await?;
-        let _page = self.session_command("Page.enable", json!({})).await?;
-        Ok(())
-    }
-
-    async fn command(&mut self, method: &str, params: Value) -> Result<Value, E2eError> {
-        self.send_call(method, params, None).await
-    }
-
-    async fn session_command(&mut self, method: &str, params: Value) -> Result<Value, E2eError> {
-        let session_id = self.session_id.clone();
-        self.send_call(method, params, Some(session_id.as_str()))
-            .await
-    }
-
-    async fn send_call(
-        &mut self,
-        method: &str,
-        params: Value,
-        session_id: Option<&str>,
-    ) -> Result<Value, E2eError> {
-        let id = self.next_id;
-        self.next_id = self.next_id.saturating_add(1);
-        let mut payload = json!({
-            "id": id,
-            "method": method,
-            "params": params
-        });
-        if let Some(session_id) = session_id {
-            payload["sessionId"] = Value::String(session_id.to_owned());
-        }
-        self.socket
-            .send(Message::Text(payload.to_string().into()))
-            .await
-            .context(WebSocketSnafu)?;
-
-        loop {
-            let response = read_browser_level_message(&mut self.socket).await?;
-            if response.pointer("/id") == Some(&Value::from(id)) {
-                return Ok(response);
-            }
-        }
-    }
-}
-
-async fn read_browser_level_message(
-    socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-) -> Result<Value, E2eError> {
-    let message = timeout(Duration::from_secs(2), socket.next())
-        .await
-        .map_err(|_| timeout_error("browser-level CDP response"))?
-        .ok_or_else(|| closed_error("browser-level CDP response"))?
-        .context(WebSocketSnafu)?;
-    if !message.is_text() {
-        return Err(unsupported_websocket_message_error(
-            "browser-level CDP response",
-        ));
-    }
-
-    let source = message.into_text().context(WebSocketSnafu)?.to_string();
-    serde_json::from_str(&source).context(JsonSnafu)
-}
-
-pub fn deny_payload_script_eval_policy(needle: &str) -> Result<LocalPolicy, E2eError> {
-    LocalPolicy::from_json_str(
-        &json!({
-            "rules": [
-                {
-                    "id": "deny-payload-script-eval",
-                    "match": {
-                        "surface": "browser_cdp",
-                        "action": "browser_script_eval",
-                        "payload_contains": needle
-                    },
-                    "decision": "deny",
-                    "reason": "script payload denied by e2e policy"
-                }
-            ]
-        })
-        .to_string(),
-    )
-    .map_err(|error| external_error("deny-payload-script-eval policy setup", error))
-}
-
-pub fn deny_target_script_eval_policy(target: &str) -> Result<LocalPolicy, E2eError> {
-    LocalPolicy::from_json_str(
-        &json!({
-            "rules": [
-                {
-                    "id": "deny-target-script-eval",
-                    "match": {
-                        "surface": "browser_cdp",
-                        "action": "browser_script_eval",
-                        "target_contains": target
-                    },
-                    "decision": "deny",
-                    "reason": "script evaluation denied for this page"
-                }
-            ]
-        })
-        .to_string(),
-    )
-    .map_err(|error| external_error("deny-target-script-eval policy setup", error))
-}
-
 pub async fn create_governed_session_with_mini_upstream(
     policy: LocalPolicy,
 ) -> Result<GovernedBrowserSession, E2eError> {
     let mut system = MiniSystem::new();
     let upstream = system.json_websocket_server(mini_cdp_handler()).await?;
-    let config = browser_cdp_runtime_config(upstream.endpoint())?;
+    let config = BrowserCdpRuntimeConfigFixture::for_upstream(upstream.endpoint())?;
 
     BrowserSessionManager::new(
         config,
@@ -431,59 +208,6 @@ fn start_browser_cdp_runtime(
         .map_err(|error| external_error("CDP runtime start", error))?;
 
     Ok((RuntimeHost::new(runtime), running_runtime))
-}
-
-fn browser_cdp_runtime_config(
-    browser_url: &str,
-) -> Result<erebor_runtime_core::BrowserCdpSurfaceConfig, E2eError> {
-    let config = RuntimeConfig::from_json_str(
-        &json!({
-            "policies": ["policies/e2e/browser.json"],
-            "surfaces": {
-                "browser_cdp": {
-                    "enabled": true,
-                    "listen": "127.0.0.1:0",
-                    "browser_url": browser_url
-                }
-            }
-        })
-        .to_string(),
-    )
-    .map_err(|error| external_error("browser CDP runtime config", error))?;
-    let start_plan = SessionSurfaceStartPlan::from_config(&config)
-        .map_err(|error| external_error("browser CDP runtime start plan", error))?;
-
-    start_plan
-        .browser_cdp()
-        .cloned()
-        .ok_or_else(|| external_error("browser CDP runtime start plan", MissingRuntimeConfig))
-}
-
-fn owned_browser_cdp_runtime_config(
-) -> Result<erebor_runtime_core::BrowserCdpSurfaceConfig, E2eError> {
-    let config = RuntimeConfig::from_json_str(
-        &json!({
-            "policies": ["policies/e2e/browser.json"],
-            "surfaces": {
-                "browser_cdp": {
-                    "enabled": true,
-                    "listen": "127.0.0.1:0",
-                    "browser": {
-                        "headless": true
-                    }
-                }
-            }
-        })
-        .to_string(),
-    )
-    .map_err(|error| external_error("owned browser CDP runtime config", error))?;
-    let start_plan = SessionSurfaceStartPlan::from_config(&config)
-        .map_err(|error| external_error("owned browser CDP runtime start plan", error))?;
-
-    start_plan
-        .browser_cdp()
-        .cloned()
-        .ok_or_else(|| external_error("owned browser CDP runtime start plan", MissingRuntimeConfig))
 }
 
 struct RuntimeHost {
@@ -525,22 +249,3 @@ simple_error!(
     MissingMiniUpstream,
     "mini upstream is not configured for this CDP harness"
 );
-simple_error!(
-    MissingRuntimeConfig,
-    "browser CDP runtime config was missing from the start plan"
-);
-simple_error!(
-    MissingTargetId,
-    "browser-level CDP response did not include a target id"
-);
-simple_error!(
-    MissingSessionId,
-    "browser-level CDP response did not include a session id"
-);
-
-fn unsupported_websocket_message_error(operation: impl Into<String>) -> E2eError {
-    E2eError::UnsupportedWebSocketMessage {
-        operation: operation.into(),
-        location: Location::default(),
-    }
-}

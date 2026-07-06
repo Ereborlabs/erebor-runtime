@@ -4,6 +4,7 @@ use erebor_runtime_e2e::E2eError;
 use serde_json::{json, Value};
 
 #[path = "support/common.rs"]
+#[allow(dead_code, unused_imports)]
 mod common;
 #[path = "support/proxy.rs"]
 mod support;
