@@ -9,7 +9,7 @@ use crate::error::{
     SessionRegistrySnafu,
 };
 
-use super::super::resolve_config_paths;
+use super::super::ConfigPathResolver;
 
 pub(super) fn open_storage(
     registry_path: &Path,
@@ -32,7 +32,7 @@ pub(super) fn open_storage(
         .source_config_path
         .as_deref()
         .unwrap_or(config_artifact);
-    resolve_config_paths(path_base, &mut config);
+    ConfigPathResolver::from_config_path(path_base).resolve(&mut config);
     let requests = config
         .surfaces
         .filesystem
