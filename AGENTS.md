@@ -50,9 +50,12 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
   verification results, and a clear `Done`, `Not done`, or `Blocked` state.
 - No dead code, unused wiring, or placeholder skeletons that do not serve the
   current phase.
-- Strong file-size rule: code files should stay under 300 lines. Treat this as
-  almost non-negotiable; if a file must exceed it temporarily, document why and
-  split it before adding more behavior.
+- Readability-first file-size guidance: code files should usually stay around
+  or under 300 lines because large files often hide unclear ownership. This is
+  not an absolute law. If splitting a cohesive owner, command family, or test
+  scenario would make the code harder to follow, keep it together, document the
+  reason in the phase result or review notes, and avoid adding unrelated
+  behavior to that file.
 - Ownership-first code shape is required. Domain behavior belongs on the struct
   that owns the state or behind a narrow trait at a real platform, runtime,
   protocol, policy, sink, or test-double seam. Loose production free functions
@@ -61,6 +64,10 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
   owner that uses it, and makes the owner easier to read. If it needs config,
   paths, policy, runtime handles, sinks, clocks, IO, validation state, or
   lifecycle state, make it an owner method or an owner collaborator instead.
+- Line count is not the only cleanup signal. A short file with orphaned
+  behavior can still be hard to follow. During ownership cleanup, explicitly
+  audit loose functions and move them onto an owner when doing so improves
+  readability, call flow, or lifecycle ownership.
 - Validation should be part of the validated type or a named validator owner.
   Avoid stray `validate_*` functions that make ownership unclear.
 - Real defaults belong in `Default` impls or derives. Do not add `default_*`
@@ -112,8 +119,9 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
   for narrow test helpers or temporary external glue that a current approved
   phase explicitly keeps and documents.
 - Every crate that returns domain errors owns those errors in `error.rs`. If
-  that file would exceed 300 lines, make `error.rs` a module root and split the
-  variants by responsibility under `src/error/`.
+  that file grows large enough to obscure ownership and splitting improves
+  readability, make `error.rs` a module root and split the variants by
+  responsibility under `src/error/`.
 - Error variants should carry structured context fields, `source` errors, and
   `snafu::Location`; avoid untyped string-only errors at public boundaries
   unless they are wrapped in a typed variant.

@@ -11,7 +11,13 @@
   or functions that are not plugged into the current behavior.
 - Keep file organization intentional: related structs can share a file; errors
   belong in each crate's `error.rs` or a thin `error.rs` module root with
-  focused `error/*.rs` submodules; avoid dumping everything into `lib.rs`.
+  focused `error/*.rs` submodules when that improves readability; avoid
+  dumping everything into `lib.rs`.
+- Treat the 300-line guideline as a readability smell detector, not an
+  absolute law. Prefer files around or under 300 lines when ownership remains
+  clear, but do not split cohesive owners, command families, or scenario tests
+  into tiny fragments just to satisfy a count. If a larger file is clearer,
+  document why and keep unrelated behavior out of it.
 - Keep sibling domain concepts in the same module family. If browser,
   terminal, and filesystem are all surfaces, they belong under the surface
   owner; if Docker and Linux-host are runners, they belong under the runner
@@ -27,6 +33,11 @@
   helper needs repeated context, mutates lifecycle state, coordinates IO, owns
   path/clock/copy decisions, or crosses a policy/protocol boundary, it should
   become an owner method or move behind an existing domain trait.
+- Do not treat line count as the only cleanup signal. A short file with
+  orphaned functions can still be harder to follow than a larger cohesive
+  owner. During ownership cleanup, audit loose functions explicitly and move
+  them onto an owner when doing so improves readability, call flow, or
+  lifecycle ownership.
 - Validation belongs to the validated type or to a named validator owner. Avoid
   stray `validate_*` functions unless they are private framework hooks wrapped
   by an owner.
@@ -84,6 +95,10 @@
 - Log errors once at the owning boundary with structured fields; lower layers
   return enriched errors instead of logging and rethrowing.
 - Keep public APIs small and useful for the current phase.
+- Prefer mature, well-maintained crates for standard domain primitives such as
+  hashing, crypto, parsing, codecs, protocol types, URL handling, and time.
+  Hand-rolled implementations are allowed only when a phase explicitly
+  documents why an upstream crate is unsuitable.
 - Avoid manual string parsing when a structured parser or protocol crate exists.
 - Keep comments sparse and useful.
 
