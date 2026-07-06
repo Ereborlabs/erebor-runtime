@@ -249,6 +249,14 @@ pub enum FilesystemError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("filesystem session-work {field} `{value}` is invalid: {reason}"))]
+    InvalidSessionWorkId {
+        field: &'static str,
+        value: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to {action} filesystem transaction catalog path `{}`: {source}", path.display()))]
     TransactionCatalogIo {
         action: &'static str,
@@ -259,6 +267,21 @@ pub enum FilesystemError {
     },
     #[snafu(display("failed to encode filesystem transaction catalog `{}`: {source}", path.display()))]
     EncodeTransactionCatalog {
+        path: PathBuf,
+        source: JsonError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to {action} filesystem session-work path `{}`: {source}", path.display()))]
+    SessionWorkIo {
+        action: &'static str,
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to encode filesystem session-work artifact `{}`: {source}", path.display()))]
+    EncodeSessionWork {
         path: PathBuf,
         source: JsonError,
         #[snafu(implicit)]

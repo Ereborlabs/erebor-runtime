@@ -67,3 +67,27 @@ impl FilesystemVolumeMode {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilesystemSessionWorkAutocommitBoundary {
+    #[default]
+    SessionFinish,
+    #[serde(other)]
+    Unsupported,
+}
+
+impl FilesystemSessionWorkAutocommitBoundary {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SessionFinish => "session_finish",
+            Self::Unsupported => "unsupported",
+        }
+    }
+
+    #[must_use]
+    pub const fn is_supported(self) -> bool {
+        matches!(self, Self::SessionFinish)
+    }
+}

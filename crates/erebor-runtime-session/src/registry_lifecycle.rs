@@ -7,7 +7,7 @@ use erebor_runtime_core::{
 use erebor_runtime_events::SessionId;
 use erebor_runtime_filesystem::{
     FilesystemCheckpointCommit, FilesystemPromotion, FilesystemPromotionOptions,
-    FilesystemSessionStorage, FilesystemVolumeStorageRequest,
+    FilesystemSessionStorage, FilesystemSessionWorkCommitRequest, FilesystemVolumeStorageRequest,
 };
 use snafu::ResultExt;
 
@@ -128,7 +128,7 @@ fn prepare_filesystem_storage(
         .map(|storage| {
             Some(PreparedFilesystemStorage::new(
                 storage,
-                *filesystem.revert(),
+                filesystem.revert().clone(),
             ))
         })
         .context(FilesystemSurfaceSnafu)
@@ -207,6 +207,14 @@ fn checkpoint_successful_filesystem_layers(
                 options,
             )
             .context(FilesystemSurfaceSnafu)?;
+        } else if let Some(rule) = filesystem.revert().autocommit().session_finish_rule() {
+            let request =
+                FilesystemSessionWorkCommitRequest::autocommit(session_id.as_str(), rule.id())
+                    .context(FilesystemSurfaceSnafu)?;
+            filesystem
+                .storage()
+                .commit_session_work(request)
+                .context(FilesystemSurfaceSnafu)?;
         } else {
             FilesystemCheckpointCommit::commit(filesystem.storage(), session_id.as_str())
                 .context(FilesystemSurfaceSnafu)?;

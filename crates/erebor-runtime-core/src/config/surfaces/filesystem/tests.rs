@@ -37,7 +37,13 @@ fn accepts_filesystem_surface_config_and_reports_file_capabilities(
                 "promote_on_session_finish": true,
                 "retain_layers": true,
                 "preimage_size_limit_bytes": 104857600,
-                "preimage_backend": "linux_reflink"
+                "preimage_backend": "linux_reflink",
+                "autocommit": {
+                  "enabled": true,
+                  "rules": [
+                    { "id": "session-finish", "boundary": "session_finish" }
+                  ]
+                }
               }
             }
           }
@@ -75,6 +81,13 @@ fn accepts_filesystem_surface_config_and_reports_file_capabilities(
         filesystem.revert().preimage_backend(),
         FilesystemPreimageBackendKind::LinuxReflink
     );
+    let autocommit = filesystem.revert().autocommit();
+    assert!(autocommit.enabled());
+    assert_eq!(autocommit.rules().len(), 1);
+    let session_finish_rule = autocommit
+        .session_finish_rule()
+        .ok_or_else(|| io::Error::other("missing session-finish autocommit rule"))?;
+    assert_eq!(session_finish_rule.id(), "session-finish");
 
     let capabilities = config.session_interception_capabilities();
     for operation in [
@@ -242,6 +255,52 @@ fn rejects_unsupported_filesystem_preimage_backend_kinds() {
                   "session_path": "/tmp/session"
                 }
               ]
+            }
+          }
+        }
+        "#,
+    );
+}
+
+#[test]
+fn rejects_enabled_filesystem_autocommit_without_rules() {
+    assert_invalid_filesystem_config(
+        r#"
+        {
+          "policies": ["policy.json"],
+          "surfaces": {
+            "filesystem": {
+              "enabled": true,
+              "revert": {
+                "autocommit": {
+                  "enabled": true
+                }
+              }
+            }
+          }
+        }
+        "#,
+    );
+}
+
+#[test]
+fn rejects_duplicate_filesystem_autocommit_rule_ids() {
+    assert_invalid_filesystem_config(
+        r#"
+        {
+          "policies": ["policy.json"],
+          "surfaces": {
+            "filesystem": {
+              "enabled": true,
+              "revert": {
+                "autocommit": {
+                  "enabled": true,
+                  "rules": [
+                    { "id": "session-finish", "boundary": "session_finish" },
+                    { "id": "session-finish", "boundary": "session_finish" }
+                  ]
+                }
+              }
             }
           }
         }

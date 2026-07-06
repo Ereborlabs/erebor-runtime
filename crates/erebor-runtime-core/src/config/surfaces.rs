@@ -15,6 +15,8 @@ pub use browser::{
 pub use filesystem::{
     FilesystemBackendConfig, FilesystemBackendKind, FilesystemBackendLayerConfig,
     FilesystemPreimageBackendKind, FilesystemRevertConfig, FilesystemRevertLayerConfig,
+    FilesystemSessionWorkAutocommitConfig, FilesystemSessionWorkAutocommitLayerConfig,
+    FilesystemSessionWorkAutocommitRuleConfig, FilesystemSessionWorkAutocommitRuleLayerConfig,
     FilesystemSurfaceConfig, FilesystemSurfaceLayerConfig, FilesystemVolumeConfig,
     FilesystemVolumeLayerConfig, FilesystemVolumeMode,
 };

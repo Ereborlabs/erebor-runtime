@@ -23,6 +23,8 @@ mod overlay_promotion_rollback;
 mod overlay_session_view;
 #[path = "linux_host/retention.rs"]
 mod retention;
+#[path = "linux_host/session_work_transaction.rs"]
+mod session_work_transaction;
 #[path = "linux_host/support.rs"]
 mod support;
 #[path = "linux_host/transaction_catalog.rs"]

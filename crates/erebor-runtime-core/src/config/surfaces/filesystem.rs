@@ -4,7 +4,8 @@ use std::{
 };
 
 pub use erebor_runtime_filesystem::{
-    FilesystemBackendKind, FilesystemPreimageBackendKind, FilesystemVolumeMode,
+    FilesystemBackendKind, FilesystemPreimageBackendKind, FilesystemSessionWorkAutocommitBoundary,
+    FilesystemVolumeMode,
 };
 use serde::Deserialize;
 use snafu::ensure;
@@ -113,7 +114,7 @@ impl FilesystemVolumeLayerConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct FilesystemRevertLayerConfig {
@@ -121,6 +122,8 @@ pub struct FilesystemRevertLayerConfig {
     pub retain_layers: bool,
     pub preimage_size_limit_bytes: u64,
     pub preimage_backend: FilesystemPreimageBackendKind,
+    #[serde(default)]
+    pub autocommit: FilesystemSessionWorkAutocommitLayerConfig,
 }
 
 impl Default for FilesystemRevertLayerConfig {
@@ -130,6 +133,7 @@ impl Default for FilesystemRevertLayerConfig {
             retain_layers: true,
             preimage_size_limit_bytes: 104_857_600,
             preimage_backend: FilesystemPreimageBackendKind::OstreeBytes,
+            autocommit: FilesystemSessionWorkAutocommitLayerConfig::default(),
         }
     }
 }
@@ -140,6 +144,71 @@ impl FilesystemRevertLayerConfig {
             self.preimage_backend.is_supported(),
             InvalidFilesystemSurfaceConfigSnafu {
                 reason: String::from("unsupported filesystem preimage backend kind")
+            }
+        );
+        self.autocommit.validate()?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct FilesystemSessionWorkAutocommitLayerConfig {
+    pub enabled: bool,
+    pub rules: Vec<FilesystemSessionWorkAutocommitRuleLayerConfig>,
+}
+
+impl FilesystemSessionWorkAutocommitLayerConfig {
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        if !self.enabled {
+            return Ok(());
+        }
+        ensure!(
+            !self.rules.is_empty(),
+            InvalidFilesystemSurfaceConfigSnafu {
+                reason: String::from("filesystem autocommit requires at least one rule")
+            }
+        );
+        let mut ids = HashSet::new();
+        for rule in &self.rules {
+            rule.validate()?;
+            ensure!(
+                ids.insert(rule.id.clone()),
+                InvalidFilesystemSurfaceConfigSnafu {
+                    reason: format!("filesystem autocommit rule `{}` is duplicated", rule.id)
+                }
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilesystemSessionWorkAutocommitRuleLayerConfig {
+    pub id: String,
+    #[serde(default)]
+    pub boundary: FilesystemSessionWorkAutocommitBoundary,
+}
+
+impl FilesystemSessionWorkAutocommitRuleLayerConfig {
+    fn validate(&self) -> Result<(), RuntimeConfigError> {
+        ensure!(
+            !self.id.trim().is_empty()
+                && self
+                    .id
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric()
+                        || matches!(character, '_' | '-')),
+            InvalidFilesystemSurfaceConfigSnafu {
+                reason: format!("filesystem autocommit rule id `{}` is invalid", self.id)
+            }
+        );
+        ensure!(
+            self.boundary.is_supported(),
+            InvalidFilesystemSurfaceConfigSnafu {
+                reason: String::from("unsupported filesystem autocommit boundary")
             }
         );
         Ok(())
@@ -183,7 +252,7 @@ impl FilesystemSurfaceConfig {
             policies: SurfacePolicyResolver::resolve(&config.policies, default_policies),
             backend: config.backend.into(),
             volumes: config.volumes.iter().map(Into::into).collect(),
-            revert: config.revert.into(),
+            revert: config.revert.clone().into(),
         }
     }
 }
@@ -247,12 +316,13 @@ impl From<&FilesystemVolumeLayerConfig> for FilesystemVolumeConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FilesystemRevertConfig {
     promote_on_session_finish: bool,
     retain_layers: bool,
     preimage_size_limit_bytes: u64,
     preimage_backend: FilesystemPreimageBackendKind,
+    autocommit: FilesystemSessionWorkAutocommitConfig,
 }
 
 impl FilesystemRevertConfig {
@@ -275,6 +345,11 @@ impl FilesystemRevertConfig {
     pub const fn preimage_backend(&self) -> FilesystemPreimageBackendKind {
         self.preimage_backend
     }
+
+    #[must_use]
+    pub const fn autocommit(&self) -> &FilesystemSessionWorkAutocommitConfig {
+        &self.autocommit
+    }
 }
 
 impl From<FilesystemRevertLayerConfig> for FilesystemRevertConfig {
@@ -284,6 +359,71 @@ impl From<FilesystemRevertLayerConfig> for FilesystemRevertConfig {
             retain_layers: config.retain_layers,
             preimage_size_limit_bytes: config.preimage_size_limit_bytes,
             preimage_backend: config.preimage_backend,
+            autocommit: config.autocommit.into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FilesystemSessionWorkAutocommitConfig {
+    enabled: bool,
+    rules: Vec<FilesystemSessionWorkAutocommitRuleConfig>,
+}
+
+impl FilesystemSessionWorkAutocommitConfig {
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub fn rules(&self) -> &[FilesystemSessionWorkAutocommitRuleConfig] {
+        &self.rules
+    }
+
+    #[must_use]
+    pub fn session_finish_rule(&self) -> Option<&FilesystemSessionWorkAutocommitRuleConfig> {
+        self.enabled.then_some(())?;
+        self.rules
+            .iter()
+            .find(|rule| rule.boundary() == FilesystemSessionWorkAutocommitBoundary::SessionFinish)
+    }
+}
+
+impl From<FilesystemSessionWorkAutocommitLayerConfig> for FilesystemSessionWorkAutocommitConfig {
+    fn from(config: FilesystemSessionWorkAutocommitLayerConfig) -> Self {
+        Self {
+            enabled: config.enabled,
+            rules: config.rules.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilesystemSessionWorkAutocommitRuleConfig {
+    id: String,
+    boundary: FilesystemSessionWorkAutocommitBoundary,
+}
+
+impl FilesystemSessionWorkAutocommitRuleConfig {
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub const fn boundary(&self) -> FilesystemSessionWorkAutocommitBoundary {
+        self.boundary
+    }
+}
+
+impl From<FilesystemSessionWorkAutocommitRuleLayerConfig>
+    for FilesystemSessionWorkAutocommitRuleConfig
+{
+    fn from(config: FilesystemSessionWorkAutocommitRuleLayerConfig) -> Self {
+        Self {
+            id: config.id,
+            boundary: config.boundary,
         }
     }
 }

@@ -2,8 +2,10 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use erebor_runtime_filesystem::{
-    FilesystemRetentionInventory, FilesystemRetentionPrune, FilesystemTransactionCatalog,
-    FilesystemTransactionRename, FilesystemTransactionRollback, FilesystemTransactionTarget,
+    FilesystemRetentionInventory, FilesystemRetentionPrune, FilesystemSessionWorkCatalog,
+    FilesystemSessionWorkCommitRequest, FilesystemSessionWorkRename, FilesystemSessionWorkRollback,
+    FilesystemSessionWorkTarget, FilesystemTransactionCatalog, FilesystemTransactionRename,
+    FilesystemTransactionRollback, FilesystemTransactionTarget,
 };
 use snafu::ResultExt;
 
@@ -14,10 +16,8 @@ use super::{parse_non_empty_path, parse_non_empty_string, OutputFormat};
 mod render;
 mod storage;
 
-use render::{
-    print_catalog, print_retention_inventory, print_retention_prune, print_rollback, print_target,
-};
-use storage::open_storage;
+use render::{RetentionRenderer, SessionWorkRenderer, TransactionRenderer};
+use storage::FilesystemStorageOpener;
 
 #[derive(Debug, Args)]
 pub(crate) struct FilesystemArgs {
@@ -35,10 +35,7 @@ impl FilesystemArgs {
 }
 
 pub(crate) fn execute(args: &FilesystemArgs) -> Result<(), CliError> {
-    match &args.command {
-        FilesystemCommand::Transactions(args) => execute_transactions(args),
-        FilesystemCommand::Retention(args) => execute_retention(args),
-    }
+    FilesystemCommandOwner::new(args).execute()
 }
 
 #[derive(Debug, Subcommand)]
@@ -60,6 +57,12 @@ impl TransactionArgs {
         match &self.command {
             TransactionCommand::List(args) => format!(
                 "filesystem transactions list registry={} session={} format={}",
+                args.session.registry.display(),
+                args.session.session,
+                args.format.as_str()
+            ),
+            TransactionCommand::Commit(args) => format!(
+                "filesystem transactions commit registry={} session={} format={}",
                 args.session.registry.display(),
                 args.session.session,
                 args.format.as_str()
@@ -92,6 +95,8 @@ impl TransactionArgs {
 enum TransactionCommand {
     /// List transaction and subtransaction handles for a session.
     List(TransactionListArgs),
+    /// Commit current session work without host promotion.
+    Commit(TransactionCommitArgs),
     /// Show changed paths for a transaction or subtransaction.
     Show(TransactionShowArgs),
     /// Rename a transaction or subtransaction handle.
@@ -104,6 +109,16 @@ enum TransactionCommand {
 struct TransactionListArgs {
     #[command(flatten)]
     session: TransactionSessionArgs,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
+struct TransactionCommitArgs {
+    #[command(flatten)]
+    session: TransactionSessionArgs,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    name: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     format: OutputFormat,
 }
@@ -198,48 +213,149 @@ struct RetentionPruneArgs {
     format: OutputFormat,
 }
 
-fn execute_transactions(args: &TransactionArgs) -> Result<(), CliError> {
-    match &args.command {
-        TransactionCommand::List(args) => {
-            let storage = open_storage(&args.session.registry, &args.session.session)?;
-            let catalog = FilesystemTransactionCatalog::load(&storage).context(FilesystemSnafu)?;
-            print_catalog(&catalog, args.format)
-        }
-        TransactionCommand::Show(args) => {
-            let storage = open_storage(&args.session.registry, &args.session.session)?;
-            let target = FilesystemTransactionTarget::show(&storage, &args.target)
-                .context(FilesystemSnafu)?;
-            print_target(&target, args.format)
-        }
-        TransactionCommand::Rename(args) => {
-            let storage = open_storage(&args.session.registry, &args.session.session)?;
-            let rename = FilesystemTransactionRename::rename(&storage, &args.target, &args.name)
-                .context(FilesystemSnafu)?;
-            println!("renamed {} {}", rename.handle(), rename.name());
-            Ok(())
-        }
-        TransactionCommand::Rollback(args) => {
-            let storage = open_storage(&args.session.registry, &args.session.session)?;
-            let rollback = FilesystemTransactionRollback::rollback(&storage, &args.target)
-                .context(FilesystemSnafu)?;
-            print_rollback(&rollback, args.format)
+struct FilesystemCommandOwner<'a> {
+    args: &'a FilesystemArgs,
+}
+
+impl<'a> FilesystemCommandOwner<'a> {
+    const fn new(args: &'a FilesystemArgs) -> Self {
+        Self { args }
+    }
+
+    fn execute(&self) -> Result<(), CliError> {
+        match &self.args.command {
+            FilesystemCommand::Transactions(args) => TransactionCommandOwner::new(args).execute(),
+            FilesystemCommand::Retention(args) => RetentionCommandOwner::new(args).execute(),
         }
     }
 }
 
-fn execute_retention(args: &RetentionArgs) -> Result<(), CliError> {
-    match &args.command {
-        RetentionCommand::List(args) => {
-            let storage = open_storage(&args.session.registry, &args.session.session)?;
-            let inventory =
-                FilesystemRetentionInventory::load(&storage).context(FilesystemSnafu)?;
-            print_retention_inventory(&inventory, args.format)
+struct TransactionCommandOwner<'a> {
+    args: &'a TransactionArgs,
+}
+
+impl<'a> TransactionCommandOwner<'a> {
+    const fn new(args: &'a TransactionArgs) -> Self {
+        Self { args }
+    }
+
+    fn execute(&self) -> Result<(), CliError> {
+        match &self.args.command {
+            TransactionCommand::List(args) => self.list(args),
+            TransactionCommand::Commit(args) => self.commit(args),
+            TransactionCommand::Show(args) => self.show(args),
+            TransactionCommand::Rename(args) => self.rename(args),
+            TransactionCommand::Rollback(args) => self.rollback(args),
         }
-        RetentionCommand::Prune(args) => {
-            let storage = open_storage(&args.session.registry, &args.session.session)?;
-            let prune =
-                FilesystemRetentionPrune::prune(&storage, &args.target).context(FilesystemSnafu)?;
-            print_retention_prune(&prune, args.format)
+    }
+
+    fn list(&self, args: &TransactionListArgs) -> Result<(), CliError> {
+        let storage =
+            FilesystemStorageOpener::new(&args.session.registry, &args.session.session).open()?;
+        let catalog = FilesystemTransactionCatalog::load(&storage).context(FilesystemSnafu)?;
+        TransactionRenderer::print_catalog(&catalog, args.format).and_then(|()| {
+            let work = FilesystemSessionWorkCatalog::load(&storage, &args.session.session)
+                .context(FilesystemSnafu)?;
+            SessionWorkRenderer::print_catalog(&work, args.format)
+        })
+    }
+
+    fn commit(&self, args: &TransactionCommitArgs) -> Result<(), CliError> {
+        let storage =
+            FilesystemStorageOpener::new(&args.session.registry, &args.session.session).open()?;
+        let mut request = FilesystemSessionWorkCommitRequest::user(&args.session.session)
+            .context(FilesystemSnafu)?;
+        if let Some(name) = args.name.as_deref() {
+            request.set_name(name).context(FilesystemSnafu)?;
         }
+        let commit = storage
+            .commit_session_work(request)
+            .context(FilesystemSnafu)?;
+        SessionWorkRenderer::print_commit(&commit, args.format)
+    }
+
+    fn show(&self, args: &TransactionShowArgs) -> Result<(), CliError> {
+        let storage =
+            FilesystemStorageOpener::new(&args.session.registry, &args.session.session).open()?;
+        match FilesystemTransactionTarget::show(&storage, &args.target) {
+            Ok(target) => TransactionRenderer::print_target(&target, args.format),
+            Err(_) => {
+                let target = FilesystemSessionWorkTarget::show(
+                    &storage,
+                    &args.session.session,
+                    &args.target,
+                )
+                .context(FilesystemSnafu)?;
+                SessionWorkRenderer::print_target(&target, args.format)
+            }
+        }
+    }
+
+    fn rename(&self, args: &TransactionRenameArgs) -> Result<(), CliError> {
+        let storage =
+            FilesystemStorageOpener::new(&args.session.registry, &args.session.session).open()?;
+        match FilesystemTransactionRename::rename(&storage, &args.target, &args.name) {
+            Ok(rename) => println!("renamed {} {}", rename.handle(), rename.name()),
+            Err(_) => {
+                let rename = FilesystemSessionWorkRename::rename(
+                    &storage,
+                    &args.session.session,
+                    &args.target,
+                    &args.name,
+                )
+                .context(FilesystemSnafu)?;
+                println!("renamed {} {}", rename.handle(), rename.name());
+            }
+        }
+        Ok(())
+    }
+
+    fn rollback(&self, args: &TransactionRollbackArgs) -> Result<(), CliError> {
+        let storage =
+            FilesystemStorageOpener::new(&args.session.registry, &args.session.session).open()?;
+        match FilesystemTransactionRollback::rollback(&storage, &args.target) {
+            Ok(rollback) => TransactionRenderer::print_rollback(&rollback, args.format),
+            Err(_) => {
+                let rollback = FilesystemSessionWorkRollback::rollback(
+                    &storage,
+                    &args.session.session,
+                    &args.target,
+                )
+                .context(FilesystemSnafu)?;
+                SessionWorkRenderer::print_rollback(&rollback, args.format)
+            }
+        }
+    }
+}
+
+struct RetentionCommandOwner<'a> {
+    args: &'a RetentionArgs,
+}
+
+impl<'a> RetentionCommandOwner<'a> {
+    const fn new(args: &'a RetentionArgs) -> Self {
+        Self { args }
+    }
+
+    fn execute(&self) -> Result<(), CliError> {
+        match &self.args.command {
+            RetentionCommand::List(args) => self.list(args),
+            RetentionCommand::Prune(args) => self.prune(args),
+        }
+    }
+
+    fn list(&self, args: &RetentionListArgs) -> Result<(), CliError> {
+        let storage =
+            FilesystemStorageOpener::new(&args.session.registry, &args.session.session).open()?;
+        let inventory = FilesystemRetentionInventory::load(&storage).context(FilesystemSnafu)?;
+        RetentionRenderer::print_inventory(&inventory, args.format)
+    }
+
+    fn prune(&self, args: &RetentionPruneArgs) -> Result<(), CliError> {
+        let storage =
+            FilesystemStorageOpener::new(&args.session.registry, &args.session.session).open()?;
+        let prune =
+            FilesystemRetentionPrune::prune(&storage, &args.target).context(FilesystemSnafu)?;
+        RetentionRenderer::print_prune(&prune, args.format)
     }
 }

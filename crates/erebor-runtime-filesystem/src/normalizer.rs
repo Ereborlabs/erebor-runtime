@@ -19,8 +19,29 @@ use proc::ActiveWriterProbe;
 mod tests;
 
 impl FilesystemSessionStorage {
+    pub fn ensure_quiescent(&self) -> Result<()> {
+        FilesystemSessionQuiescenceProbe::new(self).ensure_no_active_writers()
+    }
+
     pub fn normalize_layers(&self) -> Result<Vec<FilesystemLayerManifest>> {
         FilesystemSessionLayerNormalizer::new(self).normalize()
+    }
+}
+
+struct FilesystemSessionQuiescenceProbe<'a> {
+    storage: &'a FilesystemSessionStorage,
+}
+
+impl<'a> FilesystemSessionQuiescenceProbe<'a> {
+    const fn new(storage: &'a FilesystemSessionStorage) -> Self {
+        Self { storage }
+    }
+
+    fn ensure_no_active_writers(&self) -> Result<()> {
+        for volume in self.storage.volumes() {
+            ActiveWriterProbe::new(volume).ensure_no_active_writers()?;
+        }
+        Ok(())
     }
 }
 

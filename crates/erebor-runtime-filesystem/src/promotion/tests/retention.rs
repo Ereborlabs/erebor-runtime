@@ -19,7 +19,7 @@ use super::{
 #[test]
 fn retention_inventory_lists_refs_and_writes_audit_event() -> TestResult {
     let fixture = fixture()?;
-    let runner = promoted_fixture(&fixture)?;
+    let runner = RetentionPromotionScenario::new(&fixture).promote()?;
 
     let inventory = FilesystemRetentionInventory::load_using_repository(&fixture.storage, &runner)?;
 
@@ -48,7 +48,7 @@ fn retention_inventory_lists_refs_and_writes_audit_event() -> TestResult {
 #[test]
 fn retention_prune_refuses_applied_transaction() -> TestResult {
     let fixture = fixture()?;
-    let runner = promoted_fixture(&fixture)?;
+    let runner = RetentionPromotionScenario::new(&fixture).promote()?;
 
     let result =
         FilesystemRetentionPrune::prune_using_repository(&fixture.storage, "tx@{0}", &runner);
@@ -67,7 +67,7 @@ fn retention_prune_refuses_applied_transaction() -> TestResult {
 #[test]
 fn retention_prunes_restored_transaction_refs_and_workdirs() -> TestResult {
     let fixture = fixture()?;
-    let runner = promoted_fixture(&fixture)?;
+    let runner = RetentionPromotionScenario::new(&fixture).promote()?;
     FilesystemTransactionRollback::rollback_using_repository(&fixture.storage, "tx@{0}", &runner)?;
 
     let prune =
@@ -105,7 +105,7 @@ fn retention_prunes_restored_transaction_refs_and_workdirs() -> TestResult {
 #[test]
 fn retention_prunes_restored_subtransaction_preimage_without_layer_ref() -> TestResult {
     let fixture = fixture()?;
-    let runner = promoted_fixture(&fixture)?;
+    let runner = RetentionPromotionScenario::new(&fixture).promote()?;
     FilesystemTransactionRollback::rollback_using_repository(&fixture.storage, "tx@{0}", &runner)?;
 
     let prune = FilesystemRetentionPrune::prune_using_repository(
@@ -135,7 +135,7 @@ fn retention_prunes_restored_subtransaction_preimage_without_layer_ref() -> Test
 #[test]
 fn retention_inventory_reports_missing_expected_ref() -> TestResult {
     let fixture = fixture()?;
-    let runner = promoted_fixture(&fixture)?;
+    let runner = RetentionPromotionScenario::new(&fixture).promote()?;
     runner.forget_ref("erebor/checkpoints/session-1/volumes/project/layer");
 
     let inventory = FilesystemRetentionInventory::load_using_repository(&fixture.storage, &runner)?;
@@ -152,7 +152,7 @@ fn retention_inventory_reports_missing_expected_ref() -> TestResult {
 #[test]
 fn retention_inventory_reports_corrupt_promotion_manifest() -> TestResult {
     let fixture = fixture()?;
-    let runner = promoted_fixture(&fixture)?;
+    let runner = RetentionPromotionScenario::new(&fixture).promote()?;
     fs::write(
         runner
             .committed_tree("erebor/promotions/session-1/manifest")
@@ -172,24 +172,33 @@ fn retention_inventory_reports_corrupt_promotion_manifest() -> TestResult {
     Ok(())
 }
 
-fn promoted_fixture(
-    fixture: &super::support::Fixture,
-) -> Result<FakeOstreeRepository, Box<dyn std::error::Error>> {
-    fixture.seed_host("settings.json", "{\"theme\":\"light\"}\n")?;
-    fs::write(
-        fixture.upper().join("settings.json"),
-        "{\"theme\":\"dark\"}\n",
-    )?;
-    let manifests = fixture.storage.normalize_layers()?;
-    let runner = FakeOstreeRepository::successful();
-    commit_checkpoint(fixture, &manifests, &runner)?;
-    PromotionTestWorkflow::new(
-        &fixture.storage,
-        &manifests,
-        crate::promotion::FilesystemPromotionOptions::new(1024 * 1024),
-        &runner,
-        &NoopHook,
-    )
-    .promote()?;
-    Ok(runner)
+struct RetentionPromotionScenario<'a> {
+    fixture: &'a super::support::Fixture,
+}
+
+impl<'a> RetentionPromotionScenario<'a> {
+    const fn new(fixture: &'a super::support::Fixture) -> Self {
+        Self { fixture }
+    }
+
+    fn promote(&self) -> Result<FakeOstreeRepository, Box<dyn std::error::Error>> {
+        self.fixture
+            .seed_host("settings.json", "{\"theme\":\"light\"}\n")?;
+        fs::write(
+            self.fixture.upper().join("settings.json"),
+            "{\"theme\":\"dark\"}\n",
+        )?;
+        let manifests = self.fixture.storage.normalize_layers()?;
+        let runner = FakeOstreeRepository::successful();
+        commit_checkpoint(self.fixture, &manifests, &runner)?;
+        PromotionTestWorkflow::new(
+            &self.fixture.storage,
+            &manifests,
+            crate::promotion::FilesystemPromotionOptions::new(1024 * 1024),
+            &runner,
+            &NoopHook,
+        )
+        .promote()?;
+        Ok(runner)
+    }
 }

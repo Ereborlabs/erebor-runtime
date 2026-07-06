@@ -16,6 +16,7 @@ impl ErrorExt for FilesystemError {
             | Self::InvalidPromotionId { .. }
             | Self::InvalidTransactionHandle { .. }
             | Self::InvalidTransactionName { .. }
+            | Self::InvalidSessionWorkId { .. }
             | Self::InvalidRetentionTarget { .. }
             | Self::ProtectedRetentionTarget { .. } => StatusCode::InvalidArguments,
             Self::CreateStorageDir { .. }
@@ -31,10 +32,12 @@ impl ErrorExt for FilesystemError {
             | Self::CheckpointIo { .. }
             | Self::PromotionIo { .. }
             | Self::TransactionCatalogIo { .. }
+            | Self::SessionWorkIo { .. }
             | Self::RetentionIo { .. }
             | Self::EncodeCheckpointManifest { .. }
             | Self::EncodePromotionManifest { .. }
             | Self::EncodeTransactionCatalog { .. }
+            | Self::EncodeSessionWork { .. }
             | Self::EncodeRetention { .. }
             | Self::StartOstree { .. }
             | Self::OstreeInitFailed { .. }
@@ -61,6 +64,7 @@ impl ErrorExt for FilesystemError {
             | Self::CheckpointIo { source, .. }
             | Self::PromotionIo { source, .. }
             | Self::TransactionCatalogIo { source, .. }
+            | Self::SessionWorkIo { source, .. }
             | Self::RetentionIo { source, .. }
             | Self::StartOstree { source, .. } => RetryHint::from_io_error(source),
             Self::InvalidVolumeId { .. }
@@ -72,6 +76,7 @@ impl ErrorExt for FilesystemError {
             | Self::InvalidPromotionId { .. }
             | Self::InvalidTransactionHandle { .. }
             | Self::InvalidTransactionName { .. }
+            | Self::InvalidSessionWorkId { .. }
             | Self::InvalidRetentionTarget { .. }
             | Self::ProtectedRetentionTarget { .. }
             | Self::ActiveLayerWriter { .. }
@@ -85,6 +90,7 @@ impl ErrorExt for FilesystemError {
             | Self::EncodeCheckpointManifest { .. }
             | Self::EncodePromotionManifest { .. }
             | Self::EncodeTransactionCatalog { .. }
+            | Self::EncodeSessionWork { .. }
             | Self::EncodeRetention { .. }
             | Self::OstreeInitFailed { .. }
             | Self::OstreeCommandFailed { .. } => RetryHint::NonRetryable,

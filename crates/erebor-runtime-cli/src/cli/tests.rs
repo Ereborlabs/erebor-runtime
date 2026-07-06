@@ -182,6 +182,18 @@ fn accepts_filesystem_transaction_catalog_commands() {
         "--session",
         "session-1",
     ]);
+    let commit = Cli::try_parse_from([
+        "erebor-runtime",
+        "filesystem",
+        "transactions",
+        "commit",
+        "--registry",
+        ".erebor/sessions",
+        "--session",
+        "session-1",
+        "--name",
+        "before risky edit",
+    ]);
     let rollback = Cli::try_parse_from([
         "erebor-runtime",
         "filesystem",
@@ -195,6 +207,7 @@ fn accepts_filesystem_transaction_catalog_commands() {
     ]);
 
     assert!(list.is_ok());
+    assert!(commit.is_ok());
     assert!(rollback.is_ok());
 }
 

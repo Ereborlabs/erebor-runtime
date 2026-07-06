@@ -10,13 +10,17 @@ mod normalizer;
 mod ostree;
 mod overlay;
 mod promotion;
+mod session_work;
 mod storage;
 
 pub use checkpoint::{
     FilesystemCheckpointCommit, FilesystemCheckpointManifest, FilesystemCheckpointVolume,
     CHECKPOINT_MANIFEST_FILE, CHECKPOINT_MANIFEST_KIND,
 };
-pub use config::{FilesystemBackendKind, FilesystemPreimageBackendKind, FilesystemVolumeMode};
+pub use config::{
+    FilesystemBackendKind, FilesystemPreimageBackendKind, FilesystemSessionWorkAutocommitBoundary,
+    FilesystemVolumeMode,
+};
 pub use error::{FilesystemError, Result};
 pub use linux_overlay_session::LinuxOverlaySessionView;
 pub use manifest::{
@@ -38,6 +42,15 @@ pub use promotion::{
     FilesystemTransactionRollback, FilesystemTransactionState, FilesystemTransactionTarget,
     PREIMAGE_MANIFEST_FILE, PREIMAGE_MANIFEST_KIND, PROMOTION_MANIFEST_FILE,
     PROMOTION_MANIFEST_KIND,
+};
+pub use session_work::{
+    FilesystemSessionWorkCatalog, FilesystemSessionWorkChange, FilesystemSessionWorkCommit,
+    FilesystemSessionWorkCommitRequest, FilesystemSessionWorkCommitSource,
+    FilesystemSessionWorkCommitter, FilesystemSessionWorkManifest, FilesystemSessionWorkRename,
+    FilesystemSessionWorkRollback, FilesystemSessionWorkSubtransaction,
+    FilesystemSessionWorkTarget, FilesystemSessionWorkTransaction,
+    FilesystemSessionWorkTransactionState, FilesystemSessionWorkVolume, SESSION_WORK_MANIFEST_FILE,
+    SESSION_WORK_MANIFEST_KIND,
 };
 pub use storage::{
     FilesystemOverlayStorage, FilesystemSessionStorage, FilesystemVolumeStorage,
