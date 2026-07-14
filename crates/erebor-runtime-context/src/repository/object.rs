@@ -161,6 +161,7 @@ impl ContextRepository {
             .map_err(|source| Box::new(source) as BoxedError)
             .context(WriteObjectSnafu { kind: "blob" })?
             .detach();
+        crate::write_boundary::reach(crate::write_boundary::WriteBoundary::Blob);
         ContextObjectId::from_object_id(id)
     }
 
@@ -248,6 +249,7 @@ impl ContextRepository {
             )
             .map_err(|source| Box::new(source) as BoxedError)
             .context(WriteObjectSnafu { kind: "commit" })?;
+        crate::write_boundary::reach(crate::write_boundary::WriteBoundary::Commit);
         ContextObjectId::from_object_id(commit.id)
     }
 

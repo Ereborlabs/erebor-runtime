@@ -15,5 +15,9 @@ snafu.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 
+[dev-dependencies]
+erebor-runtime-context = { path = "../erebor-runtime-context", features = ["test-support"] }
+tempfile = "3.23.0"
+
 [lints]
 workspace = true

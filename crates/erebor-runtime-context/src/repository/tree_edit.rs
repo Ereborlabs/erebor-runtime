@@ -138,6 +138,7 @@ impl ContextRepository {
             .map_err(|source| Box::new(source) as BoxedError)
             .context(EditTreeSnafu)?
             .detach();
+        crate::write_boundary::reach(crate::write_boundary::WriteBoundary::Tree);
         ContextObjectId::from_object_id(tree)
     }
 }

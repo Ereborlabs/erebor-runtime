@@ -14,7 +14,7 @@ use crate::error::{
     StaleScopeHeadSnafu, SymbolicScopeRefSnafu, UpdateScopeRefSnafu,
 };
 
-const SCOPE_PREFIX: &str = "refs/scopes";
+pub(super) const SCOPE_PREFIX: &str = "refs/scopes";
 
 pub(super) struct DirectScopeRefUpdate {
     scope: ScopeRef,
@@ -100,6 +100,40 @@ impl ScopeRef {
             full_name,
             kind,
         })
+    }
+
+    pub(super) fn from_full_name(full_name: String) -> Result<Self> {
+        let Some(remainder) = full_name.strip_prefix(&format!("{SCOPE_PREFIX}/")) else {
+            return InvalidScopeRefSnafu {
+                component: "scope ref",
+                value: full_name,
+                reason: "is outside the repository-owned scope namespace".to_owned(),
+            }
+            .fail();
+        };
+        let Some((session_id, leaf)) = remainder.split_once('/') else {
+            return InvalidScopeRefSnafu {
+                component: "scope ref",
+                value: full_name,
+                reason: "must contain a session id and scope leaf".to_owned(),
+            }
+            .fail();
+        };
+        if leaf == "root" {
+            return Self::root(session_id);
+        }
+        if leaf == "unknown" {
+            return Self::unknown(session_id);
+        }
+        if let Some(scope_id) = leaf.strip_prefix("scope/") {
+            return Self::scope(session_id, scope_id);
+        }
+        InvalidScopeRefSnafu {
+            component: "scope ref",
+            value: full_name,
+            reason: "must end in `root`, `unknown`, or `scope/<scope-id>`".to_owned(),
+        }
+        .fail()
     }
 
     #[must_use]
@@ -319,24 +353,22 @@ impl ContextRepository {
             .context(ReadScopeRefSnafu {
                 scope: scope.to_string(),
             })?;
-        let references = reference_platform
-            .all()
+        let mut references = reference_platform
+            .prefixed(descendant_prefix.as_str())
             .map_err(|source| Box::new(source) as BoxedError)
             .context(ReadScopeRefSnafu {
                 scope: scope.to_string(),
             })?;
-        for reference in references {
+        if let Some(reference) = references.next() {
             let reference = reference.context(ReadScopeRefSnafu {
                 scope: scope.to_string(),
             })?;
             let name = reference.name().to_string();
-            if name.starts_with(&descendant_prefix) {
-                return ScopeRefPrefixConflictSnafu {
-                    scope: scope.to_string(),
-                    existing: name,
-                }
-                .fail();
+            return ScopeRefPrefixConflictSnafu {
+                scope: scope.to_string(),
+                existing: name,
             }
+            .fail();
         }
         Ok(())
     }
@@ -418,9 +450,23 @@ impl ContextRepository {
                 })
             })
             .collect::<std::result::Result<Vec<_>, BoxedError>>()?;
+        let (start, complete) = if edits.len() == 1 {
+            (
+                crate::write_boundary::WriteBoundary::BeforeSingleRefEdit,
+                crate::write_boundary::WriteBoundary::AfterSingleRefEdit,
+            )
+        } else {
+            (
+                crate::write_boundary::WriteBoundary::BeforeMultiRefEdit,
+                crate::write_boundary::WriteBoundary::AfterMultiRefEdit,
+            )
+        };
+        crate::write_boundary::reach(start);
         repository
             .edit_references_as(edits, Some(committer.to_ref(&mut time)))
             .map(|_| ())
-            .map_err(|source| Box::new(source) as BoxedError)
+            .map_err(|source| Box::new(source) as BoxedError)?;
+        crate::write_boundary::reach(complete);
+        Ok(())
     }
 }

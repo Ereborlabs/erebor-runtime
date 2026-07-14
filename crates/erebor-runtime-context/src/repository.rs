@@ -21,6 +21,10 @@ mod tree_edit;
 pub use tree_edit::{Snapshot, TreeEdit};
 mod transaction;
 pub use transaction::{ForkParentAppend, ForkResult, ForkTarget};
+mod inspect;
+pub use inspect::{
+    ContextCommit, ContextTree, ContextTreeEntry, ContextTreeEntryKind, ContextVerification,
+};
 
 #[cfg(test)]
 mod tests;
@@ -212,12 +216,14 @@ impl ContextRepository {
             .fail();
         }
         drop(local);
-        Ok(Self {
+        let context = Self {
             path,
             repository,
             metadata_source: Box::new(metadata_source),
             object_format: ContextObjectFormat::Sha256,
-        })
+        };
+        context.validate_scope_refs()?;
+        Ok(context)
     }
 
     fn open_options() -> OpenOptions {

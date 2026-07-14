@@ -232,11 +232,45 @@ pub enum ContextRepositoryError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display(
+        "failed to read tree entry `{path}` in tree `{tree}` pointing to object `{entry}`: {source}"
+    ))]
+    TreeEntryRead {
+        tree: Box<str>,
+        path: Box<str>,
+        entry: Box<str>,
+        source: BoxedError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "tree entry `{path}` in tree `{tree}` points to `{entry}`, a `{actual}` object instead of `{expected}`"
+    ))]
+    TreeEntryWrongKind {
+        tree: Box<str>,
+        path: Box<str>,
+        entry: Box<str>,
+        expected: Box<str>,
+        actual: Box<str>,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, ContextRepositoryError>;
 
 impl ContextRepositoryError {
+    fn context_source(&self) -> Option<&Self> {
+        let mut source = self.source();
+        while let Some(current) = source {
+            if let Some(context_error) = current.downcast_ref::<Self>() {
+                return Some(context_error);
+            }
+            source = current.source();
+        }
+        None
+    }
+
     fn io_source(&self) -> Option<&io::Error> {
         let mut source = self.source();
         while let Some(current) = source {
@@ -274,9 +308,9 @@ impl ErrorExt for ContextRepositoryError {
                 StatusCode::AlreadyExists
             }
             Self::SymbolicScopeRef { .. } => StatusCode::Unsupported,
-            Self::ScopeTargetNotCommit { .. } | Self::StaleScopeHead { .. } => {
-                StatusCode::IllegalState
-            }
+            Self::ScopeTargetNotCommit { .. }
+            | Self::TreeEntryWrongKind { .. }
+            | Self::StaleScopeHead { .. } => StatusCode::IllegalState,
             Self::ReadObject { .. } if self.io_source().is_some() => StatusCode::External,
             Self::ReadObject { .. } => StatusCode::InvalidSyntax,
             Self::InspectRepository { .. }
@@ -286,6 +320,9 @@ impl ErrorExt for ContextRepositoryError {
             | Self::WriteObject { .. }
             | Self::ReadScopeRef { .. }
             | Self::UpdateScopeRef { .. } => StatusCode::External,
+            Self::TreeEntryRead { .. } => self
+                .context_source()
+                .map_or(StatusCode::External, ErrorExt::status_code),
         }
     }
 

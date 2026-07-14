@@ -10,6 +10,9 @@ erebor-runtime-error = { path = "../erebor-runtime-error" }
 gix.workspace = true
 snafu.workspace = true
 
+[features]
+test-support = []
+
 [dev-dependencies]
 tempfile = "3.23.0"
 
