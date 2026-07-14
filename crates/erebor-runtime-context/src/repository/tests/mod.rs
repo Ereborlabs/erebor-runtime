@@ -8,6 +8,8 @@ use super::{
 };
 
 mod objects;
+mod scope_validation;
+mod scopes;
 mod validation;
 
 type TestResult<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;

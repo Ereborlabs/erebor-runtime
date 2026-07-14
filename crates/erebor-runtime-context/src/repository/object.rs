@@ -16,10 +16,10 @@ use crate::error::{
 };
 
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ContextObjectId(ObjectId);
+pub struct ContextObjectId(pub(in crate::repository) ObjectId);
 
 impl ContextObjectId {
-    fn from_object_id(id: ObjectId) -> Result<Self> {
+    pub(in crate::repository) fn from_object_id(id: ObjectId) -> Result<Self> {
         if id.kind() != HashKind::Sha256 {
             return UnsupportedObjectIdFormatSnafu {
                 id: id.to_string(),
@@ -154,10 +154,6 @@ impl ContextRepository {
         })
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "Phase 1 keeps Git object writers private")
-    )]
     pub(super) fn write_blob(&self, bytes: &[u8]) -> Result<ContextObjectId> {
         let repository = self.repository();
         let id = repository
@@ -170,7 +166,10 @@ impl ContextRepository {
 
     #[cfg_attr(
         not(test),
-        allow(dead_code, reason = "Phase 1 keeps Git object writers private")
+        allow(
+            dead_code,
+            reason = "used by the crate-local low-level Git object tests"
+        )
     )]
     pub(super) fn write_tree_entry(
         &self,
@@ -214,10 +213,6 @@ impl ContextRepository {
         ContextObjectId::from_object_id(tree)
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "Phase 1 keeps Git object writers private")
-    )]
     pub(super) fn write_commit(
         &self,
         tree: ContextObjectId,
@@ -256,11 +251,11 @@ impl ContextRepository {
         ContextObjectId::from_object_id(commit.id)
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "Phase 1 keeps Git object writers private")
-    )]
-    fn require_object_kind(&self, id: ContextObjectId, expected: ContextObjectKind) -> Result<()> {
+    pub(super) fn require_object_kind(
+        &self,
+        id: ContextObjectId,
+        expected: ContextObjectKind,
+    ) -> Result<()> {
         let actual = self.read_object(id)?.kind();
         if actual != expected {
             return WrongObjectKindSnafu {
@@ -273,11 +268,25 @@ impl ContextRepository {
         Ok(())
     }
 
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "Phase 1 keeps Git object writers private")
-    )]
-    fn git_signature(signature: &CommitSignature) -> actor::Signature {
+    pub(super) fn commit_tree_id(&self, commit: ContextObjectId) -> Result<ContextObjectId> {
+        self.require_object_kind(commit, ContextObjectKind::Commit)?;
+        let repository = self.repository();
+        let tree = repository
+            .find_commit(commit.0)
+            .map_err(|source| Box::new(source) as BoxedError)
+            .context(ReadObjectSnafu {
+                id: commit.to_string(),
+            })?
+            .tree_id()
+            .map_err(|source| Box::new(source) as BoxedError)
+            .context(ReadObjectSnafu {
+                id: commit.to_string(),
+            })?
+            .detach();
+        ContextObjectId::from_object_id(tree)
+    }
+
+    pub(super) fn git_signature(signature: &CommitSignature) -> actor::Signature {
         actor::Signature {
             name: signature.name().into(),
             email: signature.email().into(),

@@ -142,6 +142,96 @@ pub enum ContextRepositoryError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("scope ref {component} `{value}` is invalid: {reason}"))]
+    InvalidScopeRef {
+        component: &'static str,
+        value: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("scope id `{scope_id}` is reserved"))]
+    ReservedScopeName {
+        scope_id: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("scope ref `{scope}` was not found"))]
+    ScopeNotFound {
+        scope: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("scope ref `{scope}` already exists"))]
+    ScopeAlreadyExists {
+        scope: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("scope ref `{scope}` is symbolic; direct refs are required"))]
+    SymbolicScopeRef {
+        scope: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "scope ref `{scope}` points to `{target}`, a `{actual}` object instead of a commit"
+    ))]
+    ScopeTargetNotCommit {
+        scope: String,
+        target: String,
+        actual: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("scope ref `{scope}` conflicts with existing ref `{existing}`"))]
+    ScopeRefPrefixConflict {
+        scope: String,
+        existing: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to read scope ref `{scope}`: {source}"))]
+    ReadScopeRef {
+        scope: String,
+        source: BoxedError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to update scope ref `{scope}`: {source}"))]
+    UpdateScopeRef {
+        scope: String,
+        source: BoxedError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("scope ref `{scope}` advanced from expected `{expected}` to `{actual}`"))]
+    StaleScopeHead {
+        scope: String,
+        expected: String,
+        actual: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("tree edit path `{path}` is invalid: {reason}"))]
+    InvalidTreeEdit {
+        path: String,
+        reason: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("snapshot contains duplicate tree edit path `{path}`"))]
+    DuplicateTreeEditPath {
+        path: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("selected tree for parent commit `{parent}` is unchanged"))]
+    SelectedTreeUnchanged {
+        parent: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, ContextRepositoryError>;
@@ -173,18 +263,36 @@ impl ErrorExt for ContextRepositoryError {
             | Self::WrongObjectKind { .. }
             | Self::InvalidTreeEntryKind { .. }
             | Self::EditTree { .. }
-            | Self::InvalidParentCount { .. } => StatusCode::InvalidArguments,
+            | Self::InvalidParentCount { .. }
+            | Self::InvalidScopeRef { .. }
+            | Self::ReservedScopeName { .. }
+            | Self::InvalidTreeEdit { .. }
+            | Self::DuplicateTreeEditPath { .. }
+            | Self::SelectedTreeUnchanged { .. } => StatusCode::InvalidArguments,
+            Self::ScopeNotFound { .. } => StatusCode::NotFound,
+            Self::ScopeAlreadyExists { .. } | Self::ScopeRefPrefixConflict { .. } => {
+                StatusCode::AlreadyExists
+            }
+            Self::SymbolicScopeRef { .. } => StatusCode::Unsupported,
+            Self::ScopeTargetNotCommit { .. } | Self::StaleScopeHead { .. } => {
+                StatusCode::IllegalState
+            }
             Self::ReadObject { .. } if self.io_source().is_some() => StatusCode::External,
             Self::ReadObject { .. } => StatusCode::InvalidSyntax,
             Self::InspectRepository { .. }
             | Self::InitializeRepository { .. }
             | Self::OpenRepository { .. }
             | Self::CommitMetadataSource { .. }
-            | Self::WriteObject { .. } => StatusCode::External,
+            | Self::WriteObject { .. }
+            | Self::ReadScopeRef { .. }
+            | Self::UpdateScopeRef { .. } => StatusCode::External,
         }
     }
 
     fn retry_hint(&self) -> RetryHint {
+        if matches!(self, Self::StaleScopeHead { .. }) {
+            return RetryHint::Retryable;
+        }
         self.io_source()
             .map_or(RetryHint::NonRetryable, RetryHint::from_io_error)
     }

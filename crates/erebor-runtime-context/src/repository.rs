@@ -15,6 +15,10 @@ use crate::error::{
 
 mod object;
 pub use object::{ContextObject, ContextObjectId, ContextObjectKind};
+mod refs;
+pub use refs::{ScopeRef, ScopeStart};
+mod tree_edit;
+pub use tree_edit::{Snapshot, TreeEdit};
 
 #[cfg(test)]
 mod tests;
@@ -145,10 +149,6 @@ pub enum ContextObjectFormat {
 pub struct ContextRepository {
     path: PathBuf,
     repository: ThreadSafeRepository,
-    // Phase 1 deliberately keeps commit creation private. The source is used by
-    // the crate-local object-write tests now and by the public V2 operations in
-    // later approved phases.
-    #[cfg_attr(not(test), allow(dead_code))]
     metadata_source: Box<dyn CommitMetadataSource>,
     object_format: ContextObjectFormat,
 }
