@@ -10,6 +10,8 @@ use crate::{
 };
 use erebor_runtime_events::SessionId;
 
+mod context;
+
 #[test]
 fn registry_creates_session_record_and_artifacts() -> Result<(), Box<dyn std::error::Error>> {
     let root = temp_dir("registry")?;
@@ -72,7 +74,7 @@ fn registry_creates_session_record_and_artifacts() -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-fn temp_dir(name: &str) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+pub(super) fn temp_dir(name: &str) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let path = std::env::temp_dir().join(format!(
         "erebor-session-registry-{name}-{nanos}-{}",

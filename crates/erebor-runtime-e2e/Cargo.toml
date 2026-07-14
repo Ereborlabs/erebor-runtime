@@ -17,6 +17,8 @@ tokio-tungstenite.workspace = true
 
 [dev-dependencies]
 erebor-runtime-context = { path = "../erebor-runtime-context", features = ["test-support"] }
+erebor-runtime-core = { path = "../erebor-runtime-core" }
+erebor-runtime-events = { path = "../erebor-runtime-events" }
 tempfile = "3.23.0"
 
 [lints]

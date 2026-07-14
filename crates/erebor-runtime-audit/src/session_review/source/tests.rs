@@ -68,6 +68,15 @@ fn source_renderers_resolve_registry_artifacts() -> Result<(), Box<dyn std::erro
             Some(0),
         )),
     )?;
+    let record_path = started.record().session_dir.join("session.json");
+    let mut legacy_record: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&record_path)?)?;
+    legacy_record["schema_version"] = serde_json::json!(1);
+    legacy_record
+        .as_object_mut()
+        .ok_or("session record must be a JSON object")?
+        .remove("context_artifact");
+    fs::write(&record_path, serde_json::to_string(&legacy_record)?)?;
 
     let source = SessionReviewSource::new(registry.root().to_path_buf());
     let list = source.render_list(SessionReviewOutputFormat::Text)?;

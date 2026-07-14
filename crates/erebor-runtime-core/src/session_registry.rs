@@ -10,6 +10,7 @@ use snafu::ResultExt;
 
 mod artifacts;
 mod clock;
+mod context;
 mod paths;
 mod record_io;
 #[cfg(test)]
@@ -17,17 +18,25 @@ mod tests;
 
 use artifacts::SessionArtifactCopier;
 use clock::SessionRegistryClock;
+use context::SessionContextRepository;
 use paths::SessionRegistryPath;
 use record_io::SessionRecordIo;
 
-use crate::error::{CreateDirSnafu, UnknownSessionSnafu};
+use crate::error::{
+    CreateDirSnafu, InspectContextArtifactSnafu, SessionDirectoryCollisionSnafu,
+    SessionDirectoryMismatchSnafu, SessionDirectoryOccupiedSnafu, SessionIdMismatchSnafu,
+    UnknownSessionSnafu,
+};
 use crate::{RuntimeConfig, SessionRegistryError, SessionRunOutcome, SessionRunPlan};
 
 pub const DEFAULT_SESSION_REGISTRY_PATH: &str = ".erebor/sessions";
 pub(super) const SESSION_RECORD_FILE: &str = "session.json";
 const SESSION_AUDIT_FILE: &str = "audit.jsonl";
+const CURRENT_SESSION_REGISTRY_SCHEMA_VERSION: u32 = 2;
 pub(super) const SESSION_CONFIG_FILE: &str = "config.json";
 pub(super) const SESSION_POLICIES_DIR: &str = "policies";
+
+pub use context::SessionContextArtifact;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionRegistry {
@@ -57,10 +66,7 @@ impl SessionRegistry {
         config: &RuntimeConfig,
         plan: &SessionRunPlan,
     ) -> Result<StartedSessionRegistryRecord, SessionRegistryError> {
-        let session_dir = self.session_dir(plan.session_id());
-        fs::create_dir_all(&session_dir).context(CreateDirSnafu {
-            path: session_dir.clone(),
-        })?;
+        let session_dir = self.prepare_session_dir(plan.session_id())?;
 
         let artifacts = SessionArtifactCopier::new(&session_dir);
         let config_artifact_path = artifacts.copy_config(plan)?;
@@ -74,9 +80,14 @@ impl SessionRegistry {
                 path: parent.to_path_buf(),
             })?;
         }
+        let context_artifact = SessionContextArtifact::new();
+        let context_path =
+            self.context_path(plan.session_id().as_str(), &session_dir, &context_artifact)?;
+        let context_repository =
+            SessionContextRepository::initialize(plan.session_id().as_str(), &context_path)?;
 
         let record = SessionRegistryRecord {
-            schema_version: 1,
+            schema_version: CURRENT_SESSION_REGISTRY_SCHEMA_VERSION,
             session_id: plan.session_id().as_str().to_owned(),
             status: SessionRegistryStatus::Running,
             actor_id: plan.actor().id.clone(),
@@ -97,6 +108,7 @@ impl SessionRegistry {
             source_config_path: plan.config_path().map(Path::to_path_buf),
             policy_artifact_paths,
             source_policy_paths: plan.policies().to_vec(),
+            context_artifact: Some(context_artifact),
             started_at_unix_ms: SessionRegistryClock::unix_time_ms(),
             ended_at_unix_ms: None,
             exit_code: None,
@@ -110,7 +122,11 @@ impl SessionRegistry {
             "created session registry record"
         );
 
-        Ok(StartedSessionRegistryRecord { record, audit_path })
+        Ok(StartedSessionRegistryRecord {
+            record,
+            audit_path,
+            context_repository,
+        })
     }
 
     pub fn finish_session(
@@ -141,26 +157,141 @@ impl SessionRegistry {
         &self,
         session_id: &str,
     ) -> Result<SessionRegistryRecord, SessionRegistryError> {
-        let path = self
-            .session_dir_for_id(session_id)
-            .join(SESSION_RECORD_FILE);
-        if !path.exists() {
+        let session_dir = self.session_dir_for_id(session_id)?;
+        match fs::symlink_metadata(&session_dir) {
+            Ok(_) => SessionRegistryPath::validate_session_directory(session_id, &session_dir)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return UnknownSessionSnafu {
+                    root: self.root.clone(),
+                    session_id: session_id.to_owned(),
+                }
+                .fail();
+            }
+            Err(source) => {
+                return Err(source).context(InspectContextArtifactSnafu {
+                    session_id: session_id.to_owned(),
+                    path: session_dir,
+                });
+            }
+        }
+        let path = session_dir.join(SESSION_RECORD_FILE);
+        if !path.try_exists().context(InspectContextArtifactSnafu {
+            session_id: session_id.to_owned(),
+            path: path.clone(),
+        })? {
             return UnknownSessionSnafu {
                 root: self.root.clone(),
                 session_id: session_id.to_owned(),
             }
             .fail();
         }
-        self.record_io().read_record(&path)
+        let record = self.record_io().read_record(&path)?;
+        self.validate_loaded_record(session_id, &session_dir, &path, &record)?;
+        Ok(record)
     }
 
-    fn session_dir(&self, session_id: &SessionId) -> PathBuf {
+    pub fn open_context_repository(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<erebor_runtime_context::ContextRepository>, SessionRegistryError> {
+        let record = self.load_session(session_id)?;
+        let Some(context_artifact) = record.context_artifact.as_ref() else {
+            return Ok(None);
+        };
+        let context_path = self.context_path(session_id, &record.session_dir, context_artifact)?;
+        SessionContextRepository::open(session_id, &context_path).map(Some)
+    }
+
+    fn prepare_session_dir(&self, session_id: &SessionId) -> Result<PathBuf, SessionRegistryError> {
+        let session_dir = self.session_dir(session_id)?;
+        match fs::symlink_metadata(&session_dir) {
+            Ok(_) => {
+                SessionRegistryPath::validate_session_directory(session_id.as_str(), &session_dir)?;
+                let record_path = session_dir.join(SESSION_RECORD_FILE);
+                if record_path
+                    .try_exists()
+                    .context(InspectContextArtifactSnafu {
+                        session_id: session_id.as_str().to_owned(),
+                        path: record_path.clone(),
+                    })?
+                {
+                    let record = self.record_io().read_record(&record_path)?;
+                    if record.session_id != session_id.as_str() {
+                        return SessionDirectoryCollisionSnafu {
+                            requested_session_id: session_id.as_str().to_owned(),
+                            stored_session_id: record.session_id,
+                            session_dir: Box::new(session_dir),
+                        }
+                        .fail();
+                    }
+                }
+                SessionDirectoryOccupiedSnafu {
+                    session_id: session_id.as_str().to_owned(),
+                    session_dir,
+                }
+                .fail()
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir_all(&session_dir).context(CreateDirSnafu {
+                    path: session_dir.clone(),
+                })?;
+                SessionRegistryPath::validate_session_directory(session_id.as_str(), &session_dir)?;
+                Ok(session_dir)
+            }
+            Err(source) => Err(source).context(InspectContextArtifactSnafu {
+                session_id: session_id.as_str().to_owned(),
+                path: session_dir,
+            }),
+        }
+    }
+
+    fn validate_loaded_record(
+        &self,
+        requested_session_id: &str,
+        expected_session_dir: &Path,
+        record_path: &Path,
+        record: &SessionRegistryRecord,
+    ) -> Result<(), SessionRegistryError> {
+        if record.session_id != requested_session_id {
+            return SessionIdMismatchSnafu {
+                requested_session_id: requested_session_id.to_owned(),
+                recorded_session_id: record.session_id.clone(),
+                record_path: Box::new(record_path.to_path_buf()),
+            }
+            .fail();
+        }
+        if record.session_dir != expected_session_dir {
+            return SessionDirectoryMismatchSnafu {
+                record_path: Box::new(record_path.to_path_buf()),
+                expected_session_dir: expected_session_dir.to_path_buf(),
+                actual_session_dir: Box::new(record.session_dir.clone()),
+            }
+            .fail();
+        }
+        if let Some(context_artifact) = record.context_artifact.as_ref() {
+            self.context_path(requested_session_id, expected_session_dir, context_artifact)?;
+        }
+        Ok(())
+    }
+
+    fn context_path(
+        &self,
+        session_id: &str,
+        session_dir: &Path,
+        context_artifact: &SessionContextArtifact,
+    ) -> Result<PathBuf, SessionRegistryError> {
+        context_artifact.validate(session_id)?;
+        SessionRegistryPath::context_path(session_id, session_dir, context_artifact.path())
+    }
+
+    fn session_dir(&self, session_id: &SessionId) -> Result<PathBuf, SessionRegistryError> {
         self.session_dir_for_id(session_id.as_str())
     }
 
-    fn session_dir_for_id(&self, session_id: &str) -> PathBuf {
-        self.root
-            .join(SessionRegistryPath::safe_dir_name(session_id))
+    fn session_dir_for_id(&self, session_id: &str) -> Result<PathBuf, SessionRegistryError> {
+        Ok(self
+            .root
+            .join(SessionRegistryPath::session_dir_name(session_id)?))
     }
 
     fn record_io(&self) -> SessionRecordIo<'_> {
@@ -168,10 +299,10 @@ impl SessionRegistry {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartedSessionRegistryRecord {
     record: SessionRegistryRecord,
     audit_path: PathBuf,
+    context_repository: erebor_runtime_context::ContextRepository,
 }
 
 impl StartedSessionRegistryRecord {
@@ -183,6 +314,16 @@ impl StartedSessionRegistryRecord {
     #[must_use]
     pub fn audit_path(&self) -> &Path {
         &self.audit_path
+    }
+
+    #[must_use]
+    pub fn context_repository(&self) -> &erebor_runtime_context::ContextRepository {
+        &self.context_repository
+    }
+
+    #[must_use]
+    pub fn into_context_repository(self) -> erebor_runtime_context::ContextRepository {
+        self.context_repository
     }
 }
 
@@ -251,6 +392,8 @@ pub struct SessionRegistryRecord {
     pub source_config_path: Option<PathBuf>,
     pub policy_artifact_paths: Vec<PathBuf>,
     pub source_policy_paths: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_artifact: Option<SessionContextArtifact>,
     pub started_at_unix_ms: u64,
     pub ended_at_unix_ms: Option<u64>,
     pub exit_code: Option<i32>,

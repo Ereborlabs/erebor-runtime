@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 erebor-runtime-audit = { path = "../erebor-runtime-audit" }
 erebor-runtime-cdp = { path = "../erebor-runtime-cdp" }
+erebor-runtime-context = { path = "../erebor-runtime-context" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }

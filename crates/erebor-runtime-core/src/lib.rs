@@ -67,6 +67,6 @@ pub use session::{
     SessionRunner, SessionRunnerLauncher,
 };
 pub use session_registry::{
-    SessionRegistry, SessionRegistryFinish, SessionRegistryRecord, SessionRegistryStatus,
-    StartedSessionRegistryRecord, DEFAULT_SESSION_REGISTRY_PATH,
+    SessionContextArtifact, SessionRegistry, SessionRegistryFinish, SessionRegistryRecord,
+    SessionRegistryStatus, StartedSessionRegistryRecord, DEFAULT_SESSION_REGISTRY_PATH,
 };

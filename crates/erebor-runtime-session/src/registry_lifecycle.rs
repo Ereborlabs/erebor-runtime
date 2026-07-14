@@ -9,7 +9,7 @@ use erebor_runtime_filesystem::{
     FilesystemCheckpointCommit, FilesystemPromotion, FilesystemPromotionOptions,
     FilesystemSessionStorage, FilesystemSessionWorkCommitRequest, FilesystemVolumeStorageRequest,
 };
-use snafu::ResultExt;
+use snafu::{Location, ResultExt};
 
 use crate::{
     diagnostic::SessionDiagnosticOutcome,
@@ -62,15 +62,31 @@ impl PreparedFilesystemStorage {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PreparedSession {
     registry: SessionRegistry,
     storage: SessionStorage,
+    session_id: String,
+    context_repository: erebor_runtime_context::ContextRepository,
 }
 
 impl PreparedSession {
     pub(crate) fn storage(&self) -> &SessionStorage {
         &self.storage
+    }
+
+    fn verify_context_repository(&self) -> Result<(), SessionExecutionError> {
+        self.context_repository
+            .scope_refs()
+            .map(|_| ())
+            .map_err(
+                |source| erebor_runtime_core::SessionRegistryError::ContextRepository {
+                    session_id: self.session_id.clone(),
+                    path: self.context_repository.path().to_path_buf(),
+                    source: Box::new(source),
+                    location: Location::default(),
+                },
+            )
+            .context(SessionRegistrySnafu)
     }
 }
 
@@ -99,7 +115,13 @@ pub(crate) fn prepare_registry_session(
         }
     };
     let storage = SessionStorage::new(started.audit_path().to_path_buf(), filesystem);
-    Ok(Some(PreparedSession { registry, storage }))
+    let context_repository = started.into_context_repository();
+    Ok(Some(PreparedSession {
+        registry,
+        storage,
+        session_id: plan.session_id().as_str().to_owned(),
+        context_repository,
+    }))
 }
 
 fn prepare_filesystem_storage(
@@ -142,6 +164,7 @@ pub(crate) fn finish_registry_session(
     let Some(prepared_session) = prepared_session else {
         return Ok(());
     };
+    prepared_session.verify_context_repository()?;
     let filesystem_result =
         checkpoint_successful_filesystem_layers(prepared_session, session_id, result.is_ok());
     let update = match (result, &filesystem_result) {
@@ -166,6 +189,7 @@ pub(crate) fn finish_registry_diagnostic(
     let Some(prepared_session) = prepared_session else {
         return Ok(());
     };
+    prepared_session.verify_context_repository()?;
     let filesystem_result = checkpoint_successful_filesystem_layers(
         prepared_session,
         plan.session_id(),

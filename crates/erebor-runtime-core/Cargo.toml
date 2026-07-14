@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+erebor-runtime-context = { path = "../erebor-runtime-context" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-filesystem = { path = "../erebor-runtime-filesystem" }
