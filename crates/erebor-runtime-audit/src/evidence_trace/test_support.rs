@@ -91,5 +91,6 @@ fn record(
         },
         policy_decision,
         final_decision,
+        context_pin: None,
     }
 }

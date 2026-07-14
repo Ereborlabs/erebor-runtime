@@ -1,9 +1,15 @@
 use std::path::Path;
 
+use erebor_runtime_context::ContextRepository;
 use erebor_runtime_core::AuditRecord;
-use snafu::ResultExt;
+use snafu::{OptionExt, ResultExt};
 
-use crate::{error::ReviewAuditLogSnafu, read_audit_records, SessionReviewError};
+use crate::{
+    error::{
+        ReviewAuditLogSnafu, ReviewContextRepositorySnafu, ReviewMissingContextRepositorySnafu,
+    },
+    read_audit_records, SessionReviewError,
+};
 
 use super::{
     artifacts::{SessionReviewArtifactLoader, SessionReviewArtifacts},
@@ -94,6 +100,7 @@ impl<'a> SessionReviewRenderer<'a> {
         if let Some(config_sha256) = self.artifacts.config_sha256() {
             output.push_str(&format!("- Config sha256: {config_sha256}\n"));
         }
+        Self::append_context_pins(&mut output, &session_records);
         output.push_str("- Use `erebor session describe` for controlled-path details.\n");
         Ok(output)
     }
@@ -143,6 +150,7 @@ impl<'a> SessionReviewRenderer<'a> {
             if let Some(config_sha256) = self.artifacts.config_sha256() {
                 output.push_str(&format!("Config sha256: {config_sha256}\n"));
             }
+            Self::append_context_pin(&mut output, record);
             output.push('\n');
         }
         Ok(output)
@@ -150,6 +158,32 @@ impl<'a> SessionReviewRenderer<'a> {
 
     pub fn review(self, session_id: &str) -> Result<SessionReview, SessionReviewError> {
         SessionReviewAssembler::new(self.records, session_id, self.artifacts).review()
+    }
+
+    pub fn render_show_with_context(
+        self,
+        session_id: &str,
+        format: SessionReviewOutputFormat,
+        repository: Option<&ContextRepository>,
+    ) -> Result<String, SessionReviewError> {
+        self.validate_context_pins(session_id, repository)?;
+        match format {
+            SessionReviewOutputFormat::Text => self.render_show(session_id),
+            SessionReviewOutputFormat::Json => SessionReviewOutput::json(&self.review(session_id)?),
+        }
+    }
+
+    pub fn render_describe_with_context(
+        self,
+        session_id: &str,
+        format: SessionReviewOutputFormat,
+        repository: Option<&ContextRepository>,
+    ) -> Result<String, SessionReviewError> {
+        self.validate_context_pins(session_id, repository)?;
+        match format {
+            SessionReviewOutputFormat::Text => self.render_describe(session_id),
+            SessionReviewOutputFormat::Json => SessionReviewOutput::json(&self.review(session_id)?),
+        }
     }
 
     pub fn render_show_from_paths(
@@ -221,6 +255,72 @@ impl<'a> SessionReviewRenderer<'a> {
             view.rule_id()
                 .map_or_else(String::new, |rule| format!(" ({rule})"))
         )
+    }
+
+    fn validate_context_pins(
+        self,
+        session_id: &str,
+        repository: Option<&ContextRepository>,
+    ) -> Result<(), SessionReviewError> {
+        for record in self
+            .records
+            .iter()
+            .filter(|record| record.event.session_id.as_str() == session_id)
+        {
+            let Some(pin) = record.context_pin.as_ref() else {
+                continue;
+            };
+            let repository = repository.context(ReviewMissingContextRepositorySnafu {
+                session_id: session_id.to_owned(),
+            })?;
+            repository
+                .validate_session_pin(session_id, pin)
+                .map_err(Box::new)
+                .context(ReviewContextRepositorySnafu {
+                    session_id: session_id.to_owned(),
+                })?;
+        }
+        Ok(())
+    }
+
+    fn append_context_pins(output: &mut String, records: &[&AuditRecord]) {
+        let pinned_records = records
+            .iter()
+            .copied()
+            .filter(|record| record.context_pin.is_some())
+            .collect::<Vec<_>>();
+        if pinned_records.is_empty() {
+            return;
+        }
+        output.push_str("\nContext Pins\n");
+        for record in pinned_records {
+            output.push_str(&format!("- Event {}\n", record.event.id.as_str()));
+            Self::append_context_pin_fields(output, record);
+        }
+    }
+
+    fn append_context_pin(output: &mut String, record: &AuditRecord) {
+        let Some(_pin) = record.context_pin.as_ref() else {
+            return;
+        };
+        output.push_str("\nContext Pin\n");
+        Self::append_context_pin_fields(output, record);
+    }
+
+    fn append_context_pin_fields(output: &mut String, record: &AuditRecord) {
+        let Some(pin) = record.context_pin.as_ref() else {
+            return;
+        };
+        output.push_str(&format!("  Scope ref: {}\n", pin.scope_ref()));
+        output.push_str(&format!("  Commit: {}\n", pin.commit_id()));
+        output.push_str(&format!(
+            "  Selected paths: {}\n",
+            pin.used_paths().join(", ")
+        ));
+        output.push_str(&format!(
+            "  Selected blob ids: {}\n",
+            pin.used_blob_ids().join(", ")
+        ));
     }
 }
 

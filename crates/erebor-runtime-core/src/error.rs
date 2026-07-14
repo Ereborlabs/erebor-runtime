@@ -17,9 +17,9 @@ pub(crate) use config::{
     UnknownSessionDiagnosticSnafu,
 };
 pub(crate) use runtime::{
-    BuildAsyncRuntimeSnafu, NoSessionSurfaceServicesSnafu, PolicySnafu, SessionRunnerExitSnafu,
-    SessionRunnerLaunchSnafu, SurfaceExitedSnafu, UnsupportedSessionRunnerOperationSnafu,
-    UnsupportedSessionSurfaceSnafu,
+    BuildAsyncRuntimeSnafu, ContextSessionMismatchSnafu, DurableAuditSnafu,
+    NoSessionSurfaceServicesSnafu, PolicySnafu, SessionRunnerExitSnafu, SessionRunnerLaunchSnafu,
+    SurfaceExitedSnafu, UnsupportedSessionRunnerOperationSnafu, UnsupportedSessionSurfaceSnafu,
 };
 pub(crate) use session_registry::{
     ContextArtifactSymlinkSnafu, ContextRepositorySnafu, CopyArtifactSnafu, CreateDirSnafu,

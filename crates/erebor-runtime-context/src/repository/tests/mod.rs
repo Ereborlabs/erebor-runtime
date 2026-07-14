@@ -10,6 +10,7 @@ use super::{
 mod fork_transactions;
 mod inspection;
 mod objects;
+mod pin;
 mod pinned_merges;
 mod scope_validation;
 mod scopes;

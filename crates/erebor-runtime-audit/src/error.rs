@@ -20,9 +20,11 @@ pub(crate) use evidence_trace::{
     UnknownSessionSnafu as EvidenceUnknownSessionSnafu, WriteFileSnafu as EvidenceWriteFileSnafu,
 };
 pub(crate) use session_review::{
-    AuditLogSnafu as ReviewAuditLogSnafu, EncodeJsonSnafu as ReviewEncodeJsonSnafu,
+    AuditLogSnafu as ReviewAuditLogSnafu, ContextRepositorySnafu as ReviewContextRepositorySnafu,
+    EncodeJsonSnafu as ReviewEncodeJsonSnafu,
     InvalidRuntimeConfigSnafu as ReviewInvalidRuntimeConfigSnafu,
     MissingConfigArtifactSnafu as ReviewMissingConfigArtifactSnafu,
+    MissingContextRepositorySnafu as ReviewMissingContextRepositorySnafu,
     MissingPolicyArtifactSnafu as ReviewMissingPolicyArtifactSnafu,
     NoSessionRecordsSnafu as ReviewNoSessionRecordsSnafu, ReadFileSnafu as ReviewReadFileSnafu,
     SessionRegistrySnafu as ReviewSessionRegistrySnafu,

@@ -200,6 +200,7 @@ impl StateRecoveryAuditor {
             event,
             policy_decision: decision.clone(),
             final_decision: decision,
+            context_pin: None,
         };
 
         if let Some(error) = engine.record_audit_record(&record) {

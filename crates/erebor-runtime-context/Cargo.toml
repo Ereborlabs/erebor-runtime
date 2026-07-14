@@ -8,12 +8,14 @@ repository.workspace = true
 [dependencies]
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 gix.workspace = true
+serde.workspace = true
 snafu.workspace = true
 
 [features]
 test-support = []
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile = "3.23.0"
 
 [lints]

@@ -3,7 +3,9 @@ mod surfaces;
 #[cfg(test)]
 mod tests;
 
-use erebor_runtime_core::{AuditError, AuditRecord, AuditSink, RuntimeAuditConfig};
+use erebor_runtime_core::{
+    AuditError, AuditRecord, AuditSink, DurableAuditSink, RuntimeAuditConfig,
+};
 
 use surfaces::AuditSurfaceFilter;
 
@@ -57,9 +59,18 @@ where
     S: AuditSink,
 {
     fn record(&self, record: &AuditRecord) -> Result<(), AuditError> {
-        if AuditFilter::new(&self.audit).should_record(record) {
+        if record.context_pin.is_some() || AuditFilter::new(&self.audit).should_record(record) {
             self.inner.record(record)?;
         }
         Ok(())
+    }
+}
+
+impl<S> DurableAuditSink for FilteredAuditSink<S>
+where
+    S: DurableAuditSink,
+{
+    fn record_durable(&self, record: &AuditRecord) -> Result<(), AuditError> {
+        self.inner.record_durable(record)
     }
 }

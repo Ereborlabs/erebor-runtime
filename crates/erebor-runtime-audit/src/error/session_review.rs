@@ -1,5 +1,6 @@
 use std::{any::Any, io, path::PathBuf};
 
+use erebor_runtime_context::ContextRepositoryError;
 use erebor_runtime_core::{RuntimeConfigError, SessionRegistryError};
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use snafu::{Location, Snafu};
@@ -52,6 +53,21 @@ pub enum SessionReviewError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("session `{session_id}` has pinned audit records but no context repository"))]
+    MissingContextRepository {
+        session_id: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "failed to resolve recorded context pin for session `{session_id}`: {source}"
+    ))]
+    ContextRepository {
+        session_id: String,
+        source: Box<ContextRepositoryError>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display(
         "session `{session_id}` registry record does not include a copied policy artifact"
     ))]
@@ -82,6 +98,8 @@ impl ErrorExt for SessionReviewError {
             Self::InvalidRuntimeConfig { source, .. } => source.status_code(),
             Self::EncodeJson { .. } => StatusCode::Unexpected,
             Self::SessionRegistry { source, .. } => source.status_code(),
+            Self::MissingContextRepository { .. } => StatusCode::IllegalState,
+            Self::ContextRepository { source, .. } => source.status_code(),
         }
     }
 
@@ -91,9 +109,11 @@ impl ErrorExt for SessionReviewError {
             Self::ReadFile { source, .. } => RetryHint::from_io_error(source),
             Self::InvalidRuntimeConfig { source, .. } => source.retry_hint(),
             Self::SessionRegistry { source, .. } => source.retry_hint(),
+            Self::ContextRepository { source, .. } => source.retry_hint(),
             Self::NoSessionRecords { .. }
             | Self::UnknownSession { .. }
             | Self::EncodeJson { .. }
+            | Self::MissingContextRepository { .. }
             | Self::MissingPolicyArtifact { .. }
             | Self::MissingConfigArtifact { .. } => RetryHint::NonRetryable,
         }

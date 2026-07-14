@@ -124,6 +124,7 @@ impl FilesystemFileOperationHandler {
             event: event.clone(),
             policy_decision: policy_decision.clone(),
             final_decision: final_decision.clone(),
+            context_pin: None,
         };
         if let Err(error) = audit.record(&record) {
             warn!(

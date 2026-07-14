@@ -1,3 +1,4 @@
+use erebor_runtime_context::{ContextPin, PinnedContext};
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use erebor_runtime_events::RuntimeEvent;
 use erebor_runtime_policy::{Decision, PolicyEvaluator};
@@ -74,6 +75,8 @@ pub struct AuditRecord {
     pub event: RuntimeEvent,
     pub policy_decision: Decision,
     pub final_decision: Decision,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_pin: Option<ContextPin>,
 }
 
 impl AuditRecord {
@@ -83,12 +86,18 @@ impl AuditRecord {
             event: outcome.event.clone(),
             policy_decision: outcome.policy_decision.clone(),
             final_decision: outcome.final_decision.clone(),
+            context_pin: outcome.context_pin.clone(),
         }
     }
 }
 
 pub trait AuditSink {
     fn record(&self, record: &AuditRecord) -> Result<(), AuditError>;
+}
+
+/// An audit sink that confirms one record's durable local acceptance before returning.
+pub trait DurableAuditSink: AuditSink {
+    fn record_durable(&self, record: &AuditRecord) -> Result<(), AuditError>;
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -187,14 +196,7 @@ where
         event: &RuntimeEvent,
         approval_mode: ApprovalMode,
     ) -> Result<EnforcementOutcome, RuntimeError> {
-        let policy_decision = self.evaluator.evaluate(event).context(PolicySnafu)?;
-        let final_decision = self.resolve_decision(event, &policy_decision, approval_mode);
-        let mut outcome = EnforcementOutcome {
-            event: event.clone(),
-            policy_decision,
-            final_decision,
-            audit_error: None,
-        };
+        let mut outcome = self.outcome(event, approval_mode, None)?;
 
         let audit_record = AuditRecord::from_outcome(&outcome);
         if let Err(error) = self.audit_sink.record(&audit_record) {
@@ -202,6 +204,23 @@ where
         }
 
         Ok(outcome)
+    }
+
+    fn outcome(
+        &self,
+        event: &RuntimeEvent,
+        approval_mode: ApprovalMode,
+        context_pin: Option<ContextPin>,
+    ) -> Result<EnforcementOutcome, RuntimeError> {
+        let policy_decision = self.evaluator.evaluate(event).context(PolicySnafu)?;
+        let final_decision = self.resolve_decision(event, &policy_decision, approval_mode);
+        Ok(EnforcementOutcome {
+            event: event.clone(),
+            policy_decision,
+            final_decision,
+            context_pin,
+            audit_error: None,
+        })
     }
 
     fn resolve_decision(
@@ -248,6 +267,38 @@ where
     }
 }
 
+impl<E, A, S> LocalEnforcementEngine<E, A, S>
+where
+    E: PolicyEvaluator,
+    A: ApprovalProvider,
+    S: DurableAuditSink,
+{
+    /// Enforce from a repository-validated immutable context pin and fail closed on audit loss.
+    pub fn enforce_with_context(
+        &self,
+        event: &RuntimeEvent,
+        pinned_context: &PinnedContext,
+    ) -> Result<EnforcementOutcome, RuntimeError> {
+        if event.session_id.as_str() != pinned_context.session_id() {
+            return crate::error::ContextSessionMismatchSnafu {
+                event_session_id: event.session_id.as_str().to_owned(),
+                pin_session_id: pinned_context.session_id().to_owned(),
+            }
+            .fail();
+        }
+        let outcome = self.outcome(
+            event,
+            ApprovalMode::ResolveImmediately,
+            Some(pinned_context.pin().clone()),
+        )?;
+        let audit_record = AuditRecord::from_outcome(&outcome);
+        self.audit_sink
+            .record_durable(&audit_record)
+            .context(crate::error::DurableAuditSnafu)?;
+        Ok(outcome)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ApprovalMode {
     ResolveImmediately,
@@ -259,5 +310,6 @@ pub struct EnforcementOutcome {
     pub event: RuntimeEvent,
     pub policy_decision: Decision,
     pub final_decision: Decision,
+    pub context_pin: Option<ContextPin>,
     pub audit_error: Option<String>,
 }

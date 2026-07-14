@@ -4,12 +4,29 @@ use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use erebor_runtime_policy::PolicyError;
 use snafu::{Location, Snafu};
 
+use crate::engine::AuditError;
+
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum RuntimeError {
     #[snafu(display("policy evaluation failed: {source}"))]
     Policy {
         source: PolicyError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "context pin session `{pin_session_id}` does not match event session `{event_session_id}`"
+    ))]
+    ContextSessionMismatch {
+        event_session_id: String,
+        pin_session_id: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("durable context audit failed: {source}"))]
+    DurableAudit {
+        source: AuditError,
         #[snafu(implicit)]
         location: Location,
     },
@@ -72,6 +89,7 @@ impl ErrorExt for RuntimeError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Policy { source, .. } => source.status_code(),
+            Self::DurableAudit { source, .. } => source.status_code(),
             Self::BuildAsyncRuntime { .. }
             | Self::SurfaceStart { .. }
             | Self::SurfaceExited { .. }
@@ -79,13 +97,16 @@ impl ErrorExt for RuntimeError {
             | Self::SessionRunnerExit { .. } => StatusCode::External,
             Self::UnsupportedSessionSurface { .. }
             | Self::UnsupportedSessionRunnerOperation { .. } => StatusCode::Unsupported,
-            Self::NoSessionSurfaceServices { .. } => StatusCode::IllegalState,
+            Self::NoSessionSurfaceServices { .. } | Self::ContextSessionMismatch { .. } => {
+                StatusCode::IllegalState
+            }
         }
     }
 
     fn retry_hint(&self) -> RetryHint {
         match self {
             Self::Policy { source, .. } => source.retry_hint(),
+            Self::DurableAudit { source, .. } => source.retry_hint(),
             Self::BuildAsyncRuntime { source, .. } | Self::SessionRunnerLaunch { source, .. } => {
                 RetryHint::from_io_error(source)
             }
@@ -94,7 +115,8 @@ impl ErrorExt for RuntimeError {
             | Self::SurfaceStart { .. }
             | Self::SurfaceExited { .. }
             | Self::SessionRunnerExit { .. }
-            | Self::UnsupportedSessionRunnerOperation { .. } => RetryHint::NonRetryable,
+            | Self::UnsupportedSessionRunnerOperation { .. }
+            | Self::ContextSessionMismatch { .. } => RetryHint::NonRetryable,
         }
     }
 

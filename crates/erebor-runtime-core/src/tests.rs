@@ -1,5 +1,13 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    error::Error,
+    rc::Rc,
+};
 
+use erebor_runtime_context::{
+    CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature, CommitTime,
+    ContextPinSelection, ContextRepository, PinnedContext, ScopeRef, Snapshot, TreeEdit,
+};
 use erebor_runtime_events::{
     ActionKind, ActorIdentity, ActorKind, EventId, ExecutionSurface, RiskLevel, RiskMetadata,
     RuntimeEvent, SessionId,
@@ -10,7 +18,7 @@ use snafu::{Location, ResultExt};
 use crate::error::PolicySnafu;
 use crate::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,
-    AuditSink, LocalEnforcementEngine, RuntimeError,
+    AuditSink, DurableAuditSink, LocalEnforcementEngine, RuntimeError,
 };
 
 fn event() -> RuntimeEvent {
@@ -194,6 +202,70 @@ fn audit_failure_does_not_block_mvp_decision() -> Result<(), RuntimeError> {
     Ok(())
 }
 
+#[test]
+fn validated_context_pin_reaches_policy_once_and_is_durably_audited() -> Result<(), Box<dyn Error>>
+{
+    let policy = CountingAllowPolicy::default();
+    let sink = RecordingAuditSink::default();
+    let engine = LocalEnforcementEngine::with_hooks(
+        policy.clone(),
+        StaticApprovalProvider {
+            response: Ok(ApprovalResponse::Approved),
+        },
+        sink.clone(),
+    );
+    let pinned = pinned_context("session-1")?;
+
+    let outcome = engine.enforce_with_context(&event(), &pinned)?;
+
+    assert_eq!(policy.count(), 1);
+    assert_eq!(outcome.context_pin.as_ref(), Some(pinned.pin()));
+    assert_eq!(sink.records().len(), 1);
+    assert_eq!(sink.records()[0].context_pin.as_ref(), Some(pinned.pin()));
+    Ok(())
+}
+
+#[test]
+fn durable_context_audit_failure_returns_no_actionable_outcome() -> Result<(), Box<dyn Error>> {
+    let policy = CountingAllowPolicy::default();
+    let engine = LocalEnforcementEngine::with_hooks(
+        policy.clone(),
+        StaticApprovalProvider {
+            response: Ok(ApprovalResponse::Approved),
+        },
+        FailingDurableAuditSink,
+    );
+    let pinned = pinned_context("session-1")?;
+
+    assert!(matches!(
+        engine.enforce_with_context(&event(), &pinned),
+        Err(RuntimeError::DurableAudit { .. })
+    ));
+    assert_eq!(policy.count(), 1);
+    Ok(())
+}
+
+#[test]
+fn context_pin_from_another_session_is_rejected_before_policy_evaluation(
+) -> Result<(), Box<dyn Error>> {
+    let policy = CountingAllowPolicy::default();
+    let engine = LocalEnforcementEngine::with_hooks(
+        policy.clone(),
+        StaticApprovalProvider {
+            response: Ok(ApprovalResponse::Approved),
+        },
+        RecordingAuditSink::default(),
+    );
+    let pinned = pinned_context("other-session")?;
+
+    assert!(matches!(
+        engine.enforce_with_context(&event(), &pinned),
+        Err(RuntimeError::ContextSessionMismatch { .. })
+    ));
+    assert_eq!(policy.count(), 0);
+    Ok(())
+}
+
 fn approval_policy() -> Result<LocalPolicy, RuntimeError> {
     LocalPolicy::from_json_str(
         r#"
@@ -248,6 +320,12 @@ impl AuditSink for RecordingAuditSink {
     }
 }
 
+impl DurableAuditSink for RecordingAuditSink {
+    fn record_durable(&self, record: &AuditRecord) -> Result<(), AuditError> {
+        self.record(record)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct FailingAuditSink;
 
@@ -257,5 +335,73 @@ impl AuditSink for FailingAuditSink {
             reason: String::from("disk full"),
             location: Location::default(),
         })
+    }
+}
+
+struct FailingDurableAuditSink;
+
+impl AuditSink for FailingDurableAuditSink {
+    fn record(&self, record: &AuditRecord) -> Result<(), AuditError> {
+        FailingAuditSink.record(record)
+    }
+}
+
+impl DurableAuditSink for FailingDurableAuditSink {
+    fn record_durable(&self, record: &AuditRecord) -> Result<(), AuditError> {
+        self.record(record)
+    }
+}
+
+#[derive(Clone, Default)]
+struct CountingAllowPolicy {
+    evaluations: Rc<Cell<usize>>,
+}
+
+impl CountingAllowPolicy {
+    fn count(&self) -> usize {
+        self.evaluations.get()
+    }
+}
+
+impl erebor_runtime_policy::PolicyEvaluator for CountingAllowPolicy {
+    fn evaluate(&self, _event: &RuntimeEvent) -> erebor_runtime_policy::Result<Decision> {
+        self.evaluations.set(self.evaluations.get() + 1);
+        Ok(Decision::Allow { rule_id: None })
+    }
+}
+
+fn pinned_context(session_id: &str) -> Result<PinnedContext, Box<dyn Error>> {
+    let temp = tempfile::tempdir()?;
+    let repository =
+        ContextRepository::init(temp.path().join("context"), FixedMetadataSource::new()?)?;
+    repository.initialize_root(
+        session_id,
+        Snapshot::new(vec![TreeEdit::blob("result", b"selected context")?])?,
+        "Initialize context",
+    )?;
+    Ok(repository.pin_scope_head(
+        ScopeRef::root(session_id)?,
+        &[ContextPinSelection::blob("result")],
+    )?)
+}
+
+#[derive(Clone)]
+struct FixedMetadataSource {
+    metadata: CommitMetadata,
+}
+
+impl FixedMetadataSource {
+    fn new() -> Result<Self, Box<dyn Error>> {
+        let time = CommitTime::new(1_700_000_000, 0)?;
+        let signature = CommitSignature::new("Erebor Runtime", "runtime@erebor.dev", time)?;
+        Ok(Self {
+            metadata: CommitMetadata::new(signature.clone(), signature),
+        })
+    }
+}
+
+impl CommitMetadataSource for FixedMetadataSource {
+    fn metadata(&self) -> Result<CommitMetadata, CommitMetadataSourceError> {
+        Ok(self.metadata.clone())
     }
 }

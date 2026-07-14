@@ -1,3 +1,4 @@
+use erebor_runtime_context::ContextPin;
 use erebor_runtime_core::AuditRecord;
 use serde::Serialize;
 
@@ -14,6 +15,7 @@ pub struct SessionTimelineItem {
     pub risk: String,
     pub rule_id: Option<String>,
     pub final_decision: String,
+    pub context_pin: Option<ContextPin>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -32,6 +34,7 @@ impl SessionTimelineBuilder {
             risk: view.risk_name().to_owned(),
             rule_id: view.rule_id().map(str::to_owned),
             final_decision: view.decision_name().to_owned(),
+            context_pin: record.context_pin.clone(),
         }
     }
 }

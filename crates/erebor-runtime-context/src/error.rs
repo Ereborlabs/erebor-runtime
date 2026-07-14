@@ -255,6 +255,48 @@ pub enum ContextRepositoryError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("context pin path `{path}` is invalid: {reason}"))]
+    InvalidContextPinPath {
+        path: Box<str>,
+        reason: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("context pin contains duplicate selected path `{path}`"))]
+    DuplicateContextPinPath {
+        path: Box<str>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("context pin path `{path}` was not found in the selected commit tree"))]
+    ContextPinPathNotFound {
+        path: Box<str>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("context pin path `{path}` selected a {actual}, but a blob was required"))]
+    ContextPinPathNotBlob {
+        path: Box<str>,
+        actual: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "context pin path `{path}` selected blob `{actual}`, but `{expected}` was declared"
+    ))]
+    ContextPinBlobMismatch {
+        path: Box<str>,
+        expected: Box<str>,
+        actual: Box<str>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("context pin is invalid: {reason}"))]
+    InvalidContextPin {
+        reason: &'static str,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, ContextRepositoryError>;
@@ -302,7 +344,10 @@ impl ErrorExt for ContextRepositoryError {
             | Self::ReservedScopeName { .. }
             | Self::InvalidTreeEdit { .. }
             | Self::DuplicateTreeEditPath { .. }
-            | Self::SelectedTreeUnchanged { .. } => StatusCode::InvalidArguments,
+            | Self::SelectedTreeUnchanged { .. }
+            | Self::InvalidContextPinPath { .. }
+            | Self::DuplicateContextPinPath { .. }
+            | Self::InvalidContextPin { .. } => StatusCode::InvalidArguments,
             Self::ScopeNotFound { .. } => StatusCode::NotFound,
             Self::ScopeAlreadyExists { .. } | Self::ScopeRefPrefixConflict { .. } => {
                 StatusCode::AlreadyExists
@@ -310,7 +355,10 @@ impl ErrorExt for ContextRepositoryError {
             Self::SymbolicScopeRef { .. } => StatusCode::Unsupported,
             Self::ScopeTargetNotCommit { .. }
             | Self::TreeEntryWrongKind { .. }
-            | Self::StaleScopeHead { .. } => StatusCode::IllegalState,
+            | Self::StaleScopeHead { .. }
+            | Self::ContextPinPathNotBlob { .. }
+            | Self::ContextPinBlobMismatch { .. } => StatusCode::IllegalState,
+            Self::ContextPinPathNotFound { .. } => StatusCode::NotFound,
             Self::ReadObject { .. } if self.io_source().is_some() => StatusCode::External,
             Self::ReadObject { .. } => StatusCode::InvalidSyntax,
             Self::InspectRepository { .. }

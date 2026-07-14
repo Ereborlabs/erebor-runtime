@@ -48,7 +48,8 @@ pub use config::{
 };
 pub use engine::{
     ApprovalError, ApprovalProvider, ApprovalRequest, ApprovalResponse, AuditError, AuditRecord,
-    AuditSink, DenyApprovalProvider, EnforcementOutcome, LocalEnforcementEngine, NoopAuditSink,
+    AuditSink, DenyApprovalProvider, DurableAuditSink, EnforcementOutcome, LocalEnforcementEngine,
+    NoopAuditSink,
 };
 pub use error::{RuntimeConfigError, RuntimeError, SessionRegistryError};
 pub use interception::{

@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 comfy-table.workspace = true
+erebor-runtime-context = { path = "../erebor-runtime-context" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }

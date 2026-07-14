@@ -107,6 +107,7 @@ fn record(fixture: RecordFixture<'_>) -> AuditRecord {
         },
         policy_decision: fixture.final_decision.clone(),
         final_decision: fixture.final_decision,
+        context_pin: None,
     }
 }
 

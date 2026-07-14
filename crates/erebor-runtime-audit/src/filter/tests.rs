@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 
 use erebor_runtime_core::{
-    AuditCommandLogLevel, AuditError, AuditRecord, AuditSink, RuntimeAuditConfig,
+    AuditCommandLogLevel, AuditError, AuditRecord, AuditSink, DurableAuditSink, RuntimeAuditConfig,
 };
 use erebor_runtime_events::{
     ActionKind, ActorIdentity, ActorKind, EventId, ExecutionSurface, RiskLevel, RiskMetadata,
@@ -77,6 +77,25 @@ fn filtered_sink_wraps_any_audit_sink() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[test]
+fn pinned_records_bypass_legacy_filtering_at_the_durable_sink_boundary(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sink = RecordingAuditSink::default();
+    let filtered = FilteredAuditSink::new(sink, RuntimeAuditConfig::default());
+    let mut sleep = audit_record_with_command(
+        "evt-pinned-sleep",
+        Decision::Allow { rule_id: None },
+        "/usr/bin/sleep",
+        vec!["sleep", "0.25"],
+    );
+    sleep.context_pin = Some(test_pin()?);
+
+    filtered.record_durable(&sleep)?;
+
+    assert_eq!(filtered.inner().records(), vec![sleep]);
+    Ok(())
+}
+
+#[test]
 fn browser_cdp_debug_methods_are_filtered_per_surface() {
     let mut audit = RuntimeAuditConfig::default();
     audit.surfaces.browser_cdp.level = AuditCommandLogLevel::Signal;
@@ -126,6 +145,21 @@ impl AuditSink for RecordingAuditSink {
         self.records.borrow_mut().push(record.clone());
         Ok(())
     }
+}
+
+impl DurableAuditSink for RecordingAuditSink {
+    fn record_durable(&self, record: &AuditRecord) -> Result<(), AuditError> {
+        self.record(record)
+    }
+}
+
+fn test_pin() -> Result<erebor_runtime_context::ContextPin, serde_json::Error> {
+    serde_json::from_value(serde_json::json!({
+        "scope_ref": "refs/scopes/session-1/root",
+        "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "used_paths": ["result"],
+        "used_blob_ids": ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]
+    }))
 }
 
 fn audit_record_with_command(
@@ -180,5 +214,6 @@ fn audit_record_for_surface(
         },
         policy_decision: final_decision.clone(),
         final_decision,
+        context_pin: None,
     }
 }

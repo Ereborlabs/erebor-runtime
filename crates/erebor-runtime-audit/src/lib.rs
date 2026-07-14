@@ -15,7 +15,9 @@ pub use evidence_trace::{
     MarkdownEvidenceTraceRenderer,
 };
 pub use filter::{AuditFilter, FilteredAuditSink};
-pub use jsonl::{append_audit_record, read_audit_records, JsonlAuditSink};
+pub use jsonl::{
+    append_audit_record, append_durable_audit_record, read_audit_records, JsonlAuditSink,
+};
 pub use session_review::{
     SessionDecisionSummary, SessionReview, SessionReviewArtifacts, SessionReviewOutputFormat,
     SessionReviewRenderer, SessionReviewSource, SessionSummary, SessionSummaryBuilder,

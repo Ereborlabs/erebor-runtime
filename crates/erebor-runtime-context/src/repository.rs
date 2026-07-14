@@ -25,6 +25,8 @@ mod inspect;
 pub use inspect::{
     ContextCommit, ContextTree, ContextTreeEntry, ContextTreeEntryKind, ContextVerification,
 };
+mod pin;
+pub use pin::{ContextPin, ContextPinSelection, PinnedContext, PinnedContextBlob};
 
 #[cfg(test)]
 mod tests;

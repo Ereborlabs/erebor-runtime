@@ -1,3 +1,4 @@
+use erebor_runtime_context::ContextPin;
 use erebor_runtime_core::AuditRecord;
 use erebor_runtime_events::{ActionKind, RiskLevel};
 use erebor_runtime_policy::Decision;
@@ -24,6 +25,7 @@ pub struct SessionDecisionSummary {
     pub raw_payload_sha256: String,
     pub policy_sha256: Option<String>,
     pub config_sha256: Option<String>,
+    pub context_pin: Option<ContextPin>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -56,6 +58,7 @@ impl<'a> SessionDecisionSummaries<'a> {
             raw_payload_sha256: view.raw_payload_sha256(),
             policy_sha256: self.artifacts.policy_sha256().map(str::to_owned),
             config_sha256: self.artifacts.config_sha256().map(str::to_owned),
+            context_pin: record.context_pin.clone(),
         }
     }
 }

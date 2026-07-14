@@ -9,6 +9,7 @@ pub use error::{ContextRepositoryError, Result};
 pub use repository::{
     CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature, CommitTime,
     ContextCommit, ContextObject, ContextObjectFormat, ContextObjectId, ContextObjectKind,
-    ContextRepository, ContextTree, ContextTreeEntry, ContextTreeEntryKind, ContextVerification,
-    ForkParentAppend, ForkResult, ForkTarget, ScopeRef, ScopeStart, Snapshot, TreeEdit,
+    ContextPin, ContextPinSelection, ContextRepository, ContextTree, ContextTreeEntry,
+    ContextTreeEntryKind, ContextVerification, ForkParentAppend, ForkResult, ForkTarget,
+    PinnedContext, PinnedContextBlob, ScopeRef, ScopeStart, Snapshot, TreeEdit,
 };
