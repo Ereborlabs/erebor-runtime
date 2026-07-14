@@ -19,6 +19,8 @@ mod refs;
 pub use refs::{ScopeRef, ScopeStart};
 mod tree_edit;
 pub use tree_edit::{Snapshot, TreeEdit};
+mod transaction;
+pub use transaction::{ForkParentAppend, ForkResult, ForkTarget};
 
 #[cfg(test)]
 mod tests;

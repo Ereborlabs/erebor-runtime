@@ -16,6 +16,34 @@ use crate::error::{
 
 const SCOPE_PREFIX: &str = "refs/scopes";
 
+pub(super) struct DirectScopeRefUpdate {
+    scope: ScopeRef,
+    expected: PreviousValue,
+    target: ContextObjectId,
+}
+
+impl DirectScopeRefUpdate {
+    pub(super) fn create(scope: ScopeRef, target: ContextObjectId) -> Self {
+        Self {
+            scope,
+            expected: PreviousValue::MustNotExist,
+            target,
+        }
+    }
+
+    pub(super) fn compare_and_swap(
+        scope: ScopeRef,
+        expected: ContextObjectId,
+        target: ContextObjectId,
+    ) -> Self {
+        Self {
+            scope,
+            expected: PreviousValue::MustExistAndMatch(Target::Object(expected.0)),
+            target,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScopeKind {
     Root,
@@ -252,7 +280,7 @@ impl ContextRepository {
         Ok(target)
     }
 
-    fn ensure_scope_can_be_created(&self, scope: &ScopeRef) -> Result<()> {
+    pub(super) fn ensure_scope_can_be_created(&self, scope: &ScopeRef) -> Result<()> {
         let repository = self.repository();
         if repository
             .try_find_reference(scope.as_str())
@@ -262,6 +290,7 @@ impl ContextRepository {
             })?
             .is_some()
         {
+            self.scope_head(scope)?;
             return ScopeAlreadyExistsSnafu {
                 scope: scope.to_string(),
             }
@@ -313,7 +342,7 @@ impl ContextRepository {
     }
 
     fn create_direct_scope_ref(&self, scope: &ScopeRef, commit: ContextObjectId) -> Result<()> {
-        match self.edit_direct_scope_ref(scope, PreviousValue::MustNotExist, commit) {
+        match self.edit_direct_scope_refs([DirectScopeRefUpdate::create(scope.clone(), commit)]) {
             Ok(()) => Ok(()),
             Err(source) if self.scope_head(scope).is_ok() => ScopeAlreadyExistsSnafu {
                 scope: scope.to_string(),
@@ -325,17 +354,13 @@ impl ContextRepository {
         }
     }
 
-    fn compare_and_swap_direct_scope_ref(
+    pub(super) fn compare_and_swap_direct_scope_ref(
         &self,
         scope: &ScopeRef,
         expected: ContextObjectId,
         commit: ContextObjectId,
     ) -> Result<()> {
-        match self.edit_direct_scope_ref(
-            scope,
-            PreviousValue::MustExistAndMatch(Target::Object(expected.0)),
-            commit,
-        ) {
+        match self.edit_direct_scope_ref(scope, expected, commit) {
             Ok(()) => Ok(()),
             Err(source) => match self.scope_head(scope) {
                 Ok(actual) if actual != expected => StaleScopeHeadSnafu {
@@ -354,8 +379,19 @@ impl ContextRepository {
     fn edit_direct_scope_ref(
         &self,
         scope: &ScopeRef,
-        expected: PreviousValue,
+        expected: ContextObjectId,
         commit: ContextObjectId,
+    ) -> std::result::Result<(), BoxedError> {
+        self.edit_direct_scope_refs([DirectScopeRefUpdate::compare_and_swap(
+            scope.clone(),
+            expected,
+            commit,
+        )])
+    }
+
+    pub(super) fn edit_direct_scope_refs(
+        &self,
+        updates: impl IntoIterator<Item = DirectScopeRefUpdate>,
     ) -> std::result::Result<(), BoxedError> {
         let metadata = self
             .metadata_source
@@ -365,19 +401,25 @@ impl ContextRepository {
         let committer = Self::git_signature(metadata.committer());
         let mut time = gix::date::parse::TimeBuf::default();
         let repository = self.repository();
-        let edit = RefEdit {
-            change: Change::Update {
-                log: LogChange::default(),
-                expected,
-                new: Target::Object(commit.0),
-            },
-            name: scope
-                .git_name()
-                .map_err(|error| Box::new(error) as BoxedError)?,
-            deref: false,
-        };
+        let edits = updates
+            .into_iter()
+            .map(|update| {
+                Ok(RefEdit {
+                    change: Change::Update {
+                        log: LogChange::default(),
+                        expected: update.expected,
+                        new: Target::Object(update.target.0),
+                    },
+                    name: update
+                        .scope
+                        .git_name()
+                        .map_err(|error| Box::new(error) as BoxedError)?,
+                    deref: false,
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, BoxedError>>()?;
         repository
-            .edit_references_as([edit], Some(committer.to_ref(&mut time)))
+            .edit_references_as(edits, Some(committer.to_ref(&mut time)))
             .map(|_| ())
             .map_err(|source| Box::new(source) as BoxedError)
     }

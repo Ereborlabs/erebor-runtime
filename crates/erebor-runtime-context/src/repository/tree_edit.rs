@@ -104,6 +104,11 @@ impl Snapshot {
 }
 
 impl ContextRepository {
+    /// Materialize a complete caller-selected Git root tree from an empty base.
+    pub fn create_tree(&self, snapshot: Snapshot) -> Result<ContextObjectId> {
+        self.write_snapshot_tree(None, &snapshot)
+    }
+
     pub(super) fn write_snapshot_tree(
         &self,
         base_tree: Option<ContextObjectId>,

@@ -7,9 +7,12 @@ use super::{
     ContextObjectId, ContextObjectKind, ContextRepository,
 };
 
+mod fork_transactions;
 mod objects;
+mod pinned_merges;
 mod scope_validation;
 mod scopes;
+mod transaction_validation;
 mod validation;
 
 type TestResult<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
