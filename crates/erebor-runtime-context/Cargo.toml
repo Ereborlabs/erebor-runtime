@@ -1,0 +1,17 @@
+[package]
+name = "erebor-runtime-context"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+erebor-runtime-error = { path = "../erebor-runtime-error" }
+gix.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[lints]
+workspace = true
