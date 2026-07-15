@@ -215,10 +215,6 @@ fn start_session_side_resources_from_start_plan(
                                 String::from("EREBOR_CODEX_PROFILE_ID"),
                                 codex_managed_session.profile().id.clone(),
                             ));
-                            environment.push((
-                                String::from("EREBOR_CODEX_PROFILE_SHA256"),
-                                codex_managed_session.profile().profile_sha256.clone(),
-                            ));
                             add_codex_hook_shell_environment(
                                 &mut environment,
                                 codex_managed_session.profile(),
@@ -456,8 +452,8 @@ mod tests {
             id: String::from("test-profile"),
             runner: SessionRunnerKind::LinuxHost,
             executable: "/opt/codex/codex".into(),
+            executable_sha256: "a".repeat(64),
             deployment: CodexDeploymentMode::FleetManaged,
-            profile_sha256: "a".repeat(64),
             trust_root: "/var/lib/erebor/codex".into(),
             requirements_source: "/var/lib/erebor/codex/requirements.toml".into(),
             requirements_sha256: "b".repeat(64),

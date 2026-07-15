@@ -19,8 +19,8 @@ mod tests;
 
 pub use adoption::SessionAdoptionService;
 pub use agents::codex::{
-    CodexHookClient, CodexHookTicket, CodexHookTicketRegistry, CodexManagedSession,
-    CodexSessionError,
+    CodexHookClient, CodexHookResultOutput, CodexHookTicket, CodexHookTicketRegistry,
+    CodexManagedSession, CodexNativeHookEvent, CodexSessionError,
 };
 pub use diagnostic::SessionDiagnosticOutcome;
 pub use erebor_runtime_core::{

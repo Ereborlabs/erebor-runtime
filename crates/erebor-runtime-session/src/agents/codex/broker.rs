@@ -29,7 +29,7 @@ use snafu::{ensure, ResultExt};
 
 use super::{
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
-    CodexManagedSession, CodexSessionError,
+    CodexManagedSession, CodexNativeHookEvent, CodexSessionError,
 };
 
 const BROKER_SOCKET: &str = "codex-hook.sock";
@@ -223,18 +223,25 @@ impl CodexHookBrokerProtocol {
                 reason: format!("native event is larger than {MAX_NATIVE_EVENT_BYTES} bytes")
             }
         );
-        serde_json::from_slice::<serde_json::Value>(&event.native_event_json).map_err(|error| {
-            CodexSessionError::InvalidHookEvent {
-                reason: format!("native event JSON is malformed: {error}"),
-                location: snafu::Location::default(),
-            }
-        })?;
+        let native_event =
+            CodexNativeHookEvent::parse(&event.native_event_json).map_err(|reason| {
+                CodexSessionError::InvalidHookEvent {
+                    reason,
+                    location: snafu::Location::default(),
+                }
+            })?;
         let event_kind = HookEventKind::try_from(event.event).map_err(|_error| {
             CodexSessionError::InvalidHookEvent {
                 reason: String::from("unknown hook event kind"),
                 location: snafu::Location::default(),
             }
         })?;
+        ensure!(
+            event_kind == native_event.kind(),
+            InvalidHookEventSnafu {
+                reason: String::from("hook event kind does not match native hook_event_name")
+            }
+        );
         let codex_event = match event_kind {
             HookEventKind::SessionStart => CodexHookEvent::SessionStart,
             HookEventKind::UserPromptSubmit => CodexHookEvent::UserPromptSubmit,
@@ -265,11 +272,12 @@ impl CodexHookBrokerProtocol {
                 location: snafu::Location::default(),
             })?;
         ensure!(
-            event.schema_sha256.is_empty() || event.schema_sha256 == expected_schema.sha256,
+            event.schema_sha256 == native_event.schema_sha256()
+                && native_event.schema_sha256() == expected_schema.sha256,
             InvalidHookEventSnafu {
                 reason: format!(
-                    "event `{}` schema fingerprint does not match",
-                    codex_event.as_str()
+                    "event `{}` schema fingerprint does not match its native shape or managed profile",
+                    codex_event.as_str(),
                 )
             }
         );
@@ -498,7 +506,7 @@ mod tests {
 
     use super::{CodexHookBrokerProtocol, HookEventKind, LinuxHookPeerInspector};
     use crate::{
-        agents::codex::{CodexHookClient, CodexManagedSession},
+        agents::codex::{CodexHookClient, CodexManagedSession, CodexNativeHookEvent},
         CodexSessionError,
     };
 
@@ -526,21 +534,43 @@ mod tests {
     #[test]
     fn broker_accepts_only_profile_pinned_event_schemas() -> Result<(), Box<dyn std::error::Error>>
     {
-        let session = CodexManagedSession::for_test(profile());
+        let native_event_json = br#"{"hook_event_name":"SessionStart"}"#.to_vec();
+        let native_event = CodexNativeHookEvent::parse(&native_event_json)?;
+        let mut pinned_profile = profile();
+        pinned_profile.event_schemas[0].sha256 = native_event.schema_sha256().to_owned();
+        let session = CodexManagedSession::for_test(pinned_profile);
         let broker = CodexHookBrokerProtocol::new(session);
         let valid = HookEvent {
             event: HookEventKind::SessionStart as i32,
-            schema_sha256: "b".repeat(64),
-            native_event_json: br#"{"session_id":"native"}"#.to_vec(),
+            schema_sha256: native_event.schema_sha256().to_owned(),
+            native_event_json,
         };
         assert_eq!(broker.validate_event(&valid)?, HookEventKind::SessionStart);
 
         let invalid = HookEvent {
             schema_sha256: "c".repeat(64),
-            ..valid
+            ..valid.clone()
         };
         assert!(matches!(
             broker.validate_event(&invalid),
+            Err(CodexSessionError::InvalidHookEvent { .. })
+        ));
+
+        let omitted_schema = HookEvent {
+            schema_sha256: String::new(),
+            ..valid.clone()
+        };
+        assert!(matches!(
+            broker.validate_event(&omitted_schema),
+            Err(CodexSessionError::InvalidHookEvent { .. })
+        ));
+
+        let mismatched_kind = HookEvent {
+            event: HookEventKind::PreToolUse as i32,
+            ..valid
+        };
+        assert!(matches!(
+            broker.validate_event(&mismatched_kind),
             Err(CodexSessionError::InvalidHookEvent { .. })
         ));
         Ok(())
@@ -559,7 +589,11 @@ mod tests {
             }
             Err(error) => return Err(error.into()),
         };
-        let session = CodexManagedSession::for_test(profile());
+        let native_event_json = br#"{"hook_event_name":"SessionStart"}"#.to_vec();
+        let native_event = CodexNativeHookEvent::parse(&native_event_json)?;
+        let mut pinned_profile = profile();
+        pinned_profile.event_schemas[0].sha256 = native_event.schema_sha256().to_owned();
+        let session = CodexManagedSession::for_test(pinned_profile);
         let _ticket = session.issue_guarded_hook_ticket(observed_peer)?;
         let broker_session = session.clone();
         let worker = std::thread::spawn(move || {
@@ -570,8 +604,8 @@ mod tests {
             &mut hook_stream,
             HookEvent {
                 event: HookEventKind::SessionStart as i32,
-                schema_sha256: "b".repeat(64),
-                native_event_json: br#"{"session_id":"native"}"#.to_vec(),
+                schema_sha256: native_event.schema_sha256().to_owned(),
+                native_event_json,
             },
         )?;
         assert!(result.accepted);
@@ -589,8 +623,8 @@ mod tests {
             id: String::from("test-profile"),
             runner: SessionRunnerKind::LinuxHost,
             executable: "/opt/codex/codex".into(),
+            executable_sha256: "a".repeat(64),
             deployment: CodexDeploymentMode::LocalCooperative,
-            profile_sha256: "a".repeat(64),
             trust_root: "/var/lib/erebor/codex".into(),
             requirements_source: "/var/lib/erebor/codex/requirements.toml".into(),
             requirements_sha256: "a".repeat(64),

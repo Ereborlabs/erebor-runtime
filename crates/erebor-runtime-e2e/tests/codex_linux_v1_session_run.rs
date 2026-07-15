@@ -17,24 +17,28 @@ mod linux {
         time::Duration,
     };
 
+    use erebor_runtime_session::CodexNativeHookEvent;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
 
     use crate::{
         cli::{E2eWorkspace, EreborCliFixture},
-        managed_artifact::{CodexLinuxV1RequirementsArtifact, V1_HOOK_EVENTS},
+        managed_artifact::CodexLinuxV1RequirementsArtifact,
         mock_responses::{write_codex_mock_responses_config, CodexMockResponsesServer},
     };
+
+    const REQUIRE_SESSION_RUN_ENV: &str = "EREBOR_REQUIRE_CODEX_LINUX_V1_SESSION_RUN";
 
     #[test]
     fn managed_hook_uses_the_guarded_session_run_channel() -> Result<(), Box<dyn std::error::Error>>
     {
-        if !managed_projection_anchors_exist() {
+        if !required_session_run() {
             eprintln!(
-                "skipping managed Codex session fixture: root-managed projection anchors are not installed"
+                "skipping managed Codex session fixture; set {REQUIRE_SESSION_RUN_ENV}=1 on the Linux namespace fixture"
             );
             return Ok(());
         }
+        require_managed_projection_anchors()?;
         let workspace = E2eWorkspace::create("codex-managed-hook-session-run")?;
         let root = workspace.path();
         let trust = root.join("trust");
@@ -56,6 +60,8 @@ mod linux {
         let requirements_hash = hash(&requirements)?;
         let hook_hash = hash(&hook)?;
         let startup_hash = hash(&startup)?;
+        let driver_hash = hash(driver)?;
+        let session_start_schema = schema_sha256(br#"{"hook_event_name":"session_start"}"#)?;
         let config = root.join("runtime.json");
         fs::write(
             &config,
@@ -72,7 +78,7 @@ mod linux {
             "filesystem":{{"enabled":true}}
           }},
           "codex":{{"enabled":true,"profiles":[{{
-            "id":"fixture","runner":"linux_host","executable":"{}","deployment":"local_cooperative","profile_sha256":"{}",
+            "id":"fixture","runner":"linux_host","executable":"{}","executable_sha256":"{}","deployment":"local_cooperative",
             "trust_root":"{}","requirements_source":"{}","requirements_sha256":"{}",
             "managed_hook_source":"{}","managed_hook_sha256":"{}","managed_hook_path":"/usr/lib/erebor/codex-hooks/erebor-codex-hook",
             "shell_startup_source":"{}","shell_startup_sha256":"{}","shell_startup_path":"/usr/lib/erebor/codex-hooks/shell-startup",
@@ -83,7 +89,7 @@ mod linux {
         }}"#,
                 policy.display(),
                 driver.display(),
-                "a".repeat(64),
+                driver_hash,
                 trust.display(),
                 requirements.display(),
                 requirements_hash,
@@ -92,7 +98,7 @@ mod linux {
                 startup.display(),
                 startup_hash,
                 driver.display(),
-                "b".repeat(64)
+                session_start_schema
             ),
         )?;
         let result = EreborCliFixture::build()?.run_in(
@@ -140,25 +146,52 @@ mod linux {
             diagnostic.contains("peer identity did not match"),
             "replaced stdout did not fail through the broker: {diagnostic}"
         );
+
+        let late_replaced_stdout_marker = root.join("late-replaced-stdout-result.json");
+        let mut late_replacement = EreborCliFixture::build()?.command_in(
+            root,
+            [
+                "session",
+                "run",
+                "--runner",
+                "linux-host",
+                "--config",
+                config.to_str().ok_or("config path")?,
+                driver.to_str().ok_or("driver path")?,
+                late_replaced_stdout_marker.to_str().ok_or("marker path")?,
+            ],
+        );
+        let late_replacement_output = late_replacement
+            .env("EREBOR_CODEX_LINUX_V1_REPLACE_STDOUT_AFTER_BROKER", "1")
+            .output()?;
+        if !late_replacement_output.status.success() {
+            return Err(format!(
+                "managed hook did not preserve its original stdout after broker authentication: {}",
+                String::from_utf8_lossy(&late_replacement_output.stderr)
+            )
+            .into());
+        }
+        assert_eq!(
+            fs::read(&late_replaced_stdout_marker)?,
+            br#"{"continue":true}"#
+        );
         Ok(())
     }
 
     #[test]
     fn pinned_app_server_session_start_uses_the_authenticated_hook_channel(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        if !managed_projection_anchors_exist() {
+        if !required_session_run() {
             eprintln!(
-                "skipping pinned Codex App Server fixture: root-managed projection anchors are not installed"
+                "skipping pinned Codex App Server fixture; set {REQUIRE_SESSION_RUN_ENV}=1 with EREBOR_CODEX_LINUX_V1_CLI"
             );
             return Ok(());
         }
-        let Some(codex) = std::env::var_os("EREBOR_CODEX_LINUX_V1_CLI") else {
-            eprintln!(
-                "skipping pinned Codex App Server fixture: EREBOR_CODEX_LINUX_V1_CLI is not set"
-            );
-            return Ok(());
-        };
-        let codex = PathBuf::from(codex);
+        require_managed_projection_anchors()?;
+        let codex = PathBuf::from(
+            std::env::var_os("EREBOR_CODEX_LINUX_V1_CLI")
+                .ok_or("EREBOR_CODEX_LINUX_V1_CLI is required by the live Phase 1 fixture")?,
+        );
         if !codex.is_file() {
             return Err(format!(
                 "EREBOR_CODEX_LINUX_V1_CLI is not a regular file: {}",
@@ -169,10 +202,8 @@ mod linux {
 
         let workspace = E2eWorkspace::create("codex-managed-app-server-session-run")?;
         let root = workspace.path();
-        let artifact = CodexLinuxV1RequirementsArtifact::create(
-            root,
-            Path::new(env!("CARGO_BIN_EXE_codex-linux-v1-test-hook")),
-        )?;
+        let managed_hook = production_managed_hook()?;
+        let artifact = CodexLinuxV1RequirementsArtifact::create(root, &managed_hook)?;
         artifact.assert_complete()?;
         let startup = artifact.hook_directory().join(".zshenv");
         let managed_startup_marker = root.join("managed-zsh-startup");
@@ -186,6 +217,7 @@ mod linux {
         let hook = artifact.hook_directory().join("erebor-codex-hook");
         let policy = root.join("policy.json");
         fs::write(&policy, r#"{ "rules": [] }"#)?;
+        let codex_hash = hash(&codex)?;
         let config = root.join("runtime.json");
         fs::write(
             &config,
@@ -202,7 +234,7 @@ mod linux {
             "filesystem":{{"enabled":true}}
           }},
           "codex":{{"enabled":true,"profiles":[{{
-            "id":"pinned-app-server","runner":"linux_host","executable":"{}","deployment":"local_cooperative","profile_sha256":"{}",
+            "id":"pinned-app-server","runner":"linux_host","executable":"{}","executable_sha256":"{}","deployment":"local_cooperative",
             "trust_root":"{}","requirements_source":"{}","requirements_sha256":"{}",
             "managed_hook_source":"{}","managed_hook_sha256":"{}","managed_hook_path":"/usr/lib/erebor/codex-hooks/erebor-codex-hook",
             "shell_startup_source":"{}","shell_startup_sha256":"{}","shell_startup_path":"/usr/lib/erebor/codex-hooks/.zshenv",
@@ -213,7 +245,7 @@ mod linux {
         }}"#,
                 policy.display(),
                 codex.display(),
-                "a".repeat(64),
+                codex_hash,
                 root.display(),
                 artifact.requirements_path().display(),
                 artifact.requirements_sha256(),
@@ -222,14 +254,12 @@ mod linux {
                 startup.display(),
                 hash(&startup)?,
                 codex.display(),
-                event_schemas()
+                event_schemas()?
             ),
         )?;
         let codex_home = root.join("codex-home");
         let untrusted_home = root.join("untrusted-home");
         let app_workspace = root.join("workspace");
-        let hook_log = root.join("hook-events.jsonl");
-        let hook_environment = root.join("hook-environment.log");
         let untrusted_startup_marker = root.join("untrusted-zsh-startup");
         fs::create_dir_all(&codex_home)?;
         fs::create_dir_all(&untrusted_home)?;
@@ -261,8 +291,6 @@ mod linux {
         );
         command
             .env("CODEX_HOME", &codex_home)
-            .env("EREBOR_CODEX_LINUX_V1_HOOK_LOG", &hook_log)
-            .env("EREBOR_CODEX_LINUX_V1_HOOK_ENV_MARKER", &hook_environment)
             .env("HOME", &untrusted_home);
         let mut app_server = SessionRunAppServer::start(command)?;
         app_server.initialize()?;
@@ -290,16 +318,11 @@ mod linux {
                 "input": [{"type": "text", "text": "Phase 1 managed session probe."}]
             })),
         )?;
-        assert_hook_events_in_order(
-            &hook_log,
-            ["SessionStart", "UserPromptSubmit", "PreToolUse", "Stop"],
-        )?;
-        assert_eq!(fs::read_to_string(managed_startup_marker)?, "managed\n");
+        assert_file_contains(&managed_startup_marker, "managed\n")?;
         assert!(
             !untrusted_startup_marker.exists(),
             "untrusted $HOME/.zshenv was executed"
         );
-        assert_hook_environment_contains(&hook_environment, "ZDOTDIR=/usr/lib/erebor/codex-hooks")?;
         Ok(())
     }
 
@@ -307,24 +330,88 @@ mod linux {
         Ok(format!("{:x}", Sha256::digest(fs::read(path)?)))
     }
 
-    fn managed_projection_anchors_exist() -> bool {
-        Path::new("/etc/codex/requirements.toml").is_file()
-            && Path::new("/usr/lib/erebor/codex-hooks").is_dir()
-            && Path::new("/run/erebor").is_dir()
+    fn production_managed_hook() -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .ok_or("e2e crate is not under the workspace crates directory")?;
+        let output = Command::new("cargo")
+            .args([
+                "build",
+                "-p",
+                "erebor-runtime-session",
+                "--bin",
+                "erebor-codex-hook",
+            ])
+            .current_dir(workspace)
+            .output()?;
+        if !output.status.success() {
+            return Err(format!(
+                "cargo build erebor-codex-hook failed: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            )
+            .into());
+        }
+        let target_directory = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| workspace.join("target"));
+        let hook = target_directory
+            .join("debug")
+            .join(format!("erebor-codex-hook{}", std::env::consts::EXE_SUFFIX));
+        if !hook.is_file() {
+            return Err(format!(
+                "cargo build erebor-codex-hook did not produce a regular binary at {}",
+                hook.display()
+            )
+            .into());
+        }
+        Ok(hook)
     }
 
-    fn event_schemas() -> String {
-        V1_HOOK_EVENTS
-            .iter()
-            .map(|event| {
-                format!(
-                    r#"{{"event":"{}","sha256":"{}"}}"#,
-                    event_schema_name(event),
-                    "b".repeat(64)
+    fn schema_sha256(input: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
+        Ok(CodexNativeHookEvent::parse(input)?
+            .schema_sha256()
+            .to_owned())
+    }
+
+    fn required_session_run() -> bool {
+        std::env::var_os(REQUIRE_SESSION_RUN_ENV).is_some_and(|value| value == "1")
+    }
+
+    fn require_managed_projection_anchors() -> Result<(), Box<dyn std::error::Error>> {
+        for path in [
+            "/etc/codex/requirements.toml",
+            "/usr/lib/erebor/codex-hooks",
+            "/run/erebor",
+        ] {
+            if !Path::new(path).exists() {
+                return Err(format!(
+                    "{REQUIRE_SESSION_RUN_ENV}=1 requires the root-managed session projection anchor `{path}`"
                 )
-            })
-            .collect::<Vec<_>>()
-            .join(",")
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    fn event_schemas() -> Result<String, Box<dyn std::error::Error>> {
+        [
+            ("SessionStart", br#"{"session_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"SessionStart","model":"model","permission_mode":"mode","source":"source"}"#.as_slice()),
+            ("UserPromptSubmit", br#"{"session_id":"id","turn_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"UserPromptSubmit","model":"model","permission_mode":"mode","prompt":"prompt"}"#.as_slice()),
+            ("PreToolUse", br#"{"session_id":"id","turn_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"PreToolUse","model":"model","permission_mode":"mode","tool_name":"Bash","tool_input":{"command":"command"},"tool_use_id":"id"}"#.as_slice()),
+            ("Stop", br#"{"session_id":"id","turn_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"Stop","model":"model","permission_mode":"mode","stop_hook_active":false,"last_assistant_message":"message"}"#.as_slice()),
+        ]
+        .into_iter()
+        .map(|(event, payload)| {
+            Ok(format!(
+                r#"{{"event":"{}","sha256":"{}"}}"#,
+                event_schema_name(event),
+                schema_sha256(payload)?
+            ))
+        })
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()
+        .map(|schemas| schemas.join(","))
     }
 
     fn event_schema_name(event: &str) -> &'static str {
@@ -341,55 +428,20 @@ mod linux {
         }
     }
 
-    fn assert_hook_events_in_order(
-        hook_log: &Path,
-        expected_events: impl IntoIterator<Item = &'static str>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let expected_events = expected_events.into_iter().collect::<Vec<_>>();
-        let mut observed_events = Vec::new();
+    fn assert_file_contains(path: &Path, expected: &str) -> Result<(), Box<dyn std::error::Error>> {
         for _attempt in 0..40 {
-            if let Ok(source) = fs::read_to_string(hook_log) {
-                observed_events = source
-                    .lines()
-                    .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                    .filter_map(|value| {
-                        value
-                            .get("hook_event_name")
-                            .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .collect::<Vec<_>>();
-                if expected_events
-                    .iter()
-                    .copied()
-                    .eq(observed_events.iter().map(String::as_str))
-                {
-                    return Ok(());
-                }
-            }
-            thread::sleep(Duration::from_millis(125));
-        }
-        Err(format!(
-            "managed hook events did not converge: expected={expected_events:?} observed={observed_events:?}"
-        )
-        .into())
-    }
-
-    fn assert_hook_environment_contains(
-        hook_environment: &Path,
-        expected: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        for _attempt in 0..40 {
-            if fs::read_to_string(hook_environment)
-                .is_ok_and(|environment| environment.lines().any(|line| line == expected))
-            {
+            if fs::read_to_string(path).is_ok_and(|source| source.contains(expected)) {
                 return Ok(());
             }
             thread::sleep(Duration::from_millis(125));
         }
-        let observed = fs::read_to_string(hook_environment)
-            .unwrap_or_else(|_error| String::from("<no hook environment marker>"));
-        Err(format!("managed hook did not receive `{expected}`: observed={observed:?}").into())
+        let observed =
+            fs::read_to_string(path).unwrap_or_else(|_error| String::from("<missing file>"));
+        Err(format!(
+            "managed hook did not write `{expected}` to {}: observed={observed:?}",
+            path.display()
+        )
+        .into())
     }
 
     struct SessionRunAppServer {

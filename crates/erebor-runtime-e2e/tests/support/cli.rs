@@ -38,7 +38,7 @@ impl EreborCliFixture {
         }
 
         Ok(Self {
-            binary: workspace_root.binary_path(),
+            binary: workspace_root.binary_path("erebor-runtime"),
         })
     }
 
@@ -161,13 +161,13 @@ impl WorkspaceRoot {
         &self.path
     }
 
-    fn binary_path(&self) -> PathBuf {
+    fn binary_path(&self, name: &str) -> PathBuf {
         let target_dir = std::env::var_os("CARGO_TARGET_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| self.path.join("target"));
         target_dir
             .join("debug")
-            .join(format!("erebor-runtime{}", std::env::consts::EXE_SUFFIX))
+            .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
     }
 }
 

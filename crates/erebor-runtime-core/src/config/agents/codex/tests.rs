@@ -20,8 +20,8 @@ fn profile_with(fields: &str) -> String {
           "id": "vscode-app-server",
           "runner": "linux_host",
           "executable": "/opt/codex/codex",
+          "executable_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
           "deployment": "fleet_managed",
-          "profile_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
           "trust_root": "/var/lib/erebor/codex",
           "requirements_source": "/var/lib/erebor/codex/requirements.toml",
           "requirements_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -73,6 +73,16 @@ fn rejects_a_mutable_profile_path() {
 }
 
 #[test]
+fn rejects_a_fleet_executable_in_a_mutable_path() {
+    let source = profile_source(&profile_with("")).replace("/opt/codex/codex", "/tmp/codex");
+
+    assert!(matches!(
+        RuntimeConfig::from_json_str(&source),
+        Err(RuntimeConfigError::InvalidCodexGovernanceConfig { .. })
+    ));
+}
+
+#[test]
 fn rejects_a_profile_outside_its_trust_root() {
     let source = profile_source(&profile_with("")).replace(
         "/var/lib/erebor/codex/requirements.toml",
@@ -87,9 +97,9 @@ fn rejects_a_profile_outside_its_trust_root() {
 }
 
 #[test]
-fn rejects_missing_profile_fingerprint_and_incompatible_runner() {
+fn rejects_missing_executable_fingerprint_and_incompatible_runner() {
     let missing_fingerprint = profile_source(&profile_with("")).replace(
-        "\"profile_sha256\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",",
+        "\"executable_sha256\": \"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",",
         "",
     );
     assert!(matches!(

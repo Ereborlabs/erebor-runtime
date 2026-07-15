@@ -93,8 +93,8 @@ pub struct CodexProfileLayerConfig {
     pub id: String,
     pub runner: SessionRunnerKind,
     pub executable: PathBuf,
+    pub executable_sha256: String,
     pub deployment: CodexDeploymentMode,
-    pub profile_sha256: String,
     pub trust_root: PathBuf,
     pub requirements_source: PathBuf,
     pub requirements_sha256: String,
@@ -164,6 +164,7 @@ impl CodexProfileLayerConfig {
         }
         if self.deployment == CodexDeploymentMode::FleetManaged {
             for (label, path) in [
+                ("executable", &self.executable),
                 ("trust_root", &self.trust_root),
                 ("requirements_source", &self.requirements_source),
                 ("managed_hook_source", &self.managed_hook_source),
@@ -264,7 +265,7 @@ impl CodexProfileLayerConfig {
             }
         );
         for (label, digest) in [
-            ("profile_sha256", &self.profile_sha256),
+            ("executable_sha256", &self.executable_sha256),
             ("requirements_sha256", &self.requirements_sha256),
             ("managed_hook_sha256", &self.managed_hook_sha256),
             ("shell_startup_sha256", &self.shell_startup_sha256),

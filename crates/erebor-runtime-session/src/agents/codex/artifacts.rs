@@ -46,6 +46,7 @@ impl CodexArtifactProjection {
     }
 
     fn verify(profile: &CodexProfileLayerConfig) -> Result<(), CodexSessionError> {
+        Self::verify_executable(profile)?;
         Self::verify_managed_hook_directory(profile)?;
         for (path, digest) in [
             (&profile.requirements_source, &profile.requirements_sha256),
@@ -55,6 +56,22 @@ impl CodexArtifactProjection {
             Self::verify_file(path, digest, profile)?;
         }
         Ok(())
+    }
+
+    fn verify_executable(profile: &CodexProfileLayerConfig) -> Result<(), CodexSessionError> {
+        let path = &profile.executable;
+        let metadata = fs::symlink_metadata(path).context(ReadArtifactSnafu { path })?;
+        ensure!(
+            metadata.file_type().is_file(),
+            ArtifactDirectoryUnsafeSnafu {
+                path: path.to_path_buf()
+            }
+        );
+        if profile.deployment == CodexDeploymentMode::FleetManaged {
+            Self::verify_fleet_protection(path, &metadata)?;
+            Self::verify_fleet_path_to_root(path)?;
+        }
+        Self::verify_digest(path, &profile.executable_sha256)
     }
 
     fn verify_managed_hook_directory(
@@ -115,6 +132,10 @@ impl CodexArtifactProjection {
         if profile.deployment == CodexDeploymentMode::FleetManaged {
             Self::verify_fleet_protection(path, &metadata)?;
         }
+        Self::verify_digest(path, expected_digest)
+    }
+
+    fn verify_digest(path: &Path, expected_digest: &str) -> Result<(), CodexSessionError> {
         let mut file = File::open(path).context(ReadArtifactSnafu { path })?;
         let mut digest = Sha256::new();
         let mut buffer = [0_u8; 8192];
@@ -157,6 +178,22 @@ impl CodexArtifactProjection {
             path: profile.trust_root.clone(),
         }
         .fail()
+    }
+
+    fn verify_fleet_path_to_root(artifact: &Path) -> Result<(), CodexSessionError> {
+        let mut ancestor = artifact.parent();
+        while let Some(path) = ancestor {
+            let metadata = fs::symlink_metadata(path).context(ReadArtifactSnafu { path })?;
+            ensure!(
+                metadata.file_type().is_dir(),
+                ArtifactDirectoryUnsafeSnafu {
+                    path: path.to_path_buf()
+                }
+            );
+            Self::verify_fleet_protection(path, &metadata)?;
+            ancestor = path.parent();
+        }
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -211,12 +248,13 @@ mod tests {
         fs::write(&requirements, "allow_managed_hooks_only = true")?;
         fs::write(&hook, "#!/bin/sh\nexit 0\n")?;
         fs::write(&shell_startup, "set -eu\n")?;
+        let executable = std::env::current_exe()?;
         let profile = CodexProfileLayerConfig {
             id: String::from("test-profile"),
             runner: SessionRunnerKind::LinuxHost,
-            executable: root.join("codex"),
+            executable: executable.clone(),
+            executable_sha256: hash(&executable)?,
             deployment: CodexDeploymentMode::LocalCooperative,
-            profile_sha256: "a".repeat(64),
             trust_root: root.clone(),
             requirements_source: requirements.clone(),
             requirements_sha256: hash(&requirements)?,
@@ -228,7 +266,7 @@ mod tests {
             shell_startup_path: "/usr/lib/erebor/codex-hooks/shell-startup".into(),
             hook_shell: CodexHookShellKind::Direct,
             hook_exec_history: vec![
-                root.join("codex"),
+                executable,
                 "/usr/lib/erebor/codex-hooks/erebor-codex-hook".into(),
             ],
             event_schemas: vec![CodexHookEventSchemaLayerConfig {
@@ -249,6 +287,13 @@ mod tests {
             projections[1].target(),
             std::path::Path::new("/usr/lib/erebor/codex-hooks")
         );
+
+        let mut mismatched_executable = profile.clone();
+        mismatched_executable.executable_sha256 = "0".repeat(64);
+        assert!(matches!(
+            CodexArtifactProjection::projections(&mismatched_executable),
+            Err(super::CodexSessionError::ArtifactDigestMismatch { .. })
+        ));
 
         fs::write(hooks.join("untrusted-startup"), "exit 1\n")?;
         assert!(matches!(

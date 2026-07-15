@@ -82,7 +82,6 @@ impl CodexManagedSession {
         self.tickets.issue(
             self.session_id.clone(),
             self.profile.id.clone(),
-            self.profile.profile_sha256.clone(),
             peer,
             DEFAULT_TICKET_LIFETIME,
         )
@@ -112,7 +111,6 @@ impl CodexManagedSession {
         self.tickets.issue_with_pidfd(
             self.session_id.clone(),
             self.profile.id.clone(),
-            self.profile.profile_sha256.clone(),
             peer,
             DEFAULT_TICKET_LIFETIME,
             Some(pidfd),
@@ -170,7 +168,6 @@ pub struct CodexHookTicket {
     id: String,
     session_id: String,
     profile_id: String,
-    profile_sha256: String,
 }
 
 impl CodexHookTicket {
@@ -188,11 +185,6 @@ impl CodexHookTicket {
     pub fn profile_id(&self) -> &str {
         &self.profile_id
     }
-
-    #[must_use]
-    pub fn profile_sha256(&self) -> &str {
-        &self.profile_sha256
-    }
 }
 
 impl CodexHookTicketRegistry {
@@ -200,25 +192,16 @@ impl CodexHookTicketRegistry {
         &self,
         session_id: impl Into<String>,
         profile_id: impl Into<String>,
-        profile_sha256: impl Into<String>,
         expected_peer: HookPeerEvidence,
         lifetime: Duration,
     ) -> Result<CodexHookTicket, CodexSessionError> {
-        self.issue_with_pidfd(
-            session_id,
-            profile_id,
-            profile_sha256,
-            expected_peer,
-            lifetime,
-            None,
-        )
+        self.issue_with_pidfd(session_id, profile_id, expected_peer, lifetime, None)
     }
 
     fn issue_with_pidfd(
         &self,
         session_id: impl Into<String>,
         profile_id: impl Into<String>,
-        profile_sha256: impl Into<String>,
         mut expected_peer: HookPeerEvidence,
         lifetime: Duration,
         pidfd: Option<OwnedFd>,
@@ -227,7 +210,6 @@ impl CodexHookTicketRegistry {
             id: random_ticket_id()?,
             session_id: session_id.into(),
             profile_id: profile_id.into(),
-            profile_sha256: profile_sha256.into(),
         };
         expected_peer.ticket_id = ticket.id.clone();
         let pending = PendingHookTicket {
@@ -461,13 +443,7 @@ mod tests {
     fn ticket_consumption_requires_the_exact_peer_and_is_one_use(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let registry = CodexHookTicketRegistry::default();
-        let ticket = registry.issue(
-            "session-1",
-            "codex-1",
-            "a".repeat(64),
-            peer(),
-            Duration::from_secs(1),
-        )?;
+        let ticket = registry.issue("session-1", "codex-1", peer(), Duration::from_secs(1))?;
         let hello = HookHello {
             protocol_version: PROTOCOL_VERSION,
             ticket_id: ticket.id().to_owned(),
@@ -493,13 +469,7 @@ mod tests {
     #[test]
     fn ticket_rejects_expired_and_unsupported_hello() -> Result<(), Box<dyn std::error::Error>> {
         let registry = CodexHookTicketRegistry::default();
-        let ticket = registry.issue(
-            "session-1",
-            "codex-1",
-            "a".repeat(64),
-            peer(),
-            Duration::ZERO,
-        )?;
+        let ticket = registry.issue("session-1", "codex-1", peer(), Duration::ZERO)?;
         let mut observed = peer();
         observed.ticket_id = ticket.id().to_owned();
         let expired = HookHello {
@@ -535,7 +505,6 @@ mod tests {
         let ticket = registry.issue_with_pidfd(
             "session-1",
             "codex-1",
-            "a".repeat(64),
             expected.clone(),
             Duration::from_secs(1),
             Some(pidfd),
@@ -559,13 +528,7 @@ mod tests {
     fn ticket_can_be_selected_only_by_a_unique_kernel_peer(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let registry = CodexHookTicketRegistry::default();
-        let ticket = registry.issue(
-            "session-1",
-            "codex-1",
-            "a".repeat(64),
-            peer(),
-            Duration::from_secs(1),
-        )?;
+        let ticket = registry.issue("session-1", "codex-1", peer(), Duration::from_secs(1))?;
         let hello = HookHello {
             protocol_version: PROTOCOL_VERSION,
             ticket_id: String::new(),
@@ -582,13 +545,7 @@ mod tests {
     fn ticket_reports_replaced_pipe_for_an_otherwise_matching_kernel_peer(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let registry = CodexHookTicketRegistry::default();
-        let ticket = registry.issue(
-            "session-1",
-            "codex-1",
-            "a".repeat(64),
-            peer(),
-            Duration::from_secs(1),
-        )?;
+        let ticket = registry.issue("session-1", "codex-1", peer(), Duration::from_secs(1))?;
         let hello = HookHello {
             protocol_version: PROTOCOL_VERSION,
             ticket_id: String::new(),
@@ -666,13 +623,7 @@ mod tests {
             ),
         ] {
             let registry = CodexHookTicketRegistry::default();
-            let ticket = registry.issue(
-                "session-1",
-                "codex-1",
-                "a".repeat(64),
-                peer(),
-                Duration::from_secs(1),
-            )?;
+            let ticket = registry.issue("session-1", "codex-1", peer(), Duration::from_secs(1))?;
             let hello = HookHello {
                 protocol_version: PROTOCOL_VERSION,
                 ticket_id: ticket.id().to_owned(),
@@ -706,8 +657,8 @@ mod tests {
                   "id": "local-test",
                   "runner": "linux_host",
                   "executable": "/tmp/erebor-codex-test/codex",
+                  "executable_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   "deployment": "local_cooperative",
-                  "profile_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                   "trust_root": "/tmp/erebor-codex-test",
                   "requirements_source": "/tmp/erebor-codex-test/requirements.toml",
                   "requirements_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
