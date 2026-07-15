@@ -11,6 +11,7 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use erebor_runtime_session::CodexNativeHookEvent;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -404,7 +405,18 @@ fn assert_hook_events_in_order(log_path: &Path, expected_events: &[&str]) -> Tes
                 .copied()
                 .eq(observed_events.iter().map(String::as_str))
             {
-                eprintln!("Codex managed hook event order: {observed_events:?}");
+                let schema_fingerprints = source
+                    .lines()
+                    .filter(|line| !line.is_empty())
+                    .map(|line| {
+                        let event =
+                            CodexNativeHookEvent::parse(line.as_bytes()).map_err(test_error)?;
+                        Ok((event.kind(), event.schema_sha256().to_owned()))
+                    })
+                    .collect::<TestResult<Vec<_>>>()?;
+                eprintln!(
+                    "Codex managed hook event order: {observed_events:?}; structural schema fingerprints: {schema_fingerprints:?}"
+                );
                 return Ok(());
             }
         }

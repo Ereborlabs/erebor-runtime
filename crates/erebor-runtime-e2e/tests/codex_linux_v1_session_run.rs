@@ -9,6 +9,7 @@ mod mock_responses;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod linux {
     use std::{
+        collections::BTreeSet,
         fs,
         io::{BufRead, BufReader, Write},
         path::{Path, PathBuf},
@@ -318,6 +319,12 @@ mod linux {
                 "input": [{"type": "text", "text": "Phase 1 managed session probe."}]
             })),
         )?;
+        app_server.assert_completed_hook_events_and_turn(&[
+            "SessionStart",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "Stop",
+        ])?;
         assert_file_contains(&managed_startup_marker, "managed\n")?;
         assert!(
             !untrusted_startup_marker.exists(),
@@ -396,7 +403,7 @@ mod linux {
     }
 
     fn event_schemas() -> Result<String, Box<dyn std::error::Error>> {
-        [
+        let schemas = [
             ("SessionStart", br#"{"session_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"SessionStart","model":"model","permission_mode":"mode","source":"source"}"#.as_slice()),
             ("UserPromptSubmit", br#"{"session_id":"id","turn_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"UserPromptSubmit","model":"model","permission_mode":"mode","prompt":"prompt"}"#.as_slice()),
             ("PreToolUse", br#"{"session_id":"id","turn_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"PreToolUse","model":"model","permission_mode":"mode","tool_name":"Bash","tool_input":{"command":"command"},"tool_use_id":"id"}"#.as_slice()),
@@ -410,8 +417,8 @@ mod linux {
                 schema_sha256(payload)?
             ))
         })
-        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()
-        .map(|schemas| schemas.join(","))
+        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
+        Ok(schemas.join(","))
     }
 
     fn event_schema_name(event: &str) -> &'static str {
@@ -448,6 +455,7 @@ mod linux {
         child: Child,
         stdin: ChildStdin,
         stdout: BufReader<ChildStdout>,
+        notifications: Vec<Value>,
     }
 
     impl SessionRunAppServer {
@@ -463,6 +471,7 @@ mod linux {
                 child,
                 stdin,
                 stdout: BufReader::new(stdout),
+                notifications: Vec::new(),
             })
         }
 
@@ -503,6 +512,7 @@ mod linux {
                 }
                 let response: Value = serde_json::from_str(&line)?;
                 if response.get("id") != Some(&json!(id)) {
+                    self.notifications.push(response);
                     continue;
                 }
                 if let Some(error) = response.get("error") {
@@ -514,6 +524,88 @@ mod linux {
                     .ok_or_else(|| format!("Codex App Server omitted `{method}` result").into());
             }
             Err(format!("Codex App Server emitted too many messages for `{method}`").into())
+        }
+
+        fn assert_completed_hook_events_and_turn(
+            &mut self,
+            expected_events: &[&str],
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            let expected_events = expected_events.iter().copied().collect::<BTreeSet<_>>();
+            let mut completed_events = BTreeSet::new();
+            let mut observed_notifications = Vec::new();
+
+            for _attempt in 0..512 {
+                let notification = self.next_notification()?;
+                let method = notification
+                    .get("method")
+                    .and_then(Value::as_str)
+                    .unwrap_or("<non-notification>");
+                observed_notifications.push(method.to_owned());
+                match Some(method) {
+                    Some("hook/completed") => {
+                        let event = notification
+                            .pointer("/params/run/eventName")
+                            .and_then(Value::as_str)
+                            .ok_or("hook/completed omitted params.run.eventName")?;
+                        let event = match event {
+                            "sessionStart" | "SessionStart" => "SessionStart",
+                            "userPromptSubmit" | "UserPromptSubmit" => "UserPromptSubmit",
+                            "preToolUse" | "PreToolUse" => "PreToolUse",
+                            "postToolUse" | "PostToolUse" => "PostToolUse",
+                            "stop" | "Stop" => "Stop",
+                            other => other,
+                        };
+                        if expected_events.contains(event) {
+                            assert_eq!(
+                                notification
+                                    .pointer("/params/run/status")
+                                    .and_then(Value::as_str),
+                                Some("completed"),
+                                "managed hook `{event}` did not complete successfully"
+                            );
+                            completed_events.insert(event.to_owned());
+                        }
+                    }
+                    Some("turn/completed") => {
+                        assert_eq!(
+                            notification
+                                .pointer("/params/turn/status")
+                                .and_then(Value::as_str),
+                            Some("completed"),
+                            "managed AppServer turn did not complete successfully"
+                        );
+                        let expected_events = expected_events
+                            .iter()
+                            .map(|event| (*event).to_owned())
+                            .collect::<BTreeSet<_>>();
+                        assert_eq!(
+                            completed_events, expected_events,
+                            "the managed AppServer turn did not complete every expected hook; observed notifications: {observed_notifications:?}"
+                        );
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+            Err("managed AppServer emitted too many messages before turn/completed".into())
+        }
+
+        fn next_notification(&mut self) -> Result<Value, Box<dyn std::error::Error>> {
+            if !self.notifications.is_empty() {
+                return Ok(self.notifications.remove(0));
+            }
+            loop {
+                let mut line = String::new();
+                if self.stdout.read_line(&mut line)? == 0 {
+                    return Err(
+                        "session-run Codex AppServer closed stdout before turn/completed".into(),
+                    );
+                }
+                let message: Value = serde_json::from_str(&line)?;
+                if message.get("method").is_some() {
+                    return Ok(message);
+                }
+            }
         }
 
         fn write_json(&mut self, message: &Value) -> Result<(), Box<dyn std::error::Error>> {
