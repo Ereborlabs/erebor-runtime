@@ -11,6 +11,10 @@ use erebor_runtime_core::{
     CodexProfileLayerConfig, RuntimeConfig, SessionRunPlan, SessionRunnerKind,
 };
 use erebor_runtime_ipc::v1::{HookHello, HookPeerEvidence};
+use rustix::{
+    fd::OwnedFd,
+    process::{pidfd_open, Pid, PidfdFlags},
+};
 use snafu::{ensure, ResultExt};
 
 use super::{
@@ -82,6 +86,37 @@ impl CodexManagedSession {
         )
     }
 
+    pub(crate) fn issue_guarded_hook_ticket(
+        &self,
+        peer: HookPeerEvidence,
+    ) -> Result<CodexHookTicket, CodexSessionError> {
+        let pid = i32::try_from(peer.observed_pid).map_err(|_error| CodexSessionError::Pidfd {
+            pid: i32::MIN,
+            source: std::io::Error::from(std::io::ErrorKind::InvalidInput),
+            location: snafu::Location::default(),
+        })?;
+        let pid = Pid::from_raw(pid).ok_or_else(|| CodexSessionError::Pidfd {
+            pid,
+            source: std::io::Error::from(std::io::ErrorKind::InvalidInput),
+            location: snafu::Location::default(),
+        })?;
+        let pidfd = pidfd_open(pid, PidfdFlags::empty())
+            .map_err(std::io::Error::from)
+            .map_err(|source| CodexSessionError::Pidfd {
+                pid: peer.observed_pid as i32,
+                source,
+                location: snafu::Location::default(),
+            })?;
+        self.tickets.issue_with_pidfd(
+            self.session_id.clone(),
+            self.profile.id.clone(),
+            self.profile.profile_sha256.clone(),
+            peer,
+            DEFAULT_TICKET_LIFETIME,
+            Some(pidfd),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn for_test(profile: CodexProfileLayerConfig) -> Self {
         Self {
@@ -107,6 +142,7 @@ struct PendingHookTicket {
     ticket: CodexHookTicket,
     expected_peer: HookPeerEvidence,
     expires_at: Instant,
+    _pidfd: Option<OwnedFd>,
 }
 
 /// A one-use binding from a guarded hook exec to its expected peer identity.
@@ -146,8 +182,27 @@ impl CodexHookTicketRegistry {
         session_id: impl Into<String>,
         profile_id: impl Into<String>,
         profile_sha256: impl Into<String>,
+        expected_peer: HookPeerEvidence,
+        lifetime: Duration,
+    ) -> Result<CodexHookTicket, CodexSessionError> {
+        self.issue_with_pidfd(
+            session_id,
+            profile_id,
+            profile_sha256,
+            expected_peer,
+            lifetime,
+            None,
+        )
+    }
+
+    fn issue_with_pidfd(
+        &self,
+        session_id: impl Into<String>,
+        profile_id: impl Into<String>,
+        profile_sha256: impl Into<String>,
         mut expected_peer: HookPeerEvidence,
         lifetime: Duration,
+        pidfd: Option<OwnedFd>,
     ) -> Result<CodexHookTicket, CodexSessionError> {
         let ticket = CodexHookTicket {
             id: random_ticket_id()?,
@@ -160,6 +215,7 @@ impl CodexHookTicketRegistry {
             ticket: ticket.clone(),
             expected_peer,
             expires_at: Instant::now() + lifetime,
+            _pidfd: pidfd,
         };
         let mut state = self
             .state

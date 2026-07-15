@@ -80,6 +80,13 @@ pub enum CodexSessionError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("failed to bind Codex hook ticket to pid {pid}: {source}"))]
+    Pidfd {
+        pid: i32,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Codex hook broker IPC failed: {source}"))]
     HookBrokerProtocol {
         source: erebor_runtime_ipc::IpcProtocolError,
@@ -116,6 +123,7 @@ impl ErrorExt for CodexSessionError {
             Self::FilesystemProjection { source, .. } => source.status_code(),
             Self::TicketRegistryLock { .. } => StatusCode::Internal,
             Self::HookBrokerIo { .. } => StatusCode::External,
+            Self::Pidfd { .. } => StatusCode::External,
             Self::HookBrokerProtocol { .. }
             | Self::InvalidHookEvent { .. }
             | Self::HookRejected { .. } => StatusCode::InvalidArguments,
@@ -136,6 +144,7 @@ impl ErrorExt for CodexSessionError {
             | Self::TicketReplayed { .. }
             | Self::UnsupportedHookProtocol { .. } => RetryHint::NonRetryable,
             Self::HookBrokerIo { source, .. } => RetryHint::from_io_error(source),
+            Self::Pidfd { source, .. } => RetryHint::from_io_error(source),
             Self::HookBrokerProtocol { .. }
             | Self::InvalidHookEvent { .. }
             | Self::HookRejected { .. } => RetryHint::NonRetryable,

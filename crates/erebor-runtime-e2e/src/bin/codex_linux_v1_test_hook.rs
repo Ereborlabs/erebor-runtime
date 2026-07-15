@@ -19,12 +19,6 @@ fn main() -> ExitCode {
 }
 
 fn run() -> io::Result<()> {
-    let log_path = env::var_os(HOOK_LOG_ENV).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("{HOOK_LOG_ENV} is required"),
-        )
-    })?;
     let mut input = Vec::new();
     io::stdin()
         .take(MAX_INPUT_BYTES.saturating_add(1))
@@ -35,6 +29,13 @@ fn run() -> io::Result<()> {
             "hook input exceeds the Phase 0 test bound",
         ));
     }
+
+    let log_path = env::var_os(HOOK_LOG_ENV).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{HOOK_LOG_ENV} is required"),
+        )
+    })?;
 
     let mut log = OpenOptions::new()
         .create(true)

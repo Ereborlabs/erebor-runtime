@@ -111,7 +111,7 @@ impl CodexGuardTicketIssuerServer {
             return 2;
         }
         self.managed_session
-            .issue_hook_ticket(peer)
+            .issue_guarded_hook_ticket(peer)
             .map_or(2, |_ticket| 1)
     }
 }

@@ -536,7 +536,7 @@ mod tests {
             Err(error) => return Err(error.into()),
         };
         let session = CodexManagedSession::for_test(profile());
-        let _ticket = session.issue_hook_ticket(observed_peer)?;
+        let _ticket = session.issue_guarded_hook_ticket(observed_peer)?;
         let broker_session = session.clone();
         let worker = std::thread::spawn(move || {
             CodexHookBrokerProtocol::new(broker_session).serve(&mut broker_stream)
