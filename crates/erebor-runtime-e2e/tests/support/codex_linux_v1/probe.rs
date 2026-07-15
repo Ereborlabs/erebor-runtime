@@ -15,6 +15,8 @@ use std::os::unix::fs::PermissionsExt;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+use crate::linux_user_mount_namespace::LinuxUserMountNamespace;
+
 use super::{artifact::V1_HOOK_EVENTS, CodexLinuxV1RequirementsArtifact};
 
 const CODEX_BINARY_ENV: &str = "EREBOR_CODEX_LINUX_V1_CLI";
@@ -50,7 +52,7 @@ impl CodexLinuxV1ProfileProbe {
             )));
         }
 
-        Self::ensure_namespace_capability()?;
+        LinuxUserMountNamespace::ensure_available()?;
         let fixture = fixture_directory()?;
         let artifact = CodexLinuxV1RequirementsArtifact::create(fixture.path(), hook_binary)?;
         artifact.assert_complete()?;
@@ -71,18 +73,6 @@ impl CodexLinuxV1ProfileProbe {
             artifact.hook_sha256(),
             std::env::consts::ARCH,
         );
-        Ok(())
-    }
-
-    fn ensure_namespace_capability() -> TestResult<()> {
-        let status = Command::new("unshare")
-            .args(["--user", "--map-root-user", "--mount", "true"])
-            .status()?;
-        if !status.success() {
-            return Err(test_error(
-                "the Phase 0 fixture requires unshare --user --map-root-user --mount; run it on a host that permits user and mount namespaces",
-            ));
-        }
         Ok(())
     }
 
@@ -123,18 +113,8 @@ impl CodexLinuxV1ProfileProbe {
         write_mock_responses_config(&codex_home, _mock_responses_server.uri())?;
         let script = MountNamespaceScript::write(root)?;
 
-        let mut command = Command::new("unshare");
+        let mut command = LinuxUserMountNamespace::command(script.path());
         command
-            .args([
-                "--user",
-                "--map-root-user",
-                "--mount",
-                "--fork",
-                "--propagation",
-                "private",
-                "--",
-            ])
-            .arg(script.path())
             .arg(artifact.requirements_path())
             .arg(artifact.hook_directory())
             .arg(root.join("namespace-etc"))
@@ -388,10 +368,13 @@ fn write_mock_responses_config(codex_home: &Path, server_uri: &str) -> TestResul
     fs::write(
         codex_home.join("config.toml"),
         format!(
-            r#"model = "mock-model"
+            r#"model = "erebor-phase-0-local-mock"
 model_provider = "erebor-phase-0"
 approval_policy = "never"
 sandbox_mode = "read-only"
+
+[features]
+plugins = false
 
 [model_providers.erebor-phase-0]
 name = "Erebor Phase 0 local mock"

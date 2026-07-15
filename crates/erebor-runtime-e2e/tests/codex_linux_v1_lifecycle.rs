@@ -1,5 +1,7 @@
 #[path = "support/codex_linux_v1.rs"]
 mod codex_linux_v1;
+#[path = "support/linux_user_mount_namespace.rs"]
+mod linux_user_mount_namespace;
 
 use std::path::Path;
 
