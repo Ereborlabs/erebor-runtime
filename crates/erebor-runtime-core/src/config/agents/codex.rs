@@ -104,6 +104,7 @@ pub struct CodexProfileLayerConfig {
     pub shell_startup_source: PathBuf,
     pub shell_startup_sha256: String,
     pub shell_startup_path: PathBuf,
+    pub hook_shell: CodexHookShellKind,
     /// The exact guarded exec history, starting with the enrolled Codex
     /// executable and ending with the managed hook executable.
     pub hook_exec_history: Vec<PathBuf>,
@@ -215,15 +216,32 @@ impl CodexProfileLayerConfig {
                 )
             }
         );
+        let expected_history_len = match self.hook_shell {
+            CodexHookShellKind::Direct => 2,
+            CodexHookShellKind::Sh | CodexHookShellKind::Bash | CodexHookShellKind::Zsh => 3,
+        };
         ensure!(
-            self.hook_exec_history.len() >= 2,
+            self.hook_exec_history.len() == expected_history_len,
             InvalidCodexGovernanceConfigSnafu {
-                reason: format!(
-                    "codex profile `{}` requires a Codex-to-hook exec history",
-                    self.id
-                )
+                reason: format!("codex profile `{}` hook_shell `{}` requires an exact {expected_history_len}-entry Codex-to-hook exec history", self.id, self.hook_shell.as_str())
             }
         );
+        if let Some(expected_shell) = self.hook_shell.interpreter_name() {
+            ensure!(
+                self.hook_exec_history
+                    .get(1)
+                    .and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str())
+                    == Some(expected_shell),
+                InvalidCodexGovernanceConfigSnafu {
+                    reason: format!(
+                        "codex profile `{}` hook_shell `{}` requires its exact history to name a `{expected_shell}` interpreter",
+                        self.id,
+                        self.hook_shell.as_str()
+                    )
+                }
+            );
+        }
         for path in &self.hook_exec_history {
             ensure!(
                 normalized_absolute_path(path),
@@ -294,6 +312,40 @@ impl CodexProfileLayerConfig {
             );
         }
         Ok(())
+    }
+}
+
+/// The shell behavior Codex uses to dispatch the managed command hook for one
+/// certified executable profile. The profile's exact exec history supplies the
+/// concrete interpreter path; this kind determines which startup input Erebor
+/// must root-control before launch.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexHookShellKind {
+    Direct,
+    Sh,
+    Bash,
+    Zsh,
+}
+
+impl CodexHookShellKind {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Sh => "sh",
+            Self::Bash => "bash",
+            Self::Zsh => "zsh",
+        }
+    }
+
+    const fn interpreter_name(self) -> Option<&'static str> {
+        match self {
+            Self::Direct => None,
+            Self::Sh => Some("sh"),
+            Self::Bash => Some("bash"),
+            Self::Zsh => Some("zsh"),
+        }
     }
 }
 

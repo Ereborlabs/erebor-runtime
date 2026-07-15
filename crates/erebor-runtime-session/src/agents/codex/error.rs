@@ -26,6 +26,12 @@ pub enum CodexSessionError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Codex managed hook directory `{}` is not an exact trusted artifact set", path.display()))]
+    ArtifactDirectoryUnsafe {
+        path: PathBuf,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("fleet-managed Codex profile artifact `{}` is not root-owned and non-writable", path.display()))]
     ArtifactNotFleetProtected {
         path: PathBuf,
@@ -52,6 +58,12 @@ pub enum CodexSessionError {
     },
     #[snafu(display("Codex hook ticket `{ticket_id}` expired"))]
     TicketExpired {
+        ticket_id: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Codex hook ticket `{ticket_id}` belongs to an exited hook process"))]
+    TicketProcessExited {
         ticket_id: String,
         #[snafu(implicit)]
         location: Location,
@@ -113,9 +125,11 @@ impl ErrorExt for CodexSessionError {
         match self {
             Self::IncompatibleProfile { .. }
             | Self::ArtifactDigestMismatch { .. }
+            | Self::ArtifactDirectoryUnsafe { .. }
             | Self::ArtifactNotFleetProtected { .. }
             | Self::TicketNotFound { .. }
             | Self::TicketExpired { .. }
+            | Self::TicketProcessExited { .. }
             | Self::TicketPeerMismatch { .. }
             | Self::TicketReplayed { .. }
             | Self::UnsupportedHookProtocol { .. } => StatusCode::InvalidArguments,
@@ -136,10 +150,12 @@ impl ErrorExt for CodexSessionError {
             Self::FilesystemProjection { source, .. } => source.retry_hint(),
             Self::IncompatibleProfile { .. }
             | Self::ArtifactDigestMismatch { .. }
+            | Self::ArtifactDirectoryUnsafe { .. }
             | Self::ArtifactNotFleetProtected { .. }
             | Self::TicketRegistryLock { .. }
             | Self::TicketNotFound { .. }
             | Self::TicketExpired { .. }
+            | Self::TicketProcessExited { .. }
             | Self::TicketPeerMismatch { .. }
             | Self::TicketReplayed { .. }
             | Self::UnsupportedHookProtocol { .. } => RetryHint::NonRetryable,

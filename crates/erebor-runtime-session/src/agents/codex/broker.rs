@@ -491,7 +491,7 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     use erebor_runtime_core::{
-        CodexDeploymentMode, CodexHookEvent, CodexHookEventSchemaLayerConfig,
+        CodexDeploymentMode, CodexHookEvent, CodexHookEventSchemaLayerConfig, CodexHookShellKind,
         CodexProfileLayerConfig, SessionRunnerKind,
     };
     use erebor_runtime_ipc::v1::HookEvent;
@@ -600,6 +600,7 @@ mod tests {
             shell_startup_source: "/var/lib/erebor/codex/hooks/shell-startup".into(),
             shell_startup_sha256: "a".repeat(64),
             shell_startup_path: "/usr/lib/erebor/codex-hooks/shell-startup".into(),
+            hook_shell: CodexHookShellKind::Direct,
             hook_exec_history: vec![
                 "/opt/codex/codex".into(),
                 "/usr/lib/erebor/codex-hooks/erebor-codex-hook".into(),

@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use snafu::{ensure, ResultExt};
 
 use super::error::{
-    ArtifactDigestMismatchSnafu, ArtifactNotFleetProtectedSnafu, FilesystemProjectionSnafu,
-    ReadArtifactSnafu,
+    ArtifactDigestMismatchSnafu, ArtifactDirectoryUnsafeSnafu, ArtifactNotFleetProtectedSnafu,
+    FilesystemProjectionSnafu, ReadArtifactSnafu,
 };
 use super::CodexSessionError;
 
@@ -46,12 +46,56 @@ impl CodexArtifactProjection {
     }
 
     fn verify(profile: &CodexProfileLayerConfig) -> Result<(), CodexSessionError> {
+        Self::verify_managed_hook_directory(profile)?;
         for (path, digest) in [
             (&profile.requirements_source, &profile.requirements_sha256),
             (&profile.managed_hook_source, &profile.managed_hook_sha256),
             (&profile.shell_startup_source, &profile.shell_startup_sha256),
         ] {
-            Self::verify_file(path, digest, profile.deployment)?;
+            Self::verify_file(path, digest, profile)?;
+        }
+        Ok(())
+    }
+
+    fn verify_managed_hook_directory(
+        profile: &CodexProfileLayerConfig,
+    ) -> Result<(), CodexSessionError> {
+        let hook_directory = profile.managed_hook_source.parent().ok_or_else(|| {
+            CodexSessionError::IncompatibleProfile {
+                reason: String::from("managed hook source has no parent directory"),
+                location: snafu::Location::default(),
+            }
+        })?;
+        let metadata = fs::symlink_metadata(hook_directory).context(ReadArtifactSnafu {
+            path: hook_directory,
+        })?;
+        ensure!(
+            metadata.file_type().is_dir(),
+            ArtifactDirectoryUnsafeSnafu {
+                path: hook_directory.to_path_buf()
+            }
+        );
+        if profile.deployment == CodexDeploymentMode::FleetManaged {
+            Self::verify_fleet_ancestor_protection(&profile.managed_hook_source, profile)?;
+            Self::verify_fleet_ancestor_protection(&profile.shell_startup_source, profile)?;
+            Self::verify_fleet_ancestor_protection(&profile.requirements_source, profile)?;
+        }
+
+        for entry in fs::read_dir(hook_directory).context(ReadArtifactSnafu {
+            path: hook_directory,
+        })? {
+            let entry = entry.context(ReadArtifactSnafu {
+                path: hook_directory,
+            })?;
+            let path = entry.path();
+            let metadata =
+                fs::symlink_metadata(&path).context(ReadArtifactSnafu { path: &path })?;
+            ensure!(
+                metadata.file_type().is_file()
+                    && (path == profile.managed_hook_source
+                        || path == profile.shell_startup_source),
+                ArtifactDirectoryUnsafeSnafu { path }
+            );
         }
         Ok(())
     }
@@ -59,16 +103,16 @@ impl CodexArtifactProjection {
     fn verify_file(
         path: &Path,
         expected_digest: &str,
-        deployment: CodexDeploymentMode,
+        profile: &CodexProfileLayerConfig,
     ) -> Result<(), CodexSessionError> {
-        let metadata = fs::metadata(path).context(ReadArtifactSnafu { path })?;
+        let metadata = fs::symlink_metadata(path).context(ReadArtifactSnafu { path })?;
         ensure!(
-            metadata.is_file(),
-            ArtifactDigestMismatchSnafu {
+            metadata.file_type().is_file(),
+            ArtifactDirectoryUnsafeSnafu {
                 path: path.to_path_buf()
             }
         );
-        if deployment == CodexDeploymentMode::FleetManaged {
+        if profile.deployment == CodexDeploymentMode::FleetManaged {
             Self::verify_fleet_protection(path, &metadata)?;
         }
         let mut file = File::open(path).context(ReadArtifactSnafu { path })?;
@@ -88,6 +132,31 @@ impl CodexArtifactProjection {
             }
         );
         Ok(())
+    }
+
+    fn verify_fleet_ancestor_protection(
+        artifact: &Path,
+        profile: &CodexProfileLayerConfig,
+    ) -> Result<(), CodexSessionError> {
+        let mut ancestor = artifact.parent();
+        while let Some(path) = ancestor {
+            let metadata = fs::symlink_metadata(path).context(ReadArtifactSnafu { path })?;
+            ensure!(
+                metadata.file_type().is_dir(),
+                ArtifactDirectoryUnsafeSnafu {
+                    path: path.to_path_buf()
+                }
+            );
+            Self::verify_fleet_protection(path, &metadata)?;
+            if path == profile.trust_root {
+                return Ok(());
+            }
+            ancestor = path.parent();
+        }
+        ArtifactDirectoryUnsafeSnafu {
+            path: profile.trust_root.clone(),
+        }
+        .fail()
     }
 
     #[cfg(unix)]
@@ -121,7 +190,7 @@ mod tests {
     use std::fs;
 
     use erebor_runtime_core::{
-        CodexDeploymentMode, CodexHookEvent, CodexHookEventSchemaLayerConfig,
+        CodexDeploymentMode, CodexHookEvent, CodexHookEventSchemaLayerConfig, CodexHookShellKind,
         CodexProfileLayerConfig, SessionRunnerKind,
     };
     use sha2::{Digest, Sha256};
@@ -157,6 +226,7 @@ mod tests {
             shell_startup_source: shell_startup.clone(),
             shell_startup_sha256: hash(&shell_startup)?,
             shell_startup_path: "/usr/lib/erebor/codex-hooks/shell-startup".into(),
+            hook_shell: CodexHookShellKind::Direct,
             hook_exec_history: vec![
                 root.join("codex"),
                 "/usr/lib/erebor/codex-hooks/erebor-codex-hook".into(),
@@ -179,6 +249,19 @@ mod tests {
             projections[1].target(),
             std::path::Path::new("/usr/lib/erebor/codex-hooks")
         );
+
+        fs::write(hooks.join("untrusted-startup"), "exit 1\n")?;
+        assert!(matches!(
+            CodexArtifactProjection::projections(&profile),
+            Err(super::CodexSessionError::ArtifactDirectoryUnsafe { .. })
+        ));
+        fs::remove_file(hooks.join("untrusted-startup"))?;
+        let mut fleet_profile = profile.clone();
+        fleet_profile.deployment = CodexDeploymentMode::FleetManaged;
+        assert!(matches!(
+            CodexArtifactProjection::projections(&fleet_profile),
+            Err(super::CodexSessionError::ArtifactNotFleetProtected { .. })
+        ));
         fs::remove_dir_all(root)?;
         Ok(())
     }

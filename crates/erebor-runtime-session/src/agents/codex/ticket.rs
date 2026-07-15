@@ -12,6 +12,7 @@ use erebor_runtime_core::{
 };
 use erebor_runtime_ipc::v1::{HookHello, HookPeerEvidence};
 use rustix::{
+    event::{poll, PollFd, PollFlags, Timespec},
     fd::OwnedFd,
     process::{pidfd_open, Pid, PidfdFlags},
 };
@@ -20,7 +21,8 @@ use snafu::{ensure, ResultExt};
 use super::{
     error::{
         IncompatibleProfileSnafu, TicketExpiredSnafu, TicketNotFoundSnafu, TicketPeerMismatchSnafu,
-        TicketRegistryLockSnafu, TicketReplayedSnafu, UnsupportedHookProtocolSnafu,
+        TicketProcessExitedSnafu, TicketRegistryLockSnafu, TicketReplayedSnafu,
+        UnsupportedHookProtocolSnafu,
     },
     CodexSessionError,
 };
@@ -142,7 +144,24 @@ struct PendingHookTicket {
     ticket: CodexHookTicket,
     expected_peer: HookPeerEvidence,
     expires_at: Instant,
-    _pidfd: Option<OwnedFd>,
+    pidfd: Option<OwnedFd>,
+}
+
+impl PendingHookTicket {
+    fn process_is_live(&self) -> Result<bool, CodexSessionError> {
+        let Some(pidfd) = &self.pidfd else {
+            return Ok(true);
+        };
+        let mut descriptors = [PollFd::new(pidfd, PollFlags::IN)];
+        let ready = poll(&mut descriptors, Some(&Timespec::default())).map_err(|source| {
+            CodexSessionError::Pidfd {
+                pid: self.expected_peer.observed_pid as i32,
+                source: std::io::Error::from(source),
+                location: snafu::Location::default(),
+            }
+        })?;
+        Ok(ready == 0)
+    }
 }
 
 /// A one-use binding from a guarded hook exec to its expected peer identity.
@@ -215,7 +234,7 @@ impl CodexHookTicketRegistry {
             ticket: ticket.clone(),
             expected_peer,
             expires_at: Instant::now() + lifetime,
-            _pidfd: pidfd,
+            pidfd,
         };
         let mut state = self
             .state
@@ -255,6 +274,13 @@ impl CodexHookTicketRegistry {
         if pending.expires_at <= Instant::now() {
             state.pending.remove(&hello.ticket_id);
             return TicketExpiredSnafu {
+                ticket_id: hello.ticket_id.clone(),
+            }
+            .fail();
+        }
+        if !pending.process_is_live()? {
+            state.pending.remove(&hello.ticket_id);
+            return TicketProcessExitedSnafu {
                 ticket_id: hello.ticket_id.clone(),
             }
             .fail();
@@ -319,6 +345,21 @@ impl CodexHookTicketRegistry {
             .map(|(ticket_id, _pending)| ticket_id.clone())
             .collect::<Vec<_>>();
         let [ticket_id] = matching.as_slice() else {
+            let pipe_mismatch = state
+                .pending
+                .iter()
+                .filter(|(_ticket_id, pending)| {
+                    pending.expires_at > now
+                        && same_peer_identity_without_pipes(&pending.expected_peer, observed_peer)
+                })
+                .map(|(ticket_id, _pending)| ticket_id.clone())
+                .collect::<Vec<_>>();
+            if let [ticket_id] = pipe_mismatch.as_slice() {
+                return TicketPeerMismatchSnafu {
+                    ticket_id: ticket_id.clone(),
+                }
+                .fail();
+            }
             return TicketNotFoundSnafu {
                 ticket_id: String::from("kernel-peer"),
             }
@@ -330,6 +371,12 @@ impl CodexHookTicketRegistry {
             }
             .fail();
         };
+        if !pending.process_is_live()? {
+            return TicketProcessExitedSnafu {
+                ticket_id: ticket_id.clone(),
+            }
+            .fail();
+        }
         state
             .consumed
             .insert(ticket_id.clone(), pending.expected_peer);
@@ -345,6 +392,21 @@ fn same_peer_identity(expected: &HookPeerEvidence, observed: &HookPeerEvidence) 
     expected == observed
 }
 
+fn same_peer_identity_without_pipes(
+    expected: &HookPeerEvidence,
+    observed: &HookPeerEvidence,
+) -> bool {
+    let mut expected = expected.clone();
+    expected.ticket_id.clear();
+    expected.stdin = None;
+    expected.stdout = None;
+    let mut observed = observed.clone();
+    observed.ticket_id.clear();
+    observed.stdin = None;
+    observed.stdout = None;
+    expected == observed
+}
+
 fn random_ticket_id() -> Result<String, CodexSessionError> {
     let mut bytes = [0_u8; 32];
     File::open("/dev/urandom")
@@ -357,11 +419,13 @@ fn random_ticket_id() -> Result<String, CodexSessionError> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{process::Command, time::Duration};
 
     use erebor_runtime_core::{RuntimeConfig, SessionRunPlan, SessionRunnerKind};
     use erebor_runtime_events::SessionId;
     use erebor_runtime_ipc::v1::{HookHello, HookPeerEvidence, PipeIdentity, PROTOCOL_VERSION};
+    #[cfg(target_os = "linux")]
+    use rustix::process::{pidfd_open, Pid, PidfdFlags};
 
     use super::CodexHookTicketRegistry;
     use crate::CodexSessionError;
@@ -457,6 +521,40 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn guarded_ticket_rejects_a_hook_that_exited_after_guard_observation(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let registry = CodexHookTicketRegistry::default();
+        let mut hook = Command::new("/bin/sleep").arg("60").spawn()?;
+        let pid = i32::try_from(hook.id())?;
+        let pid = Pid::from_raw(pid).ok_or("sleep pid is invalid")?;
+        let pidfd = pidfd_open(pid, PidfdFlags::empty())?;
+        let mut expected = peer();
+        expected.observed_pid = i64::from(hook.id());
+        let ticket = registry.issue_with_pidfd(
+            "session-1",
+            "codex-1",
+            "a".repeat(64),
+            expected.clone(),
+            Duration::from_secs(1),
+            Some(pidfd),
+        )?;
+        hook.kill()?;
+        hook.wait()?;
+
+        expected.ticket_id = ticket.id().to_owned();
+        let hello = HookHello {
+            protocol_version: PROTOCOL_VERSION,
+            ticket_id: ticket.id().to_owned(),
+        };
+        assert!(matches!(
+            registry.consume(&hello, &expected),
+            Err(CodexSessionError::TicketProcessExited { .. })
+        ));
+        Ok(())
+    }
+
     #[test]
     fn ticket_can_be_selected_only_by_a_unique_kernel_peer(
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -476,6 +574,34 @@ mod tests {
         assert!(matches!(
             registry.consume_matching_peer(&hello, &peer()),
             Err(CodexSessionError::TicketReplayed { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_reports_replaced_pipe_for_an_otherwise_matching_kernel_peer(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let registry = CodexHookTicketRegistry::default();
+        let ticket = registry.issue(
+            "session-1",
+            "codex-1",
+            "a".repeat(64),
+            peer(),
+            Duration::from_secs(1),
+        )?;
+        let hello = HookHello {
+            protocol_version: PROTOCOL_VERSION,
+            ticket_id: String::new(),
+        };
+        let mut replaced_stdout = peer();
+        replaced_stdout
+            .stdout
+            .as_mut()
+            .ok_or("missing stdout")?
+            .inode += 1;
+        assert!(matches!(
+            registry.consume_matching_peer(&hello, &replaced_stdout),
+            Err(CodexSessionError::TicketPeerMismatch { ticket_id, .. }) if ticket_id == ticket.id()
         ));
         Ok(())
     }
@@ -591,6 +717,7 @@ mod tests {
                   "shell_startup_source": "/tmp/erebor-codex-test/hooks/shell-startup",
                   "shell_startup_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                   "shell_startup_path": "/usr/lib/erebor/codex-hooks/shell-startup",
+                  "hook_shell": "direct",
                   "hook_exec_history": [
                     "/tmp/erebor-codex-test/codex",
                     "/usr/lib/erebor/codex-hooks/erebor-codex-hook"

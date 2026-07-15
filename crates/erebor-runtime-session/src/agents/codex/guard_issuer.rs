@@ -102,22 +102,41 @@ impl CodexGuardTicketIssuerServer {
         }
         let peer = match LinuxHookPeerInspector::inspect_pid(observation.pid, "") {
             Ok(peer) => peer,
-            Err(_error) => return 2,
+            Err(error) => {
+                erebor_runtime_telemetry::log!(
+                    erebor_runtime_telemetry::tracing::Level::WARN,
+                    error = ?error,
+                    pid = observation.pid,
+                    "managed Codex hook peer inspection failed"
+                );
+                return 2;
+            }
         };
         let profile = self.managed_session.profile();
-        // The guarded trace runs inside the projection mount namespace and
-        // therefore reports `managed_hook_path`. This issuer runs outside
-        // that namespace, where `/proc/<pid>/exe` resolves to the immutable
-        // pinned source artifact. The argv remains the projected path the
-        // managed agent actually executed, so require both identities.
-        if peer.executable != profile.managed_hook_source.display().to_string()
+        if peer.executable != profile.managed_hook_path.display().to_string()
             || peer.argv != [profile.managed_hook_path.display().to_string()]
         {
+            erebor_runtime_telemetry::log!(
+                erebor_runtime_telemetry::tracing::Level::WARN,
+                pid = observation.pid,
+                executable = %peer.executable,
+                argv = %peer.argv.join(" "),
+                "managed Codex hook identity did not match its projected profile"
+            );
             return 2;
         }
-        self.managed_session
-            .issue_guarded_hook_ticket(peer)
-            .map_or(2, |_ticket| 1)
+        match self.managed_session.issue_guarded_hook_ticket(peer) {
+            Ok(_ticket) => 1,
+            Err(error) => {
+                erebor_runtime_telemetry::log!(
+                    erebor_runtime_telemetry::tracing::Level::WARN,
+                    error = ?error,
+                    pid = observation.pid,
+                    "managed Codex hook ticket issuance failed"
+                );
+                2
+            }
+        }
     }
 }
 

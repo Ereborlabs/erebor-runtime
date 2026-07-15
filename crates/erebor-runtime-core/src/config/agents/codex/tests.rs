@@ -31,6 +31,7 @@ fn profile_with(fields: &str) -> String {
           "shell_startup_source": "/var/lib/erebor/codex/hooks/shell-startup",
           "shell_startup_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
           "shell_startup_path": "/usr/lib/erebor/codex-hooks/shell-startup",
+          "hook_shell": "direct",
           "hook_exec_history": [
             "/opt/codex/codex",
             "/usr/lib/erebor/codex-hooks/erebor-codex-hook"
@@ -127,6 +128,32 @@ fn rejects_an_unpinned_hook_exec_history() {
         "\"/usr/lib/erebor/codex-hooks/erebor-codex-hook\"\n          ],",
         "\"/tmp/untrusted-hook\"\n          ],",
     );
+    assert!(matches!(
+        RuntimeConfig::from_json_str(&source),
+        Err(RuntimeConfigError::InvalidCodexGovernanceConfig { .. })
+    ));
+}
+
+#[test]
+fn rejects_a_hook_shell_with_the_wrong_exec_history_shape() {
+    let source = profile_source(&profile_with(""))
+        .replace("\"hook_shell\": \"direct\"", "\"hook_shell\": \"zsh\"");
+
+    assert!(matches!(
+        RuntimeConfig::from_json_str(&source),
+        Err(RuntimeConfigError::InvalidCodexGovernanceConfig { .. })
+    ));
+}
+
+#[test]
+fn rejects_a_hook_shell_with_an_incompatible_interpreter() {
+    let source = profile_source(&profile_with(""))
+        .replace("\"hook_shell\": \"direct\"", "\"hook_shell\": \"zsh\"")
+        .replace(
+            "\"/opt/codex/codex\",\n            \"/usr/lib/erebor/codex-hooks/erebor-codex-hook\"",
+            "\"/opt/codex/codex\",\n            \"/usr/bin/bash\",\n            \"/usr/lib/erebor/codex-hooks/erebor-codex-hook\"",
+        );
+
     assert!(matches!(
         RuntimeConfig::from_json_str(&source),
         Err(RuntimeConfigError::InvalidCodexGovernanceConfig { .. })

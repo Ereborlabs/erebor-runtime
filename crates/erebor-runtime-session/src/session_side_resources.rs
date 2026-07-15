@@ -2,9 +2,9 @@ use std::net::SocketAddr;
 
 use erebor_runtime_cdp::BrowserCdpSurface;
 use erebor_runtime_core::{
-    RuntimeConfig, SessionAdoptPlan, SessionInterceptionOperation, SessionRunPlan,
-    SessionRunnerKind, SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan,
-    SessionSurfaceLauncher,
+    CodexHookShellKind, RuntimeConfig, SessionAdoptPlan, SessionInterceptionOperation,
+    SessionRunPlan, SessionRunnerKind, SessionSurfaceDefinition, SessionSurfaceKind,
+    SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
 };
 use erebor_runtime_filesystem::{LinuxOverlaySessionView, LinuxReadOnlySessionView};
 use snafu::ResultExt;
@@ -219,15 +219,10 @@ fn start_session_side_resources_from_start_plan(
                                 String::from("EREBOR_CODEX_PROFILE_SHA256"),
                                 codex_managed_session.profile().profile_sha256.clone(),
                             ));
-                            environment.push((
-                                String::from("EREBOR_CODEX_SHELL_STARTUP"),
-                                codex_managed_session
-                                    .profile()
-                                    .shell_startup_path
-                                    .display()
-                                    .to_string(),
-                            ));
-                            environment.push((String::from("SHELL"), String::from("/bin/sh")));
+                            add_codex_hook_shell_environment(
+                                &mut environment,
+                                codex_managed_session.profile(),
+                            )?;
                             environment.push((
                                 String::from("EREBOR_CODEX_HOOK_BROKER"),
                                 CodexHookBroker::session_endpoint().to_owned(),
@@ -362,6 +357,33 @@ fn apply_codex_launch_sanitization(
     }
 }
 
+fn add_codex_hook_shell_environment(
+    environment: &mut Vec<(String, String)>,
+    profile: &erebor_runtime_core::CodexProfileLayerConfig,
+) -> Result<(), SessionExecutionError> {
+    let startup_path = profile.shell_startup_path.display().to_string();
+    match profile.hook_shell {
+        CodexHookShellKind::Direct => {}
+        CodexHookShellKind::Sh => environment.push((String::from("ENV"), startup_path)),
+        CodexHookShellKind::Bash => environment.push((String::from("BASH_ENV"), startup_path)),
+        CodexHookShellKind::Zsh => {
+            let startup_directory = profile
+                .shell_startup_path
+                .parent()
+                .ok_or_else(|| crate::CodexSessionError::IncompatibleProfile {
+                    reason: String::from("Codex zsh startup path has no parent directory"),
+                    location: snafu::Location::default(),
+                })
+                .context(CodexSessionSnafu)?;
+            environment.push((
+                String::from("ZDOTDIR"),
+                startup_directory.display().to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn file_operation_interception_input(
     interception: &erebor_runtime_core::SessionInterceptionConfig,
     filesystem_handler: &Option<FilesystemFileOperationHandler>,
@@ -388,4 +410,72 @@ fn session_interception_router(
         Some(handler) => router.with_file_operation_handler(handler),
         None => router,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use erebor_runtime_core::{
+        CodexDeploymentMode, CodexHookEvent, CodexHookEventSchemaLayerConfig,
+        CodexProfileLayerConfig, SessionRunnerKind,
+    };
+
+    use super::{add_codex_hook_shell_environment, CodexHookShellKind};
+
+    #[test]
+    fn certified_hook_shells_receive_only_their_root_controlled_startup_input(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for (shell, expected) in [
+            (CodexHookShellKind::Direct, None),
+            (
+                CodexHookShellKind::Sh,
+                Some(("ENV", "/usr/lib/erebor/codex-hooks/shell-startup")),
+            ),
+            (
+                CodexHookShellKind::Bash,
+                Some(("BASH_ENV", "/usr/lib/erebor/codex-hooks/shell-startup")),
+            ),
+            (
+                CodexHookShellKind::Zsh,
+                Some(("ZDOTDIR", "/usr/lib/erebor/codex-hooks")),
+            ),
+        ] {
+            let mut environment = Vec::new();
+            add_codex_hook_shell_environment(&mut environment, &profile(shell))?;
+            assert_eq!(
+                environment,
+                expected.map_or_else(Vec::new, |(key, value)| {
+                    vec![(String::from(key), String::from(value))]
+                })
+            );
+        }
+        Ok(())
+    }
+
+    fn profile(hook_shell: CodexHookShellKind) -> CodexProfileLayerConfig {
+        CodexProfileLayerConfig {
+            id: String::from("test-profile"),
+            runner: SessionRunnerKind::LinuxHost,
+            executable: "/opt/codex/codex".into(),
+            deployment: CodexDeploymentMode::FleetManaged,
+            profile_sha256: "a".repeat(64),
+            trust_root: "/var/lib/erebor/codex".into(),
+            requirements_source: "/var/lib/erebor/codex/requirements.toml".into(),
+            requirements_sha256: "b".repeat(64),
+            managed_hook_source: "/var/lib/erebor/codex/hooks/erebor-codex-hook".into(),
+            managed_hook_sha256: "c".repeat(64),
+            managed_hook_path: "/usr/lib/erebor/codex-hooks/erebor-codex-hook".into(),
+            shell_startup_source: "/var/lib/erebor/codex/hooks/shell-startup".into(),
+            shell_startup_sha256: "d".repeat(64),
+            shell_startup_path: "/usr/lib/erebor/codex-hooks/shell-startup".into(),
+            hook_shell,
+            hook_exec_history: vec![
+                "/opt/codex/codex".into(),
+                "/usr/lib/erebor/codex-hooks/erebor-codex-hook".into(),
+            ],
+            event_schemas: vec![CodexHookEventSchemaLayerConfig {
+                event: CodexHookEvent::SessionStart,
+                sha256: "e".repeat(64),
+            }],
+        }
+    }
 }

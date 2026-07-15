@@ -47,15 +47,17 @@ impl EreborCliFixture {
         cwd: &Path,
         args: impl IntoIterator<Item = &'a str>,
     ) -> Result<String, E2eError> {
-        let output = Command::new(&self.binary)
-            .current_dir(cwd)
-            .args(args)
-            .output()
-            .context(IoSnafu)?;
+        let output = self.command_in(cwd, args).output().context(IoSnafu)?;
         if !output.status.success() {
             return Err(command_error("erebor-runtime command", output));
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    pub fn command_in<'a>(&self, cwd: &Path, args: impl IntoIterator<Item = &'a str>) -> Command {
+        let mut command = Command::new(&self.binary);
+        command.current_dir(cwd).args(args);
+        command
     }
 
     pub fn run_expect_failure_in<'a>(
