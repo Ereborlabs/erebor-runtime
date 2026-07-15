@@ -159,6 +159,50 @@ fn linux_host_command_plan_can_stack_outer_wrapper_before_process_guard(
 }
 
 #[test]
+fn linux_host_command_plan_removes_inherited_shell_startup_inputs() -> Result<(), RuntimeConfigError>
+{
+    let config = RuntimeConfig::from_json_str(
+        r#"
+            {
+              "policies": ["policies/browser.json"],
+              "session": { "enabled": true, "runner": { "kind": "linux_host" } },
+              "surfaces": { "terminal": { "enabled": true } }
+            }
+            "#,
+    )?;
+    let plan = SessionRunPlan::from_config(
+        &config,
+        SessionRunnerKind::LinuxHost,
+        SessionId::new("session-sanitized-shell"),
+        vec![
+            String::from("/bin/sh"),
+            String::from("-c"),
+            String::from("true"),
+        ],
+    )?;
+    let mut options = LinuxHostSessionCommandOptions::default();
+    for key in ["BASH_ENV", "ENV", "KSH_ENV", "ZDOTDIR", "SHELL"] {
+        options.remove_environment(key);
+    }
+    options.add_environment("SHELL", "/bin/sh");
+
+    let launch = LinuxHostSessionCommandPlan::from_session_run_plan_with_environment_and_options(
+        &plan,
+        &[],
+        &options,
+    );
+
+    assert_eq!(
+        launch.removed_environment(),
+        &["BASH_ENV", "ENV", "KSH_ENV", "ZDOTDIR", "SHELL"]
+    );
+    assert!(launch
+        .environment()
+        .contains(&(String::from("SHELL"), String::from("/bin/sh"))));
+    Ok(())
+}
+
+#[test]
 fn linux_host_adopt_plan_sets_guard_pid_environment() -> Result<(), RuntimeConfigError> {
     let config = RuntimeConfig::from_json_str(
         r#"

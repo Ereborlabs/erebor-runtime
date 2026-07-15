@@ -86,6 +86,7 @@ impl<'a> ProxyCdpCommand<'a> {
             policies: vec![self.args.policy.clone()],
             audit: RuntimeAuditConfig::default(),
             session: Default::default(),
+            codex: Default::default(),
             surfaces: SessionSurfaceLayers {
                 browser_cdp: BrowserCdpSurfaceLayerConfig {
                     enabled: true,

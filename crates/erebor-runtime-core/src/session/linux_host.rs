@@ -65,6 +65,9 @@ impl LinuxHostSessionRunner {
 
         let mut command = ProcessCommand::new(launch.program());
         command.args(launch.args());
+        for key in launch.removed_environment() {
+            command.env_remove(key);
+        }
         command.envs(launch.environment().iter().cloned());
         if let Some(current_dir) = launch.current_dir() {
             command.current_dir(current_dir);
@@ -133,6 +136,9 @@ impl LinuxHostSessionRunner {
 
         let mut command = ProcessCommand::new(launch.program());
         command.args(launch.args());
+        for key in launch.removed_environment() {
+            command.env_remove(key);
+        }
         command.envs(launch.environment().iter().cloned());
         if let Some(current_dir) = launch.current_dir() {
             command.current_dir(current_dir);

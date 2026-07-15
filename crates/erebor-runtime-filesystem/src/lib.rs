@@ -4,6 +4,7 @@ mod checkpoint;
 mod config;
 mod error;
 mod linux_overlay_session;
+mod linux_read_only_session;
 mod manifest;
 mod metadata;
 mod normalizer;
@@ -23,6 +24,7 @@ pub use config::{
 };
 pub use error::{FilesystemError, Result};
 pub use linux_overlay_session::LinuxOverlaySessionView;
+pub use linux_read_only_session::{LinuxReadOnlySessionProjection, LinuxReadOnlySessionView};
 pub use manifest::{
     FilesystemLayerEntry, FilesystemLayerManifest, FilesystemLayerMetadata,
     FilesystemLayerMetadataSidecar, FilesystemLayerOperation, FilesystemLayerUnsupported,

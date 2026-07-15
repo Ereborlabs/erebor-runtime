@@ -10,6 +10,7 @@ pub struct LinuxHostSessionCommandPlan {
     program: String,
     args: Vec<String>,
     environment: Vec<(String, String)>,
+    removed_environment: Vec<String>,
     current_dir: Option<PathBuf>,
 }
 
@@ -17,6 +18,7 @@ pub struct LinuxHostSessionCommandPlan {
 pub struct LinuxHostSessionCommandOptions {
     extra_environment: Vec<(String, String)>,
     wrapper_programs: Vec<PathBuf>,
+    removed_environment: Vec<String>,
     adopt_pid: Option<i32>,
 }
 
@@ -35,6 +37,10 @@ impl LinuxHostSessionCommandOptions {
 
     pub fn set_adopt_pid(&mut self, pid: i32) {
         self.adopt_pid = Some(pid);
+    }
+
+    pub fn remove_environment(&mut self, key: impl Into<String>) {
+        self.removed_environment.push(key.into());
     }
 }
 
@@ -98,6 +104,11 @@ impl LinuxHostSessionCommandPlan {
     }
 
     #[must_use]
+    pub fn removed_environment(&self) -> &[String] {
+        &self.removed_environment
+    }
+
+    #[must_use]
     pub fn current_dir(&self) -> Option<&Path> {
         self.current_dir.as_deref()
     }
@@ -136,6 +147,7 @@ impl LinuxHostSessionCommandPlanner {
             program,
             args,
             environment: combined_environment,
+            removed_environment: options.removed_environment.clone(),
             current_dir: plan.workspace().map(Path::to_path_buf),
         }
     }
@@ -171,6 +183,7 @@ impl LinuxHostSessionCommandPlanner {
             program,
             args,
             environment: combined_environment,
+            removed_environment: options.removed_environment.clone(),
             current_dir: plan.workspace().map(Path::to_path_buf),
         }
     }

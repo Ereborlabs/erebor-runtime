@@ -17,6 +17,19 @@ pub const KIND_INTERCEPTION_REQUEST: &str = "erebor.runtime.ipc.v1.InterceptionR
 pub const KIND_INTERCEPTION_DECISION: &str = "erebor.runtime.ipc.v1.InterceptionDecision";
 pub const KIND_GUARD_EVENT: &str = "erebor.runtime.ipc.v1.GuardEvent";
 pub const KIND_GUARD_GOODBYE: &str = "erebor.runtime.ipc.v1.GuardGoodbye";
+pub const KIND_HOOK_HELLO: &str = "erebor.runtime.ipc.v1.HookHello";
+pub const KIND_HOOK_HELLO_ACK: &str = "erebor.runtime.ipc.v1.HookHelloAck";
+pub const KIND_HOOK_PEER_EVIDENCE: &str = "erebor.runtime.ipc.v1.HookPeerEvidence";
+pub const KIND_HOOK_EVENT: &str = "erebor.runtime.ipc.v1.HookEvent";
+pub const KIND_HOOK_RESULT: &str = "erebor.runtime.ipc.v1.HookResult";
+pub const KIND_HOOK_REJECTION: &str = "erebor.runtime.ipc.v1.HookRejection";
+
+impl HookHello {
+    #[must_use]
+    pub const fn uses_supported_protocol(&self) -> bool {
+        self.protocol_version == PROTOCOL_VERSION
+    }
+}
 
 impl Envelope {
     pub fn wrap_message<T: Message>(
@@ -61,9 +74,10 @@ impl Envelope {
 #[cfg(test)]
 pub(crate) mod fixtures {
     use super::{
-        AllowDecision, DecisionKind, DenyDecision, EnvVar, GuardHello, InterceptionDecision,
-        InterceptionOperation, InterceptionRequest, InterceptionSource, MediateDecision,
-        ProcessExecOperation, RequestedEndpoint, PROTOCOL_VERSION,
+        AllowDecision, DecisionKind, DenyDecision, EnvVar, GuardHello, HookEvent, HookEventKind,
+        HookHello, HookHelloAck, HookPeerEvidence, HookRejection, HookRejectionCode, HookResult,
+        InterceptionDecision, InterceptionOperation, InterceptionRequest, InterceptionSource,
+        MediateDecision, PipeIdentity, ProcessExecOperation, RequestedEndpoint, PROTOCOL_VERSION,
     };
 
     pub(crate) fn guard_hello() -> GuardHello {
@@ -164,6 +178,73 @@ pub(crate) mod fixtures {
         }
     }
 
+    pub(crate) fn hook_hello() -> HookHello {
+        HookHello {
+            protocol_version: PROTOCOL_VERSION,
+            ticket_id: String::from("ticket-fixture"),
+        }
+    }
+
+    pub(crate) fn hook_hello_ack() -> HookHelloAck {
+        HookHelloAck {
+            protocol_version: PROTOCOL_VERSION,
+            accepted: true,
+            reason: String::new(),
+        }
+    }
+
+    pub(crate) fn hook_peer_evidence() -> HookPeerEvidence {
+        HookPeerEvidence {
+            ticket_id: String::from("ticket-fixture"),
+            observed_pid: 1234,
+            process_start_time_ticks: 987_654,
+            executable: String::from("/usr/lib/erebor/codex-hooks/erebor-codex-hook"),
+            argv: vec![String::from("erebor-codex-hook")],
+            cgroup_inode: 123,
+            mount_namespace_inode: 456,
+            stdin: Some(PipeIdentity {
+                device: 15,
+                inode: 111,
+            }),
+            stdout: Some(PipeIdentity {
+                device: 15,
+                inode: 222,
+            }),
+            pidfd_identity: 321,
+            exec_chain: vec![
+                String::from("/bin/sh"),
+                String::from("/usr/lib/erebor/codex-hooks/erebor-codex-hook"),
+            ],
+            observed_uid: 1000,
+            observed_gid: 1000,
+        }
+    }
+
+    pub(crate) fn hook_event(event: HookEventKind) -> HookEvent {
+        HookEvent {
+            event: event as i32,
+            schema_sha256: String::from(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            native_event_json: br#"{\"session_id\":\"native-session\"}"#.to_vec(),
+        }
+    }
+
+    pub(crate) fn hook_result(event: HookEventKind) -> HookResult {
+        HookResult {
+            event: event as i32,
+            accepted: true,
+            result_json: br#"{\"continue\":true}"#.to_vec(),
+        }
+    }
+
+    pub(crate) fn hook_rejection() -> HookRejection {
+        HookRejection {
+            code: HookRejectionCode::TicketMismatch as i32,
+            reason: String::from("hook peer did not match the issued ticket"),
+        }
+    }
+
     pub(crate) fn mediate_decision() -> InterceptionDecision {
         InterceptionDecision {
             request_id: 7,
@@ -194,8 +275,11 @@ mod tests {
     use crate::{EreborIpcFrame, IpcProtocolError};
 
     use super::{
-        fixtures, DecisionKind, Envelope, GuardHello, InterceptionDecision, InterceptionRequest,
-        KIND_GUARD_HELLO, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
+        fixtures, DecisionKind, Envelope, GuardHello, HookEvent, HookEventKind, HookHello,
+        HookHelloAck, HookPeerEvidence, HookRejection, HookResult, InterceptionDecision,
+        InterceptionRequest, KIND_GUARD_HELLO, KIND_HOOK_EVENT, KIND_HOOK_HELLO,
+        KIND_HOOK_HELLO_ACK, KIND_HOOK_PEER_EVIDENCE, KIND_HOOK_REJECTION, KIND_HOOK_RESULT,
+        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, PROTOCOL_VERSION,
     };
 
     #[test]
@@ -206,6 +290,12 @@ mod tests {
         assert!(proto.contains("message InterceptionRequest"));
         assert!(proto.contains("message InterceptionDecision"));
         assert!(proto.contains("enum DecisionKind"));
+        assert!(proto.contains("message HookHello"));
+        assert!(proto.contains("message HookPeerEvidence"));
+        assert!(proto.contains("message HookEvent"));
+        assert!(proto.contains("message HookResult"));
+        assert!(proto.contains("message HookRejection"));
+        assert!(proto.contains("enum HookEventKind"));
     }
 
     #[test]
@@ -289,6 +379,80 @@ mod tests {
             error,
             IpcProtocolError::PayloadKindMismatch { .. }
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn hook_handshake_and_rejection_messages_round_trip() -> Result<(), Box<dyn Error>> {
+        let hello = fixtures::hook_hello();
+        let hello_envelope = Envelope::wrap_message(5, 0, KIND_HOOK_HELLO, &hello)?;
+        let decoded_hello: HookHello = hello_envelope
+            .into_frame()?
+            .decode_payload::<Envelope>()?
+            .decode_typed_payload(KIND_HOOK_HELLO)?;
+        assert_eq!(decoded_hello, hello);
+        assert!(decoded_hello.uses_supported_protocol());
+
+        let unsupported = HookHello {
+            protocol_version: PROTOCOL_VERSION + 1,
+            ..hello
+        };
+        assert!(!unsupported.uses_supported_protocol());
+
+        let ack = fixtures::hook_hello_ack();
+        let ack_envelope = Envelope::wrap_message(6, 5, KIND_HOOK_HELLO_ACK, &ack)?;
+        let decoded_ack: HookHelloAck = ack_envelope
+            .into_frame()?
+            .decode_payload::<Envelope>()?
+            .decode_typed_payload(KIND_HOOK_HELLO_ACK)?;
+        assert_eq!(decoded_ack, ack);
+
+        let peer_evidence = fixtures::hook_peer_evidence();
+        let peer_envelope = Envelope::wrap_message(7, 5, KIND_HOOK_PEER_EVIDENCE, &peer_evidence)?;
+        let decoded_peer: HookPeerEvidence = peer_envelope
+            .into_frame()?
+            .decode_payload::<Envelope>()?
+            .decode_typed_payload(KIND_HOOK_PEER_EVIDENCE)?;
+        assert_eq!(decoded_peer, peer_evidence);
+
+        let rejection = fixtures::hook_rejection();
+        let rejection_envelope = Envelope::wrap_message(8, 5, KIND_HOOK_REJECTION, &rejection)?;
+        let decoded_rejection: HookRejection = rejection_envelope
+            .into_frame()?
+            .decode_payload::<Envelope>()?
+            .decode_typed_payload(KIND_HOOK_REJECTION)?;
+        assert_eq!(decoded_rejection, rejection);
+        Ok(())
+    }
+
+    #[test]
+    fn every_hook_event_contract_round_trips() -> Result<(), Box<dyn Error>> {
+        for event_kind in [
+            HookEventKind::SessionStart,
+            HookEventKind::UserPromptSubmit,
+            HookEventKind::PreToolUse,
+            HookEventKind::PermissionRequest,
+            HookEventKind::PostToolUse,
+            HookEventKind::SubagentStart,
+            HookEventKind::SubagentStop,
+            HookEventKind::Stop,
+        ] {
+            let event = fixtures::hook_event(event_kind);
+            let event_envelope = Envelope::wrap_message(8, 5, KIND_HOOK_EVENT, &event)?;
+            let decoded_event: HookEvent = event_envelope
+                .into_frame()?
+                .decode_payload::<Envelope>()?
+                .decode_typed_payload(KIND_HOOK_EVENT)?;
+            assert_eq!(decoded_event, event);
+
+            let result = fixtures::hook_result(event_kind);
+            let result_envelope = Envelope::wrap_message(9, 8, KIND_HOOK_RESULT, &result)?;
+            let decoded_result: HookResult = result_envelope
+                .into_frame()?
+                .decode_payload::<Envelope>()?
+                .decode_typed_payload(KIND_HOOK_RESULT)?;
+            assert_eq!(decoded_result, result);
+        }
         Ok(())
     }
 }

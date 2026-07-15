@@ -75,6 +75,58 @@ message GuardGoodbye {
   string reason = 3;
 }
 
+// HookHello is the only hook-supplied identity message. The broker obtains
+// HookPeerEvidence independently from the Unix connection and process view;
+// it never trusts peer identity fields supplied in native hook JSON.
+message HookHello {
+  uint32 protocol_version = 1;
+  string ticket_id = 2;
+}
+
+message HookHelloAck {
+  uint32 protocol_version = 1;
+  bool accepted = 2;
+  string reason = 3;
+}
+
+message HookPeerEvidence {
+  string ticket_id = 1;
+  int64 observed_pid = 2;
+  uint64 process_start_time_ticks = 3;
+  string executable = 4;
+  repeated string argv = 5;
+  uint64 cgroup_inode = 6;
+  uint64 mount_namespace_inode = 7;
+  PipeIdentity stdin = 8;
+  PipeIdentity stdout = 9;
+  uint64 pidfd_identity = 10;
+  repeated string exec_chain = 11;
+  uint32 observed_uid = 12;
+  uint32 observed_gid = 13;
+}
+
+message PipeIdentity {
+  uint64 device = 1;
+  uint64 inode = 2;
+}
+
+message HookEvent {
+  HookEventKind event = 1;
+  string schema_sha256 = 2;
+  bytes native_event_json = 3;
+}
+
+message HookResult {
+  HookEventKind event = 1;
+  bool accepted = 2;
+  bytes result_json = 3;
+}
+
+message HookRejection {
+  HookRejectionCode code = 1;
+  string reason = 2;
+}
+
 message EnvVar {
   string key = 1;
   string value = 2;
@@ -164,4 +216,28 @@ enum DecisionKind {
   DECISION_KIND_DENY = 2;
   DECISION_KIND_REQUIRE_APPROVAL = 3;
   DECISION_KIND_MEDIATE = 4;
+}
+
+enum HookEventKind {
+  HOOK_EVENT_KIND_UNSPECIFIED = 0;
+  HOOK_EVENT_KIND_SESSION_START = 1;
+  HOOK_EVENT_KIND_USER_PROMPT_SUBMIT = 2;
+  HOOK_EVENT_KIND_PRE_TOOL_USE = 3;
+  HOOK_EVENT_KIND_PERMISSION_REQUEST = 4;
+  HOOK_EVENT_KIND_POST_TOOL_USE = 5;
+  HOOK_EVENT_KIND_SUBAGENT_START = 6;
+  HOOK_EVENT_KIND_SUBAGENT_STOP = 7;
+  HOOK_EVENT_KIND_STOP = 8;
+}
+
+enum HookRejectionCode {
+  HOOK_REJECTION_CODE_UNSPECIFIED = 0;
+  HOOK_REJECTION_CODE_UNSUPPORTED_VERSION = 1;
+  HOOK_REJECTION_CODE_UNAUTHENTICATED_PEER = 2;
+  HOOK_REJECTION_CODE_TICKET_NOT_FOUND = 3;
+  HOOK_REJECTION_CODE_TICKET_MISMATCH = 4;
+  HOOK_REJECTION_CODE_TICKET_REPLAYED = 5;
+  HOOK_REJECTION_CODE_EVENT_TOO_LARGE = 6;
+  HOOK_REJECTION_CODE_INVALID_SCHEMA = 7;
+  HOOK_REJECTION_CODE_BROKER_UNAVAILABLE = 8;
 }

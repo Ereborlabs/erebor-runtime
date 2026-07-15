@@ -7,13 +7,14 @@ use erebor_runtime_core::{
 use snafu::ResultExt;
 
 use crate::{
+    agents::codex::{CodexGuardTicketIssuer, CodexHookBroker},
     error::RuntimeInterceptionBrokerSnafu,
     interception_backend::SessionInterceptionBackendBundle,
     runtime_interception_broker::{
         RuntimeInterceptionBroker, SessionInterceptionRegistration, SessionInterceptionRouter,
     },
     session_context::SessionPlanContext,
-    session_resources::SessionSideResources,
+    session_resources::{SessionResourceLifetime, SessionSideResources},
     SessionExecutionError,
 };
 
@@ -64,6 +65,8 @@ impl SessionInterceptionSetup {
         browser_cdp_endpoint: Option<String>,
         interception_registration: Option<SessionInterceptionRegistration>,
         supervisor: Option<SessionSurfaceSupervisor>,
+        codex_guard_ticket_issuer: Option<CodexGuardTicketIssuer>,
+        codex_hook_broker: Option<CodexHookBroker>,
     ) -> Result<SessionSideResources, SessionExecutionError> {
         let (docker_options, linux_host_options) = self.command_options(
             browser_cdp_endpoint.as_deref(),
@@ -75,9 +78,13 @@ impl SessionInterceptionSetup {
             docker_options,
             linux_host_options,
             browser_cdp_endpoint,
-            interception_registration,
-            self.backend,
-            supervisor,
+            SessionResourceLifetime::new(
+                interception_registration,
+                self.backend,
+                codex_guard_ticket_issuer,
+                codex_hook_broker,
+                supervisor,
+            ),
         ))
     }
 

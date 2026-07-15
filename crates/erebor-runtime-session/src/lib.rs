@@ -1,4 +1,5 @@
 mod adoption;
+mod agents;
 mod diagnostic;
 mod error;
 mod interception_backend;
@@ -17,6 +18,10 @@ mod surfaces;
 mod tests;
 
 pub use adoption::SessionAdoptionService;
+pub use agents::codex::{
+    CodexHookClient, CodexHookTicket, CodexHookTicketRegistry, CodexManagedSession,
+    CodexSessionError,
+};
 pub use diagnostic::SessionDiagnosticOutcome;
 pub use erebor_runtime_core::{
     ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionInterceptionDecision,

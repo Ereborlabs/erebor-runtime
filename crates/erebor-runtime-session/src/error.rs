@@ -5,7 +5,7 @@ pub use execution::SessionExecutionError;
 pub use interception_broker::RuntimeInterceptionBrokerError;
 
 pub(crate) use execution::{
-    AdoptMatchAmbiguousSnafu, AdoptMatchNotFoundSnafu, DiagnosticFailedSnafu,
+    AdoptMatchAmbiguousSnafu, AdoptMatchNotFoundSnafu, CodexSessionSnafu, DiagnosticFailedSnafu,
     FilesystemSurfaceSnafu, GuardConfigSnafu, GuardIoSnafu, InvalidAdoptTargetSnafu,
     InvalidConfigSnafu, InvalidPolicySnafu, ReadPolicySnafu, RuntimeInterceptionBrokerSnafu,
     RuntimeSnafu, SessionRegistrySnafu, TerminalSurfaceSnafu,

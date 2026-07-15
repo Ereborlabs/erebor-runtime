@@ -21,6 +21,7 @@ pub(super) const SYS_EXECVEAT: u64 = 322;
 
 pub(super) const SIGSTOP: c_int = 19;
 pub(super) const SIGTRAP: c_int = 5;
+pub(super) const SIGKILL: c_int = 9;
 pub(super) const EINTR: c_int = 4;
 pub(super) const ENOENT: c_int = 2;
 pub(super) const EPERM: c_int = 1;
@@ -39,6 +40,8 @@ const PTRACE_O_TRACEEXEC: c_ulong = 1 << 4;
 const PTRACE_O_TRACEEXIT: c_ulong = 1 << 6;
 
 const ESRCH: c_int = 3;
+const F_SETFD: c_int = 2;
+const FD_CLOEXEC: c_int = 1;
 
 pub(super) type Pid = c_int;
 
@@ -80,6 +83,8 @@ unsafe extern "C" {
     fn fork() -> Pid;
     fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int;
     fn raise(signal: c_int) -> c_int;
+    fn fcntl(fd: c_int, command: c_int, argument: c_int) -> c_int;
+    fn kill(pid: Pid, signal: c_int) -> c_int;
     fn _exit(status: c_int) -> !;
     fn strerror(error: c_int) -> *mut c_char;
     fn __errno_location() -> *mut c_int;
@@ -98,6 +103,20 @@ impl LinuxSys {
 
     pub(super) fn raise(signal: c_int) -> c_int {
         unsafe { raise(signal) }
+    }
+
+    pub(super) fn set_close_on_exec(fd: c_int) -> Result<(), String> {
+        if unsafe { fcntl(fd, F_SETFD, FD_CLOEXEC) } != 0 {
+            return Err(format!(
+                "failed to mark inherited observer descriptor close-on-exec: {}",
+                Self::errno_message(Self::errno())
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn kill(pid: Pid, signal: c_int) {
+        let _result = unsafe { kill(pid, signal) };
     }
 
     pub(super) fn exit(status: c_int) -> ! {

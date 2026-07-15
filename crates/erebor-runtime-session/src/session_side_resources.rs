@@ -6,11 +6,17 @@ use erebor_runtime_core::{
     SessionRunnerKind, SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan,
     SessionSurfaceLauncher,
 };
-use erebor_runtime_filesystem::LinuxOverlaySessionView;
+use erebor_runtime_filesystem::{LinuxOverlaySessionView, LinuxReadOnlySessionView};
 use snafu::ResultExt;
 
 use crate::{
-    error::{FilesystemSurfaceSnafu, GuardConfigSnafu, InvalidConfigSnafu, RuntimeSnafu},
+    agents::codex::{
+        CodexArtifactProjection, CodexGuardTicketIssuer, CodexHookBroker, CodexManagedSession,
+    },
+    error::{
+        CodexSessionSnafu, FilesystemSurfaceSnafu, GuardConfigSnafu, InvalidConfigSnafu,
+        RuntimeSnafu,
+    },
     interception_backend::{FileOperationInterceptionInput, SessionInterceptionBackendBundle},
     interception_setup::SessionInterceptionSetup,
     policies::read_policy_set,
@@ -29,10 +35,18 @@ pub(crate) fn start_session_side_resources(
     plan: &SessionRunPlan,
     prepared_session: Option<&PreparedSession>,
 ) -> Result<SessionSideResources, SessionExecutionError> {
+    let codex_managed_session =
+        CodexManagedSession::for_run(config, plan).context(CodexSessionSnafu)?;
     let start_plan = config
         .surface_start_plan_for_session(plan)
         .context(InvalidConfigSnafu)?;
-    start_session_side_resources_from_start_plan(config, plan, start_plan, prepared_session)
+    start_session_side_resources_from_start_plan(
+        config,
+        plan,
+        start_plan,
+        prepared_session,
+        codex_managed_session,
+    )
 }
 
 pub(crate) fn start_adopt_session_side_resources(
@@ -59,7 +73,7 @@ pub(crate) fn start_adopt_session_side_resources(
     let start_plan = config
         .surface_start_plan_for_runner_kind(plan.runner().kind())
         .context(InvalidConfigSnafu)?;
-    start_session_side_resources_from_start_plan(config, plan, start_plan, None)
+    start_session_side_resources_from_start_plan(config, plan, start_plan, None, None)
 }
 
 fn start_session_side_resources_from_start_plan(
@@ -67,6 +81,7 @@ fn start_session_side_resources_from_start_plan(
     plan: &impl SessionPlanContext,
     start_plan: erebor_runtime_core::SessionSurfaceStartPlan,
     prepared_session: Option<&PreparedSession>,
+    codex_managed_session: Option<CodexManagedSession>,
 ) -> Result<SessionSideResources, SessionExecutionError> {
     if start_plan.surfaces().is_empty() {
         return Ok(SessionSideResources::default());
@@ -83,6 +98,9 @@ fn start_session_side_resources_from_start_plan(
     let mut terminal_process_surface = TerminalProcessSurface::absent();
     let mut filesystem_handler = None;
     let mut filesystem_overlay_wrapper = None;
+    let mut codex_projection_wrapper = None;
+    let mut codex_guard_ticket_issuer = None;
+    let mut codex_hook_broker = None;
     let mut process_exec_interception = None;
     let process_exec_supported = start_plan
         .interception()
@@ -174,6 +192,58 @@ fn start_session_side_resources_from_start_plan(
                             wrapper_path.display().to_string(),
                         ));
                         filesystem_overlay_wrapper = Some(wrapper_path);
+                        if let Some(codex_managed_session) = codex_managed_session.as_ref() {
+                            let broker =
+                                CodexHookBroker::start(storage, codex_managed_session.clone())
+                                    .context(CodexSessionSnafu)?;
+                            let mut projections = CodexArtifactProjection::projections(
+                                codex_managed_session.profile(),
+                            )
+                            .context(CodexSessionSnafu)?;
+                            projections
+                                .push(broker.session_projection().context(CodexSessionSnafu)?);
+                            let projection =
+                                LinuxReadOnlySessionView::prepare(storage, &projections)
+                                    .map_err(|source| {
+                                        crate::CodexSessionError::FilesystemProjection {
+                                            source: Box::new(source),
+                                            location: snafu::Location::default(),
+                                        }
+                                    })
+                                    .context(CodexSessionSnafu)?;
+                            let wrapper_path = projection.wrapper_path().to_path_buf();
+                            environment.push((
+                                String::from("EREBOR_CODEX_PROFILE_ID"),
+                                codex_managed_session.profile().id.clone(),
+                            ));
+                            environment.push((
+                                String::from("EREBOR_CODEX_PROFILE_SHA256"),
+                                codex_managed_session.profile().profile_sha256.clone(),
+                            ));
+                            environment.push((
+                                String::from("EREBOR_CODEX_SHELL_STARTUP"),
+                                codex_managed_session
+                                    .profile()
+                                    .shell_startup_path
+                                    .display()
+                                    .to_string(),
+                            ));
+                            environment.push((String::from("SHELL"), String::from("/bin/sh")));
+                            environment.push((
+                                String::from("EREBOR_CODEX_HOOK_BROKER"),
+                                CodexHookBroker::session_endpoint().to_owned(),
+                            ));
+                            let issuer =
+                                CodexGuardTicketIssuer::start(codex_managed_session.clone())
+                                    .context(CodexSessionSnafu)?;
+                            environment.push((
+                                String::from("EREBOR_GUARD_EXEC_OBSERVER_FD"),
+                                issuer.inherited_guard_fd().to_string(),
+                            ));
+                            codex_projection_wrapper = Some(wrapper_path);
+                            codex_guard_ticket_issuer = Some(issuer);
+                            codex_hook_broker = Some(broker);
+                        }
                     }
                 }
             }
@@ -188,6 +258,14 @@ fn start_session_side_resources_from_start_plan(
             plan,
             prepared_session.map(PreparedSession::storage),
         )?);
+    if codex_guard_ticket_issuer.is_some() && interception_setup.backend_kind().is_none() {
+        return GuardConfigSnafu {
+            reason: String::from(
+                "managed Codex hook tickets require the Linux process guard to be enabled",
+            ),
+        }
+        .fail();
+    }
     if terminal_surface_present {
         environment.push((
             String::from("EREBOR_TERMINAL_PROCESS_GUARD"),
@@ -213,10 +291,13 @@ fn start_session_side_resources_from_start_plan(
             None,
             interception_registration,
             None,
+            codex_guard_ticket_issuer,
+            codex_hook_broker,
         )?;
         if let Some(wrapper) = filesystem_overlay_wrapper {
             resources.add_linux_host_outer_wrapper(wrapper);
         }
+        apply_codex_launch_sanitization(&mut resources, codex_projection_wrapper);
         return Ok(resources);
     }
 
@@ -259,11 +340,27 @@ fn start_session_side_resources_from_start_plan(
         browser_cdp_endpoint,
         interception_registration,
         Some(supervisor),
+        codex_guard_ticket_issuer,
+        codex_hook_broker,
     )?;
     if let Some(wrapper) = filesystem_overlay_wrapper {
         resources.add_linux_host_outer_wrapper(wrapper);
     }
+    apply_codex_launch_sanitization(&mut resources, codex_projection_wrapper);
     Ok(resources)
+}
+
+fn apply_codex_launch_sanitization(
+    resources: &mut SessionSideResources,
+    codex_projection_wrapper: Option<std::path::PathBuf>,
+) {
+    let Some(wrapper) = codex_projection_wrapper else {
+        return;
+    };
+    resources.add_linux_host_outer_wrapper(wrapper);
+    for key in ["BASH_ENV", "ENV", "KSH_ENV", "ZDOTDIR", "SHELL"] {
+        resources.remove_linux_host_environment(key);
+    }
 }
 
 fn file_operation_interception_input(

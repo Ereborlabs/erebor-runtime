@@ -3,7 +3,9 @@ use std::{collections::HashMap, os::raw::c_ulong};
 use super::{
     audit::write_process_audit,
     broker::GuardBrokerEnvironment,
-    die, file_interception, ipc,
+    die,
+    exec_observer::GuardExecObserver,
+    file_interception, ipc,
     memory::{read_argv, read_cstring},
     rules::{command_text, ProcessRule, ProcessRuleDecision},
     status::{
@@ -13,7 +15,7 @@ use super::{
     sys::{
         LinuxSys, Pid, UserRegsStruct, EINTR, EPERM, PTRACE_EVENT_CLONE, PTRACE_EVENT_EXEC,
         PTRACE_EVENT_EXIT, PTRACE_EVENT_FORK, PTRACE_EVENT_STOP, PTRACE_EVENT_VFORK,
-        PTRACE_GETEVENTMSG, PTRACE_GETREGS, SIGSTOP, SIGTRAP, SYS_EXECVE, SYS_EXECVEAT,
+        PTRACE_GETEVENTMSG, PTRACE_GETREGS, SIGKILL, SIGSTOP, SIGTRAP, SYS_EXECVE, SYS_EXECVEAT,
         WAIT_ALL_TRACED,
     },
 };
@@ -22,6 +24,7 @@ use super::{
 struct PidState {
     in_syscall: bool,
     denied_pending: bool,
+    exec_history: Vec<String>,
 }
 
 pub(super) struct TraceLoop {
@@ -30,16 +33,22 @@ pub(super) struct TraceLoop {
     audit_seq: u64,
     root_pid: Pid,
     live_traces: usize,
+    exec_observer: Option<GuardExecObserver>,
 }
 
 impl TraceLoop {
-    pub(super) fn new(root_pid: Pid, rules: Vec<ProcessRule>) -> Self {
+    pub(super) fn new(
+        root_pid: Pid,
+        rules: Vec<ProcessRule>,
+        exec_observer: Option<GuardExecObserver>,
+    ) -> Self {
         Self {
             rules,
             states: HashMap::new(),
             audit_seq: 0,
             root_pid,
             live_traces: 0,
+            exec_observer,
         }
     }
 
@@ -107,16 +116,23 @@ impl TraceLoop {
                     &mut new_pid as *mut c_ulong as *mut std::ffi::c_void,
                 );
                 if result == 0 && new_pid != 0 {
-                    self.track(new_pid as Pid);
+                    let history = self
+                        .states
+                        .get(&pid)
+                        .map_or_else(Vec::new, |state| state.exec_history.clone());
+                    self.track_with_history(new_pid as Pid, history);
                 }
                 LinuxSys::continue_trace(pid, 0);
                 continue;
             }
 
-            if matches!(
-                event,
-                PTRACE_EVENT_EXEC | PTRACE_EVENT_EXIT | PTRACE_EVENT_STOP
-            ) {
+            if event == PTRACE_EVENT_EXEC {
+                self.observe_exec(pid);
+                LinuxSys::continue_trace(pid, 0);
+                continue;
+            }
+
+            if matches!(event, PTRACE_EVENT_EXIT | PTRACE_EVENT_STOP) {
                 LinuxSys::continue_trace(pid, 0);
                 continue;
             }
@@ -135,6 +151,45 @@ impl TraceLoop {
         }
 
         root_status
+    }
+
+    fn track_with_history(&mut self, pid: Pid, exec_history: Vec<String>) {
+        if self
+            .states
+            .insert(
+                pid,
+                PidState {
+                    exec_history,
+                    ..PidState::default()
+                },
+            )
+            .is_none()
+        {
+            self.live_traces += 1;
+        }
+    }
+
+    fn observe_exec(&mut self, pid: Pid) {
+        let Some(observer) = self.exec_observer.as_mut() else {
+            return;
+        };
+        let executable = match std::fs::read_link(format!("/proc/{pid}/exe")) {
+            Ok(path) => path.display().to_string(),
+            Err(error) => {
+                eprintln!("erebor linux process guard: failed to inspect exec {pid}: {error}");
+                LinuxSys::kill(pid, SIGKILL);
+                return;
+            }
+        };
+        let Some(state) = self.states.get_mut(&pid) else {
+            LinuxSys::kill(pid, SIGKILL);
+            return;
+        };
+        state.exec_history.push(executable);
+        if let Err(reason) = observer.observe(pid, &state.exec_history) {
+            eprintln!("erebor linux process guard: guarded exec observation failed: {reason}");
+            LinuxSys::kill(pid, SIGKILL);
+        }
     }
 
     fn handle_syscall_stop(&mut self, pid: Pid) {

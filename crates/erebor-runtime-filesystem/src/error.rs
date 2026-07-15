@@ -93,6 +93,48 @@ pub enum FilesystemError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display(
+        "filesystem read-only session projection from `{}` to `{}` is invalid: {reason}",
+        artifact.display(),
+        target.display()
+    ))]
+    InvalidReadOnlySessionProjection {
+        artifact: PathBuf,
+        target: PathBuf,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "failed to inspect filesystem read-only projection source `{}`: {source}",
+        path.display()
+    ))]
+    InspectReadOnlySessionProjection {
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "failed to write filesystem read-only session wrapper `{}`: {source}",
+        path.display()
+    ))]
+    WriteReadOnlySessionWrapper {
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "failed to set filesystem read-only session wrapper permissions `{}`: {source}",
+        path.display()
+    ))]
+    SetReadOnlySessionWrapperPermissions {
+        path: PathBuf,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to read filesystem layer path `{}`: {source}", path.display()))]
     ReadLayerPath {
         path: PathBuf,

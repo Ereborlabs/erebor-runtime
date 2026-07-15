@@ -12,6 +12,7 @@ impl ErrorExt for FilesystemError {
             | Self::UnsupportedOverlayPlatform { .. }
             | Self::MissingOverlayCommand { .. }
             | Self::InvalidOverlaySessionView { .. }
+            | Self::InvalidReadOnlySessionProjection { .. }
             | Self::InvalidCheckpointId { .. }
             | Self::InvalidPromotionId { .. }
             | Self::InvalidTransactionHandle { .. }
@@ -24,6 +25,9 @@ impl ErrorExt for FilesystemError {
             | Self::CreateOverlaySessionDir { .. }
             | Self::WriteOverlayWrapper { .. }
             | Self::SetOverlayWrapperPermissions { .. }
+            | Self::InspectReadOnlySessionProjection { .. }
+            | Self::WriteReadOnlySessionWrapper { .. }
+            | Self::SetReadOnlySessionWrapperPermissions { .. }
             | Self::ReadLayerPath { .. }
             | Self::InspectLayerPath { .. }
             | Self::ActiveLayerWriter { .. }
@@ -58,6 +62,9 @@ impl ErrorExt for FilesystemError {
             | Self::CreateOverlaySessionDir { source, .. }
             | Self::WriteOverlayWrapper { source, .. }
             | Self::SetOverlayWrapperPermissions { source, .. }
+            | Self::InspectReadOnlySessionProjection { source, .. }
+            | Self::WriteReadOnlySessionWrapper { source, .. }
+            | Self::SetReadOnlySessionWrapperPermissions { source, .. }
             | Self::ReadLayerPath { source, .. }
             | Self::InspectLayerPath { source, .. }
             | Self::WriteLayerManifest { source, .. }
@@ -72,6 +79,7 @@ impl ErrorExt for FilesystemError {
             | Self::UnsupportedOverlayPlatform { .. }
             | Self::MissingOverlayCommand { .. }
             | Self::InvalidOverlaySessionView { .. }
+            | Self::InvalidReadOnlySessionProjection { .. }
             | Self::InvalidCheckpointId { .. }
             | Self::InvalidPromotionId { .. }
             | Self::InvalidTransactionHandle { .. }

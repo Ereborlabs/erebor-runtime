@@ -114,6 +114,12 @@ pub enum RuntimeConfigError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("runtime config Codex governance is invalid: {reason}"))]
+    InvalidCodexGovernanceConfig {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for RuntimeConfigError {
@@ -138,7 +144,8 @@ impl ErrorExt for RuntimeConfigError {
             | Self::BrowserCdpInvalidBrowserUrl { .. }
             | Self::InvalidProcessMediationConfig { .. }
             | Self::InvalidFilesystemSurfaceConfig { .. }
-            | Self::InvalidSessionInterceptionConfig { .. } => StatusCode::InvalidArguments,
+            | Self::InvalidSessionInterceptionConfig { .. }
+            | Self::InvalidCodexGovernanceConfig { .. } => StatusCode::InvalidArguments,
         }
     }
 

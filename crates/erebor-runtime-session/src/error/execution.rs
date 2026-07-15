@@ -8,6 +8,7 @@ use erebor_runtime_terminal::TerminalSurfaceError;
 use snafu::{Location, Snafu};
 
 use super::RuntimeInterceptionBrokerError;
+use crate::agents::codex::CodexSessionError;
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
@@ -80,6 +81,13 @@ pub enum SessionExecutionError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("{source}"))]
+    CodexSession {
+        #[snafu(source(from(CodexSessionError, Box::new)))]
+        source: Box<CodexSessionError>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to read process table `{}`: {source}", path.display()))]
     ReadProcessTable {
         path: PathBuf,
@@ -125,6 +133,7 @@ impl ErrorExt for SessionExecutionError {
             Self::SessionRegistry { source, .. } => source.status_code(),
             Self::FilesystemSurface { source, .. } => source.status_code(),
             Self::RuntimeInterceptionBroker { source, .. } => source.status_code(),
+            Self::CodexSession { source, .. } => source.status_code(),
             Self::ReadProcessTable { .. } => StatusCode::External,
             Self::InvalidAdoptTarget { .. } => StatusCode::InvalidArguments,
             Self::AdoptMatchNotFound { .. } => StatusCode::NotFound,
@@ -144,6 +153,7 @@ impl ErrorExt for SessionExecutionError {
             Self::SessionRegistry { source, .. } => source.retry_hint(),
             Self::FilesystemSurface { source, .. } => source.retry_hint(),
             Self::RuntimeInterceptionBroker { source, .. } => source.retry_hint(),
+            Self::CodexSession { source, .. } => source.retry_hint(),
             Self::DiagnosticFailed { .. }
             | Self::GuardConfig { .. }
             | Self::InvalidAdoptTarget { .. }

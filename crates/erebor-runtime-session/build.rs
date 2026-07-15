@@ -11,6 +11,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/os/linux/process_guard/audit.rs");
     println!("cargo:rerun-if-changed=src/os/linux/process_guard/broker.rs");
     println!("cargo:rerun-if-changed=src/os/linux/process_guard/cgroup.rs");
+    println!("cargo:rerun-if-changed=src/os/linux/process_guard/exec_observer.rs");
     println!("cargo:rerun-if-changed=src/os/linux/process_guard/file_interception.rs");
     println!("cargo:rerun-if-changed=src/os/linux/process_guard/interception.rs");
     println!("cargo:rerun-if-changed=src/os/linux/process_guard/interception/audit.rs");

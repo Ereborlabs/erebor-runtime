@@ -6,6 +6,8 @@ mod audit;
 mod broker;
 #[path = "process_guard/cgroup.rs"]
 mod cgroup;
+#[path = "process_guard/exec_observer.rs"]
+mod exec_observer;
 #[path = "process_guard/file_interception.rs"]
 mod file_interception;
 #[path = "process_guard/interception.rs"]
@@ -26,6 +28,7 @@ mod trace;
 use std::{collections::HashMap, env, ffi::CString, fs, os::unix::ffi::OsStringExt, process};
 
 use cgroup::{join_configured_cgroup, write_capability_report};
+use exec_observer::GuardExecObserver;
 use rules::{parse_rules, ProcessRule};
 use status::{wait_exited, wait_signaled, wait_stopped};
 use sys::{LinuxSys, Pid, EINTR, ENOENT, SIGSTOP};
@@ -52,10 +55,18 @@ fn main() {
         Ok(command) => command,
         Err(error) => die(&error),
     };
-    process::exit(launch_new_process_tree(command, rules));
+    let observer = match GuardExecObserver::from_environment() {
+        Ok(observer) => observer,
+        Err(error) => die(&error),
+    };
+    process::exit(launch_new_process_tree(command, rules, observer));
 }
 
-fn launch_new_process_tree(command: Vec<CString>, rules: Vec<ProcessRule>) -> i32 {
+fn launch_new_process_tree(
+    command: Vec<CString>,
+    rules: Vec<ProcessRule>,
+    observer: Option<GuardExecObserver>,
+) -> i32 {
     let child = LinuxSys::fork();
     if child < 0 {
         die(&format!(
@@ -68,7 +79,7 @@ fn launch_new_process_tree(command: Vec<CString>, rules: Vec<ProcessRule>) -> i3
         child_exec(command);
     }
 
-    let mut trace_loop = TraceLoop::new(child, rules);
+    let mut trace_loop = TraceLoop::new(child, rules, observer);
     trace_loop.track(child);
 
     wait_for_initial_stop(child);
@@ -82,7 +93,11 @@ fn launch_new_process_tree(command: Vec<CString>, rules: Vec<ProcessRule>) -> i3
 
 fn adopt_existing_process_tree(root_pid: Pid, rules: Vec<ProcessRule>) -> i32 {
     let candidate_pids = process_tree_pids(root_pid);
-    let mut trace_loop = TraceLoop::new(root_pid, rules);
+    let observer = match GuardExecObserver::from_environment() {
+        Ok(observer) => observer,
+        Err(error) => die(&error),
+    };
+    let mut trace_loop = TraceLoop::new(root_pid, rules, observer);
     let mut failed = Vec::new();
 
     for pid in candidate_pids {
