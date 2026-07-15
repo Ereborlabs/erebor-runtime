@@ -65,6 +65,7 @@ impl CodexLinuxV1ProfileProbe {
         let host_requirements = Self::read_host_requirements(&codex, fixture.path())?;
         Self::assert_host_view_is_ordinary(&host_requirements)?;
         Self::assert_namespace_projection(&codex, fixture.path(), &artifact)?;
+        Self::assert_exec_projection(&codex, fixture.path(), &artifact)?;
 
         eprintln!(
             "Codex Linux V1 profile probe passed mechanics: profile={} executable={} version={} executable_sha256={} requirements_sha256={} hook_sha256={} architecture={}",
@@ -151,6 +152,53 @@ impl CodexLinuxV1ProfileProbe {
                 "input": [{"type": "text", "text": "Phase 0 lifecycle probe."}]
             })),
         )?;
+        assert_hook_events_in_order(
+            &hook_log,
+            &[
+                "SessionStart",
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PostToolUse",
+                "Stop",
+            ],
+        )
+    }
+
+    fn assert_exec_projection(
+        codex: &Path,
+        root: &Path,
+        artifact: &CodexLinuxV1RequirementsArtifact,
+    ) -> TestResult<()> {
+        let codex_home = root.join("exec-codex-home");
+        let hook_log = root.join("exec-hook-events.jsonl");
+        fs::create_dir_all(&codex_home)?;
+        let mock_responses = CodexMockResponsesServer::start()?;
+        write_codex_mock_responses_config(&codex_home, mock_responses.uri())?;
+        let script = MountNamespaceScript::write(root)?;
+        let mut command = LinuxUserMountNamespace::command(script.path());
+        command
+            .arg(artifact.requirements_path())
+            .arg(artifact.hook_directory())
+            .arg(root.join("exec-namespace-etc"))
+            .arg(root.join("exec-namespace-usr-lib-upper"))
+            .arg(root.join("exec-namespace-usr-lib-work"))
+            .arg(codex)
+            .args([
+                "exec",
+                "--skip-git-repo-check",
+                "Phase 0 non-interactive lifecycle probe.",
+            ])
+            .env("CODEX_HOME", codex_home)
+            .env(HOOK_LOG_ENV, &hook_log);
+        let output = command.output()?;
+        if !output.status.success() {
+            return Err(test_error(format!(
+                "pinned Codex exec probe failed: status={} stdout={} stderr={}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            )));
+        }
         assert_hook_events_in_order(
             &hook_log,
             &[
