@@ -1,5 +1,6 @@
 use std::{any::Any, io, path::PathBuf};
 
+use erebor_runtime_context::ContextRepositoryError;
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use erebor_runtime_filesystem::FilesystemError;
 use snafu::{Location, Snafu};
@@ -47,6 +48,11 @@ pub enum CodexSessionError {
     },
     #[snafu(display("Codex hook ticket registry lock failed"))]
     TicketRegistryLock {
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Codex prompt-reconciliation state lock failed"))]
+    PromptReconciliationStateLock {
         #[snafu(implicit)]
         location: Location,
     },
@@ -118,6 +124,32 @@ pub enum CodexSessionError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Codex App Server transport I/O failed during {operation}: {source}"))]
+    AppServerTransportIo {
+        operation: &'static str,
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Codex App Server transport protocol is invalid: {reason}"))]
+    AppServerTransportProtocol {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to record Codex App Server ingress context: {source}"))]
+    AppServerTransportContext {
+        #[snafu(source(from(ContextRepositoryError, Box::new)))]
+        source: Box<ContextRepositoryError>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Codex App Server exited with code {code:?}"))]
+    AppServerTransportChildExit {
+        code: Option<i32>,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for CodexSessionError {
@@ -135,12 +167,18 @@ impl ErrorExt for CodexSessionError {
             | Self::UnsupportedHookProtocol { .. } => StatusCode::InvalidArguments,
             Self::ReadArtifact { .. } => StatusCode::External,
             Self::FilesystemProjection { source, .. } => source.status_code(),
-            Self::TicketRegistryLock { .. } => StatusCode::Internal,
+            Self::TicketRegistryLock { .. } | Self::PromptReconciliationStateLock { .. } => {
+                StatusCode::Internal
+            }
             Self::HookBrokerIo { .. } => StatusCode::External,
             Self::Pidfd { .. } => StatusCode::External,
             Self::HookBrokerProtocol { .. }
             | Self::InvalidHookEvent { .. }
-            | Self::HookRejected { .. } => StatusCode::InvalidArguments,
+            | Self::HookRejected { .. }
+            | Self::AppServerTransportProtocol { .. } => StatusCode::InvalidArguments,
+            Self::AppServerTransportIo { .. } => StatusCode::External,
+            Self::AppServerTransportContext { source, .. } => source.status_code(),
+            Self::AppServerTransportChildExit { .. } => StatusCode::External,
         }
     }
 
@@ -153,6 +191,7 @@ impl ErrorExt for CodexSessionError {
             | Self::ArtifactDirectoryUnsafe { .. }
             | Self::ArtifactNotFleetProtected { .. }
             | Self::TicketRegistryLock { .. }
+            | Self::PromptReconciliationStateLock { .. }
             | Self::TicketNotFound { .. }
             | Self::TicketExpired { .. }
             | Self::TicketProcessExited { .. }
@@ -163,7 +202,11 @@ impl ErrorExt for CodexSessionError {
             Self::Pidfd { source, .. } => RetryHint::from_io_error(source),
             Self::HookBrokerProtocol { .. }
             | Self::InvalidHookEvent { .. }
-            | Self::HookRejected { .. } => RetryHint::NonRetryable,
+            | Self::HookRejected { .. }
+            | Self::AppServerTransportProtocol { .. }
+            | Self::AppServerTransportChildExit { .. } => RetryHint::NonRetryable,
+            Self::AppServerTransportContext { source, .. } => source.retry_hint(),
+            Self::AppServerTransportIo { source, .. } => RetryHint::from_io_error(source),
         }
     }
 

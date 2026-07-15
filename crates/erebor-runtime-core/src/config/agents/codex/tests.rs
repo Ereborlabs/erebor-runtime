@@ -55,7 +55,33 @@ fn parses_a_valid_linux_codex_profile() -> Result<(), Box<dyn std::error::Error>
 
     assert_eq!(profile.id, "vscode-app-server");
     assert_eq!(profile.event_schemas[0].event, CodexHookEvent::SessionStart);
+    assert!(!profile.app_server_transport.enabled);
     Ok(())
+}
+
+#[test]
+fn parses_an_explicit_brokered_app_server_profile() -> Result<(), Box<dyn std::error::Error>> {
+    let config = RuntimeConfig::from_json_str(&profile_source(&profile_with(
+        ",\n          \"app_server_transport\": { \"enabled\": true }",
+    )))?;
+    let profile = config
+        .codex
+        .matching_profile(std::path::Path::new("/opt/codex/codex"))
+        .ok_or("missing matching Codex profile")?;
+
+    assert!(profile.app_server_transport.enabled);
+    Ok(())
+}
+
+#[test]
+fn rejects_unknown_app_server_transport_configuration() {
+    let source = profile_source(&profile_with(
+        ",\n          \"app_server_transport\": { \"enabled\": true, \"unknown\": true }",
+    ));
+    assert!(matches!(
+        RuntimeConfig::from_json_str(&source),
+        Err(RuntimeConfigError::InvalidJson { .. })
+    ));
 }
 
 #[test]

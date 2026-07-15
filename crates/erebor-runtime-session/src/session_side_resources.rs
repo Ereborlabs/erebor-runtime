@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use erebor_runtime_cdp::BrowserCdpSurface;
 use erebor_runtime_core::{
@@ -12,6 +12,7 @@ use snafu::ResultExt;
 use crate::{
     agents::codex::{
         CodexArtifactProjection, CodexGuardTicketIssuer, CodexHookBroker, CodexManagedSession,
+        CodexPromptReconciliation,
     },
     error::{
         CodexSessionSnafu, FilesystemSurfaceSnafu, GuardConfigSnafu, InvalidConfigSnafu,
@@ -101,6 +102,7 @@ fn start_session_side_resources_from_start_plan(
     let mut codex_projection_wrapper = None;
     let mut codex_guard_ticket_issuer = None;
     let mut codex_hook_broker = None;
+    let mut codex_prompt_reconciliation = None;
     let mut process_exec_interception = None;
     let process_exec_supported = start_plan
         .interception()
@@ -193,8 +195,12 @@ fn start_session_side_resources_from_start_plan(
                         ));
                         filesystem_overlay_wrapper = Some(wrapper_path);
                         if let Some(codex_managed_session) = codex_managed_session.as_ref() {
-                            let broker = CodexHookBroker::start(codex_managed_session.clone())
-                                .context(CodexSessionSnafu)?;
+                            let reconciliation = Arc::new(CodexPromptReconciliation::default());
+                            let broker = CodexHookBroker::start(
+                                codex_managed_session.clone(),
+                                Arc::clone(&reconciliation),
+                            )
+                            .context(CodexSessionSnafu)?;
                             let mut projections = CodexArtifactProjection::projections(
                                 codex_managed_session.profile(),
                             )
@@ -233,6 +239,7 @@ fn start_session_side_resources_from_start_plan(
                             codex_projection_wrapper = Some(wrapper_path);
                             codex_guard_ticket_issuer = Some(issuer);
                             codex_hook_broker = Some(broker);
+                            codex_prompt_reconciliation = Some(reconciliation);
                         }
                     }
                 }
@@ -287,6 +294,7 @@ fn start_session_side_resources_from_start_plan(
         if let Some(wrapper) = filesystem_overlay_wrapper {
             resources.add_linux_host_outer_wrapper(wrapper);
         }
+        resources.set_codex_prompt_reconciliation(codex_prompt_reconciliation);
         apply_codex_launch_sanitization(&mut resources, codex_projection_wrapper);
         return Ok(resources);
     }
@@ -336,6 +344,7 @@ fn start_session_side_resources_from_start_plan(
     if let Some(wrapper) = filesystem_overlay_wrapper {
         resources.add_linux_host_outer_wrapper(wrapper);
     }
+    resources.set_codex_prompt_reconciliation(codex_prompt_reconciliation);
     apply_codex_launch_sanitization(&mut resources, codex_projection_wrapper);
     Ok(resources)
 }
@@ -472,6 +481,7 @@ mod tests {
                 event: CodexHookEvent::SessionStart,
                 sha256: "e".repeat(64),
             }],
+            app_server_transport: Default::default(),
         }
     }
 }

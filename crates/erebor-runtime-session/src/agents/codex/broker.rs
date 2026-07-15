@@ -29,7 +29,7 @@ use snafu::{ensure, ResultExt};
 
 use super::{
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
-    CodexManagedSession, CodexNativeHookEvent, CodexSessionError,
+    CodexManagedSession, CodexNativeHookEvent, CodexPromptReconciliation, CodexSessionError,
 };
 
 const BROKER_SOCKET: &str = "codex-hook.sock";
@@ -47,7 +47,10 @@ pub(crate) struct CodexHookBroker {
 }
 
 impl CodexHookBroker {
-    pub(crate) fn start(managed_session: CodexManagedSession) -> Result<Self, CodexSessionError> {
+    pub(crate) fn start(
+        managed_session: CodexManagedSession,
+        reconciliation: std::sync::Arc<CodexPromptReconciliation>,
+    ) -> Result<Self, CodexSessionError> {
         let directory = Self::create_socket_directory()?;
         let socket = directory.join(BROKER_SOCKET);
         let _result = fs::remove_file(&socket);
@@ -63,10 +66,12 @@ impl CodexHookBroker {
                 match listener.accept() {
                     Ok((mut stream, _address)) => {
                         let session = managed_session.clone();
+                        let reconciliation = std::sync::Arc::clone(&reconciliation);
                         thread::spawn(move || {
                             let _result = stream.set_read_timeout(Some(Duration::from_secs(10)));
                             let _result = stream.set_write_timeout(Some(Duration::from_secs(10)));
-                            let _result = CodexHookBrokerProtocol::new(session).serve(&mut stream);
+                            let _result = CodexHookBrokerProtocol::new(session, reconciliation)
+                                .serve(&mut stream);
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -145,11 +150,18 @@ impl Drop for CodexHookBroker {
 
 struct CodexHookBrokerProtocol {
     managed_session: CodexManagedSession,
+    reconciliation: std::sync::Arc<CodexPromptReconciliation>,
 }
 
 impl CodexHookBrokerProtocol {
-    const fn new(managed_session: CodexManagedSession) -> Self {
-        Self { managed_session }
+    const fn new(
+        managed_session: CodexManagedSession,
+        reconciliation: std::sync::Arc<CodexPromptReconciliation>,
+    ) -> Self {
+        Self {
+            managed_session,
+            reconciliation,
+        }
     }
 
     fn serve(&self, stream: &mut UnixStream) -> Result<(), CodexSessionError> {
@@ -187,6 +199,8 @@ impl CodexHookBrokerProtocol {
                 .context(HookBrokerProtocolSnafu)?;
             match self.validate_event(&event) {
                 Ok(event_kind) => {
+                    self.reconciliation
+                        .record_authenticated_hook(event_kind, &event.native_event_json)?;
                     let result = HookResult {
                         event: event_kind as i32,
                         accepted: true,
@@ -504,7 +518,9 @@ mod tests {
     };
     use erebor_runtime_ipc::v1::HookEvent;
 
-    use super::{CodexHookBrokerProtocol, HookEventKind, LinuxHookPeerInspector};
+    use super::{
+        CodexHookBrokerProtocol, CodexPromptReconciliation, HookEventKind, LinuxHookPeerInspector,
+    };
     use crate::{
         agents::codex::{CodexHookClient, CodexManagedSession, CodexNativeHookEvent},
         CodexSessionError,
@@ -539,7 +555,10 @@ mod tests {
         let mut pinned_profile = profile();
         pinned_profile.event_schemas[0].sha256 = native_event.schema_sha256().to_owned();
         let session = CodexManagedSession::for_test(pinned_profile);
-        let broker = CodexHookBrokerProtocol::new(session);
+        let broker = CodexHookBrokerProtocol::new(
+            session,
+            std::sync::Arc::new(CodexPromptReconciliation::default()),
+        );
         let valid = HookEvent {
             event: HookEventKind::SessionStart as i32,
             schema_sha256: native_event.schema_sha256().to_owned(),
@@ -597,7 +616,11 @@ mod tests {
         let _ticket = session.issue_guarded_hook_ticket(observed_peer)?;
         let broker_session = session.clone();
         let worker = std::thread::spawn(move || {
-            CodexHookBrokerProtocol::new(broker_session).serve(&mut broker_stream)
+            CodexHookBrokerProtocol::new(
+                broker_session,
+                std::sync::Arc::new(CodexPromptReconciliation::default()),
+            )
+            .serve(&mut broker_stream)
         });
 
         let result = CodexHookClient::submit_on_stream(
@@ -643,6 +666,7 @@ mod tests {
                 event: CodexHookEvent::SessionStart,
                 sha256: "b".repeat(64),
             }],
+            app_server_transport: Default::default(),
         }
     }
 }

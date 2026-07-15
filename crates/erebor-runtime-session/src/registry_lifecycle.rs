@@ -74,6 +74,10 @@ impl PreparedSession {
         &self.storage
     }
 
+    pub(crate) fn context_repository(&self) -> &erebor_runtime_context::ContextRepository {
+        &self.context_repository
+    }
+
     fn verify_context_repository(&self) -> Result<(), SessionExecutionError> {
         self.context_repository
             .scope_refs()

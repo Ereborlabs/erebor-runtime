@@ -18,6 +18,8 @@ mod linux {
         time::Duration,
     };
 
+    use erebor_runtime_context::{ContextRepository, ContextTreeEntryKind};
+    use erebor_runtime_core::SessionRegistry;
     use erebor_runtime_session::CodexNativeHookEvent;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
@@ -180,7 +182,7 @@ mod linux {
     }
 
     #[test]
-    fn pinned_app_server_session_start_uses_the_authenticated_hook_channel(
+    fn brokered_app_server_prompt_ingress_uses_the_authenticated_hook_channel(
     ) -> Result<(), Box<dyn std::error::Error>> {
         if !required_session_run() {
             eprintln!(
@@ -241,7 +243,8 @@ mod linux {
             "shell_startup_source":"{}","shell_startup_sha256":"{}","shell_startup_path":"/usr/lib/erebor/codex-hooks/.zshenv",
             "hook_shell":"zsh",
             "hook_exec_history":["{}","/usr/bin/zsh","/usr/lib/erebor/codex-hooks/erebor-codex-hook"],
-            "event_schemas":[{}]
+            "event_schemas":[{}],
+            "app_server_transport":{{"enabled":true}}
           }}]}}
         }}"#,
                 policy.display(),
@@ -325,6 +328,12 @@ mod linux {
             "PreToolUse",
             "Stop",
         ])?;
+        app_server.assert_brokered_prompt_context(root, "Phase 1 managed session probe.")?;
+        app_server.assert_broker_denied(
+            5,
+            "thread/shellCommand",
+            Some(json!({"command":"printf should-not-reach-codex"})),
+        )?;
         assert_file_contains(&managed_startup_marker, "managed\n")?;
         assert!(
             !untrusted_startup_marker.exists(),
@@ -453,6 +462,7 @@ mod linux {
 
     struct SessionRunAppServer {
         child: Child,
+        session_id: String,
         stdin: ChildStdin,
         stdout: BufReader<ChildStdout>,
         notifications: Vec<Value>,
@@ -468,11 +478,41 @@ mod linux {
             let stdin = child.stdin.take().ok_or("session run omitted stdin")?;
             let stdout = child.stdout.take().ok_or("session run omitted stdout")?;
             Ok(Self {
+                session_id: format!("session-{}", child.id()),
                 child,
                 stdin,
                 stdout: BufReader::new(stdout),
                 notifications: Vec::new(),
             })
+        }
+
+        fn assert_brokered_prompt_context(
+            &self,
+            root: &Path,
+            prompt: &str,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            let registry = SessionRegistry::new(root.join(".erebor/sessions"));
+            let repository = registry
+                .open_context_repository(&self.session_id)?
+                .ok_or("brokered App Server session omitted its context repository")?;
+            let scope = repository
+                .scope_refs()?
+                .into_iter()
+                .find(|scope| scope.as_str().contains("/scope/codex-app-server-"))
+                .ok_or("brokered App Server prompt did not create a context scope")?;
+            let head = repository.scope_head(&scope)?;
+            let tree = repository.read_commit(head)?.tree();
+            let blobs = context_blobs(&repository, tree)?;
+            assert!(
+                blobs.iter().any(|blob| {
+                    let source = String::from_utf8_lossy(blob);
+                    source.contains("brokered_app_server_transport")
+                        && source.contains("original_request_jsonl")
+                        && source.contains(prompt)
+                }),
+                "brokered App Server prompt context did not retain the original request"
+            );
+            Ok(())
         }
 
         fn initialize(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -524,6 +564,50 @@ mod linux {
                     .ok_or_else(|| format!("Codex App Server omitted `{method}` result").into());
             }
             Err(format!("Codex App Server emitted too many messages for `{method}`").into())
+        }
+
+        fn assert_broker_denied(
+            &mut self,
+            id: u64,
+            method: &str,
+            params: Option<Value>,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            let mut request = json!({"id": id, "method": method});
+            if let Some(params) = params {
+                request["params"] = params;
+            }
+            self.write_json(&request)?;
+            for _attempt in 0..128 {
+                let mut line = String::new();
+                if self.stdout.read_line(&mut line)? == 0 {
+                    return Err(format!(
+                        "session-run Codex App Server closed stdout while waiting for broker denial of `{method}`"
+                    )
+                    .into());
+                }
+                let response: Value = serde_json::from_str(&line)?;
+                if response.get("id") != Some(&json!(id)) {
+                    self.notifications.push(response);
+                    continue;
+                }
+                assert_eq!(
+                    response.pointer("/error/code").and_then(Value::as_i64),
+                    Some(-32003),
+                    "sensitive App Server method `{method}` reached Codex instead of Erebor's broker"
+                );
+                assert!(
+                    response
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .is_some_and(|message| message.contains("Erebor denied")),
+                    "sensitive App Server method `{method}` did not receive Erebor's broker denial"
+                );
+                return Ok(());
+            }
+            Err(
+                format!("App Server emitted too many messages before broker denial of `{method}`")
+                    .into(),
+            )
         }
 
         fn assert_completed_hook_events_and_turn(
@@ -621,5 +705,24 @@ mod linux {
             let _result = self.child.kill();
             let _result = self.child.wait();
         }
+    }
+
+    fn context_blobs(
+        repository: &ContextRepository,
+        tree: erebor_runtime_context::ContextObjectId,
+    ) -> Result<Vec<Vec<u8>>, Box<dyn std::error::Error>> {
+        let mut blobs = Vec::new();
+        for entry in repository.read_tree(tree)?.entries() {
+            match entry.kind() {
+                ContextTreeEntryKind::Blob => {
+                    blobs.push(repository.read_object(entry.object())?.bytes().to_vec());
+                }
+                ContextTreeEntryKind::Tree => {
+                    blobs.extend(context_blobs(repository, entry.object())?);
+                }
+                ContextTreeEntryKind::Commit => {}
+            }
+        }
+        Ok(blobs)
     }
 }

@@ -273,6 +273,7 @@ mod tests {
                 event: CodexHookEvent::SessionStart,
                 sha256: "b".repeat(64),
             }],
+            app_server_transport: Default::default(),
         };
 
         let projections = CodexArtifactProjection::projections(&profile)?;

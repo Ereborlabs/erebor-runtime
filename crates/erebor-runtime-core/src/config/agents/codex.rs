@@ -109,6 +109,21 @@ pub struct CodexProfileLayerConfig {
     /// executable and ending with the managed hook executable.
     pub hook_exec_history: Vec<PathBuf>,
     pub event_schemas: Vec<CodexHookEventSchemaLayerConfig>,
+    /// Enables Erebor's owned stdio broker for this App Server profile.
+    ///
+    /// This is deliberately opt-in: a hook profile is not automatically a
+    /// brokered prompt-ingress profile.
+    #[serde(default)]
+    pub app_server_transport: CodexAppServerTransportLayerConfig,
+}
+
+/// Transport facts certified for a profile whose App Server child is launched
+/// directly by Erebor.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexAppServerTransportLayerConfig {
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 impl CodexProfileLayerConfig {

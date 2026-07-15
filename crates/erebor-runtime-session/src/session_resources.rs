@@ -1,11 +1,11 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use erebor_runtime_core::{
     DockerSessionCommandOptions, LinuxHostSessionCommandOptions, SessionSurfaceSupervisor,
 };
 
 use crate::{
-    agents::codex::{CodexGuardTicketIssuer, CodexHookBroker},
+    agents::codex::{CodexGuardTicketIssuer, CodexHookBroker, CodexPromptReconciliation},
     interception_backend::SessionInterceptionBackendBundle,
     runtime_interception_broker::SessionInterceptionRegistration,
     SessionExecutionError,
@@ -17,6 +17,7 @@ pub(crate) struct SessionSideResources {
     docker_options: DockerSessionCommandOptions,
     linux_host_options: LinuxHostSessionCommandOptions,
     browser_cdp_endpoint: Option<String>,
+    codex_prompt_reconciliation: Option<Arc<CodexPromptReconciliation>>,
     lifetime: SessionResourceLifetime,
 }
 
@@ -60,6 +61,7 @@ impl SessionSideResources {
             docker_options,
             linux_host_options,
             browser_cdp_endpoint,
+            codex_prompt_reconciliation: None,
             lifetime,
         }
     }
@@ -82,6 +84,17 @@ impl SessionSideResources {
 
     pub(crate) fn remove_linux_host_environment(&mut self, key: impl Into<String>) {
         self.linux_host_options.remove_environment(key);
+    }
+
+    pub(crate) fn set_codex_prompt_reconciliation(
+        &mut self,
+        reconciliation: Option<Arc<CodexPromptReconciliation>>,
+    ) {
+        self.codex_prompt_reconciliation = reconciliation;
+    }
+
+    pub(crate) fn codex_prompt_reconciliation(&self) -> Option<Arc<CodexPromptReconciliation>> {
+        self.codex_prompt_reconciliation.clone()
     }
 
     pub(crate) fn linux_host_adopt_options(

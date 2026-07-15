@@ -30,6 +30,7 @@ editor-process-guard-target = []
 
 [dev-dependencies]
 rustix = { version = "1.1.4", features = ["fs"] }
+tempfile = "3.23.0"
 
 [[bin]]
 name = "erebor-linux-process-guard"

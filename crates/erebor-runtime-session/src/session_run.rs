@@ -5,6 +5,7 @@ use erebor_runtime_core::{
 use snafu::{Location, ResultExt};
 
 use crate::{
+    agents::codex::CodexAppServerTransportBroker,
     diagnostic::SessionDiagnosticOutcome,
     error::{DiagnosticFailedSnafu, RuntimeSnafu},
     registry_lifecycle::{
@@ -34,6 +35,47 @@ impl SessionExecutionService {
         prepared_session: Option<&PreparedSession>,
     ) -> Result<SessionRunOutcome, SessionExecutionError> {
         let side_resources = start_session_side_resources(config, plan, prepared_session)?;
+
+        if let Some(profile) = plan
+            .command()
+            .first()
+            .and_then(|command| config.codex.matching_profile(std::path::Path::new(command)))
+            .filter(|profile| CodexAppServerTransportBroker::configured_for(profile))
+        {
+            let prepared_session = prepared_session.ok_or_else(|| SessionExecutionError::CodexSession {
+                source: Box::new(crate::CodexSessionError::IncompatibleProfile {
+                    reason: String::from(
+                        "a brokered Codex App Server session requires a durable session context repository",
+                    ),
+                    location: Location::default(),
+                }),
+                location: Location::default(),
+            })?;
+            let reconciliation = side_resources.codex_prompt_reconciliation().ok_or_else(|| {
+                SessionExecutionError::CodexSession {
+                    source: Box::new(crate::CodexSessionError::IncompatibleProfile {
+                        reason: String::from(
+                            "a brokered Codex App Server session requires the authenticated hook reconciler",
+                        ),
+                        location: Location::default(),
+                    }),
+                    location: Location::default(),
+                }
+            })?;
+            return CodexAppServerTransportBroker::new(
+                profile,
+                plan,
+                prepared_session.context_repository(),
+                reconciliation,
+            )
+            .and_then(|broker| {
+                broker.run(
+                    side_resources.environment(),
+                    side_resources.linux_host_options(),
+                )
+            })
+            .context(crate::error::CodexSessionSnafu);
+        }
 
         match plan.runner().kind() {
             SessionRunnerKind::Docker => SessionRunnerLauncher::run_with_docker_options(

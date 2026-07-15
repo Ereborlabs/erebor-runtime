@@ -5,7 +5,9 @@ mod guard_issuer;
 mod hook_client;
 mod hook_output;
 mod native_event;
+mod reconciliation;
 mod ticket;
+mod transport;
 
 pub(crate) use artifacts::CodexArtifactProjection;
 pub(crate) use broker::CodexHookBroker;
@@ -14,4 +16,6 @@ pub(crate) use guard_issuer::CodexGuardTicketIssuer;
 pub use hook_client::CodexHookClient;
 pub use hook_output::CodexHookResultOutput;
 pub use native_event::CodexNativeHookEvent;
+pub(crate) use reconciliation::CodexPromptReconciliation;
 pub use ticket::{CodexHookTicket, CodexHookTicketRegistry, CodexManagedSession};
+pub(crate) use transport::CodexAppServerTransportBroker;
