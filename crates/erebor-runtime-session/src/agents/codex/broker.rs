@@ -16,7 +16,7 @@ use std::{
 };
 
 use erebor_runtime_core::CodexHookEvent;
-use erebor_runtime_filesystem::{FilesystemSessionStorage, LinuxReadOnlySessionProjection};
+use erebor_runtime_filesystem::LinuxReadOnlySessionProjection;
 use erebor_runtime_ipc::{
     v1::{
         Envelope, HookEvent, HookEventKind, HookHello, HookHelloAck, HookRejection,
@@ -32,8 +32,8 @@ use super::{
     CodexManagedSession, CodexSessionError,
 };
 
-const BROKER_DIRECTORY: &str = "codex-hook-broker";
 const BROKER_SOCKET: &str = "codex-hook.sock";
+const HOST_BROKER_DIRECTORY_PREFIX: &str = "erebor-codex-hook-";
 const SESSION_BROKER_DIRECTORY: &str = "/run/erebor";
 const SESSION_BROKER_ENDPOINT: &str = "/run/erebor/codex-hook.sock";
 const MAX_NATIVE_EVENT_BYTES: usize = 32 * 1024;
@@ -47,14 +47,8 @@ pub(crate) struct CodexHookBroker {
 }
 
 impl CodexHookBroker {
-    pub(crate) fn start(
-        storage: &FilesystemSessionStorage,
-        managed_session: CodexManagedSession,
-    ) -> Result<Self, CodexSessionError> {
-        let directory = storage.work_path().join(BROKER_DIRECTORY);
-        fs::create_dir_all(&directory).context(HookBrokerIoSnafu)?;
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-            .context(HookBrokerIoSnafu)?;
+    pub(crate) fn start(managed_session: CodexManagedSession) -> Result<Self, CodexSessionError> {
+        let directory = Self::create_socket_directory()?;
         let socket = directory.join(BROKER_SOCKET);
         let _result = fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket).context(HookBrokerIoSnafu)?;
@@ -89,6 +83,35 @@ impl CodexHookBroker {
         })
     }
 
+    fn create_socket_directory() -> Result<PathBuf, CodexSessionError> {
+        for _attempt in 0..16 {
+            let mut random = [0_u8; 12];
+            fs::File::open("/dev/urandom")
+                .and_then(|mut file| file.read_exact(&mut random))
+                .context(HookBrokerIoSnafu)?;
+            let suffix = random
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let directory =
+                Path::new("/tmp").join(format!("{HOST_BROKER_DIRECTORY_PREFIX}{suffix}"));
+            match fs::create_dir(&directory) {
+                Ok(()) => {
+                    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+                        .context(HookBrokerIoSnafu)?;
+                    return Ok(directory);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error).context(HookBrokerIoSnafu),
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "unable to allocate a unique Codex hook broker directory",
+        ))
+        .context(HookBrokerIoSnafu)
+    }
+
     pub(crate) fn session_projection(
         &self,
     ) -> Result<LinuxReadOnlySessionProjection, CodexSessionError> {
@@ -116,6 +139,7 @@ impl Drop for CodexHookBroker {
             }
         }
         let _result = fs::remove_file(self.directory.join(BROKER_SOCKET));
+        let _result = fs::remove_dir(&self.directory);
     }
 }
 

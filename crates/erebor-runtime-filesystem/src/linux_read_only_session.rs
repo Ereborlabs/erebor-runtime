@@ -216,9 +216,14 @@ impl<'a> LinuxReadOnlyWrapperScript<'a> {
                 continue;
             };
             let parent = Self::sh(target_parent);
-            script.push_str(&format!("  mkdir -p {parent}\n"));
             script.push_str(&format!(
-                "  if [ -d {source} ]; then mkdir -p {target}; else : > {target}; fi\n"
+                "  if [ ! -d {parent} ]; then echo 'erebor read-only projection target parent is not preinstalled: {parent}' >&2; exit 1; fi\n"
+            ));
+            script.push_str(&format!(
+                "  if [ -d {source} ] && [ ! -d {target} ]; then echo 'erebor read-only directory projection target is not preinstalled: {target}' >&2; exit 1; fi\n"
+            ));
+            script.push_str(&format!(
+                "  if [ ! -d {source} ] && [ ! -f {target} ]; then echo 'erebor read-only file projection target is not preinstalled: {target}' >&2; exit 1; fi\n"
             ));
             script.push_str(&format!("  mount --bind {source} {target}\n"));
             script.push_str(&format!("  mount -o remount,bind,ro {target}\n"));
@@ -283,6 +288,9 @@ mod tests {
         assert!(script.contains("remount,bind,ro"));
         assert!(script.contains("/etc/codex/requirements.toml"));
         assert!(script.contains("/usr/lib/erebor/codex-hooks"));
+        assert!(script.contains("target parent is not preinstalled"));
+        assert!(!script.contains("mkdir -p"));
+        assert!(!script.contains(": >"));
         fs::remove_dir_all(root)?;
         Ok(())
     }

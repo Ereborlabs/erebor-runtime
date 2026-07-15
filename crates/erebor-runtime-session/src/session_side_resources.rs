@@ -193,9 +193,8 @@ fn start_session_side_resources_from_start_plan(
                         ));
                         filesystem_overlay_wrapper = Some(wrapper_path);
                         if let Some(codex_managed_session) = codex_managed_session.as_ref() {
-                            let broker =
-                                CodexHookBroker::start(storage, codex_managed_session.clone())
-                                    .context(CodexSessionSnafu)?;
+                            let broker = CodexHookBroker::start(codex_managed_session.clone())
+                                .context(CodexSessionSnafu)?;
                             let mut projections = CodexArtifactProjection::projections(
                                 codex_managed_session.profile(),
                             )

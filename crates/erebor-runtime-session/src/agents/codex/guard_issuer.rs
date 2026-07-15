@@ -105,7 +105,12 @@ impl CodexGuardTicketIssuerServer {
             Err(_error) => return 2,
         };
         let profile = self.managed_session.profile();
-        if peer.executable != profile.managed_hook_path.display().to_string()
+        // The guarded trace runs inside the projection mount namespace and
+        // therefore reports `managed_hook_path`. This issuer runs outside
+        // that namespace, where `/proc/<pid>/exe` resolves to the immutable
+        // pinned source artifact. The argv remains the projected path the
+        // managed agent actually executed, so require both identities.
+        if peer.executable != profile.managed_hook_source.display().to_string()
             || peer.argv != [profile.managed_hook_path.display().to_string()]
         {
             return 2;

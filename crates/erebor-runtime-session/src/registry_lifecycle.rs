@@ -101,8 +101,18 @@ pub(crate) fn prepare_registry_session(
     let surface_plan = config
         .surface_start_plan_for_session(plan)
         .context(InvalidConfigSnafu)?;
+    let codex_managed_storage_required = plan.runner().kind()
+        == erebor_runtime_core::SessionRunnerKind::LinuxHost
+        && plan
+            .command()
+            .first()
+            .is_some_and(|command| config.codex.matching_profile(Path::new(command)).is_some());
     let filesystem_result = surface_plan.filesystem().map_or(Ok(None), |filesystem| {
-        prepare_filesystem_storage(started.record().session_dir.as_path(), filesystem)
+        prepare_filesystem_storage(
+            started.record().session_dir.as_path(),
+            filesystem,
+            codex_managed_storage_required,
+        )
     });
     let filesystem = match filesystem_result {
         Ok(filesystem) => filesystem,
@@ -127,8 +137,9 @@ pub(crate) fn prepare_registry_session(
 fn prepare_filesystem_storage(
     session_dir: &Path,
     filesystem: &FilesystemSurfaceConfig,
+    codex_managed_storage_required: bool,
 ) -> Result<Option<PreparedFilesystemStorage>, SessionExecutionError> {
-    if filesystem.volumes().is_empty() {
+    if filesystem.volumes().is_empty() && !codex_managed_storage_required {
         return Ok(None);
     }
 
