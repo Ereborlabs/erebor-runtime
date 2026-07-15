@@ -21,7 +21,14 @@ erebor-runtime-context = { path = "../erebor-runtime-context", features = ["test
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
+sha2.workspace = true
 tempfile = "3.23.0"
+
+[[bin]]
+name = "codex-linux-v1-test-hook"
+path = "src/bin/codex_linux_v1_test_hook.rs"
+test = false
+bench = false
 
 [lints]
 workspace = true
