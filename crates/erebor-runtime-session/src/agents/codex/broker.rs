@@ -38,6 +38,7 @@ const HOST_BROKER_DIRECTORY_PREFIX: &str = "erebor-codex-hook-";
 const SESSION_BROKER_DIRECTORY: &str = "/run/erebor";
 const SESSION_BROKER_ENDPOINT: &str = "/run/erebor/codex-hook.sock";
 const MAX_NATIVE_EVENT_BYTES: usize = 32 * 1024;
+const MAX_PROFILE_ANCESTOR_DEPTH: usize = 16;
 
 /// Stable local Unix endpoint for a single managed Codex session. Its socket
 /// directory is projected read-only at `/run/erebor` inside that session.
@@ -189,6 +190,15 @@ impl CodexHookBrokerProtocol {
                 return Ok(());
             }
         };
+        let Some(runtime) = ticket.runtime_evidence() else {
+            Self::write_hello_ack(
+                stream,
+                &hello_envelope,
+                false,
+                String::from("guard-issued hook ticket is missing profile runtime evidence"),
+            )?;
+            return Ok(());
+        };
         Self::write_hello_ack(stream, &hello_envelope, true, String::new())?;
 
         while let Ok(envelope) = Self::read_envelope(stream) {
@@ -211,7 +221,7 @@ impl CodexHookBrokerProtocol {
                     self.lease_owner.record_authenticated_hook(
                         event_kind,
                         &event.native_event_json,
-                        LinuxHookPeerInspector::runtime_evidence(&observed_peer)?,
+                        runtime.clone(),
                         observed_peer.observed_pid,
                     )?;
                     let result = HookResult {
@@ -418,8 +428,9 @@ impl LinuxHookPeerInspector {
         })
     }
 
-    fn runtime_evidence(
+    pub(super) fn runtime_evidence(
         peer: &erebor_runtime_ipc::v1::HookPeerEvidence,
+        profile_executable: &Path,
     ) -> Result<CodexLeaseRuntimeEvidence, CodexSessionError> {
         let hook_pid = i32::try_from(peer.observed_pid).map_err(|_error| {
             CodexSessionError::InvalidHookEvent {
@@ -428,16 +439,39 @@ impl LinuxHookPeerInspector {
             }
         })?;
         let process = LinuxHookProcess::inspect(hook_pid)?;
-        Ok(CodexLeaseRuntimeEvidence::new(
-            i64::from(process.parent_pid),
-            process.parent_start_time_ticks,
-            process.parent_executable,
-        ))
+        process.profile_runtime(profile_executable)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LinuxProcessIdentity {
+    pid: i32,
+    parent_pid: i32,
+    start_time_ticks: u64,
+    executable: String,
+}
+
+impl LinuxProcessIdentity {
+    fn inspect(pid: i32) -> Result<Self, CodexSessionError> {
+        let process = PathBuf::from(format!("/proc/{pid}"));
+        let stat = fs::read_to_string(process.join("stat")).context(HookBrokerIoSnafu)?;
+        let (parent_pid, start_time_ticks) = LinuxHookProcess::stat_identities(&stat)?;
+        let executable = fs::read_link(process.join("exe"))
+            .context(HookBrokerIoSnafu)?
+            .display()
+            .to_string();
+        Ok(Self {
+            pid,
+            parent_pid,
+            start_time_ticks,
+            executable,
+        })
     }
 }
 
 struct LinuxHookProcess {
     parent_pid: i32,
+    parent_parent_pid: i32,
     parent_start_time_ticks: u64,
     parent_executable: String,
     start_time_ticks: u64,
@@ -453,38 +487,83 @@ struct LinuxHookProcess {
 impl LinuxHookProcess {
     fn inspect(pid: i32) -> Result<Self, CodexSessionError> {
         let process = PathBuf::from(format!("/proc/{pid}"));
-        let stat = fs::read_to_string(process.join("stat")).context(HookBrokerIoSnafu)?;
-        let (parent_pid, start_time_ticks) = Self::stat_identities(&stat)?;
-        let executable = fs::read_link(process.join("exe"))
-            .context(HookBrokerIoSnafu)?
-            .display()
-            .to_string();
+        let identity = LinuxProcessIdentity::inspect(pid)?;
         let argv = fs::read(process.join("cmdline"))
             .context(HookBrokerIoSnafu)?
             .split(|byte| *byte == 0)
             .filter(|segment| !segment.is_empty())
             .map(|segment| String::from_utf8_lossy(segment).to_string())
             .collect();
-        let parent_executable = fs::read_link(format!("/proc/{parent_pid}/exe"))
-            .context(HookBrokerIoSnafu)?
-            .display()
-            .to_string();
-        let parent_stat =
-            fs::read_to_string(format!("/proc/{parent_pid}/stat")).context(HookBrokerIoSnafu)?;
-        let (_parent_parent_pid, parent_start_time_ticks) = Self::stat_identities(&parent_stat)?;
+        let parent = LinuxProcessIdentity::inspect(identity.parent_pid)?;
         Ok(Self {
-            parent_pid,
-            parent_start_time_ticks,
-            parent_executable: parent_executable.clone(),
-            start_time_ticks,
-            executable: executable.clone(),
+            parent_pid: parent.pid,
+            parent_parent_pid: parent.parent_pid,
+            parent_start_time_ticks: parent.start_time_ticks,
+            parent_executable: parent.executable.clone(),
+            start_time_ticks: identity.start_time_ticks,
+            executable: identity.executable.clone(),
             argv,
             cgroup_namespace_inode: Self::inode(&process.join("ns/cgroup"))?,
             mount_namespace_inode: Self::inode(&process.join("ns/mnt"))?,
             stdin: Self::pipe_identity(&process.join("fd/0"))?,
             stdout: Self::pipe_identity(&process.join("fd/1"))?,
-            exec_chain: vec![parent_executable, executable],
+            exec_chain: vec![parent.executable, identity.executable],
         })
+    }
+
+    fn profile_runtime(
+        &self,
+        profile_executable: &Path,
+    ) -> Result<CodexLeaseRuntimeEvidence, CodexSessionError> {
+        let profile_executable = profile_executable.display().to_string();
+        let mut ancestry = vec![LinuxProcessIdentity {
+            pid: self.parent_pid,
+            parent_pid: self.parent_parent_pid,
+            start_time_ticks: self.parent_start_time_ticks,
+            executable: self.parent_executable.clone(),
+        }];
+        if let Some(runtime) = Self::profile_runtime_from_ancestry(&profile_executable, &ancestry) {
+            return Ok(Self::runtime_evidence_from(runtime));
+        }
+        while ancestry.len() < MAX_PROFILE_ANCESTOR_DEPTH {
+            let Some(parent_pid) = ancestry
+                .last()
+                .map(|identity| identity.parent_pid)
+                .filter(|parent_pid| *parent_pid > 1)
+            else {
+                break;
+            };
+            let parent = LinuxProcessIdentity::inspect(parent_pid)?;
+            ancestry.push(parent);
+            if let Some(runtime) =
+                Self::profile_runtime_from_ancestry(&profile_executable, &ancestry)
+            {
+                return Ok(Self::runtime_evidence_from(runtime));
+            }
+        }
+        Err(CodexSessionError::InvalidHookEvent {
+            reason: format!(
+                "managed hook process has no configured Codex executable ancestor `{profile_executable}`"
+            ),
+            location: snafu::Location::default(),
+        })
+    }
+
+    fn runtime_evidence_from(identity: &LinuxProcessIdentity) -> CodexLeaseRuntimeEvidence {
+        CodexLeaseRuntimeEvidence::new(
+            i64::from(identity.pid),
+            identity.start_time_ticks,
+            identity.executable.clone(),
+        )
+    }
+
+    fn profile_runtime_from_ancestry<'a>(
+        profile_executable: &str,
+        ancestry: &'a [LinuxProcessIdentity],
+    ) -> Option<&'a LinuxProcessIdentity> {
+        ancestry
+            .iter()
+            .find(|identity| identity.executable == profile_executable)
     }
 
     fn stat_identities(stat: &str) -> Result<(i32, u64), CodexSessionError> {
@@ -562,7 +641,7 @@ mod tests {
 
     use super::{
         CodexHookBrokerProtocol, CodexInvocationLeaseOwner, CodexPromptReconciliation,
-        HookEventKind, LinuxHookPeerInspector,
+        HookEventKind, LinuxHookPeerInspector, LinuxHookProcess, LinuxProcessIdentity,
     };
     use crate::{
         agents::codex::{CodexHookClient, CodexManagedSession, CodexNativeHookEvent},
@@ -640,6 +719,41 @@ mod tests {
     }
 
     #[test]
+    fn profile_runtime_identity_skips_shell_ancestors() -> Result<(), Box<dyn std::error::Error>> {
+        let ancestry = vec![
+            LinuxProcessIdentity {
+                pid: 300,
+                parent_pid: 200,
+                start_time_ticks: 30,
+                executable: String::from("/usr/bin/zsh"),
+            },
+            LinuxProcessIdentity {
+                pid: 200,
+                parent_pid: 100,
+                start_time_ticks: 20,
+                executable: String::from("/usr/bin/sh"),
+            },
+            LinuxProcessIdentity {
+                pid: 100,
+                parent_pid: 1,
+                start_time_ticks: 10,
+                executable: String::from("/opt/codex/codex"),
+            },
+        ];
+
+        let runtime =
+            LinuxHookProcess::profile_runtime_from_ancestry("/opt/codex/codex", &ancestry)
+                .ok_or_else(|| {
+                    std::io::Error::other("configured Codex executable is not an ancestor")
+                })?;
+
+        assert_eq!(runtime.pid, 100);
+        assert_eq!(runtime.start_time_ticks, 10);
+        assert_eq!(runtime.executable, "/opt/codex/codex");
+        Ok(())
+    }
+
+    #[test]
     fn managed_hook_client_requires_a_guard_issued_kernel_peer_ticket(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (mut broker_stream, mut hook_stream) = UnixStream::pair()?;
@@ -655,6 +769,11 @@ mod tests {
         let native_event_json = br#"{"hook_event_name":"SessionStart"}"#.to_vec();
         let native_event = CodexNativeHookEvent::parse(&native_event_json)?;
         let mut pinned_profile = profile();
+        pinned_profile.executable = observed_peer
+            .exec_chain
+            .first()
+            .ok_or("test peer omitted its parent executable")?
+            .into();
         pinned_profile.event_schemas[0].sha256 = native_event.schema_sha256().to_owned();
         let session = CodexManagedSession::for_test(pinned_profile);
         let _ticket = session.issue_guarded_hook_ticket(observed_peer)?;
@@ -678,6 +797,63 @@ mod tests {
         )?;
         assert!(result.accepted);
         assert_eq!(result.result_json, br#"{"continue":true}"#);
+        drop(hook_stream);
+        let worker_result = worker
+            .join()
+            .map_err(|_panic| std::io::Error::other("broker worker panicked"))?;
+        worker_result?;
+        Ok(())
+    }
+
+    #[test]
+    fn broker_rejects_a_ticket_without_guard_captured_runtime(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (mut broker_stream, mut hook_stream) = UnixStream::pair()?;
+        let observed_peer = match LinuxHookPeerInspector::inspect(&broker_stream, "") {
+            Ok(peer) => peer,
+            Err(CodexSessionError::HookBrokerIo { source, .. })
+                if source.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let native_event_json = br#"{"hook_event_name":"SessionStart"}"#.to_vec();
+        let native_event = CodexNativeHookEvent::parse(&native_event_json)?;
+        let mut pinned_profile = profile();
+        pinned_profile.event_schemas[0].sha256 = native_event.schema_sha256().to_owned();
+        let session = CodexManagedSession::for_test(pinned_profile);
+        let _ticket = session.issue_hook_ticket(observed_peer)?;
+        let broker_session = session.clone();
+        let worker = std::thread::spawn(move || {
+            CodexHookBrokerProtocol::new(
+                broker_session,
+                Arc::new(CodexPromptReconciliation::default()),
+                test_lease_owner(),
+            )
+            .serve(&mut broker_stream)
+        });
+
+        let error = match CodexHookClient::submit_on_stream(
+            &mut hook_stream,
+            HookEvent {
+                event: HookEventKind::SessionStart as i32,
+                schema_sha256: native_event.schema_sha256().to_owned(),
+                native_event_json,
+            },
+        ) {
+            Ok(_result) => {
+                return Err(std::io::Error::other(
+                    "the broker accepted a ticket without guard-time runtime evidence",
+                )
+                .into());
+            }
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            CodexSessionError::HookRejected { stage, .. } if stage == "hello"
+        ));
         drop(hook_stream);
         let worker_result = worker
             .join()

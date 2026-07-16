@@ -288,9 +288,13 @@ impl CodexInvocationLeaseOwner {
                 runtime,
                 context_pin.as_ref(),
             ),
-            HookEventKind::Stop => {
-                self.close_all_locked(&mut state, "hook-stop", context_pin.as_ref())
-            }
+            HookEventKind::Stop => self.close_turn_locked(
+                &mut state,
+                &payload,
+                runtime,
+                "hook-stop",
+                context_pin.as_ref(),
+            ),
             HookEventKind::SessionStart
             | HookEventKind::UserPromptSubmit
             | HookEventKind::SubagentStart
@@ -582,13 +586,28 @@ impl CodexInvocationLeaseOwner {
         fact: &str,
         context_pin: Option<&ContextPin>,
     ) -> Result<(), CodexSessionError> {
-        let runtime_id = runtime.runtime_id();
-        let matching = state
-            .leases
-            .values()
-            .find(|lease| lease.identity.runtime_id == runtime_id)
-            .cloned();
+        let matching = self.exact_lease_for_payload(state, payload, &runtime);
         self.record_hook_fact_locked(state, fact, matching.as_ref(), payload, context_pin)
+    }
+
+    fn exact_lease_for_payload(
+        &self,
+        state: &LeaseState,
+        payload: &Value,
+        runtime: &CodexLeaseRuntimeEvidence,
+    ) -> Option<InvocationLease> {
+        let fields = InvocationIdentityFields::parse(payload)?;
+        let identity = InvocationIdentity {
+            runtime_id: runtime.runtime_id(),
+            codex_session_id: fields.codex_session_id,
+            turn_id: fields.turn_id,
+            tool_use_id: fields.tool_use_id,
+        };
+        state
+            .identities
+            .get(&identity)
+            .and_then(|lease_id| state.leases.get(lease_id))
+            .cloned()
     }
 
     fn close_all_locked(
@@ -644,6 +663,49 @@ impl CodexInvocationLeaseOwner {
         state
             .processes
             .retain(|_pid, binding| binding.lease_id != lease_id);
+        Ok(())
+    }
+
+    fn close_turn_locked(
+        &self,
+        state: &mut LeaseState,
+        payload: &Value,
+        runtime: CodexLeaseRuntimeEvidence,
+        reason: &str,
+        context_pin: Option<&ContextPin>,
+    ) -> Result<(), CodexSessionError> {
+        let Some(fields) = InvocationTurnFields::parse(payload) else {
+            return self.record_hook_fact_locked(state, reason, None, payload, context_pin);
+        };
+        let runtime_id = runtime.runtime_id();
+        let lease_ids = state
+            .leases
+            .iter()
+            .filter(|(_lease_id, lease)| {
+                lease.identity.runtime_id == runtime_id
+                    && lease.identity.codex_session_id == fields.codex_session_id
+                    && lease.identity.turn_id == fields.turn_id
+                    && lease.state != InvocationLeaseState::Closed
+            })
+            .map(|(lease_id, _lease)| lease_id.clone())
+            .collect::<Vec<_>>();
+        if lease_ids.is_empty() {
+            return self.record_hook_fact_locked(state, reason, None, payload, context_pin);
+        }
+        for lease_id in &lease_ids {
+            let Some(lease) = state.leases.get_mut(lease_id) else {
+                continue;
+            };
+            lease.state = InvocationLeaseState::Closed;
+            let lease = lease.clone();
+            self.record_transition_locked(state, &lease, reason, context_pin)?;
+        }
+        state
+            .lanes
+            .retain(|_lane, lease_id| !lease_ids.contains(lease_id));
+        state
+            .processes
+            .retain(|_pid, binding| !lease_ids.contains(&binding.lease_id));
         Ok(())
     }
 
@@ -1176,6 +1238,33 @@ struct InvocationIdentityFields {
     tool_use_id: String,
 }
 
+struct InvocationTurnFields {
+    codex_session_id: String,
+    turn_id: String,
+}
+
+impl InvocationTurnFields {
+    fn parse(payload: &Value) -> Option<Self> {
+        Some(Self {
+            codex_session_id: Self::string(
+                payload,
+                &["session_id", "sessionId", "thread_id", "threadId"],
+            )?,
+            turn_id: Self::string(payload, &["turn_id", "turnId"])?,
+        })
+    }
+
+    fn string(payload: &Value, names: &[&str]) -> Option<String> {
+        names.iter().find_map(|name| {
+            payload
+                .get(*name)
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+    }
+}
+
 impl InvocationIdentityFields {
     fn parse(payload: &Value) -> Option<Self> {
         Some(Self {
@@ -1479,6 +1568,146 @@ mod tests {
     }
 
     #[test]
+    fn stop_closes_only_leases_in_its_exact_native_turn() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let owner = CodexInvocationLeaseOwner::with_verified_barrier();
+        owner.record_scope_context(binding("scope-a", "item-a"))?;
+        owner.record_scope_context(binding_for("thread-2", "turn-1", "scope-b", "item-b"))?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            command_event("tool-1").as_bytes(),
+            runtime(),
+            101,
+        )?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            command_event_for("thread-2", "turn-1", "tool-2").as_bytes(),
+            runtime(),
+            102,
+        )?;
+
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::Stop,
+            stop_event("thread-1", "turn-1").as_bytes(),
+            runtime(),
+            103,
+        )?;
+
+        let state = owner.state.lock().map_err(|_error| "lock")?;
+        assert_eq!(
+            state
+                .leases
+                .values()
+                .find(|lease| lease.key.scope_ref == "scope-a")
+                .map(|lease| lease.state),
+            Some(InvocationLeaseState::Closed)
+        );
+        assert_eq!(
+            state
+                .leases
+                .values()
+                .find(|lease| lease.key.scope_ref == "scope-b")
+                .map(|lease| lease.state),
+            Some(InvocationLeaseState::ResponseIssued)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lifecycle_audits_use_an_exact_lease_or_remain_unbound(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let audit_path = root.path().join("audit.jsonl");
+        let owner = CodexInvocationLeaseOwner::new(
+            "session-test",
+            "agent-test",
+            erebor_runtime_events::ActorKind::Agent,
+            "profile-test",
+            String::from("/opt/codex/codex"),
+            vec![String::from(
+                "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
+            )],
+            Some(audit_path.clone()),
+        );
+        owner.record_scope_context(binding("scope-a", "item-a"))?;
+        owner.record_scope_context(binding_for("thread-2", "turn-1", "scope-b", "item-b"))?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            command_event("tool-1").as_bytes(),
+            runtime(),
+            101,
+        )?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            command_event_for("thread-2", "turn-1", "tool-2").as_bytes(),
+            runtime(),
+            102,
+        )?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PermissionRequest,
+            permission_event("thread-2", "turn-1", "tool-2").as_bytes(),
+            runtime(),
+            103,
+        )?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PermissionRequest,
+            permission_event("thread-3", "turn-1", "tool-3").as_bytes(),
+            runtime(),
+            104,
+        )?;
+
+        let records = erebor_runtime_audit::read_audit_records(audit_path)?;
+        let exact = records
+            .iter()
+            .find(|record| {
+                record
+                    .event
+                    .payload
+                    .pointer("/fact")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("permission-request")
+                    && record
+                        .event
+                        .payload
+                        .pointer("/detail/hook_payload/session_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("thread-2")
+            })
+            .ok_or("missing exact permission lifecycle audit")?;
+        assert_eq!(
+            exact
+                .event
+                .payload
+                .pointer("/lease/key/scope_ref")
+                .and_then(serde_json::Value::as_str),
+            Some("scope-b")
+        );
+        let unmatched = records
+            .iter()
+            .find(|record| {
+                record
+                    .event
+                    .payload
+                    .pointer("/fact")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("permission-request")
+                    && record
+                        .event
+                        .payload
+                        .pointer("/detail/hook_payload/session_id")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("thread-3")
+            })
+            .ok_or("missing unmatched permission lifecycle audit")?;
+        assert!(unmatched
+            .event
+            .payload
+            .pointer("/lease")
+            .is_some_and(serde_json::Value::is_null));
+        Ok(())
+    }
+
+    #[test]
     fn durable_audit_keeps_hook_and_physical_denial_facts_separate(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
@@ -1651,9 +1880,18 @@ mod tests {
     }
 
     fn binding(scope_ref: &str, item_node_stream: &str) -> CodexScopeContextBinding {
+        binding_for("thread-1", "turn-1", scope_ref, item_node_stream)
+    }
+
+    fn binding_for(
+        thread_id: &str,
+        turn_id: &str,
+        scope_ref: &str,
+        item_node_stream: &str,
+    ) -> CodexScopeContextBinding {
         CodexScopeContextBinding::new(
-            String::from("thread-1"),
-            String::from("turn-1"),
+            thread_id.to_owned(),
+            turn_id.to_owned(),
             scope_ref.to_owned(),
             item_node_stream.to_owned(),
             format!("{scope_ref}-head"),
@@ -1665,8 +1903,24 @@ mod tests {
     }
 
     fn command_event(tool_use_id: &str) -> String {
+        command_event_for("thread-1", "turn-1", tool_use_id)
+    }
+
+    fn command_event_for(thread_id: &str, turn_id: &str, tool_use_id: &str) -> String {
         format!(
-            "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"tool_use_id\":\"{tool_use_id}\",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":\"echo permitted\"}}}}"
+            "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"{thread_id}\",\"turn_id\":\"{turn_id}\",\"tool_use_id\":\"{tool_use_id}\",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":\"echo permitted\"}}}}"
+        )
+    }
+
+    fn permission_event(thread_id: &str, turn_id: &str, tool_use_id: &str) -> String {
+        format!(
+            "{{\"hook_event_name\":\"PermissionRequest\",\"session_id\":\"{thread_id}\",\"turn_id\":\"{turn_id}\",\"tool_use_id\":\"{tool_use_id}\"}}"
+        )
+    }
+
+    fn stop_event(thread_id: &str, turn_id: &str) -> String {
+        format!(
+            "{{\"hook_event_name\":\"Stop\",\"session_id\":\"{thread_id}\",\"turn_id\":\"{turn_id}\"}}"
         )
     }
 

@@ -19,12 +19,13 @@ use rustix::{
 use snafu::{ensure, ResultExt};
 
 use super::{
+    broker::LinuxHookPeerInspector,
     error::{
         IncompatibleProfileSnafu, TicketExpiredSnafu, TicketNotFoundSnafu, TicketPeerMismatchSnafu,
         TicketProcessExitedSnafu, TicketRegistryLockSnafu, TicketReplayedSnafu,
         UnsupportedHookProtocolSnafu,
     },
-    CodexSessionError,
+    CodexLeaseRuntimeEvidence, CodexSessionError,
 };
 
 const DEFAULT_TICKET_LIFETIME: Duration = Duration::from_secs(10);
@@ -91,6 +92,8 @@ impl CodexManagedSession {
         &self,
         peer: HookPeerEvidence,
     ) -> Result<CodexHookTicket, CodexSessionError> {
+        let runtime =
+            LinuxHookPeerInspector::runtime_evidence(&peer, self.profile.executable.as_path())?;
         let pid = i32::try_from(peer.observed_pid).map_err(|_error| CodexSessionError::Pidfd {
             pid: i32::MIN,
             source: std::io::Error::from(std::io::ErrorKind::InvalidInput),
@@ -114,6 +117,7 @@ impl CodexManagedSession {
             peer,
             DEFAULT_TICKET_LIFETIME,
             Some(pidfd),
+            Some(runtime),
         )
     }
 
@@ -168,6 +172,7 @@ pub struct CodexHookTicket {
     id: String,
     session_id: String,
     profile_id: String,
+    runtime: Option<CodexLeaseRuntimeEvidence>,
 }
 
 impl CodexHookTicket {
@@ -185,6 +190,10 @@ impl CodexHookTicket {
     pub fn profile_id(&self) -> &str {
         &self.profile_id
     }
+
+    pub(crate) fn runtime_evidence(&self) -> Option<CodexLeaseRuntimeEvidence> {
+        self.runtime.clone()
+    }
 }
 
 impl CodexHookTicketRegistry {
@@ -195,7 +204,7 @@ impl CodexHookTicketRegistry {
         expected_peer: HookPeerEvidence,
         lifetime: Duration,
     ) -> Result<CodexHookTicket, CodexSessionError> {
-        self.issue_with_pidfd(session_id, profile_id, expected_peer, lifetime, None)
+        self.issue_with_pidfd(session_id, profile_id, expected_peer, lifetime, None, None)
     }
 
     fn issue_with_pidfd(
@@ -205,11 +214,13 @@ impl CodexHookTicketRegistry {
         mut expected_peer: HookPeerEvidence,
         lifetime: Duration,
         pidfd: Option<OwnedFd>,
+        runtime: Option<CodexLeaseRuntimeEvidence>,
     ) -> Result<CodexHookTicket, CodexSessionError> {
         let ticket = CodexHookTicket {
             id: random_ticket_id()?,
             session_id: session_id.into(),
             profile_id: profile_id.into(),
+            runtime,
         };
         expected_peer.ticket_id = ticket.id.clone();
         let pending = PendingHookTicket {
@@ -508,6 +519,7 @@ mod tests {
             expected.clone(),
             Duration::from_secs(1),
             Some(pidfd),
+            None,
         )?;
         hook.kill()?;
         hook.wait()?;
