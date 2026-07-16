@@ -2,9 +2,9 @@ use crate::v1;
 
 use super::{
     super::{
-        request::{encode_guard_hello, encode_interception_request},
-        FileIdentity, FileOperation, FileOperationKind, GuardHello, InterceptionOperation,
-        InterceptionRequest, InterceptionSource,
+        request::{encode_guard_hello, encode_guard_lifecycle_event, encode_interception_request},
+        FileIdentity, FileOperation, FileOperationKind, GuardHello, GuardLifecycleEvent,
+        GuardLifecycleEventKind, InterceptionOperation, InterceptionRequest, InterceptionSource,
     },
     decode_prost,
 };
@@ -141,5 +141,33 @@ fn standalone_interception_request_encoding_matches_canonical_prost_contract() -
     assert_eq!(file.path, "/workspace/secret.txt");
     assert_eq!(identity.device, 123);
     assert_eq!(identity.inode, 456);
+    Ok(())
+}
+
+#[test]
+fn standalone_guard_lifecycle_event_encoding_matches_canonical_prost_contract() -> Result<(), String>
+{
+    let event = GuardLifecycleEvent {
+        request_id: 19,
+        kind: GuardLifecycleEventKind::Exec,
+        pid: 401,
+        exec_history: vec![
+            String::from("/bin/sh"),
+            String::from("/usr/lib/erebor/hook"),
+        ],
+        parent_pid: 400,
+        child_pid: 0,
+        exited_successfully: false,
+    };
+
+    let decoded: v1::GuardLifecycleEvent = decode_prost(&encode_guard_lifecycle_event(&event))?;
+
+    assert_eq!(decoded.request_id, event.request_id);
+    assert_eq!(decoded.event, v1::GuardLifecycleEventKind::Exec as i32);
+    assert_eq!(decoded.pid, event.pid);
+    assert_eq!(decoded.exec_history, event.exec_history);
+    assert_eq!(decoded.parent_pid, event.parent_pid);
+    assert_eq!(decoded.child_pid, event.child_pid);
+    assert!(!decoded.exited_successfully);
     Ok(())
 }

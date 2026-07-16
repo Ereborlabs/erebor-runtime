@@ -11,6 +11,7 @@ mod wire;
 pub use crate::error::RuntimeInterceptionBrokerError;
 pub use client::InterceptionBrokerClient;
 pub use endpoint::RuntimeInterceptionEndpoint;
+pub(crate) use handlers::GuardLifecycleHandler;
 pub use handlers::SessionInterceptionRouter;
 pub use server::{RuntimeInterceptionBroker, SessionInterceptionRegistration};
 

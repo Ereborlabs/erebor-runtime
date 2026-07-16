@@ -10,6 +10,14 @@ use super::{ipc, proc_parent_pid, sys::Pid};
 pub(super) struct GuardBrokerEnvironment;
 
 impl GuardBrokerEnvironment {
+    pub(super) fn connect() -> Result<Option<ipc::RuntimeInterceptionConnection>, String> {
+        let Some(endpoint) = Self::endpoint()? else {
+            return Ok(None);
+        };
+        let hello = Self::hello()?;
+        ipc::RuntimeInterceptionConnection::connect(&endpoint, hello).map(Some)
+    }
+
     pub(super) fn endpoint() -> Result<Option<ipc::RuntimeInterceptionEndpoint>, String> {
         let path = match env::var("EREBOR_RUNTIME_INTERCEPTION_PATH") {
             Ok(path) if !path.is_empty() => path,
@@ -88,7 +96,10 @@ impl GuardBrokerEnvironment {
     }
 
     fn capabilities() -> Vec<String> {
-        let mut capabilities = vec![String::from("interception_request")];
+        let mut capabilities = vec![
+            String::from("interception_request"),
+            String::from("guard_lifecycle"),
+        ];
         for operation in ["process_exec", "file_open", "file_read", "file_mutation"] {
             if Self::operation_enabled(operation) {
                 capabilities.push(format!("{operation}_router"));

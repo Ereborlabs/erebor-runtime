@@ -230,8 +230,8 @@ impl CodexInvocationLeaseOwner {
     }
 
     /// Releases only the exact pre-tool lease whose authenticated hook process
-    /// has exited successfully. The generic ptrace guard calls this through
-    /// the Codex issuer before it resumes a parked physical syscall.
+    /// has exited successfully. The session broker's Codex lifecycle handler
+    /// calls this before replying `release` to the generic ptrace guard.
     pub(crate) fn record_guarded_hook_exit(
         &self,
         hook_pid: i64,

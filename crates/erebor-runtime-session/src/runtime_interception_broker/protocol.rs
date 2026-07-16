@@ -1,9 +1,10 @@
 use std::io::{Read, Write};
 
 use erebor_runtime_ipc::v1::{
-    Envelope, GuardHello, GuardHelloAck, InterceptionDecision, InterceptionRequest,
-    KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
-    PROTOCOL_VERSION,
+    Envelope, GuardHello, GuardHelloAck, GuardLifecycleEvent, GuardLifecycleReply,
+    GuardLifecycleReplyKind, InterceptionDecision, InterceptionRequest, KIND_GUARD_HELLO,
+    KIND_GUARD_HELLO_ACK, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
+    KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, PROTOCOL_VERSION,
 };
 use snafu::ResultExt;
 
@@ -54,6 +55,9 @@ impl RuntimeInterceptionBrokerServer {
 
         match envelope.message_kind.as_str() {
             KIND_INTERCEPTION_REQUEST => self.handle_interception_request_envelope(envelope, bound),
+            KIND_GUARD_LIFECYCLE_EVENT => {
+                self.handle_guard_lifecycle_event_envelope(envelope, bound)
+            }
             _ => deny_unexpected_bound_message(envelope),
         }
     }
@@ -156,6 +160,56 @@ impl RuntimeInterceptionBrokerServer {
             RoutedInterception::Decision(decision) => reply.surface(decision),
             RoutedInterception::Unrouted { rule_id, reason } => reply.deny(rule_id, reason),
         })
+    }
+
+    fn handle_guard_lifecycle_event_envelope(
+        &self,
+        envelope: Envelope,
+        bound: &Option<BoundConnection>,
+    ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
+        let event: GuardLifecycleEvent = envelope
+            .decode_typed_payload(KIND_GUARD_LIFECYCLE_EVENT)
+            .context(BrokerProtocolSnafu)?;
+        let reply = self.lifecycle_reply_for_event(bound, &event)?;
+        Envelope::wrap_message(
+            envelope.message_id.saturating_add(1),
+            event.request_id,
+            KIND_GUARD_LIFECYCLE_REPLY,
+            &reply,
+        )
+        .context(BrokerProtocolSnafu)
+    }
+
+    fn lifecycle_reply_for_event(
+        &self,
+        bound: &Option<BoundConnection>,
+        event: &GuardLifecycleEvent,
+    ) -> Result<GuardLifecycleReply, RuntimeInterceptionBrokerError> {
+        let Some(bound) = bound else {
+            return Ok(lifecycle_deny(
+                event.request_id,
+                "guard lifecycle event arrived before GuardHello",
+            ));
+        };
+        let sessions = self
+            .sessions
+            .lock()
+            .map_err(|_error| BrokerStateLockSnafu.build())?;
+        let Some(registration) = sessions.get(&bound.session_id) else {
+            return Ok(lifecycle_deny(
+                event.request_id,
+                "session is no longer registered with the runtime interception broker",
+            ));
+        };
+        Ok(registration.router.route_guard_lifecycle(event))
+    }
+}
+
+fn lifecycle_deny(request_id: u64, reason: impl Into<String>) -> GuardLifecycleReply {
+    GuardLifecycleReply {
+        request_id,
+        decision: GuardLifecycleReplyKind::Deny as i32,
+        reason: reason.into(),
     }
 }
 

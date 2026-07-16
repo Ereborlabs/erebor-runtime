@@ -6,11 +6,8 @@ use std::{
 use super::{
     audit::write_process_audit,
     broker::GuardBrokerEnvironment,
-    die,
-    exec_observer::GuardExecObserver,
-    file_interception, ipc,
+    die, file_interception, ipc,
     memory::{read_argv, read_cstring},
-    observer_protocol::GuardObserverStatus,
     rules::{command_text, ProcessRule, ProcessRuleDecision},
     status::{
         ptrace_event, wait_exit_status, wait_exited, wait_signaled, wait_stop_signal, wait_stopped,
@@ -37,17 +34,18 @@ pub(super) struct TraceLoop {
     audit_seq: u64,
     root_pid: Pid,
     live_traces: usize,
-    exec_observer: Option<GuardExecObserver>,
-    observed_hook_pids: HashSet<Pid>,
+    broker_connection: Option<ipc::RuntimeInterceptionConnection>,
+    managed_hook_pids: HashSet<Pid>,
     held_effect_pids: HashSet<Pid>,
-    observer_barrier_rejected: bool,
+    lifecycle_barrier_denied: bool,
+    next_lifecycle_request_id: u64,
 }
 
 impl TraceLoop {
     pub(super) fn new(
         root_pid: Pid,
         rules: Vec<ProcessRule>,
-        exec_observer: Option<GuardExecObserver>,
+        broker_connection: Option<ipc::RuntimeInterceptionConnection>,
     ) -> Self {
         Self {
             rules,
@@ -55,10 +53,11 @@ impl TraceLoop {
             audit_seq: 0,
             root_pid,
             live_traces: 0,
-            exec_observer,
-            observed_hook_pids: HashSet::new(),
+            broker_connection,
+            managed_hook_pids: HashSet::new(),
             held_effect_pids: HashSet::new(),
-            observer_barrier_rejected: false,
+            lifecycle_barrier_denied: false,
+            next_lifecycle_request_id: 1,
         }
     }
 
@@ -184,9 +183,6 @@ impl TraceLoop {
     }
 
     fn observe_exec(&mut self, pid: Pid) {
-        let Some(observer) = self.exec_observer.as_mut() else {
-            return;
-        };
         let executable = match std::fs::read_link(format!("/proc/{pid}/exe")) {
             Ok(path) => path.display().to_string(),
             Err(error) => {
@@ -195,59 +191,120 @@ impl TraceLoop {
                 return;
             }
         };
-        let Some(state) = self.states.get_mut(&pid) else {
+        let Some(exec_history) = self.states.get_mut(&pid).map(|state| {
+            state.exec_history.push(executable);
+            state.exec_history.clone()
+        }) else {
             LinuxSys::kill(pid, SIGKILL);
             return;
         };
-        state.exec_history.push(executable);
-        match observer.observe_exec(pid, state.exec_history.clone()) {
-            Ok(GuardObserverStatus::Ignore) => {}
-            Ok(GuardObserverStatus::Track) => {
-                self.observed_hook_pids.insert(pid);
+        let event = self.lifecycle_event(
+            ipc::GuardLifecycleEventKind::Exec,
+            pid,
+            exec_history,
+            0,
+            0,
+            false,
+        );
+        match self.request_lifecycle(&event) {
+            Ok(ipc::GuardLifecycleReplyKind::Ignore | ipc::GuardLifecycleReplyKind::Allow) => {}
+            Ok(ipc::GuardLifecycleReplyKind::Hold) => {
+                self.managed_hook_pids.insert(pid);
             }
-            Ok(GuardObserverStatus::Reject) => {
-                self.observer_barrier_rejected = true;
+            Ok(
+                ipc::GuardLifecycleReplyKind::Deny
+                | ipc::GuardLifecycleReplyKind::Release
+                | ipc::GuardLifecycleReplyKind::Unknown,
+            ) => {
+                self.lifecycle_barrier_denied = true;
                 LinuxSys::kill(pid, SIGKILL);
             }
             Err(reason) => {
-                eprintln!("erebor linux process guard: guarded exec observation failed: {reason}");
-                self.observer_barrier_rejected = true;
+                eprintln!("erebor linux process guard: broker lifecycle exec failed: {reason}");
+                self.lifecycle_barrier_denied = true;
                 LinuxSys::kill(pid, SIGKILL);
             }
         }
     }
 
     fn observe_fork(&mut self, parent_pid: Pid, child_pid: Pid) {
-        let Some(observer) = self.exec_observer.as_mut() else {
-            return;
-        };
-        match observer.observe_fork(parent_pid, child_pid) {
-            Ok(GuardObserverStatus::Ignore | GuardObserverStatus::Track) => {}
-            Ok(GuardObserverStatus::Reject) => self.observer_barrier_rejected = true,
+        let event = self.lifecycle_event(
+            ipc::GuardLifecycleEventKind::Fork,
+            parent_pid,
+            Vec::new(),
+            parent_pid,
+            child_pid,
+            false,
+        );
+        match self.request_lifecycle(&event) {
+            Ok(ipc::GuardLifecycleReplyKind::Ignore | ipc::GuardLifecycleReplyKind::Allow) => {}
+            Ok(_) => self.lifecycle_barrier_denied = true,
             Err(reason) => {
-                eprintln!("erebor linux process guard: guarded fork observation failed: {reason}");
-                self.observer_barrier_rejected = true;
+                eprintln!("erebor linux process guard: broker lifecycle fork failed: {reason}");
+                self.lifecycle_barrier_denied = true;
             }
         }
     }
 
     fn observe_exit(&mut self, pid: Pid, succeeded: bool) {
-        let tracked_hook = self.observed_hook_pids.remove(&pid);
-        let Some(observer) = self.exec_observer.as_mut() else {
-            return;
-        };
-        match observer.observe_exit(pid, succeeded) {
-            Ok(GuardObserverStatus::Track) if tracked_hook && succeeded => {}
-            Ok(GuardObserverStatus::Track) => self.observer_barrier_rejected = true,
-            Ok(GuardObserverStatus::Ignore) if !tracked_hook => {}
-            Ok(GuardObserverStatus::Ignore | GuardObserverStatus::Reject) => {
-                self.observer_barrier_rejected = true;
-            }
+        let tracked_hook = self.managed_hook_pids.remove(&pid);
+        let event = self.lifecycle_event(
+            ipc::GuardLifecycleEventKind::Exit,
+            pid,
+            Vec::new(),
+            0,
+            0,
+            succeeded,
+        );
+        match self.request_lifecycle(&event) {
+            Ok(ipc::GuardLifecycleReplyKind::Release) if tracked_hook => {}
+            Ok(ipc::GuardLifecycleReplyKind::Ignore | ipc::GuardLifecycleReplyKind::Allow)
+                if !tracked_hook => {}
+            Ok(_) => self.lifecycle_barrier_denied = true,
             Err(reason) => {
-                eprintln!("erebor linux process guard: guarded exit observation failed: {reason}");
-                self.observer_barrier_rejected = true;
+                eprintln!("erebor linux process guard: broker lifecycle exit failed: {reason}");
+                self.lifecycle_barrier_denied = true;
             }
         }
+    }
+
+    fn lifecycle_event(
+        &mut self,
+        kind: ipc::GuardLifecycleEventKind,
+        pid: Pid,
+        exec_history: Vec<String>,
+        parent_pid: Pid,
+        child_pid: Pid,
+        exited_successfully: bool,
+    ) -> ipc::GuardLifecycleEvent {
+        let request_id = self.next_lifecycle_request_id;
+        self.next_lifecycle_request_id = self.next_lifecycle_request_id.saturating_add(1);
+        ipc::GuardLifecycleEvent {
+            request_id,
+            kind,
+            pid: i64::from(pid),
+            exec_history,
+            parent_pid: i64::from(parent_pid),
+            child_pid: i64::from(child_pid),
+            exited_successfully,
+        }
+    }
+
+    fn request_lifecycle(
+        &mut self,
+        event: &ipc::GuardLifecycleEvent,
+    ) -> Result<ipc::GuardLifecycleReplyKind, String> {
+        let Some(connection) = self.broker_connection.as_mut() else {
+            return Ok(ipc::GuardLifecycleReplyKind::Ignore);
+        };
+        let reply = connection.request_lifecycle(event)?;
+        if reply.request_id != event.request_id {
+            return Err(format!(
+                "broker lifecycle reply request id {} did not match event request id {}",
+                reply.request_id, event.request_id
+            ));
+        }
+        Ok(reply.kind)
     }
 
     fn handle_syscall_stop(&mut self, pid: Pid) -> bool {
@@ -279,7 +336,7 @@ impl TraceLoop {
                 self.held_effect_pids.insert(pid);
                 return false;
             }
-            let deny_requested = file_interception::should_deny_file_syscall(pid, &regs)
+            let deny_requested = self.should_deny_file_syscall(pid, &regs)
                 || (GuardBrokerEnvironment::operation_enabled("process_exec")
                     && (regs.orig_rax == SYS_EXECVE || regs.orig_rax == SYS_EXECVEAT)
                     && self.should_deny_exec(pid, &regs, regs.orig_rax == SYS_EXECVEAT));
@@ -298,8 +355,8 @@ impl TraceLoop {
     }
 
     fn should_hold_effect_for_hook_exit(&self, pid: Pid, regs: &UserRegsStruct) -> bool {
-        !self.observed_hook_pids.is_empty()
-            && !self.observed_hook_pids.contains(&pid)
+        !self.managed_hook_pids.is_empty()
+            && !self.managed_hook_pids.contains(&pid)
             && self.is_intercepted_effect(pid, regs)
     }
 
@@ -310,7 +367,7 @@ impl TraceLoop {
     }
 
     fn release_held_effects(&mut self) {
-        if !self.observed_hook_pids.is_empty() {
+        if !self.managed_hook_pids.is_empty() {
             return;
         }
         let held_pids = self.held_effect_pids.drain().collect::<Vec<_>>();
@@ -325,8 +382,8 @@ impl TraceLoop {
             if get_result != 0 || !self.states.contains_key(&pid) {
                 continue;
             }
-            let deny_requested = self.observer_barrier_rejected
-                || file_interception::should_deny_file_syscall(pid, &regs)
+            let deny_requested = self.lifecycle_barrier_denied
+                || self.should_deny_file_syscall(pid, &regs)
                 || (GuardBrokerEnvironment::operation_enabled("process_exec")
                     && (regs.orig_rax == SYS_EXECVE || regs.orig_rax == SYS_EXECVEAT)
                     && self.should_deny_exec(pid, &regs, regs.orig_rax == SYS_EXECVEAT));
@@ -400,20 +457,38 @@ impl TraceLoop {
     }
 
     fn broker_rule_for_exec(
-        &self,
+        &mut self,
         pid: Pid,
         path: &str,
         argv: &[String],
     ) -> Result<Option<ProcessRule>, String> {
-        let Some(endpoint) = GuardBrokerEnvironment::endpoint()? else {
+        let Some(connection) = self.broker_connection.as_mut() else {
             return Ok(None);
         };
-        let hello = GuardBrokerEnvironment::hello()?;
-        let mut connection = ipc::RuntimeInterceptionConnection::connect(&endpoint, hello)?;
         let request = GuardBrokerEnvironment::process_exec_request(pid, path, argv);
         connection
-            .request_decision(&request)
+            .request_interception(&request)
             .map(|decision| Some(Self::process_rule_from_broker_decision(&decision)))
+    }
+
+    fn should_deny_file_syscall(&mut self, pid: Pid, regs: &UserRegsStruct) -> bool {
+        let Some(request) = file_interception::interception_request_for_file_syscall(pid, regs)
+        else {
+            return false;
+        };
+        let Some(connection) = self.broker_connection.as_mut() else {
+            eprintln!(
+                "erebor linux process guard: file interception is enabled without a session broker"
+            );
+            return true;
+        };
+        match connection.request_interception(&request) {
+            Ok(decision) => file_interception::should_deny_file_decision(&request, &decision),
+            Err(reason) => {
+                eprintln!("erebor linux process guard: broker file decision failed: {reason}");
+                true
+            }
+        }
     }
 
     fn process_rule_from_broker_decision(decision: &ipc::InterceptionDecision) -> ProcessRule {

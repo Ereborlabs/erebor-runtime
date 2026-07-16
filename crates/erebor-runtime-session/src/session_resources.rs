@@ -5,10 +5,7 @@ use erebor_runtime_core::{
 };
 
 use crate::{
-    agents::codex::{
-        CodexGuardTicketIssuer, CodexHookBroker, CodexInvocationLeaseOwner,
-        CodexPromptReconciliation,
-    },
+    agents::codex::{CodexHookBroker, CodexInvocationLeaseOwner, CodexPromptReconciliation},
     interception_backend::SessionInterceptionBackendBundle,
     runtime_interception_broker::SessionInterceptionRegistration,
     SessionExecutionError,
@@ -29,7 +26,6 @@ pub(crate) struct SessionSideResources {
 pub(crate) struct SessionResourceLifetime {
     interception_registration: Option<SessionInterceptionRegistration>,
     interception_backend: Option<SessionInterceptionBackendBundle>,
-    _codex_guard_ticket_issuer: Option<CodexGuardTicketIssuer>,
     _codex_hook_broker: Option<CodexHookBroker>,
     _supervisor: Option<SessionSurfaceSupervisor>,
 }
@@ -38,14 +34,12 @@ impl SessionResourceLifetime {
     pub(crate) const fn new(
         interception_registration: Option<SessionInterceptionRegistration>,
         interception_backend: Option<SessionInterceptionBackendBundle>,
-        codex_guard_ticket_issuer: Option<CodexGuardTicketIssuer>,
         codex_hook_broker: Option<CodexHookBroker>,
         supervisor: Option<SessionSurfaceSupervisor>,
     ) -> Self {
         Self {
             interception_registration,
             interception_backend,
-            _codex_guard_ticket_issuer: codex_guard_ticket_issuer,
             _codex_hook_broker: codex_hook_broker,
             _supervisor: supervisor,
         }

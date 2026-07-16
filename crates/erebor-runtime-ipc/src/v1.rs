@@ -15,6 +15,8 @@ pub const KIND_GUARD_HELLO: &str = "erebor.runtime.ipc.v1.GuardHello";
 pub const KIND_GUARD_HELLO_ACK: &str = "erebor.runtime.ipc.v1.GuardHelloAck";
 pub const KIND_INTERCEPTION_REQUEST: &str = "erebor.runtime.ipc.v1.InterceptionRequest";
 pub const KIND_INTERCEPTION_DECISION: &str = "erebor.runtime.ipc.v1.InterceptionDecision";
+pub const KIND_GUARD_LIFECYCLE_EVENT: &str = "erebor.runtime.ipc.v1.GuardLifecycleEvent";
+pub const KIND_GUARD_LIFECYCLE_REPLY: &str = "erebor.runtime.ipc.v1.GuardLifecycleReply";
 pub const KIND_GUARD_EVENT: &str = "erebor.runtime.ipc.v1.GuardEvent";
 pub const KIND_GUARD_GOODBYE: &str = "erebor.runtime.ipc.v1.GuardGoodbye";
 pub const KIND_HOOK_HELLO: &str = "erebor.runtime.ipc.v1.HookHello";
@@ -289,6 +291,9 @@ mod tests {
         assert!(proto.contains("message Envelope"));
         assert!(proto.contains("message InterceptionRequest"));
         assert!(proto.contains("message InterceptionDecision"));
+        assert!(proto.contains("message GuardLifecycleEvent"));
+        assert!(proto.contains("message GuardLifecycleReply"));
+        assert!(proto.contains("enum GuardLifecycleReplyKind"));
         assert!(proto.contains("enum DecisionKind"));
         assert!(proto.contains("message HookHello"));
         assert!(proto.contains("message HookPeerEvidence"));

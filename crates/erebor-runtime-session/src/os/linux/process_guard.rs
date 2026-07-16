@@ -6,8 +6,6 @@ mod audit;
 mod broker;
 #[path = "process_guard/cgroup.rs"]
 mod cgroup;
-#[path = "process_guard/exec_observer.rs"]
-mod exec_observer;
 #[path = "process_guard/file_interception.rs"]
 mod file_interception;
 #[path = "process_guard/interception.rs"]
@@ -16,8 +14,6 @@ mod interception;
 mod ipc;
 #[path = "process_guard/memory.rs"]
 mod memory;
-#[path = "process_guard/observer_protocol.rs"]
-mod observer_protocol;
 #[path = "process_guard/rules.rs"]
 mod rules;
 #[path = "process_guard/status.rs"]
@@ -29,8 +25,8 @@ mod trace;
 
 use std::{collections::HashMap, env, ffi::CString, fs, os::unix::ffi::OsStringExt, process};
 
+use broker::GuardBrokerEnvironment;
 use cgroup::{join_configured_cgroup, write_capability_report};
-use exec_observer::GuardExecObserver;
 use rules::{parse_rules, ProcessRule};
 use status::{wait_exited, wait_signaled, wait_stopped};
 use sys::{LinuxSys, Pid, EINTR, ENOENT, SIGSTOP};
@@ -57,17 +53,17 @@ fn main() {
         Ok(command) => command,
         Err(error) => die(&error),
     };
-    let observer = match GuardExecObserver::from_environment() {
-        Ok(observer) => observer,
+    let broker_connection = match GuardBrokerEnvironment::connect() {
+        Ok(connection) => connection,
         Err(error) => die(&error),
     };
-    process::exit(launch_new_process_tree(command, rules, observer));
+    process::exit(launch_new_process_tree(command, rules, broker_connection));
 }
 
 fn launch_new_process_tree(
     command: Vec<CString>,
     rules: Vec<ProcessRule>,
-    observer: Option<GuardExecObserver>,
+    broker_connection: Option<ipc::RuntimeInterceptionConnection>,
 ) -> i32 {
     let child = LinuxSys::fork();
     if child < 0 {
@@ -81,7 +77,7 @@ fn launch_new_process_tree(
         child_exec(command);
     }
 
-    let mut trace_loop = TraceLoop::new(child, rules, observer);
+    let mut trace_loop = TraceLoop::new(child, rules, broker_connection);
     trace_loop.track(child);
 
     wait_for_initial_stop(child);
@@ -95,11 +91,11 @@ fn launch_new_process_tree(
 
 fn adopt_existing_process_tree(root_pid: Pid, rules: Vec<ProcessRule>) -> i32 {
     let candidate_pids = process_tree_pids(root_pid);
-    let observer = match GuardExecObserver::from_environment() {
-        Ok(observer) => observer,
+    let broker_connection = match GuardBrokerEnvironment::connect() {
+        Ok(connection) => connection,
         Err(error) => die(&error),
     };
-    let mut trace_loop = TraceLoop::new(root_pid, rules, observer);
+    let mut trace_loop = TraceLoop::new(root_pid, rules, broker_connection);
     let mut failed = Vec::new();
 
     for pid in candidate_pids {

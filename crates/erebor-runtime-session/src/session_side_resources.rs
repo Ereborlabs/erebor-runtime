@@ -11,7 +11,7 @@ use snafu::ResultExt;
 
 use crate::{
     agents::codex::{
-        CodexArtifactProjection, CodexContextDag, CodexGuardTicketIssuer, CodexHookBroker,
+        CodexArtifactProjection, CodexContextDag, CodexGuardLifecycleHandler, CodexHookBroker,
         CodexInvocationLeaseOwner, CodexManagedSession, CodexPromptReconciliation,
     },
     error::{
@@ -100,7 +100,7 @@ fn start_session_side_resources_from_start_plan(
     let mut filesystem_handler = None;
     let mut filesystem_overlay_wrapper = None;
     let mut codex_projection_wrapper = None;
-    let mut codex_guard_ticket_issuer = None;
+    let mut codex_guard_lifecycle_handler = None;
     let mut codex_hook_broker = None;
     let mut codex_invocation_lease_owner = None;
     let mut codex_prompt_reconciliation = None;
@@ -262,17 +262,12 @@ fn start_session_side_resources_from_start_plan(
                                 String::from("EREBOR_CODEX_HOOK_BROKER"),
                                 CodexHookBroker::session_endpoint().to_owned(),
                             ));
-                            let issuer = CodexGuardTicketIssuer::start(
+                            let lifecycle_handler = CodexGuardLifecycleHandler::new(
                                 codex_managed_session.clone(),
                                 Arc::clone(&lease_owner),
-                            )
-                            .context(CodexSessionSnafu)?;
-                            environment.push((
-                                String::from("EREBOR_GUARD_EXEC_OBSERVER_FD"),
-                                issuer.inherited_guard_fd().to_string(),
-                            ));
+                            );
                             codex_projection_wrapper = Some(wrapper_path);
-                            codex_guard_ticket_issuer = Some(issuer);
+                            codex_guard_lifecycle_handler = Some(lifecycle_handler);
                             codex_hook_broker = Some(broker);
                             codex_invocation_lease_owner = Some(lease_owner);
                             codex_prompt_reconciliation = Some(reconciliation);
@@ -291,7 +286,7 @@ fn start_session_side_resources_from_start_plan(
             plan,
             prepared_session.map(PreparedSession::storage),
         )?);
-    if codex_guard_ticket_issuer.is_some() && interception_setup.backend_kind().is_none() {
+    if codex_guard_lifecycle_handler.is_some() && interception_setup.backend_kind().is_none() {
         return GuardConfigSnafu {
             reason: String::from(
                 "managed Codex hook tickets require the Linux process guard to be enabled",
@@ -317,6 +312,7 @@ fn start_session_side_resources_from_start_plan(
             lazy_browser_cdp,
             filesystem_handler,
             codex_invocation_lease_owner.clone(),
+            codex_guard_lifecycle_handler,
         )?;
         let interception_registration =
             interception_setup.register(interception_router, plan, uses_lazy_browser_cdp)?;
@@ -325,7 +321,6 @@ fn start_session_side_resources_from_start_plan(
             None,
             interception_registration,
             None,
-            codex_guard_ticket_issuer,
             codex_hook_broker,
         )?;
         if let Some(wrapper) = filesystem_overlay_wrapper {
@@ -368,6 +363,7 @@ fn start_session_side_resources_from_start_plan(
         lazy_browser_cdp,
         filesystem_handler,
         codex_invocation_lease_owner.clone(),
+        codex_guard_lifecycle_handler,
     )?;
     let interception_registration =
         interception_setup.register(interception_router, plan, uses_lazy_browser_cdp)?;
@@ -377,7 +373,6 @@ fn start_session_side_resources_from_start_plan(
         browser_cdp_endpoint,
         interception_registration,
         Some(supervisor),
-        codex_guard_ticket_issuer,
         codex_hook_broker,
     )?;
     if let Some(wrapper) = filesystem_overlay_wrapper {
@@ -450,17 +445,21 @@ fn session_interception_router(
     lazy_browser_cdp: Option<LazyBrowserCdpProcessMediation>,
     filesystem_handler: Option<FilesystemFileOperationHandler>,
     codex_invocation_lease_owner: Option<Arc<CodexInvocationLeaseOwner>>,
+    codex_guard_lifecycle_handler: Option<CodexGuardLifecycleHandler>,
 ) -> Result<crate::runtime_interception_broker::SessionInterceptionRouter, SessionExecutionError> {
     let router = terminal_process_surface.router(browser_cdp_endpoint, lazy_browser_cdp)?;
     let router = match filesystem_handler {
         Some(handler) => router.with_file_operation_handler(handler),
         None => router,
     };
-    Ok(
-        codex_invocation_lease_owner.map_or(router.clone(), |owner| {
-            router.with_codex_invocation_lease_owner(owner)
-        }),
-    )
+    let router = match codex_invocation_lease_owner {
+        Some(owner) => router.with_codex_invocation_lease_owner(owner),
+        None => router,
+    };
+    Ok(match codex_guard_lifecycle_handler {
+        Some(handler) => router.with_guard_lifecycle_handler(handler),
+        None => router,
+    })
 }
 
 #[cfg(test)]

@@ -6,8 +6,8 @@ use erebor_runtime_core::{
     SocketConnectInterceptionRequest, SocketConnectSurfaceHandler, SurfaceInterceptionDecision,
 };
 use erebor_runtime_ipc::v1::{
-    operation_name, FileOperationKind, InterceptionOperation, InterceptionRequest,
-    SocketOperationKind,
+    operation_name, FileOperationKind, GuardLifecycleEvent, GuardLifecycleReply,
+    GuardLifecycleReplyKind, InterceptionOperation, InterceptionRequest, SocketOperationKind,
 };
 
 use crate::agents::codex::CodexInvocationLeaseOwner;
@@ -25,6 +25,15 @@ pub struct SessionInterceptionRouter {
     file_operation: Option<Arc<dyn FileOperationSurfaceHandler>>,
     socket_connect: Option<Arc<dyn SocketConnectSurfaceHandler>>,
     codex_invocation_lease_owner: Option<Arc<CodexInvocationLeaseOwner>>,
+    lifecycle: Option<Arc<dyn GuardLifecycleHandler>>,
+}
+
+/// Session-owned interpretation of a generic process-guard lifecycle fact.
+///
+/// The Linux guard only observes process state and applies the reply. Agent
+/// integrations recognize their own managed processes behind this broker seam.
+pub(crate) trait GuardLifecycleHandler: Send + Sync {
+    fn decide_guard_lifecycle(&self, event: &GuardLifecycleEvent) -> GuardLifecycleReply;
 }
 
 pub(super) enum RoutedInterception {
@@ -77,6 +86,15 @@ impl SessionInterceptionRouter {
         self
     }
 
+    #[must_use]
+    pub(crate) fn with_guard_lifecycle_handler(
+        mut self,
+        handler: impl GuardLifecycleHandler + 'static,
+    ) -> Self {
+        self.lifecycle = Some(Arc::new(handler));
+        self
+    }
+
     pub(super) fn route_interception(&self, request: &InterceptionRequest) -> RoutedInterception {
         if let Some(decision) = self
             .codex_invocation_lease_owner
@@ -96,6 +114,17 @@ impl SessionInterceptionRouter {
                 reason: String::from("interception request did not specify an operation family"),
             },
         }
+    }
+
+    pub(super) fn route_guard_lifecycle(&self, event: &GuardLifecycleEvent) -> GuardLifecycleReply {
+        self.lifecycle.as_ref().map_or_else(
+            || GuardLifecycleReply {
+                request_id: event.request_id,
+                decision: GuardLifecycleReplyKind::Ignore as i32,
+                reason: String::from("no managed lifecycle handler recognized this process"),
+            },
+            |handler| handler.decide_guard_lifecycle(event),
+        )
     }
 
     fn route_process_exec(&self, request: &InterceptionRequest) -> RoutedInterception {
@@ -258,6 +287,7 @@ impl fmt::Debug for SessionInterceptionRouter {
                 "codex_invocation_lease_owner",
                 &self.codex_invocation_lease_owner.is_some(),
             )
+            .field("lifecycle", &self.lifecycle.is_some())
             .finish()
     }
 }

@@ -2,10 +2,12 @@ use std::error::Error;
 
 use erebor_runtime_ipc::{
     v1::{
-        AllowDecision, DecisionKind, DenyDecision, Envelope, GuardHello, InterceptionDecision,
-        InterceptionOperation, InterceptionRequest, InterceptionSource, MediateDecision,
-        ProcessExecOperation, KIND_GUARD_HELLO, KIND_INTERCEPTION_DECISION,
-        KIND_INTERCEPTION_REQUEST, PROTOCOL_VERSION,
+        AllowDecision, DecisionKind, DenyDecision, Envelope, GuardHello, GuardLifecycleEvent,
+        GuardLifecycleEventKind, GuardLifecycleReply, GuardLifecycleReplyKind,
+        InterceptionDecision, InterceptionOperation, InterceptionRequest, InterceptionSource,
+        MediateDecision, ProcessExecOperation, KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT,
+        KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
+        PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
 };
@@ -93,6 +95,42 @@ fn public_api_round_trips_interception_request_and_deny_decision() -> Result<(),
     assert_eq!(decoded_decision_envelope.correlation_id, request.request_id);
     assert_eq!(decoded_decision.decision, DecisionKind::Deny as i32);
     assert_eq!(decoded_decision, decision);
+    Ok(())
+}
+
+#[test]
+fn public_api_round_trips_guard_lifecycle_hold_and_release() -> Result<(), Box<dyn Error>> {
+    let event = GuardLifecycleEvent {
+        request_id: 78,
+        event: GuardLifecycleEventKind::Exec as i32,
+        pid: 2002,
+        exec_history: vec![
+            String::from("/bin/sh"),
+            String::from("/usr/lib/erebor/hook"),
+        ],
+        parent_pid: 2001,
+        child_pid: 0,
+        exited_successfully: false,
+    };
+    let event_envelope = Envelope::wrap_message(4, 0, KIND_GUARD_LIFECYCLE_EVENT, &event)?;
+    let event_frame = EreborIpcFrame::decode(&event_envelope.into_frame()?.encode()?)?;
+    let decoded_event: GuardLifecycleEvent = event_frame
+        .decode_payload::<Envelope>()?
+        .decode_typed_payload(KIND_GUARD_LIFECYCLE_EVENT)?;
+    assert_eq!(decoded_event, event);
+
+    let reply = GuardLifecycleReply {
+        request_id: event.request_id,
+        decision: GuardLifecycleReplyKind::Release as i32,
+        reason: String::from("managed hook lease released"),
+    };
+    let reply_envelope =
+        Envelope::wrap_message(5, event.request_id, KIND_GUARD_LIFECYCLE_REPLY, &reply)?;
+    let reply_frame = EreborIpcFrame::decode(&reply_envelope.into_frame()?.encode()?)?;
+    let decoded_reply: GuardLifecycleReply = reply_frame
+        .decode_payload::<Envelope>()?
+        .decode_typed_payload(KIND_GUARD_LIFECYCLE_REPLY)?;
+    assert_eq!(decoded_reply, reply);
     Ok(())
 }
 

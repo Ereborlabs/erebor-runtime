@@ -31,7 +31,7 @@ impl<'a> InterceptionBrokerClient<'a> {
         let hello = BrokerEnvironment::hello()?;
         let mut connection = ipc::RuntimeInterceptionConnection::connect(&endpoint, hello)?;
         let request = self.request();
-        connection.request_decision(&request)
+        connection.request_interception(&request)
     }
 
     fn request(&self) -> ipc::InterceptionRequest {

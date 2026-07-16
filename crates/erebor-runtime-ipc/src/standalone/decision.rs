@@ -1,15 +1,22 @@
 use super::{
     codec::{read_bytes, read_string, read_varint, skip_field},
-    InterceptionDecision, InterceptionDecisionKind, MediateDecision,
+    GuardLifecycleReply, GuardLifecycleReplyKind, InterceptionDecision, InterceptionDecisionKind,
+    MediateDecision,
 };
 
 pub(super) const KIND_GUARD_HELLO_ACK: &str = "erebor.runtime.ipc.v1.GuardHelloAck";
 pub(super) const KIND_INTERCEPTION_DECISION: &str = "erebor.runtime.ipc.v1.InterceptionDecision";
+pub(super) const KIND_GUARD_LIFECYCLE_REPLY: &str = "erebor.runtime.ipc.v1.GuardLifecycleReply";
 
 const DECISION_ALLOW: i32 = 1;
 const DECISION_DENY: i32 = 2;
 const DECISION_REQUIRE_APPROVAL: i32 = 3;
 const DECISION_MEDIATE: i32 = 4;
+const LIFECYCLE_IGNORE: i32 = 1;
+const LIFECYCLE_HOLD: i32 = 2;
+const LIFECYCLE_ALLOW: i32 = 3;
+const LIFECYCLE_DENY: i32 = 4;
+const LIFECYCLE_RELEASE: i32 = 5;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct GuardHelloAck {
@@ -80,6 +87,36 @@ pub(super) fn decode_interception_decision(bytes: &[u8]) -> Result<InterceptionD
         }
     }
     Ok(decision)
+}
+
+pub(super) fn decode_guard_lifecycle_reply(bytes: &[u8]) -> Result<GuardLifecycleReply, String> {
+    let mut cursor = 0;
+    let mut reply = GuardLifecycleReply {
+        request_id: 0,
+        kind: GuardLifecycleReplyKind::Unknown,
+        reason: String::new(),
+    };
+    while cursor < bytes.len() {
+        let key = read_varint(bytes, &mut cursor)?;
+        let field = key >> 3;
+        let wire = key & 0x07;
+        match (field, wire) {
+            (1, 0) => reply.request_id = read_varint(bytes, &mut cursor)?,
+            (2, 0) => {
+                reply.kind = match read_varint(bytes, &mut cursor)? as i32 {
+                    LIFECYCLE_IGNORE => GuardLifecycleReplyKind::Ignore,
+                    LIFECYCLE_HOLD => GuardLifecycleReplyKind::Hold,
+                    LIFECYCLE_ALLOW => GuardLifecycleReplyKind::Allow,
+                    LIFECYCLE_DENY => GuardLifecycleReplyKind::Deny,
+                    LIFECYCLE_RELEASE => GuardLifecycleReplyKind::Release,
+                    _ => GuardLifecycleReplyKind::Unknown,
+                };
+            }
+            (3, 2) => reply.reason = read_string(bytes, &mut cursor)?,
+            (_, wire) => skip_field(bytes, &mut cursor, wire)?,
+        }
+    }
+    Ok(reply)
 }
 
 fn decode_allow_decision(bytes: &[u8]) -> Result<Option<String>, String> {

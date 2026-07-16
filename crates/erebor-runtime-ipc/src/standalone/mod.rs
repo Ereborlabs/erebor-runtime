@@ -19,9 +19,11 @@ mod tests;
 
 pub(super) use file::{FileIdentity, FileOperation, FileOperationKind};
 
-use decision::{decode_guard_hello_ack, decode_interception_decision};
+use decision::{
+    decode_guard_hello_ack, decode_guard_lifecycle_reply, decode_interception_decision,
+};
 use envelope::{read_envelope, write_envelope, Envelope, Header};
-use request::{encode_guard_hello, encode_interception_request};
+use request::{encode_guard_hello, encode_guard_lifecycle_event, encode_interception_request};
 
 const INTERCEPTION_TOKEN_HEADER: &str = "interception_token";
 const INTERCEPTION_SOURCE_PTRACE: i32 = 1;
@@ -73,6 +75,51 @@ pub(super) struct InterceptionDecision {
     pub(super) allow_exec_target: Option<String>,
     pub(super) deny_exit_code: Option<i32>,
     pub(super) mediate: Option<MediateDecision>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct GuardLifecycleEvent {
+    pub(super) request_id: u64,
+    pub(super) kind: GuardLifecycleEventKind,
+    pub(super) pid: i64,
+    pub(super) exec_history: Vec<String>,
+    pub(super) parent_pid: i64,
+    pub(super) child_pid: i64,
+    pub(super) exited_successfully: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GuardLifecycleEventKind {
+    Exec,
+    Fork,
+    Exit,
+}
+
+impl GuardLifecycleEventKind {
+    const fn as_i32(self) -> i32 {
+        match self {
+            Self::Exec => 1,
+            Self::Fork => 2,
+            Self::Exit => 3,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct GuardLifecycleReply {
+    pub(super) request_id: u64,
+    pub(super) kind: GuardLifecycleReplyKind,
+    pub(super) reason: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GuardLifecycleReplyKind {
+    Ignore,
+    Hold,
+    Allow,
+    Deny,
+    Release,
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,7 +236,7 @@ impl RuntimeInterceptionConnection {
         })
     }
 
-    pub(super) fn request_decision(
+    pub(super) fn request_interception(
         &mut self,
         request: &InterceptionRequest,
     ) -> Result<InterceptionDecision, String> {
@@ -212,5 +259,30 @@ impl RuntimeInterceptionConnection {
             ));
         }
         decode_interception_decision(&response.payload)
+    }
+
+    pub(super) fn request_lifecycle(
+        &mut self,
+        event: &GuardLifecycleEvent,
+    ) -> Result<GuardLifecycleReply, String> {
+        let message_id = self.next_message_id;
+        self.next_message_id = self.next_message_id.saturating_add(1);
+        let envelope = Envelope {
+            message_id,
+            correlation_id: 1,
+            message_kind: String::from(request::KIND_GUARD_LIFECYCLE_EVENT),
+            payload: encode_guard_lifecycle_event(event),
+            headers: Vec::new(),
+        };
+        write_envelope(&mut self.stream, &envelope)?;
+
+        let response = read_envelope(&mut self.stream)?;
+        if response.message_kind != decision::KIND_GUARD_LIFECYCLE_REPLY {
+            return Err(format!(
+                "runtime interception broker returned unexpected response `{}` to GuardLifecycleEvent",
+                response.message_kind
+            ));
+        }
+        decode_guard_lifecycle_reply(&response.payload)
     }
 }

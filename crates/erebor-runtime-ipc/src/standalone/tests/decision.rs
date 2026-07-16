@@ -4,9 +4,11 @@ use crate::v1;
 
 use super::super::{
     codec::{write_bytes_field, write_string_field, write_varint_field},
-    decision::{decode_interception_decision, KIND_INTERCEPTION_DECISION},
+    decision::{
+        decode_guard_lifecycle_reply, decode_interception_decision, KIND_INTERCEPTION_DECISION,
+    },
     envelope::{decode_envelope, encode_envelope},
-    Envelope, InterceptionDecisionKind,
+    Envelope, GuardLifecycleReplyKind, InterceptionDecisionKind,
 };
 
 #[test]
@@ -90,5 +92,21 @@ fn standalone_decision_decoder_accepts_canonical_prost_decision() -> Result<(), 
     assert_eq!(mediation.endpoint, "ws://127.0.0.1:9222/");
     assert_eq!(mediation.lease_id, "lease-fixture");
     assert!(mediation.keepalive);
+    Ok(())
+}
+
+#[test]
+fn standalone_lifecycle_reply_decoder_accepts_canonical_prost_reply() -> Result<(), String> {
+    let reply = v1::GuardLifecycleReply {
+        request_id: 19,
+        decision: v1::GuardLifecycleReplyKind::Release as i32,
+        reason: String::from("managed hook exited successfully"),
+    };
+
+    let decoded = decode_guard_lifecycle_reply(&reply.encode_to_vec())?;
+
+    assert_eq!(decoded.request_id, reply.request_id);
+    assert_eq!(decoded.kind, GuardLifecycleReplyKind::Release);
+    assert_eq!(decoded.reason, reply.reason);
     Ok(())
 }

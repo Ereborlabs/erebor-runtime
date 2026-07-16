@@ -35,49 +35,42 @@ struct FileSyscallRequest {
     resolved_identity: Option<ipc::FileIdentity>,
 }
 
-pub(super) fn should_deny_file_syscall(pid: Pid, regs: &UserRegsStruct) -> bool {
-    let Some(request) = file_request_from_syscall(pid, regs) else {
-        return false;
-    };
+pub(super) fn interception_request_for_file_syscall(
+    pid: Pid,
+    regs: &UserRegsStruct,
+) -> Option<ipc::InterceptionRequest> {
+    let request = file_request_from_syscall(pid, regs)?;
     if !GuardBrokerEnvironment::operation_enabled(request.operation.as_str()) {
-        return false;
+        return None;
     }
-
-    match broker_decision_for_file(pid, &request) {
-        Ok(decision) => should_deny_broker_decision(&request, &decision),
-        Err(reason) => {
-            eprintln!("erebor linux process guard: broker file decision failed: {reason}");
-            true
-        }
-    }
+    Some(interception_request_from_file(pid, &request))
 }
 
 pub(super) fn is_intercepted_file_syscall(pid: Pid, regs: &UserRegsStruct) -> bool {
-    file_request_from_syscall(pid, regs).is_some_and(|request| {
-        GuardBrokerEnvironment::operation_enabled(request.operation.as_str())
-    })
+    interception_request_for_file_syscall(pid, regs).is_some()
 }
 
-fn should_deny_broker_decision(
-    request: &FileSyscallRequest,
+pub(super) fn should_deny_file_decision(
+    request: &ipc::InterceptionRequest,
     decision: &ipc::InterceptionDecision,
 ) -> bool {
+    let file = request.file.as_ref();
+    let operation = file.map_or("file", |file| file.kind.as_str());
+    let path = file.map_or("<unknown>", |file| file.path.as_str());
     match decision.kind {
         ipc::InterceptionDecisionKind::Allow => false,
         ipc::InterceptionDecisionKind::Deny => {
             eprintln!(
                 "erebor linux process guard: denied {}: {}: {}",
-                request.operation.as_str(),
-                request.path,
-                decision.reason
+                operation, path, decision.reason
             );
             true
         }
         ipc::InterceptionDecisionKind::RequireApproval => {
             eprintln!(
                 "erebor linux process guard: verification required for {}, denied fail-closed: {}: {}",
-                request.operation.as_str(),
-                request.path,
+                operation,
+                path,
                 decision.reason
             );
             true
@@ -85,23 +78,12 @@ fn should_deny_broker_decision(
         ipc::InterceptionDecisionKind::Mediate | ipc::InterceptionDecisionKind::Unknown => {
             eprintln!(
                 "erebor linux process guard: unsupported file decision for {}, denied fail-closed: {}",
-                request.operation.as_str(),
-                request.path
+                operation,
+                path
             );
             true
         }
     }
-}
-
-fn broker_decision_for_file(
-    pid: Pid,
-    request: &FileSyscallRequest,
-) -> Result<ipc::InterceptionDecision, String> {
-    let endpoint = GuardBrokerEnvironment::endpoint()?
-        .ok_or_else(|| String::from("runtime interception endpoint is not configured"))?;
-    let hello = GuardBrokerEnvironment::hello()?;
-    let mut connection = ipc::RuntimeInterceptionConnection::connect(&endpoint, hello)?;
-    connection.request_decision(&interception_request_from_file(pid, request))
 }
 
 fn interception_request_from_file(

@@ -63,6 +63,26 @@ message InterceptionDecision {
   MediateDecision mediate = 8;
 }
 
+// Lifecycle events are emitted by the Linux process guard over the same
+// authenticated connection that carries physical-effect interception requests.
+// They carry observed process facts only; agent-specific recognition and policy
+// remain in the session broker's registered lifecycle handlers.
+message GuardLifecycleEvent {
+  uint64 request_id = 1;
+  GuardLifecycleEventKind event = 2;
+  int64 pid = 3;
+  repeated string exec_history = 4;
+  int64 parent_pid = 5;
+  int64 child_pid = 6;
+  bool exited_successfully = 7;
+}
+
+message GuardLifecycleReply {
+  uint64 request_id = 1;
+  GuardLifecycleReplyKind decision = 2;
+  string reason = 3;
+}
+
 message GuardEvent {
   uint64 request_id = 1;
   string message = 2;
@@ -196,6 +216,22 @@ enum InterceptionOperation {
   INTERCEPTION_OPERATION_FILE_READ = 3;
   INTERCEPTION_OPERATION_FILE_MUTATION = 4;
   INTERCEPTION_OPERATION_SOCKET_CONNECT = 5;
+}
+
+enum GuardLifecycleEventKind {
+  GUARD_LIFECYCLE_EVENT_KIND_UNSPECIFIED = 0;
+  GUARD_LIFECYCLE_EVENT_KIND_EXEC = 1;
+  GUARD_LIFECYCLE_EVENT_KIND_FORK = 2;
+  GUARD_LIFECYCLE_EVENT_KIND_EXIT = 3;
+}
+
+enum GuardLifecycleReplyKind {
+  GUARD_LIFECYCLE_REPLY_KIND_UNSPECIFIED = 0;
+  GUARD_LIFECYCLE_REPLY_KIND_IGNORE = 1;
+  GUARD_LIFECYCLE_REPLY_KIND_HOLD = 2;
+  GUARD_LIFECYCLE_REPLY_KIND_ALLOW = 3;
+  GUARD_LIFECYCLE_REPLY_KIND_DENY = 4;
+  GUARD_LIFECYCLE_REPLY_KIND_RELEASE = 5;
 }
 
 enum FileOperationKind {
