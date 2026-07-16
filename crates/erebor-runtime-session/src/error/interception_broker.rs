@@ -28,6 +28,15 @@ pub enum RuntimeInterceptionBrokerError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display(
+        "runtime interception broker is already restricted to session group `{expected_group}`, not `{requested_group}`"
+    ))]
+    SessionAccessConflict {
+        expected_group: u32,
+        requested_group: u32,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("runtime interception broker server platform is not started"))]
     ServerNotStarted {
         #[snafu(implicit)]
@@ -59,6 +68,7 @@ impl ErrorExt for RuntimeInterceptionBrokerError {
             Self::UnsupportedTransport { .. } => StatusCode::Unsupported,
             Self::StateLock { .. } => StatusCode::Internal,
             Self::SessionAlreadyRegistered { .. } => StatusCode::AlreadyExists,
+            Self::SessionAccessConflict { .. } => StatusCode::IllegalState,
             Self::ServerNotStarted { .. } => StatusCode::IllegalState,
             Self::RejectedHello { .. } => StatusCode::InvalidArguments,
             Self::Io { .. } => StatusCode::External,
@@ -72,6 +82,7 @@ impl ErrorExt for RuntimeInterceptionBrokerError {
             Self::UnsupportedTransport { .. }
             | Self::StateLock { .. }
             | Self::SessionAlreadyRegistered { .. }
+            | Self::SessionAccessConflict { .. }
             | Self::ServerNotStarted { .. }
             | Self::RejectedHello { .. }
             | Self::Protocol { .. } => RetryHint::NonRetryable,

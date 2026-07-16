@@ -19,6 +19,10 @@ mod linux {
     use erebor_runtime_context::{ContextRepository, ContextTreeEntryKind};
     use erebor_runtime_core::SessionRegistry;
     use erebor_runtime_session::CodexNativeHookEvent;
+    use rustix::{
+        fs::chown,
+        process::{geteuid, Gid, Uid},
+    };
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
 
@@ -301,6 +305,7 @@ mod linux {
             mock_responses.uri(),
             "workspace-write",
         )?;
+        grant_workspace_to_dropped_session_user(root)?;
 
         let fixture = EreborCliFixture::build()?;
         let mut command = fixture.command_in(
@@ -494,6 +499,54 @@ mod linux {
 
     fn required_session_run() -> bool {
         std::env::var_os(REQUIRE_SESSION_RUN_ENV).is_some_and(|value| value == "1")
+    }
+
+    fn grant_workspace_to_dropped_session_user(
+        root: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some((uid, gid)) = dropped_session_identity() else {
+            return Ok(());
+        };
+
+        for path in workspace_paths(root)? {
+            chown(&path, Some(Uid::from_raw(uid)), Some(Gid::from_raw(gid)))
+                .map_err(std::io::Error::from)?;
+        }
+        Ok(())
+    }
+
+    fn dropped_session_identity() -> Option<(u32, u32)> {
+        if !geteuid().is_root() {
+            return None;
+        }
+        let uid = std::env::var("EREBOR_SESSION_UID")
+            .ok()
+            .or_else(|| std::env::var("SUDO_UID").ok())?
+            .parse::<u32>()
+            .ok()?;
+        let gid = std::env::var("EREBOR_SESSION_GID")
+            .ok()
+            .or_else(|| std::env::var("SUDO_GID").ok())?
+            .parse::<u32>()
+            .ok()?;
+        (uid != 0).then_some((uid, gid))
+    }
+
+    fn workspace_paths(root: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
+        let mut paths = vec![root.to_path_buf()];
+        let mut index = 0;
+        while let Some(path) = paths.get(index).cloned() {
+            index += 1;
+            if !path.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(path)? {
+                let entry = entry?;
+                let path = entry.path();
+                paths.push(path);
+            }
+        }
+        Ok(paths)
     }
 
     fn require_managed_projection_anchors() -> Result<(), Box<dyn std::error::Error>> {

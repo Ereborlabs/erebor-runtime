@@ -25,6 +25,7 @@ pub(super) trait RuntimeInterceptionBrokerPlatform {
 }
 
 pub(super) trait RuntimeInterceptionBrokerServerPlatform: Send + Sync {
+    fn authorize_session_guard(&self) -> Result<(), RuntimeInterceptionBrokerError>;
     fn endpoint_path(&self) -> &Path;
     fn shutdown(self: Box<Self>);
 }
@@ -51,10 +52,17 @@ mod unix {
         KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK, KIND_INTERCEPTION_DECISION,
         KIND_INTERCEPTION_REQUEST,
     };
+    use rustix::{
+        fs::chown,
+        process::{geteuid, Gid, Uid},
+    };
     use snafu::ResultExt;
 
     use super::{RuntimeInterceptionBrokerPlatform, RuntimeInterceptionBrokerServerPlatform};
-    use crate::error::{BrokerIoSnafu, BrokerProtocolSnafu, BrokerRejectedHelloSnafu};
+    use crate::error::{
+        BrokerIoSnafu, BrokerProtocolSnafu, BrokerRejectedHelloSnafu,
+        BrokerSessionAccessConflictSnafu, BrokerStateLockSnafu,
+    };
     use crate::runtime_interception_broker::{
         constants::{DEFAULT_TIMEOUT_MS, RUNTIME_INTERCEPTION_SOCKET_NAME},
         endpoint::RuntimeInterceptionEndpoint,
@@ -66,7 +74,9 @@ mod unix {
     pub(in crate::runtime_interception_broker) struct Platform;
 
     struct UnixRuntimeInterceptionBrokerServer {
+        directory: PathBuf,
         endpoint_path: PathBuf,
+        session_group: Mutex<Option<u32>>,
         shutdown: Arc<AtomicBool>,
         worker: Mutex<Option<JoinHandle<()>>>,
     }
@@ -113,7 +123,9 @@ mod unix {
             });
 
             Ok(Box::new(UnixRuntimeInterceptionBrokerServer {
+                directory,
                 endpoint_path: socket_path,
+                session_group: Mutex::new(None),
                 shutdown,
                 worker: Mutex::new(Some(worker)),
             }))
@@ -194,6 +206,41 @@ mod unix {
     }
 
     impl RuntimeInterceptionBrokerServerPlatform for UnixRuntimeInterceptionBrokerServer {
+        fn authorize_session_guard(&self) -> Result<(), RuntimeInterceptionBrokerError> {
+            let Some(requested_group) = session_guard_group_from_environment() else {
+                return Ok(());
+            };
+
+            let mut session_group = self
+                .session_group
+                .lock()
+                .map_err(|_error| BrokerStateLockSnafu.build())?;
+            if let Some(expected_group) = *session_group {
+                if expected_group == requested_group {
+                    return Ok(());
+                }
+                return BrokerSessionAccessConflictSnafu {
+                    expected_group,
+                    requested_group,
+                }
+                .fail();
+            }
+
+            let group = Gid::from_raw(requested_group);
+            chown(&self.directory, Some(Uid::ROOT), Some(group))
+                .map_err(std::io::Error::from)
+                .context(BrokerIoSnafu)?;
+            chown(&self.endpoint_path, Some(Uid::ROOT), Some(group))
+                .map_err(std::io::Error::from)
+                .context(BrokerIoSnafu)?;
+            fs::set_permissions(&self.directory, fs::Permissions::from_mode(0o710))
+                .context(BrokerIoSnafu)?;
+            fs::set_permissions(&self.endpoint_path, fs::Permissions::from_mode(0o620))
+                .context(BrokerIoSnafu)?;
+            *session_group = Some(requested_group);
+            Ok(())
+        }
+
         fn endpoint_path(&self) -> &Path {
             &self.endpoint_path
         }
@@ -207,6 +254,64 @@ mod unix {
                 }
             }
             let _result = fs::remove_file(&self.endpoint_path);
+        }
+    }
+
+    fn session_guard_group_from_environment() -> Option<u32> {
+        session_guard_group(
+            geteuid().is_root(),
+            std::env::var("EREBOR_SESSION_UID")
+                .ok()
+                .or_else(|| std::env::var("SUDO_UID").ok()),
+            std::env::var("EREBOR_SESSION_GID")
+                .ok()
+                .or_else(|| std::env::var("SUDO_GID").ok()),
+        )
+    }
+
+    fn session_guard_group(
+        runs_as_root: bool,
+        session_uid: Option<String>,
+        session_gid: Option<String>,
+    ) -> Option<u32> {
+        if !runs_as_root {
+            return None;
+        }
+        let session_uid = session_uid?.parse::<u32>().ok()?;
+        let session_gid = session_gid?.parse::<u32>().ok()?;
+        (session_uid != 0).then_some(session_gid)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::session_guard_group;
+
+        #[test]
+        fn root_broker_grants_only_the_dropped_session_group() {
+            assert_eq!(
+                session_guard_group(true, Some(String::from("1000")), Some(String::from("1001"))),
+                Some(1001)
+            );
+            assert_eq!(
+                session_guard_group(
+                    false,
+                    Some(String::from("1000")),
+                    Some(String::from("1001"))
+                ),
+                None
+            );
+            assert_eq!(
+                session_guard_group(true, Some(String::from("0")), Some(String::from("0"))),
+                None
+            );
+            assert_eq!(
+                session_guard_group(
+                    true,
+                    Some(String::from("invalid")),
+                    Some(String::from("1001"))
+                ),
+                None
+            );
         }
     }
 }

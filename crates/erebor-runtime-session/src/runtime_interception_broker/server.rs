@@ -106,6 +106,7 @@ impl RuntimeInterceptionBrokerServer {
         actor_id: String,
         router: SessionInterceptionRouter,
     ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
+        self.authorize_session_guard()?;
         let endpoint_path = self.endpoint_path()?;
         let token = read_interception_token()?;
         let registration = SessionRegistration {
@@ -152,6 +153,17 @@ impl RuntimeInterceptionBrokerServer {
             return BrokerServerNotStartedSnafu.fail();
         };
         Ok(platform.endpoint_path().to_path_buf())
+    }
+
+    fn authorize_session_guard(&self) -> Result<(), RuntimeInterceptionBrokerError> {
+        let platform = self
+            .platform
+            .lock()
+            .map_err(|_error| BrokerStateLockSnafu.build())?;
+        let Some(platform) = platform.as_ref() else {
+            return BrokerServerNotStartedSnafu.fail();
+        };
+        platform.authorize_session_guard()
     }
 }
 

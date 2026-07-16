@@ -16,6 +16,7 @@ pub(crate) use interception_broker::{
     IoSnafu as BrokerIoSnafu, ProtocolSnafu as BrokerProtocolSnafu,
     RejectedHelloSnafu as BrokerRejectedHelloSnafu,
     ServerNotStartedSnafu as BrokerServerNotStartedSnafu,
+    SessionAccessConflictSnafu as BrokerSessionAccessConflictSnafu,
     SessionAlreadyRegisteredSnafu as BrokerSessionAlreadyRegisteredSnafu,
     StateLockSnafu as BrokerStateLockSnafu,
 };
