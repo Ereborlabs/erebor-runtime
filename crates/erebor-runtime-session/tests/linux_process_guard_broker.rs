@@ -33,6 +33,7 @@ fn process_guard_uses_one_broker_socket_for_lifecycle_and_physical_effects(
     };
     let marker = root.path().join("effect-after-hook-exit");
     let hook_tracked = root.path().join("hook-tracked");
+    let direct_guard_audit = root.path().join("guard-direct-audit.jsonl");
     let server_marker = marker.clone();
     let server_hook_tracked = hook_tracked.clone();
     let server =
@@ -51,6 +52,7 @@ fn process_guard_uses_one_broker_socket_for_lifecycle_and_physical_effects(
         .env("EREBOR_RUNTIME_INTERCEPTION_TIMEOUT_MS", "5000")
         .env("EREBOR_SESSION_ID", "guard-one-socket-test")
         .env("EREBOR_ACTOR_ID", "test-agent")
+        .env("EREBOR_GUARD_AUDIT_JSONL", &direct_guard_audit)
         .env(
             "EREBOR_GUARD_INTERCEPTION_OPERATIONS",
             "process_exec,file_mutation",
@@ -81,6 +83,10 @@ fn process_guard_uses_one_broker_socket_for_lifecycle_and_physical_effects(
     assert!(evidence.marker_absent_at_hook_exit);
     assert_eq!(evidence.accepted_connections, 1);
     assert!(fs::metadata(marker).is_ok());
+    assert!(
+        !direct_guard_audit.exists(),
+        "the guard must send observations to the broker, not append a session audit file directly"
+    );
     Ok(())
 }
 

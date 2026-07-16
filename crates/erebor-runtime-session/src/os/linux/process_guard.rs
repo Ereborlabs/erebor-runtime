@@ -1,7 +1,5 @@
 #![allow(unsafe_code)]
 
-#[path = "process_guard/audit.rs"]
-mod audit;
 #[path = "process_guard/broker.rs"]
 mod broker;
 #[path = "process_guard/cgroup.rs"]

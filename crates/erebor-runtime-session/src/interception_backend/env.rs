@@ -1,14 +1,4 @@
-use erebor_runtime_core::{
-    AuditCommandLogLevel, ProcessInterceptionHandlerConfig, ProcessInterceptionHandlerKind,
-};
-
-pub(crate) fn audit_command_level_env(level: AuditCommandLogLevel) -> &'static str {
-    match level {
-        AuditCommandLogLevel::All => "all",
-        AuditCommandLogLevel::Signal => "signal",
-        AuditCommandLogLevel::NonAllow => "non_allow",
-    }
-}
+use erebor_runtime_core::{ProcessInterceptionHandlerConfig, ProcessInterceptionHandlerKind};
 
 pub(crate) fn process_interception_executable_env(
     handler: &ProcessInterceptionHandlerConfig,

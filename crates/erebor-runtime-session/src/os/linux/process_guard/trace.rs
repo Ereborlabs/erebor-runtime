@@ -4,7 +4,6 @@ use std::{
 };
 
 use super::{
-    audit::write_process_audit,
     broker::GuardBrokerEnvironment,
     die, file_interception, ipc,
     memory::{read_argv, read_cstring},
@@ -31,7 +30,6 @@ struct PidState {
 pub(super) struct TraceLoop {
     rules: Vec<ProcessRule>,
     states: HashMap<Pid, PidState>,
-    audit_seq: u64,
     root_pid: Pid,
     live_traces: usize,
     broker_connection: Option<ipc::RuntimeInterceptionConnection>,
@@ -50,7 +48,6 @@ impl TraceLoop {
         Self {
             rules,
             states: HashMap::new(),
-            audit_seq: 0,
             root_pid,
             live_traces: 0,
             broker_connection,
@@ -423,16 +420,10 @@ impl TraceLoop {
                 Some(ProcessRule {
                     token: text.clone(),
                     reason,
-                    rule_id: String::from(
-                        "erebor-runtime-interception-broker-process-exec-fail-closed",
-                    ),
                     decision: ProcessRuleDecision::Deny,
                 })
             }
         };
-
-        self.audit_seq += 1;
-        write_process_audit(self.audit_seq, pid, &path, &argv, &text, rule.as_ref());
 
         if let Some(rule) = rule {
             match rule.decision {
@@ -516,11 +507,6 @@ impl TraceLoop {
                 String::from(default_reason)
             } else {
                 decision.reason.clone()
-            },
-            rule_id: if decision.rule_id.is_empty() {
-                String::from("erebor-routed-process-exec")
-            } else {
-                decision.rule_id.clone()
             },
             decision: decision_kind,
         }

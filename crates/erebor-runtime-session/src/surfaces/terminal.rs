@@ -70,8 +70,6 @@ impl<'a> TerminalProcessSurface<'a> {
                 process_exec_mediation_mode(mediation.mode()),
                 mediation.handlers(),
             ),
-            plan.audit().surfaces().terminal().level(),
-            plan.audit().surfaces().terminal().debug_commands().to_vec(),
             config.tty(),
         )))
     }

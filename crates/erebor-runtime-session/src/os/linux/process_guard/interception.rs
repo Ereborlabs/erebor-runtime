@@ -1,5 +1,3 @@
-#[path = "interception/audit.rs"]
-mod audit;
 #[path = "interception/broker.rs"]
 mod broker;
 #[path = "interception/executable.rs"]
@@ -11,7 +9,6 @@ use std::{
     env, os::unix::process::CommandExt, path::PathBuf, process::Command, thread, time::Duration,
 };
 
-use audit::InterceptionAudit;
 use broker::InterceptionBrokerClient;
 use executable::RealExecutableResolver;
 use handlers::{InterceptionHandler, InterceptionHandlers};
@@ -103,8 +100,6 @@ impl ShimInterception {
             );
         };
 
-        InterceptionAudit::allow(handler, invoked, args, &decision.reason).write();
-
         let error = Command::new(&target).args(&args[1..]).exec();
         Self::fail_closed(
             &format!("allowed process exec failed: {error}"),
@@ -130,15 +125,6 @@ impl ShimInterception {
                 Some(126),
             );
         };
-        InterceptionAudit::mediate(
-            handler,
-            invoked,
-            args,
-            &decision.reason,
-            &mediation.endpoint,
-        )
-        .write();
-
         if !mediation.print_line.is_empty() {
             eprintln!("{}", mediation.print_line);
         }
@@ -154,12 +140,11 @@ impl ShimInterception {
 
     fn fail_closed(
         reason: &str,
-        handler: &InterceptionHandler,
-        invoked: &str,
-        args: &[String],
+        _handler: &InterceptionHandler,
+        _invoked: &str,
+        _args: &[String],
         exit_code: Option<i32>,
     ) -> i32 {
-        InterceptionAudit::deny(handler, invoked, args, reason).write();
         eprintln!("erebor linux process guard interception: {reason}");
         exit_code.unwrap_or(126)
     }

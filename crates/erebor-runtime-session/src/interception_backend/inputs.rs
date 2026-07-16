@@ -1,4 +1,4 @@
-use erebor_runtime_core::{AuditCommandLogLevel, ProcessInterceptionHandlerConfig};
+use erebor_runtime_core::ProcessInterceptionHandlerConfig;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct FileOperationInterceptionInput {
@@ -58,36 +58,16 @@ impl<'a> ProcessExecMediationInput<'a> {
 
 pub(crate) struct ProcessExecInterceptionInput<'a> {
     mediation: ProcessExecMediationInput<'a>,
-    audit_level: AuditCommandLogLevel,
-    audit_debug_commands: Vec<String>,
     tty: bool,
 }
 
 impl<'a> ProcessExecInterceptionInput<'a> {
-    pub(crate) fn new(
-        mediation: ProcessExecMediationInput<'a>,
-        audit_level: AuditCommandLogLevel,
-        audit_debug_commands: Vec<String>,
-        tty: bool,
-    ) -> Self {
-        Self {
-            mediation,
-            audit_level,
-            audit_debug_commands,
-            tty,
-        }
+    pub(crate) fn new(mediation: ProcessExecMediationInput<'a>, tty: bool) -> Self {
+        Self { mediation, tty }
     }
 
     pub(crate) const fn mediation(&self) -> &ProcessExecMediationInput<'a> {
         &self.mediation
-    }
-
-    pub(crate) const fn audit_level(&self) -> AuditCommandLogLevel {
-        self.audit_level
-    }
-
-    pub(crate) fn audit_debug_commands(&self) -> &[String] {
-        &self.audit_debug_commands
     }
 
     pub(crate) const fn tty(&self) -> bool {

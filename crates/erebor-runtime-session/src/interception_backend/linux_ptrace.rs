@@ -4,19 +4,13 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+use crate::{SessionExecutionError, SessionPlanContext, SessionStorage};
 use erebor_runtime_core::{
-    AuditCommandLogLevel, DockerSessionCommandOptions, DockerSessionMount,
-    LinuxHostSessionCommandOptions, SessionInterceptionConfig, SessionInterceptionOperation,
-};
-use snafu::{OptionExt, ResultExt};
-
-use crate::{
-    error::{GuardConfigSnafu, GuardIoSnafu},
-    SessionExecutionError, SessionPlanContext, SessionStorage,
+    DockerSessionCommandOptions, DockerSessionMount, LinuxHostSessionCommandOptions,
+    SessionInterceptionConfig, SessionInterceptionOperation,
 };
 
 use super::{
-    env::audit_command_level_env,
     guard_artifact::LinuxProcessGuardArtifact,
     inputs::{FileOperationInterceptionInput, ProcessExecInterceptionInput},
     path::{linux_cgroup_component, linux_ptrace_backend_session_dir},
@@ -25,7 +19,6 @@ use super::{
 
 const DOCKER_GUARD_DIR: &str = "/erebor/guard";
 const LINUX_PROCESS_GUARD_PATH: &str = "/erebor/guard/erebor-linux-process-guard";
-const DOCKER_AUDIT_DIR: &str = "/erebor/audit";
 static SESSION_BACKEND_BUNDLE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct LinuxPtraceInterceptionBackendBundle {
@@ -33,10 +26,6 @@ pub(crate) struct LinuxPtraceInterceptionBackendBundle {
     guard_path: PathBuf,
     session_id: String,
     operations: LinuxPtraceInterceptionOperations,
-    audit_path: Option<PathBuf>,
-    audit_filename: Option<String>,
-    audit_terminal_level: AuditCommandLogLevel,
-    audit_terminal_debug_commands: Vec<String>,
     terminal_tty: bool,
     interception: Option<LinuxProcessInterceptionBundle>,
 }
@@ -94,7 +83,7 @@ impl LinuxPtraceInterceptionBackendBundle {
         process_exec: Option<ProcessExecInterceptionInput<'_>>,
         operations: LinuxPtraceInterceptionOperations,
         plan: &impl SessionPlanContext,
-        storage: Option<&SessionStorage>,
+        _storage: Option<&SessionStorage>,
     ) -> Result<Self, SessionExecutionError> {
         let guard_path = LinuxProcessGuardArtifact::resolve()?;
         let instance_id = SESSION_BACKEND_BUNDLE_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -107,41 +96,11 @@ impl LinuxPtraceInterceptionBackendBundle {
                 .as_ref()
                 .map(ProcessExecInterceptionInput::mediation),
         )?;
-        let mut audit_jsonl_path = None;
-        let mut audit_filename = None;
-
-        if let Some(audit_path) = storage.map(SessionStorage::audit_path) {
-            let audit_parent = audit_path
-                .parent()
-                .filter(|path| !path.as_os_str().is_empty())
-                .unwrap_or_else(|| Path::new("."));
-            fs::create_dir_all(audit_parent).context(GuardIoSnafu)?;
-            audit_filename = Some(
-                audit_path
-                    .file_name()
-                    .context(GuardConfigSnafu {
-                        reason: String::from("audit JSONL path must include a file name"),
-                    })?
-                    .to_string_lossy()
-                    .to_string(),
-            );
-            audit_jsonl_path = Some(audit_path.to_path_buf());
-        }
-
         Ok(Self {
             session_dir,
             guard_path,
             session_id: plan.session_id().as_str().to_owned(),
             operations,
-            audit_path: audit_jsonl_path,
-            audit_filename,
-            audit_terminal_level: process_exec.as_ref().map_or(
-                AuditCommandLogLevel::Signal,
-                ProcessExecInterceptionInput::audit_level,
-            ),
-            audit_terminal_debug_commands: process_exec
-                .as_ref()
-                .map_or_else(Vec::new, |input| input.audit_debug_commands().to_vec()),
             terminal_tty: process_exec
                 .as_ref()
                 .is_some_and(ProcessExecInterceptionInput::tty),
@@ -169,31 +128,6 @@ impl LinuxPtraceInterceptionBackendBundle {
         );
         options.add_environment("EREBOR_TERMINAL_TTY", self.terminal_tty.to_string());
 
-        if let Some(audit_path) = self.audit_path.as_ref() {
-            let audit_parent = audit_path
-                .parent()
-                .filter(|path| !path.as_os_str().is_empty())
-                .unwrap_or_else(|| Path::new("."));
-            let Some(audit_filename) = self.audit_filename.as_ref() else {
-                return options;
-            };
-            let container_audit_path = format!("{DOCKER_AUDIT_DIR}/{audit_filename}");
-            options.add_mount(DockerSessionMount::new(
-                audit_parent,
-                DOCKER_AUDIT_DIR,
-                false,
-            ));
-            options.add_environment("EREBOR_GUARD_AUDIT_JSONL", container_audit_path);
-            options.add_environment(
-                "EREBOR_GUARD_AUDIT_TERMINAL_LEVEL",
-                audit_command_level_env(self.audit_terminal_level),
-            );
-            options.add_environment(
-                "EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS",
-                self.audit_terminal_debug_commands.join("\n"),
-            );
-        }
-
         options
     }
 
@@ -216,18 +150,6 @@ impl LinuxPtraceInterceptionBackendBundle {
                 linux_cgroup_component(&self.session_id)
             ),
         );
-
-        if let Some(audit_path) = self.audit_path.as_ref() {
-            options.add_environment("EREBOR_GUARD_AUDIT_JSONL", audit_path.display().to_string());
-            options.add_environment(
-                "EREBOR_GUARD_AUDIT_TERMINAL_LEVEL",
-                audit_command_level_env(self.audit_terminal_level),
-            );
-            options.add_environment(
-                "EREBOR_GUARD_AUDIT_TERMINAL_DEBUG_COMMANDS",
-                self.audit_terminal_debug_commands.join("\n"),
-            );
-        }
 
         if let Some(interception) = self.interception.as_ref() {
             for (key, value) in interception.environment(browser_cdp_endpoint)? {

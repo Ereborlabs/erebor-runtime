@@ -7,7 +7,6 @@ pub(super) const MAX_TEXT: usize = 4096;
 pub(super) struct ProcessRule {
     pub(super) token: String,
     pub(super) reason: String,
-    pub(super) rule_id: String,
     pub(super) decision: ProcessRuleDecision,
 }
 
@@ -24,21 +23,6 @@ impl ProcessRuleDecision {
             "allow" => Self::Allow,
             "require_approval" | "require_verification" => Self::RequireApproval,
             _ => Self::Deny,
-        }
-    }
-
-    pub(super) const fn policy_decision_type(self) -> &'static str {
-        match self {
-            Self::Allow => "allow",
-            Self::Deny => "deny",
-            Self::RequireApproval => "require_approval",
-        }
-    }
-
-    pub(super) const fn final_decision_type(self) -> &'static str {
-        match self {
-            Self::Allow => "allow",
-            Self::Deny | Self::RequireApproval => "deny",
         }
     }
 }
@@ -60,18 +44,19 @@ fn parse_rules_from_source(source: &str) -> Vec<ProcessRule> {
             if token.is_empty() {
                 return None;
             }
+            let reason = fields
+                .next()
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or("process execution denied by Erebor policy")
+                .to_owned();
+            // The third field remains reserved for the policy rule id so
+            // existing guard-rule environment values retain their shape. The
+            // guard sends decisions to the broker; it no longer owns an
+            // independently persisted audit record.
+            let _reserved_rule_id = fields.next();
             Some(ProcessRule {
                 token: token.to_owned(),
-                reason: fields
-                    .next()
-                    .filter(|reason| !reason.is_empty())
-                    .unwrap_or("process execution denied by Erebor policy")
-                    .to_owned(),
-                rule_id: fields
-                    .next()
-                    .filter(|rule_id| !rule_id.is_empty())
-                    .unwrap_or("erebor-linux-process-guard")
-                    .to_owned(),
+                reason,
                 decision: ProcessRuleDecision::from_guard_env(fields.next()),
             })
         })
@@ -107,15 +92,12 @@ mod tests {
         assert_eq!(rules.len(), 3);
         assert_eq!(rules[0].token, "/tmp/erebor/shims/google-chrome");
         assert_eq!(rules[0].reason, "managed shim");
-        assert_eq!(rules[0].rule_id, "allow-shim");
         assert_eq!(rules[0].decision, ProcessRuleDecision::Allow);
         assert_eq!(rules[1].token, "remote-debugging-port");
         assert_eq!(rules[1].reason, "raw CDP is denied");
-        assert_eq!(rules[1].rule_id, "deny-raw-cdp");
         assert_eq!(rules[1].decision, ProcessRuleDecision::Deny);
         assert_eq!(rules[2].token, "chromium");
         assert_eq!(rules[2].reason, "process execution denied by Erebor policy");
-        assert_eq!(rules[2].rule_id, "erebor-linux-process-guard");
         assert_eq!(rules[2].decision, ProcessRuleDecision::Deny);
     }
 
@@ -131,7 +113,6 @@ mod tests {
             .find(|rule| command_text.contains(&rule.token))
             .expect("expected shim allow rule to match first");
 
-        assert_eq!(matched.rule_id, "allow-shim");
         assert_eq!(matched.decision, ProcessRuleDecision::Allow);
     }
 
@@ -144,7 +125,6 @@ mod tests {
         assert_eq!(rules.len(), 1);
         assert_eq!(rules[0].token, "git push");
         assert_eq!(rules[0].reason, "git push needs verification");
-        assert_eq!(rules[0].rule_id, "verify-git-push");
         assert_eq!(rules[0].decision, ProcessRuleDecision::RequireApproval);
     }
 
@@ -160,10 +140,6 @@ mod tests {
 
         assert_eq!(rules.len(), MAX_RULES);
         assert_eq!(rules[0].token, "token-0");
-        assert_eq!(
-            rules[MAX_RULES - 1].rule_id,
-            format!("rule-{}", MAX_RULES - 1)
-        );
     }
 
     #[test]
