@@ -5,7 +5,10 @@ use erebor_runtime_core::{
 };
 
 use crate::{
-    agents::codex::{CodexGuardTicketIssuer, CodexHookBroker, CodexPromptReconciliation},
+    agents::codex::{
+        CodexGuardTicketIssuer, CodexHookBroker, CodexInvocationLeaseOwner,
+        CodexPromptReconciliation,
+    },
     interception_backend::SessionInterceptionBackendBundle,
     runtime_interception_broker::SessionInterceptionRegistration,
     SessionExecutionError,
@@ -17,6 +20,7 @@ pub(crate) struct SessionSideResources {
     docker_options: DockerSessionCommandOptions,
     linux_host_options: LinuxHostSessionCommandOptions,
     browser_cdp_endpoint: Option<String>,
+    codex_invocation_lease_owner: Option<Arc<CodexInvocationLeaseOwner>>,
     codex_prompt_reconciliation: Option<Arc<CodexPromptReconciliation>>,
     lifetime: SessionResourceLifetime,
 }
@@ -61,6 +65,7 @@ impl SessionSideResources {
             docker_options,
             linux_host_options,
             browser_cdp_endpoint,
+            codex_invocation_lease_owner: None,
             codex_prompt_reconciliation: None,
             lifetime,
         }
@@ -91,6 +96,17 @@ impl SessionSideResources {
         reconciliation: Option<Arc<CodexPromptReconciliation>>,
     ) {
         self.codex_prompt_reconciliation = reconciliation;
+    }
+
+    pub(crate) fn set_codex_invocation_lease_owner(
+        &mut self,
+        owner: Option<Arc<CodexInvocationLeaseOwner>>,
+    ) {
+        self.codex_invocation_lease_owner = owner;
+    }
+
+    pub(crate) fn codex_invocation_lease_owner(&self) -> Option<Arc<CodexInvocationLeaseOwner>> {
+        self.codex_invocation_lease_owner.clone()
     }
 
     pub(crate) fn codex_prompt_reconciliation(&self) -> Option<Arc<CodexPromptReconciliation>> {

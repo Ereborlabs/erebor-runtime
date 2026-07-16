@@ -11,8 +11,8 @@ use snafu::ResultExt;
 
 use crate::{
     agents::codex::{
-        CodexArtifactProjection, CodexGuardTicketIssuer, CodexHookBroker, CodexManagedSession,
-        CodexPromptReconciliation,
+        CodexArtifactProjection, CodexContextDag, CodexGuardTicketIssuer, CodexHookBroker,
+        CodexInvocationLeaseOwner, CodexManagedSession, CodexPromptReconciliation,
     },
     error::{
         CodexSessionSnafu, FilesystemSurfaceSnafu, GuardConfigSnafu, InvalidConfigSnafu,
@@ -102,6 +102,7 @@ fn start_session_side_resources_from_start_plan(
     let mut codex_projection_wrapper = None;
     let mut codex_guard_ticket_issuer = None;
     let mut codex_hook_broker = None;
+    let mut codex_invocation_lease_owner = None;
     let mut codex_prompt_reconciliation = None;
     let mut process_exec_interception = None;
     let process_exec_supported = start_plan
@@ -196,9 +197,41 @@ fn start_session_side_resources_from_start_plan(
                         filesystem_overlay_wrapper = Some(wrapper_path);
                         if let Some(codex_managed_session) = codex_managed_session.as_ref() {
                             let reconciliation = Arc::new(CodexPromptReconciliation::default());
+                            let context_dag = prepared_session.map(|session| {
+                                Arc::new(CodexContextDag::new(
+                                    session.context_repository_handle(),
+                                    plan.session_id().as_str(),
+                                ))
+                            });
+                            let lease_owner = Arc::new(CodexInvocationLeaseOwner::new(
+                                plan.session_id().as_str(),
+                                &plan.actor().id,
+                                plan.actor().kind.clone(),
+                                &codex_managed_session.profile().id,
+                                codex_managed_session
+                                    .profile()
+                                    .executable
+                                    .display()
+                                    .to_string(),
+                                codex_managed_session
+                                    .profile()
+                                    .hook_exec_history
+                                    .iter()
+                                    .map(|path| path.display().to_string())
+                                    .collect(),
+                                prepared_session
+                                    .map(PreparedSession::storage)
+                                    .map(|storage| storage.audit_path().to_path_buf()),
+                            ));
+                            if let Some(context_dag) = context_dag {
+                                lease_owner
+                                    .set_context_dag(context_dag)
+                                    .context(CodexSessionSnafu)?;
+                            }
                             let broker = CodexHookBroker::start(
                                 codex_managed_session.clone(),
                                 Arc::clone(&reconciliation),
+                                Arc::clone(&lease_owner),
                             )
                             .context(CodexSessionSnafu)?;
                             let mut projections = CodexArtifactProjection::projections(
@@ -239,6 +272,7 @@ fn start_session_side_resources_from_start_plan(
                             codex_projection_wrapper = Some(wrapper_path);
                             codex_guard_ticket_issuer = Some(issuer);
                             codex_hook_broker = Some(broker);
+                            codex_invocation_lease_owner = Some(lease_owner);
                             codex_prompt_reconciliation = Some(reconciliation);
                         }
                     }
@@ -280,6 +314,7 @@ fn start_session_side_resources_from_start_plan(
             None,
             lazy_browser_cdp,
             filesystem_handler,
+            codex_invocation_lease_owner.clone(),
         )?;
         let interception_registration =
             interception_setup.register(interception_router, plan, uses_lazy_browser_cdp)?;
@@ -295,6 +330,7 @@ fn start_session_side_resources_from_start_plan(
             resources.add_linux_host_outer_wrapper(wrapper);
         }
         resources.set_codex_prompt_reconciliation(codex_prompt_reconciliation);
+        resources.set_codex_invocation_lease_owner(codex_invocation_lease_owner);
         apply_codex_launch_sanitization(&mut resources, codex_projection_wrapper);
         return Ok(resources);
     }
@@ -329,6 +365,7 @@ fn start_session_side_resources_from_start_plan(
         browser_cdp_endpoint.as_deref(),
         lazy_browser_cdp,
         filesystem_handler,
+        codex_invocation_lease_owner.clone(),
     )?;
     let interception_registration =
         interception_setup.register(interception_router, plan, uses_lazy_browser_cdp)?;
@@ -345,6 +382,7 @@ fn start_session_side_resources_from_start_plan(
         resources.add_linux_host_outer_wrapper(wrapper);
     }
     resources.set_codex_prompt_reconciliation(codex_prompt_reconciliation);
+    resources.set_codex_invocation_lease_owner(codex_invocation_lease_owner);
     apply_codex_launch_sanitization(&mut resources, codex_projection_wrapper);
     Ok(resources)
 }
@@ -409,12 +447,18 @@ fn session_interception_router(
     browser_cdp_endpoint: Option<&str>,
     lazy_browser_cdp: Option<LazyBrowserCdpProcessMediation>,
     filesystem_handler: Option<FilesystemFileOperationHandler>,
+    codex_invocation_lease_owner: Option<Arc<CodexInvocationLeaseOwner>>,
 ) -> Result<crate::runtime_interception_broker::SessionInterceptionRouter, SessionExecutionError> {
     let router = terminal_process_surface.router(browser_cdp_endpoint, lazy_browser_cdp)?;
-    Ok(match filesystem_handler {
+    let router = match filesystem_handler {
         Some(handler) => router.with_file_operation_handler(handler),
         None => router,
-    })
+    };
+    Ok(
+        codex_invocation_lease_owner.map_or(router.clone(), |owner| {
+            router.with_codex_invocation_lease_owner(owner)
+        }),
+    )
 }
 
 #[cfg(test)]

@@ -10,6 +10,8 @@ use erebor_runtime_ipc::v1::{
     SocketOperationKind,
 };
 
+use crate::agents::codex::CodexInvocationLeaseOwner;
+
 #[derive(Debug)]
 pub(super) struct SessionRegistration {
     pub(super) token: String,
@@ -22,6 +24,7 @@ pub struct SessionInterceptionRouter {
     process_exec: Option<Arc<dyn ProcessExecSurfaceHandler>>,
     file_operation: Option<Arc<dyn FileOperationSurfaceHandler>>,
     socket_connect: Option<Arc<dyn SocketConnectSurfaceHandler>>,
+    codex_invocation_lease_owner: Option<Arc<CodexInvocationLeaseOwner>>,
 }
 
 pub(super) enum RoutedInterception {
@@ -65,7 +68,23 @@ impl SessionInterceptionRouter {
         self
     }
 
+    #[must_use]
+    pub(crate) fn with_codex_invocation_lease_owner(
+        mut self,
+        owner: Arc<CodexInvocationLeaseOwner>,
+    ) -> Self {
+        self.codex_invocation_lease_owner = Some(owner);
+        self
+    }
+
     pub(super) fn route_interception(&self, request: &InterceptionRequest) -> RoutedInterception {
+        if let Some(decision) = self
+            .codex_invocation_lease_owner
+            .as_ref()
+            .and_then(|owner| owner.physical_effect_decision(request))
+        {
+            return RoutedInterception::Decision(decision);
+        }
         match request.operation_family() {
             InterceptionOperation::ProcessExec => self.route_process_exec(request),
             InterceptionOperation::FileOpen
@@ -234,6 +253,10 @@ impl fmt::Debug for SessionInterceptionRouter {
                     .socket_connect
                     .as_ref()
                     .map(|handler| handler.surface()),
+            )
+            .field(
+                "codex_invocation_lease_owner",
+                &self.codex_invocation_lease_owner.is_some(),
             )
             .finish()
     }

@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use erebor_runtime_core::{
     FilesystemRevertConfig, FilesystemSurfaceConfig, RuntimeConfig, RuntimeError, SessionRegistry,
@@ -66,7 +69,7 @@ pub(crate) struct PreparedSession {
     registry: SessionRegistry,
     storage: SessionStorage,
     session_id: String,
-    context_repository: erebor_runtime_context::ContextRepository,
+    context_repository: Arc<erebor_runtime_context::ContextRepository>,
 }
 
 impl PreparedSession {
@@ -74,8 +77,10 @@ impl PreparedSession {
         &self.storage
     }
 
-    pub(crate) fn context_repository(&self) -> &erebor_runtime_context::ContextRepository {
-        &self.context_repository
+    pub(crate) fn context_repository_handle(
+        &self,
+    ) -> Arc<erebor_runtime_context::ContextRepository> {
+        Arc::clone(&self.context_repository)
     }
 
     fn verify_context_repository(&self) -> Result<(), SessionExecutionError> {
@@ -129,7 +134,7 @@ pub(crate) fn prepare_registry_session(
         }
     };
     let storage = SessionStorage::new(started.audit_path().to_path_buf(), filesystem);
-    let context_repository = started.into_context_repository();
+    let context_repository = Arc::new(started.into_context_repository());
     Ok(Some(PreparedSession {
         registry,
         storage,

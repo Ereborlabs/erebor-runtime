@@ -65,6 +65,9 @@ mod linux {
         let startup_hash = hash(&startup)?;
         let driver_hash = hash(driver)?;
         let session_start_schema = schema_sha256(br#"{"hook_event_name":"session_start"}"#)?;
+        let pre_tool_use_schema = schema_sha256(
+            br#"{"hook_event_name":"PreToolUse","session_id":"thread","turn_id":"turn","tool_use_id":"tool","tool_name":"Bash","tool_input":{"command":"command"}}"#,
+        )?;
         let config = root.join("runtime.json");
         fs::write(
             &config,
@@ -87,7 +90,7 @@ mod linux {
             "shell_startup_source":"{}","shell_startup_sha256":"{}","shell_startup_path":"/usr/lib/erebor/codex-hooks/shell-startup",
             "hook_shell":"direct",
             "hook_exec_history":["{}","/usr/lib/erebor/codex-hooks/erebor-codex-hook"],
-            "event_schemas":[{{"event":"session_start","sha256":"{}"}}]
+            "event_schemas":[{{"event":"session_start","sha256":"{}"}},{{"event":"pre_tool_use","sha256":"{}"}}]
           }}]}}
         }}"#,
                 policy.display(),
@@ -101,7 +104,8 @@ mod linux {
                 startup.display(),
                 startup_hash,
                 driver.display(),
-                session_start_schema
+                session_start_schema,
+                pre_tool_use_schema
             ),
         )?;
         let result = EreborCliFixture::build()?.run_in(
@@ -125,6 +129,36 @@ mod linux {
             );
         }
         assert_eq!(fs::read(&marker)?, br#"{"continue":true}"#);
+
+        let unleased_effect_marker = root.join("unleased-effect-result.json");
+        let mut unleased_effect = EreborCliFixture::build()?.command_in(
+            root,
+            [
+                "session",
+                "run",
+                "--runner",
+                "linux-host",
+                "--config",
+                config.to_str().ok_or("config path")?,
+                driver.to_str().ok_or("driver path")?,
+                unleased_effect_marker.to_str().ok_or("marker path")?,
+            ],
+        );
+        let unleased_effect_output = unleased_effect
+            .env("EREBOR_CODEX_LINUX_V1_ASSERT_UNLEASED_EFFECT", "1")
+            .output()?;
+        if !unleased_effect_output.status.success() {
+            return Err(format!(
+                "unleased Codex effect fixture failed: {}",
+                String::from_utf8_lossy(&unleased_effect_output.stderr)
+            )
+            .into());
+        }
+        assert_eq!(fs::read(&unleased_effect_marker)?, br#"{"continue":true}"#);
+        assert_eq!(
+            fs::read_to_string(unleased_effect_marker.with_extension("diagnostic"))?,
+            "unleased-effect-denied"
+        );
 
         let replaced_stdout_marker = root.join("replaced-stdout-result.json");
         let _failure = EreborCliFixture::build()?.run_expect_failure_in_env(
@@ -528,6 +562,26 @@ mod linux {
                     .pointer("/hook_reconciliation/authenticated_user_prompt_submit_count")
                     .and_then(Value::as_u64),
                 Some(1)
+            );
+            let pre_tool_context = blobs
+                .iter()
+                .filter_map(|blob| serde_json::from_slice::<Value>(blob).ok())
+                .find(|context| {
+                    context.get("source") == Some(&json!("authenticated_codex_hook_broker"))
+                        && context.get("event_kind") == Some(&json!("pre-tool-use"))
+                })
+                .ok_or("live PreToolUse hook did not create a Context DAG record")?;
+            assert_eq!(
+                pre_tool_context
+                    .pointer("/context_binding/status")
+                    .and_then(Value::as_str),
+                Some("exact")
+            );
+            assert_eq!(
+                pre_tool_context
+                    .pointer("/context_binding/scope_ref")
+                    .and_then(Value::as_str),
+                Some(scope.as_str())
             );
             Ok(())
         }

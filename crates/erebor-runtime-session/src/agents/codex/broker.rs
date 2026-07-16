@@ -29,7 +29,8 @@ use snafu::{ensure, ResultExt};
 
 use super::{
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
-    CodexManagedSession, CodexNativeHookEvent, CodexPromptReconciliation, CodexSessionError,
+    CodexInvocationLeaseOwner, CodexLeaseRuntimeEvidence, CodexManagedSession,
+    CodexNativeHookEvent, CodexPromptReconciliation, CodexSessionError,
 };
 
 const BROKER_SOCKET: &str = "codex-hook.sock";
@@ -50,6 +51,7 @@ impl CodexHookBroker {
     pub(crate) fn start(
         managed_session: CodexManagedSession,
         reconciliation: std::sync::Arc<CodexPromptReconciliation>,
+        lease_owner: std::sync::Arc<CodexInvocationLeaseOwner>,
     ) -> Result<Self, CodexSessionError> {
         let directory = Self::create_socket_directory()?;
         let socket = directory.join(BROKER_SOCKET);
@@ -67,11 +69,13 @@ impl CodexHookBroker {
                     Ok((mut stream, _address)) => {
                         let session = managed_session.clone();
                         let reconciliation = std::sync::Arc::clone(&reconciliation);
+                        let lease_owner = std::sync::Arc::clone(&lease_owner);
                         thread::spawn(move || {
                             let _result = stream.set_read_timeout(Some(Duration::from_secs(10)));
                             let _result = stream.set_write_timeout(Some(Duration::from_secs(10)));
-                            let _result = CodexHookBrokerProtocol::new(session, reconciliation)
-                                .serve(&mut stream);
+                            let _result =
+                                CodexHookBrokerProtocol::new(session, reconciliation, lease_owner)
+                                    .serve(&mut stream);
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -151,16 +155,19 @@ impl Drop for CodexHookBroker {
 struct CodexHookBrokerProtocol {
     managed_session: CodexManagedSession,
     reconciliation: std::sync::Arc<CodexPromptReconciliation>,
+    lease_owner: std::sync::Arc<CodexInvocationLeaseOwner>,
 }
 
 impl CodexHookBrokerProtocol {
     const fn new(
         managed_session: CodexManagedSession,
         reconciliation: std::sync::Arc<CodexPromptReconciliation>,
+        lease_owner: std::sync::Arc<CodexInvocationLeaseOwner>,
     ) -> Self {
         Self {
             managed_session,
             reconciliation,
+            lease_owner,
         }
     }
 
@@ -201,6 +208,12 @@ impl CodexHookBrokerProtocol {
                 Ok(event_kind) => {
                     self.reconciliation
                         .record_authenticated_hook(event_kind, &event.native_event_json)?;
+                    self.lease_owner.record_authenticated_hook(
+                        event_kind,
+                        &event.native_event_json,
+                        LinuxHookPeerInspector::runtime_evidence(&observed_peer)?,
+                        observed_peer.observed_pid,
+                    )?;
                     let result = HookResult {
                         event: event_kind as i32,
                         accepted: true,
@@ -404,9 +417,29 @@ impl LinuxHookPeerInspector {
             observed_gid: metadata.gid(),
         })
     }
+
+    fn runtime_evidence(
+        peer: &erebor_runtime_ipc::v1::HookPeerEvidence,
+    ) -> Result<CodexLeaseRuntimeEvidence, CodexSessionError> {
+        let hook_pid = i32::try_from(peer.observed_pid).map_err(|_error| {
+            CodexSessionError::InvalidHookEvent {
+                reason: String::from("managed hook peer pid is outside the Linux pid range"),
+                location: snafu::Location::default(),
+            }
+        })?;
+        let process = LinuxHookProcess::inspect(hook_pid)?;
+        Ok(CodexLeaseRuntimeEvidence::new(
+            i64::from(process.parent_pid),
+            process.parent_start_time_ticks,
+            process.parent_executable,
+        ))
+    }
 }
 
 struct LinuxHookProcess {
+    parent_pid: i32,
+    parent_start_time_ticks: u64,
+    parent_executable: String,
     start_time_ticks: u64,
     executable: String,
     argv: Vec<String>,
@@ -436,7 +469,13 @@ impl LinuxHookProcess {
             .context(HookBrokerIoSnafu)?
             .display()
             .to_string();
+        let parent_stat =
+            fs::read_to_string(format!("/proc/{parent_pid}/stat")).context(HookBrokerIoSnafu)?;
+        let (_parent_parent_pid, parent_start_time_ticks) = Self::stat_identities(&parent_stat)?;
         Ok(Self {
+            parent_pid,
+            parent_start_time_ticks,
+            parent_executable: parent_executable.clone(),
             start_time_ticks,
             executable: executable.clone(),
             argv,
@@ -512,14 +551,18 @@ fn write_frame(stream: &mut UnixStream, frame: &EreborIpcFrame) -> Result<(), Co
 mod tests {
     use std::os::unix::net::UnixStream;
 
+    use std::sync::Arc;
+
     use erebor_runtime_core::{
         CodexDeploymentMode, CodexHookEvent, CodexHookEventSchemaLayerConfig, CodexHookShellKind,
         CodexProfileLayerConfig, SessionRunnerKind,
     };
+    use erebor_runtime_events::ActorKind;
     use erebor_runtime_ipc::v1::HookEvent;
 
     use super::{
-        CodexHookBrokerProtocol, CodexPromptReconciliation, HookEventKind, LinuxHookPeerInspector,
+        CodexHookBrokerProtocol, CodexInvocationLeaseOwner, CodexPromptReconciliation,
+        HookEventKind, LinuxHookPeerInspector,
     };
     use crate::{
         agents::codex::{CodexHookClient, CodexManagedSession, CodexNativeHookEvent},
@@ -557,7 +600,8 @@ mod tests {
         let session = CodexManagedSession::for_test(pinned_profile);
         let broker = CodexHookBrokerProtocol::new(
             session,
-            std::sync::Arc::new(CodexPromptReconciliation::default()),
+            Arc::new(CodexPromptReconciliation::default()),
+            test_lease_owner(),
         );
         let valid = HookEvent {
             event: HookEventKind::SessionStart as i32,
@@ -618,7 +662,8 @@ mod tests {
         let worker = std::thread::spawn(move || {
             CodexHookBrokerProtocol::new(
                 broker_session,
-                std::sync::Arc::new(CodexPromptReconciliation::default()),
+                Arc::new(CodexPromptReconciliation::default()),
+                test_lease_owner(),
             )
             .serve(&mut broker_stream)
         });
@@ -668,5 +713,19 @@ mod tests {
             }],
             app_server_transport: Default::default(),
         }
+    }
+
+    fn test_lease_owner() -> Arc<CodexInvocationLeaseOwner> {
+        Arc::new(CodexInvocationLeaseOwner::new(
+            "session-test",
+            "agent-test",
+            ActorKind::Agent,
+            "profile-test",
+            String::from("/opt/codex/codex"),
+            vec![String::from(
+                "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
+            )],
+            None,
+        ))
     }
 }

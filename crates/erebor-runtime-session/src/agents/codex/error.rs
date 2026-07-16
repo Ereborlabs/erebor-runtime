@@ -1,6 +1,7 @@
 use std::{any::Any, io, path::PathBuf};
 
 use erebor_runtime_context::ContextRepositoryError;
+use erebor_runtime_core::AuditError;
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use erebor_runtime_filesystem::FilesystemError;
 use snafu::{Location, Snafu};
@@ -53,6 +54,22 @@ pub enum CodexSessionError {
     },
     #[snafu(display("Codex prompt-reconciliation state lock failed"))]
     PromptReconciliationStateLock {
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Codex Context DAG state lock failed"))]
+    ContextDagStateLock {
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Codex invocation-lease state lock failed"))]
+    InvocationLeaseStateLock {
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to durably record a Codex invocation-lease fact: {source}"))]
+    InvocationLeaseAudit {
+        source: AuditError,
         #[snafu(implicit)]
         location: Location,
     },
@@ -144,6 +161,13 @@ pub enum CodexSessionError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("failed to record durable Codex Context DAG evidence: {source}"))]
+    ContextDag {
+        #[snafu(source(from(ContextRepositoryError, Box::new)))]
+        source: Box<ContextRepositoryError>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Codex App Server exited with code {code:?}"))]
     AppServerTransportChildExit {
         code: Option<i32>,
@@ -167,9 +191,11 @@ impl ErrorExt for CodexSessionError {
             | Self::UnsupportedHookProtocol { .. } => StatusCode::InvalidArguments,
             Self::ReadArtifact { .. } => StatusCode::External,
             Self::FilesystemProjection { source, .. } => source.status_code(),
-            Self::TicketRegistryLock { .. } | Self::PromptReconciliationStateLock { .. } => {
-                StatusCode::Internal
-            }
+            Self::TicketRegistryLock { .. }
+            | Self::PromptReconciliationStateLock { .. }
+            | Self::ContextDagStateLock { .. }
+            | Self::InvocationLeaseStateLock { .. } => StatusCode::Internal,
+            Self::InvocationLeaseAudit { source, .. } => source.status_code(),
             Self::HookBrokerIo { .. } => StatusCode::External,
             Self::Pidfd { .. } => StatusCode::External,
             Self::HookBrokerProtocol { .. }
@@ -177,7 +203,9 @@ impl ErrorExt for CodexSessionError {
             | Self::HookRejected { .. }
             | Self::AppServerTransportProtocol { .. } => StatusCode::InvalidArguments,
             Self::AppServerTransportIo { .. } => StatusCode::External,
-            Self::AppServerTransportContext { source, .. } => source.status_code(),
+            Self::AppServerTransportContext { source, .. } | Self::ContextDag { source, .. } => {
+                source.status_code()
+            }
             Self::AppServerTransportChildExit { .. } => StatusCode::External,
         }
     }
@@ -192,12 +220,15 @@ impl ErrorExt for CodexSessionError {
             | Self::ArtifactNotFleetProtected { .. }
             | Self::TicketRegistryLock { .. }
             | Self::PromptReconciliationStateLock { .. }
+            | Self::ContextDagStateLock { .. }
+            | Self::InvocationLeaseStateLock { .. }
             | Self::TicketNotFound { .. }
             | Self::TicketExpired { .. }
             | Self::TicketProcessExited { .. }
             | Self::TicketPeerMismatch { .. }
             | Self::TicketReplayed { .. }
             | Self::UnsupportedHookProtocol { .. } => RetryHint::NonRetryable,
+            Self::InvocationLeaseAudit { source, .. } => source.retry_hint(),
             Self::HookBrokerIo { source, .. } => RetryHint::from_io_error(source),
             Self::Pidfd { source, .. } => RetryHint::from_io_error(source),
             Self::HookBrokerProtocol { .. }
@@ -205,7 +236,9 @@ impl ErrorExt for CodexSessionError {
             | Self::HookRejected { .. }
             | Self::AppServerTransportProtocol { .. }
             | Self::AppServerTransportChildExit { .. } => RetryHint::NonRetryable,
-            Self::AppServerTransportContext { source, .. } => source.retry_hint(),
+            Self::AppServerTransportContext { source, .. } | Self::ContextDag { source, .. } => {
+                source.retry_hint()
+            }
             Self::AppServerTransportIo { source, .. } => RetryHint::from_io_error(source),
         }
     }

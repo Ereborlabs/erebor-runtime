@@ -8,7 +8,6 @@ use std::{
 #[cfg(target_os = "linux")]
 use std::os::{fd::AsFd, unix::net::UnixStream};
 
-use erebor_runtime_context::{ContextRepository, ScopeRef, ScopeStart, Snapshot, TreeEdit};
 use erebor_runtime_core::{
     CodexProfileLayerConfig, LinuxHostSessionCommandOptions, LinuxHostSessionCommandPlan,
     SessionRunOutcome, SessionRunPlan, SessionRunnerKind,
@@ -18,7 +17,9 @@ use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use super::{CodexPromptReconciliation, CodexSessionError};
+use super::{
+    CodexContextDag, CodexInvocationLeaseOwner, CodexPromptReconciliation, CodexSessionError,
+};
 
 const MAX_JSONL_FRAME_BYTES: usize = 1024 * 1024;
 const MAX_INFLIGHT_REQUESTS: usize = 128;
@@ -28,8 +29,9 @@ const MAX_INFLIGHT_REQUESTS: usize = 128;
 pub(crate) struct CodexAppServerTransportBroker<'a> {
     profile: &'a CodexProfileLayerConfig,
     plan: &'a SessionRunPlan,
-    context_repository: &'a ContextRepository,
+    context_dag: Arc<CodexContextDag>,
     reconciliation: Arc<CodexPromptReconciliation>,
+    lease_owner: Arc<CodexInvocationLeaseOwner>,
 }
 
 impl<'a> CodexAppServerTransportBroker<'a> {
@@ -40,8 +42,9 @@ impl<'a> CodexAppServerTransportBroker<'a> {
     pub(crate) fn new(
         profile: &'a CodexProfileLayerConfig,
         plan: &'a SessionRunPlan,
-        context_repository: &'a ContextRepository,
+        context_dag: Arc<CodexContextDag>,
         reconciliation: Arc<CodexPromptReconciliation>,
+        lease_owner: Arc<CodexInvocationLeaseOwner>,
     ) -> Result<Self, CodexSessionError> {
         if plan.runner().kind() != SessionRunnerKind::LinuxHost {
             return Err(Self::protocol_error(
@@ -56,8 +59,9 @@ impl<'a> CodexAppServerTransportBroker<'a> {
         Ok(Self {
             profile,
             plan,
-            context_repository,
+            context_dag,
             reconciliation,
+            lease_owner,
         })
     }
 
@@ -121,11 +125,12 @@ impl<'a> CodexAppServerTransportBroker<'a> {
         })?;
 
         let output = Arc::new(Mutex::new(io::stdout()));
-        let ledger = Mutex::new(PromptLedger::new(
-            self.context_repository,
+        let ledger = Mutex::new(PromptLedger::with_lease_owner(
+            Arc::clone(&self.context_dag),
             self.plan.session_id().as_str(),
             &self.profile.id,
             Arc::clone(&self.reconciliation),
+            Some(Arc::clone(&self.lease_owner)),
         ));
         let (shutdown_receiver, mut shutdown_sender) =
             UnixStream::pair().map_err(|source| CodexSessionError::AppServerTransportIo {
@@ -182,7 +187,7 @@ impl<'a> CodexAppServerTransportBroker<'a> {
         mut client_input: impl Read + AsFd,
         mut child_input: impl Write,
         output: &Arc<Mutex<io::Stdout>>,
-        ledger: &Mutex<PromptLedger<'_>>,
+        ledger: &Mutex<PromptLedger>,
         shutdown: &impl AsFd,
     ) -> Result<(), CodexSessionError> {
         let mut framer = JsonlFramer::default();
@@ -337,7 +342,7 @@ impl<'a> CodexAppServerTransportBroker<'a> {
     fn relay_child_output(
         mut child_output: impl Read,
         output: &Arc<Mutex<io::Stdout>>,
-        ledger: &Mutex<PromptLedger<'_>>,
+        ledger: &Mutex<PromptLedger>,
     ) -> Result<(), CodexSessionError> {
         let mut framer = JsonlFramer::default();
         let mut chunk = [0_u8; 8192];
@@ -524,19 +529,14 @@ impl ClientRequest {
     }
 }
 
-struct PromptLedger<'a> {
-    context_repository: &'a ContextRepository,
+struct PromptLedger {
+    context_dag: Arc<CodexContextDag>,
     session_id: String,
     profile_id: String,
     reconciliation: Arc<CodexPromptReconciliation>,
-    scopes: HashMap<String, PromptScope>,
+    lease_owner: Option<Arc<CodexInvocationLeaseOwner>>,
     requests: HashMap<String, RequestKind>,
     prompts: HashMap<String, PromptNode>,
-}
-
-struct PromptScope {
-    reference: ScopeRef,
-    head: erebor_runtime_context::ContextObjectId,
 }
 
 enum RequestKind {
@@ -547,7 +547,7 @@ enum RequestKind {
 #[derive(Clone)]
 struct PromptNode {
     request_id: Value,
-    scope_key: String,
+    scope_ref: String,
     path: String,
     raw_line: String,
     model_visible_content: Option<Value>,
@@ -559,19 +559,30 @@ struct PromptNode {
     child_agent_threads: Vec<String>,
 }
 
-impl<'a> PromptLedger<'a> {
+impl PromptLedger {
+    #[cfg(test)]
     fn new(
-        context_repository: &'a ContextRepository,
+        context_dag: Arc<CodexContextDag>,
         session_id: &str,
         profile_id: &str,
         reconciliation: Arc<CodexPromptReconciliation>,
     ) -> Self {
+        Self::with_lease_owner(context_dag, session_id, profile_id, reconciliation, None)
+    }
+
+    fn with_lease_owner(
+        context_dag: Arc<CodexContextDag>,
+        session_id: &str,
+        profile_id: &str,
+        reconciliation: Arc<CodexPromptReconciliation>,
+        lease_owner: Option<Arc<CodexInvocationLeaseOwner>>,
+    ) -> Self {
         Self {
-            context_repository,
+            context_dag,
             session_id: session_id.to_owned(),
             profile_id: profile_id.to_owned(),
             reconciliation,
-            scopes: HashMap::new(),
+            lease_owner,
             requests: HashMap::new(),
             prompts: HashMap::new(),
         }
@@ -626,11 +637,11 @@ impl<'a> PromptLedger<'a> {
         let scope_key = thread_id
             .clone()
             .unwrap_or_else(|| format!("request-{key}"));
-        self.ensure_scope(&scope_key)?;
+        let scope_ref = self.context_dag.ensure_prompt_scope(&scope_key)?;
         let node_id = Self::digest(frame);
         let node = PromptNode {
             request_id: id.clone(),
-            scope_key: scope_key.clone(),
+            scope_ref,
             path: format!("agents/codex/app-server/prompts/{node_id}.json"),
             raw_line: request.raw_line.clone(),
             model_visible_content: request
@@ -767,38 +778,6 @@ impl<'a> PromptLedger<'a> {
         self.append_prompt_node(&node, "bound")
     }
 
-    fn ensure_scope(&mut self, scope_key: &str) -> Result<(), CodexSessionError> {
-        if self.scopes.contains_key(scope_key) {
-            return Ok(());
-        }
-        let root = ScopeRef::root(self.session_id.clone()).map_err(Self::context_error)?;
-        let root_head = match self.context_repository.scope_head(&root) {
-            Ok(head) => head,
-            Err(erebor_runtime_context::ContextRepositoryError::ScopeNotFound { .. }) => self
-                .context_repository
-                .initialize_root(
-                    self.session_id.clone(),
-                    Snapshot::default(),
-                    "Initialize brokered Codex App Server context root",
-                )
-                .map_err(Self::context_error)?,
-            Err(source) => return Err(Self::context_error(source)),
-        };
-        let scope_id = format!(
-            "codex-app-server-{}",
-            &Self::digest(scope_key.as_bytes())[..20]
-        );
-        let reference =
-            ScopeRef::scope(self.session_id.clone(), scope_id).map_err(Self::context_error)?;
-        let head = self
-            .context_repository
-            .create_scope(reference.clone(), ScopeStart::existing_commit(root_head))
-            .map_err(Self::context_error)?;
-        self.scopes
-            .insert(scope_key.to_owned(), PromptScope { reference, head });
-        Ok(())
-    }
-
     fn append_prompt_node(
         &mut self,
         node: &PromptNode,
@@ -847,24 +826,29 @@ impl<'a> PromptLedger<'a> {
                 "could not encode durable App Server prompt context: {error}"
             ))
         })?;
-        let snapshot = Snapshot::new(vec![
-            TreeEdit::blob(&node.path, bytes).map_err(Self::context_error)?
-        ])
-        .map_err(Self::context_error)?;
-        let scope = self.scopes.get_mut(&node.scope_key).ok_or_else(|| {
-            CodexAppServerTransportBroker::protocol_error(
-                "prompt scope disappeared before forwarding",
-            )
-        })?;
-        scope.head = self
-            .context_repository
-            .append_snapshot(
-                scope.reference.clone(),
-                scope.head,
-                snapshot,
-                format!("Record Codex App Server {state} prompt ingress"),
-            )
-            .map_err(Self::context_error)?;
+        self.context_dag.append_prompt(
+            &node.scope_ref,
+            &node.path,
+            bytes,
+            &format!("Record Codex App Server {state} prompt ingress"),
+        )?;
+        if let (Some(thread_id), Some(turn_id), Some(owner)) = (
+            node.thread_id.as_ref(),
+            node.turn_id.as_ref(),
+            self.lease_owner.as_ref(),
+        ) {
+            let item_node_stream = node.item_id.as_ref().map_or_else(
+                || node.path.clone(),
+                |item_id| format!("{}#{item_id}", node.path),
+            );
+            let binding = self.context_dag.bind_prompt(
+                thread_id.clone(),
+                turn_id.clone(),
+                &node.scope_ref,
+                item_node_stream,
+            )?;
+            owner.record_scope_context(binding)?;
+        }
         Ok(())
     }
 
@@ -882,15 +866,6 @@ impl<'a> PromptLedger<'a> {
                 "could not canonicalize App Server request id: {error}"
             ))
         })
-    }
-
-    fn context_error(
-        source: impl Into<Box<erebor_runtime_context::ContextRepositoryError>>,
-    ) -> CodexSessionError {
-        CodexSessionError::AppServerTransportContext {
-            source: source.into(),
-            location: snafu::Location::default(),
-        }
     }
 
     fn digest(bytes: &[u8]) -> String {
@@ -1000,7 +975,7 @@ mod tests {
     use serde_json::json;
 
     use super::{ClientRequest, JsonlFramer, PromptLedger};
-    use crate::agents::codex::CodexPromptReconciliation;
+    use crate::agents::codex::{CodexContextDag, CodexPromptReconciliation};
 
     #[test]
     fn jsonl_framer_preserves_fragmented_and_coalesced_frames(
@@ -1023,25 +998,29 @@ mod tests {
     fn prompt_is_durable_before_its_request_is_forwardable(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let temp = tempfile::tempdir()?;
-        let repository = erebor_runtime_context::ContextRepository::init(
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
             temp.path().join("context"),
             FixedMetadataSource,
-        )?;
+        )?);
         repository.initialize_root("session-1", Default::default(), "Initialize session root")?;
         let reconciliation = Arc::new(CodexPromptReconciliation::default());
-        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let mut ledger = PromptLedger::new(
+            context_dag(&repository),
+            "session-1",
+            "profile-1",
+            reconciliation,
+        );
         let frame = b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"turn/start\",\"params\":{\"threadId\":\"thread-1\",\"input\":[{\"type\":\"text\",\"text\":\"keep exact spacing\"}]}}\n";
         let request = ClientRequest::parse(frame)?;
         ledger.record_pending_prompt(&request, frame)?;
 
         assert!(ledger.prompts.contains_key("7"));
         assert!(ledger.requests.contains_key("7"));
-        let scope = ledger
-            .scopes
-            .get("thread-1")
-            .ok_or("missing prompt scope")?;
-        let head = repository.scope_head(&scope.reference)?;
-        assert_eq!(head, scope.head);
+        let node = ledger.prompts.get("7").ok_or("missing prompt")?;
+        assert!(repository
+            .scope_refs()?
+            .iter()
+            .any(|scope| scope.as_str() == node.scope_ref));
         Ok(())
     }
 
@@ -1050,7 +1029,12 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (_temp, repository) = initialized_repository()?;
         let reconciliation = Arc::new(CodexPromptReconciliation::default());
-        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let mut ledger = PromptLedger::new(
+            context_dag(&repository),
+            "session-1",
+            "profile-1",
+            reconciliation,
+        );
         let duplicate = ClientRequest::parse(
             b"{\"id\":\"same\",\"method\":\"turn/start\",\"params\":{\"threadId\":\"t\"}}\n",
         )?;
@@ -1092,7 +1076,12 @@ mod tests {
 
         let (_temp, repository) = initialized_repository()?;
         let reconciliation = Arc::new(CodexPromptReconciliation::default());
-        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let mut ledger = PromptLedger::new(
+            context_dag(&repository),
+            "session-1",
+            "profile-1",
+            reconciliation,
+        );
         for id in 0..super::MAX_INFLIGHT_REQUESTS {
             ledger.record_request(&json!(id))?;
         }
@@ -1105,7 +1094,12 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (_temp, repository) = initialized_repository()?;
         let reconciliation = Arc::new(CodexPromptReconciliation::default());
-        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let mut ledger = PromptLedger::new(
+            context_dag(&repository),
+            "session-1",
+            "profile-1",
+            reconciliation,
+        );
         ledger.record_request(&json!(17))?;
         ledger.record_codex_message(b"{\"id\":17,\"result\":{}}\n")?;
         ledger.record_request(&json!(17))?;
@@ -1116,7 +1110,12 @@ mod tests {
     fn steer_response_binds_the_current_codex_turn_id() -> Result<(), Box<dyn std::error::Error>> {
         let (_temp, repository) = initialized_repository()?;
         let reconciliation = Arc::new(CodexPromptReconciliation::default());
-        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let mut ledger = PromptLedger::new(
+            context_dag(&repository),
+            "session-1",
+            "profile-1",
+            reconciliation,
+        );
         let frame = b"{\"id\":22,\"method\":\"turn/steer\",\"params\":{\"threadId\":\"thread-1\",\"expectedTurnId\":\"turn-0\",\"input\":[{\"type\":\"text\",\"text\":\"steer\"}]}}\n";
         ledger.record_pending_prompt(&ClientRequest::parse(frame)?, frame)?;
         ledger.record_codex_message(b"{\"id\":22,\"result\":{\"turnId\":\"turn-1\"}}\n")?;
@@ -1138,7 +1137,12 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (_temp, repository) = initialized_repository()?;
         let reconciliation = Arc::new(CodexPromptReconciliation::default());
-        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let mut ledger = PromptLedger::new(
+            context_dag(&repository),
+            "session-1",
+            "profile-1",
+            reconciliation,
+        );
         let frame = b"{\"id\":23,\"method\":\"turn/start\",\"params\":{\"threadId\":\"thread-1\",\"additionalContext\":{\"editor\":{\"uri\":\"file:///workspace/main.rs\"}},\"input\":[{\"type\":\"text\",\"text\":\"inspect this\"},{\"type\":\"localImage\",\"path\":\"/workspace/diagram.png\"}]}}\n";
         ledger.record_pending_prompt(&ClientRequest::parse(frame)?, frame)?;
         let node = ledger.prompts.get("23").ok_or("missing prompt")?;
@@ -1159,7 +1163,12 @@ mod tests {
     {
         let (_temp, repository) = initialized_repository()?;
         let reconciliation = Arc::new(CodexPromptReconciliation::default());
-        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let mut ledger = PromptLedger::new(
+            context_dag(&repository),
+            "session-1",
+            "profile-1",
+            reconciliation,
+        );
         let interrupt = ClientRequest::parse(
             b"{\"id\":24,\"method\":\"turn/interrupt\",\"params\":{\"threadId\":\"thread-1\",\"turnId\":\"turn-1\"}}\n",
         )?;
@@ -1177,7 +1186,12 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (_temp, repository) = initialized_repository()?;
         let reconciliation = Arc::new(CodexPromptReconciliation::default());
-        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let mut ledger = PromptLedger::new(
+            context_dag(&repository),
+            "session-1",
+            "profile-1",
+            reconciliation,
+        );
         let frame = b"{\"id\":31,\"method\":\"turn/start\",\"params\":{\"threadId\":\"parent-thread\",\"input\":[]}}\n";
         ledger.record_pending_prompt(&ClientRequest::parse(frame)?, frame)?;
         ledger.record_codex_message(
@@ -1204,7 +1218,7 @@ mod tests {
         let (_temp, repository) = initialized_repository()?;
         let reconciliation = Arc::new(CodexPromptReconciliation::default());
         let ledger = Mutex::new(PromptLedger::new(
-            &repository,
+            context_dag(&repository),
             "session-1",
             "profile-1",
             reconciliation,
@@ -1247,16 +1261,25 @@ mod tests {
     }
 
     fn initialized_repository() -> Result<
-        (tempfile::TempDir, erebor_runtime_context::ContextRepository),
+        (
+            tempfile::TempDir,
+            Arc<erebor_runtime_context::ContextRepository>,
+        ),
         Box<dyn std::error::Error>,
     > {
         let temp = tempfile::tempdir()?;
-        let repository = erebor_runtime_context::ContextRepository::init(
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
             temp.path().join("context"),
             FixedMetadataSource,
-        )?;
+        )?);
         repository.initialize_root("session-1", Default::default(), "Initialize session root")?;
         Ok((temp, repository))
+    }
+
+    fn context_dag(
+        repository: &Arc<erebor_runtime_context::ContextRepository>,
+    ) -> Arc<CodexContextDag> {
+        Arc::new(CodexContextDag::new(Arc::clone(repository), "session-1"))
     }
 
     struct FixedMetadataSource;

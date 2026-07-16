@@ -42,7 +42,7 @@ impl SessionExecutionService {
             .and_then(|command| config.codex.matching_profile(std::path::Path::new(command)))
             .filter(|profile| CodexAppServerTransportBroker::configured_for(profile))
         {
-            let prepared_session = prepared_session.ok_or_else(|| SessionExecutionError::CodexSession {
+            let _prepared_session = prepared_session.ok_or_else(|| SessionExecutionError::CodexSession {
                 source: Box::new(crate::CodexSessionError::IncompatibleProfile {
                     reason: String::from(
                         "a brokered Codex App Server session requires a durable session context repository",
@@ -62,11 +62,37 @@ impl SessionExecutionService {
                     location: Location::default(),
                 }
             })?;
+            let lease_owner = side_resources.codex_invocation_lease_owner().ok_or_else(|| {
+                SessionExecutionError::CodexSession {
+                    source: Box::new(crate::CodexSessionError::IncompatibleProfile {
+                        reason: String::from(
+                            "a brokered Codex App Server session requires the invocation lease owner",
+                        ),
+                        location: Location::default(),
+                    }),
+                    location: Location::default(),
+                }
+            })?;
+            let context_dag = lease_owner
+                .context_dag()
+                .context(crate::error::CodexSessionSnafu)?
+                .ok_or_else(|| {
+                SessionExecutionError::CodexSession {
+                    source: Box::new(crate::CodexSessionError::IncompatibleProfile {
+                        reason: String::from(
+                            "a brokered Codex App Server session requires a durable Codex Context DAG owner",
+                        ),
+                        location: Location::default(),
+                    }),
+                    location: Location::default(),
+                }
+            })?;
             return CodexAppServerTransportBroker::new(
                 profile,
                 plan,
-                prepared_session.context_repository(),
+                context_dag,
                 reconciliation,
+                lease_owner,
             )
             .and_then(|broker| {
                 broker.run(
