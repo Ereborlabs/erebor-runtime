@@ -262,9 +262,11 @@ fn start_session_side_resources_from_start_plan(
                                 String::from("EREBOR_CODEX_HOOK_BROKER"),
                                 CodexHookBroker::session_endpoint().to_owned(),
                             ));
-                            let issuer =
-                                CodexGuardTicketIssuer::start(codex_managed_session.clone())
-                                    .context(CodexSessionSnafu)?;
+                            let issuer = CodexGuardTicketIssuer::start(
+                                codex_managed_session.clone(),
+                                Arc::clone(&lease_owner),
+                            )
+                            .context(CodexSessionSnafu)?;
                             environment.push((
                                 String::from("EREBOR_GUARD_EXEC_OBSERVER_FD"),
                                 issuer.inherited_guard_fd().to_string(),

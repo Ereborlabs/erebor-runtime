@@ -52,6 +52,12 @@ pub(super) fn should_deny_file_syscall(pid: Pid, regs: &UserRegsStruct) -> bool 
     }
 }
 
+pub(super) fn is_intercepted_file_syscall(pid: Pid, regs: &UserRegsStruct) -> bool {
+    file_request_from_syscall(pid, regs).is_some_and(|request| {
+        GuardBrokerEnvironment::operation_enabled(request.operation.as_str())
+    })
+}
+
 fn should_deny_broker_decision(
     request: &FileSyscallRequest,
     decision: &ipc::InterceptionDecision,

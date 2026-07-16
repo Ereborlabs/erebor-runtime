@@ -16,6 +16,8 @@ mod interception;
 mod ipc;
 #[path = "process_guard/memory.rs"]
 mod memory;
+#[path = "process_guard/observer_protocol.rs"]
+mod observer_protocol;
 #[path = "process_guard/rules.rs"]
 mod rules;
 #[path = "process_guard/status.rs"]

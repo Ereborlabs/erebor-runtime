@@ -1,20 +1,22 @@
 use std::{
-    io::{Read, Write},
+    collections::HashSet,
     net::Shutdown,
     os::{fd::AsRawFd, unix::net::UnixStream},
-    sync::Mutex,
+    sync::{Arc, Mutex},
     thread::{self, JoinHandle},
 };
 
 use rustix::io::{fcntl_getfd, fcntl_setfd, FdFlags};
 
-use super::{broker::LinuxHookPeerInspector, CodexManagedSession, CodexSessionError};
+#[path = "../../os/linux/process_guard/observer_protocol.rs"]
+mod observer_protocol;
 
-const REQUEST_MAGIC: [u8; 4] = *b"ERGX";
-const RESPONSE_MAGIC: [u8; 4] = *b"ERGA";
-const VERSION: u8 = 1;
-const MAX_HISTORY_ENTRIES: usize = 16;
-const MAX_PATH_BYTES: usize = 4096;
+use observer_protocol::{GuardObserverEvent, GuardObserverStatus};
+
+use super::{
+    broker::LinuxHookPeerInspector, CodexInvocationLeaseOwner, CodexManagedSession,
+    CodexSessionError,
+};
 
 /// Codex-owned ticket issuer that consumes generic guarded-exec observations
 /// from a private inherited descriptor. The generic ptrace guard never learns
@@ -25,7 +27,10 @@ pub(crate) struct CodexGuardTicketIssuer {
 }
 
 impl CodexGuardTicketIssuer {
-    pub(crate) fn start(managed_session: CodexManagedSession) -> Result<Self, CodexSessionError> {
+    pub(crate) fn start(
+        managed_session: CodexManagedSession,
+        lease_owner: Arc<CodexInvocationLeaseOwner>,
+    ) -> Result<Self, CodexSessionError> {
         let (server_stream, guard_stream) =
             UnixStream::pair().map_err(|source| CodexSessionError::HookBrokerIo {
                 source,
@@ -46,7 +51,7 @@ impl CodexGuardTicketIssuer {
             })?;
 
         let worker = thread::spawn(move || {
-            CodexGuardTicketIssuerServer::new(managed_session).serve(server_stream);
+            CodexGuardTicketIssuerServer::new(managed_session, lease_owner).serve(server_stream);
         });
         Ok(Self {
             guard_stream,
@@ -73,23 +78,81 @@ impl Drop for CodexGuardTicketIssuer {
 
 struct CodexGuardTicketIssuerServer {
     managed_session: CodexManagedSession,
+    lease_owner: Arc<CodexInvocationLeaseOwner>,
+    tracked_hook_pids: HashSet<i32>,
 }
 
 impl CodexGuardTicketIssuerServer {
-    const fn new(managed_session: CodexManagedSession) -> Self {
-        Self { managed_session }
+    fn new(
+        managed_session: CodexManagedSession,
+        lease_owner: Arc<CodexInvocationLeaseOwner>,
+    ) -> Self {
+        Self {
+            managed_session,
+            lease_owner,
+            tracked_hook_pids: HashSet::new(),
+        }
     }
 
-    fn serve(&self, mut stream: UnixStream) {
-        while let Ok(observation) = GuardedExecObservation::read(&mut stream) {
-            let status = self.issue_if_managed_hook(observation);
-            if GuardedExecObservation::write_status(&mut stream, status).is_err() {
+    fn serve(&mut self, mut stream: UnixStream) {
+        while let Ok(observation) = GuardObserverEvent::read(&mut stream) {
+            let status = self.handle_observation(observation);
+            if status.write(&mut stream).is_err() {
                 break;
             }
         }
     }
 
-    fn issue_if_managed_hook(&self, observation: GuardedExecObservation) -> u8 {
+    fn handle_observation(&mut self, observation: GuardObserverEvent) -> GuardObserverStatus {
+        match observation {
+            GuardObserverEvent::Exec { pid, exec_history } => {
+                let status = self.issue_if_managed_hook(pid, &exec_history);
+                if status == GuardObserverStatus::Track {
+                    self.tracked_hook_pids.insert(pid);
+                }
+                status
+            }
+            GuardObserverEvent::Fork {
+                parent_pid,
+                child_pid,
+            } => self
+                .lease_owner
+                .record_guarded_process_fork(i64::from(parent_pid), i64::from(child_pid))
+                .map_or_else(
+                    |error| {
+                        self.log_observer_error("fork", parent_pid, &error);
+                        GuardObserverStatus::Reject
+                    },
+                    |_| GuardObserverStatus::Ignore,
+                ),
+            GuardObserverEvent::Exit { pid, succeeded } => {
+                if let Err(error) = self.lease_owner.record_guarded_process_exit(i64::from(pid)) {
+                    self.log_observer_error("exit", pid, &error);
+                    return GuardObserverStatus::Reject;
+                }
+                if !self.tracked_hook_pids.remove(&pid) {
+                    return GuardObserverStatus::Ignore;
+                }
+                self.lease_owner
+                    .record_guarded_hook_exit(i64::from(pid), succeeded)
+                    .map_or_else(
+                        |error| {
+                            self.log_observer_error("hook exit", pid, &error);
+                            GuardObserverStatus::Reject
+                        },
+                        |released| {
+                            if released {
+                                GuardObserverStatus::Track
+                            } else {
+                                GuardObserverStatus::Reject
+                            }
+                        },
+                    )
+            }
+        }
+    }
+
+    fn issue_if_managed_hook(&self, pid: i32, exec_history: &[String]) -> GuardObserverStatus {
         let expected_history = self
             .managed_session
             .profile()
@@ -97,19 +160,19 @@ impl CodexGuardTicketIssuerServer {
             .iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>();
-        if observation.exec_history != expected_history {
-            return 0;
+        if exec_history != expected_history {
+            return GuardObserverStatus::Ignore;
         }
-        let peer = match LinuxHookPeerInspector::inspect_pid(observation.pid, "") {
+        let peer = match LinuxHookPeerInspector::inspect_pid(pid, "") {
             Ok(peer) => peer,
             Err(error) => {
                 erebor_runtime_telemetry::log!(
-                    erebor_runtime_telemetry::tracing::Level::WARN,
-                    error = ?error,
-                    pid = observation.pid,
+                        erebor_runtime_telemetry::tracing::Level::WARN,
+                        error = ?error,
+                    pid,
                     "managed Codex hook peer inspection failed"
                 );
-                return 2;
+                return GuardObserverStatus::Reject;
             }
         };
         let profile = self.managed_session.profile();
@@ -118,120 +181,72 @@ impl CodexGuardTicketIssuerServer {
         {
             erebor_runtime_telemetry::log!(
                 erebor_runtime_telemetry::tracing::Level::WARN,
-                pid = observation.pid,
+                pid,
                 executable = %peer.executable,
                 argv = %peer.argv.join(" "),
                 "managed Codex hook identity did not match its projected profile"
             );
-            return 2;
+            return GuardObserverStatus::Reject;
         }
         match self.managed_session.issue_guarded_hook_ticket(peer) {
-            Ok(_ticket) => 1,
+            Ok(_ticket) => GuardObserverStatus::Track,
             Err(error) => {
                 erebor_runtime_telemetry::log!(
                     erebor_runtime_telemetry::tracing::Level::WARN,
                     error = ?error,
-                    pid = observation.pid,
+                pid,
                     "managed Codex hook ticket issuance failed"
                 );
-                2
+                GuardObserverStatus::Reject
             }
         }
     }
-}
-
-struct GuardedExecObservation {
-    pid: i32,
-    exec_history: Vec<String>,
-}
-
-impl GuardedExecObservation {
-    fn read(stream: &mut UnixStream) -> Result<Self, std::io::Error> {
-        let mut header = [0_u8; 10];
-        stream.read_exact(&mut header)?;
-        if header[..4] != REQUEST_MAGIC || header[4] != VERSION {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid guarded exec observation header",
-            ));
-        }
-        let pid = i32::from_le_bytes([header[5], header[6], header[7], header[8]]);
-        let count = usize::from(header[9]);
-        if pid <= 0 || count == 0 || count > MAX_HISTORY_ENTRIES {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid guarded exec observation shape",
-            ));
-        }
-        let mut exec_history = Vec::with_capacity(count);
-        for _index in 0..count {
-            let mut length = [0_u8; 2];
-            stream.read_exact(&mut length)?;
-            let length = usize::from(u16::from_le_bytes(length));
-            if length == 0 || length > MAX_PATH_BYTES {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "invalid guarded exec history path size",
-                ));
-            }
-            let mut path = vec![0_u8; length];
-            stream.read_exact(&mut path)?;
-            let path = String::from_utf8(path).map_err(|_error| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "guarded exec history path is not UTF-8",
-                )
-            })?;
-            exec_history.push(path);
-        }
-        Ok(Self { pid, exec_history })
-    }
-
-    fn write_status(stream: &mut UnixStream, status: u8) -> Result<(), std::io::Error> {
-        stream.write_all(&[
-            RESPONSE_MAGIC[0],
-            RESPONSE_MAGIC[1],
-            RESPONSE_MAGIC[2],
-            RESPONSE_MAGIC[3],
-            VERSION,
-            status,
-        ])
+    fn log_observer_error(&self, event: &str, pid: i32, error: &CodexSessionError) {
+        erebor_runtime_telemetry::log!(
+            erebor_runtime_telemetry::tracing::Level::WARN,
+            error = ?error,
+            event,
+            pid,
+            "managed Codex guard lifecycle observation failed"
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{
+        fs,
         io::Write,
         os::{fd::AsRawFd, unix::net::UnixStream},
         process::Command,
-        time::Duration,
+        thread,
+        time::{Duration, Instant},
     };
 
     use rustix::io::{fcntl_getfd, fcntl_setfd, FdFlags};
 
-    use super::GuardedExecObservation;
+    use super::observer_protocol::{GuardObserverEvent, GuardObserverStatus};
 
     #[test]
-    fn guarded_exec_observation_rejects_malformed_history() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn guarded_lifecycle_observation_rejects_malformed_header(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let (mut writer, mut reader) = match UnixStream::pair() {
             Ok(pair) => pair,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return Ok(()),
             Err(error) => return Err(error.into()),
         };
-        if let Err(error) = writer.write_all(b"ERGX\x01\x00\x00\x00\x00\x00") {
+        if let Err(error) = writer.write_all(b"ERGX\x02\x01\x00\x00\x00\x00\x00") {
             if error.kind() == std::io::ErrorKind::PermissionDenied {
                 return Ok(());
             }
             return Err(error.into());
         }
-        assert!(GuardedExecObservation::read(&mut reader).is_err());
+        assert!(GuardObserverEvent::read(&mut reader).is_err());
         Ok(())
     }
 
     #[test]
-    fn generic_process_guard_reports_each_exec_over_its_private_descriptor(
+    fn generic_process_guard_reports_exec_and_exit_over_its_private_descriptor(
     ) -> Result<(), Box<dyn std::error::Error>> {
         match generic_process_guard_observation() {
             Ok(()) => Ok(()),
@@ -260,17 +275,106 @@ mod tests {
                 guard.as_raw_fd().to_string(),
             )
             .spawn()?;
-        let observation = match GuardedExecObservation::read(&mut server) {
+        let observation = match GuardObserverEvent::read(&mut server) {
             Ok(observation) => observation,
             Err(error) => {
                 let _result = child.kill();
                 return Err(error.into());
             }
         };
-        assert!(observation.pid > 0);
-        assert!(!observation.exec_history.is_empty());
-        GuardedExecObservation::write_status(&mut server, 0)?;
+        let GuardObserverEvent::Exec { pid, exec_history } = observation else {
+            return Err("expected guarded exec observation".into());
+        };
+        assert!(pid > 0);
+        assert!(!exec_history.is_empty());
+        GuardObserverStatus::Ignore.write(&mut server)?;
+        let exit = GuardObserverEvent::read(&mut server)?;
+        assert_eq!(
+            exit,
+            GuardObserverEvent::Exit {
+                pid,
+                succeeded: true
+            }
+        );
+        GuardObserverStatus::Ignore.write(&mut server)?;
         assert!(child.wait()?.success());
+        Ok(())
+    }
+
+    #[test]
+    fn generic_process_guard_parks_a_physical_exec_until_the_tracked_hook_exits(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let marker = root.path().join("effect-after-hook-exit");
+        let hook_tracked = root.path().join("hook-tracked");
+        let (server, guard) = UnixStream::pair()?;
+        let mut flags = fcntl_getfd(&guard)?;
+        flags.remove(FdFlags::CLOEXEC);
+        fcntl_setfd(&guard, flags)?;
+        let guard_path = env!("EREBOR_BUILD_LINUX_PROCESS_GUARD");
+        let script = format!(
+            "/usr/bin/sleep 0.4 & while [ ! -e {} ]; do :; done; /usr/bin/touch {}",
+            hook_tracked.display(),
+            marker.display()
+        );
+        let mut child = Command::new(guard_path)
+            .args(["/bin/sh", "-c", &script])
+            .env(
+                "EREBOR_GUARD_EXEC_OBSERVER_FD",
+                guard.as_raw_fd().to_string(),
+            )
+            .spawn()?;
+        let marker_for_observer = marker.clone();
+        let hook_tracked_for_observer = hook_tracked.clone();
+        let observed_marker_absent = thread::spawn(move || {
+            let mut server = server;
+            server.set_read_timeout(Some(Duration::from_secs(5)))?;
+            let mut tracked_hook_pid = None;
+            let mut marker_absent_at_hook_exit = false;
+            while let Ok(event) = GuardObserverEvent::read(&mut server) {
+                let status = match event {
+                    GuardObserverEvent::Exec { pid, exec_history }
+                        if exec_history
+                            .last()
+                            .is_some_and(|path| path.ends_with("/sleep")) =>
+                    {
+                        tracked_hook_pid = Some(pid);
+                        fs::write(&hook_tracked_for_observer, "tracked")?;
+                        GuardObserverStatus::Track
+                    }
+                    GuardObserverEvent::Exit { pid, succeeded }
+                        if Some(pid) == tracked_hook_pid && succeeded =>
+                    {
+                        marker_absent_at_hook_exit = !marker_for_observer.exists();
+                        GuardObserverStatus::Track
+                    }
+                    _ => GuardObserverStatus::Ignore,
+                };
+                if status.write(&mut server).is_err() {
+                    break;
+                }
+            }
+            Ok::<_, std::io::Error>((tracked_hook_pid.is_some(), marker_absent_at_hook_exit))
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _result = child.kill();
+                return Err("process guard did not release the held physical exec".into());
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        let (saw_tracked_hook, marker_absent_at_hook_exit) = observed_marker_absent
+            .join()
+            .map_err(|_error| "process guard observer thread panicked")??;
+        assert!(status.success());
+        assert!(saw_tracked_hook);
+        assert!(marker_absent_at_hook_exit);
+        assert!(fs::metadata(marker).is_ok());
         Ok(())
     }
 }

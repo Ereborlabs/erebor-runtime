@@ -21,8 +21,6 @@ use sha2::{Digest, Sha256};
 use super::{CodexContextDag, CodexScopeContextBinding, CodexSessionError};
 
 const LEASE_LIFETIME: Duration = Duration::from_secs(30);
-const BARRIER_UNAVAILABLE_RULE: &str =
-    "erebor-codex-invocation-lease-hook-exit-ptrace-barrier-unavailable";
 
 /// Kernel-observed identity of the Codex process that launched an authenticated
 /// managed hook. It is kept outside the generic ptrace guard protocol.
@@ -48,13 +46,6 @@ impl CodexLeaseRuntimeEvidence {
             self.pid, self.process_start_time_ticks, self.executable
         )
     }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HookExitBarrier {
-    Unavailable,
-    #[cfg(test)]
-    Verified,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -173,7 +164,6 @@ pub(crate) struct CodexInvocationLeaseOwner {
     profile_id: String,
     profile_executable: String,
     trusted_profile_execs: Vec<String>,
-    barrier: HookExitBarrier,
     audit: Option<JsonlAuditSink>,
     context_dag: Mutex<Option<Arc<CodexContextDag>>>,
     state: Mutex<LeaseState>,
@@ -198,7 +188,6 @@ impl CodexInvocationLeaseOwner {
             profile_id: profile_id.to_owned(),
             profile_executable,
             trusted_profile_execs,
-            barrier: HookExitBarrier::Unavailable,
             audit: audit_path.map(JsonlAuditSink::new),
             context_dag: Mutex::new(None),
             state: Mutex::new(LeaseState::default()),
@@ -238,6 +227,109 @@ impl CodexInvocationLeaseOwner {
             binding,
         );
         Ok(())
+    }
+
+    /// Releases only the exact pre-tool lease whose authenticated hook process
+    /// has exited successfully. The generic ptrace guard calls this through
+    /// the Codex issuer before it resumes a parked physical syscall.
+    pub(crate) fn record_guarded_hook_exit(
+        &self,
+        hook_pid: i64,
+        succeeded: bool,
+    ) -> Result<bool, CodexSessionError> {
+        let mut state = self.lock_state()?;
+        self.expire_locked(&mut state)?;
+        let lease_ids = state
+            .leases
+            .iter()
+            .filter(|(_lease_id, lease)| lease.hook_pid == hook_pid)
+            .filter(|(_lease_id, lease)| lease.state != InvocationLeaseState::Closed)
+            .map(|(lease_id, _lease)| lease_id.clone())
+            .collect::<Vec<_>>();
+        if lease_ids.is_empty() {
+            return Ok(succeeded);
+        }
+
+        for lease_id in &lease_ids {
+            let Some(lease) = state.leases.get_mut(lease_id) else {
+                continue;
+            };
+            let transition = if succeeded {
+                if lease.state == InvocationLeaseState::ResponseIssued {
+                    lease.state = InvocationLeaseState::Armed;
+                    Some((lease.clone(), "guarded-hook-exit-success"))
+                } else {
+                    None
+                }
+            } else {
+                lease.state = InvocationLeaseState::Closed;
+                Some((lease.clone(), "guarded-hook-exit-failure"))
+            };
+            if let Some((lease, fact)) = transition {
+                self.record_transition_locked(&mut state, &lease, fact, None)?;
+            }
+        }
+        if !succeeded {
+            state
+                .lanes
+                .retain(|_lane, lease_id| !lease_ids.contains(lease_id));
+            state
+                .processes
+                .retain(|_pid, binding| !lease_ids.contains(&binding.lease_id));
+        }
+        Ok(succeeded)
+    }
+
+    /// Carries a kernel-observed parent/child relation into an already bound
+    /// command capability. This is deliberately independent of command text
+    /// so shell forks, background children, and later reparenting retain the
+    /// one exact invocation association.
+    pub(crate) fn record_guarded_process_fork(
+        &self,
+        parent_pid: i64,
+        child_pid: i64,
+    ) -> Result<(), CodexSessionError> {
+        let mut state = self.lock_state()?;
+        self.expire_locked(&mut state)?;
+        let Some(binding) = state.processes.get(&parent_pid).cloned() else {
+            return Ok(());
+        };
+        let Some(lease) = state.leases.get(&binding.lease_id).cloned() else {
+            state.processes.remove(&parent_pid);
+            return Ok(());
+        };
+        if lease.state == InvocationLeaseState::Closed {
+            state.processes.remove(&parent_pid);
+            return Ok(());
+        }
+        state.processes.insert(child_pid, binding);
+        self.record_audit_locked(
+            &mut state,
+            "process-descendant-fork-bound",
+            Some(&lease),
+            serde_json::json!({"parent_pid": parent_pid, "child_pid": child_pid}),
+            false,
+            lease.context_pin.as_ref(),
+        )
+    }
+
+    /// Drops stale process identity state when ptrace observes an exit. Child
+    /// bindings survive their parent's exit because they were recorded as
+    /// separate kernel-observed identities at fork time.
+    pub(crate) fn record_guarded_process_exit(&self, pid: i64) -> Result<(), CodexSessionError> {
+        let mut state = self.lock_state()?;
+        let Some(binding) = state.processes.remove(&pid) else {
+            return Ok(());
+        };
+        let lease = state.leases.get(&binding.lease_id).cloned();
+        self.record_audit_locked(
+            &mut state,
+            "process-exit-unbound",
+            lease.as_ref(),
+            serde_json::json!({"pid": pid}),
+            false,
+            lease.as_ref().and_then(|lease| lease.context_pin.as_ref()),
+        )
     }
 
     pub(crate) fn record_authenticated_hook(
@@ -365,24 +457,24 @@ impl CodexInvocationLeaseOwner {
     ) -> Result<erebor_runtime_core::SurfaceInterceptionDecision, CodexSessionError> {
         let mut state = self.lock_state()?;
         self.expire_locked(&mut state)?;
-        if self.barrier == HookExitBarrier::Unavailable {
-            if self.allow_profile_bootstrap_exec(&mut state, request) {
-                return self.record_physical_decision_locked(
-                    &mut state,
-                    None,
-                    request,
-                    true,
-                    "erebor-codex-invocation-lease-profile-bootstrap",
-                    "profile-pinned Codex or managed-hook bootstrap exec is not a tool effect",
-                );
-            }
+        if self.allow_profile_bootstrap_exec(&mut state, request) {
+            return self.record_physical_decision_locked(
+                &mut state,
+                None,
+                request,
+                true,
+                "erebor-codex-invocation-lease-profile-bootstrap",
+                "profile-pinned Codex or managed-hook bootstrap exec is not a tool effect",
+            );
+        }
+        if self.has_pending_matching_hook_exit(&state, request) {
             return self.record_physical_decision_locked(
                 &mut state,
                 None,
                 request,
                 false,
-                BARRIER_UNAVAILABLE_RULE,
-                "the current Codex profile has no verified hook-exit to ptrace physical-effect barrier",
+                "erebor-codex-invocation-lease-hook-exit-barrier-pending",
+                "the exact Codex invocation hook has not exited successfully",
             );
         }
 
@@ -399,6 +491,39 @@ impl CodexInvocationLeaseOwner {
                 unreachable!("unsupported interception family returned by physical gate")
             }
         }
+    }
+
+    fn has_pending_matching_hook_exit(
+        &self,
+        state: &LeaseState,
+        request: &InterceptionRequest,
+    ) -> bool {
+        let matches = |lease: &&InvocationLease| match request.operation_family() {
+            InterceptionOperation::ProcessExec => {
+                lease.effect_class == EffectClass::Command
+                    && lease.runtime_pid == request.ppid
+                    && Self::command_launch_matches(lease, request)
+            }
+            InterceptionOperation::FileOpen
+            | InterceptionOperation::FileRead
+            | InterceptionOperation::FileMutation => {
+                lease.effect_class == EffectClass::InProcessMutation
+                    && lease.runtime_pid == request.pid
+                    && Self::mutation_target_matches(
+                        lease,
+                        request.file.as_ref().map(|file| file.path.as_str()),
+                    )
+            }
+            InterceptionOperation::SocketConnect | InterceptionOperation::Unspecified => false,
+        };
+        state
+            .leases
+            .values()
+            .filter(|lease| lease.state == InvocationLeaseState::ResponseIssued)
+            .filter(matches)
+            .take(2)
+            .count()
+            == 1
     }
 
     fn record_pre_tool_use_locked(
@@ -714,16 +839,20 @@ impl CodexInvocationLeaseOwner {
         state: &mut LeaseState,
         request: &InterceptionRequest,
     ) -> Result<erebor_runtime_core::SurfaceInterceptionDecision, CodexSessionError> {
-        if let Some(binding) = state.processes.get(&request.pid) {
-            let lease = state.leases.get(&binding.lease_id).cloned();
-            return self.record_physical_decision_locked(
-                state,
-                lease.as_ref(),
-                request,
-                true,
-                "erebor-codex-invocation-lease-bound-descendant",
-                "process already retains its exact Codex invocation association",
-            );
+        if let Some(binding) = state.processes.get(&request.pid).cloned() {
+            if let Some(lease) = state.leases.get(&binding.lease_id).cloned() {
+                if lease.state != InvocationLeaseState::Closed {
+                    return self.record_physical_decision_locked(
+                        state,
+                        Some(&lease),
+                        request,
+                        true,
+                        "erebor-codex-invocation-lease-bound-descendant",
+                        "process already retains its exact Codex invocation association",
+                    );
+                }
+            }
+            state.processes.remove(&request.pid);
         }
         let candidates = state
             .leases
@@ -778,16 +907,20 @@ impl CodexInvocationLeaseOwner {
         state: &mut LeaseState,
         request: &InterceptionRequest,
     ) -> Result<erebor_runtime_core::SurfaceInterceptionDecision, CodexSessionError> {
-        if let Some(binding) = state.processes.get(&request.pid) {
-            let lease = state.leases.get(&binding.lease_id).cloned();
-            return self.record_physical_decision_locked(
-                state,
-                lease.as_ref(),
-                request,
-                true,
-                "erebor-codex-invocation-lease-descendant-file-effect",
-                "bound command descendant retains its original invocation association",
-            );
+        if let Some(binding) = state.processes.get(&request.pid).cloned() {
+            if let Some(lease) = state.leases.get(&binding.lease_id).cloned() {
+                if lease.state != InvocationLeaseState::Closed {
+                    return self.record_physical_decision_locked(
+                        state,
+                        Some(&lease),
+                        request,
+                        true,
+                        "erebor-codex-invocation-lease-descendant-file-effect",
+                        "bound command descendant retains its original invocation association",
+                    );
+                }
+            }
+            state.processes.remove(&request.pid);
         }
         let path = request.file.as_ref().map(|file| file.path.as_str());
         let candidates = state
@@ -1148,41 +1281,6 @@ impl CodexInvocationLeaseOwner {
             .iter()
             .any(|field| payload.get(*field).and_then(Value::as_bool) == Some(true))
     }
-
-    #[cfg(test)]
-    fn with_verified_barrier() -> Self {
-        let mut owner = Self::new(
-            "session-test",
-            "agent-test",
-            ActorKind::Agent,
-            "profile-test",
-            String::from("/opt/codex/codex"),
-            vec![String::from(
-                "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
-            )],
-            None,
-        );
-        owner.barrier = HookExitBarrier::Verified;
-        owner
-    }
-
-    #[cfg(test)]
-    fn arm_after_verified_hook_exit(&self, lease_id: &str) -> Result<(), CodexSessionError> {
-        let mut state = self.lock_state()?;
-        let Some(lease) = state.leases.get_mut(lease_id) else {
-            return Ok(());
-        };
-        let transition = if lease.state == InvocationLeaseState::ResponseIssued {
-            lease.state = InvocationLeaseState::Armed;
-            Some(lease.clone())
-        } else {
-            None
-        };
-        if let Some(lease) = transition.as_ref() {
-            self.record_transition_locked(&mut state, lease, "verified-hook-exit-barrier", None)?;
-        }
-        Ok(())
-    }
 }
 
 impl Drop for CodexInvocationLeaseOwner {
@@ -1408,7 +1506,7 @@ mod tests {
     };
 
     #[test]
-    fn response_issued_lease_cannot_authorize_a_physical_effect_without_the_barrier(
+    fn response_issued_lease_holds_its_physical_effect_until_hook_exit(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let owner = owner_with_scope()?;
         owner.record_authenticated_hook(
@@ -1425,15 +1523,15 @@ mod tests {
         assert_eq!(kind, SessionInterceptionDecision::Deny);
         assert_eq!(
             rule_id,
-            "erebor-codex-invocation-lease-hook-exit-ptrace-barrier-unavailable"
+            "erebor-codex-invocation-lease-hook-exit-barrier-pending"
         );
         Ok(())
     }
 
     #[test]
-    fn verified_barrier_binds_command_once_and_retains_descendant_after_post_tool_use(
+    fn hook_exit_binds_command_once_and_retains_descendant_after_post_tool_use(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let owner = CodexInvocationLeaseOwner::with_verified_barrier();
+        let owner = test_owner();
         owner.record_scope_context(binding("scope-a", "item-a"))?;
         owner.record_authenticated_hook(
             erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
@@ -1450,7 +1548,7 @@ mod tests {
             .next()
             .cloned()
             .ok_or("lease missing")?;
-        owner.arm_after_verified_hook_exit(&lease_id)?;
+        owner.record_guarded_hook_exit(101, true)?;
 
         let decision = owner
             .physical_effect_decision(&process_request(201, 42, "echo permitted"))
@@ -1487,7 +1585,7 @@ mod tests {
     #[test]
     fn mutation_capability_is_exact_and_post_tool_use_closes_new_in_process_effects(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let owner = CodexInvocationLeaseOwner::with_verified_barrier();
+        let owner = test_owner();
         owner.record_scope_context(binding("scope-a", "item-a"))?;
         owner.record_authenticated_hook(
             erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
@@ -1495,16 +1593,7 @@ mod tests {
             runtime(),
             101,
         )?;
-        let lease_id = owner
-            .state
-            .lock()
-            .map_err(|_error| "lock")?
-            .leases
-            .keys()
-            .next()
-            .cloned()
-            .ok_or("lease missing")?;
-        owner.arm_after_verified_hook_exit(&lease_id)?;
+        owner.record_guarded_hook_exit(101, true)?;
 
         let allowed = owner
             .physical_effect_decision(&file_request(42, "workspace/allowed.txt"))
@@ -1529,9 +1618,123 @@ mod tests {
     }
 
     #[test]
+    fn failed_hook_exit_closes_the_exact_lease_and_denies_its_effect(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let owner = owner_with_scope()?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            command_event("tool-1").as_bytes(),
+            runtime(),
+            101,
+        )?;
+        assert!(!owner.record_guarded_hook_exit(101, false)?);
+        let decision = owner
+            .physical_effect_decision(&process_request(201, 42, "echo permitted"))
+            .ok_or("missing failure decision")?;
+        assert_eq!(decision.into_parts().0, SessionInterceptionDecision::Deny);
+        assert!(owner
+            .state
+            .lock()
+            .map_err(|_error| "lock")?
+            .leases
+            .values()
+            .all(|lease| lease.state == InvocationLeaseState::Closed));
+        Ok(())
+    }
+
+    #[test]
+    fn armed_command_lease_does_not_select_a_different_launch_by_text_or_timing(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let owner = owner_with_scope()?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            command_event("tool-1").as_bytes(),
+            runtime(),
+            101,
+        )?;
+        owner.record_guarded_hook_exit(101, true)?;
+        let denied = owner
+            .physical_effect_decision(&process_request(201, 42, "echo other"))
+            .ok_or("missing mismatched launch decision")?;
+        let (kind, rule_id, _reason, _mediation) = denied.into_parts();
+        assert_eq!(kind, SessionInterceptionDecision::Deny);
+        assert_eq!(
+            rule_id,
+            "erebor-codex-invocation-lease-no-matching-command-handoff"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn kernel_observed_fork_retains_only_the_bound_descendant_after_parent_exit(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let owner = owner_with_scope()?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            command_event("tool-1").as_bytes(),
+            runtime(),
+            101,
+        )?;
+        owner.record_guarded_hook_exit(101, true)?;
+        assert_eq!(
+            owner
+                .physical_effect_decision(&process_request(201, 42, "echo permitted"))
+                .ok_or("missing root decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Allow
+        );
+        owner.record_guarded_process_fork(201, 202)?;
+        owner.record_guarded_process_exit(201)?;
+        assert_eq!(
+            owner
+                .physical_effect_decision(&process_request(202, 1, "python child.py"))
+                .ok_or("missing descendant decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Allow
+        );
+        assert_eq!(
+            owner
+                .physical_effect_decision(&process_request(203, 1, "python child.py"))
+                .ok_or("missing unrelated decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Deny
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pending_mutation_only_holds_its_exact_target() -> Result<(), Box<dyn std::error::Error>> {
+        let owner = owner_with_scope()?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            patch_event("patch-1").as_bytes(),
+            runtime(),
+            101,
+        )?;
+        let held = owner
+            .physical_effect_decision(&file_request(42, "workspace/allowed.txt"))
+            .ok_or("missing held mutation decision")?;
+        assert_eq!(
+            held.into_parts().1,
+            "erebor-codex-invocation-lease-hook-exit-barrier-pending"
+        );
+        let unrelated = owner
+            .physical_effect_decision(&file_request(42, "workspace/other.txt"))
+            .ok_or("missing unrelated mutation decision")?;
+        assert_eq!(
+            unrelated.into_parts().1,
+            "erebor-codex-invocation-lease-no-matching-file-capability"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn lanes_are_exact_to_scope_and_do_not_select_by_command_text(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let owner = CodexInvocationLeaseOwner::with_verified_barrier();
+        let owner = test_owner();
         owner.record_scope_context(binding("scope-a", "item-a"))?;
         owner.record_scope_context(CodexScopeContextBinding::new(
             String::from("thread-2"),
@@ -1570,7 +1773,7 @@ mod tests {
     #[test]
     fn stop_closes_only_leases_in_its_exact_native_turn() -> Result<(), Box<dyn std::error::Error>>
     {
-        let owner = CodexInvocationLeaseOwner::with_verified_barrier();
+        let owner = test_owner();
         owner.record_scope_context(binding("scope-a", "item-a"))?;
         owner.record_scope_context(binding_for("thread-2", "turn-1", "scope-b", "item-b"))?;
         owner.record_authenticated_hook(
@@ -1759,7 +1962,7 @@ mod tests {
                     .payload
                     .pointer("/detail/rule_id")
                     .and_then(serde_json::Value::as_str)
-                    == Some("erebor-codex-invocation-lease-hook-exit-ptrace-barrier-unavailable")
+                    == Some("erebor-codex-invocation-lease-hook-exit-barrier-pending")
         }));
         Ok(())
     }
@@ -1839,7 +2042,7 @@ mod tests {
     #[test]
     fn cancellation_closes_the_exact_lease_from_its_native_ids(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let owner = CodexInvocationLeaseOwner::with_verified_barrier();
+        let owner = test_owner();
         owner.record_scope_context(binding("scope-a", "item-a"))?;
         owner.record_authenticated_hook(
             erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
@@ -1864,7 +2067,13 @@ mod tests {
     }
 
     fn owner_with_scope() -> Result<CodexInvocationLeaseOwner, Box<dyn std::error::Error>> {
-        let owner = CodexInvocationLeaseOwner::new(
+        let owner = test_owner();
+        owner.record_scope_context(binding("scope-a", "item-a"))?;
+        Ok(owner)
+    }
+
+    fn test_owner() -> CodexInvocationLeaseOwner {
+        CodexInvocationLeaseOwner::new(
             "session-test",
             "agent-test",
             erebor_runtime_events::ActorKind::Agent,
@@ -1874,9 +2083,7 @@ mod tests {
                 "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
             )],
             None,
-        );
-        owner.record_scope_context(binding("scope-a", "item-a"))?;
-        Ok(owner)
+        )
     }
 
     fn binding(scope_ref: &str, item_node_stream: &str) -> CodexScopeContextBinding {

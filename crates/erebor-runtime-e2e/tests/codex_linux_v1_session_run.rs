@@ -1,8 +1,6 @@
 #[allow(dead_code)]
 #[path = "support/cli.rs"]
 mod cli;
-#[path = "support/codex_linux_v1/artifact.rs"]
-mod managed_artifact;
 #[path = "support/codex_linux_v1/mock_responses.rs"]
 mod mock_responses;
 
@@ -12,12 +10,12 @@ mod linux {
         collections::BTreeSet,
         fs,
         io::{BufRead, BufReader, Write},
+        os::unix::fs::MetadataExt,
         path::{Path, PathBuf},
         process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-        thread,
-        time::Duration,
     };
 
+    use erebor_runtime_audit::read_audit_records;
     use erebor_runtime_context::{ContextRepository, ContextTreeEntryKind};
     use erebor_runtime_core::SessionRegistry;
     use erebor_runtime_session::CodexNativeHookEvent;
@@ -26,11 +24,13 @@ mod linux {
 
     use crate::{
         cli::{E2eWorkspace, EreborCliFixture},
-        managed_artifact::CodexLinuxV1RequirementsArtifact,
-        mock_responses::{write_codex_mock_responses_config, CodexMockResponsesServer},
+        mock_responses::{
+            write_codex_mock_responses_config_with_sandbox, CodexMockResponsesServer,
+        },
     };
 
     const REQUIRE_SESSION_RUN_ENV: &str = "EREBOR_REQUIRE_CODEX_LINUX_V1_SESSION_RUN";
+    const STRICT_PROFILE_ROOT_ENV: &str = "EREBOR_CODEX_LINUX_V1_STRICT_PROFILE_ROOT";
 
     #[test]
     fn managed_hook_uses_the_guarded_session_run_channel() -> Result<(), Box<dyn std::error::Error>>
@@ -220,48 +220,27 @@ mod linux {
     ) -> Result<(), Box<dyn std::error::Error>> {
         if !required_session_run() {
             eprintln!(
-                "skipping pinned Codex App Server fixture; set {REQUIRE_SESSION_RUN_ENV}=1 with EREBOR_CODEX_LINUX_V1_CLI"
+                "skipping pinned Codex App Server fixture; set {REQUIRE_SESSION_RUN_ENV}=1 and {STRICT_PROFILE_ROOT_ENV}=/absolute/root-owned-profile"
             );
             return Ok(());
         }
         require_managed_projection_anchors()?;
-        let codex = PathBuf::from(
-            std::env::var_os("EREBOR_CODEX_LINUX_V1_CLI")
-                .ok_or("EREBOR_CODEX_LINUX_V1_CLI is required by the live Phase 1 fixture")?,
-        );
-        if !codex.is_file() {
-            return Err(format!(
-                "EREBOR_CODEX_LINUX_V1_CLI is not a regular file: {}",
-                codex.display()
-            )
-            .into());
-        }
+        let strict_profile = StrictCodexProfile::from_environment()?;
+        strict_profile.assert_complete()?;
+        let codex = strict_profile.executable();
 
         let workspace = E2eWorkspace::create("codex-managed-app-server-session-run")?;
         let root = workspace.path();
-        let managed_hook = production_managed_hook()?;
-        let artifact = CodexLinuxV1RequirementsArtifact::create(root, &managed_hook)?;
-        artifact.assert_complete()?;
-        let startup = artifact.hook_directory().join(".zshenv");
-        let managed_startup_marker = root.join("managed-zsh-startup");
-        fs::write(
-            &startup,
-            format!(
-                "print -r -- managed > {}\n",
-                managed_startup_marker.display()
-            ),
-        )?;
-        let hook = artifact.hook_directory().join("erebor-codex-hook");
         let policy = root.join("policy.json");
         fs::write(&policy, r#"{ "rules": [] }"#)?;
-        let codex_hash = hash(&codex)?;
+        let codex_hash = hash(codex)?;
         let config = root.join("runtime.json");
         fs::write(
             &config,
             format!(
                 r#"{{
           "policies":["{}"],
-          "session":{{"enabled":true,"runner":{{"kind":"linux_host"}},"interception":{{"enabled":true}}}},
+          "session":{{"enabled":true,"runner":{{"kind":"linux_host"}},"interception":{{"enabled":true,"operations":["process_exec","file_mutation"]}}}},
           "surfaces":{{
             "terminal":{{"enabled":true,"process_mediation":{{"enabled":true,"handlers":[{{
               "id":"unused-browser-handler","kind":"managed_browser_cdp",
@@ -271,7 +250,7 @@ mod linux {
             "filesystem":{{"enabled":true}}
           }},
           "codex":{{"enabled":true,"profiles":[{{
-            "id":"pinned-app-server","runner":"linux_host","executable":"{}","executable_sha256":"{}","deployment":"local_cooperative",
+            "id":"pinned-app-server","runner":"linux_host","executable":"{}","executable_sha256":"{}","deployment":"fleet_managed",
             "trust_root":"{}","requirements_source":"{}","requirements_sha256":"{}",
             "managed_hook_source":"{}","managed_hook_sha256":"{}","managed_hook_path":"/usr/lib/erebor/codex-hooks/erebor-codex-hook",
             "shell_startup_source":"{}","shell_startup_sha256":"{}","shell_startup_path":"/usr/lib/erebor/codex-hooks/.zshenv",
@@ -284,13 +263,13 @@ mod linux {
                 policy.display(),
                 codex.display(),
                 codex_hash,
-                root.display(),
-                artifact.requirements_path().display(),
-                artifact.requirements_sha256(),
-                hook.display(),
-                artifact.hook_sha256(),
-                startup.display(),
-                hash(&startup)?,
+                strict_profile.root().display(),
+                strict_profile.requirements_path().display(),
+                hash(strict_profile.requirements_path())?,
+                strict_profile.managed_hook_path().display(),
+                hash(strict_profile.managed_hook_path())?,
+                strict_profile.shell_startup_path().display(),
+                hash(strict_profile.shell_startup_path())?,
                 codex.display(),
                 event_schemas()?
             ),
@@ -309,8 +288,14 @@ mod linux {
                 untrusted_startup_marker.display()
             ),
         )?;
-        let mock_responses = CodexMockResponsesServer::start()?;
-        write_codex_mock_responses_config(&codex_home, mock_responses.uri())?;
+        let physical_effect_marker = app_workspace.join("phase-3-physical-effect");
+        let tool_command = format!("/usr/bin/touch {}", physical_effect_marker.display());
+        let mock_responses = CodexMockResponsesServer::start_with_tool_command(&tool_command)?;
+        write_codex_mock_responses_config_with_sandbox(
+            &codex_home,
+            mock_responses.uri(),
+            "workspace-write",
+        )?;
 
         let fixture = EreborCliFixture::build()?;
         let mut command = fixture.command_in(
@@ -362,6 +347,11 @@ mod linux {
             "PreToolUse",
             "Stop",
         ])?;
+        assert!(
+            physical_effect_marker.exists(),
+            "the pinned Codex tool command did not create its physical-effect marker"
+        );
+        app_server.assert_physical_effect_order(root, &tool_command, &physical_effect_marker)?;
         app_server.assert_brokered_prompt_context(root, "Phase 1 managed session probe.")?;
         app_server.assert_broker_denied(
             5,
@@ -370,7 +360,6 @@ mod linux {
         )?;
         app_server.assert_broker_denied(6, "thread/inject_items", Some(json!({})))?;
         app_server.assert_broker_denied(7, "thread/realtime/appendText", Some(json!({})))?;
-        assert_file_contains(&managed_startup_marker, "managed\n")?;
         assert!(
             !untrusted_startup_marker.exists(),
             "untrusted $HOME/.zshenv was executed"
@@ -378,47 +367,110 @@ mod linux {
         Ok(())
     }
 
-    fn hash(path: &Path) -> Result<String, std::io::Error> {
-        Ok(format!("{:x}", Sha256::digest(fs::read(path)?)))
+    struct StrictCodexProfile {
+        root: PathBuf,
+        executable: PathBuf,
+        requirements: PathBuf,
+        managed_hook: PathBuf,
+        shell_startup: PathBuf,
     }
 
-    fn production_managed_hook() -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .ok_or("e2e crate is not under the workspace crates directory")?;
-        let output = Command::new("cargo")
-            .args([
-                "build",
-                "-p",
-                "erebor-runtime-session",
-                "--bin",
-                "erebor-codex-hook",
-            ])
-            .current_dir(workspace)
-            .output()?;
-        if !output.status.success() {
-            return Err(format!(
-                "cargo build erebor-codex-hook failed: stdout={} stderr={}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-            .into());
+    impl StrictCodexProfile {
+        fn from_environment() -> Result<Self, Box<dyn std::error::Error>> {
+            let root = PathBuf::from(
+                std::env::var_os(STRICT_PROFILE_ROOT_ENV).ok_or_else(|| {
+                    format!(
+                        "{STRICT_PROFILE_ROOT_ENV} must name the root-owned, hash-pinned Codex profile"
+                    )
+                })?,
+            );
+            if !root.is_absolute() {
+                return Err(format!(
+                    "{STRICT_PROFILE_ROOT_ENV} must be an absolute path: {}",
+                    root.display()
+                )
+                .into());
+            }
+            let profile = Self {
+                executable: root.join("bin/codex"),
+                requirements: root.join("requirements.toml"),
+                managed_hook: root.join("hooks/erebor-codex-hook"),
+                shell_startup: root.join("hooks/.zshenv"),
+                root,
+            };
+            for path in [
+                profile.root.as_path(),
+                profile.executable.as_path(),
+                profile.requirements.as_path(),
+                profile.managed_hook.as_path(),
+                profile.shell_startup.as_path(),
+            ] {
+                Self::assert_root_owned(path)?;
+            }
+            Ok(profile)
         }
-        let target_directory = std::env::var_os("CARGO_TARGET_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| workspace.join("target"));
-        let hook = target_directory
-            .join("debug")
-            .join(format!("erebor-codex-hook{}", std::env::consts::EXE_SUFFIX));
-        if !hook.is_file() {
-            return Err(format!(
-                "cargo build erebor-codex-hook did not produce a regular binary at {}",
-                hook.display()
-            )
-            .into());
+
+        fn assert_complete(&self) -> Result<(), Box<dyn std::error::Error>> {
+            let requirements = fs::read_to_string(&self.requirements)?;
+            for expected in [
+                "allow_managed_hooks_only = true",
+                "allow_remote_control = false",
+                "managed_dir = \"/usr/lib/erebor/codex-hooks\"",
+                "[[hooks.SessionStart]]",
+                "[[hooks.UserPromptSubmit]]",
+                "[[hooks.PreToolUse]]",
+                "[[hooks.PermissionRequest]]",
+                "[[hooks.PostToolUse]]",
+                "[[hooks.SubagentStart]]",
+                "[[hooks.SubagentStop]]",
+                "[[hooks.Stop]]",
+            ] {
+                if !requirements.contains(expected) {
+                    return Err(format!(
+                        "strict Codex requirements artifact {} is missing `{expected}`",
+                        self.requirements.display()
+                    )
+                    .into());
+                }
+            }
+            Ok(())
         }
-        Ok(hook)
+
+        fn assert_root_owned(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+            let metadata = fs::symlink_metadata(path)?;
+            if metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+                return Err(format!(
+                    "strict Codex profile artifact is not root-owned and non-user-writable: {}",
+                    path.display()
+                )
+                .into());
+            }
+            Ok(())
+        }
+
+        fn root(&self) -> &Path {
+            &self.root
+        }
+
+        fn executable(&self) -> &Path {
+            &self.executable
+        }
+
+        fn requirements_path(&self) -> &Path {
+            &self.requirements
+        }
+
+        fn managed_hook_path(&self) -> &Path {
+            &self.managed_hook
+        }
+
+        fn shell_startup_path(&self) -> &Path {
+            &self.shell_startup
+        }
+    }
+
+    fn hash(path: &Path) -> Result<String, std::io::Error> {
+        Ok(format!("{:x}", Sha256::digest(fs::read(path)?)))
     }
 
     fn schema_sha256(input: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
@@ -478,22 +530,6 @@ mod linux {
             "Stop" => "stop",
             _ => unreachable!("the test requirements artifact has a fixed event inventory"),
         }
-    }
-
-    fn assert_file_contains(path: &Path, expected: &str) -> Result<(), Box<dyn std::error::Error>> {
-        for _attempt in 0..40 {
-            if fs::read_to_string(path).is_ok_and(|source| source.contains(expected)) {
-                return Ok(());
-            }
-            thread::sleep(Duration::from_millis(125));
-        }
-        let observed =
-            fs::read_to_string(path).unwrap_or_else(|_error| String::from("<missing file>"));
-        Err(format!(
-            "managed hook did not write `{expected}` to {}: observed={observed:?}",
-            path.display()
-        )
-        .into())
     }
 
     struct SessionRunAppServer {
@@ -582,6 +618,97 @@ mod linux {
                     .pointer("/context_binding/scope_ref")
                     .and_then(Value::as_str),
                 Some(scope.as_str())
+            );
+            Ok(())
+        }
+
+        fn assert_physical_effect_order(
+            &self,
+            root: &Path,
+            command: &str,
+            mutation_path: &Path,
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            let registry = SessionRegistry::new(root.join(".erebor/sessions"));
+            let record = registry.load_session(&self.session_id)?;
+            let records = read_audit_records(record.audit_path())?;
+            let fact_index = |fact: &str| {
+                records.iter().position(|record| {
+                    record
+                        .event
+                        .payload
+                        .pointer("/fact")
+                        .and_then(Value::as_str)
+                        == Some(fact)
+                })
+            };
+            let pre_tool = fact_index("pre-tool-use-authenticated")
+                .ok_or("live tool run omitted its PreToolUse lease fact")?;
+            let hook_exit = fact_index("guarded-hook-exit-success")
+                .ok_or("live tool run omitted its guarded hook-exit success fact")?;
+            let command_effect = records
+                .iter()
+                .position(|record| {
+                    record
+                        .event
+                        .payload
+                        .pointer("/fact")
+                        .and_then(Value::as_str)
+                        == Some("physical-effect")
+                        && record
+                            .event
+                            .payload
+                            .pointer("/detail/allowed")
+                            .and_then(Value::as_bool)
+                            == Some(true)
+                        && record
+                            .event
+                            .payload
+                            .pointer("/detail/operation")
+                            .and_then(Value::as_str)
+                            == Some("process_exec")
+                        && record
+                            .event
+                            .payload
+                            .pointer("/detail/argv")
+                            .and_then(Value::as_array)
+                            .and_then(|argv| argv.last())
+                            .and_then(Value::as_str)
+                            == Some(command)
+                })
+                .ok_or("live tool command did not receive an allowed process lease decision")?;
+            let mutation_path = mutation_path.display().to_string();
+            let mutation_effect = records
+                .iter()
+                .position(|record| {
+                    record
+                        .event
+                        .payload
+                        .pointer("/fact")
+                        .and_then(Value::as_str)
+                        == Some("physical-effect")
+                        && record
+                            .event
+                            .payload
+                            .pointer("/detail/allowed")
+                            .and_then(Value::as_bool)
+                            == Some(true)
+                        && record
+                            .event
+                            .payload
+                            .pointer("/detail/operation")
+                            .and_then(Value::as_str)
+                            == Some("file_mutation")
+                        && record
+                            .event
+                            .payload
+                            .pointer("/detail/file/path")
+                            .and_then(Value::as_str)
+                            == Some(mutation_path.as_str())
+                })
+                .ok_or("live tool mutation did not receive an allowed file lease decision")?;
+            assert!(
+                pre_tool < hook_exit && hook_exit < command_effect && command_effect < mutation_effect,
+                "unexpected live hook/physical-effect order: pre_tool={pre_tool}, hook_exit={hook_exit}, command={command_effect}, mutation={mutation_effect}"
             );
             Ok(())
         }
@@ -706,20 +833,27 @@ mod linux {
                             "sessionStart" | "SessionStart" => "SessionStart",
                             "userPromptSubmit" | "UserPromptSubmit" => "UserPromptSubmit",
                             "preToolUse" | "PreToolUse" => "PreToolUse",
+                            "permissionRequest" | "PermissionRequest" => "PermissionRequest",
                             "postToolUse" | "PostToolUse" => "PostToolUse",
+                            "subagentStart" | "SubagentStart" => "SubagentStart",
+                            "subagentStop" | "SubagentStop" => "SubagentStop",
                             "stop" | "Stop" => "Stop",
                             other => other,
                         };
-                        if expected_events.contains(event) {
-                            assert_eq!(
-                                notification
-                                    .pointer("/params/run/status")
-                                    .and_then(Value::as_str),
-                                Some("completed"),
-                                "managed hook `{event}` did not complete successfully"
-                            );
-                            completed_events.insert(event.to_owned());
+                        if !expected_events.contains(event) {
+                            return Err(format!(
+                                "managed AppServer emitted unsupported hook `{event}` outside the selected narrow profile; observed notifications: {observed_notifications:?}"
+                            )
+                            .into());
                         }
+                        assert_eq!(
+                            notification
+                                .pointer("/params/run/status")
+                                .and_then(Value::as_str),
+                            Some("completed"),
+                            "managed hook `{event}` did not complete successfully"
+                        );
+                        completed_events.insert(event.to_owned());
                     }
                     Some("turn/completed") => {
                         assert_eq!(
