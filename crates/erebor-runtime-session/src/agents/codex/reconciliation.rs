@@ -37,9 +37,9 @@ impl CodexPromptReconciliation {
             })?;
         let observation = CodexAuthenticatedHookObservation {
             kind,
-            session_id: Self::find_string(&payload, &["session_id", "sessionId"]),
-            thread_id: Self::find_string(&payload, &["thread_id", "threadId"]),
-            turn_id: Self::find_string(&payload, &["turn_id", "turnId"]),
+            session_id: Self::top_level_string(&payload, &["session_id", "sessionId"]),
+            thread_id: Self::top_level_string(&payload, &["thread_id", "threadId"]),
+            turn_id: Self::top_level_string(&payload, &["turn_id", "turnId"]),
         };
         let mut observations = self.observations.lock().map_err(|_error| {
             CodexSessionError::PromptReconciliationStateLock {
@@ -53,15 +53,19 @@ impl CodexPromptReconciliation {
         Ok(())
     }
 
-    /// Returns only observations with every supplied native identifier present
-    /// and equal. Missing IDs are not guessed from timing, prompt text, or
+    /// Codex's `UserPromptSubmit.session_id` is the native App Server thread
+    /// identifier. The authenticated hook broker is already session/profile
+    /// scoped, so a prompt can be corroborated only by that exact thread and
+    /// turn pair. Missing IDs are not guessed from timing, prompt text, or
     /// nearby events.
     pub(crate) fn matching_user_prompt_submit(
         &self,
-        session_id: Option<&str>,
-        thread_id: Option<&str>,
+        codex_thread_id: Option<&str>,
         turn_id: Option<&str>,
     ) -> Result<Vec<CodexAuthenticatedHookObservation>, CodexSessionError> {
+        let (Some(codex_thread_id), Some(turn_id)) = (codex_thread_id, turn_id) else {
+            return Ok(Vec::new());
+        };
         let observations = self.observations.lock().map_err(|_error| {
             CodexSessionError::PromptReconciliationStateLock {
                 location: snafu::Location::default(),
@@ -70,9 +74,11 @@ impl CodexPromptReconciliation {
         Ok(observations
             .iter()
             .filter(|observation| observation.kind == HookEventKind::UserPromptSubmit)
-            .filter(|observation| Self::matches(session_id, observation.session_id.as_deref()))
-            .filter(|observation| Self::matches(thread_id, observation.thread_id.as_deref()))
-            .filter(|observation| Self::matches(turn_id, observation.turn_id.as_deref()))
+            .filter(|observation| {
+                observation.session_id.as_deref() == Some(codex_thread_id)
+                    || observation.thread_id.as_deref() == Some(codex_thread_id)
+            })
+            .filter(|observation| observation.turn_id.as_deref() == Some(turn_id))
             .cloned()
             .collect())
     }
@@ -105,31 +111,18 @@ impl CodexPromptReconciliation {
             .collect())
     }
 
-    fn matches(expected: Option<&str>, observed: Option<&str>) -> bool {
-        expected.is_some_and(|expected| observed == Some(expected))
-    }
-
     fn matches_required(expected: Option<&str>, observed: Option<&str>) -> bool {
         expected.is_none_or(|expected| observed == Some(expected))
     }
 
-    fn find_string(payload: &serde_json::Value, names: &[&str]) -> Option<String> {
-        match payload {
-            serde_json::Value::Object(fields) => {
-                for name in names {
-                    if let Some(value) = fields.get(*name).and_then(serde_json::Value::as_str) {
-                        return Some(value.to_owned());
-                    }
-                }
-                fields
-                    .values()
-                    .find_map(|value| Self::find_string(value, names))
-            }
-            serde_json::Value::Array(values) => values
-                .iter()
-                .find_map(|value| Self::find_string(value, names)),
-            _ => None,
-        }
+    fn top_level_string(payload: &serde_json::Value, names: &[&str]) -> Option<String> {
+        let fields = payload.as_object()?;
+        names.iter().find_map(|name| {
+            fields
+                .get(*name)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
     }
 }
 
@@ -145,20 +138,23 @@ mod tests {
         let reconciliation = CodexPromptReconciliation::default();
         reconciliation.record_authenticated_hook(
             HookEventKind::UserPromptSubmit,
-            br#"{"hook_event_name":"UserPromptSubmit","session_id":"s-1","threadId":"t-1","turn_id":"u-1"}"#,
+            br#"{"hook_event_name":"UserPromptSubmit","session_id":"thread-1","turn_id":"turn-1"}"#,
         )?;
 
         assert_eq!(
             reconciliation
-                .matching_user_prompt_submit(Some("s-1"), Some("t-1"), Some("u-1"))?
+                .matching_user_prompt_submit(Some("thread-1"), Some("turn-1"))?
                 .len(),
             1
         );
         assert!(reconciliation
-            .matching_user_prompt_submit(Some("s-1"), Some("t-2"), Some("u-1"))?
+            .matching_user_prompt_submit(Some("thread-2"), Some("turn-1"))?
             .is_empty());
         assert!(reconciliation
-            .matching_user_prompt_submit(Some("s-1"), None, Some("u-1"))?
+            .matching_user_prompt_submit(Some("thread-1"), Some("turn-2"))?
+            .is_empty());
+        assert!(reconciliation
+            .matching_user_prompt_submit(Some("thread-1"), None)?
             .is_empty());
         Ok(())
     }

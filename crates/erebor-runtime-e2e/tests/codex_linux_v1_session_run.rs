@@ -334,6 +334,8 @@ mod linux {
             "thread/shellCommand",
             Some(json!({"command":"printf should-not-reach-codex"})),
         )?;
+        app_server.assert_broker_denied(6, "thread/inject_items", Some(json!({})))?;
+        app_server.assert_broker_denied(7, "thread/realtime/appendText", Some(json!({})))?;
         assert_file_contains(&managed_startup_marker, "managed\n")?;
         assert!(
             !untrusted_startup_marker.exists(),
@@ -503,14 +505,29 @@ mod linux {
             let head = repository.scope_head(&scope)?;
             let tree = repository.read_commit(head)?.tree();
             let blobs = context_blobs(&repository, tree)?;
-            assert!(
-                blobs.iter().any(|blob| {
-                    let source = String::from_utf8_lossy(blob);
-                    source.contains("brokered_app_server_transport")
-                        && source.contains("original_request_jsonl")
-                        && source.contains(prompt)
-                }),
-                "brokered App Server prompt context did not retain the original request"
+            let prompt_context = blobs
+                .iter()
+                .filter_map(|blob| serde_json::from_slice::<Value>(blob).ok())
+                .find(|context| {
+                    context.get("source") == Some(&json!("brokered_app_server_transport"))
+                        && context
+                            .get("original_request_jsonl")
+                            .and_then(Value::as_str)
+                            .is_some_and(|original| original.contains(prompt))
+                })
+                .ok_or("brokered App Server prompt context did not retain the original request")?;
+            assert_eq!(
+                prompt_context
+                    .pointer("/hook_reconciliation/status")
+                    .and_then(Value::as_str),
+                Some("exact"),
+                "the live UserPromptSubmit hook did not exactly reconcile to the brokered turn"
+            );
+            assert_eq!(
+                prompt_context
+                    .pointer("/hook_reconciliation/authenticated_user_prompt_submit_count")
+                    .and_then(Value::as_u64),
+                Some(1)
             );
             Ok(())
         }

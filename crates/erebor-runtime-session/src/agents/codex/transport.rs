@@ -5,11 +5,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[cfg(target_os = "linux")]
+use std::os::{fd::AsFd, unix::net::UnixStream};
+
 use erebor_runtime_context::{ContextRepository, ScopeRef, ScopeStart, Snapshot, TreeEdit};
 use erebor_runtime_core::{
     CodexProfileLayerConfig, LinuxHostSessionCommandOptions, LinuxHostSessionCommandPlan,
     SessionRunOutcome, SessionRunPlan, SessionRunnerKind,
 };
+#[cfg(target_os = "linux")]
+use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -61,6 +66,25 @@ impl<'a> CodexAppServerTransportBroker<'a> {
         environment: &[(String, String)],
         options: &LinuxHostSessionCommandOptions,
     ) -> Result<SessionRunOutcome, CodexSessionError> {
+        #[cfg(target_os = "linux")]
+        {
+            self.run_linux(environment, options)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (environment, options);
+            Err(Self::protocol_error(
+                "an owned App Server transport is available only on Linux",
+            ))
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn run_linux(
+        &self,
+        environment: &[(String, String)],
+        options: &LinuxHostSessionCommandOptions,
+    ) -> Result<SessionRunOutcome, CodexSessionError> {
         let launch =
             LinuxHostSessionCommandPlan::from_session_run_plan_with_environment_and_options(
                 self.plan,
@@ -103,25 +127,40 @@ impl<'a> CodexAppServerTransportBroker<'a> {
             &self.profile.id,
             Arc::clone(&self.reconciliation),
         ));
+        let (shutdown_receiver, mut shutdown_sender) =
+            UnixStream::pair().map_err(|source| CodexSessionError::AppServerTransportIo {
+                operation: "creating the App Server output shutdown signal",
+                source,
+                location: snafu::Location::default(),
+            })?;
         let output_result = std::thread::scope(|scope| {
             let output_for_child = Arc::clone(&output);
             let ledger_for_child = &ledger;
             let child_output = scope.spawn(move || {
-                Self::relay_child_output(child_stdout, &output_for_child, ledger_for_child)
+                let result =
+                    Self::relay_child_output(child_stdout, &output_for_child, ledger_for_child);
+                if result.is_err() {
+                    let _result = shutdown_sender.write_all(&[1]);
+                }
+                result
             });
-            let input_result = Self::relay_client_input(io::stdin(), child_stdin, &output, &ledger);
-            let status = child
-                .wait()
-                .map_err(|source| CodexSessionError::AppServerTransportIo {
-                    operation: "waiting for the brokered Codex App Server",
-                    source,
-                    location: snafu::Location::default(),
-                });
+            let input_result = Self::relay_client_input(
+                io::stdin(),
+                child_stdin,
+                &output,
+                &ledger,
+                &shutdown_receiver,
+            );
+            let status = if input_result.is_err() {
+                Self::terminate_child(&mut child)
+            } else {
+                Self::wait_for_child_or_output_failure(&mut child, &shutdown_receiver)
+            };
             let child_result = child_output.join().map_err(|_error| {
                 Self::protocol_error("Codex App Server output broker worker panicked")
             })?;
-            input_result?;
             child_result?;
+            input_result?;
             status
         })?;
 
@@ -138,15 +177,18 @@ impl<'a> CodexAppServerTransportBroker<'a> {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn relay_client_input(
-        mut client_input: impl Read,
+        mut client_input: impl Read + AsFd,
         mut child_input: impl Write,
         output: &Arc<Mutex<io::Stdout>>,
         ledger: &Mutex<PromptLedger<'_>>,
+        shutdown: &impl AsFd,
     ) -> Result<(), CodexSessionError> {
         let mut framer = JsonlFramer::default();
         let mut chunk = [0_u8; 8192];
         loop {
+            Self::wait_for_client_input_or_output_failure(&client_input, shutdown)?;
             let read = client_input.read(&mut chunk).map_err(|source| {
                 CodexSessionError::AppServerTransportIo {
                     operation: "reading App Server client stdin",
@@ -191,6 +233,105 @@ impl<'a> CodexAppServerTransportBroker<'a> {
         }
         framer.finish()?;
         Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wait_for_client_input_or_output_failure(
+        client_input: &impl AsFd,
+        shutdown: &impl AsFd,
+    ) -> Result<(), CodexSessionError> {
+        loop {
+            let mut descriptors = [
+                PollFd::new(client_input, PollFlags::IN),
+                PollFd::new(shutdown, PollFlags::IN),
+            ];
+            poll(&mut descriptors, None).map_err(|source| {
+                CodexSessionError::AppServerTransportIo {
+                    operation: "waiting for App Server client input or child output failure",
+                    source: io::Error::from(source),
+                    location: snafu::Location::default(),
+                }
+            })?;
+            if !descriptors[1].revents().is_empty() {
+                return Err(Self::protocol_error(
+                    "Codex App Server output validation failed; stopped forwarding client input",
+                ));
+            }
+            if !descriptors[0].revents().is_empty() {
+                return Ok(());
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wait_for_child_or_output_failure(
+        child: &mut std::process::Child,
+        shutdown: &impl AsFd,
+    ) -> Result<std::process::ExitStatus, CodexSessionError> {
+        let wait_interval = Timespec {
+            tv_sec: 0,
+            tv_nsec: 100_000_000,
+        };
+        loop {
+            if let Some(status) =
+                child
+                    .try_wait()
+                    .map_err(|source| CodexSessionError::AppServerTransportIo {
+                        operation: "checking the brokered Codex App Server exit status",
+                        source,
+                        location: snafu::Location::default(),
+                    })?
+            {
+                return Ok(status);
+            }
+            let mut descriptors = [PollFd::new(shutdown, PollFlags::IN)];
+            poll(&mut descriptors, Some(&wait_interval)).map_err(|source| {
+                CodexSessionError::AppServerTransportIo {
+                    operation: "waiting for Codex App Server output validation",
+                    source: io::Error::from(source),
+                    location: snafu::Location::default(),
+                }
+            })?;
+            if !descriptors[0].revents().is_empty() {
+                Self::terminate_child(child)?;
+                return Err(Self::protocol_error(
+                    "Codex App Server output validation failed before the child exited",
+                ));
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn terminate_child(
+        child: &mut std::process::Child,
+    ) -> Result<std::process::ExitStatus, CodexSessionError> {
+        if let Some(status) =
+            child
+                .try_wait()
+                .map_err(|source| CodexSessionError::AppServerTransportIo {
+                    operation: "checking the brokered Codex App Server before termination",
+                    source,
+                    location: snafu::Location::default(),
+                })?
+        {
+            return Ok(status);
+        }
+        if let Err(source) = child.kill() {
+            if source.kind() != io::ErrorKind::InvalidInput {
+                return Err(CodexSessionError::AppServerTransportIo {
+                    operation: "terminating the brokered Codex App Server",
+                    source,
+                    location: snafu::Location::default(),
+                });
+            }
+        }
+        child
+            .wait()
+            .map_err(|source| CodexSessionError::AppServerTransportIo {
+                operation: "waiting for the terminated brokered Codex App Server",
+                source,
+                location: snafu::Location::default(),
+            })
     }
 
     fn relay_child_output(
@@ -278,6 +419,8 @@ impl<'a> CodexAppServerTransportBroker<'a> {
 
     fn is_sensitive_method(method: &str) -> bool {
         method == "thread/shellCommand"
+            || method.starts_with("thread/inject")
+            || method.starts_with("thread/realtime/")
             || method == "command/exec"
             || method.starts_with("command/exec/")
             || method == "process/spawn"
@@ -498,13 +641,14 @@ impl<'a> PromptLedger<'a> {
             rich_ide_context: request
                 .params
                 .as_ref()
-                .and_then(|params| params.get("ideContext").or_else(|| params.get("context")))
+                .and_then(|params| {
+                    params
+                        .get("additionalContext")
+                        .or_else(|| params.get("ideContext"))
+                        .or_else(|| params.get("context"))
+                })
                 .cloned(),
-            attachments: request
-                .params
-                .as_ref()
-                .and_then(|params| params.get("attachments"))
-                .cloned(),
+            attachments: request.params.as_ref().and_then(Self::attachments),
             thread_id,
             turn_id: None,
             item_id: None,
@@ -660,11 +804,9 @@ impl<'a> PromptLedger<'a> {
         node: &PromptNode,
         state: &str,
     ) -> Result<(), CodexSessionError> {
-        let reconciliation = self.reconciliation.matching_user_prompt_submit(
-            Some(&self.session_id),
-            node.thread_id.as_deref(),
-            node.turn_id.as_deref(),
-        )?;
+        let reconciliation = self
+            .reconciliation
+            .matching_user_prompt_submit(node.thread_id.as_deref(), node.turn_id.as_deref())?;
         let child_agents = node
             .child_agent_threads
             .iter()
@@ -761,6 +903,23 @@ impl<'a> PromptLedger<'a> {
             |value| json!({"status": "observed", "value": value}),
         )
     }
+
+    fn attachments(params: &Value) -> Option<Value> {
+        params.get("attachments").cloned().or_else(|| {
+            params
+                .get("input")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter(|item| item.get("type").and_then(Value::as_str) != Some("text"))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
+                .filter(|attachments| !attachments.is_empty())
+                .map(Value::Array)
+        })
+    }
 }
 
 #[derive(Default)]
@@ -780,7 +939,12 @@ impl NativeFacts {
             ),
             turn_id: Self::string_at(
                 payload,
-                &["/params/turnId", "/params/turn/id", "/result/turn/id"],
+                &[
+                    "/params/turnId",
+                    "/params/turn/id",
+                    "/result/turnId",
+                    "/result/turn/id",
+                ],
             ),
             item_id: Self::string_at(
                 payload,
@@ -824,7 +988,10 @@ impl PromptNode {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
+
+    #[cfg(target_os = "linux")]
+    use std::{io, io::Write, os::unix::net::UnixStream, process::Command};
 
     use erebor_runtime_context::{
         CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature,
@@ -904,6 +1071,12 @@ mod tests {
         assert!(super::CodexAppServerTransportBroker::is_sensitive_method(
             "thread/shellCommand"
         ));
+        assert!(super::CodexAppServerTransportBroker::is_sensitive_method(
+            "thread/inject_items"
+        ));
+        assert!(super::CodexAppServerTransportBroker::is_sensitive_method(
+            "thread/realtime/appendText"
+        ));
         assert!(!super::CodexAppServerTransportBroker::is_sensitive_method(
             "turn/start"
         ));
@@ -940,6 +1113,66 @@ mod tests {
     }
 
     #[test]
+    fn steer_response_binds_the_current_codex_turn_id() -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp, repository) = initialized_repository()?;
+        let reconciliation = Arc::new(CodexPromptReconciliation::default());
+        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let frame = b"{\"id\":22,\"method\":\"turn/steer\",\"params\":{\"threadId\":\"thread-1\",\"expectedTurnId\":\"turn-0\",\"input\":[{\"type\":\"text\",\"text\":\"steer\"}]}}\n";
+        ledger.record_pending_prompt(&ClientRequest::parse(frame)?, frame)?;
+        ledger.record_codex_message(b"{\"id\":22,\"result\":{\"turnId\":\"turn-1\"}}\n")?;
+
+        assert_eq!(
+            ledger
+                .prompts
+                .get("22")
+                .ok_or("missing steer prompt")?
+                .turn_id
+                .as_deref(),
+            Some("turn-1")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn current_app_server_context_and_attachments_are_recorded(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (_temp, repository) = initialized_repository()?;
+        let reconciliation = Arc::new(CodexPromptReconciliation::default());
+        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let frame = b"{\"id\":23,\"method\":\"turn/start\",\"params\":{\"threadId\":\"thread-1\",\"additionalContext\":{\"editor\":{\"uri\":\"file:///workspace/main.rs\"}},\"input\":[{\"type\":\"text\",\"text\":\"inspect this\"},{\"type\":\"localImage\",\"path\":\"/workspace/diagram.png\"}]}}\n";
+        ledger.record_pending_prompt(&ClientRequest::parse(frame)?, frame)?;
+        let node = ledger.prompts.get("23").ok_or("missing prompt")?;
+
+        assert_eq!(
+            node.rich_ide_context,
+            Some(json!({"editor": {"uri": "file:///workspace/main.rs"}}))
+        );
+        assert_eq!(
+            node.attachments,
+            Some(json!([{"type": "localImage", "path": "/workspace/diagram.png"}]))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn turn_interrupt_is_paired_without_creating_a_prompt() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let (_temp, repository) = initialized_repository()?;
+        let reconciliation = Arc::new(CodexPromptReconciliation::default());
+        let mut ledger = PromptLedger::new(&repository, "session-1", "profile-1", reconciliation);
+        let interrupt = ClientRequest::parse(
+            b"{\"id\":24,\"method\":\"turn/interrupt\",\"params\":{\"threadId\":\"thread-1\",\"turnId\":\"turn-1\"}}\n",
+        )?;
+
+        ledger.record_request(interrupt.id.as_ref().ok_or("missing interrupt id")?)?;
+        ledger.record_codex_message(b"{\"id\":24,\"result\":{}}\n")?;
+
+        assert!(ledger.prompts.is_empty());
+        assert!(!ledger.requests.contains_key("24"));
+        Ok(())
+    }
+
+    #[test]
     fn app_server_parent_and_child_thread_facts_bind_a_child_agent_to_one_prompt(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let (_temp, repository) = initialized_repository()?;
@@ -962,6 +1195,57 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn output_failure_signal_stops_client_forwarding() -> Result<(), Box<dyn std::error::Error>> {
+        let (_client_writer, client_reader) = UnixStream::pair()?;
+        let (shutdown_reader, mut shutdown_sender) = UnixStream::pair()?;
+        shutdown_sender.write_all(&[1])?;
+        let (_temp, repository) = initialized_repository()?;
+        let reconciliation = Arc::new(CodexPromptReconciliation::default());
+        let ledger = Mutex::new(PromptLedger::new(
+            &repository,
+            "session-1",
+            "profile-1",
+            reconciliation,
+        ));
+        let forwarded = Arc::new(Mutex::new(Vec::new()));
+        let output = Arc::new(Mutex::new(io::stdout()));
+
+        assert!(super::CodexAppServerTransportBroker::relay_client_input(
+            client_reader,
+            SharedWriter(Arc::clone(&forwarded)),
+            &output,
+            &ledger,
+            &shutdown_reader,
+        )
+        .is_err());
+        assert!(forwarded
+            .lock()
+            .map_err(|_error| "forwarded buffer lock")?
+            .is_empty());
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn output_failure_signal_terminates_the_child_without_waiting_for_client_eof(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (shutdown_receiver, mut shutdown_sender) = UnixStream::pair()?;
+        let mut child = Command::new("sleep").arg("30").spawn()?;
+        shutdown_sender.write_all(&[1])?;
+
+        assert!(
+            super::CodexAppServerTransportBroker::wait_for_child_or_output_failure(
+                &mut child,
+                &shutdown_receiver,
+            )
+            .is_err()
+        );
+        assert!(child.try_wait()?.is_some());
+        Ok(())
+    }
+
     fn initialized_repository() -> Result<
         (tempfile::TempDir, erebor_runtime_context::ContextRepository),
         Box<dyn std::error::Error>,
@@ -976,6 +1260,24 @@ mod tests {
     }
 
     struct FixedMetadataSource;
+
+    #[cfg(target_os = "linux")]
+    struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+    #[cfg(target_os = "linux")]
+    impl Write for SharedWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .map_err(|_error| io::Error::other("shared writer lock poisoned"))?
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     impl CommitMetadataSource for FixedMetadataSource {
         fn metadata(&self) -> Result<CommitMetadata, CommitMetadataSourceError> {
