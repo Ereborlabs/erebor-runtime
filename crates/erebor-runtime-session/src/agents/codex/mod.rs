@@ -18,7 +18,10 @@ pub use error::CodexSessionError;
 pub(crate) use guard_lifecycle::CodexGuardLifecycleHandler;
 pub use hook_client::CodexHookClient;
 pub use hook_output::CodexHookResultOutput;
-pub(crate) use leases::{CodexInvocationLeaseOwner, CodexLeaseRuntimeEvidence};
+pub(crate) use leases::{
+    CodexCommandDispatch, CodexInvocationLeaseOwner, CodexInvocationLeaseProfile,
+    CodexInvocationLeaseTrust, CodexLeaseRuntimeEvidence,
+};
 pub use native_event::CodexNativeHookEvent;
 pub(crate) use reconciliation::CodexPromptReconciliation;
 pub use ticket::{CodexHookTicket, CodexHookTicketRegistry, CodexManagedSession};

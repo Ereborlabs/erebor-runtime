@@ -9,8 +9,8 @@ use erebor_runtime_audit::JsonlAuditSink;
 use erebor_runtime_context::ContextPin;
 use erebor_runtime_core::{AuditRecord, DurableAuditSink};
 use erebor_runtime_events::{
-    ActionKind, ActorIdentity, ActorKind, EventId, ExecutionSurface, RiskLevel, RiskMetadata,
-    RuntimeEvent, SessionId, TargetRef,
+    ActionKind, ActorIdentity, EventId, ExecutionSurface, RiskLevel, RiskMetadata, RuntimeEvent,
+    SessionId, TargetRef,
 };
 use erebor_runtime_ipc::v1::{HookEventKind, InterceptionOperation, InterceptionRequest};
 use erebor_runtime_policy::Decision;
@@ -29,6 +29,59 @@ pub(crate) struct CodexLeaseRuntimeEvidence {
     pid: i64,
     process_start_time_ticks: u64,
     executable: String,
+}
+
+/// Pinned App Server envelope that carries one approved shell command from
+/// Codex into its sandbox launcher. It is configuration trust, not a tool
+/// capability: the lease is still selected only when it is uniquely current.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CodexCommandDispatch {
+    program: String,
+    shell: String,
+}
+
+impl CodexCommandDispatch {
+    pub(crate) fn new(program: String, shell: String) -> Self {
+        Self { program, shell }
+    }
+}
+
+/// Immutable session trust inputs for the Codex invocation-lease owner.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CodexInvocationLeaseTrust {
+    runtime_state_roots: Vec<PathBuf>,
+    command_dispatch: Option<CodexCommandDispatch>,
+}
+
+/// Enrolled profile identity that is relevant while associating a physical
+/// process effect with a Codex invocation lease.
+#[derive(Clone, Debug)]
+pub(crate) struct CodexInvocationLeaseProfile {
+    id: String,
+    executable: String,
+    trusted_execs: Vec<String>,
+}
+
+impl CodexInvocationLeaseProfile {
+    pub(crate) fn new(id: String, executable: String, trusted_execs: Vec<String>) -> Self {
+        Self {
+            id,
+            executable,
+            trusted_execs,
+        }
+    }
+}
+
+impl CodexInvocationLeaseTrust {
+    pub(crate) fn new(
+        runtime_state_roots: Vec<PathBuf>,
+        command_dispatch: Option<CodexCommandDispatch>,
+    ) -> Self {
+        Self {
+            runtime_state_roots,
+            command_dispatch,
+        }
+    }
 }
 
 impl CodexLeaseRuntimeEvidence {
@@ -164,6 +217,8 @@ pub(crate) struct CodexInvocationLeaseOwner {
     profile_id: String,
     profile_executable: String,
     trusted_profile_execs: Vec<String>,
+    runtime_state_roots: Vec<PathBuf>,
+    command_dispatch: Option<CodexCommandDispatch>,
     audit: Option<JsonlAuditSink>,
     context_dag: Mutex<Option<Arc<CodexContextDag>>>,
     state: Mutex<LeaseState>,
@@ -172,22 +227,19 @@ pub(crate) struct CodexInvocationLeaseOwner {
 impl CodexInvocationLeaseOwner {
     pub(crate) fn new(
         session_id: &str,
-        actor_id: &str,
-        actor_kind: ActorKind,
-        profile_id: &str,
-        profile_executable: String,
-        trusted_profile_execs: Vec<String>,
+        actor: ActorIdentity,
+        profile: CodexInvocationLeaseProfile,
+        trust: CodexInvocationLeaseTrust,
         audit_path: Option<PathBuf>,
     ) -> Self {
         Self {
             session_id: session_id.to_owned(),
-            actor: ActorIdentity {
-                id: actor_id.to_owned(),
-                kind: actor_kind,
-            },
-            profile_id: profile_id.to_owned(),
-            profile_executable,
-            trusted_profile_execs,
+            actor,
+            profile_id: profile.id,
+            profile_executable: profile.executable,
+            trusted_profile_execs: profile.trusted_execs,
+            runtime_state_roots: trust.runtime_state_roots,
+            command_dispatch: trust.command_dispatch,
             audit: audit_path.map(JsonlAuditSink::new),
             context_dag: Mutex::new(None),
             state: Mutex::new(LeaseState::default()),
@@ -291,6 +343,9 @@ impl CodexInvocationLeaseOwner {
     ) -> Result<(), CodexSessionError> {
         let mut state = self.lock_state()?;
         self.expire_locked(&mut state)?;
+        if state.bootstrap_processes.contains(&parent_pid) {
+            state.bootstrap_processes.insert(child_pid);
+        }
         let Some(binding) = state.processes.get(&parent_pid).cloned() else {
             return Ok(());
         };
@@ -318,6 +373,7 @@ impl CodexInvocationLeaseOwner {
     /// separate kernel-observed identities at fork time.
     pub(crate) fn record_guarded_process_exit(&self, pid: i64) -> Result<(), CodexSessionError> {
         let mut state = self.lock_state()?;
+        state.bootstrap_processes.remove(&pid);
         let Some(binding) = state.processes.remove(&pid) else {
             return Ok(());
         };
@@ -467,6 +523,16 @@ impl CodexInvocationLeaseOwner {
                 "profile-pinned Codex or managed-hook bootstrap exec is not a tool effect",
             );
         }
+        if self.allow_runtime_state_file(&state, request) {
+            return self.record_physical_decision_locked(
+                &mut state,
+                None,
+                request,
+                true,
+                "erebor-codex-invocation-lease-runtime-state",
+                "declared direct Codex runtime state is outside the governed workspace",
+            );
+        }
         if self.has_pending_matching_hook_exit(&state, request) {
             return self.record_physical_decision_locked(
                 &mut state,
@@ -502,7 +568,7 @@ impl CodexInvocationLeaseOwner {
             InterceptionOperation::ProcessExec => {
                 lease.effect_class == EffectClass::Command
                     && lease.runtime_pid == request.ppid
-                    && Self::command_launch_matches(lease, request)
+                    && self.command_handoff_matches(lease, request)
             }
             InterceptionOperation::FileOpen
             | InterceptionOperation::FileRead
@@ -860,7 +926,7 @@ impl CodexInvocationLeaseOwner {
             .filter(|lease| lease.effect_class == EffectClass::Command)
             .filter(|lease| lease.state == InvocationLeaseState::Armed)
             .filter(|lease| lease.runtime_pid == request.ppid)
-            .filter(|lease| Self::command_launch_matches(lease, request))
+            .filter(|lease| self.command_handoff_matches(lease, request))
             .map(|lease| lease.id.clone())
             .collect::<Vec<_>>();
         let [lease_id] = candidates.as_slice() else {
@@ -989,6 +1055,53 @@ impl CodexInvocationLeaseOwner {
             .is_some_and(|argument| argument == command)
     }
 
+    fn command_handoff_matches(
+        &self,
+        lease: &InvocationLease,
+        request: &InterceptionRequest,
+    ) -> bool {
+        Self::command_launch_matches(lease, request) || self.command_dispatch_matches(request)
+    }
+
+    fn command_dispatch_matches(&self, request: &InterceptionRequest) -> bool {
+        let Some(dispatch) = self.command_dispatch.as_ref() else {
+            return false;
+        };
+        let executable = request
+            .process_exec
+            .as_ref()
+            .map_or(request.executable.as_str(), |process| {
+                process.executable.as_str()
+            });
+        if executable != self.profile_executable {
+            return false;
+        }
+        let argv = Self::process_argv(request);
+        let Some(separator) = argv.iter().position(|argument| argument == "--") else {
+            return false;
+        };
+        argv.first() == Some(&dispatch.program)
+            && matches!(
+                argv.get(separator + 1..),
+                Some([shell, flag, script])
+                    if shell == &dispatch.shell && flag == "-c" && !script.is_empty()
+            )
+    }
+
+    fn app_server_bootstrap_matches(request: &InterceptionRequest) -> bool {
+        matches!(
+            Self::process_argv(request),
+            [_, command, mode] if command == "app-server" && mode == "--stdio"
+        )
+    }
+
+    fn process_argv(request: &InterceptionRequest) -> &[String] {
+        request
+            .process_exec
+            .as_ref()
+            .map_or(request.argv.as_slice(), |process| process.argv.as_slice())
+    }
+
     fn allow_profile_bootstrap_exec(
         &self,
         state: &mut LeaseState,
@@ -1003,7 +1116,11 @@ impl CodexInvocationLeaseOwner {
             .map_or(request.executable.as_str(), |process| {
                 process.executable.as_str()
             });
-        if executable == self.profile_executable && state.bootstrap_processes.is_empty() {
+        if executable == self.profile_executable
+            && state.bootstrap_processes.is_empty()
+            && !self.command_dispatch_matches(request)
+            && (self.command_dispatch.is_none() || Self::app_server_bootstrap_matches(request))
+        {
             state.bootstrap_processes.insert(request.pid);
             return true;
         }
@@ -1017,7 +1134,23 @@ impl CodexInvocationLeaseOwner {
             state.bootstrap_processes.insert(request.pid);
             return true;
         }
+        state.bootstrap_processes.remove(&request.pid);
         false
+    }
+
+    fn allow_runtime_state_file(&self, state: &LeaseState, request: &InterceptionRequest) -> bool {
+        matches!(
+            request.operation_family(),
+            InterceptionOperation::FileOpen
+                | InterceptionOperation::FileRead
+                | InterceptionOperation::FileMutation
+        ) && state.bootstrap_processes.contains(&request.pid)
+            && request.file.as_ref().is_some_and(|file| {
+                let path = std::path::Path::new(&file.path);
+                self.runtime_state_roots
+                    .iter()
+                    .any(|root| path.starts_with(root))
+            })
     }
 
     fn mutation_target_matches(lease: &InvocationLease, path: Option<&str>) -> bool {
@@ -1501,8 +1634,9 @@ mod tests {
     };
 
     use super::{
-        CodexContextDag, CodexInvocationLeaseOwner, CodexLeaseRuntimeEvidence,
-        CodexScopeContextBinding, InvocationLeaseState,
+        CodexCommandDispatch, CodexContextDag, CodexInvocationLeaseOwner,
+        CodexInvocationLeaseTrust, CodexLeaseRuntimeEvidence, CodexScopeContextBinding,
+        InvocationLeaseState,
     };
 
     #[test]
@@ -1524,6 +1658,183 @@ mod tests {
         assert_eq!(
             rule_id,
             "erebor-codex-invocation-lease-hook-exit-barrier-pending"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_dispatch_envelope_waits_for_hook_exit_then_binds_the_unique_lease(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let owner = dispatch_owner();
+        owner.record_scope_context(binding("scope-a", "item-a"))?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            command_event("tool-1").as_bytes(),
+            runtime(),
+            101,
+        )?;
+
+        let pending = owner
+            .physical_effect_decision(&dispatch_request(201, 42))
+            .ok_or("missing pending dispatch decision")?;
+        assert_eq!(
+            pending.into_parts().0,
+            SessionInterceptionDecision::Deny,
+            "the physical sandbox launcher must stop until the exact hook exits"
+        );
+
+        owner.record_guarded_hook_exit(101, true)?;
+        let allowed = owner
+            .physical_effect_decision(&dispatch_request(201, 42))
+            .ok_or("missing dispatch decision")?;
+        assert_eq!(allowed.into_parts().0, SessionInterceptionDecision::Allow);
+
+        owner.record_guarded_process_fork(201, 202)?;
+        let child = owner
+            .physical_effect_decision(&process_request(202, 201, "touch workspace/allowed.txt"))
+            .ok_or("missing bound child decision")?;
+        assert_eq!(child.into_parts().0, SessionInterceptionDecision::Allow);
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_dispatch_envelope_cannot_consume_an_armed_command_lease(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let owner = dispatch_owner();
+        owner.record_scope_context(binding("scope-a", "item-a"))?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            command_event("tool-1").as_bytes(),
+            runtime(),
+            101,
+        )?;
+        owner.record_guarded_hook_exit(101, true)?;
+        let mut malformed = dispatch_request(201, 42);
+        malformed
+            .process_exec
+            .as_mut()
+            .ok_or("missing process payload")?
+            .argv[4] = String::from("/bin/sh");
+        let decision = owner
+            .physical_effect_decision(&malformed)
+            .ok_or("missing malformed dispatch decision")?;
+        assert_eq!(decision.into_parts().0, SessionInterceptionDecision::Deny);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_bootstrap_may_write_declared_runtime_state_but_not_the_workspace(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let state_root = root.path().join("codex-home");
+        std::fs::create_dir(&state_root)?;
+        let owner = test_owner_with_trust(CodexInvocationLeaseTrust::new(
+            vec![state_root.clone()],
+            None,
+        ));
+
+        let bootstrap = InterceptionRequest {
+            pid: 42,
+            ppid: 1,
+            operation: InterceptionOperation::ProcessExec as i32,
+            executable: String::from("/opt/codex/codex"),
+            process_exec: Some(ProcessExecOperation {
+                executable: String::from("/opt/codex/codex"),
+                ..ProcessExecOperation::default()
+            }),
+            ..InterceptionRequest::default()
+        };
+        assert_eq!(
+            owner
+                .physical_effect_decision(&bootstrap)
+                .ok_or("missing bootstrap decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Allow
+        );
+
+        let state_file = state_root.join("state.sqlite");
+        let state_path = state_file.to_string_lossy();
+        assert_eq!(
+            owner
+                .physical_effect_decision(&file_request(42, &state_path))
+                .ok_or("missing runtime-state decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Allow
+        );
+        assert_eq!(
+            owner
+                .physical_effect_decision(&file_request(42, "workspace/other.txt"))
+                .ok_or("missing workspace decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Deny
+        );
+        owner.record_guarded_process_fork(42, 43)?;
+        assert_eq!(
+            owner
+                .physical_effect_decision(&file_request(43, &state_path))
+                .ok_or("missing runtime-clone decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Allow
+        );
+        assert_eq!(
+            owner
+                .physical_effect_decision(&file_request(44, &state_path))
+                .ok_or("missing unrelated-process decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Deny
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn bootstrap_clone_loses_runtime_state_access_when_it_execs_a_tool(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let state_root = root.path().join("codex-home");
+        std::fs::create_dir(&state_root)?;
+        let owner = test_owner_with_trust(CodexInvocationLeaseTrust::new(
+            vec![state_root.clone()],
+            None,
+        ));
+        let bootstrap = InterceptionRequest {
+            pid: 42,
+            ppid: 1,
+            operation: InterceptionOperation::ProcessExec as i32,
+            executable: String::from("/opt/codex/codex"),
+            process_exec: Some(ProcessExecOperation {
+                executable: String::from("/opt/codex/codex"),
+                ..ProcessExecOperation::default()
+            }),
+            ..InterceptionRequest::default()
+        };
+        let _ = owner.physical_effect_decision(&bootstrap);
+        owner.record_guarded_process_fork(42, 43)?;
+
+        let tool_exec = process_request(43, 42, "touch workspace/other.txt");
+        assert_eq!(
+            owner
+                .physical_effect_decision(&tool_exec)
+                .ok_or("missing tool decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Deny
+        );
+        let state_path = state_root
+            .join("state.sqlite")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            owner
+                .physical_effect_decision(&file_request(43, &state_path))
+                .ok_or("missing post-tool state decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Deny
         );
         Ok(())
     }
@@ -1823,13 +2134,9 @@ mod tests {
         let audit_path = root.path().join("audit.jsonl");
         let owner = CodexInvocationLeaseOwner::new(
             "session-test",
-            "agent-test",
-            erebor_runtime_events::ActorKind::Agent,
-            "profile-test",
-            String::from("/opt/codex/codex"),
-            vec![String::from(
-                "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
-            )],
+            test_actor(),
+            test_profile(),
+            CodexInvocationLeaseTrust::default(),
             Some(audit_path.clone()),
         );
         owner.record_scope_context(binding("scope-a", "item-a"))?;
@@ -1917,13 +2224,9 @@ mod tests {
         let audit_path = root.path().join("audit.jsonl");
         let owner = CodexInvocationLeaseOwner::new(
             "session-test",
-            "agent-test",
-            erebor_runtime_events::ActorKind::Agent,
-            "profile-test",
-            String::from("/opt/codex/codex"),
-            vec![String::from(
-                "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
-            )],
+            test_actor(),
+            test_profile(),
+            CodexInvocationLeaseTrust::default(),
             Some(audit_path.clone()),
         );
         owner.record_scope_context(binding("refs/scopes/session-test/scope/a", "item-a"))?;
@@ -2000,13 +2303,9 @@ mod tests {
         )?;
         let owner = CodexInvocationLeaseOwner::new(
             "session-test",
-            "agent-test",
-            erebor_runtime_events::ActorKind::Agent,
-            "profile-test",
-            String::from("/opt/codex/codex"),
-            vec![String::from(
-                "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
-            )],
+            test_actor(),
+            test_profile(),
+            CodexInvocationLeaseTrust::default(),
             Some(audit_path.clone()),
         );
         owner.set_context_dag(context_dag)?;
@@ -2073,17 +2372,38 @@ mod tests {
     }
 
     fn test_owner() -> CodexInvocationLeaseOwner {
-        CodexInvocationLeaseOwner::new(
-            "session-test",
-            "agent-test",
-            erebor_runtime_events::ActorKind::Agent,
-            "profile-test",
+        test_owner_with_trust(CodexInvocationLeaseTrust::default())
+    }
+
+    fn test_owner_with_trust(trust: CodexInvocationLeaseTrust) -> CodexInvocationLeaseOwner {
+        CodexInvocationLeaseOwner::new("session-test", test_actor(), test_profile(), trust, None)
+    }
+
+    fn test_actor() -> erebor_runtime_events::ActorIdentity {
+        erebor_runtime_events::ActorIdentity {
+            id: String::from("agent-test"),
+            kind: erebor_runtime_events::ActorKind::Agent,
+        }
+    }
+
+    fn test_profile() -> super::CodexInvocationLeaseProfile {
+        super::CodexInvocationLeaseProfile::new(
+            String::from("profile-test"),
             String::from("/opt/codex/codex"),
             vec![String::from(
                 "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
             )],
-            None,
         )
+    }
+
+    fn dispatch_owner() -> CodexInvocationLeaseOwner {
+        test_owner_with_trust(CodexInvocationLeaseTrust::new(
+            Vec::new(),
+            Some(CodexCommandDispatch::new(
+                String::from("codex-linux-sandbox"),
+                String::from("/usr/bin/zsh"),
+            )),
+        ))
     }
 
     fn binding(scope_ref: &str, item_node_stream: &str) -> CodexScopeContextBinding {
@@ -2173,6 +2493,31 @@ mod tests {
                     String::from("-c"),
                     command.to_owned(),
                 ],
+                ..ProcessExecOperation::default()
+            }),
+            ..InterceptionRequest::default()
+        }
+    }
+
+    fn dispatch_request(pid: i64, ppid: i64) -> InterceptionRequest {
+        let argv = vec![
+            String::from("codex-linux-sandbox"),
+            String::from("--sandbox-policy-cwd"),
+            String::from("/workspace"),
+            String::from("--"),
+            String::from("/usr/bin/zsh"),
+            String::from("-c"),
+            String::from("touch workspace/allowed.txt"),
+        ];
+        InterceptionRequest {
+            pid,
+            ppid,
+            operation: InterceptionOperation::ProcessExec as i32,
+            executable: String::from("/opt/codex/codex"),
+            argv: argv.clone(),
+            process_exec: Some(ProcessExecOperation {
+                executable: String::from("/opt/codex/codex"),
+                argv,
                 ..ProcessExecOperation::default()
             }),
             ..InterceptionRequest::default()

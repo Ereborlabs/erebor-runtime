@@ -124,6 +124,35 @@ pub struct CodexProfileLayerConfig {
 pub struct CodexAppServerTransportLayerConfig {
     #[serde(default)]
     pub enabled: bool,
+    /// Optional exact process envelope the pinned App Server uses to dispatch
+    /// a shell command. A strict Phase 3 profile must declare this rather than
+    /// treating the App Server's private sandbox launcher as a tool command.
+    #[serde(default)]
+    pub command_dispatch: Option<CodexCommandDispatchLayerConfig>,
+}
+
+/// The pinned App Server's command-dispatch envelope between an authenticated
+/// hook and the actual shell command.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexCommandDispatchLayerConfig {
+    /// Exact argv[0] passed to the enrolled Codex executable.
+    pub program: String,
+    /// Exact shell executable after the envelope's `--` separator.
+    pub shell: PathBuf,
+    /// Optional pinned runtime executable used by the enrolled Codex dispatch
+    /// implementation, such as its adjacent `bwrap` binary.
+    #[serde(default)]
+    pub sandbox_launcher: Option<CodexRuntimeArtifactLayerConfig>,
+}
+
+/// A runtime executable loaded by the enrolled Codex binary while dispatching
+/// a governed command.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexRuntimeArtifactLayerConfig {
+    pub path: PathBuf,
+    pub sha256: String,
 }
 
 impl CodexProfileLayerConfig {
@@ -294,6 +323,47 @@ impl CodexProfileLayerConfig {
                     )
                 }
             );
+        }
+        if let Some(dispatch) = self.app_server_transport.command_dispatch.as_ref() {
+            ensure!(
+                valid_id(&dispatch.program),
+                InvalidCodexGovernanceConfigSnafu {
+                    reason: format!(
+                        "codex profile `{}` command dispatch program `{}` is invalid",
+                        self.id, dispatch.program
+                    )
+                }
+            );
+            ensure!(
+                normalized_absolute_path(&dispatch.shell),
+                InvalidCodexGovernanceConfigSnafu {
+                    reason: format!(
+                        "codex profile `{}` command dispatch shell must be an absolute normalized path",
+                        self.id
+                    )
+                }
+            );
+            if let Some(launcher) = dispatch.sandbox_launcher.as_ref() {
+                ensure!(
+                    normalized_absolute_path(&launcher.path)
+                        && launcher.path.starts_with(&self.trust_root),
+                    InvalidCodexGovernanceConfigSnafu {
+                        reason: format!(
+                            "codex profile `{}` sandbox launcher must be an absolute normalized path below trust_root",
+                            self.id
+                        )
+                    }
+                );
+                ensure!(
+                    valid_sha256(&launcher.sha256),
+                    InvalidCodexGovernanceConfigSnafu {
+                        reason: format!(
+                            "codex profile `{}` sandbox launcher sha256 must be a lowercase SHA-256 digest",
+                            self.id
+                        )
+                    }
+                );
+            }
         }
         ensure!(
             !self.event_schemas.is_empty(),

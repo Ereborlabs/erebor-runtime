@@ -55,6 +55,17 @@ impl CodexArtifactProjection {
         ] {
             Self::verify_file(path, digest, profile)?;
         }
+        if let Some(launcher) = profile
+            .app_server_transport
+            .command_dispatch
+            .as_ref()
+            .and_then(|dispatch| dispatch.sandbox_launcher.as_ref())
+        {
+            Self::verify_file(&launcher.path, &launcher.sha256, profile)?;
+            if profile.deployment == CodexDeploymentMode::FleetManaged {
+                Self::verify_fleet_ancestor_protection(&launcher.path, profile)?;
+            }
+        }
         Ok(())
     }
 

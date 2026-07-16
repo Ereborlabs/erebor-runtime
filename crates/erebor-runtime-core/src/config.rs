@@ -3,8 +3,9 @@ mod agents {
     mod codex;
 
     pub use codex::{
-        CodexDeploymentMode, CodexGovernanceLayerConfig, CodexHookEvent,
-        CodexHookEventSchemaLayerConfig, CodexHookShellKind, CodexProfileLayerConfig,
+        CodexCommandDispatchLayerConfig, CodexDeploymentMode, CodexGovernanceLayerConfig,
+        CodexHookEvent, CodexHookEventSchemaLayerConfig, CodexHookShellKind,
+        CodexProfileLayerConfig, CodexRuntimeArtifactLayerConfig,
     };
 }
 mod runner;
@@ -16,8 +17,9 @@ mod surfaces;
 pub(in crate::config) mod test_prelude;
 
 pub use agents::{
-    CodexDeploymentMode, CodexGovernanceLayerConfig, CodexHookEvent,
-    CodexHookEventSchemaLayerConfig, CodexHookShellKind, CodexProfileLayerConfig,
+    CodexCommandDispatchLayerConfig, CodexDeploymentMode, CodexGovernanceLayerConfig,
+    CodexHookEvent, CodexHookEventSchemaLayerConfig, CodexHookShellKind, CodexProfileLayerConfig,
+    CodexRuntimeArtifactLayerConfig,
 };
 pub use audit::{
     AuditCommandLogLevel, BrowserCdpAuditSurfaceLoggingConfig, DesktopAuditSurfaceLoggingConfig,

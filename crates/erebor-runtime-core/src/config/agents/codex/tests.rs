@@ -74,6 +74,47 @@ fn parses_an_explicit_brokered_app_server_profile() -> Result<(), Box<dyn std::e
 }
 
 #[test]
+fn parses_a_pinned_app_server_command_dispatch_envelope() -> Result<(), Box<dyn std::error::Error>>
+{
+    let config = RuntimeConfig::from_json_str(&profile_source(&profile_with(
+        ",\n          \"app_server_transport\": { \"enabled\": true, \"command_dispatch\": { \"program\": \"codex-linux-sandbox\", \"shell\": \"/usr/bin/zsh\", \"sandbox_launcher\": { \"path\": \"/var/lib/erebor/codex/bin/codex-resources/bwrap\", \"sha256\": \"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\" } } }",
+    )))?;
+    let profile = config
+        .codex
+        .matching_profile(std::path::Path::new("/opt/codex/codex"))
+        .ok_or("missing matching Codex profile")?;
+    let dispatch = profile
+        .app_server_transport
+        .command_dispatch
+        .as_ref()
+        .ok_or("missing command dispatch envelope")?;
+
+    assert_eq!(dispatch.program, "codex-linux-sandbox");
+    assert_eq!(dispatch.shell, std::path::Path::new("/usr/bin/zsh"));
+    assert_eq!(
+        dispatch
+            .sandbox_launcher
+            .as_ref()
+            .ok_or("missing sandbox launcher")?
+            .path,
+        std::path::Path::new("/var/lib/erebor/codex/bin/codex-resources/bwrap")
+    );
+    Ok(())
+}
+
+#[test]
+fn rejects_a_relative_app_server_command_dispatch_shell() {
+    let source = profile_source(&profile_with(
+        ",\n          \"app_server_transport\": { \"enabled\": true, \"command_dispatch\": { \"program\": \"codex-linux-sandbox\", \"shell\": \"zsh\" } }",
+    ));
+
+    assert!(matches!(
+        RuntimeConfig::from_json_str(&source),
+        Err(RuntimeConfigError::InvalidCodexGovernanceConfig { .. })
+    ));
+}
+
+#[test]
 fn rejects_unknown_app_server_transport_configuration() {
     let source = profile_source(&profile_with(
         ",\n          \"app_server_transport\": { \"enabled\": true, \"unknown\": true }",

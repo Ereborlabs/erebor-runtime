@@ -636,7 +636,7 @@ mod tests {
         CodexDeploymentMode, CodexHookEvent, CodexHookEventSchemaLayerConfig, CodexHookShellKind,
         CodexProfileLayerConfig, SessionRunnerKind,
     };
-    use erebor_runtime_events::ActorKind;
+    use erebor_runtime_events::{ActorIdentity, ActorKind};
     use erebor_runtime_ipc::v1::HookEvent;
 
     use super::{
@@ -644,7 +644,9 @@ mod tests {
         HookEventKind, LinuxHookPeerInspector, LinuxHookProcess, LinuxProcessIdentity,
     };
     use crate::{
-        agents::codex::{CodexHookClient, CodexManagedSession, CodexNativeHookEvent},
+        agents::codex::{
+            CodexHookClient, CodexInvocationLeaseProfile, CodexManagedSession, CodexNativeHookEvent,
+        },
         CodexSessionError,
     };
 
@@ -894,13 +896,18 @@ mod tests {
     fn test_lease_owner() -> Arc<CodexInvocationLeaseOwner> {
         Arc::new(CodexInvocationLeaseOwner::new(
             "session-test",
-            "agent-test",
-            ActorKind::Agent,
-            "profile-test",
-            String::from("/opt/codex/codex"),
-            vec![String::from(
-                "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
-            )],
+            ActorIdentity {
+                id: String::from("agent-test"),
+                kind: ActorKind::Agent,
+            },
+            CodexInvocationLeaseProfile::new(
+                String::from("profile-test"),
+                String::from("/opt/codex/codex"),
+                vec![String::from(
+                    "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
+                )],
+            ),
+            super::super::CodexInvocationLeaseTrust::default(),
             None,
         ))
     }

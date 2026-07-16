@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use erebor_runtime_cdp::BrowserCdpSurface;
 use erebor_runtime_core::{
@@ -11,8 +15,9 @@ use snafu::ResultExt;
 
 use crate::{
     agents::codex::{
-        CodexArtifactProjection, CodexContextDag, CodexGuardLifecycleHandler, CodexHookBroker,
-        CodexInvocationLeaseOwner, CodexManagedSession, CodexPromptReconciliation,
+        CodexArtifactProjection, CodexCommandDispatch, CodexContextDag, CodexGuardLifecycleHandler,
+        CodexHookBroker, CodexInvocationLeaseOwner, CodexInvocationLeaseProfile,
+        CodexInvocationLeaseTrust, CodexManagedSession, CodexPromptReconciliation,
     },
     error::{
         CodexSessionSnafu, FilesystemSurfaceSnafu, GuardConfigSnafu, InvalidConfigSnafu,
@@ -203,22 +208,44 @@ fn start_session_side_resources_from_start_plan(
                                     plan.session_id().as_str(),
                                 ))
                             });
+                            let runtime_state_roots =
+                                codex_runtime_state_roots(storage.repo_path())?;
+                            let command_dispatch = codex_managed_session
+                                .profile()
+                                .app_server_transport
+                                .command_dispatch
+                                .as_ref()
+                                .map(|dispatch| {
+                                    CodexCommandDispatch::new(
+                                        dispatch.program.clone(),
+                                        dispatch.shell.display().to_string(),
+                                    )
+                                });
+                            let lease_trust = CodexInvocationLeaseTrust::new(
+                                runtime_state_roots,
+                                command_dispatch,
+                            );
                             let lease_owner = Arc::new(CodexInvocationLeaseOwner::new(
                                 plan.session_id().as_str(),
-                                &plan.actor().id,
-                                plan.actor().kind.clone(),
-                                &codex_managed_session.profile().id,
-                                codex_managed_session
-                                    .profile()
-                                    .executable
-                                    .display()
-                                    .to_string(),
-                                codex_managed_session
-                                    .profile()
-                                    .hook_exec_history
-                                    .iter()
-                                    .map(|path| path.display().to_string())
-                                    .collect(),
+                                erebor_runtime_events::ActorIdentity {
+                                    id: plan.actor().id.clone(),
+                                    kind: plan.actor().kind.clone(),
+                                },
+                                CodexInvocationLeaseProfile::new(
+                                    codex_managed_session.profile().id.clone(),
+                                    codex_managed_session
+                                        .profile()
+                                        .executable
+                                        .display()
+                                        .to_string(),
+                                    codex_managed_session
+                                        .profile()
+                                        .hook_exec_history
+                                        .iter()
+                                        .map(|path| path.display().to_string())
+                                        .collect(),
+                                ),
+                                lease_trust,
                                 prepared_session
                                     .map(PreparedSession::storage)
                                     .map(|storage| storage.audit_path().to_path_buf()),
@@ -437,6 +464,54 @@ fn file_operation_interception_input(
         filesystem_registered
             && interception.operation_supported(SessionInterceptionOperation::FileMutation),
     )
+}
+
+fn codex_runtime_state_roots(repo_path: &Path) -> Result<Vec<PathBuf>, SessionExecutionError> {
+    let Some(root) = std::env::var_os("CODEX_HOME") else {
+        return Ok(Vec::new());
+    };
+    let root = PathBuf::from(root);
+    if !root.is_absolute() {
+        return GuardConfigSnafu {
+            reason: String::from("CODEX_HOME must be an absolute path for managed Codex sessions"),
+        }
+        .fail();
+    }
+    let root = match std::fs::canonicalize(&root) {
+        Ok(root) => root,
+        Err(error) => {
+            return GuardConfigSnafu {
+                reason: format!(
+                    "managed Codex CODEX_HOME {} could not be resolved: {error}",
+                    root.display()
+                ),
+            }
+            .fail();
+        }
+    };
+    let repo = match std::fs::canonicalize(repo_path) {
+        Ok(repo) => repo,
+        Err(error) => {
+            return GuardConfigSnafu {
+                reason: format!(
+                    "governed repository {} could not be resolved: {error}",
+                    repo_path.display()
+                ),
+            }
+            .fail();
+        }
+    };
+    if root.starts_with(&repo) || repo.starts_with(&root) {
+        return GuardConfigSnafu {
+            reason: format!(
+                "CODEX_HOME runtime-state root {} must not overlap the governed repository {}",
+                root.display(),
+                repo.display()
+            ),
+        }
+        .fail();
+    }
+    Ok(vec![root])
 }
 
 fn session_interception_router(

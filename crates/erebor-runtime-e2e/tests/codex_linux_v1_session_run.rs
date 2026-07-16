@@ -257,7 +257,7 @@ mod linux {
             "hook_shell":"zsh",
             "hook_exec_history":["{}","/usr/bin/zsh","/usr/lib/erebor/codex-hooks/erebor-codex-hook"],
             "event_schemas":[{}],
-            "app_server_transport":{{"enabled":true}}
+            "app_server_transport":{{"enabled":true,"command_dispatch":{{"program":"codex-linux-sandbox","shell":"/usr/bin/zsh","sandbox_launcher":{{"path":"{}","sha256":"{}"}}}}}}
           }}]}}
         }}"#,
                 policy.display(),
@@ -271,7 +271,9 @@ mod linux {
                 strict_profile.shell_startup_path().display(),
                 hash(strict_profile.shell_startup_path())?,
                 codex.display(),
-                event_schemas()?
+                event_schemas()?,
+                strict_profile.sandbox_launcher_path().display(),
+                hash(strict_profile.sandbox_launcher_path())?
             ),
         )?;
         let codex_home = root.join("codex-home");
@@ -373,6 +375,7 @@ mod linux {
         requirements: PathBuf,
         managed_hook: PathBuf,
         shell_startup: PathBuf,
+        sandbox_launcher: PathBuf,
     }
 
     impl StrictCodexProfile {
@@ -396,6 +399,7 @@ mod linux {
                 requirements: root.join("requirements.toml"),
                 managed_hook: root.join("hooks/erebor-codex-hook"),
                 shell_startup: root.join("hooks/.zshenv"),
+                sandbox_launcher: root.join("bin/codex-resources/bwrap"),
                 root,
             };
             for path in [
@@ -404,6 +408,7 @@ mod linux {
                 profile.requirements.as_path(),
                 profile.managed_hook.as_path(),
                 profile.shell_startup.as_path(),
+                profile.sandbox_launcher.as_path(),
             ] {
                 Self::assert_root_owned(path)?;
             }
@@ -466,6 +471,10 @@ mod linux {
 
         fn shell_startup_path(&self) -> &Path {
             &self.shell_startup
+        }
+
+        fn sandbox_launcher_path(&self) -> &Path {
+            &self.sandbox_launcher
         }
     }
 
