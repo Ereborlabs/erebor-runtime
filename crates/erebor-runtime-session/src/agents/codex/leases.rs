@@ -483,8 +483,9 @@ impl CodexInvocationLeaseOwner {
         )
     }
 
-    /// Returns a fail-closed decision for protected process/file effects, or
-    /// `None` for a family this owner does not govern yet.
+    /// Returns a decision only for a process or file effect that this owner
+    /// can attribute to a Codex invocation. The generic interception policy
+    /// remains responsible for all other observed effects.
     pub(crate) fn physical_effect_decision(
         &self,
         request: &InterceptionRequest,
@@ -499,7 +500,7 @@ impl CodexInvocationLeaseOwner {
             }
         }
         match self.physical_effect_decision_inner(request) {
-            Ok(decision) => Some(decision),
+            Ok(decision) => decision,
             Err(error) => Some(erebor_runtime_core::SurfaceInterceptionDecision::deny(
                 "erebor-codex-invocation-lease-state-failure",
                 format!("Codex invocation lease state is unavailable: {error}"),
@@ -510,38 +511,44 @@ impl CodexInvocationLeaseOwner {
     fn physical_effect_decision_inner(
         &self,
         request: &InterceptionRequest,
-    ) -> Result<erebor_runtime_core::SurfaceInterceptionDecision, CodexSessionError> {
+    ) -> Result<Option<erebor_runtime_core::SurfaceInterceptionDecision>, CodexSessionError> {
         let mut state = self.lock_state()?;
         self.expire_locked(&mut state)?;
         if self.allow_profile_bootstrap_exec(&mut state, request) {
-            return self.record_physical_decision_locked(
-                &mut state,
-                None,
-                request,
-                true,
-                "erebor-codex-invocation-lease-profile-bootstrap",
-                "profile-pinned Codex or managed-hook bootstrap exec is not a tool effect",
-            );
+            return self
+                .record_physical_decision_locked(
+                    &mut state,
+                    None,
+                    request,
+                    true,
+                    "erebor-codex-invocation-lease-profile-bootstrap",
+                    "profile-pinned Codex or managed-hook bootstrap exec is not a tool effect",
+                )
+                .map(Some);
         }
         if self.allow_runtime_state_file(&state, request) {
-            return self.record_physical_decision_locked(
-                &mut state,
-                None,
-                request,
-                true,
-                "erebor-codex-invocation-lease-runtime-state",
-                "declared direct Codex runtime state is outside the governed workspace",
-            );
+            return self
+                .record_physical_decision_locked(
+                    &mut state,
+                    None,
+                    request,
+                    true,
+                    "erebor-codex-invocation-lease-runtime-state",
+                    "declared direct Codex runtime state is outside the governed workspace",
+                )
+                .map(Some);
         }
         if self.has_pending_matching_hook_exit(&state, request) {
-            return self.record_physical_decision_locked(
-                &mut state,
-                None,
-                request,
-                false,
-                "erebor-codex-invocation-lease-hook-exit-barrier-pending",
-                "the exact Codex invocation hook has not exited successfully",
-            );
+            return self
+                .record_physical_decision_locked(
+                    &mut state,
+                    None,
+                    request,
+                    false,
+                    "erebor-codex-invocation-lease-hook-exit-barrier-pending",
+                    "the exact Codex invocation hook has not exited successfully",
+                )
+                .map(Some);
         }
 
         match request.operation_family() {
@@ -904,21 +911,26 @@ impl CodexInvocationLeaseOwner {
         &self,
         state: &mut LeaseState,
         request: &InterceptionRequest,
-    ) -> Result<erebor_runtime_core::SurfaceInterceptionDecision, CodexSessionError> {
+    ) -> Result<Option<erebor_runtime_core::SurfaceInterceptionDecision>, CodexSessionError> {
         if let Some(binding) = state.processes.get(&request.pid).cloned() {
             if let Some(lease) = state.leases.get(&binding.lease_id).cloned() {
                 if lease.state != InvocationLeaseState::Closed {
-                    return self.record_physical_decision_locked(
-                        state,
-                        Some(&lease),
-                        request,
-                        true,
-                        "erebor-codex-invocation-lease-bound-descendant",
-                        "process already retains its exact Codex invocation association",
-                    );
+                    return self
+                        .record_physical_decision_locked(
+                            state,
+                            Some(&lease),
+                            request,
+                            true,
+                            "erebor-codex-invocation-lease-bound-descendant",
+                            "process already retains its exact Codex invocation association",
+                        )
+                        .map(Some);
                 }
             }
             state.processes.remove(&request.pid);
+        }
+        if !self.is_known_command_handoff(state, request) {
+            return Ok(None);
         }
         let candidates = state
             .leases
@@ -930,24 +942,28 @@ impl CodexInvocationLeaseOwner {
             .map(|lease| lease.id.clone())
             .collect::<Vec<_>>();
         let [lease_id] = candidates.as_slice() else {
-            return self.record_physical_decision_locked(
-                state,
-                None,
-                request,
-                false,
-                "erebor-codex-invocation-lease-no-matching-command-handoff",
-                "no exact armed Codex command lease matches this stopped launch",
-            );
+            return self
+                .record_physical_decision_locked(
+                    state,
+                    None,
+                    request,
+                    false,
+                    "erebor-codex-invocation-lease-no-matching-command-handoff",
+                    "no exact armed Codex command lease matches this stopped launch",
+                )
+                .map(Some);
         };
         let Some(lease) = state.leases.get_mut(lease_id) else {
-            return self.record_physical_decision_locked(
-                state,
-                None,
-                request,
-                false,
-                "erebor-codex-invocation-lease-missing-command-handoff",
-                "the matched Codex command lease disappeared before physical binding",
-            );
+            return self
+                .record_physical_decision_locked(
+                    state,
+                    None,
+                    request,
+                    false,
+                    "erebor-codex-invocation-lease-missing-command-handoff",
+                    "the matched Codex command lease disappeared before physical binding",
+                )
+                .map(Some);
         };
         lease.state = InvocationLeaseState::EffectBound;
         let lease = lease.clone();
@@ -966,27 +982,33 @@ impl CodexInvocationLeaseOwner {
             "erebor-codex-invocation-lease-command-bound",
             "stopped command child is bound to its exact Codex invocation lease",
         )
+        .map(Some)
     }
 
     fn authorize_file_operation_locked(
         &self,
         state: &mut LeaseState,
         request: &InterceptionRequest,
-    ) -> Result<erebor_runtime_core::SurfaceInterceptionDecision, CodexSessionError> {
+    ) -> Result<Option<erebor_runtime_core::SurfaceInterceptionDecision>, CodexSessionError> {
         if let Some(binding) = state.processes.get(&request.pid).cloned() {
             if let Some(lease) = state.leases.get(&binding.lease_id).cloned() {
                 if lease.state != InvocationLeaseState::Closed {
-                    return self.record_physical_decision_locked(
-                        state,
-                        Some(&lease),
-                        request,
-                        true,
-                        "erebor-codex-invocation-lease-descendant-file-effect",
-                        "bound command descendant retains its original invocation association",
-                    );
+                    return self
+                        .record_physical_decision_locked(
+                            state,
+                            Some(&lease),
+                            request,
+                            true,
+                            "erebor-codex-invocation-lease-descendant-file-effect",
+                            "bound command descendant retains its original invocation association",
+                        )
+                        .map(Some);
                 }
             }
             state.processes.remove(&request.pid);
+        }
+        if !Self::is_known_mutation_effect(state, request) {
+            return Ok(None);
         }
         let path = request.file.as_ref().map(|file| file.path.as_str());
         let candidates = state
@@ -1004,24 +1026,28 @@ impl CodexInvocationLeaseOwner {
             .map(|lease| lease.id.clone())
             .collect::<Vec<_>>();
         let [lease_id] = candidates.as_slice() else {
-            return self.record_physical_decision_locked(
-                state,
-                None,
-                request,
-                false,
-                "erebor-codex-invocation-lease-no-matching-file-capability",
-                "no exact armed Codex mutation lease authorizes this file operation",
-            );
+            return self
+                .record_physical_decision_locked(
+                    state,
+                    None,
+                    request,
+                    false,
+                    "erebor-codex-invocation-lease-no-matching-file-capability",
+                    "no exact armed Codex mutation lease authorizes this file operation",
+                )
+                .map(Some);
         };
         let Some(lease) = state.leases.get_mut(lease_id) else {
-            return self.record_physical_decision_locked(
-                state,
-                None,
-                request,
-                false,
-                "erebor-codex-invocation-lease-missing-file-capability",
-                "the matched Codex mutation lease disappeared before physical binding",
-            );
+            return self
+                .record_physical_decision_locked(
+                    state,
+                    None,
+                    request,
+                    false,
+                    "erebor-codex-invocation-lease-missing-file-capability",
+                    "the matched Codex mutation lease disappeared before physical binding",
+                )
+                .map(Some);
         };
         let transition = if lease.state == InvocationLeaseState::Armed {
             lease.state = InvocationLeaseState::EffectBound;
@@ -1041,6 +1067,47 @@ impl CodexInvocationLeaseOwner {
             "erebor-codex-invocation-lease-mutation-capability-bound",
             "Codex process file effect matches its exact mutation capability",
         )
+        .map(Some)
+    }
+
+    fn is_known_command_handoff(&self, state: &LeaseState, request: &InterceptionRequest) -> bool {
+        state.leases.values().any(|lease| {
+            lease.effect_class == EffectClass::Command
+                && lease.runtime_pid == request.ppid
+                && self.command_handoff_matches(lease, request)
+        }) || self.is_dispatch_attempt_from_runtime(state, request)
+    }
+
+    fn is_dispatch_attempt_from_runtime(
+        &self,
+        state: &LeaseState,
+        request: &InterceptionRequest,
+    ) -> bool {
+        let Some(dispatch) = self.command_dispatch.as_ref() else {
+            return false;
+        };
+        let executable = request
+            .process_exec
+            .as_ref()
+            .map_or(request.executable.as_str(), |process| {
+                process.executable.as_str()
+            });
+        executable == self.profile_executable
+            && Self::process_argv(request).first() == Some(&dispatch.program)
+            && state.leases.values().any(|lease| {
+                lease.effect_class == EffectClass::Command && lease.runtime_pid == request.ppid
+            })
+    }
+
+    fn is_known_mutation_effect(state: &LeaseState, request: &InterceptionRequest) -> bool {
+        state.leases.values().any(|lease| {
+            lease.effect_class == EffectClass::InProcessMutation
+                && lease.runtime_pid == request.pid
+                && Self::mutation_target_matches(
+                    lease,
+                    request.file.as_ref().map(|file| file.path.as_str()),
+                )
+        })
     }
 
     fn command_launch_matches(lease: &InvocationLease, request: &InterceptionRequest) -> bool {
@@ -1723,7 +1790,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_bootstrap_may_write_declared_runtime_state_but_not_the_workspace(
+    fn direct_bootstrap_claims_declared_runtime_state_but_delegates_other_files(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
         let state_root = root.path().join("codex-home");
@@ -1763,14 +1830,9 @@ mod tests {
                 .0,
             SessionInterceptionDecision::Allow
         );
-        assert_eq!(
-            owner
-                .physical_effect_decision(&file_request(42, "workspace/other.txt"))
-                .ok_or("missing workspace decision")?
-                .into_parts()
-                .0,
-            SessionInterceptionDecision::Deny
-        );
+        assert!(owner
+            .physical_effect_decision(&file_request(42, "workspace/other.txt"))
+            .is_none());
         owner.record_guarded_process_fork(42, 43)?;
         assert_eq!(
             owner
@@ -1780,19 +1842,14 @@ mod tests {
                 .0,
             SessionInterceptionDecision::Allow
         );
-        assert_eq!(
-            owner
-                .physical_effect_decision(&file_request(44, &state_path))
-                .ok_or("missing unrelated-process decision")?
-                .into_parts()
-                .0,
-            SessionInterceptionDecision::Deny
-        );
+        assert!(owner
+            .physical_effect_decision(&file_request(44, &state_path))
+            .is_none());
         Ok(())
     }
 
     #[test]
-    fn bootstrap_clone_loses_runtime_state_access_when_it_execs_a_tool(
+    fn bootstrap_clone_delegates_nonbootstrap_exec_and_runtime_state_afterward(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
         let state_root = root.path().join("codex-home");
@@ -1816,26 +1873,14 @@ mod tests {
         owner.record_guarded_process_fork(42, 43)?;
 
         let tool_exec = process_request(43, 42, "touch workspace/other.txt");
-        assert_eq!(
-            owner
-                .physical_effect_decision(&tool_exec)
-                .ok_or("missing tool decision")?
-                .into_parts()
-                .0,
-            SessionInterceptionDecision::Deny
-        );
+        assert!(owner.physical_effect_decision(&tool_exec).is_none());
         let state_path = state_root
             .join("state.sqlite")
             .to_string_lossy()
             .into_owned();
-        assert_eq!(
-            owner
-                .physical_effect_decision(&file_request(43, &state_path))
-                .ok_or("missing post-tool state decision")?
-                .into_parts()
-                .0,
-            SessionInterceptionDecision::Deny
-        );
+        assert!(owner
+            .physical_effect_decision(&file_request(43, &state_path))
+            .is_none());
         Ok(())
     }
 
@@ -1910,10 +1955,9 @@ mod tests {
             .physical_effect_decision(&file_request(42, "workspace/allowed.txt"))
             .ok_or("missing allowed decision")?;
         assert_eq!(allowed.into_parts().0, SessionInterceptionDecision::Allow);
-        let denied = owner
+        assert!(owner
             .physical_effect_decision(&file_request(42, "workspace/other.txt"))
-            .ok_or("missing denied decision")?;
-        assert_eq!(denied.into_parts().0, SessionInterceptionDecision::Deny);
+            .is_none());
 
         owner.record_authenticated_hook(
             erebor_runtime_ipc::v1::HookEventKind::PostToolUse,
@@ -1954,7 +1998,7 @@ mod tests {
     }
 
     #[test]
-    fn armed_command_lease_does_not_select_a_different_launch_by_text_or_timing(
+    fn unmatched_command_is_delegated_to_the_generic_interception_policy(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let owner = owner_with_scope()?;
         owner.record_authenticated_hook(
@@ -1964,15 +2008,9 @@ mod tests {
             101,
         )?;
         owner.record_guarded_hook_exit(101, true)?;
-        let denied = owner
+        assert!(owner
             .physical_effect_decision(&process_request(201, 42, "echo other"))
-            .ok_or("missing mismatched launch decision")?;
-        let (kind, rule_id, _reason, _mediation) = denied.into_parts();
-        assert_eq!(kind, SessionInterceptionDecision::Deny);
-        assert_eq!(
-            rule_id,
-            "erebor-codex-invocation-lease-no-matching-command-handoff"
-        );
+            .is_none());
         Ok(())
     }
 
@@ -2005,14 +2043,9 @@ mod tests {
                 .0,
             SessionInterceptionDecision::Allow
         );
-        assert_eq!(
-            owner
-                .physical_effect_decision(&process_request(203, 1, "python child.py"))
-                .ok_or("missing unrelated decision")?
-                .into_parts()
-                .0,
-            SessionInterceptionDecision::Deny
-        );
+        assert!(owner
+            .physical_effect_decision(&process_request(203, 1, "python child.py"))
+            .is_none());
         Ok(())
     }
 
@@ -2032,13 +2065,36 @@ mod tests {
             held.into_parts().1,
             "erebor-codex-invocation-lease-hook-exit-barrier-pending"
         );
-        let unrelated = owner
+        assert!(owner
             .physical_effect_decision(&file_request(42, "workspace/other.txt"))
-            .ok_or("missing unrelated mutation decision")?;
-        assert_eq!(
-            unrelated.into_parts().1,
-            "erebor-codex-invocation-lease-no-matching-file-capability"
-        );
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn unowned_profile_startup_effects_are_delegated_to_generic_policy(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let owner = test_owner();
+        let bootstrap = InterceptionRequest {
+            pid: 42,
+            ppid: 1,
+            operation: InterceptionOperation::ProcessExec as i32,
+            executable: String::from("/opt/codex/codex"),
+            process_exec: Some(ProcessExecOperation {
+                executable: String::from("/opt/codex/codex"),
+                ..ProcessExecOperation::default()
+            }),
+            ..InterceptionRequest::default()
+        };
+        let _ = owner.physical_effect_decision(&bootstrap);
+        owner.record_guarded_process_fork(42, 43)?;
+
+        assert!(owner
+            .physical_effect_decision(&process_request(43, 42, "awk runtime probe"))
+            .is_none());
+        assert!(owner
+            .physical_effect_decision(&file_request(42, "/dev/tty"))
+            .is_none());
         Ok(())
     }
 

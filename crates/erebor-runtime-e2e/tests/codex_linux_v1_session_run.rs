@@ -130,8 +130,8 @@ mod linux {
         }
         assert_eq!(fs::read(&marker)?, br#"{"continue":true}"#);
 
-        let unleased_effect_marker = root.join("unleased-effect-result.json");
-        let mut unleased_effect = EreborCliFixture::build()?.command_in(
+        let unattributed_effect_marker = root.join("unattributed-effect-result.json");
+        let mut unattributed_effect = EreborCliFixture::build()?.command_in(
             root,
             [
                 "session",
@@ -141,23 +141,26 @@ mod linux {
                 "--config",
                 config.to_str().ok_or("config path")?,
                 driver.to_str().ok_or("driver path")?,
-                unleased_effect_marker.to_str().ok_or("marker path")?,
+                unattributed_effect_marker.to_str().ok_or("marker path")?,
             ],
         );
-        let unleased_effect_output = unleased_effect
-            .env("EREBOR_CODEX_LINUX_V1_ASSERT_UNLEASED_EFFECT", "1")
+        let unattributed_effect_output = unattributed_effect
+            .env("EREBOR_CODEX_LINUX_V1_ASSERT_UNATTRIBUTED_EFFECT", "1")
             .output()?;
-        if !unleased_effect_output.status.success() {
+        if !unattributed_effect_output.status.success() {
             return Err(format!(
-                "unleased Codex effect fixture failed: {}",
-                String::from_utf8_lossy(&unleased_effect_output.stderr)
+                "unattributed Codex effect fixture failed: {}",
+                String::from_utf8_lossy(&unattributed_effect_output.stderr)
             )
             .into());
         }
-        assert_eq!(fs::read(&unleased_effect_marker)?, br#"{"continue":true}"#);
         assert_eq!(
-            fs::read_to_string(unleased_effect_marker.with_extension("diagnostic"))?,
-            "unleased-effect-denied"
+            fs::read(&unattributed_effect_marker)?,
+            br#"{"continue":true}"#
+        );
+        assert_eq!(
+            fs::read_to_string(unattributed_effect_marker.with_extension("diagnostic"))?,
+            "unattributed-effect-delegated"
         );
 
         let replaced_stdout_marker = root.join("replaced-stdout-result.json");
@@ -347,6 +350,7 @@ mod linux {
             "SessionStart",
             "UserPromptSubmit",
             "PreToolUse",
+            "PostToolUse",
             "Stop",
         ])?;
         assert!(
@@ -513,6 +517,7 @@ mod linux {
             ("SessionStart", br#"{"session_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"SessionStart","model":"model","permission_mode":"mode","source":"source"}"#.as_slice()),
             ("UserPromptSubmit", br#"{"session_id":"id","turn_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"UserPromptSubmit","model":"model","permission_mode":"mode","prompt":"prompt"}"#.as_slice()),
             ("PreToolUse", br#"{"session_id":"id","turn_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"PreToolUse","model":"model","permission_mode":"mode","tool_name":"Bash","tool_input":{"command":"command"},"tool_use_id":"id"}"#.as_slice()),
+            ("PostToolUse", br#"{"session_id":"id","turn_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"PostToolUse","model":"model","permission_mode":"mode","tool_name":"Bash","tool_input":{"command":"command"},"tool_response":"output","tool_use_id":"id"}"#.as_slice()),
             ("Stop", br#"{"session_id":"id","turn_id":"id","transcript_path":null,"cwd":"cwd","hook_event_name":"Stop","model":"model","permission_mode":"mode","stop_hook_active":false,"last_assistant_message":"message"}"#.as_slice()),
         ]
         .into_iter()

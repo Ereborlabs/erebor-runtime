@@ -33,7 +33,7 @@ impl<'a> LinuxOverlayWrapperScript<'a> {
         script
             .push_str("unshare -U --map-current-user --keep-caps -m true >/dev/null 2>&1; then\n");
         script.push_str(&format!(
-            "  exec unshare -U --map-current-user --keep-caps -m --propagation private -- \"$0\" '{}' \"$@\"\n",
+            "  exec env EREBOR_DROP_MOUNT_NAMESPACE_CAPABILITIES=1 unshare -U --map-current-user --keep-caps -m --propagation private -- \"$0\" '{}' \"$@\"\n",
             CHILD_ARG
         ));
         script.push_str("fi\n");
@@ -121,6 +121,14 @@ prepare_session_identity() {
 }
 
 run_session_command() {
+  if [ "${EREBOR_DROP_MOUNT_NAMESPACE_CAPABILITIES:-}" = "1" ]; then
+    command -v setpriv >/dev/null 2>&1 || {
+      echo "erebor filesystem overlay requires setpriv to drop temporary mount capabilities" >&2
+      return 126
+    }
+    setpriv --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- "$@"
+    return $?
+  fi
   current_uid="$(id -u)"
   if [ "$current_uid" = "0" ]; then
     setpriv --reuid "$session_uid" --regid "$session_gid" --init-groups -- "$@"

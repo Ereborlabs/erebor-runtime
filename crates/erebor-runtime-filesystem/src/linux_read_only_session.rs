@@ -228,10 +228,17 @@ impl<'a> LinuxReadOnlyWrapperScript<'a> {
             script.push_str(&format!("  mount --bind {source} {target}\n"));
             script.push_str(&format!("  mount -o remount,bind,ro {target}\n"));
         }
+        script
+            .push_str("  if [ \"${EREBOR_DROP_MOUNT_NAMESPACE_CAPABILITIES:-}\" = \"1\" ]; then\n");
+        script.push_str("    command -v setpriv >/dev/null 2>&1 || { echo 'erebor read-only projection requires setpriv to drop temporary mount capabilities' >&2; exit 126; }\n");
+        script.push_str(
+            "    exec setpriv --inh-caps=-all --ambient-caps=-all --bounding-set=-all -- \"$@\"\n",
+        );
+        script.push_str("  fi\n");
         script.push_str("  exec \"$@\"\nfi\n\n");
         script.push_str("command -v unshare >/dev/null 2>&1\ncommand -v mount >/dev/null 2>&1\ncommand -v umount >/dev/null 2>&1\n");
         script.push_str("if [ \"$(id -u)\" != \"0\" ] && unshare -U --map-current-user --keep-caps -m true >/dev/null 2>&1; then\n");
-        script.push_str(&format!("  exec unshare -U --map-current-user --keep-caps -m --propagation private -- \"$0\" '{CHILD_ARG}' \"$@\"\n"));
+        script.push_str(&format!("  exec env EREBOR_DROP_MOUNT_NAMESPACE_CAPABILITIES=1 unshare -U --map-current-user --keep-caps -m --propagation private -- \"$0\" '{CHILD_ARG}' \"$@\"\n"));
         script.push_str("fi\n");
         script.push_str(&format!(
             "exec unshare -m --propagation private -- \"$0\" '{CHILD_ARG}' \"$@\"\n"
@@ -289,6 +296,8 @@ mod tests {
         assert!(script.contains("/etc/codex/requirements.toml"));
         assert!(script.contains("/usr/lib/erebor/codex-hooks"));
         assert!(script.contains("target parent is not preinstalled"));
+        assert!(script.contains("EREBOR_DROP_MOUNT_NAMESPACE_CAPABILITIES=1"));
+        assert!(script.contains("setpriv --inh-caps=-all --ambient-caps=-all --bounding-set=-all"));
         assert!(!script.contains("mkdir -p"));
         assert!(!script.contains(": >"));
         fs::remove_dir_all(root)?;

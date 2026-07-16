@@ -5,7 +5,7 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-const ASSERT_UNLEASED_EFFECT_ENV: &str = "EREBOR_CODEX_LINUX_V1_ASSERT_UNLEASED_EFFECT";
+const ASSERT_UNATTRIBUTED_EFFECT_ENV: &str = "EREBOR_CODEX_LINUX_V1_ASSERT_UNATTRIBUTED_EFFECT";
 fn main() -> ExitCode {
     let Some(marker) = std::env::args().nth(1) else {
         return ExitCode::FAILURE;
@@ -30,7 +30,7 @@ fn main() -> ExitCode {
         }
     };
     if let Some(mut input) = hook.stdin.take() {
-        let event = if env::var_os(ASSERT_UNLEASED_EFFECT_ENV).is_some() {
+        let event = if env::var_os(ASSERT_UNATTRIBUTED_EFFECT_ENV).is_some() {
             br#"{"hook_event_name":"PreToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"tool-1","tool_name":"Bash","tool_input":{"command":"/bin/true"}}"#
                 .as_slice()
         } else {
@@ -51,17 +51,17 @@ fn main() -> ExitCode {
                         String::from_utf8_lossy(&output.stderr)
                     ),
                 )
-            } else if env::var_os(ASSERT_UNLEASED_EFFECT_ENV).is_some()
-                && !unleased_effect_is_denied()
+            } else if env::var_os(ASSERT_UNATTRIBUTED_EFFECT_ENV).is_some()
+                && !unattributed_effect_is_delegated()
             {
                 failure(
                     &marker,
-                    "an authenticated PreToolUse hook unexpectedly permitted /bin/true without a current armed lease",
+                    "an unattributed /bin/true effect was not delegated to the generic interception policy",
                 )
             } else if fs::write(&marker, output.stdout).is_ok() {
-                if env::var_os(ASSERT_UNLEASED_EFFECT_ENV).is_some() {
+                if env::var_os(ASSERT_UNATTRIBUTED_EFFECT_ENV).is_some() {
                     let diagnostic = Path::new(&marker).with_extension("diagnostic");
-                    let _result = fs::write(diagnostic, "unleased-effect-denied");
+                    let _result = fs::write(diagnostic, "unattributed-effect-delegated");
                 }
                 ExitCode::SUCCESS
             } else {
@@ -75,10 +75,10 @@ fn main() -> ExitCode {
     }
 }
 
-fn unleased_effect_is_denied() -> bool {
+fn unattributed_effect_is_delegated() -> bool {
     match Command::new("/bin/true").status() {
-        Ok(status) => !status.success(),
-        Err(error) => matches!(error.kind(), std::io::ErrorKind::PermissionDenied),
+        Ok(status) => status.success(),
+        Err(_error) => false,
     }
 }
 

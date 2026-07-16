@@ -25,6 +25,8 @@ fn prepare_writes_executable_mount_namespace_wrapper() -> Result<(), Box<dyn std
 
     assert!(view.wrapper_path().is_file());
     assert!(script.contains("unshare -U --map-current-user --keep-caps -m"));
+    assert!(script.contains("EREBOR_DROP_MOUNT_NAMESPACE_CAPABILITIES=1"));
+    assert!(script.contains("setpriv --inh-caps=-all --ambient-caps=-all --bounding-set=-all"));
     assert!(script.contains("unshare -m --propagation private"));
     assert!(script.contains("mount --bind"));
     assert!(script.contains("mount -t overlay overlay"));

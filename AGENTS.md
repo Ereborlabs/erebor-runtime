@@ -115,6 +115,10 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
   e2e crates, not `erebor-runtime-cli`.
 - Prefer upstream crates and mature protocol/domain libraries over hand-rolled
   implementations wherever they reasonably fit the problem and crate boundary.
+  For system tools with mature Rust bindings, prefer the binding crate over
+  building a stringly CLI command wrapper; use a CLI wrapper only when the CLI
+  contract itself is the integration boundary or the phase documents why the
+  binding is unsuitable.
   For CDP, use `cdp-protocol` for commands and events wherever the crate
   supports the shape. Manual JSON handling is only acceptable for unavoidable
   wire envelopes, generic forwarding, or crate gaps.

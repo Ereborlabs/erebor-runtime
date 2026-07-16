@@ -4,6 +4,7 @@ members = [
     "crates/erebor-runtime-cdp",
     "crates/erebor-runtime-cli",
     "crates/erebor-runtime-core",
+    "crates/erebor-runtime-context",
     "crates/erebor-runtime-e2e",
     "crates/erebor-runtime-error",
     "crates/erebor-runtime-telemetry",
@@ -25,6 +26,7 @@ cdp-protocol = "0.3.1"
 clap = { version = "4", features = ["derive"] }
 comfy-table = "7.2.1"
 futures-util = "0.3"
+gix = { git = "https://github.com/nhaghighat/gitoxide", rev = "f803d3ea2efd54f18cafea76129e4c07e3e2eab9", default-features = false, features = ["parallel", "sha1", "sha256", "tree-editor"] }
 prost = "0.13"
 prost-build = "0.13"
 serde = { version = "1", features = ["derive"] }
