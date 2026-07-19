@@ -1,9 +1,9 @@
 use std::io::{Read, Write};
 
 use erebor_runtime_ipc::v1::{
-    Envelope, GuardHello, GuardHelloAck, GuardLifecycleEvent, GuardLifecycleReply,
-    GuardLifecycleReplyKind, InterceptionDecision, InterceptionRequest, KIND_GUARD_HELLO,
-    KIND_GUARD_HELLO_ACK, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
+    Envelope, EnvelopeServiceFamily, GuardHello, GuardHelloAck, GuardLifecycleEvent,
+    GuardLifecycleReply, GuardLifecycleReplyKind, InterceptionDecision, InterceptionRequest,
+    KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
     KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, PROTOCOL_VERSION,
 };
 use snafu::ResultExt;
@@ -49,6 +49,9 @@ impl RuntimeInterceptionBrokerServer {
         envelope: Envelope,
         bound: &mut Option<BoundConnection>,
     ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
+        envelope
+            .validate_headers(EnvelopeServiceFamily::RuntimeGuard)
+            .context(BrokerProtocolSnafu)?;
         if bound.is_none() {
             return self.handle_hello_envelope(envelope, bound);
         }

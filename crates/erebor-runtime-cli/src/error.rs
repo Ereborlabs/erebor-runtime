@@ -1,6 +1,7 @@
 use std::{any::Any, io, path::PathBuf};
 
 use erebor_runtime_audit::{AuditLogError, EvidenceTraceError, SessionReviewError};
+use erebor_runtime_client::DaemonClientError;
 use erebor_runtime_core::{RuntimeConfigError, RuntimeError, SessionRegistryError};
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use erebor_runtime_filesystem::FilesystemError;
@@ -120,6 +121,18 @@ pub(crate) enum CliError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("daemon client request failed: {source}"))]
+    DaemonClient {
+        source: DaemonClientError,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("failed to initialize daemon command runtime: {source}"))]
+    DaemonRuntime {
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for CliError {
@@ -143,6 +156,8 @@ impl ErrorExt for CliError {
             Self::Filesystem { source, .. } => source.status_code(),
             Self::InvalidFilesystemCommand { .. } => StatusCode::InvalidArguments,
             Self::EncodeJson { .. } => StatusCode::Internal,
+            Self::DaemonClient { source, .. } => source.status_code(),
+            Self::DaemonRuntime { .. } => StatusCode::Internal,
         }
     }
 
@@ -166,6 +181,8 @@ impl ErrorExt for CliError {
             Self::Filesystem { source, .. } => source.retry_hint(),
             Self::InvalidFilesystemCommand { .. } => RetryHint::NonRetryable,
             Self::EncodeJson { .. } => RetryHint::NonRetryable,
+            Self::DaemonClient { source, .. } => source.retry_hint(),
+            Self::DaemonRuntime { .. } => RetryHint::NonRetryable,
         }
     }
 
@@ -196,7 +213,9 @@ impl ErrorExt for CliError {
                 | Self::InvalidEvent { .. }
                 | Self::InvalidFilesystemCommand { .. }
                 | Self::WriteSessionOutput { .. }
-                | Self::EncodeJson { .. } => self.to_string(),
+                | Self::EncodeJson { .. }
+                | Self::DaemonClient { .. }
+                | Self::DaemonRuntime { .. } => self.to_string(),
             },
         }
     }

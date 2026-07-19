@@ -34,7 +34,7 @@ pub(super) use parsers::{
     about = "Zero-trust action governance runtime for AI agents",
     next_line_help = true
 )]
-pub(crate) struct Cli {
+pub struct Cli {
     #[command(flatten)]
     logging: LoggingArgs,
     #[command(subcommand)]
@@ -42,7 +42,7 @@ pub(crate) struct Cli {
 }
 
 impl Cli {
-    pub(crate) fn execute(&self) -> Result<(), CliError> {
+    pub fn execute(&self) -> Result<(), CliError> {
         init_tracing(&self.logging);
         tracing::debug!(command = %self.command, "executing command");
 

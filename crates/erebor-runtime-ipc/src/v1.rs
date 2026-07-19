@@ -4,10 +4,16 @@ mod operation;
 
 pub use operation::operation_name;
 
+use std::collections::BTreeSet;
+
 use prost::Message;
+use sha2::{Digest, Sha256};
 use snafu::ResultExt;
 
-use crate::error::{DecodePayloadSnafu, EncodePayloadSnafu, PayloadKindMismatchSnafu};
+use crate::error::{
+    DecodePayloadSnafu, DuplicateHeaderSnafu, EmptyHeaderValueSnafu, EncodePayloadSnafu,
+    HeaderNotAllowedSnafu, HeaderTooLongSnafu, PayloadKindMismatchSnafu, TooManyHeadersSnafu,
+};
 use crate::EreborIpcFrame;
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -25,6 +31,29 @@ pub const KIND_HOOK_PEER_EVIDENCE: &str = "erebor.runtime.ipc.v1.HookPeerEvidenc
 pub const KIND_HOOK_EVENT: &str = "erebor.runtime.ipc.v1.HookEvent";
 pub const KIND_HOOK_RESULT: &str = "erebor.runtime.ipc.v1.HookResult";
 pub const KIND_HOOK_REJECTION: &str = "erebor.runtime.ipc.v1.HookRejection";
+pub const KIND_DAEMON_HELLO: &str = "erebor.runtime.ipc.v1.DaemonHello";
+pub const KIND_DAEMON_HELLO_ACK: &str = "erebor.runtime.ipc.v1.DaemonHelloAck";
+pub const KIND_DAEMON_STATUS_REQUEST: &str = "erebor.runtime.ipc.v1.DaemonStatusRequest";
+pub const KIND_DAEMON_STATUS_RESPONSE: &str = "erebor.runtime.ipc.v1.DaemonStatusResponse";
+pub const KIND_DAEMON_LOGS_REQUEST: &str = "erebor.runtime.ipc.v1.DaemonLogsRequest";
+pub const KIND_DAEMON_LOG_RECORD: &str = "erebor.runtime.ipc.v1.DaemonLogRecord";
+pub const KIND_DAEMON_LOGS_END: &str = "erebor.runtime.ipc.v1.DaemonLogsEnd";
+pub const KIND_DAEMON_RELOAD_REQUEST: &str = "erebor.runtime.ipc.v1.DaemonReloadRequest";
+pub const KIND_DAEMON_STOP_REQUEST: &str = "erebor.runtime.ipc.v1.DaemonStopRequest";
+pub const KIND_DAEMON_COMMAND_RESULT: &str = "erebor.runtime.ipc.v1.DaemonCommandResult";
+pub const KIND_DAEMON_ERROR: &str = "erebor.runtime.ipc.v1.DaemonError";
+pub const EREBOR_IDEMPOTENCY_KEY_HEADER: &str = "erebor-idempotency-key";
+pub const INTERCEPTION_TOKEN_HEADER: &str = "interception_token";
+pub const MAX_HEADER_COUNT: usize = 8;
+pub const MAX_HEADER_KEY_LEN: usize = 64;
+pub const MAX_HEADER_VALUE_LEN: usize = 256;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EnvelopeServiceFamily {
+    DaemonControl { mutating: bool },
+    RuntimeGuard,
+    Hook,
+}
 
 impl HookHello {
     #[must_use]
@@ -70,6 +99,79 @@ impl Envelope {
 
     pub fn into_frame(&self) -> crate::Result<EreborIpcFrame> {
         EreborIpcFrame::from_message(self)
+    }
+
+    pub fn validate_headers(&self, family: EnvelopeServiceFamily) -> crate::Result<()> {
+        if self.headers.len() > MAX_HEADER_COUNT {
+            return TooManyHeadersSnafu {
+                actual: self.headers.len(),
+                maximum: MAX_HEADER_COUNT,
+            }
+            .fail();
+        }
+
+        let mut seen = BTreeSet::new();
+        for header in &self.headers {
+            if header.key.is_empty()
+                || header.key.len() > MAX_HEADER_KEY_LEN
+                || header.value.len() > MAX_HEADER_VALUE_LEN
+            {
+                return HeaderTooLongSnafu {
+                    key: header.key.clone(),
+                    maximum: MAX_HEADER_VALUE_LEN,
+                }
+                .fail();
+            }
+            if header.value.is_empty() {
+                return EmptyHeaderValueSnafu {
+                    key: header.key.clone(),
+                }
+                .fail();
+            }
+            if !seen.insert(header.key.as_str()) {
+                return DuplicateHeaderSnafu {
+                    key: header.key.clone(),
+                }
+                .fail();
+            }
+            if !header_is_allowed(&header.key, family) {
+                return HeaderNotAllowedSnafu {
+                    key: header.key.clone(),
+                }
+                .fail();
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn daemon_request_fingerprint(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"erebor.daemon.request-fingerprint.v1\0");
+        digest.update(PROTOCOL_VERSION.to_le_bytes());
+        digest.update((self.message_kind.len() as u64).to_le_bytes());
+        digest.update(self.message_kind.as_bytes());
+        digest.update((self.payload.len() as u64).to_le_bytes());
+        digest.update(&self.payload);
+        digest.finalize().into()
+    }
+
+    #[must_use]
+    pub fn header(&self, key: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|header| header.key == key)
+            .map(|header| header.value.as_str())
+    }
+}
+
+fn header_is_allowed(key: &str, family: EnvelopeServiceFamily) -> bool {
+    match family {
+        EnvelopeServiceFamily::DaemonControl { mutating } => {
+            mutating && key == EREBOR_IDEMPOTENCY_KEY_HEADER
+        }
+        EnvelopeServiceFamily::RuntimeGuard => key == INTERCEPTION_TOKEN_HEADER,
+        EnvelopeServiceFamily::Hook => false,
     }
 }
 
@@ -277,16 +379,22 @@ mod tests {
     use crate::{EreborIpcFrame, IpcProtocolError};
 
     use super::{
-        fixtures, DecisionKind, Envelope, GuardHello, HookEvent, HookEventKind, HookHello,
-        HookHelloAck, HookPeerEvidence, HookRejection, HookResult, InterceptionDecision,
-        InterceptionRequest, KIND_GUARD_HELLO, KIND_HOOK_EVENT, KIND_HOOK_HELLO,
+        fixtures, DaemonReloadRequest, DecisionKind, Envelope, EnvelopeServiceFamily, GuardHello,
+        Header, HookEvent, HookEventKind, HookHello, HookHelloAck, HookPeerEvidence, HookRejection,
+        HookResult, InterceptionDecision, InterceptionRequest, EREBOR_IDEMPOTENCY_KEY_HEADER,
+        KIND_DAEMON_RELOAD_REQUEST, KIND_GUARD_HELLO, KIND_HOOK_EVENT, KIND_HOOK_HELLO,
         KIND_HOOK_HELLO_ACK, KIND_HOOK_PEER_EVIDENCE, KIND_HOOK_REJECTION, KIND_HOOK_RESULT,
         KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, PROTOCOL_VERSION,
     };
 
     #[test]
-    fn proto_file_is_the_v1_contract_artifact() {
-        let proto = include_str!("../proto/erebor/runtime/ipc/v1/control.proto");
+    fn split_proto_files_are_the_v1_contract_artifact() {
+        let proto = concat!(
+            include_str!("../proto/erebor/runtime/ipc/v1/envelope.proto"),
+            include_str!("../proto/erebor/runtime/ipc/v1/guard.proto"),
+            include_str!("../proto/erebor/runtime/ipc/v1/hook.proto"),
+            include_str!("../proto/erebor/runtime/ipc/v1/daemon.proto"),
+        );
 
         assert!(proto.contains("message Envelope"));
         assert!(proto.contains("message InterceptionRequest"));
@@ -301,6 +409,7 @@ mod tests {
         assert!(proto.contains("message HookResult"));
         assert!(proto.contains("message HookRejection"));
         assert!(proto.contains("enum HookEventKind"));
+        assert!(proto.contains("message DaemonHello"));
     }
 
     #[test]
@@ -384,6 +493,81 @@ mod tests {
             error,
             IpcProtocolError::PayloadKindMismatch { .. }
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn daemon_idempotency_header_is_limited_to_mutations_and_fingerprint_excludes_transport_ids(
+    ) -> Result<(), Box<dyn Error>> {
+        let mut first =
+            Envelope::wrap_message(17, 0, KIND_DAEMON_RELOAD_REQUEST, &DaemonReloadRequest {})?;
+        first.headers = vec![Header {
+            key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_string(),
+            value: String::from("retry-1"),
+        }];
+        first.validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: true })?;
+
+        let mut retry = first.clone();
+        retry.message_id = 99;
+        retry.correlation_id = 88;
+        retry.headers[0].value = String::from("retry-2");
+        assert_eq!(
+            first.daemon_request_fingerprint(),
+            retry.daemon_request_fingerprint()
+        );
+        assert_eq!(
+            first.daemon_request_fingerprint(),
+            [
+                0xfb, 0x3f, 0xb3, 0x89, 0xdf, 0xb9, 0x19, 0xc2, 0x2c, 0xe4, 0x4d, 0xe8, 0x2a, 0x5b,
+                0x2e, 0x50, 0xb7, 0xe1, 0xf1, 0x1f, 0x02, 0xcc, 0xcb, 0x5c, 0xf7, 0xad, 0x8e, 0xc6,
+                0xcc, 0x28, 0x5a, 0xab,
+            ]
+        );
+
+        assert!(first
+            .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: false })
+            .is_err());
+        assert!(first
+            .validate_headers(EnvelopeServiceFamily::RuntimeGuard)
+            .is_err());
+        assert!(first.validate_headers(EnvelopeServiceFamily::Hook).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn envelope_headers_reject_identity_metadata_duplicates_and_unbounded_values(
+    ) -> Result<(), Box<dyn Error>> {
+        let mut envelope =
+            Envelope::wrap_message(1, 0, KIND_DAEMON_RELOAD_REQUEST, &DaemonReloadRequest {})?;
+        envelope.headers = vec![Header {
+            key: String::from("caller-uid"),
+            value: String::from("0"),
+        }];
+        assert!(envelope
+            .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: true })
+            .is_err());
+
+        envelope.headers = vec![
+            Header {
+                key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_string(),
+                value: String::from("retry-1"),
+            },
+            Header {
+                key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_string(),
+                value: String::from("retry-2"),
+            },
+        ];
+        assert!(envelope
+            .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: true })
+            .is_err());
+
+        envelope.headers = vec![Header {
+            key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_string(),
+            value: "a".repeat(super::MAX_HEADER_VALUE_LEN + 1),
+        }];
+        assert!(envelope
+            .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: true })
+            .is_err());
         Ok(())
     }
 

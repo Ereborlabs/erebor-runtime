@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::{any::Any, io};
 
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use snafu::{Location, Snafu};
@@ -6,6 +6,17 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum IpcProtocolError {
+    #[snafu(display("IPC stream reached EOF before another frame"))]
+    EndOfStream {
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("IPC framed stream I/O failed: {source}"))]
+    Io {
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("IPC frame payload exceeds maximum size: {actual} > {maximum}"))]
     PayloadTooLarge {
         actual: usize,
@@ -40,6 +51,38 @@ pub enum IpcProtocolError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("IPC envelope has too many headers: {actual} > {maximum}"))]
+    TooManyHeaders {
+        actual: usize,
+        maximum: usize,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("IPC envelope header `{key}` exceeds the {maximum}-byte limit"))]
+    HeaderTooLong {
+        key: String,
+        maximum: usize,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("IPC envelope header `{key}` is duplicated"))]
+    DuplicateHeader {
+        key: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("IPC envelope header `{key}` is not allowed for this service"))]
+    HeaderNotAllowed {
+        key: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("IPC envelope header `{key}` requires a non-empty value"))]
+    EmptyHeaderValue {
+        key: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display(
         "IPC envelope payload kind mismatch: expected `{expected}`, actual `{actual}`"
     ))]
@@ -68,19 +111,30 @@ pub type Result<T> = std::result::Result<T, IpcProtocolError>;
 impl ErrorExt for IpcProtocolError {
     fn status_code(&self) -> StatusCode {
         match self {
+            Self::EndOfStream { .. } => StatusCode::Unavailable,
+            Self::Io { .. } => StatusCode::External,
             Self::UnsupportedFrameVersion { .. } => StatusCode::Unsupported,
             Self::EncodePayload { .. } => StatusCode::Unexpected,
             Self::PayloadTooLarge { .. }
             | Self::FrameTooShort { .. }
             | Self::InvalidMagic { .. }
             | Self::InvalidPayloadLength { .. }
+            | Self::TooManyHeaders { .. }
+            | Self::HeaderTooLong { .. }
+            | Self::DuplicateHeader { .. }
+            | Self::HeaderNotAllowed { .. }
+            | Self::EmptyHeaderValue { .. }
             | Self::PayloadKindMismatch { .. }
             | Self::DecodePayload { .. } => StatusCode::InvalidArguments,
         }
     }
 
     fn retry_hint(&self) -> RetryHint {
-        RetryHint::NonRetryable
+        match self {
+            Self::EndOfStream { .. } => RetryHint::Retryable,
+            Self::Io { source, .. } => RetryHint::from_io_error(source),
+            _ => RetryHint::NonRetryable,
+        }
     }
 
     fn as_any(&self) -> &dyn Any {

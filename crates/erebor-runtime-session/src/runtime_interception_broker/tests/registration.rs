@@ -1,6 +1,12 @@
 use std::fs;
 
-use erebor_runtime_ipc::v1::PROTOCOL_VERSION;
+use erebor_runtime_ipc::{
+    v1::{
+        Envelope, GuardHello, Header, EREBOR_IDEMPOTENCY_KEY_HEADER, KIND_GUARD_HELLO,
+        PROTOCOL_VERSION,
+    },
+    SyncFrameCodec,
+};
 
 use super::{
     super::{
@@ -54,6 +60,41 @@ fn broker_rejects_guard_hello_with_bad_interception_token() -> Result<(), Box<dy
     assert!(!ack.accepted);
     assert_eq!(ack.reason, "invalid interception token");
 
+    Ok(())
+}
+
+#[test]
+fn broker_rejects_daemon_idempotency_header_on_guard_socket(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = BrokerFixture::new("rejects-daemon-header");
+    let broker = fixture.register(SessionInterceptionRouter::new())?;
+    let mut stream = std::os::unix::net::UnixStream::connect(broker.endpoint().path())?;
+    let mut hello = Envelope::wrap_message(
+        1,
+        0,
+        KIND_GUARD_HELLO,
+        &GuardHello {
+            protocol_version: PROTOCOL_VERSION,
+            session_id: fixture.session_id().to_string(),
+            actor_id: String::from("test-guard"),
+            guard_pid: i64::from(std::process::id()),
+            runner_kind: String::from("linux-host"),
+            platform: String::from("linux"),
+            capabilities: Vec::new(),
+        },
+    )?;
+    hello.headers = vec![
+        Header {
+            key: String::from("interception_token"),
+            value: broker.endpoint().token().to_string(),
+        },
+        Header {
+            key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_string(),
+            value: String::from("must-not-cross-families"),
+        },
+    ];
+    SyncFrameCodec::write_frame(&mut stream, &hello.into_frame()?)?;
+    assert!(SyncFrameCodec::read_frame(&mut stream).is_err());
     Ok(())
 }
 

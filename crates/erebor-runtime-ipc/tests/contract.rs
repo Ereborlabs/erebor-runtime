@@ -262,8 +262,13 @@ fn frame_payload_boundary_is_enforced_on_create_and_decode() -> Result<(), Box<d
 }
 
 #[test]
-fn proto_contract_file_contains_phase_zero_schema() {
-    let proto = include_str!("../proto/erebor/runtime/ipc/v1/control.proto");
+fn split_proto_contract_files_contain_the_v1_schema() {
+    let proto = concat!(
+        include_str!("../proto/erebor/runtime/ipc/v1/envelope.proto"),
+        include_str!("../proto/erebor/runtime/ipc/v1/guard.proto"),
+        include_str!("../proto/erebor/runtime/ipc/v1/hook.proto"),
+        include_str!("../proto/erebor/runtime/ipc/v1/daemon.proto"),
+    );
 
     assert!(proto.contains("message Envelope"));
     assert!(proto.contains("message InterceptionRequest"));
@@ -274,5 +279,6 @@ fn proto_contract_file_contains_phase_zero_schema() {
     assert!(proto.contains("enum InterceptionOperation"));
     assert!(proto.contains("enum DecisionKind"));
     assert!(proto.contains("DECISION_KIND_REQUIRE_APPROVAL"));
+    assert!(proto.contains("message DaemonHello"));
     assert!(!proto.contains("message Envelope {\n  uint32 protocol_version = 1;\n  uint64 message_id = 2;\n  uint64 correlation_id = 3;\n  string session_id"));
 }

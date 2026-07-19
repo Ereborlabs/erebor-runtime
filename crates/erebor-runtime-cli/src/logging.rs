@@ -2,7 +2,7 @@ use clap::{Args, ValueEnum};
 use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 #[derive(Clone, Debug, Args)]
-pub(crate) struct LoggingArgs {
+pub struct LoggingArgs {
     /// Minimum operational log level emitted to stderr.
     #[arg(long, global = true, value_enum, default_value_t = LogLevel::Info)]
     log_level: LogLevel,
@@ -31,7 +31,7 @@ impl LogLevel {
     }
 }
 
-pub(crate) fn init_tracing(args: &LoggingArgs) {
+pub fn init_tracing(args: &LoggingArgs) {
     let env_filter = EnvFilter::builder()
         .with_default_directive(args.log_level.as_filter().into())
         .from_env_lossy();

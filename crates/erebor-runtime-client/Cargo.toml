@@ -1,5 +1,5 @@
 [package]
-name = "erebor-runtime-ipc"
+name = "erebor-runtime-client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,13 +7,10 @@ repository.workspace = true
 
 [dependencies]
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 prost.workspace = true
-sha2.workspace = true
 snafu.workspace = true
 tokio.workspace = true
-
-[build-dependencies]
-prost-build.workspace = true
 
 [lints]
 workspace = true

@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{Read, Write},
+    io::Read,
     os::{
         fd::AsFd,
         unix::fs::{MetadataExt, PermissionsExt},
@@ -19,11 +19,11 @@ use erebor_runtime_core::CodexHookEvent;
 use erebor_runtime_filesystem::LinuxReadOnlySessionProjection;
 use erebor_runtime_ipc::{
     v1::{
-        Envelope, HookEvent, HookEventKind, HookHello, HookHelloAck, HookRejection,
-        HookRejectionCode, HookResult, KIND_HOOK_EVENT, KIND_HOOK_HELLO, KIND_HOOK_HELLO_ACK,
-        KIND_HOOK_REJECTION, KIND_HOOK_RESULT, PROTOCOL_VERSION,
+        Envelope, EnvelopeServiceFamily, HookEvent, HookEventKind, HookHello, HookHelloAck,
+        HookRejection, HookRejectionCode, HookResult, KIND_HOOK_EVENT, KIND_HOOK_HELLO,
+        KIND_HOOK_HELLO_ACK, KIND_HOOK_REJECTION, KIND_HOOK_RESULT, PROTOCOL_VERSION,
     },
-    EreborIpcFrame,
+    SyncFrameCodec,
 };
 use snafu::{ensure, ResultExt};
 
@@ -322,8 +322,12 @@ impl CodexHookBrokerProtocol {
     }
 
     fn read_envelope(stream: &mut UnixStream) -> Result<Envelope, CodexSessionError> {
-        let frame = read_frame(stream)?;
-        frame.decode_payload().context(HookBrokerProtocolSnafu)
+        let frame = SyncFrameCodec::read_frame(stream).context(HookBrokerProtocolSnafu)?;
+        let envelope: Envelope = frame.decode_payload().context(HookBrokerProtocolSnafu)?;
+        envelope
+            .validate_headers(EnvelopeServiceFamily::Hook)
+            .context(HookBrokerProtocolSnafu)?;
+        Ok(envelope)
     }
 
     fn write_hello_ack(
@@ -372,7 +376,7 @@ impl CodexHookBrokerProtocol {
         envelope: &Envelope,
     ) -> Result<(), CodexSessionError> {
         let frame = envelope.into_frame().context(HookBrokerProtocolSnafu)?;
-        write_frame(stream, &frame)
+        SyncFrameCodec::write_frame(stream, &frame).context(HookBrokerProtocolSnafu)
     }
 }
 
@@ -607,23 +611,6 @@ impl LinuxHookProcess {
                 inode: metadata.ino(),
             })
     }
-}
-
-fn read_frame(stream: &mut UnixStream) -> Result<EreborIpcFrame, CodexSessionError> {
-    let mut header = [0_u8; 12];
-    stream.read_exact(&mut header).context(HookBrokerIoSnafu)?;
-    let payload_len = u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
-    let mut source = header.to_vec();
-    source.resize(12 + payload_len, 0);
-    stream
-        .read_exact(&mut source[12..])
-        .context(HookBrokerIoSnafu)?;
-    EreborIpcFrame::decode(&source).context(HookBrokerProtocolSnafu)
-}
-
-fn write_frame(stream: &mut UnixStream, frame: &EreborIpcFrame) -> Result<(), CodexSessionError> {
-    let encoded = frame.encode().context(HookBrokerProtocolSnafu)?;
-    stream.write_all(&encoded).context(HookBrokerIoSnafu)
 }
 
 #[cfg(test)]

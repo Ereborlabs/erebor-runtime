@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package erebor.runtime.ipc.v1;
+
+message Envelope {
+  uint32 protocol_version = 1;
+  uint64 message_id = 2;
+  uint64 correlation_id = 3;
+  string message_kind = 4;
+  bytes payload = 5;
+  repeated Header headers = 6;
+}
+
+message Header {
+  string key = 1;
+  string value = 2;
+}
