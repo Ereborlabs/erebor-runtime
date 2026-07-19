@@ -2,8 +2,16 @@ use std::{
     fs::{self, File},
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
+use erebor_runtime_ipc::{
+    v1::{
+        DaemonHello, DaemonHelloAck, Envelope, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
+        PROTOCOL_VERSION,
+    },
+    AsyncFrameCodec,
+};
 #[cfg(test)]
 use rustix::process::{getegid, geteuid};
 use rustix::{
@@ -11,11 +19,14 @@ use rustix::{
     process::{Gid, Uid},
 };
 use snafu::ResultExt;
+use tokio::{net::UnixStream, time::timeout};
 
 use crate::{
-    error::{AlreadyRunningSnafu, IoSnafu, LockUnavailableSnafu, UnsafePathSnafu},
+    error::{AlreadyRunningSnafu, IoSnafu, IpcSnafu, LockUnavailableSnafu, UnsafePathSnafu},
     Result,
 };
+
+const SOCKET_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug)]
 pub struct DaemonPaths {
@@ -197,7 +208,11 @@ impl DaemonPaths {
         }
     }
 
-    pub(crate) fn remove_stale_socket(&self) -> Result<()> {
+    pub(crate) async fn remove_stale_socket(
+        &self,
+        _lock: &DaemonLock,
+        security: DaemonSecurity,
+    ) -> Result<()> {
         let socket = self.socket_path();
         let metadata = match fs::symlink_metadata(&socket) {
             Ok(metadata) => metadata,
@@ -218,17 +233,90 @@ impl DaemonPaths {
             }
             .fail();
         }
-        match std::os::unix::net::UnixStream::connect(&socket) {
-            Ok(_stream) => AlreadyRunningSnafu { path: socket }.fail(),
-            Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+        match timeout(SOCKET_PROBE_TIMEOUT, UnixStream::connect(&socket)).await {
+            Ok(Ok(mut stream)) => {
+                self.probe_live_socket(&mut stream, security).await?;
+                AlreadyRunningSnafu { path: socket }.fail()
+            }
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
                 fs::remove_file(&socket).context(IoSnafu {
                     action: "removing stale daemon socket after refused connection",
                     path: socket,
                 })
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(_error) => AlreadyRunningSnafu { path: socket }.fail(),
+            Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Ok(Err(_)) | Err(_) => AlreadyRunningSnafu { path: socket }.fail(),
         }
+    }
+
+    async fn probe_live_socket(
+        &self,
+        stream: &mut UnixStream,
+        security: DaemonSecurity,
+    ) -> Result<()> {
+        let credentials = stream
+            .peer_cred()
+            .map_err(|source| crate::DaemonError::Io {
+                action: "observing existing daemon socket peer credentials",
+                path: self.socket_path(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        if credentials.uid() != security.owner_uid {
+            return AlreadyRunningSnafu {
+                path: self.socket_path(),
+            }
+            .fail();
+        }
+        let hello = Envelope::wrap_message(
+            1,
+            0,
+            KIND_DAEMON_HELLO,
+            &DaemonHello {
+                protocol_version: PROTOCOL_VERSION,
+                client_name: String::from("erebord stale-socket probe"),
+                capabilities: Vec::new(),
+            },
+        )
+        .context(IpcSnafu)?;
+        let frame = hello.into_frame().context(IpcSnafu)?;
+        timeout(
+            SOCKET_PROBE_TIMEOUT,
+            AsyncFrameCodec::write_frame(stream, &frame),
+        )
+        .await
+        .map_err(|_elapsed| crate::DaemonError::AlreadyRunning {
+            path: self.socket_path(),
+            location: snafu::Location::default(),
+        })?
+        .context(IpcSnafu)?;
+        let response = timeout(SOCKET_PROBE_TIMEOUT, AsyncFrameCodec::read_frame(stream))
+            .await
+            .map_err(|_elapsed| crate::DaemonError::AlreadyRunning {
+                path: self.socket_path(),
+                location: snafu::Location::default(),
+            })?
+            .context(IpcSnafu)?
+            .decode_payload::<Envelope>()
+            .context(IpcSnafu)?;
+        if response.require_supported_protocol().is_err()
+            || response.message_kind != KIND_DAEMON_HELLO_ACK
+        {
+            return AlreadyRunningSnafu {
+                path: self.socket_path(),
+            }
+            .fail();
+        }
+        let hello: DaemonHelloAck = response
+            .decode_typed_payload(KIND_DAEMON_HELLO_ACK)
+            .context(IpcSnafu)?;
+        if hello.protocol_version != PROTOCOL_VERSION {
+            return AlreadyRunningSnafu {
+                path: self.socket_path(),
+            }
+            .fail();
+        }
+        Ok(())
     }
 
     fn open_existing_secure(

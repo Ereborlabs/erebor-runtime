@@ -1,5 +1,8 @@
 use std::{
-    os::unix::{fs::PermissionsExt, net::UnixListener as StdUnixListener},
+    os::unix::{
+        fs::{FileTypeExt, MetadataExt, PermissionsExt},
+        net::UnixListener as StdUnixListener,
+    },
     path::PathBuf,
     sync::{Arc, Mutex, RwLock},
     time::Duration,
@@ -32,7 +35,7 @@ use tokio::{
 use crate::{
     config::DaemonConfig,
     error::{InvalidRequestSnafu, IoSnafu, IpcSnafu, StateLockSnafu, UnauthorizedSnafu},
-    idempotency::{DaemonIdempotencyStore, IdempotencyAction},
+    idempotency::{DaemonIdempotencyStore, IdempotencyAction, MutationIntent},
     log::DaemonLogStore,
     paths::{DaemonLock, DaemonSecurity},
     DaemonError, DaemonPaths, Result,
@@ -52,12 +55,21 @@ pub struct DaemonControlService {
 struct DaemonControlState {
     paths: DaemonPaths,
     security: DaemonSecurity,
-    configuration: RwLock<DaemonConfig>,
-    generation: Mutex<u64>,
+    configuration: RwLock<DaemonConfiguration>,
     idempotency: Mutex<DaemonIdempotencyStore>,
     logs: DaemonLogStore,
     shutdown: watch::Sender<bool>,
     connections: Arc<Semaphore>,
+}
+
+struct DaemonConfiguration {
+    value: DaemonConfig,
+    generation: u64,
+}
+
+struct MutationOutcome {
+    message: String,
+    applied: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -69,6 +81,9 @@ struct PeerIdentity {
 
 struct DaemonSocket {
     path: PathBuf,
+    device: u64,
+    inode: u64,
+    cleanup_attempted: bool,
 }
 
 impl DaemonControlService {
@@ -95,20 +110,25 @@ impl DaemonControlService {
         };
         paths.set_runtime_group(security)?;
         let lock = paths.acquire_lock(security)?;
-        paths.remove_stale_socket()?;
+        paths.remove_stale_socket(&lock, security).await?;
 
         let socket_path = paths.socket_path();
         let listener = Self::bind_listener(&socket_path, security)?;
-        let socket = DaemonSocket { path: socket_path };
+        let socket = DaemonSocket::from_bound_path(socket_path)?;
         let logs = DaemonLogStore::open(paths.log_path(), config.max_log_bytes)?;
         logs.record("INFO", "erebord daemon control service started")?;
         let (shutdown_sender, shutdown) = watch::channel(false);
         let state = Arc::new(DaemonControlState {
-            idempotency: Mutex::new(DaemonIdempotencyStore::new(paths.idempotency_path())),
+            idempotency: Mutex::new(DaemonIdempotencyStore::new(
+                paths.idempotency_path(),
+                config.max_idempotency_records as usize,
+            )),
             paths,
             security,
-            configuration: RwLock::new(config),
-            generation: Mutex::new(1),
+            configuration: RwLock::new(DaemonConfiguration {
+                value: config,
+                generation: 1,
+            }),
             logs,
             shutdown: shutdown_sender,
             connections: Arc::new(Semaphore::new(CONNECTION_LIMIT)),
@@ -123,20 +143,23 @@ impl DaemonControlService {
     }
 
     pub async fn serve(mut self) -> Result<()> {
-        loop {
+        let result = loop {
             tokio::select! {
                 changed = self.shutdown.changed() => {
                     if changed.is_err() || *self.shutdown.borrow() {
-                        return Ok(());
+                        break Ok(());
                     }
                 }
                 accepted = self.listener.accept() => {
-                    let (stream, _address) = accepted.map_err(|source| DaemonError::Io {
-                        action: "accepting daemon client",
-                        path: self.socket.path.clone(),
-                        source,
-                        location: snafu::Location::default(),
-                    })?;
+                    let (stream, _address) = match accepted {
+                        Ok(accepted) => accepted,
+                        Err(source) => break Err(DaemonError::Io {
+                            action: "accepting daemon client",
+                            path: self.socket.path.clone(),
+                            source,
+                            location: snafu::Location::default(),
+                        }),
+                    };
                     let Some(permit) = self.state.connections.clone().try_acquire_owned().ok() else {
                         continue;
                     };
@@ -146,7 +169,14 @@ impl DaemonControlService {
                     });
                 }
             }
+        };
+        if result.is_err() {
+            let _result = self
+                .state
+                .logs
+                .record("ERROR", "daemon control service terminated unexpectedly");
         }
+        result
     }
 
     fn bind_listener(path: &PathBuf, security: DaemonSecurity) -> Result<UnixListener> {
@@ -189,11 +219,10 @@ impl DaemonControlState {
     ) {
         let peer = match self.peer_identity(&stream) {
             Ok(peer) => peer,
-            Err(error) => {
-                let _result = self.logs.record(
-                    "ERROR",
-                    format!("daemon peer credential lookup failed: {error}"),
-                );
+            Err(_error) => {
+                let _result = self
+                    .logs
+                    .record("ERROR", "daemon peer credential lookup failed");
                 return;
             }
         };
@@ -214,10 +243,8 @@ impl DaemonControlState {
             Ok(envelope) => envelope,
             Err(_error) => return,
         };
-        if let Err(error) = self.handle_hello(&mut stream, peer, hello).await {
-            let _result = self
-                .logs
-                .record("WARN", format!("daemon client handshake rejected: {error}"));
+        if let Err(_error) = self.handle_hello(&mut stream, peer, hello).await {
+            let _result = self.logs.record("WARN", "daemon client handshake rejected");
             return;
         }
         loop {
@@ -225,10 +252,8 @@ impl DaemonControlState {
                 Ok(envelope) => envelope,
                 Err(_error) => return,
             };
-            if let Err(error) = self.dispatch(&mut stream, peer, envelope).await {
-                let _result = self
-                    .logs
-                    .record("WARN", format!("daemon client request failed: {error}"));
+            if let Err(_error) = self.dispatch(&mut stream, peer, envelope).await {
+                let _result = self.logs.record("WARN", "daemon client request failed");
                 return;
             }
         }
@@ -257,9 +282,8 @@ impl DaemonControlState {
         envelope
             .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: false })
             .context(IpcSnafu)?;
-        if envelope.protocol_version != PROTOCOL_VERSION
-            || envelope.message_kind != KIND_DAEMON_HELLO
-        {
+        envelope.require_supported_protocol().context(IpcSnafu)?;
+        if envelope.message_kind != KIND_DAEMON_HELLO {
             return InvalidRequestSnafu {
                 reason: String::from("daemon control connection requires DaemonHello"),
             }
@@ -299,6 +323,9 @@ impl DaemonControlState {
         peer: PeerIdentity,
         envelope: Envelope,
     ) -> Result<()> {
+        if let Err(error) = envelope.require_supported_protocol().context(IpcSnafu) {
+            return self.write_error(stream, &envelope, error).await;
+        }
         let mutating = matches!(
             envelope.message_kind.as_str(),
             KIND_DAEMON_RELOAD_REQUEST | KIND_DAEMON_STOP_REQUEST
@@ -332,10 +359,11 @@ impl DaemonControlState {
         envelope
             .decode_typed_payload::<DaemonStatusRequest>(KIND_DAEMON_STATUS_REQUEST)
             .context(IpcSnafu)?;
-        let generation = *self
-            .generation
-            .lock()
-            .map_err(|_error| StateLockSnafu.build())?;
+        let generation = self
+            .configuration
+            .read()
+            .map_err(|_error| StateLockSnafu.build())?
+            .generation;
         self.write_message(
             stream,
             envelope.message_id.saturating_add(1),
@@ -370,6 +398,7 @@ impl DaemonControlState {
             .configuration
             .read()
             .map_err(|_error| StateLockSnafu.build())?
+            .value
             .max_log_records as usize;
         let records = self
             .logs
@@ -415,21 +444,20 @@ impl DaemonControlState {
         envelope
             .decode_typed_payload::<DaemonReloadRequest>(KIND_DAEMON_RELOAD_REQUEST)
             .context(IpcSnafu)?;
-        let message = self.mutate(peer, "reload", envelope, || {
-            let config = DaemonConfig::load(&self.paths, self.security)?;
-            *self
-                .configuration
-                .write()
-                .map_err(|_error| StateLockSnafu.build())? = config;
-            let mut generation = self
-                .generation
-                .lock()
-                .map_err(|_error| StateLockSnafu.build())?;
-            *generation = generation.saturating_add(1);
-            Ok(format!("configuration reloaded at generation {generation}"))
-        })?;
-        self.logs.record("INFO", "daemon configuration reloaded")?;
-        self.write_result(stream, envelope, message).await
+        let configuration = DaemonConfig::load(&self.paths, self.security)?;
+        let outcome = self.mutate(
+            peer,
+            "reload",
+            envelope,
+            MutationIntent::Reload {
+                configuration,
+                generation: self.next_configuration_generation()?,
+            },
+        )?;
+        if outcome.applied {
+            self.logs.record("INFO", "daemon configuration reloaded")?;
+        }
+        self.write_result(stream, envelope, outcome.message).await
     }
 
     async fn stop(
@@ -442,11 +470,11 @@ impl DaemonControlState {
         envelope
             .decode_typed_payload::<DaemonStopRequest>(KIND_DAEMON_STOP_REQUEST)
             .context(IpcSnafu)?;
-        let message = self.mutate(peer, "stop", envelope, || {
-            Ok(String::from("daemon stop accepted"))
-        })?;
-        self.logs.record("INFO", "daemon stop accepted")?;
-        self.write_result(stream, envelope, message).await?;
+        let outcome = self.mutate(peer, "stop", envelope, MutationIntent::Stop)?;
+        if outcome.applied {
+            self.logs.record("INFO", "daemon stop accepted")?;
+        }
+        self.write_result(stream, envelope, outcome.message).await?;
         let _result = self.shutdown.send(true);
         Ok(())
     }
@@ -456,8 +484,8 @@ impl DaemonControlState {
         peer: PeerIdentity,
         operation: &str,
         envelope: &Envelope,
-        action: impl FnOnce() -> Result<String>,
-    ) -> Result<String> {
+        intent: MutationIntent,
+    ) -> Result<MutationOutcome> {
         let key = envelope
             .header(erebor_runtime_ipc::v1::EREBOR_IDEMPOTENCY_KEY_HEADER)
             .ok_or_else(|| {
@@ -471,14 +499,67 @@ impl DaemonControlState {
             .idempotency
             .lock()
             .map_err(|_error| StateLockSnafu.build())?;
-        match store.prepare(peer.uid, operation, key, fingerprint)? {
-            IdempotencyAction::ReturnCompleted(message) => Ok(message),
-            IdempotencyAction::Execute => {
-                let message = action()?;
-                store.complete(peer.uid, operation, key, fingerprint, message.clone())?;
-                Ok(message)
+        match store.prepare(peer.uid, operation, key, fingerprint, intent)? {
+            IdempotencyAction::ReturnCompleted(message) => Ok(MutationOutcome {
+                message,
+                applied: false,
+            }),
+            IdempotencyAction::Execute(intent) | IdempotencyAction::ResumePending(intent) => {
+                let message = self.apply_mutation(&intent)?;
+                store.complete(
+                    peer.uid,
+                    operation,
+                    key,
+                    fingerprint,
+                    intent,
+                    message.clone(),
+                )?;
+                Ok(MutationOutcome {
+                    message,
+                    applied: true,
+                })
             }
         }
+    }
+
+    fn apply_mutation(&self, intent: &MutationIntent) -> Result<String> {
+        match intent {
+            MutationIntent::Reload {
+                configuration,
+                generation,
+            } => self.publish_configuration(configuration.clone(), *generation),
+            MutationIntent::Stop => Ok(String::from("daemon stop accepted")),
+        }
+    }
+
+    fn next_configuration_generation(&self) -> Result<u64> {
+        Ok(self
+            .configuration
+            .read()
+            .map_err(|_error| StateLockSnafu.build())?
+            .generation
+            .saturating_add(1))
+    }
+
+    fn publish_configuration(
+        &self,
+        configuration: DaemonConfig,
+        generation: u64,
+    ) -> Result<String> {
+        let mut active = self
+            .configuration
+            .write()
+            .map_err(|_error| StateLockSnafu.build())?;
+        if active.value != configuration {
+            active.value = configuration;
+            active.generation = active.generation.saturating_add(1).max(generation);
+        } else {
+            active.generation = active.generation.max(generation);
+        }
+        Ok(format!(
+            "configuration reloaded at generation {}",
+            active.generation
+        ))
     }
 
     fn require_root(&self, peer: PeerIdentity) -> Result<()> {
@@ -565,7 +646,52 @@ impl DaemonControlState {
 
 impl Drop for DaemonSocket {
     fn drop(&mut self) {
-        let _result = std::fs::remove_file(&self.path);
+        self.unlink_if_owned();
+    }
+}
+
+impl DaemonSocket {
+    fn from_bound_path(path: PathBuf) -> Result<Self> {
+        let metadata = std::fs::symlink_metadata(&path).context(IoSnafu {
+            action: "inspecting bound daemon socket",
+            path: &path,
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_socket() {
+            return crate::error::UnsafePathSnafu {
+                path,
+                reason: String::from("bound daemon socket path is not a socket"),
+            }
+            .fail();
+        }
+        Ok(Self {
+            cleanup_attempted: false,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            path,
+        })
+    }
+
+    fn unlink_if_owned(&mut self) {
+        if self.cleanup_attempted {
+            return;
+        }
+        self.cleanup_attempted = true;
+        let Ok(metadata) = std::fs::symlink_metadata(&self.path) else {
+            return;
+        };
+        if !metadata.file_type().is_symlink()
+            && metadata.file_type().is_socket()
+            && metadata.dev() == self.device
+            && metadata.ino() == self.inode
+        {
+            let _result = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+impl Drop for DaemonControlService {
+    fn drop(&mut self) {
+        self.socket.unlink_if_owned();
     }
 }
 
@@ -573,7 +699,7 @@ impl Drop for DaemonSocket {
 mod tests {
     use std::{
         fs,
-        os::unix::fs::PermissionsExt,
+        os::unix::{fs::PermissionsExt, net::UnixListener as StdUnixListener},
         sync::{Arc, Mutex, RwLock},
     };
 
@@ -591,7 +717,9 @@ mod tests {
     use tempfile::TempDir;
     use tokio::{net::UnixStream, sync::Semaphore};
 
-    use super::{DaemonControlState, DaemonLogStore, DaemonSecurity};
+    use super::{
+        DaemonConfiguration, DaemonControlState, DaemonLogStore, DaemonSecurity, DaemonSocket,
+    };
     use crate::{config::DaemonConfig, idempotency::DaemonIdempotencyStore, DaemonPaths};
 
     #[tokio::test]
@@ -677,6 +805,41 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn reload_publishes_configuration_and_generation_as_one_state(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let test_state = state()?;
+        let mut replacement = test_state
+            .state
+            .configuration
+            .read()
+            .map_err(|_error| "configuration lock poisoned")?
+            .value
+            .clone();
+        replacement.max_log_records = 3;
+
+        assert_eq!(
+            test_state
+                .state
+                .publish_configuration(replacement.clone(), 2)?,
+            "configuration reloaded at generation 2"
+        );
+        assert_eq!(
+            test_state
+                .state
+                .publish_configuration(replacement.clone(), 2)?,
+            "configuration reloaded at generation 2"
+        );
+        let active = test_state
+            .state
+            .configuration
+            .read()
+            .map_err(|_error| "configuration lock poisoned")?;
+        assert_eq!(active.value, replacement);
+        assert_eq!(active.generation, 2);
+        Ok(())
+    }
+
     #[tokio::test]
     #[ignore = "requires host Unix-domain socket I/O"]
     async fn control_service_closes_guard_family_connection_before_dispatch(
@@ -709,6 +872,58 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    #[ignore = "requires host Unix-domain socket I/O"]
+    async fn control_service_rejects_an_unsupported_request_envelope_protocol(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let test_state = state()?;
+        let state = Arc::clone(&test_state.state);
+        let (mut client, server) = stream_pair()?;
+        let permit = state.connections.clone().acquire_owned().await?;
+        let worker = tokio::spawn(Arc::clone(&state).serve_connection(server, permit));
+        write(
+            &mut client,
+            1,
+            KIND_DAEMON_HELLO,
+            &DaemonHello {
+                protocol_version: PROTOCOL_VERSION,
+                client_name: String::from("test-client"),
+                capabilities: Vec::new(),
+            },
+        )
+        .await?;
+        let _hello = read(&mut client).await?;
+        let mut request =
+            Envelope::wrap_message(2, 0, KIND_DAEMON_STATUS_REQUEST, &DaemonStatusRequest {})?;
+        request.protocol_version = PROTOCOL_VERSION.saturating_add(1);
+        AsyncFrameCodec::write_frame(&mut client, &request.into_frame()?).await?;
+        let response = read(&mut client).await?;
+        assert_eq!(response.message_kind, KIND_DAEMON_ERROR);
+        let error: DaemonErrorMessage = response.decode_typed_payload(KIND_DAEMON_ERROR)?;
+        assert_eq!(error.status_code, StatusCode::Unsupported.as_u32());
+        drop(client);
+        worker.await?;
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires host Unix-domain socket I/O"]
+    fn daemon_socket_cleanup_preserves_a_replacement_socket(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let path = root.path().join("daemon.sock");
+        let listener = StdUnixListener::bind(&path)?;
+        let socket = DaemonSocket::from_bound_path(path.clone())?;
+        fs::remove_file(&path)?;
+        let replacement = StdUnixListener::bind(&path)?;
+
+        drop(socket);
+        assert!(path.exists());
+        drop(replacement);
+        drop(listener);
+        Ok(())
+    }
+
     fn state() -> Result<TestState, Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let paths = DaemonPaths::for_testing(root.path());
@@ -722,7 +937,7 @@ mod tests {
         fs::write(
             paths.config_path(),
             format!(
-                "{{\"socket_group_gid\":{},\"max_log_bytes\":4096,\"max_log_records\":4}}",
+                "{{\"socket_group_gid\":{},\"max_log_bytes\":4096,\"max_log_records\":4,\"max_idempotency_records\":4}}",
                 security.socket_gid
             ),
         )?;
@@ -733,11 +948,16 @@ mod tests {
         let (shutdown, _receiver) = tokio::sync::watch::channel(false);
         Ok(TestState {
             state: Arc::new(DaemonControlState {
-                idempotency: Mutex::new(DaemonIdempotencyStore::new(paths.idempotency_path())),
+                idempotency: Mutex::new(DaemonIdempotencyStore::new(
+                    paths.idempotency_path(),
+                    configuration.max_idempotency_records as usize,
+                )),
                 paths,
                 security,
-                configuration: RwLock::new(configuration),
-                generation: Mutex::new(1),
+                configuration: RwLock::new(DaemonConfiguration {
+                    value: configuration,
+                    generation: 1,
+                }),
                 logs,
                 shutdown,
                 connections: Arc::new(Semaphore::new(1)),

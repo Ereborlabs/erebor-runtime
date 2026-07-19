@@ -13,6 +13,7 @@ use snafu::ResultExt;
 use crate::error::{
     DecodePayloadSnafu, DuplicateHeaderSnafu, EmptyHeaderValueSnafu, EncodePayloadSnafu,
     HeaderNotAllowedSnafu, HeaderTooLongSnafu, PayloadKindMismatchSnafu, TooManyHeadersSnafu,
+    UnsupportedProtocolVersionSnafu,
 };
 use crate::EreborIpcFrame;
 
@@ -97,6 +98,18 @@ impl Envelope {
         T::decode(self.payload.as_slice()).context(DecodePayloadSnafu)
     }
 
+    pub fn require_supported_protocol(&self) -> crate::Result<()> {
+        if self.protocol_version == PROTOCOL_VERSION {
+            Ok(())
+        } else {
+            UnsupportedProtocolVersionSnafu {
+                actual: self.protocol_version,
+                expected: PROTOCOL_VERSION,
+            }
+            .fail()
+        }
+    }
+
     pub fn into_frame(&self) -> crate::Result<EreborIpcFrame> {
         EreborIpcFrame::from_message(self)
     }
@@ -148,7 +161,7 @@ impl Envelope {
     pub fn daemon_request_fingerprint(&self) -> [u8; 32] {
         let mut digest = Sha256::new();
         digest.update(b"erebor.daemon.request-fingerprint.v1\0");
-        digest.update(PROTOCOL_VERSION.to_le_bytes());
+        digest.update(self.protocol_version.to_le_bytes());
         digest.update((self.message_kind.len() as u64).to_le_bytes());
         digest.update(self.message_kind.as_bytes());
         digest.update((self.payload.len() as u64).to_le_bytes());

@@ -7,14 +7,16 @@ async fn main() {
     if let Some(exit_code) = command_line_exit_code() {
         std::process::exit(exit_code);
     }
-    init_foreground_logging();
-    let result = match DaemonControlService::start_system().await {
-        Ok(service) => service.serve().await,
-        Err(error) => Err(error),
+    let service = match DaemonControlService::start_system().await {
+        Ok(service) => service,
+        Err(error) => {
+            init_foreground_logging();
+            erebor_runtime_telemetry::error!(error; "erebord failed before daemon logging initialized");
+            eprintln!("{}", error.output_msg());
+            std::process::exit(1);
+        }
     };
-    if let Err(error) = result {
-        erebor_runtime_telemetry::error!(error; "erebord failed");
-        eprintln!("{}", error.output_msg());
+    if service.serve().await.is_err() {
         std::process::exit(1);
     }
 }

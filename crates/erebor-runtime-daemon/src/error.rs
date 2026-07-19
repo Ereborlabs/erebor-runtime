@@ -64,6 +64,12 @@ pub enum DaemonError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("daemon idempotency store is full at {capacity} pending records"))]
+    IdempotencyCapacity {
+        capacity: usize,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("daemon state lock is poisoned"))]
     StateLock {
         #[snafu(implicit)]
@@ -88,9 +94,9 @@ impl ErrorExt for DaemonError {
             | Self::InvalidRequest { .. }
             | Self::IdempotencyConflict { .. } => StatusCode::InvalidArguments,
             Self::AlreadyRunning { .. } => StatusCode::AlreadyExists,
-            Self::LockUnavailable { .. } | Self::SocketGroupUnavailable { .. } => {
-                StatusCode::Unavailable
-            }
+            Self::LockUnavailable { .. }
+            | Self::SocketGroupUnavailable { .. }
+            | Self::IdempotencyCapacity { .. } => StatusCode::Unavailable,
             Self::Unauthorized { .. } => StatusCode::PermissionDenied,
             Self::StateLock { .. } => StatusCode::Internal,
             Self::Ipc { source, .. } => source.status_code(),

@@ -4,40 +4,90 @@ use std::{
 };
 
 use tempfile::TempDir;
+use tokio::net::UnixListener;
+
+use erebor_runtime_ipc::{
+    v1::{
+        DaemonHello, DaemonHelloAck, Envelope, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
+        PROTOCOL_VERSION,
+    },
+    AsyncFrameCodec,
+};
 
 use crate::{
     config::DaemonConfig,
-    idempotency::{DaemonIdempotencyStore, IdempotencyAction},
+    idempotency::{DaemonIdempotencyStore, IdempotencyAction, MutationIntent},
     paths::DaemonSecurity,
     DaemonPaths,
 };
 
 #[test]
-fn idempotency_store_reuses_matching_mutation_and_rejects_conflicts(
+fn idempotency_store_reuses_completed_records_and_resumes_the_original_pending_intent(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = TempDir::new()?;
     let directory = root.path().join("idempotency");
     fs::create_dir(&directory)?;
-    let store = DaemonIdempotencyStore::new(directory.clone());
     let fingerprint = [7_u8; 32];
+    let intent = reload_intent(2);
+    let store = DaemonIdempotencyStore::new(directory.clone(), 2);
     assert_eq!(
-        store.prepare(1000, "reload", "key", fingerprint)?,
-        IdempotencyAction::Execute
+        store.prepare(1000, "reload", "completed", fingerprint, intent.clone())?,
+        IdempotencyAction::Execute(intent.clone())
     );
     store.complete(
         1000,
         "reload",
-        "key",
+        "completed",
         fingerprint,
+        intent.clone(),
         String::from("configuration reloaded"),
     )?;
-    drop(store);
-    let resumed = DaemonIdempotencyStore::new(directory);
     assert_eq!(
-        resumed.prepare(1000, "reload", "key", fingerprint)?,
+        store.prepare(1000, "reload", "pending", fingerprint, intent.clone())?,
+        IdempotencyAction::Execute(intent.clone())
+    );
+    drop(store);
+
+    let resumed = DaemonIdempotencyStore::new(directory, 2);
+    assert_eq!(
+        resumed.prepare(1000, "reload", "completed", fingerprint, reload_intent(9))?,
         IdempotencyAction::ReturnCompleted(String::from("configuration reloaded"))
     );
-    assert!(resumed.prepare(1000, "reload", "key", [8_u8; 32]).is_err());
+    assert_eq!(
+        resumed.prepare(1000, "reload", "pending", fingerprint, reload_intent(9))?,
+        IdempotencyAction::ResumePending(intent.clone())
+    );
+    assert!(resumed
+        .prepare(1000, "reload", "completed", [8_u8; 32], intent)
+        .is_err());
+    Ok(())
+}
+
+#[test]
+fn idempotency_store_evicts_completed_records_but_never_pending_records(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = TempDir::new()?;
+    let directory = root.path().join("idempotency");
+    fs::create_dir(&directory)?;
+    let store = DaemonIdempotencyStore::new(directory, 1);
+    let intent = reload_intent(2);
+    let fingerprint = [7_u8; 32];
+    store.prepare(1000, "reload", "pending", fingerprint, intent.clone())?;
+    assert!(store
+        .prepare(1000, "reload", "next", fingerprint, intent.clone())
+        .is_err());
+    store.complete(
+        1000,
+        "reload",
+        "pending",
+        fingerprint,
+        intent.clone(),
+        String::from("configuration reloaded"),
+    )?;
+    assert_eq!(
+        store.prepare(1000, "reload", "next", fingerprint, intent)?,
+        IdempotencyAction::Execute(reload_intent(2))
+    );
     Ok(())
 }
 
@@ -90,31 +140,63 @@ fn daemon_lock_is_private_and_survives_owner_drop() -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 #[ignore = "requires host Unix-domain socket I/O"]
-fn stale_socket_recovery_preserves_live_socket_and_persistent_lock(
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn stale_socket_recovery_preserves_live_socket_and_persistent_lock(
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let root = TempDir::new()?;
     let paths = DaemonPaths::for_testing(root.path());
     let security = DaemonSecurity::current_process();
     paths.prepare(security)?;
     let lock = paths.acquire_lock(security)?;
 
-    let listener = std::os::unix::net::UnixListener::bind(paths.socket_path())?;
-    assert!(paths.remove_stale_socket().is_err());
+    let listener = UnixListener::bind(paths.socket_path())?;
+    let server = tokio::spawn(async move {
+        let (mut stream, _address) = listener.accept().await?;
+        let request: Envelope = AsyncFrameCodec::read_frame(&mut stream)
+            .await?
+            .decode_payload()?;
+        assert_eq!(request.message_kind, KIND_DAEMON_HELLO);
+        let _hello: DaemonHello = request.decode_typed_payload(KIND_DAEMON_HELLO)?;
+        let response = Envelope::wrap_message(
+            2,
+            request.message_id,
+            KIND_DAEMON_HELLO_ACK,
+            &DaemonHelloAck {
+                protocol_version: PROTOCOL_VERSION,
+                daemon_version: String::from("test"),
+                capabilities: Vec::new(),
+            },
+        )?;
+        AsyncFrameCodec::write_frame(&mut stream, &response.into_frame()?).await?;
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    });
+    assert!(paths.remove_stale_socket(&lock, security).await.is_err());
     assert!(paths.socket_path().exists());
-    drop(listener);
+    server.await??;
 
-    paths.remove_stale_socket()?;
+    paths.remove_stale_socket(&lock, security).await?;
     assert!(!paths.socket_path().exists());
     assert!(paths.lock_path().is_file());
     drop(lock);
     Ok(())
 }
 
+fn reload_intent(generation: u64) -> MutationIntent {
+    MutationIntent::Reload {
+        configuration: DaemonConfig {
+            socket_group_gid: DaemonSecurity::current_process().socket_gid,
+            max_log_bytes: 4096,
+            max_log_records: 32,
+            max_idempotency_records: 32,
+        },
+        generation,
+    }
+}
+
 fn fixture_config_source() -> String {
     format!(
-        "{{\"socket_group_gid\":{},\"max_log_bytes\":4096,\"max_log_records\":32}}",
+        "{{\"socket_group_gid\":{},\"max_log_bytes\":4096,\"max_log_records\":32,\"max_idempotency_records\":32}}",
         DaemonSecurity::current_process().socket_gid
     )
 }

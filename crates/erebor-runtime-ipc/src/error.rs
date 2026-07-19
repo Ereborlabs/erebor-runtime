@@ -11,6 +11,11 @@ pub enum IpcProtocolError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("IPC stream ended in the middle of a frame"))]
+    TruncatedFrame {
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("IPC framed stream I/O failed: {source}"))]
     Io {
         source: io::Error,
@@ -39,6 +44,15 @@ pub enum IpcProtocolError {
     #[snafu(display("IPC frame version `{version}` is not supported"))]
     UnsupportedFrameVersion {
         version: u16,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "IPC envelope protocol version `{actual}` does not match supported version `{expected}`"
+    ))]
+    UnsupportedProtocolVersion {
+        actual: u32,
+        expected: u32,
         #[snafu(implicit)]
         location: Location,
     },
@@ -111,9 +125,11 @@ pub type Result<T> = std::result::Result<T, IpcProtocolError>;
 impl ErrorExt for IpcProtocolError {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::EndOfStream { .. } => StatusCode::Unavailable,
+            Self::EndOfStream { .. } | Self::TruncatedFrame { .. } => StatusCode::Unavailable,
             Self::Io { .. } => StatusCode::External,
-            Self::UnsupportedFrameVersion { .. } => StatusCode::Unsupported,
+            Self::UnsupportedFrameVersion { .. } | Self::UnsupportedProtocolVersion { .. } => {
+                StatusCode::Unsupported
+            }
             Self::EncodePayload { .. } => StatusCode::Unexpected,
             Self::PayloadTooLarge { .. }
             | Self::FrameTooShort { .. }
@@ -131,7 +147,7 @@ impl ErrorExt for IpcProtocolError {
 
     fn retry_hint(&self) -> RetryHint {
         match self {
-            Self::EndOfStream { .. } => RetryHint::Retryable,
+            Self::EndOfStream { .. } | Self::TruncatedFrame { .. } => RetryHint::Retryable,
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             _ => RetryHint::NonRetryable,
         }

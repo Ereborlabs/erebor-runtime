@@ -246,6 +246,7 @@ where
         })?
         .context(IpcSnafu)?;
         let envelope: Envelope = frame.decode_payload().context(IpcSnafu)?;
+        envelope.require_supported_protocol().context(IpcSnafu)?;
         if envelope.correlation_id != request_id {
             return ProtocolSnafu {
                 reason: format!(
@@ -298,6 +299,31 @@ mod tests {
             },
         )?;
         AsyncFrameCodec::write_frame(&mut second, &response.into_frame()?).await?;
+        assert!(connection.receive(1).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn client_rejects_response_with_unsupported_protocol(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (first, mut second) = tokio::io::duplex(1024);
+        let mut connection = DaemonConnection {
+            stream: first,
+            next_message_id: 1,
+        };
+        let mut response = Envelope::wrap_message(
+            2,
+            1,
+            KIND_DAEMON_STATUS_RESPONSE,
+            &DaemonStatusResponse {
+                daemon_pid: 1,
+                configuration_generation: 1,
+                service_state: String::from("running"),
+            },
+        )?;
+        response.protocol_version = 2;
+        AsyncFrameCodec::write_frame(&mut second, &response.into_frame()?).await?;
+
         assert!(connection.receive(1).await.is_err());
         Ok(())
     }
