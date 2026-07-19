@@ -49,7 +49,7 @@ fn linux_host_transaction_catalog_cli_rolls_back_subtransactions(
     let registry = fixture.workspace.join(".erebor/sessions");
     let filesystem = support::session_filesystem_path(&fixture.workspace, session_id);
     fs::remove_dir_all(filesystem.join("work/promotions").join(session_id))?;
-    let binary = cli::erebor_runtime_binary()?;
+    let binary = cli::erebor_binary()?;
 
     let list = cli::run(
         &binary,

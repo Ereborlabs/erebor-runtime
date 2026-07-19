@@ -1,20 +1,14 @@
-//! Shared command wiring for the temporary legacy and daemon-client binaries.
+//! Command wiring for the public `erebor` client.
 
 mod cli;
-mod daemon_cli;
 mod error;
 mod logging;
 
 use clap::Parser;
 use erebor_runtime_error::ErrorExt;
 
-pub fn run_legacy() {
+pub fn run() {
     let cli = cli::Cli::parse();
-    exit_on_error(cli.execute());
-}
-
-pub fn run_daemon() {
-    let cli = daemon_cli::DaemonCli::parse();
     exit_on_error(cli.execute());
 }
 

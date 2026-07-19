@@ -9,6 +9,7 @@ use crate::{
 
 mod audit;
 pub(super) mod config_paths;
+mod daemon;
 mod dev;
 mod filesystem;
 mod parsers;
@@ -29,7 +30,7 @@ pub(super) use parsers::{
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "erebor-runtime",
+    name = "erebor",
     version,
     about = "Zero-trust action governance runtime for AI agents",
     next_line_help = true
@@ -53,6 +54,7 @@ impl Cli {
             Command::Policy(args) => policy::PolicyCommandOwner::new(args).execute(),
             Command::Audit(args) => audit::AuditCommandOwner::new(args).execute(),
             Command::Filesystem(args) => filesystem::execute(args),
+            Command::Daemon(args) => daemon::DaemonCommandOwner::new(args).execute(),
         }
     }
 }
@@ -71,6 +73,8 @@ enum Command {
     Audit(audit::AuditArgs),
     /// Filesystem revert transaction commands.
     Filesystem(filesystem::FilesystemArgs),
+    /// Inspect or administer the local Erebor daemon.
+    Daemon(daemon::DaemonArgs),
 }
 
 impl fmt::Display for Command {
@@ -82,6 +86,7 @@ impl fmt::Display for Command {
             Self::Policy(args) => formatter.write_str(&args.display()),
             Self::Audit(args) => formatter.write_str(&args.display()),
             Self::Filesystem(args) => formatter.write_str(&args.display()),
+            Self::Daemon(_) => formatter.write_str("daemon"),
         }
     }
 }

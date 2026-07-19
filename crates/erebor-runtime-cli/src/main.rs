@@ -1,3 +1,3 @@
 fn main() {
-    erebor_runtime_cli::run_legacy();
+    erebor_runtime_cli::run();
 }

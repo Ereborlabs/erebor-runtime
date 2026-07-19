@@ -12,7 +12,7 @@ pub(super) fn run(
 ) -> Result<String, Box<dyn std::error::Error>> {
     let output = Command::new(binary).current_dir(cwd).args(args).output()?;
     if !output.status.success() {
-        return Err(command_error("erebor-runtime command", output).into());
+        return Err(command_error("erebor command", output).into());
     }
     Ok(String::from_utf8(output.stdout)?)
 }
@@ -25,7 +25,7 @@ pub(super) fn run_failure(
     let output = Command::new(binary).current_dir(cwd).args(args).output()?;
     if output.status.success() {
         return Err(std::io::Error::other(format!(
-            "erebor-runtime command unexpectedly succeeded: stdout={} stderr={}",
+            "erebor command unexpectedly succeeded: stdout={} stderr={}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         ))
@@ -38,26 +38,20 @@ pub(super) fn run_failure(
     ))
 }
 
-pub(super) fn erebor_runtime_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    if let Some(binary) = std::env::var_os("CARGO_BIN_EXE_erebor-runtime") {
+pub(super) fn erebor_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if let Some(binary) = std::env::var_os("CARGO_BIN_EXE_erebor") {
         return Ok(PathBuf::from(binary));
     }
     let workspace = workspace_root();
     let candidate = workspace
         .join("target/debug")
-        .join(format!("erebor-runtime{}", std::env::consts::EXE_SUFFIX));
+        .join(format!("erebor{}", std::env::consts::EXE_SUFFIX));
     let output = Command::new("cargo")
-        .args([
-            "build",
-            "-p",
-            "erebor-runtime-cli",
-            "--bin",
-            "erebor-runtime",
-        ])
+        .args(["build", "-p", "erebor-runtime-cli", "--bin", "erebor"])
         .current_dir(&workspace)
         .output()?;
     if !output.status.success() {
-        return Err(command_error("cargo build erebor-runtime", output).into());
+        return Err(command_error("cargo build erebor", output).into());
     }
     Ok(candidate)
 }

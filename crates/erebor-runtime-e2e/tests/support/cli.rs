@@ -15,7 +15,7 @@ pub struct EreborCliFixture {
 
 impl EreborCliFixture {
     pub fn build() -> Result<Self, E2eError> {
-        if let Some(binary) = std::env::var_os("CARGO_BIN_EXE_erebor-runtime") {
+        if let Some(binary) = std::env::var_os("CARGO_BIN_EXE_erebor") {
             return Ok(Self {
                 binary: PathBuf::from(binary),
             });
@@ -23,22 +23,16 @@ impl EreborCliFixture {
 
         let workspace_root = WorkspaceRoot::resolve()?;
         let output = Command::new("cargo")
-            .args([
-                "build",
-                "-p",
-                "erebor-runtime-cli",
-                "--bin",
-                "erebor-runtime",
-            ])
+            .args(["build", "-p", "erebor-runtime-cli", "--bin", "erebor"])
             .current_dir(workspace_root.path())
             .output()
             .context(IoSnafu)?;
         if !output.status.success() {
-            return Err(command_error("cargo build erebor-runtime", output));
+            return Err(command_error("cargo build erebor", output));
         }
 
         Ok(Self {
-            binary: workspace_root.binary_path("erebor-runtime"),
+            binary: workspace_root.binary_path("erebor"),
         })
     }
 
@@ -49,7 +43,7 @@ impl EreborCliFixture {
     ) -> Result<String, E2eError> {
         let output = self.command_in(cwd, args).output().context(IoSnafu)?;
         if !output.status.success() {
-            return Err(command_error("erebor-runtime command", output));
+            return Err(command_error("erebor command", output));
         }
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
@@ -82,7 +76,7 @@ impl EreborCliFixture {
             .context(IoSnafu)?;
         if output.status.success() {
             return Err(external_error(
-                "erebor-runtime command expected failure",
+                "erebor command expected failure",
                 std::io::Error::other(format!(
                     "command unexpectedly succeeded: stdout={} stderr={}",
                     String::from_utf8_lossy(&output.stdout),

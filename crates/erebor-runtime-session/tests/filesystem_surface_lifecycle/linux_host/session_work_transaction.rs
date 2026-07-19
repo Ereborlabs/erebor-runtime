@@ -69,7 +69,7 @@ fn linux_host_session_work_transactions_autocommit_and_cli_commit(
     assert_eq!(manifest["parent_transaction_id"], Value::Null);
 
     let registry = workspace.join(".erebor/sessions");
-    let binary = cli::erebor_runtime_binary()?;
+    let binary = cli::erebor_binary()?;
     let list = cli::run(
         &binary,
         &root,

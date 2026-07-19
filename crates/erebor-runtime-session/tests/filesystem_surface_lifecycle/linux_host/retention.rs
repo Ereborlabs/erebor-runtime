@@ -62,7 +62,7 @@ impl RetentionLifecycleScenario {
         assert_promoted(&self.restored_fixture)?;
         assert_promoted(&self.protected_fixture)?;
 
-        let binary = cli::erebor_runtime_binary()?;
+        let binary = cli::erebor_binary()?;
         let registry = self.registry();
         let restored_repo = self.repo(self.restored_session);
         let protected_repo = self.repo(self.protected_session);

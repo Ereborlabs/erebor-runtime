@@ -6,21 +6,21 @@ use super::{test_support::RegistrySessionFixture, Cli};
 
 #[test]
 fn rejects_unknown_arguments() {
-    let error = Cli::try_parse_from(["erebor-runtime", "start", "--unknown"]);
+    let error = Cli::try_parse_from(["erebor", "start", "--unknown"]);
 
     assert!(error.is_err());
 }
 
 #[test]
 fn accepts_single_runtime_command_with_config() {
-    let cli = Cli::try_parse_from(["erebor-runtime", "start", "--config", "erebor.json"]);
+    let cli = Cli::try_parse_from(["erebor", "start", "--config", "erebor.json"]);
 
     assert!(cli.is_ok());
 }
 
 #[test]
 fn requires_config_for_runtime_start() {
-    let error = Cli::try_parse_from(["erebor-runtime", "start"]);
+    let error = Cli::try_parse_from(["erebor", "start"]);
 
     assert!(error.is_err());
 }
@@ -28,7 +28,7 @@ fn requires_config_for_runtime_start() {
 #[test]
 fn accepts_session_run_and_diagnose_commands() {
     let run = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "session",
         "run",
         "--runner",
@@ -39,7 +39,7 @@ fn accepts_session_run_and_diagnose_commands() {
         "--help",
     ]);
     let diagnose = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "session",
         "diagnose",
         "--runner",
@@ -56,7 +56,7 @@ fn accepts_session_run_and_diagnose_commands() {
 #[test]
 fn rejects_session_run_tty_flag() {
     let error = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "session",
         "run",
         "--runner",
@@ -73,7 +73,7 @@ fn rejects_session_run_tty_flag() {
 #[test]
 fn accepts_and_rejects_session_adopt_targets() {
     let pid = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "session",
         "adopt",
         "--runner",
@@ -84,7 +84,7 @@ fn accepts_and_rejects_session_adopt_targets() {
         "1234",
     ]);
     let by_match = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "session",
         "adopt",
         "--runner",
@@ -95,7 +95,7 @@ fn accepts_and_rejects_session_adopt_targets() {
         "openclaw",
     ]);
     let multiple = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "session",
         "adopt",
         "--runner",
@@ -108,7 +108,7 @@ fn accepts_and_rejects_session_adopt_targets() {
         "openclaw",
     ]);
     let missing = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "session",
         "adopt",
         "--runner",
@@ -125,12 +125,12 @@ fn accepts_and_rejects_session_adopt_targets() {
 
 #[test]
 fn accepts_registry_session_review_commands_and_rejects_old_flags() {
-    let ls = Cli::try_parse_from(["erebor-runtime", "session", "ls"]);
-    let show = Cli::try_parse_from(["erebor-runtime", "session", "show", "session-1"]);
-    let describe = Cli::try_parse_from(["erebor-runtime", "session", "describe", "session-1"]);
-    let old_ls = Cli::try_parse_from(["erebor-runtime", "session", "ls", "--audit", "audit"]);
+    let ls = Cli::try_parse_from(["erebor", "session", "ls"]);
+    let show = Cli::try_parse_from(["erebor", "session", "show", "session-1"]);
+    let describe = Cli::try_parse_from(["erebor", "session", "describe", "session-1"]);
+    let old_ls = Cli::try_parse_from(["erebor", "session", "ls", "--audit", "audit"]);
     let old_show = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "session",
         "show",
         "session-1",
@@ -147,17 +147,10 @@ fn accepts_registry_session_review_commands_and_rejects_old_flags() {
 
 #[test]
 fn accepts_session_review_json_format() {
-    let ls = Cli::try_parse_from(["erebor-runtime", "session", "ls", "--format", "json"]);
-    let show = Cli::try_parse_from([
-        "erebor-runtime",
-        "session",
-        "show",
-        "session-1",
-        "--format",
-        "json",
-    ]);
+    let ls = Cli::try_parse_from(["erebor", "session", "ls", "--format", "json"]);
+    let show = Cli::try_parse_from(["erebor", "session", "show", "session-1", "--format", "json"]);
     let describe = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "session",
         "describe",
         "session-1",
@@ -173,7 +166,7 @@ fn accepts_session_review_json_format() {
 #[test]
 fn accepts_filesystem_transaction_catalog_commands() {
     let list = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "filesystem",
         "transactions",
         "list",
@@ -183,7 +176,7 @@ fn accepts_filesystem_transaction_catalog_commands() {
         "session-1",
     ]);
     let commit = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "filesystem",
         "transactions",
         "commit",
@@ -195,7 +188,7 @@ fn accepts_filesystem_transaction_catalog_commands() {
         "before risky edit",
     ]);
     let rollback = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "filesystem",
         "transactions",
         "rollback",
@@ -214,7 +207,7 @@ fn accepts_filesystem_transaction_catalog_commands() {
 #[test]
 fn accepts_filesystem_retention_commands() {
     let list = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "filesystem",
         "retention",
         "list",
@@ -224,7 +217,7 @@ fn accepts_filesystem_retention_commands() {
         "session-1",
     ]);
     let prune = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "filesystem",
         "retention",
         "prune",
@@ -235,7 +228,7 @@ fn accepts_filesystem_retention_commands() {
         "tx@{0}",
     ]);
     let json = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "filesystem",
         "retention",
         "list",
@@ -255,7 +248,7 @@ fn accepts_filesystem_retention_commands() {
 #[test]
 fn accepts_policy_and_audit_commands() {
     let policy = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "policy",
         "test",
         "--policy",
@@ -264,7 +257,7 @@ fn accepts_policy_and_audit_commands() {
         "event.json",
     ]);
     let evidence = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "audit",
         "evidence-trace",
         "session-1",
@@ -281,7 +274,7 @@ fn accepts_policy_and_audit_commands() {
 #[test]
 fn rejects_invalid_dev_and_audit_options() {
     let cdp = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "dev",
         "proxy-cdp",
         "--browser-url",
@@ -290,7 +283,7 @@ fn rejects_invalid_dev_and_audit_options() {
         "policy.json",
     ]);
     let audit = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "audit",
         "evidence-trace",
         "session-1",
@@ -305,7 +298,7 @@ fn rejects_invalid_dev_and_audit_options() {
 #[test]
 fn accepts_restrictive_global_log_level() {
     let cli = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "--log-level",
         "debug",
         "start",
@@ -319,7 +312,7 @@ fn accepts_restrictive_global_log_level() {
 #[test]
 fn rejects_unknown_log_level() {
     let error = Cli::try_parse_from([
-        "erebor-runtime",
+        "erebor",
         "--log-level",
         "verbose",
         "start",
@@ -335,7 +328,7 @@ fn audit_tail_rejects_invalid_jsonl() -> Result<(), Box<dyn std::error::Error>> 
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let session_id = format!("session-invalid-audit-{nanos}-{}", std::process::id());
     let _fixture = RegistrySessionFixture::write_invalid_audit(&session_id)?;
-    let cli = Cli::try_parse_from(["erebor-runtime", "audit", "tail", session_id.as_str()])?;
+    let cli = Cli::try_parse_from(["erebor", "audit", "tail", session_id.as_str()])?;
 
     assert!(cli.execute().is_err());
     Ok(())

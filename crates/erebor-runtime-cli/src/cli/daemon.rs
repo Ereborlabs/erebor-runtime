@@ -1,29 +1,25 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Subcommand};
 use erebor_runtime_client::DaemonClient;
 use snafu::ResultExt;
 
-use crate::{
-    error::{CliError, DaemonClientSnafu, DaemonRuntimeSnafu},
-    logging::{init_tracing, LoggingArgs},
-};
+use crate::error::{CliError, DaemonClientSnafu, DaemonRuntimeSnafu};
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "erebor",
-    version,
-    about = "Client for the local Erebor daemon",
-    next_line_help = true
-)]
-pub struct DaemonCli {
-    #[command(flatten)]
-    logging: LoggingArgs,
+#[derive(Debug, Args)]
+pub(super) struct DaemonArgs {
     #[command(subcommand)]
-    command: Command,
+    command: DaemonCommand,
 }
 
-impl DaemonCli {
-    pub fn execute(&self) -> Result<(), CliError> {
-        init_tracing(&self.logging);
+pub(super) struct DaemonCommandOwner<'a> {
+    args: &'a DaemonArgs,
+}
+
+impl<'a> DaemonCommandOwner<'a> {
+    pub(super) fn new(args: &'a DaemonArgs) -> Self {
+        Self { args }
+    }
+
+    pub(super) fn execute(&self) -> Result<(), CliError> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_io()
             .enable_time()
@@ -34,8 +30,7 @@ impl DaemonCli {
 
     async fn execute_async(&self) -> Result<(), CliError> {
         let client = DaemonClient::local();
-        let Command::Daemon(daemon) = &self.command;
-        match &daemon.command {
+        match &self.args.command {
             DaemonCommand::Status => {
                 let status = client.status().await.context(DaemonClientSnafu)?;
                 println!(
@@ -86,18 +81,6 @@ enum DaemonCommand {
     Stop(MutationArgs),
 }
 
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Inspect or administer the local Erebor daemon.
-    Daemon(DaemonArgs),
-}
-
-#[derive(Debug, Args)]
-struct DaemonArgs {
-    #[command(subcommand)]
-    command: DaemonCommand,
-}
-
 #[derive(Debug, Args)]
 struct LogsArgs {
     /// Return records strictly after this sequence number.
@@ -127,13 +110,13 @@ fn non_empty_idempotency_key(value: &str) -> Result<String, String> {
 mod tests {
     use clap::Parser;
 
-    use super::DaemonCli;
+    use crate::cli::Cli;
 
     #[test]
-    fn daemon_cli_exposes_only_phase_one_commands() {
-        assert!(DaemonCli::try_parse_from(["erebor", "daemon", "status"]).is_ok());
-        assert!(DaemonCli::try_parse_from(["erebor", "status"]).is_err());
-        assert!(DaemonCli::try_parse_from([
+    fn daemon_commands_share_the_erebor_root_command_tree() {
+        assert!(Cli::try_parse_from(["erebor", "daemon", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["erebor", "status"]).is_err());
+        assert!(Cli::try_parse_from([
             "erebor",
             "daemon",
             "reload",
@@ -141,6 +124,6 @@ mod tests {
             "retry-1",
         ])
         .is_ok());
-        assert!(DaemonCli::try_parse_from(["erebor", "session", "run"]).is_err());
+        assert!(Cli::try_parse_from(["erebor", "session", "run"]).is_err());
     }
 }
