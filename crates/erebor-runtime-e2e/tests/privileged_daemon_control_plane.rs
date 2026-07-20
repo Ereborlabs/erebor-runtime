@@ -1,8 +1,8 @@
 use std::{env, error::Error, path::PathBuf, process::Command};
 
 #[test]
-#[ignore = "requires Ubuntu 24.04, PID 1 systemd, cgroup v2, and passwordless sudo"]
-fn installed_phase_one_daemon_control_plane() -> Result<(), Box<dyn Error>> {
+#[ignore = "requires Linux and passwordless sudo"]
+fn temporary_path_phase_one_daemon_control_plane() -> Result<(), Box<dyn Error>> {
     let repository = repository_root()?;
     let target = env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
@@ -11,7 +11,7 @@ fn installed_phase_one_daemon_control_plane() -> Result<(), Box<dyn Error>> {
     let erebor = target.join("debug/erebor");
     if !erebord.is_file() || !erebor.is_file() {
         return Err(format!(
-            "build erebord and erebor before this installed-product test: `{}` and `{}`",
+            "build erebord and erebor before this privileged control-plane test: `{}` and `{}`",
             erebord.display(),
             erebor.display()
         )
@@ -19,17 +19,17 @@ fn installed_phase_one_daemon_control_plane() -> Result<(), Box<dyn Error>> {
     }
 
     let output = Command::new("sudo")
-        .args(["-n", "env"])
-        .env("EREBOR_PHASE1_REPOSITORY", &repository)
-        .env("EREBOR_PHASE1_EREBORD", &erebord)
-        .env("EREBOR_PHASE1_EREBOR", &erebor)
+        .arg("-n")
+        .arg("env")
+        .arg(format!("EREBOR_PHASE1_EREBORD={}", erebord.display()))
+        .arg(format!("EREBOR_PHASE1_EREBOR={}", erebor.display()))
         .arg(repository.join(".github/scripts/privileged-daemon-control-plane.sh"))
         .output()?;
     if output.status.success() {
         return Ok(());
     }
     Err(format!(
-        "privileged daemon control-plane probe failed (status {}):\nstdout:\n{}\nstderr:\n{}",
+        "temporary-path privileged daemon control-plane probe failed (status {}):\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),

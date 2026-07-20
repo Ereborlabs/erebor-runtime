@@ -522,6 +522,7 @@ dependencies = [
  "comfy-table",
  "erebor-runtime-audit",
  "erebor-runtime-cdp",
+ "erebor-runtime-client",
  "erebor-runtime-core",
  "erebor-runtime-error",
  "erebor-runtime-events",
@@ -532,8 +533,20 @@ dependencies = [
  "serde",
  "serde_json",
  "snafu",
+ "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "erebor-runtime-client"
+version = "0.1.0"
+dependencies = [
+ "erebor-runtime-error",
+ "erebor-runtime-ipc",
+ "prost",
+ "snafu",
+ "tokio",
 ]
 
 [[package]]
@@ -563,6 +576,24 @@ dependencies = [
  "snafu",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "erebor-runtime-daemon"
+version = "0.1.0"
+dependencies = [
+ "erebor-runtime-error",
+ "erebor-runtime-ipc",
+ "erebor-runtime-telemetry",
+ "prost",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
+ "tempfile",
+ "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -622,7 +653,9 @@ dependencies = [
  "erebor-runtime-error",
  "prost",
  "prost-build",
+ "sha2 0.10.9",
  "snafu",
+ "tokio",
 ]
 
 [[package]]
