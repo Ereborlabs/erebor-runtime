@@ -49,6 +49,15 @@ impl DaemonPaths {
 
     #[must_use]
     pub fn for_testing(root: impl AsRef<Path>) -> Self {
+        Self::for_development(root)
+    }
+
+    /// Uses a disposable root for a manually started local development daemon.
+    ///
+    /// The caller remains responsible for creating the root-controlled
+    /// configuration file before starting `erebord` as root.
+    #[must_use]
+    pub fn for_development(root: impl AsRef<Path>) -> Self {
         let root = root.as_ref();
         Self {
             config: root.join("etc/erebord.json"),

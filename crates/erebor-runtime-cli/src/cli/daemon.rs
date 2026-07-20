@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{Args, Subcommand};
 use erebor_runtime_client::DaemonClient;
 use snafu::ResultExt;
@@ -6,6 +8,9 @@ use crate::error::{CliError, DaemonClientSnafu, DaemonRuntimeSnafu};
 
 #[derive(Debug, Args)]
 pub(super) struct DaemonArgs {
+    /// Use a disposable local Unix socket for the documented development walkthrough.
+    #[arg(long, value_name = "PATH")]
+    socket: Option<PathBuf>,
     #[command(subcommand)]
     command: DaemonCommand,
 }
@@ -29,7 +34,11 @@ impl<'a> DaemonCommandOwner<'a> {
     }
 
     async fn execute_async(&self) -> Result<(), CliError> {
-        let client = DaemonClient::local();
+        let client = self
+            .args
+            .socket
+            .as_deref()
+            .map_or_else(DaemonClient::local, DaemonClient::at);
         match &self.args.command {
             DaemonCommand::Status => {
                 let status = client.status().await.context(DaemonClientSnafu)?;
@@ -115,6 +124,14 @@ mod tests {
     #[test]
     fn daemon_commands_share_the_erebor_root_command_tree() {
         assert!(Cli::try_parse_from(["erebor", "daemon", "status"]).is_ok());
+        assert!(Cli::try_parse_from([
+            "erebor",
+            "daemon",
+            "--socket",
+            "/tmp/erebor-development/daemon.sock",
+            "status",
+        ])
+        .is_ok());
         assert!(Cli::try_parse_from(["erebor", "status"]).is_err());
         assert!(Cli::try_parse_from([
             "erebor",

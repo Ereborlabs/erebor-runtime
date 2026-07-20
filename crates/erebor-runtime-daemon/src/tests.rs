@@ -1,6 +1,7 @@
 use std::{
     fs,
     os::unix::fs::{MetadataExt, PermissionsExt},
+    path::Path,
 };
 
 use tempfile::TempDir;
@@ -20,6 +21,31 @@ use crate::{
     paths::DaemonSecurity,
     DaemonPaths,
 };
+
+#[test]
+fn development_paths_keep_all_daemon_data_below_the_explicit_root() {
+    let paths = DaemonPaths::for_development("/tmp/erebor-development");
+    assert_eq!(
+        paths.config_path(),
+        Path::new("/tmp/erebor-development/etc/erebord.json")
+    );
+    assert_eq!(
+        paths.socket_path(),
+        Path::new("/tmp/erebor-development/run/daemon.sock")
+    );
+    assert_eq!(
+        paths.lock_path(),
+        Path::new("/tmp/erebor-development/run/erebord.lock")
+    );
+    assert_eq!(
+        paths.log_path(),
+        Path::new("/tmp/erebor-development/log/daemon.jsonl")
+    );
+    assert_eq!(
+        paths.idempotency_path(),
+        Path::new("/tmp/erebor-development/lib/daemon/control-idempotency")
+    );
+}
 
 #[test]
 fn idempotency_store_reuses_completed_records_and_resumes_the_original_pending_intent(

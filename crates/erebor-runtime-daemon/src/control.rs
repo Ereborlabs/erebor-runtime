@@ -3,7 +3,7 @@ use std::{
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
         net::UnixListener as StdUnixListener,
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
@@ -88,13 +88,30 @@ struct DaemonSocket {
 
 impl DaemonControlService {
     pub async fn start_system() -> Result<Self> {
-        if geteuid().as_raw() != 0 {
-            return InvalidRequestSnafu {
+        Self::require_root_process()?;
+        Self::start(DaemonPaths::system(), 0).await
+    }
+
+    /// Starts one root-owned daemon with all mutable paths below a disposable
+    /// development root.
+    ///
+    /// This exists for the hands-on local walkthrough. It remains a local Unix
+    /// socket daemon and does not add a remote endpoint or daemon selection
+    /// model.
+    pub async fn start_development(root: impl AsRef<Path>) -> Result<Self> {
+        Self::require_root_process()?;
+        Self::start(DaemonPaths::for_development(root), 0).await
+    }
+
+    fn require_root_process() -> Result<()> {
+        if geteuid().as_raw() == 0 {
+            Ok(())
+        } else {
+            InvalidRequestSnafu {
                 reason: String::from("erebord must run as root"),
             }
-            .fail();
+            .fail()
         }
-        Self::start(DaemonPaths::system(), 0).await
     }
 
     pub(crate) async fn start(paths: DaemonPaths, owner_uid: u32) -> Result<Self> {
