@@ -43,7 +43,10 @@ impl GuardBrokerEnvironment {
         Ok(ipc::GuardHello {
             session_id: Self::required("EREBOR_SESSION_ID")?,
             actor_id: env::var("EREBOR_ACTOR_ID").unwrap_or_else(|_| String::from("agent")),
-            guard_pid: process::id() as i64,
+            guard_pid: env::var("EREBOR_GUARD_HOST_PID")
+                .ok()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or_else(|| process::id() as i64),
             runner_kind: env::var("EREBOR_SESSION_RUNNER")
                 .unwrap_or_else(|_| String::from("linux_host")),
             platform: String::from("linux-x86_64"),

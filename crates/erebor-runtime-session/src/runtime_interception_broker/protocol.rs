@@ -13,7 +13,7 @@ use crate::error::{BrokerProtocolSnafu, BrokerStateLockSnafu, RuntimeInterceptio
 use super::{
     decision::InterceptionDecisionReply,
     handlers::RoutedInterception,
-    server::RuntimeInterceptionBrokerServer,
+    server::{GuardPeerIdentity, RuntimeInterceptionBrokerServer},
     wire::{interception_token, read_frame_from_stream, write_frame_to_stream},
 };
 
@@ -23,17 +23,22 @@ struct BoundConnection {
 }
 
 impl RuntimeInterceptionBrokerServer {
-    pub(super) fn handle_stream(&self, stream: &mut (impl Read + Write)) {
+    pub(super) fn handle_stream(
+        &self,
+        stream: &mut (impl Read + Write),
+        peer: Option<GuardPeerIdentity>,
+    ) {
         let mut bound = None::<BoundConnection>;
         while let Ok(request_frame) = read_frame_from_stream(stream) {
             let envelope = match request_frame.decode_payload::<Envelope>() {
                 Ok(envelope) => envelope,
                 Err(_error) => break,
             };
-            let response = match self.handle_runtime_interception_envelope(envelope, &mut bound) {
-                Ok(response) => response,
-                Err(_error) => break,
-            };
+            let response =
+                match self.handle_runtime_interception_envelope(envelope, &mut bound, peer) {
+                    Ok(response) => response,
+                    Err(_error) => break,
+                };
             let response_frame = match response.into_frame() {
                 Ok(frame) => frame,
                 Err(_error) => break,
@@ -48,12 +53,13 @@ impl RuntimeInterceptionBrokerServer {
         &self,
         envelope: Envelope,
         bound: &mut Option<BoundConnection>,
+        peer: Option<GuardPeerIdentity>,
     ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
         envelope
             .validate_headers(EnvelopeServiceFamily::RuntimeGuard)
             .context(BrokerProtocolSnafu)?;
         if bound.is_none() {
-            return self.handle_hello_envelope(envelope, bound);
+            return self.handle_hello_envelope(envelope, bound, peer);
         }
 
         match envelope.message_kind.as_str() {
@@ -69,6 +75,7 @@ impl RuntimeInterceptionBrokerServer {
         &self,
         envelope: Envelope,
         bound: &mut Option<BoundConnection>,
+        peer: Option<GuardPeerIdentity>,
     ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
         let mut broker_id = String::from("unregistered");
         let mut accepted = false;
@@ -86,14 +93,25 @@ impl RuntimeInterceptionBrokerServer {
                 .map_err(|_error| BrokerStateLockSnafu.build())?;
             match sessions.get(&hello.session_id) {
                 Some(registration)
-                    if interception_token(&envelope) == Some(registration.token.as_str()) =>
+                    if interception_token(&envelope) == Some(registration.token.as_str())
+                        && registration.expected_peer_uid.is_none_or(|expected| {
+                            peer.is_some_and(|observed| observed.uid == expected)
+                        })
+                        && (!registration.require_peer_pid_match
+                            || peer.and_then(|observed| observed.pid)
+                                == u32::try_from(hello.guard_pid).ok()) =>
                 {
                     broker_id = registration.broker_id.clone();
                     accepted = true;
                     accepted_session_id = Some(hello.session_id);
                     String::from("accepted")
                 }
-                Some(_) => String::from("invalid interception token"),
+                Some(registration)
+                    if interception_token(&envelope) != Some(registration.token.as_str()) =>
+                {
+                    String::from("invalid interception token")
+                }
+                Some(_) => String::from("guard peer credentials do not match admission"),
                 None => String::from("unknown session"),
             }
         };

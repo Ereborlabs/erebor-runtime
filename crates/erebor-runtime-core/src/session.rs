@@ -1,6 +1,9 @@
-use std::{io, thread, time::Duration};
+use std::{io, path::PathBuf, thread, time::Duration};
 
+mod active;
+mod admission;
 mod docker;
+mod lifecycle;
 mod linux_host;
 
 use crate::error::UnsupportedSessionRunnerOperationSnafu;
@@ -8,22 +11,203 @@ use crate::{
     DockerSessionCommandOptions, LinuxHostSessionCommandOptions, RuntimeError, SessionAdoptPlan,
     SessionRunPlan, SessionRunnerKind,
 };
+pub use active::{
+    SessionHelperCommand, SessionHelperEvent, SessionHelperHandoff, SessionHelperLaunchConfig,
+    SESSION_HELPER_PROTOCOL_VERSION,
+};
+pub use admission::{
+    ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, EvidenceRequirement,
+    FilesystemProjection, ImmutableIdentity, OutputPlan, RunRequest, RunnerBinding,
+    RunnerCapabilityDocument, SafePathBinding, SafePathKind, SessionAdmission, SessionOwner,
+    SessionSpec, WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION,
+    SESSION_SPEC_SCHEMA_VERSION,
+};
 use docker::DockerSessionOutputMode;
 pub use docker::DockerSessionRunner;
+pub use lifecycle::SessionLifecycleState;
 use linux_host::LinuxHostSessionOutputMode;
 pub use linux_host::LinuxHostSessionRunner;
 
 const LINUX_HOST_TEXT_BUSY_RETRIES: usize = 5;
 const LINUX_HOST_TEXT_BUSY_RETRY_DELAY: Duration = Duration::from_millis(10);
 
-pub trait SessionRunner {
-    fn kind(&self) -> SessionRunnerKind;
-
+trait ForegroundSessionRunner {
     fn run(
         &self,
         plan: &SessionRunPlan,
         environment: &[(String, String)],
     ) -> Result<SessionRunOutcome, RuntimeError>;
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutputEndpoints {
+    stdout: PathBuf,
+    stderr: PathBuf,
+    events: PathBuf,
+    evidence: PathBuf,
+    continuity: PathBuf,
+    runtime_environment: Vec<(String, String)>,
+    prepared_workspace: Option<PathBuf>,
+    prepared_executable: Option<PathBuf>,
+}
+
+impl OutputEndpoints {
+    #[must_use]
+    pub fn new(
+        stdout: PathBuf,
+        stderr: PathBuf,
+        events: PathBuf,
+        evidence: PathBuf,
+        continuity: PathBuf,
+    ) -> Self {
+        Self {
+            stdout,
+            stderr,
+            events,
+            evidence,
+            continuity,
+            runtime_environment: Vec::new(),
+            prepared_workspace: None,
+            prepared_executable: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_runtime_environment(mut self, environment: Vec<(String, String)>) -> Self {
+        self.runtime_environment = environment;
+        self
+    }
+
+    #[must_use]
+    pub fn with_prepared_execution(
+        mut self,
+        workspace: PathBuf,
+        executable: Option<PathBuf>,
+    ) -> Self {
+        self.prepared_workspace = Some(workspace);
+        self.prepared_executable = executable;
+        self
+    }
+
+    #[must_use]
+    pub fn stdout(&self) -> &std::path::Path {
+        &self.stdout
+    }
+
+    #[must_use]
+    pub fn stderr(&self) -> &std::path::Path {
+        &self.stderr
+    }
+
+    #[must_use]
+    pub fn events(&self) -> &std::path::Path {
+        &self.events
+    }
+
+    #[must_use]
+    pub fn evidence(&self) -> &std::path::Path {
+        &self.evidence
+    }
+
+    #[must_use]
+    pub fn continuity(&self) -> &std::path::Path {
+        &self.continuity
+    }
+
+    #[must_use]
+    pub fn runtime_environment(&self) -> &[(String, String)] {
+        &self.runtime_environment
+    }
+
+    #[must_use]
+    pub fn prepared_workspace(&self) -> Option<&std::path::Path> {
+        self.prepared_workspace.as_deref()
+    }
+
+    #[must_use]
+    pub fn prepared_executable(&self) -> Option<&std::path::Path> {
+        self.prepared_executable.as_deref()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActiveSessionHealth {
+    Starting,
+    Running,
+    Exited,
+    ControlLost,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActiveSessionSignal {
+    Terminate,
+    Kill,
+    Interrupt,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ActiveSessionExit {
+    exit_code: Option<i32>,
+    signal: Option<i32>,
+}
+
+impl ActiveSessionExit {
+    #[must_use]
+    pub const fn new(exit_code: Option<i32>, signal: Option<i32>) -> Self {
+        Self { exit_code, signal }
+    }
+
+    #[must_use]
+    pub const fn exit_code(&self) -> Option<i32> {
+        self.exit_code
+    }
+
+    #[must_use]
+    pub const fn signal(&self) -> Option<i32> {
+        self.signal
+    }
+}
+
+pub trait ActiveSession: Send {
+    fn stable_identity(&self) -> &str;
+
+    fn capability_snapshot(&self) -> &RunnerCapabilityDocument;
+
+    fn wait(&mut self) -> Result<ActiveSessionExit, RuntimeError>;
+
+    fn stop(&mut self, grace_period: Duration) -> Result<ActiveSessionExit, RuntimeError>;
+
+    fn kill(&mut self, signal: ActiveSessionSignal) -> Result<ActiveSessionExit, RuntimeError>;
+
+    fn health(&mut self) -> Result<ActiveSessionHealth, RuntimeError>;
+}
+
+pub trait SessionRunner: Send + Sync {
+    fn kind(&self) -> SessionRunnerKind;
+
+    fn inspect(&self) -> Result<RunnerCapabilityDocument, RuntimeError>;
+
+    fn validate_admission(&self, spec: &SessionSpec) -> Result<(), RuntimeError>;
+
+    fn start(
+        &self,
+        spec: &SessionSpec,
+        output: &OutputEndpoints,
+    ) -> Result<Box<dyn ActiveSession>, RuntimeError>;
+
+    fn recover(
+        &self,
+        spec: &SessionSpec,
+        binding: &RunnerBinding,
+        output: &OutputEndpoints,
+    ) -> Result<Box<dyn ActiveSession>, RuntimeError>;
+
+    fn remove(
+        &self,
+        spec: &SessionSpec,
+        binding: Option<&RunnerBinding>,
+    ) -> Result<(), RuntimeError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,8 +241,10 @@ impl SessionRunnerLauncher {
         environment: &[(String, String)],
     ) -> Result<SessionRunOutcome, RuntimeError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => DockerSessionRunner.run(plan, environment),
-            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner.run(plan, environment),
+            SessionRunnerKind::Docker => DockerSessionRunner::default().run(plan, environment),
+            SessionRunnerKind::LinuxHost => {
+                LinuxHostSessionRunner::default().run(plan, environment)
+            }
         }
     }
 
@@ -68,12 +254,12 @@ impl SessionRunnerLauncher {
         options: &DockerSessionCommandOptions,
     ) -> Result<SessionRunOutcome, RuntimeError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => DockerSessionRunner
+            SessionRunnerKind::Docker => DockerSessionRunner::default()
                 .run_with_options(plan, environment, options, DockerSessionOutputMode::Inherit)
                 .map(|outcome| outcome.run),
             SessionRunnerKind::LinuxHost => {
                 let _ = options;
-                LinuxHostSessionRunner.run(plan, environment)
+                LinuxHostSessionRunner::default().run(plan, environment)
             }
         }
     }
@@ -84,7 +270,7 @@ impl SessionRunnerLauncher {
         options: &DockerSessionCommandOptions,
     ) -> Result<SessionCapturedRunOutcome, RuntimeError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => DockerSessionRunner.run_with_options(
+            SessionRunnerKind::Docker => DockerSessionRunner::default().run_with_options(
                 plan,
                 environment,
                 options,
@@ -92,7 +278,7 @@ impl SessionRunnerLauncher {
             ),
             SessionRunnerKind::LinuxHost => {
                 let _ = options;
-                LinuxHostSessionRunner.run_with_options(
+                LinuxHostSessionRunner::default().run_with_options(
                     plan,
                     environment,
                     &LinuxHostSessionCommandOptions::default(),
@@ -108,8 +294,8 @@ impl SessionRunnerLauncher {
         options: &LinuxHostSessionCommandOptions,
     ) -> Result<SessionRunOutcome, RuntimeError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => DockerSessionRunner.run(plan, environment),
-            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner
+            SessionRunnerKind::Docker => DockerSessionRunner::default().run(plan, environment),
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner::default()
                 .run_with_options(
                     plan,
                     environment,
@@ -128,14 +314,14 @@ impl SessionRunnerLauncher {
         match plan.runner().kind() {
             SessionRunnerKind::Docker => {
                 let _ = options;
-                DockerSessionRunner.run_with_options(
+                DockerSessionRunner::default().run_with_options(
                     plan,
                     environment,
                     &DockerSessionCommandOptions::default(),
                     DockerSessionOutputMode::Capture,
                 )
             }
-            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner.run_with_options(
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner::default().run_with_options(
                 plan,
                 environment,
                 options,
@@ -155,7 +341,7 @@ impl SessionRunnerLauncher {
                 operation: String::from("adopt"),
             }
             .fail(),
-            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner::default()
                 .adopt_with_options(
                     plan,
                     environment,
@@ -177,7 +363,7 @@ impl SessionRunnerLauncher {
                 operation: String::from("adopt"),
             }
             .fail(),
-            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner.adopt_with_options(
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner::default().adopt_with_options(
                 plan,
                 environment,
                 options,

@@ -18,10 +18,11 @@ erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 erebor-runtime-terminal = { path = "../erebor-runtime-terminal" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
 serde_json.workspace = true
+serde.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 tokio.workspace = true
-rustix = { version = "1.1.4", features = ["event", "fs", "net", "process"] }
+rustix = { version = "1.1.4", features = ["event", "fs", "net", "process", "mount", "thread"] }
 
 [features]
 # Expose the standalone process guard to rust-analyzer without changing the
@@ -42,6 +43,10 @@ bench = false
 [[bin]]
 name = "erebor-codex-hook"
 path = "src/agents/codex/managed_hook.rs"
+
+[[bin]]
+name = "erebor-session-helper"
+path = "src/bin/erebor_session_helper.rs"
 
 [lints]
 workspace = true

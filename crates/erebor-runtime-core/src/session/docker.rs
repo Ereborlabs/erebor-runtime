@@ -1,4 +1,7 @@
-use std::process::Command as ProcessCommand;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    process::Command as ProcessCommand,
+};
 
 use erebor_runtime_telemetry::info;
 use snafu::ResultExt;
@@ -9,16 +12,30 @@ use crate::{
     SessionRunnerKind,
 };
 
-use super::{LinuxHostTextBusyRetry, SessionCapturedRunOutcome, SessionRunOutcome, SessionRunner};
+use super::{
+    ActiveSession, ActiveSessionSignalKind, DaemonFailureMode, ForegroundSessionRunner,
+    LinuxHostTextBusyRetry, OutputEndpoints, RunnerCapabilityDocument, SessionCapturedRunOutcome,
+    SessionHelperLaunchConfig, SessionRunOutcome, SessionRunner, SessionSpec,
+};
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct DockerSessionRunner;
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DockerSessionRunner {
+    helper: SessionHelperLaunchConfig,
+}
 
-impl SessionRunner for DockerSessionRunner {
-    fn kind(&self) -> SessionRunnerKind {
-        SessionRunnerKind::Docker
+impl DockerSessionRunner {
+    #[must_use]
+    pub const fn new(helper: SessionHelperLaunchConfig) -> Self {
+        Self { helper }
     }
 
+    #[must_use]
+    pub const fn kind(&self) -> SessionRunnerKind {
+        SessionRunnerKind::Docker
+    }
+}
+
+impl ForegroundSessionRunner for DockerSessionRunner {
     fn run(
         &self,
         plan: &SessionRunPlan,
@@ -52,6 +69,109 @@ impl SessionRunner for DockerSessionRunner {
             }
             .fail()
         }
+    }
+}
+
+impl SessionRunner for DockerSessionRunner {
+    fn kind(&self) -> SessionRunnerKind {
+        SessionRunnerKind::Docker
+    }
+
+    fn inspect(&self) -> Result<RunnerCapabilityDocument, RuntimeError> {
+        if !cfg!(target_os = "linux") {
+            return crate::error::SessionRunnerUnavailableSnafu {
+                runner: SessionRunnerKind::Docker.as_str().to_owned(),
+                reason: String::from("the Phase 2 Docker continuity helper requires Linux"),
+            }
+            .fail();
+        }
+        self.helper.inspect_runner(SessionRunnerKind::Docker)?;
+        RunnerCapabilityDocument::new(
+            SessionRunnerKind::Docker,
+            "erebor-docker-cli",
+            env!("CARGO_PKG_VERSION"),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            true,
+            false,
+            BTreeSet::from([String::from("stdout"), String::from("stderr")]),
+            BTreeSet::from([
+                ActiveSessionSignalKind::Terminate,
+                ActiveSessionSignalKind::Kill,
+                ActiveSessionSignalKind::Interrupt,
+            ]),
+            false,
+            true,
+            BTreeSet::from([DaemonFailureMode::Terminate, DaemonFailureMode::Continue]),
+            BTreeMap::from([
+                (
+                    String::from("image"),
+                    String::from("local-content-digest-only"),
+                ),
+                (String::from("pull"), String::from("never")),
+                (
+                    String::from("containment"),
+                    if self.helper.uses_systemd_scope() {
+                        String::from("systemd-session-slice-v1")
+                    } else {
+                        String::from("direct-helper-v1")
+                    },
+                ),
+                (
+                    String::from("privilege-plan"),
+                    String::from("docker-user-ulimit-capdrop-v1"),
+                ),
+                (
+                    String::from("umask"),
+                    String::from("oci-runtime-default-0022"),
+                ),
+            ]),
+        )
+        .map_err(|error| crate::RuntimeError::SessionRunnerUnavailable {
+            runner: SessionRunnerKind::Docker.as_str().to_owned(),
+            reason: error.to_string(),
+            location: snafu::Location::default(),
+        })
+    }
+
+    fn validate_admission(&self, spec: &SessionSpec) -> Result<(), RuntimeError> {
+        if spec.workload_privileges().umask() != 0o022 {
+            return crate::error::SessionRunnerUnavailableSnafu {
+                runner: SessionRunnerKind::Docker.as_str().to_owned(),
+                reason: String::from("Docker admission requires the pinned OCI runtime umask 0022"),
+            }
+            .fail();
+        }
+        self.helper.validate_docker_image(spec)
+    }
+
+    fn start(
+        &self,
+        spec: &SessionSpec,
+        output: &OutputEndpoints,
+    ) -> Result<Box<dyn ActiveSession>, RuntimeError> {
+        let capability = self.inspect()?;
+        self.helper
+            .start(SessionRunnerKind::Docker, spec, output, capability)
+    }
+
+    fn recover(
+        &self,
+        spec: &SessionSpec,
+        binding: &crate::RunnerBinding,
+        output: &OutputEndpoints,
+    ) -> Result<Box<dyn ActiveSession>, RuntimeError> {
+        let capability = self.inspect()?;
+        self.helper
+            .recover(SessionRunnerKind::Docker, spec, binding, output, capability)
+    }
+
+    fn remove(
+        &self,
+        _spec: &SessionSpec,
+        binding: Option<&crate::RunnerBinding>,
+    ) -> Result<(), RuntimeError> {
+        self.helper.remove(SessionRunnerKind::Docker, binding)
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

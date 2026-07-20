@@ -99,11 +99,22 @@ impl DaemonPaths {
         self.state.join("daemon/control-idempotency")
     }
 
+    #[must_use]
+    pub fn session_state_path(&self) -> PathBuf {
+        self.state.clone()
+    }
+
+    #[must_use]
+    pub fn session_runtime_path(&self) -> PathBuf {
+        self.runtime.join("sessions")
+    }
+
     pub(crate) fn prepare(&self, security: DaemonSecurity) -> Result<()> {
         self.ensure_directory(&self.runtime, 0o750, security)?;
         self.ensure_directory(&self.logs, 0o750, security)?;
         self.ensure_directory(&self.state, 0o700, security)?;
         self.ensure_directory(&self.idempotency_path(), 0o700, security)?;
+        self.ensure_directory(&self.session_runtime_path(), 0o700, security)?;
         Ok(())
     }
 

@@ -2,6 +2,7 @@ use std::{
     fs,
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::Path,
+    time::Duration,
 };
 
 use tempfile::TempDir;
@@ -17,7 +18,7 @@ use erebor_runtime_ipc::{
 
 use crate::{
     config::DaemonConfig,
-    idempotency::{DaemonIdempotencyStore, IdempotencyAction, MutationIntent},
+    idempotency::{DaemonIdempotencyStore, IdempotencyAction, MutationIntent, MutationResponse},
     paths::DaemonSecurity,
     DaemonPaths,
 };
@@ -59,10 +60,15 @@ fn idempotency_store_reuses_completed_records_and_resumes_the_original_pending_i
     fs::create_dir(&directory)?;
     let fingerprint = [7_u8; 32];
     let intent = reload_intent(2);
-    let store = DaemonIdempotencyStore::new(directory.clone(), 2);
+    let store = DaemonIdempotencyStore::new(
+        directory.clone(),
+        root.path().to_path_buf(),
+        2,
+        Duration::ZERO,
+    );
     assert_eq!(
         store.prepare(1000, "reload", "completed", fingerprint, intent.clone())?,
-        IdempotencyAction::Execute(intent.clone())
+        IdempotencyAction::Execute(Box::new(intent.clone()))
     );
     store.complete(
         1000,
@@ -70,22 +76,23 @@ fn idempotency_store_reuses_completed_records_and_resumes_the_original_pending_i
         "completed",
         fingerprint,
         intent.clone(),
-        String::from("configuration reloaded"),
+        response(),
     )?;
     assert_eq!(
         store.prepare(1000, "reload", "pending", fingerprint, intent.clone())?,
-        IdempotencyAction::Execute(intent.clone())
+        IdempotencyAction::Execute(Box::new(intent.clone()))
     );
     drop(store);
 
-    let resumed = DaemonIdempotencyStore::new(directory, 2);
+    let resumed =
+        DaemonIdempotencyStore::new(directory, root.path().to_path_buf(), 2, Duration::ZERO);
     assert_eq!(
         resumed.prepare(1000, "reload", "completed", fingerprint, reload_intent(9))?,
-        IdempotencyAction::ReturnCompleted(String::from("configuration reloaded"))
+        IdempotencyAction::ReturnCompleted(response())
     );
     assert_eq!(
         resumed.prepare(1000, "reload", "pending", fingerprint, reload_intent(9))?,
-        IdempotencyAction::ResumePending(intent.clone())
+        IdempotencyAction::ResumePending(Box::new(intent.clone()))
     );
     assert!(resumed
         .prepare(1000, "reload", "completed", [8_u8; 32], intent)
@@ -99,7 +106,8 @@ fn idempotency_store_evicts_completed_records_but_never_pending_records(
     let root = TempDir::new()?;
     let directory = root.path().join("idempotency");
     fs::create_dir(&directory)?;
-    let store = DaemonIdempotencyStore::new(directory, 1);
+    let store =
+        DaemonIdempotencyStore::new(directory, root.path().to_path_buf(), 1, Duration::ZERO);
     let intent = reload_intent(2);
     let fingerprint = [7_u8; 32];
     store.prepare(1000, "reload", "pending", fingerprint, intent.clone())?;
@@ -112,11 +120,50 @@ fn idempotency_store_evicts_completed_records_but_never_pending_records(
         "pending",
         fingerprint,
         intent.clone(),
-        String::from("configuration reloaded"),
+        response(),
     )?;
     assert_eq!(
         store.prepare(1000, "reload", "next", fingerprint, intent)?,
-        IdempotencyAction::Execute(reload_intent(2))
+        IdempotencyAction::Execute(Box::new(reload_intent(2)))
+    );
+    Ok(())
+}
+
+#[test]
+fn idempotency_store_retains_session_mutations_until_tombstone_horizon_and_prune(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = TempDir::new()?;
+    let directory = root.path().join("idempotency");
+    fs::create_dir(&directory)?;
+    let store =
+        DaemonIdempotencyStore::new(directory, root.path().to_path_buf(), 1, Duration::ZERO);
+    let fingerprint = [7_u8; 32];
+    let intent = MutationIntent::SessionStart {
+        uid: 1000,
+        session_id: String::from("session-retained"),
+    };
+    store.prepare(1000, "session-start", "first", fingerprint, intent.clone())?;
+    store.complete(
+        1000,
+        "session-start",
+        "first",
+        fingerprint,
+        intent,
+        response(),
+    )?;
+    assert!(store
+        .prepare(1000, "reload", "next", fingerprint, reload_intent(2))
+        .is_err());
+
+    let session = root.path().join("users/1000/sessions/session-retained");
+    fs::create_dir_all(&session)?;
+    fs::write(
+        session.join("session.json"),
+        br#"{"state":"removed","updated_at_unix_ms":1}"#,
+    )?;
+    assert_eq!(
+        store.prepare(1000, "reload", "next", fingerprint, reload_intent(2))?,
+        IdempotencyAction::Execute(Box::new(reload_intent(2)))
     );
     Ok(())
 }
@@ -219,8 +266,16 @@ fn reload_intent(generation: u64) -> MutationIntent {
             max_log_bytes: 4096,
             max_log_records: 32,
             max_idempotency_records: 32,
+            ..DaemonConfig::default()
         },
         generation,
+    }
+}
+
+fn response() -> MutationResponse {
+    MutationResponse {
+        message_kind: String::from("test"),
+        payload: b"configuration reloaded".to_vec(),
     }
 }
 

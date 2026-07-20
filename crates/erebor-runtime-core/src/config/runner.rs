@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use snafu::ensure;
 
 mod docker;
@@ -29,7 +29,9 @@ impl SessionRunnerLayerConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Deserialize, Serialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionRunnerKind {
     #[default]

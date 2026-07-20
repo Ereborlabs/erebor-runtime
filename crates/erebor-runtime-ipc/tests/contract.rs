@@ -280,5 +280,11 @@ fn split_proto_contract_files_contain_the_v1_schema() {
     assert!(proto.contains("enum DecisionKind"));
     assert!(proto.contains("DECISION_KIND_REQUIRE_APPROVAL"));
     assert!(proto.contains("message DaemonHello"));
+    assert!(proto.contains("message SessionCreateRequest"));
+    assert!(proto.contains("message SessionLogsRequest"));
+    assert!(proto.contains("message SessionEventsRequest"));
+    assert!(proto.contains("message SessionAttachRequest"));
+    assert!(proto.contains("message SessionPruneRequest"));
+    assert!(proto.contains("message AdminSessionStopRequest"));
     assert!(!proto.contains("message Envelope {\n  uint32 protocol_version = 1;\n  uint64 message_id = 2;\n  uint64 correlation_id = 3;\n  string session_id"));
 }

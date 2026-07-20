@@ -180,6 +180,8 @@ pub(super) struct MediateDecision {
 pub(super) struct RuntimeInterceptionConnection {
     stream: UnixStream,
     next_message_id: u64,
+    endpoint: RuntimeInterceptionEndpoint,
+    hello: GuardHello,
 }
 
 impl RuntimeInterceptionConnection {
@@ -233,10 +235,25 @@ impl RuntimeInterceptionConnection {
         Ok(Self {
             stream,
             next_message_id: 2,
+            endpoint: endpoint.clone(),
+            hello,
         })
     }
 
     pub(super) fn request_interception(
+        &mut self,
+        request: &InterceptionRequest,
+    ) -> Result<InterceptionDecision, String> {
+        match self.request_interception_once(request) {
+            Ok(decision) => Ok(decision),
+            Err(_reason) => {
+                self.reconnect()?;
+                self.request_interception_once(request)
+            }
+        }
+    }
+
+    fn request_interception_once(
         &mut self,
         request: &InterceptionRequest,
     ) -> Result<InterceptionDecision, String> {
@@ -265,6 +282,19 @@ impl RuntimeInterceptionConnection {
         &mut self,
         event: &GuardLifecycleEvent,
     ) -> Result<GuardLifecycleReply, String> {
+        match self.request_lifecycle_once(event) {
+            Ok(reply) => Ok(reply),
+            Err(_reason) => {
+                self.reconnect()?;
+                self.request_lifecycle_once(event)
+            }
+        }
+    }
+
+    fn request_lifecycle_once(
+        &mut self,
+        event: &GuardLifecycleEvent,
+    ) -> Result<GuardLifecycleReply, String> {
         let message_id = self.next_message_id;
         self.next_message_id = self.next_message_id.saturating_add(1);
         let envelope = Envelope {
@@ -284,5 +314,11 @@ impl RuntimeInterceptionConnection {
             ));
         }
         decode_guard_lifecycle_reply(&response.payload)
+    }
+
+    fn reconnect(&mut self) -> Result<(), String> {
+        let replacement = Self::connect(&self.endpoint, self.hello.clone())?;
+        *self = replacement;
+        Ok(())
     }
 }

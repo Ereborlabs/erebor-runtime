@@ -51,17 +51,34 @@ fn main() {
         Ok(command) => command,
         Err(error) => die(&error),
     };
-    let broker_connection = match GuardBrokerEnvironment::connect() {
-        Ok(connection) => connection,
-        Err(error) => die(&error),
-    };
-    process::exit(launch_new_process_tree(command, rules, broker_connection));
+    preserve_host_process_identity();
+    let private_namespace = env::var("EREBOR_PRIVATE_SESSION_NAMESPACE").as_deref() == Ok("1");
+    if private_namespace {
+        if let Err(reason) = LinuxSys::prepare_child_pid_namespace() {
+            die(&reason);
+        }
+    }
+    process::exit(launch_new_process_tree(command, rules, private_namespace));
+}
+
+fn preserve_host_process_identity() {
+    let host_pid = fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|status| {
+            status.lines().find_map(|line| {
+                line.strip_prefix("NSpid:")
+                    .and_then(|value| value.split_ascii_whitespace().next())
+                    .and_then(|value| value.parse::<u32>().ok())
+            })
+        })
+        .unwrap_or_else(process::id);
+    env::set_var("EREBOR_GUARD_HOST_PID", host_pid.to_string());
 }
 
 fn launch_new_process_tree(
     command: Vec<CString>,
     rules: Vec<ProcessRule>,
-    broker_connection: Option<ipc::RuntimeInterceptionConnection>,
+    private_namespace: bool,
 ) -> i32 {
     let child = LinuxSys::fork();
     if child < 0 {
@@ -72,9 +89,26 @@ fn launch_new_process_tree(
     }
 
     if child == 0 {
+        if private_namespace {
+            if let Err(reason) = LinuxSys::prepare_private_workload_namespace() {
+                die(&reason);
+            }
+        } else if let Err(reason) = LinuxSys::lock_privileges() {
+            die(&reason);
+        }
+        apply_workload_constraints_from_environment();
+        drop_privileges_from_environment();
         child_exec(command);
     }
 
+    if let Err(reason) = LinuxSys::lock_privileges() {
+        die(&reason);
+    }
+    drop_privileges_from_environment();
+    let broker_connection = match GuardBrokerEnvironment::connect() {
+        Ok(connection) => connection,
+        Err(error) => die(&error),
+    };
     let mut trace_loop = TraceLoop::new(child, rules, broker_connection);
     trace_loop.track(child);
 
@@ -85,6 +119,69 @@ fn launch_new_process_tree(
     LinuxSys::continue_trace(child, 0);
 
     trace_loop.run()
+}
+
+fn drop_privileges_from_environment() {
+    let uid = env::var("EREBOR_TARGET_UID").ok();
+    let gid = env::var("EREBOR_TARGET_GID").ok();
+    match (uid, gid) {
+        (None, None) => {}
+        (Some(uid), Some(gid)) => {
+            let uid = uid
+                .parse::<u32>()
+                .unwrap_or_else(|_| die("EREBOR_TARGET_UID must be an unsigned integer"));
+            let gid = gid
+                .parse::<u32>()
+                .unwrap_or_else(|_| die("EREBOR_TARGET_GID must be an unsigned integer"));
+            let supplementary_groups = env::var("EREBOR_TARGET_SUPPLEMENTARY_GROUPS")
+                .unwrap_or_default()
+                .split(',')
+                .filter(|value| !value.is_empty())
+                .map(|value| {
+                    value.parse::<u32>().unwrap_or_else(|_| {
+                        die("EREBOR_TARGET_SUPPLEMENTARY_GROUPS must contain unsigned integers")
+                    })
+                })
+                .collect::<Vec<_>>();
+            if let Err(reason) = LinuxSys::drop_privileges(uid, gid, &supplementary_groups) {
+                die(&format!(
+                    "failed to drop process guard privileges: {reason}"
+                ));
+            }
+        }
+        _ => die("EREBOR_TARGET_UID and EREBOR_TARGET_GID must be supplied together"),
+    }
+}
+
+fn apply_workload_constraints_from_environment() {
+    const NAMES: [&str; 4] = [
+        "EREBOR_TARGET_UMASK",
+        "EREBOR_TARGET_MAX_OPEN_FILES",
+        "EREBOR_TARGET_MAX_PROCESSES",
+        "EREBOR_TARGET_MAX_CORE_BYTES",
+    ];
+    if NAMES.iter().all(|name| env::var_os(name).is_none()) {
+        return;
+    }
+    let value = |name: &str| {
+        env::var(name)
+            .unwrap_or_else(|_| die(&format!("{name} must be supplied")))
+            .parse::<u64>()
+            .unwrap_or_else(|_| die(&format!("{name} must be an unsigned integer")))
+    };
+    let umask = u32::try_from(value("EREBOR_TARGET_UMASK"))
+        .unwrap_or_else(|_| die("EREBOR_TARGET_UMASK is out of range"));
+    if umask > 0o777 {
+        die("EREBOR_TARGET_UMASK is out of range");
+    }
+    if let Err(reason) = LinuxSys::apply_workload_constraints(
+        umask,
+        value("EREBOR_TARGET_MAX_OPEN_FILES"),
+        value("EREBOR_TARGET_MAX_PROCESSES"),
+        value("EREBOR_TARGET_MAX_CORE_BYTES"),
+    ) {
+        die(&format!("failed to apply workload constraints: {reason}"));
+    }
 }
 
 fn adopt_existing_process_tree(root_pid: Pid, rules: Vec<ProcessRule>) -> i32 {

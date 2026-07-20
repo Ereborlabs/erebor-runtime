@@ -7,6 +7,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+clap.workspace = true
+erebor-runtime-client = { path = "../erebor-runtime-client" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
@@ -36,6 +38,12 @@ bench = false
 [[bin]]
 name = "codex-linux-v1-session-driver"
 path = "src/bin/codex_linux_v1_session_driver.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "erebor-daemon-session-driver"
+path = "src/bin/erebor_daemon_session_driver.rs"
 test = false
 bench = false
 

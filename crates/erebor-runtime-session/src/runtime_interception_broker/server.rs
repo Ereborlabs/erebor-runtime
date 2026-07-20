@@ -26,6 +26,33 @@ use super::{
 static RUNTIME_INTERCEPTION_BROKER_SERVER: Mutex<Option<Arc<RuntimeInterceptionBrokerServer>>> =
     Mutex::new(None);
 
+#[derive(Clone, Debug)]
+pub(super) struct RuntimeGuardServerConfig {
+    pub(super) directory: Option<PathBuf>,
+    pub(super) owner_uid: u32,
+    pub(super) owner_gid: u32,
+    pub(super) directory_mode: u32,
+    pub(super) socket_mode: u32,
+}
+
+impl RuntimeGuardServerConfig {
+    fn foreground() -> Self {
+        Self {
+            directory: None,
+            owner_uid: rustix::process::geteuid().as_raw(),
+            owner_gid: rustix::process::getegid().as_raw(),
+            directory_mode: 0o700,
+            socket_mode: 0o600,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct GuardPeerIdentity {
+    pub(super) pid: Option<u32>,
+    pub(super) uid: u32,
+}
+
 pub struct RuntimeInterceptionBroker;
 
 impl RuntimeInterceptionBroker {
@@ -38,6 +65,9 @@ impl RuntimeInterceptionBroker {
             session_id.into(),
             actor_id.into(),
             router,
+            None,
+            false,
+            None,
         )
     }
 }
@@ -71,6 +101,10 @@ impl SessionInterceptionRegistration {
                 .join(RUNTIME_INTERCEPTION_SOCKET_NAME),
         )
     }
+
+    pub(super) fn shutdown_server(self) {
+        self.server.shutdown();
+    }
 }
 
 impl Drop for SessionInterceptionRegistration {
@@ -86,13 +120,17 @@ pub(super) struct RuntimeInterceptionBrokerServer {
 }
 
 impl RuntimeInterceptionBrokerServer {
-    fn start() -> Result<Arc<Self>, RuntimeInterceptionBrokerError> {
+    pub(super) fn start(
+        config: RuntimeGuardServerConfig,
+    ) -> Result<Arc<Self>, RuntimeInterceptionBrokerError> {
         let server = Arc::new(Self {
             platform: Mutex::new(None),
             sessions: Mutex::new(HashMap::new()),
         });
-        let platform =
-            <Platform as RuntimeInterceptionBrokerPlatform>::start_server(Arc::clone(&server))?;
+        let platform = <Platform as RuntimeInterceptionBrokerPlatform>::start_server(
+            Arc::clone(&server),
+            config,
+        )?;
         *server
             .platform
             .lock()
@@ -100,18 +138,23 @@ impl RuntimeInterceptionBrokerServer {
         Ok(server)
     }
 
-    fn register_session(
+    pub(super) fn register_session(
         self: &Arc<Self>,
         session_id: String,
         actor_id: String,
         router: SessionInterceptionRouter,
+        expected_peer_uid: Option<u32>,
+        require_peer_pid_match: bool,
+        token: Option<String>,
     ) -> Result<SessionInterceptionRegistration, RuntimeInterceptionBrokerError> {
         self.authorize_session_guard()?;
         let endpoint_path = self.endpoint_path()?;
-        let token = read_interception_token()?;
+        let token = token.map_or_else(read_interception_token, Ok)?;
         let registration = SessionRegistration {
             token: token.clone(),
             broker_id: format!("{session_id}:{actor_id}"),
+            expected_peer_uid,
+            require_peer_pid_match,
             router,
         };
         {
@@ -165,15 +208,19 @@ impl RuntimeInterceptionBrokerServer {
         };
         platform.authorize_session_guard()
     }
-}
 
-impl Drop for RuntimeInterceptionBrokerServer {
-    fn drop(&mut self) {
+    fn shutdown(&self) {
         if let Ok(mut platform) = self.platform.lock() {
             if let Some(platform) = platform.take() {
                 platform.shutdown();
             }
         }
+    }
+}
+
+impl Drop for RuntimeInterceptionBrokerServer {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -186,7 +233,7 @@ fn shared_runtime_interception_broker_server(
         return Ok(Arc::clone(server));
     }
 
-    let started = RuntimeInterceptionBrokerServer::start()?;
+    let started = RuntimeInterceptionBrokerServer::start(RuntimeGuardServerConfig::foreground())?;
     *server = Some(Arc::clone(&started));
     Ok(started)
 }

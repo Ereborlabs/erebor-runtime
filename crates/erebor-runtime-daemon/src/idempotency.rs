@@ -2,7 +2,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -14,17 +14,20 @@ use crate::{
     error::{IdempotencyCapacitySnafu, IdempotencyConflictSnafu, IoSnafu},
     Result,
 };
+use erebor_runtime_core::{ActiveSessionSignal, SessionSpec};
 
 pub(crate) struct DaemonIdempotencyStore {
     directory: PathBuf,
+    session_state_root: PathBuf,
     capacity: usize,
+    retry_horizon: Duration,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum IdempotencyAction {
-    Execute(MutationIntent),
-    ResumePending(MutationIntent),
-    ReturnCompleted(String),
+    Execute(Box<MutationIntent>),
+    ResumePending(Box<MutationIntent>),
+    ReturnCompleted(MutationResponse),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -34,6 +37,57 @@ pub(crate) enum MutationIntent {
         generation: u64,
     },
     Stop,
+    SessionCreate {
+        spec: Box<SessionSpec>,
+    },
+    SessionStart {
+        uid: u32,
+        session_id: String,
+    },
+    SessionStop {
+        uid: u32,
+        session_id: String,
+        grace_period_seconds: u64,
+    },
+    SessionKill {
+        uid: u32,
+        session_id: String,
+        signal: ActiveSessionSignal,
+    },
+    SessionRemove {
+        uid: u32,
+        session_id: String,
+        force: bool,
+    },
+    SessionAttach {
+        uid: u32,
+        session_id: String,
+        request_input_lease: bool,
+        client_instance_id: String,
+    },
+    SessionInputLeaseRenew {
+        uid: u32,
+        session_id: String,
+        lease_id: String,
+        client_instance_id: String,
+    },
+    SessionInputLeaseRelease {
+        uid: u32,
+        session_id: String,
+        lease_id: String,
+        client_instance_id: String,
+    },
+    SessionPrune {
+        uid: u32,
+        terminal_before_unix_ms: u64,
+        maximum_sessions: u32,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct MutationResponse {
+    pub(crate) message_kind: String,
+    pub(crate) payload: Vec<u8>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -49,7 +103,9 @@ struct MutationRecord {
     fingerprint: String,
     state: MutationState,
     intent: MutationIntent,
-    message: Option<String>,
+    response: Option<MutationResponse>,
+    completed_at_unix_ms: Option<u64>,
+    retain_until_unix_ms: Option<u64>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -59,10 +115,17 @@ enum MutationState {
 }
 
 impl DaemonIdempotencyStore {
-    pub(crate) fn new(directory: PathBuf, capacity: usize) -> Self {
+    pub(crate) fn new(
+        directory: PathBuf,
+        session_state_root: PathBuf,
+        capacity: usize,
+        retry_horizon: Duration,
+    ) -> Self {
         Self {
             directory,
+            session_state_root,
             capacity,
+            retry_horizon,
         }
     }
 
@@ -86,9 +149,18 @@ impl DaemonIdempotencyStore {
                 return IdempotencyConflictSnafu.fail();
             }
             return Ok(match record.state {
-                MutationState::Pending => IdempotencyAction::ResumePending(record.intent),
+                MutationState::Pending => IdempotencyAction::ResumePending(Box::new(record.intent)),
                 MutationState::Completed => {
-                    IdempotencyAction::ReturnCompleted(record.message.unwrap_or_default())
+                    let response = record.response.ok_or_else(|| {
+                        crate::error::InvalidRequestSnafu {
+                            reason: format!(
+                                "completed idempotency record `{}` has no response",
+                                path.display()
+                            ),
+                        }
+                        .build()
+                    })?;
+                    IdempotencyAction::ReturnCompleted(response)
                 }
             });
         }
@@ -105,10 +177,12 @@ impl DaemonIdempotencyStore {
                 fingerprint: expected,
                 state: MutationState::Pending,
                 intent: intent.clone(),
-                message: None,
+                response: None,
+                completed_at_unix_ms: None,
+                retain_until_unix_ms: None,
             },
         )?;
-        Ok(IdempotencyAction::Execute(intent))
+        Ok(IdempotencyAction::Execute(Box::new(intent)))
     }
 
     pub(crate) fn complete(
@@ -118,9 +192,10 @@ impl DaemonIdempotencyStore {
         key: &str,
         fingerprint: [u8; 32],
         intent: MutationIntent,
-        message: String,
+        response: MutationResponse,
     ) -> Result<()> {
         let path = self.record_path(uid, operation, key);
+        let completed_at_unix_ms = unix_time_ms();
         self.write_record(
             &path,
             &MutationRecord {
@@ -132,7 +207,11 @@ impl DaemonIdempotencyStore {
                 fingerprint: hex(fingerprint),
                 state: MutationState::Completed,
                 intent,
-                message: Some(message),
+                response: Some(response),
+                completed_at_unix_ms: Some(completed_at_unix_ms),
+                retain_until_unix_ms: Some(
+                    completed_at_unix_ms.saturating_add(self.retry_horizon.as_millis() as u64),
+                ),
             },
         )
     }
@@ -143,7 +222,9 @@ impl DaemonIdempotencyStore {
             let mut oldest_completed = None;
             for (index, path) in records.iter().enumerate() {
                 let record = self.read_record(path)?;
-                if matches!(record.state, MutationState::Completed) {
+                if matches!(record.state, MutationState::Completed)
+                    && self.record_can_be_released(&record)
+                {
                     let modified_at = modified_at(path);
                     if oldest_completed
                         .as_ref()
@@ -166,6 +247,38 @@ impl DaemonIdempotencyStore {
             })?;
         }
         Ok(())
+    }
+
+    fn record_can_be_released(&self, record: &MutationRecord) -> bool {
+        let now = unix_time_ms();
+        if record.retain_until_unix_ms.is_none_or(|until| until > now) {
+            return false;
+        }
+        let Some((uid, session_id)) = record.intent.session_scope() else {
+            return true;
+        };
+        let session_directory = self
+            .session_state_root
+            .join("users")
+            .join(uid.to_string())
+            .join("sessions")
+            .join(session_id);
+        if session_directory.join("output").exists() {
+            return false;
+        }
+        let path = session_directory.join("session.json");
+        let Ok(source) = fs::read(path) else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&source) else {
+            return false;
+        };
+        let removed = value.get("state").and_then(serde_json::Value::as_str) == Some("removed");
+        let tombstone_horizon = value
+            .get("updated_at_unix_ms")
+            .and_then(serde_json::Value::as_u64)
+            .map(|updated| updated.saturating_add(self.retry_horizon.as_millis() as u64));
+        removed && tombstone_horizon.is_some_and(|until| until <= now)
     }
 
     fn record_paths(&self) -> Result<Vec<PathBuf>> {
@@ -255,10 +368,44 @@ impl DaemonIdempotencyStore {
     }
 }
 
+impl MutationIntent {
+    pub(crate) fn session_scope(&self) -> Option<(u32, &str)> {
+        match self {
+            Self::SessionCreate { spec } => Some((spec.owner().uid(), spec.session_id().as_str())),
+            Self::SessionStart { uid, session_id }
+            | Self::SessionStop {
+                uid, session_id, ..
+            }
+            | Self::SessionKill {
+                uid, session_id, ..
+            }
+            | Self::SessionRemove {
+                uid, session_id, ..
+            }
+            | Self::SessionAttach {
+                uid, session_id, ..
+            }
+            | Self::SessionInputLeaseRenew {
+                uid, session_id, ..
+            }
+            | Self::SessionInputLeaseRelease {
+                uid, session_id, ..
+            } => Some((*uid, session_id)),
+            Self::Reload { .. } | Self::Stop | Self::SessionPrune { .. } => None,
+        }
+    }
+}
+
 fn modified_at(path: &Path) -> SystemTime {
     path.metadata()
         .and_then(|metadata| metadata.modified())
         .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(1, |duration| duration.as_millis() as u64)
 }
 
 fn hex(bytes: impl AsRef<[u8]>) -> String {

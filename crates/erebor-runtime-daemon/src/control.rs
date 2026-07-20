@@ -11,16 +11,33 @@ use std::{
 use erebor_runtime_error::ErrorExt;
 use erebor_runtime_ipc::{
     v1::{
-        DaemonCommandResult, DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
-        DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
-        DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
-        Envelope, EnvelopeServiceFamily, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR,
+        AdminSessionInspectRequest, AdminSessionKillRequest, AdminSessionListRequest,
+        AdminSessionStopRequest, DaemonCommandResult, DaemonError as DaemonErrorMessage,
+        DaemonHello, DaemonHelloAck, DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd,
+        DaemonLogsRequest, DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse,
+        DaemonStopRequest, Envelope, EnvelopeServiceFamily, SessionAttachRequest,
+        SessionCreateRequest, SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
+        SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInspectRequest,
+        SessionKillRequest, SessionListRequest, SessionLogChunk, SessionLogsEnd,
+        SessionLogsRequest, SessionPruneRequest, SessionRemoveRequest, SessionStartRequest,
+        SessionStopRequest, SessionWaitRequest, KIND_ADMIN_SESSION_INSPECT_REQUEST,
+        KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
+        KIND_ADMIN_SESSION_STOP_REQUEST, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR,
         KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
         KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
-        KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST, PROTOCOL_VERSION,
+        KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST, KIND_SESSION_ATTACH_REQUEST,
+        KIND_SESSION_CREATE_REQUEST, KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST,
+        KIND_SESSION_EVENT_RECORD, KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST,
+        KIND_SESSION_INPUT_LEASE_RENEW_REQUEST, KIND_SESSION_INSPECT_REQUEST,
+        KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST, KIND_SESSION_LIST_RESPONSE,
+        KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST, KIND_SESSION_LOG_CHUNK,
+        KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST,
+        KIND_SESSION_START_REQUEST, KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST,
+        PROTOCOL_VERSION,
     },
     AsyncFrameCodec,
 };
+use prost::Message;
 use rustix::{
     fs::chown,
     process::{geteuid, Gid, Uid},
@@ -38,8 +55,11 @@ use crate::{
     idempotency::{DaemonIdempotencyStore, IdempotencyAction, MutationIntent},
     log::DaemonLogStore,
     paths::{DaemonLock, DaemonSecurity},
+    session_control::DaemonSessionService,
     DaemonError, DaemonPaths, Result,
 };
+use erebor_runtime_core::ActiveSessionSignal;
+use erebor_runtime_session::StreamKind;
 
 const CONNECTION_LIMIT: usize = 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -58,6 +78,7 @@ struct DaemonControlState {
     configuration: RwLock<DaemonConfiguration>,
     idempotency: Mutex<DaemonIdempotencyStore>,
     logs: DaemonLogStore,
+    sessions: DaemonSessionService,
     shutdown: watch::Sender<bool>,
     connections: Arc<Semaphore>,
 }
@@ -68,7 +89,7 @@ struct DaemonConfiguration {
 }
 
 struct MutationOutcome {
-    message: String,
+    response: crate::idempotency::MutationResponse,
     applied: bool,
 }
 
@@ -123,12 +144,22 @@ impl DaemonControlService {
         let listener = Self::bind_listener(&socket_path, security)?;
         let socket = DaemonSocket::from_bound_path(socket_path)?;
         let logs = DaemonLogStore::open(paths.log_path(), config.max_log_bytes)?;
+        let sessions = DaemonSessionService::installed(&paths, &config)?;
+        let reconciled = sessions.reconcile()?;
         logs.record("INFO", "erebord daemon control service started")?;
+        if !reconciled.is_empty() {
+            logs.record(
+                "INFO",
+                format!("reconciled {} durable sessions", reconciled.len()),
+            )?;
+        }
         let (shutdown_sender, shutdown) = watch::channel(false);
         let state = Arc::new(DaemonControlState {
             idempotency: Mutex::new(DaemonIdempotencyStore::new(
                 paths.idempotency_path(),
+                paths.session_state_path(),
                 config.max_idempotency_records as usize,
+                Duration::from_secs(config.session_retry_horizon_seconds),
             )),
             paths,
             security,
@@ -137,6 +168,7 @@ impl DaemonControlService {
                 generation: 1,
             }),
             logs,
+            sessions,
             shutdown: shutdown_sender,
             connections: Arc::new(Semaphore::new(CONNECTION_LIMIT)),
         });
@@ -318,6 +350,8 @@ impl DaemonControlState {
                     String::from("daemon-logs"),
                     String::from("daemon-reload"),
                     String::from("daemon-stop"),
+                    String::from("session-control-v1"),
+                    String::from("runtime-guard-service-v1"),
                 ],
             },
         )
@@ -333,10 +367,7 @@ impl DaemonControlState {
         if let Err(error) = envelope.require_supported_protocol().context(IpcSnafu) {
             return self.write_error(stream, &envelope, error).await;
         }
-        let mutating = matches!(
-            envelope.message_kind.as_str(),
-            KIND_DAEMON_RELOAD_REQUEST | KIND_DAEMON_STOP_REQUEST
-        );
+        let mutating = is_mutating_message(&envelope.message_kind);
         if let Err(error) = envelope
             .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating })
             .context(IpcSnafu)
@@ -348,6 +379,36 @@ impl DaemonControlState {
             KIND_DAEMON_LOGS_REQUEST => self.logs(stream, peer, &envelope).await,
             KIND_DAEMON_RELOAD_REQUEST => self.reload(stream, peer, &envelope).await,
             KIND_DAEMON_STOP_REQUEST => self.stop(stream, peer, &envelope).await,
+            KIND_SESSION_CREATE_REQUEST => self.session_create(stream, peer, &envelope).await,
+            KIND_SESSION_START_REQUEST => self.session_start(stream, peer, &envelope).await,
+            KIND_SESSION_STOP_REQUEST => self.session_stop(stream, peer, &envelope).await,
+            KIND_SESSION_KILL_REQUEST => self.session_kill(stream, peer, &envelope).await,
+            KIND_SESSION_REMOVE_REQUEST => self.session_remove(stream, peer, &envelope).await,
+            KIND_SESSION_ATTACH_REQUEST => self.session_attach(stream, peer, &envelope).await,
+            KIND_SESSION_INPUT_LEASE_RENEW_REQUEST => {
+                self.session_lease_renew(stream, peer, &envelope).await
+            }
+            KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST => {
+                self.session_lease_release(stream, peer, &envelope).await
+            }
+            KIND_SESSION_PRUNE_REQUEST => self.session_prune(stream, peer, &envelope).await,
+            KIND_SESSION_INSPECT_REQUEST => self.session_inspect(stream, peer, &envelope).await,
+            KIND_SESSION_LIST_REQUEST => self.session_list(stream, peer, &envelope).await,
+            KIND_SESSION_WAIT_REQUEST => self.session_wait(stream, peer, &envelope).await,
+            KIND_SESSION_LOGS_REQUEST => self.session_logs(stream, peer, &envelope).await,
+            KIND_SESSION_EVENTS_REQUEST => self.session_events(stream, peer, &envelope).await,
+            KIND_ADMIN_SESSION_LIST_REQUEST => {
+                self.admin_session_list(stream, peer, &envelope).await
+            }
+            KIND_ADMIN_SESSION_INSPECT_REQUEST => {
+                self.admin_session_inspect(stream, peer, &envelope).await
+            }
+            KIND_ADMIN_SESSION_STOP_REQUEST => {
+                self.admin_session_stop(stream, peer, &envelope).await
+            }
+            KIND_ADMIN_SESSION_KILL_REQUEST => {
+                self.admin_session_kill(stream, peer, &envelope).await
+            }
             _ => Err(InvalidRequestSnafu {
                 reason: format!(
                     "message kind `{}` is not accepted on daemon control",
@@ -441,6 +502,549 @@ impl DaemonControlState {
         .await
     }
 
+    async fn session_create(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionCreateRequest = envelope
+            .decode_typed_payload(KIND_SESSION_CREATE_REQUEST)
+            .context(IpcSnafu)?;
+        let (configuration_generation, configuration) = {
+            let active = self
+                .configuration
+                .read()
+                .map_err(|_error| StateLockSnafu.build())?;
+            (active.generation, active.value.clone())
+        };
+        let spec = self.sessions.admit_request(
+            request,
+            peer.uid,
+            peer.gid,
+            configuration_generation,
+            &configuration,
+        )?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-create",
+            envelope,
+            MutationIntent::SessionCreate {
+                spec: Box::new(spec),
+            },
+        )
+        .await
+    }
+
+    async fn session_start(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionStartRequest = envelope
+            .decode_typed_payload(KIND_SESSION_START_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-start",
+            envelope,
+            MutationIntent::SessionStart {
+                uid: peer.uid,
+                session_id: request.session_id,
+            },
+        )
+        .await
+    }
+
+    async fn session_stop(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionStopRequest = envelope
+            .decode_typed_payload(KIND_SESSION_STOP_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-stop",
+            envelope,
+            MutationIntent::SessionStop {
+                uid: peer.uid,
+                session_id: request.session_id,
+                grace_period_seconds: request.grace_period_seconds.max(1),
+            },
+        )
+        .await
+    }
+
+    async fn session_kill(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionKillRequest = envelope
+            .decode_typed_payload(KIND_SESSION_KILL_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-kill",
+            envelope,
+            MutationIntent::SessionKill {
+                uid: peer.uid,
+                session_id: request.session_id,
+                signal: parse_signal(&request.signal)?,
+            },
+        )
+        .await
+    }
+
+    async fn session_remove(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionRemoveRequest = envelope
+            .decode_typed_payload(KIND_SESSION_REMOVE_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-remove",
+            envelope,
+            MutationIntent::SessionRemove {
+                uid: peer.uid,
+                session_id: request.session_id,
+                force: request.force,
+            },
+        )
+        .await
+    }
+
+    async fn session_attach(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionAttachRequest = envelope
+            .decode_typed_payload(KIND_SESSION_ATTACH_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-attach",
+            envelope,
+            MutationIntent::SessionAttach {
+                uid: peer.uid,
+                session_id: request.session_id,
+                request_input_lease: request.request_input_lease,
+                client_instance_id: request.client_instance_id,
+            },
+        )
+        .await
+    }
+
+    async fn session_lease_renew(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionInputLeaseRenewRequest = envelope
+            .decode_typed_payload(KIND_SESSION_INPUT_LEASE_RENEW_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-input-lease-renew",
+            envelope,
+            MutationIntent::SessionInputLeaseRenew {
+                uid: peer.uid,
+                session_id: request.session_id,
+                lease_id: request.input_lease_id,
+                client_instance_id: request.client_instance_id,
+            },
+        )
+        .await
+    }
+
+    async fn session_lease_release(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionInputLeaseReleaseRequest = envelope
+            .decode_typed_payload(KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-input-lease-release",
+            envelope,
+            MutationIntent::SessionInputLeaseRelease {
+                uid: peer.uid,
+                session_id: request.session_id,
+                lease_id: request.input_lease_id,
+                client_instance_id: request.client_instance_id,
+            },
+        )
+        .await
+    }
+
+    async fn session_prune(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionPruneRequest = envelope
+            .decode_typed_payload(KIND_SESSION_PRUNE_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-prune",
+            envelope,
+            MutationIntent::SessionPrune {
+                uid: peer.uid,
+                terminal_before_unix_ms: request.terminal_before_unix_ms,
+                maximum_sessions: request.maximum_sessions,
+            },
+        )
+        .await
+    }
+
+    async fn session_inspect(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionInspectRequest = envelope
+            .decode_typed_payload(KIND_SESSION_INSPECT_REQUEST)
+            .context(IpcSnafu)?;
+        let record = self.sessions.inspect(peer.uid, &request.session_id)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_SESSION_RECORD,
+            &record,
+        )
+        .await
+    }
+
+    async fn session_list(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        envelope
+            .decode_typed_payload::<SessionListRequest>(KIND_SESSION_LIST_REQUEST)
+            .context(IpcSnafu)?;
+        let response = self.sessions.list(peer.uid)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_SESSION_LIST_RESPONSE,
+            &response,
+        )
+        .await
+    }
+
+    async fn session_wait(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionWaitRequest = envelope
+            .decode_typed_payload(KIND_SESSION_WAIT_REQUEST)
+            .context(IpcSnafu)?;
+        let record = self.sessions.wait(peer.uid, &request.session_id)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_SESSION_RECORD,
+            &record,
+        )
+        .await
+    }
+
+    async fn session_logs(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionLogsRequest = envelope
+            .decode_typed_payload(KIND_SESSION_LOGS_REQUEST)
+            .context(IpcSnafu)?;
+        let kind = match request.stream.as_str() {
+            "stdout" => StreamKind::Stdout,
+            "stderr" => StreamKind::Stderr,
+            _ => {
+                return InvalidRequestSnafu {
+                    reason: String::from("session log stream must be stdout or stderr"),
+                }
+                .fail();
+            }
+        };
+        let page = self.sessions.stream(
+            peer.uid,
+            &request.session_id,
+            kind,
+            request.after_sequence,
+            request.maximum_records.max(1) as usize,
+        )?;
+        for (index, record) in page.records().iter().enumerate() {
+            self.write_message(
+                stream,
+                envelope.message_id.saturating_add(index as u64 + 1),
+                envelope.message_id,
+                KIND_SESSION_LOG_CHUNK,
+                &SessionLogChunk {
+                    session_id: request.session_id.clone(),
+                    stream: request.stream.clone(),
+                    sequence: record.sequence(),
+                    timestamp_unix_ms: record.timestamp_unix_ms(),
+                    data: record.data().to_vec(),
+                    durable: true,
+                },
+            )
+            .await?;
+        }
+        self.write_message(
+            stream,
+            envelope
+                .message_id
+                .saturating_add(page.records().len() as u64 + 1),
+            envelope.message_id,
+            KIND_SESSION_LOGS_END,
+            &SessionLogsEnd {
+                session_id: request.session_id,
+                stream: request.stream,
+                durable_cursor: page.durable_cursor(),
+                truncated_before_cursor: page.truncated_before_cursor(),
+            },
+        )
+        .await
+    }
+
+    async fn session_events(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionEventsRequest = envelope
+            .decode_typed_payload(KIND_SESSION_EVENTS_REQUEST)
+            .context(IpcSnafu)?;
+        let page = self.sessions.stream(
+            peer.uid,
+            &request.session_id,
+            StreamKind::Events,
+            request.after_sequence,
+            request.maximum_records.max(1) as usize,
+        )?;
+        for (index, record) in page.records().iter().enumerate() {
+            self.write_message(
+                stream,
+                envelope.message_id.saturating_add(index as u64 + 1),
+                envelope.message_id,
+                KIND_SESSION_EVENT_RECORD,
+                &SessionEventRecord {
+                    session_id: request.session_id.clone(),
+                    sequence: record.sequence(),
+                    timestamp_unix_ms: record.timestamp_unix_ms(),
+                    event_kind: record.source().to_owned(),
+                    payload: record.data().to_vec(),
+                    durable: true,
+                },
+            )
+            .await?;
+        }
+        self.write_message(
+            stream,
+            envelope
+                .message_id
+                .saturating_add(page.records().len() as u64 + 1),
+            envelope.message_id,
+            KIND_SESSION_EVENTS_END,
+            &SessionEventsEnd {
+                session_id: request.session_id,
+                durable_cursor: page.durable_cursor(),
+                truncated_before_cursor: page.truncated_before_cursor(),
+            },
+        )
+        .await
+    }
+
+    async fn admin_session_list(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        self.require_root(peer)?;
+        let request: AdminSessionListRequest = envelope
+            .decode_typed_payload(KIND_ADMIN_SESSION_LIST_REQUEST)
+            .context(IpcSnafu)?;
+        let response = if request.all_users {
+            self.sessions.list_all()?
+        } else {
+            self.sessions.list(request.target_uid)?
+        };
+        self.logs.record(
+            "INFO",
+            format!(
+                "root administration listed sessions target_uid={} all_users={}",
+                request.target_uid, request.all_users
+            ),
+        )?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_SESSION_LIST_RESPONSE,
+            &response,
+        )
+        .await
+    }
+
+    async fn admin_session_inspect(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        self.require_root(peer)?;
+        let request: AdminSessionInspectRequest = envelope
+            .decode_typed_payload(KIND_ADMIN_SESSION_INSPECT_REQUEST)
+            .context(IpcSnafu)?;
+        let record = self
+            .sessions
+            .inspect(request.target_uid, &request.session_id)?;
+        self.logs.record(
+            "INFO",
+            format!(
+                "root administration inspected session target_uid={} session_id={}",
+                request.target_uid, request.session_id
+            ),
+        )?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_SESSION_RECORD,
+            &record,
+        )
+        .await
+    }
+
+    async fn admin_session_stop(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        self.require_root(peer)?;
+        let request: AdminSessionStopRequest = envelope
+            .decode_typed_payload(KIND_ADMIN_SESSION_STOP_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_admin_session_mutation(
+            stream,
+            peer,
+            "admin-session-stop",
+            envelope,
+            MutationIntent::SessionStop {
+                uid: request.target_uid,
+                session_id: request.session_id.clone(),
+                grace_period_seconds: request.grace_period_seconds.max(1),
+            },
+        )
+        .await
+    }
+
+    async fn admin_session_kill(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        self.require_root(peer)?;
+        let request: AdminSessionKillRequest = envelope
+            .decode_typed_payload(KIND_ADMIN_SESSION_KILL_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_admin_session_mutation(
+            stream,
+            peer,
+            "admin-session-kill",
+            envelope,
+            MutationIntent::SessionKill {
+                uid: request.target_uid,
+                session_id: request.session_id.clone(),
+                signal: parse_signal(&request.signal)?,
+            },
+        )
+        .await
+    }
+
+    async fn apply_admin_session_mutation(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        operation: &str,
+        envelope: &Envelope,
+        intent: MutationIntent,
+    ) -> Result<()> {
+        let (target_uid, session_id) = intent
+            .session_scope()
+            .map(|(uid, session_id)| (uid, session_id.to_owned()))
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: String::from("administrative session mutation has no session target"),
+                }
+                .build()
+            })?;
+        let outcome = self.mutate(peer, operation, envelope, intent)?;
+        if outcome.applied {
+            self.logs.record(
+                "INFO",
+                format!(
+                    "root administration applied {operation} target_uid={target_uid} session_id={session_id}"
+                ),
+            )?;
+        }
+        self.write_mutation_response(stream, envelope, outcome.response)
+            .await
+    }
+
+    async fn apply_session_mutation(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        operation: &str,
+        envelope: &Envelope,
+        intent: MutationIntent,
+    ) -> Result<()> {
+        let outcome = self.mutate(peer, operation, envelope, intent)?;
+        self.write_mutation_response(stream, envelope, outcome.response)
+            .await
+    }
+
     async fn reload(
         &self,
         stream: &mut UnixStream,
@@ -464,7 +1068,8 @@ impl DaemonControlState {
         if outcome.applied {
             self.logs.record("INFO", "daemon configuration reloaded")?;
         }
-        self.write_result(stream, envelope, outcome.message).await
+        self.write_mutation_response(stream, envelope, outcome.response)
+            .await
     }
 
     async fn stop(
@@ -477,11 +1082,20 @@ impl DaemonControlState {
         envelope
             .decode_typed_payload::<DaemonStopRequest>(KIND_DAEMON_STOP_REQUEST)
             .context(IpcSnafu)?;
+        if self.sessions.has_unresolved_sessions()? {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "graceful daemon stop refuses while sessions remain unresolved",
+                ),
+            }
+            .fail();
+        }
         let outcome = self.mutate(peer, "stop", envelope, MutationIntent::Stop)?;
         if outcome.applied {
             self.logs.record("INFO", "daemon stop accepted")?;
         }
-        self.write_result(stream, envelope, outcome.message).await?;
+        self.write_mutation_response(stream, envelope, outcome.response)
+            .await?;
         let _result = self.shutdown.send(true);
         Ok(())
     }
@@ -507,35 +1121,77 @@ impl DaemonControlState {
             .lock()
             .map_err(|_error| StateLockSnafu.build())?;
         match store.prepare(peer.uid, operation, key, fingerprint, intent)? {
-            IdempotencyAction::ReturnCompleted(message) => Ok(MutationOutcome {
-                message,
+            IdempotencyAction::ReturnCompleted(response) => Ok(MutationOutcome {
+                response,
                 applied: false,
             }),
-            IdempotencyAction::Execute(intent) | IdempotencyAction::ResumePending(intent) => {
-                let message = self.apply_mutation(&intent)?;
+            IdempotencyAction::Execute(intent) => {
+                let response = self.apply_mutation(&intent, false)?;
                 store.complete(
                     peer.uid,
                     operation,
                     key,
                     fingerprint,
-                    intent,
-                    message.clone(),
+                    *intent,
+                    response.clone(),
                 )?;
                 Ok(MutationOutcome {
-                    message,
+                    response,
+                    applied: true,
+                })
+            }
+            IdempotencyAction::ResumePending(intent) => {
+                let response = self.apply_mutation(&intent, true)?;
+                store.complete(
+                    peer.uid,
+                    operation,
+                    key,
+                    fingerprint,
+                    *intent,
+                    response.clone(),
+                )?;
+                Ok(MutationOutcome {
+                    response,
                     applied: true,
                 })
             }
         }
     }
 
-    fn apply_mutation(&self, intent: &MutationIntent) -> Result<String> {
+    fn apply_mutation(
+        &self,
+        intent: &MutationIntent,
+        resume_pending: bool,
+    ) -> Result<crate::idempotency::MutationResponse> {
         match intent {
             MutationIntent::Reload {
                 configuration,
                 generation,
-            } => self.publish_configuration(configuration.clone(), *generation),
-            MutationIntent::Stop => Ok(String::from("daemon stop accepted")),
+            } => {
+                let message = self.publish_configuration(configuration.clone(), *generation)?;
+                encode_mutation_response(
+                    KIND_DAEMON_COMMAND_RESULT,
+                    &DaemonCommandResult { message },
+                )
+            }
+            MutationIntent::Stop => encode_mutation_response(
+                KIND_DAEMON_COMMAND_RESULT,
+                &DaemonCommandResult {
+                    message: String::from("daemon stop accepted"),
+                },
+            ),
+            MutationIntent::SessionStart { uid, session_id } => {
+                let configuration = self
+                    .configuration
+                    .read()
+                    .map_err(|_error| StateLockSnafu.build())?
+                    .value
+                    .clone();
+                self.sessions
+                    .validate_start(*uid, session_id, &configuration)?;
+                self.sessions.apply(intent, resume_pending)
+            }
+            session => self.sessions.apply(session, resume_pending),
         }
     }
 
@@ -615,20 +1271,33 @@ impl DaemonControlState {
         .context(IpcSnafu)
     }
 
-    async fn write_result(
+    async fn write_mutation_response(
         &self,
         stream: &mut UnixStream,
         envelope: &Envelope,
-        message: String,
+        response: crate::idempotency::MutationResponse,
     ) -> Result<()> {
-        self.write_message(
-            stream,
-            envelope.message_id.saturating_add(1),
-            envelope.message_id,
-            KIND_DAEMON_COMMAND_RESULT,
-            &DaemonCommandResult { message },
+        let response_envelope = Envelope {
+            protocol_version: PROTOCOL_VERSION,
+            message_id: envelope.message_id.saturating_add(1),
+            correlation_id: envelope.message_id,
+            message_kind: response.message_kind,
+            payload: response.payload,
+            headers: Vec::new(),
+        };
+        let frame = response_envelope.into_frame().context(IpcSnafu)?;
+        timeout(
+            REQUEST_TIMEOUT,
+            AsyncFrameCodec::write_frame(stream, &frame),
         )
         .await
+        .map_err(|_elapsed| {
+            InvalidRequestSnafu {
+                reason: String::from("daemon response timed out"),
+            }
+            .build()
+        })?
+        .context(IpcSnafu)
     }
 
     async fn write_error(
@@ -655,6 +1324,48 @@ impl Drop for DaemonSocket {
     fn drop(&mut self) {
         self.unlink_if_owned();
     }
+}
+
+fn is_mutating_message(kind: &str) -> bool {
+    matches!(
+        kind,
+        KIND_DAEMON_RELOAD_REQUEST
+            | KIND_DAEMON_STOP_REQUEST
+            | KIND_SESSION_CREATE_REQUEST
+            | KIND_SESSION_START_REQUEST
+            | KIND_SESSION_STOP_REQUEST
+            | KIND_SESSION_KILL_REQUEST
+            | KIND_SESSION_REMOVE_REQUEST
+            | KIND_SESSION_ATTACH_REQUEST
+            | KIND_SESSION_INPUT_LEASE_RENEW_REQUEST
+            | KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST
+            | KIND_SESSION_PRUNE_REQUEST
+            | KIND_ADMIN_SESSION_STOP_REQUEST
+            | KIND_ADMIN_SESSION_KILL_REQUEST
+    )
+}
+
+fn parse_signal(value: &str) -> Result<ActiveSessionSignal> {
+    match value {
+        "terminate" | "TERM" | "SIGTERM" => Ok(ActiveSessionSignal::Terminate),
+        "kill" | "KILL" | "SIGKILL" => Ok(ActiveSessionSignal::Kill),
+        "interrupt" | "INT" | "SIGINT" => Ok(ActiveSessionSignal::Interrupt),
+        _ => InvalidRequestSnafu {
+            reason: format!("unsupported session signal `{value}`"),
+        }
+        .fail(),
+    }
+}
+
+fn encode_mutation_response(
+    kind: &str,
+    message: &impl Message,
+) -> Result<crate::idempotency::MutationResponse> {
+    let envelope = Envelope::wrap_message(1, 0, kind, message).context(IpcSnafu)?;
+    Ok(crate::idempotency::MutationResponse {
+        message_kind: envelope.message_kind,
+        payload: envelope.payload,
+    })
 }
 
 impl DaemonSocket {
@@ -708,6 +1419,7 @@ mod tests {
         fs,
         os::unix::{fs::PermissionsExt, net::UnixListener as StdUnixListener},
         sync::{Arc, Mutex, RwLock},
+        time::Duration,
     };
 
     use erebor_runtime_error::StatusCode;
@@ -727,7 +1439,10 @@ mod tests {
     use super::{
         DaemonConfiguration, DaemonControlState, DaemonLogStore, DaemonSecurity, DaemonSocket,
     };
-    use crate::{config::DaemonConfig, idempotency::DaemonIdempotencyStore, DaemonPaths};
+    use crate::{
+        config::DaemonConfig, idempotency::DaemonIdempotencyStore,
+        session_control::DaemonSessionService, DaemonPaths,
+    };
 
     #[tokio::test]
     #[ignore = "requires host Unix-domain socket I/O"]
@@ -952,12 +1667,15 @@ mod tests {
         paths.prepare(security)?;
         let configuration = DaemonConfig::load(&paths, security)?;
         let logs = DaemonLogStore::open(paths.log_path(), configuration.max_log_bytes)?;
+        let sessions = DaemonSessionService::installed(&paths, &configuration)?;
         let (shutdown, _receiver) = tokio::sync::watch::channel(false);
         Ok(TestState {
             state: Arc::new(DaemonControlState {
                 idempotency: Mutex::new(DaemonIdempotencyStore::new(
                     paths.idempotency_path(),
+                    paths.session_state_path(),
                     configuration.max_idempotency_records as usize,
+                    Duration::from_secs(configuration.session_retry_horizon_seconds),
                 )),
                 paths,
                 security,
@@ -966,6 +1684,7 @@ mod tests {
                     generation: 1,
                 }),
                 logs,
+                sessions,
                 shutdown,
                 connections: Arc::new(Semaphore::new(1)),
             }),

@@ -53,7 +53,7 @@ pub use engine::{
     AuditSink, DenyApprovalProvider, DurableAuditSink, EnforcementOutcome, LocalEnforcementEngine,
     NoopAuditSink,
 };
-pub use error::{RuntimeConfigError, RuntimeError, SessionRegistryError};
+pub use error::{RuntimeConfigError, RuntimeError, SessionRegistryError, SessionSpecError};
 pub use interception::{
     FileInterceptionOperationKind, FileInterceptionRequest, FileOperationSurfaceHandler,
     FileResolvedIdentity, ProcessExecInterceptionRequest, ProcessExecSurfaceHandler,
@@ -66,8 +66,15 @@ pub use runtime::{
     SessionSurfaceService, SessionSurfaceSupervisor,
 };
 pub use session::{
-    DockerSessionRunner, LinuxHostSessionRunner, SessionCapturedRunOutcome, SessionRunOutcome,
-    SessionRunner, SessionRunnerLauncher,
+    ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
+    ActiveSessionSignalKind, DaemonFailureMode, DockerSessionRunner, EndpointProjection,
+    EvidenceRequirement, FilesystemProjection, ImmutableIdentity, LinuxHostSessionRunner,
+    OutputEndpoints, OutputPlan, RunRequest, RunnerBinding, RunnerCapabilityDocument,
+    SafePathBinding, SafePathKind, SessionAdmission, SessionCapturedRunOutcome,
+    SessionHelperCommand, SessionHelperEvent, SessionHelperHandoff, SessionHelperLaunchConfig,
+    SessionLifecycleState, SessionOwner, SessionRunOutcome, SessionRunner, SessionRunnerLauncher,
+    SessionSpec, WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION,
+    SESSION_HELPER_PROTOCOL_VERSION, SESSION_SPEC_SCHEMA_VERSION,
 };
 pub use session_registry::{
     SessionContextArtifact, SessionRegistry, SessionRegistryFinish, SessionRegistryRecord,

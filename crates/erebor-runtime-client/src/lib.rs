@@ -1,6 +1,7 @@
 //! Typed local transport for the daemon-control service.
 
 mod error;
+mod session;
 
 use std::{
     path::{Path, PathBuf},
@@ -27,6 +28,7 @@ use tokio::{
 
 use error::{ConnectSnafu, DaemonSnafu, IpcSnafu, ProtocolSnafu, TimedOutSnafu};
 pub use error::{DaemonClientError, Result};
+pub use session::{SessionEventPage, SessionLogPage};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -233,18 +235,23 @@ where
     }
 
     async fn receive(&mut self, request_id: u64) -> Result<Envelope> {
-        let frame = tokio::time::timeout(
-            REQUEST_TIMEOUT,
-            AsyncFrameCodec::read_frame(&mut self.stream),
-        )
-        .await
-        .map_err(|_elapsed| {
-            TimedOutSnafu {
-                operation: "reading daemon response",
-            }
-            .build()
-        })?
-        .context(IpcSnafu)?;
+        self.receive_with_timeout(request_id, REQUEST_TIMEOUT).await
+    }
+
+    async fn receive_with_timeout(
+        &mut self,
+        request_id: u64,
+        timeout: Duration,
+    ) -> Result<Envelope> {
+        let frame = tokio::time::timeout(timeout, AsyncFrameCodec::read_frame(&mut self.stream))
+            .await
+            .map_err(|_elapsed| {
+                TimedOutSnafu {
+                    operation: "reading daemon response",
+                }
+                .build()
+            })?
+            .context(IpcSnafu)?;
         let envelope: Envelope = frame.decode_payload().context(IpcSnafu)?;
         envelope.require_supported_protocol().context(IpcSnafu)?;
         if envelope.correlation_id != request_id {

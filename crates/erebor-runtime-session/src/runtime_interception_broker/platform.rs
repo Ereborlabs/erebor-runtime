@@ -4,12 +4,16 @@ use erebor_runtime_ipc::v1::{
     GuardHello, GuardHelloAck, InterceptionDecision, InterceptionRequest,
 };
 
-use super::{endpoint::RuntimeInterceptionEndpoint, server::RuntimeInterceptionBrokerServer};
+use super::{
+    endpoint::RuntimeInterceptionEndpoint,
+    server::{RuntimeGuardServerConfig, RuntimeInterceptionBrokerServer},
+};
 use crate::error::RuntimeInterceptionBrokerError;
 
 pub(super) trait RuntimeInterceptionBrokerPlatform {
     fn start_server(
         server: Arc<RuntimeInterceptionBrokerServer>,
+        config: RuntimeGuardServerConfig,
     ) -> Result<Box<dyn RuntimeInterceptionBrokerServerPlatform>, RuntimeInterceptionBrokerError>;
 
     fn send_hello(
@@ -66,7 +70,7 @@ mod unix {
     use crate::runtime_interception_broker::{
         constants::{DEFAULT_TIMEOUT_MS, RUNTIME_INTERCEPTION_SOCKET_NAME},
         endpoint::RuntimeInterceptionEndpoint,
-        server::RuntimeInterceptionBrokerServer,
+        server::{GuardPeerIdentity, RuntimeGuardServerConfig, RuntimeInterceptionBrokerServer},
         wire::{envelope_with_token, read_frame_from_stream, write_frame_to_stream},
     };
     use crate::RuntimeInterceptionBrokerError;
@@ -79,37 +83,68 @@ mod unix {
         session_group: Mutex<Option<u32>>,
         shutdown: Arc<AtomicBool>,
         worker: Mutex<Option<JoinHandle<()>>>,
+        owns_directory: bool,
     }
 
     impl RuntimeInterceptionBrokerPlatform for Platform {
         fn start_server(
             server: Arc<RuntimeInterceptionBrokerServer>,
+            config: RuntimeGuardServerConfig,
         ) -> Result<Box<dyn RuntimeInterceptionBrokerServerPlatform>, RuntimeInterceptionBrokerError>
         {
-            let directory = std::env::temp_dir()
-                .join("erebor-runtime")
-                .join("interception")
-                .join(std::process::id().to_string());
+            let owns_directory = config.directory.is_none();
+            let directory = config.directory.unwrap_or_else(|| {
+                std::env::temp_dir()
+                    .join("erebor-runtime")
+                    .join("interception")
+                    .join(std::process::id().to_string())
+            });
             fs::create_dir_all(&directory).context(BrokerIoSnafu)?;
-            fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-                .context(BrokerIoSnafu)?;
+            fs::set_permissions(
+                &directory,
+                fs::Permissions::from_mode(config.directory_mode),
+            )
+            .context(BrokerIoSnafu)?;
+            chown(
+                &directory,
+                Some(Uid::from_raw(config.owner_uid)),
+                Some(Gid::from_raw(config.owner_gid)),
+            )
+            .map_err(std::io::Error::from)
+            .context(BrokerIoSnafu)?;
             let socket_path = directory.join(RUNTIME_INTERCEPTION_SOCKET_NAME);
             let _result = fs::remove_file(&socket_path);
             let listener = UnixListener::bind(&socket_path).context(BrokerIoSnafu)?;
-            fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600))
+            fs::set_permissions(&socket_path, fs::Permissions::from_mode(config.socket_mode))
                 .context(BrokerIoSnafu)?;
+            chown(
+                &socket_path,
+                Some(Uid::from_raw(config.owner_uid)),
+                Some(Gid::from_raw(config.owner_gid)),
+            )
+            .map_err(std::io::Error::from)
+            .context(BrokerIoSnafu)?;
             listener.set_nonblocking(true).context(BrokerIoSnafu)?;
             let shutdown = Arc::new(AtomicBool::new(false));
             let worker_shutdown = Arc::clone(&shutdown);
+            let weak_server = Arc::downgrade(&server);
             let worker = thread::spawn(move || {
                 let timeout = Duration::from_millis(DEFAULT_TIMEOUT_MS);
                 while !worker_shutdown.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((mut stream, _addr)) => {
-                            let server = Arc::clone(&server);
+                            let peer = rustix::net::sockopt::socket_peercred(&stream).ok().map(
+                                |credentials| GuardPeerIdentity {
+                                    pid: Some(credentials.pid.as_raw_nonzero().get() as u32),
+                                    uid: credentials.uid.as_raw(),
+                                },
+                            );
+                            let Some(server) = weak_server.upgrade() else {
+                                break;
+                            };
                             thread::spawn(move || {
                                 let _result = stream.set_write_timeout(Some(timeout));
-                                server.handle_stream(&mut stream);
+                                server.handle_stream(&mut stream, peer);
                             });
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -128,6 +163,7 @@ mod unix {
                 session_group: Mutex::new(None),
                 shutdown,
                 worker: Mutex::new(Some(worker)),
+                owns_directory,
             }))
         }
 
@@ -254,6 +290,9 @@ mod unix {
                 }
             }
             let _result = fs::remove_file(&self.endpoint_path);
+            if self.owns_directory {
+                let _result = fs::remove_dir(&self.directory);
+            }
         }
     }
 
@@ -330,7 +369,8 @@ mod windows {
     use super::{RuntimeInterceptionBrokerPlatform, RuntimeInterceptionBrokerServerPlatform};
     use crate::error::{BrokerUnsupportedTransportSnafu, RuntimeInterceptionBrokerError};
     use crate::runtime_interception_broker::{
-        endpoint::RuntimeInterceptionEndpoint, server::RuntimeInterceptionBrokerServer,
+        endpoint::RuntimeInterceptionEndpoint,
+        server::{RuntimeGuardServerConfig, RuntimeInterceptionBrokerServer},
     };
 
     pub(in crate::runtime_interception_broker) struct Platform;
@@ -338,6 +378,7 @@ mod windows {
     impl RuntimeInterceptionBrokerPlatform for Platform {
         fn start_server(
             _server: Arc<RuntimeInterceptionBrokerServer>,
+            _config: RuntimeGuardServerConfig,
         ) -> Result<Box<dyn RuntimeInterceptionBrokerServerPlatform>, RuntimeInterceptionBrokerError>
         {
             unsupported()

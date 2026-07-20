@@ -42,6 +42,189 @@ message DaemonReloadRequest {}
 
 message DaemonStopRequest {}
 
+message SessionCreateRequest {
+  string runner_id = 1;
+  repeated string command = 2;
+  string workspace = 3;
+  string policy_set_digest = 4;
+  string package_digest = 5;
+  string installation_digest = 6;
+  string adapter_digest = 7;
+  string daemon_failure_mode = 8;
+  uint64 requested_loss_grace_seconds = 9;
+  repeated SessionEnvironmentEntry environment = 10;
+  repeated string secret_references = 11;
+  string container_image_digest = 12;
+  bool tty = 13;
+  bool detached = 14;
+}
+
+message SessionEnvironmentEntry {
+  string key = 1;
+  string value = 2;
+}
+
+message SessionCreateResponse {
+  string session_id = 1;
+  string state = 2;
+  uint64 generation = 3;
+  uint64 retry_guarantee_expires_unix_ms = 4;
+}
+
+message SessionStartRequest {
+  string session_id = 1;
+}
+
+message SessionStopRequest {
+  string session_id = 1;
+  uint64 grace_period_seconds = 2;
+}
+
+message SessionKillRequest {
+  string session_id = 1;
+  string signal = 2;
+}
+
+message SessionInspectRequest {
+  string session_id = 1;
+}
+
+message SessionListRequest {}
+
+message SessionRecord {
+  string session_id = 1;
+  string state = 2;
+  uint64 generation = 3;
+  uint32 owner_uid = 4;
+  string runner_id = 5;
+  string stable_runner_identity = 6;
+  string failure = 7;
+  uint64 retry_guarantee_expires_unix_ms = 8;
+}
+
+message SessionListResponse {
+  repeated SessionRecord sessions = 1;
+}
+
+message SessionWaitRequest {
+  string session_id = 1;
+  uint64 after_generation = 2;
+}
+
+message SessionRemoveRequest {
+  string session_id = 1;
+  bool force = 2;
+}
+
+message SessionLogsRequest {
+  string session_id = 1;
+  string stream = 2;
+  uint64 after_sequence = 3;
+  uint32 maximum_records = 4;
+}
+
+message SessionLogChunk {
+  string session_id = 1;
+  string stream = 2;
+  uint64 sequence = 3;
+  uint64 timestamp_unix_ms = 4;
+  bytes data = 5;
+  bool durable = 6;
+}
+
+message SessionLogsEnd {
+  string session_id = 1;
+  string stream = 2;
+  uint64 durable_cursor = 3;
+  bool truncated_before_cursor = 4;
+}
+
+message SessionEventsRequest {
+  string session_id = 1;
+  uint64 after_sequence = 2;
+  uint32 maximum_records = 3;
+}
+
+message SessionEventRecord {
+  string session_id = 1;
+  uint64 sequence = 2;
+  uint64 timestamp_unix_ms = 3;
+  string event_kind = 4;
+  bytes payload = 5;
+  bool durable = 6;
+}
+
+message SessionEventsEnd {
+  string session_id = 1;
+  uint64 durable_cursor = 2;
+  bool truncated_before_cursor = 3;
+}
+
+message SessionAttachRequest {
+  string session_id = 1;
+  uint64 after_output_sequence = 2;
+  bool request_input_lease = 3;
+  string client_instance_id = 4;
+}
+
+message SessionAttachResponse {
+  string session_id = 1;
+  bool read_only = 2;
+  string input_lease_id = 3;
+  uint64 input_lease_expires_unix_ms = 4;
+}
+
+message SessionInputLeaseRenewRequest {
+  string session_id = 1;
+  string input_lease_id = 2;
+  string client_instance_id = 3;
+}
+
+message SessionInputLeaseReleaseRequest {
+  string session_id = 1;
+  string input_lease_id = 2;
+  string client_instance_id = 3;
+}
+
+message SessionInputLeaseResponse {
+  string session_id = 1;
+  string input_lease_id = 2;
+  uint64 expires_unix_ms = 3;
+  bool released = 4;
+}
+
+message SessionPruneRequest {
+  uint64 terminal_before_unix_ms = 1;
+  uint32 maximum_sessions = 2;
+}
+
+message SessionPruneResponse {
+  uint32 pruned_sessions = 1;
+  repeated string retained_session_ids = 2;
+}
+
+message AdminSessionListRequest {
+  uint32 target_uid = 1;
+  bool all_users = 2;
+}
+
+message AdminSessionInspectRequest {
+  uint32 target_uid = 1;
+  string session_id = 2;
+}
+
+message AdminSessionStopRequest {
+  uint32 target_uid = 1;
+  string session_id = 2;
+  uint64 grace_period_seconds = 3;
+}
+
+message AdminSessionKillRequest {
+  uint32 target_uid = 1;
+  string session_id = 2;
+  string signal = 3;
+}
+
 message DaemonCommandResult {
   string message = 1;
 }

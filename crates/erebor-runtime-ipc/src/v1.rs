@@ -41,6 +41,38 @@ pub const KIND_DAEMON_LOG_RECORD: &str = "erebor.runtime.ipc.v1.DaemonLogRecord"
 pub const KIND_DAEMON_LOGS_END: &str = "erebor.runtime.ipc.v1.DaemonLogsEnd";
 pub const KIND_DAEMON_RELOAD_REQUEST: &str = "erebor.runtime.ipc.v1.DaemonReloadRequest";
 pub const KIND_DAEMON_STOP_REQUEST: &str = "erebor.runtime.ipc.v1.DaemonStopRequest";
+pub const KIND_SESSION_CREATE_REQUEST: &str = "erebor.runtime.ipc.v1.SessionCreateRequest";
+pub const KIND_SESSION_CREATE_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionCreateResponse";
+pub const KIND_SESSION_START_REQUEST: &str = "erebor.runtime.ipc.v1.SessionStartRequest";
+pub const KIND_SESSION_STOP_REQUEST: &str = "erebor.runtime.ipc.v1.SessionStopRequest";
+pub const KIND_SESSION_KILL_REQUEST: &str = "erebor.runtime.ipc.v1.SessionKillRequest";
+pub const KIND_SESSION_INSPECT_REQUEST: &str = "erebor.runtime.ipc.v1.SessionInspectRequest";
+pub const KIND_SESSION_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.SessionListRequest";
+pub const KIND_SESSION_LIST_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionListResponse";
+pub const KIND_SESSION_WAIT_REQUEST: &str = "erebor.runtime.ipc.v1.SessionWaitRequest";
+pub const KIND_SESSION_REMOVE_REQUEST: &str = "erebor.runtime.ipc.v1.SessionRemoveRequest";
+pub const KIND_SESSION_RECORD: &str = "erebor.runtime.ipc.v1.SessionRecord";
+pub const KIND_SESSION_LOGS_REQUEST: &str = "erebor.runtime.ipc.v1.SessionLogsRequest";
+pub const KIND_SESSION_LOG_CHUNK: &str = "erebor.runtime.ipc.v1.SessionLogChunk";
+pub const KIND_SESSION_LOGS_END: &str = "erebor.runtime.ipc.v1.SessionLogsEnd";
+pub const KIND_SESSION_EVENTS_REQUEST: &str = "erebor.runtime.ipc.v1.SessionEventsRequest";
+pub const KIND_SESSION_EVENT_RECORD: &str = "erebor.runtime.ipc.v1.SessionEventRecord";
+pub const KIND_SESSION_EVENTS_END: &str = "erebor.runtime.ipc.v1.SessionEventsEnd";
+pub const KIND_SESSION_ATTACH_REQUEST: &str = "erebor.runtime.ipc.v1.SessionAttachRequest";
+pub const KIND_SESSION_ATTACH_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionAttachResponse";
+pub const KIND_SESSION_INPUT_LEASE_RENEW_REQUEST: &str =
+    "erebor.runtime.ipc.v1.SessionInputLeaseRenewRequest";
+pub const KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST: &str =
+    "erebor.runtime.ipc.v1.SessionInputLeaseReleaseRequest";
+pub const KIND_SESSION_INPUT_LEASE_RESPONSE: &str =
+    "erebor.runtime.ipc.v1.SessionInputLeaseResponse";
+pub const KIND_SESSION_PRUNE_REQUEST: &str = "erebor.runtime.ipc.v1.SessionPruneRequest";
+pub const KIND_SESSION_PRUNE_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionPruneResponse";
+pub const KIND_ADMIN_SESSION_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.AdminSessionListRequest";
+pub const KIND_ADMIN_SESSION_INSPECT_REQUEST: &str =
+    "erebor.runtime.ipc.v1.AdminSessionInspectRequest";
+pub const KIND_ADMIN_SESSION_STOP_REQUEST: &str = "erebor.runtime.ipc.v1.AdminSessionStopRequest";
+pub const KIND_ADMIN_SESSION_KILL_REQUEST: &str = "erebor.runtime.ipc.v1.AdminSessionKillRequest";
 pub const KIND_DAEMON_COMMAND_RESULT: &str = "erebor.runtime.ipc.v1.DaemonCommandResult";
 pub const KIND_DAEMON_ERROR: &str = "erebor.runtime.ipc.v1.DaemonError";
 pub const EREBOR_IDEMPOTENCY_KEY_HEADER: &str = "erebor-idempotency-key";

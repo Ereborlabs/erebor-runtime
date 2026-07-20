@@ -76,6 +76,20 @@ pub enum RuntimeError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("session runner `{runner}` is unavailable: {reason}"))]
+    SessionRunnerUnavailable {
+        runner: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("session runner `{runner}` helper protocol failed: {reason}"))]
+    SessionRunnerProtocol {
+        runner: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("session runner `{runner}` does not support `{operation}`"))]
     UnsupportedSessionRunnerOperation {
         runner: String,
@@ -94,7 +108,9 @@ impl ErrorExt for RuntimeError {
             | Self::SurfaceStart { .. }
             | Self::SurfaceExited { .. }
             | Self::SessionRunnerLaunch { .. }
-            | Self::SessionRunnerExit { .. } => StatusCode::External,
+            | Self::SessionRunnerExit { .. }
+            | Self::SessionRunnerProtocol { .. } => StatusCode::External,
+            Self::SessionRunnerUnavailable { .. } => StatusCode::Unavailable,
             Self::UnsupportedSessionSurface { .. }
             | Self::UnsupportedSessionRunnerOperation { .. } => StatusCode::Unsupported,
             Self::NoSessionSurfaceServices { .. } | Self::ContextSessionMismatch { .. } => {
@@ -115,6 +131,8 @@ impl ErrorExt for RuntimeError {
             | Self::SurfaceStart { .. }
             | Self::SurfaceExited { .. }
             | Self::SessionRunnerExit { .. }
+            | Self::SessionRunnerUnavailable { .. }
+            | Self::SessionRunnerProtocol { .. }
             | Self::UnsupportedSessionRunnerOperation { .. }
             | Self::ContextSessionMismatch { .. } => RetryHint::NonRetryable,
         }
