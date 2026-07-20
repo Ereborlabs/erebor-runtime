@@ -144,19 +144,23 @@ start_daemon
 [[ "$(stat -c '%U:%G:%a' "$socket")" == "root:$test_group:660" ]]
 sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status | grep -q 'state=running'
 sudo -u "$user_b" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status | grep -q 'state=running'
-if sudo -u "$user_outside" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status; then
+if sudo -u "$user_outside" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status \
+  >/dev/null 2>&1; then
   echo "user outside the connection group reached the control socket" >&2
   exit 1
 fi
-if sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" logs --maximum-records 1; then
+if sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" logs --maximum-records 1 \
+  >/dev/null 2>&1; then
   echo "non-root caller read daemon logs" >&2
   exit 1
 fi
-if sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" reload --idempotency-key phase1-nonroot-reload; then
+if sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" reload \
+  --idempotency-key phase1-nonroot-reload >/dev/null 2>&1; then
   echo "non-root caller reloaded daemon configuration" >&2
   exit 1
 fi
-if sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" stop --idempotency-key phase1-nonroot-stop; then
+if sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" stop \
+  --idempotency-key phase1-nonroot-stop >/dev/null 2>&1; then
   echo "non-root caller stopped the daemon" >&2
   exit 1
 fi
@@ -168,7 +172,8 @@ before_reload="$("$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status)"
 after_reload="$("$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status)"
 [[ "$before_reload" != "$after_reload" ]]
 printf '{"socket_group_gid":' >"$config_path"
-if "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" reload --idempotency-key phase1-invalid-reload; then
+if "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" reload \
+  --idempotency-key phase1-invalid-reload >/dev/null 2>&1; then
   echo "invalid replacement configuration was accepted" >&2
   exit 1
 fi
@@ -183,7 +188,8 @@ if "$EREBOR_PHASE1_EREBORD" \
   --config "$config_path" \
   --runtime-dir "$runtime_dir" \
   --log-dir "$log_dir" \
-  --state-dir "$state_dir"; then
+  --state-dir "$state_dir" \
+  >/dev/null 2>&1; then
   echo "second daemon started despite the held lock" >&2
   exit 1
 fi
@@ -202,7 +208,7 @@ sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status | gre
 [[ -S "$socket" ]]
 
 kill -KILL "$daemon_pid"
-if wait "$daemon_pid"; then
+if wait "$daemon_pid" 2>/dev/null; then
   echo "erebord unexpectedly exited cleanly after SIGKILL" >&2
   exit 1
 fi
