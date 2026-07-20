@@ -48,11 +48,11 @@ impl ProcessExecAuditRecorder {
         surface_decision: &SurfaceInterceptionDecision,
     ) {
         let event = self.event_for_request(request);
-        let decision = self.decision_for_request(request, surface_decision);
+        let policy_decision = self.decision_for_request(request, surface_decision);
         let record = AuditRecord {
             event: event.clone(),
-            policy_decision: decision.clone(),
-            final_decision: decision,
+            final_decision: self.final_guard_decision(&policy_decision),
+            policy_decision,
             context_pin: None,
         };
         if let Err(error) = self.sink.record(&record) {
@@ -108,6 +108,20 @@ impl ProcessExecAuditRecorder {
                 reasons: vec![String::from("process_exec_interception")],
             },
             timestamp: Self::timestamp(),
+        }
+    }
+
+    fn final_guard_decision(&self, policy_decision: &Decision) -> Decision {
+        match policy_decision {
+            Decision::RequireApproval {
+                reason, rule_id, ..
+            } => Decision::Deny {
+                reason: format!(
+                    "{reason}; denied fail-closed because the process guard cannot satisfy approvals"
+                ),
+                rule_id: rule_id.clone(),
+            },
+            _ => policy_decision.clone(),
         }
     }
 

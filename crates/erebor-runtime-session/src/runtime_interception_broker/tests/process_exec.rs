@@ -156,6 +156,48 @@ fn broker_audits_mediated_process_exec_with_the_handler_and_endpoint(
 }
 
 #[test]
+fn broker_audits_approval_required_process_exec_as_fail_closed_denial(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = BrokerFixture::new("audits-process-exec-approval");
+    let directory = TempDirectoryFixture::new("audits-process-exec-approval")?;
+    let audit_path = directory.path().join("audit.jsonl");
+    let audit = ProcessExecAuditRecorder::new(
+        &audit_path,
+        SessionId::new(fixture.session_id()),
+        ActorIdentity {
+            id: String::from("openclaw"),
+            kind: ActorKind::Agent,
+        },
+        RuntimeAuditConfig::default(),
+    );
+    let router = SessionInterceptionRouter::new()
+        .with_process_exec_handler(TestProcessExecDecisionHandler)
+        .with_process_exec_audit(audit);
+    let broker = fixture.register(router)?;
+
+    let decision = fixture.request_decision(
+        &broker,
+        InterceptionRequestFixture::process_with_argv(
+            "approve-tool",
+            &[String::from("git"), String::from("push")],
+        ),
+    )?;
+
+    assert_eq!(decision.decision, DecisionKind::RequireApproval as i32);
+    let records = read_audit_records(&audit_path)?;
+    assert_eq!(records.len(), 1);
+    assert!(matches!(
+        &records[0].policy_decision,
+        Decision::RequireApproval { rule_id, .. } if rule_id.as_deref() == Some("approve-tool")
+    ));
+    assert!(matches!(
+        &records[0].final_decision,
+        Decision::Deny { rule_id, .. } if rule_id.as_deref() == Some("approve-tool")
+    ));
+    Ok(())
+}
+
+#[test]
 fn broker_routes_process_exec_requests_with_handler_id_to_surface_handler(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fixture = BrokerFixture::new("routes-matched-process-exec");
