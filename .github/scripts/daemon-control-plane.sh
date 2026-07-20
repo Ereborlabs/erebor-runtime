@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-required=(EREBOR_PHASE1_EREBORD EREBOR_PHASE1_EREBOR)
+required=(EREBOR_DAEMON_CONTROL_EREBORD EREBOR_DAEMON_CONTROL_EREBOR)
 for variable in "${required[@]}"; do
   if [[ -z "${!variable:-}" ]]; then
     echo "missing required environment variable: ${variable}" >&2
@@ -17,12 +17,12 @@ if [[ "$(uname -s)" != "Linux" ]]; then
   echo "this control-plane probe requires Linux Unix peer credentials" >&2
   exit 1
 fi
-if [[ ! -x "$EREBOR_PHASE1_EREBORD" || ! -x "$EREBOR_PHASE1_EREBOR" ]]; then
+if [[ ! -x "$EREBOR_DAEMON_CONTROL_EREBORD" || ! -x "$EREBOR_DAEMON_CONTROL_EREBOR" ]]; then
   echo "staged binaries are missing or not executable" >&2
   exit 1
 fi
 
-phase_root="$(mktemp -d /tmp/erebor-phase1.XXXXXX)"
+phase_root="$(mktemp -d /tmp/erebor-daemon-control-plane.XXXXXX)"
 config_dir="$phase_root/etc"
 config_path="$config_dir/erebord.json"
 runtime_dir="$phase_root/run"
@@ -31,10 +31,10 @@ state_dir="$phase_root/lib"
 socket="$runtime_dir/daemon.sock"
 lock_path="$runtime_dir/erebord.lock"
 daemon_stderr="$phase_root/erebord.stderr"
-test_group="erebor-phase1-test"
-user_a="erebor-phase1-a"
-user_b="erebor-phase1-b"
-user_outside="erebor-phase1-outside"
+test_group="erebor-daemon-test"
+user_a="erebor-daemon-a"
+user_b="erebor-daemon-b"
+user_outside="erebor-daemon-outside"
 daemon_pid=""
 group_created=false
 user_a_created=false
@@ -75,7 +75,7 @@ fi
 
 await_daemon() {
   for _ in $(seq 1 100); do
-    if "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status >/dev/null 2>&1; then
+    if "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" status >/dev/null 2>&1; then
       return
     fi
     if ! kill -0 "$daemon_pid" 2>/dev/null; then
@@ -102,8 +102,14 @@ await_socket_removal() {
   exit 1
 }
 
+run_as_user() {
+  local user="$1"
+  shift
+  runuser -u "$user" -- "$@"
+}
+
 start_daemon() {
-  "$EREBOR_PHASE1_EREBORD" \
+  "$EREBOR_DAEMON_CONTROL_EREBORD" \
     --config "$config_path" \
     --runtime-dir "$runtime_dir" \
     --log-dir "$log_dir" \
@@ -115,7 +121,7 @@ start_daemon() {
 
 stop_daemon() {
   local idempotency_key="$1"
-  "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" stop \
+  "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" stop \
     --idempotency-key "$idempotency_key" | grep -q 'daemon stop accepted'
   await_socket_removal
   wait "$daemon_pid"
@@ -142,49 +148,49 @@ chmod 0640 "$config_path"
 start_daemon
 
 [[ "$(stat -c '%U:%G:%a' "$socket")" == "root:$test_group:660" ]]
-sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status | grep -q 'state=running'
-sudo -u "$user_b" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status | grep -q 'state=running'
-if sudo -u "$user_outside" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status \
+run_as_user "$user_a" "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" status | grep -q 'state=running'
+run_as_user "$user_b" "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" status | grep -q 'state=running'
+if run_as_user "$user_outside" "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" status \
   >/dev/null 2>&1; then
   echo "user outside the connection group reached the control socket" >&2
   exit 1
 fi
-if sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" logs --maximum-records 1 \
+if run_as_user "$user_a" "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" logs --maximum-records 1 \
   >/dev/null 2>&1; then
   echo "non-root caller read daemon logs" >&2
   exit 1
 fi
-if sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" reload \
-  --idempotency-key phase1-nonroot-reload >/dev/null 2>&1; then
+if run_as_user "$user_a" "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" reload \
+  --idempotency-key daemon-control-nonroot-reload >/dev/null 2>&1; then
   echo "non-root caller reloaded daemon configuration" >&2
   exit 1
 fi
-if sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" stop \
-  --idempotency-key phase1-nonroot-stop >/dev/null 2>&1; then
+if run_as_user "$user_a" "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" stop \
+  --idempotency-key daemon-control-nonroot-stop >/dev/null 2>&1; then
   echo "non-root caller stopped the daemon" >&2
   exit 1
 fi
 
-before_reload="$("$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status)"
+before_reload="$("$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" status)"
 [[ "$before_reload" != *"accepted daemon client"* ]]
-"$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" reload --idempotency-key phase1-reload \
+"$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" reload --idempotency-key daemon-control-reload \
   | grep -q 'configuration reloaded'
-after_reload="$("$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status)"
+after_reload="$("$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" status)"
 [[ "$before_reload" != "$after_reload" ]]
 printf '{"socket_group_gid":' >"$config_path"
-if "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" reload \
-  --idempotency-key phase1-invalid-reload >/dev/null 2>&1; then
+if "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" reload \
+  --idempotency-key daemon-control-invalid-reload >/dev/null 2>&1; then
   echo "invalid replacement configuration was accepted" >&2
   exit 1
 fi
-[[ "$after_reload" == "$("$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status)" ]]
+[[ "$after_reload" == "$("$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" status)" ]]
 printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":32}\n' "$group_gid" \
   >"$config_path"
 chown root:root "$config_path"
 chmod 0640 "$config_path"
 
 socket_inode="$(stat -c '%i' "$socket")"
-if "$EREBOR_PHASE1_EREBORD" \
+if "$EREBOR_DAEMON_CONTROL_EREBORD" \
   --config "$config_path" \
   --runtime-dir "$runtime_dir" \
   --log-dir "$log_dir" \
@@ -195,16 +201,16 @@ if "$EREBOR_PHASE1_EREBORD" \
 fi
 [[ "$socket_inode" == "$(stat -c '%i' "$socket")" ]]
 
-"$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" logs --maximum-records 32 \
+"$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" logs --maximum-records 32 \
   | grep -q 'daemon control service started'
 lock_inode="$(stat -c '%i' "$lock_path")"
-stop_daemon phase1-stop
+stop_daemon daemon-control-stop
 [[ ! -e "$socket" ]]
 [[ "$lock_inode" == "$(stat -c '%i' "$lock_path")" ]]
 
 python3 -c 'import socket, sys; sock=socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1])' "$socket"
 start_daemon
-sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status | grep -q 'state=running'
+run_as_user "$user_a" "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" status | grep -q 'state=running'
 [[ -S "$socket" ]]
 
 kill -KILL "$daemon_pid"
@@ -214,11 +220,11 @@ if wait "$daemon_pid" 2>/dev/null; then
 fi
 daemon_pid=""
 start_daemon
-sudo -u "$user_a" "$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" status | grep -q 'state=running'
+run_as_user "$user_a" "$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" status | grep -q 'state=running'
 [[ "$lock_inode" == "$(stat -c '%i' "$lock_path")" ]]
 
-"$EREBOR_PHASE1_EREBOR" daemon --socket "$socket" reload --idempotency-key phase1-reload \
+"$EREBOR_DAEMON_CONTROL_EREBOR" daemon --socket "$socket" reload --idempotency-key daemon-control-reload \
   | grep -q 'configuration reloaded at generation 2'
-stop_daemon phase1-stop
+stop_daemon daemon-control-stop
 [[ ! -e "$socket" ]]
 [[ "$lock_inode" == "$(stat -c '%i' "$lock_path")" ]]

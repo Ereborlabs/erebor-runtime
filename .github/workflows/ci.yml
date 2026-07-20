@@ -27,9 +27,6 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
-      - name: Check hands-on probe scripts
-        run: bash -n .github/scripts/privileged-daemon-control-plane.sh
-
       - name: Check
         run: cargo check --workspace
 
@@ -38,34 +35,3 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --all-targets --all-features
-
-  privileged-linux:
-    name: Privileged Linux control plane
-    runs-on: ubuntu-24.04
-    needs: rust
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Install native build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler libglib2.0-dev libostree-dev
-
-      - name: Require privileged test capability
-        run: |
-          sudo -n true
-
-      - name: Build staged daemon and client
-        run: cargo build -p erebor-runtime-daemon --bins && cargo build -p erebor-runtime-cli --bins
-
-      - name: Run temporary-path privileged control-plane probe
-        run: cargo test -p erebor-runtime-e2e --test privileged_daemon_control_plane -- --ignored
-
-      - name: Exercise daemon socket-family rejection with real peer credentials
-        run: cargo test -p erebor-runtime-daemon -- --ignored

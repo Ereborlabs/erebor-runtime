@@ -1,0 +1,14 @@
+**
+!.github
+!.github/containers
+!.github/containers/daemon-systemd.Dockerfile
+!.github/scripts
+!.github/scripts/daemon-control-plane.sh
+!.github/scripts/daemon-systemd-control-plane.sh
+!packaging
+!packaging/systemd
+!packaging/systemd/erebord.service
+!target
+!target/debug
+!target/debug/erebor
+!target/debug/erebord
