@@ -3,17 +3,29 @@
 ## Required Quality Gates
 
 Before saying a code change is complete, run the checks that match the changed
-surface. For Rust changes, the full bar is:
+surface. For Rust changes, the full bar is the repository-owned procedure CI
+executes:
 
 ```sh
-cargo fmt
-cargo check --workspace
-cargo test --workspace --all-targets --all-features
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+bash .github/scripts/verify-rust-ci.sh
 ```
 
-Run `cargo check --workspace` directly, matching the CI gate. Filtered command
-output, tests, and clippy do not substitute for that explicit check.
+`verify-rust-ci.sh` runs, in CI order, `cargo fmt --all --check`,
+`cargo check --workspace`, clippy with warnings denied, and the full workspace
+test suite. Do not replace it with focused tests, a prior workspace run, or a
+different command sequence.
+
+## Verification Provenance
+
+Run the full procedure after the final edit to Rust source, tests, Cargo files,
+CI configuration, or verification scripts. A passing run from an earlier
+working-tree state or commit does not verify later changes.
+
+When handing work off, report the procedure that ran and the source state it
+covered. If any covered file changes after the procedure completes, rerun it
+before calling the change complete. Focused tests are required while diagnosing
+and iterating, but they establish only the focused behavior; they never replace
+the final procedure.
 
 For the Playwright validation demo:
 

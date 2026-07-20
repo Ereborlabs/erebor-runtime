@@ -130,14 +130,12 @@
 
 ## Baseline Commands
 
-Use these before claiming code is clean:
+For Rust changes, use the shared CI procedure before claiming code is clean:
 
 ```sh
-cargo fmt
-cargo check --workspace
-cargo test --workspace --all-targets --all-features
-cargo clippy --workspace --all-targets --all-features -- -D warnings
+bash .github/scripts/verify-rust-ci.sh
 ```
 
-Run narrower tests first while iterating, then run the workspace checks when the
-change is ready.
+Run narrower tests first while iterating. Run the shared procedure only after
+the final relevant edit; a result from an earlier working-tree state does not
+cover later source, test, manifest, workflow, or verification-script changes.
