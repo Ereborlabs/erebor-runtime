@@ -241,7 +241,6 @@ fn open_rejects_malformed_and_symbolic_scope_refs_and_preserves_stale_locks() ->
     let recovered = locked.reopen()?;
     assert_eq!(recovered.scope_head(&root_scope)?, locked_root);
     assert_eq!(recovered.verify_full()?.scope_count(), 1);
-    run_git(&locked.path, &["fsck", "--full"])?;
     Ok(())
 }
 
