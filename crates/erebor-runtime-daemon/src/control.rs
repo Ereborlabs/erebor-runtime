@@ -3,7 +3,7 @@ use std::{
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
         net::UnixListener as StdUnixListener,
     },
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex, RwLock},
     time::Duration,
 };
@@ -87,20 +87,10 @@ struct DaemonSocket {
 }
 
 impl DaemonControlService {
-    pub async fn start_system() -> Result<Self> {
+    /// Starts one root-owned daemon using explicitly supplied local paths.
+    pub async fn start_with_paths(paths: DaemonPaths) -> Result<Self> {
         Self::require_root_process()?;
-        Self::start(DaemonPaths::system(), 0).await
-    }
-
-    /// Starts one root-owned daemon with all mutable paths below a disposable
-    /// development root.
-    ///
-    /// This exists for the hands-on local walkthrough. It remains a local Unix
-    /// socket daemon and does not add a remote endpoint or daemon selection
-    /// model.
-    pub async fn start_development(root: impl AsRef<Path>) -> Result<Self> {
-        Self::require_root_process()?;
-        Self::start(DaemonPaths::for_development(root), 0).await
+        Self::start(paths, 0).await
     }
 
     fn require_root_process() -> Result<()> {

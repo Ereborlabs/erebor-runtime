@@ -1,13 +1,39 @@
 use std::{ffi::OsString, path::PathBuf};
 
-use erebor_runtime_daemon::DaemonControlService;
+use erebor_runtime_daemon::{DaemonControlService, DaemonPaths};
 use erebor_runtime_error::ErrorExt;
 use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 enum LaunchMode {
-    System,
-    Development { root: PathBuf },
+    Run(DaemonPaths),
     Help,
+}
+
+#[derive(Default)]
+struct PathOverrides {
+    config: Option<PathBuf>,
+    runtime_dir: Option<PathBuf>,
+    log_dir: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
+}
+
+impl PathOverrides {
+    fn apply(self) -> DaemonPaths {
+        let mut paths = DaemonPaths::system();
+        if let Some(path) = self.config {
+            paths.set_config_path(path);
+        }
+        if let Some(path) = self.runtime_dir {
+            paths.set_runtime_dir(path);
+        }
+        if let Some(path) = self.log_dir {
+            paths.set_log_dir(path);
+        }
+        if let Some(path) = self.state_dir {
+            paths.set_state_dir(path);
+        }
+        paths
+    }
 }
 
 #[tokio::main]
@@ -19,16 +45,11 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    if matches!(mode, LaunchMode::Help) {
+    let LaunchMode::Run(paths) = mode else {
         println!("{}", usage());
         return;
-    }
-    let service = match mode {
-        LaunchMode::System => DaemonControlService::start_system().await,
-        LaunchMode::Development { root } => DaemonControlService::start_development(root).await,
-        LaunchMode::Help => unreachable!("help mode returned before daemon startup"),
     };
-    let service = match service {
+    let service = match DaemonControlService::start_with_paths(paths).await {
         Ok(service) => service,
         Err(error) => {
             init_foreground_logging();
@@ -44,38 +65,60 @@ async fn main() {
 
 fn parse_launch_mode(arguments: impl IntoIterator<Item = OsString>) -> Result<LaunchMode, String> {
     let mut arguments = arguments.into_iter();
-    let Some(argument) = arguments.next() else {
-        return Ok(LaunchMode::System);
-    };
-    if argument == "--help" || argument == "-h" {
-        return no_extra_arguments(arguments).map(|()| LaunchMode::Help);
+    let mut overrides = PathOverrides::default();
+    while let Some(argument) = arguments.next() {
+        if argument == "--help" || argument == "-h" {
+            if let Some(extra) = arguments.next() {
+                return Err(format!(
+                    "erebord does not accept extra argument `{}` after --help",
+                    extra.to_string_lossy()
+                ));
+            }
+            return Ok(LaunchMode::Help);
+        }
+        match argument.to_str() {
+            Some("--config") => {
+                set_path_override(&mut overrides.config, "--config", &mut arguments)?
+            }
+            Some("--runtime-dir") => {
+                set_path_override(&mut overrides.runtime_dir, "--runtime-dir", &mut arguments)?
+            }
+            Some("--log-dir") => {
+                set_path_override(&mut overrides.log_dir, "--log-dir", &mut arguments)?;
+            }
+            Some("--state-dir") => {
+                set_path_override(&mut overrides.state_dir, "--state-dir", &mut arguments)?;
+            }
+            _ => {
+                return Err(format!(
+                    "erebord does not accept `{}`",
+                    argument.to_string_lossy()
+                ));
+            }
+        }
     }
-    if argument == "--development-root" {
-        let root = arguments
-            .next()
-            .map(PathBuf::from)
-            .ok_or_else(|| String::from("--development-root requires a directory"))?;
-        return no_extra_arguments(arguments).map(|()| LaunchMode::Development { root });
-    }
-    Err(format!(
-        "erebord does not accept `{}`",
-        argument.to_string_lossy()
-    ))
+    Ok(LaunchMode::Run(overrides.apply()))
 }
 
-fn no_extra_arguments(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
-    if let Some(argument) = arguments.into_iter().next() {
-        Err(format!(
-            "erebord does not accept extra argument `{}`",
-            argument.to_string_lossy()
-        ))
-    } else {
-        Ok(())
+fn set_path_override(
+    target: &mut Option<PathBuf>,
+    option: &str,
+    arguments: &mut impl Iterator<Item = OsString>,
+) -> Result<(), String> {
+    if target.is_some() {
+        return Err(format!("erebord accepts {option} only once"));
     }
+    let path = arguments
+        .next()
+        .filter(|path| !path.to_string_lossy().starts_with('-'))
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("{option} requires a path"))?;
+    *target = Some(path);
+    Ok(())
 }
 
 fn usage() -> &'static str {
-    "Usage: erebord [--development-root <directory>]\n\nRun the privileged local Erebor daemon control service.\n\n--development-root stores all daemon paths below a disposable local directory for the documented hands-on walkthrough. It still requires root and exposes only a local Unix socket."
+    "Usage: erebord [OPTIONS]\n\nRun the privileged local Erebor daemon control service.\n\nOptions:\n  --config <PATH>       Root-owned daemon configuration (default: /etc/erebor/erebord.json)\n  --runtime-dir <PATH>  Socket and lock directory (default: /run/erebor)\n  --log-dir <PATH>      Daemon log directory (default: /var/log/erebor)\n  --state-dir <PATH>    Daemon persistent-state directory (default: /var/lib/erebor)\n  -h, --help            Print this help\n\nEach option overrides only its named local path. They do not add a remote endpoint, context, or daemon-selection model."
 }
 
 fn init_foreground_logging() {
@@ -91,36 +134,79 @@ fn init_foreground_logging() {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsString, path::PathBuf};
+    use std::{ffi::OsString, path::Path};
 
     use super::{parse_launch_mode, LaunchMode};
 
     #[test]
-    fn defaults_to_system_paths() {
-        assert!(matches!(
-            parse_launch_mode(Vec::new()),
-            Ok(LaunchMode::System)
-        ));
+    fn defaults_to_installed_system_paths() -> Result<(), String> {
+        let paths = run_paths(parse_launch_mode(Vec::new())?)?;
+        assert_eq!(paths.config_path(), Path::new("/etc/erebor/erebord.json"));
+        assert_eq!(paths.socket_path(), Path::new("/run/erebor/daemon.sock"));
+        assert_eq!(paths.log_path(), Path::new("/var/log/erebor/daemon.jsonl"));
+        assert_eq!(
+            paths.idempotency_path(),
+            Path::new("/var/lib/erebor/daemon/control-idempotency")
+        );
+        Ok(())
     }
 
     #[test]
-    fn accepts_one_development_root() {
-        let root = PathBuf::from("/tmp/erebor-development");
-        let mode = parse_launch_mode(vec![
-            OsString::from("--development-root"),
-            root.clone().into_os_string(),
-        ]);
-        assert!(matches!(mode, Ok(LaunchMode::Development { root: actual }) if actual == root));
+    fn accepts_independent_local_path_overrides() -> Result<(), String> {
+        let paths = run_paths(parse_launch_mode([
+            OsString::from("--config"),
+            OsString::from("/tmp/erebor-phase1/etc/erebord.json"),
+            OsString::from("--runtime-dir"),
+            OsString::from("/tmp/erebor-phase1/run"),
+            OsString::from("--log-dir"),
+            OsString::from("/tmp/erebor-phase1/log"),
+            OsString::from("--state-dir"),
+            OsString::from("/tmp/erebor-phase1/lib"),
+        ])?)?;
+        assert_eq!(
+            paths.config_path(),
+            Path::new("/tmp/erebor-phase1/etc/erebord.json")
+        );
+        assert_eq!(
+            paths.socket_path(),
+            Path::new("/tmp/erebor-phase1/run/daemon.sock")
+        );
+        assert_eq!(
+            paths.log_path(),
+            Path::new("/tmp/erebor-phase1/log/daemon.jsonl")
+        );
+        assert_eq!(
+            paths.idempotency_path(),
+            Path::new("/tmp/erebor-phase1/lib/daemon/control-idempotency")
+        );
+        Ok(())
     }
 
     #[test]
-    fn rejects_missing_or_extra_development_arguments() {
-        assert!(parse_launch_mode(vec![OsString::from("--development-root")]).is_err());
-        assert!(parse_launch_mode(vec![
-            OsString::from("--development-root"),
-            OsString::from("/tmp/erebor-development"),
-            OsString::from("unexpected"),
+    fn rejects_missing_duplicate_or_unknown_options() {
+        assert!(parse_launch_mode([OsString::from("--config")]).is_err());
+        assert!(parse_launch_mode([
+            OsString::from("--config"),
+            OsString::from("--runtime-dir"),
+            OsString::from("/tmp/erebor-phase1/run"),
         ])
         .is_err());
+        assert!(parse_launch_mode([
+            OsString::from("--log-dir"),
+            OsString::from("/tmp/a"),
+            OsString::from("--log-dir"),
+            OsString::from("/tmp/b"),
+        ])
+        .is_err());
+        assert!(parse_launch_mode([OsString::from("--unsupported")]).is_err());
     }
+
+    fn run_paths(mode: LaunchMode) -> DaemonPathsResult {
+        match mode {
+            LaunchMode::Run(paths) => Ok(paths),
+            LaunchMode::Help => Err(String::from("expected daemon paths, found help")),
+        }
+    }
+
+    type DaemonPathsResult = Result<erebor_runtime_daemon::DaemonPaths, String>;
 }

@@ -23,27 +23,31 @@ use crate::{
 };
 
 #[test]
-fn development_paths_keep_all_daemon_data_below_the_explicit_root() {
-    let paths = DaemonPaths::for_development("/tmp/erebor-development");
+fn configured_paths_keep_each_daemon_owner_below_its_explicit_directory() {
+    let mut paths = DaemonPaths::system();
+    paths.set_config_path("/tmp/erebor-paths/etc/erebord.json");
+    paths.set_runtime_dir("/tmp/erebor-paths/run");
+    paths.set_log_dir("/tmp/erebor-paths/log");
+    paths.set_state_dir("/tmp/erebor-paths/lib");
     assert_eq!(
         paths.config_path(),
-        Path::new("/tmp/erebor-development/etc/erebord.json")
+        Path::new("/tmp/erebor-paths/etc/erebord.json")
     );
     assert_eq!(
         paths.socket_path(),
-        Path::new("/tmp/erebor-development/run/daemon.sock")
+        Path::new("/tmp/erebor-paths/run/daemon.sock")
     );
     assert_eq!(
         paths.lock_path(),
-        Path::new("/tmp/erebor-development/run/erebord.lock")
+        Path::new("/tmp/erebor-paths/run/erebord.lock")
     );
     assert_eq!(
         paths.log_path(),
-        Path::new("/tmp/erebor-development/log/daemon.jsonl")
+        Path::new("/tmp/erebor-paths/log/daemon.jsonl")
     );
     assert_eq!(
         paths.idempotency_path(),
-        Path::new("/tmp/erebor-development/lib/daemon/control-idempotency")
+        Path::new("/tmp/erebor-paths/lib/daemon/control-idempotency")
     );
 }
 

@@ -8,7 +8,7 @@ use crate::error::{CliError, DaemonClientSnafu, DaemonRuntimeSnafu};
 
 #[derive(Debug, Args)]
 pub(super) struct DaemonArgs {
-    /// Use a disposable local Unix socket for the documented development walkthrough.
+    /// Use this local Unix socket instead of the default /run/erebor/daemon.sock.
     #[arg(long, value_name = "PATH")]
     socket: Option<PathBuf>,
     #[command(subcommand)]
@@ -128,7 +128,7 @@ mod tests {
             "erebor",
             "daemon",
             "--socket",
-            "/tmp/erebor-development/daemon.sock",
+            "/tmp/erebor-phase1/daemon.sock",
             "status",
         ])
         .is_ok());
