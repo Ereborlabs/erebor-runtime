@@ -376,7 +376,7 @@ impl ContextRepository {
     fn create_direct_scope_ref(&self, scope: &ScopeRef, commit: ContextObjectId) -> Result<()> {
         match self.edit_direct_scope_refs([DirectScopeRefUpdate::create(scope.clone(), commit)]) {
             Ok(()) => Ok(()),
-            Err(source) if self.scope_head(scope).is_ok() => ScopeAlreadyExistsSnafu {
+            Err(_source) if self.scope_head(scope).is_ok() => ScopeAlreadyExistsSnafu {
                 scope: scope.to_string(),
             }
             .fail(),

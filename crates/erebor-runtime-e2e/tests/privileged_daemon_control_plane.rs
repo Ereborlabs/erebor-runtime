@@ -23,6 +23,7 @@ fn temporary_path_phase_one_daemon_control_plane() -> Result<(), Box<dyn Error>>
         .arg("env")
         .arg(format!("EREBOR_PHASE1_EREBORD={}", erebord.display()))
         .arg(format!("EREBOR_PHASE1_EREBOR={}", erebor.display()))
+        .arg("bash")
         .arg(repository.join(".github/scripts/privileged-daemon-control-plane.sh"))
         .output()?;
     if output.status.success() {
