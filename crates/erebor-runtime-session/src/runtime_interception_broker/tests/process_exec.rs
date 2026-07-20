@@ -131,6 +131,7 @@ fn broker_audits_mediated_process_exec_with_the_handler_and_endpoint(
     assert_eq!(decision.decision, DecisionKind::Mediate as i32);
     let records = read_audit_records(&audit_path)?;
     assert_eq!(records.len(), 1);
+    assert_eq!(records[0].event.payload["kind"], "process_interception");
     assert_eq!(
         records[0].event.payload["handler_id"],
         "managed-browser-cdp"

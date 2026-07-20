@@ -91,7 +91,7 @@ impl ProcessExecAuditRecorder {
                 uri: None,
             }),
             payload: serde_json::json!({
-                "kind": "process_exec_interception",
+                "kind": "process_interception",
                 "operation": "process_exec",
                 "request_id": request.request_id,
                 "executable": executable,
@@ -123,7 +123,14 @@ impl ProcessExecAuditRecorder {
             .map(|operation| operation.matched_handler_id.as_str())
             .filter(|handler_id| !handler_id.is_empty())
             .unwrap_or(&request.matched_handler_id);
-        let rule_id = Some(self.audit_rule_id(handler_id, &rule_id));
+        let rule_id = Some(match decision {
+            SessionInterceptionDecision::Mediate => {
+                self.mediation_audit_rule_id(handler_id, &rule_id)
+            }
+            SessionInterceptionDecision::Allow
+            | SessionInterceptionDecision::Deny
+            | SessionInterceptionDecision::RequireApproval => rule_id,
+        });
 
         match decision {
             SessionInterceptionDecision::Allow => Decision::Allow { rule_id },
@@ -152,7 +159,7 @@ impl ProcessExecAuditRecorder {
         }
     }
 
-    fn audit_rule_id(&self, handler_id: &str, fallback_rule_id: &str) -> String {
+    fn mediation_audit_rule_id(&self, handler_id: &str, fallback_rule_id: &str) -> String {
         let identifier = if handler_id.is_empty() {
             fallback_rule_id
         } else {
