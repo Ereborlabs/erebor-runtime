@@ -14,6 +14,7 @@ erebord=/usr/lib/erebor/erebord
 erebor=/usr/local/bin/erebor
 service_group=erebor
 service_user=erebor-daemon-service-client
+service_user_two=erebor-daemon-service-client-two
 outside_user=erebor-daemon-service-outsider
 config_dir=/etc/erebor
 config_path="$config_dir/erebord.json"
@@ -34,7 +35,7 @@ if getent group "$service_group" >/dev/null; then
   echo "refusing to modify pre-existing service group: $service_group" >&2
   exit 1
 fi
-for account in "$service_user" "$outside_user"; do
+for account in "$service_user" "$service_user_two" "$outside_user"; do
   if id "$account" >/dev/null 2>&1; then
     echo "refusing to modify pre-existing service user: $account" >&2
     exit 1
@@ -44,6 +45,7 @@ done
 cleanup() {
   systemctl stop erebord.service >/dev/null 2>&1 || true
   userdel --remove "$service_user" >/dev/null 2>&1 || true
+  userdel --remove "$service_user_two" >/dev/null 2>&1 || true
   userdel --remove "$outside_user" >/dev/null 2>&1 || true
   groupdel "$service_group" >/dev/null 2>&1 || true
 }
@@ -57,6 +59,10 @@ report_failure() {
   if [[ -f /var/log/erebor/daemon.jsonl ]]; then
     cat /var/log/erebor/daemon.jsonl >&2 || true
   fi
+  while IFS= read -r diagnostics; do
+    echo "helper diagnostics: $diagnostics" >&2
+    cat "$diagnostics" >&2 || true
+  done < <(find /var/lib/erebor/users -name helper-diagnostics.log -type f 2>/dev/null)
   exit "$status"
 }
 trap report_failure ERR
@@ -87,11 +93,12 @@ await_service() {
 
 groupadd --system "$service_group"
 useradd --create-home --groups "$service_group" "$service_user"
+useradd --create-home --groups "$service_group" "$service_user_two"
 useradd --create-home "$outside_user"
 group_gid="$(getent group "$service_group" | cut -d: -f3)"
 
 install -d -o root -g root -m 0750 "$config_dir"
-printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":32}\n' "$group_gid" \
+printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":256,"phase_two_validated_fixtures":[{"package_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","installation_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","adapter_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_input_digests":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"policy_set_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}\n' "$group_gid" \
   >"$config_path"
 chown root:root "$config_path"
 chmod 0640 "$config_path"
@@ -139,6 +146,10 @@ fi
 [[ "$lock_inode" == "$(stat -c '%i' "$lock_path")" ]]
 systemctl start erebord.service
 await_service
+
+EREBOR_INSTALLED_SESSION_USER="$service_user" \
+EREBOR_INSTALLED_SESSION_USER_TWO="$service_user_two" \
+bash /usr/local/lib/erebor/daemon-installed-session-runtime.sh
 
 EREBOR_DAEMON_CONTROL_EREBORD="$erebord" \
 EREBOR_DAEMON_CONTROL_EREBOR="$erebor" \
