@@ -1,0 +1,40 @@
+{
+  "id": "fixture-oauth-callback-script",
+  "session_id": "session-fixture",
+  "actor": {
+    "id": "openclaw",
+    "kind": "agent"
+  },
+  "surface": "browser_cdp",
+  "action": "browser_script_eval",
+  "target": {
+    "label": "OAuth callback",
+    "uri": "http://127.0.0.1:5105/oauth/callback?code=redacted&state=demo"
+  },
+  "payload": {
+    "kind": "command",
+    "method": "Runtime.evaluate",
+    "message_id": 118,
+    "cdp_session_id": "fixture-cdp-session",
+    "page": {
+      "active_page": {
+        "url": "http://127.0.0.1:5105/oauth/callback?code=redacted&state=demo",
+        "title": "Callback captured"
+      },
+      "command_page": {
+        "url": "http://127.0.0.1:5105/oauth/callback?code=redacted&state=demo",
+        "title": "Callback captured"
+      }
+    },
+    "params": {
+      "expression": "document.body.innerText"
+    }
+  },
+  "risk": {
+    "level": "high",
+    "reasons": [
+      "governed CDP method `Runtime.evaluate`"
+    ]
+  },
+  "timestamp": "2026-06-17T00:00:00Z"
+}

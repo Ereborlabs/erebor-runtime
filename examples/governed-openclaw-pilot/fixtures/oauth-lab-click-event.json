@@ -1,0 +1,36 @@
+{
+  "id": "fixture-oauth-lab-click",
+  "session_id": "session-fixture",
+  "actor": {
+    "id": "openclaw",
+    "kind": "agent"
+  },
+  "surface": "browser_cdp",
+  "action": "browser_click",
+  "target": {
+    "label": "Connect GitHub",
+    "uri": "http://127.0.0.1:5105/repro"
+  },
+  "payload": {
+    "kind": "browser_action",
+    "page": {
+      "active_page": {
+        "url": "http://127.0.0.1:5105/repro",
+        "title": "GitHub callback repro"
+      },
+      "command_page": {
+        "url": "http://127.0.0.1:5105/repro",
+        "title": "GitHub callback repro"
+      }
+    },
+    "selector": "a[href='/connect/github']",
+    "label": "Connect GitHub"
+  },
+  "risk": {
+    "level": "low",
+    "reasons": [
+      "local OAuth lab reproduction click"
+    ]
+  },
+  "timestamp": "2026-06-17T00:00:00Z"
+}

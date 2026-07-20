@@ -1,0 +1,35 @@
+{
+  "id": "fixture-oauth-callback-navigation",
+  "session_id": "session-fixture",
+  "actor": {
+    "id": "openclaw",
+    "kind": "agent"
+  },
+  "surface": "browser_cdp",
+  "action": "browser_navigate",
+  "target": {
+    "label": "OAuth callback",
+    "uri": "http://127.0.0.1:5105/oauth/callback?code=redacted&state=demo"
+  },
+  "payload": {
+    "kind": "command",
+    "method": "Page.navigate",
+    "message_id": 117,
+    "page": {
+      "active_page": {
+        "url": "https://github.com/login/oauth/authorize?client_id=demo",
+        "title": "Authorize Erebor Consent Lab"
+      }
+    },
+    "params": {
+      "url": "http://127.0.0.1:5105/oauth/callback?code=redacted&state=demo"
+    }
+  },
+  "risk": {
+    "level": "low",
+    "reasons": [
+      "governed CDP method `Page.navigate`"
+    ]
+  },
+  "timestamp": "2026-06-17T00:00:00Z"
+}

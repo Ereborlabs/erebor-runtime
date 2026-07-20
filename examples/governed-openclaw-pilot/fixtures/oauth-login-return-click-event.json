@@ -1,0 +1,36 @@
+{
+  "id": "fixture-oauth-login-return-click",
+  "session_id": "session-fixture",
+  "actor": {
+    "id": "openclaw",
+    "kind": "agent"
+  },
+  "surface": "browser_cdp",
+  "action": "browser_click",
+  "target": {
+    "label": "GitHub OAuth login submit",
+    "uri": "https://github.com/login?allow_signup=false&client_id=demo&return_to=%2Flogin%2Foauth%2Fauthorize%3Fclient_id%3Ddemo"
+  },
+  "payload": {
+    "kind": "browser_action",
+    "page": {
+      "active_page": {
+        "url": "https://github.com/login?allow_signup=false&client_id=demo&return_to=%2Flogin%2Foauth%2Fauthorize%3Fclient_id%3Ddemo",
+        "title": "Sign in to GitHub"
+      },
+      "command_page": {
+        "url": "https://github.com/login?allow_signup=false&client_id=demo&return_to=%2Flogin%2Foauth%2Fauthorize%3Fclient_id%3Ddemo",
+        "title": "Sign in to GitHub"
+      }
+    },
+    "selector": "button[type=submit], input[type=submit]",
+    "label": "Sign in"
+  },
+  "risk": {
+    "level": "high",
+    "reasons": [
+      "agent attempted GitHub login toward OAuth consent"
+    ]
+  },
+  "timestamp": "2026-06-17T00:00:00Z"
+}

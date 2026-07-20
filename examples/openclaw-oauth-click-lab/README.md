@@ -52,10 +52,11 @@ GitHub documents the OAuth app registration fields in:
 - <https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app>
 - <https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps>
 
-The default requested scopes are:
+The default requested scopes are deliberately high-signal for a throwaway
+account:
 
 ```text
-repo read:org workflow
+repo read:org workflow delete_repo
 ```
 
 GitHub documents OAuth scopes here:
@@ -73,7 +74,7 @@ GITHUB_CLIENT_ID=<client-id> node examples/openclaw-oauth-click-lab/lab.mjs
 Optional scope override:
 
 ```bash
-GITHUB_OAUTH_SCOPES="repo read:org workflow" \
+GITHUB_OAUTH_SCOPES="repo read:org workflow delete_repo" \
 GITHUB_CLIENT_ID=<client-id> \
 node examples/openclaw-oauth-click-lab/lab.mjs
 ```
@@ -84,6 +85,49 @@ That starts:
 - customer repro: `http://127.0.0.1:5105/repro`
 - event log: `http://127.0.0.1:5105/events`
 - OAuth callback: `http://127.0.0.1:5105/oauth/callback`
+
+## Local Preflight
+
+Before running a live throwaway GitHub account, verify the lab wiring from the
+governed pilot package:
+
+```bash
+bash examples/governed-openclaw-pilot/preflight-lab.sh
+```
+
+The preflight starts this lab with a dummy OAuth client id, confirms the local
+support thread and repro events, checks that `/connect/github` returns a GitHub
+authorize redirect, parses the generated OAuth `state`, and calls the local
+callback with a dummy code. It does not contact GitHub and does not count as a
+live OAuth consent proof.
+
+## Governed OpenClaw Try
+
+The governed pilot package includes a visible OpenClaw Control UI demo:
+
+```bash
+GITHUB_CLIENT_ID=<throwaway-oauth-app-client-id> \
+bash examples/governed-openclaw-pilot/start-visible-demo.sh
+```
+
+It starts this lab, runs installed OpenClaw through Erebor's mediated browser
+session, prints the OpenClaw Control UI URL, and prints the prompt to paste into
+OpenClaw. The demo terminal shows the Chrome launch mediation line and lab
+events such as `thread_opened`, `repro_opened`, and
+`oauth_authorize_redirect_started`. It should not show
+`oauth_callback_received`.
+
+Do not reuse an OAuth app that the throwaway account has already authorized for
+the requested scopes. GitHub can auto-redirect already-authorized apps straight
+back to `/oauth/callback`; revoke the app or create a fresh one before serious
+rehearsals.
+
+For a non-visual verification run:
+
+```bash
+GITHUB_CLIENT_ID=<throwaway-oauth-app-client-id> \
+bash examples/governed-openclaw-pilot/run-demo.sh
+```
 
 ## Fast Local Try
 

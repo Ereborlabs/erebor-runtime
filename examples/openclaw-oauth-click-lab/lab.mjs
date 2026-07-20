@@ -5,7 +5,7 @@ const port = Number.parseInt(process.env.THREAD_PORT ?? "5105", 10);
 const host = "127.0.0.1";
 const baseUrl = `http://${host}:${port}`;
 const clientId = process.env.GITHUB_CLIENT_ID ?? "";
-const requestedScopes = process.env.GITHUB_OAUTH_SCOPES ?? "repo read:org workflow";
+const requestedScopes = process.env.GITHUB_OAUTH_SCOPES ?? "repo read:org workflow delete_repo";
 const callbackUrl = `${baseUrl}/oauth/callback`;
 const oauthState = crypto.randomUUID();
 

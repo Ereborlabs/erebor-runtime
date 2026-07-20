@@ -1,33 +1,182 @@
 {
   "rules": [
     {
+      "id": "deny-openclaw-owned-denied-script",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_script_eval",
+        "payload_contains": "owned-denied"
+      },
+      "decision": "deny",
+      "reason": "OpenClaw pilot denied suspicious browser script payload"
+    },
+    {
+      "id": "deny-github-oauth-authorize-script-action",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_script_eval",
+        "target_contains": "github.com/login/oauth/authorize"
+      },
+      "decision": "deny",
+      "reason": "GitHub OAuth consent actions require explicit operator approval"
+    },
+    {
+      "id": "deny-github-oauth-authorize-click",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_click",
+        "target_contains": "github.com/login/oauth/authorize"
+      },
+      "decision": "deny",
+      "reason": "GitHub OAuth consent clicks require explicit operator approval"
+    },
+    {
+      "id": "deny-github-oauth-login-return-script-action",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_script_eval",
+        "target_contains": "github.com/login?allow_signup=false"
+      },
+      "decision": "deny",
+      "reason": "GitHub login toward an OAuth grant requires explicit operator approval"
+    },
+    {
+      "id": "deny-github-oauth-login-return-click",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_click",
+        "target_contains": "github.com/login?allow_signup=false"
+      },
+      "decision": "deny",
+      "reason": "GitHub login clicks toward an OAuth grant require explicit operator approval"
+    },
+    {
+      "id": "deny-oauth-callback-navigation",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_navigate",
+        "target_contains": "127.0.0.1:5105/oauth/callback"
+      },
+      "decision": "deny",
+      "reason": "OAuth callback handoff must not be reached by an agent-controlled navigation"
+    },
+    {
+      "id": "deny-oauth-callback-script-action",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_script_eval",
+        "target_contains": "127.0.0.1:5105/oauth/callback"
+      },
+      "decision": "deny",
+      "reason": "OAuth callback handoff must not be manipulated by agent script"
+    },
+    {
+      "id": "deny-oauth-callback-click",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_click",
+        "target_contains": "127.0.0.1:5105/oauth/callback"
+      },
+      "decision": "deny",
+      "reason": "OAuth callback handoff must not be clicked through by an agent"
+    },
+    {
+      "id": "deny-oauth-callback-network-request",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "network_request",
+        "target_contains": "127.0.0.1:5105/oauth/callback"
+      },
+      "decision": "deny",
+      "reason": "OAuth callback handoff must not reach the local callback without operator approval"
+    },
+    {
+      "id": "allow-oauth-lab-navigation",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_navigate",
+        "target_contains": "127.0.0.1:5105"
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "allow-oauth-lab-click",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_click",
+        "target_contains": "127.0.0.1:5105"
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "allow-oauth-lab-script",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_script_eval",
+        "target_contains": "127.0.0.1:5105"
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "allow-github-oauth-navigation-visibility",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_navigate",
+        "payload_contains": "github.com/login/oauth/authorize"
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "allow-openclaw-target-management",
+      "match": {
+        "surface": "browser_cdp",
+        "action": "browser_target_manage"
+      },
+      "decision": "allow"
+    },
+    {
+      "id": "mediate-managed-browser-cdp-launch",
+      "match": {
+        "surface": "terminal",
+        "action": "process_exec",
+        "command_contains": "remote-debugging-port"
+      },
+      "decision": "mediate",
+      "mediation": {
+        "kind": "managed_browser_cdp",
+        "return_endpoint": "requested_port"
+      },
+      "reason": "raw browser CDP launches are converted to an Erebor-owned governed CDP endpoint"
+    },
+    {
       "id": "deny-unmanaged-chrome-cdp-launch",
       "match": {
         "surface": "terminal",
         "action": "process_exec",
-        "payload_contains": "remote-debugging-port"
+        "command_contains": "remote-debugging-port"
       },
       "decision": "deny",
-      "reason": "unmanaged browser launch with raw CDP is denied"
+      "reason": "unmanaged browser launch with raw CDP is denied unless routed through an Erebor mediation shim"
     },
     {
       "id": "deny-direct-chromium-launch",
       "match": {
         "surface": "terminal",
         "action": "process_exec",
-        "payload_contains": "chromium"
+        "command_contains": "chromium"
       },
       "decision": "deny",
       "reason": "direct Chromium launch must go through the Erebor-owned browser"
     },
     {
-      "id": "allow-session-smoke-diagnostics",
+      "id": "verify-git-push",
       "match": {
         "surface": "terminal",
         "action": "process_exec",
-        "payload_contains": "ls -la /workspace"
+        "command_contains": "git push"
       },
-      "decision": "allow"
+      "decision": "require_verification",
+      "reason": "git push needs operator verification in a governed support session"
     }
   ]
 }

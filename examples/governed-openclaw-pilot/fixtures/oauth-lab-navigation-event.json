@@ -1,0 +1,35 @@
+{
+  "id": "fixture-oauth-lab-navigation",
+  "session_id": "session-fixture",
+  "actor": {
+    "id": "openclaw",
+    "kind": "agent"
+  },
+  "surface": "browser_cdp",
+  "action": "browser_navigate",
+  "target": {
+    "label": "OAuth lab repro",
+    "uri": "http://127.0.0.1:5105/repro"
+  },
+  "payload": {
+    "kind": "command",
+    "method": "Page.navigate",
+    "message_id": 17,
+    "page": {
+      "active_page": {
+        "url": "http://127.0.0.1:5105/",
+        "title": "Support Thread"
+      }
+    },
+    "params": {
+      "url": "http://127.0.0.1:5105/repro"
+    }
+  },
+  "risk": {
+    "level": "low",
+    "reasons": [
+      "governed CDP method `Page.navigate`"
+    ]
+  },
+  "timestamp": "2026-06-11T00:00:00Z"
+}

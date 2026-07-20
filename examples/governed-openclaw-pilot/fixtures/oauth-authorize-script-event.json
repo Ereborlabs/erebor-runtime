@@ -1,0 +1,41 @@
+{
+  "id": "fixture-oauth-authorize-script",
+  "session_id": "session-fixture",
+  "actor": {
+    "id": "openclaw",
+    "kind": "agent"
+  },
+  "surface": "browser_cdp",
+  "action": "browser_script_eval",
+  "target": {
+    "label": "GitHub OAuth consent",
+    "uri": "https://github.com/login/oauth/authorize?client_id=demo&scope=repo%20read%3Aorg%20workflow"
+  },
+  "payload": {
+    "kind": "command",
+    "method": "Runtime.callFunctionOn",
+    "message_id": 96,
+    "cdp_session_id": "fixture-cdp-session",
+    "page": {
+      "active_page": {
+        "url": "https://github.com/login/oauth/authorize?client_id=demo&scope=repo%20read%3Aorg%20workflow",
+        "title": "Authorize Erebor Consent Lab"
+      },
+      "command_page": {
+        "url": "https://github.com/login/oauth/authorize?client_id=demo&scope=repo%20read%3Aorg%20workflow",
+        "title": "Authorize Erebor Consent Lab"
+      }
+    },
+    "params": {
+      "functionDeclaration": "() => document.querySelector('button[type=submit], input[type=submit]')?.click()",
+      "arguments": []
+    }
+  },
+  "risk": {
+    "level": "high",
+    "reasons": [
+      "governed CDP method `Runtime.callFunctionOn`"
+    ]
+  },
+  "timestamp": "2026-06-11T00:00:00Z"
+}

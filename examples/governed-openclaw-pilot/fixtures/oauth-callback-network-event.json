@@ -1,0 +1,39 @@
+{
+  "id": "fixture-oauth-callback-network-request",
+  "session_id": "session-fixture",
+  "actor": {
+    "id": "openclaw",
+    "kind": "agent"
+  },
+  "surface": "browser_cdp",
+  "action": "network_request",
+  "target": {
+    "label": "fetch-callback-request",
+    "uri": "http://127.0.0.1:5105/oauth/callback?code=redacted&state=demo"
+  },
+  "payload": {
+    "kind": "event",
+    "method": "Fetch.requestPaused",
+    "cdp_session_id": "observer-session",
+    "event_id": "fetch-callback-request",
+    "params": {
+      "requestId": "fetch-callback-request",
+      "request": {
+        "url": "http://127.0.0.1:5105/oauth/callback?code=redacted&state=demo",
+        "method": "GET",
+        "headers": {},
+        "initialPriority": "VeryHigh",
+        "referrerPolicy": "strict-origin-when-cross-origin"
+      },
+      "frameId": "frame-1",
+      "resourceType": "Document"
+    }
+  },
+  "risk": {
+    "level": "medium",
+    "reasons": [
+      "inspected CDP method `Fetch.requestPaused`"
+    ]
+  },
+  "timestamp": "2026-06-17T00:00:00Z"
+}

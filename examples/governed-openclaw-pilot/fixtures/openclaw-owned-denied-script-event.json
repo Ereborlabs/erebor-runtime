@@ -1,0 +1,41 @@
+{
+  "id": "fixture-openclaw-owned-denied-script",
+  "session_id": "session-fixture",
+  "actor": {
+    "id": "openclaw",
+    "kind": "agent"
+  },
+  "surface": "browser_cdp",
+  "action": "browser_script_eval",
+  "target": {
+    "label": "Example Domain",
+    "uri": "https://example.com/"
+  },
+  "payload": {
+    "kind": "command",
+    "method": "Runtime.callFunctionOn",
+    "message_id": 42,
+    "cdp_session_id": "fixture-cdp-session",
+    "page": {
+      "active_page": {
+        "url": "https://example.com/",
+        "title": "Example Domain"
+      },
+      "command_page": {
+        "url": "https://example.com/",
+        "title": "Example Domain"
+      }
+    },
+    "params": {
+      "functionDeclaration": "() => { window.__erebor = 'owned-denied'; return window.__erebor; }",
+      "arguments": []
+    }
+  },
+  "risk": {
+    "level": "high",
+    "reasons": [
+      "governed CDP method `Runtime.callFunctionOn`"
+    ]
+  },
+  "timestamp": "2026-06-11T00:00:00Z"
+}

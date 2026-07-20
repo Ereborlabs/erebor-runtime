@@ -1,0 +1,88 @@
+{
+  "policies": ["policy.json"],
+  "session": {
+    "enabled": true,
+    "runner": { "kind": "linux_host" },
+    "interception": {
+      "enabled": true,
+      "operations": ["process_exec", "file_mutation"]
+    }
+  },
+  "surfaces": {
+    "terminal": {
+      "enabled": true,
+      "process_mediation": {
+        "enabled": true,
+        "handlers": [
+          {
+            "id": "unused-browser-handler",
+            "kind": "managed_browser_cdp",
+            "match": { "executables": ["never-invoked-by-this-example"] }
+          }
+        ]
+      }
+    },
+    "browser_cdp": { "enabled": true },
+    "filesystem": { "enabled": true }
+  },
+  "codex": {
+    "enabled": true,
+    "profiles": [
+      {
+        "id": "vscode-0-144-2-root-managed-app-server",
+        "runner": "linux_host",
+        "executable": "/var/lib/erebor/codex-phase3/vscode-0.144.2/bin/codex",
+        "executable_sha256": "8b5b8bf86fb661c10787b5a5c70d7ba2cf3e61f3c902877509174b45d13fa6aa",
+        "deployment": "fleet_managed",
+        "trust_root": "/var/lib/erebor/codex-phase3/vscode-0.144.2",
+        "requirements_source": "/var/lib/erebor/codex-phase3/vscode-0.144.2/requirements.toml",
+        "requirements_sha256": "8d20b14131c929c75a924c471ca31a2eb16aecaf2c06642ea49d7f81bd96f88b",
+        "managed_hook_source": "/var/lib/erebor/codex-phase3/vscode-0.144.2/hooks/erebor-codex-hook",
+        "managed_hook_sha256": "25b0266c9641531b4a377a77e28418a562c1ea9033aed6a3216476b6f9325d3d",
+        "managed_hook_path": "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
+        "shell_startup_source": "/var/lib/erebor/codex-phase3/vscode-0.144.2/hooks/.zshenv",
+        "shell_startup_sha256": "fd4c53ac43eb5efe57e804f8bcde144a984d520c3099ffde54ca0aad6ec5ba8c",
+        "shell_startup_path": "/usr/lib/erebor/codex-hooks/.zshenv",
+        "hook_shell": "zsh",
+        "hook_exec_history": [
+          "/var/lib/erebor/codex-phase3/vscode-0.144.2/bin/codex",
+          "/usr/bin/zsh",
+          "/usr/lib/erebor/codex-hooks/erebor-codex-hook"
+        ],
+        "event_schemas": [
+          {
+            "event": "session_start",
+            "sha256": "46943383a16763908ab33c409890a8a014e229947749e858b74b7c4c644d5090"
+          },
+          {
+            "event": "user_prompt_submit",
+            "sha256": "365cf1b9607dd99d7ccdd1128ab12dee9029ee243a210402aa6da69ad089e1a3"
+          },
+          {
+            "event": "pre_tool_use",
+            "sha256": "585b090d54c26e792a6119b4b1eaa89ec31e8d719c971e9f5096838147abfc76"
+          },
+          {
+            "event": "post_tool_use",
+            "sha256": "779b5fefbf9a55b10867da6176907ff1b3b48fc6b348c9016946e87466da8f1a"
+          },
+          {
+            "event": "stop",
+            "sha256": "3a01ac7ed87b7c2d1c5290389f9044416eee6b7d03000bb1492c0f1356a98c84"
+          }
+        ],
+        "app_server_transport": {
+          "enabled": true,
+          "command_dispatch": {
+            "program": "codex-linux-sandbox",
+            "shell": "/usr/bin/zsh",
+            "sandbox_launcher": {
+              "path": "/var/lib/erebor/codex-phase3/vscode-0.144.2/bin/codex-resources/bwrap",
+              "sha256": "77360cb751ccedc5971391444ac86a8a33c15b04d6b4a6fe45f5d25496e62c4c"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

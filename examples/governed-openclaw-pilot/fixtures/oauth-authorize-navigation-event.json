@@ -1,0 +1,39 @@
+{
+  "id": "fixture-oauth-authorize-navigation",
+  "session_id": "session-fixture",
+  "actor": {
+    "id": "openclaw",
+    "kind": "agent"
+  },
+  "surface": "browser_cdp",
+  "action": "browser_navigate",
+  "target": {
+    "label": "GitHub OAuth authorize request",
+    "uri": "https://github.com/login/oauth/authorize?client_id=demo&scope=repo%20read%3Aorg%20workflow"
+  },
+  "payload": {
+    "kind": "command",
+    "method": "Page.navigate",
+    "message_id": 31,
+    "page": {
+      "active_page": {
+        "url": "http://127.0.0.1:5105/repro",
+        "title": "OAuth lab repro"
+      },
+      "command_page": {
+        "url": "http://127.0.0.1:5105/repro",
+        "title": "OAuth lab repro"
+      }
+    },
+    "params": {
+      "url": "https://github.com/login/oauth/authorize?client_id=demo&scope=repo%20read%3Aorg%20workflow"
+    }
+  },
+  "risk": {
+    "level": "medium",
+    "reasons": [
+      "navigation toward OAuth authorization endpoint"
+    ]
+  },
+  "timestamp": "2026-06-11T00:00:00Z"
+}

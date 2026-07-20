@@ -1,0 +1,36 @@
+{
+  "id": "fixture-oauth-authorize-click",
+  "session_id": "session-fixture",
+  "actor": {
+    "id": "openclaw",
+    "kind": "agent"
+  },
+  "surface": "browser_cdp",
+  "action": "browser_click",
+  "target": {
+    "label": "GitHub OAuth consent button",
+    "uri": "https://github.com/login/oauth/authorize?client_id=demo&scope=repo%20read%3Aorg%20workflow"
+  },
+  "payload": {
+    "kind": "browser_action",
+    "page": {
+      "active_page": {
+        "url": "https://github.com/login/oauth/authorize?client_id=demo&scope=repo%20read%3Aorg%20workflow",
+        "title": "Authorize Erebor Consent Lab"
+      },
+      "command_page": {
+        "url": "https://github.com/login/oauth/authorize?client_id=demo&scope=repo%20read%3Aorg%20workflow",
+        "title": "Authorize Erebor Consent Lab"
+      }
+    },
+    "selector": "button[type=submit], input[type=submit]",
+    "label": "Authorize"
+  },
+  "risk": {
+    "level": "high",
+    "reasons": [
+      "agent attempted OAuth consent approval"
+    ]
+  },
+  "timestamp": "2026-06-11T00:00:00Z"
+}
