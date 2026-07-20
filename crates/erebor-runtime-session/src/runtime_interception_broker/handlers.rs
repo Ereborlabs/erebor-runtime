@@ -10,7 +10,9 @@ use erebor_runtime_ipc::v1::{
     GuardLifecycleReplyKind, InterceptionOperation, InterceptionRequest, SocketOperationKind,
 };
 
-use crate::agents::codex::CodexInvocationLeaseOwner;
+use crate::{
+    agents::codex::CodexInvocationLeaseOwner, runtime_interception_broker::ProcessExecAuditRecorder,
+};
 
 #[derive(Debug)]
 pub(super) struct SessionRegistration {
@@ -22,6 +24,7 @@ pub(super) struct SessionRegistration {
 #[derive(Clone, Default)]
 pub struct SessionInterceptionRouter {
     process_exec: Option<Arc<dyn ProcessExecSurfaceHandler>>,
+    process_exec_audit: Option<Arc<ProcessExecAuditRecorder>>,
     file_operation: Option<Arc<dyn FileOperationSurfaceHandler>>,
     socket_connect: Option<Arc<dyn SocketConnectSurfaceHandler>>,
     codex_invocation_lease_owner: Option<Arc<CodexInvocationLeaseOwner>>,
@@ -56,6 +59,12 @@ impl SessionInterceptionRouter {
         handler: impl ProcessExecSurfaceHandler + 'static,
     ) -> Self {
         self.process_exec = Some(Arc::new(handler));
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_process_exec_audit(mut self, audit: ProcessExecAuditRecorder) -> Self {
+        self.process_exec_audit = Some(Arc::new(audit));
         self
     }
 
@@ -143,12 +152,14 @@ impl SessionInterceptionRouter {
             .unwrap_or(&request.matched_handler_id);
         let process_exec_request =
             ProcessExecInterceptionRequest::new(executable, argv, matched_handler_id);
-        self.process_exec
-            .as_ref()
-            .map(|handler| {
-                RoutedInterception::Decision(handler.decide_process_exec(&process_exec_request))
-            })
-            .unwrap_or_else(|| unrouted_operation("process_exec"))
+        let Some(handler) = self.process_exec.as_ref() else {
+            return unrouted_operation("process_exec");
+        };
+        let decision = handler.decide_process_exec(&process_exec_request);
+        if let Some(audit) = self.process_exec_audit.as_ref() {
+            audit.record(request, &decision);
+        }
+        RoutedInterception::Decision(decision)
     }
 
     fn route_file_operation(&self, request: &InterceptionRequest) -> RoutedInterception {
@@ -269,6 +280,7 @@ impl fmt::Debug for SessionInterceptionRouter {
                 "process_exec",
                 &self.process_exec.as_ref().map(|handler| handler.surface()),
             )
+            .field("process_exec_audit", &self.process_exec_audit.is_some())
             .field(
                 "file_operation",
                 &self

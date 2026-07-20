@@ -27,6 +27,7 @@ use crate::{
     interception_setup::SessionInterceptionSetup,
     policies::read_policy_set,
     registry_lifecycle::PreparedSession,
+    runtime_interception_broker::ProcessExecAuditRecorder,
     session_context::{CdpSessionContexts, SessionPlanContext},
     session_resources::SessionSideResources,
     surfaces::{
@@ -313,6 +314,17 @@ fn start_session_side_resources_from_start_plan(
             plan,
             prepared_session.map(PreparedSession::storage),
         )?);
+    let process_exec_audit = prepared_session.map(|session| {
+        ProcessExecAuditRecorder::new(
+            session.storage().audit_path().to_path_buf(),
+            plan.session_id().clone(),
+            erebor_runtime_events::ActorIdentity {
+                id: plan.actor().id.clone(),
+                kind: plan.actor().kind.clone(),
+            },
+            plan.audit().clone(),
+        )
+    });
     if codex_guard_lifecycle_handler.is_some() && interception_setup.backend_kind().is_none() {
         return GuardConfigSnafu {
             reason: String::from(
@@ -338,6 +350,7 @@ fn start_session_side_resources_from_start_plan(
             None,
             lazy_browser_cdp,
             filesystem_handler,
+            process_exec_audit,
             codex_invocation_lease_owner.clone(),
             codex_guard_lifecycle_handler,
         )?;
@@ -389,6 +402,7 @@ fn start_session_side_resources_from_start_plan(
         browser_cdp_endpoint.as_deref(),
         lazy_browser_cdp,
         filesystem_handler,
+        process_exec_audit,
         codex_invocation_lease_owner.clone(),
         codex_guard_lifecycle_handler,
     )?;
@@ -519,10 +533,15 @@ fn session_interception_router(
     browser_cdp_endpoint: Option<&str>,
     lazy_browser_cdp: Option<LazyBrowserCdpProcessMediation>,
     filesystem_handler: Option<FilesystemFileOperationHandler>,
+    process_exec_audit: Option<ProcessExecAuditRecorder>,
     codex_invocation_lease_owner: Option<Arc<CodexInvocationLeaseOwner>>,
     codex_guard_lifecycle_handler: Option<CodexGuardLifecycleHandler>,
 ) -> Result<crate::runtime_interception_broker::SessionInterceptionRouter, SessionExecutionError> {
     let router = terminal_process_surface.router(browser_cdp_endpoint, lazy_browser_cdp)?;
+    let router = match process_exec_audit {
+        Some(audit) => router.with_process_exec_audit(audit),
+        None => router,
+    };
     let router = match filesystem_handler {
         Some(handler) => router.with_file_operation_handler(handler),
         None => router,

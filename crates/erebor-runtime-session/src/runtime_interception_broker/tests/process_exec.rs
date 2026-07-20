@@ -1,10 +1,15 @@
+use erebor_runtime_audit::read_audit_records;
+use erebor_runtime_core::RuntimeAuditConfig;
+use erebor_runtime_events::{ActorIdentity, ActorKind, SessionId};
 use erebor_runtime_ipc::v1::DecisionKind;
+use erebor_runtime_policy::Decision;
 
 use super::{
-    super::SessionInterceptionRouter,
+    super::{ProcessExecAuditRecorder, SessionInterceptionRouter},
     fixtures::{
         BrokerFixture, InterceptionRequestFixture, MatchedHandlerProcessExecHandler,
-        TestProcessExecDecisionHandler, TestProcessExecHandler, TestProcessExecMediationHandler,
+        TempDirectoryFixture, TestProcessExecDecisionHandler, TestProcessExecHandler,
+        TestProcessExecMediationHandler,
     },
 };
 
@@ -89,6 +94,63 @@ fn broker_routes_process_exec_mediation_from_surface_handler(
         "DevTools listening on ws://127.0.0.1:9222/devtools/browser/surface"
     );
     assert!(mediation.keepalive);
+    Ok(())
+}
+
+#[test]
+fn broker_audits_mediated_process_exec_with_the_handler_and_endpoint(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fixture = BrokerFixture::new("audits-process-exec-mediate");
+    let directory = TempDirectoryFixture::new("audits-process-exec-mediate")?;
+    let audit_path = directory.path().join("audit.jsonl");
+    let audit = ProcessExecAuditRecorder::new(
+        &audit_path,
+        SessionId::new(fixture.session_id()),
+        ActorIdentity {
+            id: String::from("openclaw"),
+            kind: ActorKind::Agent,
+        },
+        RuntimeAuditConfig::default(),
+    );
+    let router = SessionInterceptionRouter::new()
+        .with_process_exec_handler(TestProcessExecMediationHandler)
+        .with_process_exec_audit(audit);
+    let broker = fixture.register(router)?;
+
+    let decision = fixture.request_decision(
+        &broker,
+        InterceptionRequestFixture::process_with_argv(
+            "managed-browser-cdp",
+            &[
+                String::from("google-chrome"),
+                String::from("--remote-debugging-port=9222"),
+            ],
+        ),
+    )?;
+
+    assert_eq!(decision.decision, DecisionKind::Mediate as i32);
+    let records = read_audit_records(&audit_path)?;
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].event.payload["handler_id"],
+        "managed-browser-cdp"
+    );
+    let Decision::Mediate {
+        rule_id, mediation, ..
+    } = &records[0].policy_decision
+    else {
+        return Err("expected a mediated process-exec audit decision".into());
+    };
+    assert_eq!(
+        rule_id.as_deref(),
+        Some("erebor-process-interception-managed-browser-cdp")
+    );
+    assert_eq!(
+        mediation
+            .as_ref()
+            .and_then(|value| value["endpoint"].as_str()),
+        Some("ws://127.0.0.1:9222/")
+    );
     Ok(())
 }
 

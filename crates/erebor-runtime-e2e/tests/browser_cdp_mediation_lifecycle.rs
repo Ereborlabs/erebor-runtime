@@ -45,7 +45,10 @@ mod linux_host {
         lifecycle.assert_original_command_not_executed()?;
 
         let audit = lifecycle.audit(workspace.path())?.read()?;
-        assert!(audit.contains("\"policy_decision\":{\"type\":\"mediate\""));
+        assert!(
+            audit.contains("\"policy_decision\":{\"type\":\"mediate\""),
+            "expected a mediated policy decision in audit:\n{audit}"
+        );
         assert!(audit.contains("\"handler_id\":\"managed-browser-cdp\""));
         assert!(audit.contains("\"rule_id\":\"erebor-process-interception-managed-browser-cdp\""));
         assert!(audit.contains(&lifecycle.governed_endpoint_prefix()));
