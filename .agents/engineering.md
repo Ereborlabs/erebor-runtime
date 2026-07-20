@@ -107,6 +107,10 @@
   hashing, crypto, parsing, codecs, protocol types, URL handling, and time.
   Hand-rolled implementations are allowed only when a phase explicitly
   documents why an upstream crate is unsuitable.
+- Prefer mature Rust bindings for system/domain tools over stringly command
+  wrappers. A command runner is acceptable when the executable interface is the
+  actual product boundary, but crate-owned runtime behavior should normally use
+  a library binding with an owner trait seam for tests.
 - Avoid manual string parsing when a structured parser or protocol crate exists.
 - Keep comments sparse and useful.
 
@@ -130,6 +134,7 @@ Use these before claiming code is clean:
 
 ```sh
 cargo fmt
+cargo check --workspace
 cargo test --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```

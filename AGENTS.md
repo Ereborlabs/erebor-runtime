@@ -94,6 +94,9 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
   sibling concept are not acceptable unless the file is the family root.
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings` must
   be clean.
+- `cargo check --workspace` must be run directly and be clean before claiming
+  a Rust change is complete. It is a CI gate; do not treat filtered command
+  output, a test run, or clippy as a substitute for this exact check.
 - Use crate-local SNAFU error modules: returned Rust errors belong in each
   crate's `src/error.rs` or a thin `src/error.rs` plus `src/error/*.rs`
   submodules, with `snafu::Location` context, `erebor_runtime_error::ErrorExt`

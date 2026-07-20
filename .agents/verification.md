@@ -7,9 +7,13 @@ surface. For Rust changes, the full bar is:
 
 ```sh
 cargo fmt
+cargo check --workspace
 cargo test --workspace --all-targets --all-features
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
+
+Run `cargo check --workspace` directly, matching the CI gate. Filtered command
+output, tests, and clippy do not substitute for that explicit check.
 
 For the Playwright validation demo:
 
