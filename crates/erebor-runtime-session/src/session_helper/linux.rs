@@ -26,7 +26,7 @@ use crate::{SessionHelperError, StreamKind};
 use self::prepared::PreparedLinuxExecution;
 use super::{
     output::HelperOutput,
-    workload::{child_exit, pump_output, wait_child, WorkloadExit},
+    workload::{child_exit, pump_output, wait_child, OutputFailureMonitor, WorkloadExit},
 };
 
 pub(super) struct LinuxWorkload {
@@ -34,6 +34,7 @@ pub(super) struct LinuxWorkload {
     process_group: Pid,
     stable_identity: String,
     output_pumps: Vec<thread::JoinHandle<()>>,
+    output_failures: OutputFailureMonitor,
 }
 
 impl LinuxWorkload {
@@ -120,11 +121,13 @@ impl LinuxWorkload {
         let start_time = process_start_time(&host_proc, child.id()).unwrap_or(0);
         let stable_identity = format!("linux:pid={}:start={start_time}", child.id());
         let mut output_pumps = Vec::new();
+        let (output_failures, failure_sender) = OutputFailureMonitor::new();
         if let Some(stdout) = child.stdout.take() {
             output_pumps.push(pump_output(
                 stdout,
                 Arc::clone(&output.stdout),
                 StreamKind::Stdout.as_str(),
+                failure_sender.clone(),
             ));
         }
         if let Some(stderr) = child.stderr.take() {
@@ -132,6 +135,7 @@ impl LinuxWorkload {
                 stderr,
                 Arc::clone(&output.stderr),
                 StreamKind::Stderr.as_str(),
+                failure_sender,
             ));
         }
         Ok(Self {
@@ -139,11 +143,16 @@ impl LinuxWorkload {
             process_group: pid,
             stable_identity,
             output_pumps,
+            output_failures,
         })
     }
 
     pub(super) fn stable_identity(&self) -> &str {
         &self.stable_identity
+    }
+
+    pub(super) fn take_output_failure(&self) -> Option<SessionHelperError> {
+        self.output_failures.take_failure()
     }
 
     pub(super) fn try_wait(&mut self) -> Result<Option<WorkloadExit>, SessionHelperError> {

@@ -30,7 +30,7 @@ impl HelperOutput {
                     StreamKind::Stdout,
                     maximum,
                     rotation,
-                    false,
+                    handoff.spec.output().requirements().stdout_required(),
                 )
                 .context(OutputSnafu)?,
             ),
@@ -40,7 +40,7 @@ impl HelperOutput {
                     StreamKind::Stderr,
                     maximum,
                     rotation,
-                    false,
+                    handoff.spec.output().requirements().stderr_required(),
                 )
                 .context(OutputSnafu)?,
             ),

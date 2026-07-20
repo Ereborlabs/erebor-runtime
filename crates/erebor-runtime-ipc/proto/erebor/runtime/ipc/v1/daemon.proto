@@ -100,6 +100,7 @@ message SessionRecord {
   string stable_runner_identity = 6;
   string failure = 7;
   uint64 retry_guarantee_expires_unix_ms = 8;
+  bool retention_hold = 9;
 }
 
 message SessionListResponse {
@@ -223,6 +224,12 @@ message AdminSessionKillRequest {
   uint32 target_uid = 1;
   string session_id = 2;
   string signal = 3;
+}
+
+message AdminSessionSetRetentionHoldRequest {
+  uint32 target_uid = 1;
+  string session_id = 2;
+  bool retention_hold = 3;
 }
 
 message DaemonCommandResult {

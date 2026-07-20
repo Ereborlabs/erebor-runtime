@@ -1,4 +1,10 @@
-use std::{io::Read, process::Child, sync::Arc, thread, time::Duration};
+use std::{
+    io::Read,
+    process::Child,
+    sync::{mpsc, Arc},
+    thread,
+    time::Duration,
+};
 
 use erebor_runtime_core::{ActiveSessionSignal, SessionHelperHandoff, SessionRunnerKind};
 
@@ -62,23 +68,63 @@ impl HelperWorkload {
             Self::Docker(workload) => workload.kill(signal),
         }
     }
+
+    pub(super) fn take_output_failure(&self) -> Option<SessionHelperError> {
+        match self {
+            Self::Linux(workload) => workload.take_output_failure(),
+            Self::Docker(workload) => workload.take_output_failure(),
+        }
+    }
+}
+
+pub(super) struct OutputFailureMonitor {
+    receiver: mpsc::Receiver<SessionHelperError>,
+}
+
+impl OutputFailureMonitor {
+    pub(super) fn new() -> (Self, mpsc::Sender<SessionHelperError>) {
+        let (sender, receiver) = mpsc::channel();
+        (Self { receiver }, sender)
+    }
+
+    pub(super) fn take_failure(&self) -> Option<SessionHelperError> {
+        self.receiver.try_recv().ok()
+    }
 }
 
 pub(super) fn pump_output(
     mut source: impl Read + Send + 'static,
     sink: Arc<DurableStreamStore>,
     source_name: &'static str,
+    failure_sender: mpsc::Sender<SessionHelperError>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
+        let required = sink.required();
         let mut buffer = [0_u8; 8192];
         loop {
             match source.read(&mut buffer) {
-                Ok(0) | Err(_) => return,
+                Ok(0) => return,
+                Err(source) => {
+                    if required {
+                        let _result = failure_sender.send(SessionHelperError::Io {
+                            action: "reading governed workload output",
+                            path: std::path::PathBuf::from(format!("<{source_name}>")),
+                            source,
+                            location: snafu::Location::default(),
+                        });
+                    }
+                    return;
+                }
                 Ok(bytes) => {
-                    if sink
-                        .append(unix_time_ms(), source_name, buffer[..bytes].to_vec())
-                        .is_err()
+                    if let Err(source) =
+                        sink.append(unix_time_ms(), source_name, buffer[..bytes].to_vec())
                     {
+                        if required {
+                            let _result = failure_sender.send(SessionHelperError::Output {
+                                source,
+                                location: snafu::Location::default(),
+                            });
+                        }
                         return;
                     }
                 }
@@ -104,4 +150,56 @@ pub(super) fn wait_child(child: &mut Child) -> Result<WorkloadExit, SessionHelpe
         location: snafu::Location::default(),
     })?;
     Ok(child_exit(status))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{io::Cursor, sync::Arc};
+
+    use tempfile::TempDir;
+
+    use crate::{DurableStreamStore, StreamKind};
+
+    use super::{pump_output, OutputFailureMonitor};
+
+    #[test]
+    fn required_stream_write_failure_reaches_the_helper_monitor(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = TempDir::new()?;
+        let sink = Arc::new(DurableStreamStore::open(
+            temporary.path(),
+            StreamKind::Stdout,
+            128,
+            128,
+            true,
+        )?);
+        let (monitor, sender) = OutputFailureMonitor::new();
+        let pump = pump_output(Cursor::new(vec![b'x'; 256]), sink, "stdout", sender);
+
+        pump.join().map_err(|_panic| "output pump panicked")?;
+        let failure = monitor
+            .take_failure()
+            .ok_or("required output failure was not reported")?;
+        assert!(matches!(failure, crate::SessionHelperError::Output { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn optional_stream_write_failure_does_not_fail_the_helper(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = TempDir::new()?;
+        let sink = Arc::new(DurableStreamStore::open(
+            temporary.path(),
+            StreamKind::Stdout,
+            128,
+            128,
+            false,
+        )?);
+        let (monitor, sender) = OutputFailureMonitor::new();
+        let pump = pump_output(Cursor::new(vec![b'x'; 256]), sink, "stdout", sender);
+
+        pump.join().map_err(|_panic| "output pump panicked")?;
+        assert!(monitor.take_failure().is_none());
+        Ok(())
+    }
 }

@@ -344,6 +344,17 @@ impl SessionSupervisor {
             .context(RepositorySnafu)
     }
 
+    pub fn set_retention_hold(
+        &self,
+        uid: u32,
+        session_id: &str,
+        retention_hold: bool,
+    ) -> Result<DurableSessionRecord, SessionSupervisorError> {
+        self.repository
+            .set_retention_hold(uid, session_id, retention_hold)
+            .context(RepositorySnafu)
+    }
+
     pub fn reconcile(&self) -> Result<Vec<DurableSessionRecord>, SessionSupervisorError> {
         let mut reconciled = Vec::new();
         for record in self.list_all()? {
@@ -418,10 +429,15 @@ impl SessionSupervisor {
             (None, None) => SessionLifecycleState::Interrupted,
         };
         let failure = (next == SessionLifecycleState::Failed).then(|| {
-            format!(
-                "runner exited with code {:?} signal {:?}",
-                exit.exit_code(),
-                exit.signal()
+            exit.failure().map_or_else(
+                || {
+                    format!(
+                        "runner exited with code {:?} signal {:?}",
+                        exit.exit_code(),
+                        exit.signal()
+                    )
+                },
+                str::to_owned,
             )
         });
         let finished = self
@@ -453,8 +469,10 @@ impl SessionSupervisor {
                 record.generation(),
                 next,
                 Some(binding),
-                (next != SessionLifecycleState::Succeeded)
-                    .then(|| String::from("runner exited during start")),
+                (next != SessionLifecycleState::Succeeded).then(|| {
+                    exit.failure()
+                        .map_or_else(|| String::from("runner exited during start"), str::to_owned)
+                }),
             )
             .context(RepositorySnafu)
     }
@@ -634,9 +652,9 @@ mod tests {
     use erebor_runtime_core::{
         ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
         ActiveSessionSignalKind, DaemonFailureMode, EvidenceRequirement, ImmutableIdentity,
-        OutputEndpoints, OutputPlan, RunnerBinding, RunnerCapabilityDocument, SafePathBinding,
-        SafePathKind, SessionAdmission, SessionOwner, SessionRunner, SessionRunnerKind,
-        SessionSpec, WorkloadPrivilegePlan,
+        OutputEndpoints, OutputPlan, OutputStreamRequirements, RunnerBinding,
+        RunnerCapabilityDocument, SafePathBinding, SafePathKind, SessionAdmission, SessionOwner,
+        SessionRunner, SessionRunnerKind, SessionSpec, WorkloadPrivilegePlan,
     };
     use erebor_runtime_events::SessionId;
     use tempfile::TempDir;
@@ -838,7 +856,13 @@ mod tests {
             secret_references: Vec::new(),
             filesystem_projections: Vec::new(),
             endpoint_projections: Vec::new(),
-            output: OutputPlan::new(output_root, 4096, 512, 64)?,
+            output: OutputPlan::new(
+                output_root,
+                4096,
+                512,
+                64,
+                OutputStreamRequirements::required(),
+            )?,
             evidence_requirements: vec![EvidenceRequirement::new("audit", true)?],
             tty: false,
             detached: true,

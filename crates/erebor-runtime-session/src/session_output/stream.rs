@@ -5,6 +5,7 @@ use std::{
     sync::Mutex,
 };
 
+use erebor_runtime_core::OutputPlan;
 use rustix::fs::{flock, FlockOperation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -221,6 +222,11 @@ impl DurableStreamStore {
         Ok(record)
     }
 
+    #[must_use]
+    pub const fn required(&self) -> bool {
+        self.required
+    }
+
     pub fn read_after(
         &self,
         after_sequence: u64,
@@ -311,28 +317,24 @@ pub struct SessionOutputStores {
 }
 
 impl SessionOutputStores {
-    pub fn open(
-        root: impl Into<PathBuf>,
-        maximum_bytes: u64,
-        rotation_bytes: u64,
-    ) -> Result<Self, SessionOutputError> {
-        let root = root.into();
-        let per_stream = maximum_bytes / 5;
-        let per_rotation = rotation_bytes.min(per_stream);
+    pub fn open(plan: &OutputPlan) -> Result<Self, SessionOutputError> {
+        let root = plan.root();
+        let per_stream = plan.maximum_bytes() / 5;
+        let per_rotation = plan.rotation_bytes().min(per_stream);
         Ok(Self {
             stdout: DurableStreamStore::open(
                 root.join("stdout"),
                 StreamKind::Stdout,
                 per_stream,
                 per_rotation,
-                false,
+                plan.requirements().stdout_required(),
             )?,
             stderr: DurableStreamStore::open(
                 root.join("stderr"),
                 StreamKind::Stderr,
                 per_stream,
                 per_rotation,
-                false,
+                plan.requirements().stderr_required(),
             )?,
             events: DurableStreamStore::open(
                 root.join("events"),

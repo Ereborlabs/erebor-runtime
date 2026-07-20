@@ -5,8 +5,9 @@ use std::{
 
 use erebor_runtime_core::{
     DaemonFailureMode, EndpointProjection, EvidenceRequirement, FilesystemProjection,
-    ImmutableIdentity, OutputPlan, RunRequest, RunnerCapabilityDocument, SafePathKind,
-    SessionAdmission, SessionOwner, SessionRunnerKind, SessionSpec, WorkloadPrivilegePlan,
+    ImmutableIdentity, OutputPlan, OutputStreamRequirements, RunRequest, RunnerCapabilityDocument,
+    SafePathKind, SessionAdmission, SessionOwner, SessionRunnerKind, SessionSpec,
+    WorkloadPrivilegePlan,
 };
 use erebor_runtime_events::SessionId;
 use erebor_runtime_ipc::v1::SessionCreateRequest;
@@ -184,6 +185,7 @@ pub(super) fn admit(
             context.config.max_session_output_bytes,
             context.config.session_output_rotation_bytes,
             256,
+            OutputStreamRequirements::required(),
         )
         .map_err(invalid_spec)?,
         evidence_requirements: vec![

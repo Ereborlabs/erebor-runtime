@@ -816,11 +816,7 @@ impl HelperActiveSession {
                     return self.observe_exit(exit_code, signal);
                 }
                 SessionHelperEvent::Failed { reason } => {
-                    return SessionRunnerProtocolSnafu {
-                        runner: self.runner.as_str().to_owned(),
-                        reason,
-                    }
-                    .fail();
+                    return self.observe_failure(reason);
                 }
                 SessionHelperEvent::Started { .. } | SessionHelperEvent::Health { .. } => {}
             }
@@ -833,6 +829,16 @@ impl HelperActiveSession {
         signal: Option<i32>,
     ) -> Result<ActiveSessionExit, RuntimeError> {
         let exit = ActiveSessionExit::new(exit_code, signal);
+        self.observed_exit = Some(exit.clone());
+        let _status = self.child.wait().context(SessionRunnerLaunchSnafu {
+            runner: self.runner.as_str().to_owned(),
+            program: String::from("erebor-session-helper"),
+        })?;
+        Ok(exit)
+    }
+
+    fn observe_failure(&mut self, reason: String) -> Result<ActiveSessionExit, RuntimeError> {
+        let exit = ActiveSessionExit::failed(Some(125), None, reason);
         self.observed_exit = Some(exit.clone());
         let _status = self.child.wait().context(SessionRunnerLaunchSnafu {
             runner: self.runner.as_str().to_owned(),
@@ -858,19 +864,27 @@ impl ActiveSession for HelperActiveSession {
     fn stop(&mut self, grace_period: Duration) -> Result<ActiveSessionExit, RuntimeError> {
         let grace_period_ms = u64::try_from(grace_period.as_millis()).unwrap_or(u64::MAX);
         let event = self.command(&SessionHelperCommand::Stop { grace_period_ms })?;
-        if let SessionHelperEvent::Exited { exit_code, signal } = event {
-            self.observe_exit(exit_code, signal)
-        } else {
-            self.wait_for_exit()
+        match event {
+            SessionHelperEvent::Exited { exit_code, signal } => {
+                self.observe_exit(exit_code, signal)
+            }
+            SessionHelperEvent::Failed { reason } => self.observe_failure(reason),
+            SessionHelperEvent::Started { .. } | SessionHelperEvent::Health { .. } => {
+                self.wait_for_exit()
+            }
         }
     }
 
     fn kill(&mut self, signal: ActiveSessionSignal) -> Result<ActiveSessionExit, RuntimeError> {
         let event = self.command(&SessionHelperCommand::Kill { signal })?;
-        if let SessionHelperEvent::Exited { exit_code, signal } = event {
-            self.observe_exit(exit_code, signal)
-        } else {
-            self.wait_for_exit()
+        match event {
+            SessionHelperEvent::Exited { exit_code, signal } => {
+                self.observe_exit(exit_code, signal)
+            }
+            SessionHelperEvent::Failed { reason } => self.observe_failure(reason),
+            SessionHelperEvent::Started { .. } | SessionHelperEvent::Health { .. } => {
+                self.wait_for_exit()
+            }
         }
     }
 
@@ -896,11 +910,10 @@ impl ActiveSession for HelperActiveSession {
                 self.observe_exit(exit_code, signal)?;
                 Ok(ActiveSessionHealth::Exited)
             }
-            SessionHelperEvent::Failed { reason } => SessionRunnerProtocolSnafu {
-                runner: self.runner.as_str().to_owned(),
-                reason,
+            SessionHelperEvent::Failed { reason } => {
+                self.observe_failure(reason)?;
+                Ok(ActiveSessionHealth::Exited)
             }
-            .fail(),
             SessionHelperEvent::Started { .. } => Ok(ActiveSessionHealth::Starting),
         }
     }

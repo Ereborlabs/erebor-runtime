@@ -9,6 +9,21 @@ use std::{
 #[test]
 #[ignore = "requires Linux, Docker, and privileged containers"]
 fn daemon_control_plane_runs_in_systemd_container() -> Result<(), Box<dyn Error>> {
+    run_systemd_probe(["/usr/local/lib/erebor/daemon-systemd-control-plane.sh"])
+}
+
+#[test]
+#[ignore = "requires Linux, Docker, and privileged containers"]
+fn required_session_output_and_retention_contract_runs_in_systemd_container(
+) -> Result<(), Box<dyn Error>> {
+    run_systemd_probe([
+        "/usr/bin/env",
+        "EREBOR_SESSION_RUNTIME_PROBE=output-contract",
+        "/usr/local/lib/erebor/daemon-systemd-control-plane.sh",
+    ])
+}
+
+fn run_systemd_probe<const N: usize>(arguments: [&str; N]) -> Result<(), Box<dyn Error>> {
     if env::consts::OS != "linux" {
         return Err("the daemon systemd-container probe requires Linux".into());
     }
@@ -16,7 +31,7 @@ fn daemon_control_plane_runs_in_systemd_container() -> Result<(), Box<dyn Error>
     let image = env::var("EREBOR_DAEMON_SYSTEMD_IMAGE")
         .unwrap_or_else(|_| "erebor-daemon-systemd:local".to_owned());
     let container = SystemdContainer::start(&image)?;
-    let output = container.exec(["/usr/local/lib/erebor/daemon-systemd-control-plane.sh"])?;
+    let output = container.exec(arguments)?;
     if output.status.success() {
         return Ok(());
     }

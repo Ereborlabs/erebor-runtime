@@ -13,7 +13,7 @@ use crate::{SessionHelperError, StreamKind};
 
 use super::{
     output::HelperOutput,
-    workload::{pump_output, WorkloadExit},
+    workload::{pump_output, OutputFailureMonitor, WorkloadExit},
 };
 
 pub(super) struct DockerWorkload {
@@ -21,6 +21,7 @@ pub(super) struct DockerWorkload {
     container_id: String,
     logs: Child,
     output_pumps: Vec<thread::JoinHandle<()>>,
+    output_failures: OutputFailureMonitor,
 }
 
 impl DockerWorkload {
@@ -137,11 +138,13 @@ impl DockerWorkload {
                 location: snafu::Location::default(),
             })?;
         let mut output_pumps = Vec::new();
+        let (output_failures, failure_sender) = OutputFailureMonitor::new();
         if let Some(stdout) = logs.stdout.take() {
             output_pumps.push(pump_output(
                 stdout,
                 Arc::clone(&output.stdout),
                 StreamKind::Stdout.as_str(),
+                failure_sender.clone(),
             ));
         }
         if let Some(stderr) = logs.stderr.take() {
@@ -149,6 +152,7 @@ impl DockerWorkload {
                 stderr,
                 Arc::clone(&output.stderr),
                 StreamKind::Stderr.as_str(),
+                failure_sender,
             ));
         }
         Ok(Self {
@@ -156,11 +160,16 @@ impl DockerWorkload {
             container_id,
             logs,
             output_pumps,
+            output_failures,
         })
     }
 
     pub(super) fn stable_identity(&self) -> &str {
         &self.container_id
+    }
+
+    pub(super) fn take_output_failure(&self) -> Option<SessionHelperError> {
+        self.output_failures.take_failure()
     }
 
     pub(super) fn try_wait(&mut self) -> Result<Option<WorkloadExit>, SessionHelperError> {

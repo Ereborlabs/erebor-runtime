@@ -313,6 +313,32 @@ impl SessionRepository {
         Ok(record)
     }
 
+    pub fn set_retention_hold(
+        &self,
+        uid: u32,
+        session_id: &str,
+        retention_hold: bool,
+    ) -> Result<DurableSessionRecord, SessionRepositoryError> {
+        validate_session_id(session_id, &self.root)?;
+        let _guard = self.mutation_lock.lock().map_err(|_error| {
+            UnsafePathSnafu {
+                path: self.root.clone(),
+                reason: String::from("mutation lock is poisoned"),
+            }
+            .build()
+        })?;
+        let directory = self.session_directory(uid, session_id);
+        let mut record = self.read(&directory, session_id)?;
+        if record.retention_hold == retention_hold {
+            return Ok(record);
+        }
+        record.retention_hold = retention_hold;
+        record.generation = record.generation.saturating_add(1);
+        record.updated_at_unix_ms = unix_time_ms();
+        self.write(&directory, &record)?;
+        Ok(record)
+    }
+
     pub fn prune(
         &self,
         uid: u32,
@@ -642,6 +668,7 @@ mod tests {
                 1024,
                 512,
                 64,
+                erebor_runtime_core::OutputStreamRequirements::required(),
             )?,
             evidence_requirements: Vec::new(),
             tty: false,
@@ -786,6 +813,32 @@ mod tests {
         let recovered = repository.load(1000, "session-9f7b7f6e")?;
         assert_eq!(recovered.state(), SessionLifecycleState::Created);
         assert_eq!(recovered.generation(), created.generation());
+        Ok(())
+    }
+
+    #[test]
+    fn retention_hold_is_durable_and_blocks_removal_until_released(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = TempDir::new()?;
+        let repository = SessionRepository::new(temporary.path());
+        let created = repository.create(spec()?)?;
+        let held = repository.set_retention_hold(1000, "session-9f7b7f6e", true)?;
+
+        assert!(held.retention_hold());
+        assert_eq!(held.generation(), created.generation().saturating_add(1));
+        assert!(repository
+            .remove(1000, "session-9f7b7f6e", held.generation())
+            .is_err());
+        assert!(repository.load(1000, "session-9f7b7f6e")?.retention_hold());
+
+        let released = repository.set_retention_hold(1000, "session-9f7b7f6e", false)?;
+        assert!(!released.retention_hold());
+        assert_eq!(
+            repository
+                .remove(1000, "session-9f7b7f6e", released.generation())?
+                .state(),
+            SessionLifecycleState::Removed
+        );
         Ok(())
     }
 }

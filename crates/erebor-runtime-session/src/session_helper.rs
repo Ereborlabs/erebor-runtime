@@ -44,7 +44,15 @@ pub fn run_session_helper() -> Result<(), SessionHelperError> {
     });
     let mut control_connected = true;
     loop {
+        if let Some(failure) = workload.take_output_failure() {
+            fail_closed_for_output(&mut workload, failure, control_connected);
+            return Ok(());
+        }
         if let Some(exit) = workload.try_wait()? {
+            if let Some(failure) = workload.take_output_failure() {
+                fail_closed_for_output(&mut workload, failure, control_connected);
+                return Ok(());
+            }
             output.finish(exit.exit_code, exit.signal)?;
             if control_connected {
                 write_event(&SessionHelperEvent::Exited {
@@ -57,6 +65,10 @@ pub fn run_session_helper() -> Result<(), SessionHelperError> {
         match receiver.try_recv() {
             Ok(ControlInput::Command(command)) => {
                 if let Some(exit) = apply_command(&mut workload, command)? {
+                    if let Some(failure) = workload.take_output_failure() {
+                        fail_closed_for_output(&mut workload, failure, control_connected);
+                        return Ok(());
+                    }
                     output.finish(exit.exit_code, exit.signal)?;
                     if control_connected {
                         write_event(&SessionHelperEvent::Exited {
@@ -89,6 +101,19 @@ pub fn run_session_helper() -> Result<(), SessionHelperError> {
             Err(mpsc::TryRecvError::Disconnected | mpsc::TryRecvError::Empty) => {}
         }
         thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn fail_closed_for_output(
+    workload: &mut HelperWorkload,
+    failure: SessionHelperError,
+    control_connected: bool,
+) {
+    let _result = workload.kill(erebor_runtime_core::ActiveSessionSignal::Kill);
+    if control_connected {
+        let _result = write_event(&SessionHelperEvent::Failed {
+            reason: failure.to_string(),
+        });
     }
 }
 

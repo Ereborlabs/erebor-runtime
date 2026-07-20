@@ -1,23 +1,24 @@
 use erebor_runtime_ipc::v1::{
     AdminSessionInspectRequest, AdminSessionKillRequest, AdminSessionListRequest,
-    AdminSessionStopRequest, Header, SessionAttachRequest, SessionAttachResponse,
-    SessionCreateRequest, SessionCreateResponse, SessionEventRecord, SessionEventsEnd,
-    SessionEventsRequest, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
-    SessionInputLeaseResponse, SessionInspectRequest, SessionKillRequest, SessionListRequest,
-    SessionListResponse, SessionLogChunk, SessionLogsEnd, SessionLogsRequest, SessionPruneRequest,
-    SessionPruneResponse, SessionRecord, SessionRemoveRequest, SessionStartRequest,
-    SessionStopRequest, SessionWaitRequest, EREBOR_IDEMPOTENCY_KEY_HEADER,
-    KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
-    KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST, KIND_DAEMON_ERROR,
-    KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_REQUEST,
-    KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST,
-    KIND_SESSION_EVENT_RECORD, KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST,
-    KIND_SESSION_INPUT_LEASE_RENEW_REQUEST, KIND_SESSION_INPUT_LEASE_RESPONSE,
-    KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
-    KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST,
-    KIND_SESSION_LOG_CHUNK, KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_PRUNE_RESPONSE,
-    KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST, KIND_SESSION_START_REQUEST,
-    KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST,
+    AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, Header, SessionAttachRequest,
+    SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionEventRecord,
+    SessionEventsEnd, SessionEventsRequest, SessionInputLeaseReleaseRequest,
+    SessionInputLeaseRenewRequest, SessionInputLeaseResponse, SessionInspectRequest,
+    SessionKillRequest, SessionListRequest, SessionListResponse, SessionLogChunk, SessionLogsEnd,
+    SessionLogsRequest, SessionPruneRequest, SessionPruneResponse, SessionRecord,
+    SessionRemoveRequest, SessionStartRequest, SessionStopRequest, SessionWaitRequest,
+    EREBOR_IDEMPOTENCY_KEY_HEADER, KIND_ADMIN_SESSION_INSPECT_REQUEST,
+    KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
+    KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
+    KIND_DAEMON_ERROR, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_ATTACH_RESPONSE,
+    KIND_SESSION_CREATE_REQUEST, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_EVENTS_END,
+    KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
+    KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
+    KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST,
+    KIND_SESSION_LIST_REQUEST, KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END,
+    KIND_SESSION_LOGS_REQUEST, KIND_SESSION_LOG_CHUNK, KIND_SESSION_PRUNE_REQUEST,
+    KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST,
+    KIND_SESSION_START_REQUEST, KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST,
 };
 use snafu::ResultExt;
 use std::time::Duration;
@@ -384,6 +385,20 @@ impl DaemonClient {
     ) -> Result<SessionRecord> {
         self.session_mutation(
             KIND_ADMIN_SESSION_KILL_REQUEST,
+            &request,
+            KIND_SESSION_RECORD,
+            idempotency_key,
+        )
+        .await
+    }
+
+    pub async fn admin_session_set_retention_hold(
+        &self,
+        request: AdminSessionSetRetentionHoldRequest,
+        idempotency_key: &str,
+    ) -> Result<SessionRecord> {
+        self.session_mutation(
+            KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
             &request,
             KIND_SESSION_RECORD,
             idempotency_key,

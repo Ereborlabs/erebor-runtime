@@ -4,6 +4,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use snafu::ResultExt;
@@ -33,6 +34,24 @@ pub(super) struct RuntimeGuardServerConfig {
     pub(super) owner_gid: u32,
     pub(super) directory_mode: u32,
     pub(super) socket_mode: u32,
+    pub(super) limits: RuntimeGuardServerLimits,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct RuntimeGuardServerLimits {
+    pub(super) connection_limit: usize,
+    pub(super) worker_count: usize,
+    pub(super) connection_deadline: Duration,
+}
+
+impl Default for RuntimeGuardServerLimits {
+    fn default() -> Self {
+        Self {
+            connection_limit: 16,
+            worker_count: 4,
+            connection_deadline: Duration::from_millis(DEFAULT_TIMEOUT_MS),
+        }
+    }
 }
 
 impl RuntimeGuardServerConfig {
@@ -43,6 +62,7 @@ impl RuntimeGuardServerConfig {
             owner_gid: rustix::process::getegid().as_raw(),
             directory_mode: 0o700,
             socket_mode: 0o600,
+            limits: RuntimeGuardServerLimits::default(),
         }
     }
 }

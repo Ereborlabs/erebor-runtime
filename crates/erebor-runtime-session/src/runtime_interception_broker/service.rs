@@ -15,7 +15,8 @@ use super::{
     endpoint::RuntimeInterceptionEndpoint,
     handlers::SessionInterceptionRouter,
     server::{
-        RuntimeGuardServerConfig, RuntimeInterceptionBrokerServer, SessionInterceptionRegistration,
+        RuntimeGuardServerConfig, RuntimeGuardServerLimits, RuntimeInterceptionBrokerServer,
+        SessionInterceptionRegistration,
     },
 };
 
@@ -23,11 +24,30 @@ pub struct RuntimeGuardService {
     runtime_root: PathBuf,
     owner_uid: u32,
     owner_gid: u32,
+    limits: RuntimeGuardServerLimits,
     sessions: Mutex<HashMap<(u32, String), SessionInterceptionRegistration>>,
 }
 
 impl RuntimeGuardService {
     pub fn new(runtime_root: impl Into<PathBuf>) -> Result<Self, RuntimeInterceptionBrokerError> {
+        Self::new_with_limits(runtime_root, RuntimeGuardServerLimits::default())
+    }
+
+    fn new_with_limits(
+        runtime_root: impl Into<PathBuf>,
+        limits: RuntimeGuardServerLimits,
+    ) -> Result<Self, RuntimeInterceptionBrokerError> {
+        if limits.connection_limit == 0
+            || limits.worker_count == 0
+            || limits.worker_count > limits.connection_limit
+            || limits.connection_deadline.is_zero()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "runtime guard limits are invalid",
+            ))
+            .context(BrokerIoSnafu);
+        }
         let runtime_root = runtime_root.into();
         fs::create_dir_all(&runtime_root).context(BrokerIoSnafu)?;
         fs::set_permissions(&runtime_root, fs::Permissions::from_mode(0o711))
@@ -36,6 +56,7 @@ impl RuntimeGuardService {
             runtime_root,
             owner_uid: geteuid().as_raw(),
             owner_gid: getegid().as_raw(),
+            limits,
             sessions: Mutex::new(HashMap::new()),
         })
     }
@@ -100,6 +121,7 @@ impl RuntimeGuardService {
             owner_gid: gid,
             directory_mode: 0o710,
             socket_mode: 0o620,
+            limits: self.limits,
         }) {
             Ok(server) => server,
             Err(error) => {
@@ -178,7 +200,12 @@ fn validate_session_id(session_id: &str) -> Result<(), RuntimeInterceptionBroker
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, os::unix::net::UnixStream};
+    use std::{
+        fs,
+        os::unix::net::UnixStream,
+        thread,
+        time::{Duration, Instant},
+    };
 
     use erebor_runtime_ipc::v1::{
         DaemonStatusRequest, Envelope, GuardHello, GuardHelloAck, KIND_DAEMON_STATUS_REQUEST,
@@ -188,8 +215,9 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::{
-        runtime_interception_broker::wire::{
-            envelope_with_token, read_frame_from_stream, write_frame_to_stream,
+        runtime_interception_broker::{
+            server::RuntimeGuardServerLimits,
+            wire::{envelope_with_token, read_frame_from_stream, write_frame_to_stream},
         },
         InterceptionBrokerClient, RuntimeGuardService, SessionInterceptionRouter,
     };
@@ -256,6 +284,65 @@ mod tests {
         assert!(!rejection.accepted);
         assert!(rejection.reason.contains(KIND_DAEMON_STATUS_REQUEST));
         service.stop_session(uid, "session-cross-service")?;
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_guard_limits_idle_connections_and_drains_on_stop(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = TempDir::new()?;
+        let service = RuntimeGuardService::new_with_limits(
+            temporary.path(),
+            RuntimeGuardServerLimits {
+                connection_limit: 1,
+                worker_count: 1,
+                connection_deadline: Duration::from_millis(100),
+            },
+        )?;
+        let uid = geteuid().as_raw();
+        let gid = getegid().as_raw();
+        let endpoint = service.start_session(
+            uid,
+            gid,
+            "session-connection-limit",
+            "agent",
+            SessionInterceptionRouter::new(),
+        )?;
+        let _idle = UnixStream::connect(endpoint.path())?;
+        thread::sleep(Duration::from_millis(10));
+
+        assert!(InterceptionBrokerClient::send_hello(
+            &endpoint,
+            GuardHello {
+                protocol_version: PROTOCOL_VERSION,
+                session_id: String::from("session-connection-limit"),
+                actor_id: String::from("agent"),
+                guard_pid: i64::from(std::process::id()),
+                runner_kind: String::from("linux-host"),
+                platform: String::from("linux-x86_64"),
+                capabilities: Vec::new(),
+            },
+        )
+        .is_err());
+
+        thread::sleep(Duration::from_millis(120));
+        let ack = InterceptionBrokerClient::send_hello(
+            &endpoint,
+            GuardHello {
+                protocol_version: PROTOCOL_VERSION,
+                session_id: String::from("session-connection-limit"),
+                actor_id: String::from("agent"),
+                guard_pid: i64::from(std::process::id()),
+                runner_kind: String::from("linux-host"),
+                platform: String::from("linux-x86_64"),
+                capabilities: Vec::new(),
+            },
+        )?;
+        assert!(ack.accepted);
+
+        let stopped_at = Instant::now();
+        service.stop_session(uid, "session-connection-limit")?;
+        assert!(stopped_at.elapsed() < Duration::from_secs(1));
         Ok(())
     }
 }

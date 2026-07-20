@@ -73,6 +73,8 @@ pub const KIND_ADMIN_SESSION_INSPECT_REQUEST: &str =
     "erebor.runtime.ipc.v1.AdminSessionInspectRequest";
 pub const KIND_ADMIN_SESSION_STOP_REQUEST: &str = "erebor.runtime.ipc.v1.AdminSessionStopRequest";
 pub const KIND_ADMIN_SESSION_KILL_REQUEST: &str = "erebor.runtime.ipc.v1.AdminSessionKillRequest";
+pub const KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST: &str =
+    "erebor.runtime.ipc.v1.AdminSessionSetRetentionHoldRequest";
 pub const KIND_DAEMON_COMMAND_RESULT: &str = "erebor.runtime.ipc.v1.DaemonCommandResult";
 pub const KIND_DAEMON_ERROR: &str = "erebor.runtime.ipc.v1.DaemonError";
 pub const EREBOR_IDEMPOTENCY_KEY_HEADER: &str = "erebor-idempotency-key";

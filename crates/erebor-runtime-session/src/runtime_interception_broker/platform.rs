@@ -44,8 +44,8 @@ mod unix {
         },
         path::{Path, PathBuf},
         sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            mpsc, Arc, Mutex,
         },
         thread::{self, JoinHandle},
         time::Duration,
@@ -68,7 +68,7 @@ mod unix {
         BrokerSessionAccessConflictSnafu, BrokerStateLockSnafu,
     };
     use crate::runtime_interception_broker::{
-        constants::{DEFAULT_TIMEOUT_MS, RUNTIME_INTERCEPTION_SOCKET_NAME},
+        constants::RUNTIME_INTERCEPTION_SOCKET_NAME,
         endpoint::RuntimeInterceptionEndpoint,
         server::{GuardPeerIdentity, RuntimeGuardServerConfig, RuntimeInterceptionBrokerServer},
         wire::{envelope_with_token, read_frame_from_stream, write_frame_to_stream},
@@ -82,8 +82,49 @@ mod unix {
         endpoint_path: PathBuf,
         session_group: Mutex<Option<u32>>,
         shutdown: Arc<AtomicBool>,
-        worker: Mutex<Option<JoinHandle<()>>>,
+        acceptor: Mutex<Option<JoinHandle<()>>>,
+        workers: Mutex<Vec<JoinHandle<()>>>,
         owns_directory: bool,
+    }
+
+    #[derive(Clone)]
+    struct GuardConnectionCapacity {
+        available: Arc<AtomicUsize>,
+    }
+
+    struct GuardConnectionPermit {
+        available: Arc<AtomicUsize>,
+    }
+
+    struct GuardConnection {
+        stream: UnixStream,
+        peer: Option<GuardPeerIdentity>,
+        _permit: GuardConnectionPermit,
+    }
+
+    impl GuardConnectionCapacity {
+        fn new(limit: usize) -> Self {
+            Self {
+                available: Arc::new(AtomicUsize::new(limit)),
+            }
+        }
+
+        fn try_acquire(&self) -> Option<GuardConnectionPermit> {
+            self.available
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |available| {
+                    available.checked_sub(1)
+                })
+                .ok()
+                .map(|_previous| GuardConnectionPermit {
+                    available: Arc::clone(&self.available),
+                })
+        }
+    }
+
+    impl Drop for GuardConnectionPermit {
+        fn drop(&mut self) {
+            self.available.fetch_add(1, Ordering::Release);
+        }
     }
 
     impl RuntimeInterceptionBrokerPlatform for Platform {
@@ -126,25 +167,62 @@ mod unix {
             .context(BrokerIoSnafu)?;
             listener.set_nonblocking(true).context(BrokerIoSnafu)?;
             let shutdown = Arc::new(AtomicBool::new(false));
-            let worker_shutdown = Arc::clone(&shutdown);
-            let weak_server = Arc::downgrade(&server);
-            let worker = thread::spawn(move || {
-                let timeout = Duration::from_millis(DEFAULT_TIMEOUT_MS);
-                while !worker_shutdown.load(Ordering::SeqCst) {
+            let deadline = config.limits.connection_deadline;
+            let capacity = GuardConnectionCapacity::new(config.limits.connection_limit);
+            let (sender, receiver) = mpsc::sync_channel(config.limits.connection_limit);
+            let receiver = Arc::new(Mutex::new(receiver));
+            let mut workers = Vec::with_capacity(config.limits.worker_count);
+            for _ in 0..config.limits.worker_count {
+                let worker_shutdown = Arc::clone(&shutdown);
+                let worker_receiver = Arc::clone(&receiver);
+                let weak_server = Arc::downgrade(&server);
+                workers.push(thread::spawn(move || loop {
+                    let connection = match worker_receiver.lock() {
+                        Ok(receiver) => receiver.recv_timeout(Duration::from_millis(1)),
+                        Err(_error) => return,
+                    };
+                    match connection {
+                        Ok(GuardConnection {
+                            mut stream,
+                            peer,
+                            _permit,
+                        }) => {
+                            let _result = stream.set_read_timeout(Some(deadline));
+                            let _result = stream.set_write_timeout(Some(deadline));
+                            let Some(server) = weak_server.upgrade() else {
+                                return;
+                            };
+                            server.handle_stream(&mut stream, peer);
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout)
+                            if worker_shutdown.load(Ordering::SeqCst) =>
+                        {
+                            return;
+                        }
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    }
+                }));
+            }
+            let acceptor_shutdown = Arc::clone(&shutdown);
+            let acceptor_capacity = capacity.clone();
+            let acceptor = thread::spawn(move || {
+                while !acceptor_shutdown.load(Ordering::SeqCst) {
                     match listener.accept() {
-                        Ok((mut stream, _addr)) => {
+                        Ok((stream, _addr)) => {
                             let peer = rustix::net::sockopt::socket_peercred(&stream).ok().map(
                                 |credentials| GuardPeerIdentity {
                                     pid: Some(credentials.pid.as_raw_nonzero().get() as u32),
                                     uid: credentials.uid.as_raw(),
                                 },
                             );
-                            let Some(server) = weak_server.upgrade() else {
-                                break;
+                            let Some(permit) = acceptor_capacity.try_acquire() else {
+                                continue;
                             };
-                            thread::spawn(move || {
-                                let _result = stream.set_write_timeout(Some(timeout));
-                                server.handle_stream(&mut stream, peer);
+                            let _result = sender.try_send(GuardConnection {
+                                stream,
+                                peer,
+                                _permit: permit,
                             });
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -162,7 +240,8 @@ mod unix {
                 endpoint_path: socket_path,
                 session_group: Mutex::new(None),
                 shutdown,
-                worker: Mutex::new(Some(worker)),
+                acceptor: Mutex::new(Some(acceptor)),
+                workers: Mutex::new(workers),
                 owns_directory,
             }))
         }
@@ -284,8 +363,13 @@ mod unix {
         fn shutdown(self: Box<Self>) {
             self.shutdown.store(true, Ordering::SeqCst);
             let _result = UnixStream::connect(&self.endpoint_path);
-            if let Ok(mut worker) = self.worker.lock() {
-                if let Some(worker) = worker.take() {
+            if let Ok(mut acceptor) = self.acceptor.lock() {
+                if let Some(acceptor) = acceptor.take() {
+                    let _result = acceptor.join();
+                }
+            }
+            if let Ok(mut workers) = self.workers.lock() {
+                for worker in workers.drain(..) {
                     let _result = worker.join();
                 }
             }

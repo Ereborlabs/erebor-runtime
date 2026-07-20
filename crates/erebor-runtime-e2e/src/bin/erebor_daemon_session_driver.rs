@@ -1,11 +1,12 @@
 use std::{io::Write, path::PathBuf};
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use erebor_runtime_client::DaemonClient;
 use erebor_runtime_ipc::v1::{
-    AdminSessionKillRequest, AdminSessionStopRequest, SessionAttachRequest, SessionCreateRequest,
-    SessionEnvironmentEntry, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
-    SessionPruneRequest, SessionRecord,
+    AdminSessionKillRequest, AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest,
+    SessionAttachRequest, SessionCreateRequest, SessionEnvironmentEntry,
+    SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionPruneRequest,
+    SessionRecord,
 };
 
 const FIXTURE_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -39,6 +40,7 @@ enum DriverCommand {
     AdminInspect(AdminSessionArgs),
     AdminStop(AdminStopArgs),
     AdminKill(AdminKillArgs),
+    AdminSetRetentionHold(AdminSetRetentionHoldArgs),
 }
 
 #[derive(Args)]
@@ -182,6 +184,17 @@ struct AdminKillArgs {
     session_id: String,
     #[arg(long, default_value = "kill")]
     signal: String,
+    #[arg(long)]
+    key: String,
+}
+
+#[derive(Args)]
+struct AdminSetRetentionHoldArgs {
+    #[arg(long)]
+    uid: u32,
+    session_id: String,
+    #[arg(long, action = ArgAction::Set)]
+    retention_hold: bool,
     #[arg(long)]
     key: String,
 }
@@ -426,13 +439,27 @@ async fn execute(
                     .await?,
             );
         }
+        DriverCommand::AdminSetRetentionHold(args) => {
+            print_record(
+                &client
+                    .admin_session_set_retention_hold(
+                        AdminSessionSetRetentionHoldRequest {
+                            target_uid: args.uid,
+                            session_id: args.session_id,
+                            retention_hold: args.retention_hold,
+                        },
+                        &args.key,
+                    )
+                    .await?,
+            );
+        }
     }
     Ok(())
 }
 
 fn print_record(record: &SessionRecord) {
     println!(
-        "session_id={} state={} generation={} owner_uid={} runner={} stable_identity={} failure={} retry_expires_unix_ms={}",
+        "session_id={} state={} generation={} owner_uid={} runner={} stable_identity={} failure={} retention_hold={} retry_expires_unix_ms={}",
         record.session_id,
         record.state,
         record.generation,
@@ -440,6 +467,7 @@ fn print_record(record: &SessionRecord) {
         record.runner_id,
         record.stable_runner_identity,
         record.failure,
+        record.retention_hold,
         record.retry_guarantee_expires_unix_ms
     );
 }

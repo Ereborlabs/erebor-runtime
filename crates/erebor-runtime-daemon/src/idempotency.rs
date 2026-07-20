@@ -82,6 +82,11 @@ pub(crate) enum MutationIntent {
         terminal_before_unix_ms: u64,
         maximum_sessions: u32,
     },
+    SessionSetRetentionHold {
+        uid: u32,
+        session_id: String,
+        retention_hold: bool,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -389,6 +394,9 @@ impl MutationIntent {
                 uid, session_id, ..
             }
             | Self::SessionInputLeaseRelease {
+                uid, session_id, ..
+            }
+            | Self::SessionSetRetentionHold {
                 uid, session_id, ..
             } => Some((*uid, session_id)),
             Self::Reload { .. } | Self::Stop | Self::SessionPrune { .. } => None,

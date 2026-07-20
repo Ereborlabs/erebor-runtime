@@ -12,28 +12,29 @@ use erebor_runtime_error::ErrorExt;
 use erebor_runtime_ipc::{
     v1::{
         AdminSessionInspectRequest, AdminSessionKillRequest, AdminSessionListRequest,
-        AdminSessionStopRequest, DaemonCommandResult, DaemonError as DaemonErrorMessage,
-        DaemonHello, DaemonHelloAck, DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd,
-        DaemonLogsRequest, DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse,
-        DaemonStopRequest, Envelope, EnvelopeServiceFamily, SessionAttachRequest,
-        SessionCreateRequest, SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
+        AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, DaemonCommandResult,
+        DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
+        DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
+        DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
+        Envelope, EnvelopeServiceFamily, SessionAttachRequest, SessionCreateRequest,
+        SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
         SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInspectRequest,
         SessionKillRequest, SessionListRequest, SessionLogChunk, SessionLogsEnd,
         SessionLogsRequest, SessionPruneRequest, SessionRemoveRequest, SessionStartRequest,
         SessionStopRequest, SessionWaitRequest, KIND_ADMIN_SESSION_INSPECT_REQUEST,
         KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
-        KIND_ADMIN_SESSION_STOP_REQUEST, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR,
-        KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
-        KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
-        KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST, KIND_SESSION_ATTACH_REQUEST,
-        KIND_SESSION_CREATE_REQUEST, KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST,
-        KIND_SESSION_EVENT_RECORD, KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST,
-        KIND_SESSION_INPUT_LEASE_RENEW_REQUEST, KIND_SESSION_INSPECT_REQUEST,
-        KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST, KIND_SESSION_LIST_RESPONSE,
-        KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST, KIND_SESSION_LOG_CHUNK,
-        KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST,
-        KIND_SESSION_START_REQUEST, KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST,
-        PROTOCOL_VERSION,
+        KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
+        KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
+        KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD,
+        KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
+        KIND_DAEMON_STOP_REQUEST, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST,
+        KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
+        KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
+        KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
+        KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST,
+        KIND_SESSION_LOG_CHUNK, KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_RECORD,
+        KIND_SESSION_REMOVE_REQUEST, KIND_SESSION_START_REQUEST, KIND_SESSION_STOP_REQUEST,
+        KIND_SESSION_WAIT_REQUEST, PROTOCOL_VERSION,
     },
     AsyncFrameCodec,
 };
@@ -408,6 +409,10 @@ impl DaemonControlState {
             }
             KIND_ADMIN_SESSION_KILL_REQUEST => {
                 self.admin_session_kill(stream, peer, &envelope).await
+            }
+            KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST => {
+                self.admin_session_set_retention_hold(stream, peer, &envelope)
+                    .await
             }
             _ => Err(InvalidRequestSnafu {
                 reason: format!(
@@ -1002,6 +1007,30 @@ impl DaemonControlState {
         .await
     }
 
+    async fn admin_session_set_retention_hold(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        self.require_root(peer)?;
+        let request: AdminSessionSetRetentionHoldRequest = envelope
+            .decode_typed_payload(KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_admin_session_mutation(
+            stream,
+            peer,
+            "admin-session-set-retention-hold",
+            envelope,
+            MutationIntent::SessionSetRetentionHold {
+                uid: request.target_uid,
+                session_id: request.session_id,
+                retention_hold: request.retention_hold,
+            },
+        )
+        .await
+    }
+
     async fn apply_admin_session_mutation(
         &self,
         stream: &mut UnixStream,
@@ -1342,6 +1371,7 @@ fn is_mutating_message(kind: &str) -> bool {
             | KIND_SESSION_PRUNE_REQUEST
             | KIND_ADMIN_SESSION_STOP_REQUEST
             | KIND_ADMIN_SESSION_KILL_REQUEST
+            | KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST
     )
 }
 

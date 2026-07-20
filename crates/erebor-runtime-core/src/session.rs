@@ -17,9 +17,9 @@ pub use active::{
 };
 pub use admission::{
     ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, EvidenceRequirement,
-    FilesystemProjection, ImmutableIdentity, OutputPlan, RunRequest, RunnerBinding,
-    RunnerCapabilityDocument, SafePathBinding, SafePathKind, SessionAdmission, SessionOwner,
-    SessionSpec, WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION,
+    FilesystemProjection, ImmutableIdentity, OutputPlan, OutputStreamRequirements, RunRequest,
+    RunnerBinding, RunnerCapabilityDocument, SafePathBinding, SafePathKind, SessionAdmission,
+    SessionOwner, SessionSpec, WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION,
     SESSION_SPEC_SCHEMA_VERSION,
 };
 use docker::DockerSessionOutputMode;
@@ -150,12 +150,26 @@ pub enum ActiveSessionSignal {
 pub struct ActiveSessionExit {
     exit_code: Option<i32>,
     signal: Option<i32>,
+    failure: Option<String>,
 }
 
 impl ActiveSessionExit {
     #[must_use]
     pub const fn new(exit_code: Option<i32>, signal: Option<i32>) -> Self {
-        Self { exit_code, signal }
+        Self {
+            exit_code,
+            signal,
+            failure: None,
+        }
+    }
+
+    #[must_use]
+    pub fn failed(exit_code: Option<i32>, signal: Option<i32>, reason: impl Into<String>) -> Self {
+        Self {
+            exit_code,
+            signal,
+            failure: Some(reason.into()),
+        }
     }
 
     #[must_use]
@@ -166,6 +180,11 @@ impl ActiveSessionExit {
     #[must_use]
     pub const fn signal(&self) -> Option<i32> {
         self.signal
+    }
+
+    #[must_use]
+    pub fn failure(&self) -> Option<&str> {
+        self.failure.as_deref()
     }
 }
 

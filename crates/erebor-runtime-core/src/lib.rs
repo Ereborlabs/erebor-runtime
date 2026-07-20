@@ -69,12 +69,12 @@ pub use session::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
     ActiveSessionSignalKind, DaemonFailureMode, DockerSessionRunner, EndpointProjection,
     EvidenceRequirement, FilesystemProjection, ImmutableIdentity, LinuxHostSessionRunner,
-    OutputEndpoints, OutputPlan, RunRequest, RunnerBinding, RunnerCapabilityDocument,
-    SafePathBinding, SafePathKind, SessionAdmission, SessionCapturedRunOutcome,
-    SessionHelperCommand, SessionHelperEvent, SessionHelperHandoff, SessionHelperLaunchConfig,
-    SessionLifecycleState, SessionOwner, SessionRunOutcome, SessionRunner, SessionRunnerLauncher,
-    SessionSpec, WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION,
-    SESSION_HELPER_PROTOCOL_VERSION, SESSION_SPEC_SCHEMA_VERSION,
+    OutputEndpoints, OutputPlan, OutputStreamRequirements, RunRequest, RunnerBinding,
+    RunnerCapabilityDocument, SafePathBinding, SafePathKind, SessionAdmission,
+    SessionCapturedRunOutcome, SessionHelperCommand, SessionHelperEvent, SessionHelperHandoff,
+    SessionHelperLaunchConfig, SessionLifecycleState, SessionOwner, SessionRunOutcome,
+    SessionRunner, SessionRunnerLauncher, SessionSpec, WorkloadPrivilegePlan,
+    RUNNER_CAPABILITY_SCHEMA_VERSION, SESSION_HELPER_PROTOCOL_VERSION, SESSION_SPEC_SCHEMA_VERSION,
 };
 pub use session_registry::{
     SessionContextArtifact, SessionRegistry, SessionRegistryFinish, SessionRegistryRecord,

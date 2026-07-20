@@ -180,6 +180,11 @@ impl DaemonSessionService {
                 terminal_before_unix_ms,
                 maximum_sessions,
             } => self.prune(*uid, *terminal_before_unix_ms, *maximum_sessions),
+            MutationIntent::SessionSetRetentionHold {
+                uid,
+                session_id,
+                retention_hold,
+            } => self.set_retention_hold(*uid, session_id, *retention_hold),
             MutationIntent::Reload { .. } | MutationIntent::Stop => {
                 unreachable!("daemon-only mutation reached session service")
             }
@@ -617,6 +622,19 @@ impl DaemonSessionService {
         )
     }
 
+    fn set_retention_hold(
+        &self,
+        uid: u32,
+        session_id: &str,
+        retention_hold: bool,
+    ) -> Result<MutationResponse> {
+        let record = self
+            .supervisor
+            .set_retention_hold(uid, session_id, retention_hold)
+            .context(SessionSnafu)?;
+        message(KIND_SESSION_RECORD, &self.record(&record))
+    }
+
     fn prepare_runtime(
         &self,
         spec: &SessionSpec,
@@ -783,12 +801,7 @@ impl DaemonSessionService {
     }
 
     fn output_stores(&self, spec: &SessionSpec) -> Result<SessionOutputStores> {
-        SessionOutputStores::open(
-            spec.output().root(),
-            spec.output().maximum_bytes(),
-            spec.output().rotation_bytes(),
-        )
-        .context(SessionOutputSnafu)
+        SessionOutputStores::open(spec.output()).context(SessionOutputSnafu)
     }
 
     fn guard_credential(&self, spec: &SessionSpec, recovering: bool) -> Result<GuardCredential> {

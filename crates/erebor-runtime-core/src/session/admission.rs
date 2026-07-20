@@ -9,7 +9,7 @@ use snafu::ensure;
 
 use crate::{error::session_spec::InvalidSnafu, SessionRunnerKind, SessionSpecError};
 
-pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 1;
+pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 2;
 pub const RUNNER_CAPABILITY_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -613,6 +613,41 @@ pub struct OutputPlan {
     maximum_bytes: u64,
     rotation_bytes: u64,
     maximum_records_per_read: u32,
+    requirements: OutputStreamRequirements,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct OutputStreamRequirements {
+    stdout: bool,
+    stderr: bool,
+}
+
+impl OutputStreamRequirements {
+    #[must_use]
+    pub const fn required() -> Self {
+        Self {
+            stdout: true,
+            stderr: true,
+        }
+    }
+
+    #[must_use]
+    pub const fn optional() -> Self {
+        Self {
+            stdout: false,
+            stderr: false,
+        }
+    }
+
+    #[must_use]
+    pub const fn stdout_required(self) -> bool {
+        self.stdout
+    }
+
+    #[must_use]
+    pub const fn stderr_required(self) -> bool {
+        self.stderr
+    }
 }
 
 impl OutputPlan {
@@ -621,12 +656,14 @@ impl OutputPlan {
         maximum_bytes: u64,
         rotation_bytes: u64,
         maximum_records_per_read: u32,
+        requirements: OutputStreamRequirements,
     ) -> Result<Self, SessionSpecError> {
         let value = Self {
             root,
             maximum_bytes,
             rotation_bytes,
             maximum_records_per_read,
+            requirements,
         };
         value.validate()?;
         Ok(value)
@@ -665,6 +702,11 @@ impl OutputPlan {
     #[must_use]
     pub const fn maximum_records_per_read(&self) -> u32 {
         self.maximum_records_per_read
+    }
+
+    #[must_use]
+    pub const fn requirements(&self) -> OutputStreamRequirements {
+        self.requirements
     }
 }
 
@@ -1218,8 +1260,9 @@ mod tests {
 
     use super::{
         ActiveSessionSignalKind, DaemonFailureMode, EvidenceRequirement, ImmutableIdentity,
-        OutputPlan, RunnerBinding, RunnerCapabilityDocument, SafePathBinding, SafePathKind,
-        SessionAdmission, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
+        OutputPlan, OutputStreamRequirements, RunnerBinding, RunnerCapabilityDocument,
+        SafePathBinding, SafePathKind, SessionAdmission, SessionOwner, SessionSpec,
+        WorkloadPrivilegePlan,
     };
     use crate::SessionRunnerKind;
 
@@ -1282,6 +1325,7 @@ mod tests {
                 1024,
                 512,
                 64,
+                OutputStreamRequirements::required(),
             )?,
             evidence_requirements: vec![EvidenceRequirement::new("audit", true)?],
             tty: false,

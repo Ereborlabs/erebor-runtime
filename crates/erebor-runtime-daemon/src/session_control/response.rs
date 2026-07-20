@@ -21,5 +21,6 @@ pub(super) fn session_record(
             .map_or_else(String::new, |binding| binding.stable_identity().to_owned()),
         failure: record.failure().unwrap_or_default().to_owned(),
         retry_guarantee_expires_unix_ms,
+        retention_hold: record.retention_hold(),
     }
 }
