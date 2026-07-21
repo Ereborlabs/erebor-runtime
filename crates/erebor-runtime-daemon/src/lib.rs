@@ -1,9 +1,11 @@
 //! Privileged local daemon control service for Erebor.
 
+mod approvals;
 mod config;
 mod control;
 mod error;
 mod idempotency;
+mod local_store;
 mod log;
 mod path_broker;
 mod paths;

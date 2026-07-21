@@ -26,6 +26,7 @@ use crate::{
     config::DaemonConfig,
     error::SessionSnafu,
     idempotency::{MutationIntent, MutationResponse},
+    local_store::DaemonLocalStore,
     path_broker::DescriptorBroker,
     DaemonPaths, Result,
 };
@@ -42,6 +43,7 @@ pub(crate) struct DaemonSessionApi {
     runtime_root: PathBuf,
     retry_horizon: Duration,
     descriptor_broker: Arc<DescriptorBroker>,
+    local_store: DaemonLocalStore,
 }
 
 impl DaemonSessionApi {
@@ -61,6 +63,7 @@ impl DaemonSessionApi {
         let state_root = paths.session_state_path();
         let runtime_root = paths.session_runtime_path();
         let descriptor_broker = Arc::new(DescriptorBroker::installed());
+        let local_store = DaemonLocalStore::installed(paths)?;
         let runtime = SessionRuntimeResources::new(
             state_root.clone(),
             runtime_root.clone(),
@@ -78,6 +81,7 @@ impl DaemonSessionApi {
             runtime_root,
             retry_horizon: Duration::from_secs(config.session_retry_horizon_seconds),
             descriptor_broker,
+            local_store,
         })
     }
 
@@ -176,7 +180,10 @@ impl DaemonSessionApi {
                 session_id,
                 retention_hold,
             } => self.set_retention_hold(*uid, session_id, *retention_hold),
-            MutationIntent::Reload { .. } | MutationIntent::Stop => {
+            MutationIntent::Reload { .. }
+            | MutationIntent::Stop
+            | MutationIntent::ApprovalApprove { .. }
+            | MutationIntent::ApprovalDeny { .. } => {
                 unreachable!("daemon-only mutation reached session service")
             }
         }
@@ -309,6 +316,7 @@ impl DaemonSessionApi {
                 .context(SessionSnafu)?,
             Err(source) => return Err(source).context(SessionSnafu),
         };
+        self.local_store.record_session_lease(record.spec())?;
         message(
             KIND_SESSION_CREATE_RESPONSE,
             &SessionCreateResponse {

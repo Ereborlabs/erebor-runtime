@@ -1,5 +1,6 @@
 use std::{any::Any, io, path::PathBuf};
 
+use erebor_runtime_approvals::ApprovalError;
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use erebor_runtime_ipc::IpcProtocolError;
 use erebor_runtime_session::SessionManagerError;
@@ -89,6 +90,12 @@ pub enum DaemonError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("daemon approval operation failed: {source}"))]
+    Approval {
+        source: ApprovalError,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, DaemonError>;
@@ -109,6 +116,7 @@ impl ErrorExt for DaemonError {
             Self::StateLock { .. } => StatusCode::Internal,
             Self::Ipc { source, .. } => source.status_code(),
             Self::Session { source, .. } => source.status_code(),
+            Self::Approval { source, .. } => source.status_code(),
         }
     }
 
@@ -117,6 +125,7 @@ impl ErrorExt for DaemonError {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Ipc { source, .. } => source.retry_hint(),
             Self::Session { source, .. } => source.retry_hint(),
+            Self::Approval { source, .. } => source.retry_hint(),
             Self::LockUnavailable { .. } | Self::AlreadyRunning { .. } => RetryHint::Retryable,
             _ => RetryHint::NonRetryable,
         }

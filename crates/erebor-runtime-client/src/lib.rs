@@ -1,5 +1,6 @@
 //! Typed local transport for the daemon-control service.
 
+mod approvals;
 mod error;
 mod session;
 
@@ -26,6 +27,7 @@ use tokio::{
     net::UnixStream,
 };
 
+pub use approvals::{ApprovalPage, ApprovalRecord};
 use error::{ConnectSnafu, DaemonSnafu, IpcSnafu, ProtocolSnafu, TimedOutSnafu};
 pub use error::{DaemonClientError, Result};
 pub use session::{SessionEventPage, SessionLogPage};

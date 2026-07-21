@@ -87,6 +87,15 @@ pub(crate) enum MutationIntent {
         session_id: String,
         retention_hold: bool,
     },
+    ApprovalApprove {
+        owner_uid: u32,
+        approval_id: String,
+    },
+    ApprovalDeny {
+        owner_uid: u32,
+        approval_id: String,
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -399,7 +408,11 @@ impl MutationIntent {
             | Self::SessionSetRetentionHold {
                 uid, session_id, ..
             } => Some((*uid, session_id)),
-            Self::Reload { .. } | Self::Stop | Self::SessionPrune { .. } => None,
+            Self::Reload { .. }
+            | Self::Stop
+            | Self::SessionPrune { .. }
+            | Self::ApprovalApprove { .. }
+            | Self::ApprovalDeny { .. } => None,
         }
     }
 }

@@ -60,9 +60,9 @@ report_failure() {
     cat /var/log/erebor/daemon.jsonl >&2 || true
   fi
   while IFS= read -r diagnostics; do
-    echo "helper diagnostics: $diagnostics" >&2
+    echo "runner controller diagnostics: $diagnostics" >&2
     cat "$diagnostics" >&2 || true
-  done < <(find /var/lib/erebor/users -name helper-diagnostics.log -type f 2>/dev/null)
+  done < <(find /var/lib/erebor/users -name '*-controller-diagnostics.log' -type f 2>/dev/null)
   exit "$status"
 }
 trap report_failure ERR

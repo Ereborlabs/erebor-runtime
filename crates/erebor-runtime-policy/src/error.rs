@@ -30,6 +30,21 @@ pub enum PolicyError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("mandatory policy layer `{layer}` did not cover this effect"))]
+    MissingMandatoryCoverage {
+        layer: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display(
+        "policy layers require incompatible mediations: `{first_layer}` and `{second_layer}`"
+    ))]
+    IncompatibleMediation {
+        first_layer: String,
+        second_layer: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, PolicyError>;
@@ -37,7 +52,10 @@ pub type Result<T> = std::result::Result<T, PolicyError>;
 impl ErrorExt for PolicyError {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::EmptyPolicy { .. } | Self::InvalidRule { .. } => StatusCode::InvalidArguments,
+            Self::EmptyPolicy { .. }
+            | Self::InvalidRule { .. }
+            | Self::MissingMandatoryCoverage { .. }
+            | Self::IncompatibleMediation { .. } => StatusCode::InvalidArguments,
             Self::InvalidPolicySyntax { .. } => StatusCode::InvalidSyntax,
             Self::DuplicateRule { .. } => StatusCode::AlreadyExists,
         }

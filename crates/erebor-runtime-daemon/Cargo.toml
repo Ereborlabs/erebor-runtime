@@ -7,8 +7,10 @@ repository.workspace = true
 
 [dependencies]
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+erebor-runtime-approvals = { path = "../erebor-runtime-approvals" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
+erebor-runtime-packages = { path = "../erebor-runtime-packages" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-session = { path = "../erebor-runtime-session" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }

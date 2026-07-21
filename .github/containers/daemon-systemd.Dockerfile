@@ -21,7 +21,10 @@ RUN apt-get update \
 COPY packaging/systemd/erebord.service /etc/systemd/system/erebord.service
 COPY target/debug/erebord /usr/lib/erebor/erebord
 COPY target/debug/erebor /usr/local/bin/erebor
-COPY target/debug/erebor-session-helper /usr/libexec/erebor/erebor-session-helper
+COPY target/debug/erebor-linux-session-controller \
+    /usr/libexec/erebor/erebor-linux-session-controller
+COPY target/debug/erebor-docker-session-controller \
+    /usr/libexec/erebor/erebor-docker-session-controller
 COPY target/debug/erebor-linux-process-guard /usr/libexec/erebor/erebor-linux-process-guard
 COPY target/debug/erebor-path-broker /usr/libexec/erebor/erebor-path-broker
 COPY target/debug/erebor-daemon-session-driver \
@@ -35,7 +38,8 @@ COPY .github/scripts/daemon-installed-session-runtime.sh \
 
 RUN chmod 0755 \
         /usr/lib/erebor/erebord \
-        /usr/libexec/erebor/erebor-session-helper \
+        /usr/libexec/erebor/erebor-linux-session-controller \
+        /usr/libexec/erebor/erebor-docker-session-controller \
         /usr/libexec/erebor/erebor-linux-process-guard \
         /usr/libexec/erebor/erebor-path-broker \
         /usr/local/bin/erebor \

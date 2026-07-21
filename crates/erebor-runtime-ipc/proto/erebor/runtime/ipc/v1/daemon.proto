@@ -240,3 +240,38 @@ message DaemonError {
   uint32 status_code = 1;
   string message = 2;
 }
+
+message ApprovalListRequest {}
+
+message ApprovalInspectRequest {
+  string approval_id = 1;
+  uint32 owner_uid = 2;
+}
+
+message ApprovalApproveRequest {
+  string approval_id = 1;
+  uint32 owner_uid = 2;
+}
+
+message ApprovalDenyRequest {
+  string approval_id = 1;
+  string reason = 2;
+  uint32 owner_uid = 3;
+}
+
+message ApprovalRecord {
+  string approval_id = 1;
+  string state = 2;
+  uint32 owner_uid = 3;
+  string session_id = 4;
+  uint64 session_generation = 5;
+  string effect_digest = 6;
+  string process_identity = 7;
+  string policy_set_digest = 8;
+  string policy_rule_id = 9;
+  uint64 expires_at_unix_ms = 10;
+}
+
+message ApprovalListResponse {
+  repeated ApprovalRecord approvals = 1;
+}

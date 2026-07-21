@@ -71,6 +71,10 @@
 - Keep plans and phase files grounded in the current source tree. When a split
   moves a concept into a family directory, update the phase text to use the new
   path and remove stale one-off module names from future instructions.
+- Prefer the least complex architecture that preserves the complete correctness
+  and enforcement contract. Never call a change a simplification when it only
+  moves complexity into another owner or collapses distinct authorization,
+  protocol, lifecycle, recovery, evidence, or physical-effect boundaries.
 - If external codebases are used for taste or organization research, translate
   the lesson into local engineering rules. Do not name or copy external repo
   style instructions into phase plans unless the user explicitly requests the

@@ -7,6 +7,7 @@ use crate::{
     logging::{init_tracing, LoggingArgs},
 };
 
+mod approval;
 mod audit;
 pub(super) mod config_paths;
 mod daemon;
@@ -53,6 +54,7 @@ impl Cli {
             Command::Dev(args) => dev::DevCommandOwner::new(args).execute(),
             Command::Policy(args) => policy::PolicyCommandOwner::new(args).execute(),
             Command::Audit(args) => audit::AuditCommandOwner::new(args).execute(),
+            Command::Approval(args) => approval::ApprovalCommandOwner::new(args).execute(),
             Command::Filesystem(args) => filesystem::execute(args),
             Command::Daemon(args) => daemon::DaemonCommandOwner::new(args).execute(),
         }
@@ -71,6 +73,8 @@ enum Command {
     Policy(policy::PolicyArgs),
     /// Audit log commands.
     Audit(audit::AuditArgs),
+    /// Inspect or resolve durable effect approvals.
+    Approval(approval::ApprovalArgs),
     /// Filesystem revert transaction commands.
     Filesystem(filesystem::FilesystemArgs),
     /// Inspect or administer the local Erebor daemon.
@@ -85,6 +89,7 @@ impl fmt::Display for Command {
             Self::Dev(args) => formatter.write_str(&args.display()),
             Self::Policy(args) => formatter.write_str(&args.display()),
             Self::Audit(args) => formatter.write_str(&args.display()),
+            Self::Approval(args) => formatter.write_str(&args.display()),
             Self::Filesystem(args) => formatter.write_str(&args.display()),
             Self::Daemon(_) => formatter.write_str("daemon"),
         }

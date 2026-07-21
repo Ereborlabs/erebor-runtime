@@ -26,6 +26,19 @@ Active implementation plans should have:
 - Keep historical facts only when they explain an existing decision,
   compatibility break, or follow-up risk.
 
+## Architectural Simplification
+
+- Prefer the simpler design only when it removes a real durable owner,
+  listener, protocol, or runtime model and preserves the entire correctness and
+  enforcement contract.
+- A simplification proposal must state the removed architecture, the remaining
+  owner, the invariants that remain true, and the code-backed proof required.
+- Do not describe hardening, code movement, a renamed abstraction, or a new
+  feature as simplification.
+- Do not merge distinct control, enforcement, authentication, lifecycle,
+  recovery, evidence, or physical-effect boundaries merely to reduce a process
+  or type count. Correctness is the deciding constraint.
+
 ## Verification Claims
 
 - A plan can list required verification without claiming it was run.

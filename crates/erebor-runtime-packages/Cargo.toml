@@ -1,0 +1,19 @@
+[package]
+name = "erebor-runtime-packages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+erebor-runtime-error = { path = "../erebor-runtime-error" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[lints]
+workspace = true

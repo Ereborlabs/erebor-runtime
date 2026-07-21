@@ -1,6 +1,6 @@
 mod decisions;
 mod filesystem;
-mod fixtures;
+pub(crate) mod fixtures;
 mod payload;
 mod policy_set;
 mod rule_matching;

@@ -3,10 +3,10 @@ use erebor_runtime_events::{
     RuntimeEvent, SessionId, TargetRef,
 };
 
-pub(super) struct PolicyEventFixture;
+pub(crate) struct PolicyEventFixture;
 
 impl PolicyEventFixture {
-    pub(super) fn event(
+    pub(crate) fn event(
         surface: ExecutionSurface,
         action: ActionKind,
         risk: RiskLevel,
@@ -33,7 +33,7 @@ impl PolicyEventFixture {
         }
     }
 
-    pub(super) fn event_with_payload(
+    pub(crate) fn event_with_payload(
         surface: ExecutionSurface,
         action: ActionKind,
         risk: RiskLevel,

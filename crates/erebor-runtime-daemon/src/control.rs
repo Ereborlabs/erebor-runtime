@@ -5,14 +5,17 @@ use std::{
     },
     path::PathBuf,
     sync::{Arc, Mutex, RwLock},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use erebor_runtime_approvals::{ApprovalRecord, ApprovalRepository};
 use erebor_runtime_error::ErrorExt;
 use erebor_runtime_ipc::{
     v1::{
         AdminSessionInspectRequest, AdminSessionKillRequest, AdminSessionListRequest,
-        AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, DaemonCommandResult,
+        AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, ApprovalApproveRequest,
+        ApprovalDenyRequest, ApprovalInspectRequest, ApprovalListRequest, ApprovalListResponse,
+        ApprovalRecord as ApprovalRecordMessage, DaemonCommandResult,
         DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
         DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
@@ -24,6 +27,8 @@ use erebor_runtime_ipc::{
         SessionStopRequest, SessionWaitRequest, KIND_ADMIN_SESSION_INSPECT_REQUEST,
         KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
         KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
+        KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST, KIND_APPROVAL_INSPECT_REQUEST,
+        KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE, KIND_APPROVAL_RECORD,
         KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
         KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD,
         KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
@@ -51,6 +56,7 @@ use tokio::{
 };
 
 use crate::{
+    approvals::DaemonApprovalRepository,
     config::DaemonConfig,
     error::{InvalidRequestSnafu, IoSnafu, IpcSnafu, StateLockSnafu, UnauthorizedSnafu},
     idempotency::{DaemonIdempotencyStore, IdempotencyAction, MutationIntent},
@@ -80,6 +86,7 @@ struct DaemonControlState {
     idempotency: Mutex<DaemonIdempotencyStore>,
     logs: DaemonLogStore,
     sessions: DaemonSessionApi,
+    approvals: DaemonApprovalRepository,
     shutdown: watch::Sender<bool>,
     connections: Arc<Semaphore>,
 }
@@ -146,6 +153,7 @@ impl DaemonControlService {
         let socket = DaemonSocket::from_bound_path(socket_path)?;
         let logs = DaemonLogStore::open(paths.log_path(), config.max_log_bytes)?;
         let sessions = DaemonSessionApi::installed(&paths, &config)?;
+        let approvals = DaemonApprovalRepository::installed(&paths)?;
         let reconciled = sessions.reconcile()?;
         logs.record("INFO", "erebord daemon control service started")?;
         if !reconciled.is_empty() {
@@ -170,6 +178,7 @@ impl DaemonControlService {
             }),
             logs,
             sessions,
+            approvals,
             shutdown: shutdown_sender,
             connections: Arc::new(Semaphore::new(CONNECTION_LIMIT)),
         });
@@ -352,6 +361,7 @@ impl DaemonControlState {
                     String::from("daemon-reload"),
                     String::from("daemon-stop"),
                     String::from("session-control-v1"),
+                    String::from("approvals-v1"),
                     String::from("runtime-guard-service-v1"),
                 ],
             },
@@ -414,6 +424,10 @@ impl DaemonControlState {
                 self.admin_session_set_retention_hold(stream, peer, &envelope)
                     .await
             }
+            KIND_APPROVAL_LIST_REQUEST => self.approval_list(stream, peer, &envelope).await,
+            KIND_APPROVAL_INSPECT_REQUEST => self.approval_inspect(stream, peer, &envelope).await,
+            KIND_APPROVAL_APPROVE_REQUEST => self.approval_approve(stream, peer, &envelope).await,
+            KIND_APPROVAL_DENY_REQUEST => self.approval_deny(stream, peer, &envelope).await,
             _ => Err(InvalidRequestSnafu {
                 reason: format!(
                     "message kind `{}` is not accepted on daemon control",
@@ -897,6 +911,157 @@ impl DaemonControlState {
         .await
     }
 
+    async fn approval_list(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        envelope
+            .decode_typed_payload::<ApprovalListRequest>(KIND_APPROVAL_LIST_REQUEST)
+            .context(IpcSnafu)?;
+        let records =
+            self.approvals
+                .list_pending(peer.uid)
+                .map_err(|source| DaemonError::Approval {
+                    source,
+                    location: snafu::Location::default(),
+                })?;
+        let approvals = records
+            .iter()
+            .map(Self::approval_record)
+            .collect::<Vec<_>>();
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_APPROVAL_LIST_RESPONSE,
+            &ApprovalListResponse { approvals },
+        )
+        .await
+    }
+
+    async fn approval_inspect(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: ApprovalInspectRequest = envelope
+            .decode_typed_payload(KIND_APPROVAL_INSPECT_REQUEST)
+            .context(IpcSnafu)?;
+        let owner_uid = self.approval_owner(peer, request.owner_uid)?;
+        let record = self
+            .approvals
+            .inspect(owner_uid, &request.approval_id)
+            .map_err(|source| DaemonError::Approval {
+                source,
+                location: snafu::Location::default(),
+            })?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_APPROVAL_RECORD,
+            &Self::approval_record(&record),
+        )
+        .await
+    }
+
+    async fn approval_approve(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        self.require_root(peer)?;
+        let request: ApprovalApproveRequest = envelope
+            .decode_typed_payload(KIND_APPROVAL_APPROVE_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_approval_mutation(
+            stream,
+            peer,
+            "approval-approve",
+            envelope,
+            MutationIntent::ApprovalApprove {
+                owner_uid: request.owner_uid,
+                approval_id: request.approval_id,
+            },
+        )
+        .await
+    }
+
+    async fn approval_deny(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        self.require_root(peer)?;
+        let request: ApprovalDenyRequest = envelope
+            .decode_typed_payload(KIND_APPROVAL_DENY_REQUEST)
+            .context(IpcSnafu)?;
+        if request.reason.trim().is_empty() {
+            return InvalidRequestSnafu {
+                reason: String::from("approval denial reason must not be empty"),
+            }
+            .fail();
+        }
+        self.apply_approval_mutation(
+            stream,
+            peer,
+            "approval-deny",
+            envelope,
+            MutationIntent::ApprovalDeny {
+                owner_uid: request.owner_uid,
+                approval_id: request.approval_id,
+                reason: request.reason,
+            },
+        )
+        .await
+    }
+
+    fn approval_owner(&self, peer: PeerIdentity, requested_owner_uid: u32) -> Result<u32> {
+        let owner_uid = if requested_owner_uid == 0 {
+            peer.uid
+        } else {
+            requested_owner_uid
+        };
+        if owner_uid == peer.uid || peer.uid == 0 {
+            Ok(owner_uid)
+        } else {
+            UnauthorizedSnafu { uid: peer.uid }.fail()
+        }
+    }
+
+    fn approval_record(record: &ApprovalRecord) -> ApprovalRecordMessage {
+        ApprovalRecordMessage {
+            approval_id: record.id().to_owned(),
+            state: match record.state() {
+                erebor_runtime_approvals::ApprovalState::Pending => String::from("pending"),
+                erebor_runtime_approvals::ApprovalState::Approved => String::from("approved"),
+                erebor_runtime_approvals::ApprovalState::Denied => String::from("denied"),
+                erebor_runtime_approvals::ApprovalState::Expired => String::from("expired"),
+                erebor_runtime_approvals::ApprovalState::Cancelled => String::from("cancelled"),
+                erebor_runtime_approvals::ApprovalState::Consumed => String::from("consumed"),
+            },
+            owner_uid: record.binding().owner_uid(),
+            session_id: record.binding().session_id().to_owned(),
+            session_generation: record.binding().session_generation(),
+            effect_digest: record.binding().effect_digest().to_owned(),
+            process_identity: record.binding().process_identity().to_owned(),
+            policy_set_digest: record.binding().policy_set_digest().to_owned(),
+            policy_rule_id: record.binding().policy_rule_id().to_owned(),
+            expires_at_unix_ms: record.expires_at_unix_ms(),
+        }
+    }
+
+    fn unix_time_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(1, |duration| duration.as_millis() as u64)
+    }
+
     async fn admin_session_list(
         &self,
         stream: &mut UnixStream,
@@ -1074,6 +1239,42 @@ impl DaemonControlState {
             .await
     }
 
+    async fn apply_approval_mutation(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        operation: &str,
+        envelope: &Envelope,
+        intent: MutationIntent,
+    ) -> Result<()> {
+        let outcome = self.mutate(peer, operation, envelope, intent.clone())?;
+        if outcome.applied {
+            let (action, owner_uid, approval_id) = match intent {
+                MutationIntent::ApprovalApprove {
+                    owner_uid,
+                    approval_id,
+                } => ("approved", owner_uid, approval_id),
+                MutationIntent::ApprovalDeny {
+                    owner_uid,
+                    approval_id,
+                    ..
+                } => ("denied", owner_uid, approval_id),
+                _ => {
+                    return InvalidRequestSnafu {
+                        reason: String::from("approval mutation used a non-approval intent"),
+                    }
+                    .fail()
+                }
+            };
+            self.logs.record(
+                "INFO",
+                format!("root approver {action} approval_id={approval_id} owner_uid={owner_uid}"),
+            )?;
+        }
+        self.write_mutation_response(stream, envelope, outcome.response)
+            .await
+    }
+
     async fn reload(
         &self,
         stream: &mut UnixStream,
@@ -1224,8 +1425,78 @@ impl DaemonControlState {
                 self.sessions
                     .start(*uid, session_id, &constraints, resume_pending)
             }
+            MutationIntent::ApprovalApprove {
+                owner_uid,
+                approval_id,
+            } => {
+                let mut record = self.approval_record_for_transition(*owner_uid, approval_id)?;
+                if record.state() == erebor_runtime_approvals::ApprovalState::Pending {
+                    record.approve(Self::unix_time_ms()).map_err(|source| {
+                        DaemonError::Approval {
+                            source,
+                            location: snafu::Location::default(),
+                        }
+                    })?;
+                    record =
+                        self.approvals
+                            .replace(record)
+                            .map_err(|source| DaemonError::Approval {
+                                source,
+                                location: snafu::Location::default(),
+                            })?;
+                }
+                if record.state() != erebor_runtime_approvals::ApprovalState::Approved {
+                    return InvalidRequestSnafu {
+                        reason: String::from("approval is no longer pending or approved"),
+                    }
+                    .fail();
+                }
+                encode_mutation_response(KIND_APPROVAL_RECORD, &Self::approval_record(&record))
+            }
+            MutationIntent::ApprovalDeny {
+                owner_uid,
+                approval_id,
+                reason,
+            } => {
+                let mut record = self.approval_record_for_transition(*owner_uid, approval_id)?;
+                if record.state() == erebor_runtime_approvals::ApprovalState::Pending {
+                    record
+                        .deny(Self::unix_time_ms(), reason)
+                        .map_err(|source| DaemonError::Approval {
+                            source,
+                            location: snafu::Location::default(),
+                        })?;
+                    record =
+                        self.approvals
+                            .replace(record)
+                            .map_err(|source| DaemonError::Approval {
+                                source,
+                                location: snafu::Location::default(),
+                            })?;
+                }
+                if record.state() != erebor_runtime_approvals::ApprovalState::Denied {
+                    return InvalidRequestSnafu {
+                        reason: String::from("approval is no longer pending or denied"),
+                    }
+                    .fail();
+                }
+                encode_mutation_response(KIND_APPROVAL_RECORD, &Self::approval_record(&record))
+            }
             session => self.sessions.apply(session),
         }
+    }
+
+    fn approval_record_for_transition(
+        &self,
+        owner_uid: u32,
+        approval_id: &str,
+    ) -> Result<ApprovalRecord> {
+        self.approvals
+            .inspect(owner_uid, approval_id)
+            .map_err(|source| DaemonError::Approval {
+                source,
+                location: snafu::Location::default(),
+            })
     }
 
     fn next_configuration_generation(&self) -> Result<u64> {
@@ -1376,6 +1647,8 @@ fn is_mutating_message(kind: &str) -> bool {
             | KIND_ADMIN_SESSION_STOP_REQUEST
             | KIND_ADMIN_SESSION_KILL_REQUEST
             | KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST
+            | KIND_APPROVAL_APPROVE_REQUEST
+            | KIND_APPROVAL_DENY_REQUEST
     )
 }
 
@@ -1471,7 +1744,8 @@ mod tests {
     use tokio::{net::UnixStream, sync::Semaphore};
 
     use super::{
-        DaemonConfiguration, DaemonControlState, DaemonLogStore, DaemonSecurity, DaemonSocket,
+        DaemonApprovalRepository, DaemonConfiguration, DaemonControlState, DaemonLogStore,
+        DaemonSecurity, DaemonSocket,
     };
     use crate::{
         config::DaemonConfig, idempotency::DaemonIdempotencyStore, session_api::DaemonSessionApi,
@@ -1702,6 +1976,7 @@ mod tests {
         let configuration = DaemonConfig::load(&paths, security)?;
         let logs = DaemonLogStore::open(paths.log_path(), configuration.max_log_bytes)?;
         let sessions = DaemonSessionApi::installed(&paths, &configuration)?;
+        let approvals = DaemonApprovalRepository::installed(&paths)?;
         let (shutdown, _receiver) = tokio::sync::watch::channel(false);
         Ok(TestState {
             state: Arc::new(DaemonControlState {
@@ -1719,6 +1994,7 @@ mod tests {
                 }),
                 logs,
                 sessions,
+                approvals,
                 shutdown,
                 connections: Arc::new(Semaphore::new(1)),
             }),

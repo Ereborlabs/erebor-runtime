@@ -7,6 +7,7 @@ use snafu::{ensure, ResultExt};
 use crate::error::{
     DuplicateRuleSnafu, EmptyPolicySnafu, InvalidPolicySyntaxSnafu, InvalidRuleSnafu,
 };
+use crate::layered::{LayerEvaluation, PolicyLayerEvaluator};
 use crate::{Decision, Result};
 
 pub trait PolicyEvaluator {
@@ -19,6 +20,14 @@ pub struct AllowAllPolicy;
 impl PolicyEvaluator for AllowAllPolicy {
     fn evaluate(&self, _event: &RuntimeEvent) -> Result<Decision> {
         Ok(Decision::Allow { rule_id: None })
+    }
+}
+
+impl PolicyLayerEvaluator for AllowAllPolicy {
+    fn evaluate_layer(&self, _event: &RuntimeEvent) -> Result<LayerEvaluation> {
+        Ok(LayerEvaluation::Decision(Decision::Allow {
+            rule_id: Some(String::from("allow-all")),
+        }))
     }
 }
 
@@ -49,6 +58,18 @@ impl PolicyEvaluator for PolicySet {
         }
 
         Ok(Decision::Allow { rule_id: None })
+    }
+}
+
+impl PolicyLayerEvaluator for PolicySet {
+    fn evaluate_layer(&self, event: &RuntimeEvent) -> Result<LayerEvaluation> {
+        for policy in &self.policies {
+            let decision = policy.evaluate_layer(event)?;
+            if !matches!(decision, LayerEvaluation::NotApplicable) {
+                return Ok(decision);
+            }
+        }
+        Ok(LayerEvaluation::NotApplicable)
     }
 }
 
@@ -110,6 +131,18 @@ impl PolicyEvaluator for LocalPolicy {
             .map_or(Decision::Allow { rule_id: None }, PolicyRule::to_decision);
 
         Ok(decision)
+    }
+}
+
+impl PolicyLayerEvaluator for LocalPolicy {
+    fn evaluate_layer(&self, event: &RuntimeEvent) -> Result<LayerEvaluation> {
+        Ok(self
+            .rules
+            .iter()
+            .find(|rule| rule.matcher.matches(event))
+            .map_or(LayerEvaluation::NotApplicable, |rule| {
+                LayerEvaluation::Decision(rule.to_decision())
+            }))
     }
 }
 

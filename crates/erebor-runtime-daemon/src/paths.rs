@@ -105,6 +105,16 @@ impl DaemonPaths {
     }
 
     #[must_use]
+    pub(crate) fn users_state_path(&self) -> PathBuf {
+        self.state.join("users")
+    }
+
+    #[must_use]
+    pub(crate) fn packages_state_path(&self) -> PathBuf {
+        self.state.join("packages")
+    }
+
+    #[must_use]
     pub fn session_runtime_path(&self) -> PathBuf {
         self.runtime.join("sessions")
     }
@@ -115,6 +125,8 @@ impl DaemonPaths {
         self.ensure_directory(&self.state, 0o700, security)?;
         self.ensure_directory(&self.idempotency_path(), 0o700, security)?;
         self.ensure_directory(&self.session_runtime_path(), 0o700, security)?;
+        self.ensure_directory(&self.users_state_path(), 0o700, security)?;
+        self.ensure_directory(&self.packages_state_path(), 0o700, security)?;
         Ok(())
     }
 

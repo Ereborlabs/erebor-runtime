@@ -23,7 +23,8 @@ policy_digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 for binary in \
   "$driver" \
-  /usr/libexec/erebor/erebor-session-helper \
+  /usr/libexec/erebor/erebor-linux-session-controller \
+  /usr/libexec/erebor/erebor-docker-session-controller \
   /usr/libexec/erebor/erebor-linux-process-guard \
   /usr/libexec/erebor/erebor-path-broker; do
   [[ -x "$binary" ]] || {
@@ -36,8 +37,8 @@ session_id_from() {
   sed -n 's/^session_id=\([^ ]*\).*/\1/p'
 }
 
-stable_identity_from() {
-  sed -n 's/.* stable_identity=\([^ ]*\).*/\1/p'
+runner_recovery_from() {
+  sed -n 's/.* runner_recovery=\([^ ]*\).*/\1/p'
 }
 
 uid_of() {
@@ -75,7 +76,7 @@ marker_live() {
       if [[ "$argument" == *"$marker"* ]]; then
         return 0
       fi
-    done <"$command_line" 2>/dev/null || true
+    done 2>/dev/null <"$command_line" || true
   done
   return 1
 }
@@ -220,27 +221,33 @@ remove_session() {
 
 assert_scope() {
   local session_id="$1"
-  local stable_identity="$2"
+  local runner_recovery="$2"
   local scope="erebor-session-$session_id.scope"
   local session_slice="erebor-session-$session_id.slice"
-  local helper_pid
+  local controller_pid
+  local container_id
   local session_cgroup
-  helper_pid="$(sed -n 's/.*helper_pid=\([0-9]*\).*/\1/p' <<<"$stable_identity")"
+  controller_pid="$(sed -n 's/.*"controller_pid":\([0-9]*\).*/\1/p' <<<"$runner_recovery")"
+  container_id="$(sed -n 's/.*"container_id":"\([^"]*\)".*/\1/p' <<<"$runner_recovery")"
   session_cgroup="$(
     systemctl show "$session_slice" --property=ControlGroup --value
   )"
-  [[ -n "$helper_pid" ]]
+  [[ -n "$controller_pid" ]]
   [[ -n "$session_cgroup" ]]
-  [[ "$(readlink "/proc/$helper_pid/exe")" == \
-    /usr/libexec/erebor/erebor-session-helper ]]
+  if [[ -n "$container_id" ]]; then
+    [[ "$(readlink "/proc/$controller_pid/exe")" == \
+      /usr/libexec/erebor/erebor-docker-session-controller ]]
+  else
+    [[ "$(readlink "/proc/$controller_pid/exe")" == \
+      /usr/libexec/erebor/erebor-linux-session-controller ]]
+  fi
   [[ "$(systemctl show "$scope" --property=PartOf --value)" == "" ]]
   [[ "$(systemctl show "$scope" --property=BindsTo --value)" == "" ]]
   [[ "$(systemctl show "$scope" --property=ControlGroup --value)" != \
     "$(systemctl show erebord.service --property=ControlGroup --value)" ]]
   [[ "$(systemctl show "$scope" --property=ControlGroup --value)" == \
     "$session_cgroup/$scope" ]]
-  if [[ "$stable_identity" != linux:* ]]; then
-    local container_id="${stable_identity%%;*}"
+  if [[ -n "$container_id" ]]; then
     [[ "$(docker inspect --format '{{.HostConfig.CgroupParent}}' "$container_id")" == \
       "$session_slice" ]]
     [[ "$(systemctl show "docker-$container_id.scope" \
@@ -289,6 +296,7 @@ run_service_loss_case() {
   marker_live "erebor-grandchild-$docker_continue_label"
 
   if [[ "$action" == restart ]]; then
+    systemctl reset-failed erebord.service
     systemctl restart erebord.service
   else
     systemctl stop erebord.service
@@ -309,6 +317,7 @@ run_service_loss_case() {
     marker_live "erebor-child-$docker_continue_label"
     marker_live "erebor-grandchild-$linux_continue_label"
     marker_live "erebor-grandchild-$docker_continue_label"
+    systemctl reset-failed erebord.service
     systemctl start erebord.service
   fi
   await_daemon
@@ -352,6 +361,7 @@ docker_image="$(docker import "$fixture_tar" erebor-installed-fixture:local)"
 docker_digest="${docker_image#sha256:}"
 
 systemctl set-environment EREBOR_ROOT_SENTINEL=phase-two-root-secret
+systemctl reset-failed erebord.service
 systemctl restart erebord.service
 await_daemon
 
@@ -375,9 +385,9 @@ import json, sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
 spec = record["spec"]
 assert record["state"] == "created"
-assert spec["schema_version"] == 2
-assert spec["runner_capability"]["schema_version"] == 1
-assert spec["runner_capability"]["runner"] == "linux_host"
+assert spec["schema_version"] == 3
+assert spec["runner_capability"]["schema_version"] == 2
+assert spec["runner_capability"]["runner"] == "linux-host"
 assert spec["policy_set"]["sha256"] == sys.argv[2]
 assert spec["package"]["sha256"] == sys.argv[2]
 assert spec["installation"]["sha256"] == sys.argv[2]
@@ -623,18 +633,18 @@ as_user "$first_user" logs "$docker_terminate" --stream stderr \
   | grep -q docker-stderr-docker-terminate
 
 linux_stable="$(
-  as_user "$first_user" inspect "$linux_terminate" | stable_identity_from
+  as_user "$first_user" inspect "$linux_terminate" | runner_recovery_from
 )"
 docker_stable="$(
-  as_user "$first_user" inspect "$docker_terminate" | stable_identity_from
+  as_user "$first_user" inspect "$docker_terminate" | runner_recovery_from
 )"
 [[ "$(
   as_user "$first_user" start "$linux_terminate" \
-    --key start-linux-terminate | stable_identity_from
+    --key start-linux-terminate | runner_recovery_from
 )" == "$linux_stable" ]]
 [[ "$(
   as_user "$first_user" start "$docker_terminate" \
-    --key start-docker-terminate | stable_identity_from
+    --key start-docker-terminate | runner_recovery_from
 )" == "$docker_stable" ]]
 if as_user "$first_user" start "$linux_terminate" \
   --key second-start-linux-terminate >/dev/null 2>&1; then
@@ -687,8 +697,8 @@ for session_id in \
   if [[ "$session_id" == "$linux_continue" || "$session_id" == "$docker_continue" ]]; then
     owner="$second_user"
   fi
-  stable_identity="$(as_user "$owner" inspect "$session_id" | stable_identity_from)"
-  assert_scope "$session_id" "$stable_identity"
+  runner_recovery="$(as_user "$owner" inspect "$session_id" | runner_recovery_from)"
+  assert_scope "$session_id" "$runner_recovery"
 done
 
 shared_guard_socket=/run/erebor/sessions/runtime-interception.sock
@@ -776,6 +786,7 @@ for marker in \
   marker_live "$marker"
 done
 
+systemctl reset-failed erebord.service
 systemctl kill --kill-who=main --signal=KILL erebord.service
 await_daemon
 

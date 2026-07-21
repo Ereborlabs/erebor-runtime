@@ -26,6 +26,13 @@ Current planning documents live under [docs/](docs/) and
 When creating or rewriting plans, follow the phase-plan style in
 [.agents/planning.md](.agents/planning.md).
 
+Architectural simplification is valuable only when it removes a duplicated
+durable owner, listener, protocol, or runtime model while preserving the
+complete correctness and enforcement contract. A simpler design never justifies
+weaker authorization, attribution, lifecycle, recovery, evidence, or physical
+effect guarantees. Plans must name both what is removed and the proof that the
+remaining owner preserves those guarantees.
+
 ## Product Direction
 
 Erebor Runtime is a universal action-governance runtime for agents and tools.
