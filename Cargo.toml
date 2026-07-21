@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/erebor-runtime-audit",
+    "crates/erebor-runtime-approvals",
     "crates/erebor-runtime-cdp",
     "crates/erebor-runtime-client",
     "crates/erebor-runtime-cli",
@@ -14,6 +15,7 @@ members = [
     "crates/erebor-runtime-filesystem",
     "crates/erebor-runtime-ipc",
     "crates/erebor-runtime-policy",
+    "crates/erebor-runtime-packages",
     "crates/erebor-runtime-session",
     "crates/erebor-runtime-terminal",
 ]

@@ -484,6 +484,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "erebor-runtime-approvals"
+version = "0.1.0"
+dependencies = [
+ "erebor-runtime-error",
+ "serde",
+ "snafu",
+]
+
+[[package]]
 name = "erebor-runtime-audit"
 version = "0.1.0"
 dependencies = [
@@ -533,6 +542,7 @@ dependencies = [
  "erebor-runtime-error",
  "erebor-runtime-events",
  "erebor-runtime-filesystem",
+ "erebor-runtime-ipc",
  "erebor-runtime-policy",
  "erebor-runtime-session",
  "erebor-runtime-telemetry",
@@ -589,10 +599,12 @@ dependencies = [
 name = "erebor-runtime-daemon"
 version = "0.1.0"
 dependencies = [
+ "erebor-runtime-approvals",
  "erebor-runtime-core",
  "erebor-runtime-error",
  "erebor-runtime-events",
  "erebor-runtime-ipc",
+ "erebor-runtime-packages",
  "erebor-runtime-session",
  "erebor-runtime-telemetry",
  "prost",
@@ -672,6 +684,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "erebor-runtime-packages"
+version = "0.1.0"
+dependencies = [
+ "erebor-runtime-error",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
+]
+
+[[package]]
 name = "erebor-runtime-policy"
 version = "0.1.0"
 dependencies = [
@@ -704,6 +727,7 @@ dependencies = [
  "snafu",
  "tempfile",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
