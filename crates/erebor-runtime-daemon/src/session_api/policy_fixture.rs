@@ -1,7 +1,8 @@
 use erebor_runtime_core::{
-    ImmutableIdentity, ProcessExecInterceptionRequest, ProcessExecSurfaceHandler,
+    ImmutableIdentity, ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionSpec,
     SurfaceInterceptionDecision,
 };
+use erebor_runtime_session::{SessionInterceptionRouter, SessionInterceptionRouterFactory};
 
 /// Temporary Phase 2 decision owner for operator-admitted immutable policy fixtures.
 ///
@@ -10,6 +11,15 @@ use erebor_runtime_core::{
 /// store; arbitrary client-supplied policy digests never reach this handler.
 pub(super) struct PhaseTwoProcessExecPolicy {
     identity: ImmutableIdentity,
+}
+
+pub(super) struct PhaseTwoInterceptionRouterFactory;
+
+impl SessionInterceptionRouterFactory for PhaseTwoInterceptionRouterFactory {
+    fn router(&self, spec: &SessionSpec) -> SessionInterceptionRouter {
+        SessionInterceptionRouter::new()
+            .with_process_exec_handler(PhaseTwoProcessExecPolicy::new(spec.policy_set().clone()))
+    }
 }
 
 impl PhaseTwoProcessExecPolicy {

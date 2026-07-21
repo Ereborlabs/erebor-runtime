@@ -56,7 +56,7 @@ use crate::{
     idempotency::{DaemonIdempotencyStore, IdempotencyAction, MutationIntent},
     log::DaemonLogStore,
     paths::{DaemonLock, DaemonSecurity},
-    session_control::DaemonSessionService,
+    session_api::DaemonSessionApi,
     DaemonError, DaemonPaths, Result,
 };
 use erebor_runtime_core::ActiveSessionSignal;
@@ -79,7 +79,7 @@ struct DaemonControlState {
     configuration: RwLock<DaemonConfiguration>,
     idempotency: Mutex<DaemonIdempotencyStore>,
     logs: DaemonLogStore,
-    sessions: DaemonSessionService,
+    sessions: DaemonSessionApi,
     shutdown: watch::Sender<bool>,
     connections: Arc<Semaphore>,
 }
@@ -145,7 +145,7 @@ impl DaemonControlService {
         let listener = Self::bind_listener(&socket_path, security)?;
         let socket = DaemonSocket::from_bound_path(socket_path)?;
         let logs = DaemonLogStore::open(paths.log_path(), config.max_log_bytes)?;
-        let sessions = DaemonSessionService::installed(&paths, &config)?;
+        let sessions = DaemonSessionApi::installed(&paths, &config)?;
         let reconciled = sessions.reconcile()?;
         logs.record("INFO", "erebord daemon control service started")?;
         if !reconciled.is_empty() {
@@ -1210,17 +1210,21 @@ impl DaemonControlState {
                 },
             ),
             MutationIntent::SessionStart { uid, session_id } => {
-                let configuration = self
+                let active = self
                     .configuration
                     .read()
-                    .map_err(|_error| StateLockSnafu.build())?
-                    .value
-                    .clone();
+                    .map_err(|_error| StateLockSnafu.build())?;
+                let constraints = self.sessions.validate_start(
+                    *uid,
+                    session_id,
+                    active.generation,
+                    &active.value,
+                )?;
+                drop(active);
                 self.sessions
-                    .validate_start(*uid, session_id, &configuration)?;
-                self.sessions.apply(intent, resume_pending)
+                    .start(*uid, session_id, &constraints, resume_pending)
             }
-            session => self.sessions.apply(session, resume_pending),
+            session => self.sessions.apply(session),
         }
     }
 
@@ -1470,8 +1474,8 @@ mod tests {
         DaemonConfiguration, DaemonControlState, DaemonLogStore, DaemonSecurity, DaemonSocket,
     };
     use crate::{
-        config::DaemonConfig, idempotency::DaemonIdempotencyStore,
-        session_control::DaemonSessionService, DaemonPaths,
+        config::DaemonConfig, idempotency::DaemonIdempotencyStore, session_api::DaemonSessionApi,
+        DaemonPaths,
     };
 
     #[tokio::test]
@@ -1697,7 +1701,7 @@ mod tests {
         paths.prepare(security)?;
         let configuration = DaemonConfig::load(&paths, security)?;
         let logs = DaemonLogStore::open(paths.log_path(), configuration.max_log_bytes)?;
-        let sessions = DaemonSessionService::installed(&paths, &configuration)?;
+        let sessions = DaemonSessionApi::installed(&paths, &configuration)?;
         let (shutdown, _receiver) = tokio::sync::watch::channel(false);
         Ok(TestState {
             state: Arc::new(DaemonControlState {

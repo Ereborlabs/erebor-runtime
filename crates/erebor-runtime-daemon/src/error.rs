@@ -2,9 +2,7 @@ use std::{any::Any, io, path::PathBuf};
 
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use erebor_runtime_ipc::IpcProtocolError;
-use erebor_runtime_session::{
-    RuntimeInterceptionBrokerError, SessionOutputError, SessionSupervisorError,
-};
+use erebor_runtime_session::SessionManagerError;
 use snafu::{Location, Snafu};
 
 #[derive(Debug, Snafu)]
@@ -86,20 +84,8 @@ pub enum DaemonError {
     },
     #[snafu(display("daemon session operation failed: {source}"))]
     Session {
-        #[snafu(source(from(SessionSupervisorError, Box::new)))]
-        source: Box<SessionSupervisorError>,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("daemon session output operation failed: {source}"))]
-    SessionOutput {
-        source: SessionOutputError,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("daemon runtime guard operation failed: {source}"))]
-    RuntimeGuard {
-        source: RuntimeInterceptionBrokerError,
+        #[snafu(source(from(SessionManagerError, Box::new)))]
+        source: Box<SessionManagerError>,
         #[snafu(implicit)]
         location: Location,
     },
@@ -123,8 +109,6 @@ impl ErrorExt for DaemonError {
             Self::StateLock { .. } => StatusCode::Internal,
             Self::Ipc { source, .. } => source.status_code(),
             Self::Session { source, .. } => source.status_code(),
-            Self::SessionOutput { source, .. } => source.status_code(),
-            Self::RuntimeGuard { source, .. } => source.status_code(),
         }
     }
 
@@ -133,8 +117,6 @@ impl ErrorExt for DaemonError {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Ipc { source, .. } => source.retry_hint(),
             Self::Session { source, .. } => source.retry_hint(),
-            Self::SessionOutput { source, .. } => source.retry_hint(),
-            Self::RuntimeGuard { source, .. } => source.retry_hint(),
             Self::LockUnavailable { .. } | Self::AlreadyRunning { .. } => RetryHint::Retryable,
             _ => RetryHint::NonRetryable,
         }

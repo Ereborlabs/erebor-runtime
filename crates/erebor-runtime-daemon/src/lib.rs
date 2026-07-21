@@ -7,7 +7,7 @@ mod idempotency;
 mod log;
 mod path_broker;
 mod paths;
-mod session_control;
+mod session_api;
 
 pub use control::DaemonControlService;
 pub use error::{DaemonError, Result};

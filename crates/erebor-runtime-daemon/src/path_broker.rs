@@ -13,6 +13,7 @@ use std::{
 };
 
 use erebor_runtime_core::{SafePathBinding, SafePathKind};
+use erebor_runtime_session::{ResolvedSessionPath, SessionPathResolver, SessionPathResolverError};
 use rustix::{
     cmsg_space,
     fs::{
@@ -220,12 +221,29 @@ impl DescriptorBroker {
 }
 
 impl ResolvedDescriptor {
-    pub(crate) fn descriptor(&self) -> &File {
-        &self.descriptor
-    }
-
     pub(crate) fn binding(&self) -> &SafePathBinding {
         &self.binding
+    }
+
+    fn into_parts(self) -> (File, SafePathBinding) {
+        (self.descriptor, self.binding)
+    }
+}
+
+impl SessionPathResolver for DescriptorBroker {
+    fn resolve(
+        &self,
+        uid: u32,
+        gid: u32,
+        path: &Path,
+        kind: SafePathKind,
+    ) -> std::result::Result<ResolvedSessionPath, SessionPathResolverError> {
+        DescriptorBroker::resolve(self, uid, gid, path, kind)
+            .map(|resolved| {
+                let (descriptor, binding) = resolved.into_parts();
+                ResolvedSessionPath::new(descriptor, binding)
+            })
+            .map_err(|source| Box::new(source) as SessionPathResolverError)
     }
 }
 
