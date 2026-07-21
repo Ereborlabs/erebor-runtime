@@ -59,6 +59,8 @@ pub struct DurableSessionRecord {
     runner_binding: Option<RunnerBinding>,
     failure: Option<String>,
     retention_hold: bool,
+    #[serde(default = "default_content_retained")]
+    content_retained: bool,
     updated_at_unix_ms: u64,
 }
 
@@ -94,6 +96,11 @@ impl DurableSessionRecord {
     }
 
     #[must_use]
+    pub const fn retains_content(&self) -> bool {
+        self.content_retained
+    }
+
+    #[must_use]
     pub const fn updated_at_unix_ms(&self) -> u64 {
         self.updated_at_unix_ms
     }
@@ -102,6 +109,7 @@ impl DurableSessionRecord {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SessionPruneResult {
     pub pruned: usize,
+    pub pruned_session_ids: Vec<String>,
     pub retained_session_ids: Vec<String>,
 }
 
@@ -147,6 +155,7 @@ impl SessionRepository {
             runner_binding: None,
             failure: None,
             retention_hold: false,
+            content_retained: true,
             updated_at_unix_ms: unix_time_ms(),
         };
         self.write(&directory, &record)?;
@@ -448,8 +457,12 @@ impl SessionRepository {
         let mut records = self.list(uid)?;
         records.sort_by_key(DurableSessionRecord::updated_at_unix_ms);
         let mut pruned = 0;
+        let mut pruned_session_ids = Vec::new();
         let mut retained_session_ids = Vec::new();
-        for record in records {
+        for mut record in records {
+            if !record.content_retained {
+                continue;
+            }
             if record.state != SessionLifecycleState::Removed
                 || record.retention_hold
                 || record.updated_at_unix_ms > terminal_before_unix_ms
@@ -464,9 +477,13 @@ impl SessionRepository {
                 .session_directory(uid, record.spec.session_id().as_str())
                 .join("output");
             match fs::remove_dir_all(&output) {
-                Ok(()) => pruned += 1,
+                Ok(()) => {
+                    pruned += 1;
+                    pruned_session_ids.push(record.spec.session_id().as_str().to_owned());
+                }
                 Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
                     pruned += 1;
+                    pruned_session_ids.push(record.spec.session_id().as_str().to_owned());
                 }
                 Err(source) => {
                     return Err(source).context(IoSnafu {
@@ -475,9 +492,15 @@ impl SessionRepository {
                     });
                 }
             }
+            record.content_retained = false;
+            record.generation = record.generation.saturating_add(1);
+            record.updated_at_unix_ms = unix_time_ms();
+            let directory = self.session_directory(uid, record.spec.session_id().as_str());
+            self.write(&directory, &record)?;
         }
         Ok(SessionPruneResult {
             pruned,
+            pruned_session_ids,
             retained_session_ids,
         })
     }
@@ -741,6 +764,10 @@ impl SessionRepository {
             path: temporary,
         })
     }
+}
+
+const fn default_content_retained() -> bool {
+    true
 }
 
 fn validate_session_id(session_id: &str, root: &Path) -> Result<(), SessionRepositoryError> {
@@ -1077,6 +1104,29 @@ mod tests {
                 .state(),
             SessionLifecycleState::Removed
         );
+        Ok(())
+    }
+
+    #[test]
+    fn prune_reports_each_session_whose_retained_output_is_removed(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = TempDir::new()?;
+        let repository = SessionRepository::new(temporary.path());
+        let created = repository.create(spec()?)?;
+        repository.remove(1000, "session-9f7b7f6e", created.generation())?;
+        let output = temporary
+            .path()
+            .join("users/1000/sessions/session-9f7b7f6e/output");
+        fs::create_dir_all(&output)?;
+        fs::write(output.join("stdout.log"), b"retained evidence")?;
+
+        let pruned = repository.prune(1000, u64::MAX, 1)?;
+
+        assert_eq!(pruned.pruned, 1);
+        assert_eq!(pruned.pruned_session_ids, ["session-9f7b7f6e"]);
+        assert!(pruned.retained_session_ids.is_empty());
+        assert!(!output.exists());
+        assert!(!repository.load(1000, "session-9f7b7f6e")?.retains_content());
         Ok(())
     }
 }

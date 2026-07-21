@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     os::unix::{
         fs::{FileTypeExt, MetadataExt, PermissionsExt},
         net::UnixListener as StdUnixListener,
@@ -27,18 +28,18 @@ use erebor_runtime_ipc::{
         SessionAliasListRequest, SessionAliasRemoveRequest, SessionAliasSetRequest,
         SessionAttachRequest, SessionCreateRequest, SessionEventRecord, SessionEventsEnd,
         SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
-        SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInspectRequest,
-        SessionKillRequest, SessionListRequest, SessionLogChunk, SessionLogsEnd,
-        SessionLogsRequest, SessionPruneRequest, SessionRemoveRequest, SessionStartRequest,
-        SessionStopRequest, SessionWaitRequest, KIND_ADMIN_SESSION_INSPECT_REQUEST,
-        KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
-        KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
-        KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST, KIND_APPROVAL_INSPECT_REQUEST,
-        KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE, KIND_APPROVAL_RECORD,
-        KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
-        KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD,
-        KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
-        KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
+        SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputRequest,
+        SessionInspectRequest, SessionKillRequest, SessionListRequest, SessionLogChunk,
+        SessionLogsEnd, SessionLogsRequest, SessionPruneRequest, SessionRemoveRequest,
+        SessionStartRequest, SessionStopRequest, SessionWaitRequest,
+        KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
+        KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
+        KIND_ADMIN_SESSION_STOP_REQUEST, KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST,
+        KIND_APPROVAL_INSPECT_REQUEST, KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE,
+        KIND_APPROVAL_RECORD, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO,
+        KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
+        KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
+        KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
         KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
         KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
         KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
@@ -52,11 +53,12 @@ use erebor_runtime_ipc::{
         KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD, KIND_SESSION_EVIDENCE_END,
         KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
         KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
-        KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
-        KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST,
-        KIND_SESSION_LOG_CHUNK, KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_RECORD,
-        KIND_SESSION_REMOVE_REQUEST, KIND_SESSION_START_REQUEST, KIND_SESSION_STOP_REQUEST,
-        KIND_SESSION_WAIT_REQUEST, PROTOCOL_VERSION,
+        KIND_SESSION_INPUT_REQUEST, KIND_SESSION_INPUT_RESPONSE, KIND_SESSION_INSPECT_REQUEST,
+        KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST, KIND_SESSION_LIST_RESPONSE,
+        KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST, KIND_SESSION_LOG_CHUNK,
+        KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST,
+        KIND_SESSION_START_REQUEST, KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST,
+        PROTOCOL_VERSION,
     },
     AsyncFrameCodec,
 };
@@ -107,6 +109,7 @@ struct DaemonControlState {
     approvals: DaemonApprovalRepository,
     shutdown: watch::Sender<bool>,
     connections: Arc<Semaphore>,
+    active_streams: Arc<PerUidStreamLimiter>,
 }
 
 struct DaemonConfiguration {
@@ -124,6 +127,44 @@ struct PeerIdentity {
     pid: Option<i32>,
     uid: u32,
     gid: u32,
+}
+
+struct PerUidStreamPermit {
+    limiter: Arc<PerUidStreamLimiter>,
+    uid: u32,
+}
+
+struct PerUidStreamLimiter {
+    active: Mutex<BTreeMap<u32, u32>>,
+}
+
+impl PerUidStreamLimiter {
+    fn new() -> Self {
+        Self {
+            active: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn acquire(self: &Arc<Self>, uid: u32, maximum: u32) -> Result<PerUidStreamPermit> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_error| StateLockSnafu.build())?;
+        let count = active.entry(uid).or_default();
+        if *count >= maximum {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "owner UID {uid} has reached the {maximum} active daemon-stream limit"
+                ),
+            }
+            .fail();
+        }
+        *count = count.saturating_add(1);
+        Ok(PerUidStreamPermit {
+            limiter: Arc::clone(self),
+            uid,
+        })
+    }
 }
 
 struct DaemonSocket {
@@ -199,6 +240,7 @@ impl DaemonControlService {
             approvals,
             shutdown: shutdown_sender,
             connections: Arc::new(Semaphore::new(CONNECTION_LIMIT)),
+            active_streams: Arc::new(PerUidStreamLimiter::new()),
         });
         Ok(Self {
             listener,
@@ -293,6 +335,15 @@ impl DaemonControlState {
                 return;
             }
         };
+        let _stream_permit = match self.acquire_stream_permit(peer.uid) {
+            Ok(permit) => permit,
+            Err(_error) => {
+                let _result = self
+                    .logs
+                    .record("WARN", "daemon peer exceeded its active-stream limit");
+                return;
+            }
+        };
         if self
             .logs
             .record(
@@ -379,6 +430,7 @@ impl DaemonControlState {
                     String::from("daemon-reload"),
                     String::from("daemon-stop"),
                     String::from("session-control-v1"),
+                    String::from("session-interactive-input-v1"),
                     String::from("approvals-v1"),
                     String::from("policy-test-v1"),
                     String::from("runtime-guard-service-v1"),
@@ -421,6 +473,7 @@ impl DaemonControlState {
             KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST => {
                 self.session_lease_release(stream, peer, &envelope).await
             }
+            KIND_SESSION_INPUT_REQUEST => self.session_input(stream, peer, &envelope).await,
             KIND_SESSION_PRUNE_REQUEST => self.session_prune(stream, peer, &envelope).await,
             KIND_SESSION_ALIAS_SET_REQUEST => self.session_alias_set(stream, peer, &envelope).await,
             KIND_SESSION_ALIAS_REMOVE_REQUEST => {
@@ -767,6 +820,44 @@ impl DaemonControlState {
         .await
     }
 
+    async fn session_input(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionInputRequest = envelope
+            .decode_typed_payload(KIND_SESSION_INPUT_REQUEST)
+            .context(IpcSnafu)?;
+        let maximum = self
+            .configuration
+            .read()
+            .map_err(|_error| StateLockSnafu.build())?
+            .value
+            .max_ipc_upload_bytes_per_uid();
+        if request.data.is_empty() || request.data.len() as u64 > maximum {
+            return InvalidRequestSnafu {
+                reason: format!("interactive input must contain between one and {maximum} bytes"),
+            }
+            .fail();
+        }
+        let response = self.sessions.input(
+            peer.uid,
+            &request.session_id,
+            &request.input_lease_id,
+            &request.client_instance_id,
+            &request.data,
+        )?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_SESSION_INPUT_RESPONSE,
+            &response,
+        )
+        .await
+    }
+
     async fn session_prune(
         &self,
         stream: &mut UnixStream,
@@ -1094,7 +1185,7 @@ impl DaemonControlState {
             .read()
             .map_err(|_error| StateLockSnafu.build())?
             .value
-            .max_policy_upload_bytes();
+            .max_ipc_upload_bytes_per_uid();
         let response = evaluate_policy_test(request, maximum)?;
         self.write_message(
             stream,
@@ -1121,12 +1212,16 @@ impl DaemonControlState {
             }
             .fail();
         }
-        let maximum = self
-            .configuration
-            .read()
-            .map_err(|_error| StateLockSnafu.build())?
-            .value
-            .max_policy_upload_bytes();
+        let (maximum, maximum_stored_bytes) = {
+            let configuration = self
+                .configuration
+                .read()
+                .map_err(|_error| StateLockSnafu.build())?;
+            (
+                configuration.value.max_policy_upload_bytes(),
+                configuration.value.max_stored_policy_bytes_per_uid(),
+            )
+        };
         let policy = self.sessions.read_policy_package(
             peer.uid,
             peer.gid,
@@ -1141,6 +1236,7 @@ impl DaemonControlState {
             MutationIntent::PolicyPackageApply {
                 uid: peer.uid,
                 policy,
+                maximum_stored_bytes,
             },
         )
         .await
@@ -1959,6 +2055,16 @@ impl DaemonControlState {
         }
     }
 
+    fn acquire_stream_permit(self: &Arc<Self>, uid: u32) -> Result<PerUidStreamPermit> {
+        let maximum = self
+            .configuration
+            .read()
+            .map_err(|_error| StateLockSnafu.build())?
+            .value
+            .max_concurrent_streams_per_uid();
+        self.active_streams.acquire(uid, maximum)
+    }
+
     async fn read_envelope(&self, stream: &mut UnixStream) -> Result<Envelope> {
         let frame = timeout(REQUEST_TIMEOUT, AsyncFrameCodec::read_frame(stream))
             .await
@@ -2049,6 +2155,20 @@ impl DaemonControlState {
 impl Drop for DaemonSocket {
     fn drop(&mut self) {
         self.unlink_if_owned();
+    }
+}
+
+impl Drop for PerUidStreamPermit {
+    fn drop(&mut self) {
+        if let Ok(mut active_streams) = self.limiter.active.lock() {
+            match active_streams.get_mut(&self.uid) {
+                Some(active) if *active > 1 => *active -= 1,
+                Some(_) => {
+                    active_streams.remove(&self.uid);
+                }
+                None => {}
+            }
+        }
     }
 }
 
@@ -2347,6 +2467,19 @@ mod tests {
     }
 
     #[test]
+    fn daemon_stream_limit_is_scoped_to_the_observed_uid() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let limiter = Arc::new(super::PerUidStreamLimiter::new());
+        let first = limiter.acquire(1000, 1)?;
+        assert!(limiter.acquire(1000, 1).is_err());
+        let other_owner = limiter.acquire(1001, 1)?;
+        drop(first);
+        assert!(limiter.acquire(1000, 1).is_ok());
+        drop(other_owner);
+        Ok(())
+    }
+
+    #[test]
     fn reload_publishes_configuration_and_generation_as_one_state(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let test_state = state()?;
@@ -2508,6 +2641,7 @@ mod tests {
                 approvals,
                 shutdown,
                 connections: Arc::new(Semaphore::new(1)),
+                active_streams: Arc::new(super::PerUidStreamLimiter::new()),
             }),
             _root: root,
         })

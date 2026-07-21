@@ -124,6 +124,38 @@ impl InputLeaseManager {
         Ok(())
     }
 
+    pub fn require_current(
+        &self,
+        lease_id: &str,
+        client_id: &str,
+    ) -> Result<InputLease, SessionOutputError> {
+        let now = unix_time_ms();
+        let mut state = self.lock()?;
+        let Some(lease) = state.as_ref() else {
+            return LeaseNotOwnedSnafu {
+                lease_id: lease_id.to_owned(),
+                client_id: client_id.to_owned(),
+            }
+            .fail();
+        };
+        if lease.expires_unix_ms <= now {
+            *state = None;
+            return LeaseNotOwnedSnafu {
+                lease_id: lease_id.to_owned(),
+                client_id: client_id.to_owned(),
+            }
+            .fail();
+        }
+        if lease.lease_id != lease_id || lease.client_id != client_id {
+            return LeaseNotOwnedSnafu {
+                lease_id: lease_id.to_owned(),
+                client_id: client_id.to_owned(),
+            }
+            .fail();
+        }
+        Ok(lease.clone())
+    }
+
     pub fn current(&self) -> Result<Option<InputLease>, SessionOutputError> {
         let now = unix_time_ms();
         let mut state = self.lock()?;
@@ -192,6 +224,27 @@ mod tests {
         assert!(renewed.expires_unix_ms() >= first.expires_unix_ms());
         manager.release(first.lease_id(), first.client_id())?;
         assert!(manager.acquire("client-b", Duration::from_secs(5)).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn only_the_current_lease_can_write_interactive_input() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let manager = InputLeaseManager::new("session-1");
+        let lease = manager.acquire("client-a", Duration::from_secs(5))?;
+
+        assert_eq!(
+            manager
+                .require_current(lease.lease_id(), lease.client_id())?
+                .lease_id(),
+            lease.lease_id()
+        );
+        assert!(manager
+            .require_current("different-lease", lease.client_id())
+            .is_err());
+        assert!(manager
+            .require_current(lease.lease_id(), "client-b")
+            .is_err());
         Ok(())
     }
 }

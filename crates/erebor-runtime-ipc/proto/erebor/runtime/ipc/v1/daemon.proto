@@ -218,6 +218,20 @@ message SessionInputLeaseResponse {
   bool released = 4;
 }
 
+// Interactive input is deliberately separate from the lease mutation RPCs.
+// It is bound to the current lease and is never replayed through idempotency.
+message SessionInputRequest {
+  string session_id = 1;
+  string input_lease_id = 2;
+  string client_instance_id = 3;
+  bytes data = 4;
+}
+
+message SessionInputResponse {
+  string session_id = 1;
+  uint32 accepted_bytes = 2;
+}
+
 message SessionPruneRequest {
   uint64 terminal_before_unix_ms = 1;
   uint32 maximum_sessions = 2;

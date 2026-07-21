@@ -97,7 +97,7 @@ impl LinuxRunnerDriver {
                 ActiveSessionSignalKind::Kill,
                 ActiveSessionSignalKind::Interrupt,
             ]),
-            false,
+            true,
             true,
             BTreeSet::from([DaemonFailureMode::Terminate, DaemonFailureMode::Continue]),
             BTreeMap::from([
@@ -547,6 +547,7 @@ pub(crate) struct LinuxControllerHandoff {
 pub(crate) enum LinuxControllerCommand {
     Stop { grace_period_ms: u64 },
     Kill { signal: ActiveSessionSignal },
+    Input { data: Vec<u8> },
     Health,
 }
 
@@ -559,6 +560,9 @@ pub(crate) enum LinuxControllerEvent {
     },
     Health {
         running: bool,
+    },
+    InputAccepted {
+        accepted_bytes: u32,
     },
     Exited {
         exit_code: Option<i32>,
@@ -587,6 +591,14 @@ struct LinuxControllerSession {
 }
 
 impl LinuxControllerSession {
+    fn protocol(&self, reason: impl Into<String>) -> RuntimeError {
+        RuntimeError::SessionRunnerProtocol {
+            runner: self.id.as_str().to_owned(),
+            reason: reason.into(),
+            location: snafu::Location::default(),
+        }
+    }
+
     fn command(
         &mut self,
         command: &LinuxControllerCommand,
@@ -605,7 +617,9 @@ impl LinuxControllerSession {
                     return self.observe_exit(exit_code, signal);
                 }
                 LinuxControllerEvent::Failed { reason } => return self.observe_failure(reason),
-                LinuxControllerEvent::Started { .. } | LinuxControllerEvent::Health { .. } => {}
+                LinuxControllerEvent::Started { .. }
+                | LinuxControllerEvent::Health { .. }
+                | LinuxControllerEvent::InputAccepted { .. } => {}
             }
         }
     }
@@ -667,6 +681,22 @@ impl ActiveSession for LinuxControllerSession {
         self.exit_from_event(event)
     }
 
+    fn write_input(&mut self, data: &[u8]) -> Result<(), RuntimeError> {
+        let accepted_bytes = u32::try_from(data.len()).map_err(|_error| {
+            self.protocol("interactive input exceeds the Linux controller protocol limit")
+        })?;
+        match self.command(&LinuxControllerCommand::Input {
+            data: data.to_vec(),
+        })? {
+            LinuxControllerEvent::InputAccepted {
+                accepted_bytes: observed,
+            } if observed == accepted_bytes => Ok(()),
+            event => Err(self.protocol(format!(
+                "expected interactive-input acknowledgement, received {event:?}"
+            ))),
+        }
+    }
+
     fn health(&mut self) -> Result<ActiveSessionHealth, RuntimeError> {
         if self.observed_exit.is_some() {
             return Ok(ActiveSessionHealth::Exited);
@@ -695,7 +725,9 @@ impl ActiveSession for LinuxControllerSession {
                 self.observe_failure(reason)?;
                 Ok(ActiveSessionHealth::Exited)
             }
-            LinuxControllerEvent::Started { .. } => Ok(ActiveSessionHealth::Starting),
+            LinuxControllerEvent::Started { .. } | LinuxControllerEvent::InputAccepted { .. } => {
+                Ok(ActiveSessionHealth::Starting)
+            }
         }
     }
 }
@@ -710,9 +742,9 @@ impl LinuxControllerSession {
                 self.observe_exit(exit_code, signal)
             }
             LinuxControllerEvent::Failed { reason } => self.observe_failure(reason),
-            LinuxControllerEvent::Started { .. } | LinuxControllerEvent::Health { .. } => {
-                self.wait_for_exit()
-            }
+            LinuxControllerEvent::Started { .. }
+            | LinuxControllerEvent::Health { .. }
+            | LinuxControllerEvent::InputAccepted { .. } => self.wait_for_exit(),
         }
     }
 }

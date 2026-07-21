@@ -1,5 +1,6 @@
 use std::{collections::BTreeSet, io::Read, path::Path};
 
+use erebor_runtime_ipc::MAX_PAYLOAD_LEN;
 use erebor_runtime_packages::{
     AgentPackageManifest, CanonicalEncoding, InstallationRecord, PolicyPackageRevision,
     PolicySetRevision,
@@ -18,6 +19,11 @@ const DEFAULT_MAX_DAEMON_LOSS_GRACE_SECONDS: u64 = 300;
 const DEFAULT_SESSION_RETRY_HORIZON_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_MAX_POLICY_UPLOAD_BYTES: u64 = 1024 * 1024;
 const DEFAULT_MAX_CONCURRENT_SESSIONS_PER_UID: u32 = 16;
+const DEFAULT_MAX_CONCURRENT_STREAMS_PER_UID: u32 = 8;
+const DEFAULT_MAX_RETAINED_SESSION_OUTPUT_BYTES_PER_UID: u64 =
+    DEFAULT_MAX_SESSION_OUTPUT_BYTES * DEFAULT_MAX_CONCURRENT_SESSIONS_PER_UID as u64;
+const DEFAULT_MAX_STORED_POLICY_BYTES_PER_UID: u64 = 64 * 1024 * 1024;
+const DEFAULT_MAX_IPC_UPLOAD_BYTES_PER_UID: u64 = (MAX_PAYLOAD_LEN - 1024) as u64;
 const MIN_LOG_BYTES: u64 = 4096;
 const MAX_LOG_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_RECORDS: u32 = 4096;
@@ -116,6 +122,14 @@ pub struct DaemonConfig {
     pub max_policy_upload_bytes: u64,
     #[serde(default = "default_max_concurrent_sessions_per_uid")]
     pub max_concurrent_sessions_per_uid: u32,
+    #[serde(default = "default_max_concurrent_streams_per_uid")]
+    pub max_concurrent_streams_per_uid: u32,
+    #[serde(default = "default_max_retained_session_output_bytes_per_uid")]
+    pub max_retained_session_output_bytes_per_uid: u64,
+    #[serde(default = "default_max_stored_policy_bytes_per_uid")]
+    pub max_stored_policy_bytes_per_uid: u64,
+    #[serde(default = "default_max_ipc_upload_bytes_per_uid")]
+    pub max_ipc_upload_bytes_per_uid: u64,
     #[serde(default)]
     pub(crate) root_curated_admissions: Vec<RootCuratedAdmission>,
 }
@@ -133,6 +147,11 @@ impl Default for DaemonConfig {
             session_retry_horizon_seconds: DEFAULT_SESSION_RETRY_HORIZON_SECONDS,
             max_policy_upload_bytes: DEFAULT_MAX_POLICY_UPLOAD_BYTES,
             max_concurrent_sessions_per_uid: DEFAULT_MAX_CONCURRENT_SESSIONS_PER_UID,
+            max_concurrent_streams_per_uid: DEFAULT_MAX_CONCURRENT_STREAMS_PER_UID,
+            max_retained_session_output_bytes_per_uid:
+                DEFAULT_MAX_RETAINED_SESSION_OUTPUT_BYTES_PER_UID,
+            max_stored_policy_bytes_per_uid: DEFAULT_MAX_STORED_POLICY_BYTES_PER_UID,
+            max_ipc_upload_bytes_per_uid: DEFAULT_MAX_IPC_UPLOAD_BYTES_PER_UID,
             root_curated_admissions: Vec::new(),
         }
     }
@@ -173,6 +192,12 @@ impl DaemonConfig {
             || self.max_policy_upload_bytes > 8 * 1024 * 1024
             || self.max_concurrent_sessions_per_uid == 0
             || self.max_concurrent_sessions_per_uid > 1024
+            || self.max_concurrent_streams_per_uid == 0
+            || self.max_concurrent_streams_per_uid > 32
+            || self.max_retained_session_output_bytes_per_uid < self.max_session_output_bytes
+            || self.max_stored_policy_bytes_per_uid < self.max_policy_upload_bytes
+            || self.max_ipc_upload_bytes_per_uid < 1024
+            || self.max_ipc_upload_bytes_per_uid > DEFAULT_MAX_IPC_UPLOAD_BYTES_PER_UID
             || !valid_root_curated_admissions(&self.root_curated_admissions)
         {
             return Err(crate::DaemonError::InvalidConfig {
@@ -197,6 +222,22 @@ impl DaemonConfig {
 
     pub(crate) const fn max_concurrent_sessions_per_uid(&self) -> u32 {
         self.max_concurrent_sessions_per_uid
+    }
+
+    pub(crate) const fn max_retained_session_output_bytes_per_uid(&self) -> u64 {
+        self.max_retained_session_output_bytes_per_uid
+    }
+
+    pub(crate) const fn max_concurrent_streams_per_uid(&self) -> u32 {
+        self.max_concurrent_streams_per_uid
+    }
+
+    pub(crate) const fn max_stored_policy_bytes_per_uid(&self) -> u64 {
+        self.max_stored_policy_bytes_per_uid
+    }
+
+    pub(crate) const fn max_ipc_upload_bytes_per_uid(&self) -> u64 {
+        self.max_ipc_upload_bytes_per_uid
     }
 }
 
@@ -245,11 +286,28 @@ const fn default_max_concurrent_sessions_per_uid() -> u32 {
     DEFAULT_MAX_CONCURRENT_SESSIONS_PER_UID
 }
 
+const fn default_max_concurrent_streams_per_uid() -> u32 {
+    DEFAULT_MAX_CONCURRENT_STREAMS_PER_UID
+}
+
+const fn default_max_retained_session_output_bytes_per_uid() -> u64 {
+    DEFAULT_MAX_RETAINED_SESSION_OUTPUT_BYTES_PER_UID
+}
+
+const fn default_max_stored_policy_bytes_per_uid() -> u64 {
+    DEFAULT_MAX_STORED_POLICY_BYTES_PER_UID
+}
+
+const fn default_max_ipc_upload_bytes_per_uid() -> u64 {
+    DEFAULT_MAX_IPC_UPLOAD_BYTES_PER_UID
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
+    use erebor_runtime_ipc::MAX_PAYLOAD_LEN;
     use erebor_runtime_packages::{
         AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord,
         PolicyPackageRevision, PolicySetRevision,
@@ -294,5 +352,21 @@ mod tests {
         config.root_curated_admissions = vec![admission.clone(), admission];
         assert!(config.validate(Path::new("<test-config>")).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn daemon_rejects_per_uid_limits_that_cannot_be_enforced_by_the_local_ipc_contract() {
+        let config = DaemonConfig {
+            max_concurrent_streams_per_uid: 0,
+            ..DaemonConfig::default()
+        };
+        assert!(config.validate(Path::new("<test-config>")).is_err());
+
+        let config = DaemonConfig {
+            max_concurrent_streams_per_uid: 1,
+            max_ipc_upload_bytes_per_uid: (MAX_PAYLOAD_LEN as u64).saturating_add(1),
+            ..DaemonConfig::default()
+        };
+        assert!(config.validate(Path::new("<test-config>")).is_err());
     }
 }

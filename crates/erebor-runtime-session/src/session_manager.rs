@@ -36,6 +36,7 @@ type ActiveHandles = BTreeMap<(u32, String), ActiveHandle>;
 type InputLeases = BTreeMap<(u32, String), Arc<InputLeaseManager>>;
 
 const INPUT_LEASE_DURATION: Duration = Duration::from_secs(30);
+const MAX_INPUT_CHUNK_BYTES: usize = 4096;
 
 #[derive(Debug)]
 pub struct SessionAttachOutcome {
@@ -244,6 +245,39 @@ impl SessionManager {
         self.lease(uid, session_id)?
             .release(lease_id, client_instance_id)
             .context(OutputSnafu)
+    }
+
+    pub fn write_input(
+        &self,
+        uid: u32,
+        session_id: &str,
+        lease_id: &str,
+        client_instance_id: &str,
+        data: &[u8],
+    ) -> Result<(), SessionManagerError> {
+        self.require_input_lease_session(uid, session_id)?;
+        if data.is_empty() || data.len() > MAX_INPUT_CHUNK_BYTES {
+            return Err(SessionManagerError::InvalidOperation {
+                session_id: session_id.to_owned(),
+                reason: format!(
+                    "interactive input must contain between one and {MAX_INPUT_CHUNK_BYTES} bytes"
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        self.lease(uid, session_id)?
+            .require_current(lease_id, client_instance_id)
+            .context(OutputSnafu)?;
+        self.handle(uid, session_id)?
+            .lock()
+            .map_err(|_error| {
+                ActiveHandleLockSnafu {
+                    session_id: session_id.to_owned(),
+                }
+                .build()
+            })?
+            .write_input(data)
+            .context(RunnerSnafu)
     }
 
     pub fn inspect_runner(
@@ -1023,6 +1057,7 @@ mod tests {
         admissions: AtomicUsize,
         recoveries: AtomicUsize,
         removals: AtomicUsize,
+        inputs: Arc<Mutex<Vec<Vec<u8>>>>,
     }
 
     struct FakeRunner {
@@ -1114,6 +1149,7 @@ mod tests {
         capability: RunnerCapabilityDocument,
         recovery: RunnerRecovery,
         running: Arc<AtomicBool>,
+        inputs: Arc<Mutex<Vec<Vec<u8>>>>,
     }
 
     impl ActiveSession for FakeActiveSession {
@@ -1152,6 +1188,20 @@ mod tests {
             } else {
                 ActiveSessionHealth::Exited
             })
+        }
+
+        fn write_input(&mut self, data: &[u8]) -> Result<(), erebor_runtime_core::RuntimeError> {
+            self.inputs
+                .lock()
+                .map_err(
+                    |_error| erebor_runtime_core::RuntimeError::SessionRunnerProtocol {
+                        runner: String::from("test-runner"),
+                        reason: String::from("fake input lock is poisoned"),
+                        location: snafu::Location::default(),
+                    },
+                )?
+                .push(data.to_vec());
+            Ok(())
         }
     }
 
@@ -1244,6 +1294,7 @@ mod tests {
                     }
                 })?,
                 running: Arc::clone(&self.state.running),
+                inputs: Arc::clone(&self.state.inputs),
             }))
         }
 
@@ -1264,6 +1315,7 @@ mod tests {
                     }
                 })?,
                 running: Arc::clone(&self.state.running),
+                inputs: Arc::clone(&self.state.inputs),
             }))
         }
 
@@ -1277,7 +1329,10 @@ mod tests {
         }
     }
 
-    fn capability(version: &str) -> Result<RunnerCapabilityDocument, Box<dyn std::error::Error>> {
+    fn capability(
+        version: &str,
+        tty_supported: bool,
+    ) -> Result<RunnerCapabilityDocument, Box<dyn std::error::Error>> {
         RunnerCapabilityDocument::new(
             RunnerId::new("test-runner")?,
             "fake-linux-runner",
@@ -1291,7 +1346,7 @@ mod tests {
                 ActiveSessionSignalKind::Terminate,
                 ActiveSessionSignalKind::Kill,
             ]),
-            false,
+            tty_supported,
             true,
             BTreeSet::from([DaemonFailureMode::Terminate, DaemonFailureMode::Continue]),
             BTreeMap::new(),
@@ -1303,8 +1358,16 @@ mod tests {
         root: &TempDir,
         daemon_failure_mode: DaemonFailureMode,
     ) -> Result<ManagerFixture, TestError> {
+        fixture_with_mode_and_tty(root, daemon_failure_mode, false)
+    }
+
+    fn fixture_with_mode_and_tty(
+        root: &TempDir,
+        daemon_failure_mode: DaemonFailureMode,
+        tty: bool,
+    ) -> Result<ManagerFixture, TestError> {
         let state = Arc::new(FakeRunnerState {
-            capability: Mutex::new(capability("1")?),
+            capability: Mutex::new(capability("1", tty)?),
             running: Arc::new(AtomicBool::new(false)),
             preparations: AtomicUsize::new(0),
             starts: AtomicUsize::new(0),
@@ -1312,6 +1375,7 @@ mod tests {
             admissions: AtomicUsize::new(0),
             recoveries: AtomicUsize::new(0),
             removals: AtomicUsize::new(0),
+            inputs: Arc::new(Mutex::new(Vec::new())),
         });
         let runner = Arc::new(FakeRunner {
             id: RunnerId::new("test-runner")?,
@@ -1338,7 +1402,7 @@ mod tests {
             adapter: None,
             policy_inputs: vec![ImmutableIdentity::new("root-policy", digest)?],
             policy_set: ImmutableIdentity::new("policy-set", digest)?,
-            runner_capability: capability("1")?,
+            runner_capability: capability("1", tty)?,
             workspace: SafePathBinding::new(
                 PathBuf::from("/workspace"),
                 1,
@@ -1374,7 +1438,7 @@ mod tests {
                 OutputStreamRequirements::required(),
             )?,
             evidence_requirements: vec![EvidenceRequirement::new("audit", true)?],
-            tty: false,
+            tty,
             detached: true,
             daemon_failure_mode,
             loss_grace_seconds: 1,
@@ -1386,6 +1450,10 @@ mod tests {
 
     fn fixture(root: &TempDir) -> Result<ManagerFixture, TestError> {
         fixture_with_mode(root, DaemonFailureMode::Continue)
+    }
+
+    fn interactive_fixture(root: &TempDir) -> Result<ManagerFixture, TestError> {
+        fixture_with_mode_and_tty(root, DaemonFailureMode::Continue, true)
     }
 
     #[test]
@@ -1452,6 +1520,54 @@ mod tests {
     }
 
     #[test]
+    fn manager_forwards_only_current_interactive_lease_input_to_the_active_runner(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, _runtime, spec) = interactive_fixture(&root)?;
+        manager.create(spec)?;
+        manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+        let lease = manager
+            .attach(1000, "session-manager-test", true, "client-a")?
+            .lease()
+            .cloned()
+            .ok_or("interactive attach did not create a lease")?;
+
+        manager.write_input(
+            1000,
+            "session-manager-test",
+            lease.lease_id(),
+            lease.client_id(),
+            b"echo governed\n",
+        )?;
+        assert!(manager
+            .write_input(
+                1000,
+                "session-manager-test",
+                "other-lease",
+                lease.client_id(),
+                b"not accepted",
+            )
+            .is_err());
+        assert!(manager
+            .write_input(
+                1000,
+                "session-manager-test",
+                lease.lease_id(),
+                lease.client_id(),
+                &[0_u8; 4097],
+            )
+            .is_err());
+        assert_eq!(
+            *state
+                .inputs
+                .lock()
+                .map_err(|_error| "fake input lock is poisoned")?,
+            vec![b"echo governed\n".to_vec()]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn manager_marks_runtime_preparation_failure_and_cleans_once(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
@@ -1501,7 +1617,7 @@ mod tests {
         let Ok(mut current) = state.capability.lock() else {
             return Err("fake capability lock is poisoned".into());
         };
-        *current = capability("2")?;
+        *current = capability("2", false)?;
         drop(current);
 
         assert!(manager

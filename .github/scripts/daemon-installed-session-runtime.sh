@@ -39,6 +39,21 @@ as_user() {
   runuser -u "$user" -- "$erebor" "$@"
 }
 
+child_pid_of() {
+  local parent_pid="$1"
+  local child_pid=""
+  for _ in $(seq 1 150); do
+    child_pid="$(tr ' ' '\n' <"/proc/$parent_pid/task/$parent_pid/children" | head -n 1)"
+    [[ -n "$child_pid" ]] && {
+      printf '%s\n' "$child_pid"
+      return
+    }
+    sleep 0.1
+  done
+  echo "runuser process $parent_pid did not start an Erebor client" >&2
+  return 1
+}
+
 await_daemon() {
   for _ in $(seq 1 150); do
     "$erebor" daemon status >/dev/null 2>&1 && return
@@ -99,6 +114,20 @@ create_linux() {
     --idempotency-key "create-$label" \
     -- /usr/bin/dash -c \
       'test "$(id -u)" != 0; test "$(id -G)" = "$(id -g)"; test "$(umask)" = 0077; test ! -e /run/erebor/daemon.sock; printf "linux-ready-%s\n" "$0"; printf "linux-stderr-%s\n" "$0" >&2; while :; do sleep 1; done' \
+    "$label"
+}
+
+create_tty_linux() {
+  local user="$1"
+  local label="$2"
+  as_user "$user" session create \
+    --runner linux-host \
+    --workspace "/home/$user" \
+    --loss-grace-seconds 1 \
+    --idempotency-key "tty-create-$label" \
+    -t \
+    -- /usr/bin/dash -c \
+      'IFS= read -r line; printf "tty-input-%s\n" "$line"; while :; do sleep 1; done' \
     "$label"
 }
 
@@ -163,6 +192,67 @@ fi
 stop_and_remove "$first_user" "$first_session" first
 as_user "$first_user" session alias remove primary \
   --idempotency-key alias-remove-first | grep -q "session_id=$first_session"
+
+tty_output="$(create_tty_linux "$first_user" first)"
+tty_session="$(session_id_from <<<"$tty_output")"
+[[ -n "$tty_session" ]]
+start_session "$first_user" "$tty_session" tty-first
+{
+  sleep 1
+  printf 'governed\n'
+  sleep 1
+  printf '\020\021'
+} | runuser -u "$first_user" -- script -qefc \
+  "$erebor session attach $tty_session --input --client-instance-id tty-first --idempotency-key tty-attach-first" \
+  /dev/null >/dev/null
+await_log "$first_user" "$tty_session" 'tty-input-governed'
+as_user "$first_user" session inspect "$tty_session" | grep -q 'state=running'
+stop_and_remove "$first_user" "$tty_session" tty-first
+
+sigint_output="$(mktemp)"
+runuser -u "$first_user" -- "$erebor" session run \
+  --runner linux-host \
+  --workspace "/home/$first_user" \
+  --loss-grace-seconds 1 \
+  --idempotency-key sigint-first \
+  -- /usr/bin/dash -c 'while :; do sleep 1; done' \
+  >"$sigint_output" 2>&1 &
+sigint_client_pid="$!"
+sigint_session=""
+for _ in $(seq 1 150); do
+  sigint_session="$(session_id_from <"$sigint_output")"
+  [[ -n "$sigint_session" ]] && break
+  sleep 0.1
+done
+[[ -n "$sigint_session" ]]
+for _ in $(seq 1 150); do
+  grep -q 'read_only=true' "$sigint_output" && break
+  sleep 0.1
+done
+grep -q 'read_only=true' "$sigint_output"
+sleep 1
+sigint_erebor_pid="$(child_pid_of "$sigint_client_pid")"
+kill -INT "$sigint_erebor_pid"
+wait "$sigint_client_pid" || true
+await_terminal_state "$first_user" "$sigint_session"
+as_user "$first_user" session inspect "$sigint_session" | grep -q 'state=failed'
+as_user "$first_user" session rm "$sigint_session" --force \
+  --idempotency-key sigint-remove-first | grep -q 'state=removed'
+
+transport_output="$(create_linux "$first_user" transport)"
+transport_session="$(session_id_from <<<"$transport_output")"
+[[ -n "$transport_session" ]]
+start_session "$first_user" "$transport_session" transport
+readonly_attach_output="$(mktemp)"
+as_user "$first_user" session attach "$transport_session" \
+  --idempotency-key readonly-attach-first >"$readonly_attach_output" 2>&1 &
+readonly_attach_pid="$!"
+sleep 1
+readonly_attach_erebor_pid="$(child_pid_of "$readonly_attach_pid")"
+kill -TERM "$readonly_attach_erebor_pid"
+wait "$readonly_attach_pid" || true
+as_user "$first_user" session inspect "$transport_session" | grep -q 'state=running'
+stop_and_remove "$first_user" "$transport_session" transport
 
 second_output="$(create_linux "$second_user" second)"
 second_session="$(session_id_from <<<"$second_output")"

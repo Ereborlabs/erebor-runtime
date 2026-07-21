@@ -126,6 +126,17 @@ fn apply_command(
             let exit = workload.kill(signal)?;
             Ok(Some(exit))
         }
+        LinuxControllerCommand::Input { data } => {
+            let accepted_bytes = u32::try_from(data.len()).map_err(|_error| {
+                SessionControllerError::InvalidHandoff {
+                    reason: String::from("interactive input exceeds the controller protocol limit"),
+                    location: snafu::Location::default(),
+                }
+            })?;
+            workload.write_input(&data)?;
+            write_event(&LinuxControllerEvent::InputAccepted { accepted_bytes })?;
+            Ok(None)
+        }
         LinuxControllerCommand::Health => {
             write_event(&LinuxControllerEvent::Health {
                 running: workload.try_wait()?.is_none(),

@@ -6,10 +6,7 @@ mod policy;
 mod runner;
 mod session;
 
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
 use erebor_runtime_ipc::{
     v1::{
@@ -49,13 +46,8 @@ pub struct DaemonClient {
 impl DaemonClient {
     #[must_use]
     pub fn local() -> Self {
-        Self::at("/run/erebor/daemon.sock")
-    }
-
-    #[must_use]
-    pub fn at(path: impl AsRef<Path>) -> Self {
         Self {
-            socket_path: path.as_ref().to_path_buf(),
+            socket_path: PathBuf::from("/run/erebor/daemon.sock"),
         }
     }
 

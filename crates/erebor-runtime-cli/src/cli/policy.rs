@@ -6,6 +6,7 @@ use std::{
 
 use clap::{Args, Subcommand};
 use erebor_runtime_client::DaemonClient;
+use erebor_runtime_ipc::MAX_PAYLOAD_LEN;
 use snafu::ResultExt;
 
 use crate::error::{
@@ -15,7 +16,7 @@ use crate::error::{
 
 use super::parse_non_empty_path;
 
-const MAX_POLICY_TEST_INPUT_BYTES: u64 = 1024 * 1024;
+const MAX_POLICY_TEST_REQUEST_BYTES: u64 = (MAX_PAYLOAD_LEN - 1024) as u64;
 
 #[derive(Debug, Args)]
 pub(super) struct PolicyArgs {
@@ -287,8 +288,10 @@ impl<'a> PolicyTestCommand<'a> {
     }
 
     fn execute(&self) -> Result<(), CliError> {
-        let policy_json = Self::read_bounded(&self.args.policy, true)?;
-        let event_json = Self::read_bounded(&self.args.event, false)?;
+        let policy_json =
+            Self::read_bounded(&self.args.policy, true, MAX_POLICY_TEST_REQUEST_BYTES)?;
+        let remaining = MAX_POLICY_TEST_REQUEST_BYTES.saturating_sub(policy_json.len() as u64);
+        let event_json = Self::read_bounded(&self.args.event, false, remaining)?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_io()
             .enable_time()
@@ -304,16 +307,16 @@ impl<'a> PolicyTestCommand<'a> {
         writeln!(output).context(WriteSessionOutputSnafu)
     }
 
-    fn read_bounded(path: &PathBuf, policy: bool) -> Result<Vec<u8>, CliError> {
+    fn read_bounded(path: &PathBuf, policy: bool, maximum_bytes: u64) -> Result<Vec<u8>, CliError> {
         let metadata =
             std::fs::metadata(path).map_err(|source| input_read_error(path, policy, source))?;
-        if metadata.len() > MAX_POLICY_TEST_INPUT_BYTES {
+        if metadata.len() > maximum_bytes {
             return InvalidPolicyCommandSnafu {
                 reason: format!(
-                    "{} `{}` exceeds the {}-byte upload bound",
+                    "{} `{}` exceeds the remaining {}-byte policy-test request bound",
                     if policy { "policy" } else { "event" },
                     path.display(),
-                    MAX_POLICY_TEST_INPUT_BYTES,
+                    maximum_bytes,
                 ),
             }
             .fail();
@@ -321,16 +324,16 @@ impl<'a> PolicyTestCommand<'a> {
         let mut file = File::open(path).map_err(|source| input_read_error(path, policy, source))?;
         let mut source = Vec::with_capacity(metadata.len() as usize);
         Read::by_ref(&mut file)
-            .take(MAX_POLICY_TEST_INPUT_BYTES + 1)
+            .take(maximum_bytes.saturating_add(1))
             .read_to_end(&mut source)
             .map_err(|source| input_read_error(path, policy, source))?;
-        if source.len() as u64 > MAX_POLICY_TEST_INPUT_BYTES {
+        if source.len() as u64 > maximum_bytes {
             return InvalidPolicyCommandSnafu {
                 reason: format!(
-                    "{} `{}` changed while it was read and exceeds the {}-byte upload bound",
+                    "{} `{}` changed while it was read and exceeds the remaining {}-byte policy-test request bound",
                     if policy { "policy" } else { "event" },
                     path.display(),
-                    MAX_POLICY_TEST_INPUT_BYTES,
+                    maximum_bytes,
                 ),
             }
             .fail();

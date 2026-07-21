@@ -1,11 +1,15 @@
-use std::io::{self, Write};
+use std::{
+    io::{self, Write},
+    time::{Duration, Instant},
+};
 
 use erebor_runtime_client::DaemonClient;
 use erebor_runtime_core::{RuntimeConfig, SessionRunPlan};
 use erebor_runtime_events::SessionId;
 use erebor_runtime_ipc::v1::{
-    SessionAttachRequest, SessionCreateRequest, SessionEnvironmentEntry, SessionPruneRequest,
-    SessionRecord,
+    SessionAttachRequest, SessionCreateRequest, SessionEnvironmentEntry,
+    SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputRequest,
+    SessionPruneRequest, SessionRecord,
 };
 use erebor_runtime_session::SessionExecutionService;
 use snafu::ResultExt;
@@ -18,12 +22,14 @@ use crate::error::{
 use super::config_paths::RuntimeConfigLoader;
 
 mod args;
+mod interactive;
 
 use args::{
     GenericSessionCreateArgs, GenericSessionRequestArgs, OptionalGenericSessionRequestArgs,
     SessionAliasArgs, SessionAliasCommand, SessionAttachArgs, SessionCommand, SessionEventsArgs,
     SessionLogsArgs, SessionRunArgs,
 };
+use interactive::{InteractiveInput, InteractiveTerminal};
 
 pub(super) use args::SessionArgs;
 
@@ -196,8 +202,15 @@ impl<'a> SessionCommandOwner<'a> {
             .context(DaemonClientSnafu)?;
         Self::write_record(started);
         if !args.request.detached {
-            self.follow_attached(client, &created.session_id, args.request.tty, key)
-                .await?;
+            let client_instance_id = format!("erebor-cli-{}", std::process::id());
+            self.follow_attached(
+                client,
+                &created.session_id,
+                args.request.tty,
+                key,
+                &client_instance_id,
+            )
+            .await?;
         }
         Ok(())
     }
@@ -208,6 +221,7 @@ impl<'a> SessionCommandOwner<'a> {
         session_id: &str,
         request_input_lease: bool,
         key: &str,
+        client_instance_id: &str,
     ) -> Result<(), CliError> {
         let attachment = client
             .session_attach(
@@ -215,12 +229,32 @@ impl<'a> SessionCommandOwner<'a> {
                     session_id: session_id.to_owned(),
                     after_output_sequence: 0,
                     request_input_lease,
-                    client_instance_id: String::from("erebor-cli-run"),
+                    client_instance_id: client_instance_id.to_owned(),
                 },
                 &format!("{key}:attach"),
             )
             .await
             .context(DaemonClientSnafu)?;
+        self.follow_attachment(
+            client,
+            attachment,
+            0,
+            request_input_lease,
+            key,
+            client_instance_id,
+        )
+        .await
+    }
+
+    async fn follow_attachment(
+        &self,
+        client: &DaemonClient,
+        attachment: erebor_runtime_ipc::v1::SessionAttachResponse,
+        after_output_sequence: u64,
+        request_input_lease: bool,
+        key: &str,
+        client_instance_id: &str,
+    ) -> Result<(), CliError> {
         println!(
             "session_id={} read_only={} input_lease_id={} input_lease_expires_unix_ms={}",
             attachment.session_id,
@@ -228,23 +262,103 @@ impl<'a> SessionCommandOwner<'a> {
             attachment.input_lease_id,
             attachment.input_lease_expires_unix_ms,
         );
-        let mut stdout_cursor = 0;
-        let mut stderr_cursor = 0;
+        if request_input_lease && attachment.read_only {
+            return InvalidSessionCommandSnafu {
+                reason: String::from("interactive attachment did not receive an input lease"),
+            }
+            .fail();
+        }
+        let terminal = request_input_lease
+            .then(InteractiveTerminal::open)
+            .transpose()?;
+        let mut stdout_cursor = after_output_sequence;
+        let mut stderr_cursor = after_output_sequence;
+        let mut renew_at = Instant::now() + Duration::from_secs(10);
+        let mut renewal = 0_u64;
+        let mut interrupt_sent = false;
+        let interrupt = tokio::signal::ctrl_c();
+        tokio::pin!(interrupt);
         loop {
+            if let Some(terminal) = terminal.as_ref() {
+                while let Some(input) = terminal.try_input() {
+                    match input {
+                        InteractiveInput::Bytes(data) => {
+                            let expected_bytes = u32::try_from(data.len()).map_err(|_error| {
+                                CliError::InvalidSessionCommand {
+                                    reason: String::from(
+                                        "interactive input exceeds the client protocol limit",
+                                    ),
+                                    location: snafu::Location::default(),
+                                }
+                            })?;
+                            let response = client
+                                .session_input(SessionInputRequest {
+                                    session_id: attachment.session_id.clone(),
+                                    input_lease_id: attachment.input_lease_id.clone(),
+                                    client_instance_id: client_instance_id.to_owned(),
+                                    data,
+                                })
+                                .await
+                                .context(DaemonClientSnafu)?;
+                            if response.session_id != attachment.session_id
+                                || response.accepted_bytes != expected_bytes
+                            {
+                                return InvalidSessionCommandSnafu {
+                                    reason: String::from(
+                                        "daemon did not acknowledge the exact interactive input write",
+                                    ),
+                                }
+                                .fail();
+                            }
+                        }
+                        InteractiveInput::Detach | InteractiveInput::Closed => {
+                            self.release_input_lease(
+                                client,
+                                &attachment,
+                                client_instance_id,
+                                &format!("{key}:detach"),
+                            )
+                            .await?;
+                            return Ok(());
+                        }
+                        InteractiveInput::Failed(source) => {
+                            return Err(CliError::Terminal {
+                                source,
+                                location: snafu::Location::default(),
+                            });
+                        }
+                    }
+                }
+                if Instant::now() >= renew_at {
+                    renewal = renewal.saturating_add(1);
+                    client
+                        .session_input_lease_renew(
+                            SessionInputLeaseRenewRequest {
+                                session_id: attachment.session_id.clone(),
+                                input_lease_id: attachment.input_lease_id.clone(),
+                                client_instance_id: client_instance_id.to_owned(),
+                            },
+                            &format!("{key}:lease-renew-{renewal}"),
+                        )
+                        .await
+                        .context(DaemonClientSnafu)?;
+                    renew_at = Instant::now() + Duration::from_secs(10);
+                }
+            }
             stdout_cursor = Self::write_stream_page(
                 client
-                    .session_logs(session_id, "stdout", stdout_cursor, 256)
+                    .session_logs(&attachment.session_id, "stdout", stdout_cursor, 256)
                     .await
                     .context(DaemonClientSnafu)?,
             )?;
             stderr_cursor = Self::write_stream_page(
                 client
-                    .session_logs(session_id, "stderr", stderr_cursor, 256)
+                    .session_logs(&attachment.session_id, "stderr", stderr_cursor, 256)
                     .await
                     .context(DaemonClientSnafu)?,
             )?;
             let record = client
-                .session_inspect(session_id)
+                .session_inspect(&attachment.session_id)
                 .await
                 .context(DaemonClientSnafu)?;
             if matches!(
@@ -254,8 +368,46 @@ impl<'a> SessionCommandOwner<'a> {
                 Self::write_record(record);
                 return Ok(());
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if terminal.is_some() || interrupt_sent {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            } else {
+                tokio::select! {
+                    _ = &mut interrupt => {
+                        client
+                            .session_kill(
+                                &attachment.session_id,
+                                "interrupt",
+                                &format!("{key}:interrupt"),
+                            )
+                            .await
+                            .context(DaemonClientSnafu)?;
+                        interrupt_sent = true;
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                }
+            }
         }
+    }
+
+    async fn release_input_lease(
+        &self,
+        client: &DaemonClient,
+        attachment: &erebor_runtime_ipc::v1::SessionAttachResponse,
+        client_instance_id: &str,
+        idempotency_key: &str,
+    ) -> Result<(), CliError> {
+        client
+            .session_input_lease_release(
+                SessionInputLeaseReleaseRequest {
+                    session_id: attachment.session_id.clone(),
+                    input_lease_id: attachment.input_lease_id.clone(),
+                    client_instance_id: client_instance_id.to_owned(),
+                },
+                idempotency_key,
+            )
+            .await
+            .context(DaemonClientSnafu)?;
+        Ok(())
     }
 
     fn write_stream_page(page: erebor_runtime_client::SessionLogPage) -> Result<u64, CliError> {
@@ -310,14 +462,15 @@ impl<'a> SessionCommandOwner<'a> {
             )
             .await
             .context(DaemonClientSnafu)?;
-        println!(
-            "session_id={} read_only={} input_lease_id={} input_lease_expires_unix_ms={}",
-            response.session_id,
-            response.read_only,
-            response.input_lease_id,
-            response.input_lease_expires_unix_ms,
-        );
-        Ok(())
+        self.follow_attachment(
+            client,
+            response,
+            args.after_output_sequence,
+            args.input,
+            &args.idempotency_key,
+            &args.client_instance_id,
+        )
+        .await
     }
 
     async fn aliases(

@@ -10,10 +10,10 @@ use erebor_runtime_core::{
 use erebor_runtime_ipc::v1::{
     PolicyPackageRecord, PolicySetRecord, SessionAliasListResponse, SessionAliasRecord,
     SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionInputLeaseResponse,
-    SessionListResponse, SessionPruneResponse, SessionRecord, KIND_POLICY_PACKAGE_RECORD,
-    KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ATTACH_RESPONSE,
-    KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_PRUNE_RESPONSE,
-    KIND_SESSION_RECORD,
+    SessionInputResponse, SessionListResponse, SessionPruneResponse, SessionRecord,
+    KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD,
+    KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE,
+    KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD,
 };
 use erebor_runtime_session::{
     AgentAdapterRegistry, DurableSessionRecord, RunnerAdmissionRequest, RunnerInstallConfig,
@@ -200,10 +200,8 @@ impl DaemonSessionApi {
     }
 
     fn enforce_session_quota(&self, owner_uid: u32, config: &DaemonConfig) -> Result<()> {
-        let active = self
-            .manager
-            .list(owner_uid)
-            .context(SessionSnafu)?
+        let sessions = self.manager.list(owner_uid).context(SessionSnafu)?;
+        let active = sessions
             .iter()
             .filter(|record| !record.state().is_terminal())
             .count();
@@ -212,6 +210,24 @@ impl DaemonSessionApi {
                 reason: format!(
                     "owner UID {owner_uid} has reached the {} concurrent-session limit",
                     config.max_concurrent_sessions_per_uid()
+                ),
+            }
+            .fail();
+        }
+        let retained_output = sessions
+            .iter()
+            .filter(|record| record.retains_content())
+            .fold(0_u64, |total, record| {
+                total.saturating_add(record.spec().output().maximum_bytes())
+            });
+        let requested_output = config.max_session_output_bytes;
+        if retained_output.saturating_add(requested_output)
+            > config.max_retained_session_output_bytes_per_uid()
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: format!(
+                    "owner UID {owner_uid} would exceed the {}-byte retained output/evidence limit",
+                    config.max_retained_session_output_bytes_per_uid(),
                 ),
             }
             .fail();
@@ -274,9 +290,11 @@ impl DaemonSessionApi {
                 session_id,
                 retention_hold,
             } => self.set_retention_hold(*uid, session_id, *retention_hold),
-            MutationIntent::PolicyPackageApply { uid, policy } => {
-                self.store_policy_package(*uid, policy)
-            }
+            MutationIntent::PolicyPackageApply {
+                uid,
+                policy,
+                maximum_stored_bytes,
+            } => self.store_policy_package(*uid, policy, *maximum_stored_bytes),
             MutationIntent::PolicySetCreate {
                 uid,
                 root_minimum_digest,
@@ -364,10 +382,11 @@ impl DaemonSessionApi {
         &self,
         owner_uid: u32,
         policy: &erebor_runtime_packages::PolicyPackageRevision,
+        maximum_stored_bytes: u64,
     ) -> Result<MutationResponse> {
-        let digest = self
-            .local_store
-            .store_user_policy_package(owner_uid, policy)?;
+        let digest =
+            self.local_store
+                .store_user_policy_package(owner_uid, policy, maximum_stored_bytes)?;
         message(
             KIND_POLICY_PACKAGE_RECORD,
             &PolicyPackageRecord {
@@ -695,6 +714,29 @@ impl DaemonSessionApi {
         )
     }
 
+    pub(crate) fn input(
+        &self,
+        uid: u32,
+        session_id: &str,
+        lease_id: &str,
+        client_instance_id: &str,
+        data: &[u8],
+    ) -> Result<SessionInputResponse> {
+        let session_id = self.resolve_session_reference(uid, session_id)?;
+        self.manager
+            .write_input(uid, &session_id, lease_id, client_instance_id, data)
+            .context(SessionSnafu)?;
+        Ok(SessionInputResponse {
+            session_id,
+            accepted_bytes: u32::try_from(data.len()).map_err(|_error| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from("interactive input chunk length is invalid"),
+                }
+                .build()
+            })?,
+        })
+    }
+
     fn prune(
         &self,
         uid: u32,
@@ -709,6 +751,12 @@ impl DaemonSessionApi {
                 maximum_sessions.max(1) as usize,
             )
             .context(SessionSnafu)?;
+        for record in self.manager.list(uid).context(SessionSnafu)? {
+            if record.state() == SessionLifecycleState::Removed && !record.retains_content() {
+                self.local_store
+                    .release_session_lease(uid, record.spec().session_id().as_str())?;
+            }
+        }
         message(
             KIND_SESSION_PRUNE_RESPONSE,
             &SessionPruneResponse {

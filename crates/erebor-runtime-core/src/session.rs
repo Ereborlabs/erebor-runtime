@@ -208,6 +208,14 @@ pub trait ActiveSession: Send {
 
     fn kill(&mut self, signal: ActiveSessionSignal) -> Result<ActiveSessionExit, RuntimeError>;
 
+    fn write_input(&mut self, _data: &[u8]) -> Result<(), RuntimeError> {
+        UnsupportedSessionRunnerOperationSnafu {
+            runner: self.capability_snapshot().runner().as_str().to_owned(),
+            operation: String::from("interactive input"),
+        }
+        .fail()
+    }
+
     fn health(&mut self) -> Result<ActiveSessionHealth, RuntimeError>;
 }
 

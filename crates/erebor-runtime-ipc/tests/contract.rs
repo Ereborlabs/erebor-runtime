@@ -5,9 +5,10 @@ use erebor_runtime_ipc::{
         AllowDecision, DecisionKind, DenyDecision, Envelope, GuardHello, GuardLifecycleEvent,
         GuardLifecycleEventKind, GuardLifecycleReply, GuardLifecycleReplyKind,
         InterceptionDecision, InterceptionOperation, InterceptionRequest, InterceptionSource,
-        MediateDecision, ProcessExecOperation, SessionEvidenceRequest, KIND_GUARD_HELLO,
-        KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION,
-        KIND_INTERCEPTION_REQUEST, KIND_SESSION_EVIDENCE_REQUEST, PROTOCOL_VERSION,
+        MediateDecision, ProcessExecOperation, SessionEvidenceRequest, SessionInputRequest,
+        KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
+        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, KIND_SESSION_EVIDENCE_REQUEST,
+        KIND_SESSION_INPUT_REQUEST, PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
 };
@@ -48,6 +49,24 @@ fn public_api_round_trips_daemon_owned_evidence_stream_request() -> Result<(), B
     let decoded: SessionEvidenceRequest = frame
         .decode_payload::<Envelope>()?
         .decode_typed_payload(KIND_SESSION_EVIDENCE_REQUEST)?;
+
+    assert_eq!(decoded, request);
+    Ok(())
+}
+
+#[test]
+fn public_api_round_trips_lease_bound_interactive_input() -> Result<(), Box<dyn Error>> {
+    let request = SessionInputRequest {
+        session_id: String::from("session-input-contract"),
+        input_lease_id: String::from("lease-contract"),
+        client_instance_id: String::from("cli-contract"),
+        data: b"echo governed\n".to_vec(),
+    };
+    let envelope = Envelope::wrap_message(7, 0, KIND_SESSION_INPUT_REQUEST, &request)?;
+    let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
+    let decoded: SessionInputRequest = frame
+        .decode_payload::<Envelope>()?
+        .decode_typed_payload(KIND_SESSION_INPUT_REQUEST)?;
 
     assert_eq!(decoded, request);
     Ok(())
@@ -301,6 +320,7 @@ fn split_proto_contract_files_contain_the_v1_schema() {
     assert!(proto.contains("message SessionLogsRequest"));
     assert!(proto.contains("message SessionEventsRequest"));
     assert!(proto.contains("message SessionAttachRequest"));
+    assert!(proto.contains("message SessionInputRequest"));
     assert!(proto.contains("message SessionPruneRequest"));
     assert!(proto.contains("message AdminSessionStopRequest"));
     assert!(proto.contains("message AdminSessionSetRetentionHoldRequest"));

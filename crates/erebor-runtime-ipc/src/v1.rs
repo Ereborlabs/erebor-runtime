@@ -69,6 +69,8 @@ pub const KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST: &str =
     "erebor.runtime.ipc.v1.SessionInputLeaseReleaseRequest";
 pub const KIND_SESSION_INPUT_LEASE_RESPONSE: &str =
     "erebor.runtime.ipc.v1.SessionInputLeaseResponse";
+pub const KIND_SESSION_INPUT_REQUEST: &str = "erebor.runtime.ipc.v1.SessionInputRequest";
+pub const KIND_SESSION_INPUT_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionInputResponse";
 pub const KIND_SESSION_PRUNE_REQUEST: &str = "erebor.runtime.ipc.v1.SessionPruneRequest";
 pub const KIND_SESSION_PRUNE_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionPruneResponse";
 pub const KIND_SESSION_ALIAS_SET_REQUEST: &str = "erebor.runtime.ipc.v1.SessionAliasSetRequest";

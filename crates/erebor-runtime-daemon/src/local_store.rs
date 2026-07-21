@@ -391,13 +391,26 @@ impl DaemonLocalStore {
         &self,
         owner_uid: u32,
         policy: &PolicyPackageRevision,
+        maximum_stored_bytes: u64,
     ) -> Result<ContentDigest> {
         self.validate_policy_package(policy)?;
         let digest = policy.canonical_digest().map_err(Self::invalid_model)?;
-        self.write_immutable(
-            &self.user_policy_package_path(owner_uid, &digest),
-            &policy.canonical_bytes().map_err(Self::invalid_model)?,
-        )?;
+        let encoded = policy.canonical_bytes().map_err(Self::invalid_model)?;
+        let path = self.user_policy_package_path(owner_uid, &digest);
+        if !path.exists()
+            && self
+                .user_policy_package_bytes(owner_uid)?
+                .saturating_add(encoded.len() as u64)
+                > maximum_stored_bytes
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: format!(
+                    "owner UID {owner_uid} would exceed the {maximum_stored_bytes}-byte stored policy limit",
+                ),
+            }
+            .fail();
+        }
+        self.write_immutable(&path, &encoded)?;
         Ok(digest)
     }
 
@@ -489,6 +502,66 @@ impl DaemonLocalStore {
 
     pub(crate) fn record_session_lease(&self, spec: &SessionSpec) -> Result<()> {
         self.record_lease(SessionLease::from_spec(spec))
+    }
+
+    /// A removed session retains its immutable dependencies until its bounded
+    /// output/evidence retention is pruned. Only that final retention step can
+    /// release the corresponding content lease.
+    pub(crate) fn release_session_lease(&self, owner_uid: u32, session_id: &str) -> Result<()> {
+        if !Self::is_path_component(session_id) {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("session lease id is not a safe path component"),
+            }
+            .fail();
+        }
+        let path = self.lease_path(session_id);
+        let encoded = match fs::read(&path) {
+            Ok(encoded) => encoded,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(source) => {
+                return Err(crate::DaemonError::Io {
+                    action: "reading session content lease before release",
+                    path,
+                    source,
+                    location: snafu::Location::default(),
+                })
+            }
+        };
+        let lease: SessionLease = serde_json::from_slice(&encoded).map_err(|source| {
+            crate::DaemonError::InvalidConfig {
+                path: path.clone(),
+                source,
+                location: snafu::Location::default(),
+            }
+        })?;
+        if lease.session_id != session_id || lease.owner_uid != owner_uid {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("session content lease does not match the pruning owner"),
+            }
+            .fail();
+        }
+        let parent = path.parent().ok_or_else(|| {
+            crate::error::UnsafePathSnafu {
+                path: path.clone(),
+                reason: String::from("session content lease has no parent directory"),
+            }
+            .build()
+        })?;
+        Self::require_safe_directory(parent)?;
+        fs::remove_file(&path).context(IoSnafu {
+            action: "releasing pruned session content lease",
+            path: &path,
+        })?;
+        File::open(parent)
+            .context(IoSnafu {
+                action: "opening session content lease directory",
+                path: parent,
+            })?
+            .sync_all()
+            .context(IoSnafu {
+                action: "syncing released session content lease directory",
+                path: parent,
+            })
     }
 
     fn record_lease(&self, lease: SessionLease) -> Result<()> {
@@ -624,6 +697,26 @@ impl DaemonLocalStore {
             );
         }
         Ok(())
+    }
+
+    fn user_policy_package_bytes(&self, owner_uid: u32) -> Result<u64> {
+        let directory = self
+            .users
+            .join(owner_uid.to_string())
+            .join("policy-packages");
+        let mut total = 0_u64;
+        for (digest, _policy) in self.canonical_records_in_flat_directory::<PolicyPackageRevision>(
+            &directory,
+            "policy package",
+        )? {
+            let path = self.user_policy_package_path(owner_uid, &digest);
+            let metadata = fs::metadata(&path).context(IoSnafu {
+                action: "measuring immutable user policy package",
+                path: &path,
+            })?;
+            total = total.saturating_add(metadata.len());
+        }
+        Ok(total)
     }
 
     fn canonical_records_in_flat_directory<T>(
@@ -962,6 +1055,9 @@ mod tests {
                 policy_input_digests: vec![String::from("policy-a"), String::from("policy-b")],
             })
             .is_err());
+        store.release_session_lease(1000, "session-1")?;
+        assert!(!store.lease_path("session-1").exists());
+        store.release_session_lease(1000, "session-1")?;
         Ok(())
     }
 
@@ -1149,7 +1245,7 @@ mod tests {
             BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
             b"# User guardrail\n".to_vec(),
         )?;
-        let user_digest = store.store_user_policy_package(1000, &user_policy)?;
+        let user_digest = store.store_user_policy_package(1000, &user_policy, u64::MAX)?;
         let policy_set = store.create_user_policy_set(
             1000,
             root_digest.as_str(),
@@ -1172,6 +1268,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![root_digest.as_str(), user_digest.as_str()]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn policy_storage_quota_rejects_before_a_new_immutable_record_is_written(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        let policy = PolicyPackageRevision::new(
+            "bounded-user-policy",
+            b"name = \"bounded-user-policy\"\n".to_vec(),
+            BTreeMap::from([(
+                String::from("terminal.json"),
+                br#"{"rules":[{"id":"allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
+            )]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# Bounded user policy\n".to_vec(),
+        )?;
+        let bytes = policy.canonical_bytes()?.len() as u64;
+        assert!(store
+            .store_user_policy_package(1000, &policy, bytes.saturating_sub(1))
+            .is_err());
+        assert!(store.list_policy_packages(1000)?.is_empty());
+        assert!(store
+            .store_user_policy_package(1000, &policy, bytes)
+            .is_ok());
         Ok(())
     }
 

@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use clap::{Args, Subcommand};
 use erebor_runtime_client::DaemonClient;
 use snafu::ResultExt;
@@ -8,9 +6,6 @@ use crate::error::{CliError, DaemonClientSnafu, DaemonRuntimeSnafu};
 
 #[derive(Debug, Args)]
 pub(super) struct DaemonArgs {
-    /// Use this local Unix socket instead of the default /run/erebor/daemon.sock.
-    #[arg(long, value_name = "PATH")]
-    socket: Option<PathBuf>,
     #[command(subcommand)]
     command: DaemonCommand,
 }
@@ -34,11 +29,7 @@ impl<'a> DaemonCommandOwner<'a> {
     }
 
     async fn execute_async(&self) -> Result<(), CliError> {
-        let client = self
-            .args
-            .socket
-            .as_deref()
-            .map_or_else(DaemonClient::local, DaemonClient::at);
+        let client = DaemonClient::local();
         match &self.args.command {
             DaemonCommand::Status => {
                 let status = client.status().await.context(DaemonClientSnafu)?;
@@ -128,10 +119,10 @@ mod tests {
             "erebor",
             "daemon",
             "--socket",
-            "/tmp/erebor-phase1/daemon.sock",
-            "status",
+            "/tmp/daemon.sock",
+            "status"
         ])
-        .is_ok());
+        .is_err());
         assert!(Cli::try_parse_from(["erebor", "status"]).is_err());
         assert!(Cli::try_parse_from([
             "erebor",

@@ -57,6 +57,12 @@ pub(crate) enum CliError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("failed to configure interactive terminal input: {source}"))]
+    Terminal {
+        source: io::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("{source}"))]
     SessionRegistry {
         source: SessionRegistryError,
@@ -114,7 +120,8 @@ impl ErrorExt for CliError {
             Self::ReadConfig { .. }
             | Self::ReadPolicy { .. }
             | Self::ReadEvent { .. }
-            | Self::WriteSessionOutput { .. } => StatusCode::External,
+            | Self::WriteSessionOutput { .. }
+            | Self::Terminal { .. } => StatusCode::External,
             Self::InvalidConfig { source, .. } => source.status_code(),
             Self::Runtime { source, .. } => source.status_code(),
             Self::SessionExecution { source, .. } => source.status_code(),
@@ -134,7 +141,8 @@ impl ErrorExt for CliError {
             Self::ReadConfig { source, .. }
             | Self::ReadPolicy { source, .. }
             | Self::ReadEvent { source, .. }
-            | Self::WriteSessionOutput { source, .. } => RetryHint::from_io_error(source),
+            | Self::WriteSessionOutput { source, .. }
+            | Self::Terminal { source, .. } => RetryHint::from_io_error(source),
             Self::InvalidConfig { source, .. } => source.retry_hint(),
             Self::Runtime { source, .. } => source.retry_hint(),
             Self::SessionExecution { source, .. } => source.retry_hint(),
@@ -171,6 +179,7 @@ impl ErrorExt for CliError {
                 | Self::InvalidSessionCommand { .. }
                 | Self::InvalidPolicyCommand { .. }
                 | Self::WriteSessionOutput { .. }
+                | Self::Terminal { .. }
                 | Self::EncodeJson { .. }
                 | Self::DaemonClient { .. }
                 | Self::DaemonRuntime { .. } => self.to_string(),

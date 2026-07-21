@@ -2,6 +2,7 @@ use std::{ffi::OsString, path::PathBuf};
 
 use erebor_runtime_daemon::{DaemonControlService, DaemonPaths};
 use erebor_runtime_error::ErrorExt;
+use tokio::signal::unix::{signal, SignalKind};
 use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 enum LaunchMode {
@@ -58,7 +59,30 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    if service.serve().await.is_err() {
+    let mut terminate = match signal(SignalKind::terminate()) {
+        Ok(signal) => signal,
+        Err(error) => {
+            init_foreground_logging();
+            erebor_runtime_telemetry::error!(error; "erebord could not register SIGTERM handling");
+            eprintln!("erebord could not register SIGTERM handling: {error}");
+            std::process::exit(1);
+        }
+    };
+    let mut interrupt = match signal(SignalKind::interrupt()) {
+        Ok(signal) => signal,
+        Err(error) => {
+            init_foreground_logging();
+            erebor_runtime_telemetry::error!(error; "erebord could not register SIGINT handling");
+            eprintln!("erebord could not register SIGINT handling: {error}");
+            std::process::exit(1);
+        }
+    };
+    let result = tokio::select! {
+        result = service.serve() => result,
+        _received = terminate.recv() => Ok(()),
+        _received = interrupt.recv() => Ok(()),
+    };
+    if result.is_err() {
         std::process::exit(1);
     }
 }

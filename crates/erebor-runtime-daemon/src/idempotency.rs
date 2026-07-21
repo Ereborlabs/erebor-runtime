@@ -109,6 +109,7 @@ pub(crate) enum MutationIntent {
     PolicyPackageApply {
         uid: u32,
         policy: PolicyPackageRevision,
+        maximum_stored_bytes: u64,
     },
     PolicySetCreate {
         uid: u32,

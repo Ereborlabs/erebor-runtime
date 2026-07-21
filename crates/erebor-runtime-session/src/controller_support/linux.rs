@@ -1,7 +1,7 @@
 use std::{
     ffi::CString,
     fs::File,
-    io::Read,
+    io::{Read, Write},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -19,6 +19,9 @@ use rustix::thread::unshare;
 use rustix::{
     fs::{openat, Mode, OFlags},
     mount::{mount, mount_bind, mount_change, MountFlags, MountPropagationFlags},
+    process::{ioctl_tiocsctty, setsid},
+    pty::{grantpt, ioctl_tiocgptpeer, openpt, unlockpt, OpenptFlags},
+    termios::tcsetpgrp,
     thread::UnshareFlags,
 };
 
@@ -34,6 +37,7 @@ pub(crate) struct LinuxWorkload {
     child: Child,
     process_group: Pid,
     stable_identity: String,
+    input: Option<File>,
     output_pumps: Vec<thread::JoinHandle<()>>,
     output_failures: OutputFailureMonitor,
 }
@@ -104,10 +108,64 @@ impl LinuxWorkload {
                     .to_string(),
             )
             .current_dir(prepared.workspace_path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0);
+            .env("EREBOR_TERMINAL_TTY", handoff.spec.tty().to_string());
+        let (input, controlling_terminal) = if handoff.spec.tty() {
+            setsid().map_err(|source| SessionControllerError::Io {
+                action: "creating Linux pseudoterminal session",
+                path: PathBuf::from("<pty-session>"),
+                source: source.into(),
+                location: snafu::Location::default(),
+            })?;
+            let (master, slave) = Self::open_pty()?;
+            let controlling_terminal =
+                slave
+                    .try_clone()
+                    .map_err(|source| SessionControllerError::Io {
+                        action: "duplicating Linux pseudoterminal slave",
+                        path: PathBuf::from("<pty-slave>"),
+                        source,
+                        location: snafu::Location::default(),
+                    })?;
+            ioctl_tiocsctty(&controlling_terminal).map_err(|source| {
+                SessionControllerError::Io {
+                    action: "setting Linux pseudoterminal controlling terminal",
+                    path: PathBuf::from("<pty-slave>"),
+                    source: source.into(),
+                    location: snafu::Location::default(),
+                }
+            })?;
+            let standard_input =
+                slave
+                    .try_clone()
+                    .map_err(|source| SessionControllerError::Io {
+                        action: "duplicating Linux pseudoterminal stdin",
+                        path: PathBuf::from("<pty-slave>"),
+                        source,
+                        location: snafu::Location::default(),
+                    })?;
+            let standard_output =
+                slave
+                    .try_clone()
+                    .map_err(|source| SessionControllerError::Io {
+                        action: "duplicating Linux pseudoterminal stdout",
+                        path: PathBuf::from("<pty-slave>"),
+                        source,
+                        location: snafu::Location::default(),
+                    })?;
+            command
+                .stdin(Stdio::from(standard_input))
+                .stdout(Stdio::from(standard_output))
+                .stderr(Stdio::from(slave))
+                .process_group(0);
+            (Some(master), Some(controlling_terminal))
+        } else {
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .process_group(0);
+            (None, None)
+        };
         let mut child = command
             .spawn()
             .map_err(|source| SessionControllerError::Io {
@@ -122,33 +180,96 @@ impl LinuxWorkload {
                 location: snafu::Location::default(),
             }
         })?;
+        if let Some(terminal) = controlling_terminal {
+            tcsetpgrp(&terminal, pid).map_err(|source| SessionControllerError::Io {
+                action: "setting Linux pseudoterminal foreground process group",
+                path: PathBuf::from("<pty-slave>"),
+                source: source.into(),
+                location: snafu::Location::default(),
+            })?;
+        }
         let start_time = process_start_time(&host_proc, child.id()).unwrap_or(0);
         let stable_identity = format!("linux:pid={}:start={start_time}", child.id());
         let mut output_pumps = Vec::new();
         let (output_failures, failure_sender) = OutputFailureMonitor::new();
-        if let Some(stdout) = child.stdout.take() {
-            output_pumps.push(pump_output(
-                stdout,
-                Arc::clone(&output.stdout),
-                StreamKind::Stdout.as_str(),
-                failure_sender.clone(),
-            ));
-        }
-        if let Some(stderr) = child.stderr.take() {
-            output_pumps.push(pump_output(
-                stderr,
-                Arc::clone(&output.stderr),
-                StreamKind::Stderr.as_str(),
-                failure_sender,
-            ));
+        match input.as_ref() {
+            Some(terminal) => {
+                let output_terminal =
+                    terminal
+                        .try_clone()
+                        .map_err(|source| SessionControllerError::Io {
+                            action: "duplicating Linux pseudoterminal master for output",
+                            path: PathBuf::from("<pty-master>"),
+                            source,
+                            location: snafu::Location::default(),
+                        })?;
+                output_pumps.push(pump_output(
+                    output_terminal,
+                    Arc::clone(&output.stdout),
+                    StreamKind::Stdout.as_str(),
+                    failure_sender,
+                ));
+            }
+            None => {
+                if let Some(stdout) = child.stdout.take() {
+                    output_pumps.push(pump_output(
+                        stdout,
+                        Arc::clone(&output.stdout),
+                        StreamKind::Stdout.as_str(),
+                        failure_sender.clone(),
+                    ));
+                }
+                if let Some(stderr) = child.stderr.take() {
+                    output_pumps.push(pump_output(
+                        stderr,
+                        Arc::clone(&output.stderr),
+                        StreamKind::Stderr.as_str(),
+                        failure_sender,
+                    ));
+                }
+            }
         }
         Ok(Self {
             child,
             process_group: pid,
             stable_identity,
+            input,
             output_pumps,
             output_failures,
         })
+    }
+
+    fn open_pty() -> Result<(File, File), SessionControllerError> {
+        let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC)
+            .map_err(|source| SessionControllerError::Io {
+                action: "opening Linux pseudoterminal master",
+                path: PathBuf::from("/dev/ptmx"),
+                source: source.into(),
+                location: snafu::Location::default(),
+            })?;
+        grantpt(&master).map_err(|source| SessionControllerError::Io {
+            action: "granting Linux pseudoterminal slave",
+            path: PathBuf::from("<pty-master>"),
+            source: source.into(),
+            location: snafu::Location::default(),
+        })?;
+        unlockpt(&master).map_err(|source| SessionControllerError::Io {
+            action: "unlocking Linux pseudoterminal slave",
+            path: PathBuf::from("<pty-master>"),
+            source: source.into(),
+            location: snafu::Location::default(),
+        })?;
+        let slave = ioctl_tiocgptpeer(
+            &master,
+            OpenptFlags::RDWR | OpenptFlags::NOCTTY | OpenptFlags::CLOEXEC,
+        )
+        .map_err(|source| SessionControllerError::Io {
+            action: "opening Linux pseudoterminal slave",
+            path: PathBuf::from("<pty-master>"),
+            source: source.into(),
+            location: snafu::Location::default(),
+        })?;
+        Ok((File::from(master), File::from(slave)))
     }
 
     pub(crate) fn stable_identity(&self) -> &str {
@@ -157,6 +278,25 @@ impl LinuxWorkload {
 
     pub(crate) fn take_output_failure(&self) -> Option<SessionControllerError> {
         self.output_failures.take_failure()
+    }
+
+    pub(crate) fn write_input(&mut self, data: &[u8]) -> Result<(), SessionControllerError> {
+        let terminal =
+            self.input
+                .as_mut()
+                .ok_or_else(|| SessionControllerError::InvalidHandoff {
+                    reason: String::from("interactive input requires an admitted Linux TTY"),
+                    location: snafu::Location::default(),
+                })?;
+        terminal
+            .write_all(data)
+            .and_then(|()| terminal.flush())
+            .map_err(|source| SessionControllerError::Io {
+                action: "writing Linux pseudoterminal input",
+                path: PathBuf::from("<pty-master>"),
+                source,
+                location: snafu::Location::default(),
+            })
     }
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<WorkloadExit>, SessionControllerError> {

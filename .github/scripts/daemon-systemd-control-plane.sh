@@ -73,7 +73,7 @@ await_service() {
     if last_client_error="$("$erebor" daemon status 2>&1)"; then
       return
     fi
-    if ! systemctl is-active --quiet erebord.service; then
+    if systemctl is-failed --quiet erebord.service; then
       systemctl status erebord.service --no-pager >&2 || true
       journalctl -u erebord.service --no-pager >&2 || true
       echo "erebord.service stopped before accepting control-plane requests" >&2
@@ -111,6 +111,10 @@ await_service
 
 [[ "$(stat -c '%U:%G:%a' "$socket")" == "root:$service_group:660" ]]
 runuser -u "$service_user" -- "$erebor" daemon status | grep -q 'state=running'
+if "$erebor" daemon --socket "$socket" status >/dev/null 2>&1; then
+  echo "the CLI accepted a removed alternate-daemon selector" >&2
+  exit 1
+fi
 if runuser -u "$outside_user" -- "$erebor" daemon status >/dev/null 2>&1; then
   echo "user outside the connection group reached the installed control socket" >&2
   exit 1
@@ -133,6 +137,17 @@ fi
 "$erebor" daemon logs --maximum-records 32 | grep -q 'daemon control service started'
 "$erebor" daemon reload --idempotency-key daemon-systemd-reload \
   | grep -q 'configuration reloaded'
+before_invalid_reload="$("$erebor" daemon status)"
+printf '{"socket_group_gid":' >"$config_path"
+if "$erebor" daemon reload --idempotency-key daemon-systemd-invalid-reload >/dev/null 2>&1; then
+  echo "the installed daemon accepted invalid replacement configuration" >&2
+  exit 1
+fi
+[[ "$before_invalid_reload" == "$("$erebor" daemon status)" ]]
+printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":256,"max_session_output_bytes":67108864,"session_output_rotation_bytes":4194304,"max_daemon_loss_grace_seconds":2}\n' \
+  "$group_gid" >"$config_path"
+chown root:root "$config_path"
+chmod 0640 "$config_path"
 lock_inode="$(stat -c '%i' "$lock_path")"
 systemctl restart erebord.service
 await_service
@@ -143,14 +158,18 @@ if systemctl is-active --quiet erebord.service; then
   echo "erebord.service remained active after systemctl stop" >&2
   exit 1
 fi
+[[ ! -e "$socket" ]]
 [[ "$lock_inode" == "$(stat -c '%i' "$lock_path")" ]]
+python3 -c 'import socket, sys; sock=socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1])' "$socket"
 systemctl start erebord.service
 await_service
+[[ -S "$socket" ]]
+main_pid="$(systemctl show --property=MainPID --value erebord.service)"
+[[ "$main_pid" != 0 ]]
+kill -KILL "$main_pid"
+await_service
+[[ "$lock_inode" == "$(stat -c '%i' "$lock_path")" ]]
 
 EREBOR_INSTALLED_SESSION_USER="$service_user" \
 EREBOR_INSTALLED_SESSION_USER_TWO="$service_user_two" \
 bash /usr/local/lib/erebor/daemon-installed-session-runtime.sh
-
-EREBOR_DAEMON_CONTROL_EREBORD="$erebord" \
-EREBOR_DAEMON_CONTROL_EREBOR="$erebor" \
-bash /usr/local/lib/erebor/daemon-control-plane.sh
