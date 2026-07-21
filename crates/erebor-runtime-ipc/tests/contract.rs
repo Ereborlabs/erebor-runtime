@@ -5,9 +5,9 @@ use erebor_runtime_ipc::{
         AllowDecision, DecisionKind, DenyDecision, Envelope, GuardHello, GuardLifecycleEvent,
         GuardLifecycleEventKind, GuardLifecycleReply, GuardLifecycleReplyKind,
         InterceptionDecision, InterceptionOperation, InterceptionRequest, InterceptionSource,
-        MediateDecision, ProcessExecOperation, KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT,
-        KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
-        PROTOCOL_VERSION,
+        MediateDecision, ProcessExecOperation, SessionEvidenceRequest, KIND_GUARD_HELLO,
+        KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION,
+        KIND_INTERCEPTION_REQUEST, KIND_SESSION_EVIDENCE_REQUEST, PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
 };
@@ -33,6 +33,23 @@ fn public_api_round_trips_guard_hello_through_envelope_and_frame() -> Result<(),
     assert_eq!(decoded_envelope.protocol_version, PROTOCOL_VERSION);
     assert_eq!(decoded_envelope.message_kind, KIND_GUARD_HELLO);
     assert_eq!(decoded_hello, hello);
+    Ok(())
+}
+
+#[test]
+fn public_api_round_trips_daemon_owned_evidence_stream_request() -> Result<(), Box<dyn Error>> {
+    let request = SessionEvidenceRequest {
+        session_id: String::from("session-evidence-contract"),
+        after_sequence: 41,
+        maximum_records: 128,
+    };
+    let envelope = Envelope::wrap_message(6, 0, KIND_SESSION_EVIDENCE_REQUEST, &request)?;
+    let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
+    let decoded: SessionEvidenceRequest = frame
+        .decode_payload::<Envelope>()?
+        .decode_typed_payload(KIND_SESSION_EVIDENCE_REQUEST)?;
+
+    assert_eq!(decoded, request);
     Ok(())
 }
 

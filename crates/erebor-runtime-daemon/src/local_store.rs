@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::Write,
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -47,6 +48,44 @@ pub(crate) struct BuiltInAdmission {
     installation_digest: String,
     adapter_digest: String,
     policy_set_digest: String,
+}
+
+pub(crate) struct StoredPolicyPackage {
+    digest: String,
+    name: String,
+}
+
+impl StoredPolicyPackage {
+    fn new(digest: &ContentDigest, revision: &PolicyPackageRevision) -> Self {
+        Self {
+            digest: digest.as_str().to_owned(),
+            name: revision.manifest().name().to_owned(),
+        }
+    }
+
+    pub(crate) fn digest(&self) -> &str {
+        &self.digest
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+pub(crate) struct StoredPolicySet {
+    digest: String,
+}
+
+impl StoredPolicySet {
+    fn new(digest: &ContentDigest) -> Self {
+        Self {
+            digest: digest.as_str().to_owned(),
+        }
+    }
+
+    pub(crate) fn digest(&self) -> &str {
+        &self.digest
+    }
 }
 
 impl BuiltInAdmission {
@@ -362,6 +401,24 @@ impl DaemonLocalStore {
         Ok(digest)
     }
 
+    pub(crate) fn list_policy_packages(&self, owner_uid: u32) -> Result<Vec<StoredPolicyPackage>> {
+        let mut packages = BTreeMap::new();
+        self.collect_root_policy_packages(&mut packages)?;
+        self.collect_user_policy_packages(owner_uid, &mut packages)?;
+        Ok(packages.into_values().collect())
+    }
+
+    pub(crate) fn inspect_policy_package(
+        &self,
+        owner_uid: u32,
+        requested_digest: &str,
+    ) -> Result<StoredPolicyPackage> {
+        let digest = Self::parse_digest(requested_digest, "policy package")?;
+        let policy = self.read_policy_package(owner_uid, &digest)?;
+        self.validate_policy_package(&policy)?;
+        Ok(StoredPolicyPackage::new(&digest, &policy))
+    }
+
     pub(crate) fn create_user_policy_set(
         &self,
         owner_uid: u32,
@@ -399,6 +456,35 @@ impl DaemonLocalStore {
             &revision.canonical_bytes().map_err(Self::invalid_model)?,
         )?;
         Ok(digest)
+    }
+
+    pub(crate) fn list_policy_sets(&self, owner_uid: u32) -> Result<Vec<StoredPolicySet>> {
+        let directory = self.users.join(owner_uid.to_string()).join("policy-sets");
+        let mut policy_sets = BTreeMap::new();
+        for (digest, _revision) in
+            self.canonical_records_in_flat_directory::<PolicySetRevision>(&directory, "policy set")?
+        {
+            policy_sets.insert(digest.as_str().to_owned(), StoredPolicySet::new(&digest));
+        }
+        Ok(policy_sets.into_values().collect())
+    }
+
+    pub(crate) fn inspect_policy_set(
+        &self,
+        owner_uid: u32,
+        requested_digest: &str,
+    ) -> Result<StoredPolicySet> {
+        let digest = Self::parse_digest(requested_digest, "policy set")?;
+        let revision: PolicySetRevision = self.read_canonical(
+            &self.policy_set_path(owner_uid, &digest),
+            &digest,
+            "policy set",
+        )?;
+        revision.validate().map_err(Self::invalid_model)?;
+        for policy_digest in revision.policy_input_digests() {
+            self.read_policy_package(owner_uid, policy_digest)?;
+        }
+        Ok(StoredPolicySet::new(&digest))
     }
 
     pub(crate) fn record_session_lease(&self, spec: &SessionSpec) -> Result<()> {
@@ -477,6 +563,134 @@ impl DaemonLocalStore {
             digest,
             "root policy package",
         )
+    }
+
+    fn collect_root_policy_packages(
+        &self,
+        packages: &mut BTreeMap<String, StoredPolicyPackage>,
+    ) -> Result<()> {
+        let entries = self.directory_entries(&self.packages, "listing root policy packages")?;
+        for entry in entries {
+            let path = entry.path();
+            let file_type = entry.file_type().context(IoSnafu {
+                action: "inspecting root package directory",
+                path: &path,
+            })?;
+            if file_type.is_symlink() || !file_type.is_dir() {
+                continue;
+            }
+            Self::require_safe_directory(&path)?;
+            let digest = match entry.file_name().to_str() {
+                Some(value) => match ContentDigest::new(value) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                },
+                None => continue,
+            };
+            let policy_path = path.join("policy-package.json");
+            if !policy_path.exists() {
+                continue;
+            }
+            let revision: PolicyPackageRevision =
+                self.read_canonical(&policy_path, &digest, "root policy package")?;
+            self.validate_policy_package(&revision)?;
+            packages.insert(
+                digest.as_str().to_owned(),
+                StoredPolicyPackage::new(&digest, &revision),
+            );
+        }
+        Ok(())
+    }
+
+    fn collect_user_policy_packages(
+        &self,
+        owner_uid: u32,
+        packages: &mut BTreeMap<String, StoredPolicyPackage>,
+    ) -> Result<()> {
+        let directory = self
+            .users
+            .join(owner_uid.to_string())
+            .join("policy-packages");
+        for (digest, revision) in self
+            .canonical_records_in_flat_directory::<PolicyPackageRevision>(
+                &directory,
+                "policy package",
+            )?
+        {
+            self.validate_policy_package(&revision)?;
+            packages.insert(
+                digest.as_str().to_owned(),
+                StoredPolicyPackage::new(&digest, &revision),
+            );
+        }
+        Ok(())
+    }
+
+    fn canonical_records_in_flat_directory<T>(
+        &self,
+        directory: &Path,
+        record_kind: &str,
+    ) -> Result<Vec<(ContentDigest, T)>>
+    where
+        T: CanonicalEncoding + DeserializeOwned,
+    {
+        let entries =
+            self.directory_entries(directory, "listing immutable daemon store records")?;
+        let mut records = Vec::new();
+        for entry in entries {
+            let path = entry.path();
+            let file_type = entry.file_type().context(IoSnafu {
+                action: "inspecting immutable daemon store record entry",
+                path: &path,
+            })?;
+            if file_type.is_symlink() || !file_type.is_file() {
+                continue;
+            }
+            let file_name = entry.file_name();
+            let Some(name) = file_name
+                .to_str()
+                .and_then(|name| name.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            let digest = match ContentDigest::new(name) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            records.push((
+                digest.clone(),
+                self.read_canonical(&path, &digest, record_kind)?,
+            ));
+        }
+        records.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
+        Ok(records)
+    }
+
+    fn directory_entries(
+        &self,
+        directory: &Path,
+        action: &'static str,
+    ) -> Result<Vec<fs::DirEntry>> {
+        match fs::read_dir(directory) {
+            Ok(entries) => {
+                Self::require_safe_directory(directory)?;
+                entries
+                    .map(|entry| {
+                        entry.context(IoSnafu {
+                            action,
+                            path: directory,
+                        })
+                    })
+                    .collect()
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(source) => Err(crate::DaemonError::Io {
+                action,
+                path: directory.to_path_buf(),
+                source,
+                location: snafu::Location::default(),
+            }),
+        }
     }
 
     fn read_canonical<T>(
@@ -818,6 +1032,38 @@ mod tests {
                 policy_set_digest.as_str(),
             )
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn policy_catalogs_are_daemon_owned_and_revalidate_canonical_records(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        let admission = store.ensure_builtin_admission(1000)?;
+
+        let packages = store.list_policy_packages(1000)?;
+        let package = packages
+            .iter()
+            .find(|package| package.name() == "generic-host-minimum")
+            .ok_or("built-in host policy package was not listed")?;
+        let inspected_package = store.inspect_policy_package(1000, package.digest())?;
+        assert_eq!(inspected_package.digest(), package.digest());
+        assert_eq!(inspected_package.name(), "generic-host-minimum");
+
+        let policy_sets = store.list_policy_sets(1000)?;
+        assert!(policy_sets
+            .iter()
+            .any(|policy_set| policy_set.digest() == admission.policy_set_digest()));
+        assert_eq!(
+            store
+                .inspect_policy_set(1000, admission.policy_set_digest())?
+                .digest(),
+            admission.policy_set_digest()
+        );
+        assert!(store.list_policy_sets(1001)?.is_empty());
         Ok(())
     }
 

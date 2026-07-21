@@ -11,7 +11,6 @@ mod approval;
 mod audit;
 pub(super) mod config_paths;
 mod daemon;
-mod dev;
 mod filesystem;
 mod parsers;
 mod policy;
@@ -25,9 +24,7 @@ mod test_support;
 mod tests;
 
 pub(super) use config_paths::ConfigPathResolver;
-pub(super) use parsers::{
-    parse_non_empty_path, parse_non_empty_string, parse_ws_url, OutputFormat, WebSocketUrl,
-};
+pub(super) use parsers::{parse_non_empty_path, parse_non_empty_string, OutputFormat};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -51,7 +48,6 @@ impl Cli {
         match &self.command {
             Command::Start(args) => start::StartCommand::new(args).execute(),
             Command::Session(args) => session::SessionCommandOwner::new(args).execute(),
-            Command::Dev(args) => dev::DevCommandOwner::new(args).execute(),
             Command::Policy(args) => policy::PolicyCommandOwner::new(args).execute(),
             Command::Runner(args) => runner::RunnerCommandOwner::new(args).execute(),
             Command::Audit(args) => audit::AuditCommandOwner::new(args).execute(),
@@ -68,8 +64,6 @@ enum Command {
     Start(start::StartArgs),
     /// Start or manage governed agent sessions.
     Session(session::SessionArgs),
-    /// Development and surface-specific utilities.
-    Dev(dev::DevArgs),
     /// Policy development and validation commands.
     Policy(policy::PolicyArgs),
     /// Inspect the daemon's installed runner capability documents.
@@ -89,7 +83,6 @@ impl fmt::Display for Command {
         match self {
             Self::Start(args) => formatter.write_str(&args.display()),
             Self::Session(args) => formatter.write_str(&args.display()),
-            Self::Dev(args) => formatter.write_str(&args.display()),
             Self::Policy(args) => formatter.write_str(&args.display()),
             Self::Runner(args) => formatter.write_str(&args.display()),
             Self::Audit(args) => formatter.write_str(&args.display()),

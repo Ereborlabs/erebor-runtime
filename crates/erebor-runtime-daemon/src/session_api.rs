@@ -308,6 +308,58 @@ impl DaemonSessionApi {
             .read_policy_package(owner_uid, owner_gid, path, maximum_bytes)
     }
 
+    pub(crate) fn list_policy_packages(&self, owner_uid: u32) -> Result<Vec<PolicyPackageRecord>> {
+        self.local_store
+            .list_policy_packages(owner_uid)
+            .map(|packages| {
+                packages
+                    .into_iter()
+                    .map(|package| PolicyPackageRecord {
+                        digest: package.digest().to_owned(),
+                        name: package.name().to_owned(),
+                    })
+                    .collect()
+            })
+    }
+
+    pub(crate) fn inspect_policy_package(
+        &self,
+        owner_uid: u32,
+        digest: &str,
+    ) -> Result<PolicyPackageRecord> {
+        self.local_store
+            .inspect_policy_package(owner_uid, digest)
+            .map(|package| PolicyPackageRecord {
+                digest: package.digest().to_owned(),
+                name: package.name().to_owned(),
+            })
+    }
+
+    pub(crate) fn list_policy_sets(&self, owner_uid: u32) -> Result<Vec<PolicySetRecord>> {
+        self.local_store
+            .list_policy_sets(owner_uid)
+            .map(|policy_sets| {
+                policy_sets
+                    .into_iter()
+                    .map(|policy_set| PolicySetRecord {
+                        digest: policy_set.digest().to_owned(),
+                    })
+                    .collect()
+            })
+    }
+
+    pub(crate) fn inspect_policy_set(
+        &self,
+        owner_uid: u32,
+        digest: &str,
+    ) -> Result<PolicySetRecord> {
+        self.local_store
+            .inspect_policy_set(owner_uid, digest)
+            .map(|policy_set| PolicySetRecord {
+                digest: policy_set.digest().to_owned(),
+            })
+    }
+
     fn store_policy_package(
         &self,
         owner_uid: u32,

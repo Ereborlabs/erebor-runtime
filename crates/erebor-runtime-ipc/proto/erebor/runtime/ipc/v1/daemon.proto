@@ -161,6 +161,30 @@ message SessionEventsEnd {
   bool truncated_before_cursor = 3;
 }
 
+// The daemon-owned evidence stream is distinct from lifecycle events. The
+// client only presents these durable records; it never opens a legacy
+// workspace registry or reconstructs evidence locally.
+message SessionEvidenceRequest {
+  string session_id = 1;
+  uint64 after_sequence = 2;
+  uint32 maximum_records = 3;
+}
+
+message SessionEvidenceRecord {
+  string session_id = 1;
+  uint64 sequence = 2;
+  uint64 timestamp_unix_ms = 3;
+  string source = 4;
+  bytes payload = 5;
+  bool durable = 6;
+}
+
+message SessionEvidenceEnd {
+  string session_id = 1;
+  uint64 durable_cursor = 2;
+  bool truncated_before_cursor = 3;
+}
+
 message SessionAttachRequest {
   string session_id = 1;
   uint64 after_output_sequence = 2;
@@ -314,6 +338,20 @@ message PolicyPackageRecord {
   string name = 2;
 }
 
+message PolicyPackageListRequest {}
+
+message PolicyPackageListResponse {
+  repeated PolicyPackageRecord packages = 1;
+}
+
+message PolicyPackageInspectRequest {
+  string digest = 1;
+}
+
+message PolicyPackageVerifyRequest {
+  string digest = 1;
+}
+
 message PolicySetCreateRequest {
   string root_minimum_digest = 1;
   repeated string package_minimum_digests = 2;
@@ -321,6 +359,20 @@ message PolicySetCreateRequest {
 }
 
 message PolicySetRecord {
+  string digest = 1;
+}
+
+message PolicySetListRequest {}
+
+message PolicySetListResponse {
+  repeated PolicySetRecord policy_sets = 1;
+}
+
+message PolicySetInspectRequest {
+  string digest = 1;
+}
+
+message PolicySetVerifyRequest {
   string digest = 1;
 }
 

@@ -1,8 +1,6 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use clap::{CommandFactory, Parser};
 
-use super::{test_support::RegistrySessionFixture, Cli};
+use super::Cli;
 
 #[test]
 fn rejects_unknown_arguments() {
@@ -233,10 +231,10 @@ fn accepts_policy_and_audit_commands() {
         "audit",
         "evidence-trace",
         "session-1",
-        "--prompt",
-        "prompt.txt",
-        "--out",
-        "evidence-trace.md",
+        "--after-sequence",
+        "4",
+        "--maximum-records",
+        "8",
     ]);
     let tail = Cli::try_parse_from([
         "erebor",
@@ -255,16 +253,46 @@ fn accepts_policy_and_audit_commands() {
 }
 
 #[test]
-fn rejects_invalid_dev_and_audit_options() {
-    let cdp = Cli::try_parse_from([
-        "erebor",
-        "dev",
-        "proxy-cdp",
-        "--browser-url",
-        "http://localhost:9222",
-        "--policy",
-        "policy.json",
-    ]);
+fn accepts_daemon_owned_policy_catalog_commands() {
+    for command in [
+        vec!["erebor", "policy", "package", "ls"],
+        vec![
+            "erebor",
+            "policy",
+            "package",
+            "inspect",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ],
+        vec![
+            "erebor",
+            "policy",
+            "package",
+            "verify",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ],
+        vec!["erebor", "policy", "set", "ls"],
+        vec![
+            "erebor",
+            "policy",
+            "set",
+            "inspect",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ],
+        vec![
+            "erebor",
+            "policy",
+            "set",
+            "verify",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ],
+    ] {
+        assert!(Cli::try_parse_from(command).is_ok());
+    }
+}
+
+#[test]
+fn rejects_removed_dev_and_invalid_audit_options() {
+    let dev = Cli::try_parse_from(["erebor", "dev"]);
     let audit = Cli::try_parse_from([
         "erebor",
         "audit",
@@ -274,7 +302,7 @@ fn rejects_invalid_dev_and_audit_options() {
         ".erebor/sessions",
     ]);
 
-    assert!(cdp.is_err());
+    assert!(dev.is_err());
     assert!(audit.is_err());
 }
 
@@ -304,17 +332,6 @@ fn rejects_unknown_log_level() {
     ]);
 
     assert!(error.is_err());
-}
-
-#[test]
-fn audit_tail_rejects_invalid_jsonl() -> Result<(), Box<dyn std::error::Error>> {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
-    let session_id = format!("session-invalid-audit-{nanos}-{}", std::process::id());
-    let _fixture = RegistrySessionFixture::write_invalid_audit(&session_id)?;
-    let cli = Cli::try_parse_from(["erebor", "audit", "tail", session_id.as_str()])?;
-
-    assert!(cli.execute().is_err());
-    Ok(())
 }
 
 #[test]

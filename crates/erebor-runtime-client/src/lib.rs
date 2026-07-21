@@ -30,11 +30,14 @@ use tokio::{
 };
 
 pub use approvals::{ApprovalPage, ApprovalRecord};
-pub use erebor_runtime_ipc::v1::{PolicyPackageRecord, PolicySetRecord, PolicyTestResponse};
+pub use erebor_runtime_ipc::v1::{
+    PolicyPackageListResponse, PolicyPackageRecord, PolicySetListResponse, PolicySetRecord,
+    PolicyTestResponse,
+};
 use error::{ConnectSnafu, DaemonSnafu, IpcSnafu, ProtocolSnafu, TimedOutSnafu};
 pub use error::{DaemonClientError, Result};
 pub use runner::RunnerCapability;
-pub use session::{SessionEventPage, SessionLogPage};
+pub use session::{SessionEventPage, SessionEvidencePage, SessionLogPage};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 

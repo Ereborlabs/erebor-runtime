@@ -3,15 +3,6 @@ use std::path::{Path, PathBuf};
 use clap::ValueEnum;
 use erebor_runtime_audit::SessionReviewOutputFormat;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct WebSocketUrl(String);
-
-impl WebSocketUrl {
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(crate) enum OutputFormat {
     Text,
@@ -33,14 +24,6 @@ impl From<OutputFormat> for SessionReviewOutputFormat {
             OutputFormat::Text => Self::Text,
             OutputFormat::Json => Self::Json,
         }
-    }
-}
-
-pub(crate) fn parse_ws_url(value: &str) -> Result<WebSocketUrl, String> {
-    if value.starts_with("ws://") {
-        Ok(WebSocketUrl(value.to_owned()))
-    } else {
-        Err(String::from("must start with ws://"))
     }
 }
 

@@ -58,6 +58,9 @@ pub const KIND_SESSION_LOGS_END: &str = "erebor.runtime.ipc.v1.SessionLogsEnd";
 pub const KIND_SESSION_EVENTS_REQUEST: &str = "erebor.runtime.ipc.v1.SessionEventsRequest";
 pub const KIND_SESSION_EVENT_RECORD: &str = "erebor.runtime.ipc.v1.SessionEventRecord";
 pub const KIND_SESSION_EVENTS_END: &str = "erebor.runtime.ipc.v1.SessionEventsEnd";
+pub const KIND_SESSION_EVIDENCE_REQUEST: &str = "erebor.runtime.ipc.v1.SessionEvidenceRequest";
+pub const KIND_SESSION_EVIDENCE_RECORD: &str = "erebor.runtime.ipc.v1.SessionEvidenceRecord";
+pub const KIND_SESSION_EVIDENCE_END: &str = "erebor.runtime.ipc.v1.SessionEvidenceEnd";
 pub const KIND_SESSION_ATTACH_REQUEST: &str = "erebor.runtime.ipc.v1.SessionAttachRequest";
 pub const KIND_SESSION_ATTACH_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionAttachResponse";
 pub const KIND_SESSION_INPUT_LEASE_RENEW_REQUEST: &str =
@@ -94,8 +97,19 @@ pub const KIND_POLICY_TEST_RESPONSE: &str = "erebor.runtime.ipc.v1.PolicyTestRes
 pub const KIND_POLICY_PACKAGE_APPLY_REQUEST: &str =
     "erebor.runtime.ipc.v1.PolicyPackageApplyRequest";
 pub const KIND_POLICY_PACKAGE_RECORD: &str = "erebor.runtime.ipc.v1.PolicyPackageRecord";
+pub const KIND_POLICY_PACKAGE_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.PolicyPackageListRequest";
+pub const KIND_POLICY_PACKAGE_LIST_RESPONSE: &str =
+    "erebor.runtime.ipc.v1.PolicyPackageListResponse";
+pub const KIND_POLICY_PACKAGE_INSPECT_REQUEST: &str =
+    "erebor.runtime.ipc.v1.PolicyPackageInspectRequest";
+pub const KIND_POLICY_PACKAGE_VERIFY_REQUEST: &str =
+    "erebor.runtime.ipc.v1.PolicyPackageVerifyRequest";
 pub const KIND_POLICY_SET_CREATE_REQUEST: &str = "erebor.runtime.ipc.v1.PolicySetCreateRequest";
 pub const KIND_POLICY_SET_RECORD: &str = "erebor.runtime.ipc.v1.PolicySetRecord";
+pub const KIND_POLICY_SET_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.PolicySetListRequest";
+pub const KIND_POLICY_SET_LIST_RESPONSE: &str = "erebor.runtime.ipc.v1.PolicySetListResponse";
+pub const KIND_POLICY_SET_INSPECT_REQUEST: &str = "erebor.runtime.ipc.v1.PolicySetInspectRequest";
+pub const KIND_POLICY_SET_VERIFY_REQUEST: &str = "erebor.runtime.ipc.v1.PolicySetVerifyRequest";
 pub const KIND_RUNNER_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.RunnerListRequest";
 pub const KIND_RUNNER_INSPECT_REQUEST: &str = "erebor.runtime.ipc.v1.RunnerInspectRequest";
 pub const KIND_RUNNER_CAPABILITY_RECORD: &str = "erebor.runtime.ipc.v1.RunnerCapabilityRecord";

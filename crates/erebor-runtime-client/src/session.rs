@@ -4,6 +4,7 @@ use erebor_runtime_ipc::v1::{
     SessionAliasListResponse, SessionAliasRecord, SessionAliasRemoveRequest,
     SessionAliasSetRequest, SessionAttachRequest, SessionAttachResponse, SessionCreateRequest,
     SessionCreateResponse, SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
+    SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
     SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputLeaseResponse,
     SessionInspectRequest, SessionKillRequest, SessionListRequest, SessionListResponse,
     SessionLogChunk, SessionLogsEnd, SessionLogsRequest, SessionPruneRequest, SessionPruneResponse,
@@ -15,7 +16,8 @@ use erebor_runtime_ipc::v1::{
     KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ALIAS_REMOVE_REQUEST, KIND_SESSION_ALIAS_SET_REQUEST,
     KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_REQUEST,
     KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST,
-    KIND_SESSION_EVENT_RECORD, KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST,
+    KIND_SESSION_EVENT_RECORD, KIND_SESSION_EVIDENCE_END, KIND_SESSION_EVIDENCE_RECORD,
+    KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST,
     KIND_SESSION_INPUT_LEASE_RENEW_REQUEST, KIND_SESSION_INPUT_LEASE_RESPONSE,
     KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
     KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST,
@@ -43,6 +45,12 @@ pub struct SessionLogPage {
 pub struct SessionEventPage {
     pub records: Vec<SessionEventRecord>,
     pub end: SessionEventsEnd,
+}
+
+#[derive(Clone, Debug)]
+pub struct SessionEvidencePage {
+    pub records: Vec<SessionEvidenceRecord>,
+    pub end: SessionEvidenceEnd,
 }
 
 impl DaemonClient {
@@ -312,6 +320,50 @@ impl DaemonClient {
                 actual => {
                     return ProtocolSnafu {
                         reason: format!("unexpected session events response kind `{actual}`"),
+                    }
+                    .fail()
+                }
+            }
+        }
+    }
+
+    pub async fn session_evidence(
+        &self,
+        session_id: impl Into<String>,
+        after_sequence: u64,
+        maximum_records: u32,
+    ) -> Result<SessionEvidencePage> {
+        let mut connection = self.connect().await?;
+        let request_id = connection
+            .send(
+                KIND_SESSION_EVIDENCE_REQUEST,
+                &SessionEvidenceRequest {
+                    session_id: session_id.into(),
+                    after_sequence,
+                    maximum_records,
+                },
+                Vec::new(),
+            )
+            .await?;
+        let mut records = Vec::new();
+        loop {
+            let envelope = connection.receive(request_id).await?;
+            match envelope.message_kind.as_str() {
+                KIND_SESSION_EVIDENCE_RECORD => records.push(
+                    envelope
+                        .decode_typed_payload(KIND_SESSION_EVIDENCE_RECORD)
+                        .context(IpcSnafu)?,
+                ),
+                KIND_SESSION_EVIDENCE_END => {
+                    let end = envelope
+                        .decode_typed_payload(KIND_SESSION_EVIDENCE_END)
+                        .context(IpcSnafu)?;
+                    return Ok(SessionEvidencePage { records, end });
+                }
+                KIND_DAEMON_ERROR => return Err(connection.daemon_error(envelope)?),
+                actual => {
+                    return ProtocolSnafu {
+                        reason: format!("unexpected session evidence response kind `{actual}`"),
                     }
                     .fail()
                 }

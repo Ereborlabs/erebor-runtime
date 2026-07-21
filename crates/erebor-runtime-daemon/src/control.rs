@@ -19,28 +19,38 @@ use erebor_runtime_ipc::{
         DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
         DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
-        Envelope, EnvelopeServiceFamily, PolicyPackageApplyRequest, PolicySetCreateRequest,
-        PolicyTestRequest, PolicyTestResponse, RunnerCapabilityRecord, RunnerInspectRequest,
-        RunnerListRequest, RunnerListResponse, SessionAliasListRequest, SessionAliasRemoveRequest,
-        SessionAliasSetRequest, SessionAttachRequest, SessionCreateRequest, SessionEventRecord,
-        SessionEventsEnd, SessionEventsRequest, SessionInputLeaseReleaseRequest,
-        SessionInputLeaseRenewRequest, SessionInspectRequest, SessionKillRequest,
-        SessionListRequest, SessionLogChunk, SessionLogsEnd, SessionLogsRequest,
-        SessionPruneRequest, SessionRemoveRequest, SessionStartRequest, SessionStopRequest,
-        SessionWaitRequest, KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
-        KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
-        KIND_ADMIN_SESSION_STOP_REQUEST, KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST,
-        KIND_APPROVAL_INSPECT_REQUEST, KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE,
-        KIND_APPROVAL_RECORD, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO,
-        KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
-        KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
-        KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
-        KIND_POLICY_SET_CREATE_REQUEST, KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE,
-        KIND_RUNNER_CAPABILITY_RECORD, KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST,
-        KIND_RUNNER_LIST_RESPONSE, KIND_SESSION_ALIAS_LIST_REQUEST,
-        KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_REMOVE_REQUEST,
-        KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST,
-        KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
+        Envelope, EnvelopeServiceFamily, PolicyPackageApplyRequest, PolicyPackageInspectRequest,
+        PolicyPackageListRequest, PolicyPackageListResponse, PolicyPackageVerifyRequest,
+        PolicySetCreateRequest, PolicySetInspectRequest, PolicySetListRequest,
+        PolicySetListResponse, PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse,
+        RunnerCapabilityRecord, RunnerInspectRequest, RunnerListRequest, RunnerListResponse,
+        SessionAliasListRequest, SessionAliasRemoveRequest, SessionAliasSetRequest,
+        SessionAttachRequest, SessionCreateRequest, SessionEventRecord, SessionEventsEnd,
+        SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
+        SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInspectRequest,
+        SessionKillRequest, SessionListRequest, SessionLogChunk, SessionLogsEnd,
+        SessionLogsRequest, SessionPruneRequest, SessionRemoveRequest, SessionStartRequest,
+        SessionStopRequest, SessionWaitRequest, KIND_ADMIN_SESSION_INSPECT_REQUEST,
+        KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
+        KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
+        KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST, KIND_APPROVAL_INSPECT_REQUEST,
+        KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE, KIND_APPROVAL_RECORD,
+        KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
+        KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD,
+        KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
+        KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
+        KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
+        KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
+        KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
+        KIND_POLICY_SET_INSPECT_REQUEST, KIND_POLICY_SET_LIST_REQUEST,
+        KIND_POLICY_SET_LIST_RESPONSE, KIND_POLICY_SET_RECORD, KIND_POLICY_SET_VERIFY_REQUEST,
+        KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE, KIND_RUNNER_CAPABILITY_RECORD,
+        KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST, KIND_RUNNER_LIST_RESPONSE,
+        KIND_SESSION_ALIAS_LIST_REQUEST, KIND_SESSION_ALIAS_LIST_RESPONSE,
+        KIND_SESSION_ALIAS_REMOVE_REQUEST, KIND_SESSION_ALIAS_SET_REQUEST,
+        KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST, KIND_SESSION_EVENTS_END,
+        KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD, KIND_SESSION_EVIDENCE_END,
+        KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
         KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
         KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
         KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST,
@@ -424,6 +434,7 @@ impl DaemonControlState {
             KIND_SESSION_WAIT_REQUEST => self.session_wait(stream, peer, &envelope).await,
             KIND_SESSION_LOGS_REQUEST => self.session_logs(stream, peer, &envelope).await,
             KIND_SESSION_EVENTS_REQUEST => self.session_events(stream, peer, &envelope).await,
+            KIND_SESSION_EVIDENCE_REQUEST => self.session_evidence(stream, peer, &envelope).await,
             KIND_ADMIN_SESSION_LIST_REQUEST => {
                 self.admin_session_list(stream, peer, &envelope).await
             }
@@ -448,7 +459,21 @@ impl DaemonControlState {
             KIND_POLICY_PACKAGE_APPLY_REQUEST => {
                 self.policy_package_apply(stream, peer, &envelope).await
             }
+            KIND_POLICY_PACKAGE_LIST_REQUEST => {
+                self.policy_package_list(stream, peer, &envelope).await
+            }
+            KIND_POLICY_PACKAGE_INSPECT_REQUEST => {
+                self.policy_package_inspect(stream, peer, &envelope).await
+            }
+            KIND_POLICY_PACKAGE_VERIFY_REQUEST => {
+                self.policy_package_verify(stream, peer, &envelope).await
+            }
             KIND_POLICY_SET_CREATE_REQUEST => self.policy_set_create(stream, peer, &envelope).await,
+            KIND_POLICY_SET_LIST_REQUEST => self.policy_set_list(stream, peer, &envelope).await,
+            KIND_POLICY_SET_INSPECT_REQUEST => {
+                self.policy_set_inspect(stream, peer, &envelope).await
+            }
+            KIND_POLICY_SET_VERIFY_REQUEST => self.policy_set_verify(stream, peer, &envelope).await,
             KIND_RUNNER_LIST_REQUEST => self.runner_list(stream, &envelope).await,
             KIND_RUNNER_INSPECT_REQUEST => self.runner_inspect(stream, &envelope).await,
             _ => Err(InvalidRequestSnafu {
@@ -1008,6 +1033,58 @@ impl DaemonControlState {
         .await
     }
 
+    async fn session_evidence(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionEvidenceRequest = envelope
+            .decode_typed_payload(KIND_SESSION_EVIDENCE_REQUEST)
+            .context(IpcSnafu)?;
+        let session_id = self
+            .sessions
+            .resolve_session_reference(peer.uid, &request.session_id)?;
+        let page = self.sessions.stream(
+            peer.uid,
+            &session_id,
+            StreamKind::Evidence,
+            request.after_sequence,
+            request.maximum_records.max(1) as usize,
+        )?;
+        for (index, record) in page.records().iter().enumerate() {
+            self.write_message(
+                stream,
+                envelope.message_id.saturating_add(index as u64 + 1),
+                envelope.message_id,
+                KIND_SESSION_EVIDENCE_RECORD,
+                &SessionEvidenceRecord {
+                    session_id: session_id.clone(),
+                    sequence: record.sequence(),
+                    timestamp_unix_ms: record.timestamp_unix_ms(),
+                    source: record.source().to_owned(),
+                    payload: record.data().to_vec(),
+                    durable: true,
+                },
+            )
+            .await?;
+        }
+        self.write_message(
+            stream,
+            envelope
+                .message_id
+                .saturating_add(page.records().len() as u64 + 1),
+            envelope.message_id,
+            KIND_SESSION_EVIDENCE_END,
+            &SessionEvidenceEnd {
+                session_id,
+                durable_cursor: page.durable_cursor(),
+                truncated_before_cursor: page.truncated_before_cursor(),
+            },
+        )
+        .await
+    }
+
     async fn policy_test(&self, stream: &mut UnixStream, envelope: &Envelope) -> Result<()> {
         let request: PolicyTestRequest = envelope
             .decode_typed_payload(KIND_POLICY_TEST_REQUEST)
@@ -1069,6 +1146,69 @@ impl DaemonControlState {
         .await
     }
 
+    async fn policy_package_list(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        envelope
+            .decode_typed_payload::<PolicyPackageListRequest>(KIND_POLICY_PACKAGE_LIST_REQUEST)
+            .context(IpcSnafu)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_POLICY_PACKAGE_LIST_RESPONSE,
+            &PolicyPackageListResponse {
+                packages: self.sessions.list_policy_packages(peer.uid)?,
+            },
+        )
+        .await
+    }
+
+    async fn policy_package_inspect(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: PolicyPackageInspectRequest = envelope
+            .decode_typed_payload(KIND_POLICY_PACKAGE_INSPECT_REQUEST)
+            .context(IpcSnafu)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_POLICY_PACKAGE_RECORD,
+            &self
+                .sessions
+                .inspect_policy_package(peer.uid, &request.digest)?,
+        )
+        .await
+    }
+
+    async fn policy_package_verify(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: PolicyPackageVerifyRequest = envelope
+            .decode_typed_payload(KIND_POLICY_PACKAGE_VERIFY_REQUEST)
+            .context(IpcSnafu)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_POLICY_PACKAGE_RECORD,
+            &self
+                .sessions
+                .inspect_policy_package(peer.uid, &request.digest)?,
+        )
+        .await
+    }
+
     async fn policy_set_create(
         &self,
         stream: &mut UnixStream,
@@ -1090,6 +1230,69 @@ impl DaemonControlState {
                 local_override_digest: (!request.local_override_digest.is_empty())
                     .then_some(request.local_override_digest),
             },
+        )
+        .await
+    }
+
+    async fn policy_set_list(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        envelope
+            .decode_typed_payload::<PolicySetListRequest>(KIND_POLICY_SET_LIST_REQUEST)
+            .context(IpcSnafu)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_POLICY_SET_LIST_RESPONSE,
+            &PolicySetListResponse {
+                policy_sets: self.sessions.list_policy_sets(peer.uid)?,
+            },
+        )
+        .await
+    }
+
+    async fn policy_set_inspect(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: PolicySetInspectRequest = envelope
+            .decode_typed_payload(KIND_POLICY_SET_INSPECT_REQUEST)
+            .context(IpcSnafu)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_POLICY_SET_RECORD,
+            &self
+                .sessions
+                .inspect_policy_set(peer.uid, &request.digest)?,
+        )
+        .await
+    }
+
+    async fn policy_set_verify(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: PolicySetVerifyRequest = envelope
+            .decode_typed_payload(KIND_POLICY_SET_VERIFY_REQUEST)
+            .context(IpcSnafu)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_POLICY_SET_RECORD,
+            &self
+                .sessions
+                .inspect_policy_set(peer.uid, &request.digest)?,
         )
         .await
     }
