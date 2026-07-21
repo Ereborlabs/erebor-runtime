@@ -9,9 +9,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "linux/prepared.rs"]
 mod prepared;
 
-use erebor_runtime_core::{ActiveSessionSignal, SessionHelperHandoff};
+use erebor_runtime_core::ActiveSessionSignal;
 use rustix::process::{kill_process_group, Pid, Signal};
 #[allow(deprecated)]
 use rustix::thread::unshare;
@@ -21,7 +22,7 @@ use rustix::{
     thread::UnshareFlags,
 };
 
-use crate::{SessionHelperError, StreamKind};
+use crate::{runners::linux::LinuxControllerHandoff, SessionControllerError, StreamKind};
 
 use self::prepared::PreparedLinuxExecution;
 use super::{
@@ -29,7 +30,7 @@ use super::{
     workload::{child_exit, pump_output, wait_child, OutputFailureMonitor, WorkloadExit},
 };
 
-pub(super) struct LinuxWorkload {
+pub(crate) struct LinuxWorkload {
     child: Child,
     process_group: Pid,
     stable_identity: String,
@@ -38,11 +39,11 @@ pub(super) struct LinuxWorkload {
 }
 
 impl LinuxWorkload {
-    pub(super) fn start(
-        handoff: &SessionHelperHandoff,
+    pub(crate) fn start(
+        handoff: &LinuxControllerHandoff,
         output: &HelperOutput,
-    ) -> Result<Self, SessionHelperError> {
-        let host_proc = File::open("/proc").map_err(|source| SessionHelperError::Io {
+    ) -> Result<Self, SessionControllerError> {
+        let host_proc = File::open("/proc").map_err(|source| SessionControllerError::Io {
             action: "opening host proc before session namespace isolation",
             path: PathBuf::from("/proc"),
             source,
@@ -107,17 +108,20 @@ impl LinuxWorkload {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
-        let mut child = command.spawn().map_err(|source| SessionHelperError::Io {
-            action: "starting Linux process guard",
-            path: handoff.process_guard_path.clone(),
-            source,
-            location: snafu::Location::default(),
-        })?;
-        let pid =
-            Pid::from_raw(child.id() as i32).ok_or_else(|| SessionHelperError::InvalidHandoff {
-                reason: String::from("process guard returned an invalid pid"),
+        let mut child = command
+            .spawn()
+            .map_err(|source| SessionControllerError::Io {
+                action: "starting Linux process guard",
+                path: handoff.process_guard_path.clone(),
+                source,
                 location: snafu::Location::default(),
             })?;
+        let pid = Pid::from_raw(child.id() as i32).ok_or_else(|| {
+            SessionControllerError::InvalidHandoff {
+                reason: String::from("process guard returned an invalid pid"),
+                location: snafu::Location::default(),
+            }
+        })?;
         let start_time = process_start_time(&host_proc, child.id()).unwrap_or(0);
         let stable_identity = format!("linux:pid={}:start={start_time}", child.id());
         let mut output_pumps = Vec::new();
@@ -147,19 +151,19 @@ impl LinuxWorkload {
         })
     }
 
-    pub(super) fn stable_identity(&self) -> &str {
+    pub(crate) fn stable_identity(&self) -> &str {
         &self.stable_identity
     }
 
-    pub(super) fn take_output_failure(&self) -> Option<SessionHelperError> {
+    pub(crate) fn take_output_failure(&self) -> Option<SessionControllerError> {
         self.output_failures.take_failure()
     }
 
-    pub(super) fn try_wait(&mut self) -> Result<Option<WorkloadExit>, SessionHelperError> {
+    pub(crate) fn try_wait(&mut self) -> Result<Option<WorkloadExit>, SessionControllerError> {
         let exit = self
             .child
             .try_wait()
-            .map_err(|source| SessionHelperError::Io {
+            .map_err(|source| SessionControllerError::Io {
                 action: "observing Linux process guard",
                 path: std::path::PathBuf::from("<process-guard>"),
                 source,
@@ -172,7 +176,7 @@ impl LinuxWorkload {
         Ok(exit)
     }
 
-    pub(super) fn stop(&mut self, grace: Duration) -> Result<WorkloadExit, SessionHelperError> {
+    pub(crate) fn stop(&mut self, grace: Duration) -> Result<WorkloadExit, SessionControllerError> {
         signal_group(self.process_group, Signal::TERM)?;
         let deadline = Instant::now() + grace;
         while Instant::now() < deadline {
@@ -187,10 +191,10 @@ impl LinuxWorkload {
         Ok(exit)
     }
 
-    pub(super) fn kill(
+    pub(crate) fn kill(
         &mut self,
         signal: ActiveSessionSignal,
-    ) -> Result<WorkloadExit, SessionHelperError> {
+    ) -> Result<WorkloadExit, SessionControllerError> {
         let signal = match signal {
             ActiveSessionSignal::Terminate => Signal::TERM,
             ActiveSessionSignal::Kill => Signal::KILL,
@@ -202,10 +206,10 @@ impl LinuxWorkload {
         Ok(exit)
     }
 
-    fn join_output_pumps(&mut self) -> Result<(), SessionHelperError> {
+    fn join_output_pumps(&mut self) -> Result<(), SessionControllerError> {
         for pump in self.output_pumps.drain(..) {
             pump.join()
-                .map_err(|_panic| SessionHelperError::InvalidHandoff {
+                .map_err(|_panic| SessionControllerError::InvalidHandoff {
                     reason: String::from("Linux workload output pump panicked"),
                     location: snafu::Location::default(),
                 })?;
@@ -228,8 +232,8 @@ impl Drop for LinuxWorkload {
 
 use std::sync::Arc;
 
-fn signal_group(process_group: Pid, signal: Signal) -> Result<(), SessionHelperError> {
-    kill_process_group(process_group, signal).map_err(|source| SessionHelperError::Io {
+fn signal_group(process_group: Pid, signal: Signal) -> Result<(), SessionControllerError> {
+    kill_process_group(process_group, signal).map_err(|source| SessionControllerError::Io {
         action: "signaling Linux session process group",
         path: std::path::PathBuf::from(format!(
             "<process-group:{}>",
@@ -262,12 +266,12 @@ fn process_start_time(host_proc: &File, pid: u32) -> Option<u64> {
 }
 
 fn prepare_private_namespace(
-    handoff: &SessionHelperHandoff,
-) -> Result<Vec<(String, String)>, SessionHelperError> {
+    handoff: &LinuxControllerHandoff,
+) -> Result<Vec<(String, String)>, SessionControllerError> {
     #[allow(deprecated)]
     unshare(UnshareFlags::NEWNS)
         .map_err(std::io::Error::from)
-        .map_err(|source| SessionHelperError::Io {
+        .map_err(|source| SessionControllerError::Io {
             action: "creating Linux session mount namespace",
             path: PathBuf::from("<session-namespace>"),
             source,
@@ -278,7 +282,7 @@ fn prepare_private_namespace(
         MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,
     )
     .map_err(std::io::Error::from)
-    .map_err(|source| SessionHelperError::Io {
+    .map_err(|source| SessionControllerError::Io {
         action: "making Linux session mounts private",
         path: PathBuf::from("/"),
         source,
@@ -293,7 +297,7 @@ fn prepare_private_namespace(
         .is_some()
         .then(|| handoff.evidence_path.join("runtime-guard-projection.sock"));
     if let (Some(source), Some(target)) = (guard_host_path.as_ref(), projection_source.as_ref()) {
-        File::create(target).map_err(|source_error| SessionHelperError::Io {
+        File::create(target).map_err(|source_error| SessionControllerError::Io {
             action: "creating private runtime guard projection",
             path: target.clone(),
             source: source_error,
@@ -301,7 +305,7 @@ fn prepare_private_namespace(
         })?;
         mount_bind(Path::new(source), target)
             .map_err(std::io::Error::from)
-            .map_err(|source_error| SessionHelperError::Io {
+            .map_err(|source_error| SessionControllerError::Io {
                 action: "holding runtime guard socket before hiding host runtime",
                 path: target.clone(),
                 source: source_error,
@@ -309,14 +313,14 @@ fn prepare_private_namespace(
             })?;
     }
 
-    std::fs::create_dir_all("/run/erebor").map_err(|source| SessionHelperError::Io {
+    std::fs::create_dir_all("/run/erebor").map_err(|source| SessionControllerError::Io {
         action: "creating private Erebor runtime mountpoint",
         path: PathBuf::from("/run/erebor"),
         source,
         location: snafu::Location::default(),
     })?;
     let data = CString::new("mode=0711,size=65536").map_err(|error| {
-        SessionHelperError::InvalidHandoff {
+        SessionControllerError::InvalidHandoff {
             reason: error.to_string(),
             location: snafu::Location::default(),
         }
@@ -329,7 +333,7 @@ fn prepare_private_namespace(
         Some(data.as_c_str()),
     )
     .map_err(std::io::Error::from)
-    .map_err(|source| SessionHelperError::Io {
+    .map_err(|source| SessionControllerError::Io {
         action: "hiding the host Erebor runtime in the session namespace",
         path: PathBuf::from("/run/erebor"),
         source,
@@ -338,7 +342,7 @@ fn prepare_private_namespace(
 
     let private_guard = PathBuf::from("/run/erebor/runtime-interception.sock");
     if let Some(source) = projection_source {
-        File::create(&private_guard).map_err(|source_error| SessionHelperError::Io {
+        File::create(&private_guard).map_err(|source_error| SessionControllerError::Io {
             action: "creating private runtime guard endpoint",
             path: private_guard.clone(),
             source: source_error,
@@ -346,7 +350,7 @@ fn prepare_private_namespace(
         })?;
         mount_bind(&source, &private_guard)
             .map_err(std::io::Error::from)
-            .map_err(|source_error| SessionHelperError::Io {
+            .map_err(|source_error| SessionControllerError::Io {
                 action: "projecting only the admitted runtime guard endpoint",
                 path: private_guard.clone(),
                 source: source_error,

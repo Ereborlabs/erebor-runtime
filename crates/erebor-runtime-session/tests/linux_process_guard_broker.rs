@@ -22,6 +22,53 @@ use erebor_runtime_ipc::{
 };
 
 #[test]
+fn process_guard_paces_fail_closed_exec_when_broker_is_unavailable(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let socket_path = root.path().join("broker.sock");
+    let listener = match UnixListener::bind(&socket_path) {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let server = thread::spawn(move || accept_guard_then_disconnect(listener));
+    let guard_path = env!("EREBOR_BUILD_LINUX_PROCESS_GUARD");
+    let script =
+        "attempt=0; while [ \"$attempt\" -lt 8 ]; do /usr/bin/true; attempt=$((attempt + 1)); done";
+
+    let started = Instant::now();
+    let output = Command::new(guard_path)
+        .args(["/bin/sh", "-c", script])
+        .env("EREBOR_RUNTIME_INTERCEPTION_PATH", &socket_path)
+        .env("EREBOR_RUNTIME_INTERCEPTION_TOKEN", "test-token")
+        .env("EREBOR_RUNTIME_INTERCEPTION_TIMEOUT_MS", "5000")
+        .env("EREBOR_SESSION_ID", "guard-broker-outage-test")
+        .env("EREBOR_ACTOR_ID", "test-agent")
+        .env("EREBOR_GUARD_INTERCEPTION_OPERATIONS", "process_exec")
+        .output()?;
+    let elapsed = started.elapsed();
+
+    server
+        .join()
+        .map_err(|_error| "guard broker outage test server panicked")?
+        .map_err(|error| error.to_string())?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("broker"),
+        "the deliberate broker outage did not reach the guarded process: {stderr}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(150),
+        "the fail-closed broker-disconnect path completed in {elapsed:?}, allowing an outage retry storm"
+    );
+    assert!(
+        elapsed < Duration::from_secs(8),
+        "broker outage backoff prevented timely fail-closed progress: {elapsed:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn process_guard_uses_one_broker_socket_for_lifecycle_and_physical_effects(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;
@@ -98,6 +145,36 @@ struct GuardEvidence {
     saw_lifecycle_exit: bool,
     saw_physical_effect_request: bool,
     marker_absent_at_hook_exit: bool,
+}
+
+fn accept_guard_then_disconnect(
+    listener: UnixListener,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (mut stream, _address) = listener.accept()?;
+    stream.set_read_timeout(Some(Duration::from_secs(6)))?;
+    let envelope = read_envelope(&mut stream)?;
+    if envelope.message_kind != KIND_GUARD_HELLO {
+        return Err(format!(
+            "expected guard hello before disconnect, received `{}`",
+            envelope.message_kind
+        )
+        .into());
+    }
+    write_envelope(
+        &mut stream,
+        Envelope::wrap_message(
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_GUARD_HELLO_ACK,
+            &GuardHelloAck {
+                protocol_version: PROTOCOL_VERSION,
+                broker_id: String::from("test-broker"),
+                accepted: true,
+                reason: String::from("accepted before deliberate outage"),
+            },
+        )?,
+    )?;
+    Ok(())
 }
 
 fn serve_guard_connection(

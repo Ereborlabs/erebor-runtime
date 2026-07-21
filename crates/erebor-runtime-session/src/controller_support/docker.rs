@@ -7,16 +7,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use erebor_runtime_core::{ActiveSessionSignal, SessionHelperHandoff};
+use erebor_runtime_core::ActiveSessionSignal;
 
-use crate::{SessionHelperError, StreamKind};
+use crate::{runners::docker::DockerControllerHandoff, SessionControllerError, StreamKind};
 
 use super::{
     output::HelperOutput,
     workload::{pump_output, OutputFailureMonitor, WorkloadExit},
 };
 
-pub(super) struct DockerWorkload {
+pub(crate) struct DockerWorkload {
     docker: DockerCommand,
     container_id: String,
     logs: Child,
@@ -25,23 +25,21 @@ pub(super) struct DockerWorkload {
 }
 
 impl DockerWorkload {
-    pub(super) fn start(
-        handoff: &SessionHelperHandoff,
+    pub(crate) fn start(
+        handoff: &DockerControllerHandoff,
         output: &HelperOutput,
-    ) -> Result<Self, SessionHelperError> {
-        let image =
-            handoff
-                .spec
-                .container_image()
-                .ok_or_else(|| SessionHelperError::InvalidHandoff {
-                    reason: String::from("Docker session has no immutable image identity"),
-                    location: snafu::Location::default(),
-                })?;
+    ) -> Result<Self, SessionControllerError> {
+        let image = handoff.spec.container_image().ok_or_else(|| {
+            SessionControllerError::InvalidHandoff {
+                reason: String::from("Docker session has no immutable image identity"),
+                location: snafu::Location::default(),
+            }
+        })?;
         let image_id = format!("sha256:{}", image.sha256());
         let docker = DockerCommand::new(handoff.docker_path.clone());
         let inspected = docker.run(["image", "inspect", "--format", "{{.Id}}", &image_id])?;
         if text(&inspected) != image_id {
-            return Err(SessionHelperError::InvalidHandoff {
+            return Err(SessionControllerError::InvalidHandoff {
                 reason: String::from("Docker image is not available under its admitted digest"),
                 location: snafu::Location::default(),
             });
@@ -106,7 +104,7 @@ impl DockerWorkload {
         }
         let (program, command_arguments) =
             handoff.spec.command().split_first().ok_or_else(|| {
-                SessionHelperError::InvalidHandoff {
+                SessionControllerError::InvalidHandoff {
                     reason: String::from("Docker session has no admitted command"),
                     location: snafu::Location::default(),
                 }
@@ -118,7 +116,7 @@ impl DockerWorkload {
         let started = docker.run(arguments.iter().map(String::as_str))?;
         let container_id = text(&started);
         if container_id.len() != 64 || !container_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(SessionHelperError::Command {
+            return Err(SessionControllerError::Command {
                 program: handoff.docker_path.display().to_string(),
                 reason: String::from("Docker returned an invalid container id"),
                 location: snafu::Location::default(),
@@ -131,7 +129,7 @@ impl DockerWorkload {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|source| SessionHelperError::Io {
+            .map_err(|source| SessionControllerError::Io {
                 action: "starting Docker log follower",
                 path: handoff.docker_path.clone(),
                 source,
@@ -164,15 +162,15 @@ impl DockerWorkload {
         })
     }
 
-    pub(super) fn stable_identity(&self) -> &str {
+    pub(crate) fn stable_identity(&self) -> &str {
         &self.container_id
     }
 
-    pub(super) fn take_output_failure(&self) -> Option<SessionHelperError> {
+    pub(crate) fn take_output_failure(&self) -> Option<SessionControllerError> {
         self.output_failures.take_failure()
     }
 
-    pub(super) fn try_wait(&mut self) -> Result<Option<WorkloadExit>, SessionHelperError> {
+    pub(crate) fn try_wait(&mut self) -> Result<Option<WorkloadExit>, SessionControllerError> {
         let output = self.docker.run([
             "container",
             "inspect",
@@ -190,7 +188,7 @@ impl DockerWorkload {
             let exit_code =
                 exit_code
                     .parse::<i32>()
-                    .map_err(|_error| SessionHelperError::Command {
+                    .map_err(|_error| SessionControllerError::Command {
                         program: self.docker.path.display().to_string(),
                         reason: String::from("Docker inspect returned an invalid exit code"),
                         location: snafu::Location::default(),
@@ -204,17 +202,17 @@ impl DockerWorkload {
         }
     }
 
-    pub(super) fn stop(&mut self, grace: Duration) -> Result<WorkloadExit, SessionHelperError> {
+    pub(crate) fn stop(&mut self, grace: Duration) -> Result<WorkloadExit, SessionControllerError> {
         let seconds = grace.as_secs().max(1).to_string();
         self.docker
             .run(["stop", "--time", &seconds, &self.container_id])?;
         self.wait()
     }
 
-    pub(super) fn kill(
+    pub(crate) fn kill(
         &mut self,
         signal: ActiveSessionSignal,
-    ) -> Result<WorkloadExit, SessionHelperError> {
+    ) -> Result<WorkloadExit, SessionControllerError> {
         let signal = match signal {
             ActiveSessionSignal::Terminate => "TERM",
             ActiveSessionSignal::Kill => "KILL",
@@ -225,12 +223,12 @@ impl DockerWorkload {
         self.wait()
     }
 
-    fn wait(&mut self) -> Result<WorkloadExit, SessionHelperError> {
+    fn wait(&mut self) -> Result<WorkloadExit, SessionControllerError> {
         let output = self.docker.run(["wait", &self.container_id])?;
         let exit_code =
             text(&output)
                 .parse::<i32>()
-                .map_err(|_error| SessionHelperError::Command {
+                .map_err(|_error| SessionControllerError::Command {
                     program: self.docker.path.display().to_string(),
                     reason: String::from("Docker wait returned an invalid exit code"),
                     location: snafu::Location::default(),
@@ -243,10 +241,10 @@ impl DockerWorkload {
         })
     }
 
-    fn join_output_pumps(&mut self) -> Result<(), SessionHelperError> {
+    fn join_output_pumps(&mut self) -> Result<(), SessionControllerError> {
         for pump in self.output_pumps.drain(..) {
             pump.join()
-                .map_err(|_panic| SessionHelperError::InvalidHandoff {
+                .map_err(|_panic| SessionControllerError::InvalidHandoff {
                     reason: String::from("Docker workload output pump panicked"),
                     location: snafu::Location::default(),
                 })?;
@@ -289,7 +287,7 @@ impl DockerCommand {
     fn run<'a>(
         &self,
         arguments: impl IntoIterator<Item = &'a str>,
-    ) -> Result<Output, SessionHelperError> {
+    ) -> Result<Output, SessionControllerError> {
         let mut child = Command::new(&self.path)
             .args(arguments)
             .env_clear()
@@ -297,7 +295,7 @@ impl DockerCommand {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|source| SessionHelperError::Io {
+            .map_err(|source| SessionControllerError::Io {
                 action: "starting bounded Docker command",
                 path: self.path.clone(),
                 source,
@@ -316,12 +314,15 @@ impl DockerCommand {
         let stderr_reader = thread::spawn(move || read_bounded(stderr, maximum));
         let deadline = Instant::now() + self.timeout;
         let status = loop {
-            if let Some(status) = child.try_wait().map_err(|source| SessionHelperError::Io {
-                action: "observing bounded Docker command",
-                path: self.path.clone(),
-                source,
-                location: snafu::Location::default(),
-            })? {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|source| SessionControllerError::Io {
+                    action: "observing bounded Docker command",
+                    path: self.path.clone(),
+                    source,
+                    location: snafu::Location::default(),
+                })?
+            {
                 break status;
             }
             if Instant::now() >= deadline {
@@ -347,15 +348,15 @@ impl DockerCommand {
         }
     }
 
-    fn command_error(&self, reason: impl Into<String>) -> SessionHelperError {
-        SessionHelperError::Command {
+    fn command_error(&self, reason: impl Into<String>) -> SessionControllerError {
+        SessionControllerError::Command {
             program: self.path.display().to_string(),
             reason: reason.into(),
             location: snafu::Location::default(),
         }
     }
 
-    fn error<T>(&self, reason: impl Into<String>) -> Result<T, SessionHelperError> {
+    fn error<T>(&self, reason: impl Into<String>) -> Result<T, SessionControllerError> {
         Err(self.command_error(reason))
     }
 }
@@ -376,15 +377,15 @@ fn read_bounded(mut reader: impl Read, maximum: usize) -> std::io::Result<Vec<u8
 fn join_reader(
     reader: thread::JoinHandle<std::io::Result<Vec<u8>>>,
     path: &Path,
-) -> Result<Vec<u8>, SessionHelperError> {
+) -> Result<Vec<u8>, SessionControllerError> {
     reader
         .join()
-        .map_err(|_panic| SessionHelperError::Command {
+        .map_err(|_panic| SessionControllerError::Command {
             program: path.display().to_string(),
             reason: String::from("Docker output reader panicked"),
             location: snafu::Location::default(),
         })?
-        .map_err(|source| SessionHelperError::Io {
+        .map_err(|source| SessionControllerError::Io {
             action: "reading bounded Docker command output",
             path: path.to_path_buf(),
             source,

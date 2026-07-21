@@ -459,13 +459,13 @@ async fn execute(
 
 fn print_record(record: &SessionRecord) {
     println!(
-        "session_id={} state={} generation={} owner_uid={} runner={} stable_identity={} failure={} retention_hold={} retry_expires_unix_ms={}",
+        "session_id={} state={} generation={} owner_uid={} runner={} runner_recovery={} failure={} retention_hold={} retry_expires_unix_ms={}",
         record.session_id,
         record.state,
         record.generation,
         record.owner_uid,
         record.runner_id,
-        record.stable_runner_identity,
+        record.runner_recovery,
         record.failure,
         record.retention_hold,
         record.retry_guarantee_expires_unix_ms

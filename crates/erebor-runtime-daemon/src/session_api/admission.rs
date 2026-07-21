@@ -6,8 +6,7 @@ use std::{
 use erebor_runtime_core::{
     DaemonFailureMode, EndpointProjection, EvidenceRequirement, FilesystemProjection,
     ImmutableIdentity, OutputPlan, OutputStreamRequirements, RunRequest, RunnerCapabilityDocument,
-    SafePathKind, SessionAdmission, SessionOwner, SessionRunnerKind, SessionSpec,
-    WorkloadPrivilegePlan,
+    RunnerId, SafePathKind, SessionAdmission, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
 };
 use erebor_runtime_events::SessionId;
 use erebor_runtime_ipc::v1::SessionCreateRequest;
@@ -15,6 +14,7 @@ use erebor_runtime_ipc::v1::SessionCreateRequest;
 use crate::{
     config::DaemonConfig, error::InvalidRequestSnafu, path_broker::DescriptorBroker, Result,
 };
+use erebor_runtime_session::RunnerAdmissionProfile;
 
 pub(super) struct AdmissionContext<'a> {
     pub(super) owner_uid: u32,
@@ -24,6 +24,7 @@ pub(super) struct AdmissionContext<'a> {
     pub(super) state_root: &'a Path,
     pub(super) runtime_root: &'a Path,
     pub(super) capability: RunnerCapabilityDocument,
+    pub(super) runner_profile: RunnerAdmissionProfile,
     pub(super) config: &'a DaemonConfig,
     pub(super) descriptor_broker: &'a DescriptorBroker,
 }
@@ -32,7 +33,7 @@ pub(super) fn admit(
     request: SessionCreateRequest,
     context: AdmissionContext<'_>,
 ) -> Result<SessionSpec> {
-    let runner = parse_runner(&request.runner_id)?;
+    let runner = RunnerId::new(request.runner_id).map_err(invalid_spec)?;
     let failure_mode = parse_failure_mode(&request.daemon_failure_mode)?;
     let package_digest = optional(request.package_digest);
     let installation_digest = optional(request.installation_digest);
@@ -44,7 +45,7 @@ pub(super) fn admit(
         .map(|entry| (entry.key, entry.value))
         .collect::<Vec<_>>();
     let run_request = RunRequest::new(
-        runner,
+        runner.clone(),
         request.command,
         PathBuf::from(request.workspace),
         request.policy_set_digest,
@@ -92,10 +93,10 @@ pub(super) fn admit(
         )?
         .binding()
         .clone();
-    let executable = if runner == SessionRunnerKind::LinuxHost {
+    let executable = if context.runner_profile.executable_required() {
         let program = run_request.command().first().ok_or_else(|| {
             InvalidRequestSnafu {
-                reason: String::from("Linux-host session requires an executable"),
+                reason: String::from("selected runner requires an executable"),
             }
             .build()
         })?;
@@ -125,7 +126,9 @@ pub(super) fn admit(
         .join(context.session_id)
         .join("output");
     let runtime_guard_host_path = context.runtime_root.join("runtime-interception.sock");
-    let endpoint_projections = (runner == SessionRunnerKind::LinuxHost)
+    let endpoint_projections = context
+        .runner_profile
+        .project_runtime_guard()
         .then(|| {
             EndpointProjection::new(
                 "runtime-guard",
@@ -147,11 +150,7 @@ pub(super) fn admit(
         owner: SessionOwner::new(context.owner_uid, context.owner_gid),
         workload_privileges: WorkloadPrivilegePlan::new(
             Vec::new(),
-            if runner == SessionRunnerKind::Docker {
-                0o022
-            } else {
-                0o077
-            },
+            context.runner_profile.workload_umask(),
             1024,
             512,
             0,
@@ -195,17 +194,6 @@ pub(super) fn admit(
         created_at_unix_ms: unix_time_ms(),
     })
     .map_err(invalid_spec)
-}
-
-fn parse_runner(value: &str) -> Result<SessionRunnerKind> {
-    match value {
-        "linux-host" | "linux_host" => Ok(SessionRunnerKind::LinuxHost),
-        "docker" => Ok(SessionRunnerKind::Docker),
-        _ => InvalidRequestSnafu {
-            reason: format!("unknown runner `{value}`"),
-        }
-        .fail(),
-    }
 }
 
 fn parse_failure_mode(value: &str) -> Result<DaemonFailureMode> {

@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
     os::raw::c_ulong,
+    thread,
+    time::Duration,
 };
 
 use super::{
@@ -19,6 +21,8 @@ use super::{
         WAIT_ALL_TRACED,
     },
 };
+
+const BROKER_OUTAGE_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, Default)]
 struct PidState {
@@ -291,10 +295,10 @@ impl TraceLoop {
         &mut self,
         event: &ipc::GuardLifecycleEvent,
     ) -> Result<ipc::GuardLifecycleReplyKind, String> {
-        let Some(connection) = self.broker_connection.as_mut() else {
+        let Some(reply) = self.request_broker(|connection| connection.request_lifecycle(event))?
+        else {
             return Ok(ipc::GuardLifecycleReplyKind::Ignore);
         };
-        let reply = connection.request_lifecycle(event)?;
         if reply.request_id != event.request_id {
             return Err(format!(
                 "broker lifecycle reply request id {} did not match event request id {}",
@@ -302,6 +306,23 @@ impl TraceLoop {
             ));
         }
         Ok(reply.kind)
+    }
+
+    fn request_broker<T>(
+        &mut self,
+        request: impl FnOnce(&mut ipc::RuntimeInterceptionConnection) -> Result<T, String>,
+    ) -> Result<Option<T>, String> {
+        let Some(connection) = self.broker_connection.as_mut() else {
+            return Ok(None);
+        };
+        let result = request(connection);
+        if result.is_err() {
+            // The tracee stays stopped while Erebor paces retries. This remains
+            // fail-closed without allowing a tight process/logging storm while
+            // the daemon-owned broker is restarting.
+            thread::sleep(BROKER_OUTAGE_RETRY_DELAY);
+        }
+        result.map(Some)
     }
 
     fn handle_syscall_stop(&mut self, pid: Pid) -> bool {
@@ -453,13 +474,11 @@ impl TraceLoop {
         path: &str,
         argv: &[String],
     ) -> Result<Option<ProcessRule>, String> {
-        let Some(connection) = self.broker_connection.as_mut() else {
-            return Ok(None);
-        };
         let request = GuardBrokerEnvironment::process_exec_request(pid, path, argv);
-        connection
-            .request_interception(&request)
-            .map(|decision| Some(Self::process_rule_from_broker_decision(&decision)))
+        self.request_broker(|connection| connection.request_interception(&request))
+            .map(|decision| {
+                decision.map(|decision| Self::process_rule_from_broker_decision(&decision))
+            })
     }
 
     fn should_deny_file_syscall(&mut self, pid: Pid, regs: &UserRegsStruct) -> bool {
@@ -467,14 +486,14 @@ impl TraceLoop {
         else {
             return false;
         };
-        let Some(connection) = self.broker_connection.as_mut() else {
-            eprintln!(
-                "erebor linux process guard: file interception is enabled without a session broker"
-            );
-            return true;
-        };
-        match connection.request_interception(&request) {
-            Ok(decision) => file_interception::should_deny_file_decision(&request, &decision),
+        match self.request_broker(|connection| connection.request_interception(&request)) {
+            Ok(Some(decision)) => file_interception::should_deny_file_decision(&request, &decision),
+            Ok(None) => {
+                eprintln!(
+                    "erebor linux process guard: file interception is enabled without a session broker"
+                );
+                true
+            }
             Err(reason) => {
                 eprintln!("erebor linux process guard: broker file decision failed: {reason}");
                 true

@@ -46,8 +46,12 @@ name = "erebor-codex-hook"
 path = "src/agents/codex/managed_hook.rs"
 
 [[bin]]
-name = "erebor-session-helper"
-path = "src/bin/erebor_session_helper.rs"
+name = "erebor-linux-session-controller"
+path = "src/bin/erebor_linux_session_controller.rs"
+
+[[bin]]
+name = "erebor-docker-session-controller"
+path = "src/bin/erebor_docker_session_controller.rs"
 
 [lints]
 workspace = true

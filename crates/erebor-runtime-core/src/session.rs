@@ -1,6 +1,5 @@
 use std::{io, path::PathBuf, thread, time::Duration};
 
-mod active;
 mod admission;
 mod docker;
 mod lifecycle;
@@ -11,16 +10,12 @@ use crate::{
     DockerSessionCommandOptions, LinuxHostSessionCommandOptions, RuntimeError, SessionAdoptPlan,
     SessionRunPlan, SessionRunnerKind,
 };
-pub use active::{
-    SessionHelperCommand, SessionHelperEvent, SessionHelperHandoff, SessionHelperLaunchConfig,
-    SESSION_HELPER_PROTOCOL_VERSION,
-};
 pub use admission::{
     ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, EvidenceRequirement,
     FilesystemProjection, ImmutableIdentity, OutputPlan, OutputStreamRequirements, RunRequest,
-    RunnerBinding, RunnerCapabilityDocument, SafePathBinding, SafePathKind, SessionAdmission,
-    SessionOwner, SessionSpec, WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION,
-    SESSION_SPEC_SCHEMA_VERSION,
+    RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding,
+    SafePathKind, SessionAdmission, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
+    RUNNER_CAPABILITY_SCHEMA_VERSION, RUNNER_RECOVERY_SCHEMA_VERSION, SESSION_SPEC_SCHEMA_VERSION,
 };
 use docker::DockerSessionOutputMode;
 pub use docker::DockerSessionRunner;
@@ -189,7 +184,7 @@ impl ActiveSessionExit {
 }
 
 pub trait ActiveSession: Send {
-    fn stable_identity(&self) -> &str;
+    fn recovery(&self) -> &RunnerRecovery;
 
     fn capability_snapshot(&self) -> &RunnerCapabilityDocument;
 
@@ -200,33 +195,6 @@ pub trait ActiveSession: Send {
     fn kill(&mut self, signal: ActiveSessionSignal) -> Result<ActiveSessionExit, RuntimeError>;
 
     fn health(&mut self) -> Result<ActiveSessionHealth, RuntimeError>;
-}
-
-pub trait SessionRunner: Send + Sync {
-    fn kind(&self) -> SessionRunnerKind;
-
-    fn inspect(&self) -> Result<RunnerCapabilityDocument, RuntimeError>;
-
-    fn validate_admission(&self, spec: &SessionSpec) -> Result<(), RuntimeError>;
-
-    fn start(
-        &self,
-        spec: &SessionSpec,
-        output: &OutputEndpoints,
-    ) -> Result<Box<dyn ActiveSession>, RuntimeError>;
-
-    fn recover(
-        &self,
-        spec: &SessionSpec,
-        binding: &RunnerBinding,
-        output: &OutputEndpoints,
-    ) -> Result<Box<dyn ActiveSession>, RuntimeError>;
-
-    fn remove(
-        &self,
-        spec: &SessionSpec,
-        binding: Option<&RunnerBinding>,
-    ) -> Result<(), RuntimeError>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -260,10 +228,8 @@ impl SessionRunnerLauncher {
         environment: &[(String, String)],
     ) -> Result<SessionRunOutcome, RuntimeError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => DockerSessionRunner::default().run(plan, environment),
-            SessionRunnerKind::LinuxHost => {
-                LinuxHostSessionRunner::default().run(plan, environment)
-            }
+            SessionRunnerKind::Docker => DockerSessionRunner.run(plan, environment),
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner.run(plan, environment),
         }
     }
 
@@ -273,12 +239,12 @@ impl SessionRunnerLauncher {
         options: &DockerSessionCommandOptions,
     ) -> Result<SessionRunOutcome, RuntimeError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => DockerSessionRunner::default()
+            SessionRunnerKind::Docker => DockerSessionRunner
                 .run_with_options(plan, environment, options, DockerSessionOutputMode::Inherit)
                 .map(|outcome| outcome.run),
             SessionRunnerKind::LinuxHost => {
                 let _ = options;
-                LinuxHostSessionRunner::default().run(plan, environment)
+                LinuxHostSessionRunner.run(plan, environment)
             }
         }
     }
@@ -289,7 +255,7 @@ impl SessionRunnerLauncher {
         options: &DockerSessionCommandOptions,
     ) -> Result<SessionCapturedRunOutcome, RuntimeError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => DockerSessionRunner::default().run_with_options(
+            SessionRunnerKind::Docker => DockerSessionRunner.run_with_options(
                 plan,
                 environment,
                 options,
@@ -297,7 +263,7 @@ impl SessionRunnerLauncher {
             ),
             SessionRunnerKind::LinuxHost => {
                 let _ = options;
-                LinuxHostSessionRunner::default().run_with_options(
+                LinuxHostSessionRunner.run_with_options(
                     plan,
                     environment,
                     &LinuxHostSessionCommandOptions::default(),
@@ -313,8 +279,8 @@ impl SessionRunnerLauncher {
         options: &LinuxHostSessionCommandOptions,
     ) -> Result<SessionRunOutcome, RuntimeError> {
         match plan.runner().kind() {
-            SessionRunnerKind::Docker => DockerSessionRunner::default().run(plan, environment),
-            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner::default()
+            SessionRunnerKind::Docker => DockerSessionRunner.run(plan, environment),
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner
                 .run_with_options(
                     plan,
                     environment,
@@ -333,14 +299,14 @@ impl SessionRunnerLauncher {
         match plan.runner().kind() {
             SessionRunnerKind::Docker => {
                 let _ = options;
-                DockerSessionRunner::default().run_with_options(
+                DockerSessionRunner.run_with_options(
                     plan,
                     environment,
                     &DockerSessionCommandOptions::default(),
                     DockerSessionOutputMode::Capture,
                 )
             }
-            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner::default().run_with_options(
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner.run_with_options(
                 plan,
                 environment,
                 options,
@@ -360,7 +326,7 @@ impl SessionRunnerLauncher {
                 operation: String::from("adopt"),
             }
             .fail(),
-            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner::default()
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner
                 .adopt_with_options(
                     plan,
                     environment,
@@ -382,7 +348,7 @@ impl SessionRunnerLauncher {
                 operation: String::from("adopt"),
             }
             .fail(),
-            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner::default().adopt_with_options(
+            SessionRunnerKind::LinuxHost => LinuxHostSessionRunner.adopt_with_options(
                 plan,
                 environment,
                 options,

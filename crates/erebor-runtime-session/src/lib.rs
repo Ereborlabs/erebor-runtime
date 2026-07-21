@@ -1,14 +1,17 @@
 mod adoption;
 mod agents;
+mod controller_support;
 mod diagnostic;
+mod docker_controller;
 mod error;
 mod interception_backend;
 mod interception_setup;
+mod linux_controller;
 mod policies;
 mod registry_lifecycle;
+mod runners;
 mod runtime_interception_broker;
 mod session_context;
-mod session_helper;
 mod session_manager;
 mod session_output;
 mod session_repository;
@@ -27,25 +30,28 @@ pub use agents::codex::{
     CodexManagedSession, CodexNativeHookEvent, CodexSessionError,
 };
 pub use diagnostic::SessionDiagnosticOutcome;
+#[doc(hidden)]
+pub use docker_controller::run_docker_session_controller;
 pub use erebor_runtime_core::{
     ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionInterceptionDecision,
     SurfaceInterceptionDecision,
 };
 pub use error::{
-    SessionExecutionError, SessionHelperError, SessionManagerError, SessionOutputError,
+    SessionControllerError, SessionExecutionError, SessionManagerError, SessionOutputError,
     SessionRepositoryError,
 };
+#[doc(hidden)]
+pub use linux_controller::run_linux_session_controller;
+pub use runners::{RunnerAdmissionProfile, RunnerDriver, RunnerInstallConfig, RunnerRegistry};
 pub use runtime_interception_broker::{
     InterceptionBrokerClient, RuntimeGuardService, RuntimeInterceptionBroker,
     RuntimeInterceptionBrokerError, RuntimeInterceptionEndpoint, SessionInterceptionRegistration,
     SessionInterceptionRouter,
 };
-#[doc(hidden)]
-pub use session_helper::run_session_helper;
 pub use session_manager::{
-    output_endpoints, ResolvedSessionPath, RunnerRegistry, SessionAttachOutcome,
-    SessionInterceptionRouterFactory, SessionManager, SessionPathResolver,
-    SessionPathResolverError, SessionRuntimeResources, ValidatedStartConstraints,
+    output_endpoints, ResolvedSessionPath, SessionAttachOutcome, SessionInterceptionRouterFactory,
+    SessionManager, SessionPathResolver, SessionPathResolverError, SessionRuntimeResources,
+    ValidatedStartConstraints,
 };
 pub use session_output::{
     DurableStreamCursor, DurableStreamRecord, DurableStreamStore, InputLease, InputLeaseManager,

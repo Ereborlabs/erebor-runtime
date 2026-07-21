@@ -83,7 +83,7 @@ pub enum RuntimeError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("session runner `{runner}` helper protocol failed: {reason}"))]
+    #[snafu(display("session runner `{runner}` control protocol failed: {reason}"))]
     SessionRunnerProtocol {
         runner: String,
         reason: String,

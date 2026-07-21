@@ -5,8 +5,7 @@ mod response;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use erebor_runtime_core::{
-    ActiveSessionSignal, ImmutableIdentity, SessionHelperLaunchConfig, SessionLifecycleState,
-    SessionRunnerKind, SessionSpec,
+    ActiveSessionSignal, ImmutableIdentity, RunnerId, SessionLifecycleState, SessionSpec,
 };
 use erebor_runtime_ipc::v1::{
     SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionInputLeaseResponse,
@@ -15,8 +14,9 @@ use erebor_runtime_ipc::v1::{
     KIND_SESSION_RECORD,
 };
 use erebor_runtime_session::{
-    DurableSessionRecord, RunnerRegistry, SessionManager, SessionManagerError, SessionRepository,
-    SessionRepositoryError, SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
+    DurableSessionRecord, RunnerInstallConfig, RunnerRegistry, SessionManager, SessionManagerError,
+    SessionRepository, SessionRepositoryError, SessionRuntimeResources, StreamKind,
+    ValidatedStartConstraints,
 };
 use prost::Message;
 use snafu::ResultExt;
@@ -49,7 +49,7 @@ impl DaemonSessionApi {
         Self::new(
             paths,
             config,
-            RunnerRegistry::compiled(SessionHelperLaunchConfig::default()),
+            RunnerRegistry::compiled(RunnerInstallConfig::default()).context(SessionSnafu)?,
         )
     }
 
@@ -91,7 +91,11 @@ impl DaemonSessionApi {
     ) -> Result<SessionSpec> {
         let session_id = format!("session-{}", Uuid::new_v4());
         let runner = parse_runner(&request.runner_id)?;
-        let capability = self.manager.inspect_runner(runner).context(SessionSnafu)?;
+        let capability = self.manager.inspect_runner(&runner).context(SessionSnafu)?;
+        let runner_profile = self
+            .manager
+            .runner_admission_profile(&runner)
+            .context(SessionSnafu)?;
         let spec = admit(
             request,
             AdmissionContext {
@@ -102,6 +106,7 @@ impl DaemonSessionApi {
                 state_root: &self.state_root,
                 runtime_root: &self.runtime_root,
                 capability,
+                runner_profile,
                 config,
                 descriptor_broker: self.descriptor_broker.as_ref(),
             },
@@ -478,15 +483,11 @@ impl DaemonSessionApi {
     }
 }
 
-fn parse_runner(value: &str) -> Result<SessionRunnerKind> {
-    match value {
-        "linux-host" | "linux_host" => Ok(SessionRunnerKind::LinuxHost),
-        "docker" => Ok(SessionRunnerKind::Docker),
-        _ => crate::error::InvalidRequestSnafu {
-            reason: format!("unknown runner `{value}`"),
-        }
-        .fail(),
-    }
+fn parse_runner(value: &str) -> Result<RunnerId> {
+    RunnerId::new(value).map_err(|source| crate::DaemonError::InvalidRequest {
+        reason: source.to_string(),
+        location: snafu::Location::default(),
+    })
 }
 
 fn message(kind: &str, value: &impl Message) -> Result<MutationResponse> {

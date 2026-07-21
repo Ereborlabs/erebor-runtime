@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt,
     path::{Component, Path, PathBuf},
 };
 
@@ -7,10 +8,68 @@ use erebor_runtime_events::SessionId;
 use serde::{Deserialize, Serialize};
 use snafu::ensure;
 
-use crate::{error::session_spec::InvalidSnafu, SessionRunnerKind, SessionSpecError};
+use crate::{error::session_spec::InvalidSnafu, SessionSpecError};
 
-pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 2;
-pub const RUNNER_CAPABILITY_SCHEMA_VERSION: u32 = 1;
+pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 3;
+pub const RUNNER_CAPABILITY_SCHEMA_VERSION: u32 = 2;
+pub const RUNNER_RECOVERY_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct RunnerId(String);
+
+impl RunnerId {
+    pub fn new(value: impl Into<String>) -> Result<Self, SessionSpecError> {
+        let value = Self(value.into());
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn validate(&self) -> Result<(), SessionSpecError> {
+        let bytes = self.0.as_bytes();
+        ensure!(
+            !bytes.is_empty()
+                && bytes.len() <= 64
+                && bytes.first().is_some_and(u8::is_ascii_lowercase)
+                && bytes.last().is_some_and(u8::is_ascii_alphanumeric)
+                && bytes.iter().all(|byte| byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || *byte == b'-'),
+            InvalidSnafu {
+                field: "runner_id",
+                reason: String::from(
+                    "must be 1-64 lowercase ASCII letters, digits, or interior hyphens",
+                ),
+            }
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for RunnerId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl TryFrom<String> for RunnerId {
+    type Error = SessionSpecError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<RunnerId> for String {
+    fn from(value: RunnerId) -> Self {
+        value.0
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SessionOwner {
@@ -129,7 +188,7 @@ pub enum ActiveSessionSignalKind {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RunnerCapabilityDocument {
     schema_version: u32,
-    runner: SessionRunnerKind,
+    runner: RunnerId,
     implementation_id: String,
     implementation_version: String,
     host_os: String,
@@ -147,7 +206,7 @@ pub struct RunnerCapabilityDocument {
 impl RunnerCapabilityDocument {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        runner: SessionRunnerKind,
+        runner: RunnerId,
         implementation_id: impl Into<String>,
         implementation_version: impl Into<String>,
         host_os: impl Into<String>,
@@ -189,6 +248,7 @@ impl RunnerCapabilityDocument {
                 reason: format!("unsupported version {}", self.schema_version),
             }
         );
+        self.runner.validate()?;
         for (field, value) in [
             (
                 "runner_capability.implementation_id",
@@ -235,8 +295,8 @@ impl RunnerCapabilityDocument {
     }
 
     #[must_use]
-    pub const fn runner(&self) -> SessionRunnerKind {
-        self.runner
+    pub const fn runner(&self) -> &RunnerId {
+        &self.runner
     }
 
     #[must_use]
@@ -297,23 +357,68 @@ impl RunnerCapabilityDocument {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RunnerBinding {
-    runner: SessionRunnerKind,
+    runner: RunnerId,
     implementation_id: String,
-    stable_identity: String,
+    recovery: RunnerRecovery,
     observed_at_unix_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RunnerRecovery {
+    schema_version: u32,
+    format_version: u32,
+    payload: String,
+}
+
+impl RunnerRecovery {
+    pub fn new(format_version: u32, payload: impl Into<String>) -> Result<Self, SessionSpecError> {
+        let value = Self {
+            schema_version: RUNNER_RECOVERY_SCHEMA_VERSION,
+            format_version,
+            payload: payload.into(),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn validate(&self) -> Result<(), SessionSpecError> {
+        ensure!(
+            self.schema_version == RUNNER_RECOVERY_SCHEMA_VERSION
+                && self.format_version > 0
+                && !self.payload.trim().is_empty()
+                && self.payload.len() <= 64 * 1024,
+            InvalidSnafu {
+                field: "runner_recovery",
+                reason: String::from(
+                    "supported schema, positive format version, and a bounded payload are required",
+                ),
+            }
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn format_version(&self) -> u32 {
+        self.format_version
+    }
+
+    #[must_use]
+    pub fn payload(&self) -> &str {
+        &self.payload
+    }
 }
 
 impl RunnerBinding {
     pub fn new(
-        runner: SessionRunnerKind,
+        runner: RunnerId,
         implementation_id: impl Into<String>,
-        stable_identity: impl Into<String>,
+        recovery: RunnerRecovery,
         observed_at_unix_ms: u64,
     ) -> Result<Self, SessionSpecError> {
         let value = Self {
             runner,
             implementation_id: implementation_id.into(),
-            stable_identity: stable_identity.into(),
+            recovery,
             observed_at_unix_ms,
         };
         value.validate()?;
@@ -322,22 +427,22 @@ impl RunnerBinding {
 
     pub fn validate(&self) -> Result<(), SessionSpecError> {
         ensure!(
-            !self.implementation_id.trim().is_empty()
-                && !self.stable_identity.trim().is_empty()
-                && self.observed_at_unix_ms > 0,
+            !self.implementation_id.trim().is_empty() && self.observed_at_unix_ms > 0,
             InvalidSnafu {
                 field: "runner_binding",
                 reason: String::from(
-                    "implementation, stable identity, and observation time are required",
+                    "implementation, recovery value, and observation time are required",
                 ),
             }
         );
+        self.runner.validate()?;
+        self.recovery.validate()?;
         Ok(())
     }
 
     #[must_use]
-    pub const fn runner(&self) -> SessionRunnerKind {
-        self.runner
+    pub const fn runner(&self) -> &RunnerId {
+        &self.runner
     }
 
     #[must_use]
@@ -346,8 +451,8 @@ impl RunnerBinding {
     }
 
     #[must_use]
-    pub fn stable_identity(&self) -> &str {
-        &self.stable_identity
+    pub const fn recovery(&self) -> &RunnerRecovery {
+        &self.recovery
     }
 }
 
@@ -712,7 +817,7 @@ impl OutputPlan {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunRequest {
-    runner: SessionRunnerKind,
+    runner: RunnerId,
     command: Vec<String>,
     workspace: PathBuf,
     policy_set_sha256: String,
@@ -731,7 +836,7 @@ pub struct RunRequest {
 impl RunRequest {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        runner: SessionRunnerKind,
+        runner: RunnerId,
         command: Vec<String>,
         workspace: PathBuf,
         policy_set_sha256: impl Into<String>,
@@ -779,6 +884,7 @@ impl RunRequest {
                 ),
             }
         );
+        self.runner.validate()?;
         ImmutableIdentity::new("policy-set", &self.policy_set_sha256)?;
         for (kind, digest) in [
             ("agent-package", self.package_sha256.as_deref()),
@@ -796,8 +902,8 @@ impl RunRequest {
     }
 
     #[must_use]
-    pub const fn runner(&self) -> SessionRunnerKind {
-        self.runner
+    pub const fn runner(&self) -> &RunnerId {
+        &self.runner
     }
 
     #[must_use]
@@ -1066,32 +1172,23 @@ impl SessionSpec {
         );
         validate_environment(&self.environment)?;
         validate_secret_references(&self.secret_references)?;
-        match self.runner_capability.runner() {
-            SessionRunnerKind::LinuxHost => ensure!(
-                self.executable
+        ensure!(
+            self.workspace.kind() == SafePathKind::Directory
+                && self
+                    .executable
                     .as_ref()
-                    .is_some_and(|binding| binding.kind() == SafePathKind::Executable)
-                    && self.workspace.kind() == SafePathKind::Directory
-                    && self.container_image.is_none(),
-                InvalidSnafu {
-                    field: "session_spec.execution_identity",
-                    reason: String::from(
-                        "Linux-host requires an executable and forbids a container image",
-                    ),
-                }
-            ),
-            SessionRunnerKind::Docker => ensure!(
-                self.workspace.kind() == SafePathKind::Directory
-                    && self
-                        .container_image
-                        .as_ref()
-                        .is_some_and(|identity| { identity.kind() == "container-image" }),
-                InvalidSnafu {
-                    field: "session_spec.execution_identity",
-                    reason: String::from("Docker requires an immutable container image identity"),
-                }
-            ),
-        }
+                    .is_none_or(|binding| binding.kind() == SafePathKind::Executable)
+                && self
+                    .container_image
+                    .as_ref()
+                    .is_none_or(|identity| identity.kind() == "container-image"),
+            InvalidSnafu {
+                field: "session_spec.execution_identity",
+                reason: String::from(
+                    "workspace, optional executable, and optional image identities are malformed",
+                ),
+            }
+        );
         Ok(())
     }
 
@@ -1260,11 +1357,10 @@ mod tests {
 
     use super::{
         ActiveSessionSignalKind, DaemonFailureMode, EvidenceRequirement, ImmutableIdentity,
-        OutputPlan, OutputStreamRequirements, RunnerBinding, RunnerCapabilityDocument,
-        SafePathBinding, SafePathKind, SessionAdmission, SessionOwner, SessionSpec,
+        OutputPlan, OutputStreamRequirements, RunnerBinding, RunnerCapabilityDocument, RunnerId,
+        RunnerRecovery, SafePathBinding, SafePathKind, SessionAdmission, SessionOwner, SessionSpec,
         WorkloadPrivilegePlan,
     };
-    use crate::SessionRunnerKind;
 
     fn digest() -> String {
         String::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
@@ -1272,7 +1368,7 @@ mod tests {
 
     fn capability() -> Result<RunnerCapabilityDocument, Box<dyn std::error::Error>> {
         RunnerCapabilityDocument::new(
-            SessionRunnerKind::LinuxHost,
+            RunnerId::new("linux-host")?,
             "linux-host-v1",
             "1",
             "linux",
@@ -1361,11 +1457,21 @@ mod tests {
     }
 
     #[test]
-    fn runner_binding_requires_a_stable_observed_identity() {
-        assert!(
-            RunnerBinding::new(SessionRunnerKind::LinuxHost, "linux-host-v1", "pidfd:1", 1).is_ok()
-        );
-        assert!(RunnerBinding::new(SessionRunnerKind::LinuxHost, "linux-host-v1", "", 1).is_err());
+    fn runner_binding_requires_an_opaque_versioned_recovery_value(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let binding = RunnerBinding::new(
+            RunnerId::new("test-runner")?,
+            "test-runner-v1",
+            RunnerRecovery::new(3, r#"{"object":"runner-owned"}"#)?,
+            1,
+        )?;
+        let round_trip: RunnerBinding = serde_json::from_str(&serde_json::to_string(&binding)?)?;
+
+        assert_eq!(round_trip, binding);
+        assert_eq!(round_trip.recovery().format_version(), 3);
+        assert!(RunnerId::new("Invalid_Runner").is_err());
+        assert!(RunnerRecovery::new(0, "payload").is_err());
+        Ok(())
     }
 
     #[test]

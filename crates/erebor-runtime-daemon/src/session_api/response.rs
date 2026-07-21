@@ -16,9 +16,9 @@ pub(super) fn session_record(
             .runner()
             .as_str()
             .to_owned(),
-        stable_runner_identity: record
-            .runner_binding()
-            .map_or_else(String::new, |binding| binding.stable_identity().to_owned()),
+        runner_recovery: record.runner_binding().map_or_else(String::new, |binding| {
+            binding.recovery().payload().to_owned()
+        }),
         failure: record.failure().unwrap_or_default().to_owned(),
         retry_guarantee_expires_unix_ms,
         retention_hold: record.retention_hold(),

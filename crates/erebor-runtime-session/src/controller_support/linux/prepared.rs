@@ -4,13 +4,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use erebor_runtime_core::SessionHelperHandoff;
+use crate::runners::linux::LinuxControllerHandoff;
 use rustix::{
     fs::{open, Mode, OFlags},
     io::{fcntl_setfd, FdFlags},
 };
 
-use crate::SessionHelperError;
+use crate::SessionControllerError;
 
 pub(super) struct PreparedLinuxExecution {
     workspace: File,
@@ -18,7 +18,7 @@ pub(super) struct PreparedLinuxExecution {
 }
 
 impl PreparedLinuxExecution {
-    pub(super) fn open(handoff: &SessionHelperHandoff) -> Result<Self, SessionHelperError> {
+    pub(super) fn open(handoff: &LinuxControllerHandoff) -> Result<Self, SessionControllerError> {
         let workspace_path = handoff
             .prepared_workspace
             .as_deref()
@@ -39,7 +39,7 @@ impl PreparedLinuxExecution {
                 )?;
                 fcntl_setfd(&executable, FdFlags::empty())
                     .map_err(std::io::Error::from)
-                    .map_err(|source| SessionHelperError::Io {
+                    .map_err(|source| SessionControllerError::Io {
                         action: "preserving admitted Linux executable across guard launch",
                         path: path.to_path_buf(),
                         source,
@@ -58,7 +58,7 @@ impl PreparedLinuxExecution {
         descriptor_path(&self.workspace)
     }
 
-    pub(super) fn admitted_command(&self, handoff: &SessionHelperHandoff) -> Vec<String> {
+    pub(super) fn admitted_command(&self, handoff: &LinuxControllerHandoff) -> Vec<String> {
         let mut command = handoff.spec.command().to_vec();
         if let Some(executable) = &self.executable {
             command[0] = descriptor_path(executable).display().to_string();
@@ -67,11 +67,15 @@ impl PreparedLinuxExecution {
     }
 }
 
-fn open_path(path: &Path, flags: OFlags, action: &'static str) -> Result<File, SessionHelperError> {
+fn open_path(
+    path: &Path,
+    flags: OFlags,
+    action: &'static str,
+) -> Result<File, SessionControllerError> {
     open(path, flags, Mode::empty())
         .map(File::from)
         .map_err(std::io::Error::from)
-        .map_err(|source| SessionHelperError::Io {
+        .map_err(|source| SessionControllerError::Io {
             action,
             path: path.to_path_buf(),
             source,

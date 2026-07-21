@@ -3,91 +3,29 @@ use std::{
     process::Child,
     sync::{mpsc, Arc},
     thread,
-    time::Duration,
 };
 
-use erebor_runtime_core::{ActiveSessionSignal, SessionHelperHandoff, SessionRunnerKind};
+use crate::{DurableStreamStore, SessionControllerError};
 
-use crate::{DurableStreamStore, SessionHelperError};
-
-use super::{
-    docker::DockerWorkload,
-    linux::LinuxWorkload,
-    output::{unix_time_ms, HelperOutput},
-};
+use super::output::unix_time_ms;
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct WorkloadExit {
-    pub(super) exit_code: Option<i32>,
-    pub(super) signal: Option<i32>,
-}
-
-pub(super) enum HelperWorkload {
-    Linux(LinuxWorkload),
-    Docker(DockerWorkload),
-}
-
-impl HelperWorkload {
-    pub(super) fn start(
-        handoff: &SessionHelperHandoff,
-        output: &HelperOutput,
-    ) -> Result<Self, SessionHelperError> {
-        match handoff.spec.runner_capability().runner() {
-            SessionRunnerKind::LinuxHost => LinuxWorkload::start(handoff, output).map(Self::Linux),
-            SessionRunnerKind::Docker => DockerWorkload::start(handoff, output).map(Self::Docker),
-        }
-    }
-
-    pub(super) fn stable_identity(&self) -> &str {
-        match self {
-            Self::Linux(workload) => workload.stable_identity(),
-            Self::Docker(workload) => workload.stable_identity(),
-        }
-    }
-
-    pub(super) fn try_wait(&mut self) -> Result<Option<WorkloadExit>, SessionHelperError> {
-        match self {
-            Self::Linux(workload) => workload.try_wait(),
-            Self::Docker(workload) => workload.try_wait(),
-        }
-    }
-
-    pub(super) fn stop(&mut self, grace: Duration) -> Result<WorkloadExit, SessionHelperError> {
-        match self {
-            Self::Linux(workload) => workload.stop(grace),
-            Self::Docker(workload) => workload.stop(grace),
-        }
-    }
-
-    pub(super) fn kill(
-        &mut self,
-        signal: ActiveSessionSignal,
-    ) -> Result<WorkloadExit, SessionHelperError> {
-        match self {
-            Self::Linux(workload) => workload.kill(signal),
-            Self::Docker(workload) => workload.kill(signal),
-        }
-    }
-
-    pub(super) fn take_output_failure(&self) -> Option<SessionHelperError> {
-        match self {
-            Self::Linux(workload) => workload.take_output_failure(),
-            Self::Docker(workload) => workload.take_output_failure(),
-        }
-    }
+pub(crate) struct WorkloadExit {
+    pub(crate) exit_code: Option<i32>,
+    pub(crate) signal: Option<i32>,
 }
 
 pub(super) struct OutputFailureMonitor {
-    receiver: mpsc::Receiver<SessionHelperError>,
+    receiver: mpsc::Receiver<SessionControllerError>,
 }
 
 impl OutputFailureMonitor {
-    pub(super) fn new() -> (Self, mpsc::Sender<SessionHelperError>) {
+    pub(super) fn new() -> (Self, mpsc::Sender<SessionControllerError>) {
         let (sender, receiver) = mpsc::channel();
         (Self { receiver }, sender)
     }
 
-    pub(super) fn take_failure(&self) -> Option<SessionHelperError> {
+    pub(super) fn take_failure(&self) -> Option<SessionControllerError> {
         self.receiver.try_recv().ok()
     }
 }
@@ -96,7 +34,7 @@ pub(super) fn pump_output(
     mut source: impl Read + Send + 'static,
     sink: Arc<DurableStreamStore>,
     source_name: &'static str,
-    failure_sender: mpsc::Sender<SessionHelperError>,
+    failure_sender: mpsc::Sender<SessionControllerError>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let required = sink.required();
@@ -106,7 +44,7 @@ pub(super) fn pump_output(
                 Ok(0) => return,
                 Err(source) => {
                     if required {
-                        let _result = failure_sender.send(SessionHelperError::Io {
+                        let _result = failure_sender.send(SessionControllerError::Io {
                             action: "reading governed workload output",
                             path: std::path::PathBuf::from(format!("<{source_name}>")),
                             source,
@@ -120,7 +58,7 @@ pub(super) fn pump_output(
                         sink.append(unix_time_ms(), source_name, buffer[..bytes].to_vec())
                     {
                         if required {
-                            let _result = failure_sender.send(SessionHelperError::Output {
+                            let _result = failure_sender.send(SessionControllerError::Output {
                                 source,
                                 location: snafu::Location::default(),
                             });
@@ -142,8 +80,8 @@ pub(super) fn child_exit(status: std::process::ExitStatus) -> WorkloadExit {
     }
 }
 
-pub(super) fn wait_child(child: &mut Child) -> Result<WorkloadExit, SessionHelperError> {
-    let status = child.wait().map_err(|source| SessionHelperError::Io {
+pub(super) fn wait_child(child: &mut Child) -> Result<WorkloadExit, SessionControllerError> {
+    let status = child.wait().map_err(|source| SessionControllerError::Io {
         action: "waiting for governed workload",
         path: std::path::PathBuf::from("<workload>"),
         source,
@@ -163,7 +101,7 @@ mod tests {
     use super::{pump_output, OutputFailureMonitor};
 
     #[test]
-    fn required_stream_write_failure_reaches_the_helper_monitor(
+    fn required_stream_write_failure_reaches_the_controller_monitor(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let temporary = TempDir::new()?;
         let sink = Arc::new(DurableStreamStore::open(
@@ -180,12 +118,15 @@ mod tests {
         let failure = monitor
             .take_failure()
             .ok_or("required output failure was not reported")?;
-        assert!(matches!(failure, crate::SessionHelperError::Output { .. }));
+        assert!(matches!(
+            failure,
+            crate::SessionControllerError::Output { .. }
+        ));
         Ok(())
     }
 
     #[test]
-    fn optional_stream_write_failure_does_not_fail_the_helper(
+    fn optional_stream_write_failure_does_not_fail_the_controller(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let temporary = TempDir::new()?;
         let sink = Arc::new(DurableStreamStore::open(

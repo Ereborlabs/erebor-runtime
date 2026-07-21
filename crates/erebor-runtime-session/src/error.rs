@@ -1,13 +1,13 @@
 mod execution;
 mod interception_broker;
-pub(crate) mod session_helper;
+pub(crate) mod session_controller;
 pub(crate) mod session_manager;
 pub(crate) mod session_output;
 pub(crate) mod session_repository;
 
 pub use execution::SessionExecutionError;
 pub use interception_broker::RuntimeInterceptionBrokerError;
-pub use session_helper::SessionHelperError;
+pub use session_controller::SessionControllerError;
 pub use session_manager::SessionManagerError;
 pub use session_output::SessionOutputError;
 pub use session_repository::SessionRepositoryError;

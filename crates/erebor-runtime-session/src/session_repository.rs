@@ -598,8 +598,8 @@ mod tests {
 
     use erebor_runtime_core::{
         ActiveSessionSignalKind, DaemonFailureMode, ImmutableIdentity, OutputPlan, RunnerBinding,
-        RunnerCapabilityDocument, SafePathBinding, SafePathKind, SessionAdmission,
-        SessionLifecycleState, SessionOwner, SessionRunnerKind, SessionSpec, WorkloadPrivilegePlan,
+        RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding, SafePathKind,
+        SessionAdmission, SessionLifecycleState, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
     };
     use erebor_runtime_events::SessionId;
     use tempfile::TempDir;
@@ -612,7 +612,7 @@ mod tests {
 
     fn spec() -> Result<SessionSpec, Box<dyn std::error::Error>> {
         let capabilities = RunnerCapabilityDocument::new(
-            SessionRunnerKind::LinuxHost,
+            RunnerId::new("linux-host")?,
             "linux-host-v1",
             "1",
             "linux",
@@ -702,17 +702,19 @@ mod tests {
             starting.generation(),
             SessionLifecycleState::Running,
             Some(RunnerBinding::new(
-                SessionRunnerKind::LinuxHost,
+                RunnerId::new("linux-host")?,
                 "linux-host-v1",
-                "pidfd:17",
+                RunnerRecovery::new(1, r#"{"pidfd":17}"#)?,
                 1,
             )?),
             None,
         )?;
         assert_eq!(running.state(), SessionLifecycleState::Running);
         assert_eq!(
-            running.runner_binding().map(RunnerBinding::stable_identity),
-            Some("pidfd:17")
+            running
+                .runner_binding()
+                .map(|binding| binding.recovery().payload()),
+            Some(r#"{"pidfd":17}"#)
         );
         assert_eq!(
             repository.load(1000, "session-9f7b7f6e")?.generation(),
@@ -770,9 +772,9 @@ mod tests {
             starting.generation(),
             SessionLifecycleState::Running,
             Some(RunnerBinding::new(
-                SessionRunnerKind::LinuxHost,
+                RunnerId::new("linux-host")?,
                 "linux-host-v1",
-                "pidfd:17",
+                RunnerRecovery::new(1, r#"{"pidfd":17}"#)?,
                 1,
             )?),
             None,

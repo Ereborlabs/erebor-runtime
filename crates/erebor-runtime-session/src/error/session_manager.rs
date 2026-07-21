@@ -1,6 +1,6 @@
 use std::{any::Any, error::Error, io, path::PathBuf};
 
-use erebor_runtime_core::{RuntimeError, SessionRunnerKind};
+use erebor_runtime_core::RuntimeError;
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use snafu::{Location, Snafu};
 
@@ -23,9 +23,9 @@ pub enum SessionManagerError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("runner `{}` is not available on this daemon host", runner.as_str()))]
+    #[snafu(display("runner `{runner}` is not available on this daemon host"))]
     RunnerUnavailable {
-        runner: SessionRunnerKind,
+        runner: String,
         #[snafu(implicit)]
         location: Location,
     },

@@ -7,8 +7,8 @@ use super::SessionOutputError;
 
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
-pub enum SessionHelperError {
-    #[snafu(display("session helper I/O failed while {action} `{}`: {source}", path.display()))]
+pub enum SessionControllerError {
+    #[snafu(display("session controller I/O failed while {action} `{}`: {source}", path.display()))]
     Io {
         action: &'static str,
         path: PathBuf,
@@ -16,39 +16,39 @@ pub enum SessionHelperError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("session helper control protocol failed: {source}"))]
+    #[snafu(display("session controller protocol failed: {source}"))]
     Protocol {
         source: serde_json::Error,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("session helper handoff is invalid: {reason}"))]
+    #[snafu(display("session controller handoff is invalid: {reason}"))]
     InvalidHandoff {
         reason: String,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("session helper command `{program}` failed: {reason}"))]
+    #[snafu(display("session controller command `{program}` failed: {reason}"))]
     Command {
         program: String,
         reason: String,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("session helper output continuity failed: {source}"))]
+    #[snafu(display("session controller output continuity failed: {source}"))]
     Output {
         source: SessionOutputError,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("session helper command channel failed"))]
+    #[snafu(display("session controller command channel failed"))]
     CommandChannel {
         #[snafu(implicit)]
         location: Location,
     },
 }
 
-impl ErrorExt for SessionHelperError {
+impl ErrorExt for SessionControllerError {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::Io { .. } | Self::Command { .. } | Self::Output { .. } => StatusCode::External,

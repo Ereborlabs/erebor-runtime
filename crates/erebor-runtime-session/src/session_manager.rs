@@ -6,9 +6,7 @@ use std::{
 
 use erebor_runtime_core::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal, DaemonFailureMode,
-    DockerSessionRunner, LinuxHostSessionRunner, OutputEndpoints, RunnerBinding,
-    SessionHelperLaunchConfig, SessionLifecycleState, SessionRunner, SessionRunnerKind,
-    SessionSpec,
+    OutputEndpoints, RunnerBinding, RunnerId, SessionLifecycleState, SessionSpec,
 };
 use snafu::{OptionExt, ResultExt};
 
@@ -22,8 +20,9 @@ pub use resources::{
 use crate::{
     error::session_manager::{
         ActiveHandleLockSnafu, ActiveHandleMissingSnafu, CapabilityChangedSnafu, OutputSnafu,
-        RepositorySnafu, RunnerSnafu, RunnerUnavailableSnafu, StateLockSnafu,
+        RepositorySnafu, RunnerSnafu, StateLockSnafu,
     },
+    runners::RunnerRegistry,
     DurableSessionRecord, DurableStreamCursor, InputLease, InputLeaseManager, SessionManagerError,
     SessionPruneResult, SessionRepository, SessionRepositoryError, StreamKind,
 };
@@ -73,46 +72,6 @@ impl SessionAttachOutcome {
     #[must_use]
     pub const fn lease(&self) -> Option<&InputLease> {
         self.lease.as_ref()
-    }
-}
-
-pub struct RunnerRegistry {
-    runners: BTreeMap<SessionRunnerKind, Arc<dyn SessionRunner>>,
-}
-
-impl RunnerRegistry {
-    #[must_use]
-    pub fn new(runners: impl IntoIterator<Item = Arc<dyn SessionRunner>>) -> Self {
-        Self {
-            runners: runners
-                .into_iter()
-                .map(|runner| (runner.kind(), runner))
-                .collect(),
-        }
-    }
-
-    pub fn get(
-        &self,
-        kind: SessionRunnerKind,
-    ) -> Result<&Arc<dyn SessionRunner>, SessionManagerError> {
-        self.runners
-            .get(&kind)
-            .context(RunnerUnavailableSnafu { runner: kind })
-    }
-
-    #[must_use]
-    pub fn compiled(helper: SessionHelperLaunchConfig) -> Self {
-        Self::new([
-            Arc::new(LinuxHostSessionRunner::new(helper.clone())) as Arc<dyn SessionRunner>,
-            Arc::new(DockerSessionRunner::new(helper)) as Arc<dyn SessionRunner>,
-        ])
-    }
-
-    pub fn inspect(
-        &self,
-        kind: SessionRunnerKind,
-    ) -> Result<erebor_runtime_core::RunnerCapabilityDocument, SessionManagerError> {
-        self.get(kind)?.inspect().context(RunnerSnafu)
     }
 }
 
@@ -256,9 +215,16 @@ impl SessionManager {
 
     pub fn inspect_runner(
         &self,
-        kind: SessionRunnerKind,
+        id: &RunnerId,
     ) -> Result<erebor_runtime_core::RunnerCapabilityDocument, SessionManagerError> {
-        self.runners.inspect(kind)
+        self.runners.inspect(id)
+    }
+
+    pub fn runner_admission_profile(
+        &self,
+        id: &RunnerId,
+    ) -> Result<crate::RunnerAdmissionProfile, SessionManagerError> {
+        Ok(self.runners.get(id)?.admission_profile())
     }
 
     pub fn validate_admission(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
@@ -387,9 +353,9 @@ impl SessionManager {
             }
         };
         let binding = RunnerBinding::new(
-            runner.kind(),
+            runner.id().clone(),
             current_capability.implementation_id(),
-            active.stable_identity(),
+            active.recovery().clone(),
             unix_time_ms(),
         )
         .map_err(|source| SessionRepositoryError::Spec {
@@ -956,13 +922,13 @@ mod tests {
         ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
         ActiveSessionSignalKind, DaemonFailureMode, EvidenceRequirement, ImmutableIdentity,
         OutputEndpoints, OutputPlan, OutputStreamRequirements, RunnerBinding,
-        RunnerCapabilityDocument, SafePathBinding, SafePathKind, SessionAdmission, SessionOwner,
-        SessionRunner, SessionRunnerKind, SessionSpec, WorkloadPrivilegePlan,
+        RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding, SafePathKind,
+        SessionAdmission, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
     };
     use erebor_runtime_events::SessionId;
     use tempfile::TempDir;
 
-    use crate::SessionOutputStores;
+    use crate::{RunnerAdmissionProfile, RunnerDriver, SessionOutputStores};
 
     use super::{
         output_endpoints, resources::SessionRuntime, DurableStreamCursor, RunnerRegistry,
@@ -992,6 +958,7 @@ mod tests {
     }
 
     struct FakeRunner {
+        id: RunnerId,
         state: Arc<FakeRunnerState>,
     }
 
@@ -1051,12 +1018,13 @@ mod tests {
 
     struct FakeActiveSession {
         capability: RunnerCapabilityDocument,
+        recovery: RunnerRecovery,
         running: Arc<AtomicBool>,
     }
 
     impl ActiveSession for FakeActiveSession {
-        fn stable_identity(&self) -> &str {
-            "fake-stable-identity"
+        fn recovery(&self) -> &RunnerRecovery {
+            &self.recovery
         }
 
         fn capability_snapshot(&self) -> &RunnerCapabilityDocument {
@@ -1093,9 +1061,9 @@ mod tests {
         }
     }
 
-    impl SessionRunner for FakeRunner {
-        fn kind(&self) -> SessionRunnerKind {
-            SessionRunnerKind::LinuxHost
+    impl RunnerDriver for FakeRunner {
+        fn id(&self) -> &RunnerId {
+            &self.id
         }
 
         fn inspect(&self) -> Result<RunnerCapabilityDocument, erebor_runtime_core::RuntimeError> {
@@ -1105,7 +1073,7 @@ mod tests {
                 .map(|capability| capability.clone())
                 .map_err(
                     |_error| erebor_runtime_core::RuntimeError::SessionRunnerProtocol {
-                        runner: String::from("linux-host"),
+                        runner: self.id.as_str().to_owned(),
                         reason: String::from("fake capability lock is poisoned"),
                         location: snafu::Location::default(),
                     },
@@ -1119,6 +1087,10 @@ mod tests {
             Ok(())
         }
 
+        fn admission_profile(&self) -> RunnerAdmissionProfile {
+            RunnerAdmissionProfile::new(true, 0o077, true)
+        }
+
         fn start(
             &self,
             _spec: &SessionSpec,
@@ -1127,7 +1099,7 @@ mod tests {
             self.state.starts.fetch_add(1, Ordering::SeqCst);
             if self.state.fail_start.load(Ordering::SeqCst) {
                 return Err(erebor_runtime_core::RuntimeError::SessionRunnerProtocol {
-                    runner: String::from("linux-host"),
+                    runner: self.id.as_str().to_owned(),
                     reason: String::from("injected runner start failure"),
                     location: snafu::Location::default(),
                 });
@@ -1135,6 +1107,13 @@ mod tests {
             self.state.running.store(true, Ordering::SeqCst);
             Ok(Box::new(FakeActiveSession {
                 capability: self.inspect()?,
+                recovery: RunnerRecovery::new(1, r#"{"fake":"active"}"#).map_err(|error| {
+                    erebor_runtime_core::RuntimeError::SessionRunnerProtocol {
+                        runner: self.id.as_str().to_owned(),
+                        reason: error.to_string(),
+                        location: snafu::Location::default(),
+                    }
+                })?,
                 running: Arc::clone(&self.state.running),
             }))
         }
@@ -1148,6 +1127,13 @@ mod tests {
             self.state.recoveries.fetch_add(1, Ordering::SeqCst);
             Ok(Box::new(FakeActiveSession {
                 capability: self.inspect()?,
+                recovery: RunnerRecovery::new(1, r#"{"fake":"recovered"}"#).map_err(|error| {
+                    erebor_runtime_core::RuntimeError::SessionRunnerProtocol {
+                        runner: self.id.as_str().to_owned(),
+                        reason: error.to_string(),
+                        location: snafu::Location::default(),
+                    }
+                })?,
                 running: Arc::clone(&self.state.running),
             }))
         }
@@ -1164,7 +1150,7 @@ mod tests {
 
     fn capability(version: &str) -> Result<RunnerCapabilityDocument, Box<dyn std::error::Error>> {
         RunnerCapabilityDocument::new(
-            SessionRunnerKind::LinuxHost,
+            RunnerId::new("test-runner")?,
             "fake-linux-runner",
             version,
             "linux",
@@ -1197,8 +1183,9 @@ mod tests {
             removals: AtomicUsize::new(0),
         });
         let runner = Arc::new(FakeRunner {
+            id: RunnerId::new("test-runner")?,
             state: Arc::clone(&state),
-        }) as Arc<dyn SessionRunner>;
+        }) as Arc<dyn RunnerDriver>;
         let runtime_state = Arc::new(FakeRuntimeState::default());
         let runtime = Arc::new(FakeRuntime {
             state: Arc::clone(&runtime_state),
@@ -1390,8 +1377,9 @@ mod tests {
         drop(manager);
 
         let runner = Arc::new(FakeRunner {
+            id: RunnerId::new("test-runner")?,
             state: Arc::clone(&state),
-        }) as Arc<dyn SessionRunner>;
+        }) as Arc<dyn RunnerDriver>;
         let recovered = SessionManager::new_with_runtime(
             SessionRepository::new(root.path()),
             RunnerRegistry::new([runner]),
@@ -1420,8 +1408,10 @@ mod tests {
         );
         assert_eq!(state.removals.load(Ordering::SeqCst), 1);
         assert_eq!(
-            running.runner_binding().map(RunnerBinding::stable_identity),
-            Some("fake-stable-identity")
+            running
+                .runner_binding()
+                .map(|binding| binding.recovery().payload()),
+            Some(r#"{"fake":"active"}"#)
         );
         Ok(())
     }
@@ -1437,8 +1427,9 @@ mod tests {
 
         runtime_state.fail_prepare.store(true, Ordering::SeqCst);
         let runner = Arc::new(FakeRunner {
+            id: RunnerId::new("test-runner")?,
             state: Arc::clone(&state),
-        }) as Arc<dyn SessionRunner>;
+        }) as Arc<dyn RunnerDriver>;
         let recovered = SessionManager::new_with_runtime(
             SessionRepository::new(root.path()),
             RunnerRegistry::new([runner]),
@@ -1497,8 +1488,9 @@ mod tests {
         drop(manager);
 
         let runner = Arc::new(FakeRunner {
+            id: RunnerId::new("test-runner")?,
             state: Arc::clone(&state),
-        }) as Arc<dyn SessionRunner>;
+        }) as Arc<dyn RunnerDriver>;
         let recovered = SessionManager::new_with_runtime(
             SessionRepository::new(root.path()),
             RunnerRegistry::new([runner]),
@@ -1528,8 +1520,9 @@ mod tests {
         drop(manager);
 
         let runner = Arc::new(FakeRunner {
+            id: RunnerId::new("test-runner")?,
             state: Arc::clone(&state),
-        }) as Arc<dyn SessionRunner>;
+        }) as Arc<dyn RunnerDriver>;
         let recovered = SessionManager::new_with_runtime(
             SessionRepository::new(root.path()),
             RunnerRegistry::new([runner]),
@@ -1559,8 +1552,9 @@ mod tests {
         drop(manager);
 
         let runner = Arc::new(FakeRunner {
+            id: RunnerId::new("test-runner")?,
             state: Arc::clone(&state),
-        }) as Arc<dyn SessionRunner>;
+        }) as Arc<dyn RunnerDriver>;
         let recovered = SessionManager::new_with_runtime(
             SessionRepository::new(root.path()),
             RunnerRegistry::new([runner]),

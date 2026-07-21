@@ -1,8 +1,3 @@
-mod docker;
-mod linux;
-mod output;
-mod workload;
-
 use std::{
     io::{BufRead, Write},
     sync::mpsc,
@@ -10,31 +5,32 @@ use std::{
     time::Duration,
 };
 
-use erebor_runtime_core::{
-    DaemonFailureMode, SessionHelperCommand, SessionHelperEvent, SessionHelperHandoff,
-    SessionRunnerKind, SESSION_HELPER_PROTOCOL_VERSION,
-};
+use erebor_runtime_core::DaemonFailureMode;
 use snafu::ResultExt;
 
 use crate::{
-    error::session_helper::{CommandChannelSnafu, InvalidHandoffSnafu, ProtocolSnafu},
-    session_helper::{output::HelperOutput, workload::HelperWorkload},
-    SessionHelperError,
+    controller_support::{linux::LinuxWorkload, output::HelperOutput, workload::WorkloadExit},
+    error::session_controller::{CommandChannelSnafu, InvalidHandoffSnafu, ProtocolSnafu},
+    runners::linux::{
+        LinuxControllerCommand, LinuxControllerEvent, LinuxControllerHandoff,
+        LINUX_CONTROLLER_PROTOCOL_VERSION,
+    },
+    SessionControllerError,
 };
 
-pub fn run_session_helper() -> Result<(), SessionHelperError> {
+pub fn run_linux_session_controller() -> Result<(), SessionControllerError> {
     let standard_input = std::io::stdin();
-    let handoff: SessionHelperHandoff = read_json_line(&mut standard_input.lock())?;
+    let handoff: LinuxControllerHandoff = read_json_line(&mut standard_input.lock())?;
     validate_handoff(&handoff)?;
     let output = HelperOutput::open(&handoff)?;
-    let mut workload = HelperWorkload::start(&handoff, &output)?;
+    let mut workload = LinuxWorkload::start(&handoff, &output)?;
     output.record_event(
         "workload_started",
         serde_json::json!({"stable_identity": workload.stable_identity()}),
     )?;
-    write_event(&SessionHelperEvent::Started {
-        stable_identity: workload.stable_identity().to_owned(),
-        helper_pid: std::process::id(),
+    write_event(&LinuxControllerEvent::Started {
+        workload_identity: workload.stable_identity().to_owned(),
+        controller_pid: std::process::id(),
     })?;
 
     let (sender, receiver) = mpsc::channel();
@@ -55,7 +51,7 @@ pub fn run_session_helper() -> Result<(), SessionHelperError> {
             }
             output.finish(exit.exit_code, exit.signal)?;
             if control_connected {
-                write_event(&SessionHelperEvent::Exited {
+                write_event(&LinuxControllerEvent::Exited {
                     exit_code: exit.exit_code,
                     signal: exit.signal,
                 })?;
@@ -71,7 +67,7 @@ pub fn run_session_helper() -> Result<(), SessionHelperError> {
                     }
                     output.finish(exit.exit_code, exit.signal)?;
                     if control_connected {
-                        write_event(&SessionHelperEvent::Exited {
+                        write_event(&LinuxControllerEvent::Exited {
                             exit_code: exit.exit_code,
                             signal: exit.signal,
                         })?;
@@ -105,33 +101,33 @@ pub fn run_session_helper() -> Result<(), SessionHelperError> {
 }
 
 fn fail_closed_for_output(
-    workload: &mut HelperWorkload,
-    failure: SessionHelperError,
+    workload: &mut LinuxWorkload,
+    failure: SessionControllerError,
     control_connected: bool,
 ) {
     let _result = workload.kill(erebor_runtime_core::ActiveSessionSignal::Kill);
     if control_connected {
-        let _result = write_event(&SessionHelperEvent::Failed {
+        let _result = write_event(&LinuxControllerEvent::Failed {
             reason: failure.to_string(),
         });
     }
 }
 
 fn apply_command(
-    workload: &mut HelperWorkload,
-    command: SessionHelperCommand,
-) -> Result<Option<workload::WorkloadExit>, SessionHelperError> {
+    workload: &mut LinuxWorkload,
+    command: LinuxControllerCommand,
+) -> Result<Option<WorkloadExit>, SessionControllerError> {
     match command {
-        SessionHelperCommand::Stop { grace_period_ms } => {
+        LinuxControllerCommand::Stop { grace_period_ms } => {
             let exit = workload.stop(Duration::from_millis(grace_period_ms))?;
             Ok(Some(exit))
         }
-        SessionHelperCommand::Kill { signal } => {
+        LinuxControllerCommand::Kill { signal } => {
             let exit = workload.kill(signal)?;
             Ok(Some(exit))
         }
-        SessionHelperCommand::Health => {
-            write_event(&SessionHelperEvent::Health {
+        LinuxControllerCommand::Health => {
+            write_event(&LinuxControllerEvent::Health {
                 running: workload.try_wait()?.is_none(),
             })?;
             Ok(None)
@@ -139,8 +135,8 @@ fn apply_command(
     }
 }
 
-fn validate_handoff(handoff: &SessionHelperHandoff) -> Result<(), SessionHelperError> {
-    if handoff.protocol_version != SESSION_HELPER_PROTOCOL_VERSION {
+fn validate_handoff(handoff: &LinuxControllerHandoff) -> Result<(), SessionControllerError> {
+    if handoff.protocol_version != LINUX_CONTROLLER_PROTOCOL_VERSION {
         return InvalidHandoffSnafu {
             reason: format!("unsupported protocol version {}", handoff.protocol_version),
         }
@@ -152,11 +148,9 @@ fn validate_handoff(handoff: &SessionHelperHandoff) -> Result<(), SessionHelperE
         }
         .build()
     })?;
-    if handoff.spec.runner_capability().runner() == SessionRunnerKind::LinuxHost
-        && !cfg!(all(target_os = "linux", target_arch = "x86_64"))
-    {
+    if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
         return InvalidHandoffSnafu {
-            reason: String::from("Linux-host helper is unavailable on this platform"),
+            reason: String::from("Linux-host controller is unavailable on this platform"),
         }
         .fail();
     }
@@ -164,7 +158,7 @@ fn validate_handoff(handoff: &SessionHelperHandoff) -> Result<(), SessionHelperE
 }
 
 enum ControlInput {
-    Command(SessionHelperCommand),
+    Command(LinuxControllerCommand),
     Eof,
     Failed(String),
 }
@@ -198,11 +192,11 @@ fn command_reader(mut input: impl BufRead, sender: mpsc::Sender<ControlInput>) {
 
 fn read_json_line<T: for<'de> serde::Deserialize<'de>>(
     reader: &mut impl BufRead,
-) -> Result<T, SessionHelperError> {
+) -> Result<T, SessionControllerError> {
     let mut line = String::new();
     reader
         .read_line(&mut line)
-        .map_err(|source| SessionHelperError::Io {
+        .map_err(|source| SessionControllerError::Io {
             action: "reading startup handoff",
             path: std::path::PathBuf::from("<inherited-control>"),
             source,
@@ -211,20 +205,20 @@ fn read_json_line<T: for<'de> serde::Deserialize<'de>>(
     serde_json::from_str(&line).context(ProtocolSnafu)
 }
 
-fn write_event(event: &SessionHelperEvent) -> Result<(), SessionHelperError> {
+fn write_event(event: &LinuxControllerEvent) -> Result<(), SessionControllerError> {
     let standard_output = std::io::stdout();
     let mut output = standard_output.lock();
     serde_json::to_writer(&mut output, event).context(ProtocolSnafu)?;
     output
         .write_all(b"\n")
-        .map_err(|source| SessionHelperError::Io {
-            action: "writing helper control event",
+        .map_err(|source| SessionControllerError::Io {
+            action: "writing controller event",
             path: std::path::PathBuf::from("<inherited-control>"),
             source,
             location: snafu::Location::default(),
         })?;
-    output.flush().map_err(|source| SessionHelperError::Io {
-        action: "flushing helper control event",
+    output.flush().map_err(|source| SessionControllerError::Io {
+        action: "flushing controller event",
         path: std::path::PathBuf::from("<inherited-control>"),
         source,
         location: snafu::Location::default(),
