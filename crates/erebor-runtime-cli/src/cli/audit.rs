@@ -2,12 +2,12 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand};
 use erebor_runtime_audit::{
-    read_audit_records, EvidenceTraceRequest, EvidenceTraceSink, EvidenceTraceSource,
-    FileEvidenceTraceSink, MarkdownEvidenceTraceRenderer,
+    EvidenceTraceRequest, EvidenceTraceSink, EvidenceTraceSource, FileEvidenceTraceSink,
+    MarkdownEvidenceTraceRenderer,
 };
 use snafu::ResultExt;
 
-use crate::error::{AuditLogSnafu, CliError, EncodeJsonSnafu, EvidenceTraceSnafu};
+use crate::error::{CliError, DaemonClientSnafu, DaemonRuntimeSnafu, EvidenceTraceSnafu};
 
 use super::{parse_non_empty_path, parse_non_empty_string};
 
@@ -42,9 +42,15 @@ enum AuditCommand {
 
 #[derive(Debug, Args)]
 struct AuditTailArgs {
-    /// Session id whose registry-owned audit records should be printed.
+    /// Session id, local alias, or unique prefix in the caller's daemon namespace.
     #[arg(value_parser = parse_non_empty_string)]
     session_id: String,
+    /// Return records strictly after this durable cursor.
+    #[arg(long, default_value_t = 0)]
+    after_sequence: u64,
+    /// Bound the result page before it leaves the daemon.
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=256))]
+    maximum_records: u32,
 }
 
 #[derive(Debug, Args)]
@@ -93,20 +99,32 @@ impl<'a> AuditTailCommand<'a> {
     }
 
     fn execute(&self) -> Result<(), CliError> {
-        let audit_path = EvidenceTraceSource::default()
-            .audit_path(&self.args.session_id)
-            .context(EvidenceTraceSnafu)?;
-        tracing::debug!(
-            session = %self.args.session_id,
-            audit = %audit_path.display(),
-            "reading session audit records"
-        );
-        for record in read_audit_records(&audit_path).context(AuditLogSnafu)? {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()
+            .context(DaemonRuntimeSnafu)?;
+        let page = runtime
+            .block_on(erebor_runtime_client::DaemonClient::local().session_events(
+                &self.args.session_id,
+                self.args.after_sequence,
+                self.args.maximum_records,
+            ))
+            .context(DaemonClientSnafu)?;
+        for record in page.records {
             println!(
-                "{}",
-                serde_json::to_string(&record).context(EncodeJsonSnafu)?
+                "session_id={} sequence={} timestamp_unix_ms={} kind={} payload={}",
+                record.session_id,
+                record.sequence,
+                record.timestamp_unix_ms,
+                record.event_kind,
+                String::from_utf8_lossy(&record.payload),
             );
         }
+        println!(
+            "durable_cursor={} truncated_before_cursor={}",
+            page.end.durable_cursor, page.end.truncated_before_cursor
+        );
         Ok(())
     }
 }

@@ -83,6 +83,15 @@ pub(crate) enum MutationIntent {
         terminal_before_unix_ms: u64,
         maximum_sessions: u32,
     },
+    SessionAliasSet {
+        uid: u32,
+        alias: String,
+        session_id: String,
+    },
+    SessionAliasRemove {
+        uid: u32,
+        alias: String,
+    },
     SessionSetRetentionHold {
         uid: u32,
         session_id: String,
@@ -422,6 +431,8 @@ impl MutationIntent {
             Self::Reload { .. }
             | Self::Stop
             | Self::SessionPrune { .. }
+            | Self::SessionAliasSet { .. }
+            | Self::SessionAliasRemove { .. }
             | Self::ApprovalApprove { .. }
             | Self::ApprovalDeny { .. }
             | Self::PolicyPackageApply { .. }

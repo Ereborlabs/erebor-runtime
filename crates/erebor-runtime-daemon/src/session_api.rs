@@ -8,11 +8,12 @@ use erebor_runtime_core::{
     ActiveSessionSignal, ImmutableIdentity, SessionLifecycleState, SessionOwner, SessionSpec,
 };
 use erebor_runtime_ipc::v1::{
-    PolicyPackageRecord, PolicySetRecord, SessionAttachResponse, SessionCreateRequest,
-    SessionCreateResponse, SessionInputLeaseResponse, SessionListResponse, SessionPruneResponse,
-    SessionRecord, KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_SET_RECORD,
-    KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE,
-    KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD,
+    PolicyPackageRecord, PolicySetRecord, SessionAliasListResponse, SessionAliasRecord,
+    SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionInputLeaseResponse,
+    SessionListResponse, SessionPruneResponse, SessionRecord, KIND_POLICY_PACKAGE_RECORD,
+    KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ATTACH_RESPONSE,
+    KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_PRUNE_RESPONSE,
+    KIND_SESSION_RECORD,
 };
 use erebor_runtime_session::{
     AgentAdapterRegistry, DurableSessionRecord, RunnerAdmissionRequest, RunnerInstallConfig,
@@ -262,6 +263,12 @@ impl DaemonSessionApi {
                 terminal_before_unix_ms,
                 maximum_sessions,
             } => self.prune(*uid, *terminal_before_unix_ms, *maximum_sessions),
+            MutationIntent::SessionAliasSet {
+                uid,
+                alias,
+                session_id,
+            } => self.set_alias(*uid, alias, session_id),
+            MutationIntent::SessionAliasRemove { uid, alias } => self.remove_alias(*uid, alias),
             MutationIntent::SessionSetRetentionHold {
                 uid,
                 session_id,
@@ -357,6 +364,20 @@ impl DaemonSessionApi {
             .map(|record| self.record(record))
             .collect();
         Ok(SessionListResponse { sessions })
+    }
+
+    pub(crate) fn aliases(&self, uid: u32) -> Result<SessionAliasListResponse> {
+        let aliases = self
+            .manager
+            .aliases(uid)
+            .context(SessionSnafu)?
+            .into_iter()
+            .map(|alias| SessionAliasRecord {
+                alias: alias.alias().to_owned(),
+                session_id: alias.session_id().to_owned(),
+            })
+            .collect();
+        Ok(SessionAliasListResponse { aliases })
     }
 
     pub(crate) fn list_all(&self) -> Result<SessionListResponse> {
@@ -645,6 +666,35 @@ impl DaemonSessionApi {
         )
     }
 
+    fn set_alias(&self, uid: u32, alias: &str, session_id: &str) -> Result<MutationResponse> {
+        let session_id = self.resolve_session_reference(uid, session_id)?;
+        let alias = self
+            .manager
+            .set_alias(uid, alias, &session_id)
+            .context(SessionSnafu)?;
+        message(
+            KIND_SESSION_ALIAS_RECORD,
+            &SessionAliasRecord {
+                alias: alias.alias().to_owned(),
+                session_id: alias.session_id().to_owned(),
+            },
+        )
+    }
+
+    fn remove_alias(&self, uid: u32, alias: &str) -> Result<MutationResponse> {
+        let alias = self
+            .manager
+            .remove_alias(uid, alias)
+            .context(SessionSnafu)?;
+        message(
+            KIND_SESSION_ALIAS_RECORD,
+            &SessionAliasRecord {
+                alias: alias.alias().to_owned(),
+                session_id: alias.session_id().to_owned(),
+            },
+        )
+    }
+
     fn set_retention_hold(
         &self,
         uid: u32,
@@ -671,6 +721,28 @@ impl DaemonSessionApi {
             .fail();
         }
         let sessions = self.manager.list(uid).context(SessionSnafu)?;
+        if sessions
+            .iter()
+            .any(|record| record.spec().session_id().as_str() == reference)
+        {
+            return Ok(reference.to_owned());
+        }
+        if let Some(session_id) = self
+            .manager
+            .resolve_alias(uid, reference)
+            .context(SessionSnafu)?
+        {
+            if sessions
+                .iter()
+                .any(|record| record.spec().session_id().as_str() == session_id)
+            {
+                return Ok(session_id);
+            }
+            return crate::error::InvalidRequestSnafu {
+                reason: format!("session alias `{reference}` does not name a session"),
+            }
+            .fail();
+        }
         Self::choose_session_id(
             reference,
             sessions

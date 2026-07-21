@@ -61,7 +61,9 @@ pub use session_output::{
     DurableStreamCursor, DurableStreamRecord, DurableStreamStore, InputLease, InputLeaseManager,
     SessionOutputStores, StreamKind,
 };
-pub use session_repository::{DurableSessionRecord, SessionPruneResult, SessionRepository};
+pub use session_repository::{
+    DurableSessionRecord, SessionAlias, SessionPruneResult, SessionRepository,
+};
 pub use session_run::SessionExecutionService;
 pub use surface_services::SurfaceServiceRunner;
 pub use surfaces::filesystem::{FilesystemFileOperationHandler, FilesystemSessionContext};

@@ -1,6 +1,6 @@
 use std::{any::Any, io, path::PathBuf};
 
-use erebor_runtime_audit::{AuditLogError, EvidenceTraceError};
+use erebor_runtime_audit::EvidenceTraceError;
 use erebor_runtime_client::DaemonClientError;
 use erebor_runtime_core::{RuntimeConfigError, RuntimeError, SessionRegistryError};
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
@@ -55,12 +55,6 @@ pub(crate) enum CliError {
     #[snafu(display("failed to write session diagnostic output: {source}"))]
     WriteSessionOutput {
         source: io::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("{source}"))]
-    AuditLog {
-        source: AuditLogError,
         #[snafu(implicit)]
         location: Location,
     },
@@ -132,7 +126,6 @@ impl ErrorExt for CliError {
             Self::InvalidConfig { source, .. } => source.status_code(),
             Self::Runtime { source, .. } => source.status_code(),
             Self::SessionExecution { source, .. } => source.status_code(),
-            Self::AuditLog { source, .. } => source.status_code(),
             Self::EvidenceTrace { source, .. } => source.status_code(),
             Self::SessionRegistry { source, .. } => source.status_code(),
             Self::Filesystem { source, .. } => source.status_code(),
@@ -154,7 +147,6 @@ impl ErrorExt for CliError {
             Self::InvalidConfig { source, .. } => source.retry_hint(),
             Self::Runtime { source, .. } => source.retry_hint(),
             Self::SessionExecution { source, .. } => source.retry_hint(),
-            Self::AuditLog { source, .. } => source.retry_hint(),
             Self::EvidenceTrace { source, .. } => source.retry_hint(),
             Self::SessionRegistry { source, .. } => source.retry_hint(),
             Self::Filesystem { source, .. } => source.retry_hint(),
@@ -180,7 +172,6 @@ impl ErrorExt for CliError {
                 Self::InvalidConfig { source, .. } => source.to_string(),
                 Self::Runtime { source, .. } => source.to_string(),
                 Self::SessionExecution { source, .. } => source.to_string(),
-                Self::AuditLog { source, .. } => source.to_string(),
                 Self::EvidenceTrace { source, .. } => source.to_string(),
                 Self::SessionRegistry { source, .. } => source.to_string(),
                 Self::Filesystem { source, .. } => source.to_string(),

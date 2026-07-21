@@ -21,23 +21,25 @@ use erebor_runtime_ipc::{
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
         Envelope, EnvelopeServiceFamily, PolicyPackageApplyRequest, PolicySetCreateRequest,
         PolicyTestRequest, PolicyTestResponse, RunnerCapabilityRecord, RunnerInspectRequest,
-        RunnerListRequest, RunnerListResponse, SessionAttachRequest, SessionCreateRequest,
-        SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
-        SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInspectRequest,
-        SessionKillRequest, SessionListRequest, SessionLogChunk, SessionLogsEnd,
-        SessionLogsRequest, SessionPruneRequest, SessionRemoveRequest, SessionStartRequest,
-        SessionStopRequest, SessionWaitRequest, KIND_ADMIN_SESSION_INSPECT_REQUEST,
-        KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
-        KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
-        KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST, KIND_APPROVAL_INSPECT_REQUEST,
-        KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE, KIND_APPROVAL_RECORD,
-        KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
-        KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD,
-        KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
-        KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
+        RunnerListRequest, RunnerListResponse, SessionAliasListRequest, SessionAliasRemoveRequest,
+        SessionAliasSetRequest, SessionAttachRequest, SessionCreateRequest, SessionEventRecord,
+        SessionEventsEnd, SessionEventsRequest, SessionInputLeaseReleaseRequest,
+        SessionInputLeaseRenewRequest, SessionInspectRequest, SessionKillRequest,
+        SessionListRequest, SessionLogChunk, SessionLogsEnd, SessionLogsRequest,
+        SessionPruneRequest, SessionRemoveRequest, SessionStartRequest, SessionStopRequest,
+        SessionWaitRequest, KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
+        KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
+        KIND_ADMIN_SESSION_STOP_REQUEST, KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST,
+        KIND_APPROVAL_INSPECT_REQUEST, KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE,
+        KIND_APPROVAL_RECORD, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO,
+        KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
+        KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
+        KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
         KIND_POLICY_SET_CREATE_REQUEST, KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE,
         KIND_RUNNER_CAPABILITY_RECORD, KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST,
-        KIND_RUNNER_LIST_RESPONSE, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST,
+        KIND_RUNNER_LIST_RESPONSE, KIND_SESSION_ALIAS_LIST_REQUEST,
+        KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_REMOVE_REQUEST,
+        KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST,
         KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
         KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
         KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
@@ -410,6 +412,13 @@ impl DaemonControlState {
                 self.session_lease_release(stream, peer, &envelope).await
             }
             KIND_SESSION_PRUNE_REQUEST => self.session_prune(stream, peer, &envelope).await,
+            KIND_SESSION_ALIAS_SET_REQUEST => self.session_alias_set(stream, peer, &envelope).await,
+            KIND_SESSION_ALIAS_REMOVE_REQUEST => {
+                self.session_alias_remove(stream, peer, &envelope).await
+            }
+            KIND_SESSION_ALIAS_LIST_REQUEST => {
+                self.session_alias_list(stream, peer, &envelope).await
+            }
             KIND_SESSION_INSPECT_REQUEST => self.session_inspect(stream, peer, &envelope).await,
             KIND_SESSION_LIST_REQUEST => self.session_list(stream, peer, &envelope).await,
             KIND_SESSION_WAIT_REQUEST => self.session_wait(stream, peer, &envelope).await,
@@ -752,6 +761,74 @@ impl DaemonControlState {
                 terminal_before_unix_ms: request.terminal_before_unix_ms,
                 maximum_sessions: request.maximum_sessions,
             },
+        )
+        .await
+    }
+
+    async fn session_alias_set(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionAliasSetRequest = envelope
+            .decode_typed_payload(KIND_SESSION_ALIAS_SET_REQUEST)
+            .context(IpcSnafu)?;
+        let session_id = self
+            .sessions
+            .resolve_session_reference(peer.uid, &request.session_id)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-alias-set",
+            envelope,
+            MutationIntent::SessionAliasSet {
+                uid: peer.uid,
+                alias: request.alias,
+                session_id,
+            },
+        )
+        .await
+    }
+
+    async fn session_alias_remove(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SessionAliasRemoveRequest = envelope
+            .decode_typed_payload(KIND_SESSION_ALIAS_REMOVE_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "session-alias-remove",
+            envelope,
+            MutationIntent::SessionAliasRemove {
+                uid: peer.uid,
+                alias: request.alias,
+            },
+        )
+        .await
+    }
+
+    async fn session_alias_list(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        envelope
+            .decode_typed_payload::<SessionAliasListRequest>(KIND_SESSION_ALIAS_LIST_REQUEST)
+            .context(IpcSnafu)?;
+        let response = self.sessions.aliases(peer.uid)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_SESSION_ALIAS_LIST_RESPONSE,
+            &response,
         )
         .await
     }
@@ -1848,6 +1925,8 @@ fn is_mutating_message(kind: &str) -> bool {
             | KIND_SESSION_INPUT_LEASE_RENEW_REQUEST
             | KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST
             | KIND_SESSION_PRUNE_REQUEST
+            | KIND_SESSION_ALIAS_SET_REQUEST
+            | KIND_SESSION_ALIAS_REMOVE_REQUEST
             | KIND_ADMIN_SESSION_STOP_REQUEST
             | KIND_ADMIN_SESSION_KILL_REQUEST
             | KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST

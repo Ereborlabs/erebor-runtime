@@ -108,6 +108,34 @@ fn session_reviews_use_the_daemon_session_api() {
 }
 
 #[test]
+fn accepts_daemon_owned_session_alias_commands() {
+    let set = Cli::try_parse_from([
+        "erebor",
+        "session",
+        "alias",
+        "set",
+        "demo",
+        "session-1",
+        "--idempotency-key",
+        "alias-set-1",
+    ]);
+    let remove = Cli::try_parse_from([
+        "erebor",
+        "session",
+        "alias",
+        "remove",
+        "demo",
+        "--idempotency-key",
+        "alias-remove-1",
+    ]);
+    let list = Cli::try_parse_from(["erebor", "session", "alias", "ls"]);
+
+    assert!(set.is_ok());
+    assert!(remove.is_ok());
+    assert!(list.is_ok());
+}
+
+#[test]
 fn accepts_filesystem_transaction_catalog_commands() {
     let list = Cli::try_parse_from([
         "erebor",
@@ -210,9 +238,20 @@ fn accepts_policy_and_audit_commands() {
         "--out",
         "evidence-trace.md",
     ]);
+    let tail = Cli::try_parse_from([
+        "erebor",
+        "audit",
+        "tail",
+        "session-1",
+        "--after-sequence",
+        "4",
+        "--maximum-records",
+        "8",
+    ]);
 
     assert!(policy.is_ok());
     assert!(evidence.is_ok());
+    assert!(tail.is_ok());
 }
 
 #[test]

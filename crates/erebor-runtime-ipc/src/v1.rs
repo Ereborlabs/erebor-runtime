@@ -68,6 +68,12 @@ pub const KIND_SESSION_INPUT_LEASE_RESPONSE: &str =
     "erebor.runtime.ipc.v1.SessionInputLeaseResponse";
 pub const KIND_SESSION_PRUNE_REQUEST: &str = "erebor.runtime.ipc.v1.SessionPruneRequest";
 pub const KIND_SESSION_PRUNE_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionPruneResponse";
+pub const KIND_SESSION_ALIAS_SET_REQUEST: &str = "erebor.runtime.ipc.v1.SessionAliasSetRequest";
+pub const KIND_SESSION_ALIAS_REMOVE_REQUEST: &str =
+    "erebor.runtime.ipc.v1.SessionAliasRemoveRequest";
+pub const KIND_SESSION_ALIAS_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.SessionAliasListRequest";
+pub const KIND_SESSION_ALIAS_RECORD: &str = "erebor.runtime.ipc.v1.SessionAliasRecord";
+pub const KIND_SESSION_ALIAS_LIST_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionAliasListResponse";
 pub const KIND_ADMIN_SESSION_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.AdminSessionListRequest";
 pub const KIND_ADMIN_SESSION_INSPECT_REQUEST: &str =
     "erebor.runtime.ipc.v1.AdminSessionInspectRequest";

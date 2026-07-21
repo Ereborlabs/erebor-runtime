@@ -1,24 +1,27 @@
 use erebor_runtime_ipc::v1::{
     AdminSessionInspectRequest, AdminSessionKillRequest, AdminSessionListRequest,
-    AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, Header, SessionAttachRequest,
-    SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionEventRecord,
-    SessionEventsEnd, SessionEventsRequest, SessionInputLeaseReleaseRequest,
-    SessionInputLeaseRenewRequest, SessionInputLeaseResponse, SessionInspectRequest,
-    SessionKillRequest, SessionListRequest, SessionListResponse, SessionLogChunk, SessionLogsEnd,
-    SessionLogsRequest, SessionPruneRequest, SessionPruneResponse, SessionRecord,
-    SessionRemoveRequest, SessionStartRequest, SessionStopRequest, SessionWaitRequest,
-    EREBOR_IDEMPOTENCY_KEY_HEADER, KIND_ADMIN_SESSION_INSPECT_REQUEST,
+    AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, Header, SessionAliasListRequest,
+    SessionAliasListResponse, SessionAliasRecord, SessionAliasRemoveRequest,
+    SessionAliasSetRequest, SessionAttachRequest, SessionAttachResponse, SessionCreateRequest,
+    SessionCreateResponse, SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
+    SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputLeaseResponse,
+    SessionInspectRequest, SessionKillRequest, SessionListRequest, SessionListResponse,
+    SessionLogChunk, SessionLogsEnd, SessionLogsRequest, SessionPruneRequest, SessionPruneResponse,
+    SessionRecord, SessionRemoveRequest, SessionStartRequest, SessionStopRequest,
+    SessionWaitRequest, EREBOR_IDEMPOTENCY_KEY_HEADER, KIND_ADMIN_SESSION_INSPECT_REQUEST,
     KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
     KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
-    KIND_DAEMON_ERROR, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_ATTACH_RESPONSE,
-    KIND_SESSION_CREATE_REQUEST, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_EVENTS_END,
-    KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
-    KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
-    KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST,
-    KIND_SESSION_LIST_REQUEST, KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END,
-    KIND_SESSION_LOGS_REQUEST, KIND_SESSION_LOG_CHUNK, KIND_SESSION_PRUNE_REQUEST,
-    KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST,
-    KIND_SESSION_START_REQUEST, KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST,
+    KIND_DAEMON_ERROR, KIND_SESSION_ALIAS_LIST_REQUEST, KIND_SESSION_ALIAS_LIST_RESPONSE,
+    KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ALIAS_REMOVE_REQUEST, KIND_SESSION_ALIAS_SET_REQUEST,
+    KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_REQUEST,
+    KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST,
+    KIND_SESSION_EVENT_RECORD, KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST,
+    KIND_SESSION_INPUT_LEASE_RENEW_REQUEST, KIND_SESSION_INPUT_LEASE_RESPONSE,
+    KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
+    KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST,
+    KIND_SESSION_LOG_CHUNK, KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_PRUNE_RESPONSE,
+    KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST, KIND_SESSION_START_REQUEST,
+    KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST,
 };
 use snafu::ResultExt;
 use std::time::Duration;
@@ -148,6 +151,52 @@ impl DaemonClient {
                 KIND_SESSION_LIST_REQUEST,
                 &SessionListRequest {},
                 KIND_SESSION_LIST_RESPONSE,
+                Vec::new(),
+            )
+            .await
+    }
+
+    pub async fn session_alias_set(
+        &self,
+        alias: impl Into<String>,
+        session_id: impl Into<String>,
+        idempotency_key: &str,
+    ) -> Result<SessionAliasRecord> {
+        self.session_mutation(
+            KIND_SESSION_ALIAS_SET_REQUEST,
+            &SessionAliasSetRequest {
+                alias: alias.into(),
+                session_id: session_id.into(),
+            },
+            KIND_SESSION_ALIAS_RECORD,
+            idempotency_key,
+        )
+        .await
+    }
+
+    pub async fn session_alias_remove(
+        &self,
+        alias: impl Into<String>,
+        idempotency_key: &str,
+    ) -> Result<SessionAliasRecord> {
+        self.session_mutation(
+            KIND_SESSION_ALIAS_REMOVE_REQUEST,
+            &SessionAliasRemoveRequest {
+                alias: alias.into(),
+            },
+            KIND_SESSION_ALIAS_RECORD,
+            idempotency_key,
+        )
+        .await
+    }
+
+    pub async fn session_alias_list(&self) -> Result<SessionAliasListResponse> {
+        let mut connection = self.connect().await?;
+        connection
+            .unary(
+                KIND_SESSION_ALIAS_LIST_REQUEST,
+                &SessionAliasListRequest {},
+                KIND_SESSION_ALIAS_LIST_RESPONSE,
                 Vec::new(),
             )
             .await

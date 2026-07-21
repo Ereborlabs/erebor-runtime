@@ -25,8 +25,8 @@ use crate::{
     runners::{
         RunnerAdmissionRequest, RunnerExecutionAdmission, RunnerPreparation, RunnerRegistry,
     },
-    DurableSessionRecord, DurableStreamCursor, InputLease, InputLeaseManager, SessionManagerError,
-    SessionPruneResult, SessionRepository, SessionRepositoryError, StreamKind,
+    DurableSessionRecord, DurableStreamCursor, InputLease, InputLeaseManager, SessionAlias,
+    SessionManagerError, SessionPruneResult, SessionRepository, SessionRepositoryError, StreamKind,
 };
 
 pub(crate) use self::resources::SessionRuntime;
@@ -125,6 +125,37 @@ impl SessionManager {
 
     pub fn list(&self, uid: u32) -> Result<Vec<DurableSessionRecord>, SessionManagerError> {
         self.repository.list(uid).context(RepositorySnafu)
+    }
+
+    pub fn set_alias(
+        &self,
+        uid: u32,
+        alias: &str,
+        session_id: &str,
+    ) -> Result<SessionAlias, SessionManagerError> {
+        self.repository
+            .set_alias(uid, alias, session_id)
+            .context(RepositorySnafu)
+    }
+
+    pub fn remove_alias(&self, uid: u32, alias: &str) -> Result<SessionAlias, SessionManagerError> {
+        self.repository
+            .remove_alias(uid, alias)
+            .context(RepositorySnafu)
+    }
+
+    pub fn aliases(&self, uid: u32) -> Result<Vec<SessionAlias>, SessionManagerError> {
+        self.repository.aliases(uid).context(RepositorySnafu)
+    }
+
+    pub fn resolve_alias(
+        &self,
+        uid: u32,
+        alias: &str,
+    ) -> Result<Option<String>, SessionManagerError> {
+        self.repository
+            .resolve_alias(uid, alias)
+            .context(RepositorySnafu)
     }
 
     pub fn list_all(&self) -> Result<Vec<DurableSessionRecord>, SessionManagerError> {

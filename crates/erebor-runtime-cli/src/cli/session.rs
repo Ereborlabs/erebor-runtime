@@ -21,7 +21,8 @@ mod args;
 
 use args::{
     GenericSessionCreateArgs, GenericSessionRequestArgs, OptionalGenericSessionRequestArgs,
-    SessionAttachArgs, SessionCommand, SessionEventsArgs, SessionLogsArgs, SessionRunArgs,
+    SessionAliasArgs, SessionAliasCommand, SessionAttachArgs, SessionCommand, SessionEventsArgs,
+    SessionLogsArgs, SessionRunArgs,
 };
 
 pub(super) use args::SessionArgs;
@@ -154,6 +155,7 @@ impl<'a> SessionCommandOwner<'a> {
                     println!("session_id={session_id}");
                 }
             }
+            SessionCommand::Alias(args) => self.aliases(&client, args).await?,
         }
         Ok(())
     }
@@ -315,6 +317,40 @@ impl<'a> SessionCommandOwner<'a> {
             response.input_lease_id,
             response.input_lease_expires_unix_ms,
         );
+        Ok(())
+    }
+
+    async fn aliases(
+        &self,
+        client: &DaemonClient,
+        args: &SessionAliasArgs,
+    ) -> Result<(), CliError> {
+        match &args.command {
+            SessionAliasCommand::Set(args) => {
+                let alias = client
+                    .session_alias_set(&args.alias, &args.session_id, &args.idempotency_key)
+                    .await
+                    .context(DaemonClientSnafu)?;
+                println!("alias={} session_id={}", alias.alias, alias.session_id);
+            }
+            SessionAliasCommand::Remove(args) => {
+                let alias = client
+                    .session_alias_remove(&args.alias, &args.idempotency_key)
+                    .await
+                    .context(DaemonClientSnafu)?;
+                println!("alias={} session_id={}", alias.alias, alias.session_id);
+            }
+            SessionAliasCommand::List => {
+                for alias in client
+                    .session_alias_list()
+                    .await
+                    .context(DaemonClientSnafu)?
+                    .aliases
+                {
+                    println!("alias={} session_id={}", alias.alias, alias.session_id);
+                }
+            }
+        }
         Ok(())
     }
 

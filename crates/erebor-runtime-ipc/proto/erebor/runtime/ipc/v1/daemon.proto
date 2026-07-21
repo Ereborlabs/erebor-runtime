@@ -204,6 +204,26 @@ message SessionPruneResponse {
   repeated string retained_session_ids = 2;
 }
 
+message SessionAliasSetRequest {
+  string alias = 1;
+  string session_id = 2;
+}
+
+message SessionAliasRemoveRequest {
+  string alias = 1;
+}
+
+message SessionAliasListRequest {}
+
+message SessionAliasRecord {
+  string alias = 1;
+  string session_id = 2;
+}
+
+message SessionAliasListResponse {
+  repeated SessionAliasRecord aliases = 1;
+}
+
 message AdminSessionListRequest {
   uint32 target_uid = 1;
   bool all_users = 2;

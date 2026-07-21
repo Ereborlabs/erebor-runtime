@@ -27,6 +27,7 @@ impl SessionArgs {
             SessionCommand::Wait(args) => format!("session wait {}", args.session_id),
             SessionCommand::Remove(args) => format!("session rm {}", args.session_id),
             SessionCommand::Prune(_) => String::from("session prune"),
+            SessionCommand::Alias(_) => String::from("session alias"),
         }
     }
 }
@@ -61,6 +62,8 @@ pub(crate) enum SessionCommand {
     Remove(SessionRemoveArgs),
     /// Remove eligible terminal sessions.
     Prune(SessionPruneArgs),
+    /// Manage daemon-owned local aliases for your sessions.
+    Alias(SessionAliasArgs),
 }
 
 #[derive(Debug, Args)]
@@ -256,6 +259,41 @@ pub(crate) struct SessionPruneArgs {
     pub(crate) terminal_before_unix_ms: u64,
     #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=256))]
     pub(crate) maximum_sessions: u32,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionAliasArgs {
+    #[command(subcommand)]
+    pub(crate) command: SessionAliasCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum SessionAliasCommand {
+    /// Bind an alias to an exact session id or one unique session-id prefix.
+    Set(SessionAliasSetArgs),
+    /// Remove one local alias.
+    Remove(SessionAliasRemoveArgs),
+    /// List local aliases in your daemon namespace.
+    #[command(alias = "ls")]
+    List,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionAliasSetArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) alias: String,
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) session_id: String,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionAliasRemoveArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) alias: String,
     #[arg(long, value_parser = parse_non_empty_string)]
     pub(crate) idempotency_key: String,
 }

@@ -1,7 +1,8 @@
 use std::{
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::Write,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -21,6 +22,33 @@ use crate::{
 
 const SESSION_RECORD_SCHEMA_VERSION: u32 = 2;
 const SESSION_RECORD_FILE: &str = "session.json";
+const SESSION_ALIAS_FILE: &str = "aliases.json";
+
+/// A daemon-owned local alias for one exact session id.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SessionAlias {
+    alias: String,
+    session_id: String,
+}
+
+impl SessionAlias {
+    fn new(alias: impl Into<String>, session_id: impl Into<String>) -> Self {
+        Self {
+            alias: alias.into(),
+            session_id: session_id.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn alias(&self) -> &str {
+        &self.alias
+    }
+
+    #[must_use]
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DurableSessionRecord {
@@ -271,6 +299,71 @@ impl SessionRepository {
         Ok(user_ids)
     }
 
+    pub fn set_alias(
+        &self,
+        uid: u32,
+        alias: &str,
+        session_id: &str,
+    ) -> Result<SessionAlias, SessionRepositoryError> {
+        validate_session_alias(alias, &self.root)?;
+        validate_session_id(session_id, &self.root)?;
+        let _guard = self.mutation_lock.lock().map_err(|_error| {
+            UnsafePathSnafu {
+                path: self.root.clone(),
+                reason: String::from("mutation lock is poisoned"),
+            }
+            .build()
+        })?;
+        self.read(&self.session_directory(uid, session_id), session_id)?;
+        let mut aliases = self.read_aliases(uid)?;
+        aliases.insert(alias.to_owned(), session_id.to_owned());
+        self.write_aliases(uid, &aliases)?;
+        Ok(SessionAlias::new(alias, session_id))
+    }
+
+    pub fn remove_alias(
+        &self,
+        uid: u32,
+        alias: &str,
+    ) -> Result<SessionAlias, SessionRepositoryError> {
+        validate_session_alias(alias, &self.root)?;
+        let _guard = self.mutation_lock.lock().map_err(|_error| {
+            UnsafePathSnafu {
+                path: self.root.clone(),
+                reason: String::from("mutation lock is poisoned"),
+            }
+            .build()
+        })?;
+        let mut aliases = self.read_aliases(uid)?;
+        let session_id = aliases.remove(alias).ok_or_else(|| {
+            NotFoundSnafu {
+                session_id: format!("alias-{alias}"),
+            }
+            .build()
+        })?;
+        self.write_aliases(uid, &aliases)?;
+        Ok(SessionAlias::new(alias, session_id))
+    }
+
+    pub fn aliases(&self, uid: u32) -> Result<Vec<SessionAlias>, SessionRepositoryError> {
+        Ok(self
+            .read_aliases(uid)?
+            .into_iter()
+            .map(|(alias, session_id)| SessionAlias::new(alias, session_id))
+            .collect())
+    }
+
+    pub fn resolve_alias(
+        &self,
+        uid: u32,
+        alias: &str,
+    ) -> Result<Option<String>, SessionRepositoryError> {
+        if validate_session_alias(alias, &self.root).is_err() {
+            return Ok(None);
+        }
+        Ok(self.read_aliases(uid)?.remove(alias))
+    }
+
     pub fn remove(
         &self,
         uid: u32,
@@ -395,6 +488,93 @@ impl SessionRepository {
             .join(uid.to_string())
             .join("sessions")
             .join(session_id)
+    }
+
+    fn aliases_path(&self, uid: u32) -> PathBuf {
+        self.root
+            .join("users")
+            .join(uid.to_string())
+            .join(SESSION_ALIAS_FILE)
+    }
+
+    fn read_aliases(&self, uid: u32) -> Result<BTreeMap<String, String>, SessionRepositoryError> {
+        let path = self.aliases_path(uid);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(BTreeMap::new())
+            }
+            Err(source) => {
+                return Err(source).context(IoSnafu {
+                    action: "reading session aliases",
+                    path: &path,
+                })
+            }
+        };
+        let aliases = serde_json::from_slice::<BTreeMap<String, String>>(&bytes)
+            .context(DecodeSnafu { path: &path })?;
+        for (alias, session_id) in &aliases {
+            validate_session_alias(alias, &self.root)?;
+            validate_session_id(session_id, &self.root)?;
+        }
+        Ok(aliases)
+    }
+
+    fn write_aliases(
+        &self,
+        uid: u32,
+        aliases: &BTreeMap<String, String>,
+    ) -> Result<(), SessionRepositoryError> {
+        let path = self.aliases_path(uid);
+        let parent = path.parent().ok_or_else(|| {
+            UnsafePathSnafu {
+                path: path.clone(),
+                reason: String::from("session alias file has no parent directory"),
+            }
+            .build()
+        })?;
+        fs::create_dir_all(parent).context(IoSnafu {
+            action: "creating session alias directory",
+            path: parent,
+        })?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700)).context(IoSnafu {
+            action: "protecting session alias directory",
+            path: parent,
+        })?;
+        let temporary = parent.join("aliases.json.tmp");
+        self.remove_stale_temporary(&temporary)?;
+        let encoded = serde_json::to_vec(aliases).context(DecodeSnafu { path: &path })?;
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&temporary)
+            .context(IoSnafu {
+                action: "creating temporary session aliases",
+                path: &temporary,
+            })?;
+        file.write_all(&encoded).context(IoSnafu {
+            action: "writing session aliases",
+            path: &temporary,
+        })?;
+        file.sync_all().context(IoSnafu {
+            action: "syncing session aliases",
+            path: &temporary,
+        })?;
+        fs::rename(&temporary, &path).context(IoSnafu {
+            action: "publishing session aliases",
+            path: &path,
+        })?;
+        File::open(parent)
+            .context(IoSnafu {
+                action: "opening session alias directory",
+                path: parent,
+            })?
+            .sync_all()
+            .context(IoSnafu {
+                action: "syncing session alias directory",
+                path: parent,
+            })
     }
 
     fn create_directory(&self, directory: &Path) -> Result<(), SessionRepositoryError> {
@@ -582,6 +762,25 @@ fn validate_session_id(session_id: &str, root: &Path) -> Result<(), SessionRepos
     }
 }
 
+fn validate_session_alias(alias: &str, root: &Path) -> Result<(), SessionRepositoryError> {
+    if !alias.is_empty()
+        && alias.len() <= 128
+        && alias != "."
+        && alias != ".."
+        && alias
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        Ok(())
+    } else {
+        UnsafePathSnafu {
+            path: root.join(alias),
+            reason: String::from("session alias is not a safe path component"),
+        }
+        .fail()
+    }
+}
+
 fn unix_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -724,6 +923,39 @@ mod tests {
             repository.load(1000, "session-9f7b7f6e")?.generation(),
             running.generation()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn aliases_are_durable_scoped_and_resolve_to_exact_session_ids(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = TempDir::new()?;
+        let repository = SessionRepository::new(temporary.path());
+        repository.create(spec()?)?;
+
+        let alias = repository.set_alias(1000, "demo", "session-9f7b7f6e")?;
+        assert_eq!(alias.alias(), "demo");
+        assert_eq!(alias.session_id(), "session-9f7b7f6e");
+        assert_eq!(
+            repository.resolve_alias(1000, "demo")?,
+            Some(String::from("session-9f7b7f6e"))
+        );
+        assert!(repository.resolve_alias(1001, "demo")?.is_none());
+        assert_eq!(
+            repository.aliases(1000)?.as_slice(),
+            std::slice::from_ref(&alias)
+        );
+
+        assert!(repository
+            .set_alias(1000, "../unsafe", "session-9f7b7f6e")
+            .is_err());
+        assert!(repository
+            .set_alias(1000, "missing", "session-missing")
+            .is_err());
+
+        let removed = repository.remove_alias(1000, "demo")?;
+        assert_eq!(removed, alias);
+        assert!(repository.resolve_alias(1000, "demo")?.is_none());
         Ok(())
     }
 

@@ -14,23 +14,8 @@ fn daemon_control_plane_runs_in_systemd_container() -> Result<(), Box<dyn Error>
 
 #[test]
 #[ignore = "requires Linux, Docker, and privileged containers"]
-fn required_session_output_and_retention_contract_runs_in_systemd_container(
-) -> Result<(), Box<dyn Error>> {
-    run_systemd_probe([
-        "/usr/bin/env",
-        "EREBOR_SESSION_RUNTIME_PROBE=output-contract",
-        "/usr/local/lib/erebor/daemon-systemd-control-plane.sh",
-    ])
-}
-
-#[test]
-#[ignore = "requires Linux, Docker, and privileged containers"]
-fn shared_runtime_guard_service_runs_in_systemd_container() -> Result<(), Box<dyn Error>> {
-    run_systemd_probe([
-        "/usr/bin/env",
-        "EREBOR_SESSION_RUNTIME_PROBE=shared-guard",
-        "/usr/local/lib/erebor/daemon-systemd-control-plane.sh",
-    ])
+fn public_generic_cli_runs_in_systemd_container() -> Result<(), Box<dyn Error>> {
+    run_systemd_probe(["/usr/local/lib/erebor/daemon-systemd-control-plane.sh"])
 }
 
 fn run_systemd_probe<const N: usize>(arguments: [&str; N]) -> Result<(), Box<dyn Error>> {
