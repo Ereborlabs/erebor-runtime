@@ -19,7 +19,8 @@ pub enum SessionManagerError {
     },
     #[snafu(display("{source}"))]
     Runner {
-        source: RuntimeError,
+        #[snafu(source(from(RuntimeError, Box::new)))]
+        source: Box<RuntimeError>,
         #[snafu(implicit)]
         location: Location,
     },

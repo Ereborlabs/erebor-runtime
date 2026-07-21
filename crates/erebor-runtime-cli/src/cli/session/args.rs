@@ -1,11 +1,9 @@
 use std::path::PathBuf;
 
-use clap::{ArgGroup, Args, Subcommand, ValueEnum};
-use erebor_runtime_core::{SessionAdoptTarget, SessionRunnerKind};
+use clap::{Args, Subcommand, ValueEnum};
+use erebor_runtime_core::SessionRunnerKind;
 
-use super::super::{
-    parse_non_empty_path, parse_non_empty_string, parse_positive_pid, OutputFormat,
-};
+use super::super::{parse_non_empty_path, parse_non_empty_string};
 
 #[derive(Debug, Args)]
 pub(crate) struct SessionArgs {
@@ -16,140 +14,248 @@ pub(crate) struct SessionArgs {
 impl SessionArgs {
     pub(crate) fn display(&self) -> String {
         match &self.command {
-            SessionCommand::Run(args) => format!(
-                "session run runner={} config={} command={}",
-                args.runner.as_str(),
-                args.config.display(),
-                args.command.join(" ")
-            ),
-            SessionCommand::Diagnose(args) => format!(
-                "session diagnose runner={} config={} name={}",
-                args.runner.as_str(),
-                args.config.display(),
-                args.name
-            ),
-            SessionCommand::Adopt(args) => format!(
-                "session adopt runner={} config={} target={}",
-                args.runner.as_str(),
-                args.config.display(),
-                args.target_display()
-            ),
-            SessionCommand::Ls(args) => format!("session ls format={}", args.format.as_str()),
-            SessionCommand::Show(args) => format!(
-                "session show session_id={} format={}",
-                args.session_id,
-                args.format.as_str()
-            ),
-            SessionCommand::Describe(args) => format!(
-                "session describe session_id={} format={}",
-                args.session_id,
-                args.format.as_str()
-            ),
+            SessionCommand::Create(_) => String::from("session create"),
+            SessionCommand::Run(_) => String::from("session run"),
+            SessionCommand::Start(args) => format!("session start {}", args.session_id),
+            SessionCommand::Ps => String::from("session ps"),
+            SessionCommand::Inspect(args) => format!("session inspect {}", args.session_id),
+            SessionCommand::Logs(args) => format!("session logs {}", args.session_id),
+            SessionCommand::Attach(args) => format!("session attach {}", args.session_id),
+            SessionCommand::Events(args) => format!("session events {}", args.session_id),
+            SessionCommand::Stop(args) => format!("session stop {}", args.session_id),
+            SessionCommand::Kill(args) => format!("session kill {}", args.session_id),
+            SessionCommand::Wait(args) => format!("session wait {}", args.session_id),
+            SessionCommand::Remove(args) => format!("session rm {}", args.session_id),
+            SessionCommand::Prune(_) => String::from("session prune"),
         }
     }
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SessionCommand {
-    /// Start an agent inside a governed session runner.
+    /// Create a daemon-owned generic session without starting its workload.
+    Create(GenericSessionCreateArgs),
+    /// Create and start a session. `--config` retains the temporary direct Codex path only.
     Run(SessionRunArgs),
-    /// Run a named bounded diagnostic from the session config.
-    Diagnose(SessionDiagnoseArgs),
-    /// Adopt an already-running agent process into a governed session.
-    Adopt(SessionAdoptArgs),
-    /// List sessions present in an audit log.
-    Ls(SessionLsArgs),
-    /// Show a buyer-readable summary for one governed session.
-    Show(SessionShowArgs),
-    /// Describe governed session decisions with proof details.
-    Describe(SessionDescribeArgs),
+    /// Start a previously created session.
+    Start(SessionMutationArgs),
+    /// List your daemon-owned sessions.
+    #[command(alias = "ls")]
+    Ps,
+    /// Inspect one daemon-owned session.
+    Inspect(SessionArgsById),
+    /// Read bounded durable session output.
+    Logs(SessionLogsArgs),
+    /// Acquire a read-only or input lease attachment.
+    Attach(SessionAttachArgs),
+    /// Read bounded durable session lifecycle events.
+    Events(SessionEventsArgs),
+    /// Request a graceful stop.
+    Stop(SessionStopArgs),
+    /// Deliver an admitted terminal signal.
+    Kill(SessionKillArgs),
+    /// Wait for a generation change.
+    Wait(SessionWaitArgs),
+    /// Remove a terminal session.
+    #[command(alias = "rm")]
+    Remove(SessionRemoveArgs),
+    /// Remove eligible terminal sessions.
+    Prune(SessionPruneArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct GenericSessionCreateArgs {
+    #[command(flatten)]
+    pub(crate) request: GenericSessionRequestArgs,
+    /// Stable key reused only after an uncertain create result.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: String,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct SessionRunArgs {
-    /// Session config describing policies, audit, surfaces, and runner settings.
+    /// Existing temporary Codex profile config. It is rejected unless the command exactly
+    /// matches a configured brokered Codex App Server profile.
     #[arg(long, value_parser = parse_non_empty_path)]
-    pub(crate) config: PathBuf,
-    /// Concrete session runner to use.
+    pub(crate) config: Option<PathBuf>,
+    #[command(flatten)]
+    pub(crate) request: OptionalGenericSessionRequestArgs,
+    /// Stable key reused only after an uncertain create/start result. Required for generic runs.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct GenericSessionRequestArgs {
+    /// The Phase 3 generic runner. Docker is unavailable until Phase 6.
     #[arg(long, alias = "runtime", value_enum)]
     pub(crate) runner: SessionRunnerArg,
-    /// Agent entrypoint to launch inside the governed session runner.
+    /// Existing workspace admitted by the daemon under the caller UID.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    pub(crate) workspace: PathBuf,
+    /// Exact installed agent-package canonical digest.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) package_digest: String,
+    /// Exact caller-owned installation canonical digest.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) installation_digest: String,
+    /// Exact generic adapter canonical digest selected by the package.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) adapter_digest: String,
+    /// Exact caller-owned immutable policy-set digest.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) policy_set_digest: String,
+    /// Failure contract for daemon loss.
+    #[arg(long, default_value = "terminate", value_parser = parse_failure_mode)]
+    pub(crate) failure_mode: String,
+    /// Requested grace period, bounded by root daemon configuration.
+    #[arg(long, default_value_t = 2)]
+    pub(crate) loss_grace_seconds: u64,
+    /// Pass one explicitly declared environment value (NAME=VALUE).
+    #[arg(long = "env", value_parser = parse_environment)]
+    pub(crate) environment: Vec<(String, String)>,
+    /// Pass one approved secret provider reference.
+    #[arg(long = "secret", value_parser = parse_non_empty_string)]
+    pub(crate) secret_references: Vec<String>,
+    /// Request an admitted TTY.
+    #[arg(short = 't', long)]
+    pub(crate) tty: bool,
+    /// Return after start without waiting for a state change.
+    #[arg(short = 'd', long)]
+    pub(crate) detached: bool,
+    /// Initial argv; the daemon never starts a shell for this request.
     #[arg(required = true, trailing_var_arg = true, num_args = 1..)]
     pub(crate) command: Vec<String>,
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct SessionDiagnoseArgs {
-    /// Session config describing policies, audit, diagnostics, and runner settings.
-    #[arg(long, value_parser = parse_non_empty_path)]
-    pub(crate) config: PathBuf,
-    /// Concrete session runner to use.
+pub(crate) struct OptionalGenericSessionRequestArgs {
     #[arg(long, alias = "runtime", value_enum)]
-    pub(crate) runner: SessionRunnerArg,
-    /// Named diagnostic from the session config.
-    pub(crate) name: String,
-}
-
-#[derive(Debug, Args)]
-#[command(group(
-    ArgGroup::new("adopt_target")
-        .required(true)
-        .args(["pid", "match_pattern"])
-))]
-pub(crate) struct SessionAdoptArgs {
-    /// Session config describing policies, audit, surfaces, and runner settings.
+    pub(crate) runner: Option<SessionRunnerArg>,
     #[arg(long, value_parser = parse_non_empty_path)]
-    pub(crate) config: PathBuf,
-    /// Concrete session runner to use.
-    #[arg(long, alias = "runtime", value_enum)]
-    pub(crate) runner: SessionRunnerArg,
-    /// Already-running process id to attach to.
-    #[arg(long, value_parser = parse_positive_pid)]
-    pub(crate) pid: Option<i32>,
-    /// Find one already-running process whose executable or command line contains this text.
-    #[arg(long = "match", value_name = "TEXT", value_parser = parse_non_empty_string)]
-    pub(crate) match_pattern: Option<String>,
-}
-
-impl SessionAdoptArgs {
-    pub(crate) fn target_display(&self) -> String {
-        self.target().display_target()
-    }
-
-    pub(crate) fn target(&self) -> SessionAdoptTarget {
-        match (self.pid, self.match_pattern.as_deref()) {
-            (Some(pid), None) => SessionAdoptTarget::pid(pid),
-            (None, Some(pattern)) => SessionAdoptTarget::process_match(pattern),
-            _ => unreachable!("clap enforces exactly one session adoption target"),
-        }
-    }
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct SessionLsArgs {
-    /// Output format.
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) format: OutputFormat,
+    pub(crate) workspace: Option<PathBuf>,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) package_digest: Option<String>,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) installation_digest: Option<String>,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) adapter_digest: Option<String>,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) policy_set_digest: Option<String>,
+    #[arg(long, default_value = "terminate", value_parser = parse_failure_mode)]
+    pub(crate) failure_mode: String,
+    #[arg(long, default_value_t = 2)]
+    pub(crate) loss_grace_seconds: u64,
+    #[arg(long = "env", value_parser = parse_environment)]
+    pub(crate) environment: Vec<(String, String)>,
+    #[arg(long = "secret", value_parser = parse_non_empty_string)]
+    pub(crate) secret_references: Vec<String>,
+    #[arg(short = 't', long)]
+    pub(crate) tty: bool,
+    #[arg(short = 'd', long)]
+    pub(crate) detached: bool,
+    #[arg(required = true, trailing_var_arg = true, num_args = 1..)]
+    pub(crate) command: Vec<String>,
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct SessionShowArgs {
-    /// Session id to show.
+pub(crate) struct SessionMutationArgs {
     #[arg(value_parser = parse_non_empty_string)]
     pub(crate) session_id: String,
-    /// Output format.
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) format: OutputFormat,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: String,
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct SessionDescribeArgs {
-    /// Session id to describe.
+pub(crate) struct SessionArgsById {
     #[arg(value_parser = parse_non_empty_string)]
     pub(crate) session_id: String,
-    /// Output format.
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) format: OutputFormat,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionLogsArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) session_id: String,
+    #[arg(long, default_value = "stdout", value_parser = parse_stream)]
+    pub(crate) stream: String,
+    #[arg(long, default_value_t = 0)]
+    pub(crate) after_sequence: u64,
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=256))]
+    pub(crate) maximum_records: u32,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionAttachArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) session_id: String,
+    #[arg(long, default_value_t = 0)]
+    pub(crate) after_output_sequence: u64,
+    /// Request the exclusive input lease for an admitted TTY.
+    #[arg(long)]
+    pub(crate) input: bool,
+    #[arg(long, default_value = "erebor-cli", value_parser = parse_non_empty_string)]
+    pub(crate) client_instance_id: String,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionEventsArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) session_id: String,
+    #[arg(long, default_value_t = 0)]
+    pub(crate) after_sequence: u64,
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=256))]
+    pub(crate) maximum_records: u32,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionStopArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) session_id: String,
+    #[arg(long, default_value_t = 2)]
+    pub(crate) grace_seconds: u64,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionKillArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) session_id: String,
+    #[arg(long, default_value = "kill", value_parser = parse_non_empty_string)]
+    pub(crate) signal: String,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionWaitArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) session_id: String,
+    #[arg(long, default_value_t = 0)]
+    pub(crate) after_generation: u64,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionRemoveArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) session_id: String,
+    #[arg(long)]
+    pub(crate) force: bool,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionPruneArgs {
+    /// Prune only terminal sessions older than this Unix timestamp in milliseconds.
+    #[arg(long)]
+    pub(crate) terminal_before_unix_ms: u64,
+    #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..=256))]
+    pub(crate) maximum_sessions: u32,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -173,5 +279,39 @@ impl From<SessionRunnerArg> for SessionRunnerKind {
             SessionRunnerArg::Docker => Self::Docker,
             SessionRunnerArg::LinuxHost => Self::LinuxHost,
         }
+    }
+}
+
+fn parse_failure_mode(value: &str) -> Result<String, String> {
+    match value {
+        "terminate" | "continue" | "continue_if_enforced" => Ok(value.to_owned()),
+        _ => Err(String::from(
+            "must be one of `terminate`, `continue`, or `continue_if_enforced`",
+        )),
+    }
+}
+
+fn parse_environment(value: &str) -> Result<(String, String), String> {
+    let (name, value) = value
+        .split_once('=')
+        .ok_or_else(|| String::from("must use NAME=VALUE"))?;
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+        || name
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_digit())
+    {
+        return Err(String::from("environment name must be a shell identifier"));
+    }
+    Ok((name.to_owned(), value.to_owned()))
+}
+
+fn parse_stream(value: &str) -> Result<String, String> {
+    match value {
+        "stdout" | "stderr" => Ok(value.to_owned()),
+        _ => Err(String::from("must be `stdout` or `stderr`")),
     }
 }

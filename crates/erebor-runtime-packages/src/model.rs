@@ -121,6 +121,11 @@ impl AgentPackageManifest {
     }
 
     #[must_use]
+    pub fn config_digest(&self) -> &ContentDigest {
+        &self.config_digest
+    }
+
+    #[must_use]
     pub fn entrypoint(&self) -> &[String] {
         &self.entrypoint
     }
@@ -243,6 +248,20 @@ impl PolicySetRevision {
         }
         Ok(())
     }
+
+    #[must_use]
+    pub fn policy_input_digests(&self) -> Vec<&ContentDigest> {
+        let mut digests = Vec::with_capacity(
+            1 + self.package_minimum_digests.len()
+                + usize::from(self.local_override_digest.is_some()),
+        );
+        digests.push(&self.root_minimum_digest);
+        digests.extend(&self.package_minimum_digests);
+        if let Some(digest) = &self.local_override_digest {
+            digests.push(digest);
+        }
+        digests
+    }
 }
 
 impl CanonicalEncoding for PolicySetRevision {}
@@ -276,95 +295,19 @@ impl InstallationRecord {
     pub fn package_digest(&self) -> &ContentDigest {
         &self.package_digest
     }
-}
-
-impl CanonicalEncoding for InstallationRecord {}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct VerificationReceipt {
-    format_version: u32,
-    subject_digest: ContentDigest,
-    subject_reference: String,
-    trust_policy_digest: ContentDigest,
-    trust_policy_scope: String,
-    verifier_version: String,
-    verifier_digest: ContentDigest,
-    verified_at_unix_ms: u64,
-    revocation_snapshot_digest: Option<ContentDigest>,
-}
-
-/// Verified backend facts captured atomically in a durable receipt.
-pub struct VerificationReceiptInput {
-    pub subject_digest: ContentDigest,
-    pub subject_reference: String,
-    pub trust_policy_digest: ContentDigest,
-    pub trust_policy_scope: String,
-    pub verifier_version: String,
-    pub verifier_digest: ContentDigest,
-    pub verified_at_unix_ms: u64,
-    pub revocation_snapshot_digest: Option<ContentDigest>,
-}
-
-impl VerificationReceipt {
-    pub fn new(input: VerificationReceiptInput) -> Result<Self> {
-        let receipt = Self {
-            format_version: CANONICAL_FORMAT_VERSION,
-            subject_digest: input.subject_digest,
-            subject_reference: input.subject_reference,
-            trust_policy_digest: input.trust_policy_digest,
-            trust_policy_scope: input.trust_policy_scope,
-            verifier_version: input.verifier_version,
-            verifier_digest: input.verifier_digest,
-            verified_at_unix_ms: input.verified_at_unix_ms,
-            revocation_snapshot_digest: input.revocation_snapshot_digest,
-        };
-        receipt.validate()?;
-        Ok(receipt)
-    }
-
-    pub fn validates_current_trust(&self, trust_policy_digest: &ContentDigest) -> bool {
-        &self.trust_policy_digest == trust_policy_digest
-    }
-
-    #[must_use]
-    pub fn subject_digest(&self) -> &ContentDigest {
-        &self.subject_digest
-    }
-
-    #[must_use]
-    pub fn subject_reference(&self) -> &str {
-        &self.subject_reference
-    }
-
-    #[must_use]
-    pub fn trust_policy_scope(&self) -> &str {
-        &self.trust_policy_scope
-    }
 
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.format_version == CANONICAL_FORMAT_VERSION
-                && !self.subject_reference.trim().is_empty()
-                && !self.trust_policy_scope.trim().is_empty()
-                && !self.verifier_version.trim().is_empty(),
+            self.format_version == CANONICAL_FORMAT_VERSION,
             InvalidModelSnafu {
-                reason: String::from(
-                    "verification receipt is not versioned or lacks a verifier version"
-                )
+                reason: String::from("installation record has an unsupported format version")
             }
         );
-        self.subject_digest.validate()?;
-        self.trust_policy_digest.validate()?;
-        self.verifier_digest.validate()?;
-        if let Some(digest) = &self.revocation_snapshot_digest {
-            digest.validate()?;
-        }
-        Ok(())
+        self.package_digest.validate()
     }
 }
 
-impl CanonicalEncoding for VerificationReceipt {}
+impl CanonicalEncoding for InstallationRecord {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -398,6 +341,19 @@ impl DigestAlias {
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.format_version == CANONICAL_FORMAT_VERSION
+                && AgentPackageManifest::is_identifier(&self.name),
+            InvalidModelSnafu {
+                reason: String::from(
+                    "alias must have a supported format version and unambiguous identifier"
+                )
+            }
+        );
+        self.digest.validate()
     }
 }
 

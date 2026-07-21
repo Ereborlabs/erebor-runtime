@@ -11,7 +11,9 @@ use erebor_runtime_core::{
 use erebor_runtime_events::SessionId;
 use erebor_runtime_ipc::v1::SessionCreateRequest;
 
-use crate::{config::DaemonConfig, error::InvalidRequestSnafu, Result};
+use crate::{
+    config::DaemonConfig, error::InvalidRequestSnafu, local_store::DaemonLocalStore, Result,
+};
 use erebor_runtime_session::RunnerExecutionAdmission;
 
 pub(super) struct AdmissionContext<'a> {
@@ -21,6 +23,7 @@ pub(super) struct AdmissionContext<'a> {
     pub(super) state_root: &'a Path,
     pub(super) capability: RunnerCapabilityDocument,
     pub(super) runner_admission: RunnerExecutionAdmission,
+    pub(super) local_store: &'a DaemonLocalStore,
     pub(super) config: &'a DaemonConfig,
 }
 
@@ -56,22 +59,16 @@ pub(super) fn parse_request(request: SessionCreateRequest) -> Result<RunRequest>
 }
 
 pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> Result<SessionSpec> {
-    let fixture = context
-        .config
-        .phase_two_fixture(
-            run_request.package_sha256(),
-            run_request.installation_sha256(),
-            run_request.adapter_sha256(),
-            run_request.policy_set_sha256(),
-        )
-        .ok_or_else(|| {
-            InvalidRequestSnafu {
-            reason: String::from(
-                    "package, installation, adapter, and policy identities do not match an operator-admitted Phase 2 validated fixture",
-            ),
-        }
-            .build()
-        })?;
+    let package_digest = required_identity(run_request.package_sha256(), "package")?;
+    let installation_digest = required_identity(run_request.installation_sha256(), "installation")?;
+    let adapter_digest = required_identity(run_request.adapter_sha256(), "adapter")?;
+    let admission = context.local_store.resolve_admission(
+        context.owner.uid(),
+        package_digest,
+        installation_digest,
+        adapter_digest,
+        run_request.policy_set_sha256(),
+    )?;
     if run_request.runner() != context.capability.runner() {
         return InvalidRequestSnafu {
             reason: String::from("selected runner does not match its capability document"),
@@ -101,15 +98,15 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
         owner: context.owner,
         workload_privileges,
         command: run_request.command().to_vec(),
-        package: identity("agent-package", run_request.package_sha256())?,
-        installation: identity("installation", run_request.installation_sha256())?,
-        adapter: identity("adapter", run_request.adapter_sha256())?,
-        policy_inputs: fixture
+        package: identity("agent-package", Some(admission.package_digest()))?,
+        installation: identity("installation", Some(admission.installation_digest()))?,
+        adapter: identity("adapter", Some(admission.adapter_digest()))?,
+        policy_inputs: admission
             .policy_input_digests()
             .iter()
             .map(|digest| ImmutableIdentity::new("policy-input", digest).map_err(invalid_spec))
             .collect::<Result<Vec<_>>>()?,
-        policy_set: ImmutableIdentity::new("policy-set", run_request.policy_set_sha256())
+        policy_set: ImmutableIdentity::new("policy-set", admission.policy_set_digest())
             .map_err(invalid_spec)?,
         runner_capability: context.capability,
         workspace,
@@ -156,6 +153,15 @@ fn identity(kind: &str, digest: Option<&str>) -> Result<Option<ImmutableIdentity
     digest
         .map(|digest| ImmutableIdentity::new(kind, digest).map_err(invalid_spec))
         .transpose()
+}
+
+fn required_identity<'a>(digest: Option<&'a str>, kind: &str) -> Result<&'a str> {
+    digest.ok_or_else(|| {
+        InvalidRequestSnafu {
+            reason: format!("generic session admission requires an exact {kind} digest"),
+        }
+        .build()
+    })
 }
 
 fn optional(value: String) -> Option<String> {

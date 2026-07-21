@@ -174,11 +174,11 @@ impl SessionExecutionService {
     ) -> Result<SessionRunOutcome, SessionExecutionError> {
         match plan.runner().kind() {
             SessionRunnerKind::Docker => Err(SessionExecutionError::Runtime {
-                source: RuntimeError::UnsupportedSessionRunnerOperation {
+                source: Box::new(RuntimeError::UnsupportedSessionRunnerOperation {
                     runner: String::from("docker"),
                     operation: String::from("adopt"),
                     location: Location::default(),
-                },
+                }),
                 location: Location::default(),
             }),
             SessionRunnerKind::LinuxHost => {
@@ -201,11 +201,11 @@ impl SessionExecutionService {
         let outcome = match plan.runner().kind() {
             SessionRunnerKind::Docker => {
                 return Err(SessionExecutionError::Runtime {
-                    source: RuntimeError::UnsupportedSessionRunnerOperation {
+                    source: Box::new(RuntimeError::UnsupportedSessionRunnerOperation {
                         runner: String::from("docker"),
                         operation: String::from("adopt"),
                         location: Location::default(),
-                    },
+                    }),
                     location: Location::default(),
                 });
             }

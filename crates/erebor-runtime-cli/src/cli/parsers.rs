@@ -61,14 +61,3 @@ pub(crate) fn parse_non_empty_string(value: &str) -> Result<String, String> {
         Ok(value.to_owned())
     }
 }
-
-pub(crate) fn parse_positive_pid(value: &str) -> Result<i32, String> {
-    let pid = value
-        .parse::<i32>()
-        .map_err(|_| String::from("pid must be a positive process id"))?;
-    if pid <= 0 {
-        Err(String::from("pid must be a positive process id"))
-    } else {
-        Ok(pid)
-    }
-}

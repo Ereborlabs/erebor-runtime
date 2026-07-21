@@ -26,7 +26,7 @@ fn requires_config_for_runtime_start() {
 }
 
 #[test]
-fn accepts_session_run_and_diagnose_commands() {
+fn accepts_transitional_codex_run_and_daemon_generic_run() {
     let run = Cli::try_parse_from([
         "erebor",
         "session",
@@ -35,132 +35,76 @@ fn accepts_session_run_and_diagnose_commands() {
         "docker",
         "--config",
         "pilot-session.json",
-        "openclaw",
+        "--",
+        "/opt/codex/codex",
         "--help",
     ]);
-    let diagnose = Cli::try_parse_from([
-        "erebor",
-        "session",
-        "diagnose",
-        "--runner",
-        "docker",
-        "--config",
-        "pilot-session.json",
-        "list-workspace",
-    ]);
-
-    assert!(run.is_ok());
-    assert!(diagnose.is_ok());
-}
-
-#[test]
-fn rejects_session_run_tty_flag() {
-    let error = Cli::try_parse_from([
+    let generic = Cli::try_parse_from([
         "erebor",
         "session",
         "run",
         "--runner",
-        "docker",
+        "linux-host",
+        "--workspace",
+        "/work",
+        "--package-digest",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--installation-digest",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--adapter-digest",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--policy-set-digest",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--idempotency-key",
+        "run-1",
+        "--",
+        "/usr/bin/true",
+    ]);
+
+    assert!(run.is_ok());
+    assert!(generic.is_ok());
+}
+
+#[test]
+fn generic_session_run_accepts_admitted_tty_request() {
+    let run = Cli::try_parse_from([
+        "erebor",
+        "session",
+        "run",
+        "--runner",
+        "linux-host",
+        "--workspace",
+        "/work",
+        "--package-digest",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--installation-digest",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--adapter-digest",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--policy-set-digest",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--idempotency-key",
+        "run-1",
         "--tty",
-        "--config",
-        "pilot-session.json",
-        "openclaw",
+        "--",
+        "/usr/bin/true",
     ]);
 
-    assert!(error.is_err());
+    assert!(run.is_ok());
 }
 
 #[test]
-fn accepts_and_rejects_session_adopt_targets() {
-    let pid = Cli::try_parse_from([
-        "erebor",
-        "session",
-        "adopt",
-        "--runner",
-        "linux-host",
-        "--config",
-        "pilot-session.json",
-        "--pid",
-        "1234",
-    ]);
-    let by_match = Cli::try_parse_from([
-        "erebor",
-        "session",
-        "adopt",
-        "--runner",
-        "linux-host",
-        "--config",
-        "pilot-session.json",
-        "--match",
-        "openclaw",
-    ]);
-    let multiple = Cli::try_parse_from([
-        "erebor",
-        "session",
-        "adopt",
-        "--runner",
-        "linux-host",
-        "--config",
-        "pilot-session.json",
-        "--pid",
-        "1234",
-        "--match",
-        "openclaw",
-    ]);
-    let missing = Cli::try_parse_from([
-        "erebor",
-        "session",
-        "adopt",
-        "--runner",
-        "linux-host",
-        "--config",
-        "pilot-session.json",
-    ]);
-
-    assert!(pid.is_ok());
-    assert!(by_match.is_ok());
-    assert!(multiple.is_err());
-    assert!(missing.is_err());
+fn rejects_session_adoption() {
+    assert!(Cli::try_parse_from(["erebor", "session", "adopt", "--pid", "1234"]).is_err());
 }
 
 #[test]
-fn accepts_registry_session_review_commands_and_rejects_old_flags() {
-    let ls = Cli::try_parse_from(["erebor", "session", "ls"]);
-    let show = Cli::try_parse_from(["erebor", "session", "show", "session-1"]);
-    let describe = Cli::try_parse_from(["erebor", "session", "describe", "session-1"]);
-    let old_ls = Cli::try_parse_from(["erebor", "session", "ls", "--audit", "audit"]);
-    let old_show = Cli::try_parse_from([
-        "erebor",
-        "session",
-        "show",
-        "session-1",
-        "--audit",
-        "audit.jsonl",
-    ]);
-
-    assert!(ls.is_ok());
-    assert!(show.is_ok());
-    assert!(describe.is_ok());
-    assert!(old_ls.is_err());
-    assert!(old_show.is_err());
-}
-
-#[test]
-fn accepts_session_review_json_format() {
-    let ls = Cli::try_parse_from(["erebor", "session", "ls", "--format", "json"]);
-    let show = Cli::try_parse_from(["erebor", "session", "show", "session-1", "--format", "json"]);
-    let describe = Cli::try_parse_from([
-        "erebor",
-        "session",
-        "describe",
-        "session-1",
-        "--format",
-        "json",
-    ]);
-
-    assert!(ls.is_ok());
-    assert!(show.is_ok());
-    assert!(describe.is_ok());
+fn session_reviews_use_the_daemon_session_api() {
+    assert!(Cli::try_parse_from(["erebor", "session", "ps"]).is_ok());
+    assert!(Cli::try_parse_from(["erebor", "session", "ls"]).is_ok());
+    assert!(Cli::try_parse_from(["erebor", "session", "inspect", "session-1"]).is_ok());
+    assert!(Cli::try_parse_from(["erebor", "session", "show", "session-1"]).is_err());
+    assert!(Cli::try_parse_from(["erebor", "session", "describe", "session-1"]).is_err());
 }
 
 #[test]

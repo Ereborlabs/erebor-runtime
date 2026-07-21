@@ -1,160 +1,110 @@
-use std::path::PathBuf;
+use clap::Parser;
 
-use erebor_runtime_core::{SessionAdoptTarget, SessionRunnerKind};
+use crate::cli::Cli;
 
-use super::{
-    args::{SessionAdoptArgs, SessionDiagnoseArgs, SessionRunArgs, SessionRunnerArg},
-    SessionPlanBuilder,
-};
-use crate::cli::{config_paths::RuntimeConfigLoader, test_support::TempJsonFile};
+const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[test]
-fn session_run_builds_docker_session_plan() -> Result<(), Box<dyn std::error::Error>> {
-    let config = TempJsonFile::write(
-        r#"
-        {
-          "policies": ["policies/browser.json"],
-          "session": {
-            "enabled": true,
-            "actor": { "id": "openclaw", "kind": "agent" },
-            "workspace": "workspace",
-            "runner": {
-              "kind": "docker",
-              "docker": {
-                "image": "erebor/openclaw-pilot:local",
-                "network": "none",
-                "workdir": "/work"
-              }
-            }
-          },
-          "surfaces": {
-            "terminal": { "enabled": true, "tty": true }
-          }
-        }
-        "#,
-    )?;
-    let args = SessionRunArgs {
-        config: config.path().to_path_buf(),
-        runner: SessionRunnerArg::Docker,
-        command: vec![String::from("openclaw"), String::from("--help")],
-    };
-    let runtime_config = RuntimeConfigLoader::read(config.path())?;
-
-    let plan = SessionPlanBuilder::new(&runtime_config, &args.config).run(&args)?;
-    let base_dir = config
-        .path()
-        .parent()
-        .ok_or_else(|| std::io::Error::other("missing config parent"))?;
-
-    assert_eq!(plan.actor().id, "openclaw");
-    assert_eq!(
-        plan.policies(),
-        vec![base_dir.join("policies/browser.json")].as_slice()
-    );
-    assert_eq!(plan.workspace(), Some(base_dir.join("workspace").as_path()));
-    assert_eq!(
-        plan.registry_path(),
-        base_dir
-            .join("workspace")
-            .join(".erebor/sessions")
-            .as_path()
-    );
-    assert_eq!(
-        plan.runner().docker().image(),
-        "erebor/openclaw-pilot:local"
-    );
-    assert_eq!(plan.runner().docker().network(), "none");
-    assert!(plan.terminal().tty());
-    assert_eq!(plan.command(), ["openclaw", "--help"]);
-    Ok(())
+fn generic_session_commands_require_daemon_owned_identities() {
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "create",
+        "--runner",
+        "linux-host",
+        "--workspace",
+        "/work",
+        "--package-digest",
+        DIGEST,
+        "--installation-digest",
+        DIGEST,
+        "--adapter-digest",
+        DIGEST,
+        "--policy-set-digest",
+        DIGEST,
+        "--idempotency-key",
+        "create-1",
+        "--",
+        "/usr/bin/true",
+    ])
+    .is_ok());
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "create",
+        "--runner",
+        "linux-host",
+        "--workspace",
+        "/work",
+        "--package-digest",
+        DIGEST,
+        "--installation-digest",
+        DIGEST,
+        "--adapter-digest",
+        DIGEST,
+        "--policy-set-digest",
+        DIGEST,
+        "--",
+        "/usr/bin/true",
+    ])
+    .is_err());
 }
 
 #[test]
-fn session_run_builds_linux_host_session_plan() -> Result<(), Box<dyn std::error::Error>> {
-    let config = TempJsonFile::write(
-        r#"
-        {
-          "policies": ["policies/browser.json"],
-          "session": {
-            "enabled": true,
-            "actor": { "id": "openclaw", "kind": "agent" },
-            "workspace": "workspace",
-            "runner": { "kind": "linux_host" }
-          },
-          "surfaces": {
-            "terminal": { "enabled": true }
-          }
-        }
-        "#,
-    )?;
-    let args = SessionRunArgs {
-        config: config.path().to_path_buf(),
-        runner: SessionRunnerArg::LinuxHost,
-        command: vec![String::from("openclaw")],
-    };
-    let runtime_config = RuntimeConfigLoader::read(config.path())?;
-
-    let plan = SessionPlanBuilder::new(&runtime_config, &args.config).run(&args)?;
-
-    assert_eq!(plan.actor().id, "openclaw");
-    assert_eq!(plan.runner().kind(), SessionRunnerKind::LinuxHost);
-    assert_eq!(plan.command(), ["openclaw"]);
-    Ok(())
+fn session_lifecycle_is_a_daemon_command_family() {
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "run",
+        "--runner",
+        "linux-host",
+        "--workspace",
+        "/work",
+        "--package-digest",
+        DIGEST,
+        "--installation-digest",
+        DIGEST,
+        "--adapter-digest",
+        DIGEST,
+        "--policy-set-digest",
+        DIGEST,
+        "--idempotency-key",
+        "run-1",
+        "--env",
+        "LANG=C",
+        "--secret",
+        "provider://secret",
+        "--",
+        "/usr/bin/true",
+    ])
+    .is_ok());
+    assert!(Cli::try_parse_from(["erebor", "session", "start", "session-1"]).is_err());
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "start",
+        "session-1",
+        "--idempotency-key",
+        "start-1",
+    ])
+    .is_ok());
+    assert!(Cli::try_parse_from(["erebor", "session", "adopt", "--pid", "1"]).is_err());
+    assert!(Cli::try_parse_from(["erebor", "session", "diagnose", "test"]).is_err());
 }
 
 #[test]
-fn session_diagnose_builds_named_diagnostic_plan() -> Result<(), Box<dyn std::error::Error>> {
-    let config = TempJsonFile::write(
-        r#"
-        {
-          "policies": ["policies/browser.json"],
-          "session": {
-            "enabled": true,
-            "actor": { "id": "openclaw", "kind": "agent" },
-            "diagnostics": [
-              {
-                "name": "list-workspace",
-                "command": ["sh", "-lc", "ls -la /workspace | head"]
-              }
-            ],
-            "runner": {
-              "kind": "docker",
-              "docker": {
-                "image": "alpine:3.20",
-                "network": "none",
-                "workdir": "/workspace"
-              }
-            }
-          },
-          "surfaces": {
-            "terminal": { "enabled": true }
-          }
-        }
-        "#,
-    )?;
-    let args = SessionDiagnoseArgs {
-        config: config.path().to_path_buf(),
-        runner: SessionRunnerArg::Docker,
-        name: String::from("list-workspace"),
-    };
-    let runtime_config = RuntimeConfigLoader::read(config.path())?;
-
-    let plan = SessionPlanBuilder::new(&runtime_config, &args.config).diagnostic(&args)?;
-
-    assert_eq!(plan.actor().id, "openclaw");
-    assert_eq!(plan.diagnostic(), Some("list-workspace"));
-    assert_eq!(plan.command(), ["sh", "-lc", "ls -la /workspace | head"]);
-    Ok(())
-}
-
-#[test]
-fn session_adopt_args_translate_to_service_target() {
-    let args = SessionAdoptArgs {
-        config: PathBuf::from("pilot-session.json"),
-        runner: SessionRunnerArg::LinuxHost,
-        pid: None,
-        match_pattern: Some(String::from("openclaw")),
-    };
-
-    assert_eq!(args.target(), SessionAdoptTarget::process_match("openclaw"));
+fn configured_codex_path_remains_the_only_foreground_exception() {
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "run",
+        "--config",
+        "codex-runtime.json",
+        "--runner",
+        "linux-host",
+        "--",
+        "/opt/codex/codex",
+        "app-server",
+    ])
+    .is_ok());
 }

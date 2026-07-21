@@ -301,7 +301,30 @@ impl RunnerRegistry {
         ]))
     }
 
+    /// Compiles the Phase 3 daemon runner set. Docker remains available to
+    /// earlier direct-test owners, but daemon admission deliberately exposes
+    /// only Linux-host until the Phase 6 image contract is implemented.
+    pub fn compiled_linux_host(config: RunnerInstallConfig) -> Result<Self, SessionManagerError> {
+        Ok(Self::new([Arc::new(
+            LinuxRunnerDriver::from_install_config(&config).context(RunnerSnafu)?,
+        ) as Arc<dyn RunnerDriver>]))
+    }
+
     pub fn inspect(&self, id: &RunnerId) -> Result<RunnerCapabilityDocument, SessionManagerError> {
         self.get(id)?.inspect().context(RunnerSnafu)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RunnerInstallConfig, RunnerRegistry};
+    use erebor_runtime_core::RunnerId;
+
+    #[test]
+    fn phase_three_registry_excludes_docker() -> Result<(), Box<dyn std::error::Error>> {
+        let registry = RunnerRegistry::compiled_linux_host(RunnerInstallConfig::default())?;
+        assert!(registry.get(&RunnerId::new("linux-host")?).is_ok());
+        assert!(registry.get(&RunnerId::new("docker")?).is_err());
+        Ok(())
     }
 }

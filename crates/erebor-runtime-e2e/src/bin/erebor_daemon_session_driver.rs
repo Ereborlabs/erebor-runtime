@@ -9,8 +9,6 @@ use erebor_runtime_ipc::v1::{
     SessionRecord,
 };
 
-const FIXTURE_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-
 #[derive(Parser)]
 #[command(name = "erebor-daemon-session-driver")]
 struct Driver {
@@ -49,6 +47,14 @@ struct CreateArgs {
     runner: String,
     #[arg(long)]
     workspace: PathBuf,
+    #[arg(long)]
+    package_digest: String,
+    #[arg(long)]
+    installation_digest: String,
+    #[arg(long)]
+    adapter_digest: String,
+    #[arg(long)]
+    policy_set_digest: String,
     #[arg(long, default_value = "terminate")]
     failure_mode: String,
     #[arg(long, default_value_t = 2)]
@@ -228,19 +234,17 @@ async fn execute(
                         runner_id: args.runner,
                         command: args.command,
                         workspace: args.workspace.display().to_string(),
-                        policy_set_digest: FIXTURE_DIGEST.to_owned(),
-                        package_digest: FIXTURE_DIGEST.to_owned(),
-                        installation_digest: FIXTURE_DIGEST.to_owned(),
-                        adapter_digest: FIXTURE_DIGEST.to_owned(),
+                        policy_set_digest: args.policy_set_digest,
+                        package_digest: args.package_digest,
+                        installation_digest: args.installation_digest,
+                        adapter_digest: args.adapter_digest,
                         daemon_failure_mode: args.failure_mode,
                         requested_loss_grace_seconds: args.loss_grace_seconds,
                         environment: vec![SessionEnvironmentEntry {
                             key: String::from("LANG"),
                             value: String::from("C"),
                         }],
-                        secret_references: vec![String::from(
-                            "phase-two-secret-provider://fixture",
-                        )],
+                        secret_references: Vec::new(),
                         container_image_digest: args.image_digest.unwrap_or_default(),
                         tty: false,
                         detached: true,

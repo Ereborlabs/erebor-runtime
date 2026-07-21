@@ -1,6 +1,6 @@
 use std::{any::Any, io, path::PathBuf};
 
-use erebor_runtime_audit::{AuditLogError, EvidenceTraceError, SessionReviewError};
+use erebor_runtime_audit::{AuditLogError, EvidenceTraceError};
 use erebor_runtime_client::DaemonClientError;
 use erebor_runtime_core::{RuntimeConfigError, RuntimeError, SessionRegistryError};
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
@@ -59,7 +59,8 @@ pub(crate) enum CliError {
     },
     #[snafu(display("{source}"))]
     Runtime {
-        source: RuntimeError,
+        #[snafu(source(from(RuntimeError, Box::new)))]
+        source: Box<RuntimeError>,
         #[snafu(implicit)]
         location: Location,
     },
@@ -90,13 +91,6 @@ pub(crate) enum CliError {
         location: Location,
     },
     #[snafu(display("{source}"))]
-    SessionReview {
-        #[snafu(source(from(SessionReviewError, Box::new)))]
-        source: Box<SessionReviewError>,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("{source}"))]
     SessionRegistry {
         source: SessionRegistryError,
         #[snafu(implicit)]
@@ -111,6 +105,12 @@ pub(crate) enum CliError {
     },
     #[snafu(display("filesystem command is invalid: {reason}"))]
     InvalidFilesystemCommand {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("session command is invalid: {reason}"))]
+    InvalidSessionCommand {
         reason: String,
         #[snafu(implicit)]
         location: Location,
@@ -151,10 +151,10 @@ impl ErrorExt for CliError {
             Self::SessionExecution { source, .. } => source.status_code(),
             Self::AuditLog { source, .. } => source.status_code(),
             Self::EvidenceTrace { source, .. } => source.status_code(),
-            Self::SessionReview { source, .. } => source.status_code(),
             Self::SessionRegistry { source, .. } => source.status_code(),
             Self::Filesystem { source, .. } => source.status_code(),
             Self::InvalidFilesystemCommand { .. } => StatusCode::InvalidArguments,
+            Self::InvalidSessionCommand { .. } => StatusCode::InvalidArguments,
             Self::EncodeJson { .. } => StatusCode::Internal,
             Self::DaemonClient { source, .. } => source.status_code(),
             Self::DaemonRuntime { .. } => StatusCode::Internal,
@@ -176,10 +176,10 @@ impl ErrorExt for CliError {
             Self::SessionExecution { source, .. } => source.retry_hint(),
             Self::AuditLog { source, .. } => source.retry_hint(),
             Self::EvidenceTrace { source, .. } => source.retry_hint(),
-            Self::SessionReview { source, .. } => source.retry_hint(),
             Self::SessionRegistry { source, .. } => source.retry_hint(),
             Self::Filesystem { source, .. } => source.retry_hint(),
             Self::InvalidFilesystemCommand { .. } => RetryHint::NonRetryable,
+            Self::InvalidSessionCommand { .. } => RetryHint::NonRetryable,
             Self::EncodeJson { .. } => RetryHint::NonRetryable,
             Self::DaemonClient { source, .. } => source.retry_hint(),
             Self::DaemonRuntime { .. } => RetryHint::NonRetryable,
@@ -204,7 +204,6 @@ impl ErrorExt for CliError {
                 Self::SessionExecution { source, .. } => source.to_string(),
                 Self::AuditLog { source, .. } => source.to_string(),
                 Self::EvidenceTrace { source, .. } => source.to_string(),
-                Self::SessionReview { source, .. } => source.to_string(),
                 Self::SessionRegistry { source, .. } => source.to_string(),
                 Self::Filesystem { source, .. } => source.to_string(),
                 Self::ReadConfig { .. }
@@ -212,6 +211,7 @@ impl ErrorExt for CliError {
                 | Self::ReadEvent { .. }
                 | Self::InvalidEvent { .. }
                 | Self::InvalidFilesystemCommand { .. }
+                | Self::InvalidSessionCommand { .. }
                 | Self::WriteSessionOutput { .. }
                 | Self::EncodeJson { .. }
                 | Self::DaemonClient { .. }

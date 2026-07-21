@@ -269,10 +269,10 @@ fn checkpoint_successful_filesystem_layers(
 
 fn session_exit_code_from_error(error: &SessionExecutionError) -> Option<i32> {
     match error {
-        SessionExecutionError::Runtime {
-            source: RuntimeError::SessionRunnerExit { code, .. },
-            ..
-        } => *code,
+        SessionExecutionError::Runtime { source, .. } => match source.as_ref() {
+            RuntimeError::SessionRunnerExit { code, .. } => *code,
+            _ => None,
+        },
         SessionExecutionError::DiagnosticFailed { .. } => None,
         _ => None,
     }

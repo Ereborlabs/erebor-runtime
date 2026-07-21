@@ -311,7 +311,7 @@ impl RunnerDriver for DockerRunnerDriver {
             .map_err(|source| context.invalid(source.to_string()))?;
         self.validate_image(&image)
             .map_err(|source| SessionManagerError::Runner {
-                source,
+                source: Box::new(source),
                 location: snafu::Location::default(),
             })?;
         let workload_privileges = WorkloadPrivilegePlan::new(Vec::new(), 0o022, 1024, 512, 0)

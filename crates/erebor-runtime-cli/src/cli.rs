@@ -25,8 +25,7 @@ mod tests;
 
 pub(super) use config_paths::ConfigPathResolver;
 pub(super) use parsers::{
-    parse_non_empty_path, parse_non_empty_string, parse_positive_pid, parse_ws_url, OutputFormat,
-    WebSocketUrl,
+    parse_non_empty_path, parse_non_empty_string, parse_ws_url, OutputFormat, WebSocketUrl,
 };
 
 #[derive(Debug, Parser)]

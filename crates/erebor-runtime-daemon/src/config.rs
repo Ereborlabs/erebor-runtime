@@ -1,5 +1,8 @@
 use std::{collections::BTreeSet, io::Read, path::Path};
 
+use erebor_runtime_packages::{
+    AgentPackageManifest, CanonicalEncoding, InstallationRecord, PolicySetRevision,
+};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 
@@ -17,61 +20,60 @@ const MAX_LOG_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_RECORDS: u32 = 4096;
 const MAX_IDEMPOTENCY_RECORDS: u32 = 4096;
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PhaseTwoValidatedFixture {
-    package_digest: Option<String>,
-    installation_digest: Option<String>,
-    adapter_digest: Option<String>,
-    policy_input_digests: Vec<String>,
-    policy_set_digest: String,
+pub(crate) struct RootCuratedAdmission {
+    package: AgentPackageManifest,
+    installation: InstallationRecord,
+    policy_set: PolicySetRevision,
 }
 
-impl PhaseTwoValidatedFixture {
+impl RootCuratedAdmission {
+    #[cfg(test)]
+    pub(crate) fn new(
+        package: AgentPackageManifest,
+        installation: InstallationRecord,
+        policy_set: PolicySetRevision,
+    ) -> Self {
+        Self {
+            package,
+            installation,
+            policy_set,
+        }
+    }
+
     fn validate(&self) -> bool {
-        let agent_identity_is_complete = [
-            self.package_digest.as_ref(),
-            self.installation_digest.as_ref(),
-            self.adapter_digest.as_ref(),
-        ]
-        .into_iter()
-        .all(|identity| identity.is_some());
-        let agent_identity_is_absent = self.package_digest.is_none()
-            && self.installation_digest.is_none()
-            && self.adapter_digest.is_none();
-        (agent_identity_is_complete || agent_identity_is_absent)
+        self.package.validate().is_ok()
+            && self.installation.validate().is_ok()
+            && self.policy_set.validate().is_ok()
             && self
-                .package_digest
-                .iter()
-                .chain(self.installation_digest.iter())
-                .chain(self.adapter_digest.iter())
-                .chain(self.policy_input_digests.iter())
-                .chain(std::iter::once(&self.policy_set_digest))
-                .all(|digest| valid_sha256(digest))
-            && !self.policy_input_digests.is_empty()
-            && self
-                .policy_input_digests
-                .iter()
-                .collect::<BTreeSet<_>>()
-                .len()
-                == self.policy_input_digests.len()
+                .package
+                .canonical_digest()
+                .is_ok_and(|digest| self.installation.package_digest() == &digest)
     }
 
-    pub(crate) fn policy_input_digests(&self) -> &[String] {
-        &self.policy_input_digests
+    pub(crate) fn package(&self) -> &AgentPackageManifest {
+        &self.package
     }
 
-    fn matches(
-        &self,
-        package_digest: Option<&str>,
-        installation_digest: Option<&str>,
-        adapter_digest: Option<&str>,
-        policy_set_digest: &str,
-    ) -> bool {
-        self.package_digest.as_deref() == package_digest
-            && self.installation_digest.as_deref() == installation_digest
-            && self.adapter_digest.as_deref() == adapter_digest
-            && self.policy_set_digest == policy_set_digest
+    pub(crate) fn installation(&self) -> &InstallationRecord {
+        &self.installation
+    }
+
+    pub(crate) fn policy_set(&self) -> &PolicySetRevision {
+        &self.policy_set
+    }
+
+    fn identity_key(&self) -> Option<(String, String, String)> {
+        Some((
+            self.package.canonical_digest().ok()?.as_str().to_owned(),
+            self.installation
+                .canonical_digest()
+                .ok()?
+                .as_str()
+                .to_owned(),
+            self.policy_set.canonical_digest().ok()?.as_str().to_owned(),
+        ))
     }
 }
 
@@ -94,7 +96,7 @@ pub struct DaemonConfig {
     #[serde(default = "default_session_retry_horizon_seconds")]
     pub session_retry_horizon_seconds: u64,
     #[serde(default)]
-    pub(crate) phase_two_validated_fixtures: Vec<PhaseTwoValidatedFixture>,
+    pub(crate) root_curated_admissions: Vec<RootCuratedAdmission>,
 }
 
 impl Default for DaemonConfig {
@@ -108,7 +110,7 @@ impl Default for DaemonConfig {
             session_output_rotation_bytes: DEFAULT_SESSION_OUTPUT_ROTATION_BYTES,
             max_daemon_loss_grace_seconds: DEFAULT_MAX_DAEMON_LOSS_GRACE_SECONDS,
             session_retry_horizon_seconds: DEFAULT_SESSION_RETRY_HORIZON_SECONDS,
-            phase_two_validated_fixtures: Vec::new(),
+            root_curated_admissions: Vec::new(),
         }
     }
 }
@@ -144,7 +146,7 @@ impl DaemonConfig {
             || self.max_daemon_loss_grace_seconds == 0
             || self.max_daemon_loss_grace_seconds > 24 * 60 * 60
             || self.session_retry_horizon_seconds == 0
-            || !valid_phase_two_fixtures(&self.phase_two_validated_fixtures)
+            || !valid_root_curated_admissions(&self.root_curated_admissions)
         {
             return Err(crate::DaemonError::InvalidConfig {
                 path: path.to_path_buf(),
@@ -158,34 +160,18 @@ impl DaemonConfig {
         Ok(())
     }
 
-    pub(crate) fn phase_two_fixture(
-        &self,
-        package_digest: Option<&str>,
-        installation_digest: Option<&str>,
-        adapter_digest: Option<&str>,
-        policy_set_digest: &str,
-    ) -> Option<&PhaseTwoValidatedFixture> {
-        self.phase_two_validated_fixtures.iter().find(|fixture| {
-            fixture.matches(
-                package_digest,
-                installation_digest,
-                adapter_digest,
-                policy_set_digest,
-            )
-        })
+    pub(crate) fn root_curated_admissions(&self) -> &[RootCuratedAdmission] {
+        &self.root_curated_admissions
     }
 }
 
-fn valid_phase_two_fixtures(fixtures: &[PhaseTwoValidatedFixture]) -> bool {
-    fixtures.iter().all(PhaseTwoValidatedFixture::validate)
-        && fixtures.iter().collect::<BTreeSet<_>>().len() == fixtures.len()
-}
-
-fn valid_sha256(digest: &str) -> bool {
-    digest.len() == 64
-        && digest
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+fn valid_root_curated_admissions(admissions: &[RootCuratedAdmission]) -> bool {
+    let keys = admissions
+        .iter()
+        .map(RootCuratedAdmission::identity_key)
+        .collect::<Option<BTreeSet<_>>>();
+    admissions.iter().all(RootCuratedAdmission::validate)
+        && keys.is_some_and(|keys| keys.len() == admissions.len())
 }
 
 const fn default_max_log_bytes() -> u64 {
@@ -220,40 +206,40 @@ const fn default_session_retry_horizon_seconds() -> u64 {
 mod tests {
     use std::path::Path;
 
-    use super::{DaemonConfig, PhaseTwoValidatedFixture};
+    use erebor_runtime_packages::{
+        AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord,
+        PolicySetRevision,
+    };
+
+    use super::{DaemonConfig, RootCuratedAdmission};
 
     #[test]
-    fn phase_two_fixtures_require_complete_unique_validated_identity_sets() {
-        let digest =
-            String::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        let fixture = PhaseTwoValidatedFixture {
-            package_digest: Some(digest.clone()),
-            installation_digest: Some(digest.clone()),
-            adapter_digest: Some(digest.clone()),
-            policy_input_digests: vec![digest.clone()],
-            policy_set_digest: digest.clone(),
-        };
+    fn root_curated_admissions_require_matching_unique_canonical_identities(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let config_digest =
+            ContentDigest::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?;
+        let policy_digest =
+            ContentDigest::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")?;
+        let package = AgentPackageManifest::new(
+            "generic-process",
+            "generic-process-v1",
+            "0.1.0",
+            vec![String::from("<argv>")],
+            config_digest,
+            Vec::new(),
+        )?;
+        let installation = InstallationRecord::new(1000, package.canonical_digest()?, 1);
+        let policy_set = PolicySetRevision::new(policy_digest, Vec::new(), None)?;
+        let admission = RootCuratedAdmission::new(package, installation, policy_set);
         let mut config = DaemonConfig {
-            phase_two_validated_fixtures: vec![fixture.clone()],
+            root_curated_admissions: vec![admission.clone()],
             ..DaemonConfig::default()
         };
         assert!(config.validate(Path::new("<test-config>")).is_ok());
-        assert!(config
-            .phase_two_fixture(Some(&digest), Some(&digest), Some(&digest), &digest)
-            .is_some());
-        assert!(config
-            .phase_two_fixture(None, Some(&digest), Some(&digest), &digest)
-            .is_none());
+        assert_eq!(config.root_curated_admissions().len(), 1);
 
-        config.phase_two_validated_fixtures = vec![fixture.clone(), fixture];
+        config.root_curated_admissions = vec![admission.clone(), admission];
         assert!(config.validate(Path::new("<test-config>")).is_err());
-        config.phase_two_validated_fixtures = vec![PhaseTwoValidatedFixture {
-            package_digest: Some(digest.clone()),
-            installation_digest: None,
-            adapter_digest: Some(digest.clone()),
-            policy_input_digests: vec![digest.clone()],
-            policy_set_digest: digest,
-        }];
-        assert!(config.validate(Path::new("<test-config>")).is_err());
+        Ok(())
     }
 }

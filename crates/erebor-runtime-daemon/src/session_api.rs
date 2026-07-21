@@ -51,7 +51,8 @@ impl DaemonSessionApi {
         Self::new(
             paths,
             config,
-            RunnerRegistry::compiled(RunnerInstallConfig::default()).context(SessionSnafu)?,
+            RunnerRegistry::compiled_linux_host(RunnerInstallConfig::default())
+                .context(SessionSnafu)?,
         )
     }
 
@@ -64,6 +65,7 @@ impl DaemonSessionApi {
         let runtime_root = paths.session_runtime_path();
         let descriptor_broker = Arc::new(DescriptorBroker::installed());
         let local_store = DaemonLocalStore::installed(paths)?;
+        local_store.seed_root_curated(config.root_curated_admissions())?;
         let runtime = SessionRuntimeResources::new(
             state_root.clone(),
             runtime_root.clone(),
@@ -122,6 +124,7 @@ impl DaemonSessionApi {
                 state_root: &self.state_root,
                 capability,
                 runner_admission,
+                local_store: &self.local_store,
                 config,
             },
         )?;
@@ -129,6 +132,11 @@ impl DaemonSessionApi {
             .validate_admission(&spec)
             .context(SessionSnafu)?;
         Ok(spec)
+    }
+
+    pub(crate) fn seed_root_curated(&self, config: &DaemonConfig) -> Result<()> {
+        self.local_store
+            .seed_root_curated(config.root_curated_admissions())
     }
 
     pub(crate) fn apply(&self, intent: &MutationIntent) -> Result<MutationResponse> {
@@ -263,32 +271,31 @@ impl DaemonSessionApi {
             .validate_admission(record.spec())
             .context(SessionSnafu)?;
         let output = record.spec().output();
-        let fixture_is_current = config
-            .phase_two_fixture(
-                record.spec().package().map(ImmutableIdentity::sha256),
-                record.spec().installation().map(ImmutableIdentity::sha256),
-                record.spec().adapter().map(ImmutableIdentity::sha256),
-                record.spec().policy_set().sha256(),
-            )
-            .is_some_and(|fixture| {
-                fixture
-                    .policy_input_digests()
-                    .iter()
-                    .map(String::as_str)
-                    .eq(record
-                        .spec()
-                        .policy_inputs()
-                        .iter()
-                        .map(ImmutableIdentity::sha256))
-            });
         if record.spec().loss_grace_seconds() > config.max_daemon_loss_grace_seconds
             || output.maximum_bytes() > config.max_session_output_bytes
             || output.rotation_bytes() > config.session_output_rotation_bytes
-            || !fixture_is_current
         {
             return crate::error::InvalidRequestSnafu {
                 reason: String::from(
                     "session no longer satisfies the active root start constraints",
+                ),
+            }
+            .fail();
+        }
+        let admission = self.local_store.validate_session_spec(record.spec())?;
+        if !admission
+            .policy_input_digests()
+            .iter()
+            .map(String::as_str)
+            .eq(record
+                .spec()
+                .policy_inputs()
+                .iter()
+                .map(ImmutableIdentity::sha256))
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "session policy identities no longer match the daemon-owned policy set",
                 ),
             }
             .fail();

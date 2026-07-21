@@ -1513,6 +1513,7 @@ impl DaemonControlState {
         configuration: DaemonConfig,
         generation: u64,
     ) -> Result<String> {
+        self.sessions.seed_root_curated(&configuration)?;
         let mut active = self
             .configuration
             .write()

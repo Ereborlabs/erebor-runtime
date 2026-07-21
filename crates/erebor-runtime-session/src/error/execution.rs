@@ -34,13 +34,15 @@ pub enum SessionExecutionError {
     },
     #[snafu(display("{source}"))]
     Runtime {
-        source: RuntimeError,
+        #[snafu(source(from(RuntimeError, Box::new)))]
+        source: Box<RuntimeError>,
         #[snafu(implicit)]
         location: Location,
     },
     #[snafu(display("{source}"))]
     TerminalSurface {
-        source: TerminalSurfaceError,
+        #[snafu(source(from(TerminalSurfaceError, Box::new)))]
+        source: Box<TerminalSurfaceError>,
         #[snafu(implicit)]
         location: Location,
     },
