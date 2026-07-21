@@ -22,12 +22,14 @@ use crate::{
         ActiveHandleLockSnafu, ActiveHandleMissingSnafu, CapabilityChangedSnafu, OutputSnafu,
         RepositorySnafu, RunnerSnafu, StateLockSnafu,
     },
-    runners::{RunnerAdmissionRequest, RunnerExecutionAdmission, RunnerRegistry},
+    runners::{
+        RunnerAdmissionRequest, RunnerExecutionAdmission, RunnerPreparation, RunnerRegistry,
+    },
     DurableSessionRecord, DurableStreamCursor, InputLease, InputLeaseManager, SessionManagerError,
     SessionPruneResult, SessionRepository, SessionRepositoryError, StreamKind,
 };
 
-use self::resources::SessionRuntime;
+pub(crate) use self::resources::SessionRuntime;
 
 type ActiveHandle = Arc<Mutex<Box<dyn ActiveSession>>>;
 type ActiveHandles = BTreeMap<(u32, String), ActiveHandle>;
@@ -236,6 +238,19 @@ impl SessionManager {
             .context(RunnerSnafu)
     }
 
+    fn prepare_runner(
+        &self,
+        spec: &SessionSpec,
+        recovering: bool,
+    ) -> Result<OutputEndpoints, SessionManagerError> {
+        self.runners
+            .get(spec.runner_capability().runner())?
+            .prepare(
+                spec,
+                &RunnerPreparation::new(self.runtime.as_ref(), recovering),
+            )
+    }
+
     pub fn start(
         &self,
         uid: u32,
@@ -267,7 +282,7 @@ impl SessionManager {
         }
 
         let starting = self.begin_start(current)?;
-        let output = match self.runtime.prepare(starting.spec(), false) {
+        let output = match self.prepare_runner(starting.spec(), false) {
             Ok(output) => output,
             Err(source) => {
                 let failed = self.fail_start(&starting, source.to_string())?;
@@ -559,7 +574,7 @@ impl SessionManager {
             ) {
                 continue;
             }
-            let output = match self.runtime.prepare(record.spec(), true) {
+            let output = match self.prepare_runner(record.spec(), true) {
                 Ok(output) => output,
                 Err(source) => {
                     let interrupted = if matches!(
@@ -938,8 +953,8 @@ mod tests {
     };
 
     use super::{
-        output_endpoints, resources::SessionRuntime, DurableStreamCursor, RunnerRegistry,
-        SessionManager, SessionManagerError, SessionRepository, StreamKind,
+        output_endpoints, resources::SessionRuntime, DurableStreamCursor, RunnerPreparation,
+        RunnerRegistry, SessionManager, SessionManagerError, SessionRepository, StreamKind,
         ValidatedStartConstraints,
     };
 
@@ -958,6 +973,7 @@ mod tests {
     struct FakeRunnerState {
         capability: Mutex<RunnerCapabilityDocument>,
         running: Arc<AtomicBool>,
+        preparations: AtomicUsize,
         starts: AtomicUsize,
         fail_start: AtomicBool,
         admissions: AtomicUsize,
@@ -1000,7 +1016,7 @@ mod tests {
     }
 
     impl SessionRuntime for FakeRuntime {
-        fn prepare(
+        fn prepare_execution(
             &self,
             spec: &SessionSpec,
             _recovering: bool,
@@ -1014,6 +1030,14 @@ mod tests {
                 });
             }
             Ok(output_endpoints(spec))
+        }
+
+        fn start_runtime_guard(
+            &self,
+            _spec: &SessionSpec,
+            _recovering: bool,
+        ) -> Result<Vec<(String, String)>, SessionManagerError> {
+            Ok(Vec::new())
         }
 
         fn cleanup(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
@@ -1111,6 +1135,15 @@ mod tests {
             _spec: &SessionSpec,
         ) -> Result<(), erebor_runtime_core::RuntimeError> {
             Ok(())
+        }
+
+        fn prepare(
+            &self,
+            spec: &SessionSpec,
+            resources: &RunnerPreparation<'_>,
+        ) -> Result<OutputEndpoints, SessionManagerError> {
+            self.state.preparations.fetch_add(1, Ordering::SeqCst);
+            resources.prepare_execution(spec)
         }
 
         fn admit(
@@ -1222,6 +1255,7 @@ mod tests {
         let state = Arc::new(FakeRunnerState {
             capability: Mutex::new(capability("1")?),
             running: Arc::new(AtomicBool::new(false)),
+            preparations: AtomicUsize::new(0),
             starts: AtomicUsize::new(0),
             fail_start: AtomicBool::new(false),
             admissions: AtomicUsize::new(0),
@@ -1348,6 +1382,7 @@ mod tests {
             .start(1000, "session-manager-test", &start_constraints(), false)
             .is_err());
         assert_eq!(state.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(state.preparations.load(Ordering::SeqCst), 1);
         assert_eq!(runtime.preparations.load(Ordering::SeqCst), 1);
         assert_eq!(runtime.cleanups.load(Ordering::SeqCst), 0);
         let replayed = manager.start(1000, "session-manager-test", &start_constraints(), true)?;
@@ -1467,6 +1502,7 @@ mod tests {
             erebor_runtime_core::SessionLifecycleState::Running
         );
         assert_eq!(state.recoveries.load(Ordering::SeqCst), 1);
+        assert_eq!(state.preparations.load(Ordering::SeqCst), 2);
 
         let terminal = recovered.kill(1000, "session-manager-test", ActiveSessionSignal::Kill)?;
         assert_eq!(

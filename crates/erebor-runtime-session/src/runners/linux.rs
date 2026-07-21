@@ -16,11 +16,20 @@ use erebor_runtime_core::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{RunnerAdmissionContext, RunnerDriver, RunnerExecutionAdmission};
+use super::{
+    RunnerAdmissionContext, RunnerDriver, RunnerExecutionAdmission, RunnerInstallConfig,
+    RunnerPreparation,
+};
 use crate::SessionManagerError;
 
 const RUNNER_ID: &str = "linux-host";
 const IMPLEMENTATION_ID: &str = "erebor-linux-host";
+const CONTROLLER_PROGRAM: &str = "linux-session-controller";
+const PROCESS_GUARD_PROGRAM: &str = "linux-process-guard";
+const SYSTEMD_RUN_PROGRAM: &str = "systemd-run";
+const DEFAULT_CONTROLLER_PATH: &str = "/usr/libexec/erebor/erebor-linux-session-controller";
+const DEFAULT_PROCESS_GUARD_PATH: &str = "/usr/libexec/erebor/erebor-linux-process-guard";
+const DEFAULT_SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
 pub(crate) const LINUX_CONTROLLER_PROTOCOL_VERSION: u32 = 1;
 const LINUX_RECOVERY_FORMAT_VERSION: u32 = 1;
 
@@ -34,12 +43,7 @@ pub(crate) struct LinuxRunnerDriver {
 }
 
 impl LinuxRunnerDriver {
-    pub(crate) fn new(
-        controller_path: PathBuf,
-        process_guard_path: PathBuf,
-        systemd_run_path: PathBuf,
-        use_systemd_scope: bool,
-    ) -> Result<Self, RuntimeError> {
+    pub(crate) fn from_install_config(config: &RunnerInstallConfig) -> Result<Self, RuntimeError> {
         Ok(Self {
             id: RunnerId::new(RUNNER_ID).map_err(|error| {
                 RuntimeError::SessionRunnerUnavailable {
@@ -48,10 +52,12 @@ impl LinuxRunnerDriver {
                     location: snafu::Location::default(),
                 }
             })?,
-            controller_path,
-            process_guard_path,
-            systemd_run_path,
-            use_systemd_scope,
+            controller_path: config.program(CONTROLLER_PROGRAM, Path::new(DEFAULT_CONTROLLER_PATH)),
+            process_guard_path: config
+                .program(PROCESS_GUARD_PROGRAM, Path::new(DEFAULT_PROCESS_GUARD_PATH)),
+            systemd_run_path: config
+                .program(SYSTEMD_RUN_PROGRAM, Path::new(DEFAULT_SYSTEMD_RUN_PATH)),
+            use_systemd_scope: config.use_systemd_scope(),
         })
     }
 
@@ -297,6 +303,15 @@ impl RunnerDriver for LinuxRunnerDriver {
                 "Linux-host admission requires its runner ID, executable, no image, and umask 0077",
             ))
         }
+    }
+
+    fn prepare(
+        &self,
+        spec: &SessionSpec,
+        resources: &RunnerPreparation<'_>,
+    ) -> Result<OutputEndpoints, SessionManagerError> {
+        let output = resources.prepare_execution(spec)?;
+        resources.start_runtime_guard(spec, output)
     }
 
     fn start(
@@ -761,8 +776,33 @@ fn read_json_line<T: for<'de> Deserialize<'de>>(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_recovery, encode_recovery, LinuxRecovery, RUNNER_ID};
+    use std::{collections::BTreeMap, path::PathBuf};
+
+    use super::{
+        decode_recovery, encode_recovery, LinuxRecovery, LinuxRunnerDriver, CONTROLLER_PROGRAM,
+        DEFAULT_CONTROLLER_PATH, RUNNER_ID,
+    };
+    use crate::RunnerInstallConfig;
     use erebor_runtime_core::RunnerId;
+
+    #[test]
+    fn linux_driver_owns_its_installation_program_names_and_defaults(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let default = LinuxRunnerDriver::from_install_config(&RunnerInstallConfig::default())?;
+        assert_eq!(
+            default.controller_path,
+            PathBuf::from(DEFAULT_CONTROLLER_PATH)
+        );
+
+        let override_path = PathBuf::from("/opt/erebor/linux-controller");
+        let configured = LinuxRunnerDriver::from_install_config(&RunnerInstallConfig::new(
+            BTreeMap::from([(String::from(CONTROLLER_PROGRAM), override_path.clone())]),
+            false,
+        ))?;
+        assert_eq!(configured.controller_path, override_path);
+        assert!(!configured.use_systemd_scope);
+        Ok(())
+    }
 
     #[test]
     fn linux_driver_round_trips_its_opaque_versioned_recovery_value(

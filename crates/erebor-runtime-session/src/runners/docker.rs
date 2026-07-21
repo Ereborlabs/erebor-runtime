@@ -17,11 +17,20 @@ use erebor_runtime_core::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::{RunnerAdmissionContext, RunnerDriver, RunnerExecutionAdmission};
+use super::{
+    RunnerAdmissionContext, RunnerDriver, RunnerExecutionAdmission, RunnerInstallConfig,
+    RunnerPreparation,
+};
 use crate::SessionManagerError;
 
 const RUNNER_ID: &str = "docker";
 const IMPLEMENTATION_ID: &str = "erebor-docker-cli";
+const CONTROLLER_PROGRAM: &str = "docker-session-controller";
+const DOCKER_PROGRAM: &str = "docker";
+const SYSTEMD_RUN_PROGRAM: &str = "systemd-run";
+const DEFAULT_CONTROLLER_PATH: &str = "/usr/libexec/erebor/erebor-docker-session-controller";
+const DEFAULT_DOCKER_PATH: &str = "/usr/bin/docker";
+const DEFAULT_SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
 pub(crate) const DOCKER_CONTROLLER_PROTOCOL_VERSION: u32 = 1;
 const DOCKER_RECOVERY_FORMAT_VERSION: u32 = 1;
 
@@ -35,12 +44,7 @@ pub(crate) struct DockerRunnerDriver {
 }
 
 impl DockerRunnerDriver {
-    pub(crate) fn new(
-        controller_path: PathBuf,
-        docker_path: PathBuf,
-        systemd_run_path: PathBuf,
-        use_systemd_scope: bool,
-    ) -> Result<Self, RuntimeError> {
+    pub(crate) fn from_install_config(config: &RunnerInstallConfig) -> Result<Self, RuntimeError> {
         Ok(Self {
             id: RunnerId::new(RUNNER_ID).map_err(|error| {
                 RuntimeError::SessionRunnerUnavailable {
@@ -49,10 +53,11 @@ impl DockerRunnerDriver {
                     location: snafu::Location::default(),
                 }
             })?,
-            controller_path,
-            docker_path,
-            systemd_run_path,
-            use_systemd_scope,
+            controller_path: config.program(CONTROLLER_PROGRAM, Path::new(DEFAULT_CONTROLLER_PATH)),
+            docker_path: config.program(DOCKER_PROGRAM, Path::new(DEFAULT_DOCKER_PATH)),
+            systemd_run_path: config
+                .program(SYSTEMD_RUN_PROGRAM, Path::new(DEFAULT_SYSTEMD_RUN_PATH)),
+            use_systemd_scope: config.use_systemd_scope(),
         })
     }
 
@@ -340,6 +345,14 @@ impl RunnerDriver for DockerRunnerDriver {
             .container_image()
             .ok_or_else(|| self.protocol("Docker session has no immutable image identity"))?;
         self.validate_image(image)
+    }
+
+    fn prepare(
+        &self,
+        spec: &SessionSpec,
+        resources: &RunnerPreparation<'_>,
+    ) -> Result<OutputEndpoints, SessionManagerError> {
+        resources.prepare_execution(spec)
     }
 
     fn start(
@@ -1150,8 +1163,33 @@ fn join_reader(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_recovery, encode_recovery, DockerRecovery, RUNNER_ID};
+    use std::{collections::BTreeMap, path::PathBuf};
+
+    use super::{
+        decode_recovery, encode_recovery, DockerRecovery, DockerRunnerDriver, CONTROLLER_PROGRAM,
+        DEFAULT_CONTROLLER_PATH, RUNNER_ID,
+    };
+    use crate::RunnerInstallConfig;
     use erebor_runtime_core::RunnerId;
+
+    #[test]
+    fn docker_driver_owns_its_installation_program_names_and_defaults(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let default = DockerRunnerDriver::from_install_config(&RunnerInstallConfig::default())?;
+        assert_eq!(
+            default.controller_path,
+            PathBuf::from(DEFAULT_CONTROLLER_PATH)
+        );
+
+        let override_path = PathBuf::from("/opt/erebor/docker-controller");
+        let configured = DockerRunnerDriver::from_install_config(&RunnerInstallConfig::new(
+            BTreeMap::from([(String::from(CONTROLLER_PROGRAM), override_path.clone())]),
+            false,
+        ))?;
+        assert_eq!(configured.controller_path, override_path);
+        assert!(!configured.use_systemd_scope);
+        Ok(())
+    }
 
     #[test]
     fn docker_driver_round_trips_its_opaque_versioned_recovery_value(

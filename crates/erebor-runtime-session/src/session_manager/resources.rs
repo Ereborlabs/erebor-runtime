@@ -421,12 +421,22 @@ impl SessionRuntimeResources {
     }
 }
 
-pub(super) trait SessionRuntime: Send + Sync {
-    fn prepare(
+pub(crate) trait SessionRuntime: Send + Sync {
+    /// Materializes the common daemon-owned execution resources. The selected
+    /// runner decides whether and how to use them.
+    fn prepare_execution(
         &self,
         spec: &SessionSpec,
         recovering: bool,
     ) -> Result<OutputEndpoints, SessionManagerError>;
+
+    /// Starts a session-local runtime guard and returns only the environment
+    /// projection needed by a runner that elected to use it.
+    fn start_runtime_guard(
+        &self,
+        spec: &SessionSpec,
+        recovering: bool,
+    ) -> Result<Vec<(String, String)>, SessionManagerError>;
 
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError>;
 
@@ -440,29 +450,32 @@ pub(super) trait SessionRuntime: Send + Sync {
 }
 
 impl SessionRuntime for SessionRuntimeResources {
-    fn prepare(
+    fn prepare_execution(
         &self,
         spec: &SessionSpec,
         recovering: bool,
     ) -> Result<OutputEndpoints, SessionManagerError> {
         let (workspace, executable) = self.prepare_staging(spec, recovering)?;
         let _stores = self.output_stores(spec)?;
-        let mut output = output_endpoints(spec).with_prepared_execution(workspace, executable);
-        if spec.runner_capability().physical_interception() {
-            let credential = self.guard_credential(spec, recovering)?;
-            let endpoint = self
-                .guard
-                .start_session_with_token(
-                    spec.owner().uid(),
-                    spec.session_id().as_str(),
-                    "agent",
-                    self.router_factory.router(spec),
-                    Some(credential.token),
-                )
-                .context(RuntimeGuardSnafu)?;
-            output = output.with_runtime_environment(endpoint.environment());
-        }
-        Ok(output)
+        Ok(output_endpoints(spec).with_prepared_execution(workspace, executable))
+    }
+
+    fn start_runtime_guard(
+        &self,
+        spec: &SessionSpec,
+        recovering: bool,
+    ) -> Result<Vec<(String, String)>, SessionManagerError> {
+        let credential = self.guard_credential(spec, recovering)?;
+        self.guard
+            .start_session_with_token(
+                spec.owner().uid(),
+                spec.session_id().as_str(),
+                "agent",
+                self.router_factory.router(spec),
+                Some(credential.token),
+            )
+            .context(RuntimeGuardSnafu)
+            .map(|endpoint| endpoint.environment())
     }
 
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {

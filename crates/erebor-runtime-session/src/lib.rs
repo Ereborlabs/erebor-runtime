@@ -44,7 +44,7 @@ pub use error::{
 pub use linux_controller::run_linux_session_controller;
 pub use runners::{
     RunnerAdmissionContext, RunnerAdmissionRequest, RunnerDriver, RunnerExecutionAdmission,
-    RunnerInstallConfig, RunnerRegistry,
+    RunnerInstallConfig, RunnerPreparation, RunnerRegistry,
 };
 pub use runtime_interception_broker::{
     InterceptionBrokerClient, RuntimeGuardService, RuntimeInterceptionBroker,
@@ -68,3 +68,4 @@ pub use surfaces::terminal::browser_cdp_process_mediation::BrowserCdpProcessMedi
 
 pub(crate) use registry_lifecycle::SessionStorage;
 pub(crate) use session_context::SessionPlanContext;
+pub(crate) use session_manager::SessionRuntime;

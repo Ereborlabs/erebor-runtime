@@ -19,31 +19,19 @@ pub(crate) use linux::LinuxRunnerDriver;
 
 use crate::{
     error::session_manager::{PathResolutionSnafu, RunnerSnafu, RunnerUnavailableSnafu},
-    SessionManagerError, SessionPathResolver,
+    SessionManagerError, SessionPathResolver, SessionRuntime,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunnerInstallConfig {
-    linux_controller_path: PathBuf,
-    docker_controller_path: PathBuf,
-    process_guard_path: PathBuf,
-    docker_path: PathBuf,
-    systemd_run_path: PathBuf,
+    program_overrides: BTreeMap<String, PathBuf>,
     use_systemd_scope: bool,
 }
 
 impl Default for RunnerInstallConfig {
     fn default() -> Self {
         Self {
-            linux_controller_path: PathBuf::from(
-                "/usr/libexec/erebor/erebor-linux-session-controller",
-            ),
-            docker_controller_path: PathBuf::from(
-                "/usr/libexec/erebor/erebor-docker-session-controller",
-            ),
-            process_guard_path: PathBuf::from("/usr/libexec/erebor/erebor-linux-process-guard"),
-            docker_path: PathBuf::from("/usr/bin/docker"),
-            systemd_run_path: PathBuf::from("/usr/bin/systemd-run"),
+            program_overrides: BTreeMap::new(),
             use_systemd_scope: true,
         }
     }
@@ -51,22 +39,26 @@ impl Default for RunnerInstallConfig {
 
 impl RunnerInstallConfig {
     #[must_use]
-    pub fn new(
-        linux_controller_path: PathBuf,
-        docker_controller_path: PathBuf,
-        process_guard_path: PathBuf,
-        docker_path: PathBuf,
-        systemd_run_path: PathBuf,
+    pub const fn new(
+        program_overrides: BTreeMap<String, PathBuf>,
         use_systemd_scope: bool,
     ) -> Self {
         Self {
-            linux_controller_path,
-            docker_controller_path,
-            process_guard_path,
-            docker_path,
-            systemd_run_path,
+            program_overrides,
             use_systemd_scope,
         }
+    }
+
+    #[must_use]
+    pub const fn use_systemd_scope(&self) -> bool {
+        self.use_systemd_scope
+    }
+
+    pub(crate) fn program(&self, name: &str, default: &Path) -> PathBuf {
+        self.program_overrides
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| default.to_path_buf())
     }
 }
 
@@ -196,6 +188,41 @@ pub struct RunnerExecutionAdmission {
     pub endpoint_projections: Vec<EndpointProjection>,
 }
 
+/// The daemon-owned resource operations a runner can select while preparing a
+/// session. It is deliberately not a controller protocol: it neither
+/// interprets a runner's workload nor requires every runner to use the same
+/// set of resources.
+pub struct RunnerPreparation<'a> {
+    runtime: &'a dyn SessionRuntime,
+    recovering: bool,
+}
+
+impl<'a> RunnerPreparation<'a> {
+    pub(crate) const fn new(runtime: &'a dyn SessionRuntime, recovering: bool) -> Self {
+        Self {
+            runtime,
+            recovering,
+        }
+    }
+
+    pub fn prepare_execution(
+        &self,
+        spec: &SessionSpec,
+    ) -> Result<OutputEndpoints, SessionManagerError> {
+        self.runtime.prepare_execution(spec, self.recovering)
+    }
+
+    pub fn start_runtime_guard(
+        &self,
+        spec: &SessionSpec,
+        output: OutputEndpoints,
+    ) -> Result<OutputEndpoints, SessionManagerError> {
+        self.runtime
+            .start_runtime_guard(spec, self.recovering)
+            .map(|environment| output.with_runtime_environment(environment))
+    }
+}
+
 pub trait RunnerDriver: Send + Sync {
     fn id(&self) -> &RunnerId;
 
@@ -207,6 +234,12 @@ pub trait RunnerDriver: Send + Sync {
     ) -> Result<RunnerExecutionAdmission, SessionManagerError>;
 
     fn validate_admission(&self, spec: &SessionSpec) -> Result<(), RuntimeError>;
+
+    fn prepare(
+        &self,
+        spec: &SessionSpec,
+        resources: &RunnerPreparation<'_>,
+    ) -> Result<OutputEndpoints, SessionManagerError>;
 
     fn start(
         &self,
@@ -261,24 +294,10 @@ impl RunnerRegistry {
 
     pub fn compiled(config: RunnerInstallConfig) -> Result<Self, SessionManagerError> {
         Ok(Self::new([
-            Arc::new(
-                LinuxRunnerDriver::new(
-                    config.linux_controller_path,
-                    config.process_guard_path,
-                    config.systemd_run_path.clone(),
-                    config.use_systemd_scope,
-                )
-                .context(RunnerSnafu)?,
-            ) as Arc<dyn RunnerDriver>,
-            Arc::new(
-                DockerRunnerDriver::new(
-                    config.docker_controller_path,
-                    config.docker_path,
-                    config.systemd_run_path,
-                    config.use_systemd_scope,
-                )
-                .context(RunnerSnafu)?,
-            ) as Arc<dyn RunnerDriver>,
+            Arc::new(LinuxRunnerDriver::from_install_config(&config).context(RunnerSnafu)?)
+                as Arc<dyn RunnerDriver>,
+            Arc::new(DockerRunnerDriver::from_install_config(&config).context(RunnerSnafu)?)
+                as Arc<dyn RunnerDriver>,
         ]))
     }
 
