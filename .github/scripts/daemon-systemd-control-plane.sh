@@ -98,7 +98,7 @@ useradd --create-home "$outside_user"
 group_gid="$(getent group "$service_group" | cut -d: -f3)"
 
 install -d -o root -g root -m 0750 "$config_dir"
-printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":256,"phase_two_validated_fixtures":[{"package_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","installation_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","adapter_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policy_input_digests":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"policy_set_digest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]}\n' "$group_gid" \
+printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":256,"max_session_output_bytes":67108864,"session_output_rotation_bytes":4194304,"max_daemon_loss_grace_seconds":2}\n' "$group_gid" \
   >"$config_path"
 chown root:root "$config_path"
 chmod 0640 "$config_path"
