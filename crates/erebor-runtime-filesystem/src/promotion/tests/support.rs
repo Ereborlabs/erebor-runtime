@@ -3,7 +3,7 @@ use std::{
     fs,
     os::unix::fs::symlink,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use crate::ostree::OstreePruneSummary;
@@ -138,10 +138,37 @@ where
     }
 }
 
-fn nonce() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos())
+fn nonce() -> u64 {
+    static NEXT_NONCE: AtomicU64 = AtomicU64::new(0);
+
+    NEXT_NONCE.fetch_add(1, Ordering::Relaxed)
+}
+
+#[test]
+fn temporary_path_nonces_are_unique_under_parallel_allocation() -> TestResult {
+    let values = std::thread::scope(|scope| {
+        let handles = (0..16)
+            .map(|_| scope.spawn(|| (0..256).map(|_| nonce()).collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+
+        handles
+            .into_iter()
+            .try_fold(Vec::new(), |mut values, handle| {
+                values.extend(
+                    handle
+                        .join()
+                        .map_err(|_| std::io::Error::other("nonce worker panicked"))?,
+                );
+                Ok::<_, std::io::Error>(values)
+            })
+    })?;
+    let unique = values
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+
+    assert_eq!(values.len(), unique.len());
+    Ok(())
 }
 
 pub(super) struct FakeOstreeRepository {

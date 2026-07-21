@@ -13,13 +13,16 @@ use crate::error::{BrokerProtocolSnafu, BrokerStateLockSnafu, RuntimeInterceptio
 use super::{
     decision::InterceptionDecisionReply,
     handlers::RoutedInterception,
-    server::{GuardPeerIdentity, RuntimeInterceptionBrokerServer},
+    server::{
+        GuardPeerIdentity, RuntimeInterceptionBrokerServer, SessionConnectionPermit,
+        SessionRegistrationKey,
+    },
     wire::{interception_token, read_frame_from_stream, write_frame_to_stream},
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
 struct BoundConnection {
-    session_id: String,
+    key: SessionRegistrationKey,
+    _permit: SessionConnectionPermit,
 }
 
 impl RuntimeInterceptionBrokerServer {
@@ -79,7 +82,7 @@ impl RuntimeInterceptionBrokerServer {
     ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
         let mut broker_id = String::from("unregistered");
         let mut accepted = false;
-        let mut accepted_session_id = None;
+        let mut accepted_binding = None;
 
         let reason = if envelope.message_kind != KIND_GUARD_HELLO {
             format!("unexpected message kind `{}`", envelope.message_kind)
@@ -91,47 +94,68 @@ impl RuntimeInterceptionBrokerServer {
                 .sessions
                 .lock()
                 .map_err(|_error| BrokerStateLockSnafu.build())?;
-            match sessions.get(&hello.session_id) {
-                Some(registration)
-                    if interception_token(&envelope) == Some(registration.token.as_str())
-                        && registration.expected_peer_uid.is_none_or(|expected| {
-                            peer.is_some_and(|observed| observed.uid == expected)
-                        })
-                        && (!registration.require_peer_pid_match
-                            || peer.and_then(|observed| observed.pid)
-                                == u32::try_from(hello.guard_pid).ok()) =>
-                {
-                    broker_id = registration.broker_id.clone();
-                    accepted = true;
-                    accepted_session_id = Some(hello.session_id);
-                    String::from("accepted")
-                }
-                Some(registration)
+            let key = session_registration_key(&sessions, &hello.session_id, peer);
+            match key.and_then(|key| sessions.get(&key).map(|registration| (key, registration))) {
+                Some((_key, registration))
                     if interception_token(&envelope) != Some(registration.token.as_str()) =>
                 {
                     String::from("invalid interception token")
                 }
-                Some(_) => String::from("guard peer credentials do not match admission"),
+                Some((_key, registration))
+                    if !registration.expected_peer_uid.is_none_or(|expected| {
+                        peer.is_some_and(|observed| observed.uid == expected)
+                    }) || (registration.require_peer_pid_match
+                        && peer.and_then(|observed| observed.pid)
+                            != u32::try_from(hello.guard_pid).ok()) =>
+                {
+                    String::from("guard peer credentials do not match admission")
+                }
+                Some((key, registration)) => {
+                    let Some(permit) = registration.try_acquire_connection() else {
+                        return self.hello_ack(
+                            &envelope,
+                            broker_id,
+                            false,
+                            "session connection limit reached",
+                        );
+                    };
+                    broker_id = registration.broker_id.clone();
+                    accepted = true;
+                    accepted_binding = Some(BoundConnection {
+                        key,
+                        _permit: permit,
+                    });
+                    String::from("accepted")
+                }
                 None => String::from("unknown session"),
             }
         };
-        let ack = GuardHelloAck {
-            protocol_version: PROTOCOL_VERSION,
-            broker_id,
-            accepted,
-            reason,
-        };
+        let response = self.hello_ack(&envelope, broker_id, accepted, reason)?;
         if accepted {
-            if let Some(session_id) = accepted_session_id {
-                *bound = Some(BoundConnection { session_id });
+            if let Some(binding) = accepted_binding {
+                *bound = Some(binding);
             }
         }
+        Ok(response)
+    }
 
+    fn hello_ack(
+        &self,
+        envelope: &Envelope,
+        broker_id: String,
+        accepted: bool,
+        reason: impl Into<String>,
+    ) -> Result<Envelope, RuntimeInterceptionBrokerError> {
         Envelope::wrap_message(
             envelope.message_id.saturating_add(1),
             envelope.message_id,
             KIND_GUARD_HELLO_ACK,
-            &ack,
+            &GuardHelloAck {
+                protocol_version: PROTOCOL_VERSION,
+                broker_id,
+                accepted,
+                reason: reason.into(),
+            },
         )
         .context(BrokerProtocolSnafu)
     }
@@ -167,17 +191,20 @@ impl RuntimeInterceptionBrokerServer {
                 "interception request arrived before GuardHello",
             ));
         };
-        let sessions = self
-            .sessions
-            .lock()
-            .map_err(|_error| BrokerStateLockSnafu.build())?;
-        let Some(registration) = sessions.get(&bound.session_id) else {
-            return Ok(reply.deny(
-                "erebor-runtime-interception-broker-unknown-session",
-                "session is no longer registered with the runtime interception broker",
-            ));
+        let router = {
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|_error| BrokerStateLockSnafu.build())?;
+            let Some(registration) = sessions.get(&bound.key) else {
+                return Ok(reply.deny(
+                    "erebor-runtime-interception-broker-unknown-session",
+                    "session is no longer registered with the runtime interception broker",
+                ));
+            };
+            registration.router.clone()
         };
-        Ok(match registration.router.route_interception(request) {
+        Ok(match router.route_interception(request) {
             RoutedInterception::Decision(decision) => reply.surface(decision),
             RoutedInterception::Unrouted { rule_id, reason } => reply.deny(rule_id, reason),
         })
@@ -212,18 +239,46 @@ impl RuntimeInterceptionBrokerServer {
                 "guard lifecycle event arrived before GuardHello",
             ));
         };
-        let sessions = self
-            .sessions
-            .lock()
-            .map_err(|_error| BrokerStateLockSnafu.build())?;
-        let Some(registration) = sessions.get(&bound.session_id) else {
-            return Ok(lifecycle_deny(
-                event.request_id,
-                "session is no longer registered with the runtime interception broker",
-            ));
+        let router = {
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|_error| BrokerStateLockSnafu.build())?;
+            let Some(registration) = sessions.get(&bound.key) else {
+                return Ok(lifecycle_deny(
+                    event.request_id,
+                    "session is no longer registered with the runtime interception broker",
+                ));
+            };
+            registration.router.clone()
         };
-        Ok(registration.router.route_guard_lifecycle(event))
+        Ok(router.route_guard_lifecycle(event))
     }
+}
+
+fn session_registration_key(
+    sessions: &std::collections::HashMap<SessionRegistrationKey, super::server::RegisteredSession>,
+    session_id: &str,
+    peer: Option<GuardPeerIdentity>,
+) -> Option<SessionRegistrationKey> {
+    let exact = SessionRegistrationKey {
+        expected_peer_uid: peer.map(|identity| identity.uid),
+        session_id: session_id.to_owned(),
+    };
+    if sessions.contains_key(&exact) {
+        return Some(exact);
+    }
+    let unscoped = SessionRegistrationKey {
+        expected_peer_uid: None,
+        session_id: session_id.to_owned(),
+    };
+    if sessions.contains_key(&unscoped) {
+        return Some(unscoped);
+    }
+    sessions
+        .keys()
+        .find(|key| key.session_id == session_id)
+        .cloned()
 }
 
 fn lifecycle_deny(request_id: u64, reason: impl Into<String>) -> GuardLifecycleReply {
@@ -251,4 +306,134 @@ fn deny_unexpected_bound_message(
         &decision,
     )
     .context(BrokerProtocolSnafu)
+}
+
+#[cfg(test)]
+mod tests {
+    use erebor_runtime_ipc::v1::{
+        Envelope, GuardHello, GuardHelloAck, KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK,
+        PROTOCOL_VERSION,
+    };
+    use rustix::process::{getegid, geteuid};
+    use tempfile::TempDir;
+
+    use super::BoundConnection;
+    use crate::runtime_interception_broker::{
+        handlers::SessionInterceptionRouter,
+        server::{
+            GuardPeerIdentity, RuntimeGuardServerConfig, RuntimeGuardServerLimits,
+            RuntimeGuardSocketAccess, RuntimeInterceptionBrokerServer,
+        },
+        wire::envelope_with_token,
+    };
+
+    #[test]
+    fn shared_server_rejects_the_right_token_from_the_wrong_uid(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = TempDir::new()?;
+        let server = server(&temporary)?;
+        let token = "11111111111111111111111111111111";
+        let _registration = server.register_session(
+            String::from("shared-session"),
+            String::from("agent"),
+            SessionInterceptionRouter::new(),
+            Some(1001),
+            false,
+            Some(String::from(token)),
+        )?;
+        let mut bound = None::<BoundConnection>;
+        let response = server.handle_runtime_interception_envelope(
+            hello("shared-session", token, 41)?,
+            &mut bound,
+            Some(GuardPeerIdentity {
+                pid: Some(41),
+                uid: 1002,
+            }),
+        )?;
+        let ack: GuardHelloAck = response.decode_typed_payload(KIND_GUARD_HELLO_ACK)?;
+
+        assert!(!ack.accepted);
+        assert_eq!(ack.reason, "guard peer credentials do not match admission");
+        assert!(bound.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn shared_server_routes_equal_session_ids_by_observed_uid(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = TempDir::new()?;
+        let server = server(&temporary)?;
+        let first_token = "11111111111111111111111111111111";
+        let second_token = "22222222222222222222222222222222";
+        let _first = server.register_session(
+            String::from("same-id"),
+            String::from("first"),
+            SessionInterceptionRouter::new(),
+            Some(1001),
+            false,
+            Some(String::from(first_token)),
+        )?;
+        let _second = server.register_session(
+            String::from("same-id"),
+            String::from("second"),
+            SessionInterceptionRouter::new(),
+            Some(1002),
+            false,
+            Some(String::from(second_token)),
+        )?;
+        let mut bound = None::<BoundConnection>;
+        let response = server.handle_runtime_interception_envelope(
+            hello("same-id", second_token, 42)?,
+            &mut bound,
+            Some(GuardPeerIdentity {
+                pid: Some(42),
+                uid: 1002,
+            }),
+        )?;
+        let ack: GuardHelloAck = response.decode_typed_payload(KIND_GUARD_HELLO_ACK)?;
+
+        assert!(ack.accepted);
+        assert_eq!(ack.broker_id, "same-id:second");
+        assert!(bound.is_some());
+        Ok(())
+    }
+
+    fn server(
+        temporary: &TempDir,
+    ) -> Result<
+        std::sync::Arc<RuntimeInterceptionBrokerServer>,
+        crate::RuntimeInterceptionBrokerError,
+    > {
+        RuntimeInterceptionBrokerServer::start(RuntimeGuardServerConfig {
+            directory: Some(temporary.path().to_path_buf()),
+            owner_uid: geteuid().as_raw(),
+            owner_gid: getegid().as_raw(),
+            directory_mode: 0o700,
+            socket_mode: 0o600,
+            limits: RuntimeGuardServerLimits::default(),
+            socket_access: RuntimeGuardSocketAccess::ProjectedShared,
+        })
+    }
+
+    fn hello(
+        session_id: &str,
+        token: &str,
+        guard_pid: i64,
+    ) -> Result<Envelope, erebor_runtime_ipc::IpcProtocolError> {
+        let envelope = Envelope::wrap_message(
+            1,
+            0,
+            KIND_GUARD_HELLO,
+            &GuardHello {
+                protocol_version: PROTOCOL_VERSION,
+                session_id: session_id.to_owned(),
+                actor_id: String::from("agent"),
+                guard_pid,
+                runner_kind: String::from("linux-host"),
+                platform: String::from("linux-x86_64"),
+                capabilities: Vec::new(),
+            },
+        )?;
+        Ok(envelope_with_token(envelope, token))
+    }
 }

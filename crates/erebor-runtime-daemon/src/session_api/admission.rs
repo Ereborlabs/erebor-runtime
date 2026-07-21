@@ -124,11 +124,7 @@ pub(super) fn admit(
         .join("sessions")
         .join(context.session_id)
         .join("output");
-    let runtime_guard_host_path = context
-        .runtime_root
-        .join(context.owner_uid.to_string())
-        .join(context.session_id)
-        .join("runtime-interception.sock");
+    let runtime_guard_host_path = context.runtime_root.join("runtime-interception.sock");
     let endpoint_projections = (runner == SessionRunnerKind::LinuxHost)
         .then(|| {
             EndpointProjection::new(

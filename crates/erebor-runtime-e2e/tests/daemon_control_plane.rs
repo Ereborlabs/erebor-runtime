@@ -23,6 +23,16 @@ fn required_session_output_and_retention_contract_runs_in_systemd_container(
     ])
 }
 
+#[test]
+#[ignore = "requires Linux, Docker, and privileged containers"]
+fn shared_runtime_guard_service_runs_in_systemd_container() -> Result<(), Box<dyn Error>> {
+    run_systemd_probe([
+        "/usr/bin/env",
+        "EREBOR_SESSION_RUNTIME_PROBE=shared-guard",
+        "/usr/local/lib/erebor/daemon-systemd-control-plane.sh",
+    ])
+}
+
 fn run_systemd_probe<const N: usize>(arguments: [&str; N]) -> Result<(), Box<dyn Error>> {
     if env::consts::OS != "linux" {
         return Err("the daemon systemd-container probe requires Linux".into());

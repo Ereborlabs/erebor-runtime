@@ -37,6 +37,7 @@ pub(super) trait RuntimeInterceptionBrokerServerPlatform: Send + Sync {
 #[cfg(unix)]
 mod unix {
     use std::{
+        collections::HashMap,
         fs,
         os::unix::{
             fs::PermissionsExt,
@@ -44,13 +45,28 @@ mod unix {
         },
         path::{Path, PathBuf},
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
+            atomic::{AtomicBool, Ordering},
             mpsc, Arc, Mutex,
         },
         thread::{self, JoinHandle},
         time::Duration,
     };
 
+    use super::{RuntimeInterceptionBrokerPlatform, RuntimeInterceptionBrokerServerPlatform};
+    use crate::error::{
+        BrokerIoSnafu, BrokerProtocolSnafu, BrokerRejectedHelloSnafu,
+        BrokerSessionAccessConflictSnafu, BrokerStateLockSnafu,
+    };
+    use crate::runtime_interception_broker::{
+        constants::RUNTIME_INTERCEPTION_SOCKET_NAME,
+        endpoint::RuntimeInterceptionEndpoint,
+        server::{
+            GuardPeerIdentity, RuntimeGuardServerConfig, RuntimeGuardSocketAccess,
+            RuntimeInterceptionBrokerServer,
+        },
+        wire::{envelope_with_token, read_frame_from_stream, write_frame_to_stream},
+    };
+    use crate::RuntimeInterceptionBrokerError;
     use erebor_runtime_ipc::v1::{
         Envelope, GuardHello, GuardHelloAck, InterceptionDecision, InterceptionRequest,
         KIND_GUARD_HELLO, KIND_GUARD_HELLO_ACK, KIND_INTERCEPTION_DECISION,
@@ -62,25 +78,13 @@ mod unix {
     };
     use snafu::ResultExt;
 
-    use super::{RuntimeInterceptionBrokerPlatform, RuntimeInterceptionBrokerServerPlatform};
-    use crate::error::{
-        BrokerIoSnafu, BrokerProtocolSnafu, BrokerRejectedHelloSnafu,
-        BrokerSessionAccessConflictSnafu, BrokerStateLockSnafu,
-    };
-    use crate::runtime_interception_broker::{
-        constants::RUNTIME_INTERCEPTION_SOCKET_NAME,
-        endpoint::RuntimeInterceptionEndpoint,
-        server::{GuardPeerIdentity, RuntimeGuardServerConfig, RuntimeInterceptionBrokerServer},
-        wire::{envelope_with_token, read_frame_from_stream, write_frame_to_stream},
-    };
-    use crate::RuntimeInterceptionBrokerError;
-
     pub(in crate::runtime_interception_broker) struct Platform;
 
     struct UnixRuntimeInterceptionBrokerServer {
         directory: PathBuf,
         endpoint_path: PathBuf,
         session_group: Mutex<Option<u32>>,
+        socket_access: RuntimeGuardSocketAccess,
         shutdown: Arc<AtomicBool>,
         acceptor: Mutex<Option<JoinHandle<()>>>,
         workers: Mutex<Vec<JoinHandle<()>>>,
@@ -89,11 +93,14 @@ mod unix {
 
     #[derive(Clone)]
     struct GuardConnectionCapacity {
-        available: Arc<AtomicUsize>,
+        state: Arc<Mutex<GuardConnectionCapacityState>>,
+        global_limit: usize,
+        per_uid_limit: usize,
     }
 
     struct GuardConnectionPermit {
-        available: Arc<AtomicUsize>,
+        state: Arc<Mutex<GuardConnectionCapacityState>>,
+        uid: Option<u32>,
     }
 
     struct GuardConnection {
@@ -102,28 +109,57 @@ mod unix {
         _permit: GuardConnectionPermit,
     }
 
+    #[derive(Default)]
+    struct GuardConnectionCapacityState {
+        active: usize,
+        active_by_uid: HashMap<u32, usize>,
+    }
+
     impl GuardConnectionCapacity {
-        fn new(limit: usize) -> Self {
+        fn new(global_limit: usize, per_uid_limit: usize) -> Self {
             Self {
-                available: Arc::new(AtomicUsize::new(limit)),
+                state: Arc::new(Mutex::new(GuardConnectionCapacityState::default())),
+                global_limit,
+                per_uid_limit,
             }
         }
 
-        fn try_acquire(&self) -> Option<GuardConnectionPermit> {
-            self.available
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |available| {
-                    available.checked_sub(1)
+        fn try_acquire(&self, peer: Option<GuardPeerIdentity>) -> Option<GuardConnectionPermit> {
+            let uid = peer.map(|identity| identity.uid);
+            let mut state = self.state.lock().ok()?;
+            if state.active >= self.global_limit
+                || uid.is_some_and(|uid| {
+                    state.active_by_uid.get(&uid).copied().unwrap_or(0) >= self.per_uid_limit
                 })
-                .ok()
-                .map(|_previous| GuardConnectionPermit {
-                    available: Arc::clone(&self.available),
-                })
+            {
+                return None;
+            }
+            state.active += 1;
+            if let Some(uid) = uid {
+                *state.active_by_uid.entry(uid).or_default() += 1;
+            }
+            drop(state);
+            Some(GuardConnectionPermit {
+                state: Arc::clone(&self.state),
+                uid,
+            })
         }
     }
 
     impl Drop for GuardConnectionPermit {
         fn drop(&mut self) {
-            self.available.fetch_add(1, Ordering::Release);
+            let Ok(mut state) = self.state.lock() else {
+                return;
+            };
+            state.active = state.active.saturating_sub(1);
+            if let Some(uid) = self.uid {
+                if let Some(active) = state.active_by_uid.get_mut(&uid) {
+                    *active = active.saturating_sub(1);
+                    if *active == 0 {
+                        state.active_by_uid.remove(&uid);
+                    }
+                }
+            }
         }
     }
 
@@ -168,7 +204,10 @@ mod unix {
             listener.set_nonblocking(true).context(BrokerIoSnafu)?;
             let shutdown = Arc::new(AtomicBool::new(false));
             let deadline = config.limits.connection_deadline;
-            let capacity = GuardConnectionCapacity::new(config.limits.connection_limit);
+            let capacity = GuardConnectionCapacity::new(
+                config.limits.connection_limit,
+                config.limits.per_uid_connection_limit,
+            );
             let (sender, receiver) = mpsc::sync_channel(config.limits.connection_limit);
             let receiver = Arc::new(Mutex::new(receiver));
             let mut workers = Vec::with_capacity(config.limits.worker_count);
@@ -205,18 +244,17 @@ mod unix {
                 }));
             }
             let acceptor_shutdown = Arc::clone(&shutdown);
-            let acceptor_capacity = capacity.clone();
             let acceptor = thread::spawn(move || {
                 while !acceptor_shutdown.load(Ordering::SeqCst) {
                     match listener.accept() {
-                        Ok((stream, _addr)) => {
+                        Ok((stream, _address)) => {
                             let peer = rustix::net::sockopt::socket_peercred(&stream).ok().map(
                                 |credentials| GuardPeerIdentity {
                                     pid: Some(credentials.pid.as_raw_nonzero().get() as u32),
                                     uid: credentials.uid.as_raw(),
                                 },
                             );
-                            let Some(permit) = acceptor_capacity.try_acquire() else {
+                            let Some(permit) = capacity.try_acquire(peer) else {
                                 continue;
                             };
                             let _result = sender.try_send(GuardConnection {
@@ -228,9 +266,7 @@ mod unix {
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(1));
                         }
-                        Err(_error) => {
-                            thread::sleep(Duration::from_millis(1));
-                        }
+                        Err(_error) => thread::sleep(Duration::from_millis(1)),
                     }
                 }
             });
@@ -239,6 +275,7 @@ mod unix {
                 directory,
                 endpoint_path: socket_path,
                 session_group: Mutex::new(None),
+                socket_access: config.socket_access,
                 shutdown,
                 acceptor: Mutex::new(Some(acceptor)),
                 workers: Mutex::new(workers),
@@ -322,6 +359,9 @@ mod unix {
 
     impl RuntimeInterceptionBrokerServerPlatform for UnixRuntimeInterceptionBrokerServer {
         fn authorize_session_guard(&self) -> Result<(), RuntimeInterceptionBrokerError> {
+            if self.socket_access == RuntimeGuardSocketAccess::ProjectedShared {
+                return Ok(());
+            }
             let Some(requested_group) = session_guard_group_from_environment() else {
                 return Ok(());
             };
@@ -407,7 +447,7 @@ mod unix {
 
     #[cfg(test)]
     mod tests {
-        use super::session_guard_group;
+        use super::{session_guard_group, GuardConnectionCapacity, GuardPeerIdentity};
 
         #[test]
         fn root_broker_grants_only_the_dropped_session_group() {
@@ -435,6 +475,30 @@ mod unix {
                 ),
                 None
             );
+        }
+
+        #[test]
+        fn shared_guard_capacity_enforces_global_and_per_uid_limits() -> Result<(), &'static str> {
+            let capacity = GuardConnectionCapacity::new(3, 1);
+            let first = capacity
+                .try_acquire(Some(peer(1001)))
+                .ok_or("first UID should have capacity")?;
+            assert!(capacity.try_acquire(Some(peer(1001))).is_none());
+            let _second = capacity
+                .try_acquire(Some(peer(1002)))
+                .ok_or("second UID should have independent capacity")?;
+            let _third = capacity
+                .try_acquire(Some(peer(1003)))
+                .ok_or("third UID should reach the global limit")?;
+            assert!(capacity.try_acquire(Some(peer(1004))).is_none());
+
+            drop(first);
+            assert!(capacity.try_acquire(Some(peer(1001))).is_some());
+            Ok(())
+        }
+
+        const fn peer(uid: u32) -> GuardPeerIdentity {
+            GuardPeerIdentity { pid: Some(1), uid }
         }
     }
 }

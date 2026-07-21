@@ -454,7 +454,6 @@ impl SessionRuntime for SessionRuntimeResources {
                 .guard
                 .start_session_with_token(
                     spec.owner().uid(),
-                    spec.owner().gid(),
                     spec.session_id().as_str(),
                     "agent",
                     self.router_factory.router(spec),

@@ -41,7 +41,10 @@ mod linux_host {
             lifecycle.command_environment()?,
         )?;
 
-        assert!(output.contains(&lifecycle.devtools_listening_line()));
+        assert!(
+            output.contains(&lifecycle.devtools_listening_line()),
+            "expected governed DevTools endpoint in command output:\n{output}"
+        );
         lifecycle.assert_original_command_not_executed()?;
 
         let audit = lifecycle.audit(workspace.path())?.read()?;

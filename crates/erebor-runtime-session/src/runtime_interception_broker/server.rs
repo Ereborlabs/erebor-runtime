@@ -3,7 +3,10 @@ use std::{
     fs::File,
     io::Read,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -17,7 +20,7 @@ use crate::error::{
 use super::{
     constants::{DEFAULT_TIMEOUT_MS, RUNTIME_INTERCEPTION_SOCKET_NAME},
     endpoint::RuntimeInterceptionEndpoint,
-    handlers::{SessionInterceptionRouter, SessionRegistration},
+    handlers::SessionInterceptionRouter,
     platform::{
         Platform, RuntimeInterceptionBrokerPlatform, RuntimeInterceptionBrokerServerPlatform,
     },
@@ -35,11 +38,14 @@ pub(super) struct RuntimeGuardServerConfig {
     pub(super) directory_mode: u32,
     pub(super) socket_mode: u32,
     pub(super) limits: RuntimeGuardServerLimits,
+    pub(super) socket_access: RuntimeGuardSocketAccess,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct RuntimeGuardServerLimits {
     pub(super) connection_limit: usize,
+    pub(super) per_uid_connection_limit: usize,
+    pub(super) per_session_connection_limit: usize,
     pub(super) worker_count: usize,
     pub(super) connection_deadline: Duration,
 }
@@ -47,11 +53,40 @@ pub(super) struct RuntimeGuardServerLimits {
 impl Default for RuntimeGuardServerLimits {
     fn default() -> Self {
         Self {
-            connection_limit: 16,
+            connection_limit: 256,
+            per_uid_connection_limit: 64,
+            per_session_connection_limit: 16,
             worker_count: 4,
             connection_deadline: Duration::from_millis(DEFAULT_TIMEOUT_MS),
         }
     }
+}
+
+impl RuntimeGuardServerLimits {
+    pub(super) fn validate(self) -> Result<Self, RuntimeInterceptionBrokerError> {
+        if self.connection_limit == 0
+            || self.per_uid_connection_limit == 0
+            || self.per_uid_connection_limit > self.connection_limit
+            || self.per_session_connection_limit == 0
+            || self.per_session_connection_limit > self.per_uid_connection_limit
+            || self.worker_count == 0
+            || self.worker_count > self.connection_limit
+            || self.connection_deadline.is_zero()
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "runtime guard limits are invalid",
+            ))
+            .context(BrokerIoSnafu);
+        }
+        Ok(self)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RuntimeGuardSocketAccess {
+    ForegroundSessionGroup,
+    ProjectedShared,
 }
 
 impl RuntimeGuardServerConfig {
@@ -63,6 +98,7 @@ impl RuntimeGuardServerConfig {
             directory_mode: 0o700,
             socket_mode: 0o600,
             limits: RuntimeGuardServerLimits::default(),
+            socket_access: RuntimeGuardSocketAccess::ForegroundSessionGroup,
         }
     }
 }
@@ -95,7 +131,7 @@ impl RuntimeInterceptionBroker {
 pub struct SessionInterceptionRegistration {
     endpoint: RuntimeInterceptionEndpoint,
     server: Arc<RuntimeInterceptionBrokerServer>,
-    session_id: String,
+    key: SessionRegistrationKey,
 }
 
 impl SessionInterceptionRegistration {
@@ -121,31 +157,90 @@ impl SessionInterceptionRegistration {
                 .join(RUNTIME_INTERCEPTION_SOCKET_NAME),
         )
     }
-
-    pub(super) fn shutdown_server(self) {
-        self.server.shutdown();
-    }
 }
 
 impl Drop for SessionInterceptionRegistration {
     fn drop(&mut self) {
         self.server
-            .unregister_session(&self.session_id, self.endpoint.token());
+            .unregister_session(&self.key, self.endpoint.token());
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) struct SessionRegistrationKey {
+    pub(super) expected_peer_uid: Option<u32>,
+    pub(super) session_id: String,
+}
+
+pub(super) struct RegisteredSession {
+    pub(super) token: String,
+    pub(super) broker_id: String,
+    pub(super) expected_peer_uid: Option<u32>,
+    pub(super) require_peer_pid_match: bool,
+    pub(super) router: SessionInterceptionRouter,
+    connection_capacity: Arc<SessionConnectionCapacity>,
+}
+
+impl RegisteredSession {
+    pub(super) fn try_acquire_connection(&self) -> Option<SessionConnectionPermit> {
+        self.connection_capacity.try_acquire()
+    }
+}
+
+struct SessionConnectionCapacity {
+    active: AtomicUsize,
+    limit: usize,
+}
+
+pub(super) struct SessionConnectionPermit {
+    capacity: Arc<SessionConnectionCapacity>,
+}
+
+impl SessionConnectionCapacity {
+    fn new(limit: usize) -> Arc<Self> {
+        Arc::new(Self {
+            active: AtomicUsize::new(0),
+            limit,
+        })
+    }
+
+    fn try_acquire(self: &Arc<Self>) -> Option<SessionConnectionPermit> {
+        self.active
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |active| {
+                (active < self.limit).then_some(active + 1)
+            })
+            .ok()
+            .map(|_previous| SessionConnectionPermit {
+                capacity: Arc::clone(self),
+            })
+    }
+}
+
+impl Drop for SessionConnectionPermit {
+    fn drop(&mut self) {
+        self.capacity.active.fetch_sub(1, Ordering::Release);
     }
 }
 
 pub(super) struct RuntimeInterceptionBrokerServer {
     platform: Mutex<Option<Box<dyn RuntimeInterceptionBrokerServerPlatform>>>,
-    pub(super) sessions: Mutex<HashMap<String, SessionRegistration>>,
+    pub(super) sessions: Mutex<HashMap<SessionRegistrationKey, RegisteredSession>>,
+    session_connection_limit: usize,
+    #[cfg(test)]
+    worker_count: usize,
 }
 
 impl RuntimeInterceptionBrokerServer {
     pub(super) fn start(
-        config: RuntimeGuardServerConfig,
+        mut config: RuntimeGuardServerConfig,
     ) -> Result<Arc<Self>, RuntimeInterceptionBrokerError> {
+        config.limits = config.limits.validate()?;
         let server = Arc::new(Self {
             platform: Mutex::new(None),
             sessions: Mutex::new(HashMap::new()),
+            session_connection_limit: config.limits.per_session_connection_limit,
+            #[cfg(test)]
+            worker_count: config.limits.worker_count,
         });
         let platform = <Platform as RuntimeInterceptionBrokerPlatform>::start_server(
             Arc::clone(&server),
@@ -170,41 +265,56 @@ impl RuntimeInterceptionBrokerServer {
         self.authorize_session_guard()?;
         let endpoint_path = self.endpoint_path()?;
         let token = token.map_or_else(read_interception_token, Ok)?;
-        let registration = SessionRegistration {
+        let key = SessionRegistrationKey {
+            expected_peer_uid,
+            session_id: session_id.clone(),
+        };
+        let registration = RegisteredSession {
             token: token.clone(),
             broker_id: format!("{session_id}:{actor_id}"),
             expected_peer_uid,
             require_peer_pid_match,
             router,
+            connection_capacity: SessionConnectionCapacity::new(self.session_connection_limit),
         };
         {
             let mut sessions = self
                 .sessions
                 .lock()
                 .map_err(|_error| BrokerStateLockSnafu.build())?;
-            if sessions.contains_key(&session_id) {
+            if sessions.contains_key(&key) {
                 return BrokerSessionAlreadyRegisteredSnafu { session_id }.fail();
             }
-            sessions.insert(session_id.clone(), registration);
+            sessions.insert(key.clone(), registration);
         }
 
         Ok(SessionInterceptionRegistration {
             endpoint: RuntimeInterceptionEndpoint::unix(endpoint_path, token, DEFAULT_TIMEOUT_MS),
             server: Arc::clone(self),
-            session_id,
+            key,
         })
     }
 
-    fn unregister_session(&self, session_id: &str, token: &str) {
+    fn unregister_session(&self, key: &SessionRegistrationKey, token: &str) {
         let Ok(mut sessions) = self.sessions.lock() else {
             return;
         };
         if sessions
-            .get(session_id)
+            .get(key)
             .is_some_and(|registration| registration.token == token)
         {
-            sessions.remove(session_id);
+            sessions.remove(key);
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn registered_session_count(&self) -> usize {
+        self.sessions.lock().map_or(0, |sessions| sessions.len())
+    }
+
+    #[cfg(test)]
+    pub(super) const fn worker_count(&self) -> usize {
+        self.worker_count
     }
 
     fn endpoint_path(&self) -> Result<PathBuf, RuntimeInterceptionBrokerError> {
@@ -229,7 +339,7 @@ impl RuntimeInterceptionBrokerServer {
         platform.authorize_session_guard()
     }
 
-    fn shutdown(&self) {
+    pub(super) fn shutdown(&self) {
         if let Ok(mut platform) = self.platform.lock() {
             if let Some(platform) = platform.take() {
                 platform.shutdown();

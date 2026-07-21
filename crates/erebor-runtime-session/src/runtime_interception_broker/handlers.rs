@@ -14,15 +14,6 @@ use crate::{
     agents::codex::CodexInvocationLeaseOwner, runtime_interception_broker::ProcessExecAuditRecorder,
 };
 
-#[derive(Debug)]
-pub(super) struct SessionRegistration {
-    pub(super) token: String,
-    pub(super) broker_id: String,
-    pub(super) expected_peer_uid: Option<u32>,
-    pub(super) require_peer_pid_match: bool,
-    pub(super) router: SessionInterceptionRouter,
-}
-
 #[derive(Clone, Default)]
 pub struct SessionInterceptionRouter {
     process_exec: Option<Arc<dyn ProcessExecSurfaceHandler>>,

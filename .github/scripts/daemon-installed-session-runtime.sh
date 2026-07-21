@@ -375,7 +375,7 @@ import json, sys
 record = json.load(open(sys.argv[1], encoding="utf-8"))
 spec = record["spec"]
 assert record["state"] == "created"
-assert spec["schema_version"] == 1
+assert spec["schema_version"] == 2
 assert spec["runner_capability"]["schema_version"] == 1
 assert spec["runner_capability"]["runner"] == "linux_host"
 assert spec["policy_set"]["sha256"] == sys.argv[2]
@@ -385,6 +385,27 @@ assert spec["adapter"]["sha256"] == sys.argv[2]
 assert spec["secret_references"] == ["phase-two-secret-provider://fixture"]
 assert "phase-two-root-secret" not in json.dumps(record)
 ' "$created_record" "$policy_digest"
+if as_user "$first_user" admin-set-retention-hold \
+  --uid "$created_uid" "$created_only" --retention-hold true \
+  --key non-root-retention-hold >/dev/null 2>&1; then
+  echo "non-root caller used the retention-hold administration API" >&2
+  exit 1
+fi
+"$driver" admin-set-retention-hold \
+  --uid "$created_uid" "$created_only" --retention-hold true \
+  --key root-retention-hold \
+  | grep -q 'retention_hold=true'
+"$erebor" daemon logs --maximum-records 32 \
+  | grep -q 'root administration applied admin-session-set-retention-hold'
+if as_user "$first_user" remove "$created_only" --key remove-held-created-only \
+  >/dev/null 2>&1; then
+  echo "retention-held session was removed" >&2
+  exit 1
+fi
+"$driver" admin-set-retention-hold \
+  --uid "$created_uid" "$created_only" --retention-hold false \
+  --key root-release-retention-hold \
+  | grep -q 'retention_hold=false'
 as_user "$first_user" remove "$created_only" --key remove-created-only \
   | grep -q 'state=removed'
 
@@ -438,7 +459,7 @@ if as_user "$first_user" start "$workspace_swap_session" \
   echo "start accepted a changed workspace identity" >&2
   exit 1
 fi
-as_user "$first_user" inspect "$workspace_swap_session" | grep -q 'state=created'
+as_user "$first_user" inspect "$workspace_swap_session" | grep -q 'state=failed'
 as_user "$first_user" remove "$workspace_swap_session" \
   --key remove-workspace-swap | grep -q 'state=removed'
 rm -r "$swapped_workspace" "$swapped_workspace.old"
@@ -531,6 +552,43 @@ await_log "$first_user" "$fast_docker" fast-docker-final
 as_user "$first_user" logs "$fast_docker" --stream stderr \
   | grep -q fast-docker-stderr
 remove_session "$first_user" "$fast_docker" fast-docker
+
+output_failure_label=output-sink-failure
+output_failure_session="$(
+  as_user "$first_user" create \
+    --runner linux-host \
+    --workspace "/home/$first_user" \
+    --failure-mode terminate \
+    --key create-output-sink-failure \
+    -- /usr/bin/dash -c \
+    'while :; do printf "%08000d\\n" 0; done' \
+    "$output_failure_label" | session_id_from
+)"
+output_failure_root="/var/lib/erebor/users/$(uid_of "$first_user")/sessions/$output_failure_session/output"
+install -d -m 0700 "$output_failure_root"
+mount -t tmpfs -o size=64k tmpfs "$output_failure_root"
+as_user "$first_user" start "$output_failure_session" \
+  --key start-output-sink-failure >/dev/null 2>&1 || true
+as_user "$first_user" wait "$output_failure_session" \
+  | grep -Eq 'state=failed.*failure=.*output'
+if marker_live "$output_failure_label"; then
+  echo "required output sink failure left a workload alive" >&2
+  exit 1
+fi
+umount "$output_failure_root"
+remove_session "$first_user" "$output_failure_session" output-sink-failure
+
+case "${EREBOR_SESSION_RUNTIME_PROBE:-full}" in
+  output-contract)
+    exit 0
+    ;;
+  full | shared-guard)
+    ;;
+  *)
+    echo "unknown installed session-runtime probe mode" >&2
+    exit 1
+    ;;
+esac
 
 linux_terminate="$(create_linux "$first_user" terminate linux-terminate | session_id_from)"
 linux_continue="$(create_linux "$second_user" continue linux-continue | session_id_from)"
@@ -633,22 +691,36 @@ for session_id in \
   assert_scope "$session_id" "$stable_identity"
 done
 
+shared_guard_socket=/run/erebor/sessions/runtime-interception.sock
+[[ -S "$shared_guard_socket" ]]
+[[ "$(stat -c '%U:%G:%a' "$shared_guard_socket")" == "root:root:666" ]]
+[[ "$(find /run/erebor/sessions -type s -name runtime-interception.sock | wc -l)" -eq 1 ]]
 for session_id in "$linux_terminate" "$linux_continue"; do
-  socket="/run/erebor/sessions/$(stat -c %u "/home/$first_user")/$session_id/runtime-interception.sock"
+  owner_uid="$(uid_of "$first_user")"
   if [[ "$session_id" == "$linux_continue" ]]; then
-    socket="/run/erebor/sessions/$(stat -c %u "/home/$second_user")/$session_id/runtime-interception.sock"
+    owner_uid="$(uid_of "$second_user")"
   fi
-  [[ -S "$socket" ]]
+  [[ ! -e "/run/erebor/sessions/$owner_uid/$session_id/runtime-interception.sock" ]]
+  python3 -c '
+import json, sys
+record = json.load(open(sys.argv[1], encoding="utf-8"))
+assert record["spec"]["endpoint_projections"] == [{
+    "service": "runtime-guard",
+    "host_path": "/run/erebor/sessions/runtime-interception.sock",
+    "workload_path": "/run/erebor/runtime-interception.sock",
+}]
+' "/var/lib/erebor/users/$owner_uid/sessions/$session_id/session.json"
 done
-other_user_socket="/run/erebor/sessions/$(uid_of "$second_user")/$linux_continue/runtime-interception.sock"
-if runuser -u "$first_user" -- python3 -c '
+for user in "$first_user" "$second_user"; do
+  if runuser -u "$user" -- python3 -c '
 import socket, sys
 client = socket.socket(socket.AF_UNIX)
 client.connect(sys.argv[1])
-' "$other_user_socket" >/dev/null 2>&1; then
-  echo "one user connected to another user session guard endpoint" >&2
-  exit 1
-fi
+' "$shared_guard_socket" >/dev/null 2>&1; then
+    echo "a host user reached the unprojected shared runtime guard socket" >&2
+    exit 1
+  fi
+done
 if as_user "$first_user" inspect "$linux_continue" >/dev/null 2>&1; then
   echo "one user inspected another user session by guessing its id" >&2
   exit 1
@@ -656,6 +728,17 @@ fi
 if find /run/erebor -type s -name '*hook*' | grep -q .; then
   echo "erebord exposed a production Codex hook listener during Phase 2" >&2
   exit 1
+fi
+
+if [[ "${EREBOR_SESSION_RUNTIME_PROBE:-full}" == shared-guard ]]; then
+  remove_session "$first_user" "$linux_terminate" linux-terminate
+  remove_session "$first_user" "$docker_terminate" docker-terminate
+  remove_session "$second_user" "$linux_continue" linux-continue
+  remove_session "$second_user" "$docker_continue" docker-continue
+  [[ -S "$shared_guard_socket" ]]
+  [[ -z "$(docker ps -aq --filter "label=dev.erebor.session_id=$docker_terminate")" ]]
+  [[ -z "$(docker ps -aq --filter "label=dev.erebor.session_id=$docker_continue")" ]]
+  exit 0
 fi
 
 "$driver" admin-list --all-users | grep -q "session_id=$linux_terminate"
@@ -719,8 +802,8 @@ await_event_after "$second_user" "$linux_continue" \
   "$linux_event_cursor" daemon_control_lost
 await_event_after "$second_user" "$docker_continue" \
   "$docker_event_cursor" daemon_control_lost
-[[ ! -e "/run/erebor/sessions/$(uid_of "$first_user")/$linux_terminate/runtime-interception.sock" ]]
-[[ -S "/run/erebor/sessions/$(uid_of "$second_user")/$linux_continue/runtime-interception.sock" ]]
+[[ -S "$shared_guard_socket" ]]
+[[ "$(find /run/erebor/sessions -type s -name runtime-interception.sock | wc -l)" -eq 1 ]]
 
 remove_session "$first_user" "$linux_terminate" linux-terminate
 remove_session "$first_user" "$docker_terminate" docker-terminate
@@ -756,7 +839,6 @@ remove_session "$second_user" "$admin_kill_session" admin-kill
   | grep -q 'root administration applied admin-session-stop'
 "$erebor" daemon logs --maximum-records 32 \
   | grep -q 'root administration applied admin-session-kill'
-
 "$driver" prune --before-unix-ms "$(date +%s%3N)" --maximum-sessions 100 \
   --key installed-session-prune | grep -q 'pruned='
 systemctl unset-environment EREBOR_ROOT_SENTINEL
