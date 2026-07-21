@@ -11,12 +11,14 @@ use std::{
 
 use erebor_runtime_core::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
-    ActiveSessionSignalKind, DaemonFailureMode, OutputEndpoints, RunnerBinding,
-    RunnerCapabilityDocument, RunnerId, RunnerRecovery, RuntimeError, SessionSpec,
+    ActiveSessionSignalKind, DaemonFailureMode, FilesystemProjection, ImmutableIdentity,
+    OutputEndpoints, RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery,
+    RuntimeError, SessionSpec, WorkloadPrivilegePlan,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{RunnerAdmissionProfile, RunnerDriver};
+use super::{RunnerAdmissionContext, RunnerDriver, RunnerExecutionAdmission};
+use crate::SessionManagerError;
 
 const RUNNER_ID: &str = "docker";
 const IMPLEMENTATION_ID: &str = "erebor-docker-cli";
@@ -124,10 +126,7 @@ impl DockerRunnerDriver {
         .map_err(|error| self.unavailable(error.to_string()))
     }
 
-    fn validate_image(&self, spec: &SessionSpec) -> Result<(), RuntimeError> {
-        let image = spec
-            .container_image()
-            .ok_or_else(|| self.protocol("Docker session has no immutable image identity"))?;
+    fn validate_image(&self, image: &ImmutableIdentity) -> Result<(), RuntimeError> {
         let image_id = format!("sha256:{}", image.sha256());
         let output = DockerCommand::new(self.docker_path.clone()).run(&[
             "image",
@@ -296,8 +295,36 @@ impl RunnerDriver for DockerRunnerDriver {
         self.capability()
     }
 
-    fn admission_profile(&self) -> RunnerAdmissionProfile {
-        RunnerAdmissionProfile::new(false, 0o022, false)
+    fn admit(
+        &self,
+        context: &RunnerAdmissionContext<'_, '_>,
+    ) -> Result<RunnerExecutionAdmission, SessionManagerError> {
+        let digest = context.container_image_digest().ok_or_else(|| {
+            context.invalid("Docker admission requires an immutable container image digest")
+        })?;
+        let image = ImmutableIdentity::new("container-image", digest)
+            .map_err(|source| context.invalid(source.to_string()))?;
+        self.validate_image(&image)
+            .map_err(|source| SessionManagerError::Runner {
+                source,
+                location: snafu::Location::default(),
+            })?;
+        let workload_privileges = WorkloadPrivilegePlan::new(Vec::new(), 0o022, 1024, 512, 0)
+            .map_err(|source| context.invalid(source.to_string()))?;
+        let filesystem_projections = vec![FilesystemProjection::new(
+            context.workspace().clone(),
+            PathBuf::from("/workspace"),
+            false,
+        )
+        .map_err(|source| context.invalid(source.to_string()))?];
+        Ok(RunnerExecutionAdmission {
+            workspace: context.workspace().clone(),
+            workload_privileges,
+            executable: None,
+            container_image: Some(image),
+            filesystem_projections,
+            endpoint_projections: Vec::new(),
+        })
     }
 
     fn validate_admission(&self, spec: &SessionSpec) -> Result<(), RuntimeError> {
@@ -309,7 +336,10 @@ impl RunnerDriver for DockerRunnerDriver {
                 "Docker admission requires its runner ID, no host executable, and umask 0022",
             ));
         }
-        self.validate_image(spec)
+        let image = spec
+            .container_image()
+            .ok_or_else(|| self.protocol("Docker session has no immutable image identity"))?;
+        self.validate_image(image)
     }
 
     fn start(

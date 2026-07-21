@@ -22,7 +22,7 @@ use crate::{
         ActiveHandleLockSnafu, ActiveHandleMissingSnafu, CapabilityChangedSnafu, OutputSnafu,
         RepositorySnafu, RunnerSnafu, StateLockSnafu,
     },
-    runners::RunnerRegistry,
+    runners::{RunnerAdmissionRequest, RunnerExecutionAdmission, RunnerRegistry},
     DurableSessionRecord, DurableStreamCursor, InputLease, InputLeaseManager, SessionManagerError,
     SessionPruneResult, SessionRepository, SessionRepositoryError, StreamKind,
 };
@@ -220,11 +220,13 @@ impl SessionManager {
         self.runners.inspect(id)
     }
 
-    pub fn runner_admission_profile(
+    pub fn admit_runner(
         &self,
         id: &RunnerId,
-    ) -> Result<crate::RunnerAdmissionProfile, SessionManagerError> {
-        Ok(self.runners.get(id)?.admission_profile())
+        request: RunnerAdmissionRequest<'_>,
+        resolver: &dyn SessionPathResolver,
+    ) -> Result<RunnerExecutionAdmission, SessionManagerError> {
+        self.runners.admit(id, request, resolver)
     }
 
     pub fn validate_admission(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
@@ -910,7 +912,8 @@ pub fn output_endpoints(spec: &SessionSpec) -> OutputEndpoints {
 mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
-        path::PathBuf,
+        fs::File,
+        path::{Path, PathBuf},
         sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc, Mutex,
@@ -920,15 +923,19 @@ mod tests {
 
     use erebor_runtime_core::{
         ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
-        ActiveSessionSignalKind, DaemonFailureMode, EvidenceRequirement, ImmutableIdentity,
-        OutputEndpoints, OutputPlan, OutputStreamRequirements, RunnerBinding,
+        ActiveSessionSignalKind, DaemonFailureMode, EvidenceRequirement, FilesystemProjection,
+        ImmutableIdentity, OutputEndpoints, OutputPlan, OutputStreamRequirements, RunnerBinding,
         RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding, SafePathKind,
         SessionAdmission, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
     };
     use erebor_runtime_events::SessionId;
     use tempfile::TempDir;
 
-    use crate::{RunnerAdmissionProfile, RunnerDriver, SessionOutputStores};
+    use crate::{
+        ResolvedSessionPath, RunnerAdmissionContext, RunnerAdmissionRequest, RunnerDriver,
+        RunnerExecutionAdmission, SessionOutputStores, SessionPathResolver,
+        SessionPathResolverError,
+    };
 
     use super::{
         output_endpoints, resources::SessionRuntime, DurableStreamCursor, RunnerRegistry,
@@ -953,6 +960,7 @@ mod tests {
         running: Arc<AtomicBool>,
         starts: AtomicUsize,
         fail_start: AtomicBool,
+        admissions: AtomicUsize,
         recoveries: AtomicUsize,
         removals: AtomicUsize,
     }
@@ -971,6 +979,24 @@ mod tests {
 
     struct FakeRuntime {
         state: Arc<FakeRuntimeState>,
+    }
+
+    struct StaticPathResolver;
+
+    impl SessionPathResolver for StaticPathResolver {
+        fn resolve(
+            &self,
+            uid: u32,
+            gid: u32,
+            path: &Path,
+            kind: SafePathKind,
+        ) -> Result<ResolvedSessionPath, SessionPathResolverError> {
+            let binding = SafePathBinding::new(path.to_path_buf(), 1, 2, 3, uid, gid, kind)
+                .map_err(|source| Box::new(source) as SessionPathResolverError)?;
+            let descriptor = File::open("/tmp")
+                .map_err(|source| Box::new(source) as SessionPathResolverError)?;
+            Ok(ResolvedSessionPath::new(descriptor, binding))
+        }
     }
 
     impl SessionRuntime for FakeRuntime {
@@ -1087,8 +1113,27 @@ mod tests {
             Ok(())
         }
 
-        fn admission_profile(&self) -> RunnerAdmissionProfile {
-            RunnerAdmissionProfile::new(true, 0o077, true)
+        fn admit(
+            &self,
+            context: &RunnerAdmissionContext<'_, '_>,
+        ) -> Result<RunnerExecutionAdmission, SessionManagerError> {
+            self.state.admissions.fetch_add(1, Ordering::SeqCst);
+            let workload_privileges = WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)
+                .map_err(|source| context.invalid(source.to_string()))?;
+            let filesystem_projections = vec![FilesystemProjection::new(
+                context.workspace().clone(),
+                PathBuf::from("/workspace"),
+                false,
+            )
+            .map_err(|source| context.invalid(source.to_string()))?];
+            Ok(RunnerExecutionAdmission {
+                workspace: context.workspace().clone(),
+                workload_privileges,
+                executable: None,
+                container_image: None,
+                filesystem_projections,
+                endpoint_projections: Vec::new(),
+            })
         }
 
         fn start(
@@ -1179,6 +1224,7 @@ mod tests {
             running: Arc::new(AtomicBool::new(false)),
             starts: AtomicUsize::new(0),
             fail_start: AtomicBool::new(false),
+            admissions: AtomicUsize::new(0),
             recoveries: AtomicUsize::new(0),
             removals: AtomicUsize::new(0),
         });
@@ -1251,6 +1297,33 @@ mod tests {
 
     fn fixture(root: &TempDir) -> Result<ManagerFixture, TestError> {
         fixture_with_mode(root, DaemonFailureMode::Continue)
+    }
+
+    #[test]
+    fn runner_admission_is_owned_by_the_registered_driver() -> Result<(), TestError> {
+        let root = TempDir::new()?;
+        let (manager, state, _runtime, _spec) = fixture(&root)?;
+        let owner = SessionOwner::new(1000, 1000);
+        let command = vec![String::from("/usr/bin/agent")];
+        let workspace = PathBuf::from("/workspace");
+        let admitted = manager.admit_runner(
+            &RunnerId::new("test-runner")?,
+            RunnerAdmissionRequest::new(
+                "session-runner-admission",
+                &owner,
+                &command,
+                &workspace,
+                None,
+                Path::new("/run/erebor/runtime-interception.sock"),
+            ),
+            &StaticPathResolver,
+        )?;
+
+        assert_eq!(state.admissions.load(Ordering::SeqCst), 1);
+        assert_eq!(admitted.workspace.requested_path(), Path::new("/workspace"));
+        assert!(admitted.executable.is_none());
+        assert!(admitted.container_image.is_none());
+        Ok(())
     }
 
     #[test]

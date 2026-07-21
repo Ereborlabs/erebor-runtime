@@ -221,10 +221,6 @@ impl DescriptorBroker {
 }
 
 impl ResolvedDescriptor {
-    pub(crate) fn binding(&self) -> &SafePathBinding {
-        &self.binding
-    }
-
     fn into_parts(self) -> (File, SafePathBinding) {
         (self.descriptor, self.binding)
     }

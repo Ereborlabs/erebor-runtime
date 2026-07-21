@@ -10,12 +10,14 @@ use std::{
 
 use erebor_runtime_core::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
-    ActiveSessionSignalKind, DaemonFailureMode, OutputEndpoints, RunnerBinding,
-    RunnerCapabilityDocument, RunnerId, RunnerRecovery, RuntimeError, SessionSpec,
+    ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, FilesystemProjection,
+    OutputEndpoints, RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery,
+    RuntimeError, SafePathKind, SessionSpec, WorkloadPrivilegePlan,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{RunnerAdmissionProfile, RunnerDriver};
+use super::{RunnerAdmissionContext, RunnerDriver, RunnerExecutionAdmission};
+use crate::SessionManagerError;
 
 const RUNNER_ID: &str = "linux-host";
 const IMPLEMENTATION_ID: &str = "erebor-linux-host";
@@ -248,8 +250,39 @@ impl RunnerDriver for LinuxRunnerDriver {
         self.capability()
     }
 
-    fn admission_profile(&self) -> RunnerAdmissionProfile {
-        RunnerAdmissionProfile::new(true, 0o077, true)
+    fn admit(
+        &self,
+        context: &RunnerAdmissionContext<'_, '_>,
+    ) -> Result<RunnerExecutionAdmission, SessionManagerError> {
+        if context.container_image_digest().is_some() {
+            return Err(context.invalid("Linux-host admission does not accept a container image"));
+        }
+        let program = context.command().first().ok_or_else(|| {
+            context.invalid("Linux-host admission requires an executable command")
+        })?;
+        let executable = context.resolve_path(Path::new(program), SafePathKind::Executable)?;
+        let workload_privileges = WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)
+            .map_err(|source| context.invalid(source.to_string()))?;
+        let filesystem_projections = vec![FilesystemProjection::new(
+            context.workspace().clone(),
+            PathBuf::from("/workspace"),
+            false,
+        )
+        .map_err(|source| context.invalid(source.to_string()))?];
+        let endpoint_projections = vec![EndpointProjection::new(
+            "runtime-guard",
+            context.runtime_guard_host_path().to_path_buf(),
+            PathBuf::from("/run/erebor/runtime-interception.sock"),
+        )
+        .map_err(|source| context.invalid(source.to_string()))?];
+        Ok(RunnerExecutionAdmission {
+            workspace: context.workspace().clone(),
+            workload_privileges,
+            executable: Some(executable),
+            container_image: None,
+            filesystem_projections,
+            endpoint_projections,
+        })
     }
 
     fn validate_admission(&self, spec: &SessionSpec) -> Result<(), RuntimeError> {

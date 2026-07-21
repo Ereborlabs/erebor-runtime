@@ -4,35 +4,27 @@ use std::{
 };
 
 use erebor_runtime_core::{
-    DaemonFailureMode, EndpointProjection, EvidenceRequirement, FilesystemProjection,
-    ImmutableIdentity, OutputPlan, OutputStreamRequirements, RunRequest, RunnerCapabilityDocument,
-    RunnerId, SafePathKind, SessionAdmission, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
+    DaemonFailureMode, EvidenceRequirement, ImmutableIdentity, OutputPlan,
+    OutputStreamRequirements, RunRequest, RunnerCapabilityDocument, RunnerId, SessionAdmission,
+    SessionOwner, SessionSpec,
 };
 use erebor_runtime_events::SessionId;
 use erebor_runtime_ipc::v1::SessionCreateRequest;
 
-use crate::{
-    config::DaemonConfig, error::InvalidRequestSnafu, path_broker::DescriptorBroker, Result,
-};
-use erebor_runtime_session::RunnerAdmissionProfile;
+use crate::{config::DaemonConfig, error::InvalidRequestSnafu, Result};
+use erebor_runtime_session::RunnerExecutionAdmission;
 
 pub(super) struct AdmissionContext<'a> {
-    pub(super) owner_uid: u32,
-    pub(super) owner_gid: u32,
+    pub(super) owner: SessionOwner,
     pub(super) session_id: &'a str,
     pub(super) root_configuration_generation: u64,
     pub(super) state_root: &'a Path,
-    pub(super) runtime_root: &'a Path,
     pub(super) capability: RunnerCapabilityDocument,
-    pub(super) runner_profile: RunnerAdmissionProfile,
+    pub(super) runner_admission: RunnerExecutionAdmission,
     pub(super) config: &'a DaemonConfig,
-    pub(super) descriptor_broker: &'a DescriptorBroker,
 }
 
-pub(super) fn admit(
-    request: SessionCreateRequest,
-    context: AdmissionContext<'_>,
-) -> Result<SessionSpec> {
+pub(super) fn parse_request(request: SessionCreateRequest) -> Result<RunRequest> {
     let runner = RunnerId::new(request.runner_id).map_err(invalid_spec)?;
     let failure_mode = parse_failure_mode(&request.daemon_failure_mode)?;
     let package_digest = optional(request.package_digest);
@@ -44,8 +36,8 @@ pub(super) fn admit(
         .into_iter()
         .map(|entry| (entry.key, entry.value))
         .collect::<Vec<_>>();
-    let run_request = RunRequest::new(
-        runner.clone(),
+    RunRequest::new(
+        runner,
         request.command,
         PathBuf::from(request.workspace),
         request.policy_set_digest,
@@ -60,7 +52,10 @@ pub(super) fn admit(
         failure_mode,
         request.requested_loss_grace_seconds,
     )
-    .map_err(invalid_spec)?;
+    .map_err(invalid_spec)
+}
+
+pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> Result<SessionSpec> {
     let fixture = context
         .config
         .phase_two_fixture(
@@ -83,79 +78,28 @@ pub(super) fn admit(
         }
         .fail();
     }
-    let workspace = context
-        .descriptor_broker
-        .resolve(
-            context.owner_uid,
-            context.owner_gid,
-            run_request.workspace(),
-            SafePathKind::Directory,
-        )?
-        .binding()
-        .clone();
-    let executable = if context.runner_profile.executable_required() {
-        let program = run_request.command().first().ok_or_else(|| {
-            InvalidRequestSnafu {
-                reason: String::from("selected runner requires an executable"),
-            }
-            .build()
-        })?;
-        Some(
-            context
-                .descriptor_broker
-                .resolve(
-                    context.owner_uid,
-                    context.owner_gid,
-                    Path::new(program),
-                    SafePathKind::Executable,
-                )?
-                .binding()
-                .clone(),
-        )
-    } else {
-        None
-    };
     let loss_grace_seconds = run_request
         .requested_loss_grace_seconds()
         .min(context.config.max_daemon_loss_grace_seconds);
     let output_root = context
         .state_root
         .join("users")
-        .join(context.owner_uid.to_string())
+        .join(context.owner.uid().to_string())
         .join("sessions")
         .join(context.session_id)
         .join("output");
-    let runtime_guard_host_path = context.runtime_root.join("runtime-interception.sock");
-    let endpoint_projections = context
-        .runner_profile
-        .project_runtime_guard()
-        .then(|| {
-            EndpointProjection::new(
-                "runtime-guard",
-                runtime_guard_host_path,
-                PathBuf::from("/run/erebor/runtime-interception.sock"),
-            )
-            .map_err(invalid_spec)
-        })
-        .transpose()?
-        .into_iter()
-        .collect();
-    let filesystem_projections =
-        vec![
-            FilesystemProjection::new(workspace.clone(), PathBuf::from("/workspace"), false)
-                .map_err(invalid_spec)?,
-        ];
+    let RunnerExecutionAdmission {
+        workspace,
+        workload_privileges,
+        executable,
+        container_image,
+        filesystem_projections,
+        endpoint_projections,
+    } = context.runner_admission;
     SessionSpec::new(SessionAdmission {
         session_id: SessionId::new(context.session_id),
-        owner: SessionOwner::new(context.owner_uid, context.owner_gid),
-        workload_privileges: WorkloadPrivilegePlan::new(
-            Vec::new(),
-            context.runner_profile.workload_umask(),
-            1024,
-            512,
-            0,
-        )
-        .map_err(invalid_spec)?,
+        owner: context.owner,
+        workload_privileges,
         command: run_request.command().to_vec(),
         package: identity("agent-package", run_request.package_sha256())?,
         installation: identity("installation", run_request.installation_sha256())?,
@@ -170,7 +114,7 @@ pub(super) fn admit(
         runner_capability: context.capability,
         workspace,
         executable,
-        container_image: identity("container-image", run_request.container_image_sha256())?,
+        container_image,
         environment: run_request.environment().to_vec(),
         secret_references: run_request.secret_references().to_vec(),
         filesystem_projections,

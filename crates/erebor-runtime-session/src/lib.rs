@@ -42,7 +42,10 @@ pub use error::{
 };
 #[doc(hidden)]
 pub use linux_controller::run_linux_session_controller;
-pub use runners::{RunnerAdmissionProfile, RunnerDriver, RunnerInstallConfig, RunnerRegistry};
+pub use runners::{
+    RunnerAdmissionContext, RunnerAdmissionRequest, RunnerDriver, RunnerExecutionAdmission,
+    RunnerInstallConfig, RunnerRegistry,
+};
 pub use runtime_interception_broker::{
     InterceptionBrokerClient, RuntimeGuardService, RuntimeInterceptionBroker,
     RuntimeInterceptionBrokerError, RuntimeInterceptionEndpoint, SessionInterceptionRegistration,

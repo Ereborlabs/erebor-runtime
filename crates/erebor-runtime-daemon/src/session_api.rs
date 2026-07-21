@@ -5,7 +5,7 @@ mod response;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use erebor_runtime_core::{
-    ActiveSessionSignal, ImmutableIdentity, RunnerId, SessionLifecycleState, SessionSpec,
+    ActiveSessionSignal, ImmutableIdentity, SessionLifecycleState, SessionOwner, SessionSpec,
 };
 use erebor_runtime_ipc::v1::{
     SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionInputLeaseResponse,
@@ -14,9 +14,9 @@ use erebor_runtime_ipc::v1::{
     KIND_SESSION_RECORD,
 };
 use erebor_runtime_session::{
-    DurableSessionRecord, RunnerInstallConfig, RunnerRegistry, SessionManager, SessionManagerError,
-    SessionRepository, SessionRepositoryError, SessionRuntimeResources, StreamKind,
-    ValidatedStartConstraints,
+    DurableSessionRecord, RunnerAdmissionRequest, RunnerInstallConfig, RunnerRegistry,
+    SessionManager, SessionManagerError, SessionRepository, SessionRepositoryError,
+    SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
 };
 use prost::Message;
 use snafu::ResultExt;
@@ -31,7 +31,7 @@ use crate::{
 };
 
 use self::{
-    admission::{admit, AdmissionContext},
+    admission::{admit, parse_request, AdmissionContext},
     policy_fixture::PhaseTwoInterceptionRouterFactory,
     response::session_record,
 };
@@ -90,25 +90,35 @@ impl DaemonSessionApi {
         config: &DaemonConfig,
     ) -> Result<SessionSpec> {
         let session_id = format!("session-{}", Uuid::new_v4());
-        let runner = parse_runner(&request.runner_id)?;
+        let request = parse_request(request)?;
+        let runner = request.runner().clone();
         let capability = self.manager.inspect_runner(&runner).context(SessionSnafu)?;
-        let runner_profile = self
+        let owner = SessionOwner::new(owner_uid, owner_gid);
+        let runner_admission = self
             .manager
-            .runner_admission_profile(&runner)
+            .admit_runner(
+                &runner,
+                RunnerAdmissionRequest::new(
+                    &session_id,
+                    &owner,
+                    request.command(),
+                    request.workspace(),
+                    request.container_image_sha256(),
+                    &self.runtime_root.join("runtime-interception.sock"),
+                ),
+                self.descriptor_broker.as_ref(),
+            )
             .context(SessionSnafu)?;
         let spec = admit(
             request,
             AdmissionContext {
-                owner_uid,
-                owner_gid,
+                owner,
                 session_id: &session_id,
                 root_configuration_generation: configuration_generation,
                 state_root: &self.state_root,
-                runtime_root: &self.runtime_root,
                 capability,
-                runner_profile,
+                runner_admission,
                 config,
-                descriptor_broker: self.descriptor_broker.as_ref(),
             },
         )?;
         self.manager
@@ -481,13 +491,6 @@ impl DaemonSessionApi {
             u64::MAX
         }
     }
-}
-
-fn parse_runner(value: &str) -> Result<RunnerId> {
-    RunnerId::new(value).map_err(|source| crate::DaemonError::InvalidRequest {
-        reason: source.to_string(),
-        location: snafu::Location::default(),
-    })
 }
 
 fn message(kind: &str, value: &impl Message) -> Result<MutationResponse> {

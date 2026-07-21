@@ -1,8 +1,13 @@
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use erebor_runtime_core::{
-    ActiveSession, OutputEndpoints, RunnerBinding, RunnerCapabilityDocument, RunnerId,
-    RuntimeError, SessionSpec,
+    ActiveSession, EndpointProjection, FilesystemProjection, ImmutableIdentity, OutputEndpoints,
+    RunnerBinding, RunnerCapabilityDocument, RunnerId, RuntimeError, SafePathBinding, SafePathKind,
+    SessionOwner, SessionSpec, WorkloadPrivilegePlan,
 };
 use snafu::{OptionExt, ResultExt};
 
@@ -13,8 +18,8 @@ pub(crate) use docker::DockerRunnerDriver;
 pub(crate) use linux::LinuxRunnerDriver;
 
 use crate::{
-    error::session_manager::{RunnerSnafu, RunnerUnavailableSnafu},
-    SessionManagerError,
+    error::session_manager::{PathResolutionSnafu, RunnerSnafu, RunnerUnavailableSnafu},
+    SessionManagerError, SessionPathResolver,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,41 +70,130 @@ impl RunnerInstallConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RunnerAdmissionProfile {
-    executable_required: bool,
-    workload_umask: u32,
-    project_runtime_guard: bool,
+pub struct RunnerAdmissionRequest<'a> {
+    session_id: &'a str,
+    owner: &'a SessionOwner,
+    command: &'a [String],
+    workspace: &'a Path,
+    container_image_digest: Option<&'a str>,
+    runtime_guard_host_path: &'a Path,
 }
 
-impl RunnerAdmissionProfile {
+impl<'a> RunnerAdmissionRequest<'a> {
     #[must_use]
     pub const fn new(
-        executable_required: bool,
-        workload_umask: u32,
-        project_runtime_guard: bool,
+        session_id: &'a str,
+        owner: &'a SessionOwner,
+        command: &'a [String],
+        workspace: &'a Path,
+        container_image_digest: Option<&'a str>,
+        runtime_guard_host_path: &'a Path,
     ) -> Self {
         Self {
-            executable_required,
-            workload_umask,
-            project_runtime_guard,
+            session_id,
+            owner,
+            command,
+            workspace,
+            container_image_digest,
+            runtime_guard_host_path,
         }
     }
+}
 
-    #[must_use]
-    pub const fn executable_required(self) -> bool {
-        self.executable_required
+pub struct RunnerAdmissionContext<'request, 'resolver> {
+    request: RunnerAdmissionRequest<'request>,
+    workspace: SafePathBinding,
+    resolver: &'resolver dyn SessionPathResolver,
+}
+
+impl<'request, 'resolver> RunnerAdmissionContext<'request, 'resolver> {
+    fn new(
+        request: RunnerAdmissionRequest<'request>,
+        resolver: &'resolver dyn SessionPathResolver,
+    ) -> Result<Self, SessionManagerError> {
+        let workspace = Self::resolve(
+            &request,
+            resolver,
+            request.workspace,
+            SafePathKind::Directory,
+        )?;
+        Ok(Self {
+            request,
+            workspace,
+            resolver,
+        })
+    }
+
+    fn resolve(
+        request: &RunnerAdmissionRequest<'_>,
+        resolver: &dyn SessionPathResolver,
+        path: &Path,
+        kind: SafePathKind,
+    ) -> Result<SafePathBinding, SessionManagerError> {
+        resolver
+            .resolve(request.owner.uid(), request.owner.gid(), path, kind)
+            .map(|resolved| resolved.binding().clone())
+            .context(PathResolutionSnafu {
+                uid: request.owner.uid(),
+                gid: request.owner.gid(),
+                path: path.to_path_buf(),
+            })
+    }
+
+    pub fn resolve_path(
+        &self,
+        path: &Path,
+        kind: SafePathKind,
+    ) -> Result<SafePathBinding, SessionManagerError> {
+        Self::resolve(&self.request, self.resolver, path, kind)
     }
 
     #[must_use]
-    pub const fn workload_umask(self) -> u32 {
-        self.workload_umask
+    pub const fn session_id(&self) -> &str {
+        self.request.session_id
     }
 
     #[must_use]
-    pub const fn project_runtime_guard(self) -> bool {
-        self.project_runtime_guard
+    pub const fn owner(&self) -> &SessionOwner {
+        self.request.owner
     }
+
+    #[must_use]
+    pub fn command(&self) -> &[String] {
+        self.request.command
+    }
+
+    #[must_use]
+    pub const fn workspace(&self) -> &SafePathBinding {
+        &self.workspace
+    }
+
+    #[must_use]
+    pub const fn container_image_digest(&self) -> Option<&str> {
+        self.request.container_image_digest
+    }
+
+    #[must_use]
+    pub fn runtime_guard_host_path(&self) -> &Path {
+        self.request.runtime_guard_host_path
+    }
+
+    pub fn invalid(&self, reason: impl Into<String>) -> SessionManagerError {
+        SessionManagerError::InvalidOperation {
+            session_id: self.session_id().to_owned(),
+            reason: reason.into(),
+            location: snafu::Location::default(),
+        }
+    }
+}
+
+pub struct RunnerExecutionAdmission {
+    pub workspace: SafePathBinding,
+    pub workload_privileges: WorkloadPrivilegePlan,
+    pub executable: Option<SafePathBinding>,
+    pub container_image: Option<ImmutableIdentity>,
+    pub filesystem_projections: Vec<FilesystemProjection>,
+    pub endpoint_projections: Vec<EndpointProjection>,
 }
 
 pub trait RunnerDriver: Send + Sync {
@@ -107,7 +201,10 @@ pub trait RunnerDriver: Send + Sync {
 
     fn inspect(&self) -> Result<RunnerCapabilityDocument, RuntimeError>;
 
-    fn admission_profile(&self) -> RunnerAdmissionProfile;
+    fn admit(
+        &self,
+        context: &RunnerAdmissionContext<'_, '_>,
+    ) -> Result<RunnerExecutionAdmission, SessionManagerError>;
 
     fn validate_admission(&self, spec: &SessionSpec) -> Result<(), RuntimeError>;
 
@@ -150,6 +247,16 @@ impl RunnerRegistry {
         self.runners.get(id).context(RunnerUnavailableSnafu {
             runner: id.as_str().to_owned(),
         })
+    }
+
+    pub fn admit(
+        &self,
+        id: &RunnerId,
+        request: RunnerAdmissionRequest<'_>,
+        resolver: &dyn SessionPathResolver,
+    ) -> Result<RunnerExecutionAdmission, SessionManagerError> {
+        let context = RunnerAdmissionContext::new(request, resolver)?;
+        self.get(id)?.admit(&context)
     }
 
     pub fn compiled(config: RunnerInstallConfig) -> Result<Self, SessionManagerError> {
