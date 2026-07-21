@@ -193,7 +193,77 @@ impl<'a> SessionCommandOwner<'a> {
             .await
             .context(DaemonClientSnafu)?;
         Self::write_record(started);
+        if !args.request.detached {
+            self.follow_attached(client, &created.session_id, args.request.tty, key)
+                .await?;
+        }
         Ok(())
+    }
+
+    async fn follow_attached(
+        &self,
+        client: &DaemonClient,
+        session_id: &str,
+        request_input_lease: bool,
+        key: &str,
+    ) -> Result<(), CliError> {
+        let attachment = client
+            .session_attach(
+                SessionAttachRequest {
+                    session_id: session_id.to_owned(),
+                    after_output_sequence: 0,
+                    request_input_lease,
+                    client_instance_id: String::from("erebor-cli-run"),
+                },
+                &format!("{key}:attach"),
+            )
+            .await
+            .context(DaemonClientSnafu)?;
+        println!(
+            "session_id={} read_only={} input_lease_id={} input_lease_expires_unix_ms={}",
+            attachment.session_id,
+            attachment.read_only,
+            attachment.input_lease_id,
+            attachment.input_lease_expires_unix_ms,
+        );
+        let mut stdout_cursor = 0;
+        let mut stderr_cursor = 0;
+        loop {
+            stdout_cursor = Self::write_stream_page(
+                client
+                    .session_logs(session_id, "stdout", stdout_cursor, 256)
+                    .await
+                    .context(DaemonClientSnafu)?,
+            )?;
+            stderr_cursor = Self::write_stream_page(
+                client
+                    .session_logs(session_id, "stderr", stderr_cursor, 256)
+                    .await
+                    .context(DaemonClientSnafu)?,
+            )?;
+            let record = client
+                .session_inspect(session_id)
+                .await
+                .context(DaemonClientSnafu)?;
+            if matches!(
+                record.state.as_str(),
+                "succeeded" | "failed" | "interrupted" | "removed"
+            ) {
+                Self::write_record(record);
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+
+    fn write_stream_page(page: erebor_runtime_client::SessionLogPage) -> Result<u64, CliError> {
+        let mut output = io::stdout().lock();
+        for record in page.records {
+            output
+                .write_all(&record.data)
+                .context(crate::error::WriteSessionOutputSnafu)?;
+        }
+        Ok(page.end.durable_cursor)
     }
 
     async fn logs(&self, client: &DaemonClient, args: &SessionLogsArgs) -> Result<(), CliError> {
@@ -305,10 +375,10 @@ impl GenericSessionRequestArgs {
             runner_id: self.runner.as_str().to_owned(),
             command: self.command.clone(),
             workspace: self.workspace.display().to_string(),
-            policy_set_digest: self.policy_set_digest.clone(),
-            package_digest: self.package_digest.clone(),
-            installation_digest: self.installation_digest.clone(),
-            adapter_digest: self.adapter_digest.clone(),
+            policy_set_digest: self.policy_set_digest.clone().unwrap_or_default(),
+            package_digest: self.package_digest.clone().unwrap_or_default(),
+            installation_digest: self.installation_digest.clone().unwrap_or_default(),
+            adapter_digest: self.adapter_digest.clone().unwrap_or_default(),
             daemon_failure_mode: self.failure_mode.clone(),
             requested_loss_grace_seconds: self.loss_grace_seconds,
             environment: self
@@ -344,10 +414,6 @@ impl OptionalGenericSessionRequestArgs {
         let missing = [
             ("--runner", self.runner.is_some()),
             ("--workspace", self.workspace.is_some()),
-            ("--package-digest", self.package_digest.is_some()),
-            ("--installation-digest", self.installation_digest.is_some()),
-            ("--adapter-digest", self.adapter_digest.is_some()),
-            ("--policy-set-digest", self.policy_set_digest.is_some()),
         ]
         .into_iter()
         .filter_map(|(name, present)| (!present).then_some(name))
@@ -358,22 +424,7 @@ impl OptionalGenericSessionRequestArgs {
             }
             .fail();
         }
-        let (
-            Some(runner),
-            Some(workspace),
-            Some(package_digest),
-            Some(installation_digest),
-            Some(adapter_digest),
-            Some(policy_set_digest),
-        ) = (
-            self.runner,
-            self.workspace.as_ref(),
-            self.package_digest.as_ref(),
-            self.installation_digest.as_ref(),
-            self.adapter_digest.as_ref(),
-            self.policy_set_digest.as_ref(),
-        )
-        else {
+        let (Some(runner), Some(workspace)) = (self.runner, self.workspace.as_ref()) else {
             return InvalidSessionCommandSnafu {
                 reason: String::from("generic run identities changed during validation"),
             }
@@ -383,10 +434,10 @@ impl OptionalGenericSessionRequestArgs {
             runner_id: runner.as_str().to_owned(),
             command: self.command.clone(),
             workspace: workspace.display().to_string(),
-            policy_set_digest: policy_set_digest.clone(),
-            package_digest: package_digest.clone(),
-            installation_digest: installation_digest.clone(),
-            adapter_digest: adapter_digest.clone(),
+            policy_set_digest: self.policy_set_digest.clone().unwrap_or_default(),
+            package_digest: self.package_digest.clone().unwrap_or_default(),
+            installation_digest: self.installation_digest.clone().unwrap_or_default(),
+            adapter_digest: self.adapter_digest.clone().unwrap_or_default(),
             daemon_failure_mode: self.failure_mode.clone(),
             requested_loss_grace_seconds: self.loss_grace_seconds,
             environment: self

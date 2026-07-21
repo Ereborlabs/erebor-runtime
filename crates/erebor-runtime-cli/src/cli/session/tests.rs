@@ -5,7 +5,21 @@ use crate::cli::Cli;
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[test]
-fn generic_session_commands_require_daemon_owned_identities() {
+fn generic_session_commands_accept_the_daemon_installed_package_or_exact_identities() {
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "create",
+        "--runner",
+        "linux-host",
+        "--workspace",
+        "/work",
+        "--idempotency-key",
+        "create-built-in",
+        "--",
+        "/usr/bin/true",
+    ])
+    .is_ok());
     assert!(Cli::try_parse_from([
         "erebor",
         "session",

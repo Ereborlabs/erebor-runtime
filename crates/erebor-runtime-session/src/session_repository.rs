@@ -649,15 +649,19 @@ mod tests {
                 1000,
                 SafePathKind::Directory,
             )?,
-            executable: Some(SafePathBinding::new(
-                PathBuf::from("/usr/bin/agent"),
-                1,
-                3,
-                1,
-                0,
-                0,
-                SafePathKind::Executable,
-            )?),
+            executable: Some(
+                SafePathBinding::new(
+                    PathBuf::from("/usr/bin/agent"),
+                    1,
+                    3,
+                    1,
+                    0,
+                    0,
+                    SafePathKind::Executable,
+                )?
+                .with_content_sha256(digest())?,
+            ),
+            script_interpreters: Vec::new(),
             container_image: None,
             environment: Vec::new(),
             secret_references: Vec::new(),

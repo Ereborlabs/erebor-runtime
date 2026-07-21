@@ -3,7 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     time::Duration,
 };
@@ -12,7 +12,7 @@ use erebor_runtime_core::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
     ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, FilesystemProjection,
     OutputEndpoints, RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery,
-    RuntimeError, SafePathKind, SessionSpec, WorkloadPrivilegePlan,
+    RuntimeError, SafePathBinding, ScriptInterpreterBinding, SessionSpec, WorkloadPrivilegePlan,
 };
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +32,14 @@ const DEFAULT_PROCESS_GUARD_PATH: &str = "/usr/libexec/erebor/erebor-linux-proce
 const DEFAULT_SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
 pub(crate) const LINUX_CONTROLLER_PROTOCOL_VERSION: u32 = 1;
 const LINUX_RECOVERY_FORMAT_VERSION: u32 = 1;
+const DEFAULT_SANITIZED_EXECUTABLE_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
+const MAX_SCRIPT_INTERPRETER_CHAIN: usize = 4;
+const MAX_SCRIPT_HEADER_BYTES: u64 = 4096;
+
+struct LinuxExecutableAdmission {
+    executable: SafePathBinding,
+    script_interpreters: Vec<ScriptInterpreterBinding>,
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct LinuxRunnerDriver {
@@ -137,6 +145,7 @@ impl LinuxRunnerDriver {
             runtime_environment: output.runtime_environment().to_vec(),
             prepared_workspace: output.prepared_workspace().map(Path::to_path_buf),
             prepared_executable: output.prepared_executable().map(Path::to_path_buf),
+            prepared_interpreters: output.prepared_interpreters().to_vec(),
             process_guard_path: self.process_guard_path.clone(),
             systemd_scope_unit: self.use_systemd_scope.then_some(unit.clone()),
             systemd_session_slice: self.use_systemd_scope.then_some(session_slice.clone()),
@@ -256,6 +265,10 @@ impl RunnerDriver for LinuxRunnerDriver {
         self.capability()
     }
 
+    fn capability_document(&self) -> Result<RunnerCapabilityDocument, RuntimeError> {
+        self.capability()
+    }
+
     fn admit(
         &self,
         context: &RunnerAdmissionContext<'_, '_>,
@@ -266,7 +279,7 @@ impl RunnerDriver for LinuxRunnerDriver {
         let program = context.command().first().ok_or_else(|| {
             context.invalid("Linux-host admission requires an executable command")
         })?;
-        let executable = context.resolve_path(Path::new(program), SafePathKind::Executable)?;
+        let executable = self.resolve_executable(context, program)?;
         let workload_privileges = WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)
             .map_err(|source| context.invalid(source.to_string()))?;
         let filesystem_projections = vec![FilesystemProjection::new(
@@ -284,7 +297,8 @@ impl RunnerDriver for LinuxRunnerDriver {
         Ok(RunnerExecutionAdmission {
             workspace: context.workspace().clone(),
             workload_privileges,
-            executable: Some(executable),
+            executable: Some(executable.executable),
+            script_interpreters: executable.script_interpreters,
             container_image: None,
             filesystem_projections,
             endpoint_projections,
@@ -349,6 +363,167 @@ impl RunnerDriver for LinuxRunnerDriver {
     }
 }
 
+impl LinuxRunnerDriver {
+    fn resolve_executable(
+        &self,
+        context: &RunnerAdmissionContext<'_, '_>,
+        program: &str,
+    ) -> Result<LinuxExecutableAdmission, SessionManagerError> {
+        let requested = Path::new(program);
+        if requested.is_absolute() {
+            return self.resolve_executable_path(context, requested);
+        }
+        if program.contains('/') || program.is_empty() {
+            return Err(context
+                .invalid("Linux-host executable must be an absolute path or a bare command name"));
+        }
+        let search_path = context
+            .executable_search_path()
+            .unwrap_or(DEFAULT_SANITIZED_EXECUTABLE_PATH);
+        let directories = search_path
+            .split(':')
+            .map(PathBuf::from)
+            .collect::<Vec<_>>();
+        if directories.is_empty() || directories.iter().any(|path| !Self::sanitized_path(path)) {
+            return Err(context
+                .invalid("Linux-host PATH must contain only normalized absolute directories"));
+        }
+        for directory in directories {
+            let candidate = directory.join(program);
+            if let Ok(admission) = self.resolve_executable_path(context, &candidate) {
+                return Ok(admission);
+            }
+        }
+        Err(context.invalid(format!(
+            "Linux-host executable `{program}` was not found in the caller PATH"
+        )))
+    }
+
+    fn resolve_executable_path(
+        &self,
+        context: &RunnerAdmissionContext<'_, '_>,
+        path: &Path,
+    ) -> Result<LinuxExecutableAdmission, SessionManagerError> {
+        let (executable, header) =
+            context.resolve_executable_prefix(path, MAX_SCRIPT_HEADER_BYTES)?;
+        let script_interpreters =
+            self.resolve_script_interpreters(context, executable.clone(), header)?;
+        Ok(LinuxExecutableAdmission {
+            executable,
+            script_interpreters,
+        })
+    }
+
+    fn resolve_script_interpreters(
+        &self,
+        context: &RunnerAdmissionContext<'_, '_>,
+        executable: SafePathBinding,
+        mut header: Vec<u8>,
+    ) -> Result<Vec<ScriptInterpreterBinding>, SessionManagerError> {
+        let mut interpreters = Vec::new();
+        let mut seen = BTreeSet::from([executable.requested_path().to_path_buf()]);
+        if header.starts_with(b"#!")
+            && header.len() == MAX_SCRIPT_HEADER_BYTES as usize
+            && !header.contains(&b'\n')
+        {
+            return Err(context.invalid("script shebang exceeds the supported header bound"));
+        }
+        while let Some((interpreter, arguments)) = Self::script_interpreter(&header)? {
+            if interpreters.len() == MAX_SCRIPT_INTERPRETER_CHAIN {
+                return Err(context.invalid("script interpreter chain exceeds the supported depth"));
+            }
+            let interpreter = self.resolve_executable(context, &interpreter)?;
+            if !seen.insert(interpreter.executable.requested_path().to_path_buf()) {
+                return Err(context.invalid("script interpreter chain contains a cycle"));
+            }
+            header = context
+                .resolve_executable_prefix(
+                    interpreter.executable.requested_path(),
+                    MAX_SCRIPT_HEADER_BYTES,
+                )?
+                .1;
+            if header.starts_with(b"#!")
+                && header.len() == MAX_SCRIPT_HEADER_BYTES as usize
+                && !header.contains(&b'\n')
+            {
+                return Err(context.invalid("script shebang exceeds the supported header bound"));
+            }
+            interpreters.push(
+                ScriptInterpreterBinding::new(interpreter.executable, arguments)
+                    .map_err(|source| context.invalid(source.to_string()))?,
+            );
+        }
+        Ok(interpreters)
+    }
+
+    fn script_interpreter(
+        header: &[u8],
+    ) -> Result<Option<(String, Vec<String>)>, SessionManagerError> {
+        let Some(line) = header
+            .strip_prefix(b"#!")
+            .and_then(|source| source.split(|byte| *byte == b'\n').next())
+        else {
+            return Ok(None);
+        };
+        let source =
+            std::str::from_utf8(line).map_err(|error| SessionManagerError::InvalidOperation {
+                session_id: String::from("linux-host-admission"),
+                reason: format!("script shebang is not UTF-8: {error}"),
+                location: snafu::Location::default(),
+            })?;
+        let source = source.trim();
+        let (program, remainder) = source
+            .split_once(char::is_whitespace)
+            .map_or((source, ""), |(program, remainder)| {
+                (program, remainder.trim())
+            });
+        if program.is_empty() {
+            return Err(SessionManagerError::InvalidOperation {
+                session_id: String::from("linux-host-admission"),
+                reason: String::from("script shebang has no interpreter"),
+                location: snafu::Location::default(),
+            });
+        }
+        if program == "/usr/bin/env" || program == "/bin/env" {
+            if remainder.is_empty()
+                || remainder.contains(char::is_whitespace)
+                || remainder.starts_with('-')
+                || remainder.contains('=')
+            {
+                return Err(SessionManagerError::InvalidOperation {
+                    session_id: String::from("linux-host-admission"),
+                    reason: String::from(
+                        "script uses an unsupported env-based interpreter selection",
+                    ),
+                    location: snafu::Location::default(),
+                });
+            }
+            return Ok(Some((String::from(remainder), Vec::new())));
+        }
+        if !Path::new(program).is_absolute() {
+            return Err(SessionManagerError::InvalidOperation {
+                session_id: String::from("linux-host-admission"),
+                reason: String::from("script shebang interpreter must be absolute"),
+                location: snafu::Location::default(),
+            });
+        }
+        Ok(Some((
+            String::from(program),
+            (!remainder.is_empty())
+                .then_some(String::from(remainder))
+                .into_iter()
+                .collect(),
+        )))
+    }
+
+    fn sanitized_path(path: &Path) -> bool {
+        path.is_absolute()
+            && path
+                .components()
+                .all(|component| matches!(component, Component::RootDir | Component::Normal(_)))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct LinuxControllerHandoff {
     pub(crate) protocol_version: u32,
@@ -361,6 +536,7 @@ pub(crate) struct LinuxControllerHandoff {
     pub(crate) runtime_environment: Vec<(String, String)>,
     pub(crate) prepared_workspace: Option<PathBuf>,
     pub(crate) prepared_executable: Option<PathBuf>,
+    pub(crate) prepared_interpreters: Vec<PathBuf>,
     pub(crate) process_guard_path: PathBuf,
     pub(crate) systemd_scope_unit: Option<String>,
     pub(crate) systemd_session_slice: Option<String>,
@@ -776,14 +952,44 @@ fn read_json_line<T: for<'de> Deserialize<'de>>(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, path::PathBuf};
+    use std::{
+        collections::BTreeMap,
+        fs::File,
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
 
     use super::{
         decode_recovery, encode_recovery, LinuxRecovery, LinuxRunnerDriver, CONTROLLER_PROGRAM,
         DEFAULT_CONTROLLER_PATH, RUNNER_ID,
     };
-    use crate::RunnerInstallConfig;
-    use erebor_runtime_core::RunnerId;
+    use crate::{
+        ResolvedSessionPath, RunnerAdmissionRequest, RunnerInstallConfig, RunnerRegistry,
+        SessionPathResolver, SessionPathResolverError,
+    };
+    use erebor_runtime_core::{RunnerId, SafePathBinding, SafePathKind, SessionOwner};
+
+    struct ScriptResolver;
+
+    impl SessionPathResolver for ScriptResolver {
+        fn resolve(
+            &self,
+            _uid: u32,
+            _gid: u32,
+            path: &Path,
+            kind: SafePathKind,
+        ) -> Result<ResolvedSessionPath, SessionPathResolverError> {
+            let file =
+                File::open(path).map_err(|error| Box::new(error) as SessionPathResolverError)?;
+            let binding = SafePathBinding::new(path.to_path_buf(), 1, 1, 1, 1000, 1000, kind)
+                .and_then(|binding| match kind {
+                    SafePathKind::Executable => binding.with_content_sha256("a".repeat(64)),
+                    SafePathKind::Directory | SafePathKind::File => Ok(binding),
+                })
+                .map_err(|error| Box::new(error) as SessionPathResolverError)?;
+            Ok(ResolvedSessionPath::new(file, binding))
+        }
+    }
 
     #[test]
     fn linux_driver_owns_its_installation_program_names_and_defaults(
@@ -819,5 +1025,56 @@ mod tests {
         assert_eq!(decoded.controller_pid, expected.controller_pid);
         assert_eq!(decoded.controller_start, expected.controller_start);
         Ok(())
+    }
+
+    #[test]
+    fn executable_path_rejects_relative_or_traversal_entries() {
+        assert!(LinuxRunnerDriver::sanitized_path(&PathBuf::from(
+            "/usr/bin"
+        )));
+        assert!(!LinuxRunnerDriver::sanitized_path(&PathBuf::from("bin")));
+        assert!(!LinuxRunnerDriver::sanitized_path(&PathBuf::from(
+            "/usr/../bin"
+        )));
+        assert!(!LinuxRunnerDriver::sanitized_path(&PathBuf::from("")));
+    }
+
+    #[test]
+    fn linux_admission_pins_a_script_interpreter_and_its_shebang_argument(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let script = root.path().join("agent-script");
+        std::fs::write(&script, b"#!/bin/sh -eu\necho governed\n")?;
+        let owner = SessionOwner::new(1000, 1000);
+        let command = vec![script.display().to_string(), String::from("argument")];
+        let registry = RunnerRegistry::new([Arc::new(LinuxRunnerDriver::from_install_config(
+            &RunnerInstallConfig::default(),
+        )?) as Arc<dyn super::RunnerDriver>]);
+        let admission = registry.admit(
+            &RunnerId::new(RUNNER_ID)?,
+            RunnerAdmissionRequest::new(
+                "session-script",
+                &owner,
+                &command,
+                None,
+                root.path(),
+                None,
+                Path::new("/run/erebor/runtime-interception.sock"),
+            ),
+            &ScriptResolver,
+        )?;
+        assert_eq!(admission.script_interpreters.len(), 1);
+        let interpreter = &admission.script_interpreters[0];
+        assert_eq!(
+            interpreter.executable().requested_path(),
+            Path::new("/bin/sh")
+        );
+        assert_eq!(interpreter.arguments(), &[String::from("-eu")]);
+        Ok(())
+    }
+
+    #[test]
+    fn script_shebang_rejects_ambient_env_options() {
+        assert!(LinuxRunnerDriver::script_interpreter(b"#!/usr/bin/env -S python -I\n").is_err());
     }
 }

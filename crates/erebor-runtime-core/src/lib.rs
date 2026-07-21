@@ -67,13 +67,15 @@ pub use runtime::{
 };
 pub use session::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
-    ActiveSessionSignalKind, DaemonFailureMode, DockerSessionRunner, EndpointProjection,
-    EvidenceRequirement, FilesystemProjection, ImmutableIdentity, LinuxHostSessionRunner,
-    OutputEndpoints, OutputPlan, OutputStreamRequirements, RunRequest, RunnerBinding,
-    RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding, SafePathKind,
-    SessionAdmission, SessionCapturedRunOutcome, SessionLifecycleState, SessionOwner,
-    SessionRunOutcome, SessionRunnerLauncher, SessionSpec, WorkloadPrivilegePlan,
-    RUNNER_CAPABILITY_SCHEMA_VERSION, RUNNER_RECOVERY_SCHEMA_VERSION, SESSION_SPEC_SCHEMA_VERSION,
+    ActiveSessionSignalKind, AgentAdapterDescriptor, AgentAdapterInvocationShape,
+    DaemonFailureMode, DockerSessionRunner, EndpointProjection, EvidenceRequirement,
+    FilesystemProjection, ImmutableIdentity, LinuxHostSessionRunner, OutputEndpoints, OutputPlan,
+    OutputStreamRequirements, RunRequest, RunnerBinding, RunnerCapabilityDocument, RunnerId,
+    RunnerRecovery, SafePathBinding, SafePathKind, ScriptInterpreterBinding, SessionAdmission,
+    SessionCapturedRunOutcome, SessionLifecycleState, SessionOwner, SessionRunOutcome,
+    SessionRunnerLauncher, SessionSpec, WorkloadPrivilegePlan,
+    AGENT_ADAPTER_DESCRIPTOR_SCHEMA_VERSION, RUNNER_CAPABILITY_SCHEMA_VERSION,
+    RUNNER_RECOVERY_SCHEMA_VERSION, SESSION_SPEC_SCHEMA_VERSION,
 };
 pub use session_registry::{
     SessionContextArtifact, SessionRegistry, SessionRegistryFinish, SessionRegistryRecord,

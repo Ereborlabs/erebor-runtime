@@ -15,6 +15,7 @@ mod dev;
 mod filesystem;
 mod parsers;
 mod policy;
+mod runner;
 mod session;
 mod start;
 
@@ -52,6 +53,7 @@ impl Cli {
             Command::Session(args) => session::SessionCommandOwner::new(args).execute(),
             Command::Dev(args) => dev::DevCommandOwner::new(args).execute(),
             Command::Policy(args) => policy::PolicyCommandOwner::new(args).execute(),
+            Command::Runner(args) => runner::RunnerCommandOwner::new(args).execute(),
             Command::Audit(args) => audit::AuditCommandOwner::new(args).execute(),
             Command::Approval(args) => approval::ApprovalCommandOwner::new(args).execute(),
             Command::Filesystem(args) => filesystem::execute(args),
@@ -70,6 +72,8 @@ enum Command {
     Dev(dev::DevArgs),
     /// Policy development and validation commands.
     Policy(policy::PolicyArgs),
+    /// Inspect the daemon's installed runner capability documents.
+    Runner(runner::RunnerArgs),
     /// Audit log commands.
     Audit(audit::AuditArgs),
     /// Inspect or resolve durable effect approvals.
@@ -87,6 +91,7 @@ impl fmt::Display for Command {
             Self::Session(args) => formatter.write_str(&args.display()),
             Self::Dev(args) => formatter.write_str(&args.display()),
             Self::Policy(args) => formatter.write_str(&args.display()),
+            Self::Runner(args) => formatter.write_str(&args.display()),
             Self::Audit(args) => formatter.write_str(&args.display()),
             Self::Approval(args) => formatter.write_str(&args.display()),
             Self::Filesystem(args) => formatter.write_str(&args.display()),

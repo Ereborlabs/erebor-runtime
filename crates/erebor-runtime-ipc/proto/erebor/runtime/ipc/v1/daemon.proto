@@ -275,3 +275,47 @@ message ApprovalRecord {
 message ApprovalListResponse {
   repeated ApprovalRecord approvals = 1;
 }
+
+message PolicyTestRequest {
+  bytes policy_json = 1;
+  bytes event_json = 2;
+}
+
+message PolicyTestResponse {
+  bytes decision_json = 1;
+}
+
+message PolicyPackageApplyRequest {
+  string path = 1;
+}
+
+message PolicyPackageRecord {
+  string digest = 1;
+  string name = 2;
+}
+
+message PolicySetCreateRequest {
+  string root_minimum_digest = 1;
+  repeated string package_minimum_digests = 2;
+  string local_override_digest = 3;
+}
+
+message PolicySetRecord {
+  string digest = 1;
+}
+
+message RunnerListRequest {}
+
+message RunnerInspectRequest {
+  string runner_id = 1;
+}
+
+message RunnerCapabilityRecord {
+  bytes document_json = 1;
+  bool available = 2;
+  string unavailable_reason = 3;
+}
+
+message RunnerListResponse {
+  repeated RunnerCapabilityRecord runners = 1;
+}

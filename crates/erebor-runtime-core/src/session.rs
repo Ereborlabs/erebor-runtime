@@ -1,5 +1,6 @@
 use std::{io, path::PathBuf, thread, time::Duration};
 
+mod adapter;
 mod admission;
 mod docker;
 mod lifecycle;
@@ -10,12 +11,16 @@ use crate::{
     DockerSessionCommandOptions, LinuxHostSessionCommandOptions, RuntimeError, SessionAdoptPlan,
     SessionRunPlan, SessionRunnerKind,
 };
+pub use adapter::{
+    AgentAdapterDescriptor, AgentAdapterInvocationShape, AGENT_ADAPTER_DESCRIPTOR_SCHEMA_VERSION,
+};
 pub use admission::{
     ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, EvidenceRequirement,
     FilesystemProjection, ImmutableIdentity, OutputPlan, OutputStreamRequirements, RunRequest,
     RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding,
-    SafePathKind, SessionAdmission, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
-    RUNNER_CAPABILITY_SCHEMA_VERSION, RUNNER_RECOVERY_SCHEMA_VERSION, SESSION_SPEC_SCHEMA_VERSION,
+    SafePathKind, ScriptInterpreterBinding, SessionAdmission, SessionOwner, SessionSpec,
+    WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION, RUNNER_RECOVERY_SCHEMA_VERSION,
+    SESSION_SPEC_SCHEMA_VERSION,
 };
 use docker::DockerSessionOutputMode;
 pub use docker::DockerSessionRunner;
@@ -44,6 +49,7 @@ pub struct OutputEndpoints {
     runtime_environment: Vec<(String, String)>,
     prepared_workspace: Option<PathBuf>,
     prepared_executable: Option<PathBuf>,
+    prepared_interpreters: Vec<PathBuf>,
 }
 
 impl OutputEndpoints {
@@ -64,6 +70,7 @@ impl OutputEndpoints {
             runtime_environment: Vec::new(),
             prepared_workspace: None,
             prepared_executable: None,
+            prepared_interpreters: Vec::new(),
         }
     }
 
@@ -78,9 +85,11 @@ impl OutputEndpoints {
         mut self,
         workspace: PathBuf,
         executable: Option<PathBuf>,
+        interpreters: Vec<PathBuf>,
     ) -> Self {
         self.prepared_workspace = Some(workspace);
         self.prepared_executable = executable;
+        self.prepared_interpreters = interpreters;
         self
     }
 
@@ -122,6 +131,11 @@ impl OutputEndpoints {
     #[must_use]
     pub fn prepared_executable(&self) -> Option<&std::path::Path> {
         self.prepared_executable.as_deref()
+    }
+
+    #[must_use]
+    pub fn prepared_interpreters(&self) -> &[PathBuf] {
+        &self.prepared_interpreters
     }
 }
 

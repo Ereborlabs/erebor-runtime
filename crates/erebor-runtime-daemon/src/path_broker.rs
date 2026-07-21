@@ -1,7 +1,8 @@
 #![allow(unsafe_code)]
 
 use std::{
-    fs::File,
+    collections::BTreeMap,
+    fs::{self, File},
     io::{IoSlice, IoSliceMut, Read},
     mem::MaybeUninit,
     os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
@@ -13,6 +14,7 @@ use std::{
 };
 
 use erebor_runtime_core::{SafePathBinding, SafePathKind};
+use erebor_runtime_packages::PolicyPackageRevision;
 use erebor_runtime_session::{ResolvedSessionPath, SessionPathResolver, SessionPathResolverError};
 use rustix::{
     cmsg_space,
@@ -31,6 +33,7 @@ use rustix::{
     },
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use snafu::ResultExt;
 
 use crate::{
@@ -50,6 +53,12 @@ pub(crate) struct ResolvedDescriptor {
     binding: SafePathBinding,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyPackageConfig {
+    name: String,
+}
+
 #[derive(Deserialize, Serialize)]
 struct BrokerResponse {
     error: Option<String>,
@@ -58,6 +67,7 @@ struct BrokerResponse {
     mount_id: u64,
     owner_uid: u32,
     owner_gid: u32,
+    content_sha256: Option<String>,
     effective_uid: u32,
     effective_gid: u32,
     supplementary_group_count: usize,
@@ -207,6 +217,10 @@ impl DescriptorBroker {
             received.response.owner_gid,
             kind,
         )
+        .and_then(|binding| match received.response.content_sha256 {
+            Some(digest) => binding.with_content_sha256(digest),
+            None => Ok(binding),
+        })
         .map_err(|source| {
             InvalidRequestSnafu {
                 reason: source.to_string(),
@@ -218,11 +232,221 @@ impl DescriptorBroker {
             binding,
         })
     }
+
+    pub(crate) fn read_policy_package(
+        &self,
+        uid: u32,
+        gid: u32,
+        path: &Path,
+        maximum_bytes: u64,
+    ) -> Result<PolicyPackageRevision> {
+        let resolved = self.resolve(uid, gid, path, SafePathKind::Directory)?;
+        PolicyPackageDirectoryReader::new(resolved.descriptor, path, maximum_bytes).read()
+    }
 }
 
 impl ResolvedDescriptor {
     fn into_parts(self) -> (File, SafePathBinding) {
         (self.descriptor, self.binding)
+    }
+}
+
+struct PolicyPackageDirectoryReader {
+    root: File,
+    source: PathBuf,
+    maximum_bytes: u64,
+    bytes_read: u64,
+}
+
+impl PolicyPackageDirectoryReader {
+    fn new(root: File, source: &Path, maximum_bytes: u64) -> Self {
+        Self {
+            root,
+            source: source.to_path_buf(),
+            maximum_bytes,
+            bytes_read: 0,
+        }
+    }
+
+    fn read(mut self) -> Result<PolicyPackageRevision> {
+        self.validate_root_layout()?;
+        let policy_config = self.read_file("policy.toml")?;
+        let config_source = std::str::from_utf8(&policy_config).map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("policy.toml is not UTF-8: {error}"),
+            }
+            .build()
+        })?;
+        let config: PolicyPackageConfig = toml::from_str(config_source).map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("policy.toml is invalid: {error}"),
+            }
+            .build()
+        })?;
+        PolicyPackageRevision::new(
+            config.name,
+            policy_config,
+            self.read_directory("rules")?,
+            self.read_directory("examples")?,
+            self.read_directory("tests")?,
+            self.read_file("README.md")?,
+        )
+        .map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("policy package has invalid immutable contents: {error}"),
+            }
+            .build()
+        })
+    }
+
+    fn validate_root_layout(&self) -> Result<()> {
+        let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", self.root.as_raw_fd()));
+        let entries = fs::read_dir(&descriptor_path).context(IoSnafu {
+            action: "enumerating held policy package root",
+            path: &self.source,
+        })?;
+        let mut names = BTreeMap::new();
+        for entry in entries {
+            let entry = entry.context(IoSnafu {
+                action: "enumerating held policy package root entry",
+                path: &self.source,
+            })?;
+            let name = entry.file_name().into_string().map_err(|_name| {
+                InvalidRequestSnafu {
+                    reason: String::from("policy package root has a non-UTF-8 entry"),
+                }
+                .build()
+            })?;
+            if !Self::safe_file_name(&name) || names.insert(name.clone(), ()).is_some() {
+                return InvalidRequestSnafu {
+                    reason: format!("policy package root has an unsafe entry `{name}`"),
+                }
+                .fail();
+            }
+        }
+        let expected = ["README.md", "examples", "policy.toml", "rules", "tests"];
+        if names.keys().map(String::as_str).ne(expected) {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "policy package must contain exactly policy.toml, rules/, examples/, tests/, and README.md",
+                ),
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    fn read_directory(&mut self, name: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+        let directory = self.open_relative(name, true)?;
+        let descriptor_path = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+        let entries = fs::read_dir(&descriptor_path).context(IoSnafu {
+            action: "enumerating held policy package directory",
+            path: &self.source,
+        })?;
+        let mut files = BTreeMap::new();
+        for entry in entries {
+            let entry = entry.context(IoSnafu {
+                action: "enumerating held policy package directory entry",
+                path: &self.source,
+            })?;
+            let name = entry.file_name().into_string().map_err(|_name| {
+                InvalidRequestSnafu {
+                    reason: format!("policy package directory `{}` has a non-UTF-8 entry", name),
+                }
+                .build()
+            })?;
+            if !Self::safe_file_name(&name) {
+                return InvalidRequestSnafu {
+                    reason: format!(
+                        "policy package directory `{}` has an unsafe entry `{name}`",
+                        name
+                    ),
+                }
+                .fail();
+            }
+            let file = self.open_at(&directory, Path::new(&name), false)?;
+            let contents = self.read_held_file(file, &name)?;
+            if files.insert(name, contents).is_some() {
+                return InvalidRequestSnafu {
+                    reason: String::from("policy package has duplicate directory entries"),
+                }
+                .fail();
+            }
+        }
+        Ok(files)
+    }
+
+    fn read_file(&mut self, name: &str) -> Result<Vec<u8>> {
+        let file = self.open_relative(name, false)?;
+        self.read_held_file(file, name)
+    }
+
+    fn open_relative(&self, name: &str, directory: bool) -> Result<File> {
+        self.open_at(&self.root, Path::new(name), directory)
+    }
+
+    fn open_at(&self, parent: &File, name: &Path, directory: bool) -> Result<File> {
+        let mut flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        if directory {
+            flags |= OFlags::DIRECTORY;
+        }
+        openat2(
+            parent,
+            name,
+            flags,
+            Mode::empty(),
+            ResolveFlags::BENEATH | ResolveFlags::NO_MAGICLINKS | ResolveFlags::NO_SYMLINKS,
+        )
+        .map(File::from)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            action: "opening held policy package entry without symlinks",
+            path: &self.source,
+        })
+    }
+
+    fn read_held_file(&mut self, mut file: File, name: &str) -> Result<Vec<u8>> {
+        let metadata = file.metadata().context(IoSnafu {
+            action: "inspecting held policy package file",
+            path: &self.source,
+        })?;
+        if !metadata.is_file() {
+            return InvalidRequestSnafu {
+                reason: format!("policy package entry `{name}` must be a regular file"),
+            }
+            .fail();
+        }
+        let remaining = self.maximum_bytes.saturating_sub(self.bytes_read);
+        let mut contents = Vec::with_capacity(metadata.len().min(remaining) as usize);
+        file.by_ref()
+            .take(remaining.saturating_add(1))
+            .read_to_end(&mut contents)
+            .context(IoSnafu {
+                action: "reading held policy package file",
+                path: &self.source,
+            })?;
+        let count = contents.len() as u64;
+        if count > remaining {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "policy package exceeds the declared {}-byte upload limit",
+                    self.maximum_bytes
+                ),
+            }
+            .fail();
+        }
+        self.bytes_read = self.bytes_read.saturating_add(count);
+        Ok(contents)
+    }
+
+    fn safe_file_name(name: &str) -> bool {
+        !name.is_empty()
+            && name.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_uppercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'-' | b'_')
+            })
     }
 }
 
@@ -309,6 +533,7 @@ pub fn run_path_broker() -> Result<()> {
                 mount_id: 0,
                 owner_uid: 0,
                 owner_gid: 0,
+                content_sha256: None,
                 effective_uid: 0,
                 effective_gid: 0,
                 supplementary_group_count: usize::MAX,
@@ -450,9 +675,11 @@ fn broker_resolve(arguments: &BrokerArguments) -> Result<(OwnedFd, BrokerRespons
         }
         .build()
     })?;
-    let mut flags = OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut flags = OFlags::NOFOLLOW | OFlags::CLOEXEC;
     if arguments.kind == SafePathKind::Directory {
-        flags |= OFlags::DIRECTORY;
+        flags |= OFlags::PATH | OFlags::DIRECTORY;
+    } else {
+        flags |= OFlags::RDONLY;
     }
     let descriptor = openat2(
         &root,
@@ -489,6 +716,11 @@ fn broker_resolve(arguments: &BrokerArguments) -> Result<(OwnedFd, BrokerRespons
         }
         .fail();
     }
+    let content_sha256 = if arguments.kind == SafePathKind::Executable {
+        Some(digest_descriptor(&descriptor, &arguments.path)?)
+    } else {
+        None
+    };
     Ok((
         descriptor,
         BrokerResponse {
@@ -498,6 +730,7 @@ fn broker_resolve(arguments: &BrokerArguments) -> Result<(OwnedFd, BrokerRespons
             mount_id: status.stx_mnt_id,
             owner_uid: status.stx_uid,
             owner_gid: status.stx_gid,
+            content_sha256,
             effective_uid: geteuid().as_raw(),
             effective_gid: getegid().as_raw(),
             supplementary_group_count: 0,
@@ -505,6 +738,22 @@ fn broker_resolve(arguments: &BrokerArguments) -> Result<(OwnedFd, BrokerRespons
             remaining_unrelated_descriptor_count,
         },
     ))
+}
+
+fn digest_descriptor(descriptor: &OwnedFd, path: &Path) -> Result<String> {
+    let duplicate = rustix::io::dup(descriptor)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            action: "duplicating held executable for digesting",
+            path,
+        })?;
+    let mut file = File::from(duplicate);
+    let mut digest = Sha256::new();
+    std::io::copy(&mut file, &mut digest).context(IoSnafu {
+        action: "digesting held executable",
+        path,
+    })?;
+    Ok(format!("{:x}", digest.finalize()))
 }
 
 fn unrelated_descriptor_count(socket_fd: i32) -> Result<usize> {
@@ -585,5 +834,59 @@ const fn kind_name(kind: SafePathKind) -> &'static str {
         SafePathKind::Directory => "directory",
         SafePathKind::Executable => "executable",
         SafePathKind::File => "file",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::{self, File};
+
+    use super::PolicyPackageDirectoryReader;
+
+    #[test]
+    fn held_directory_reader_accepts_the_fixed_policy_package_layout(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        fs::write(root.path().join("policy.toml"), "name = \"example\"\n")?;
+        fs::create_dir(root.path().join("rules"))?;
+        fs::write(
+            root.path().join("rules").join("terminal.json"),
+            br#"{"rules":[{"id":"allow","match":{"surface":"terminal"},"decision":"allow"}]}"#,
+        )?;
+        fs::create_dir(root.path().join("examples"))?;
+        fs::create_dir(root.path().join("tests"))?;
+        fs::write(root.path().join("tests").join("terminal.json"), "{}")?;
+        fs::write(root.path().join("README.md"), "# Example\n")?;
+
+        let package =
+            PolicyPackageDirectoryReader::new(File::open(root.path())?, root.path(), 4096)
+                .read()?;
+        assert_eq!(package.manifest().name(), "example");
+        assert_eq!(package.rules().len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn held_directory_reader_rejects_unrecognized_root_entries(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        fs::write(root.path().join("policy.toml"), "name = \"example\"\n")?;
+        fs::create_dir(root.path().join("rules"))?;
+        fs::write(
+            root.path().join("rules").join("terminal.json"),
+            br#"{"rules":[{"id":"allow","match":{"surface":"terminal"},"decision":"allow"}]}"#,
+        )?;
+        fs::create_dir(root.path().join("examples"))?;
+        fs::create_dir(root.path().join("tests"))?;
+        fs::write(root.path().join("tests").join("terminal.json"), "{}")?;
+        fs::write(root.path().join("README.md"), "# Example\n")?;
+        fs::write(root.path().join("unexpected.txt"), "nope")?;
+
+        assert!(
+            PolicyPackageDirectoryReader::new(File::open(root.path())?, root.path(), 4096)
+                .read()
+                .is_err()
+        );
+        Ok(())
     }
 }

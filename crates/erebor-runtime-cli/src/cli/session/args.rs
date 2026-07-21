@@ -93,18 +93,20 @@ pub(crate) struct GenericSessionRequestArgs {
     /// Existing workspace admitted by the daemon under the caller UID.
     #[arg(long, value_parser = parse_non_empty_path)]
     pub(crate) workspace: PathBuf,
-    /// Exact installed agent-package canonical digest.
+    /// Exact installed agent-package canonical digest. Omit all identity flags to use the
+    /// daemon-installed generic package and host-minimum policy.
     #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) package_digest: String,
-    /// Exact caller-owned installation canonical digest.
+    pub(crate) package_digest: Option<String>,
+    /// Exact caller-owned installation canonical digest. Supply with every other identity flag.
     #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) installation_digest: String,
-    /// Exact generic adapter canonical digest selected by the package.
+    pub(crate) installation_digest: Option<String>,
+    /// Exact generic adapter canonical digest selected by the package. Supply with every other
+    /// identity flag.
     #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) adapter_digest: String,
-    /// Exact caller-owned immutable policy-set digest.
+    pub(crate) adapter_digest: Option<String>,
+    /// Exact caller-owned immutable policy-set digest. Supply with every other identity flag.
     #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) policy_set_digest: String,
+    pub(crate) policy_set_digest: Option<String>,
     /// Failure contract for daemon loss.
     #[arg(long, default_value = "terminate", value_parser = parse_failure_mode)]
     pub(crate) failure_mode: String,

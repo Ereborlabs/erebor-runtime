@@ -300,6 +300,10 @@ impl RunnerDriver for DockerRunnerDriver {
         self.capability()
     }
 
+    fn capability_document(&self) -> Result<RunnerCapabilityDocument, RuntimeError> {
+        self.capability()
+    }
+
     fn admit(
         &self,
         context: &RunnerAdmissionContext<'_, '_>,
@@ -326,6 +330,7 @@ impl RunnerDriver for DockerRunnerDriver {
             workspace: context.workspace().clone(),
             workload_privileges,
             executable: None,
+            script_interpreters: Vec::new(),
             container_image: Some(image),
             filesystem_projections,
             endpoint_projections: Vec::new(),

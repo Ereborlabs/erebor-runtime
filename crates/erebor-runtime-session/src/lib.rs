@@ -29,6 +29,7 @@ pub use agents::codex::{
     CodexHookClient, CodexHookResultOutput, CodexHookTicket, CodexHookTicketRegistry,
     CodexManagedSession, CodexNativeHookEvent, CodexSessionError,
 };
+pub use agents::{AgentAdapter, AgentAdapterRegistry, PreparedAgentInvocation};
 pub use diagnostic::SessionDiagnosticOutcome;
 #[doc(hidden)]
 pub use docker_controller::run_docker_session_controller;
@@ -43,8 +44,8 @@ pub use error::{
 #[doc(hidden)]
 pub use linux_controller::run_linux_session_controller;
 pub use runners::{
-    RunnerAdmissionContext, RunnerAdmissionRequest, RunnerDriver, RunnerExecutionAdmission,
-    RunnerInstallConfig, RunnerPreparation, RunnerRegistry,
+    RunnerAdmissionContext, RunnerAdmissionRequest, RunnerCapabilityReport, RunnerDriver,
+    RunnerExecutionAdmission, RunnerInstallConfig, RunnerPreparation, RunnerRegistry,
 };
 pub use runtime_interception_broker::{
     InterceptionBrokerClient, RuntimeGuardService, RuntimeInterceptionBroker,

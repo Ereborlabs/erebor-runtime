@@ -15,6 +15,7 @@ use crate::{
     Result,
 };
 use erebor_runtime_core::{ActiveSessionSignal, SessionSpec};
+use erebor_runtime_packages::PolicyPackageRevision;
 
 pub(crate) struct DaemonIdempotencyStore {
     directory: PathBuf,
@@ -95,6 +96,16 @@ pub(crate) enum MutationIntent {
         owner_uid: u32,
         approval_id: String,
         reason: String,
+    },
+    PolicyPackageApply {
+        uid: u32,
+        policy: PolicyPackageRevision,
+    },
+    PolicySetCreate {
+        uid: u32,
+        root_minimum_digest: String,
+        package_minimum_digests: Vec<String>,
+        local_override_digest: Option<String>,
     },
 }
 
@@ -412,7 +423,9 @@ impl MutationIntent {
             | Self::Stop
             | Self::SessionPrune { .. }
             | Self::ApprovalApprove { .. }
-            | Self::ApprovalDeny { .. } => None,
+            | Self::ApprovalDeny { .. }
+            | Self::PolicyPackageApply { .. }
+            | Self::PolicySetCreate { .. } => None,
         }
     }
 }

@@ -6,12 +6,17 @@ mod model;
 pub use error::{PackageError, Result};
 pub use model::{
     AgentPackageManifest, CanonicalEncoding, ContentDigest, DigestAlias, InstallationRecord,
-    PolicyPackageManifest, PolicySetRevision, CANONICAL_FORMAT_VERSION,
+    PolicyPackageManifest, PolicyPackageRevision, PolicySetRevision, CANONICAL_FORMAT_VERSION,
 };
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentPackageManifest, CanonicalEncoding, ContentDigest, PolicySetRevision};
+    use std::collections::BTreeMap;
+
+    use super::{
+        AgentPackageManifest, CanonicalEncoding, ContentDigest, PolicyPackageRevision,
+        PolicySetRevision,
+    };
 
     const FIRST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const SECOND: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -42,6 +47,22 @@ mod tests {
             None
         )
         .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn policy_revision_binds_manifest_to_complete_immutable_contents(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let revision = PolicyPackageRevision::new(
+            "host-minimum",
+            b"name = \"host-minimum\"\n".to_vec(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{\"rules\":[]}"#.to_vec())]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# Host minimum\n".to_vec(),
+        )?;
+        revision.validate()?;
+        assert_eq!(revision.canonical_digest()?, revision.canonical_digest()?);
         Ok(())
     }
 }

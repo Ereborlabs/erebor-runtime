@@ -15,6 +15,7 @@ erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-filesystem = { path = "../erebor-runtime-filesystem" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
+erebor-runtime-packages = { path = "../erebor-runtime-packages" }
 erebor-runtime-terminal = { path = "../erebor-runtime-terminal" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
 serde_json.workspace = true

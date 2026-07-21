@@ -22,6 +22,17 @@ pub enum SessionSpecError {
     },
 }
 
+impl SessionSpecError {
+    #[must_use]
+    pub fn invalid(field: &'static str, reason: impl Into<String>) -> Self {
+        InvalidSnafu {
+            field,
+            reason: reason.into(),
+        }
+        .build()
+    }
+}
+
 impl ErrorExt for SessionSpecError {
     fn status_code(&self) -> StatusCode {
         StatusCode::InvalidArguments

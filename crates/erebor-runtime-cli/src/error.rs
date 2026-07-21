@@ -5,7 +5,6 @@ use erebor_runtime_client::DaemonClientError;
 use erebor_runtime_core::{RuntimeConfigError, RuntimeError, SessionRegistryError};
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
 use erebor_runtime_filesystem::FilesystemError;
-use erebor_runtime_policy::PolicyError;
 use erebor_runtime_session::SessionExecutionError;
 use snafu::{Location, Snafu};
 
@@ -32,28 +31,10 @@ pub(crate) enum CliError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("{source}"))]
-    InvalidPolicy {
-        source: PolicyError,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("policy evaluation failed: {source}"))]
-    PolicyEvaluation {
-        source: PolicyError,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("failed to read event `{}`: {source}", path.display()))]
     ReadEvent {
         path: PathBuf,
         source: io::Error,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("event fixture JSON is invalid: {source}"))]
-    InvalidEvent {
-        source: serde_json::Error,
         #[snafu(implicit)]
         location: Location,
     },
@@ -115,6 +96,12 @@ pub(crate) enum CliError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("policy command is invalid: {reason}"))]
+    InvalidPolicyCommand {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to encode JSON output: {source}"))]
     EncodeJson {
         source: serde_json::Error,
@@ -143,10 +130,6 @@ impl ErrorExt for CliError {
             | Self::ReadEvent { .. }
             | Self::WriteSessionOutput { .. } => StatusCode::External,
             Self::InvalidConfig { source, .. } => source.status_code(),
-            Self::InvalidPolicy { source, .. } | Self::PolicyEvaluation { source, .. } => {
-                source.status_code()
-            }
-            Self::InvalidEvent { .. } => StatusCode::InvalidSyntax,
             Self::Runtime { source, .. } => source.status_code(),
             Self::SessionExecution { source, .. } => source.status_code(),
             Self::AuditLog { source, .. } => source.status_code(),
@@ -155,6 +138,7 @@ impl ErrorExt for CliError {
             Self::Filesystem { source, .. } => source.status_code(),
             Self::InvalidFilesystemCommand { .. } => StatusCode::InvalidArguments,
             Self::InvalidSessionCommand { .. } => StatusCode::InvalidArguments,
+            Self::InvalidPolicyCommand { .. } => StatusCode::InvalidArguments,
             Self::EncodeJson { .. } => StatusCode::Internal,
             Self::DaemonClient { source, .. } => source.status_code(),
             Self::DaemonRuntime { .. } => StatusCode::Internal,
@@ -168,10 +152,6 @@ impl ErrorExt for CliError {
             | Self::ReadEvent { source, .. }
             | Self::WriteSessionOutput { source, .. } => RetryHint::from_io_error(source),
             Self::InvalidConfig { source, .. } => source.retry_hint(),
-            Self::InvalidPolicy { source, .. } | Self::PolicyEvaluation { source, .. } => {
-                source.retry_hint()
-            }
-            Self::InvalidEvent { .. } => RetryHint::NonRetryable,
             Self::Runtime { source, .. } => source.retry_hint(),
             Self::SessionExecution { source, .. } => source.retry_hint(),
             Self::AuditLog { source, .. } => source.retry_hint(),
@@ -180,6 +160,7 @@ impl ErrorExt for CliError {
             Self::Filesystem { source, .. } => source.retry_hint(),
             Self::InvalidFilesystemCommand { .. } => RetryHint::NonRetryable,
             Self::InvalidSessionCommand { .. } => RetryHint::NonRetryable,
+            Self::InvalidPolicyCommand { .. } => RetryHint::NonRetryable,
             Self::EncodeJson { .. } => RetryHint::NonRetryable,
             Self::DaemonClient { source, .. } => source.retry_hint(),
             Self::DaemonRuntime { .. } => RetryHint::NonRetryable,
@@ -197,9 +178,6 @@ impl ErrorExt for CliError {
             }
             _ => match self {
                 Self::InvalidConfig { source, .. } => source.to_string(),
-                Self::InvalidPolicy { source, .. } | Self::PolicyEvaluation { source, .. } => {
-                    source.to_string()
-                }
                 Self::Runtime { source, .. } => source.to_string(),
                 Self::SessionExecution { source, .. } => source.to_string(),
                 Self::AuditLog { source, .. } => source.to_string(),
@@ -209,9 +187,9 @@ impl ErrorExt for CliError {
                 Self::ReadConfig { .. }
                 | Self::ReadPolicy { .. }
                 | Self::ReadEvent { .. }
-                | Self::InvalidEvent { .. }
                 | Self::InvalidFilesystemCommand { .. }
                 | Self::InvalidSessionCommand { .. }
+                | Self::InvalidPolicyCommand { .. }
                 | Self::WriteSessionOutput { .. }
                 | Self::EncodeJson { .. }
                 | Self::DaemonClient { .. }
@@ -226,7 +204,6 @@ mod tests {
     use std::io;
 
     use erebor_runtime_core::RuntimeConfig;
-    use erebor_runtime_policy::LocalPolicy;
     use snafu::Location;
 
     use super::CliError;
@@ -247,25 +224,6 @@ mod tests {
 
         assert_eq!(error.status_code(), StatusCode::InvalidArguments);
         assert_eq!(error.output_msg(), "runtime config is empty");
-        Ok(())
-    }
-
-    #[test]
-    fn invalid_policy_syntax_uses_actionable_user_output() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let source = match LocalPolicy::from_json_str("{") {
-            Ok(_) => {
-                return Err(io::Error::other("malformed policy should be invalid").into());
-            }
-            Err(source) => source,
-        };
-        let error = CliError::InvalidPolicy {
-            source,
-            location: Location::default(),
-        };
-
-        assert_eq!(error.status_code(), StatusCode::InvalidSyntax);
-        assert!(error.output_msg().contains("policy syntax is invalid"));
         Ok(())
     }
 

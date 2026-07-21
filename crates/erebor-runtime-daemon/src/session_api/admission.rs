@@ -14,7 +14,7 @@ use erebor_runtime_ipc::v1::SessionCreateRequest;
 use crate::{
     config::DaemonConfig, error::InvalidRequestSnafu, local_store::DaemonLocalStore, Result,
 };
-use erebor_runtime_session::RunnerExecutionAdmission;
+use erebor_runtime_session::{AgentAdapterRegistry, RunnerExecutionAdmission};
 
 pub(super) struct AdmissionContext<'a> {
     pub(super) owner: SessionOwner,
@@ -23,6 +23,7 @@ pub(super) struct AdmissionContext<'a> {
     pub(super) state_root: &'a Path,
     pub(super) capability: RunnerCapabilityDocument,
     pub(super) runner_admission: RunnerExecutionAdmission,
+    pub(super) adapters: &'a AgentAdapterRegistry,
     pub(super) local_store: &'a DaemonLocalStore,
     pub(super) config: &'a DaemonConfig,
 }
@@ -69,6 +70,14 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
         adapter_digest,
         run_request.policy_set_sha256(),
     )?;
+    let prepared = context
+        .adapters
+        .prepare(
+            admission.package(),
+            env!("CARGO_PKG_VERSION"),
+            run_request.command(),
+        )
+        .map_err(invalid_spec)?;
     if run_request.runner() != context.capability.runner() {
         return InvalidRequestSnafu {
             reason: String::from("selected runner does not match its capability document"),
@@ -89,6 +98,7 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
         workspace,
         workload_privileges,
         executable,
+        script_interpreters,
         container_image,
         filesystem_projections,
         endpoint_projections,
@@ -97,7 +107,7 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
         session_id: SessionId::new(context.session_id),
         owner: context.owner,
         workload_privileges,
-        command: run_request.command().to_vec(),
+        command: prepared.command().to_vec(),
         package: identity("agent-package", Some(admission.package_digest()))?,
         installation: identity("installation", Some(admission.installation_digest()))?,
         adapter: identity("adapter", Some(admission.adapter_digest()))?,
@@ -111,6 +121,7 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
         runner_capability: context.capability,
         workspace,
         executable,
+        script_interpreters,
         container_image,
         environment: run_request.environment().to_vec(),
         secret_references: run_request.secret_references().to_vec(),

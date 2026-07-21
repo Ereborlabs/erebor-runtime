@@ -2,6 +2,8 @@
 
 mod approvals;
 mod error;
+mod policy;
+mod runner;
 mod session;
 
 use std::{
@@ -28,8 +30,10 @@ use tokio::{
 };
 
 pub use approvals::{ApprovalPage, ApprovalRecord};
+pub use erebor_runtime_ipc::v1::{PolicyPackageRecord, PolicySetRecord, PolicyTestResponse};
 use error::{ConnectSnafu, DaemonSnafu, IpcSnafu, ProtocolSnafu, TimedOutSnafu};
 pub use error::{DaemonClientError, Result};
+pub use runner::RunnerCapability;
 pub use session::{SessionEventPage, SessionLogPage};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);

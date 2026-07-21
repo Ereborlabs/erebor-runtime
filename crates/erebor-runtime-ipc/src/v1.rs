@@ -83,6 +83,17 @@ pub const KIND_APPROVAL_APPROVE_REQUEST: &str = "erebor.runtime.ipc.v1.ApprovalA
 pub const KIND_APPROVAL_DENY_REQUEST: &str = "erebor.runtime.ipc.v1.ApprovalDenyRequest";
 pub const KIND_APPROVAL_RECORD: &str = "erebor.runtime.ipc.v1.ApprovalRecord";
 pub const KIND_APPROVAL_LIST_RESPONSE: &str = "erebor.runtime.ipc.v1.ApprovalListResponse";
+pub const KIND_POLICY_TEST_REQUEST: &str = "erebor.runtime.ipc.v1.PolicyTestRequest";
+pub const KIND_POLICY_TEST_RESPONSE: &str = "erebor.runtime.ipc.v1.PolicyTestResponse";
+pub const KIND_POLICY_PACKAGE_APPLY_REQUEST: &str =
+    "erebor.runtime.ipc.v1.PolicyPackageApplyRequest";
+pub const KIND_POLICY_PACKAGE_RECORD: &str = "erebor.runtime.ipc.v1.PolicyPackageRecord";
+pub const KIND_POLICY_SET_CREATE_REQUEST: &str = "erebor.runtime.ipc.v1.PolicySetCreateRequest";
+pub const KIND_POLICY_SET_RECORD: &str = "erebor.runtime.ipc.v1.PolicySetRecord";
+pub const KIND_RUNNER_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.RunnerListRequest";
+pub const KIND_RUNNER_INSPECT_REQUEST: &str = "erebor.runtime.ipc.v1.RunnerInspectRequest";
+pub const KIND_RUNNER_CAPABILITY_RECORD: &str = "erebor.runtime.ipc.v1.RunnerCapabilityRecord";
+pub const KIND_RUNNER_LIST_RESPONSE: &str = "erebor.runtime.ipc.v1.RunnerListResponse";
 pub const EREBOR_IDEMPOTENCY_KEY_HEADER: &str = "erebor-idempotency-key";
 pub const INTERCEPTION_TOKEN_HEADER: &str = "interception_token";
 pub const MAX_HEADER_COUNT: usize = 8;

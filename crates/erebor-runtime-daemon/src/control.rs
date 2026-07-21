@@ -19,7 +19,9 @@ use erebor_runtime_ipc::{
         DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
         DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
-        Envelope, EnvelopeServiceFamily, SessionAttachRequest, SessionCreateRequest,
+        Envelope, EnvelopeServiceFamily, PolicyPackageApplyRequest, PolicySetCreateRequest,
+        PolicyTestRequest, PolicyTestResponse, RunnerCapabilityRecord, RunnerInspectRequest,
+        RunnerListRequest, RunnerListResponse, SessionAttachRequest, SessionCreateRequest,
         SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
         SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInspectRequest,
         SessionKillRequest, SessionListRequest, SessionLogChunk, SessionLogsEnd,
@@ -32,7 +34,10 @@ use erebor_runtime_ipc::{
         KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
         KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD,
         KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
-        KIND_DAEMON_STOP_REQUEST, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST,
+        KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
+        KIND_POLICY_SET_CREATE_REQUEST, KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE,
+        KIND_RUNNER_CAPABILITY_RECORD, KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST,
+        KIND_RUNNER_LIST_RESPONSE, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST,
         KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
         KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
         KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
@@ -66,6 +71,7 @@ use crate::{
     DaemonError, DaemonPaths, Result,
 };
 use erebor_runtime_core::ActiveSessionSignal;
+use erebor_runtime_policy::{LocalPolicy, PolicyEvaluator};
 use erebor_runtime_session::StreamKind;
 
 const CONNECTION_LIMIT: usize = 32;
@@ -362,6 +368,7 @@ impl DaemonControlState {
                     String::from("daemon-stop"),
                     String::from("session-control-v1"),
                     String::from("approvals-v1"),
+                    String::from("policy-test-v1"),
                     String::from("runtime-guard-service-v1"),
                 ],
             },
@@ -428,6 +435,13 @@ impl DaemonControlState {
             KIND_APPROVAL_INSPECT_REQUEST => self.approval_inspect(stream, peer, &envelope).await,
             KIND_APPROVAL_APPROVE_REQUEST => self.approval_approve(stream, peer, &envelope).await,
             KIND_APPROVAL_DENY_REQUEST => self.approval_deny(stream, peer, &envelope).await,
+            KIND_POLICY_TEST_REQUEST => self.policy_test(stream, &envelope).await,
+            KIND_POLICY_PACKAGE_APPLY_REQUEST => {
+                self.policy_package_apply(stream, peer, &envelope).await
+            }
+            KIND_POLICY_SET_CREATE_REQUEST => self.policy_set_create(stream, peer, &envelope).await,
+            KIND_RUNNER_LIST_REQUEST => self.runner_list(stream, &envelope).await,
+            KIND_RUNNER_INSPECT_REQUEST => self.runner_inspect(stream, &envelope).await,
             _ => Err(InvalidRequestSnafu {
                 reason: format!(
                     "message kind `{}` is not accepted on daemon control",
@@ -821,9 +835,12 @@ impl DaemonControlState {
                 .fail();
             }
         };
+        let session_id = self
+            .sessions
+            .resolve_session_reference(peer.uid, &request.session_id)?;
         let page = self.sessions.stream(
             peer.uid,
-            &request.session_id,
+            &session_id,
             kind,
             request.after_sequence,
             request.maximum_records.max(1) as usize,
@@ -835,7 +852,7 @@ impl DaemonControlState {
                 envelope.message_id,
                 KIND_SESSION_LOG_CHUNK,
                 &SessionLogChunk {
-                    session_id: request.session_id.clone(),
+                    session_id: session_id.clone(),
                     stream: request.stream.clone(),
                     sequence: record.sequence(),
                     timestamp_unix_ms: record.timestamp_unix_ms(),
@@ -853,7 +870,7 @@ impl DaemonControlState {
             envelope.message_id,
             KIND_SESSION_LOGS_END,
             &SessionLogsEnd {
-                session_id: request.session_id,
+                session_id,
                 stream: request.stream,
                 durable_cursor: page.durable_cursor(),
                 truncated_before_cursor: page.truncated_before_cursor(),
@@ -871,9 +888,12 @@ impl DaemonControlState {
         let request: SessionEventsRequest = envelope
             .decode_typed_payload(KIND_SESSION_EVENTS_REQUEST)
             .context(IpcSnafu)?;
+        let session_id = self
+            .sessions
+            .resolve_session_reference(peer.uid, &request.session_id)?;
         let page = self.sessions.stream(
             peer.uid,
-            &request.session_id,
+            &session_id,
             StreamKind::Events,
             request.after_sequence,
             request.maximum_records.max(1) as usize,
@@ -885,7 +905,7 @@ impl DaemonControlState {
                 envelope.message_id,
                 KIND_SESSION_EVENT_RECORD,
                 &SessionEventRecord {
-                    session_id: request.session_id.clone(),
+                    session_id: session_id.clone(),
                     sequence: record.sequence(),
                     timestamp_unix_ms: record.timestamp_unix_ms(),
                     event_kind: record.source().to_owned(),
@@ -903,10 +923,131 @@ impl DaemonControlState {
             envelope.message_id,
             KIND_SESSION_EVENTS_END,
             &SessionEventsEnd {
-                session_id: request.session_id,
+                session_id,
                 durable_cursor: page.durable_cursor(),
                 truncated_before_cursor: page.truncated_before_cursor(),
             },
+        )
+        .await
+    }
+
+    async fn policy_test(&self, stream: &mut UnixStream, envelope: &Envelope) -> Result<()> {
+        let request: PolicyTestRequest = envelope
+            .decode_typed_payload(KIND_POLICY_TEST_REQUEST)
+            .context(IpcSnafu)?;
+        let maximum = self
+            .configuration
+            .read()
+            .map_err(|_error| StateLockSnafu.build())?
+            .value
+            .max_policy_upload_bytes();
+        let response = evaluate_policy_test(request, maximum)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_POLICY_TEST_RESPONSE,
+            &response,
+        )
+        .await
+    }
+
+    async fn policy_package_apply(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: PolicyPackageApplyRequest = envelope
+            .decode_typed_payload(KIND_POLICY_PACKAGE_APPLY_REQUEST)
+            .context(IpcSnafu)?;
+        if request.path.trim().is_empty() {
+            return InvalidRequestSnafu {
+                reason: String::from("policy package apply requires a directory path"),
+            }
+            .fail();
+        }
+        let maximum = self
+            .configuration
+            .read()
+            .map_err(|_error| StateLockSnafu.build())?
+            .value
+            .max_policy_upload_bytes();
+        let policy = self.sessions.read_policy_package(
+            peer.uid,
+            peer.gid,
+            std::path::Path::new(&request.path),
+            maximum,
+        )?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "policy-package-apply",
+            envelope,
+            MutationIntent::PolicyPackageApply {
+                uid: peer.uid,
+                policy,
+            },
+        )
+        .await
+    }
+
+    async fn policy_set_create(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: PolicySetCreateRequest = envelope
+            .decode_typed_payload(KIND_POLICY_SET_CREATE_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "policy-set-create",
+            envelope,
+            MutationIntent::PolicySetCreate {
+                uid: peer.uid,
+                root_minimum_digest: request.root_minimum_digest,
+                package_minimum_digests: request.package_minimum_digests,
+                local_override_digest: (!request.local_override_digest.is_empty())
+                    .then_some(request.local_override_digest),
+            },
+        )
+        .await
+    }
+
+    async fn runner_list(&self, stream: &mut UnixStream, envelope: &Envelope) -> Result<()> {
+        envelope
+            .decode_typed_payload::<RunnerListRequest>(KIND_RUNNER_LIST_REQUEST)
+            .context(IpcSnafu)?;
+        let runners = self
+            .sessions
+            .runner_reports()?
+            .iter()
+            .map(runner_capability_record)
+            .collect::<Result<Vec<_>>>()?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_RUNNER_LIST_RESPONSE,
+            &RunnerListResponse { runners },
+        )
+        .await
+    }
+
+    async fn runner_inspect(&self, stream: &mut UnixStream, envelope: &Envelope) -> Result<()> {
+        let request: RunnerInspectRequest = envelope
+            .decode_typed_payload(KIND_RUNNER_INSPECT_REQUEST)
+            .context(IpcSnafu)?;
+        let report = self.sessions.runner_report(&request.runner_id)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_RUNNER_CAPABILITY_RECORD,
+            &runner_capability_record(&report)?,
         )
         .await
     }
@@ -1631,6 +1772,68 @@ impl Drop for DaemonSocket {
     }
 }
 
+fn evaluate_policy_test(request: PolicyTestRequest, maximum: u64) -> Result<PolicyTestResponse> {
+    let total = request
+        .policy_json
+        .len()
+        .saturating_add(request.event_json.len());
+    if total > maximum as usize {
+        return InvalidRequestSnafu {
+            reason: format!(
+                "policy test upload is {total} bytes, exceeding the configured {maximum}-byte limit"
+            ),
+        }
+        .fail();
+    }
+    let policy_source = std::str::from_utf8(&request.policy_json).map_err(|error| {
+        InvalidRequestSnafu {
+            reason: format!("policy test input is not UTF-8: {error}"),
+        }
+        .build()
+    })?;
+    let policy = LocalPolicy::from_json_str(policy_source).map_err(|error| {
+        InvalidRequestSnafu {
+            reason: format!("policy test input is invalid: {error}"),
+        }
+        .build()
+    })?;
+    let event = serde_json::from_slice(&request.event_json).map_err(|error| {
+        InvalidRequestSnafu {
+            reason: format!("policy test event is invalid: {error}"),
+        }
+        .build()
+    })?;
+    let decision = policy.evaluate(&event).map_err(|error| {
+        InvalidRequestSnafu {
+            reason: format!("policy test evaluation failed: {error}"),
+        }
+        .build()
+    })?;
+    let decision_json = serde_json::to_vec(&decision).map_err(|error| {
+        InvalidRequestSnafu {
+            reason: format!("policy test result cannot be encoded: {error}"),
+        }
+        .build()
+    })?;
+    Ok(PolicyTestResponse { decision_json })
+}
+
+fn runner_capability_record(
+    report: &erebor_runtime_session::RunnerCapabilityReport,
+) -> Result<RunnerCapabilityRecord> {
+    let document_json = serde_json::to_vec(report.document()).map_err(|error| {
+        InvalidRequestSnafu {
+            reason: format!("runner capability document cannot be encoded: {error}"),
+        }
+        .build()
+    })?;
+    Ok(RunnerCapabilityRecord {
+        document_json,
+        available: report.available(),
+        unavailable_reason: report.unavailable_reason().unwrap_or_default().to_owned(),
+    })
+}
+
 fn is_mutating_message(kind: &str) -> bool {
     matches!(
         kind,
@@ -1650,6 +1853,8 @@ fn is_mutating_message(kind: &str) -> bool {
             | KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST
             | KIND_APPROVAL_APPROVE_REQUEST
             | KIND_APPROVAL_DENY_REQUEST
+            | KIND_POLICY_PACKAGE_APPLY_REQUEST
+            | KIND_POLICY_SET_CREATE_REQUEST
     )
 }
 
@@ -1734,9 +1939,9 @@ mod tests {
     use erebor_runtime_ipc::{
         v1::{
             DaemonError as DaemonErrorMessage, DaemonHello, DaemonLogsRequest, DaemonStatusRequest,
-            Envelope, GuardHello, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
-            KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
-            PROTOCOL_VERSION,
+            Envelope, GuardHello, PolicyTestRequest, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO,
+            KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_STATUS_REQUEST,
+            KIND_DAEMON_STATUS_RESPONSE, PROTOCOL_VERSION,
         },
         AsyncFrameCodec, IpcProtocolError,
     };
@@ -1745,13 +1950,36 @@ mod tests {
     use tokio::{net::UnixStream, sync::Semaphore};
 
     use super::{
-        DaemonApprovalRepository, DaemonConfiguration, DaemonControlState, DaemonLogStore,
-        DaemonSecurity, DaemonSocket,
+        evaluate_policy_test, DaemonApprovalRepository, DaemonConfiguration, DaemonControlState,
+        DaemonLogStore, DaemonSecurity, DaemonSocket,
     };
     use crate::{
         config::DaemonConfig, idempotency::DaemonIdempotencyStore, session_api::DaemonSessionApi,
         DaemonPaths,
     };
+
+    #[test]
+    fn policy_test_is_bounded_and_evaluated_by_the_daemon_owner(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let response = evaluate_policy_test(
+            PolicyTestRequest {
+                policy_json: br#"{"rules":[{"id":"deny-terminal","match":{"surface":"terminal"},"decision":"deny"}]}"#.to_vec(),
+                event_json: br#"{"id":"event-1","session_id":"session-1","actor":{"id":"agent","kind":"agent"},"surface":"terminal","action":"process_exec","target":null,"payload":{},"risk":{"level":"low","reasons":[]},"timestamp":"now"}"#.to_vec(),
+            },
+            1024,
+        )?;
+        let decision = String::from_utf8(response.decision_json)?;
+        assert!(decision.contains("deny-terminal"));
+        assert!(evaluate_policy_test(
+            PolicyTestRequest {
+                policy_json: vec![b'x'; 1024],
+                event_json: vec![b'y'],
+            },
+            1024,
+        )
+        .is_err());
+        Ok(())
+    }
 
     #[tokio::test]
     #[ignore = "requires host Unix-domain socket I/O"]

@@ -6,10 +6,12 @@ use std::{
     sync::Mutex,
 };
 
-use erebor_runtime_core::{ImmutableIdentity, SessionSpec};
+use erebor_runtime_core::{AgentAdapterDescriptor, ImmutableIdentity, SessionSpec};
 use erebor_runtime_packages::{
-    AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord, PolicySetRevision,
+    AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord,
+    PolicyPackageRevision, PolicySetRevision,
 };
+use erebor_runtime_policy::LocalPolicy;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
@@ -32,6 +34,7 @@ pub(crate) struct DaemonLocalStore {
 /// one session admission. The daemon derives these facts from its own store;
 /// client-supplied digests merely select an already admitted record.
 pub(crate) struct LocalAdmission {
+    package: AgentPackageManifest,
     package_digest: String,
     installation_digest: String,
     adapter_digest: String,
@@ -39,7 +42,36 @@ pub(crate) struct LocalAdmission {
     policy_input_digests: Vec<String>,
 }
 
+pub(crate) struct BuiltInAdmission {
+    package_digest: String,
+    installation_digest: String,
+    adapter_digest: String,
+    policy_set_digest: String,
+}
+
+impl BuiltInAdmission {
+    pub(crate) fn package_digest(&self) -> &str {
+        &self.package_digest
+    }
+
+    pub(crate) fn installation_digest(&self) -> &str {
+        &self.installation_digest
+    }
+
+    pub(crate) fn adapter_digest(&self) -> &str {
+        &self.adapter_digest
+    }
+
+    pub(crate) fn policy_set_digest(&self) -> &str {
+        &self.policy_set_digest
+    }
+}
+
 impl LocalAdmission {
+    pub(crate) const fn package(&self) -> &AgentPackageManifest {
+        &self.package
+    }
+
     pub(crate) fn package_digest(&self) -> &str {
         &self.package_digest
     }
@@ -88,6 +120,14 @@ impl DaemonLocalStore {
 
     pub(crate) fn seed_root_curated(&self, admissions: &[RootCuratedAdmission]) -> Result<()> {
         for admission in admissions {
+            for policy in admission.policies() {
+                self.validate_policy_package(policy)?;
+                let policy_digest = policy.canonical_digest().map_err(Self::invalid_model)?;
+                self.write_immutable(
+                    &self.policy_package_path(&policy_digest),
+                    &policy.canonical_bytes().map_err(Self::invalid_model)?,
+                )?;
+            }
             let package = admission.package();
             let package_digest = package.canonical_digest().map_err(Self::invalid_model)?;
             self.write_immutable(
@@ -116,6 +156,88 @@ impl DaemonLocalStore {
         Ok(())
     }
 
+    pub(crate) fn seed_builtin_generic_content(&self) -> Result<()> {
+        let (package, policy) = Self::builtin_generic_content()?;
+        let package_digest = package.canonical_digest().map_err(Self::invalid_model)?;
+        self.write_immutable(
+            &self.package_manifest_path(&package_digest),
+            &package.canonical_bytes().map_err(Self::invalid_model)?,
+        )?;
+        self.validate_policy_package(&policy)?;
+        let policy_digest = policy.canonical_digest().map_err(Self::invalid_model)?;
+        self.write_immutable(
+            &self.policy_package_path(&policy_digest),
+            &policy.canonical_bytes().map_err(Self::invalid_model)?,
+        )
+    }
+
+    pub(crate) fn ensure_builtin_admission(&self, owner_uid: u32) -> Result<BuiltInAdmission> {
+        self.seed_builtin_generic_content()?;
+        let (package, policy) = Self::builtin_generic_content()?;
+        let package_digest = package.canonical_digest().map_err(Self::invalid_model)?;
+        let installation = InstallationRecord::new(owner_uid, package_digest.clone(), 0);
+        let installation_digest = installation
+            .canonical_digest()
+            .map_err(Self::invalid_model)?;
+        self.write_immutable(
+            &self.installation_path(owner_uid, &installation_digest),
+            &installation
+                .canonical_bytes()
+                .map_err(Self::invalid_model)?,
+        )?;
+        let policy_digest = policy.canonical_digest().map_err(Self::invalid_model)?;
+        let policy_set =
+            PolicySetRevision::new(policy_digest, Vec::new(), None).map_err(Self::invalid_model)?;
+        let policy_set_digest = policy_set.canonical_digest().map_err(Self::invalid_model)?;
+        self.write_immutable(
+            &self.policy_set_path(owner_uid, &policy_set_digest),
+            &policy_set.canonical_bytes().map_err(Self::invalid_model)?,
+        )?;
+        Ok(BuiltInAdmission {
+            package_digest: package_digest.as_str().to_owned(),
+            installation_digest: installation_digest.as_str().to_owned(),
+            adapter_digest: package.config_digest().as_str().to_owned(),
+            policy_set_digest: policy_set_digest.as_str().to_owned(),
+        })
+    }
+
+    fn builtin_generic_content() -> Result<(AgentPackageManifest, PolicyPackageRevision)> {
+        let descriptor = AgentAdapterDescriptor::generic_process_v1().map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("built-in generic adapter descriptor is invalid: {error}"),
+            }
+            .build()
+        })?;
+        let package = AgentPackageManifest::new(
+            "generic-process",
+            descriptor.id(),
+            env!("CARGO_PKG_VERSION"),
+            vec![String::from("<argv>")],
+            ContentDigest::new(descriptor.sha256().map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("built-in generic adapter digest is invalid: {error}"),
+                }
+                .build()
+            })?)
+            .map_err(Self::invalid_model)?,
+            Vec::new(),
+        )
+        .map_err(Self::invalid_model)?;
+        let policy = PolicyPackageRevision::new(
+            "generic-host-minimum",
+            b"name = \"generic-host-minimum\"\n".to_vec(),
+            std::collections::BTreeMap::from([(
+                String::from("terminal.json"),
+                br#"{"rules":[{"id":"generic-host-allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
+            )]),
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# Built-in generic host minimum\n".to_vec(),
+        )
+        .map_err(Self::invalid_model)?;
+        Ok((package, policy))
+    }
+
     pub(crate) fn resolve_admission(
         &self,
         owner_uid: u32,
@@ -134,16 +256,6 @@ impl DaemonLocalStore {
             &package_digest,
             "agent package",
         )?;
-        if package.adapter_id() != "generic-process-v1" {
-            return InvalidRequestSnafu {
-                reason: format!(
-                    "package `{}` selects adapter `{}` instead of the Phase 3 generic adapter",
-                    package_digest.as_str(),
-                    package.adapter_id()
-                ),
-            }
-            .fail();
-        }
         if package.config_digest() != &adapter_digest {
             return InvalidRequestSnafu {
                 reason: String::from(
@@ -152,7 +264,6 @@ impl DaemonLocalStore {
             }
             .fail();
         }
-
         let installation: InstallationRecord = self.read_canonical(
             &self.installation_path(owner_uid, &installation_digest),
             &installation_digest,
@@ -175,6 +286,9 @@ impl DaemonLocalStore {
             "policy set",
         )?;
         policy_set.validate().map_err(Self::invalid_model)?;
+        for policy_digest in policy_set.policy_input_digests() {
+            self.read_policy_package(owner_uid, policy_digest)?;
+        }
         let policy_input_digests = policy_set
             .policy_input_digests()
             .into_iter()
@@ -182,6 +296,7 @@ impl DaemonLocalStore {
             .collect();
 
         Ok(LocalAdmission {
+            package,
             package_digest: package_digest.as_str().to_owned(),
             installation_digest: installation_digest.as_str().to_owned(),
             adapter_digest: adapter_digest.as_str().to_owned(),
@@ -216,6 +331,74 @@ impl DaemonLocalStore {
             adapter.sha256(),
             spec.policy_set().sha256(),
         )
+    }
+
+    pub(crate) fn policy_packages_for_session(
+        &self,
+        spec: &SessionSpec,
+    ) -> Result<Vec<PolicyPackageRevision>> {
+        let admission = self.validate_session_spec(spec)?;
+        admission
+            .policy_input_digests()
+            .iter()
+            .map(|digest| {
+                let digest = Self::parse_digest(digest, "policy package")?;
+                self.read_policy_package(spec.owner().uid(), &digest)
+            })
+            .collect()
+    }
+
+    pub(crate) fn store_user_policy_package(
+        &self,
+        owner_uid: u32,
+        policy: &PolicyPackageRevision,
+    ) -> Result<ContentDigest> {
+        self.validate_policy_package(policy)?;
+        let digest = policy.canonical_digest().map_err(Self::invalid_model)?;
+        self.write_immutable(
+            &self.user_policy_package_path(owner_uid, &digest),
+            &policy.canonical_bytes().map_err(Self::invalid_model)?,
+        )?;
+        Ok(digest)
+    }
+
+    pub(crate) fn create_user_policy_set(
+        &self,
+        owner_uid: u32,
+        root_minimum_digest: &str,
+        package_minimum_digests: &[String],
+        local_override_digest: Option<&str>,
+    ) -> Result<ContentDigest> {
+        let root_minimum = Self::parse_digest(root_minimum_digest, "root policy package")?;
+        self.read_canonical::<PolicyPackageRevision>(
+            &self.policy_package_path(&root_minimum),
+            &root_minimum,
+            "root policy package",
+        )?;
+        let package_minimums = package_minimum_digests
+            .iter()
+            .map(|digest| {
+                let digest = Self::parse_digest(digest, "package policy")?;
+                self.read_policy_package(owner_uid, &digest)?;
+                Ok(digest)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let local_override = local_override_digest
+            .filter(|digest| !digest.is_empty())
+            .map(|digest| {
+                let digest = Self::parse_digest(digest, "local policy")?;
+                self.read_policy_package(owner_uid, &digest)?;
+                Ok(digest)
+            })
+            .transpose()?;
+        let revision = PolicySetRevision::new(root_minimum, package_minimums, local_override)
+            .map_err(Self::invalid_model)?;
+        let digest = revision.canonical_digest().map_err(Self::invalid_model)?;
+        self.write_immutable(
+            &self.policy_set_path(owner_uid, &digest),
+            &revision.canonical_bytes().map_err(Self::invalid_model)?,
+        )?;
+        Ok(digest)
     }
 
     pub(crate) fn record_session_lease(&self, spec: &SessionSpec) -> Result<()> {
@@ -265,6 +448,35 @@ impl DaemonLocalStore {
             .join(owner_uid.to_string())
             .join("policy-sets")
             .join(format!("{}.json", digest.as_str()))
+    }
+
+    fn policy_package_path(&self, digest: &ContentDigest) -> PathBuf {
+        self.packages
+            .join(digest.as_str())
+            .join("policy-package.json")
+    }
+
+    fn user_policy_package_path(&self, owner_uid: u32, digest: &ContentDigest) -> PathBuf {
+        self.users
+            .join(owner_uid.to_string())
+            .join("policy-packages")
+            .join(format!("{}.json", digest.as_str()))
+    }
+
+    fn read_policy_package(
+        &self,
+        owner_uid: u32,
+        digest: &ContentDigest,
+    ) -> Result<PolicyPackageRevision> {
+        let user_path = self.user_policy_package_path(owner_uid, digest);
+        if user_path.exists() {
+            return self.read_canonical(&user_path, digest, "user policy package");
+        }
+        self.read_canonical(
+            &self.policy_package_path(digest),
+            digest,
+            "root policy package",
+        )
     }
 
     fn read_canonical<T>(
@@ -430,6 +642,39 @@ impl DaemonLocalStore {
         }
         .build()
     }
+
+    fn validate_policy_package(&self, policy: &PolicyPackageRevision) -> Result<()> {
+        std::str::from_utf8(policy.policy_config()).map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!(
+                    "policy package `{}` has non-UTF-8 policy.toml: {error}",
+                    policy.manifest().name()
+                ),
+            }
+            .build()
+        })?;
+        for (name, source) in policy.rules() {
+            let source = std::str::from_utf8(source).map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!(
+                        "policy package `{}` rule `{name}` is not UTF-8: {error}",
+                        policy.manifest().name()
+                    ),
+                }
+                .build()
+            })?;
+            LocalPolicy::from_json_str(source).map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!(
+                        "policy package `{}` rule `{name}` is invalid: {error}",
+                        policy.manifest().name()
+                    ),
+                }
+                .build()
+            })?;
+        }
+        Ok(())
+    }
 }
 
 impl SessionLease {
@@ -462,16 +707,17 @@ impl SessionLease {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use erebor_runtime_packages::{
         AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord,
-        PolicySetRevision,
+        PolicyPackageRevision, PolicySetRevision,
     };
 
     use super::{DaemonLocalStore, SessionLease};
     use crate::{config::RootCuratedAdmission, DaemonPaths};
 
     const ADAPTER_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    const POLICY_DIGEST: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     #[test]
     fn session_leases_are_crash_safe_idempotent_and_immutable(
@@ -524,10 +770,26 @@ mod tests {
         let package_digest = package.canonical_digest()?;
         let installation = InstallationRecord::new(1000, package_digest.clone(), 1);
         let installation_digest = installation.canonical_digest()?;
-        let policy_set =
-            PolicySetRevision::new(ContentDigest::new(POLICY_DIGEST)?, Vec::new(), None)?;
+        let policy = PolicyPackageRevision::new(
+            "host-minimum",
+            b"name = \"host-minimum\"\n".to_vec(),
+            BTreeMap::from([(
+                String::from("terminal.json"),
+                br#"{"rules":[{"id":"allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
+            )]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# Host minimum\n".to_vec(),
+        )?;
+        let policy_digest = policy.canonical_digest()?;
+        let policy_set = PolicySetRevision::new(policy_digest.clone(), Vec::new(), None)?;
         let policy_set_digest = policy_set.canonical_digest()?;
-        store.seed_root_curated(&[RootCuratedAdmission::new(package, installation, policy_set)])?;
+        store.seed_root_curated(&[RootCuratedAdmission::new(
+            package,
+            installation,
+            policy_set,
+            vec![policy],
+        )])?;
 
         let admission = store.resolve_admission(
             1000,
@@ -545,7 +807,7 @@ mod tests {
         assert_eq!(admission.policy_set_digest(), policy_set_digest.as_str());
         assert_eq!(
             admission.policy_input_digests(),
-            &[String::from(POLICY_DIGEST)]
+            &[policy_digest.as_str().to_owned()]
         );
         assert!(store
             .resolve_admission(
@@ -556,6 +818,157 @@ mod tests {
                 policy_set_digest.as_str(),
             )
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_root_policy_is_rejected_before_it_reaches_the_store(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        let package = AgentPackageManifest::new(
+            "generic-process",
+            "generic-process-v1",
+            "0.1.0",
+            vec![String::from("<argv>")],
+            ContentDigest::new(ADAPTER_DIGEST)?,
+            Vec::new(),
+        )?;
+        let installation = InstallationRecord::new(1000, package.canonical_digest()?, 1);
+        let policy = PolicyPackageRevision::new(
+            "host-minimum",
+            b"name = \"host-minimum\"\n".to_vec(),
+            BTreeMap::from([(String::from("terminal.json"), b"not-json".to_vec())]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# Host minimum\n".to_vec(),
+        )?;
+        let policy_set = PolicySetRevision::new(policy.canonical_digest()?, Vec::new(), None)?;
+        assert!(store
+            .seed_root_curated(&[RootCuratedAdmission::new(
+                package,
+                installation,
+                policy_set,
+                vec![policy],
+            )])
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn user_policy_revisions_compose_only_with_a_root_curated_minimum(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        let package = AgentPackageManifest::new(
+            "generic-process",
+            "generic-process-v1",
+            "0.1.0",
+            vec![String::from("<argv>")],
+            ContentDigest::new(ADAPTER_DIGEST)?,
+            Vec::new(),
+        )?;
+        let installation = InstallationRecord::new(1000, package.canonical_digest()?, 1);
+        let root_policy = PolicyPackageRevision::new(
+            "host-minimum",
+            b"name = \"host-minimum\"\n".to_vec(),
+            BTreeMap::from([(
+                String::from("terminal.json"),
+                br#"{"rules":[{"id":"root-allow","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
+            )]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# Host minimum\n".to_vec(),
+        )?;
+        let root_digest = root_policy.canonical_digest()?;
+        let root_set = PolicySetRevision::new(root_digest.clone(), Vec::new(), None)?;
+        store.seed_root_curated(&[RootCuratedAdmission::new(
+            package,
+            installation,
+            root_set,
+            vec![root_policy],
+        )])?;
+        let user_policy = PolicyPackageRevision::new(
+            "user-guardrail",
+            b"name = \"user-guardrail\"\n".to_vec(),
+            BTreeMap::from([(
+                String::from("terminal.json"),
+                br#"{"rules":[{"id":"user-deny","match":{"surface":"terminal"},"decision":"deny"}]}"#.to_vec(),
+            )]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# User guardrail\n".to_vec(),
+        )?;
+        let user_digest = store.store_user_policy_package(1000, &user_policy)?;
+        let policy_set = store.create_user_policy_set(
+            1000,
+            root_digest.as_str(),
+            &[user_digest.as_str().to_owned()],
+            None,
+        )?;
+        assert!(store
+            .create_user_policy_set(1000, user_digest.as_str(), &[], None)
+            .is_err());
+        let revision: PolicySetRevision = store.read_canonical(
+            &store.policy_set_path(1000, &policy_set),
+            &policy_set,
+            "policy set",
+        )?;
+        assert_eq!(
+            revision
+                .policy_input_digests()
+                .iter()
+                .map(|digest| digest.as_str())
+                .collect::<Vec<_>>(),
+            vec![root_digest.as_str(), user_digest.as_str()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn daemon_installed_builtin_generic_content_is_canonical_and_idempotent(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        store.seed_builtin_generic_content()?;
+        store.seed_builtin_generic_content()?;
+        let descriptor = erebor_runtime_core::AgentAdapterDescriptor::generic_process_v1()?;
+        let package = AgentPackageManifest::new(
+            "generic-process",
+            descriptor.id(),
+            env!("CARGO_PKG_VERSION"),
+            vec![String::from("<argv>")],
+            ContentDigest::new(descriptor.sha256()?)?,
+            Vec::new(),
+        )?;
+        let digest = package.canonical_digest()?;
+        let stored: AgentPackageManifest = store.read_canonical(
+            &store.package_manifest_path(&digest),
+            &digest,
+            "built-in package",
+        )?;
+        assert_eq!(stored, package);
+        let first = store.ensure_builtin_admission(1000)?;
+        let second = store.ensure_builtin_admission(1000)?;
+        assert_eq!(first.package_digest(), digest.as_str());
+        assert_eq!(first.package_digest(), second.package_digest());
+        assert_eq!(first.installation_digest(), second.installation_digest());
+        assert_eq!(first.adapter_digest(), second.adapter_digest());
+        assert_eq!(first.policy_set_digest(), second.policy_set_digest());
+        let resolved = store.resolve_admission(
+            1000,
+            first.package_digest(),
+            first.installation_digest(),
+            first.adapter_digest(),
+            first.policy_set_digest(),
+        )?;
+        assert_eq!(resolved.package_digest(), first.package_digest());
         Ok(())
     }
 }

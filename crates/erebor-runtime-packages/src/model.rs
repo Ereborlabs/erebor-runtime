@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -126,8 +126,18 @@ impl AgentPackageManifest {
     }
 
     #[must_use]
+    pub fn minimum_daemon_version(&self) -> &str {
+        &self.minimum_daemon_version
+    }
+
+    #[must_use]
     pub fn entrypoint(&self) -> &[String] {
         &self.entrypoint
+    }
+
+    #[must_use]
+    pub fn support_layer_digests(&self) -> &[ContentDigest] {
+        &self.support_layer_digests
     }
 
     pub(crate) fn is_identifier(value: &str) -> bool {
@@ -202,9 +212,171 @@ impl PolicyPackageManifest {
         }
         Ok(())
     }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn policy_config_digest(&self) -> &ContentDigest {
+        &self.policy_config_digest
+    }
+
+    #[must_use]
+    pub fn rule_layer_digests(&self) -> &[ContentDigest] {
+        &self.rule_layer_digests
+    }
+
+    #[must_use]
+    pub fn example_layer_digests(&self) -> &[ContentDigest] {
+        &self.example_layer_digests
+    }
+
+    #[must_use]
+    pub fn test_layer_digests(&self) -> &[ContentDigest] {
+        &self.test_layer_digests
+    }
+
+    #[must_use]
+    pub fn documentation_layer_digest(&self) -> &ContentDigest {
+        &self.documentation_layer_digest
+    }
 }
 
 impl CanonicalEncoding for PolicyPackageManifest {}
+
+/// The complete immutable contents of one locally admitted policy package.
+///
+/// The package is stored as canonical data rather than a mutable user tree.
+/// Its source layout is intentionally fixed to `policy.toml`, flat `rules/`,
+/// `examples/`, `tests/`, and `README.md`; policy evaluation consumes only the
+/// admitted rule bytes.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyPackageRevision {
+    format_version: u32,
+    manifest: PolicyPackageManifest,
+    policy_config: Vec<u8>,
+    rules: BTreeMap<String, Vec<u8>>,
+    examples: BTreeMap<String, Vec<u8>>,
+    tests: BTreeMap<String, Vec<u8>>,
+    documentation: Vec<u8>,
+}
+
+impl PolicyPackageRevision {
+    pub fn new(
+        name: impl Into<String>,
+        policy_config: Vec<u8>,
+        rules: BTreeMap<String, Vec<u8>>,
+        examples: BTreeMap<String, Vec<u8>>,
+        tests: BTreeMap<String, Vec<u8>>,
+        documentation: Vec<u8>,
+    ) -> Result<Self> {
+        let manifest = PolicyPackageManifest::new(
+            name,
+            ContentDigest::from_canonical_bytes(&policy_config),
+            Self::layer_digests(&rules),
+            Self::layer_digests(&examples),
+            Self::layer_digests(&tests),
+            ContentDigest::from_canonical_bytes(&documentation),
+        )?;
+        let revision = Self {
+            format_version: CANONICAL_FORMAT_VERSION,
+            manifest,
+            policy_config,
+            rules,
+            examples,
+            tests,
+            documentation,
+        };
+        revision.validate()?;
+        Ok(revision)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.format_version == CANONICAL_FORMAT_VERSION
+                && !self.policy_config.is_empty()
+                && !self.documentation.is_empty()
+                && Self::valid_files(&self.rules, true)
+                && Self::valid_files(&self.examples, false)
+                && Self::valid_files(&self.tests, true),
+            InvalidModelSnafu {
+                reason: String::from("policy package revision has invalid immutable contents")
+            }
+        );
+        self.manifest.validate()?;
+        let expected = PolicyPackageManifest::new(
+            self.manifest.name(),
+            ContentDigest::from_canonical_bytes(&self.policy_config),
+            Self::layer_digests(&self.rules),
+            Self::layer_digests(&self.examples),
+            Self::layer_digests(&self.tests),
+            ContentDigest::from_canonical_bytes(&self.documentation),
+        )?;
+        ensure!(
+            self.manifest == expected,
+            InvalidModelSnafu {
+                reason: String::from("policy package manifest does not match immutable contents")
+            }
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn manifest(&self) -> &PolicyPackageManifest {
+        &self.manifest
+    }
+
+    #[must_use]
+    pub fn policy_config(&self) -> &[u8] {
+        &self.policy_config
+    }
+
+    #[must_use]
+    pub const fn rules(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.rules
+    }
+
+    #[must_use]
+    pub const fn examples(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.examples
+    }
+
+    #[must_use]
+    pub const fn tests(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.tests
+    }
+
+    #[must_use]
+    pub fn documentation(&self) -> &[u8] {
+        &self.documentation
+    }
+
+    fn layer_digests(files: &BTreeMap<String, Vec<u8>>) -> Vec<ContentDigest> {
+        files
+            .values()
+            .map(|contents| ContentDigest::from_canonical_bytes(contents))
+            .collect()
+    }
+
+    fn valid_files(files: &BTreeMap<String, Vec<u8>>, required: bool) -> bool {
+        (!required || !files.is_empty())
+            && files.iter().all(|(name, contents)| {
+                !contents.is_empty()
+                    && !name.is_empty()
+                    && name.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_uppercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'.' | b'-' | b'_')
+                    })
+            })
+    }
+}
+
+impl CanonicalEncoding for PolicyPackageRevision {}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeMap,
+    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -7,7 +8,7 @@ use std::{
 use erebor_runtime_core::{
     ActiveSession, EndpointProjection, FilesystemProjection, ImmutableIdentity, OutputEndpoints,
     RunnerBinding, RunnerCapabilityDocument, RunnerId, RuntimeError, SafePathBinding, SafePathKind,
-    SessionOwner, SessionSpec, WorkloadPrivilegePlan,
+    ScriptInterpreterBinding, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
 };
 use snafu::{OptionExt, ResultExt};
 
@@ -66,6 +67,7 @@ pub struct RunnerAdmissionRequest<'a> {
     session_id: &'a str,
     owner: &'a SessionOwner,
     command: &'a [String],
+    executable_search_path: Option<&'a str>,
     workspace: &'a Path,
     container_image_digest: Option<&'a str>,
     runtime_guard_host_path: &'a Path,
@@ -77,6 +79,7 @@ impl<'a> RunnerAdmissionRequest<'a> {
         session_id: &'a str,
         owner: &'a SessionOwner,
         command: &'a [String],
+        executable_search_path: Option<&'a str>,
         workspace: &'a Path,
         container_image_digest: Option<&'a str>,
         runtime_guard_host_path: &'a Path,
@@ -85,6 +88,7 @@ impl<'a> RunnerAdmissionRequest<'a> {
             session_id,
             owner,
             command,
+            executable_search_path,
             workspace,
             container_image_digest,
             runtime_guard_host_path,
@@ -140,6 +144,48 @@ impl<'request, 'resolver> RunnerAdmissionContext<'request, 'resolver> {
         Self::resolve(&self.request, self.resolver, path, kind)
     }
 
+    pub fn resolve_executable_prefix(
+        &self,
+        path: &Path,
+        maximum_bytes: u64,
+    ) -> Result<(SafePathBinding, Vec<u8>), SessionManagerError> {
+        let resolved = self
+            .resolver
+            .resolve(
+                self.request.owner.uid(),
+                self.request.owner.gid(),
+                path,
+                SafePathKind::Executable,
+            )
+            .context(PathResolutionSnafu {
+                uid: self.request.owner.uid(),
+                gid: self.request.owner.gid(),
+                path: path.to_path_buf(),
+            })?;
+        let binding = resolved.binding().clone();
+        let mut descriptor = resolved.descriptor().try_clone().map_err(|error| {
+            self.invalid(format!(
+                "cloning the held executable descriptor `{}` failed: {error}",
+                path.display()
+            ))
+        })?;
+        let mut prefix = Vec::new();
+        descriptor
+            .by_ref()
+            .take(maximum_bytes.saturating_add(1))
+            .read_to_end(&mut prefix)
+            .map_err(|error| {
+                self.invalid(format!(
+                    "reading the held executable descriptor `{}` failed: {error}",
+                    path.display()
+                ))
+            })?;
+        if prefix.len() as u64 > maximum_bytes {
+            prefix.truncate(maximum_bytes as usize);
+        }
+        Ok((binding, prefix))
+    }
+
     #[must_use]
     pub const fn session_id(&self) -> &str {
         self.request.session_id
@@ -153,6 +199,11 @@ impl<'request, 'resolver> RunnerAdmissionContext<'request, 'resolver> {
     #[must_use]
     pub fn command(&self) -> &[String] {
         self.request.command
+    }
+
+    #[must_use]
+    pub const fn executable_search_path(&self) -> Option<&str> {
+        self.request.executable_search_path
     }
 
     #[must_use]
@@ -183,9 +234,36 @@ pub struct RunnerExecutionAdmission {
     pub workspace: SafePathBinding,
     pub workload_privileges: WorkloadPrivilegePlan,
     pub executable: Option<SafePathBinding>,
+    pub script_interpreters: Vec<ScriptInterpreterBinding>,
     pub container_image: Option<ImmutableIdentity>,
     pub filesystem_projections: Vec<FilesystemProjection>,
     pub endpoint_projections: Vec<EndpointProjection>,
+}
+
+/// Transport-neutral availability around the exact capability document used at
+/// admission. The document remains the sole capability model.
+#[derive(Clone, Debug)]
+pub struct RunnerCapabilityReport {
+    document: RunnerCapabilityDocument,
+    available: bool,
+    unavailable_reason: Option<String>,
+}
+
+impl RunnerCapabilityReport {
+    #[must_use]
+    pub const fn document(&self) -> &RunnerCapabilityDocument {
+        &self.document
+    }
+
+    #[must_use]
+    pub const fn available(&self) -> bool {
+        self.available
+    }
+
+    #[must_use]
+    pub fn unavailable_reason(&self) -> Option<&str> {
+        self.unavailable_reason.as_deref()
+    }
 }
 
 /// The daemon-owned resource operations a runner can select while preparing a
@@ -227,6 +305,8 @@ pub trait RunnerDriver: Send + Sync {
     fn id(&self) -> &RunnerId;
 
     fn inspect(&self) -> Result<RunnerCapabilityDocument, RuntimeError>;
+
+    fn capability_document(&self) -> Result<RunnerCapabilityDocument, RuntimeError>;
 
     fn admit(
         &self,
@@ -313,6 +393,32 @@ impl RunnerRegistry {
     pub fn inspect(&self, id: &RunnerId) -> Result<RunnerCapabilityDocument, SessionManagerError> {
         self.get(id)?.inspect().context(RunnerSnafu)
     }
+
+    pub fn report(&self, id: &RunnerId) -> Result<RunnerCapabilityReport, SessionManagerError> {
+        let runner = self.get(id)?;
+        let document = runner.capability_document().context(RunnerSnafu)?;
+        match runner.inspect() {
+            Ok(inspected) if inspected == document => Ok(RunnerCapabilityReport {
+                document,
+                available: true,
+                unavailable_reason: None,
+            }),
+            Ok(_) => Err(SessionManagerError::InvalidOperation {
+                session_id: String::from("runner-capability"),
+                reason: String::from("runner inspection returned a different capability document"),
+                location: snafu::Location::default(),
+            }),
+            Err(error) => Ok(RunnerCapabilityReport {
+                document,
+                available: false,
+                unavailable_reason: Some(error.to_string()),
+            }),
+        }
+    }
+
+    pub fn reports(&self) -> Result<Vec<RunnerCapabilityReport>, SessionManagerError> {
+        self.runners.keys().map(|id| self.report(id)).collect()
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +431,19 @@ mod tests {
         let registry = RunnerRegistry::compiled_linux_host(RunnerInstallConfig::default())?;
         assert!(registry.get(&RunnerId::new("linux-host")?).is_ok());
         assert!(registry.get(&RunnerId::new("docker")?).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn runner_reports_wrap_the_same_capability_document_used_by_admission(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let registry = RunnerRegistry::compiled_linux_host(RunnerInstallConfig::default())?;
+        let reports = registry.reports()?;
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].document().runner().as_str(), "linux-host");
+        if !reports[0].available() {
+            assert!(reports[0].unavailable_reason().is_some());
+        }
         Ok(())
     }
 }

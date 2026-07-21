@@ -98,16 +98,39 @@ impl SessionRuntimeResources {
         &self,
         spec: &SessionSpec,
         recovering: bool,
-    ) -> Result<(PathBuf, Option<PathBuf>), SessionManagerError> {
+    ) -> Result<(PathBuf, Option<PathBuf>, Vec<PathBuf>), SessionManagerError> {
         let staging = self.staging_path(spec);
         let workspace = staging.join("workspace");
         let executable = spec.executable().map(|_| staging.join("executable"));
+        let interpreters = spec
+            .script_interpreters()
+            .iter()
+            .enumerate()
+            .map(|(index, _binding)| staging.join("interpreters").join(index.to_string()))
+            .collect::<Vec<_>>();
         if recovering {
             self.verify_staging(spec, &workspace, spec.workspace())?;
             if let (Some(path), Some(binding)) = (&executable, spec.executable()) {
+                if self.resolve(spec, binding)?.binding() != binding {
+                    return self.invalid_runtime(
+                        spec,
+                        "executable content or identity changed before recovery",
+                    );
+                }
                 self.verify_staging(spec, path, binding)?;
             }
-            return Ok((workspace, executable));
+            for (path, interpreter) in interpreters.iter().zip(spec.script_interpreters()) {
+                if self.resolve(spec, interpreter.executable())?.binding()
+                    != interpreter.executable()
+                {
+                    return self.invalid_runtime(
+                        spec,
+                        "script interpreter content or identity changed before recovery",
+                    );
+                }
+                self.verify_staging(spec, path, interpreter.executable())?;
+            }
+            return Ok((workspace, executable, interpreters));
         }
 
         let workspace_source = self.resolve(spec, spec.workspace())?;
@@ -128,6 +151,20 @@ impl SessionRuntimeResources {
                 Ok(source)
             })
             .transpose()?;
+        let interpreter_sources = spec
+            .script_interpreters()
+            .iter()
+            .map(|interpreter| {
+                let source = self.resolve(spec, interpreter.executable())?;
+                if source.binding() != interpreter.executable() {
+                    return self.invalid_runtime(
+                        spec,
+                        "script interpreter identity changed after session admission",
+                    );
+                }
+                Ok(source)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         fs::create_dir_all(&staging).context(RuntimeIoSnafu {
             action: "creating daemon-owned session staging directory",
@@ -152,7 +189,25 @@ impl SessionRuntimeResources {
             })?;
             bind_descriptor(source.descriptor(), target, true)?;
         }
-        Ok((workspace, executable))
+        if !interpreters.is_empty() {
+            let interpreter_root = staging.join("interpreters");
+            fs::create_dir(&interpreter_root).context(RuntimeIoSnafu {
+                action: "creating script interpreter staging directory",
+                path: &interpreter_root,
+            })?;
+            for ((target, source), _interpreter) in interpreters
+                .iter()
+                .zip(interpreter_sources.iter())
+                .zip(spec.script_interpreters())
+            {
+                File::create(target).context(RuntimeIoSnafu {
+                    action: "creating script interpreter staging mountpoint",
+                    path: target,
+                })?;
+                bind_descriptor(source.descriptor(), target, true)?;
+            }
+        }
+        Ok((workspace, executable, interpreters))
     }
 
     fn resolve(
@@ -349,7 +404,14 @@ impl SessionRuntimeResources {
 
     fn cleanup_staging(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
         let staging = self.staging_path(spec);
-        for target in [staging.join("executable"), staging.join("workspace")] {
+        let mut targets = vec![staging.join("executable"), staging.join("workspace")];
+        targets.extend(
+            spec.script_interpreters()
+                .iter()
+                .enumerate()
+                .map(|(index, _interpreter)| staging.join("interpreters").join(index.to_string())),
+        );
+        for target in targets {
             match unmount(&target, UnmountFlags::NOFOLLOW) {
                 Ok(()) => {}
                 Err(rustix::io::Errno::INVAL | rustix::io::Errno::NOENT) => {}
@@ -455,9 +517,9 @@ impl SessionRuntime for SessionRuntimeResources {
         spec: &SessionSpec,
         recovering: bool,
     ) -> Result<OutputEndpoints, SessionManagerError> {
-        let (workspace, executable) = self.prepare_staging(spec, recovering)?;
+        let (workspace, executable, interpreters) = self.prepare_staging(spec, recovering)?;
         let _stores = self.output_stores(spec)?;
-        Ok(output_endpoints(spec).with_prepared_execution(workspace, executable))
+        Ok(output_endpoints(spec).with_prepared_execution(workspace, executable, interpreters))
     }
 
     fn start_runtime_guard(

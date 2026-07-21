@@ -15,6 +15,7 @@ use crate::SessionControllerError;
 pub(super) struct PreparedLinuxExecution {
     workspace: File,
     executable: Option<File>,
+    interpreters: Vec<File>,
 }
 
 impl PreparedLinuxExecution {
@@ -48,9 +49,38 @@ impl PreparedLinuxExecution {
                 Ok(executable)
             })
             .transpose()?;
+        if handoff.prepared_interpreters.len() != handoff.spec.script_interpreters().len() {
+            return Err(SessionControllerError::InvalidHandoff {
+                reason: String::from(
+                    "prepared script interpreter descriptors do not match the admitted session",
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        let interpreters = handoff
+            .prepared_interpreters
+            .iter()
+            .map(|path| {
+                let interpreter = open_path(
+                    path,
+                    OFlags::PATH | OFlags::CLOEXEC | OFlags::NOFOLLOW,
+                    "opening admitted script interpreter before namespace isolation",
+                )?;
+                fcntl_setfd(&interpreter, FdFlags::empty())
+                    .map_err(std::io::Error::from)
+                    .map_err(|source| SessionControllerError::Io {
+                        action: "preserving admitted script interpreter across guard launch",
+                        path: path.to_path_buf(),
+                        source,
+                        location: snafu::Location::default(),
+                    })?;
+                Ok(interpreter)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             workspace,
             executable,
+            interpreters,
         })
     }
 
@@ -62,6 +92,16 @@ impl PreparedLinuxExecution {
         let mut command = handoff.spec.command().to_vec();
         if let Some(executable) = &self.executable {
             command[0] = descriptor_path(executable).display().to_string();
+        }
+        for (interpreter, binding) in self
+            .interpreters
+            .iter()
+            .zip(handoff.spec.script_interpreters())
+        {
+            let mut nested = vec![descriptor_path(interpreter).display().to_string()];
+            nested.extend(binding.arguments().iter().cloned());
+            nested.extend(command);
+            command = nested;
         }
         command
     }

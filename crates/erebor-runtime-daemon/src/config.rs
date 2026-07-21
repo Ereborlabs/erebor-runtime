@@ -1,7 +1,8 @@
 use std::{collections::BTreeSet, io::Read, path::Path};
 
 use erebor_runtime_packages::{
-    AgentPackageManifest, CanonicalEncoding, InstallationRecord, PolicySetRevision,
+    AgentPackageManifest, CanonicalEncoding, InstallationRecord, PolicyPackageRevision,
+    PolicySetRevision,
 };
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
@@ -15,6 +16,8 @@ const DEFAULT_MAX_SESSION_OUTPUT_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_SESSION_OUTPUT_ROTATION_BYTES: u64 = 4 * 1024 * 1024;
 const DEFAULT_MAX_DAEMON_LOSS_GRACE_SECONDS: u64 = 300;
 const DEFAULT_SESSION_RETRY_HORIZON_SECONDS: u64 = 24 * 60 * 60;
+const DEFAULT_MAX_POLICY_UPLOAD_BYTES: u64 = 1024 * 1024;
+const DEFAULT_MAX_CONCURRENT_SESSIONS_PER_UID: u32 = 16;
 const MIN_LOG_BYTES: u64 = 4096;
 const MAX_LOG_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_RECORDS: u32 = 4096;
@@ -26,6 +29,7 @@ pub(crate) struct RootCuratedAdmission {
     package: AgentPackageManifest,
     installation: InstallationRecord,
     policy_set: PolicySetRevision,
+    policies: Vec<PolicyPackageRevision>,
 }
 
 impl RootCuratedAdmission {
@@ -34,11 +38,13 @@ impl RootCuratedAdmission {
         package: AgentPackageManifest,
         installation: InstallationRecord,
         policy_set: PolicySetRevision,
+        policies: Vec<PolicyPackageRevision>,
     ) -> Self {
         Self {
             package,
             installation,
             policy_set,
+            policies,
         }
     }
 
@@ -50,6 +56,13 @@ impl RootCuratedAdmission {
                 .package
                 .canonical_digest()
                 .is_ok_and(|digest| self.installation.package_digest() == &digest)
+            && self.policy_set.policy_input_digests().iter().all(|digest| {
+                self.policies.iter().any(|policy| {
+                    policy
+                        .canonical_digest()
+                        .is_ok_and(|candidate| candidate == **digest)
+                })
+            })
     }
 
     pub(crate) fn package(&self) -> &AgentPackageManifest {
@@ -62,6 +75,10 @@ impl RootCuratedAdmission {
 
     pub(crate) fn policy_set(&self) -> &PolicySetRevision {
         &self.policy_set
+    }
+
+    pub(crate) fn policies(&self) -> &[PolicyPackageRevision] {
+        &self.policies
     }
 
     fn identity_key(&self) -> Option<(String, String, String)> {
@@ -95,6 +112,10 @@ pub struct DaemonConfig {
     pub max_daemon_loss_grace_seconds: u64,
     #[serde(default = "default_session_retry_horizon_seconds")]
     pub session_retry_horizon_seconds: u64,
+    #[serde(default = "default_max_policy_upload_bytes")]
+    pub max_policy_upload_bytes: u64,
+    #[serde(default = "default_max_concurrent_sessions_per_uid")]
+    pub max_concurrent_sessions_per_uid: u32,
     #[serde(default)]
     pub(crate) root_curated_admissions: Vec<RootCuratedAdmission>,
 }
@@ -110,6 +131,8 @@ impl Default for DaemonConfig {
             session_output_rotation_bytes: DEFAULT_SESSION_OUTPUT_ROTATION_BYTES,
             max_daemon_loss_grace_seconds: DEFAULT_MAX_DAEMON_LOSS_GRACE_SECONDS,
             session_retry_horizon_seconds: DEFAULT_SESSION_RETRY_HORIZON_SECONDS,
+            max_policy_upload_bytes: DEFAULT_MAX_POLICY_UPLOAD_BYTES,
+            max_concurrent_sessions_per_uid: DEFAULT_MAX_CONCURRENT_SESSIONS_PER_UID,
             root_curated_admissions: Vec::new(),
         }
     }
@@ -146,6 +169,10 @@ impl DaemonConfig {
             || self.max_daemon_loss_grace_seconds == 0
             || self.max_daemon_loss_grace_seconds > 24 * 60 * 60
             || self.session_retry_horizon_seconds == 0
+            || self.max_policy_upload_bytes < 1024
+            || self.max_policy_upload_bytes > 8 * 1024 * 1024
+            || self.max_concurrent_sessions_per_uid == 0
+            || self.max_concurrent_sessions_per_uid > 1024
             || !valid_root_curated_admissions(&self.root_curated_admissions)
         {
             return Err(crate::DaemonError::InvalidConfig {
@@ -162,6 +189,14 @@ impl DaemonConfig {
 
     pub(crate) fn root_curated_admissions(&self) -> &[RootCuratedAdmission] {
         &self.root_curated_admissions
+    }
+
+    pub(crate) const fn max_policy_upload_bytes(&self) -> u64 {
+        self.max_policy_upload_bytes
+    }
+
+    pub(crate) const fn max_concurrent_sessions_per_uid(&self) -> u32 {
+        self.max_concurrent_sessions_per_uid
     }
 }
 
@@ -202,13 +237,22 @@ const fn default_session_retry_horizon_seconds() -> u64 {
     DEFAULT_SESSION_RETRY_HORIZON_SECONDS
 }
 
+const fn default_max_policy_upload_bytes() -> u64 {
+    DEFAULT_MAX_POLICY_UPLOAD_BYTES
+}
+
+const fn default_max_concurrent_sessions_per_uid() -> u32 {
+    DEFAULT_MAX_CONCURRENT_SESSIONS_PER_UID
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::Path;
 
     use erebor_runtime_packages::{
         AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord,
-        PolicySetRevision,
+        PolicyPackageRevision, PolicySetRevision,
     };
 
     use super::{DaemonConfig, RootCuratedAdmission};
@@ -218,8 +262,6 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let config_digest =
             ContentDigest::new("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")?;
-        let policy_digest =
-            ContentDigest::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")?;
         let package = AgentPackageManifest::new(
             "generic-process",
             "generic-process-v1",
@@ -229,8 +271,19 @@ mod tests {
             Vec::new(),
         )?;
         let installation = InstallationRecord::new(1000, package.canonical_digest()?, 1);
-        let policy_set = PolicySetRevision::new(policy_digest, Vec::new(), None)?;
-        let admission = RootCuratedAdmission::new(package, installation, policy_set);
+        let policy = PolicyPackageRevision::new(
+            "host-minimum",
+            b"name = \"host-minimum\"\n".to_vec(),
+            BTreeMap::from([(
+                String::from("terminal.json"),
+                br#"{"rules":[{"id":"allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
+            )]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# Host minimum\n".to_vec(),
+        )?;
+        let policy_set = PolicySetRevision::new(policy.canonical_digest()?, Vec::new(), None)?;
+        let admission = RootCuratedAdmission::new(package, installation, policy_set, vec![policy]);
         let mut config = DaemonConfig {
             root_curated_admissions: vec![admission.clone()],
             ..DaemonConfig::default()

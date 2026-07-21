@@ -222,6 +222,19 @@ impl SessionManager {
         self.runners.inspect(id)
     }
 
+    pub fn runner_reports(
+        &self,
+    ) -> Result<Vec<crate::RunnerCapabilityReport>, SessionManagerError> {
+        self.runners.reports()
+    }
+
+    pub fn runner_report(
+        &self,
+        id: &RunnerId,
+    ) -> Result<crate::RunnerCapabilityReport, SessionManagerError> {
+        self.runners.report(id)
+    }
+
     pub fn admit_runner(
         &self,
         id: &RunnerId,
@@ -1130,6 +1143,12 @@ mod tests {
                 )
         }
 
+        fn capability_document(
+            &self,
+        ) -> Result<RunnerCapabilityDocument, erebor_runtime_core::RuntimeError> {
+            self.inspect()
+        }
+
         fn validate_admission(
             &self,
             _spec: &SessionSpec,
@@ -1163,6 +1182,7 @@ mod tests {
                 workspace: context.workspace().clone(),
                 workload_privileges,
                 executable: None,
+                script_interpreters: Vec::new(),
                 container_image: None,
                 filesystem_projections,
                 endpoint_projections: Vec::new(),
@@ -1297,15 +1317,19 @@ mod tests {
                 1000,
                 SafePathKind::Directory,
             )?,
-            executable: Some(SafePathBinding::new(
-                PathBuf::from("/usr/bin/agent"),
-                1,
-                4,
-                3,
-                1000,
-                1000,
-                SafePathKind::Executable,
-            )?),
+            executable: Some(
+                SafePathBinding::new(
+                    PathBuf::from("/usr/bin/agent"),
+                    1,
+                    4,
+                    3,
+                    1000,
+                    1000,
+                    SafePathKind::Executable,
+                )?
+                .with_content_sha256(digest)?,
+            ),
+            script_interpreters: Vec::new(),
             container_image: None,
             environment: Vec::new(),
             secret_references: Vec::new(),
@@ -1346,6 +1370,7 @@ mod tests {
                 "session-runner-admission",
                 &owner,
                 &command,
+                None,
                 &workspace,
                 None,
                 Path::new("/run/erebor/runtime-interception.sock"),

@@ -10,7 +10,7 @@ use snafu::ensure;
 
 use crate::{error::session_spec::InvalidSnafu, SessionSpecError};
 
-pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 3;
+pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 4;
 pub const RUNNER_CAPABILITY_SCHEMA_VERSION: u32 = 2;
 pub const RUNNER_RECOVERY_SCHEMA_VERSION: u32 = 1;
 
@@ -468,6 +468,8 @@ pub struct SafePathBinding {
     owner_uid: u32,
     owner_gid: u32,
     kind: SafePathKind,
+    #[serde(default)]
+    content_sha256: Option<String>,
 }
 
 impl SafePathBinding {
@@ -489,6 +491,7 @@ impl SafePathBinding {
             owner_uid,
             owner_gid,
             kind,
+            content_sha256: None,
         };
         value.validate()?;
         Ok(value)
@@ -507,7 +510,28 @@ impl SafePathBinding {
                 ),
             }
         );
+        if let Some(digest) = &self.content_sha256 {
+            ensure!(
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')),
+                InvalidSnafu {
+                    field: "safe_path.content_sha256",
+                    reason: String::from("must be a lower-case SHA-256 digest when present"),
+                }
+            );
+        }
         Ok(())
+    }
+
+    pub fn with_content_sha256(
+        mut self,
+        digest: impl Into<String>,
+    ) -> Result<Self, SessionSpecError> {
+        self.content_sha256 = Some(digest.into());
+        self.validate()?;
+        Ok(self)
     }
 
     #[must_use]
@@ -543,6 +567,62 @@ impl SafePathBinding {
     #[must_use]
     pub const fn kind(&self) -> SafePathKind {
         self.kind
+    }
+
+    #[must_use]
+    pub fn content_sha256(&self) -> Option<&str> {
+        self.content_sha256.as_deref()
+    }
+}
+
+/// An interpreter selected from a script shebang during admission. Its
+/// executable identity and arguments are part of the immutable session record.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ScriptInterpreterBinding {
+    executable: SafePathBinding,
+    arguments: Vec<String>,
+}
+
+impl ScriptInterpreterBinding {
+    pub fn new(
+        executable: SafePathBinding,
+        arguments: Vec<String>,
+    ) -> Result<Self, SessionSpecError> {
+        let value = Self {
+            executable,
+            arguments,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn validate(&self) -> Result<(), SessionSpecError> {
+        self.executable.validate()?;
+        ensure!(
+            self.executable.kind() == SafePathKind::Executable
+                && self.executable.content_sha256().is_some()
+                && self
+                    .arguments
+                    .iter()
+                    .all(|argument| !argument.is_empty() && !argument.contains('\0')),
+            InvalidSnafu {
+                field: "script_interpreter",
+                reason: String::from(
+                    "a script interpreter must be a hash-pinned executable with safe arguments",
+                ),
+            }
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn executable(&self) -> &SafePathBinding {
+        &self.executable
+    }
+
+    #[must_use]
+    pub fn arguments(&self) -> &[String] {
+        &self.arguments
     }
 }
 
@@ -994,6 +1074,7 @@ pub struct SessionAdmission {
     pub runner_capability: RunnerCapabilityDocument,
     pub workspace: SafePathBinding,
     pub executable: Option<SafePathBinding>,
+    pub script_interpreters: Vec<ScriptInterpreterBinding>,
     pub container_image: Option<ImmutableIdentity>,
     pub environment: Vec<(String, String)>,
     pub secret_references: Vec<String>,
@@ -1024,6 +1105,7 @@ pub struct SessionSpec {
     runner_capability: RunnerCapabilityDocument,
     workspace: SafePathBinding,
     executable: Option<SafePathBinding>,
+    script_interpreters: Vec<ScriptInterpreterBinding>,
     container_image: Option<ImmutableIdentity>,
     environment: Vec<(String, String)>,
     secret_references: Vec<String>,
@@ -1055,6 +1137,7 @@ impl SessionSpec {
             runner_capability: admission.runner_capability,
             workspace: admission.workspace,
             executable: admission.executable,
+            script_interpreters: admission.script_interpreters,
             container_image: admission.container_image,
             environment: admission.environment,
             secret_references: admission.secret_references,
@@ -1096,6 +1179,18 @@ impl SessionSpec {
         self.executable
             .iter()
             .try_for_each(SafePathBinding::validate)?;
+        self.script_interpreters
+            .iter()
+            .try_for_each(ScriptInterpreterBinding::validate)?;
+        ensure!(
+            self.executable
+                .as_ref()
+                .is_none_or(|binding| binding.content_sha256().is_some()),
+            InvalidSnafu {
+                field: "session_spec.executable.content_sha256",
+                reason: String::from("an admitted executable must retain its held content digest"),
+            }
+        );
         self.package
             .iter()
             .chain(self.installation.iter())
@@ -1173,6 +1268,7 @@ impl SessionSpec {
                     .executable
                     .as_ref()
                     .is_none_or(|binding| binding.kind() == SafePathKind::Executable)
+                && (self.script_interpreters.is_empty() || self.executable.is_some())
                 && self
                     .container_image
                     .as_ref()
@@ -1245,6 +1341,11 @@ impl SessionSpec {
     #[must_use]
     pub fn executable(&self) -> Option<&SafePathBinding> {
         self.executable.as_ref()
+    }
+
+    #[must_use]
+    pub fn script_interpreters(&self) -> &[ScriptInterpreterBinding] {
+        &self.script_interpreters
     }
 
     #[must_use]
@@ -1388,8 +1489,11 @@ mod tests {
         inode: u64,
         kind: SafePathKind,
     ) -> Result<SafePathBinding, Box<dyn std::error::Error>> {
-        SafePathBinding::new(PathBuf::from(value), 1, inode, 1, 1000, 1000, kind)
-            .map_err(Into::into)
+        let binding = SafePathBinding::new(PathBuf::from(value), 1, inode, 1, 1000, 1000, kind)?;
+        if kind == SafePathKind::Executable {
+            return binding.with_content_sha256(digest()).map_err(Into::into);
+        }
+        Ok(binding)
     }
 
     fn admission(mode: DaemonFailureMode) -> Result<SessionAdmission, Box<dyn std::error::Error>> {
@@ -1406,6 +1510,7 @@ mod tests {
             runner_capability: capability()?,
             workspace: path("/workspace", 2, SafePathKind::Directory)?,
             executable: Some(path("/usr/bin/agent", 3, SafePathKind::Executable)?),
+            script_interpreters: Vec::new(),
             container_image: None,
             environment: vec![(String::from("LANG"), String::from("C"))],
             secret_references: vec![String::from("vault://session-token")],
@@ -1481,6 +1586,18 @@ mod tests {
         let decoded: SessionSpec = serde_json::from_value(encoded)?;
 
         assert!(decoded.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn executable_binding_keeps_its_content_digest() -> Result<(), Box<dyn std::error::Error>> {
+        let expected = digest();
+        let binding =
+            path("/usr/bin/agent", 3, SafePathKind::Executable)?.with_content_sha256(&expected)?;
+        assert_eq!(binding.content_sha256(), Some(expected.as_str()));
+        assert!(path("/usr/bin/agent", 3, SafePathKind::Executable)?
+            .with_content_sha256("not-a-digest")
+            .is_err());
         Ok(())
     }
 }
