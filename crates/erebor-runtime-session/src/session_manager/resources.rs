@@ -83,6 +83,17 @@ pub struct SessionRuntimeResources {
     router_factory: Arc<dyn SessionInterceptionRouterFactory>,
 }
 
+/// The daemon-owned mountpoints prepared before a runner starts a workload.
+///
+/// Keeping these paths together makes the staging lifetime explicit instead of
+/// leaking a positional tuple across the runtime boundary.
+struct PreparedStaging {
+    workspace: PathBuf,
+    executable: Option<PathBuf>,
+    interpreters: Vec<PathBuf>,
+    projections: Vec<PreparedFilesystemProjection>,
+}
+
 impl SessionRuntimeResources {
     pub fn new(
         state_root: PathBuf,
@@ -104,15 +115,7 @@ impl SessionRuntimeResources {
         &self,
         spec: &SessionSpec,
         recovering: bool,
-    ) -> Result<
-        (
-            PathBuf,
-            Option<PathBuf>,
-            Vec<PathBuf>,
-            Vec<PreparedFilesystemProjection>,
-        ),
-        SessionManagerError,
-    > {
+    ) -> Result<PreparedStaging, SessionManagerError> {
         let staging = self.staging_path(spec);
         let workspace = staging.join("workspace");
         let executable = spec.executable().map(|_| staging.join("executable"));
@@ -165,7 +168,12 @@ impl SessionRuntimeResources {
                 }
                 self.verify_staging(spec, prepared.staging_path(), projection.source())?;
             }
-            return Ok((workspace, executable, interpreters, projections));
+            return Ok(PreparedStaging {
+                workspace,
+                executable,
+                interpreters,
+                projections,
+            });
         }
 
         let workspace_source = self.resolve(spec, spec.workspace())?;
@@ -284,7 +292,12 @@ impl SessionRuntimeResources {
                 )?;
             }
         }
-        Ok((workspace, executable, interpreters, projections))
+        Ok(PreparedStaging {
+            workspace,
+            executable,
+            interpreters,
+            projections,
+        })
     }
 
     fn resolve(
@@ -600,11 +613,11 @@ impl SessionRuntime for SessionRuntimeResources {
         spec: &SessionSpec,
         recovering: bool,
     ) -> Result<OutputEndpoints, SessionManagerError> {
-        let (workspace, executable, interpreters, projections) = self.prepare_staging(spec, recovering)?;
+        let staging = self.prepare_staging(spec, recovering)?;
         let _stores = self.output_stores(spec)?;
         Ok(output_endpoints(spec)
-            .with_prepared_execution(workspace, executable, interpreters)
-            .with_prepared_filesystem_projections(projections))
+            .with_prepared_execution(staging.workspace, staging.executable, staging.interpreters)
+            .with_prepared_filesystem_projections(staging.projections))
     }
 
     fn start_runtime_guard(

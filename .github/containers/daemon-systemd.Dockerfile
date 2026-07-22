@@ -23,19 +23,24 @@ COPY target/debug/erebor-linux-session-controller \
     /usr/libexec/erebor/erebor-linux-session-controller
 COPY target/debug/erebor-linux-process-guard /usr/libexec/erebor/erebor-linux-process-guard
 COPY target/debug/erebor-path-broker /usr/libexec/erebor/erebor-path-broker
+COPY target/debug/codex-v1-fixture /usr/lib/erebor/codex-v1-fixture
 COPY .github/scripts/daemon-systemd-control-plane.sh \
     /usr/local/lib/erebor/daemon-systemd-control-plane.sh
 COPY .github/scripts/daemon-installed-session-runtime.sh \
     /usr/local/lib/erebor/daemon-installed-session-runtime.sh
+COPY .github/scripts/daemon-phase4-codex-runtime.sh \
+    /usr/local/lib/erebor/daemon-phase4-codex-runtime.sh
 
 RUN chmod 0755 \
         /usr/lib/erebor/erebord \
         /usr/libexec/erebor/erebor-linux-session-controller \
         /usr/libexec/erebor/erebor-linux-process-guard \
         /usr/libexec/erebor/erebor-path-broker \
+        /usr/lib/erebor/codex-v1-fixture \
         /usr/local/bin/erebor \
         /usr/local/lib/erebor/daemon-systemd-control-plane.sh \
-        /usr/local/lib/erebor/daemon-installed-session-runtime.sh
+        /usr/local/lib/erebor/daemon-installed-session-runtime.sh \
+        /usr/local/lib/erebor/daemon-phase4-codex-runtime.sh
 
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]

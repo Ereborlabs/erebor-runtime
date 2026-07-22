@@ -75,11 +75,7 @@ impl SessionInterceptionSetup {
             docker_options,
             linux_host_options,
             browser_cdp_endpoint,
-            SessionResourceLifetime::new(
-                interception_registration,
-                self.backend,
-                supervisor,
-            ),
+            SessionResourceLifetime::new(interception_registration, self.backend, supervisor),
         ))
     }
 

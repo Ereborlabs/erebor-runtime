@@ -637,6 +637,7 @@ dependencies = [
  "erebor-runtime-error",
  "erebor-runtime-events",
  "erebor-runtime-ipc",
+ "erebor-runtime-packages",
  "erebor-runtime-policy",
  "erebor-runtime-session",
  "erebor-runtime-telemetry",

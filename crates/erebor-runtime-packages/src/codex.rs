@@ -225,15 +225,17 @@ impl CodexManagedArtifacts {
                 && self.requirements_path.starts_with("/run/erebor/codex/")
                 && self.managed_hook_path.starts_with("/run/erebor/codex/")
                 && self.shell_startup_path.starts_with("/run/erebor/codex/")
-                && self
-                    .sandbox_launcher_path
-                    .as_ref()
-                    .is_none_or(|path| normalized_absolute(path) && path.starts_with("/run/erebor/codex/"))
+                && self.sandbox_launcher_path.as_ref().is_none_or(
+                    |path| normalized_absolute(path) && path.starts_with("/run/erebor/codex/")
+                )
                 && (self.sandbox_launcher.is_some() == self.sandbox_launcher_path.is_some())
                 && self.managed_hook_path.parent() == self.shell_startup_path.parent()
-                && self.managed_hook_source.path.parent() == self.shell_startup_source.path.parent(),
+                && self.managed_hook_source.path.parent()
+                    == self.shell_startup_source.path.parent(),
             InvalidModelSnafu {
-                reason: String::from("Codex managed artifact targets must remain inside the private Erebor runtime")
+                reason: String::from(
+                    "Codex managed artifact targets must remain inside the private Erebor runtime"
+                )
             }
         );
         self.requirements_source.validate()?;

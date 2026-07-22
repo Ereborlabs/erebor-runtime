@@ -65,7 +65,7 @@ impl Cli {
 enum Command {
     /// Start the configured session surfaces.
     Start(start::StartArgs),
-    /// Enroll a locally verified agent package installation.
+    /// Load a locally verified agent executable into the daemon-owned inventory.
     Agent(agent::AgentArgs),
     /// Create, start, and attach to one daemon-owned Codex session by local alias.
     Run(session::CodexRunArgs),

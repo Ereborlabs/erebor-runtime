@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::{
@@ -457,8 +457,8 @@ mod tests {
     };
 
     #[test]
-    fn structured_input_denies_sensitive_methods_without_forwarding()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn structured_input_denies_sensitive_methods_without_forwarding(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let registered = registered_service()?;
         let input = registered.service.accept_input(
             "session-test",
@@ -476,8 +476,8 @@ mod tests {
     }
 
     #[test]
-    fn structured_output_reassembles_frames_and_binds_the_prompt_turn()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn structured_output_reassembles_frames_and_binds_the_prompt_turn(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let registered = registered_service()?;
         let input = registered.service.accept_input(
             "session-test",
@@ -492,12 +492,10 @@ mod tests {
         registered
             .service
             .observe_output_chunk("session-test", 2, b"\"turnId\":\"turn-1\"}}\n")?;
-        assert!(
-            registered
-                .context_dag
-                .exact_binding("thread-1", "turn-1")?
-                .is_some()
-        );
+        assert!(registered
+            .context_dag
+            .exact_binding("thread-1", "turn-1")?
+            .is_some());
         Ok(())
     }
 
@@ -510,27 +508,23 @@ mod tests {
     }
 
     #[test]
-    fn structured_output_rejects_non_protocol_stdout_before_it_can_be_exposed()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn structured_output_rejects_non_protocol_stdout_before_it_can_be_exposed(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let registered = registered_service()?;
-        assert!(
-            registered
-                .service
-                .observe_output_chunk("session-test", 1, b"not-json\n")
-                .is_err()
-        );
-        assert!(
-            registered
-                .service
-                .observe_output_chunk("session-test", 2, b"{\"jsonrpc\":\"1.0\"}\n")
-                .is_err()
-        );
+        assert!(registered
+            .service
+            .observe_output_chunk("session-test", 1, b"not-json\n")
+            .is_err());
+        assert!(registered
+            .service
+            .observe_output_chunk("session-test", 2, b"{\"jsonrpc\":\"1.0\"}\n")
+            .is_err());
         Ok(())
     }
 
     #[test]
-    fn failed_forwards_and_json_rpc_cancellation_release_the_correlation_ledger()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn failed_forwards_and_json_rpc_cancellation_release_the_correlation_ledger(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let registered = registered_service()?;
         let request = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"model/list\"}\n";
         assert!(matches!(
@@ -538,15 +532,13 @@ mod tests {
             CodexAppServerInput::Forward(_)
         ));
         registered.service.abort_input("session-test", request)?;
-        assert!(
-            registered
-                .service
-                .ledger("session-test")?
-                .lock()
-                .map_err(|_error| "ledger lock is poisoned")?
-                .pending
-                .is_empty()
-        );
+        assert!(registered
+            .service
+            .ledger("session-test")?
+            .lock()
+            .map_err(|_error| "ledger lock is poisoned")?
+            .pending
+            .is_empty());
 
         assert!(matches!(
             registered.service.accept_input("session-test", request)?,
@@ -559,15 +551,13 @@ mod tests {
             )?,
             CodexAppServerInput::Forward(_)
         ));
-        assert!(
-            registered
-                .service
-                .ledger("session-test")?
-                .lock()
-                .map_err(|_error| "ledger lock is poisoned")?
-                .pending
-                .is_empty()
-        );
+        assert!(registered
+            .service
+            .ledger("session-test")?
+            .lock()
+            .map_err(|_error| "ledger lock is poisoned")?
+            .pending
+            .is_empty());
         Ok(())
     }
 

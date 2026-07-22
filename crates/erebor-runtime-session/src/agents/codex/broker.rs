@@ -24,15 +24,15 @@ use erebor_runtime_ipc::{
     },
     SyncFrameCodec,
 };
-use snafu::{ensure, ResultExt};
 use erebor_runtime_packages::{CodexHookEventName, CodexPackageDefinition};
+use snafu::{ensure, ResultExt};
 
 use super::{
-    CodexAppServerRegistration,
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
-    CodexCommandDispatch, CodexGuardLifecycleHandler, CodexInvocationLeaseOwner,
-    CodexInvocationLeaseProfile, CodexInvocationLeaseTrust, CodexLeaseRuntimeEvidence,
-    CodexManagedSession, CodexNativeHookEvent, CodexPromptReconciliation, CodexSessionError,
+    CodexAppServerRegistration, CodexCommandDispatch, CodexGuardLifecycleHandler,
+    CodexInvocationLeaseOwner, CodexInvocationLeaseProfile, CodexInvocationLeaseTrust,
+    CodexLeaseRuntimeEvidence, CodexManagedSession, CodexNativeHookEvent,
+    CodexPromptReconciliation, CodexSessionError,
 };
 
 const BROKER_SOCKET: &str = "codex-hook.sock";
@@ -75,21 +75,26 @@ impl CodexSessionHookRegistration {
         spec: &SessionSpec,
         definition: &CodexPackageDefinition,
     ) -> Result<Self, CodexSessionError> {
-        let executable = spec.executable().ok_or_else(|| CodexSessionError::IncompatibleProfile {
-            reason: String::from("Codex session has no descriptor-verified executable"),
-            location: snafu::Location::default(),
-        })?;
+        let executable =
+            spec.executable()
+                .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                    reason: String::from("Codex session has no descriptor-verified executable"),
+                    location: snafu::Location::default(),
+                })?;
         let managed_session = CodexManagedSession::from_package(
             spec.session_id().as_str(),
             executable.requested_path().to_path_buf(),
             definition,
         )?;
-        let dispatch = definition.hook_contract().command_dispatch().map(|dispatch| {
-            CodexCommandDispatch::new(
-                dispatch.program().to_owned(),
-                dispatch.shell().display().to_string(),
-            )
-        });
+        let dispatch = definition
+            .hook_contract()
+            .command_dispatch()
+            .map(|dispatch| {
+                CodexCommandDispatch::new(
+                    dispatch.program().to_owned(),
+                    dispatch.shell().display().to_string(),
+                )
+            });
         let trust = dispatch
             .map(CodexInvocationLeaseTrust::with_command_dispatch)
             .unwrap_or_default();
@@ -114,15 +119,9 @@ impl CodexSessionHookRegistration {
         ));
         let context_root = spec.output().root().join("codex-context");
         let repository = if context_root.exists() {
-            erebor_runtime_context::ContextRepository::open(
-                &context_root,
-                DaemonContextMetadata,
-            )
+            erebor_runtime_context::ContextRepository::open(&context_root, DaemonContextMetadata)
         } else {
-            erebor_runtime_context::ContextRepository::init(
-                &context_root,
-                DaemonContextMetadata,
-            )
+            erebor_runtime_context::ContextRepository::init(&context_root, DaemonContextMetadata)
         }
         .map_err(|error| CodexSessionError::IncompatibleProfile {
             reason: format!(
@@ -180,14 +179,14 @@ impl erebor_runtime_context::CommitMetadataSource for DaemonContextMetadata {
         let seconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |duration| duration.as_secs() as i64);
-        let time = erebor_runtime_context::CommitTime::new(seconds, 0)
-            .map_err(|error| Box::new(error) as erebor_runtime_context::CommitMetadataSourceError)?;
-        let signature = erebor_runtime_context::CommitSignature::new(
-            "erebord",
-            "erebord@localhost",
-            time,
-        )
-        .map_err(|error| Box::new(error) as erebor_runtime_context::CommitMetadataSourceError)?;
+        let time = erebor_runtime_context::CommitTime::new(seconds, 0).map_err(|error| {
+            Box::new(error) as erebor_runtime_context::CommitMetadataSourceError
+        })?;
+        let signature =
+            erebor_runtime_context::CommitSignature::new("erebord", "erebord@localhost", time)
+                .map_err(|error| {
+                    Box::new(error) as erebor_runtime_context::CommitMetadataSourceError
+                })?;
         Ok(erebor_runtime_context::CommitMetadata::new(
             signature.clone(),
             signature,
@@ -224,7 +223,8 @@ impl CodexHookService {
                         thread::spawn(move || {
                             let _result = stream.set_read_timeout(Some(Duration::from_secs(10)));
                             let _result = stream.set_write_timeout(Some(Duration::from_secs(10)));
-                            let hello_envelope = CodexHookBrokerProtocol::read_envelope(&mut stream);
+                            let hello_envelope =
+                                CodexHookBrokerProtocol::read_envelope(&mut stream);
                             let Ok(hello_envelope) = hello_envelope else {
                                 return;
                             };
@@ -243,7 +243,9 @@ impl CodexHookService {
                                     &mut stream,
                                     &hello_envelope,
                                     false,
-                                    String::from("no active Codex hook registration for this session"),
+                                    String::from(
+                                        "no active Codex hook registration for this session",
+                                    ),
                                 );
                                 return;
                             };
@@ -252,7 +254,11 @@ impl CodexHookService {
                                 registration.reconciliation,
                                 registration.lease_owner,
                             )
-                            .serve_after_hello(&mut stream, hello_envelope, hello);
+                            .serve_after_hello(
+                                &mut stream,
+                                hello_envelope,
+                                hello,
+                            );
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1078,7 +1084,10 @@ mod tests {
 
     fn package(schema_sha256: &str) -> Result<CodexPackageDefinition, Box<dyn std::error::Error>> {
         let artifact = |path: &str, digest: char| {
-            CodexArtifact::new(path.into(), ContentDigest::new(digest.to_string().repeat(64))?)
+            CodexArtifact::new(
+                path.into(),
+                ContentDigest::new(digest.to_string().repeat(64))?,
+            )
         };
         let artifacts = CodexManagedArtifacts::new(
             artifact("/var/lib/erebor/codex/requirements.toml", 'a')?,
@@ -1102,7 +1111,10 @@ mod tests {
             artifacts,
             CodexHookContract::new(
                 CodexHookShell::Direct,
-                vec![CodexHookExec::InstalledExecutable, CodexHookExec::ManagedHook],
+                vec![
+                    CodexHookExec::InstalledExecutable,
+                    CodexHookExec::ManagedHook,
+                ],
                 vec![CodexHookEventSchema::new(
                     CodexHookEventName::SessionStart,
                     ContentDigest::new(schema_sha256.to_owned())?,

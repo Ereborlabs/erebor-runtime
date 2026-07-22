@@ -1,17 +1,17 @@
 use std::error::Error;
 
 use erebor_runtime_ipc::{
-    EreborIpcFrame, FRAME_VERSION, HEADER_LEN, IpcProtocolError, MAX_PAYLOAD_LEN,
     v1::{
         AllowDecision, CodexAppServerInputCloseRequest, CodexAppServerInputRequest, DecisionKind,
         DenyDecision, Envelope, GuardHello, GuardLifecycleEvent, GuardLifecycleEventKind,
         GuardLifecycleReply, GuardLifecycleReplyKind, InterceptionDecision, InterceptionOperation,
-        InterceptionRequest, InterceptionSource, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
+        InterceptionRequest, InterceptionSource, MediateDecision, ProcessExecOperation,
+        SessionEvidenceRequest, SessionInputRequest, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
         KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT,
         KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
-        KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST, MediateDecision,
-        PROTOCOL_VERSION, ProcessExecOperation, SessionEvidenceRequest, SessionInputRequest,
+        KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST, PROTOCOL_VERSION,
     },
+    EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
 };
 
 #[test]
@@ -208,8 +208,8 @@ fn public_api_round_trips_guard_lifecycle_hold_and_release() -> Result<(), Box<d
 }
 
 #[test]
-fn frame_header_is_generic_and_future_envelope_kinds_survive_round_trip()
--> Result<(), Box<dyn Error>> {
+fn frame_header_is_generic_and_future_envelope_kinds_survive_round_trip(
+) -> Result<(), Box<dyn Error>> {
     let envelope = Envelope {
         protocol_version: PROTOCOL_VERSION,
         message_id: 9,

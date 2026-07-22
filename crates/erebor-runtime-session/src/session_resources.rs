@@ -6,8 +6,7 @@ use erebor_runtime_core::{
 
 use crate::{
     interception_backend::SessionInterceptionBackendBundle,
-    runtime_interception_broker::SessionInterceptionRegistration,
-    SessionExecutionError,
+    runtime_interception_broker::SessionInterceptionRegistration, SessionExecutionError,
 };
 
 #[derive(Default)]

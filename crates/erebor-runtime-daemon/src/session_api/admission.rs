@@ -4,9 +4,9 @@ use std::{
 };
 
 use erebor_runtime_core::{
-    DaemonFailureMode, EvidenceRequirement, ImmutableIdentity, OutputPlan,
+    DaemonFailureMode, EvidenceRequirement, FilesystemProjection, ImmutableIdentity, OutputPlan,
     OutputStreamRequirements, RunRequest, RunnerCapabilityDocument, RunnerId, SessionAdmission,
-    SessionOwner, SessionSpec, FilesystemProjection,
+    SessionOwner, SessionSpec,
 };
 use erebor_runtime_events::SessionId;
 use erebor_runtime_ipc::v1::SessionCreateRequest;

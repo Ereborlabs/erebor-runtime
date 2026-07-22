@@ -18,8 +18,6 @@ pub use resources::{
 };
 
 use crate::{
-    DurableSessionRecord, DurableStreamCursor, InputLease, InputLeaseManager, SessionAlias,
-    SessionManagerError, SessionPruneResult, SessionRepository, SessionRepositoryError, StreamKind,
     error::session_manager::{
         ActiveHandleLockSnafu, ActiveHandleMissingSnafu, CapabilityChangedSnafu, OutputSnafu,
         RepositorySnafu, RunnerSnafu, StateLockSnafu,
@@ -27,6 +25,8 @@ use crate::{
     runners::{
         RunnerAdmissionRequest, RunnerExecutionAdmission, RunnerPreparation, RunnerRegistry,
     },
+    DurableSessionRecord, DurableStreamCursor, InputLease, InputLeaseManager, SessionAlias,
+    SessionManagerError, SessionPruneResult, SessionRepository, SessionRepositoryError, StreamKind,
 };
 
 pub(crate) use self::resources::SessionRuntime;
@@ -1104,8 +1104,8 @@ mod tests {
         fs::File,
         path::{Path, PathBuf},
         sync::{
-            Arc, Mutex,
             atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc, Mutex,
         },
         time::Duration,
     };
@@ -1127,9 +1127,9 @@ mod tests {
     };
 
     use super::{
-        DurableStreamCursor, RunnerPreparation, RunnerRegistry, SessionManager,
-        SessionManagerError, SessionRepository, StreamKind, ValidatedStartConstraints,
-        output_endpoints, resources::SessionRuntime,
+        output_endpoints, resources::SessionRuntime, DurableStreamCursor, RunnerPreparation,
+        RunnerRegistry, SessionManager, SessionManagerError, SessionRepository, StreamKind,
+        ValidatedStartConstraints,
     };
 
     type TestError = Box<dyn std::error::Error>;
@@ -1363,14 +1363,12 @@ mod tests {
             self.state.admissions.fetch_add(1, Ordering::SeqCst);
             let workload_privileges = WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)
                 .map_err(|source| context.invalid(source.to_string()))?;
-            let filesystem_projections = vec![
-                FilesystemProjection::new(
-                    context.workspace().clone(),
-                    PathBuf::from("/workspace"),
-                    false,
-                )
-                .map_err(|source| context.invalid(source.to_string()))?,
-            ];
+            let filesystem_projections = vec![FilesystemProjection::new(
+                context.workspace().clone(),
+                PathBuf::from("/workspace"),
+                false,
+            )
+            .map_err(|source| context.invalid(source.to_string()))?];
             Ok(RunnerExecutionAdmission {
                 workspace: context.workspace().clone(),
                 workload_privileges,
@@ -1601,8 +1599,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_creates_without_starting_and_starts_exactly_once()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_creates_without_starting_and_starts_exactly_once(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime, spec) = fixture(&root)?;
         let created = manager.create(spec)?;
@@ -1618,11 +1616,9 @@ mod tests {
             erebor_runtime_core::SessionLifecycleState::Running
         );
         assert_eq!(state.starts.load(Ordering::SeqCst), 1);
-        assert!(
-            manager
-                .start(1000, "session-manager-test", &start_constraints(), false)
-                .is_err()
-        );
+        assert!(manager
+            .start(1000, "session-manager-test", &start_constraints(), false)
+            .is_err());
         assert_eq!(state.starts.load(Ordering::SeqCst), 1);
         assert_eq!(state.preparations.load(Ordering::SeqCst), 1);
         assert_eq!(runtime.preparations.load(Ordering::SeqCst), 1);
@@ -1638,8 +1634,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_forwards_only_current_interactive_lease_input_to_the_active_runner()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_forwards_only_current_interactive_lease_input_to_the_active_runner(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, _runtime, spec) = interactive_fixture(&root)?;
         manager.create(spec)?;
@@ -1657,28 +1653,24 @@ mod tests {
             lease.client_id(),
             b"echo governed\n",
         )?;
-        assert!(
-            manager
-                .write_input(
-                    1000,
-                    "session-manager-test",
-                    "other-lease",
-                    lease.client_id(),
-                    b"not accepted",
-                )
-                .is_err()
-        );
-        assert!(
-            manager
-                .write_input(
-                    1000,
-                    "session-manager-test",
-                    lease.lease_id(),
-                    lease.client_id(),
-                    &[0_u8; 4097],
-                )
-                .is_err()
-        );
+        assert!(manager
+            .write_input(
+                1000,
+                "session-manager-test",
+                "other-lease",
+                lease.client_id(),
+                b"not accepted",
+            )
+            .is_err());
+        assert!(manager
+            .write_input(
+                1000,
+                "session-manager-test",
+                lease.lease_id(),
+                lease.client_id(),
+                &[0_u8; 4097],
+            )
+            .is_err());
         assert_eq!(
             *state
                 .inputs
@@ -1690,8 +1682,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_forwards_only_current_structured_lease_input_to_a_non_tty_runner()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_forwards_only_current_structured_lease_input_to_a_non_tty_runner(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, _runtime, spec) = fixture(&root)?;
         manager.create(spec)?;
@@ -1709,17 +1701,15 @@ mod tests {
             lease.client_id(),
             b"{\"jsonrpc\":\"2.0\",\"id\":1}\n",
         )?;
-        assert!(
-            manager
-                .write_structured_input(
-                    1000,
-                    "session-manager-test",
-                    "other-lease",
-                    lease.client_id(),
-                    b"{\"jsonrpc\":\"2.0\"}\n",
-                )
-                .is_err()
-        );
+        assert!(manager
+            .write_structured_input(
+                1000,
+                "session-manager-test",
+                "other-lease",
+                lease.client_id(),
+                b"{\"jsonrpc\":\"2.0\"}\n",
+            )
+            .is_err());
         assert_eq!(
             *state
                 .inputs
@@ -1734,33 +1724,29 @@ mod tests {
             lease.client_id(),
         )?;
         assert!(state.input_closed.load(Ordering::SeqCst));
-        assert!(
-            manager
-                .write_structured_input(
-                    1000,
-                    "session-manager-test",
-                    lease.lease_id(),
-                    lease.client_id(),
-                    b"{\"jsonrpc\":\"2.0\",\"id\":2}\n",
-                )
-                .is_err()
-        );
+        assert!(manager
+            .write_structured_input(
+                1000,
+                "session-manager-test",
+                lease.lease_id(),
+                lease.client_id(),
+                b"{\"jsonrpc\":\"2.0\",\"id\":2}\n",
+            )
+            .is_err());
         Ok(())
     }
 
     #[test]
-    fn manager_marks_runtime_preparation_failure_and_cleans_once()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_marks_runtime_preparation_failure_and_cleans_once(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime, spec) = fixture(&root)?;
         runtime.fail_prepare.store(true, Ordering::SeqCst);
         manager.create(spec)?;
 
-        assert!(
-            manager
-                .start(1000, "session-manager-test", &start_constraints(), false)
-                .is_err()
-        );
+        assert!(manager
+            .start(1000, "session-manager-test", &start_constraints(), false)
+            .is_err());
         assert_eq!(
             manager.inspect(1000, "session-manager-test")?.state(),
             erebor_runtime_core::SessionLifecycleState::Failed
@@ -1779,11 +1765,9 @@ mod tests {
         state.fail_start.store(true, Ordering::SeqCst);
         manager.create(spec)?;
 
-        assert!(
-            manager
-                .start(1000, "session-manager-test", &start_constraints(), false)
-                .is_err()
-        );
+        assert!(manager
+            .start(1000, "session-manager-test", &start_constraints(), false)
+            .is_err());
         assert_eq!(
             manager.inspect(1000, "session-manager-test")?.state(),
             erebor_runtime_core::SessionLifecycleState::Failed
@@ -1805,28 +1789,24 @@ mod tests {
         *current = capability("2", false)?;
         drop(current);
 
-        assert!(
-            manager
-                .start(1000, "session-manager-test", &start_constraints(), false)
-                .is_err()
-        );
+        assert!(manager
+            .start(1000, "session-manager-test", &start_constraints(), false)
+            .is_err());
         assert_eq!(state.starts.load(Ordering::SeqCst), 0);
         Ok(())
     }
 
     #[test]
-    fn manager_requires_current_root_constraint_validation_before_start()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_requires_current_root_constraint_validation_before_start(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime, spec) = fixture(&root)?;
         manager.create(spec)?;
         let stale = ValidatedStartConstraints::new(1000, "session-manager-test", 0);
 
-        assert!(
-            manager
-                .start(1000, "session-manager-test", &stale, false)
-                .is_err()
-        );
+        assert!(manager
+            .start(1000, "session-manager-test", &stale, false)
+            .is_err());
         assert_eq!(
             manager.inspect(1000, "session-manager-test")?.state(),
             erebor_runtime_core::SessionLifecycleState::Created
@@ -1837,8 +1817,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_recovers_by_stable_binding_and_runner_then_removes()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_recovers_by_stable_binding_and_runner_then_removes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime_state, spec) = fixture(&root)?;
         manager.create(spec)?;
@@ -1887,8 +1867,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_recovery_preparation_failure_interrupts_without_recovering_runner()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_recovery_preparation_failure_interrupts_without_recovering_runner(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime_state, spec) = fixture(&root)?;
         manager.create(spec)?;
@@ -1948,8 +1928,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_recovery_enforces_terminate_mode_before_returning_control()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_recovery_enforces_terminate_mode_before_returning_control(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime_state, spec) =
             fixture_with_mode(&root, DaemonFailureMode::Terminate)?;
@@ -1981,8 +1961,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_recovery_marks_starting_without_a_binding_interrupted()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_recovery_marks_starting_without_a_binding_interrupted(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime_state, spec) = fixture(&root)?;
         let created = manager.create(spec)?;

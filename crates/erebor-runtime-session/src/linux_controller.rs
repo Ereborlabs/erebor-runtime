@@ -9,13 +9,13 @@ use erebor_runtime_core::DaemonFailureMode;
 use snafu::ResultExt;
 
 use crate::{
-    SessionControllerError,
     controller_support::{linux::LinuxWorkload, output::HelperOutput, workload::WorkloadExit},
     error::session_controller::{CommandChannelSnafu, InvalidHandoffSnafu, ProtocolSnafu},
     runners::linux::{
-        LINUX_CONTROLLER_PROTOCOL_VERSION, LinuxControllerCommand, LinuxControllerEvent,
-        LinuxControllerHandoff,
+        LinuxControllerCommand, LinuxControllerEvent, LinuxControllerHandoff,
+        LINUX_CONTROLLER_PROTOCOL_VERSION,
     },
+    SessionControllerError,
 };
 
 pub fn run_linux_session_controller() -> Result<(), SessionControllerError> {

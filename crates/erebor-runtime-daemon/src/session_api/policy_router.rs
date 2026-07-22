@@ -317,8 +317,8 @@ mod tests {
     }
 
     #[test]
-    fn mediation_fails_closed_without_a_generic_mediation_owner()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn mediation_fails_closed_without_a_generic_mediation_owner(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let handler = StoredPolicyProcessExecHandler {
             session_id: erebor_runtime_events::SessionId::new("session-1"),
             policy_set_digest: "a".repeat(64),

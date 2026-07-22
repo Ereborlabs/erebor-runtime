@@ -16,14 +16,14 @@ use erebor_runtime_core::{
 };
 use erebor_runtime_ipc::v1::{
     AgentInstallResponse, CodexAppServerAttachResponse, CodexAppServerInputCloseResponse,
-    CodexAppServerInputResponse, CodexRunRequest, KIND_CODEX_APP_SERVER_ATTACH_RESPONSE,
-    KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_SET_ALIAS_RECORD, KIND_POLICY_SET_RECORD,
-    KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE,
-    KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD,
-    PolicyPackageRecord, PolicySetAliasRecord, PolicySetRecord, SessionAliasListResponse,
-    SessionAliasRecord, SessionAttachResponse, SessionCreateRequest, SessionCreateResponse,
-    SessionInputLeaseResponse, SessionInputResponse, SessionListResponse, SessionPruneResponse,
-    SessionRecord,
+    CodexAppServerInputResponse, CodexRunRequest, PolicyPackageRecord, PolicySetAliasRecord,
+    PolicySetRecord, SessionAliasListResponse, SessionAliasRecord, SessionAttachResponse,
+    SessionCreateRequest, SessionCreateResponse, SessionInputLeaseResponse, SessionInputResponse,
+    SessionListResponse, SessionPruneResponse, SessionRecord,
+    KIND_CODEX_APP_SERVER_ATTACH_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
+    KIND_POLICY_SET_ALIAS_RECORD, KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD,
+    KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE,
+    KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD,
 };
 use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact};
 use erebor_runtime_session::{
@@ -37,16 +37,16 @@ use snafu::ResultExt;
 use uuid::Uuid;
 
 use crate::{
-    DaemonPaths, Result,
     config::DaemonConfig,
     error::SessionSnafu,
     idempotency::{MutationIntent, MutationResponse},
     local_store::DaemonLocalStore,
     path_broker::DescriptorBroker,
+    DaemonPaths, Result,
 };
 
 use self::{
-    admission::{AdmissionContext, admit, parse_request},
+    admission::{admit, parse_request, AdmissionContext},
     policy_router::StoredPolicyInterceptionRouterFactory,
     response::session_record,
 };
@@ -1685,8 +1685,8 @@ mod tests {
     use super::DaemonSessionApi;
 
     #[test]
-    fn session_reference_requires_an_exact_or_unique_owner_scoped_prefix()
-    -> Result<(), crate::DaemonError> {
+    fn session_reference_requires_an_exact_or_unique_owner_scoped_prefix(
+    ) -> Result<(), crate::DaemonError> {
         let sessions = ["session-a111", "session-b222"];
         assert_eq!(
             DaemonSessionApi::choose_session_id("session-a", sessions.into_iter())?,

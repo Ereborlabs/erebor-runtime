@@ -730,8 +730,10 @@ fn broker_resolve(arguments: &BrokerArguments) -> Result<(OwnedFd, BrokerRespons
         }
         .fail();
     }
-    let content_sha256 = if matches!(arguments.kind, SafePathKind::Executable | SafePathKind::File)
-    {
+    let content_sha256 = if matches!(
+        arguments.kind,
+        SafePathKind::Executable | SafePathKind::File
+    ) {
         Some(digest_descriptor(&descriptor, &arguments.path)?)
     } else {
         None

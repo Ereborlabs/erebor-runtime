@@ -9,9 +9,11 @@ publish = false
 [dependencies]
 clap.workspace = true
 erebor-runtime-client = { path = "../erebor-runtime-client" }
+erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
+erebor-runtime-packages = { path = "../erebor-runtime-packages" }
 erebor-runtime-session = { path = "../erebor-runtime-session" }
 futures-util.workspace = true
 serde_json.workspace = true
@@ -23,7 +25,6 @@ rustix = { version = "1.1.4", features = ["fs", "process", "stdio"] }
 [dev-dependencies]
 erebor-runtime-audit = { path = "../erebor-runtime-audit" }
 erebor-runtime-context = { path = "../erebor-runtime-context", features = ["test-support"] }
-erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 sha2.workspace = true
@@ -32,6 +33,12 @@ tempfile = "3.23.0"
 [[bin]]
 name = "codex-linux-v1-test-hook"
 path = "src/bin/codex_linux_v1_test_hook.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "codex-v1-fixture"
+path = "src/bin/codex_v1_fixture.rs"
 test = false
 bench = false
 

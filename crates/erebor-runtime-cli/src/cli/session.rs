@@ -336,7 +336,7 @@ impl<'a> SessionCommandOwner<'a> {
                     }
                     StructuredJsonlEvent::Failed(source) => {
                         return Err(CliError::Terminal {
-                            source: source.into(),
+                            source,
                             location: snafu::Location::default(),
                         });
                     }

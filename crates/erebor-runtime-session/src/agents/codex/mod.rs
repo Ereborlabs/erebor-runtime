@@ -12,8 +12,8 @@ mod reconciliation;
 mod ticket;
 
 pub(crate) use adapter::CodexV1Adapter;
-pub use app_server::{CodexAppServerInput, CodexAppServerService, MAX_APP_SERVER_FRAME_BYTES};
 pub(crate) use app_server::CodexAppServerRegistration;
+pub use app_server::{CodexAppServerInput, CodexAppServerService, MAX_APP_SERVER_FRAME_BYTES};
 pub use broker::{CodexHookService, CodexSessionHookRegistration};
 pub(crate) use context::{CodexContextDag, CodexScopeContextBinding};
 pub use error::CodexSessionError;

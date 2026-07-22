@@ -4,7 +4,7 @@ use std::{
     thread,
 };
 
-use rustix::termios::{OptionalActions, Termios, tcgetattr, tcsetattr};
+use rustix::termios::{tcgetattr, tcsetattr, OptionalActions, Termios};
 
 use crate::error::CliError;
 
@@ -214,7 +214,7 @@ fn split_terminal_input(input: &[u8], pending_detach_prefix: &mut bool) -> Termi
 
 #[cfg(test)]
 mod tests {
-    use super::{DETACH_PREFIX, DETACH_SUFFIX, split_terminal_input};
+    use super::{split_terminal_input, DETACH_PREFIX, DETACH_SUFFIX};
 
     #[test]
     fn detach_escape_is_local_and_other_bytes_are_preserved() {

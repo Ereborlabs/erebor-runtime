@@ -288,14 +288,12 @@ impl RunnerDriver for LinuxRunnerDriver {
         // is not a separate namespace projection, so do not claim a `/workspace`
         // mount that the controller never created.
         let filesystem_projections = Vec::new();
-        let endpoint_projections = vec![
-            EndpointProjection::new(
-                "runtime-guard",
-                context.runtime_guard_host_path().to_path_buf(),
-                PathBuf::from("/run/erebor/runtime-interception.sock"),
-            )
-            .map_err(|source| context.invalid(source.to_string()))?,
-        ];
+        let endpoint_projections = vec![EndpointProjection::new(
+            "runtime-guard",
+            context.runtime_guard_host_path().to_path_buf(),
+            PathBuf::from("/run/erebor/runtime-interception.sock"),
+        )
+        .map_err(|source| context.invalid(source.to_string()))?];
         Ok(RunnerExecutionAdmission {
             workspace: context.workspace().clone(),
             workload_privileges,
@@ -1008,8 +1006,8 @@ mod tests {
     };
 
     use super::{
-        CONTROLLER_PROGRAM, DEFAULT_CONTROLLER_PATH, LinuxRecovery, LinuxRunnerDriver, RUNNER_ID,
-        decode_recovery, encode_recovery,
+        decode_recovery, encode_recovery, LinuxRecovery, LinuxRunnerDriver, CONTROLLER_PROGRAM,
+        DEFAULT_CONTROLLER_PATH, RUNNER_ID,
     };
     use crate::{
         ResolvedSessionPath, RunnerAdmissionRequest, RunnerInstallConfig, RunnerRegistry,
@@ -1040,8 +1038,8 @@ mod tests {
     }
 
     #[test]
-    fn linux_driver_owns_its_installation_program_names_and_defaults()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn linux_driver_owns_its_installation_program_names_and_defaults(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let default = LinuxRunnerDriver::from_install_config(&RunnerInstallConfig::default())?;
         assert_eq!(
             default.controller_path,
@@ -1059,8 +1057,8 @@ mod tests {
     }
 
     #[test]
-    fn linux_driver_round_trips_its_opaque_versioned_recovery_value()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn linux_driver_round_trips_its_opaque_versioned_recovery_value(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let expected = LinuxRecovery {
             workload_identity: String::from("linux:pid=42:start=99"),
             controller_pid: 41,
@@ -1088,8 +1086,8 @@ mod tests {
     }
 
     #[test]
-    fn linux_admission_pins_a_script_interpreter_and_its_shebang_argument()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn linux_admission_pins_a_script_interpreter_and_its_shebang_argument(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
         let script = root.path().join("agent-script");
         std::fs::write(&script, b"#!/bin/sh -eu\necho governed\n")?;

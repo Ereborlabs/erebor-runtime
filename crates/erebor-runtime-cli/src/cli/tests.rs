@@ -59,6 +59,44 @@ fn accepts_daemon_owned_codex_run_and_generic_run() {
 }
 
 #[test]
+fn agent_load_is_the_only_public_codex_enrollment_verb() {
+    let load = Cli::try_parse_from([
+        "erebor",
+        "agent",
+        "load",
+        "codex-v1-fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--from",
+        "/opt/codex-v1-fixture",
+    ]);
+    let stale_install = Cli::try_parse_from([
+        "erebor",
+        "agent",
+        "install",
+        "codex-v1-fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--from",
+        "/opt/codex-v1-fixture",
+    ]);
+
+    assert!(load.is_ok());
+    assert!(stale_install.is_err());
+}
+
+#[test]
+fn codex_aliases_do_not_accept_raw_arguments() {
+    let raw_argv = Cli::try_parse_from([
+        "erebor",
+        "run",
+        "--policy",
+        "fixture",
+        "codex",
+        "--",
+        "--escape-daemon-entrypoint",
+    ]);
+
+    assert!(raw_argv.is_err());
+}
+
+#[test]
 fn generic_session_run_accepts_admitted_tty_request() {
     let run = Cli::try_parse_from([
         "erebor",

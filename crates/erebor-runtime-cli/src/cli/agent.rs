@@ -18,8 +18,8 @@ pub(super) struct AgentArgs {
 impl AgentArgs {
     pub(super) fn display(&self) -> String {
         match &self.command {
-            AgentCommand::Install(args) => format!(
-                "agent install {} --from {}",
+            AgentCommand::Load(args) => format!(
+                "agent load {} --from {}",
                 args.package_reference,
                 args.from.display()
             ),
@@ -29,12 +29,12 @@ impl AgentArgs {
 
 #[derive(Debug, Subcommand)]
 enum AgentCommand {
-    /// Enroll a caller-provided Codex executable against a root-curated release.
-    Install(AgentInstallArgs),
+    /// Load a caller-provided Codex executable into the verified local agent inventory.
+    Load(AgentLoadArgs),
 }
 
 #[derive(Debug, Args)]
-struct AgentInstallArgs {
+struct AgentLoadArgs {
     /// Exact root-curated package reference: NAME@sha256:LOWERCASE_DIGEST.
     #[arg(value_parser = parse_non_empty_string)]
     package_reference: String,
@@ -59,12 +59,12 @@ impl<'a> AgentCommandOwner<'a> {
             .build()
             .context(DaemonRuntimeSnafu)?;
         match &self.args.command {
-            AgentCommand::Install(args) => {
+            AgentCommand::Load(args) => {
                 let response = runtime
-                    .block_on(DaemonClient::local().agent_install_codex(
+                    .block_on(DaemonClient::local().agent_load_codex(
                         &args.package_reference,
                         args.from.display().to_string(),
-                        &format!("agent-install-{}", Uuid::new_v4()),
+                        &format!("agent-load-{}", Uuid::new_v4()),
                     ))
                     .context(DaemonClientSnafu)?;
                 println!("package_digest={}", response.package_digest);

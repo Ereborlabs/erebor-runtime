@@ -2,17 +2,15 @@ use std::net::SocketAddr;
 
 use erebor_runtime_cdp::BrowserCdpSurface;
 use erebor_runtime_core::{
-    RuntimeConfig, SessionAdoptPlan, SessionInterceptionOperation,
-    SessionRunPlan, SessionRunnerKind, SessionSurfaceDefinition, SessionSurfaceKind,
-    SessionSurfaceLaunchPlan, SessionSurfaceLauncher,
+    RuntimeConfig, SessionAdoptPlan, SessionInterceptionOperation, SessionRunPlan,
+    SessionRunnerKind, SessionSurfaceDefinition, SessionSurfaceKind, SessionSurfaceLaunchPlan,
+    SessionSurfaceLauncher,
 };
 use erebor_runtime_filesystem::LinuxOverlaySessionView;
 use snafu::ResultExt;
 
 use crate::{
-    error::{
-        FilesystemSurfaceSnafu, GuardConfigSnafu, InvalidConfigSnafu, RuntimeSnafu,
-    },
+    error::{FilesystemSurfaceSnafu, GuardConfigSnafu, InvalidConfigSnafu, RuntimeSnafu},
     interception_backend::{FileOperationInterceptionInput, SessionInterceptionBackendBundle},
     interception_setup::SessionInterceptionSetup,
     policies::read_policy_set,
@@ -35,12 +33,7 @@ pub(crate) fn start_session_side_resources(
     let start_plan = config
         .surface_start_plan_for_session(plan)
         .context(InvalidConfigSnafu)?;
-    start_session_side_resources_from_start_plan(
-        config,
-        plan,
-        start_plan,
-        prepared_session,
-    )
+    start_session_side_resources_from_start_plan(config, plan, start_plan, prepared_session)
 }
 
 pub(crate) fn start_adopt_session_side_resources(

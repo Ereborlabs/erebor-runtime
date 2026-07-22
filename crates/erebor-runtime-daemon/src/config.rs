@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, io::Read, path::{Component, Path, PathBuf}};
+use std::{
+    collections::BTreeSet,
+    io::Read,
+    path::{Component, Path, PathBuf},
+};
 
 use erebor_runtime_core::AgentAdapterDescriptor;
 use erebor_runtime_ipc::MAX_PAYLOAD_LEN;
@@ -115,19 +119,6 @@ pub(crate) struct RootCuratedCodexPackage {
 }
 
 impl RootCuratedCodexPackage {
-    #[cfg(test)]
-    pub(crate) fn new(
-        package: AgentPackageManifest,
-        definition: CodexPackageDefinition,
-        trust_root: PathBuf,
-    ) -> Self {
-        Self {
-            package,
-            definition,
-            trust_root,
-        }
-    }
-
     fn validate(&self) -> bool {
         self.package.validate().is_ok()
             && self.definition.validate().is_ok()
@@ -190,7 +181,10 @@ impl RootCuratedCodexPackage {
 fn normalized_absolute(path: &Path) -> bool {
     path.is_absolute()
         && !path.components().any(|component| {
-            matches!(component, Component::CurDir | Component::ParentDir | Component::Prefix(_))
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_)
+            )
         })
 }
 

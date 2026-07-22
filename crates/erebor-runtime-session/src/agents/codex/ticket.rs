@@ -56,7 +56,10 @@ impl CodexManagedProfile {
         Self {
             id: definition.release_id().to_owned(),
             executable: executable.clone(),
-            managed_hook_path: definition.managed_artifacts().managed_hook_path().to_path_buf(),
+            managed_hook_path: definition
+                .managed_artifacts()
+                .managed_hook_path()
+                .to_path_buf(),
             hook_exec_history: definition
                 .hook_contract()
                 .exec_history()
@@ -98,8 +101,13 @@ impl CodexManagedProfile {
         &self.hook_exec_history
     }
 
-    pub(crate) fn event_schema(&self, event: &CodexHookEventName) -> Option<&CodexManagedEventSchema> {
-        self.event_schemas.iter().find(|schema| &schema.event == event)
+    pub(crate) fn event_schema(
+        &self,
+        event: &CodexHookEventName,
+    ) -> Option<&CodexManagedEventSchema> {
+        self.event_schemas
+            .iter()
+            .find(|schema| &schema.event == event)
     }
 }
 
@@ -158,8 +166,7 @@ impl CodexManagedSession {
         &self,
         peer: HookPeerEvidence,
     ) -> Result<CodexHookTicket, CodexSessionError> {
-        let runtime =
-            LinuxHookPeerInspector::runtime_evidence(&peer, self.profile.executable())?;
+        let runtime = LinuxHookPeerInspector::runtime_evidence(&peer, self.profile.executable())?;
         let pid = i32::try_from(peer.observed_pid).map_err(|_error| CodexSessionError::Pidfd {
             pid: i32::MIN,
             source: std::io::Error::from(std::io::ErrorKind::InvalidInput),
@@ -186,7 +193,6 @@ impl CodexManagedSession {
             Some(runtime),
         )
     }
-
 }
 
 #[derive(Clone, Default)]
@@ -721,5 +727,4 @@ mod tests {
         }
         Ok(())
     }
-
 }

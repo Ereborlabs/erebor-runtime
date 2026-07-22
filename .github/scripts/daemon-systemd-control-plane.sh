@@ -173,3 +173,7 @@ await_service
 EREBOR_INSTALLED_SESSION_USER="$service_user" \
 EREBOR_INSTALLED_SESSION_USER_TWO="$service_user_two" \
 bash /usr/local/lib/erebor/daemon-installed-session-runtime.sh
+
+EREBOR_INSTALLED_SESSION_USER="$service_user" \
+EREBOR_INSTALLED_SESSION_USER_TWO="$service_user_two" \
+bash /usr/local/lib/erebor/daemon-phase4-codex-runtime.sh

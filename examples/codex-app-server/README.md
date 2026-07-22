@@ -36,7 +36,7 @@ the `codex` and (when certified) `codex-app-server` aliases available.
 package_ref='codex-v1@sha256:<64-lowercase-hex-digest>'
 codex_bin="$HOME/.local/bin/codex"
 
-erebor agent install "$package_ref" --from "$codex_bin"
+erebor agent load "$package_ref" --from "$codex_bin"
 ```
 
 Expected output names the immutable package and installation digests, followed

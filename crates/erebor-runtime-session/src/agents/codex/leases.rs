@@ -1777,11 +1777,9 @@ mod tests {
                 .0,
             SessionInterceptionDecision::Allow
         );
-        assert!(
-            owner
-                .physical_effect_decision(&file_request(42, "/home/user/.codex/state.sqlite"))
-                .is_none()
-        );
+        assert!(owner
+            .physical_effect_decision(&file_request(42, "/home/user/.codex/state.sqlite"))
+            .is_none());
         Ok(())
     }
 

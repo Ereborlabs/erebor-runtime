@@ -10,9 +10,9 @@ use sha2::{Digest, Sha256};
 use snafu::ResultExt;
 
 use crate::{
-    Result,
     config::DaemonConfig,
     error::{IdempotencyCapacitySnafu, IdempotencyConflictSnafu, IoSnafu},
+    Result,
 };
 use erebor_runtime_core::{ActiveSessionSignal, SessionSpec};
 use erebor_runtime_packages::{PolicyPackageRevision, VerifiedLocalArtifact};

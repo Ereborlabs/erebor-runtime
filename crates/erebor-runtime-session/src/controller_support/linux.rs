@@ -13,24 +13,24 @@ use std::{
 mod prepared;
 
 use erebor_runtime_core::ActiveSessionSignal;
-use rustix::process::{Pid, Signal, kill_process_group};
+use rustix::process::{kill_process_group, Pid, Signal};
 #[allow(deprecated)]
 use rustix::thread::unshare;
 use rustix::{
-    fs::{Mode, OFlags, openat},
-    mount::{MountFlags, MountPropagationFlags, mount, mount_bind, mount_change, mount_remount},
+    fs::{openat, Mode, OFlags},
+    mount::{mount, mount_bind, mount_change, mount_remount, MountFlags, MountPropagationFlags},
     process::{ioctl_tiocsctty, setsid},
-    pty::{OpenptFlags, grantpt, ioctl_tiocgptpeer, openpt, unlockpt},
+    pty::{grantpt, ioctl_tiocgptpeer, openpt, unlockpt, OpenptFlags},
     termios::tcsetpgrp,
     thread::UnshareFlags,
 };
 
-use crate::{SessionControllerError, StreamKind, runners::linux::LinuxControllerHandoff};
+use crate::{runners::linux::LinuxControllerHandoff, SessionControllerError, StreamKind};
 
 use self::prepared::PreparedLinuxExecution;
 use super::{
     output::HelperOutput,
-    workload::{OutputFailureMonitor, WorkloadExit, child_exit, pump_output, wait_child},
+    workload::{child_exit, pump_output, wait_child, OutputFailureMonitor, WorkloadExit},
 };
 
 pub(crate) struct LinuxWorkload {

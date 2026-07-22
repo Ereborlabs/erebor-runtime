@@ -9,7 +9,7 @@ use crate::{DaemonClient, Result};
 impl DaemonClient {
     /// Enroll one caller-provided Codex executable against a root-curated
     /// release. The daemon, not this client, resolves and verifies the path.
-    pub async fn agent_install_codex(
+    pub async fn agent_load_codex(
         &self,
         package_reference: impl Into<String>,
         source_path: impl Into<String>,
