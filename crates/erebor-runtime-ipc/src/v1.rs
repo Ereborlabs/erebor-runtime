@@ -10,12 +10,12 @@ use prost::Message;
 use sha2::{Digest, Sha256};
 use snafu::ResultExt;
 
+use crate::EreborIpcFrame;
 use crate::error::{
     DecodePayloadSnafu, DuplicateHeaderSnafu, EmptyHeaderValueSnafu, EncodePayloadSnafu,
     HeaderNotAllowedSnafu, HeaderTooLongSnafu, PayloadKindMismatchSnafu, TooManyHeadersSnafu,
     UnsupportedProtocolVersionSnafu,
 };
-use crate::EreborIpcFrame;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 pub const KIND_GUARD_HELLO: &str = "erebor.runtime.ipc.v1.GuardHello";
@@ -74,6 +74,18 @@ pub const KIND_SESSION_INPUT_LEASE_RESPONSE: &str =
     "erebor.runtime.ipc.v1.SessionInputLeaseResponse";
 pub const KIND_SESSION_INPUT_REQUEST: &str = "erebor.runtime.ipc.v1.SessionInputRequest";
 pub const KIND_SESSION_INPUT_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionInputResponse";
+pub const KIND_CODEX_APP_SERVER_ATTACH_REQUEST: &str =
+    "erebor.runtime.ipc.v1.CodexAppServerAttachRequest";
+pub const KIND_CODEX_APP_SERVER_ATTACH_RESPONSE: &str =
+    "erebor.runtime.ipc.v1.CodexAppServerAttachResponse";
+pub const KIND_CODEX_APP_SERVER_INPUT_REQUEST: &str =
+    "erebor.runtime.ipc.v1.CodexAppServerInputRequest";
+pub const KIND_CODEX_APP_SERVER_INPUT_RESPONSE: &str =
+    "erebor.runtime.ipc.v1.CodexAppServerInputResponse";
+pub const KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST: &str =
+    "erebor.runtime.ipc.v1.CodexAppServerInputCloseRequest";
+pub const KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE: &str =
+    "erebor.runtime.ipc.v1.CodexAppServerInputCloseResponse";
 pub const KIND_SESSION_PRUNE_REQUEST: &str = "erebor.runtime.ipc.v1.SessionPruneRequest";
 pub const KIND_SESSION_PRUNE_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionPruneResponse";
 pub const KIND_SESSION_ALIAS_SET_REQUEST: &str = "erebor.runtime.ipc.v1.SessionAliasSetRequest";
@@ -273,7 +285,7 @@ pub(crate) mod fixtures {
         AllowDecision, DecisionKind, DenyDecision, EnvVar, GuardHello, HookEvent, HookEventKind,
         HookHello, HookHelloAck, HookPeerEvidence, HookRejection, HookRejectionCode, HookResult,
         InterceptionDecision, InterceptionOperation, InterceptionRequest, InterceptionSource,
-        MediateDecision, PipeIdentity, ProcessExecOperation, RequestedEndpoint, PROTOCOL_VERSION,
+        MediateDecision, PROTOCOL_VERSION, PipeIdentity, ProcessExecOperation, RequestedEndpoint,
     };
 
     pub(crate) fn guard_hello() -> GuardHello {
@@ -472,12 +484,13 @@ mod tests {
     use crate::{EreborIpcFrame, IpcProtocolError};
 
     use super::{
-        fixtures, DaemonReloadRequest, DecisionKind, Envelope, EnvelopeServiceFamily, GuardHello,
-        Header, HookEvent, HookEventKind, HookHello, HookHelloAck, HookPeerEvidence, HookRejection,
-        HookResult, InterceptionDecision, InterceptionRequest, EREBOR_IDEMPOTENCY_KEY_HEADER,
-        KIND_DAEMON_RELOAD_REQUEST, KIND_GUARD_HELLO, KIND_HOOK_EVENT, KIND_HOOK_HELLO,
-        KIND_HOOK_HELLO_ACK, KIND_HOOK_PEER_EVIDENCE, KIND_HOOK_REJECTION, KIND_HOOK_RESULT,
-        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, PROTOCOL_VERSION,
+        DaemonReloadRequest, DecisionKind, EREBOR_IDEMPOTENCY_KEY_HEADER, Envelope,
+        EnvelopeServiceFamily, GuardHello, Header, HookEvent, HookEventKind, HookHello,
+        HookHelloAck, HookPeerEvidence, HookRejection, HookResult, InterceptionDecision,
+        InterceptionRequest, KIND_DAEMON_RELOAD_REQUEST, KIND_GUARD_HELLO, KIND_HOOK_EVENT,
+        KIND_HOOK_HELLO, KIND_HOOK_HELLO_ACK, KIND_HOOK_PEER_EVIDENCE, KIND_HOOK_REJECTION,
+        KIND_HOOK_RESULT, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, PROTOCOL_VERSION,
+        fixtures,
     };
 
     #[test]
@@ -522,8 +535,8 @@ mod tests {
     }
 
     #[test]
-    fn interception_request_fixture_round_trips_through_generic_envelope(
-    ) -> Result<(), Box<dyn Error>> {
+    fn interception_request_fixture_round_trips_through_generic_envelope()
+    -> Result<(), Box<dyn Error>> {
         let fixture = fixtures::interception_request();
         let envelope = Envelope::wrap_message(2, 1, KIND_INTERCEPTION_REQUEST, &fixture)?;
         let encoded = envelope.into_frame()?.encode()?;
@@ -539,8 +552,8 @@ mod tests {
     }
 
     #[test]
-    fn all_interception_decision_fixtures_round_trip_through_envelope_frames(
-    ) -> Result<(), Box<dyn Error>> {
+    fn all_interception_decision_fixtures_round_trip_through_envelope_frames()
+    -> Result<(), Box<dyn Error>> {
         for (expected_kind, fixture) in [
             (DecisionKind::Allow, fixtures::allow_decision()),
             (DecisionKind::Deny, fixtures::deny_decision()),
@@ -590,8 +603,8 @@ mod tests {
     }
 
     #[test]
-    fn daemon_idempotency_header_is_limited_to_mutations_and_fingerprint_excludes_transport_ids(
-    ) -> Result<(), Box<dyn Error>> {
+    fn daemon_idempotency_header_is_limited_to_mutations_and_fingerprint_excludes_transport_ids()
+    -> Result<(), Box<dyn Error>> {
         let mut first =
             Envelope::wrap_message(17, 0, KIND_DAEMON_RELOAD_REQUEST, &DaemonReloadRequest {})?;
         first.headers = vec![Header {
@@ -617,28 +630,34 @@ mod tests {
             ]
         );
 
-        assert!(first
-            .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: false })
-            .is_err());
-        assert!(first
-            .validate_headers(EnvelopeServiceFamily::RuntimeGuard)
-            .is_err());
+        assert!(
+            first
+                .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: false })
+                .is_err()
+        );
+        assert!(
+            first
+                .validate_headers(EnvelopeServiceFamily::RuntimeGuard)
+                .is_err()
+        );
         assert!(first.validate_headers(EnvelopeServiceFamily::Hook).is_err());
         Ok(())
     }
 
     #[test]
-    fn envelope_headers_reject_identity_metadata_duplicates_and_unbounded_values(
-    ) -> Result<(), Box<dyn Error>> {
+    fn envelope_headers_reject_identity_metadata_duplicates_and_unbounded_values()
+    -> Result<(), Box<dyn Error>> {
         let mut envelope =
             Envelope::wrap_message(1, 0, KIND_DAEMON_RELOAD_REQUEST, &DaemonReloadRequest {})?;
         envelope.headers = vec![Header {
             key: String::from("caller-uid"),
             value: String::from("0"),
         }];
-        assert!(envelope
-            .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: true })
-            .is_err());
+        assert!(
+            envelope
+                .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: true })
+                .is_err()
+        );
 
         envelope.headers = vec![
             Header {
@@ -650,17 +669,21 @@ mod tests {
                 value: String::from("retry-2"),
             },
         ];
-        assert!(envelope
-            .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: true })
-            .is_err());
+        assert!(
+            envelope
+                .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: true })
+                .is_err()
+        );
 
         envelope.headers = vec![Header {
             key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_string(),
             value: "a".repeat(super::MAX_HEADER_VALUE_LEN + 1),
         }];
-        assert!(envelope
-            .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: true })
-            .is_err());
+        assert!(
+            envelope
+                .validate_headers(EnvelopeServiceFamily::DaemonControl { mutating: true })
+                .is_err()
+        );
         Ok(())
     }
 

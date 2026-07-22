@@ -3,8 +3,10 @@ mod policy_router;
 mod response;
 
 use std::{
+    collections::BTreeSet,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
+    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -13,35 +15,38 @@ use erebor_runtime_core::{
     SafePathBinding, SafePathKind, SessionLifecycleState, SessionOwner, SessionSpec,
 };
 use erebor_runtime_ipc::v1::{
-    AgentInstallResponse, CodexRunRequest, PolicyPackageRecord, PolicySetAliasRecord,
-    PolicySetRecord, SessionAliasListResponse, SessionAliasRecord, SessionAttachResponse,
-    SessionCreateRequest, SessionCreateResponse, SessionInputLeaseResponse, SessionInputResponse,
-    SessionListResponse, SessionPruneResponse, SessionRecord, KIND_POLICY_PACKAGE_RECORD,
-    KIND_POLICY_SET_ALIAS_RECORD, KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD,
-    KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE,
-    KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD,
+    AgentInstallResponse, CodexAppServerAttachResponse, CodexAppServerInputCloseResponse,
+    CodexAppServerInputResponse, CodexRunRequest, KIND_CODEX_APP_SERVER_ATTACH_RESPONSE,
+    KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_SET_ALIAS_RECORD, KIND_POLICY_SET_RECORD,
+    KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE,
+    KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD,
+    PolicyPackageRecord, PolicySetAliasRecord, PolicySetRecord, SessionAliasListResponse,
+    SessionAliasRecord, SessionAttachResponse, SessionCreateRequest, SessionCreateResponse,
+    SessionInputLeaseResponse, SessionInputResponse, SessionListResponse, SessionPruneResponse,
+    SessionRecord,
 };
 use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact};
 use erebor_runtime_session::{
-    AgentAdapterRegistry, CodexAppServerService, CodexHookService, DurableSessionRecord, RunnerAdmissionRequest, RunnerInstallConfig,
-    RunnerRegistry, SessionManager, SessionManagerError, SessionRepository, SessionRepositoryError,
-    SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
+    AgentAdapterRegistry, CodexAppServerService, CodexHookService, DurableSessionRecord,
+    RunnerAdmissionRequest, RunnerInstallConfig, RunnerRegistry, SessionManager,
+    SessionManagerError, SessionRepository, SessionRepositoryError, SessionRuntimeResources,
+    StreamKind, ValidatedStartConstraints,
 };
 use prost::Message;
 use snafu::ResultExt;
 use uuid::Uuid;
 
 use crate::{
+    DaemonPaths, Result,
     config::DaemonConfig,
     error::SessionSnafu,
     idempotency::{MutationIntent, MutationResponse},
     local_store::DaemonLocalStore,
     path_broker::DescriptorBroker,
-    DaemonPaths, Result,
 };
 
 use self::{
-    admission::{admit, parse_request, AdmissionContext},
+    admission::{AdmissionContext, admit, parse_request},
     policy_router::StoredPolicyInterceptionRouterFactory,
     response::session_record,
 };
@@ -56,6 +61,7 @@ pub(crate) struct DaemonSessionApi {
     adapters: AgentAdapterRegistry,
     codex_hook_service: Arc<CodexHookService>,
     codex_app_server_service: Arc<CodexAppServerService>,
+    codex_app_server_output_monitors: Arc<Mutex<BTreeSet<String>>>,
 }
 
 pub(crate) struct VerifiedCodexInstallation {
@@ -102,10 +108,12 @@ impl DaemonSessionApi {
         local_store.seed_root_curated(config.root_curated_admissions())?;
         local_store.seed_root_curated_codex_packages(config.root_curated_codex_packages())?;
         let codex_hook_service = Arc::new(CodexHookService::start(runtime_root.clone()).map_err(
-            |error| crate::error::InvalidRequestSnafu {
-                reason: format!("starting the daemon-owned Codex hook service failed: {error}"),
-            }
-            .build(),
+            |error| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("starting the daemon-owned Codex hook service failed: {error}"),
+                }
+                .build()
+            },
         )?);
         let codex_app_server_service = Arc::new(CodexAppServerService::default());
         let runtime = SessionRuntimeResources::new(
@@ -133,6 +141,7 @@ impl DaemonSessionApi {
             adapters,
             codex_hook_service,
             codex_app_server_service,
+            codex_app_server_output_monitors: Arc::new(Mutex::new(BTreeSet::new())),
         })
     }
 
@@ -217,23 +226,21 @@ impl DaemonSessionApi {
                 }
                 .build()
             })?;
-            let projections = self.codex_filesystem_projections(
-                owner_uid,
-                owner_gid,
-                package_digest,
-                config,
-            )?;
-            runner_admission
-                .endpoint_projections
-                .push(EndpointProjection::new(
+            let projections =
+                self.codex_filesystem_projections(owner_uid, owner_gid, package_digest, config)?;
+            runner_admission.endpoint_projections.push(
+                EndpointProjection::new(
                     "codex-hook",
                     self.codex_hook_service.endpoint().to_path_buf(),
                     PathBuf::from(CodexHookService::session_endpoint()),
                 )
-                .map_err(|error| crate::error::InvalidRequestSnafu {
-                    reason: error.to_string(),
-                }
-                .build())?);
+                .map_err(|error| {
+                    crate::error::InvalidRequestSnafu {
+                        reason: error.to_string(),
+                    }
+                    .build()
+                })?,
+            );
             projections
         } else {
             Vec::new()
@@ -369,6 +376,22 @@ impl DaemonSessionApi {
                 }
                 .build()
             })?;
+        if entrypoint.app_server_stdio() && request.tty {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "the certified Codex App Server entrypoint must not use a TTY",
+                ),
+            }
+            .fail();
+        }
+        if !entrypoint.app_server_stdio() && !request.tty {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "the certified interactive Codex entrypoint requires a daemon-owned TTY",
+                ),
+            }
+            .fail();
+        }
         let mut command = vec![artifact.path().display().to_string()];
         command.extend(entrypoint.argv_suffix().iter().cloned());
         let policy_set_digest = self
@@ -488,19 +511,30 @@ impl DaemonSessionApi {
         package_digest: &str,
         config: &DaemonConfig,
     ) -> Result<Vec<FilesystemProjection>> {
-        let package = config.root_curated_codex_package(package_digest).ok_or_else(|| {
-            crate::error::InvalidRequestSnafu {
+        let package = config
+            .root_curated_codex_package(package_digest)
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
                 reason: String::from(
                     "Codex package is not present in the active root-curated daemon configuration",
                 ),
             }
             .build()
-        })?;
+            })?;
         let artifacts = package.definition().managed_artifacts();
         let mut sources = vec![
-            (artifacts.requirements_source(), artifacts.requirements_path()),
-            (artifacts.managed_hook_source(), artifacts.managed_hook_path()),
-            (artifacts.shell_startup_source(), artifacts.shell_startup_path()),
+            (
+                artifacts.requirements_source(),
+                artifacts.requirements_path(),
+            ),
+            (
+                artifacts.managed_hook_source(),
+                artifacts.managed_hook_path(),
+            ),
+            (
+                artifacts.shell_startup_source(),
+                artifacts.shell_startup_path(),
+            ),
         ];
         if let (Some(source), Some(target)) = (
             artifacts.sandbox_launcher(),
@@ -630,6 +664,11 @@ impl DaemonSessionApi {
                 request_input_lease,
                 client_instance_id,
             } => self.attach(*uid, session_id, *request_input_lease, client_instance_id),
+            MutationIntent::CodexAppServerAttach {
+                uid,
+                session_id,
+                client_instance_id,
+            } => self.attach_codex_app_server(*uid, session_id, client_instance_id),
             MutationIntent::SessionInputLeaseRenew {
                 uid,
                 session_id,
@@ -869,9 +908,23 @@ impl DaemonSessionApi {
         maximum_records: usize,
     ) -> Result<erebor_runtime_session::DurableStreamCursor> {
         let session_id = self.resolve_session_reference(uid, session_id)?;
-        self.manager
+        let page = self
+            .manager
             .stream(uid, &session_id, kind, after_sequence, maximum_records)
-            .context(SessionSnafu)
+            .context(SessionSnafu)?;
+        if kind == StreamKind::Stdout && self.is_codex_app_server(uid, &session_id)? {
+            for record in page.records() {
+                self.codex_app_server_service
+                    .observe_output_chunk(&session_id, record.sequence(), record.data())
+                    .map_err(|error| {
+                        crate::error::InvalidRequestSnafu {
+                            reason: format!("Codex App Server output is invalid: {error}"),
+                        }
+                        .build()
+                    })?;
+            }
+        }
+        Ok(page)
     }
 
     pub(crate) fn has_unresolved_sessions(&self) -> Result<bool> {
@@ -979,7 +1032,16 @@ impl DaemonSessionApi {
     }
 
     pub(crate) fn reconcile(&self) -> Result<Vec<DurableSessionRecord>> {
-        self.manager.reconcile().context(SessionSnafu)
+        let records = self.manager.reconcile().context(SessionSnafu)?;
+        for record in &records {
+            if !record.state().is_terminal() {
+                self.monitor_codex_app_server_output(
+                    record.spec().owner().uid(),
+                    record.spec().session_id().as_str(),
+                )?;
+            }
+        }
+        Ok(records)
     }
 
     fn create(&self, spec: SessionSpec) -> Result<MutationResponse> {
@@ -1018,6 +1080,7 @@ impl DaemonSessionApi {
             .manager
             .start(uid, &session_id, constraints, resume_pending)
             .context(SessionSnafu)?;
+        self.monitor_codex_app_server_output(uid, &session_id)?;
         message(KIND_SESSION_RECORD, &self.record(&record))
     }
 
@@ -1059,6 +1122,14 @@ impl DaemonSessionApi {
             .manager
             .remove(uid, &session_id, force)
             .context(SessionSnafu)?;
+        self.codex_app_server_service
+            .unregister(&session_id)
+            .map_err(|error| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("removing the Codex App Server output ledger failed: {error}"),
+                }
+                .build()
+            })?;
         message(KIND_SESSION_RECORD, &self.record(&record))
     }
 
@@ -1078,6 +1149,34 @@ impl DaemonSessionApi {
         message(
             KIND_SESSION_ATTACH_RESPONSE,
             &SessionAttachResponse {
+                session_id,
+                read_only: lease.is_none(),
+                input_lease_id: lease
+                    .as_ref()
+                    .map_or_else(String::new, |value| value.lease_id().to_owned()),
+                input_lease_expires_unix_ms: lease
+                    .as_ref()
+                    .map_or(0, |value| value.expires_unix_ms()),
+            },
+        )
+    }
+
+    fn attach_codex_app_server(
+        &self,
+        uid: u32,
+        session_id: &str,
+        client_instance_id: &str,
+    ) -> Result<MutationResponse> {
+        let session_id = self.resolve_session_reference(uid, session_id)?;
+        self.require_codex_app_server(uid, &session_id)?;
+        let outcome = self
+            .manager
+            .attach_structured_input(uid, &session_id, client_instance_id)
+            .context(SessionSnafu)?;
+        let lease = outcome.lease();
+        message(
+            KIND_CODEX_APP_SERVER_ATTACH_RESPONSE,
+            &CodexAppServerAttachResponse {
                 session_id,
                 read_only: lease.is_none(),
                 input_lease_id: lease
@@ -1158,6 +1257,249 @@ impl DaemonSessionApi {
         })
     }
 
+    pub(crate) fn codex_app_server_input(
+        &self,
+        uid: u32,
+        session_id: &str,
+        lease_id: &str,
+        client_instance_id: &str,
+        frame: &[u8],
+    ) -> Result<CodexAppServerInputResponse> {
+        let session_id = self.resolve_session_reference(uid, session_id)?;
+        self.require_codex_app_server(uid, &session_id)?;
+        let input = self
+            .codex_app_server_service
+            .accept_input(&session_id, frame)
+            .map_err(|error| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("Codex App Server request is invalid: {error}"),
+                }
+                .build()
+            })?;
+        match input {
+            erebor_runtime_session::CodexAppServerInput::Forward(frame) => {
+                if let Err(error) = self.manager.write_structured_input(
+                    uid,
+                    &session_id,
+                    lease_id,
+                    client_instance_id,
+                    &frame,
+                ) {
+                    let _result = self
+                        .codex_app_server_service
+                        .abort_input(&session_id, &frame);
+                    return Err(error).context(SessionSnafu);
+                }
+                Ok(CodexAppServerInputResponse {
+                    session_id,
+                    accepted_bytes: u32::try_from(frame.len()).map_err(|_error| {
+                        crate::error::InvalidRequestSnafu {
+                            reason: String::from("Codex App Server frame length is invalid"),
+                        }
+                        .build()
+                    })?,
+                    synthetic_jsonl_response: Vec::new(),
+                })
+            }
+            erebor_runtime_session::CodexAppServerInput::Deny(response) => {
+                Ok(CodexAppServerInputResponse {
+                    session_id,
+                    accepted_bytes: 0,
+                    synthetic_jsonl_response: response,
+                })
+            }
+        }
+    }
+
+    pub(crate) fn close_codex_app_server_input(
+        &self,
+        uid: u32,
+        session_id: &str,
+        lease_id: &str,
+        client_instance_id: &str,
+    ) -> Result<CodexAppServerInputCloseResponse> {
+        let session_id = self.resolve_session_reference(uid, session_id)?;
+        self.require_codex_app_server(uid, &session_id)?;
+        self.manager
+            .close_structured_input(uid, &session_id, lease_id, client_instance_id)
+            .context(SessionSnafu)?;
+        Ok(CodexAppServerInputCloseResponse {
+            session_id,
+            closed: true,
+        })
+    }
+
+    fn require_codex_app_server(&self, uid: u32, session_id: &str) -> Result<()> {
+        let record = self
+            .manager
+            .inspect(uid, session_id)
+            .context(SessionSnafu)?;
+        if record.spec().tty() {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("Codex App Server structured stdio cannot use a TTY session"),
+            }
+            .fail();
+        }
+        let admission = self.local_store.validate_session_spec(record.spec())?;
+        if admission.package().adapter_id() != "codex-v1" {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("session is not admitted through the Codex adapter"),
+            }
+            .fail();
+        }
+        let installation = self.local_store.resolve_codex_installation(
+            uid,
+            admission.package_digest(),
+            admission.installation_digest(),
+            Some("codex-app-server"),
+        )?;
+        let entrypoint = installation
+            .package()
+            .definition()
+            .entrypoint(installation.entrypoint())
+            .filter(|entrypoint| entrypoint.app_server_stdio())
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from(
+                        "session installation does not certify Codex App Server stdio",
+                    ),
+                }
+                .build()
+            })?;
+        let artifact = installation
+            .installation()
+            .local_artifact()
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from("Codex App Server installation has no local executable"),
+                }
+                .build()
+            })?;
+        let current = self.reverify_codex_artifact(uid, record.spec().owner().gid(), artifact)?;
+        if record.spec().executable() != Some(&current) {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex App Server executable no longer matches its enrolled artifact",
+                ),
+            }
+            .fail();
+        }
+        let mut expected_command = vec![artifact.path().display().to_string()];
+        expected_command.extend(entrypoint.argv_suffix().iter().cloned());
+        if record.spec().command() != expected_command {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "session command does not match the certified Codex App Server entrypoint",
+                ),
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    fn is_codex_app_server(&self, uid: u32, session_id: &str) -> Result<bool> {
+        let record = self
+            .manager
+            .inspect(uid, session_id)
+            .context(SessionSnafu)?;
+        if record.spec().tty() || record.spec().package().is_none() {
+            return Ok(false);
+        }
+        let admission = self.local_store.validate_session_spec(record.spec())?;
+        if admission.package().adapter_id() != "codex-v1" {
+            return Ok(false);
+        }
+        let installation = self.local_store.resolve_codex_installation(
+            uid,
+            admission.package_digest(),
+            admission.installation_digest(),
+            Some("codex-app-server"),
+        )?;
+        let Some(entrypoint) = installation
+            .package()
+            .definition()
+            .entrypoint(installation.entrypoint())
+        else {
+            return Ok(false);
+        };
+        if !entrypoint.app_server_stdio() {
+            return Ok(false);
+        }
+        let artifact = installation
+            .installation()
+            .local_artifact()
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from("Codex App Server installation has no local executable"),
+                }
+                .build()
+            })?;
+        let mut expected_command = vec![artifact.path().display().to_string()];
+        expected_command.extend(entrypoint.argv_suffix().iter().cloned());
+        Ok(record.spec().command() == expected_command)
+    }
+
+    fn monitor_codex_app_server_output(&self, uid: u32, session_id: &str) -> Result<()> {
+        if !self.is_codex_app_server(uid, session_id)? {
+            return Ok(());
+        }
+        let monitor_key = format!("{uid}:{session_id}");
+        let mut monitors = self
+            .codex_app_server_output_monitors
+            .lock()
+            .map_err(|_error| crate::error::StateLockSnafu.build())?;
+        if !monitors.insert(monitor_key.clone()) {
+            return Ok(());
+        }
+        drop(monitors);
+        let manager = Arc::clone(&self.manager);
+        let service = Arc::clone(&self.codex_app_server_service);
+        let monitors = Arc::clone(&self.codex_app_server_output_monitors);
+        let session_id = session_id.to_owned();
+        thread::Builder::new()
+            .name(format!("erebor-codex-app-server-{session_id}"))
+            .spawn(move || {
+                let mut after_sequence = 0;
+                loop {
+                    let page = match manager.stream(
+                        uid,
+                        &session_id,
+                        StreamKind::Stdout,
+                        after_sequence,
+                        256,
+                    ) {
+                        Ok(page) => page,
+                        Err(_) => break,
+                    };
+                    let invalid_output = page.records().iter().any(|record| {
+                        after_sequence = after_sequence.max(record.sequence());
+                        service
+                            .observe_output_chunk(&session_id, record.sequence(), record.data())
+                            .is_err()
+                    });
+                    if invalid_output {
+                        let _result = manager.kill(uid, &session_id, ActiveSessionSignal::Kill);
+                        break;
+                    }
+                    match manager.inspect(uid, &session_id) {
+                        Ok(record) if record.state().is_terminal() => break,
+                        Ok(_) => thread::sleep(Duration::from_millis(50)),
+                        Err(_) => break,
+                    }
+                }
+                if let Ok(mut monitors) = monitors.lock() {
+                    monitors.remove(&monitor_key);
+                }
+            })
+            .map_err(|source| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("starting Codex App Server output monitor failed: {source}"),
+                }
+                .build()
+            })?;
+        Ok(())
+    }
+
     fn prune(
         &self,
         uid: u32,
@@ -1172,6 +1514,16 @@ impl DaemonSessionApi {
                 maximum_sessions.max(1) as usize,
             )
             .context(SessionSnafu)?;
+        for session_id in &result.pruned_session_ids {
+            self.codex_app_server_service
+                .unregister(session_id)
+                .map_err(|error| crate::error::InvalidRequestSnafu {
+                    reason: format!(
+                        "pruning the Codex App Server output ledger for `{session_id}` failed: {error}"
+                    ),
+                }
+                .build())?;
+        }
         for record in self.manager.list(uid).context(SessionSnafu)? {
             if record.state() == SessionLifecycleState::Removed && !record.retains_content() {
                 self.local_store
@@ -1333,8 +1685,8 @@ mod tests {
     use super::DaemonSessionApi;
 
     #[test]
-    fn session_reference_requires_an_exact_or_unique_owner_scoped_prefix(
-    ) -> Result<(), crate::DaemonError> {
+    fn session_reference_requires_an_exact_or_unique_owner_scoped_prefix()
+    -> Result<(), crate::DaemonError> {
         let sessions = ["session-a111", "session-b222"];
         assert_eq!(
             DaemonSessionApi::choose_session_id("session-a", sessions.into_iter())?,

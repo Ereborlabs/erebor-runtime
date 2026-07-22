@@ -13,24 +13,24 @@ use std::{
 mod prepared;
 
 use erebor_runtime_core::ActiveSessionSignal;
-use rustix::process::{kill_process_group, Pid, Signal};
+use rustix::process::{Pid, Signal, kill_process_group};
 #[allow(deprecated)]
 use rustix::thread::unshare;
 use rustix::{
-    fs::{openat, Mode, OFlags},
-    mount::{mount, mount_bind, mount_change, mount_remount, MountFlags, MountPropagationFlags},
+    fs::{Mode, OFlags, openat},
+    mount::{MountFlags, MountPropagationFlags, mount, mount_bind, mount_change, mount_remount},
     process::{ioctl_tiocsctty, setsid},
-    pty::{grantpt, ioctl_tiocgptpeer, openpt, unlockpt, OpenptFlags},
+    pty::{OpenptFlags, grantpt, ioctl_tiocgptpeer, openpt, unlockpt},
     termios::tcsetpgrp,
     thread::UnshareFlags,
 };
 
-use crate::{runners::linux::LinuxControllerHandoff, SessionControllerError, StreamKind};
+use crate::{SessionControllerError, StreamKind, runners::linux::LinuxControllerHandoff};
 
 use self::prepared::PreparedLinuxExecution;
 use super::{
     output::HelperOutput,
-    workload::{child_exit, pump_output, wait_child, OutputFailureMonitor, WorkloadExit},
+    workload::{OutputFailureMonitor, WorkloadExit, child_exit, pump_output, wait_child},
 };
 
 pub(crate) struct LinuxWorkload {
@@ -162,7 +162,10 @@ impl LinuxWorkload {
                 .stdout(Stdio::from(standard_output))
                 .stderr(Stdio::from(slave))
                 .process_group(0);
-            (Some(LinuxWorkloadInput::Terminal(master)), Some(controlling_terminal))
+            (
+                Some(LinuxWorkloadInput::Terminal(master)),
+                Some(controlling_terminal),
+            )
         } else {
             command
                 .stdin(Stdio::piped())
@@ -289,23 +292,29 @@ impl LinuxWorkload {
     }
 
     pub(crate) fn write_input(&mut self, data: &[u8]) -> Result<(), SessionControllerError> {
-        let input =
-            self.input
-                .as_mut()
-                .ok_or_else(|| SessionControllerError::InvalidHandoff {
-                    reason: String::from("Linux workload stdin is unavailable"),
-                    location: snafu::Location::default(),
-                })?;
+        let input = self
+            .input
+            .as_mut()
+            .ok_or_else(|| SessionControllerError::InvalidHandoff {
+                reason: String::from("Linux workload stdin is unavailable"),
+                location: snafu::Location::default(),
+            })?;
         match input {
-            LinuxWorkloadInput::Terminal(input) => input.write_all(data).and_then(|()| input.flush()),
+            LinuxWorkloadInput::Terminal(input) => {
+                input.write_all(data).and_then(|()| input.flush())
+            }
             LinuxWorkloadInput::Pipe(input) => input.write_all(data).and_then(|()| input.flush()),
         }
-            .map_err(|source| SessionControllerError::Io {
-                action: "writing Linux workload stdin",
-                path: PathBuf::from("<workload-stdin>"),
-                source,
-                location: snafu::Location::default(),
-            })
+        .map_err(|source| SessionControllerError::Io {
+            action: "writing Linux workload stdin",
+            path: PathBuf::from("<workload-stdin>"),
+            source,
+            location: snafu::Location::default(),
+        })
+    }
+
+    pub(crate) fn close_input(&mut self) {
+        self.input.take();
     }
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<WorkloadExit>, SessionControllerError> {
@@ -560,9 +569,7 @@ fn hold_endpoint_projections(
     Ok(held)
 }
 
-fn project_endpoints(
-    projections: &[(PathBuf, PathBuf)],
-) -> Result<(), SessionControllerError> {
+fn project_endpoints(projections: &[(PathBuf, PathBuf)]) -> Result<(), SessionControllerError> {
     for (source, target) in projections {
         create_projection_target(target, false)?;
         mount_bind(source, target)
@@ -578,8 +585,7 @@ fn project_endpoints(
 }
 
 fn project_filesystems(handoff: &LinuxControllerHandoff) -> Result<(), SessionControllerError> {
-    if handoff.prepared_filesystem_projections.len()
-        != handoff.spec.filesystem_projections().len()
+    if handoff.prepared_filesystem_projections.len() != handoff.spec.filesystem_projections().len()
     {
         return Err(SessionControllerError::InvalidHandoff {
             reason: String::from(
@@ -634,10 +640,12 @@ fn project_filesystems(handoff: &LinuxControllerHandoff) -> Result<(), SessionCo
 fn create_projection_target(path: &Path, directory: bool) -> Result<(), SessionControllerError> {
     let private_runtime = Path::new("/run/erebor");
     if path.starts_with(private_runtime) {
-        let parent = path.parent().ok_or_else(|| SessionControllerError::InvalidHandoff {
-            reason: format!("projection target `{}` has no parent", path.display()),
-            location: snafu::Location::default(),
-        })?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| SessionControllerError::InvalidHandoff {
+                reason: format!("projection target `{}` has no parent", path.display()),
+                location: snafu::Location::default(),
+            })?;
         fs::create_dir_all(parent).map_err(|source| SessionControllerError::Io {
             action: "creating private projection parent",
             path: parent.to_path_buf(),

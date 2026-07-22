@@ -10,9 +10,10 @@ use std::{
 
 use erebor_runtime_core::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
-    ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection,
-    OutputEndpoints, PreparedFilesystemProjection, RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery,
-    RuntimeError, SafePathBinding, ScriptInterpreterBinding, SessionSpec, WorkloadPrivilegePlan,
+    ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, OutputEndpoints,
+    PreparedFilesystemProjection, RunnerBinding, RunnerCapabilityDocument, RunnerId,
+    RunnerRecovery, RuntimeError, SafePathBinding, ScriptInterpreterBinding, SessionSpec,
+    WorkloadPrivilegePlan,
 };
 use serde::{Deserialize, Serialize};
 
@@ -287,12 +288,14 @@ impl RunnerDriver for LinuxRunnerDriver {
         // is not a separate namespace projection, so do not claim a `/workspace`
         // mount that the controller never created.
         let filesystem_projections = Vec::new();
-        let endpoint_projections = vec![EndpointProjection::new(
-            "runtime-guard",
-            context.runtime_guard_host_path().to_path_buf(),
-            PathBuf::from("/run/erebor/runtime-interception.sock"),
-        )
-        .map_err(|source| context.invalid(source.to_string()))?];
+        let endpoint_projections = vec![
+            EndpointProjection::new(
+                "runtime-guard",
+                context.runtime_guard_host_path().to_path_buf(),
+                PathBuf::from("/run/erebor/runtime-interception.sock"),
+            )
+            .map_err(|source| context.invalid(source.to_string()))?,
+        ];
         Ok(RunnerExecutionAdmission {
             workspace: context.workspace().clone(),
             workload_privileges,
@@ -548,6 +551,7 @@ pub(crate) enum LinuxControllerCommand {
     Stop { grace_period_ms: u64 },
     Kill { signal: ActiveSessionSignal },
     Input { data: Vec<u8> },
+    CloseInput,
     Health,
 }
 
@@ -564,6 +568,7 @@ pub(crate) enum LinuxControllerEvent {
     InputAccepted {
         accepted_bytes: u32,
     },
+    InputClosed,
     Exited {
         exit_code: Option<i32>,
         signal: Option<i32>,
@@ -619,7 +624,8 @@ impl LinuxControllerSession {
                 LinuxControllerEvent::Failed { reason } => return self.observe_failure(reason),
                 LinuxControllerEvent::Started { .. }
                 | LinuxControllerEvent::Health { .. }
-                | LinuxControllerEvent::InputAccepted { .. } => {}
+                | LinuxControllerEvent::InputAccepted { .. }
+                | LinuxControllerEvent::InputClosed => {}
             }
         }
     }
@@ -697,6 +703,15 @@ impl ActiveSession for LinuxControllerSession {
         }
     }
 
+    fn close_input(&mut self) -> Result<(), RuntimeError> {
+        match self.command(&LinuxControllerCommand::CloseInput)? {
+            LinuxControllerEvent::InputClosed => Ok(()),
+            event => Err(self.protocol(format!(
+                "expected structured-input EOF acknowledgement, received {event:?}"
+            ))),
+        }
+    }
+
     fn health(&mut self) -> Result<ActiveSessionHealth, RuntimeError> {
         if self.observed_exit.is_some() {
             return Ok(ActiveSessionHealth::Exited);
@@ -725,9 +740,9 @@ impl ActiveSession for LinuxControllerSession {
                 self.observe_failure(reason)?;
                 Ok(ActiveSessionHealth::Exited)
             }
-            LinuxControllerEvent::Started { .. } | LinuxControllerEvent::InputAccepted { .. } => {
-                Ok(ActiveSessionHealth::Starting)
-            }
+            LinuxControllerEvent::Started { .. }
+            | LinuxControllerEvent::InputAccepted { .. }
+            | LinuxControllerEvent::InputClosed => Ok(ActiveSessionHealth::Starting),
         }
     }
 }
@@ -744,7 +759,8 @@ impl LinuxControllerSession {
             LinuxControllerEvent::Failed { reason } => self.observe_failure(reason),
             LinuxControllerEvent::Started { .. }
             | LinuxControllerEvent::Health { .. }
-            | LinuxControllerEvent::InputAccepted { .. } => self.wait_for_exit(),
+            | LinuxControllerEvent::InputAccepted { .. }
+            | LinuxControllerEvent::InputClosed => self.wait_for_exit(),
         }
     }
 }
@@ -992,8 +1008,8 @@ mod tests {
     };
 
     use super::{
-        decode_recovery, encode_recovery, LinuxRecovery, LinuxRunnerDriver, CONTROLLER_PROGRAM,
-        DEFAULT_CONTROLLER_PATH, RUNNER_ID,
+        CONTROLLER_PROGRAM, DEFAULT_CONTROLLER_PATH, LinuxRecovery, LinuxRunnerDriver, RUNNER_ID,
+        decode_recovery, encode_recovery,
     };
     use crate::{
         ResolvedSessionPath, RunnerAdmissionRequest, RunnerInstallConfig, RunnerRegistry,
@@ -1024,8 +1040,8 @@ mod tests {
     }
 
     #[test]
-    fn linux_driver_owns_its_installation_program_names_and_defaults(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn linux_driver_owns_its_installation_program_names_and_defaults()
+    -> Result<(), Box<dyn std::error::Error>> {
         let default = LinuxRunnerDriver::from_install_config(&RunnerInstallConfig::default())?;
         assert_eq!(
             default.controller_path,
@@ -1043,8 +1059,8 @@ mod tests {
     }
 
     #[test]
-    fn linux_driver_round_trips_its_opaque_versioned_recovery_value(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn linux_driver_round_trips_its_opaque_versioned_recovery_value()
+    -> Result<(), Box<dyn std::error::Error>> {
         let expected = LinuxRecovery {
             workload_identity: String::from("linux:pid=42:start=99"),
             controller_pid: 41,
@@ -1072,8 +1088,8 @@ mod tests {
     }
 
     #[test]
-    fn linux_admission_pins_a_script_interpreter_and_its_shebang_argument(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn linux_admission_pins_a_script_interpreter_and_its_shebang_argument()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
         let script = root.path().join("agent-script");
         std::fs::write(&script, b"#!/bin/sh -eu\necho governed\n")?;

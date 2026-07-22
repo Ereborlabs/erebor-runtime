@@ -12,8 +12,8 @@ use erebor_runtime_packages::PolicyPackageRevision;
 use erebor_runtime_policy::{
     LayeredDecision, LayeredPolicySet, LocalPolicy, PolicyLayer, PolicySet,
 };
-use erebor_runtime_session::{SessionInterceptionRouter, SessionInterceptionRouterFactory};
 use erebor_runtime_session::{CodexAppServerService, CodexHookService, SessionManagerError};
+use erebor_runtime_session::{SessionInterceptionRouter, SessionInterceptionRouterFactory};
 
 use crate::local_store::DaemonLocalStore;
 
@@ -65,9 +65,17 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
             .codex_hook_service
             .register_session(spec, codex.package().definition())
             .map_err(|error| self.invalid_error(spec, error.to_string()))?;
-        self.codex_app_server_service
-            .register(registration.app_server_registration())
-            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        if self.is_codex_app_server(spec, codex.package().definition()) {
+            if let Err(error) = self
+                .codex_app_server_service
+                .register(registration.app_server_registration())
+            {
+                let _result = self
+                    .codex_hook_service
+                    .unregister(spec.session_id().as_str());
+                return Err(self.invalid_error(spec, error.to_string()));
+            }
+        }
         Ok(registration.with_interception_router(router))
     }
 
@@ -75,14 +83,33 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
         self.codex_hook_service
             .unregister(spec.session_id().as_str())
             .map_err(|error| self.invalid_error(spec, error.to_string()))?;
-        self.codex_app_server_service
-            .unregister(spec.session_id().as_str())
-            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
         Ok(())
     }
 }
 
 impl StoredPolicyInterceptionRouterFactory {
+    fn is_codex_app_server(
+        &self,
+        spec: &SessionSpec,
+        definition: &erebor_runtime_packages::CodexPackageDefinition,
+    ) -> bool {
+        if spec.tty() {
+            return false;
+        }
+        let Some(executable) = spec.executable() else {
+            return false;
+        };
+        let Some(entrypoint) = definition
+            .entrypoint("codex-app-server")
+            .filter(|entrypoint| entrypoint.app_server_stdio())
+        else {
+            return false;
+        };
+        let mut expected_command = vec![executable.requested_path().display().to_string()];
+        expected_command.extend(entrypoint.argv_suffix().iter().cloned());
+        spec.command() == expected_command
+    }
+
     fn invalid_error(&self, spec: &SessionSpec, reason: impl Into<String>) -> SessionManagerError {
         SessionManagerError::InvalidRuntime {
             session_id: spec.session_id().as_str().to_owned(),
@@ -224,7 +251,7 @@ impl ProcessExecSurfaceHandler for StoredPolicyProcessExecHandler {
                 return SurfaceInterceptionDecision::deny(
                     "stored-policy-load-failed",
                     format!("admitted policy package cannot be evaluated: {reason}"),
-                )
+                );
             }
         };
         match policy.evaluate(&self.event(request)) {
@@ -290,8 +317,8 @@ mod tests {
     }
 
     #[test]
-    fn mediation_fails_closed_without_a_generic_mediation_owner(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn mediation_fails_closed_without_a_generic_mediation_owner()
+    -> Result<(), Box<dyn std::error::Error>> {
         let handler = StoredPolicyProcessExecHandler {
             session_id: erebor_runtime_events::SessionId::new("session-1"),
             policy_set_digest: "a".repeat(64),

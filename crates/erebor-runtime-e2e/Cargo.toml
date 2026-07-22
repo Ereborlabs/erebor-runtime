@@ -35,12 +35,5 @@ path = "src/bin/codex_linux_v1_test_hook.rs"
 test = false
 bench = false
 
-[[bin]]
-name = "codex-linux-v1-session-driver"
-path = "src/bin/codex_linux_v1_session_driver.rs"
-test = false
-bench = false
-
-
 [lints]
 workspace = true

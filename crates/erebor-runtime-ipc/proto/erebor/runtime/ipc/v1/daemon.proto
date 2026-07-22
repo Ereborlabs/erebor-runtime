@@ -259,6 +259,47 @@ message SessionInputResponse {
   uint32 accepted_bytes = 2;
 }
 
+// Codex App Server has a distinct structured-stdio attachment. It never uses
+// the terminal attach or arbitrary interactive-input contracts.
+message CodexAppServerAttachRequest {
+  string session_id = 1;
+  string client_instance_id = 2;
+}
+
+message CodexAppServerAttachResponse {
+  string session_id = 1;
+  bool read_only = 2;
+  string input_lease_id = 3;
+  uint64 input_lease_expires_unix_ms = 4;
+}
+
+// Exactly one validated, bounded JSON-RPC JSONL request. The daemon either
+// forwards it to the daemon-owned child stdin or returns a synthetic JSON-RPC
+// policy denial without forwarding it.
+message CodexAppServerInputRequest {
+  string session_id = 1;
+  string input_lease_id = 2;
+  string client_instance_id = 3;
+  bytes jsonl_frame = 4;
+}
+
+message CodexAppServerInputResponse {
+  string session_id = 1;
+  uint32 accepted_bytes = 2;
+  bytes synthetic_jsonl_response = 3;
+}
+
+message CodexAppServerInputCloseRequest {
+  string session_id = 1;
+  string input_lease_id = 2;
+  string client_instance_id = 3;
+}
+
+message CodexAppServerInputCloseResponse {
+  string session_id = 1;
+  bool closed = 2;
+}
+
 message SessionPruneRequest {
   uint64 terminal_before_unix_ms = 1;
   uint32 maximum_sessions = 2;

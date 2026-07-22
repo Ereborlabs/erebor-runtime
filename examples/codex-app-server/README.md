@@ -1,279 +1,103 @@
-# Codex App Server: Cumulative Hands-On Example
+# Daemon-Owned Codex
 
-This is Erebor's maintained hands-on example. It grows with the daemon/client
-architecture: after each approved phase, add the smallest real walkthrough
-that lets a developer exercise that phase against its actual public or
-explicitly documented test interface.
+This is the Phase 4 public workflow for a real locally installed Codex
+executable. `erebor` is only a client: `erebord` verifies the executable,
+creates the governed session, owns the child process and I/O, and preserves
+the session's output and evidence.
 
-Do not make this example claim a future command exists. In particular, Phase 1
-proves the installed daemon control plane only; it does **not** yet run Codex
-through `erebord`.
+There is deliberately no `runtime.json`, raw executable argv, `sudo env`, or
+client-selected `CODEX_HOME` in this example. Those were the retired direct
+foreground path.
 
-## Phase 1: Daemon Control Plane
+## Prerequisites
 
-This is a manual two-terminal example. It starts a real root-owned `erebord`
-from this checkout, then connects the matching `erebor` client to its explicit
-local Unix socket. It creates no `/etc/erebor`, `/run/erebor`, `/var/log/erebor`,
-or `/var/lib/erebor` data, and does not require systemd.
+- Linux with the installed `erebord` service running and the caller authorized
+  to use `/run/erebor/daemon.sock`.
+- A root administrator has configured one `codex-v1` release in the daemon's
+  `root_curated_codex_packages`. That configuration pins the vendor executable
+  digest, the managed hook and support-artifact digests, supported entrypoints,
+  adapter digest, and root-owned artifact directory.
+- The administrator gives the caller the exact configured package reference,
+  for example `codex-v1@sha256:<64-lowercase-hex-digest>`.
+- The caller has the matching vendor Codex executable at an absolute path.
+  Erebor does not download it, search `PATH`, or accept a same-named binary.
 
-In Terminal 1, build the binaries and create a disposable local directory.
-Copy the printed path; Terminal 2 uses the same path.
+The root-curated release is an administrator responsibility, not an import or
+distribution command. OCI/Notation distribution remains Phase 10 work.
 
-```sh
-cd /path/to/erebor-runtime
-cargo build -p erebor-runtime-cli --bin erebor
-cargo build -p erebor-runtime-daemon --bin erebord
+## Enroll the local executable
 
-local_root="$(mktemp -d /tmp/erebor-phase1.XXXXXX)"
-printf 'local root: %s\n' "$local_root"
-
-sudo install -d -o root -g root -m 0755 "$local_root"
-sudo install -d -o root -g root -m 0750 "$local_root/etc"
-printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":32}\n' "$(id -g)" \
-  | sudo tee "$local_root/etc/erebord.json" >/dev/null
-sudo chown root:root "$local_root/etc/erebord.json"
-sudo chmod 0640 "$local_root/etc/erebord.json"
-
-sudo target/debug/erebord \
-  --config "$local_root/etc/erebord.json" \
-  --runtime-dir "$local_root/run" \
-  --log-dir "$local_root/log" \
-  --state-dir "$local_root/lib"
-```
-
-`erebord` now owns `$local_root/run/daemon.sock`. Keep it running. In
-Terminal 2, use the printed local directory:
+Replace the two values with the administrator-provided package reference and
+the caller-owned vendor executable. The daemon resolves this path under the
+caller UID, holds its descriptor, verifies identity and digest, and then makes
+the `codex` and (when certified) `codex-app-server` aliases available.
 
 ```sh
-cd /path/to/erebor-runtime
-local_root=/tmp/erebor-phase1.<copied-suffix>
-socket="$local_root/run/daemon.sock"
+package_ref='codex-v1@sha256:<64-lowercase-hex-digest>'
+codex_bin="$HOME/.local/bin/codex"
 
-target/debug/erebor daemon --socket "$socket" status
-# expected: daemon_pid=... configuration_generation=1 state=running
-
-target/debug/erebor daemon --socket "$socket" logs --maximum-records 1
-# expected: denied, because this caller is not root
-
-sudo target/debug/erebor daemon --socket "$socket" logs --maximum-records 10
-# expected: sequence=... daemon-control telemetry records
-
-key="manual-phase1-reload-$(date -u +%Y%m%dT%H%M%SZ)"
-sudo target/debug/erebor daemon --socket "$socket" reload --idempotency-key "$key"
-# expected: configuration reloaded at generation 2
-
-sudo target/debug/erebor daemon --socket "$socket" reload --idempotency-key "$key"
-# expected: the same stored result; generation does not increase again
+erebor agent install "$package_ref" --from "$codex_bin"
 ```
 
-This proves that the real client connects to the real daemon, and exercises
-non-root status, root-only logs, transactional reload, and idempotent replay.
-`erebord`'s path arguments are ordinary local path overrides: omitting each
-one uses the installed system default. Likewise, omitting `erebor daemon
---socket` uses `/run/erebor/daemon.sock`. None of these options add a remote
-endpoint, context, or daemon-selection model to the product.
+Expected output names the immutable package and installation digests, followed
+by `alias=codex` and `alias=codex-app-server` when the release certifies both
+entrypoints.
 
-To stop this daemon, run this in Terminal 2, then remove only the printed
-disposable directory:
+## Interactive Codex TUI
+
+`codex` is always an interactive daemon-owned TTY session. There is no `-t`
+requirement: the client attaches the terminal, while the daemon owns the PTY,
+workload, process guard, hook endpoint, output, and lifecycle.
 
 ```sh
-sudo target/debug/erebor daemon --socket "$socket" stop \
-  --idempotency-key "manual-phase1-stop-$(date -u +%Y%m%dT%H%M%SZ)"
-sudo rm -rf -- "$local_root"
+erebor run --policy engineering codex
 ```
 
-For the installed systemd product path, use
-[the daemon installation guide](../../docs/erebord-installation.md). The
-manual example supplements, but does not replace, the local ignored privileged
-Docker acceptance, which also creates a second in-group user and an outsider,
-tests socket recovery, and tests graceful and abrupt daemon shutdown. That
-acceptance is not run in CI.
+Use the normal Codex TUI. A nested Codex launched from that session remains a
+governed descendant; it cannot contact the daemon control socket, enroll an
+agent, mint an alias, or make itself a separately trusted App Server.
 
-## Phase 3: Generic Daemon-Owned Session
+## Structured Codex App Server
 
-This is the public generic-session workflow. The erebor binary is only a
-client: it sends every generic operation to the root-owned erebord socket.
-The daemon installs the built-in generic-process-v1 package and host-minimum
-policy itself, so this example contains no handcrafted digests or package
-records.
+`codex-app-server` is different from the TUI. Its standard input and standard
+output are a bounded JSON-RPC JSONL bridge. The daemon validates each client
+frame, correlates requests and replies, sends EOF to the child when client
+input closes, validates child output before returning it, and never mixes
+daemon telemetry into protocol stdout.
 
-Prerequisites are Linux, Docker, and permission to run a privileged systemd
-container. Build the installed artifacts and image from the repository root:
-
-~~~sh
-cargo build \
-  -p erebor-runtime-cli --bin erebor \
-  -p erebor-runtime-daemon --bins \
-  -p erebor-runtime-session --features editor-process-guard-target \
-    --bin erebor-linux-process-guard \
-    --bin erebor-linux-session-controller
-
-docker build \
-  --file .github/containers/daemon-systemd.Dockerfile \
-  --tag erebor-daemon-systemd:local \
-  .
-
-phase3_box="$(
-  docker run --detach --rm --privileged --cgroupns=private \
-    --tmpfs /run --tmpfs /run/lock \
-    erebor-daemon-systemd:local
-)"
-printf 'Phase 3 container: %s\n' "$phase3_box"
-docker exec -it "$phase3_box" bash
-~~~
-
-The remaining commands run inside the container as root. Create a socket-group
-member and the smallest valid daemon configuration, then start the installed
-service:
-
-~~~sh
-groupadd --system erebor
-useradd --create-home --groups erebor erebor-demo
-erebor_gid="$(getent group erebor | cut -d: -f3)"
-
-install -d -o root -g root -m 0750 /etc/erebor
-printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32}\n' \
-  "$erebor_gid" >/etc/erebor/erebord.json
-chown root:root /etc/erebor/erebord.json
-chmod 0640 /etc/erebor/erebord.json
-
-systemctl daemon-reload
-systemctl enable --now erebord.service
-runuser -u erebor-demo -- erebor daemon status
-# expected: daemon_pid=... configuration_generation=1 state=running
-
-stat -c '%U:%G:%a %n' /run/erebor/daemon.sock
-# expected: root:erebor:660 /run/erebor/daemon.sock
-~~~
-
-First prove that client failure has no launch fallback. Stopping the daemon
-makes erebor session run fail while the marker remains absent:
-
-~~~sh
-marker=/home/erebor-demo/daemon-must-launch-nothing
-rm -f "$marker"
-systemctl stop erebord.service
-
-if runuser -u erebor-demo -- erebor session run \
-  --runner linux-host \
-  --workspace /home/erebor-demo \
-  --idempotency-key example-daemon-unavailable \
-  -- /usr/bin/dash -c 'touch "$1"' dash "$marker"; then
-  echo 'unexpected generic launch without erebord' >&2
-  exit 1
-fi
-test ! -e "$marker"
-
-systemctl start erebord.service
-~~~
-
-Now create, start, inspect, and clean up one Linux-host session. Omitting all
-four identity flags deliberately selects the daemon-installed built-in package,
-installation, generic adapter, and host-minimum policy.
-
-~~~sh
-linux_created="$(
-  runuser -u erebor-demo -- erebor session create \
-    --runner linux-host \
-    --workspace /home/erebor-demo \
-    --idempotency-key example-linux-create \
-    -- /usr/bin/dash -c \
-      'printf "linux-output\n"; printf "linux-error\n" >&2; sleep 300'
-)"
-printf '%s\n' "$linux_created"
-linux_session="$(sed -n 's/^session_id=\([^ ]*\).*/\1/p' <<<"$linux_created")"
-
-runuser -u erebor-demo -- erebor session inspect "$linux_session"
-# expected: state=created
-
-runuser -u erebor-demo -- erebor session start "$linux_session" \
-  --idempotency-key example-linux-start
-runuser -u erebor-demo -- erebor session logs "$linux_session"
-runuser -u erebor-demo -- erebor session logs "$linux_session" --stream stderr
-runuser -u erebor-demo -- erebor audit tail "$linux_session"
-runuser -u erebor-demo -- erebor session events "$linux_session"
-
-runuser -u erebor-demo -- erebor session stop "$linux_session" \
-  --idempotency-key example-linux-stop
-runuser -u erebor-demo -- erebor session wait "$linux_session"
-runuser -u erebor-demo -- erebor session rm "$linux_session" --force \
-  --idempotency-key example-linux-remove
-~~~
-
-erebor session create --runner docker ... fails explicitly in Phase 3:
-Docker image admission, pulls, and lifecycle are Phase 6 work. It does not pull
-an image or launch directly.
-
-Exit the container shell, then remove only this disposable container:
-
-~~~sh
-exit
-docker rm --force "$phase3_box"
-~~~
-
-The corresponding privileged regression target is deliberately explicit:
-
-~~~sh
-cargo test -p erebor-runtime-e2e --test daemon_control_plane \
-  public_generic_cli_runs_in_systemd_container \
-  -- --ignored --nocapture
-~~~
-
-It needs Docker and privileged mounts, so it is not run in the restricted
-workspace lane. The command is a supplement to the committed daemon/client
-tests, not a replacement for them.
-
-## Current Direct Codex Baseline
-
-The following is the existing direct foreground baseline. It is useful for
-checking the current Codex integration, but it is **not** evidence that Codex
-is daemon-owned yet. That migration belongs to Phase 4.
+The smallest useful probe is an initialization request. Keep credentials and
+real prompts out of shell history and committed files.
 
 ```sh
-sudo env \
-  EREBOR_SESSION_UID="$(id -u)" \
-  EREBOR_SESSION_GID="$(id -g)" \
-  CODEX_HOME="$HOME/.codex" \
-  target/debug/erebor session run \
-    --runner linux-host \
-    --config examples/codex-app-server/runtime.json \
-    /var/lib/erebor/codex-phase3/vscode-0.144.2/bin/codex \
-    app-server --stdio
+printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"erebor-example","version":"1"},"capabilities":{"experimentalApi":true}}}' \
+  '{"jsonrpc":"2.0","method":"initialized"}' \
+  | erebor run --policy engineering codex-app-server
 ```
 
-`runtime.json` and `policy.json` are the required current Erebor setup. They
-enroll the root-managed profile at `/var/lib/erebor/codex-phase3/vscode-0.144.2`,
-pin the binary, hook, requirements, sandbox launcher, and observed hook
-schemas, and enable the Linux process/file interception path. The command
-starts the real Codex App Server as an Erebor-governed child. There is no mock
-model, helper client, or second App Server in this example.
+The command's stdout is only Codex App Server JSONL responses. Its stderr may
+contain Codex diagnostics. A policy-denied sensitive transport method returns a
+JSON-RPC error on stdout and is not forwarded to Codex.
 
-`app-server --stdio` speaks the Codex App Server JSON-RPC protocol, so connect
-your normal App Server client to its standard input/output. Keep `CODEX_HOME`
-outside the governed workspace and authenticate Codex there before this run.
+For an interactive App Server client, connect that client directly to the
+command's stdin/stdout; do not wrap it with `erebor session attach` or send its
+frames through generic session input.
 
-The explicit `sudo env` form is required: a simple `CODEX_HOME=... sudo ...`
-does not preserve `CODEX_HOME` through `sudo`, so Codex falls back to
-`/root/.codex`. The user/group variables tell Erebor which non-root identity
-the governed child and its process guard will use.
+## Inspect governed evidence
 
-## Extension Contract
+After a run, use the daemon session commands to locate the session and inspect
+the durable records:
 
-Every future architecture phase extends this directory in the same change that
-implements the phase:
+```sh
+erebor session ps
+erebor session inspect <session-id>
+erebor session events <session-id>
+erebor session logs <session-id> --stream stderr
+erebor audit tail <session-id>
+```
 
-| Phase | Add to this example |
-| --- | --- |
-| 2 | A documented daemon-session/runner-guard probe using the explicit Phase 2 test driver; do not invent a public run command before Phase 3. |
-| 3 | A generic daemon-owned `erebor session create/run/ps/logs` walkthrough, including daemon-unavailable failure before process launch. |
-| 4 | Replace the direct baseline above with the daemon-owned real Codex App Server walkthrough and its evidence checks. |
-| 10 | Package pull/verify and local registry/Hub trust walkthrough. |
-| 6 | Linux-host and Docker runner-parity plus ambient-surface walkthroughs. |
-| 7–8 | Claude discovery/implementation walkthroughs only if the Phase 7 approval gate is passed. |
-| 9 | Recovery, upgrade, and certification evidence walkthrough. |
-
-Each addition must state its host prerequisites, exact commands, expected
-observable result, cleanup, and whether it is a manual supplement or a
-replacement for an automated test. Never put Codex credentials, prompts, hook
-tickets, package tokens, or workload data in example output or committed
-fixtures.
+Phase 4 acceptance must exercise a real privileged Linux fixture, including
+package/installation revalidation, hook ticket and peer binding, private
+daemon-socket absence, App Server JSONL validation, Context DAG prompt binding,
+and two-UID isolation. It requires a privileged Linux host; this walkthrough
+does not replace that evidence.

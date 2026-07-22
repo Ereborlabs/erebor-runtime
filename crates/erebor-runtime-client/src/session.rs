@@ -1,6 +1,26 @@
 use erebor_runtime_ipc::v1::{
     AdminSessionInspectRequest, AdminSessionKillRequest, AdminSessionListRequest,
-    AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, Header, SessionAliasListRequest,
+    AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, CodexAppServerAttachRequest,
+    CodexAppServerAttachResponse, CodexAppServerInputCloseRequest,
+    CodexAppServerInputCloseResponse, CodexAppServerInputRequest, CodexAppServerInputResponse,
+    EREBOR_IDEMPOTENCY_KEY_HEADER, Header, KIND_ADMIN_SESSION_INSPECT_REQUEST,
+    KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
+    KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
+    KIND_CODEX_APP_SERVER_ATTACH_REQUEST, KIND_CODEX_APP_SERVER_ATTACH_RESPONSE,
+    KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE,
+    KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_CODEX_APP_SERVER_INPUT_RESPONSE, KIND_DAEMON_ERROR,
+    KIND_SESSION_ALIAS_LIST_REQUEST, KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_RECORD,
+    KIND_SESSION_ALIAS_REMOVE_REQUEST, KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST,
+    KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_REQUEST, KIND_SESSION_CREATE_RESPONSE,
+    KIND_SESSION_EVENT_RECORD, KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST,
+    KIND_SESSION_EVIDENCE_END, KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
+    KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
+    KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_INPUT_REQUEST, KIND_SESSION_INPUT_RESPONSE,
+    KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
+    KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOG_CHUNK, KIND_SESSION_LOGS_END,
+    KIND_SESSION_LOGS_REQUEST, KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_PRUNE_RESPONSE,
+    KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST, KIND_SESSION_START_REQUEST,
+    KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST, SessionAliasListRequest,
     SessionAliasListResponse, SessionAliasRecord, SessionAliasRemoveRequest,
     SessionAliasSetRequest, SessionAttachRequest, SessionAttachResponse, SessionCreateRequest,
     SessionCreateResponse, SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
@@ -9,29 +29,14 @@ use erebor_runtime_ipc::v1::{
     SessionInputRequest, SessionInputResponse, SessionInspectRequest, SessionKillRequest,
     SessionListRequest, SessionListResponse, SessionLogChunk, SessionLogsEnd, SessionLogsRequest,
     SessionPruneRequest, SessionPruneResponse, SessionRecord, SessionRemoveRequest,
-    SessionStartRequest, SessionStopRequest, SessionWaitRequest, EREBOR_IDEMPOTENCY_KEY_HEADER,
-    KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
-    KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
-    KIND_ADMIN_SESSION_STOP_REQUEST, KIND_DAEMON_ERROR, KIND_SESSION_ALIAS_LIST_REQUEST,
-    KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ALIAS_REMOVE_REQUEST,
-    KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_ATTACH_RESPONSE,
-    KIND_SESSION_CREATE_REQUEST, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_EVENTS_END,
-    KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD, KIND_SESSION_EVIDENCE_END,
-    KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
-    KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
-    KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_INPUT_REQUEST, KIND_SESSION_INPUT_RESPONSE,
-    KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
-    KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST,
-    KIND_SESSION_LOG_CHUNK, KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_PRUNE_RESPONSE,
-    KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST, KIND_SESSION_START_REQUEST,
-    KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST,
+    SessionStartRequest, SessionStopRequest, SessionWaitRequest,
 };
 use snafu::ResultExt;
 use std::time::Duration;
 
 use crate::{
-    error::{IpcSnafu, ProtocolSnafu},
     DaemonClient, Result,
+    error::{IpcSnafu, ProtocolSnafu},
 };
 
 const SESSION_WAIT_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
@@ -278,7 +283,7 @@ impl DaemonClient {
                     return ProtocolSnafu {
                         reason: format!("unexpected session logs response kind `{actual}`"),
                     }
-                    .fail()
+                    .fail();
                 }
             }
         }
@@ -322,7 +327,7 @@ impl DaemonClient {
                     return ProtocolSnafu {
                         reason: format!("unexpected session events response kind `{actual}`"),
                     }
-                    .fail()
+                    .fail();
                 }
             }
         }
@@ -366,7 +371,7 @@ impl DaemonClient {
                     return ProtocolSnafu {
                         reason: format!("unexpected session evidence response kind `{actual}`"),
                     }
-                    .fail()
+                    .fail();
                 }
             }
         }
@@ -441,6 +446,50 @@ impl DaemonClient {
             idempotency_key,
         )
         .await
+    }
+
+    pub async fn codex_app_server_attach(
+        &self,
+        request: CodexAppServerAttachRequest,
+        idempotency_key: &str,
+    ) -> Result<CodexAppServerAttachResponse> {
+        self.session_mutation(
+            KIND_CODEX_APP_SERVER_ATTACH_REQUEST,
+            &request,
+            KIND_CODEX_APP_SERVER_ATTACH_RESPONSE,
+            idempotency_key,
+        )
+        .await
+    }
+
+    pub async fn codex_app_server_input(
+        &self,
+        request: CodexAppServerInputRequest,
+    ) -> Result<CodexAppServerInputResponse> {
+        let mut connection = self.connect().await?;
+        connection
+            .unary(
+                KIND_CODEX_APP_SERVER_INPUT_REQUEST,
+                &request,
+                KIND_CODEX_APP_SERVER_INPUT_RESPONSE,
+                Vec::new(),
+            )
+            .await
+    }
+
+    pub async fn codex_app_server_input_close(
+        &self,
+        request: CodexAppServerInputCloseRequest,
+    ) -> Result<CodexAppServerInputCloseResponse> {
+        let mut connection = self.connect().await?;
+        connection
+            .unary(
+                KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
+                &request,
+                KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE,
+                Vec::new(),
+            )
+            .await
     }
 
     pub async fn admin_session_list(

@@ -1,16 +1,17 @@
 use std::error::Error;
 
 use erebor_runtime_ipc::{
+    EreborIpcFrame, FRAME_VERSION, HEADER_LEN, IpcProtocolError, MAX_PAYLOAD_LEN,
     v1::{
-        AllowDecision, DecisionKind, DenyDecision, Envelope, GuardHello, GuardLifecycleEvent,
-        GuardLifecycleEventKind, GuardLifecycleReply, GuardLifecycleReplyKind,
-        InterceptionDecision, InterceptionOperation, InterceptionRequest, InterceptionSource,
-        MediateDecision, ProcessExecOperation, SessionEvidenceRequest, SessionInputRequest,
-        KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
-        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, KIND_SESSION_EVIDENCE_REQUEST,
-        KIND_SESSION_INPUT_REQUEST, PROTOCOL_VERSION,
+        AllowDecision, CodexAppServerInputCloseRequest, CodexAppServerInputRequest, DecisionKind,
+        DenyDecision, Envelope, GuardHello, GuardLifecycleEvent, GuardLifecycleEventKind,
+        GuardLifecycleReply, GuardLifecycleReplyKind, InterceptionDecision, InterceptionOperation,
+        InterceptionRequest, InterceptionSource, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
+        KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT,
+        KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
+        KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST, MediateDecision,
+        PROTOCOL_VERSION, ProcessExecOperation, SessionEvidenceRequest, SessionInputRequest,
     },
-    EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
 };
 
 #[test]
@@ -67,6 +68,42 @@ fn public_api_round_trips_lease_bound_interactive_input() -> Result<(), Box<dyn 
     let decoded: SessionInputRequest = frame
         .decode_payload::<Envelope>()?
         .decode_typed_payload(KIND_SESSION_INPUT_REQUEST)?;
+
+    assert_eq!(decoded, request);
+    Ok(())
+}
+
+#[test]
+fn public_api_round_trips_bounded_codex_app_server_input() -> Result<(), Box<dyn Error>> {
+    let request = CodexAppServerInputRequest {
+        session_id: String::from("session-app-server-contract"),
+        input_lease_id: String::from("lease-contract"),
+        client_instance_id: String::from("cli-contract"),
+        jsonl_frame: b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"turn/start\"}\n".to_vec(),
+    };
+    let envelope = Envelope::wrap_message(8, 0, KIND_CODEX_APP_SERVER_INPUT_REQUEST, &request)?;
+    let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
+    let decoded: CodexAppServerInputRequest = frame
+        .decode_payload::<Envelope>()?
+        .decode_typed_payload(KIND_CODEX_APP_SERVER_INPUT_REQUEST)?;
+
+    assert_eq!(decoded, request);
+    Ok(())
+}
+
+#[test]
+fn public_api_round_trips_codex_app_server_input_eof() -> Result<(), Box<dyn Error>> {
+    let request = CodexAppServerInputCloseRequest {
+        session_id: String::from("session-app-server-contract"),
+        input_lease_id: String::from("lease-contract"),
+        client_instance_id: String::from("cli-contract"),
+    };
+    let envelope =
+        Envelope::wrap_message(9, 0, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, &request)?;
+    let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
+    let decoded: CodexAppServerInputCloseRequest = frame
+        .decode_payload::<Envelope>()?
+        .decode_typed_payload(KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST)?;
 
     assert_eq!(decoded, request);
     Ok(())
@@ -171,8 +208,8 @@ fn public_api_round_trips_guard_lifecycle_hold_and_release() -> Result<(), Box<d
 }
 
 #[test]
-fn frame_header_is_generic_and_future_envelope_kinds_survive_round_trip(
-) -> Result<(), Box<dyn Error>> {
+fn frame_header_is_generic_and_future_envelope_kinds_survive_round_trip()
+-> Result<(), Box<dyn Error>> {
     let envelope = Envelope {
         protocol_version: PROTOCOL_VERSION,
         message_id: 9,
@@ -321,6 +358,7 @@ fn split_proto_contract_files_contain_the_v1_schema() {
     assert!(proto.contains("message SessionEventsRequest"));
     assert!(proto.contains("message SessionAttachRequest"));
     assert!(proto.contains("message SessionInputRequest"));
+    assert!(proto.contains("message CodexAppServerInputRequest"));
     assert!(proto.contains("message SessionPruneRequest"));
     assert!(proto.contains("message AdminSessionStopRequest"));
     assert!(proto.contains("message AdminSessionSetRetentionHoldRequest"));

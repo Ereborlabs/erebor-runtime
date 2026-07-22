@@ -12,34 +12,27 @@ use std::{
 use erebor_runtime_approvals::{ApprovalRecord, ApprovalRepository};
 use erebor_runtime_error::ErrorExt;
 use erebor_runtime_ipc::{
+    AsyncFrameCodec,
     v1::{
         AdminSessionInspectRequest, AdminSessionKillRequest, AdminSessionListRequest,
         AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, AgentInstallRequest,
         ApprovalApproveRequest, ApprovalDenyRequest, ApprovalInspectRequest, ApprovalListRequest,
-        ApprovalListResponse, ApprovalRecord as ApprovalRecordMessage, CodexRunRequest,
+        ApprovalListResponse, ApprovalRecord as ApprovalRecordMessage, CodexAppServerAttachRequest,
+        CodexAppServerInputCloseRequest, CodexAppServerInputRequest, CodexRunRequest,
         DaemonCommandResult, DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
         DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
-        Envelope, EnvelopeServiceFamily, PolicyPackageApplyRequest, PolicyPackageInspectRequest,
-        PolicyPackageListRequest, PolicyPackageListResponse, PolicyPackageVerifyRequest,
-        PolicySetAliasSetRequest, PolicySetCreateRequest, PolicySetInspectRequest,
-        PolicySetListRequest, PolicySetListResponse, PolicySetVerifyRequest, PolicyTestRequest,
-        PolicyTestResponse, RunnerCapabilityRecord, RunnerInspectRequest, RunnerListRequest,
-        RunnerListResponse, SessionAliasListRequest, SessionAliasRemoveRequest,
-        SessionAliasSetRequest, SessionAttachRequest, SessionCreateRequest, SessionEventRecord,
-        SessionEventsEnd, SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord,
-        SessionEvidenceRequest, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
-        SessionInputRequest, SessionInspectRequest, SessionKillRequest, SessionListRequest,
-        SessionLogChunk, SessionLogsEnd, SessionLogsRequest, SessionPruneRequest,
-        SessionRemoveRequest, SessionStartRequest, SessionStopRequest, SessionWaitRequest,
-        KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
-        KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
-        KIND_ADMIN_SESSION_STOP_REQUEST, KIND_AGENT_INSTALL_REQUEST, KIND_AGENT_INSTALL_RESPONSE,
-        KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST, KIND_APPROVAL_INSPECT_REQUEST,
-        KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE, KIND_APPROVAL_RECORD,
+        Envelope, EnvelopeServiceFamily, KIND_ADMIN_SESSION_INSPECT_REQUEST,
+        KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
+        KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
+        KIND_AGENT_INSTALL_REQUEST, KIND_AGENT_INSTALL_RESPONSE, KIND_APPROVAL_APPROVE_REQUEST,
+        KIND_APPROVAL_DENY_REQUEST, KIND_APPROVAL_INSPECT_REQUEST, KIND_APPROVAL_LIST_REQUEST,
+        KIND_APPROVAL_LIST_RESPONSE, KIND_APPROVAL_RECORD, KIND_CODEX_APP_SERVER_ATTACH_REQUEST,
+        KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE,
+        KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_CODEX_APP_SERVER_INPUT_RESPONSE,
         KIND_CODEX_RUN_REQUEST, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO,
-        KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
-        KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
+        KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOG_RECORD, KIND_DAEMON_LOGS_END,
+        KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
         KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
         KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
         KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
@@ -51,31 +44,42 @@ use erebor_runtime_ipc::{
         KIND_RUNNER_LIST_RESPONSE, KIND_SESSION_ALIAS_LIST_REQUEST,
         KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_REMOVE_REQUEST,
         KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST,
-        KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
+        KIND_SESSION_EVENT_RECORD, KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST,
         KIND_SESSION_EVIDENCE_END, KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
         KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
         KIND_SESSION_INPUT_REQUEST, KIND_SESSION_INPUT_RESPONSE, KIND_SESSION_INSPECT_REQUEST,
         KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST, KIND_SESSION_LIST_RESPONSE,
-        KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST, KIND_SESSION_LOG_CHUNK,
+        KIND_SESSION_LOG_CHUNK, KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST,
         KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST,
         KIND_SESSION_START_REQUEST, KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST,
-        PROTOCOL_VERSION,
+        PROTOCOL_VERSION, PolicyPackageApplyRequest, PolicyPackageInspectRequest,
+        PolicyPackageListRequest, PolicyPackageListResponse, PolicyPackageVerifyRequest,
+        PolicySetAliasSetRequest, PolicySetCreateRequest, PolicySetInspectRequest,
+        PolicySetListRequest, PolicySetListResponse, PolicySetVerifyRequest, PolicyTestRequest,
+        PolicyTestResponse, RunnerCapabilityRecord, RunnerInspectRequest, RunnerListRequest,
+        RunnerListResponse, SessionAliasListRequest, SessionAliasRemoveRequest,
+        SessionAliasSetRequest, SessionAttachRequest, SessionCreateRequest, SessionEventRecord,
+        SessionEventsEnd, SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord,
+        SessionEvidenceRequest, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
+        SessionInputRequest, SessionInspectRequest, SessionKillRequest, SessionListRequest,
+        SessionLogChunk, SessionLogsEnd, SessionLogsRequest, SessionPruneRequest,
+        SessionRemoveRequest, SessionStartRequest, SessionStopRequest, SessionWaitRequest,
     },
-    AsyncFrameCodec,
 };
 use prost::Message;
 use rustix::{
     fs::chown,
-    process::{geteuid, Gid, Uid},
+    process::{Gid, Uid, geteuid},
 };
 use snafu::ResultExt;
 use tokio::{
     net::{UnixListener, UnixStream},
-    sync::{watch, OwnedSemaphorePermit, Semaphore},
+    sync::{OwnedSemaphorePermit, Semaphore, watch},
     time::timeout,
 };
 
 use crate::{
+    DaemonError, DaemonPaths, Result,
     approvals::DaemonApprovalRepository,
     config::DaemonConfig,
     error::{InvalidRequestSnafu, IoSnafu, IpcSnafu, StateLockSnafu, UnauthorizedSnafu},
@@ -83,7 +87,6 @@ use crate::{
     log::DaemonLogStore,
     paths::{DaemonLock, DaemonSecurity},
     session_api::DaemonSessionApi,
-    DaemonError, DaemonPaths, Result,
 };
 use erebor_runtime_core::ActiveSessionSignal;
 use erebor_runtime_policy::{LocalPolicy, PolicyEvaluator};
@@ -464,6 +467,16 @@ impl DaemonControlState {
             KIND_DAEMON_STOP_REQUEST => self.stop(stream, peer, &envelope).await,
             KIND_AGENT_INSTALL_REQUEST => self.agent_install(stream, peer, &envelope).await,
             KIND_CODEX_RUN_REQUEST => self.codex_run(stream, peer, &envelope).await,
+            KIND_CODEX_APP_SERVER_ATTACH_REQUEST => {
+                self.codex_app_server_attach(stream, peer, &envelope).await
+            }
+            KIND_CODEX_APP_SERVER_INPUT_REQUEST => {
+                self.codex_app_server_input(stream, peer, &envelope).await
+            }
+            KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST => {
+                self.codex_app_server_input_close(stream, peer, &envelope)
+                    .await
+            }
             KIND_SESSION_CREATE_REQUEST => self.session_create(stream, peer, &envelope).await,
             KIND_SESSION_START_REQUEST => self.session_start(stream, peer, &envelope).await,
             KIND_SESSION_STOP_REQUEST => self.session_stop(stream, peer, &envelope).await,
@@ -844,6 +857,29 @@ impl DaemonControlState {
         .await
     }
 
+    async fn codex_app_server_attach(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: CodexAppServerAttachRequest = envelope
+            .decode_typed_payload(KIND_CODEX_APP_SERVER_ATTACH_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "codex-app-server-attach",
+            envelope,
+            MutationIntent::CodexAppServerAttach {
+                uid: peer.uid,
+                session_id: request.session_id,
+                client_instance_id: request.client_instance_id,
+            },
+        )
+        .await
+    }
+
     async fn session_lease_renew(
         &self,
         stream: &mut UnixStream,
@@ -925,6 +961,71 @@ impl DaemonControlState {
             envelope.message_id.saturating_add(1),
             envelope.message_id,
             KIND_SESSION_INPUT_RESPONSE,
+            &response,
+        )
+        .await
+    }
+
+    async fn codex_app_server_input(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: CodexAppServerInputRequest = envelope
+            .decode_typed_payload(KIND_CODEX_APP_SERVER_INPUT_REQUEST)
+            .context(IpcSnafu)?;
+        let maximum = self
+            .configuration
+            .read()
+            .map_err(|_error| StateLockSnafu.build())?
+            .value
+            .max_ipc_upload_bytes_per_uid();
+        if request.jsonl_frame.is_empty() || request.jsonl_frame.len() as u64 > maximum {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "Codex App Server input must contain between one and {maximum} bytes"
+                ),
+            }
+            .fail();
+        }
+        let response = self.sessions.codex_app_server_input(
+            peer.uid,
+            &request.session_id,
+            &request.input_lease_id,
+            &request.client_instance_id,
+            &request.jsonl_frame,
+        )?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_CODEX_APP_SERVER_INPUT_RESPONSE,
+            &response,
+        )
+        .await
+    }
+
+    async fn codex_app_server_input_close(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: CodexAppServerInputCloseRequest = envelope
+            .decode_typed_payload(KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST)
+            .context(IpcSnafu)?;
+        let response = self.sessions.close_codex_app_server_input(
+            peer.uid,
+            &request.session_id,
+            &request.input_lease_id,
+            &request.client_instance_id,
+        )?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE,
             &response,
         )
         .await
@@ -1875,7 +1976,7 @@ impl DaemonControlState {
                     return InvalidRequestSnafu {
                         reason: String::from("approval mutation used a non-approval intent"),
                     }
-                    .fail()
+                    .fail();
                 }
             };
             self.logs.record(
@@ -2350,6 +2451,7 @@ fn is_mutating_message(kind: &str) -> bool {
             | KIND_DAEMON_STOP_REQUEST
             | KIND_AGENT_INSTALL_REQUEST
             | KIND_CODEX_RUN_REQUEST
+            | KIND_CODEX_APP_SERVER_ATTACH_REQUEST
             | KIND_SESSION_CREATE_REQUEST
             | KIND_SESSION_START_REQUEST
             | KIND_SESSION_STOP_REQUEST
@@ -2451,30 +2553,30 @@ mod tests {
 
     use erebor_runtime_error::StatusCode;
     use erebor_runtime_ipc::{
+        AsyncFrameCodec, IpcProtocolError,
         v1::{
             DaemonError as DaemonErrorMessage, DaemonHello, DaemonLogsRequest, DaemonStatusRequest,
-            Envelope, GuardHello, PolicyTestRequest, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO,
-            KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_STATUS_REQUEST,
-            KIND_DAEMON_STATUS_RESPONSE, PROTOCOL_VERSION,
+            Envelope, GuardHello, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
+            KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
+            PROTOCOL_VERSION, PolicyTestRequest,
         },
-        AsyncFrameCodec, IpcProtocolError,
     };
     use rustix::process::geteuid;
     use tempfile::TempDir;
     use tokio::{net::UnixStream, sync::Semaphore};
 
     use super::{
-        evaluate_policy_test, DaemonApprovalRepository, DaemonConfiguration, DaemonControlState,
-        DaemonLogStore, DaemonSecurity, DaemonSocket,
+        DaemonApprovalRepository, DaemonConfiguration, DaemonControlState, DaemonLogStore,
+        DaemonSecurity, DaemonSocket, evaluate_policy_test,
     };
     use crate::{
-        config::DaemonConfig, idempotency::DaemonIdempotencyStore, session_api::DaemonSessionApi,
-        DaemonPaths,
+        DaemonPaths, config::DaemonConfig, idempotency::DaemonIdempotencyStore,
+        session_api::DaemonSessionApi,
     };
 
     #[test]
-    fn policy_test_is_bounded_and_evaluated_by_the_daemon_owner(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn policy_test_is_bounded_and_evaluated_by_the_daemon_owner()
+    -> Result<(), Box<dyn std::error::Error>> {
         let response = evaluate_policy_test(
             PolicyTestRequest {
                 policy_json: br#"{"rules":[{"id":"deny-terminal","match":{"surface":"terminal"},"decision":"deny"}]}"#.to_vec(),
@@ -2484,21 +2586,23 @@ mod tests {
         )?;
         let decision = String::from_utf8(response.decision_json)?;
         assert!(decision.contains("deny-terminal"));
-        assert!(evaluate_policy_test(
-            PolicyTestRequest {
-                policy_json: vec![b'x'; 1024],
-                event_json: vec![b'y'],
-            },
-            1024,
-        )
-        .is_err());
+        assert!(
+            evaluate_policy_test(
+                PolicyTestRequest {
+                    policy_json: vec![b'x'; 1024],
+                    event_json: vec![b'y'],
+                },
+                1024,
+            )
+            .is_err()
+        );
         Ok(())
     }
 
     #[tokio::test]
     #[ignore = "requires host Unix-domain socket I/O"]
-    async fn control_service_observes_real_peer_credentials_and_denies_non_root_logs(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn control_service_observes_real_peer_credentials_and_denies_non_root_logs()
+    -> Result<(), Box<dyn std::error::Error>> {
         let test_state = state()?;
         let state = Arc::clone(&test_state.state);
         let (mut client, server) = stream_pair()?;
@@ -2519,9 +2623,11 @@ mod tests {
         let hello = read(&mut client).await?;
         assert_eq!(hello.correlation_id, 1);
         assert_eq!(hello.message_kind, KIND_DAEMON_HELLO_ACK);
-        assert!(state.logs.records_after(0, 10)?.iter().any(|record| record
-            .message
-            .contains(&format!("uid={}", geteuid().as_raw()))));
+        assert!(state.logs.records_after(0, 10)?.iter().any(|record| {
+            record
+                .message
+                .contains(&format!("uid={}", geteuid().as_raw()))
+        }));
 
         write(
             &mut client,
@@ -2559,22 +2665,26 @@ mod tests {
     fn root_only_operations_reject_non_root_observed_uids() -> Result<(), Box<dyn std::error::Error>>
     {
         let test_state = state()?;
-        assert!(test_state
-            .state
-            .require_root(super::PeerIdentity {
-                pid: Some(1),
-                uid: 1000,
-                gid: 1000,
-            })
-            .is_err());
-        assert!(test_state
-            .state
-            .require_root(super::PeerIdentity {
-                pid: Some(1),
-                uid: 0,
-                gid: 0,
-            })
-            .is_ok());
+        assert!(
+            test_state
+                .state
+                .require_root(super::PeerIdentity {
+                    pid: Some(1),
+                    uid: 1000,
+                    gid: 1000,
+                })
+                .is_err()
+        );
+        assert!(
+            test_state
+                .state
+                .require_root(super::PeerIdentity {
+                    pid: Some(1),
+                    uid: 0,
+                    gid: 0,
+                })
+                .is_ok()
+        );
         Ok(())
     }
 
@@ -2592,8 +2702,8 @@ mod tests {
     }
 
     #[test]
-    fn reload_publishes_configuration_and_generation_as_one_state(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn reload_publishes_configuration_and_generation_as_one_state()
+    -> Result<(), Box<dyn std::error::Error>> {
         let test_state = state()?;
         let mut replacement = test_state
             .state
@@ -2628,8 +2738,8 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires host Unix-domain socket I/O"]
-    async fn control_service_closes_guard_family_connection_before_dispatch(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn control_service_closes_guard_family_connection_before_dispatch()
+    -> Result<(), Box<dyn std::error::Error>> {
         let test_state = state()?;
         let state = Arc::clone(&test_state.state);
         let (mut client, server) = stream_pair()?;
@@ -2660,8 +2770,8 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "requires host Unix-domain socket I/O"]
-    async fn control_service_rejects_an_unsupported_request_envelope_protocol(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn control_service_rejects_an_unsupported_request_envelope_protocol()
+    -> Result<(), Box<dyn std::error::Error>> {
         let test_state = state()?;
         let state = Arc::clone(&test_state.state);
         let (mut client, server) = stream_pair()?;
@@ -2694,8 +2804,8 @@ mod tests {
 
     #[test]
     #[ignore = "requires host Unix-domain socket I/O"]
-    fn daemon_socket_cleanup_preserves_a_replacement_socket(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn daemon_socket_cleanup_preserves_a_replacement_socket()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let path = root.path().join("daemon.sock");
         let listener = StdUnixListener::bind(&path)?;

@@ -4,12 +4,13 @@ use std::{
     thread,
 };
 
-use rustix::termios::{tcgetattr, tcsetattr, OptionalActions, Termios};
+use rustix::termios::{OptionalActions, Termios, tcgetattr, tcsetattr};
 
 use crate::error::CliError;
 
 const DETACH_PREFIX: u8 = 0x10;
 const DETACH_SUFFIX: u8 = 0x11;
+const MAX_APP_SERVER_FRAME_BYTES: usize = 1024 * 1024;
 
 pub(super) struct InteractiveTerminal {
     stdin: io::Stdin,
@@ -22,6 +23,34 @@ pub(super) enum InteractiveInput {
     Detach,
     Closed,
     Failed(io::Error),
+}
+
+/// Bounded JSONL input for the App Server bridge. Unlike terminal attachment,
+/// it intentionally works with a pipe as well as a terminal.
+pub(super) struct StructuredJsonlInput {
+    receiver: Receiver<StructuredJsonlEvent>,
+}
+
+pub(super) enum StructuredJsonlEvent {
+    Frame(Vec<u8>),
+    Closed,
+    Failed(io::Error),
+}
+
+impl StructuredJsonlInput {
+    pub(super) fn open() -> Self {
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || read_structured_jsonl(sender));
+        Self { receiver }
+    }
+
+    pub(super) fn try_event(&self) -> Option<StructuredJsonlEvent> {
+        match self.receiver.try_recv() {
+            Ok(event) => Some(event),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(StructuredJsonlEvent::Closed),
+        }
+    }
 }
 
 impl InteractiveTerminal {
@@ -105,6 +134,54 @@ fn read_terminal_input(sender: mpsc::Sender<InteractiveInput>) {
     }
 }
 
+fn read_structured_jsonl(sender: mpsc::Sender<StructuredJsonlEvent>) {
+    let mut stdin = io::stdin();
+    let mut pending = Vec::new();
+    loop {
+        let mut chunk = [0_u8; 8192];
+        match stdin.read(&mut chunk) {
+            Ok(0) => {
+                if pending.is_empty() {
+                    let _result = sender.send(StructuredJsonlEvent::Closed);
+                } else {
+                    let _result = sender.send(StructuredJsonlEvent::Failed(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Codex App Server input ended before its JSONL newline",
+                    )));
+                }
+                return;
+            }
+            Ok(length) => {
+                pending.extend_from_slice(&chunk[..length]);
+                while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
+                    let frame: Vec<u8> = pending.drain(..=end).collect();
+                    if frame.len() > MAX_APP_SERVER_FRAME_BYTES {
+                        let _result = sender.send(StructuredJsonlEvent::Failed(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "Codex App Server JSONL frame exceeds one MiB",
+                        )));
+                        return;
+                    }
+                    if sender.send(StructuredJsonlEvent::Frame(frame)).is_err() {
+                        return;
+                    }
+                }
+                if pending.len() >= MAX_APP_SERVER_FRAME_BYTES {
+                    let _result = sender.send(StructuredJsonlEvent::Failed(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Codex App Server JSONL frame exceeds one MiB",
+                    )));
+                    return;
+                }
+            }
+            Err(source) => {
+                let _result = sender.send(StructuredJsonlEvent::Failed(source));
+                return;
+            }
+        }
+    }
+}
+
 struct TerminalInputOutcome {
     bytes: Vec<u8>,
     detach: bool,
@@ -137,7 +214,7 @@ fn split_terminal_input(input: &[u8], pending_detach_prefix: &mut bool) -> Termi
 
 #[cfg(test)]
 mod tests {
-    use super::{split_terminal_input, DETACH_PREFIX, DETACH_SUFFIX};
+    use super::{DETACH_PREFIX, DETACH_SUFFIX, split_terminal_input};
 
     #[test]
     fn detach_escape_is_local_and_other_bytes_are_preserved() {

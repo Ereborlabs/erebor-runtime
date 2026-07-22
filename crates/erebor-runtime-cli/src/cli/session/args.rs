@@ -29,9 +29,6 @@ pub(crate) struct CodexRunArgs {
     pub(crate) failure_mode: String,
     #[arg(long, default_value_t = 2)]
     pub(crate) loss_grace_seconds: u64,
-    /// Request a terminal session for the interactive `codex` entrypoint.
-    #[arg(short = 't', long)]
-    pub(crate) tty: bool,
     /// Create and start the session without attaching the client output stream.
     #[arg(short = 'd', long)]
     pub(crate) detached: bool,

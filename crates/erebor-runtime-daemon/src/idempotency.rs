@@ -10,9 +10,9 @@ use sha2::{Digest, Sha256};
 use snafu::ResultExt;
 
 use crate::{
+    Result,
     config::DaemonConfig,
     error::{IdempotencyCapacitySnafu, IdempotencyConflictSnafu, IoSnafu},
-    Result,
 };
 use erebor_runtime_core::{ActiveSessionSignal, SessionSpec};
 use erebor_runtime_packages::{PolicyPackageRevision, VerifiedLocalArtifact};
@@ -70,6 +70,11 @@ pub(crate) enum MutationIntent {
         uid: u32,
         session_id: String,
         request_input_lease: bool,
+        client_instance_id: String,
+    },
+    CodexAppServerAttach {
+        uid: u32,
+        session_id: String,
         client_instance_id: String,
     },
     SessionInputLeaseRenew {
@@ -429,6 +434,9 @@ impl MutationIntent {
                 uid, session_id, ..
             }
             | Self::SessionAttach {
+                uid, session_id, ..
+            }
+            | Self::CodexAppServerAttach {
                 uid, session_id, ..
             }
             | Self::SessionInputLeaseRenew {

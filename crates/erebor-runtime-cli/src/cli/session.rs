@@ -5,6 +5,7 @@ use std::{
 
 use erebor_runtime_client::DaemonClient;
 use erebor_runtime_ipc::v1::{
+    CodexAppServerAttachRequest, CodexAppServerInputCloseRequest, CodexAppServerInputRequest,
     CodexRunRequest, SessionAttachRequest, SessionCreateRequest, SessionEnvironmentEntry,
     SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputRequest,
     SessionPruneRequest, SessionRecord,
@@ -21,7 +22,9 @@ use args::{
     GenericSessionCreateArgs, GenericSessionRequestArgs, SessionAliasArgs, SessionAliasCommand,
     SessionAttachArgs, SessionCommand, SessionEventsArgs, SessionLogsArgs, SessionRunArgs,
 };
-use interactive::{InteractiveInput, InteractiveTerminal};
+use interactive::{
+    InteractiveInput, InteractiveTerminal, StructuredJsonlEvent, StructuredJsonlInput,
+};
 
 pub(super) use args::{CodexRunArgs, SessionArgs};
 
@@ -172,6 +175,7 @@ impl<'a> SessionCommandOwner<'a> {
     }
 
     async fn run_codex_alias(client: &DaemonClient, args: &CodexRunArgs) -> Result<(), CliError> {
+        let app_server = args.alias == "codex-app-server";
         let workspace = args.workspace.clone().unwrap_or_else(|| {
             std::env::current_dir().unwrap_or_else(|_error| std::path::PathBuf::from("."))
         });
@@ -184,31 +188,223 @@ impl<'a> SessionCommandOwner<'a> {
                     policy_set_reference: args.policy.clone(),
                     daemon_failure_mode: args.failure_mode.clone(),
                     requested_loss_grace_seconds: args.loss_grace_seconds,
-                    tty: args.tty,
+                    tty: !app_server,
                     detached: args.detached,
                 },
                 &key,
             )
             .await
             .context(DaemonClientSnafu)?;
-        Self::write_create(created.clone());
+        if !app_server {
+            Self::write_create(created.clone());
+        }
         let started = client
             .session_start(&created.session_id, &format!("{key}:start"))
             .await
             .context(DaemonClientSnafu)?;
-        Self::write_record(started);
+        if !app_server {
+            Self::write_record(started);
+        }
         if !args.detached {
             let client_instance_id = format!("erebor-cli-{}", std::process::id());
-            Self::follow_attached(
-                client,
-                &created.session_id,
-                args.tty,
-                &key,
-                &client_instance_id,
-            )
-            .await?;
+            if app_server {
+                Self::follow_codex_app_server(
+                    client,
+                    &created.session_id,
+                    &key,
+                    &client_instance_id,
+                )
+                .await?;
+            } else {
+                Self::follow_attached(client, &created.session_id, true, &key, &client_instance_id)
+                    .await?;
+            }
         }
         Ok(())
+    }
+
+    async fn follow_codex_app_server(
+        client: &DaemonClient,
+        session_id: &str,
+        key: &str,
+        client_instance_id: &str,
+    ) -> Result<(), CliError> {
+        let attachment = client
+            .codex_app_server_attach(
+                CodexAppServerAttachRequest {
+                    session_id: session_id.to_owned(),
+                    client_instance_id: client_instance_id.to_owned(),
+                },
+                &format!("{key}:app-server-attach"),
+            )
+            .await
+            .context(DaemonClientSnafu)?;
+        if attachment.read_only {
+            return InvalidSessionCommandSnafu {
+                reason: String::from(
+                    "Codex App Server attachment did not receive its structured input lease",
+                ),
+            }
+            .fail();
+        }
+        let input = StructuredJsonlInput::open();
+        let mut stdout_cursor = 0;
+        let mut stderr_cursor = 0;
+        let mut renew_at = Instant::now() + Duration::from_secs(10);
+        let mut renewal = 0_u64;
+        let mut interrupt_sent = false;
+        let mut input_closed = false;
+        let interrupt = tokio::signal::ctrl_c();
+        tokio::pin!(interrupt);
+        loop {
+            while !input_closed {
+                let Some(event) = input.try_event() else {
+                    break;
+                };
+                match event {
+                    StructuredJsonlEvent::Frame(jsonl_frame) => {
+                        let expected_bytes =
+                            u32::try_from(jsonl_frame.len()).map_err(|_error| {
+                                CliError::InvalidSessionCommand {
+                                    reason: String::from(
+                                        "Codex App Server input exceeds the client protocol limit",
+                                    ),
+                                    location: snafu::Location::default(),
+                                }
+                            })?;
+                        let response = client
+                            .codex_app_server_input(CodexAppServerInputRequest {
+                                session_id: attachment.session_id.clone(),
+                                input_lease_id: attachment.input_lease_id.clone(),
+                                client_instance_id: client_instance_id.to_owned(),
+                                jsonl_frame,
+                            })
+                            .await
+                            .context(DaemonClientSnafu)?;
+                        if response.session_id != attachment.session_id {
+                            return InvalidSessionCommandSnafu {
+                                reason: String::from(
+                                    "daemon acknowledged a different Codex App Server session",
+                                ),
+                            }
+                            .fail();
+                        }
+                        if response.synthetic_jsonl_response.is_empty() {
+                            if response.accepted_bytes != expected_bytes {
+                                return InvalidSessionCommandSnafu {
+                                    reason: String::from("daemon did not acknowledge the exact Codex App Server frame"),
+                                }
+                                .fail();
+                            }
+                        } else {
+                            if response.accepted_bytes != 0 {
+                                return InvalidSessionCommandSnafu {
+                                    reason: String::from(
+                                        "daemon both denied and forwarded a Codex App Server frame",
+                                    ),
+                                }
+                                .fail();
+                            }
+                            io::stdout()
+                                .lock()
+                                .write_all(&response.synthetic_jsonl_response)
+                                .context(crate::error::WriteSessionOutputSnafu)?;
+                            io::stdout()
+                                .lock()
+                                .flush()
+                                .context(crate::error::WriteSessionOutputSnafu)?;
+                        }
+                    }
+                    StructuredJsonlEvent::Closed => {
+                        let response = client
+                            .codex_app_server_input_close(CodexAppServerInputCloseRequest {
+                                session_id: attachment.session_id.clone(),
+                                input_lease_id: attachment.input_lease_id.clone(),
+                                client_instance_id: client_instance_id.to_owned(),
+                            })
+                            .await
+                            .context(DaemonClientSnafu)?;
+                        if response.session_id != attachment.session_id || !response.closed {
+                            return InvalidSessionCommandSnafu {
+                                reason: String::from(
+                                    "daemon did not acknowledge Codex App Server input EOF",
+                                ),
+                            }
+                            .fail();
+                        }
+                        input_closed = true;
+                    }
+                    StructuredJsonlEvent::Failed(source) => {
+                        return Err(CliError::Terminal {
+                            source: source.into(),
+                            location: snafu::Location::default(),
+                        });
+                    }
+                }
+            }
+            if Instant::now() >= renew_at {
+                renewal = renewal.saturating_add(1);
+                client
+                    .session_input_lease_renew(
+                        SessionInputLeaseRenewRequest {
+                            session_id: attachment.session_id.clone(),
+                            input_lease_id: attachment.input_lease_id.clone(),
+                            client_instance_id: client_instance_id.to_owned(),
+                        },
+                        &format!("{key}:app-server-lease-renew-{renewal}"),
+                    )
+                    .await
+                    .context(DaemonClientSnafu)?;
+                renew_at = Instant::now() + Duration::from_secs(10);
+            }
+            stdout_cursor = Self::write_stream_page(
+                client
+                    .session_logs(&attachment.session_id, "stdout", stdout_cursor, 256)
+                    .await
+                    .context(DaemonClientSnafu)?,
+            )?;
+            stderr_cursor = Self::write_stream_page_to_stderr(
+                client
+                    .session_logs(&attachment.session_id, "stderr", stderr_cursor, 256)
+                    .await
+                    .context(DaemonClientSnafu)?,
+            )?;
+            let record = client
+                .session_inspect(&attachment.session_id)
+                .await
+                .context(DaemonClientSnafu)?;
+            if matches!(
+                record.state.as_str(),
+                "succeeded" | "failed" | "interrupted" | "removed"
+            ) {
+                Self::release_codex_app_server_lease(
+                    client,
+                    &attachment,
+                    client_instance_id,
+                    &format!("{key}:app-server-finished"),
+                )
+                .await?;
+                return Ok(());
+            }
+            if interrupt_sent {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            } else {
+                tokio::select! {
+                    _ = &mut interrupt => {
+                        client
+                            .session_kill(
+                                &attachment.session_id,
+                                "interrupt",
+                                &format!("{key}:app-server-interrupt"),
+                            )
+                            .await
+                            .context(DaemonClientSnafu)?;
+                        interrupt_sent = true;
+                    }
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+                }
+            }
+        }
     }
 
     async fn follow_attached(
@@ -403,6 +599,26 @@ impl<'a> SessionCommandOwner<'a> {
         Ok(())
     }
 
+    async fn release_codex_app_server_lease(
+        client: &DaemonClient,
+        attachment: &erebor_runtime_ipc::v1::CodexAppServerAttachResponse,
+        client_instance_id: &str,
+        idempotency_key: &str,
+    ) -> Result<(), CliError> {
+        client
+            .session_input_lease_release(
+                SessionInputLeaseReleaseRequest {
+                    session_id: attachment.session_id.clone(),
+                    input_lease_id: attachment.input_lease_id.clone(),
+                    client_instance_id: client_instance_id.to_owned(),
+                },
+                idempotency_key,
+            )
+            .await
+            .context(DaemonClientSnafu)?;
+        Ok(())
+    }
+
     fn write_stream_page(page: erebor_runtime_client::SessionLogPage) -> Result<u64, CliError> {
         let mut output = io::stdout().lock();
         for record in page.records {
@@ -410,6 +626,24 @@ impl<'a> SessionCommandOwner<'a> {
                 .write_all(&record.data)
                 .context(crate::error::WriteSessionOutputSnafu)?;
         }
+        output
+            .flush()
+            .context(crate::error::WriteSessionOutputSnafu)?;
+        Ok(page.end.durable_cursor)
+    }
+
+    fn write_stream_page_to_stderr(
+        page: erebor_runtime_client::SessionLogPage,
+    ) -> Result<u64, CliError> {
+        let mut output = io::stderr().lock();
+        for record in page.records {
+            output
+                .write_all(&record.data)
+                .context(crate::error::WriteSessionOutputSnafu)?;
+        }
+        output
+            .flush()
+            .context(crate::error::WriteSessionOutputSnafu)?;
         Ok(page.end.durable_cursor)
     }
 

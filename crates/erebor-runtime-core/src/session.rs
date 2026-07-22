@@ -12,15 +12,15 @@ use crate::{
     SessionRunPlan, SessionRunnerKind,
 };
 pub use adapter::{
-    AgentAdapterDescriptor, AgentAdapterInvocationShape, AGENT_ADAPTER_DESCRIPTOR_SCHEMA_VERSION,
+    AGENT_ADAPTER_DESCRIPTOR_SCHEMA_VERSION, AgentAdapterDescriptor, AgentAdapterInvocationShape,
 };
 pub use admission::{
     ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, EvidenceRequirement,
-    FilesystemProjection, ImmutableIdentity, OutputPlan, OutputStreamRequirements, RunRequest,
-    RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding,
-    SafePathKind, ScriptInterpreterBinding, SessionAdmission, SessionOwner, SessionSpec,
-    WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION, RUNNER_RECOVERY_SCHEMA_VERSION,
-    SESSION_SPEC_SCHEMA_VERSION,
+    FilesystemProjection, ImmutableIdentity, OutputPlan, OutputStreamRequirements,
+    RUNNER_CAPABILITY_SCHEMA_VERSION, RUNNER_RECOVERY_SCHEMA_VERSION, RunRequest, RunnerBinding,
+    RunnerCapabilityDocument, RunnerId, RunnerRecovery, SESSION_SPEC_SCHEMA_VERSION,
+    SafePathBinding, SafePathKind, ScriptInterpreterBinding, SessionAdmission, SessionOwner,
+    SessionSpec, WorkloadPrivilegePlan,
 };
 use docker::DockerSessionOutputMode;
 pub use docker::DockerSessionRunner;
@@ -263,6 +263,14 @@ pub trait ActiveSession: Send {
         UnsupportedSessionRunnerOperationSnafu {
             runner: self.capability_snapshot().runner().as_str().to_owned(),
             operation: String::from("interactive input"),
+        }
+        .fail()
+    }
+
+    fn close_input(&mut self) -> Result<(), RuntimeError> {
+        UnsupportedSessionRunnerOperationSnafu {
+            runner: self.capability_snapshot().runner().as_str().to_owned(),
+            operation: String::from("structured input EOF"),
         }
         .fail()
     }

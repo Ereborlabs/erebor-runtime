@@ -18,6 +18,8 @@ pub use resources::{
 };
 
 use crate::{
+    DurableSessionRecord, DurableStreamCursor, InputLease, InputLeaseManager, SessionAlias,
+    SessionManagerError, SessionPruneResult, SessionRepository, SessionRepositoryError, StreamKind,
     error::session_manager::{
         ActiveHandleLockSnafu, ActiveHandleMissingSnafu, CapabilityChangedSnafu, OutputSnafu,
         RepositorySnafu, RunnerSnafu, StateLockSnafu,
@@ -25,8 +27,6 @@ use crate::{
     runners::{
         RunnerAdmissionRequest, RunnerExecutionAdmission, RunnerPreparation, RunnerRegistry,
     },
-    DurableSessionRecord, DurableStreamCursor, InputLease, InputLeaseManager, SessionAlias,
-    SessionManagerError, SessionPruneResult, SessionRepository, SessionRepositoryError, StreamKind,
 };
 
 pub(crate) use self::resources::SessionRuntime;
@@ -221,6 +221,29 @@ impl SessionManager {
         Ok(SessionAttachOutcome { lease })
     }
 
+    /// Acquires the bounded structured-stdio lease reserved for a daemon
+    /// certified App Server session. Generic callers cannot obtain this lease.
+    pub fn attach_structured_input(
+        &self,
+        uid: u32,
+        session_id: &str,
+        client_instance_id: &str,
+    ) -> Result<SessionAttachOutcome, SessionManagerError> {
+        let record = self.inspect(uid, session_id)?;
+        if !record.spec().runner_capability().attach_supported() {
+            return Err(SessionManagerError::InvalidOperation {
+                session_id: session_id.to_owned(),
+                reason: String::from("the admitted runner does not support structured stdio"),
+                location: snafu::Location::default(),
+            });
+        }
+        let lease = self
+            .lease(uid, session_id)?
+            .acquire(client_instance_id, INPUT_LEASE_DURATION)
+            .context(OutputSnafu)?;
+        Ok(SessionAttachOutcome { lease: Some(lease) })
+    }
+
     pub fn renew_input_lease(
         &self,
         uid: u32,
@@ -228,7 +251,7 @@ impl SessionManager {
         lease_id: &str,
         client_instance_id: &str,
     ) -> Result<InputLease, SessionManagerError> {
-        self.require_input_lease_session(uid, session_id)?;
+        self.require_attach_supported_session(uid, session_id)?;
         self.lease(uid, session_id)?
             .renew(lease_id, client_instance_id, INPUT_LEASE_DURATION)
             .context(OutputSnafu)
@@ -241,7 +264,7 @@ impl SessionManager {
         lease_id: &str,
         client_instance_id: &str,
     ) -> Result<(), SessionManagerError> {
-        self.require_input_lease_session(uid, session_id)?;
+        self.require_attach_supported_session(uid, session_id)?;
         self.lease(uid, session_id)?
             .release(lease_id, client_instance_id)
             .context(OutputSnafu)
@@ -277,6 +300,63 @@ impl SessionManager {
                 .build()
             })?
             .write_input(data)
+            .context(RunnerSnafu)
+    }
+
+    /// Writes a daemon-validated structured-stdio frame after the owning
+    /// daemon has proved the exact App Server package entrypoint.
+    pub fn write_structured_input(
+        &self,
+        uid: u32,
+        session_id: &str,
+        lease_id: &str,
+        client_instance_id: &str,
+        data: &[u8],
+    ) -> Result<(), SessionManagerError> {
+        if data.is_empty() || data.len() > crate::agents::codex::MAX_APP_SERVER_FRAME_BYTES {
+            return Err(SessionManagerError::InvalidOperation {
+                session_id: session_id.to_owned(),
+                reason: format!(
+                    "structured input must contain between one and {} bytes",
+                    crate::agents::codex::MAX_APP_SERVER_FRAME_BYTES
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        self.lease(uid, session_id)?
+            .require_current(lease_id, client_instance_id)
+            .context(OutputSnafu)?;
+        self.handle(uid, session_id)?
+            .lock()
+            .map_err(|_error| {
+                ActiveHandleLockSnafu {
+                    session_id: session_id.to_owned(),
+                }
+                .build()
+            })?
+            .write_input(data)
+            .context(RunnerSnafu)
+    }
+
+    pub fn close_structured_input(
+        &self,
+        uid: u32,
+        session_id: &str,
+        lease_id: &str,
+        client_instance_id: &str,
+    ) -> Result<(), SessionManagerError> {
+        self.lease(uid, session_id)?
+            .require_current(lease_id, client_instance_id)
+            .context(OutputSnafu)?;
+        self.handle(uid, session_id)?
+            .lock()
+            .map_err(|_error| {
+                ActiveHandleLockSnafu {
+                    session_id: session_id.to_owned(),
+                }
+                .build()
+            })?
+            .close_input()
             .context(RunnerSnafu)
     }
 
@@ -961,6 +1041,22 @@ impl SessionManager {
         })
     }
 
+    fn require_attach_supported_session(
+        &self,
+        uid: u32,
+        session_id: &str,
+    ) -> Result<(), SessionManagerError> {
+        let record = self.inspect(uid, session_id)?;
+        if !record.spec().runner_capability().attach_supported() {
+            return Err(SessionManagerError::InvalidOperation {
+                session_id: session_id.to_owned(),
+                reason: String::from("the admitted runner does not support input leases"),
+                location: snafu::Location::default(),
+            });
+        }
+        Ok(())
+    }
+
     fn handle(&self, uid: u32, session_id: &str) -> Result<ActiveHandle, SessionManagerError> {
         self.active_handles(session_id)?
             .get(&(uid, session_id.to_owned()))
@@ -1008,8 +1104,8 @@ mod tests {
         fs::File,
         path::{Path, PathBuf},
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
             Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
         time::Duration,
     };
@@ -1031,9 +1127,9 @@ mod tests {
     };
 
     use super::{
-        output_endpoints, resources::SessionRuntime, DurableStreamCursor, RunnerPreparation,
-        RunnerRegistry, SessionManager, SessionManagerError, SessionRepository, StreamKind,
-        ValidatedStartConstraints,
+        DurableStreamCursor, RunnerPreparation, RunnerRegistry, SessionManager,
+        SessionManagerError, SessionRepository, StreamKind, ValidatedStartConstraints,
+        output_endpoints, resources::SessionRuntime,
     };
 
     type TestError = Box<dyn std::error::Error>;
@@ -1058,6 +1154,7 @@ mod tests {
         recoveries: AtomicUsize,
         removals: AtomicUsize,
         inputs: Arc<Mutex<Vec<Vec<u8>>>>,
+        input_closed: Arc<AtomicBool>,
     }
 
     struct FakeRunner {
@@ -1150,6 +1247,7 @@ mod tests {
         recovery: RunnerRecovery,
         running: Arc<AtomicBool>,
         inputs: Arc<Mutex<Vec<Vec<u8>>>>,
+        input_closed: Arc<AtomicBool>,
     }
 
     impl ActiveSession for FakeActiveSession {
@@ -1191,6 +1289,13 @@ mod tests {
         }
 
         fn write_input(&mut self, data: &[u8]) -> Result<(), erebor_runtime_core::RuntimeError> {
+            if self.input_closed.load(Ordering::SeqCst) {
+                return Err(erebor_runtime_core::RuntimeError::SessionRunnerProtocol {
+                    runner: String::from("test-runner"),
+                    reason: String::from("fake structured input is closed"),
+                    location: snafu::Location::default(),
+                });
+            }
             self.inputs
                 .lock()
                 .map_err(
@@ -1201,6 +1306,11 @@ mod tests {
                     },
                 )?
                 .push(data.to_vec());
+            Ok(())
+        }
+
+        fn close_input(&mut self) -> Result<(), erebor_runtime_core::RuntimeError> {
+            self.input_closed.store(true, Ordering::SeqCst);
             Ok(())
         }
     }
@@ -1253,12 +1363,14 @@ mod tests {
             self.state.admissions.fetch_add(1, Ordering::SeqCst);
             let workload_privileges = WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)
                 .map_err(|source| context.invalid(source.to_string()))?;
-            let filesystem_projections = vec![FilesystemProjection::new(
-                context.workspace().clone(),
-                PathBuf::from("/workspace"),
-                false,
-            )
-            .map_err(|source| context.invalid(source.to_string()))?];
+            let filesystem_projections = vec![
+                FilesystemProjection::new(
+                    context.workspace().clone(),
+                    PathBuf::from("/workspace"),
+                    false,
+                )
+                .map_err(|source| context.invalid(source.to_string()))?,
+            ];
             Ok(RunnerExecutionAdmission {
                 workspace: context.workspace().clone(),
                 workload_privileges,
@@ -1295,6 +1407,7 @@ mod tests {
                 })?,
                 running: Arc::clone(&self.state.running),
                 inputs: Arc::clone(&self.state.inputs),
+                input_closed: Arc::clone(&self.state.input_closed),
             }))
         }
 
@@ -1316,6 +1429,7 @@ mod tests {
                 })?,
                 running: Arc::clone(&self.state.running),
                 inputs: Arc::clone(&self.state.inputs),
+                input_closed: Arc::clone(&self.state.input_closed),
             }))
         }
 
@@ -1376,6 +1490,7 @@ mod tests {
             recoveries: AtomicUsize::new(0),
             removals: AtomicUsize::new(0),
             inputs: Arc::new(Mutex::new(Vec::new())),
+            input_closed: Arc::new(AtomicBool::new(false)),
         });
         let runner = Arc::new(FakeRunner {
             id: RunnerId::new("test-runner")?,
@@ -1486,8 +1601,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_creates_without_starting_and_starts_exactly_once(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_creates_without_starting_and_starts_exactly_once()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime, spec) = fixture(&root)?;
         let created = manager.create(spec)?;
@@ -1503,9 +1618,11 @@ mod tests {
             erebor_runtime_core::SessionLifecycleState::Running
         );
         assert_eq!(state.starts.load(Ordering::SeqCst), 1);
-        assert!(manager
-            .start(1000, "session-manager-test", &start_constraints(), false)
-            .is_err());
+        assert!(
+            manager
+                .start(1000, "session-manager-test", &start_constraints(), false)
+                .is_err()
+        );
         assert_eq!(state.starts.load(Ordering::SeqCst), 1);
         assert_eq!(state.preparations.load(Ordering::SeqCst), 1);
         assert_eq!(runtime.preparations.load(Ordering::SeqCst), 1);
@@ -1521,8 +1638,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_forwards_only_current_interactive_lease_input_to_the_active_runner(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_forwards_only_current_interactive_lease_input_to_the_active_runner()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, _runtime, spec) = interactive_fixture(&root)?;
         manager.create(spec)?;
@@ -1540,24 +1657,28 @@ mod tests {
             lease.client_id(),
             b"echo governed\n",
         )?;
-        assert!(manager
-            .write_input(
-                1000,
-                "session-manager-test",
-                "other-lease",
-                lease.client_id(),
-                b"not accepted",
-            )
-            .is_err());
-        assert!(manager
-            .write_input(
-                1000,
-                "session-manager-test",
-                lease.lease_id(),
-                lease.client_id(),
-                &[0_u8; 4097],
-            )
-            .is_err());
+        assert!(
+            manager
+                .write_input(
+                    1000,
+                    "session-manager-test",
+                    "other-lease",
+                    lease.client_id(),
+                    b"not accepted",
+                )
+                .is_err()
+        );
+        assert!(
+            manager
+                .write_input(
+                    1000,
+                    "session-manager-test",
+                    lease.lease_id(),
+                    lease.client_id(),
+                    &[0_u8; 4097],
+                )
+                .is_err()
+        );
         assert_eq!(
             *state
                 .inputs
@@ -1569,16 +1690,77 @@ mod tests {
     }
 
     #[test]
-    fn manager_marks_runtime_preparation_failure_and_cleans_once(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_forwards_only_current_structured_lease_input_to_a_non_tty_runner()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, _runtime, spec) = fixture(&root)?;
+        manager.create(spec)?;
+        manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+        let lease = manager
+            .attach_structured_input(1000, "session-manager-test", "app-server-client")?
+            .lease()
+            .cloned()
+            .ok_or("structured attach did not create a lease")?;
+
+        manager.write_structured_input(
+            1000,
+            "session-manager-test",
+            lease.lease_id(),
+            lease.client_id(),
+            b"{\"jsonrpc\":\"2.0\",\"id\":1}\n",
+        )?;
+        assert!(
+            manager
+                .write_structured_input(
+                    1000,
+                    "session-manager-test",
+                    "other-lease",
+                    lease.client_id(),
+                    b"{\"jsonrpc\":\"2.0\"}\n",
+                )
+                .is_err()
+        );
+        assert_eq!(
+            *state
+                .inputs
+                .lock()
+                .map_err(|_error| "fake input lock is poisoned")?,
+            vec![b"{\"jsonrpc\":\"2.0\",\"id\":1}\n".to_vec()]
+        );
+        manager.close_structured_input(
+            1000,
+            "session-manager-test",
+            lease.lease_id(),
+            lease.client_id(),
+        )?;
+        assert!(state.input_closed.load(Ordering::SeqCst));
+        assert!(
+            manager
+                .write_structured_input(
+                    1000,
+                    "session-manager-test",
+                    lease.lease_id(),
+                    lease.client_id(),
+                    b"{\"jsonrpc\":\"2.0\",\"id\":2}\n",
+                )
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn manager_marks_runtime_preparation_failure_and_cleans_once()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime, spec) = fixture(&root)?;
         runtime.fail_prepare.store(true, Ordering::SeqCst);
         manager.create(spec)?;
 
-        assert!(manager
-            .start(1000, "session-manager-test", &start_constraints(), false)
-            .is_err());
+        assert!(
+            manager
+                .start(1000, "session-manager-test", &start_constraints(), false)
+                .is_err()
+        );
         assert_eq!(
             manager.inspect(1000, "session-manager-test")?.state(),
             erebor_runtime_core::SessionLifecycleState::Failed
@@ -1597,9 +1779,11 @@ mod tests {
         state.fail_start.store(true, Ordering::SeqCst);
         manager.create(spec)?;
 
-        assert!(manager
-            .start(1000, "session-manager-test", &start_constraints(), false)
-            .is_err());
+        assert!(
+            manager
+                .start(1000, "session-manager-test", &start_constraints(), false)
+                .is_err()
+        );
         assert_eq!(
             manager.inspect(1000, "session-manager-test")?.state(),
             erebor_runtime_core::SessionLifecycleState::Failed
@@ -1621,24 +1805,28 @@ mod tests {
         *current = capability("2", false)?;
         drop(current);
 
-        assert!(manager
-            .start(1000, "session-manager-test", &start_constraints(), false)
-            .is_err());
+        assert!(
+            manager
+                .start(1000, "session-manager-test", &start_constraints(), false)
+                .is_err()
+        );
         assert_eq!(state.starts.load(Ordering::SeqCst), 0);
         Ok(())
     }
 
     #[test]
-    fn manager_requires_current_root_constraint_validation_before_start(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_requires_current_root_constraint_validation_before_start()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime, spec) = fixture(&root)?;
         manager.create(spec)?;
         let stale = ValidatedStartConstraints::new(1000, "session-manager-test", 0);
 
-        assert!(manager
-            .start(1000, "session-manager-test", &stale, false)
-            .is_err());
+        assert!(
+            manager
+                .start(1000, "session-manager-test", &stale, false)
+                .is_err()
+        );
         assert_eq!(
             manager.inspect(1000, "session-manager-test")?.state(),
             erebor_runtime_core::SessionLifecycleState::Created
@@ -1649,8 +1837,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_recovers_by_stable_binding_and_runner_then_removes(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_recovers_by_stable_binding_and_runner_then_removes()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime_state, spec) = fixture(&root)?;
         manager.create(spec)?;
@@ -1699,8 +1887,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_recovery_preparation_failure_interrupts_without_recovering_runner(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_recovery_preparation_failure_interrupts_without_recovering_runner()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime_state, spec) = fixture(&root)?;
         manager.create(spec)?;
@@ -1760,8 +1948,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_recovery_enforces_terminate_mode_before_returning_control(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_recovery_enforces_terminate_mode_before_returning_control()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime_state, spec) =
             fixture_with_mode(&root, DaemonFailureMode::Terminate)?;
@@ -1793,8 +1981,8 @@ mod tests {
     }
 
     #[test]
-    fn manager_recovery_marks_starting_without_a_binding_interrupted(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn manager_recovery_marks_starting_without_a_binding_interrupted()
+    -> Result<(), Box<dyn std::error::Error>> {
         let root = TempDir::new()?;
         let (manager, state, runtime_state, spec) = fixture(&root)?;
         let created = manager.create(spec)?;
