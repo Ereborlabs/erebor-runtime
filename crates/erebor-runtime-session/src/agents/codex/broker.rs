@@ -90,6 +90,9 @@ impl CodexSessionHookRegistration {
                 dispatch.shell().display().to_string(),
             )
         });
+        let trust = dispatch
+            .map(CodexInvocationLeaseTrust::with_command_dispatch)
+            .unwrap_or_default();
         let lease_owner = Arc::new(CodexInvocationLeaseOwner::new(
             spec.session_id().as_str(),
             erebor_runtime_events::ActorIdentity {
@@ -106,7 +109,7 @@ impl CodexSessionHookRegistration {
                     .map(|path| path.display().to_string())
                     .collect(),
             ),
-            CodexInvocationLeaseTrust::new(Vec::new(), dispatch),
+            trust,
             Some(spec.output().root().join("evidence")),
         ));
         let context_root = spec.output().root().join("codex-context");

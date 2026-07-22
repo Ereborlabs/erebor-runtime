@@ -96,8 +96,9 @@ erebor session logs <session-id> --stream stderr
 erebor audit tail <session-id>
 ```
 
-Phase 4 acceptance must exercise a real privileged Linux fixture, including
-package/installation revalidation, hook ticket and peer binding, private
-daemon-socket absence, App Server JSONL validation, Context DAG prompt binding,
-and two-UID isolation. It requires a privileged Linux host; this walkthrough
-does not replace that evidence.
+Phase 4 acceptance uses a deterministic Codex-compatible privileged Linux
+fixture to prove package/installation revalidation, hook ticket and peer
+binding, private daemon-socket absence, App Server JSONL validation, Context
+DAG prompt binding, and two-UID isolation. Phase 5 adds the state-projected,
+authenticated real-vendor Codex fixture. This walkthrough does not replace
+either evidence set.

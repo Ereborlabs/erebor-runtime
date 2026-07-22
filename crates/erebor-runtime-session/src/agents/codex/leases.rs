@@ -49,7 +49,6 @@ impl CodexCommandDispatch {
 /// Immutable session trust inputs for the Codex invocation-lease owner.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CodexInvocationLeaseTrust {
-    runtime_state_roots: Vec<PathBuf>,
     command_dispatch: Option<CodexCommandDispatch>,
 }
 
@@ -73,13 +72,9 @@ impl CodexInvocationLeaseProfile {
 }
 
 impl CodexInvocationLeaseTrust {
-    pub(crate) fn new(
-        runtime_state_roots: Vec<PathBuf>,
-        command_dispatch: Option<CodexCommandDispatch>,
-    ) -> Self {
+    pub(crate) const fn with_command_dispatch(command_dispatch: CodexCommandDispatch) -> Self {
         Self {
-            runtime_state_roots,
-            command_dispatch,
+            command_dispatch: Some(command_dispatch),
         }
     }
 }
@@ -217,7 +212,6 @@ pub(crate) struct CodexInvocationLeaseOwner {
     profile_id: String,
     profile_executable: String,
     trusted_profile_execs: Vec<String>,
-    runtime_state_roots: Vec<PathBuf>,
     command_dispatch: Option<CodexCommandDispatch>,
     audit: Option<JsonlAuditSink>,
     context_dag: Mutex<Option<Arc<CodexContextDag>>>,
@@ -238,7 +232,6 @@ impl CodexInvocationLeaseOwner {
             profile_id: profile.id,
             profile_executable: profile.executable,
             trusted_profile_execs: profile.trusted_execs,
-            runtime_state_roots: trust.runtime_state_roots,
             command_dispatch: trust.command_dispatch,
             audit: audit_path.map(JsonlAuditSink::new),
             context_dag: Mutex::new(None),
@@ -523,18 +516,6 @@ impl CodexInvocationLeaseOwner {
                     true,
                     "erebor-codex-invocation-lease-profile-bootstrap",
                     "profile-pinned Codex or managed-hook bootstrap exec is not a tool effect",
-                )
-                .map(Some);
-        }
-        if self.allow_runtime_state_file(&state, request) {
-            return self
-                .record_physical_decision_locked(
-                    &mut state,
-                    None,
-                    request,
-                    true,
-                    "erebor-codex-invocation-lease-runtime-state",
-                    "declared direct Codex runtime state is outside the governed workspace",
                 )
                 .map(Some);
         }
@@ -1205,21 +1186,6 @@ impl CodexInvocationLeaseOwner {
         false
     }
 
-    fn allow_runtime_state_file(&self, state: &LeaseState, request: &InterceptionRequest) -> bool {
-        matches!(
-            request.operation_family(),
-            InterceptionOperation::FileOpen
-                | InterceptionOperation::FileRead
-                | InterceptionOperation::FileMutation
-        ) && state.bootstrap_processes.contains(&request.pid)
-            && request.file.as_ref().is_some_and(|file| {
-                let path = std::path::Path::new(&file.path);
-                self.runtime_state_roots
-                    .iter()
-                    .any(|root| path.starts_with(root))
-            })
-    }
-
     fn mutation_target_matches(lease: &InvocationLease, path: Option<&str>) -> bool {
         let (InvocationCapability::InProcessMutation { targets }, Some(path)) =
             (&lease.capability, path)
@@ -1790,16 +1756,8 @@ mod tests {
     }
 
     #[test]
-    fn direct_bootstrap_claims_declared_runtime_state_but_delegates_other_files(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let root = tempfile::tempdir()?;
-        let state_root = root.path().join("codex-home");
-        std::fs::create_dir(&state_root)?;
-        let owner = test_owner_with_trust(CodexInvocationLeaseTrust::new(
-            vec![state_root.clone()],
-            None,
-        ));
-
+    fn bootstrap_does_not_claim_ambient_state_files() -> Result<(), Box<dyn std::error::Error>> {
+        let owner = test_owner();
         let bootstrap = InterceptionRequest {
             pid: 42,
             ppid: 1,
@@ -1819,68 +1777,11 @@ mod tests {
                 .0,
             SessionInterceptionDecision::Allow
         );
-
-        let state_file = state_root.join("state.sqlite");
-        let state_path = state_file.to_string_lossy();
-        assert_eq!(
+        assert!(
             owner
-                .physical_effect_decision(&file_request(42, &state_path))
-                .ok_or("missing runtime-state decision")?
-                .into_parts()
-                .0,
-            SessionInterceptionDecision::Allow
+                .physical_effect_decision(&file_request(42, "/home/user/.codex/state.sqlite"))
+                .is_none()
         );
-        assert!(owner
-            .physical_effect_decision(&file_request(42, "workspace/other.txt"))
-            .is_none());
-        owner.record_guarded_process_fork(42, 43)?;
-        assert_eq!(
-            owner
-                .physical_effect_decision(&file_request(43, &state_path))
-                .ok_or("missing runtime-clone decision")?
-                .into_parts()
-                .0,
-            SessionInterceptionDecision::Allow
-        );
-        assert!(owner
-            .physical_effect_decision(&file_request(44, &state_path))
-            .is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn bootstrap_clone_delegates_nonbootstrap_exec_and_runtime_state_afterward(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let root = tempfile::tempdir()?;
-        let state_root = root.path().join("codex-home");
-        std::fs::create_dir(&state_root)?;
-        let owner = test_owner_with_trust(CodexInvocationLeaseTrust::new(
-            vec![state_root.clone()],
-            None,
-        ));
-        let bootstrap = InterceptionRequest {
-            pid: 42,
-            ppid: 1,
-            operation: InterceptionOperation::ProcessExec as i32,
-            executable: String::from("/opt/codex/codex"),
-            process_exec: Some(ProcessExecOperation {
-                executable: String::from("/opt/codex/codex"),
-                ..ProcessExecOperation::default()
-            }),
-            ..InterceptionRequest::default()
-        };
-        let _ = owner.physical_effect_decision(&bootstrap);
-        owner.record_guarded_process_fork(42, 43)?;
-
-        let tool_exec = process_request(43, 42, "touch workspace/other.txt");
-        assert!(owner.physical_effect_decision(&tool_exec).is_none());
-        let state_path = state_root
-            .join("state.sqlite")
-            .to_string_lossy()
-            .into_owned();
-        assert!(owner
-            .physical_effect_decision(&file_request(43, &state_path))
-            .is_none());
         Ok(())
     }
 
@@ -2453,12 +2354,11 @@ mod tests {
     }
 
     fn dispatch_owner() -> CodexInvocationLeaseOwner {
-        test_owner_with_trust(CodexInvocationLeaseTrust::new(
-            Vec::new(),
-            Some(CodexCommandDispatch::new(
+        test_owner_with_trust(CodexInvocationLeaseTrust::with_command_dispatch(
+            CodexCommandDispatch::new(
                 String::from("codex-linux-sandbox"),
                 String::from("/usr/bin/zsh"),
-            )),
+            ),
         ))
     }
 
