@@ -30,6 +30,10 @@ pub struct PreparedAgentInvocation {
 }
 
 impl PreparedAgentInvocation {
+    pub(crate) fn exact(command: Vec<String>) -> Self {
+        Self { command }
+    }
+
     #[must_use]
     pub fn command(&self) -> &[String] {
         &self.command
@@ -45,11 +49,18 @@ pub struct AgentAdapterRegistry {
 impl AgentAdapterRegistry {
     pub fn compiled() -> Result<Self, SessionSpecError> {
         let generic = GenericProcessAdapter::new()?;
+        let codex = super::codex::CodexV1Adapter::new()?;
         Ok(Self {
-            adapters: BTreeMap::from([(
-                generic.descriptor().id().to_owned(),
-                Arc::new(generic) as Arc<dyn AgentAdapter>,
-            )]),
+            adapters: BTreeMap::from([
+                (
+                    generic.descriptor().id().to_owned(),
+                    Arc::new(generic) as Arc<dyn AgentAdapter>,
+                ),
+                (
+                    codex.descriptor().id().to_owned(),
+                    Arc::new(codex) as Arc<dyn AgentAdapter>,
+                ),
+            ]),
         })
     }
 
@@ -137,7 +148,7 @@ impl AgentAdapter for GenericProcessAdapter {
                 .first()
                 .is_some_and(|entrypoint| entrypoint == "<argv>");
         if package.adapter_id() != self.descriptor.id()
-            || package.config_digest().as_str() != self.descriptor.sha256()?
+            || package.adapter_digest().as_str() != self.descriptor.sha256()?
             || !arbitrary_argv
             || !package.support_layer_digests().is_empty()
             || !self.daemon_version_is_compatible(package, daemon_version)?
@@ -170,9 +181,7 @@ impl AgentAdapter for GenericProcessAdapter {
                 "generic-process-v1 requires one non-empty initial argv",
             ));
         }
-        Ok(PreparedAgentInvocation {
-            command: command.to_vec(),
-        })
+        Ok(PreparedAgentInvocation::exact(command.to_vec()))
     }
 }
 

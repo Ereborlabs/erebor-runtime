@@ -13,6 +13,7 @@ use erebor_runtime_policy::{
     LayeredDecision, LayeredPolicySet, LocalPolicy, PolicyLayer, PolicySet,
 };
 use erebor_runtime_session::{SessionInterceptionRouter, SessionInterceptionRouterFactory};
+use erebor_runtime_session::{CodexAppServerService, CodexHookService, SessionManagerError};
 
 use crate::local_store::DaemonLocalStore;
 
@@ -21,19 +22,73 @@ use crate::local_store::DaemonLocalStore;
 /// path supplied by a client or workload.
 pub(super) struct StoredPolicyInterceptionRouterFactory {
     local_store: Arc<DaemonLocalStore>,
+    codex_hook_service: Arc<CodexHookService>,
+    codex_app_server_service: Arc<CodexAppServerService>,
 }
 
 impl StoredPolicyInterceptionRouterFactory {
-    pub(super) const fn new(local_store: Arc<DaemonLocalStore>) -> Self {
-        Self { local_store }
+    pub(super) const fn new(
+        local_store: Arc<DaemonLocalStore>,
+        codex_hook_service: Arc<CodexHookService>,
+        codex_app_server_service: Arc<CodexAppServerService>,
+    ) -> Self {
+        Self {
+            local_store,
+            codex_hook_service,
+            codex_app_server_service,
+        }
     }
 }
 
 impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory {
-    fn router(&self, spec: &SessionSpec) -> SessionInterceptionRouter {
-        SessionInterceptionRouter::new().with_process_exec_handler(
+    fn router(&self, spec: &SessionSpec) -> Result<SessionInterceptionRouter, SessionManagerError> {
+        let router = SessionInterceptionRouter::new().with_process_exec_handler(
             StoredPolicyProcessExecHandler::from_session(Arc::clone(&self.local_store), spec),
-        )
+        );
+        let admission = self
+            .local_store
+            .validate_session_spec(spec)
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        if admission.package().adapter_id() != "codex-v1" {
+            return Ok(router);
+        }
+        let codex = self
+            .local_store
+            .resolve_codex_installation(
+                spec.owner().uid(),
+                admission.package_digest(),
+                admission.installation_digest(),
+                None,
+            )
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        let registration = self
+            .codex_hook_service
+            .register_session(spec, codex.package().definition())
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        self.codex_app_server_service
+            .register(registration.app_server_registration())
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        Ok(registration.with_interception_router(router))
+    }
+
+    fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
+        self.codex_hook_service
+            .unregister(spec.session_id().as_str())
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        self.codex_app_server_service
+            .unregister(spec.session_id().as_str())
+            .map_err(|error| self.invalid_error(spec, error.to_string()))?;
+        Ok(())
+    }
+}
+
+impl StoredPolicyInterceptionRouterFactory {
+    fn invalid_error(&self, spec: &SessionSpec, reason: impl Into<String>) -> SessionManagerError {
+        SessionManagerError::InvalidRuntime {
+            session_id: spec.session_id().as_str().to_owned(),
+            reason: reason.into(),
+            location: snafu::Location::default(),
+        }
     }
 }
 

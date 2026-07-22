@@ -7,6 +7,7 @@ use crate::{
     logging::{init_tracing, LoggingArgs},
 };
 
+mod agent;
 mod approval;
 mod audit;
 pub(super) mod config_paths;
@@ -47,6 +48,8 @@ impl Cli {
 
         match &self.command {
             Command::Start(args) => start::StartCommand::new(args).execute(),
+            Command::Agent(args) => agent::AgentCommandOwner::new(args).execute(),
+            Command::Run(args) => session::SessionCommandOwner::execute_codex_run(args),
             Command::Session(args) => session::SessionCommandOwner::new(args).execute(),
             Command::Policy(args) => policy::PolicyCommandOwner::new(args).execute(),
             Command::Runner(args) => runner::RunnerCommandOwner::new(args).execute(),
@@ -62,6 +65,10 @@ impl Cli {
 enum Command {
     /// Start the configured session surfaces.
     Start(start::StartArgs),
+    /// Enroll a locally verified agent package installation.
+    Agent(agent::AgentArgs),
+    /// Create, start, and attach to one daemon-owned Codex session by local alias.
+    Run(session::CodexRunArgs),
     /// Start or manage governed agent sessions.
     Session(session::SessionArgs),
     /// Policy development and validation commands.
@@ -82,6 +89,8 @@ impl fmt::Display for Command {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Start(args) => formatter.write_str(&args.display()),
+            Self::Agent(args) => formatter.write_str(&args.display()),
+            Self::Run(args) => formatter.write_str(&format!("run {}", args.alias)),
             Self::Session(args) => formatter.write_str(&args.display()),
             Self::Policy(args) => formatter.write_str(&args.display()),
             Self::Runner(args) => formatter.write_str(&args.display()),

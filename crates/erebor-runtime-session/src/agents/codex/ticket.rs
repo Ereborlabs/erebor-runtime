@@ -2,15 +2,13 @@ use std::{
     collections::HashMap,
     fs::File,
     io::Read,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
-use erebor_runtime_core::{
-    CodexProfileLayerConfig, RuntimeConfig, SessionRunPlan, SessionRunnerKind,
-};
 use erebor_runtime_ipc::v1::{HookHello, HookPeerEvidence};
+use erebor_runtime_packages::{CodexHookEventName, CodexHookExec, CodexPackageDefinition};
 use rustix::{
     event::{poll, PollFd, PollFlags, Timespec},
     fd::OwnedFd,
@@ -34,41 +32,109 @@ const DEFAULT_TICKET_LIFETIME: Duration = Duration::from_secs(10);
 #[derive(Clone)]
 pub struct CodexManagedSession {
     session_id: String,
-    profile: CodexProfileLayerConfig,
+    profile: CodexManagedProfile,
     tickets: CodexHookTicketRegistry,
 }
 
+#[derive(Clone)]
+pub(crate) struct CodexManagedProfile {
+    id: String,
+    executable: PathBuf,
+    managed_hook_path: PathBuf,
+    hook_exec_history: Vec<PathBuf>,
+    event_schemas: Vec<CodexManagedEventSchema>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CodexManagedEventSchema {
+    event: CodexHookEventName,
+    sha256: String,
+}
+
+impl CodexManagedProfile {
+    fn from_package(executable: PathBuf, definition: &CodexPackageDefinition) -> Self {
+        Self {
+            id: definition.release_id().to_owned(),
+            executable: executable.clone(),
+            managed_hook_path: definition.managed_artifacts().managed_hook_path().to_path_buf(),
+            hook_exec_history: definition
+                .hook_contract()
+                .exec_history()
+                .iter()
+                .map(|entry| match entry {
+                    CodexHookExec::InstalledExecutable => executable.clone(),
+                    CodexHookExec::AbsolutePath(path) => path.clone(),
+                    CodexHookExec::ManagedHook => definition
+                        .managed_artifacts()
+                        .managed_hook_path()
+                        .to_path_buf(),
+                })
+                .collect(),
+            event_schemas: definition
+                .hook_contract()
+                .event_schemas()
+                .iter()
+                .map(|schema| CodexManagedEventSchema {
+                    event: schema.event().clone(),
+                    sha256: schema.sha256().as_str().to_owned(),
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(crate) fn executable(&self) -> &Path {
+        &self.executable
+    }
+
+    pub(crate) fn managed_hook_path(&self) -> &Path {
+        &self.managed_hook_path
+    }
+
+    pub(crate) fn hook_exec_history(&self) -> &[PathBuf] {
+        &self.hook_exec_history
+    }
+
+    pub(crate) fn event_schema(&self, event: &CodexHookEventName) -> Option<&CodexManagedEventSchema> {
+        self.event_schemas.iter().find(|schema| &schema.event == event)
+    }
+}
+
+impl CodexManagedEventSchema {
+    pub(crate) fn sha256(&self) -> &str {
+        &self.sha256
+    }
+}
+
 impl CodexManagedSession {
-    pub fn for_run(
-        config: &RuntimeConfig,
-        plan: &SessionRunPlan,
-    ) -> Result<Option<Self>, CodexSessionError> {
-        let Some(command) = plan.command().first() else {
-            return Ok(None);
-        };
-        let Some(profile) = config.codex.matching_profile(Path::new(command)) else {
-            return Ok(None);
-        };
-        ensure!(
-            plan.runner().kind() == SessionRunnerKind::LinuxHost,
-            IncompatibleProfileSnafu {
-                reason: format!(
-                    "profile `{}` requires linux_host but session run selected `{}`",
-                    profile.id,
-                    plan.runner().kind().as_str()
-                )
+    pub(crate) fn from_package(
+        session_id: impl Into<String>,
+        executable: PathBuf,
+        definition: &CodexPackageDefinition,
+    ) -> Result<Self, CodexSessionError> {
+        if !definition.supported_platform().matches_host() {
+            return IncompatibleProfileSnafu {
+                reason: String::from("Codex package is not supported by this Linux host"),
             }
-        );
-        Ok(Some(Self {
-            session_id: plan.session_id().as_str().to_owned(),
-            profile: profile.clone(),
+            .fail();
+        }
+        Ok(Self {
+            session_id: session_id.into(),
+            profile: CodexManagedProfile::from_package(executable, definition),
             tickets: CodexHookTicketRegistry::default(),
-        }))
+        })
     }
 
     #[must_use]
-    pub fn profile(&self) -> &CodexProfileLayerConfig {
+    pub(crate) fn profile(&self) -> &CodexManagedProfile {
         &self.profile
+    }
+
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     #[must_use]
@@ -93,7 +159,7 @@ impl CodexManagedSession {
         peer: HookPeerEvidence,
     ) -> Result<CodexHookTicket, CodexSessionError> {
         let runtime =
-            LinuxHookPeerInspector::runtime_evidence(&peer, self.profile.executable.as_path())?;
+            LinuxHookPeerInspector::runtime_evidence(&peer, self.profile.executable())?;
         let pid = i32::try_from(peer.observed_pid).map_err(|_error| CodexSessionError::Pidfd {
             pid: i32::MIN,
             source: std::io::Error::from(std::io::ErrorKind::InvalidInput),
@@ -121,14 +187,6 @@ impl CodexManagedSession {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(profile: CodexProfileLayerConfig) -> Self {
-        Self {
-            session_id: String::from("session-test"),
-            profile,
-            tickets: CodexHookTicketRegistry::default(),
-        }
-    }
 }
 
 #[derive(Clone, Default)]
@@ -278,7 +336,10 @@ impl CodexHookTicketRegistry {
             }
             .fail();
         }
-        if hello.ticket_id != observed_peer.ticket_id || pending.expected_peer != *observed_peer {
+        if hello.session_id != pending.ticket.session_id
+            || hello.ticket_id != observed_peer.ticket_id
+            || pending.expected_peer != *observed_peer
+        {
             return TicketPeerMismatchSnafu {
                 ticket_id: hello.ticket_id.clone(),
             }
@@ -332,7 +393,8 @@ impl CodexHookTicketRegistry {
             .pending
             .iter()
             .filter(|(_ticket_id, pending)| {
-                pending.expires_at > now
+                pending.ticket.session_id == hello.session_id
+                    && pending.expires_at > now
                     && same_peer_identity(&pending.expected_peer, observed_peer)
             })
             .map(|(ticket_id, _pending)| ticket_id.clone())
@@ -342,7 +404,8 @@ impl CodexHookTicketRegistry {
                 .pending
                 .iter()
                 .filter(|(_ticket_id, pending)| {
-                    pending.expires_at > now
+                    pending.ticket.session_id == hello.session_id
+                        && pending.expires_at > now
                         && same_peer_identity_without_pipes(&pending.expected_peer, observed_peer)
                 })
                 .map(|(ticket_id, _pending)| ticket_id.clone())
@@ -414,8 +477,6 @@ fn random_ticket_id() -> Result<String, CodexSessionError> {
 mod tests {
     use std::{process::Command, time::Duration};
 
-    use erebor_runtime_core::{RuntimeConfig, SessionRunPlan, SessionRunnerKind};
-    use erebor_runtime_events::SessionId;
     use erebor_runtime_ipc::v1::{HookHello, HookPeerEvidence, PipeIdentity, PROTOCOL_VERSION};
     #[cfg(target_os = "linux")]
     use rustix::process::{pidfd_open, Pid, PidfdFlags};
@@ -458,6 +519,7 @@ mod tests {
         let hello = HookHello {
             protocol_version: PROTOCOL_VERSION,
             ticket_id: ticket.id().to_owned(),
+            session_id: String::from("session-1"),
         };
         let mut forged = peer();
         forged.ticket_id = ticket.id().to_owned();
@@ -486,6 +548,7 @@ mod tests {
         let expired = HookHello {
             protocol_version: PROTOCOL_VERSION,
             ticket_id: ticket.id().to_owned(),
+            session_id: String::from("session-1"),
         };
         assert!(matches!(
             registry.consume(&expired, &observed),
@@ -494,6 +557,7 @@ mod tests {
         let unsupported = HookHello {
             protocol_version: PROTOCOL_VERSION + 1,
             ticket_id: String::from("ignored"),
+            session_id: String::from("session-1"),
         };
         assert!(matches!(
             registry.consume(&unsupported, &observed),
@@ -528,6 +592,7 @@ mod tests {
         let hello = HookHello {
             protocol_version: PROTOCOL_VERSION,
             ticket_id: ticket.id().to_owned(),
+            session_id: String::from("session-1"),
         };
         assert!(matches!(
             registry.consume(&hello, &expected),
@@ -544,6 +609,7 @@ mod tests {
         let hello = HookHello {
             protocol_version: PROTOCOL_VERSION,
             ticket_id: String::new(),
+            session_id: String::from("session-1"),
         };
         assert_eq!(registry.consume_matching_peer(&hello, &peer())?, ticket);
         assert!(matches!(
@@ -561,6 +627,7 @@ mod tests {
         let hello = HookHello {
             protocol_version: PROTOCOL_VERSION,
             ticket_id: String::new(),
+            session_id: String::from("session-1"),
         };
         let mut replaced_stdout = peer();
         replaced_stdout
@@ -639,6 +706,7 @@ mod tests {
             let hello = HookHello {
                 protocol_version: PROTOCOL_VERSION,
                 ticket_id: ticket.id().to_owned(),
+                session_id: String::from("session-1"),
             };
             let mut observed = peer();
             observed.ticket_id = ticket.id().to_owned();
@@ -654,63 +722,4 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn managed_session_selects_only_the_profile_pinned_command(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let config = RuntimeConfig::from_json_str(
-            r#"
-            {
-              "policies": ["policies/default.json"],
-              "session": { "enabled": true, "runner": { "kind": "linux_host" } },
-              "surfaces": { "filesystem": { "enabled": true } },
-              "codex": {
-                "enabled": true,
-                "profiles": [{
-                  "id": "local-test",
-                  "runner": "linux_host",
-                  "executable": "/tmp/erebor-codex-test/codex",
-                  "executable_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                  "deployment": "local_cooperative",
-                  "trust_root": "/tmp/erebor-codex-test",
-                  "requirements_source": "/tmp/erebor-codex-test/requirements.toml",
-                  "requirements_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                  "managed_hook_source": "/tmp/erebor-codex-test/hooks/erebor-codex-hook",
-                  "managed_hook_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                  "managed_hook_path": "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
-                  "shell_startup_source": "/tmp/erebor-codex-test/hooks/shell-startup",
-                  "shell_startup_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-                  "shell_startup_path": "/usr/lib/erebor/codex-hooks/shell-startup",
-                  "hook_shell": "direct",
-                  "hook_exec_history": [
-                    "/tmp/erebor-codex-test/codex",
-                    "/usr/lib/erebor/codex-hooks/erebor-codex-hook"
-                  ],
-                  "event_schemas": [{
-                    "event": "session_start",
-                    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-                  }]
-                }]
-              }
-            }
-            "#,
-        )?;
-        let selected_plan = SessionRunPlan::from_config(
-            &config,
-            SessionRunnerKind::LinuxHost,
-            SessionId::new("session-profile-selection"),
-            vec![String::from("/tmp/erebor-codex-test/codex")],
-        )?;
-        let selected = super::CodexManagedSession::for_run(&config, &selected_plan)?
-            .ok_or("expected managed Codex session")?;
-        assert_eq!(selected.profile().id, "local-test");
-
-        let other_plan = SessionRunPlan::from_config(
-            &config,
-            SessionRunnerKind::LinuxHost,
-            SessionId::new("session-unmanaged-command"),
-            vec![String::from("/usr/bin/true")],
-        )?;
-        assert!(super::CodexManagedSession::for_run(&config, &other_plan)?.is_none());
-        Ok(())
-    }
 }

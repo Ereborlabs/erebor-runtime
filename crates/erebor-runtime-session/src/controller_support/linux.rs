@@ -1,10 +1,10 @@
 use std::{
     ffi::CString,
-    fs::File,
+    fs::{self, File},
     io::{Read, Write},
     os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -18,7 +18,7 @@ use rustix::process::{kill_process_group, Pid, Signal};
 use rustix::thread::unshare;
 use rustix::{
     fs::{openat, Mode, OFlags},
-    mount::{mount, mount_bind, mount_change, MountFlags, MountPropagationFlags},
+    mount::{mount, mount_bind, mount_change, mount_remount, MountFlags, MountPropagationFlags},
     process::{ioctl_tiocsctty, setsid},
     pty::{grantpt, ioctl_tiocgptpeer, openpt, unlockpt, OpenptFlags},
     termios::tcsetpgrp,
@@ -37,9 +37,14 @@ pub(crate) struct LinuxWorkload {
     child: Child,
     process_group: Pid,
     stable_identity: String,
-    input: Option<File>,
+    input: Option<LinuxWorkloadInput>,
     output_pumps: Vec<thread::JoinHandle<()>>,
     output_failures: OutputFailureMonitor,
+}
+
+enum LinuxWorkloadInput {
+    Terminal(File),
+    Pipe(ChildStdin),
 }
 
 impl LinuxWorkload {
@@ -109,7 +114,7 @@ impl LinuxWorkload {
             )
             .current_dir(prepared.workspace_path())
             .env("EREBOR_TERMINAL_TTY", handoff.spec.tty().to_string());
-        let (input, controlling_terminal) = if handoff.spec.tty() {
+        let (mut input, controlling_terminal) = if handoff.spec.tty() {
             setsid().map_err(|source| SessionControllerError::Io {
                 action: "creating Linux pseudoterminal session",
                 path: PathBuf::from("<pty-session>"),
@@ -157,10 +162,10 @@ impl LinuxWorkload {
                 .stdout(Stdio::from(standard_output))
                 .stderr(Stdio::from(slave))
                 .process_group(0);
-            (Some(master), Some(controlling_terminal))
+            (Some(LinuxWorkloadInput::Terminal(master)), Some(controlling_terminal))
         } else {
             command
-                .stdin(Stdio::null())
+                .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .process_group(0);
@@ -174,6 +179,9 @@ impl LinuxWorkload {
                 source,
                 location: snafu::Location::default(),
             })?;
+        if !handoff.spec.tty() {
+            input = child.stdin.take().map(LinuxWorkloadInput::Pipe);
+        }
         let pid = Pid::from_raw(child.id() as i32).ok_or_else(|| {
             SessionControllerError::InvalidHandoff {
                 reason: String::from("process guard returned an invalid pid"),
@@ -193,7 +201,7 @@ impl LinuxWorkload {
         let mut output_pumps = Vec::new();
         let (output_failures, failure_sender) = OutputFailureMonitor::new();
         match input.as_ref() {
-            Some(terminal) => {
+            Some(LinuxWorkloadInput::Terminal(terminal)) => {
                 let output_terminal =
                     terminal
                         .try_clone()
@@ -210,7 +218,7 @@ impl LinuxWorkload {
                     failure_sender,
                 ));
             }
-            None => {
+            Some(LinuxWorkloadInput::Pipe(_)) | None => {
                 if let Some(stdout) = child.stdout.take() {
                     output_pumps.push(pump_output(
                         stdout,
@@ -281,19 +289,20 @@ impl LinuxWorkload {
     }
 
     pub(crate) fn write_input(&mut self, data: &[u8]) -> Result<(), SessionControllerError> {
-        let terminal =
+        let input =
             self.input
                 .as_mut()
                 .ok_or_else(|| SessionControllerError::InvalidHandoff {
-                    reason: String::from("interactive input requires an admitted Linux TTY"),
+                    reason: String::from("Linux workload stdin is unavailable"),
                     location: snafu::Location::default(),
                 })?;
-        terminal
-            .write_all(data)
-            .and_then(|()| terminal.flush())
+        match input {
+            LinuxWorkloadInput::Terminal(input) => input.write_all(data).and_then(|()| input.flush()),
+            LinuxWorkloadInput::Pipe(input) => input.write_all(data).and_then(|()| input.flush()),
+        }
             .map_err(|source| SessionControllerError::Io {
-                action: "writing Linux pseudoterminal input",
-                path: PathBuf::from("<pty-master>"),
+                action: "writing Linux workload stdin",
+                path: PathBuf::from("<workload-stdin>"),
                 source,
                 location: snafu::Location::default(),
             })
@@ -452,6 +461,7 @@ fn prepare_private_namespace(
                 location: snafu::Location::default(),
             })?;
     }
+    let endpoint_projections = hold_endpoint_projections(handoff)?;
 
     std::fs::create_dir_all("/run/erebor").map_err(|source| SessionControllerError::Io {
         action: "creating private Erebor runtime mountpoint",
@@ -497,6 +507,8 @@ fn prepare_private_namespace(
                 location: snafu::Location::default(),
             })?;
     }
+    project_endpoints(&endpoint_projections)?;
+    project_filesystems(handoff)?;
     Ok(handoff
         .runtime_environment
         .iter()
@@ -508,6 +520,165 @@ fn prepare_private_namespace(
             }
         })
         .collect())
+}
+
+fn hold_endpoint_projections(
+    handoff: &LinuxControllerHandoff,
+) -> Result<Vec<(PathBuf, PathBuf)>, SessionControllerError> {
+    let root = handoff.evidence_path.join("endpoint-projections");
+    let mut held = Vec::new();
+    for (index, endpoint) in handoff
+        .spec
+        .endpoint_projections()
+        .iter()
+        .filter(|endpoint| endpoint.service() != "runtime-guard")
+        .enumerate()
+    {
+        fs::create_dir_all(&root).map_err(|source| SessionControllerError::Io {
+            action: "creating daemon-owned endpoint projection directory",
+            path: root.clone(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+        let held_path = root.join(index.to_string());
+        File::create(&held_path).map_err(|source| SessionControllerError::Io {
+            action: "creating held endpoint projection mountpoint",
+            path: held_path.clone(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+        mount_bind(endpoint.host_path(), &held_path)
+            .map_err(std::io::Error::from)
+            .map_err(|source| SessionControllerError::Io {
+                action: "holding admitted endpoint before hiding host runtime",
+                path: endpoint.host_path().to_path_buf(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        held.push((held_path, endpoint.workload_path().to_path_buf()));
+    }
+    Ok(held)
+}
+
+fn project_endpoints(
+    projections: &[(PathBuf, PathBuf)],
+) -> Result<(), SessionControllerError> {
+    for (source, target) in projections {
+        create_projection_target(target, false)?;
+        mount_bind(source, target)
+            .map_err(std::io::Error::from)
+            .map_err(|error| SessionControllerError::Io {
+                action: "projecting admitted daemon endpoint into the workload",
+                path: target.clone(),
+                source: error,
+                location: snafu::Location::default(),
+            })?;
+    }
+    Ok(())
+}
+
+fn project_filesystems(handoff: &LinuxControllerHandoff) -> Result<(), SessionControllerError> {
+    if handoff.prepared_filesystem_projections.len()
+        != handoff.spec.filesystem_projections().len()
+    {
+        return Err(SessionControllerError::InvalidHandoff {
+            reason: String::from(
+                "prepared filesystem projections do not match the admitted session",
+            ),
+            location: snafu::Location::default(),
+        });
+    }
+    for (prepared, admitted) in handoff
+        .prepared_filesystem_projections
+        .iter()
+        .zip(handoff.spec.filesystem_projections())
+    {
+        if prepared.workload_path() != admitted.workload_path()
+            || prepared.read_only() != admitted.read_only()
+        {
+            return Err(SessionControllerError::InvalidHandoff {
+                reason: String::from(
+                    "prepared filesystem projection does not match the admitted target",
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        let directory = admitted.source().kind() == erebor_runtime_core::SafePathKind::Directory;
+        create_projection_target(prepared.workload_path(), directory)?;
+        mount_bind(prepared.staging_path(), prepared.workload_path())
+            .map_err(std::io::Error::from)
+            .map_err(|error| SessionControllerError::Io {
+                action: "projecting held filesystem artifact into the workload",
+                path: prepared.workload_path().to_path_buf(),
+                source: error,
+                location: snafu::Location::default(),
+            })?;
+        if prepared.read_only() {
+            mount_remount(
+                prepared.workload_path(),
+                MountFlags::BIND | MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
+                "",
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|error| SessionControllerError::Io {
+                action: "locking filesystem projection read-only",
+                path: prepared.workload_path().to_path_buf(),
+                source: error,
+                location: snafu::Location::default(),
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn create_projection_target(path: &Path, directory: bool) -> Result<(), SessionControllerError> {
+    let private_runtime = Path::new("/run/erebor");
+    if path.starts_with(private_runtime) {
+        let parent = path.parent().ok_or_else(|| SessionControllerError::InvalidHandoff {
+            reason: format!("projection target `{}` has no parent", path.display()),
+            location: snafu::Location::default(),
+        })?;
+        fs::create_dir_all(parent).map_err(|source| SessionControllerError::Io {
+            action: "creating private projection parent",
+            path: parent.to_path_buf(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+        if directory {
+            fs::create_dir_all(path).map_err(|source| SessionControllerError::Io {
+                action: "creating private filesystem projection mountpoint",
+                path: path.to_path_buf(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        } else {
+            File::create(path).map_err(|source| SessionControllerError::Io {
+                action: "creating private endpoint projection mountpoint",
+                path: path.to_path_buf(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        }
+        return Ok(());
+    }
+
+    let metadata = fs::symlink_metadata(path).map_err(|source| SessionControllerError::Io {
+        action: "checking preinstalled projection mountpoint",
+        path: path.to_path_buf(),
+        source,
+        location: snafu::Location::default(),
+    })?;
+    if metadata.file_type().is_symlink() || metadata.is_dir() != directory {
+        return Err(SessionControllerError::InvalidHandoff {
+            reason: format!(
+                "projection target `{}` is not the required preinstalled {} mountpoint",
+                path.display(),
+                if directory { "directory" } else { "file" }
+            ),
+            location: snafu::Location::default(),
+        });
+    }
+    Ok(())
 }
 
 fn environment_value(environment: &[(String, String)], key: &str) -> Option<String> {

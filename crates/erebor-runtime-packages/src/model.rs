@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Component, Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -67,6 +70,7 @@ pub struct AgentPackageManifest {
     adapter_id: String,
     minimum_daemon_version: String,
     entrypoint: Vec<String>,
+    adapter_digest: ContentDigest,
     config_digest: ContentDigest,
     support_layer_digests: Vec<ContentDigest>,
 }
@@ -80,12 +84,34 @@ impl AgentPackageManifest {
         config_digest: ContentDigest,
         support_layer_digests: Vec<ContentDigest>,
     ) -> Result<Self> {
+        Self::with_adapter_and_config(
+            name,
+            adapter_id,
+            minimum_daemon_version,
+            entrypoint,
+            config_digest.clone(),
+            config_digest,
+            support_layer_digests,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_adapter_and_config(
+        name: impl Into<String>,
+        adapter_id: impl Into<String>,
+        minimum_daemon_version: impl Into<String>,
+        entrypoint: Vec<String>,
+        adapter_digest: ContentDigest,
+        config_digest: ContentDigest,
+        support_layer_digests: Vec<ContentDigest>,
+    ) -> Result<Self> {
         let manifest = Self {
             format_version: CANONICAL_FORMAT_VERSION,
             name: name.into(),
             adapter_id: adapter_id.into(),
             minimum_daemon_version: minimum_daemon_version.into(),
             entrypoint,
+            adapter_digest,
             config_digest,
             support_layer_digests,
         };
@@ -108,6 +134,7 @@ impl AgentPackageManifest {
                 )
             }
         );
+        self.adapter_digest.validate()?;
         self.config_digest.validate()?;
         for digest in &self.support_layer_digests {
             digest.validate()?;
@@ -121,8 +148,18 @@ impl AgentPackageManifest {
     }
 
     #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
     pub fn config_digest(&self) -> &ContentDigest {
         &self.config_digest
+    }
+
+    #[must_use]
+    pub fn adapter_digest(&self) -> &ContentDigest {
+        &self.adapter_digest
     }
 
     #[must_use]
@@ -445,6 +482,8 @@ pub struct InstallationRecord {
     owner_uid: u32,
     package_digest: ContentDigest,
     installed_at_unix_ms: u64,
+    #[serde(default)]
+    local_artifact: Option<VerifiedLocalArtifact>,
 }
 
 impl InstallationRecord {
@@ -455,7 +494,25 @@ impl InstallationRecord {
             owner_uid,
             package_digest,
             installed_at_unix_ms,
+            local_artifact: None,
         }
+    }
+
+    pub fn enrolled_local(
+        owner_uid: u32,
+        package_digest: ContentDigest,
+        installed_at_unix_ms: u64,
+        local_artifact: VerifiedLocalArtifact,
+    ) -> Result<Self> {
+        let record = Self {
+            format_version: CANONICAL_FORMAT_VERSION,
+            owner_uid,
+            package_digest,
+            installed_at_unix_ms,
+            local_artifact: Some(local_artifact),
+        };
+        record.validate()?;
+        Ok(record)
     }
 
     #[must_use]
@@ -468,6 +525,11 @@ impl InstallationRecord {
         &self.package_digest
     }
 
+    #[must_use]
+    pub const fn local_artifact(&self) -> Option<&VerifiedLocalArtifact> {
+        self.local_artifact.as_ref()
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.format_version == CANONICAL_FORMAT_VERSION,
@@ -475,11 +537,149 @@ impl InstallationRecord {
                 reason: String::from("installation record has an unsupported format version")
             }
         );
-        self.package_digest.validate()
+        self.package_digest.validate()?;
+        if let Some(artifact) = &self.local_artifact {
+            artifact.validate()?;
+            ensure!(
+                artifact.owner_uid == self.owner_uid,
+                InvalidModelSnafu {
+                    reason: String::from(
+                        "a local installation artifact must remain owned by its installation UID"
+                    )
+                }
+            );
+        }
+        Ok(())
     }
 }
 
 impl CanonicalEncoding for InstallationRecord {}
+
+/// A vendor or user-supplied executable enrolled through the daemon's
+/// UID-dropped descriptor broker. The path is never reopened as a separate
+/// unchecked pathname: this record preserves the identity facts that must be
+/// re-proved from a held descriptor before admission and start.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifiedLocalArtifact {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+    mount_id: u64,
+    owner_uid: u32,
+    owner_gid: u32,
+    mode: u32,
+    sha256: ContentDigest,
+    provider: LocalArtifactProvider,
+}
+
+impl VerifiedLocalArtifact {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        path: PathBuf,
+        device: u64,
+        inode: u64,
+        mount_id: u64,
+        owner_uid: u32,
+        owner_gid: u32,
+        mode: u32,
+        sha256: ContentDigest,
+        provider: LocalArtifactProvider,
+    ) -> Result<Self> {
+        let artifact = Self {
+            path,
+            device,
+            inode,
+            mount_id,
+            owner_uid,
+            owner_gid,
+            mode,
+            sha256,
+            provider,
+        };
+        artifact.validate()?;
+        Ok(artifact)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            normalized_absolute_path(&self.path)
+                && self.device != 0
+                && self.inode != 0
+                && self.mount_id != 0
+                && self.mode & 0o111 != 0,
+            InvalidModelSnafu {
+                reason: String::from(
+                    "a verified local artifact requires a normalized absolute executable path and complete stat identity"
+                )
+            }
+        );
+        self.sha256.validate()
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    #[must_use]
+    pub const fn device(&self) -> u64 {
+        self.device
+    }
+
+    #[must_use]
+    pub const fn inode(&self) -> u64 {
+        self.inode
+    }
+
+    #[must_use]
+    pub const fn mount_id(&self) -> u64 {
+        self.mount_id
+    }
+
+    #[must_use]
+    pub const fn owner_uid(&self) -> u32 {
+        self.owner_uid
+    }
+
+    #[must_use]
+    pub const fn owner_gid(&self) -> u32 {
+        self.owner_gid
+    }
+
+    #[must_use]
+    pub const fn mode(&self) -> u32 {
+        self.mode
+    }
+
+    #[must_use]
+    pub const fn sha256(&self) -> &ContentDigest {
+        &self.sha256
+    }
+
+    #[must_use]
+    pub const fn provider(&self) -> LocalArtifactProvider {
+        self.provider
+    }
+}
+
+/// Phase 4 supports only an explicit descriptor-backed local enrollment. OCI
+/// import, remote download, and provider discovery remain Phase 10 work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalArtifactProvider {
+    CallerDescriptor,
+}
+
+fn normalized_absolute_path(path: &Path) -> bool {
+    path.is_absolute()
+        && !path.components().any(|component| {
+            matches!(
+                component,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_)
+            )
+        })
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -77,12 +77,6 @@ impl PreparedSession {
         &self.storage
     }
 
-    pub(crate) fn context_repository_handle(
-        &self,
-    ) -> Arc<erebor_runtime_context::ContextRepository> {
-        Arc::clone(&self.context_repository)
-    }
-
     fn verify_context_repository(&self) -> Result<(), SessionExecutionError> {
         self.context_repository
             .scope_refs()
@@ -110,18 +104,8 @@ pub(crate) fn prepare_registry_session(
     let surface_plan = config
         .surface_start_plan_for_session(plan)
         .context(InvalidConfigSnafu)?;
-    let codex_managed_storage_required = plan.runner().kind()
-        == erebor_runtime_core::SessionRunnerKind::LinuxHost
-        && plan
-            .command()
-            .first()
-            .is_some_and(|command| config.codex.matching_profile(Path::new(command)).is_some());
     let filesystem_result = surface_plan.filesystem().map_or(Ok(None), |filesystem| {
-        prepare_filesystem_storage(
-            started.record().session_dir.as_path(),
-            filesystem,
-            codex_managed_storage_required,
-        )
+        prepare_filesystem_storage(started.record().session_dir.as_path(), filesystem)
     });
     let filesystem = match filesystem_result {
         Ok(filesystem) => filesystem,
@@ -146,9 +130,8 @@ pub(crate) fn prepare_registry_session(
 fn prepare_filesystem_storage(
     session_dir: &Path,
     filesystem: &FilesystemSurfaceConfig,
-    codex_managed_storage_required: bool,
 ) -> Result<Option<PreparedFilesystemStorage>, SessionExecutionError> {
-    if filesystem.volumes().is_empty() && !codex_managed_storage_required {
+    if filesystem.volumes().is_empty() {
         return Ok(None);
     }
 

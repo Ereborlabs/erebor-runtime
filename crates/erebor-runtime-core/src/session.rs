@@ -50,6 +50,42 @@ pub struct OutputEndpoints {
     prepared_workspace: Option<PathBuf>,
     prepared_executable: Option<PathBuf>,
     prepared_interpreters: Vec<PathBuf>,
+    prepared_filesystem_projections: Vec<PreparedFilesystemProjection>,
+}
+
+/// A daemon-held filesystem source paired with the only workload path to
+/// which the Linux controller may project it.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct PreparedFilesystemProjection {
+    staging_path: PathBuf,
+    workload_path: PathBuf,
+    read_only: bool,
+}
+
+impl PreparedFilesystemProjection {
+    #[must_use]
+    pub fn new(staging_path: PathBuf, workload_path: PathBuf, read_only: bool) -> Self {
+        Self {
+            staging_path,
+            workload_path,
+            read_only,
+        }
+    }
+
+    #[must_use]
+    pub fn staging_path(&self) -> &std::path::Path {
+        &self.staging_path
+    }
+
+    #[must_use]
+    pub fn workload_path(&self) -> &std::path::Path {
+        &self.workload_path
+    }
+
+    #[must_use]
+    pub const fn read_only(&self) -> bool {
+        self.read_only
+    }
 }
 
 impl OutputEndpoints {
@@ -71,6 +107,7 @@ impl OutputEndpoints {
             prepared_workspace: None,
             prepared_executable: None,
             prepared_interpreters: Vec::new(),
+            prepared_filesystem_projections: Vec::new(),
         }
     }
 
@@ -90,6 +127,15 @@ impl OutputEndpoints {
         self.prepared_workspace = Some(workspace);
         self.prepared_executable = executable;
         self.prepared_interpreters = interpreters;
+        self
+    }
+
+    #[must_use]
+    pub fn with_prepared_filesystem_projections(
+        mut self,
+        projections: Vec<PreparedFilesystemProjection>,
+    ) -> Self {
+        self.prepared_filesystem_projections = projections;
         self
     }
 
@@ -136,6 +182,11 @@ impl OutputEndpoints {
     #[must_use]
     pub fn prepared_interpreters(&self) -> &[PathBuf] {
         &self.prepared_interpreters
+    }
+
+    #[must_use]
+    pub fn prepared_filesystem_projections(&self) -> &[PreparedFilesystemProjection] {
+        &self.prepared_filesystem_projections
     }
 }
 

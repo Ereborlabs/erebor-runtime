@@ -23,6 +23,7 @@ pub struct AgentAdapterDescriptor {
 #[serde(rename_all = "snake_case")]
 pub enum AgentAdapterInvocationShape {
     ArbitraryInitialArgv,
+    PackageEntrypoint,
 }
 
 impl AgentAdapterDescriptor {
@@ -44,6 +45,10 @@ impl AgentAdapterDescriptor {
             "generic-process-v1",
             AgentAdapterInvocationShape::ArbitraryInitialArgv,
         )
+    }
+
+    pub fn codex_v1() -> Result<Self, SessionSpecError> {
+        Self::new("codex-v1", AgentAdapterInvocationShape::PackageEntrypoint)
     }
 
     pub fn validate(&self) -> Result<(), SessionSpecError> {

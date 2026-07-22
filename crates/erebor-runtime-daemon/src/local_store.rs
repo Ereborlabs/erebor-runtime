@@ -9,8 +9,8 @@ use std::{
 
 use erebor_runtime_core::{AgentAdapterDescriptor, ImmutableIdentity, SessionSpec};
 use erebor_runtime_packages::{
-    AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord,
-    PolicyPackageRevision, PolicySetRevision,
+    AgentPackageManifest, CanonicalEncoding, CodexPackageDefinition, ContentDigest, DigestAlias,
+    InstallationRecord, PolicyPackageRevision, PolicySetRevision, VerifiedLocalArtifact,
 };
 use erebor_runtime_policy::LocalPolicy;
 use serde::de::DeserializeOwned;
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 
 use crate::{
-    config::RootCuratedAdmission,
+    config::{RootCuratedAdmission, RootCuratedCodexPackage},
     error::{InvalidRequestSnafu, IoSnafu},
     DaemonPaths, Result,
 };
@@ -41,6 +41,57 @@ pub(crate) struct LocalAdmission {
     adapter_digest: String,
     policy_set_digest: String,
     policy_input_digests: Vec<String>,
+}
+
+/// The exact root-curated Codex release selected before an explicit local
+/// installation is enrolled. It is stored separately from the vendor binary
+/// so no raw path can become a trusted package definition.
+pub(crate) struct LocalCodexPackage {
+    package: AgentPackageManifest,
+    package_digest: String,
+    definition: CodexPackageDefinition,
+}
+
+impl LocalCodexPackage {
+    pub(crate) const fn package(&self) -> &AgentPackageManifest {
+        &self.package
+    }
+
+    pub(crate) fn package_digest(&self) -> &str {
+        &self.package_digest
+    }
+
+    pub(crate) const fn definition(&self) -> &CodexPackageDefinition {
+        &self.definition
+    }
+}
+
+/// One caller-owned, descriptor-verified Codex installation resolved from the
+/// daemon store. Its embedded artifact facts must be re-proved from a held
+/// descriptor before the daemon admits or starts a workload.
+pub(crate) struct LocalCodexInstallation {
+    package: LocalCodexPackage,
+    installation: InstallationRecord,
+    installation_digest: String,
+    entrypoint: String,
+}
+
+impl LocalCodexInstallation {
+    pub(crate) const fn package(&self) -> &LocalCodexPackage {
+        &self.package
+    }
+
+    pub(crate) const fn installation(&self) -> &InstallationRecord {
+        &self.installation
+    }
+
+    pub(crate) fn installation_digest(&self) -> &str {
+        &self.installation_digest
+    }
+
+    pub(crate) fn entrypoint(&self) -> &str {
+        &self.entrypoint
+    }
 }
 
 pub(crate) struct BuiltInAdmission {
@@ -195,6 +246,35 @@ impl DaemonLocalStore {
         Ok(())
     }
 
+    pub(crate) fn seed_root_curated_codex_packages(
+        &self,
+        packages: &[RootCuratedCodexPackage],
+    ) -> Result<()> {
+        for curated in packages {
+            let package = curated.package();
+            let package_digest = package.canonical_digest().map_err(Self::invalid_model)?;
+            self.write_immutable(
+                &self.package_manifest_path(&package_digest),
+                &package.canonical_bytes().map_err(Self::invalid_model)?,
+            )?;
+            let definition = curated.definition();
+            let definition_digest = definition.canonical_digest().map_err(Self::invalid_model)?;
+            if package.config_digest() != &definition_digest {
+                return InvalidRequestSnafu {
+                    reason: String::from(
+                        "root-curated Codex package does not bind its exact definition digest",
+                    ),
+                }
+                .fail();
+            }
+            self.write_immutable(
+                &self.codex_definition_path(&package_digest),
+                &definition.canonical_bytes().map_err(Self::invalid_model)?,
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn seed_builtin_generic_content(&self) -> Result<()> {
         let (package, policy) = Self::builtin_generic_content()?;
         let package_digest = package.canonical_digest().map_err(Self::invalid_model)?;
@@ -235,7 +315,7 @@ impl DaemonLocalStore {
         Ok(BuiltInAdmission {
             package_digest: package_digest.as_str().to_owned(),
             installation_digest: installation_digest.as_str().to_owned(),
-            adapter_digest: package.config_digest().as_str().to_owned(),
+            adapter_digest: package.adapter_digest().as_str().to_owned(),
             policy_set_digest: policy_set_digest.as_str().to_owned(),
         })
     }
@@ -295,7 +375,7 @@ impl DaemonLocalStore {
             &package_digest,
             "agent package",
         )?;
-        if package.config_digest() != &adapter_digest {
+        if package.adapter_digest() != &adapter_digest {
             return InvalidRequestSnafu {
                 reason: String::from(
                     "package adapter identity does not match the requested adapter",
@@ -344,6 +424,190 @@ impl DaemonLocalStore {
         })
     }
 
+    pub(crate) fn resolve_codex_package(&self, package_digest: &str) -> Result<LocalCodexPackage> {
+        let package_digest = Self::parse_digest(package_digest, "Codex package")?;
+        let package: AgentPackageManifest = self.read_canonical(
+            &self.package_manifest_path(&package_digest),
+            &package_digest,
+            "Codex agent package",
+        )?;
+        if package.adapter_id() != "codex-v1" {
+            return InvalidRequestSnafu {
+                reason: String::from("selected package is not a root-curated codex-v1 package"),
+            }
+            .fail();
+        }
+        let definition: CodexPackageDefinition = self.read_canonical(
+            &self.codex_definition_path(&package_digest),
+            package.config_digest(),
+            "Codex package definition",
+        )?;
+        definition.validate().map_err(Self::invalid_model)?;
+        Ok(LocalCodexPackage {
+            package,
+            package_digest: package_digest.as_str().to_owned(),
+            definition,
+        })
+    }
+
+    pub(crate) fn resolve_codex_package_reference(
+        &self,
+        reference: &str,
+    ) -> Result<LocalCodexPackage> {
+        let (name, digest) = reference.split_once("@sha256:").ok_or_else(|| {
+            InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex package reference must use NAME@sha256:LOWERCASE_DIGEST",
+                ),
+            }
+            .build()
+        })?;
+        if name.is_empty() || digest.is_empty() || digest.contains('@') {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex package reference must use NAME@sha256:LOWERCASE_DIGEST",
+                ),
+            }
+            .fail();
+        }
+        let package = self.resolve_codex_package(digest)?;
+        if package.package().name() != name {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex package reference name does not match the root-curated package",
+                ),
+            }
+            .fail();
+        }
+        Ok(package)
+    }
+
+    pub(crate) fn store_codex_installation(
+        &self,
+        owner_uid: u32,
+        package_digest: &str,
+        installed_at_unix_ms: u64,
+        artifact: VerifiedLocalArtifact,
+    ) -> Result<LocalCodexInstallation> {
+        let package = self.resolve_codex_package(package_digest)?;
+        if artifact.sha256() != package.definition().executable_sha256() {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "the held Codex executable digest does not match the root-curated release",
+                ),
+            }
+            .fail();
+        }
+        let package_digest =
+            ContentDigest::new(package.package_digest()).map_err(Self::invalid_model)?;
+        let installation = InstallationRecord::enrolled_local(
+            owner_uid,
+            package_digest,
+            installed_at_unix_ms,
+            artifact,
+        )
+        .map_err(Self::invalid_model)?;
+        let installation_digest = installation
+            .canonical_digest()
+            .map_err(Self::invalid_model)?;
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_error| crate::error::StateLockSnafu.build())?;
+        self.write_immutable(
+            &self.installation_path(owner_uid, &installation_digest),
+            &installation
+                .canonical_bytes()
+                .map_err(Self::invalid_model)?,
+        )?;
+        self.create_codex_aliases(owner_uid, &package, &installation_digest)?;
+        self.resolve_codex_installation(
+            owner_uid,
+            package.package_digest(),
+            installation_digest.as_str(),
+            None,
+        )
+    }
+
+    pub(crate) fn resolve_codex_alias(
+        &self,
+        owner_uid: u32,
+        alias: &str,
+    ) -> Result<LocalCodexInstallation> {
+        let entrypoint = Self::codex_alias_entrypoint(alias)?;
+        let alias: DigestAlias = self.read_canonical_alias(
+            &self.codex_alias_path(owner_uid, alias),
+            "Codex installation alias",
+        )?;
+        if alias.name() != entrypoint {
+            return InvalidRequestSnafu {
+                reason: String::from("Codex alias record does not bind its requested entrypoint"),
+            }
+            .fail();
+        }
+        let installation: InstallationRecord = self.read_canonical(
+            &self.installation_path(owner_uid, alias.digest()),
+            alias.digest(),
+            "Codex installation",
+        )?;
+        self.resolve_codex_installation(
+            owner_uid,
+            installation.package_digest().as_str(),
+            alias.digest().as_str(),
+            Some(entrypoint),
+        )
+    }
+
+    pub(crate) fn resolve_codex_installation(
+        &self,
+        owner_uid: u32,
+        package_digest: &str,
+        installation_digest: &str,
+        entrypoint: Option<&str>,
+    ) -> Result<LocalCodexInstallation> {
+        let package = self.resolve_codex_package(package_digest)?;
+        let installation_digest = Self::parse_digest(installation_digest, "Codex installation")?;
+        let installation: InstallationRecord = self.read_canonical(
+            &self.installation_path(owner_uid, &installation_digest),
+            &installation_digest,
+            "Codex installation",
+        )?;
+        installation.validate().map_err(Self::invalid_model)?;
+        if installation.owner_uid() != owner_uid
+            || installation.package_digest().as_str() != package.package_digest()
+        {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex installation does not belong to the caller or its selected package",
+                ),
+            }
+            .fail();
+        }
+        if installation.local_artifact().is_none() {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex installation has no descriptor-verified local executable artifact",
+                ),
+            }
+            .fail();
+        }
+        let entrypoint = entrypoint.unwrap_or("codex");
+        if package.definition().entrypoint(entrypoint).is_none() {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "Codex package does not certify the `{entrypoint}` entrypoint for this installation"
+                ),
+            }
+            .fail();
+        }
+        Ok(LocalCodexInstallation {
+            package,
+            installation,
+            installation_digest: installation_digest.as_str().to_owned(),
+            entrypoint: entrypoint.to_owned(),
+        })
+    }
+
     pub(crate) fn validate_session_spec(&self, spec: &SessionSpec) -> Result<LocalAdmission> {
         let package = spec.package().ok_or_else(|| {
             InvalidRequestSnafu {
@@ -363,13 +627,28 @@ impl DaemonLocalStore {
             }
             .build()
         })?;
-        self.resolve_admission(
+        let configuration = spec.package_configuration().ok_or_else(|| {
+            InvalidRequestSnafu {
+                reason: String::from("session has no admitted package configuration identity"),
+            }
+            .build()
+        })?;
+        let admission = self.resolve_admission(
             spec.owner().uid(),
             package.sha256(),
             installation.sha256(),
             adapter.sha256(),
             spec.policy_set().sha256(),
-        )
+        )?;
+        if configuration.sha256() != admission.package().config_digest().as_str() {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "session package configuration identity no longer matches its package manifest",
+                ),
+            }
+            .fail();
+        }
+        Ok(admission)
     }
 
     pub(crate) fn policy_packages_for_session(
@@ -469,6 +748,64 @@ impl DaemonLocalStore {
             &revision.canonical_bytes().map_err(Self::invalid_model)?,
         )?;
         Ok(digest)
+    }
+
+    pub(crate) fn set_policy_set_alias(
+        &self,
+        owner_uid: u32,
+        alias: &str,
+        policy_set_digest: &str,
+    ) -> Result<DigestAlias> {
+        let policy_set_digest = Self::parse_digest(policy_set_digest, "policy set")?;
+        let policy_set: PolicySetRevision = self.read_canonical(
+            &self.policy_set_path(owner_uid, &policy_set_digest),
+            &policy_set_digest,
+            "policy set",
+        )?;
+        policy_set.validate().map_err(Self::invalid_model)?;
+        let alias = DigestAlias::new(alias, policy_set_digest).map_err(Self::invalid_model)?;
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_error| crate::error::StateLockSnafu.build())?;
+        self.write_immutable(
+            &self.policy_set_alias_path(owner_uid, alias.name()),
+            &alias.canonical_bytes().map_err(Self::invalid_model)?,
+        )?;
+        Ok(alias)
+    }
+
+    pub(crate) fn resolve_policy_set_reference(
+        &self,
+        owner_uid: u32,
+        reference: &str,
+    ) -> Result<ContentDigest> {
+        if let Ok(digest) = ContentDigest::new(reference) {
+            let policy_set: PolicySetRevision = self.read_canonical(
+                &self.policy_set_path(owner_uid, &digest),
+                &digest,
+                "policy set",
+            )?;
+            policy_set.validate().map_err(Self::invalid_model)?;
+            return Ok(digest);
+        }
+        let alias: DigestAlias = self.read_canonical_alias(
+            &self.policy_set_alias_path(owner_uid, reference),
+            "policy set alias",
+        )?;
+        if alias.name() != reference {
+            return InvalidRequestSnafu {
+                reason: String::from("policy set alias does not bind its requested name"),
+            }
+            .fail();
+        }
+        let policy_set: PolicySetRevision = self.read_canonical(
+            &self.policy_set_path(owner_uid, alias.digest()),
+            alias.digest(),
+            "policy set",
+        )?;
+        policy_set.validate().map_err(Self::invalid_model)?;
+        Ok(alias.digest().clone())
     }
 
     pub(crate) fn list_policy_sets(&self, owner_uid: u32) -> Result<Vec<StoredPolicySet>> {
@@ -595,6 +932,17 @@ impl DaemonLocalStore {
         self.packages.join(digest.as_str()).join("manifest.json")
     }
 
+    fn codex_definition_path(&self, digest: &ContentDigest) -> PathBuf {
+        self.packages.join(digest.as_str()).join("codex-v1.json")
+    }
+
+    fn codex_alias_path(&self, owner_uid: u32, alias: &str) -> PathBuf {
+        self.users
+            .join(owner_uid.to_string())
+            .join("codex-aliases")
+            .join(format!("{alias}.json"))
+    }
+
     fn installation_path(&self, owner_uid: u32, digest: &ContentDigest) -> PathBuf {
         self.users
             .join(owner_uid.to_string())
@@ -607,6 +955,13 @@ impl DaemonLocalStore {
             .join(owner_uid.to_string())
             .join("policy-sets")
             .join(format!("{}.json", digest.as_str()))
+    }
+
+    fn policy_set_alias_path(&self, owner_uid: u32, alias: &str) -> PathBuf {
+        self.users
+            .join(owner_uid.to_string())
+            .join("policy-set-aliases")
+            .join(format!("{alias}.json"))
     }
 
     fn policy_package_path(&self, digest: &ContentDigest) -> PathBuf {
@@ -832,6 +1187,80 @@ impl DaemonLocalStore {
             .fail();
         }
         Ok(record)
+    }
+
+    fn read_canonical_alias<T>(&self, path: &Path, record_kind: &str) -> Result<T>
+    where
+        T: CanonicalEncoding + DeserializeOwned,
+    {
+        let metadata = fs::symlink_metadata(path).context(IoSnafu {
+            action: "inspecting immutable daemon alias record",
+            path,
+        })?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.uid() != rustix::process::geteuid().as_raw()
+            || metadata.mode() & 0o022 != 0
+        {
+            return crate::error::UnsafePathSnafu {
+                path: path.to_path_buf(),
+                reason: String::from(
+                    "must be an effective-owner-controlled non-symlink non-writable alias file",
+                ),
+            }
+            .fail();
+        }
+        let bytes = fs::read(path).context(IoSnafu {
+            action: "reading immutable daemon alias record",
+            path,
+        })?;
+        let record = serde_json::from_slice::<T>(&bytes).map_err(|source| {
+            crate::DaemonError::InvalidConfig {
+                path: path.to_path_buf(),
+                source,
+                location: snafu::Location::default(),
+            }
+        })?;
+        if record.canonical_bytes().map_err(Self::invalid_model)? != bytes {
+            return InvalidRequestSnafu {
+                reason: format!("stored {record_kind} does not use its canonical encoding"),
+            }
+            .fail();
+        }
+        Ok(record)
+    }
+
+    fn create_codex_aliases(
+        &self,
+        owner_uid: u32,
+        package: &LocalCodexPackage,
+        installation_digest: &ContentDigest,
+    ) -> Result<()> {
+        for alias in ["codex", "codex-app-server"] {
+            let Some(entrypoint) = package.definition().entrypoint(alias) else {
+                continue;
+            };
+            if alias == "codex-app-server" && !entrypoint.app_server_stdio() {
+                continue;
+            }
+            let alias = DigestAlias::new(alias, installation_digest.clone())
+                .map_err(Self::invalid_model)?;
+            self.write_immutable(
+                &self.codex_alias_path(owner_uid, alias.name()),
+                &alias.canonical_bytes().map_err(Self::invalid_model)?,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn codex_alias_entrypoint(alias: &str) -> Result<&str> {
+        match alias {
+            "codex" | "codex-app-server" => Ok(alias),
+            _ => InvalidRequestSnafu {
+                reason: format!("unsupported Codex alias `{alias}`"),
+            }
+            .fail(),
+        }
     }
 
     fn write_immutable(&self, path: &Path, encoded: &[u8]) -> Result<()> {

@@ -13,9 +13,7 @@ mod tests;
 pub use config::{
     AuditCommandLogLevel, BrowserCdpAuditSurfaceLoggingConfig, BrowserCdpSurfaceConfig,
     BrowserCdpSurfaceLayerConfig, BrowserLaunchConfig, BrowserLaunchLayerConfig,
-    CodexCommandDispatchLayerConfig, CodexDeploymentMode, CodexGovernanceLayerConfig,
-    CodexHookEvent, CodexHookEventSchemaLayerConfig, CodexHookShellKind, CodexProfileLayerConfig,
-    CodexRuntimeArtifactLayerConfig, DesktopAuditSurfaceLoggingConfig, DockerSessionCommandOptions,
+    DesktopAuditSurfaceLoggingConfig, DockerSessionCommandOptions,
     DockerSessionCommandPlan, DockerSessionMount, DockerSessionRunnerConfig,
     DockerSessionRunnerLayerConfig, FilesystemAuditSurfaceLoggingConfig, FilesystemBackendConfig,
     FilesystemBackendKind, FilesystemBackendLayerConfig, FilesystemPreimageBackendKind,
@@ -70,6 +68,7 @@ pub use session::{
     ActiveSessionSignalKind, AgentAdapterDescriptor, AgentAdapterInvocationShape,
     DaemonFailureMode, DockerSessionRunner, EndpointProjection, EvidenceRequirement,
     FilesystemProjection, ImmutableIdentity, LinuxHostSessionRunner, OutputEndpoints, OutputPlan,
+    PreparedFilesystemProjection,
     OutputStreamRequirements, RunRequest, RunnerBinding, RunnerCapabilityDocument, RunnerId,
     RunnerRecovery, SafePathBinding, SafePathKind, ScriptInterpreterBinding, SessionAdmission,
     SessionCapturedRunOutcome, SessionLifecycleState, SessionOwner, SessionRunOutcome,

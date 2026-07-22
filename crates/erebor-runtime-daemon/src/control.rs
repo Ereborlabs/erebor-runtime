@@ -14,44 +14,45 @@ use erebor_runtime_error::ErrorExt;
 use erebor_runtime_ipc::{
     v1::{
         AdminSessionInspectRequest, AdminSessionKillRequest, AdminSessionListRequest,
-        AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, ApprovalApproveRequest,
-        ApprovalDenyRequest, ApprovalInspectRequest, ApprovalListRequest, ApprovalListResponse,
-        ApprovalRecord as ApprovalRecordMessage, DaemonCommandResult,
-        DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
+        AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, AgentInstallRequest,
+        ApprovalApproveRequest, ApprovalDenyRequest, ApprovalInspectRequest, ApprovalListRequest,
+        ApprovalListResponse, ApprovalRecord as ApprovalRecordMessage, CodexRunRequest,
+        DaemonCommandResult, DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
         DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
         Envelope, EnvelopeServiceFamily, PolicyPackageApplyRequest, PolicyPackageInspectRequest,
         PolicyPackageListRequest, PolicyPackageListResponse, PolicyPackageVerifyRequest,
-        PolicySetCreateRequest, PolicySetInspectRequest, PolicySetListRequest,
-        PolicySetListResponse, PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse,
-        RunnerCapabilityRecord, RunnerInspectRequest, RunnerListRequest, RunnerListResponse,
-        SessionAliasListRequest, SessionAliasRemoveRequest, SessionAliasSetRequest,
-        SessionAttachRequest, SessionCreateRequest, SessionEventRecord, SessionEventsEnd,
-        SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
-        SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputRequest,
-        SessionInspectRequest, SessionKillRequest, SessionListRequest, SessionLogChunk,
-        SessionLogsEnd, SessionLogsRequest, SessionPruneRequest, SessionRemoveRequest,
-        SessionStartRequest, SessionStopRequest, SessionWaitRequest,
+        PolicySetAliasSetRequest, PolicySetCreateRequest, PolicySetInspectRequest,
+        PolicySetListRequest, PolicySetListResponse, PolicySetVerifyRequest, PolicyTestRequest,
+        PolicyTestResponse, RunnerCapabilityRecord, RunnerInspectRequest, RunnerListRequest,
+        RunnerListResponse, SessionAliasListRequest, SessionAliasRemoveRequest,
+        SessionAliasSetRequest, SessionAttachRequest, SessionCreateRequest, SessionEventRecord,
+        SessionEventsEnd, SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord,
+        SessionEvidenceRequest, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
+        SessionInputRequest, SessionInspectRequest, SessionKillRequest, SessionListRequest,
+        SessionLogChunk, SessionLogsEnd, SessionLogsRequest, SessionPruneRequest,
+        SessionRemoveRequest, SessionStartRequest, SessionStopRequest, SessionWaitRequest,
         KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
         KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
-        KIND_ADMIN_SESSION_STOP_REQUEST, KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST,
-        KIND_APPROVAL_INSPECT_REQUEST, KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE,
-        KIND_APPROVAL_RECORD, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO,
+        KIND_ADMIN_SESSION_STOP_REQUEST, KIND_AGENT_INSTALL_REQUEST, KIND_AGENT_INSTALL_RESPONSE,
+        KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST, KIND_APPROVAL_INSPECT_REQUEST,
+        KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE, KIND_APPROVAL_RECORD,
+        KIND_CODEX_RUN_REQUEST, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO,
         KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
         KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
         KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
         KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
         KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
-        KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
-        KIND_POLICY_SET_INSPECT_REQUEST, KIND_POLICY_SET_LIST_REQUEST,
-        KIND_POLICY_SET_LIST_RESPONSE, KIND_POLICY_SET_RECORD, KIND_POLICY_SET_VERIFY_REQUEST,
-        KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE, KIND_RUNNER_CAPABILITY_RECORD,
-        KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST, KIND_RUNNER_LIST_RESPONSE,
-        KIND_SESSION_ALIAS_LIST_REQUEST, KIND_SESSION_ALIAS_LIST_RESPONSE,
-        KIND_SESSION_ALIAS_REMOVE_REQUEST, KIND_SESSION_ALIAS_SET_REQUEST,
-        KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST, KIND_SESSION_EVENTS_END,
-        KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD, KIND_SESSION_EVIDENCE_END,
-        KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
+        KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_ALIAS_SET_REQUEST,
+        KIND_POLICY_SET_CREATE_REQUEST, KIND_POLICY_SET_INSPECT_REQUEST,
+        KIND_POLICY_SET_LIST_REQUEST, KIND_POLICY_SET_LIST_RESPONSE, KIND_POLICY_SET_RECORD,
+        KIND_POLICY_SET_VERIFY_REQUEST, KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE,
+        KIND_RUNNER_CAPABILITY_RECORD, KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST,
+        KIND_RUNNER_LIST_RESPONSE, KIND_SESSION_ALIAS_LIST_REQUEST,
+        KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_REMOVE_REQUEST,
+        KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST,
+        KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
+        KIND_SESSION_EVIDENCE_END, KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
         KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
         KIND_SESSION_INPUT_REQUEST, KIND_SESSION_INPUT_RESPONSE, KIND_SESSION_INSPECT_REQUEST,
         KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST, KIND_SESSION_LIST_RESPONSE,
@@ -461,6 +462,8 @@ impl DaemonControlState {
             KIND_DAEMON_LOGS_REQUEST => self.logs(stream, peer, &envelope).await,
             KIND_DAEMON_RELOAD_REQUEST => self.reload(stream, peer, &envelope).await,
             KIND_DAEMON_STOP_REQUEST => self.stop(stream, peer, &envelope).await,
+            KIND_AGENT_INSTALL_REQUEST => self.agent_install(stream, peer, &envelope).await,
+            KIND_CODEX_RUN_REQUEST => self.codex_run(stream, peer, &envelope).await,
             KIND_SESSION_CREATE_REQUEST => self.session_create(stream, peer, &envelope).await,
             KIND_SESSION_START_REQUEST => self.session_start(stream, peer, &envelope).await,
             KIND_SESSION_STOP_REQUEST => self.session_stop(stream, peer, &envelope).await,
@@ -522,6 +525,9 @@ impl DaemonControlState {
                 self.policy_package_verify(stream, peer, &envelope).await
             }
             KIND_POLICY_SET_CREATE_REQUEST => self.policy_set_create(stream, peer, &envelope).await,
+            KIND_POLICY_SET_ALIAS_SET_REQUEST => {
+                self.policy_set_alias_set(stream, peer, &envelope).await
+            }
             KIND_POLICY_SET_LIST_REQUEST => self.policy_set_list(stream, peer, &envelope).await,
             KIND_POLICY_SET_INSPECT_REQUEST => {
                 self.policy_set_inspect(stream, peer, &envelope).await
@@ -649,6 +655,72 @@ impl DaemonControlState {
             stream,
             peer,
             "session-create",
+            envelope,
+            MutationIntent::SessionCreate {
+                spec: Box::new(spec),
+            },
+        )
+        .await
+    }
+
+    async fn agent_install(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: AgentInstallRequest = envelope
+            .decode_typed_payload(KIND_AGENT_INSTALL_REQUEST)
+            .context(IpcSnafu)?;
+        let source_path = PathBuf::from(request.source_path);
+        let verified = self.sessions.verify_codex_installation(
+            &request.package_reference,
+            &source_path,
+            peer.uid,
+            peer.gid,
+        )?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "agent-install",
+            envelope,
+            MutationIntent::AgentInstall {
+                uid: peer.uid,
+                package_digest: verified.package_digest().to_owned(),
+                installed_at_unix_ms: DaemonSessionApi::installation_time(),
+                artifact: verified.artifact().clone(),
+            },
+        )
+        .await
+    }
+
+    async fn codex_run(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: CodexRunRequest = envelope
+            .decode_typed_payload(KIND_CODEX_RUN_REQUEST)
+            .context(IpcSnafu)?;
+        let (configuration_generation, configuration) = {
+            let active = self
+                .configuration
+                .read()
+                .map_err(|_error| StateLockSnafu.build())?;
+            (active.generation, active.value.clone())
+        };
+        let spec = self.sessions.admit_codex_run(
+            request,
+            peer.uid,
+            peer.gid,
+            configuration_generation,
+            &configuration,
+        )?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "codex-run",
             envelope,
             MutationIntent::SessionCreate {
                 spec: Box::new(spec),
@@ -1330,6 +1402,29 @@ impl DaemonControlState {
         .await
     }
 
+    async fn policy_set_alias_set(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: PolicySetAliasSetRequest = envelope
+            .decode_typed_payload(KIND_POLICY_SET_ALIAS_SET_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "policy-set-alias-set",
+            envelope,
+            MutationIntent::PolicySetAliasSet {
+                uid: peer.uid,
+                alias: request.alias,
+                policy_set_digest: request.policy_set_digest,
+            },
+        )
+        .await
+    }
+
     async fn policy_set_list(
         &self,
         stream: &mut UnixStream,
@@ -1927,6 +2022,20 @@ impl DaemonControlState {
                     message: String::from("daemon stop accepted"),
                 },
             ),
+            MutationIntent::AgentInstall {
+                uid,
+                package_digest,
+                installed_at_unix_ms,
+                artifact,
+            } => {
+                let response = self.sessions.install_verified_codex(
+                    *uid,
+                    package_digest,
+                    artifact.clone(),
+                    *installed_at_unix_ms,
+                )?;
+                encode_mutation_response(KIND_AGENT_INSTALL_RESPONSE, &response)
+            }
             MutationIntent::SessionStart { uid, session_id } => {
                 let active = self
                     .configuration
@@ -2239,6 +2348,8 @@ fn is_mutating_message(kind: &str) -> bool {
         kind,
         KIND_DAEMON_RELOAD_REQUEST
             | KIND_DAEMON_STOP_REQUEST
+            | KIND_AGENT_INSTALL_REQUEST
+            | KIND_CODEX_RUN_REQUEST
             | KIND_SESSION_CREATE_REQUEST
             | KIND_SESSION_START_REQUEST
             | KIND_SESSION_STOP_REQUEST
@@ -2257,6 +2368,7 @@ fn is_mutating_message(kind: &str) -> bool {
             | KIND_APPROVAL_DENY_REQUEST
             | KIND_POLICY_PACKAGE_APPLY_REQUEST
             | KIND_POLICY_SET_CREATE_REQUEST
+            | KIND_POLICY_SET_ALIAS_SET_REQUEST
     )
 }
 

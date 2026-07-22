@@ -10,9 +10,9 @@ use crate::error::{
 use crate::RuntimeConfigError;
 
 use super::{
-    CodexGovernanceLayerConfig, RuntimeAuditConfig, SessionInterceptionCapabilityReport,
-    SessionInterceptionConfig, SessionInterceptionOperation, SessionLayerConfig, SessionRunPlan,
-    SessionRunnerKind, SessionSurfaceKind, SessionSurfaceLayers, SessionSurfaceStartPlan,
+    RuntimeAuditConfig, SessionInterceptionCapabilityReport, SessionInterceptionConfig,
+    SessionInterceptionOperation, SessionLayerConfig, SessionRunPlan, SessionRunnerKind,
+    SessionSurfaceKind, SessionSurfaceLayers, SessionSurfaceStartPlan,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
@@ -24,8 +24,6 @@ pub struct RuntimeConfig {
     pub session: SessionLayerConfig,
     #[serde(default, alias = "surfaces")]
     pub surfaces: SessionSurfaceLayers,
-    #[serde(default)]
-    pub codex: CodexGovernanceLayerConfig,
 }
 
 impl RuntimeConfig {
@@ -68,9 +66,6 @@ impl RuntimeConfig {
         );
 
         self.audit.validate()?;
-
-        self.codex
-            .validate(self.session.enabled, self.surfaces.filesystem.enabled)?;
 
         if self.session.enabled || self.session.interception.enabled {
             self.session.validate()?;

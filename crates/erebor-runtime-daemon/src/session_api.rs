@@ -2,21 +2,28 @@ mod admission;
 mod policy_router;
 mod response;
 
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use erebor_runtime_core::{
-    ActiveSessionSignal, ImmutableIdentity, SessionLifecycleState, SessionOwner, SessionSpec,
+    ActiveSessionSignal, EndpointProjection, FilesystemProjection, ImmutableIdentity,
+    SafePathBinding, SafePathKind, SessionLifecycleState, SessionOwner, SessionSpec,
 };
 use erebor_runtime_ipc::v1::{
-    PolicyPackageRecord, PolicySetRecord, SessionAliasListResponse, SessionAliasRecord,
-    SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionInputLeaseResponse,
-    SessionInputResponse, SessionListResponse, SessionPruneResponse, SessionRecord,
-    KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD,
+    AgentInstallResponse, CodexRunRequest, PolicyPackageRecord, PolicySetAliasRecord,
+    PolicySetRecord, SessionAliasListResponse, SessionAliasRecord, SessionAttachResponse,
+    SessionCreateRequest, SessionCreateResponse, SessionInputLeaseResponse, SessionInputResponse,
+    SessionListResponse, SessionPruneResponse, SessionRecord, KIND_POLICY_PACKAGE_RECORD,
+    KIND_POLICY_SET_ALIAS_RECORD, KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD,
     KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE,
     KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD,
 };
+use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact};
 use erebor_runtime_session::{
-    AgentAdapterRegistry, DurableSessionRecord, RunnerAdmissionRequest, RunnerInstallConfig,
+    AgentAdapterRegistry, CodexAppServerService, CodexHookService, DurableSessionRecord, RunnerAdmissionRequest, RunnerInstallConfig,
     RunnerRegistry, SessionManager, SessionManagerError, SessionRepository, SessionRepositoryError,
     SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
 };
@@ -47,6 +54,23 @@ pub(crate) struct DaemonSessionApi {
     descriptor_broker: Arc<DescriptorBroker>,
     local_store: Arc<DaemonLocalStore>,
     adapters: AgentAdapterRegistry,
+    codex_hook_service: Arc<CodexHookService>,
+    codex_app_server_service: Arc<CodexAppServerService>,
+}
+
+pub(crate) struct VerifiedCodexInstallation {
+    package_digest: String,
+    artifact: VerifiedLocalArtifact,
+}
+
+impl VerifiedCodexInstallation {
+    pub(crate) fn package_digest(&self) -> &str {
+        &self.package_digest
+    }
+
+    pub(crate) const fn artifact(&self) -> &VerifiedLocalArtifact {
+        &self.artifact
+    }
 }
 
 impl DaemonSessionApi {
@@ -76,13 +100,23 @@ impl DaemonSessionApi {
         })?;
         local_store.seed_builtin_generic_content()?;
         local_store.seed_root_curated(config.root_curated_admissions())?;
+        local_store.seed_root_curated_codex_packages(config.root_curated_codex_packages())?;
+        let codex_hook_service = Arc::new(CodexHookService::start(runtime_root.clone()).map_err(
+            |error| crate::error::InvalidRequestSnafu {
+                reason: format!("starting the daemon-owned Codex hook service failed: {error}"),
+            }
+            .build(),
+        )?);
+        let codex_app_server_service = Arc::new(CodexAppServerService::default());
         let runtime = SessionRuntimeResources::new(
             state_root.clone(),
             runtime_root.clone(),
             Arc::clone(&descriptor_broker) as Arc<dyn erebor_runtime_session::SessionPathResolver>,
-            Arc::new(StoredPolicyInterceptionRouterFactory::new(Arc::clone(
-                &local_store,
-            ))),
+            Arc::new(StoredPolicyInterceptionRouterFactory::new(
+                Arc::clone(&local_store),
+                Arc::clone(&codex_hook_service),
+                Arc::clone(&codex_app_server_service),
+            )),
         )
         .context(SessionSnafu)?;
         Ok(Self {
@@ -97,16 +131,37 @@ impl DaemonSessionApi {
             descriptor_broker,
             local_store,
             adapters,
+            codex_hook_service,
+            codex_app_server_service,
         })
     }
 
     pub(crate) fn admit_request(
+        &self,
+        request: SessionCreateRequest,
+        owner_uid: u32,
+        owner_gid: u32,
+        configuration_generation: u64,
+        config: &DaemonConfig,
+    ) -> Result<SessionSpec> {
+        self.admit_request_with_adapter(
+            request,
+            owner_uid,
+            owner_gid,
+            configuration_generation,
+            config,
+            false,
+        )
+    }
+
+    fn admit_request_with_adapter(
         &self,
         mut request: SessionCreateRequest,
         owner_uid: u32,
         owner_gid: u32,
         configuration_generation: u64,
         config: &DaemonConfig,
+        allow_codex_adapter: bool,
     ) -> Result<SessionSpec> {
         let session_id = format!("session-{}", Uuid::new_v4());
         let identity_fields = [
@@ -139,7 +194,7 @@ impl DaemonSessionApi {
             .map(|(_key, value)| value.as_str());
         let capability = self.manager.inspect_runner(&runner).context(SessionSnafu)?;
         let owner = SessionOwner::new(owner_uid, owner_gid);
-        let runner_admission = self
+        let mut runner_admission = self
             .manager
             .admit_runner(
                 &runner,
@@ -155,6 +210,34 @@ impl DaemonSessionApi {
                 self.descriptor_broker.as_ref(),
             )
             .context(SessionSnafu)?;
+        let additional_filesystem_projections = if allow_codex_adapter {
+            let package_digest = request.package_sha256().ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from("Codex admission requires a package digest"),
+                }
+                .build()
+            })?;
+            let projections = self.codex_filesystem_projections(
+                owner_uid,
+                owner_gid,
+                package_digest,
+                config,
+            )?;
+            runner_admission
+                .endpoint_projections
+                .push(EndpointProjection::new(
+                    "codex-hook",
+                    self.codex_hook_service.endpoint().to_path_buf(),
+                    PathBuf::from(CodexHookService::session_endpoint()),
+                )
+                .map_err(|error| crate::error::InvalidRequestSnafu {
+                    reason: error.to_string(),
+                }
+                .build())?);
+            projections
+        } else {
+            Vec::new()
+        };
         let spec = admit(
             request,
             AdmissionContext {
@@ -167,6 +250,8 @@ impl DaemonSessionApi {
                 adapters: &self.adapters,
                 local_store: self.local_store.as_ref(),
                 config,
+                allow_codex_adapter,
+                additional_filesystem_projections,
             },
         )?;
         self.manager
@@ -177,7 +262,290 @@ impl DaemonSessionApi {
 
     pub(crate) fn seed_root_curated(&self, config: &DaemonConfig) -> Result<()> {
         self.local_store
-            .seed_root_curated(config.root_curated_admissions())
+            .seed_root_curated(config.root_curated_admissions())?;
+        self.local_store
+            .seed_root_curated_codex_packages(config.root_curated_codex_packages())
+    }
+
+    pub(crate) fn verify_codex_installation(
+        &self,
+        package_reference: &str,
+        source_path: &Path,
+        owner_uid: u32,
+        owner_gid: u32,
+    ) -> Result<VerifiedCodexInstallation> {
+        let package = self
+            .local_store
+            .resolve_codex_package_reference(package_reference)?;
+        let resolved = self.descriptor_broker.resolve(
+            owner_uid,
+            owner_gid,
+            source_path,
+            SafePathKind::Executable,
+        )?;
+        let binding = resolved.binding();
+        let sha256 = binding.content_sha256().ok_or_else(|| {
+            crate::error::InvalidRequestSnafu {
+                reason: String::from("descriptor broker did not hash the held Codex executable"),
+            }
+            .build()
+        })?;
+        let artifact = VerifiedLocalArtifact::new(
+            binding.requested_path().to_path_buf(),
+            binding.device(),
+            binding.inode(),
+            binding.mount_id(),
+            binding.owner_uid(),
+            binding.owner_gid(),
+            resolved.mode()?,
+            ContentDigest::new(sha256).map_err(|error| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!(
+                        "descriptor broker returned an invalid executable digest: {error}"
+                    ),
+                }
+                .build()
+            })?,
+            LocalArtifactProvider::CallerDescriptor,
+        )
+        .map_err(|error| {
+            crate::error::InvalidRequestSnafu {
+                reason: format!("Codex installation artifact is invalid: {error}"),
+            }
+            .build()
+        })?;
+        if artifact.owner_uid() != owner_uid {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "a caller-enrolled Codex executable must remain owned by the calling UID",
+                ),
+            }
+            .fail();
+        }
+        if artifact.sha256() != package.definition().executable_sha256() {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "the held Codex executable does not match the root-curated release hash",
+                ),
+            }
+            .fail();
+        }
+        Ok(VerifiedCodexInstallation {
+            package_digest: package.package_digest().to_owned(),
+            artifact,
+        })
+    }
+
+    pub(crate) fn admit_codex_run(
+        &self,
+        request: CodexRunRequest,
+        owner_uid: u32,
+        owner_gid: u32,
+        configuration_generation: u64,
+        config: &DaemonConfig,
+    ) -> Result<SessionSpec> {
+        let installation = self
+            .local_store
+            .resolve_codex_alias(owner_uid, &request.alias)?;
+        let artifact = installation
+            .installation()
+            .local_artifact()
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from("Codex alias has no descriptor-verified local artifact"),
+                }
+                .build()
+            })?;
+        let executable = self.reverify_codex_artifact(owner_uid, owner_gid, artifact)?;
+        let entrypoint = installation
+            .package()
+            .definition()
+            .entrypoint(installation.entrypoint())
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from(
+                        "Codex alias does not name a certified package entrypoint",
+                    ),
+                }
+                .build()
+            })?;
+        let mut command = vec![artifact.path().display().to_string()];
+        command.extend(entrypoint.argv_suffix().iter().cloned());
+        let policy_set_digest = self
+            .local_store
+            .resolve_policy_set_reference(owner_uid, &request.policy_set_reference)?;
+        let spec = self.admit_request_with_adapter(
+            SessionCreateRequest {
+                runner_id: String::from("linux-host"),
+                command,
+                workspace: request.workspace,
+                policy_set_digest: policy_set_digest.as_str().to_owned(),
+                package_digest: installation.package().package_digest().to_owned(),
+                installation_digest: installation.installation_digest().to_owned(),
+                adapter_digest: installation
+                    .package()
+                    .package()
+                    .adapter_digest()
+                    .as_str()
+                    .to_owned(),
+                daemon_failure_mode: request.daemon_failure_mode,
+                requested_loss_grace_seconds: request.requested_loss_grace_seconds,
+                environment: Vec::new(),
+                secret_references: Vec::new(),
+                container_image_digest: String::new(),
+                tty: request.tty,
+                detached: request.detached,
+            },
+            owner_uid,
+            owner_gid,
+            configuration_generation,
+            config,
+            true,
+        )?;
+        if spec.executable() != Some(&executable) {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex executable changed between alias revalidation and runner admission",
+                ),
+            }
+            .fail();
+        }
+        Ok(spec)
+    }
+
+    pub(crate) fn install_verified_codex(
+        &self,
+        owner_uid: u32,
+        package_digest: &str,
+        artifact: VerifiedLocalArtifact,
+        installed_at_unix_ms: u64,
+    ) -> Result<AgentInstallResponse> {
+        let installation = self.local_store.store_codex_installation(
+            owner_uid,
+            package_digest,
+            installed_at_unix_ms,
+            artifact,
+        )?;
+        let definition = installation.package().definition();
+        let aliases = ["codex", "codex-app-server"]
+            .into_iter()
+            .filter(|alias| {
+                definition
+                    .entrypoint(alias)
+                    .is_some_and(|entrypoint| *alias == "codex" || entrypoint.app_server_stdio())
+            })
+            .map(str::to_owned)
+            .collect();
+        Ok(AgentInstallResponse {
+            package_digest: installation.package().package_digest().to_owned(),
+            installation_digest: installation.installation_digest().to_owned(),
+            aliases,
+        })
+    }
+
+    pub(crate) fn installation_time() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(1, |duration| duration.as_millis() as u64)
+    }
+
+    fn reverify_codex_artifact(
+        &self,
+        owner_uid: u32,
+        owner_gid: u32,
+        artifact: &VerifiedLocalArtifact,
+    ) -> Result<SafePathBinding> {
+        let resolved = self.descriptor_broker.resolve(
+            owner_uid,
+            owner_gid,
+            artifact.path(),
+            SafePathKind::Executable,
+        )?;
+        let binding = resolved.binding();
+        let matches = binding.requested_path() == artifact.path()
+            && binding.device() == artifact.device()
+            && binding.inode() == artifact.inode()
+            && binding.mount_id() == artifact.mount_id()
+            && binding.owner_uid() == artifact.owner_uid()
+            && binding.owner_gid() == artifact.owner_gid()
+            && binding.content_sha256() == Some(artifact.sha256().as_str())
+            && resolved.mode()? == artifact.mode();
+        if !matches {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex installation artifact identity, owner, mode, or content changed after enrollment",
+                ),
+            }
+            .fail();
+        }
+        Ok(binding.clone())
+    }
+
+    fn codex_filesystem_projections(
+        &self,
+        owner_uid: u32,
+        owner_gid: u32,
+        package_digest: &str,
+        config: &DaemonConfig,
+    ) -> Result<Vec<FilesystemProjection>> {
+        let package = config.root_curated_codex_package(package_digest).ok_or_else(|| {
+            crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex package is not present in the active root-curated daemon configuration",
+                ),
+            }
+            .build()
+        })?;
+        let artifacts = package.definition().managed_artifacts();
+        let mut sources = vec![
+            (artifacts.requirements_source(), artifacts.requirements_path()),
+            (artifacts.managed_hook_source(), artifacts.managed_hook_path()),
+            (artifacts.shell_startup_source(), artifacts.shell_startup_path()),
+        ];
+        if let (Some(source), Some(target)) = (
+            artifacts.sandbox_launcher(),
+            artifacts.sandbox_launcher_path(),
+        ) {
+            sources.push((source, target));
+        }
+        sources
+            .into_iter()
+            .map(|(artifact, target)| {
+                if !artifact.path().starts_with(package.trust_root()) {
+                    return crate::error::InvalidRequestSnafu {
+                        reason: String::from(
+                            "Codex package artifact is outside its root-curated trust root",
+                        ),
+                    }
+                    .fail();
+                }
+                let resolved = self.descriptor_broker.resolve(
+                    owner_uid,
+                    owner_gid,
+                    artifact.path(),
+                    SafePathKind::File,
+                )?;
+                let binding = resolved.binding();
+                if binding.owner_uid() != 0
+                    || resolved.mode()? & 0o022 != 0
+                    || binding.content_sha256() != Some(artifact.sha256().as_str())
+                {
+                    return crate::error::InvalidRequestSnafu {
+                        reason: format!(
+                            "Codex root-managed artifact `{}` has an unexpected owner, mode, or digest",
+                            artifact.path().display(),
+                        ),
+                    }
+                    .fail();
+                }
+                FilesystemProjection::new(binding.clone(), target.to_path_buf(), true).map_err(
+                    |error| crate::error::InvalidRequestSnafu {
+                        reason: error.to_string(),
+                    }
+                    .build(),
+                )
+            })
+            .collect()
     }
 
     pub(crate) fn runner_reports(
@@ -306,8 +674,14 @@ impl DaemonSessionApi {
                 package_minimum_digests,
                 local_override_digest.as_deref(),
             ),
+            MutationIntent::PolicySetAliasSet {
+                uid,
+                alias,
+                policy_set_digest,
+            } => self.set_policy_set_alias(*uid, alias, policy_set_digest),
             MutationIntent::Reload { .. }
             | MutationIntent::Stop
+            | MutationIntent::AgentInstall { .. }
             | MutationIntent::ApprovalApprove { .. }
             | MutationIntent::ApprovalDeny { .. } => {
                 unreachable!("daemon-only mutation reached session service")
@@ -417,6 +791,24 @@ impl DaemonSessionApi {
         )
     }
 
+    fn set_policy_set_alias(
+        &self,
+        owner_uid: u32,
+        alias: &str,
+        policy_set_digest: &str,
+    ) -> Result<MutationResponse> {
+        let alias = self
+            .local_store
+            .set_policy_set_alias(owner_uid, alias, policy_set_digest)?;
+        message(
+            KIND_POLICY_SET_ALIAS_RECORD,
+            &PolicySetAliasRecord {
+                alias: alias.name().to_owned(),
+                policy_set_digest: alias.digest().as_str().to_owned(),
+            },
+        )
+    }
+
     pub(crate) fn inspect(&self, uid: u32, session_id: &str) -> Result<SessionRecord> {
         let session_id = self.resolve_session_reference(uid, session_id)?;
         let record = self
@@ -521,6 +913,35 @@ impl DaemonSessionApi {
             .fail();
         }
         let admission = self.local_store.validate_session_spec(record.spec())?;
+        if admission.package().adapter_id() == "codex-v1" {
+            let installation = self.local_store.resolve_codex_installation(
+                uid,
+                admission.package_digest(),
+                admission.installation_digest(),
+                None,
+            )?;
+            let artifact = installation
+                .installation()
+                .local_artifact()
+                .ok_or_else(|| {
+                    crate::error::InvalidRequestSnafu {
+                        reason: String::from(
+                            "Codex session installation no longer has a verified local artifact",
+                        ),
+                    }
+                    .build()
+                })?;
+            let current =
+                self.reverify_codex_artifact(uid, record.spec().owner().gid(), artifact)?;
+            if record.spec().executable() != Some(&current) {
+                return crate::error::InvalidRequestSnafu {
+                    reason: String::from(
+                        "Codex session executable no longer matches its enrolled artifact",
+                    ),
+                }
+                .fail();
+            }
+        }
         self.adapters
             .prepare(
                 admission.package(),

@@ -1,6 +1,6 @@
 use std::{
+    collections::HashMap,
     fs,
-    io::Read,
     os::{
         fd::AsFd,
         unix::fs::{MetadataExt, PermissionsExt},
@@ -12,11 +12,10 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use erebor_runtime_core::CodexHookEvent;
-use erebor_runtime_filesystem::LinuxReadOnlySessionProjection;
+use erebor_runtime_core::SessionSpec;
 use erebor_runtime_ipc::{
     v1::{
         Envelope, EnvelopeServiceFamily, HookEvent, HookEventKind, HookHello, HookHelloAck,
@@ -26,57 +25,231 @@ use erebor_runtime_ipc::{
     SyncFrameCodec,
 };
 use snafu::{ensure, ResultExt};
+use erebor_runtime_packages::{CodexHookEventName, CodexPackageDefinition};
 
 use super::{
+    CodexAppServerRegistration,
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
-    CodexInvocationLeaseOwner, CodexLeaseRuntimeEvidence, CodexManagedSession,
-    CodexNativeHookEvent, CodexPromptReconciliation, CodexSessionError,
+    CodexCommandDispatch, CodexGuardLifecycleHandler, CodexInvocationLeaseOwner,
+    CodexInvocationLeaseProfile, CodexInvocationLeaseTrust, CodexLeaseRuntimeEvidence,
+    CodexManagedSession, CodexNativeHookEvent, CodexPromptReconciliation, CodexSessionError,
 };
 
 const BROKER_SOCKET: &str = "codex-hook.sock";
-const HOST_BROKER_DIRECTORY_PREFIX: &str = "erebor-codex-hook-";
-const SESSION_BROKER_DIRECTORY: &str = "/run/erebor";
 const SESSION_BROKER_ENDPOINT: &str = "/run/erebor/codex-hook.sock";
 const MAX_NATIVE_EVENT_BYTES: usize = 32 * 1024;
 const MAX_PROFILE_ANCESTOR_DEPTH: usize = 16;
 
-/// Stable local Unix endpoint for a single managed Codex session. Its socket
-/// directory is projected read-only at `/run/erebor` inside that session.
-pub(crate) struct CodexHookBroker {
-    directory: PathBuf,
+/// One daemon-owned hook listener shared by registered Codex sessions.
+///
+/// Registrations retain all session-local authorization state. The listener
+/// only selects a registration after the managed hook identifies its session;
+/// the selected registration still performs one-use ticket and kernel-peer
+/// validation before processing any native event.
+pub struct CodexHookService {
+    endpoint: PathBuf,
+    registrations: Arc<Mutex<HashMap<String, CodexHookRegistration>>>,
     shutdown: Arc<AtomicBool>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
-impl CodexHookBroker {
-    pub(crate) fn start(
-        managed_session: CodexManagedSession,
-        reconciliation: std::sync::Arc<CodexPromptReconciliation>,
-        lease_owner: std::sync::Arc<CodexInvocationLeaseOwner>,
+#[derive(Clone)]
+struct CodexHookRegistration {
+    managed_session: CodexManagedSession,
+    reconciliation: Arc<CodexPromptReconciliation>,
+    lease_owner: Arc<CodexInvocationLeaseOwner>,
+}
+
+/// Session-local Codex authorities retained by the shared listener's
+/// registration table. It can extend only the already-created runtime-guard
+/// router; it cannot access daemon control traffic.
+pub struct CodexSessionHookRegistration {
+    managed_session: CodexManagedSession,
+    reconciliation: Arc<CodexPromptReconciliation>,
+    lease_owner: Arc<CodexInvocationLeaseOwner>,
+    context_dag: Arc<super::CodexContextDag>,
+}
+
+impl CodexSessionHookRegistration {
+    fn from_spec(
+        spec: &SessionSpec,
+        definition: &CodexPackageDefinition,
     ) -> Result<Self, CodexSessionError> {
-        let directory = Self::create_socket_directory()?;
-        let socket = directory.join(BROKER_SOCKET);
-        let _result = fs::remove_file(&socket);
-        let listener = UnixListener::bind(&socket).context(HookBrokerIoSnafu)?;
-        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))
+        let executable = spec.executable().ok_or_else(|| CodexSessionError::IncompatibleProfile {
+            reason: String::from("Codex session has no descriptor-verified executable"),
+            location: snafu::Location::default(),
+        })?;
+        let managed_session = CodexManagedSession::from_package(
+            spec.session_id().as_str(),
+            executable.requested_path().to_path_buf(),
+            definition,
+        )?;
+        let dispatch = definition.hook_contract().command_dispatch().map(|dispatch| {
+            CodexCommandDispatch::new(
+                dispatch.program().to_owned(),
+                dispatch.shell().display().to_string(),
+            )
+        });
+        let lease_owner = Arc::new(CodexInvocationLeaseOwner::new(
+            spec.session_id().as_str(),
+            erebor_runtime_events::ActorIdentity {
+                id: String::from("agent"),
+                kind: erebor_runtime_events::ActorKind::Agent,
+            },
+            CodexInvocationLeaseProfile::new(
+                managed_session.profile().id().to_owned(),
+                managed_session.profile().executable().display().to_string(),
+                managed_session
+                    .profile()
+                    .hook_exec_history()
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect(),
+            ),
+            CodexInvocationLeaseTrust::new(Vec::new(), dispatch),
+            Some(spec.output().root().join("evidence")),
+        ));
+        let context_root = spec.output().root().join("codex-context");
+        let repository = if context_root.exists() {
+            erebor_runtime_context::ContextRepository::open(
+                &context_root,
+                DaemonContextMetadata,
+            )
+        } else {
+            erebor_runtime_context::ContextRepository::init(
+                &context_root,
+                DaemonContextMetadata,
+            )
+        }
+        .map_err(|error| CodexSessionError::IncompatibleProfile {
+            reason: format!(
+                "could not open the daemon-owned Codex context repository `{}`: {error}",
+                context_root.display()
+            ),
+            location: snafu::Location::default(),
+        })?;
+        let context_dag = Arc::new(super::CodexContextDag::new(
+            Arc::new(repository),
+            spec.session_id().as_str(),
+        ));
+        lease_owner.set_context_dag(Arc::clone(&context_dag))?;
+        Ok(Self {
+            managed_session,
+            reconciliation: Arc::new(CodexPromptReconciliation::default()),
+            lease_owner,
+            context_dag,
+        })
+    }
+
+    #[must_use]
+    pub fn with_interception_router(
+        &self,
+        router: crate::SessionInterceptionRouter,
+    ) -> crate::SessionInterceptionRouter {
+        router
+            .with_codex_invocation_lease_owner(Arc::clone(&self.lease_owner))
+            .with_guard_lifecycle_handler(CodexGuardLifecycleHandler::new(
+                self.managed_session.clone(),
+                Arc::clone(&self.lease_owner),
+            ))
+    }
+
+    #[must_use]
+    pub fn app_server_registration(&self) -> CodexAppServerRegistration {
+        CodexAppServerRegistration::new(
+            self.managed_session.session_id(),
+            Arc::clone(&self.context_dag),
+            Arc::clone(&self.reconciliation),
+            Arc::clone(&self.lease_owner),
+        )
+    }
+}
+
+struct DaemonContextMetadata;
+
+impl erebor_runtime_context::CommitMetadataSource for DaemonContextMetadata {
+    fn metadata(
+        &self,
+    ) -> std::result::Result<
+        erebor_runtime_context::CommitMetadata,
+        erebor_runtime_context::CommitMetadataSourceError,
+    > {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs() as i64);
+        let time = erebor_runtime_context::CommitTime::new(seconds, 0)
+            .map_err(|error| Box::new(error) as erebor_runtime_context::CommitMetadataSourceError)?;
+        let signature = erebor_runtime_context::CommitSignature::new(
+            "erebord",
+            "erebord@localhost",
+            time,
+        )
+        .map_err(|error| Box::new(error) as erebor_runtime_context::CommitMetadataSourceError)?;
+        Ok(erebor_runtime_context::CommitMetadata::new(
+            signature.clone(),
+            signature,
+        ))
+    }
+}
+
+impl CodexHookService {
+    pub fn start(runtime_root: impl Into<PathBuf>) -> Result<Self, CodexSessionError> {
+        let directory = runtime_root.into();
+        fs::create_dir_all(&directory).context(HookBrokerIoSnafu)?;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+            .context(HookBrokerIoSnafu)?;
+        let endpoint = directory.join(BROKER_SOCKET);
+        match fs::remove_file(&endpoint) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).context(HookBrokerIoSnafu),
+        }
+        let listener = UnixListener::bind(&endpoint).context(HookBrokerIoSnafu)?;
+        fs::set_permissions(&endpoint, fs::Permissions::from_mode(0o666))
             .context(HookBrokerIoSnafu)?;
         listener.set_nonblocking(true).context(HookBrokerIoSnafu)?;
 
+        let registrations = Arc::new(Mutex::new(HashMap::<String, CodexHookRegistration>::new()));
+        let worker_registrations = Arc::clone(&registrations);
         let shutdown = Arc::new(AtomicBool::new(false));
         let worker_shutdown = Arc::clone(&shutdown);
         let worker = thread::spawn(move || {
             while !worker_shutdown.load(Ordering::SeqCst) {
                 match listener.accept() {
                     Ok((mut stream, _address)) => {
-                        let session = managed_session.clone();
-                        let reconciliation = std::sync::Arc::clone(&reconciliation);
-                        let lease_owner = std::sync::Arc::clone(&lease_owner);
+                        let registrations = Arc::clone(&worker_registrations);
                         thread::spawn(move || {
                             let _result = stream.set_read_timeout(Some(Duration::from_secs(10)));
                             let _result = stream.set_write_timeout(Some(Duration::from_secs(10)));
-                            let _result =
-                                CodexHookBrokerProtocol::new(session, reconciliation, lease_owner)
-                                    .serve(&mut stream);
+                            let hello_envelope = CodexHookBrokerProtocol::read_envelope(&mut stream);
+                            let Ok(hello_envelope) = hello_envelope else {
+                                return;
+                            };
+                            let hello: Result<HookHello, _> = hello_envelope
+                                .decode_typed_payload(KIND_HOOK_HELLO)
+                                .context(HookBrokerProtocolSnafu);
+                            let Ok(hello) = hello else {
+                                return;
+                            };
+                            let registration = registrations
+                                .lock()
+                                .ok()
+                                .and_then(|table| table.get(&hello.session_id).cloned());
+                            let Some(registration) = registration else {
+                                let _result = CodexHookBrokerProtocol::write_hello_ack(
+                                    &mut stream,
+                                    &hello_envelope,
+                                    false,
+                                    String::from("no active Codex hook registration for this session"),
+                                );
+                                return;
+                            };
+                            let _result = CodexHookBrokerProtocol::new(
+                                registration.managed_session,
+                                registration.reconciliation,
+                                registration.lease_owner,
+                            )
+                            .serve_after_hello(&mut stream, hello_envelope, hello);
                         });
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -87,69 +260,84 @@ impl CodexHookBroker {
             }
         });
         Ok(Self {
-            directory,
+            endpoint,
+            registrations,
             shutdown,
             worker: Mutex::new(Some(worker)),
         })
     }
 
-    fn create_socket_directory() -> Result<PathBuf, CodexSessionError> {
-        for _attempt in 0..16 {
-            let mut random = [0_u8; 12];
-            fs::File::open("/dev/urandom")
-                .and_then(|mut file| file.read_exact(&mut random))
-                .context(HookBrokerIoSnafu)?;
-            let suffix = random
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>();
-            let directory =
-                Path::new("/tmp").join(format!("{HOST_BROKER_DIRECTORY_PREFIX}{suffix}"));
-            match fs::create_dir(&directory) {
-                Ok(()) => {
-                    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
-                        .context(HookBrokerIoSnafu)?;
-                    return Ok(directory);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error).context(HookBrokerIoSnafu),
-            }
+    pub(crate) fn register(
+        &self,
+        managed_session: CodexManagedSession,
+        reconciliation: Arc<CodexPromptReconciliation>,
+        lease_owner: Arc<CodexInvocationLeaseOwner>,
+    ) -> Result<(), CodexSessionError> {
+        let session_id = managed_session.session_id().to_owned();
+        let mut registrations = self
+            .registrations
+            .lock()
+            .map_err(|_error| super::error::TicketRegistryLockSnafu.build())?;
+        if registrations.contains_key(&session_id) {
+            return Err(CodexSessionError::InvalidHookEvent {
+                reason: format!("Codex hook session `{session_id}` is already registered"),
+                location: snafu::Location::default(),
+            });
         }
-        Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            "unable to allocate a unique Codex hook broker directory",
-        ))
-        .context(HookBrokerIoSnafu)
+        registrations.insert(
+            session_id,
+            CodexHookRegistration {
+                managed_session,
+                reconciliation,
+                lease_owner,
+            },
+        );
+        Ok(())
     }
 
-    pub(crate) fn session_projection(
+    pub fn register_session(
         &self,
-    ) -> Result<LinuxReadOnlySessionProjection, CodexSessionError> {
-        LinuxReadOnlySessionProjection::new(&self.directory, SESSION_BROKER_DIRECTORY).map_err(
-            |source| CodexSessionError::FilesystemProjection {
-                source: Box::new(source),
-                location: snafu::Location::default(),
-            },
-        )
+        spec: &SessionSpec,
+        definition: &CodexPackageDefinition,
+    ) -> Result<CodexSessionHookRegistration, CodexSessionError> {
+        let registration = CodexSessionHookRegistration::from_spec(spec, definition)?;
+        self.register(
+            registration.managed_session.clone(),
+            Arc::clone(&registration.reconciliation),
+            Arc::clone(&registration.lease_owner),
+        )?;
+        Ok(registration)
+    }
+
+    pub fn unregister(&self, session_id: &str) -> Result<(), CodexSessionError> {
+        self.registrations
+            .lock()
+            .map_err(|_error| super::error::TicketRegistryLockSnafu.build())?
+            .remove(session_id);
+        Ok(())
     }
 
     #[must_use]
-    pub(crate) const fn session_endpoint() -> &'static str {
+    pub fn endpoint(&self) -> &Path {
+        &self.endpoint
+    }
+
+    #[must_use]
+    pub const fn session_endpoint() -> &'static str {
         SESSION_BROKER_ENDPOINT
     }
 }
 
-impl Drop for CodexHookBroker {
+impl Drop for CodexHookService {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
-        let _result = UnixStream::connect(self.directory.join(BROKER_SOCKET));
+        let _result = UnixStream::connect(&self.endpoint);
         if let Ok(mut worker) = self.worker.lock() {
             if let Some(worker) = worker.take() {
                 let _result = worker.join();
             }
         }
-        let _result = fs::remove_file(self.directory.join(BROKER_SOCKET));
-        let _result = fs::remove_dir(&self.directory);
+        let _result = fs::remove_file(&self.endpoint);
     }
 }
 
@@ -172,11 +360,30 @@ impl CodexHookBrokerProtocol {
         }
     }
 
+    #[cfg(test)]
     fn serve(&self, stream: &mut UnixStream) -> Result<(), CodexSessionError> {
         let hello_envelope = Self::read_envelope(stream)?;
         let hello: HookHello = hello_envelope
             .decode_typed_payload(KIND_HOOK_HELLO)
             .context(HookBrokerProtocolSnafu)?;
+        self.serve_after_hello(stream, hello_envelope, hello)
+    }
+
+    fn serve_after_hello(
+        &self,
+        stream: &mut UnixStream,
+        hello_envelope: Envelope,
+        hello: HookHello,
+    ) -> Result<(), CodexSessionError> {
+        if hello.session_id != self.managed_session.session_id() {
+            Self::write_hello_ack(
+                stream,
+                &hello_envelope,
+                false,
+                String::from("Codex hook hello session does not match its registration"),
+            )?;
+            return Ok(());
+        }
         let observed_peer = LinuxHookPeerInspector::inspect(stream, &hello.ticket_id)?;
         let tickets = self.managed_session.hook_tickets();
         let ticket = match if hello.ticket_id.is_empty() {
@@ -279,42 +486,31 @@ impl CodexHookBrokerProtocol {
                 reason: String::from("hook event kind does not match native hook_event_name")
             }
         );
-        let codex_event = match event_kind {
-            HookEventKind::SessionStart => CodexHookEvent::SessionStart,
-            HookEventKind::UserPromptSubmit => CodexHookEvent::UserPromptSubmit,
-            HookEventKind::PreToolUse => CodexHookEvent::PreToolUse,
-            HookEventKind::PermissionRequest => CodexHookEvent::PermissionRequest,
-            HookEventKind::PostToolUse => CodexHookEvent::PostToolUse,
-            HookEventKind::SubagentStart => CodexHookEvent::SubagentStart,
-            HookEventKind::SubagentStop => CodexHookEvent::SubagentStop,
-            HookEventKind::Stop => CodexHookEvent::Stop,
-            HookEventKind::Unspecified => {
-                return InvalidHookEventSnafu {
-                    reason: String::from("hook event kind is unspecified"),
-                }
-                .fail();
+        if event_kind == HookEventKind::Unspecified {
+            return InvalidHookEventSnafu {
+                reason: String::from("hook event kind is unspecified"),
             }
-        };
+            .fail();
+        }
+        let package_event = package_event(event_kind);
         let expected_schema = self
             .managed_session
             .profile()
-            .event_schemas
-            .iter()
-            .find(|schema| schema.event == codex_event)
+            .event_schema(&package_event)
             .ok_or_else(|| CodexSessionError::InvalidHookEvent {
                 reason: format!(
-                    "event `{}` is not enabled by the managed profile",
-                    codex_event.as_str()
+                    "event `{}` is not enabled by the managed package",
+                    event_kind.as_str_name()
                 ),
                 location: snafu::Location::default(),
             })?;
         ensure!(
             event.schema_sha256 == native_event.schema_sha256()
-                && native_event.schema_sha256() == expected_schema.sha256,
+                && native_event.schema_sha256() == expected_schema.sha256(),
             InvalidHookEventSnafu {
                 reason: format!(
                     "event `{}` schema fingerprint does not match its native shape or managed profile",
-                    codex_event.as_str(),
+                    event_kind.as_str_name(),
                 )
             }
         );
@@ -377,6 +573,24 @@ impl CodexHookBrokerProtocol {
     ) -> Result<(), CodexSessionError> {
         let frame = envelope.into_frame().context(HookBrokerProtocolSnafu)?;
         SyncFrameCodec::write_frame(stream, &frame).context(HookBrokerProtocolSnafu)
+    }
+}
+
+fn package_event(event: erebor_runtime_ipc::v1::HookEventKind) -> CodexHookEventName {
+    match event {
+        erebor_runtime_ipc::v1::HookEventKind::SessionStart => CodexHookEventName::SessionStart,
+        erebor_runtime_ipc::v1::HookEventKind::UserPromptSubmit => {
+            CodexHookEventName::UserPromptSubmit
+        }
+        erebor_runtime_ipc::v1::HookEventKind::PreToolUse => CodexHookEventName::PreToolUse,
+        erebor_runtime_ipc::v1::HookEventKind::PermissionRequest => {
+            CodexHookEventName::PermissionRequest
+        }
+        erebor_runtime_ipc::v1::HookEventKind::PostToolUse => CodexHookEventName::PostToolUse,
+        erebor_runtime_ipc::v1::HookEventKind::SubagentStart => CodexHookEventName::SubagentStart,
+        erebor_runtime_ipc::v1::HookEventKind::SubagentStop => CodexHookEventName::SubagentStop,
+        erebor_runtime_ipc::v1::HookEventKind::Stop => CodexHookEventName::Stop,
+        erebor_runtime_ipc::v1::HookEventKind::Unspecified => CodexHookEventName::Stop,
     }
 }
 
@@ -619,12 +833,13 @@ mod tests {
 
     use std::sync::Arc;
 
-    use erebor_runtime_core::{
-        CodexDeploymentMode, CodexHookEvent, CodexHookEventSchemaLayerConfig, CodexHookShellKind,
-        CodexProfileLayerConfig, SessionRunnerKind,
-    };
     use erebor_runtime_events::{ActorIdentity, ActorKind};
     use erebor_runtime_ipc::v1::HookEvent;
+    use erebor_runtime_packages::{
+        CodexArtifact, CodexEntrypoint, CodexHookContract, CodexHookEventName,
+        CodexHookEventSchema, CodexHookExec, CodexHookShell, CodexManagedArtifacts,
+        CodexPackageDefinition, CodexSupportedPlatform, ContentDigest,
+    };
 
     use super::{
         CodexHookBrokerProtocol, CodexInvocationLeaseOwner, CodexPromptReconciliation,
@@ -663,9 +878,7 @@ mod tests {
     {
         let native_event_json = br#"{"hook_event_name":"SessionStart"}"#.to_vec();
         let native_event = CodexNativeHookEvent::parse(&native_event_json)?;
-        let mut pinned_profile = profile();
-        pinned_profile.event_schemas[0].sha256 = native_event.schema_sha256().to_owned();
-        let session = CodexManagedSession::for_test(pinned_profile);
+        let session = session("/opt/codex/codex", native_event.schema_sha256())?;
         let broker = CodexHookBrokerProtocol::new(
             session,
             Arc::new(CodexPromptReconciliation::default()),
@@ -757,14 +970,12 @@ mod tests {
         };
         let native_event_json = br#"{"hook_event_name":"SessionStart"}"#.to_vec();
         let native_event = CodexNativeHookEvent::parse(&native_event_json)?;
-        let mut pinned_profile = profile();
-        pinned_profile.executable = observed_peer
+        let executable = observed_peer
             .exec_chain
             .first()
             .ok_or("test peer omitted its parent executable")?
-            .into();
-        pinned_profile.event_schemas[0].sha256 = native_event.schema_sha256().to_owned();
-        let session = CodexManagedSession::for_test(pinned_profile);
+            .clone();
+        let session = session(executable, native_event.schema_sha256())?;
         let _ticket = session.issue_guarded_hook_ticket(observed_peer)?;
         let broker_session = session.clone();
         let worker = std::thread::spawn(move || {
@@ -776,8 +987,9 @@ mod tests {
             .serve(&mut broker_stream)
         });
 
-        let result = CodexHookClient::submit_on_stream(
+        let result = CodexHookClient::submit_on_stream_for_session(
             &mut hook_stream,
+            "session-test",
             HookEvent {
                 event: HookEventKind::SessionStart as i32,
                 schema_sha256: native_event.schema_sha256().to_owned(),
@@ -809,9 +1021,7 @@ mod tests {
         };
         let native_event_json = br#"{"hook_event_name":"SessionStart"}"#.to_vec();
         let native_event = CodexNativeHookEvent::parse(&native_event_json)?;
-        let mut pinned_profile = profile();
-        pinned_profile.event_schemas[0].sha256 = native_event.schema_sha256().to_owned();
-        let session = CodexManagedSession::for_test(pinned_profile);
+        let session = session("/opt/codex/codex", native_event.schema_sha256())?;
         let _ticket = session.issue_hook_ticket(observed_peer)?;
         let broker_session = session.clone();
         let worker = std::thread::spawn(move || {
@@ -823,8 +1033,9 @@ mod tests {
             .serve(&mut broker_stream)
         });
 
-        let error = match CodexHookClient::submit_on_stream(
+        let error = match CodexHookClient::submit_on_stream_for_session(
             &mut hook_stream,
+            "session-test",
             HookEvent {
                 event: HookEventKind::SessionStart as i32,
                 schema_sha256: native_event.schema_sha256().to_owned(),
@@ -851,33 +1062,51 @@ mod tests {
         Ok(())
     }
 
-    fn profile() -> CodexProfileLayerConfig {
-        CodexProfileLayerConfig {
-            id: String::from("test-profile"),
-            runner: SessionRunnerKind::LinuxHost,
-            executable: "/opt/codex/codex".into(),
-            executable_sha256: "a".repeat(64),
-            deployment: CodexDeploymentMode::LocalCooperative,
-            trust_root: "/var/lib/erebor/codex".into(),
-            requirements_source: "/var/lib/erebor/codex/requirements.toml".into(),
-            requirements_sha256: "a".repeat(64),
-            managed_hook_source: "/var/lib/erebor/codex/hooks/erebor-codex-hook".into(),
-            managed_hook_sha256: "a".repeat(64),
-            managed_hook_path: "/usr/lib/erebor/codex-hooks/erebor-codex-hook".into(),
-            shell_startup_source: "/var/lib/erebor/codex/hooks/shell-startup".into(),
-            shell_startup_sha256: "a".repeat(64),
-            shell_startup_path: "/usr/lib/erebor/codex-hooks/shell-startup".into(),
-            hook_shell: CodexHookShellKind::Direct,
-            hook_exec_history: vec![
-                "/opt/codex/codex".into(),
-                "/usr/lib/erebor/codex-hooks/erebor-codex-hook".into(),
-            ],
-            event_schemas: vec![CodexHookEventSchemaLayerConfig {
-                event: CodexHookEvent::SessionStart,
-                sha256: "b".repeat(64),
-            }],
-            app_server_transport: Default::default(),
-        }
+    fn session(
+        executable: impl Into<std::path::PathBuf>,
+        schema_sha256: &str,
+    ) -> Result<CodexManagedSession, Box<dyn std::error::Error>> {
+        Ok(CodexManagedSession::from_package(
+            "session-test",
+            executable.into(),
+            &package(schema_sha256)?,
+        )?)
+    }
+
+    fn package(schema_sha256: &str) -> Result<CodexPackageDefinition, Box<dyn std::error::Error>> {
+        let artifact = |path: &str, digest: char| {
+            CodexArtifact::new(path.into(), ContentDigest::new(digest.to_string().repeat(64))?)
+        };
+        let artifacts = CodexManagedArtifacts::new(
+            artifact("/var/lib/erebor/codex/requirements.toml", 'a')?,
+            "/run/erebor/codex/requirements.toml".into(),
+            artifact("/var/lib/erebor/codex/hooks/erebor-codex-hook", 'b')?,
+            "/run/erebor/codex/hooks/erebor-codex-hook".into(),
+            artifact("/var/lib/erebor/codex/hooks/shell-startup", 'c')?,
+            "/run/erebor/codex/hooks/shell-startup".into(),
+            None,
+            None,
+        )?;
+        Ok(CodexPackageDefinition::new(
+            "codex-v1-test",
+            ContentDigest::new("d".repeat(64))?,
+            CodexSupportedPlatform::LinuxX86_64,
+            vec![CodexEntrypoint::new(
+                "codex-app-server",
+                vec![String::from("app-server"), String::from("--stdio")],
+                true,
+            )?],
+            artifacts,
+            CodexHookContract::new(
+                CodexHookShell::Direct,
+                vec![CodexHookExec::InstalledExecutable, CodexHookExec::ManagedHook],
+                vec![CodexHookEventSchema::new(
+                    CodexHookEventName::SessionStart,
+                    ContentDigest::new(schema_sha256.to_owned())?,
+                )?],
+                None,
+            )?,
+        )?)
     }
 
     fn test_lease_owner() -> Arc<CodexInvocationLeaseOwner> {

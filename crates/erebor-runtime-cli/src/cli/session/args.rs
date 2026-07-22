@@ -11,6 +11,32 @@ pub(crate) struct SessionArgs {
     pub(crate) command: SessionCommand,
 }
 
+/// The public Phase 4 Codex run request. The daemon resolves its local alias
+/// to the certified package entrypoint; this command deliberately has no raw
+/// executable or argv position.
+#[derive(Debug, Args)]
+pub(crate) struct CodexRunArgs {
+    /// Caller-local `codex` or `codex-app-server` installation alias.
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) alias: String,
+    /// Caller-local policy-set alias or immutable policy-set digest.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) policy: String,
+    /// Workspace admitted by the daemon under the caller UID. Defaults to the current directory.
+    #[arg(long, value_parser = parse_non_empty_path)]
+    pub(crate) workspace: Option<PathBuf>,
+    #[arg(long, default_value = "terminate", value_parser = parse_failure_mode)]
+    pub(crate) failure_mode: String,
+    #[arg(long, default_value_t = 2)]
+    pub(crate) loss_grace_seconds: u64,
+    /// Request a terminal session for the interactive `codex` entrypoint.
+    #[arg(short = 't', long)]
+    pub(crate) tty: bool,
+    /// Create and start the session without attaching the client output stream.
+    #[arg(short = 'd', long)]
+    pub(crate) detached: bool,
+}
+
 impl SessionArgs {
     pub(crate) fn display(&self) -> String {
         match &self.command {
@@ -36,7 +62,7 @@ impl SessionArgs {
 pub(crate) enum SessionCommand {
     /// Create a daemon-owned generic session without starting its workload.
     Create(GenericSessionCreateArgs),
-    /// Create and start a session. `--config` retains the temporary direct Codex path only.
+    /// Create and start a daemon-owned generic session.
     Run(SessionRunArgs),
     /// Start a previously created session.
     Start(SessionMutationArgs),
@@ -77,15 +103,11 @@ pub(crate) struct GenericSessionCreateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SessionRunArgs {
-    /// Existing temporary Codex profile config. It is rejected unless the command exactly
-    /// matches a configured brokered Codex App Server profile.
-    #[arg(long, value_parser = parse_non_empty_path)]
-    pub(crate) config: Option<PathBuf>,
     #[command(flatten)]
-    pub(crate) request: OptionalGenericSessionRequestArgs,
-    /// Stable key reused only after an uncertain create/start result. Required for generic runs.
+    pub(crate) request: GenericSessionRequestArgs,
+    /// Stable key reused only after an uncertain create/start result.
     #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) idempotency_key: Option<String>,
+    pub(crate) idempotency_key: String,
 }
 
 #[derive(Debug, Args)]
@@ -129,36 +151,6 @@ pub(crate) struct GenericSessionRequestArgs {
     #[arg(short = 'd', long)]
     pub(crate) detached: bool,
     /// Initial argv; the daemon never starts a shell for this request.
-    #[arg(required = true, trailing_var_arg = true, num_args = 1..)]
-    pub(crate) command: Vec<String>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct OptionalGenericSessionRequestArgs {
-    #[arg(long, alias = "runtime", value_enum)]
-    pub(crate) runner: Option<SessionRunnerArg>,
-    #[arg(long, value_parser = parse_non_empty_path)]
-    pub(crate) workspace: Option<PathBuf>,
-    #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) package_digest: Option<String>,
-    #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) installation_digest: Option<String>,
-    #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) adapter_digest: Option<String>,
-    #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) policy_set_digest: Option<String>,
-    #[arg(long, default_value = "terminate", value_parser = parse_failure_mode)]
-    pub(crate) failure_mode: String,
-    #[arg(long, default_value_t = 2)]
-    pub(crate) loss_grace_seconds: u64,
-    #[arg(long = "env", value_parser = parse_environment)]
-    pub(crate) environment: Vec<(String, String)>,
-    #[arg(long = "secret", value_parser = parse_non_empty_string)]
-    pub(crate) secret_references: Vec<String>,
-    #[arg(short = 't', long)]
-    pub(crate) tty: bool,
-    #[arg(short = 'd', long)]
-    pub(crate) detached: bool,
     #[arg(required = true, trailing_var_arg = true, num_args = 1..)]
     pub(crate) command: Vec<String>,
 }

@@ -246,6 +246,20 @@ impl DescriptorBroker {
 }
 
 impl ResolvedDescriptor {
+    pub(crate) const fn binding(&self) -> &SafePathBinding {
+        &self.binding
+    }
+
+    pub(crate) fn mode(&self) -> Result<u32> {
+        self.descriptor
+            .metadata()
+            .map(|metadata| metadata.mode())
+            .context(IoSnafu {
+                action: "observing held descriptor mode",
+                path: self.binding.requested_path(),
+            })
+    }
+
     fn into_parts(self) -> (File, SafePathBinding) {
         (self.descriptor, self.binding)
     }
@@ -716,7 +730,8 @@ fn broker_resolve(arguments: &BrokerArguments) -> Result<(OwnedFd, BrokerRespons
         }
         .fail();
     }
-    let content_sha256 = if arguments.kind == SafePathKind::Executable {
+    let content_sha256 = if matches!(arguments.kind, SafePathKind::Executable | SafePathKind::File)
+    {
         Some(digest_descriptor(&descriptor, &arguments.path)?)
     } else {
         None

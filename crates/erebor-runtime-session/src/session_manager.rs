@@ -1398,6 +1398,7 @@ mod tests {
             workload_privileges: WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)?,
             command: vec![String::from("/usr/bin/agent")],
             package: None,
+            package_configuration: None,
             installation: None,
             adapter: None,
             policy_inputs: vec![ImmutableIdentity::new("root-policy", digest)?],

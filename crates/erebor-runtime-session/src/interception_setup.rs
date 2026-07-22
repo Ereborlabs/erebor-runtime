@@ -7,7 +7,6 @@ use erebor_runtime_core::{
 use snafu::ResultExt;
 
 use crate::{
-    agents::codex::CodexHookBroker,
     error::RuntimeInterceptionBrokerSnafu,
     interception_backend::SessionInterceptionBackendBundle,
     runtime_interception_broker::{
@@ -65,7 +64,6 @@ impl SessionInterceptionSetup {
         browser_cdp_endpoint: Option<String>,
         interception_registration: Option<SessionInterceptionRegistration>,
         supervisor: Option<SessionSurfaceSupervisor>,
-        codex_hook_broker: Option<CodexHookBroker>,
     ) -> Result<SessionSideResources, SessionExecutionError> {
         let (docker_options, linux_host_options) = self.command_options(
             browser_cdp_endpoint.as_deref(),
@@ -80,7 +78,6 @@ impl SessionInterceptionSetup {
             SessionResourceLifetime::new(
                 interception_registration,
                 self.backend,
-                codex_hook_broker,
                 supervisor,
             ),
         ))

@@ -10,8 +10,8 @@ use std::{
 
 use erebor_runtime_core::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal,
-    ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, FilesystemProjection,
-    OutputEndpoints, RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery,
+    ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection,
+    OutputEndpoints, PreparedFilesystemProjection, RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery,
     RuntimeError, SafePathBinding, ScriptInterpreterBinding, SessionSpec, WorkloadPrivilegePlan,
 };
 use serde::{Deserialize, Serialize};
@@ -146,6 +146,7 @@ impl LinuxRunnerDriver {
             prepared_workspace: output.prepared_workspace().map(Path::to_path_buf),
             prepared_executable: output.prepared_executable().map(Path::to_path_buf),
             prepared_interpreters: output.prepared_interpreters().to_vec(),
+            prepared_filesystem_projections: output.prepared_filesystem_projections().to_vec(),
             process_guard_path: self.process_guard_path.clone(),
             systemd_scope_unit: self.use_systemd_scope.then_some(unit.clone()),
             systemd_session_slice: self.use_systemd_scope.then_some(session_slice.clone()),
@@ -282,12 +283,10 @@ impl RunnerDriver for LinuxRunnerDriver {
         let executable = self.resolve_executable(context, program)?;
         let workload_privileges = WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)
             .map_err(|source| context.invalid(source.to_string()))?;
-        let filesystem_projections = vec![FilesystemProjection::new(
-            context.workspace().clone(),
-            PathBuf::from("/workspace"),
-            false,
-        )
-        .map_err(|source| context.invalid(source.to_string()))?];
+        // The held workspace descriptor is the workload current directory. It
+        // is not a separate namespace projection, so do not claim a `/workspace`
+        // mount that the controller never created.
+        let filesystem_projections = Vec::new();
         let endpoint_projections = vec![EndpointProjection::new(
             "runtime-guard",
             context.runtime_guard_host_path().to_path_buf(),
@@ -537,6 +536,7 @@ pub(crate) struct LinuxControllerHandoff {
     pub(crate) prepared_workspace: Option<PathBuf>,
     pub(crate) prepared_executable: Option<PathBuf>,
     pub(crate) prepared_interpreters: Vec<PathBuf>,
+    pub(crate) prepared_filesystem_projections: Vec<PreparedFilesystemProjection>,
     pub(crate) process_guard_path: PathBuf,
     pub(crate) systemd_scope_unit: Option<String>,
     pub(crate) systemd_session_slice: Option<String>,

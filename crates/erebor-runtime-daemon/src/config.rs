@@ -1,9 +1,10 @@
-use std::{collections::BTreeSet, io::Read, path::Path};
+use std::{collections::BTreeSet, io::Read, path::{Component, Path, PathBuf}};
 
+use erebor_runtime_core::AgentAdapterDescriptor;
 use erebor_runtime_ipc::MAX_PAYLOAD_LEN;
 use erebor_runtime_packages::{
-    AgentPackageManifest, CanonicalEncoding, InstallationRecord, PolicyPackageRevision,
-    PolicySetRevision,
+    AgentPackageManifest, CanonicalEncoding, CodexPackageDefinition, InstallationRecord,
+    PolicyPackageRevision, PolicySetRevision,
 };
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
@@ -100,6 +101,99 @@ impl RootCuratedAdmission {
     }
 }
 
+/// One root-curated Codex release that may be installed by a local user.
+///
+/// This is not a distribution/import mechanism: the daemon receives the
+/// immutable release facts from root configuration and accepts only a caller
+/// supplied executable whose held descriptor matches the release digest.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RootCuratedCodexPackage {
+    package: AgentPackageManifest,
+    definition: CodexPackageDefinition,
+    trust_root: PathBuf,
+}
+
+impl RootCuratedCodexPackage {
+    #[cfg(test)]
+    pub(crate) fn new(
+        package: AgentPackageManifest,
+        definition: CodexPackageDefinition,
+        trust_root: PathBuf,
+    ) -> Self {
+        Self {
+            package,
+            definition,
+            trust_root,
+        }
+    }
+
+    fn validate(&self) -> bool {
+        self.package.validate().is_ok()
+            && self.definition.validate().is_ok()
+            && normalized_absolute(&self.trust_root)
+            && self
+                .definition
+                .managed_artifacts()
+                .requirements_source()
+                .path()
+                .starts_with(&self.trust_root)
+            && self
+                .definition
+                .managed_artifacts()
+                .managed_hook_source()
+                .path()
+                .starts_with(&self.trust_root)
+            && self
+                .definition
+                .managed_artifacts()
+                .shell_startup_source()
+                .path()
+                .starts_with(&self.trust_root)
+            && self
+                .definition
+                .managed_artifacts()
+                .sandbox_launcher()
+                .is_none_or(|artifact| artifact.path().starts_with(&self.trust_root))
+            && self.package.adapter_id() == "codex-v1"
+            && AgentAdapterDescriptor::codex_v1().is_ok_and(|descriptor| {
+                descriptor
+                    .sha256()
+                    .is_ok_and(|digest| self.package.adapter_digest().as_str() == digest)
+            })
+            && self
+                .definition
+                .canonical_digest()
+                .is_ok_and(|digest| self.package.config_digest() == &digest)
+    }
+
+    pub(crate) fn package(&self) -> &AgentPackageManifest {
+        &self.package
+    }
+
+    pub(crate) fn definition(&self) -> &CodexPackageDefinition {
+        &self.definition
+    }
+
+    pub(crate) fn trust_root(&self) -> &Path {
+        &self.trust_root
+    }
+
+    fn identity_key(&self) -> Option<String> {
+        self.package
+            .canonical_digest()
+            .ok()
+            .map(|digest| digest.as_str().to_owned())
+    }
+}
+
+fn normalized_absolute(path: &Path) -> bool {
+    path.is_absolute()
+        && !path.components().any(|component| {
+            matches!(component, Component::CurDir | Component::ParentDir | Component::Prefix(_))
+        })
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DaemonConfig {
@@ -132,6 +226,8 @@ pub struct DaemonConfig {
     pub max_ipc_upload_bytes_per_uid: u64,
     #[serde(default)]
     pub(crate) root_curated_admissions: Vec<RootCuratedAdmission>,
+    #[serde(default)]
+    pub(crate) root_curated_codex_packages: Vec<RootCuratedCodexPackage>,
 }
 
 impl Default for DaemonConfig {
@@ -153,6 +249,7 @@ impl Default for DaemonConfig {
             max_stored_policy_bytes_per_uid: DEFAULT_MAX_STORED_POLICY_BYTES_PER_UID,
             max_ipc_upload_bytes_per_uid: DEFAULT_MAX_IPC_UPLOAD_BYTES_PER_UID,
             root_curated_admissions: Vec::new(),
+            root_curated_codex_packages: Vec::new(),
         }
     }
 }
@@ -199,6 +296,7 @@ impl DaemonConfig {
             || self.max_ipc_upload_bytes_per_uid < 1024
             || self.max_ipc_upload_bytes_per_uid > DEFAULT_MAX_IPC_UPLOAD_BYTES_PER_UID
             || !valid_root_curated_admissions(&self.root_curated_admissions)
+            || !valid_root_curated_codex_packages(&self.root_curated_codex_packages)
         {
             return Err(crate::DaemonError::InvalidConfig {
                 path: path.to_path_buf(),
@@ -214,6 +312,22 @@ impl DaemonConfig {
 
     pub(crate) fn root_curated_admissions(&self) -> &[RootCuratedAdmission] {
         &self.root_curated_admissions
+    }
+
+    pub(crate) fn root_curated_codex_packages(&self) -> &[RootCuratedCodexPackage] {
+        &self.root_curated_codex_packages
+    }
+
+    pub(crate) fn root_curated_codex_package(
+        &self,
+        package_digest: &str,
+    ) -> Option<&RootCuratedCodexPackage> {
+        self.root_curated_codex_packages.iter().find(|package| {
+            package
+                .package()
+                .canonical_digest()
+                .is_ok_and(|digest| digest.as_str() == package_digest)
+        })
     }
 
     pub(crate) const fn max_policy_upload_bytes(&self) -> u64 {
@@ -248,6 +362,15 @@ fn valid_root_curated_admissions(admissions: &[RootCuratedAdmission]) -> bool {
         .collect::<Option<BTreeSet<_>>>();
     admissions.iter().all(RootCuratedAdmission::validate)
         && keys.is_some_and(|keys| keys.len() == admissions.len())
+}
+
+fn valid_root_curated_codex_packages(packages: &[RootCuratedCodexPackage]) -> bool {
+    let keys = packages
+        .iter()
+        .map(RootCuratedCodexPackage::identity_key)
+        .collect::<Option<BTreeSet<_>>>();
+    packages.iter().all(RootCuratedCodexPackage::validate)
+        && keys.is_some_and(|keys| keys.len() == packages.len())
 }
 
 const fn default_max_log_bytes() -> u64 {

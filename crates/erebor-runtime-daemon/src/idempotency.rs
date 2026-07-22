@@ -15,7 +15,7 @@ use crate::{
     Result,
 };
 use erebor_runtime_core::{ActiveSessionSignal, SessionSpec};
-use erebor_runtime_packages::PolicyPackageRevision;
+use erebor_runtime_packages::{PolicyPackageRevision, VerifiedLocalArtifact};
 
 pub(crate) struct DaemonIdempotencyStore {
     directory: PathBuf,
@@ -38,6 +38,12 @@ pub(crate) enum MutationIntent {
         generation: u64,
     },
     Stop,
+    AgentInstall {
+        uid: u32,
+        package_digest: String,
+        installed_at_unix_ms: u64,
+        artifact: VerifiedLocalArtifact,
+    },
     SessionCreate {
         spec: Box<SessionSpec>,
     },
@@ -116,6 +122,11 @@ pub(crate) enum MutationIntent {
         root_minimum_digest: String,
         package_minimum_digests: Vec<String>,
         local_override_digest: Option<String>,
+    },
+    PolicySetAliasSet {
+        uid: u32,
+        alias: String,
+        policy_set_digest: String,
     },
 }
 
@@ -431,13 +442,15 @@ impl MutationIntent {
             } => Some((*uid, session_id)),
             Self::Reload { .. }
             | Self::Stop
+            | Self::AgentInstall { .. }
             | Self::SessionPrune { .. }
             | Self::SessionAliasSet { .. }
             | Self::SessionAliasRemove { .. }
             | Self::ApprovalApprove { .. }
             | Self::ApprovalDeny { .. }
             | Self::PolicyPackageApply { .. }
-            | Self::PolicySetCreate { .. } => None,
+            | Self::PolicySetCreate { .. }
+            | Self::PolicySetAliasSet { .. } => None,
         }
     }
 }

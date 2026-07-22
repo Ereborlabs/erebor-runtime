@@ -186,6 +186,9 @@ impl PolicySetArgs {
     fn display(&self) -> String {
         match &self.command {
             PolicySetSubcommand::Create(_) => String::from("policy set create"),
+            PolicySetSubcommand::Alias(args) => {
+                format!("policy set alias {} {}", args.alias, args.policy_set_digest)
+            }
             PolicySetSubcommand::Ls => String::from("policy set ls"),
             PolicySetSubcommand::Inspect(args) => format!("policy set inspect {}", args.digest),
             PolicySetSubcommand::Verify(args) => format!("policy set verify {}", args.digest),
@@ -197,6 +200,8 @@ impl PolicySetArgs {
 enum PolicySetSubcommand {
     /// Compose root, package, and optional local policy revisions by exact digest.
     Create(PolicySetCreateArgs),
+    /// Bind a caller-local policy-set alias to one immutable revision.
+    Alias(PolicySetAliasArgs),
     /// List immutable policy-set revisions visible to the caller.
     Ls,
     /// Show one immutable policy-set revision selected by digest.
@@ -221,6 +226,16 @@ struct PolicySetCreateArgs {
 struct PolicySetDigestArgs {
     #[arg(value_parser = super::parse_non_empty_string)]
     digest: String,
+}
+
+#[derive(Debug, Args)]
+struct PolicySetAliasArgs {
+    #[arg(value_parser = super::parse_non_empty_string)]
+    alias: String,
+    #[arg(value_parser = super::parse_non_empty_string)]
+    policy_set_digest: String,
+    #[arg(long, value_parser = super::parse_non_empty_string)]
+    idempotency_key: String,
 }
 
 struct PolicySetCommandOwner<'a> {
@@ -249,6 +264,20 @@ impl<'a> PolicySetCommandOwner<'a> {
                     ))
                     .context(DaemonClientSnafu)?;
                 println!("digest={}", record.digest);
+                Ok(())
+            }
+            PolicySetSubcommand::Alias(args) => {
+                let record = runtime
+                    .block_on(DaemonClient::local().policy_set_alias_set(
+                        &args.alias,
+                        &args.policy_set_digest,
+                        &args.idempotency_key,
+                    ))
+                    .context(DaemonClientSnafu)?;
+                println!(
+                    "alias={} policy_set_digest={}",
+                    record.alias, record.policy_set_digest
+                );
                 Ok(())
             }
             PolicySetSubcommand::Ls => {

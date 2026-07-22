@@ -1,12 +1,19 @@
 //! Immutable local package, policy, installation, and alias models.
 
+mod codex;
 mod error;
 mod model;
 
+pub use codex::{
+    CodexArtifact, CodexCommandDispatch, CodexEntrypoint, CodexHookContract, CodexHookEventName,
+    CodexHookEventSchema, CodexHookExec, CodexHookShell, CodexManagedArtifacts,
+    CodexPackageDefinition, CodexSupportedPlatform,
+};
 pub use error::{PackageError, Result};
 pub use model::{
     AgentPackageManifest, CanonicalEncoding, ContentDigest, DigestAlias, InstallationRecord,
-    PolicyPackageManifest, PolicyPackageRevision, PolicySetRevision, CANONICAL_FORMAT_VERSION,
+    LocalArtifactProvider, PolicyPackageManifest, PolicyPackageRevision, PolicySetRevision,
+    VerifiedLocalArtifact, CANONICAL_FORMAT_VERSION,
 };
 
 #[cfg(test)]

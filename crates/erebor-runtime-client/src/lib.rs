@@ -1,5 +1,6 @@
 //! Typed local transport for the daemon-control service.
 
+mod agent;
 mod approvals;
 mod error;
 mod policy;

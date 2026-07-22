@@ -6,7 +6,7 @@ use std::{
 use erebor_runtime_core::{
     DaemonFailureMode, EvidenceRequirement, ImmutableIdentity, OutputPlan,
     OutputStreamRequirements, RunRequest, RunnerCapabilityDocument, RunnerId, SessionAdmission,
-    SessionOwner, SessionSpec,
+    SessionOwner, SessionSpec, FilesystemProjection,
 };
 use erebor_runtime_events::SessionId;
 use erebor_runtime_ipc::v1::SessionCreateRequest;
@@ -26,6 +26,8 @@ pub(super) struct AdmissionContext<'a> {
     pub(super) adapters: &'a AgentAdapterRegistry,
     pub(super) local_store: &'a DaemonLocalStore,
     pub(super) config: &'a DaemonConfig,
+    pub(super) allow_codex_adapter: bool,
+    pub(super) additional_filesystem_projections: Vec<FilesystemProjection>,
 }
 
 pub(super) fn parse_request(request: SessionCreateRequest) -> Result<RunRequest> {
@@ -70,6 +72,14 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
         adapter_digest,
         run_request.policy_set_sha256(),
     )?;
+    if admission.package().adapter_id() == "codex-v1" && !context.allow_codex_adapter {
+        return InvalidRequestSnafu {
+            reason: String::from(
+                "codex-v1 must be selected through the daemon-owned Codex alias request",
+            ),
+        }
+        .fail();
+    }
     let prepared = context
         .adapters
         .prepare(
@@ -100,15 +110,20 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
         executable,
         script_interpreters,
         container_image,
-        filesystem_projections,
+        mut filesystem_projections,
         endpoint_projections,
     } = context.runner_admission;
+    filesystem_projections.extend(context.additional_filesystem_projections);
     SessionSpec::new(SessionAdmission {
         session_id: SessionId::new(context.session_id),
         owner: context.owner,
         workload_privileges,
         command: prepared.command().to_vec(),
         package: identity("agent-package", Some(admission.package_digest()))?,
+        package_configuration: identity(
+            "agent-package-config",
+            Some(admission.package().config_digest().as_str()),
+        )?,
         installation: identity("installation", Some(admission.installation_digest()))?,
         adapter: identity("adapter", Some(admission.adapter_digest()))?,
         policy_inputs: admission

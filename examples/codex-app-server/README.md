@@ -89,91 +89,93 @@ Docker acceptance, which also creates a second in-group user and an outsider,
 tests socket recovery, and tests graceful and abrupt daemon shutdown. That
 acceptance is not run in CI.
 
-## Phase 2: Daemon-Owned Generic Sessions
+## Phase 3: Generic Daemon-Owned Session
 
-Phase 2 intentionally has no public `erebor run` command yet. This walkthrough
-uses the explicitly documented internal driver, but every operation still
-crosses the real authenticated daemon-control socket. It is a step-by-step
-example, not a wrapper around the automated acceptance.
+This is the public generic-session workflow. The erebor binary is only a
+client: it sends every generic operation to the root-owned erebord socket.
+The daemon installs the built-in generic-process-v1 package and host-minimum
+policy itself, so this example contains no handcrafted digests or package
+records.
 
-Prerequisites are Linux, Docker, and permission to run privileged containers.
-First build the installed artifacts and disposable systemd image from the
-repository root:
+Prerequisites are Linux, Docker, and permission to run a privileged systemd
+container. Build the installed artifacts and image from the repository root:
 
-```sh
+~~~sh
 cargo build \
   -p erebor-runtime-cli --bin erebor \
   -p erebor-runtime-daemon --bins \
-  -p erebor-runtime-session \
+  -p erebor-runtime-session --features editor-process-guard-target \
     --bin erebor-linux-process-guard \
-    --bin erebor-linux-session-controller \
-    --bin erebor-docker-session-controller \
-  -p erebor-runtime-e2e --bin erebor-daemon-session-driver
+    --bin erebor-linux-session-controller
 
 docker build \
   --file .github/containers/daemon-systemd.Dockerfile \
   --tag erebor-daemon-systemd:local \
   .
 
-phase2_box="$(
+phase3_box="$(
   docker run --detach --rm --privileged --cgroupns=private \
     --tmpfs /run --tmpfs /run/lock \
     erebor-daemon-systemd:local
 )"
-printf 'Phase 2 container: %s\n' "$phase2_box"
-docker exec -it "$phase2_box" bash
-```
+printf 'Phase 3 container: %s\n' "$phase3_box"
+docker exec -it "$phase3_box" bash
+~~~
 
-The remaining commands run inside that container as root. Create one client
-account, configure the root-curated local generic package records, and then
-start the installed daemon. Phase 3 has no Docker/image admission path.
+The remaining commands run inside the container as root. Create a socket-group
+member and the smallest valid daemon configuration, then start the installed
+service:
 
-```sh
+~~~sh
 groupadd --system erebor
 useradd --create-home --groups erebor erebor-demo
 erebor_gid="$(getent group erebor | cut -d: -f3)"
-demo_uid="$(id -u erebor-demo)"
-adapter_digest=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-root_policy_digest=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-package_manifest="$(printf '{"format_version":1,"name":"generic-process","adapter_id":"generic-process-v1","minimum_daemon_version":"0.1.0","entrypoint":["<argv>"],"config_digest":"%s","support_layer_digests":[]}' "$adapter_digest")"
-package_digest="$(printf '%s' "$package_manifest" | sha256sum | cut -d' ' -f1)"
-installation_record="$(printf '{"format_version":1,"owner_uid":%s,"package_digest":"%s","installed_at_unix_ms":1}' "$demo_uid" "$package_digest")"
-installation_digest="$(printf '%s' "$installation_record" | sha256sum | cut -d' ' -f1)"
-policy_set_record="$(printf '{"format_version":1,"root_minimum_digest":"%s","package_minimum_digests":[],"local_override_digest":null}' "$root_policy_digest")"
-policy_set_digest="$(printf '%s' "$policy_set_record" | sha256sum | cut -d' ' -f1)"
 
 install -d -o root -g root -m 0750 /etc/erebor
-printf '{"socket_group_gid":%s,"max_session_output_bytes":67108864,"session_output_rotation_bytes":4194304,"root_curated_admissions":[{"package":%s,"installation":%s,"policy_set":%s}]}\n' \
-  "$erebor_gid" "$package_manifest" "$installation_record" "$policy_set_record" >/etc/erebor/erebord.json
+printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32}\n' \
+  "$erebor_gid" >/etc/erebor/erebord.json
 chown root:root /etc/erebor/erebord.json
 chmod 0640 /etc/erebor/erebord.json
 
 systemctl daemon-reload
 systemctl enable --now erebord.service
-erebor daemon status
-```
+runuser -u erebor-demo -- erebor daemon status
+# expected: daemon_pid=... configuration_generation=1 state=running
 
-`erebor daemon status` should report `state=running`. The installed control
-socket should also prove the intended owner and permissions:
-
-```sh
 stat -c '%U:%G:%a %n' /run/erebor/daemon.sock
 # expected: root:erebor:660 /run/erebor/daemon.sock
-```
+~~~
 
-Create a Linux-host generic session through the public daemon client. `create`
-persists the immutable session but starts no process:
+First prove that client failure has no launch fallback. Stopping the daemon
+makes erebor session run fail while the marker remains absent:
 
-```sh
+~~~sh
+marker=/home/erebor-demo/daemon-must-launch-nothing
+rm -f "$marker"
+systemctl stop erebord.service
+
+if runuser -u erebor-demo -- erebor session run \
+  --runner linux-host \
+  --workspace /home/erebor-demo \
+  --idempotency-key example-daemon-unavailable \
+  -- /usr/bin/dash -c 'touch "$1"' dash "$marker"; then
+  echo 'unexpected generic launch without erebord' >&2
+  exit 1
+fi
+test ! -e "$marker"
+
+systemctl start erebord.service
+~~~
+
+Now create, start, inspect, and clean up one Linux-host session. Omitting all
+four identity flags deliberately selects the daemon-installed built-in package,
+installation, generic adapter, and host-minimum policy.
+
+~~~sh
 linux_created="$(
   runuser -u erebor-demo -- erebor session create \
     --runner linux-host \
     --workspace /home/erebor-demo \
-    --package-digest "$package_digest" \
-    --installation-digest "$installation_digest" \
-    --adapter-digest "$adapter_digest" \
-    --policy-set-digest "$policy_set_digest" \
-    --failure-mode terminate \
     --idempotency-key example-linux-create \
     -- /usr/bin/dash -c \
       'printf "linux-output\n"; printf "linux-error\n" >&2; sleep 300'
@@ -183,74 +185,43 @@ linux_session="$(sed -n 's/^session_id=\([^ ]*\).*/\1/p' <<<"$linux_created")"
 
 runuser -u erebor-demo -- erebor session inspect "$linux_session"
 # expected: state=created
-test ! -e "/run/erebor/sessions/$(id -u erebor-demo)/$linux_session"
-```
 
-Now start it and inspect the active runner, its private runtime-guard
-projection onto the shared service, output, lifecycle events, and systemd
-ownership:
-
-```sh
 runuser -u erebor-demo -- erebor session start "$linux_session" \
   --idempotency-key example-linux-start
-runuser -u erebor-demo -- erebor session inspect "$linux_session"
 runuser -u erebor-demo -- erebor session logs "$linux_session"
 runuser -u erebor-demo -- erebor session logs "$linux_session" --stream stderr
+runuser -u erebor-demo -- erebor audit tail "$linux_session"
 runuser -u erebor-demo -- erebor session events "$linux_session"
 
-demo_uid="$(id -u erebor-demo)"
-stat /run/erebor/sessions/runtime-interception.sock
-systemctl status "erebor-session-$linux_session.slice" --no-pager
-systemctl status "erebor-session-$linux_session.scope" --no-pager
-```
-
-The Phase 3 generic adapter has no interactive TTY contract yet. A normal
-attach returns `read_only=true`; requesting input must fail:
-
-```sh
-runuser -u erebor-demo -- erebor session attach "$linux_session" \
-  --idempotency-key example-linux-attach
-
-if runuser -u erebor-demo -- erebor session attach "$linux_session" --input \
-  --idempotency-key example-linux-input; then
-  echo 'unexpected input lease' >&2
-  exit 1
-fi
-```
-
-Stop, wait for an honest terminal result, and remove the Linux session:
-
-```sh
 runuser -u erebor-demo -- erebor session stop "$linux_session" \
   --idempotency-key example-linux-stop
 runuser -u erebor-demo -- erebor session wait "$linux_session"
 runuser -u erebor-demo -- erebor session rm "$linux_session" --force \
   --idempotency-key example-linux-remove
-```
+~~~
 
-`erebor session create --runner docker ...` fails explicitly because Docker
-image admission and lifecycle support are deferred to Phase 6. It never pulls
-an image or falls back to a direct launcher.
+erebor session create --runner docker ... fails explicitly in Phase 3:
+Docker image admission, pulls, and lifecycle are Phase 6 work. It does not pull
+an image or launch directly.
 
-Exit the container shell, then remove only this disposable example container:
+Exit the container shell, then remove only this disposable container:
 
-```sh
+~~~sh
 exit
-docker rm --force "$phase2_box"
-```
+docker rm --force "$phase3_box"
+~~~
 
-The broader automated supplement is explicit and local:
+The corresponding privileged regression target is deliberately explicit:
 
-```sh
+~~~sh
 cargo test -p erebor-runtime-e2e --test daemon_control_plane \
-  daemon_control_plane_runs_in_systemd_container -- --ignored --nocapture
-```
+  public_generic_cli_runs_in_systemd_container \
+  -- --ignored --nocapture
+~~~
 
-It additionally covers two users, root administration, idempotent retry and
-conflict, path-identity changes, process trees that fork/double-fork, output
-cursors, daemon SIGKILL, systemd stop/restart, and Linux-host failure modes.
-Docker lifecycle coverage is deferred to Phase 6. It is not CI and it does not
-replace the manual walkthrough above.
+It needs Docker and privileged mounts, so it is not run in the restricted
+workspace lane. The command is a supplement to the committed daemon/client
+tests, not a replacement for them.
 
 ## Current Direct Codex Baseline
 

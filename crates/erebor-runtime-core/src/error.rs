@@ -13,8 +13,8 @@ pub(crate) use config::{
     EmptyAuditDebugMatcherSnafu, EmptyConfigSnafu, EmptyDockerSessionImageSnafu,
     EmptyDockerSessionNetworkSnafu, EmptyPolicyPathSnafu, EmptySessionActorIdSnafu,
     EmptySessionCommandSnafu, EmptySessionDiagnosticCommandSnafu, EmptySessionDiagnosticNameSnafu,
-    EmptySessionWorkspaceSnafu, InvalidCodexGovernanceConfigSnafu,
-    InvalidFilesystemSurfaceConfigSnafu, InvalidJsonSnafu, InvalidProcessMediationConfigSnafu,
+    EmptySessionWorkspaceSnafu, InvalidFilesystemSurfaceConfigSnafu, InvalidJsonSnafu,
+    InvalidProcessMediationConfigSnafu,
     InvalidSessionAdoptPidSnafu, InvalidSessionInterceptionConfigSnafu, MissingPolicySnafu,
     NoSessionSurfacesSnafu, UnknownSessionDiagnosticSnafu,
 };

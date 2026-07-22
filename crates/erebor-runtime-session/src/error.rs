@@ -13,7 +13,7 @@ pub use session_output::SessionOutputError;
 pub use session_repository::SessionRepositoryError;
 
 pub(crate) use execution::{
-    AdoptMatchAmbiguousSnafu, AdoptMatchNotFoundSnafu, CodexSessionSnafu, DiagnosticFailedSnafu,
+    AdoptMatchAmbiguousSnafu, AdoptMatchNotFoundSnafu, DiagnosticFailedSnafu,
     FilesystemSurfaceSnafu, GuardConfigSnafu, GuardIoSnafu, InvalidAdoptTargetSnafu,
     InvalidConfigSnafu, InvalidPolicySnafu, ReadPolicySnafu, RuntimeInterceptionBrokerSnafu,
     RuntimeSnafu, SessionRegistrySnafu, TerminalSurfaceSnafu,

@@ -757,6 +757,21 @@ impl EndpointProjection {
         );
         Ok(())
     }
+
+    #[must_use]
+    pub fn service(&self) -> &str {
+        &self.service
+    }
+
+    #[must_use]
+    pub fn host_path(&self) -> &Path {
+        &self.host_path
+    }
+
+    #[must_use]
+    pub fn workload_path(&self) -> &Path {
+        &self.workload_path
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1067,6 +1082,7 @@ pub struct SessionAdmission {
     pub workload_privileges: WorkloadPrivilegePlan,
     pub command: Vec<String>,
     pub package: Option<ImmutableIdentity>,
+    pub package_configuration: Option<ImmutableIdentity>,
     pub installation: Option<ImmutableIdentity>,
     pub adapter: Option<ImmutableIdentity>,
     pub policy_inputs: Vec<ImmutableIdentity>,
@@ -1098,6 +1114,7 @@ pub struct SessionSpec {
     workload_privileges: WorkloadPrivilegePlan,
     command: Vec<String>,
     package: Option<ImmutableIdentity>,
+    package_configuration: Option<ImmutableIdentity>,
     installation: Option<ImmutableIdentity>,
     adapter: Option<ImmutableIdentity>,
     policy_inputs: Vec<ImmutableIdentity>,
@@ -1130,6 +1147,7 @@ impl SessionSpec {
             workload_privileges: admission.workload_privileges,
             command: admission.command,
             package: admission.package,
+            package_configuration: admission.package_configuration,
             installation: admission.installation,
             adapter: admission.adapter,
             policy_inputs: admission.policy_inputs,
@@ -1193,6 +1211,7 @@ impl SessionSpec {
         );
         self.package
             .iter()
+            .chain(self.package_configuration.iter())
             .chain(self.installation.iter())
             .chain(self.adapter.iter())
             .chain(self.policy_inputs.iter())
@@ -1202,6 +1221,18 @@ impl SessionSpec {
         self.filesystem_projections
             .iter()
             .try_for_each(FilesystemProjection::validate)?;
+        ensure!(
+            self.filesystem_projections.iter().all(|projection| {
+                projection.source().kind() == SafePathKind::Directory
+                    || projection.source().content_sha256().is_some()
+            }),
+            InvalidSnafu {
+                field: "session_spec.filesystem_projections",
+                reason: String::from(
+                    "file and executable projections must retain their held content digest",
+                ),
+            }
+        );
         self.endpoint_projections
             .iter()
             .try_for_each(EndpointProjection::validate)?;
@@ -1209,10 +1240,14 @@ impl SessionSpec {
         self.evidence_requirements
             .iter()
             .try_for_each(EvidenceRequirement::validate)?;
-        let package_identity_is_complete =
-            self.package.is_some() && self.installation.is_some() && self.adapter.is_some();
-        let package_identity_is_absent =
-            self.package.is_none() && self.installation.is_none() && self.adapter.is_none();
+        let package_identity_is_complete = self.package.is_some()
+            && self.package_configuration.is_some()
+            && self.installation.is_some()
+            && self.adapter.is_some();
+        let package_identity_is_absent = self.package.is_none()
+            && self.package_configuration.is_none()
+            && self.installation.is_none()
+            && self.adapter.is_none();
         ensure!(
             (package_identity_is_complete || package_identity_is_absent)
                 && !self.policy_inputs.is_empty()
@@ -1220,6 +1255,10 @@ impl SessionSpec {
                     .package
                     .as_ref()
                     .is_none_or(|identity| identity.kind() == "agent-package")
+                && self
+                    .package_configuration
+                    .as_ref()
+                    .is_none_or(|identity| identity.kind() == "agent-package-config")
                 && self
                     .installation
                     .as_ref()
@@ -1314,6 +1353,11 @@ impl SessionSpec {
     }
 
     #[must_use]
+    pub const fn package_configuration(&self) -> Option<&ImmutableIdentity> {
+        self.package_configuration.as_ref()
+    }
+
+    #[must_use]
     pub const fn installation(&self) -> Option<&ImmutableIdentity> {
         self.installation.as_ref()
     }
@@ -1366,6 +1410,11 @@ impl SessionSpec {
     #[must_use]
     pub fn filesystem_projections(&self) -> &[FilesystemProjection] {
         &self.filesystem_projections
+    }
+
+    #[must_use]
+    pub fn endpoint_projections(&self) -> &[EndpointProjection] {
+        &self.endpoint_projections
     }
 
     #[must_use]
@@ -1503,6 +1552,7 @@ mod tests {
             workload_privileges: WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)?,
             command: vec![String::from("/usr/bin/agent"), String::from("run")],
             package: Some(ImmutableIdentity::new("agent-package", digest())?),
+            package_configuration: Some(ImmutableIdentity::new("agent-package-config", digest())?),
             installation: Some(ImmutableIdentity::new("installation", digest())?),
             adapter: Some(ImmutableIdentity::new("adapter", digest())?),
             policy_inputs: vec![ImmutableIdentity::new("root-policy", digest())?],

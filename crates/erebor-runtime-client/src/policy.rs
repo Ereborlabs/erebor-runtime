@@ -1,12 +1,13 @@
 use erebor_runtime_ipc::v1::{
     Header, PolicyPackageApplyRequest, PolicyPackageInspectRequest, PolicyPackageListRequest,
     PolicyPackageListResponse, PolicyPackageRecord, PolicyPackageVerifyRequest,
-    PolicySetCreateRequest, PolicySetInspectRequest, PolicySetListRequest, PolicySetListResponse,
-    PolicySetRecord, PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse,
-    EREBOR_IDEMPOTENCY_KEY_HEADER, KIND_POLICY_PACKAGE_APPLY_REQUEST,
-    KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
-    KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
-    KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
+    PolicySetAliasRecord, PolicySetAliasSetRequest, PolicySetCreateRequest,
+    PolicySetInspectRequest, PolicySetListRequest, PolicySetListResponse, PolicySetRecord,
+    PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse, EREBOR_IDEMPOTENCY_KEY_HEADER,
+    KIND_POLICY_PACKAGE_APPLY_REQUEST, KIND_POLICY_PACKAGE_INSPECT_REQUEST,
+    KIND_POLICY_PACKAGE_LIST_REQUEST, KIND_POLICY_PACKAGE_LIST_RESPONSE,
+    KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_ALIAS_RECORD,
+    KIND_POLICY_SET_ALIAS_SET_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
     KIND_POLICY_SET_INSPECT_REQUEST, KIND_POLICY_SET_LIST_REQUEST, KIND_POLICY_SET_LIST_RESPONSE,
     KIND_POLICY_SET_RECORD, KIND_POLICY_SET_VERIFY_REQUEST, KIND_POLICY_TEST_REQUEST,
     KIND_POLICY_TEST_RESPONSE,
@@ -116,6 +117,29 @@ impl DaemonClient {
                     local_override_digest: local_override_digest.unwrap_or_default(),
                 },
                 KIND_POLICY_SET_RECORD,
+                vec![Header {
+                    key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_owned(),
+                    value: idempotency_key.to_owned(),
+                }],
+            )
+            .await
+    }
+
+    pub async fn policy_set_alias_set(
+        &self,
+        alias: impl Into<String>,
+        policy_set_digest: impl Into<String>,
+        idempotency_key: &str,
+    ) -> Result<PolicySetAliasRecord> {
+        let mut connection = self.connect().await?;
+        connection
+            .unary(
+                KIND_POLICY_SET_ALIAS_SET_REQUEST,
+                &PolicySetAliasSetRequest {
+                    alias: alias.into(),
+                    policy_set_digest: policy_set_digest.into(),
+                },
+                KIND_POLICY_SET_ALIAS_RECORD,
                 vec![Header {
                     key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_owned(),
                     value: idempotency_key.to_owned(),

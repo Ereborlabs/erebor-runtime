@@ -523,7 +523,7 @@ impl DaemonClient {
         .await
     }
 
-    async fn session_mutation<T: prost::Message, R: prost::Message + Default>(
+    pub(crate) async fn session_mutation<T: prost::Message, R: prost::Message + Default>(
         &self,
         kind: &str,
         request: &T,

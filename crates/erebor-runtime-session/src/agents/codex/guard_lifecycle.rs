@@ -49,7 +49,7 @@ impl CodexGuardLifecycleHandler {
         let expected_history = self
             .managed_session
             .profile()
-            .hook_exec_history
+            .hook_exec_history()
             .iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>();
@@ -88,8 +88,8 @@ impl CodexGuardLifecycleHandler {
             }
         };
         let profile = self.managed_session.profile();
-        if peer.executable != profile.managed_hook_path.display().to_string()
-            || peer.argv != [profile.managed_hook_path.display().to_string()]
+        if peer.executable != profile.managed_hook_path().display().to_string()
+            || peer.argv != [profile.managed_hook_path().display().to_string()]
         {
             erebor_runtime_telemetry::log!(
                 erebor_runtime_telemetry::tracing::Level::WARN,

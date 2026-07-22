@@ -5,6 +5,7 @@ package erebor.runtime.ipc.v1;
 message HookHello {
   uint32 protocol_version = 1;
   string ticket_id = 2;
+  string session_id = 3;
 }
 
 message HookHelloAck {

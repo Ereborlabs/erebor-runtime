@@ -11,7 +11,7 @@ use erebor_runtime_ipc::{
 use snafu::ResultExt;
 
 use super::{
-    broker::CodexHookBroker,
+    broker::CodexHookService,
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, HookRejectedSnafu, InvalidHookEventSnafu},
     CodexSessionError,
 };
@@ -27,7 +27,7 @@ pub struct CodexHookClient {
 impl Default for CodexHookClient {
     fn default() -> Self {
         Self {
-            endpoint: PathBuf::from(CodexHookBroker::session_endpoint()),
+            endpoint: PathBuf::from(CodexHookService::session_endpoint()),
         }
     }
 }
@@ -50,6 +50,18 @@ impl CodexHookClient {
         stream: &mut UnixStream,
         event: HookEvent,
     ) -> Result<HookResult, CodexSessionError> {
+        Self::submit_on_stream_for_session(
+            stream,
+            std::env::var("EREBOR_SESSION_ID").unwrap_or_default(),
+            event,
+        )
+    }
+
+    pub(crate) fn submit_on_stream_for_session(
+        stream: &mut UnixStream,
+        session_id: impl Into<String>,
+        event: HookEvent,
+    ) -> Result<HookResult, CodexSessionError> {
         if event.native_event_json.len() > Self::MAX_NATIVE_EVENT_BYTES {
             return InvalidHookEventSnafu {
                 reason: format!(
@@ -62,6 +74,7 @@ impl CodexHookClient {
         let hello = HookHello {
             protocol_version: PROTOCOL_VERSION,
             ticket_id: String::new(),
+            session_id: session_id.into(),
         };
         let hello_request = Envelope::wrap_message(1, 0, KIND_HOOK_HELLO, &hello)
             .context(HookBrokerProtocolSnafu)?;

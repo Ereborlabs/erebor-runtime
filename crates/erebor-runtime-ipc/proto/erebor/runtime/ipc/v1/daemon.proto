@@ -42,6 +42,33 @@ message DaemonReloadRequest {}
 
 message DaemonStopRequest {}
 
+// Enrolls a vendor/user-provided Codex executable against one root-curated
+// release. The daemon resolves source_path through its UID-dropped descriptor
+// broker; it never searches PATH or downloads a binary.
+message AgentInstallRequest {
+  string package_reference = 1;
+  string source_path = 2;
+}
+
+message AgentInstallResponse {
+  string package_digest = 1;
+  string installation_digest = 2;
+  repeated string aliases = 3;
+}
+
+// Creates a Codex session from a daemon-owned local alias. The request names
+// no executable or argv: the daemon resolves the certified entrypoint after it
+// re-verifies the enrolled artifact.
+message CodexRunRequest {
+  string alias = 1;
+  string workspace = 2;
+  string policy_set_reference = 3;
+  string daemon_failure_mode = 4;
+  uint64 requested_loss_grace_seconds = 5;
+  bool tty = 6;
+  bool detached = 7;
+}
+
 message SessionCreateRequest {
   string runner_id = 1;
   repeated string command = 2;
@@ -370,6 +397,16 @@ message PolicySetCreateRequest {
   string root_minimum_digest = 1;
   repeated string package_minimum_digests = 2;
   string local_override_digest = 3;
+}
+
+message PolicySetAliasSetRequest {
+  string alias = 1;
+  string policy_set_digest = 2;
+}
+
+message PolicySetAliasRecord {
+  string alias = 1;
+  string policy_set_digest = 2;
 }
 
 message PolicySetRecord {

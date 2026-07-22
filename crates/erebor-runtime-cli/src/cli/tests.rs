@@ -24,18 +24,13 @@ fn requires_config_for_runtime_start() {
 }
 
 #[test]
-fn accepts_transitional_codex_run_and_daemon_generic_run() {
+fn accepts_daemon_owned_codex_run_and_generic_run() {
     let run = Cli::try_parse_from([
         "erebor",
-        "session",
         "run",
-        "--runner",
-        "docker",
-        "--config",
-        "pilot-session.json",
-        "--",
-        "/opt/codex/codex",
-        "--help",
+        "--policy",
+        "engineering",
+        "codex-app-server",
     ]);
     let generic = Cli::try_parse_from([
         "erebor",

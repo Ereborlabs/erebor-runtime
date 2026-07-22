@@ -107,7 +107,15 @@ fn session_lifecycle_is_a_daemon_command_family() {
 }
 
 #[test]
-fn configured_codex_path_remains_the_only_foreground_exception() {
+fn codex_runs_only_through_a_daemon_owned_alias_request() {
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "run",
+        "--policy",
+        "engineering",
+        "codex-app-server",
+    ])
+    .is_ok());
     assert!(Cli::try_parse_from([
         "erebor",
         "session",
@@ -116,9 +124,13 @@ fn configured_codex_path_remains_the_only_foreground_exception() {
         "codex-runtime.json",
         "--runner",
         "linux-host",
+        "--workspace",
+        "/work",
+        "--idempotency-key",
+        "legacy-codex",
         "--",
         "/opt/codex/codex",
         "app-server",
     ])
-    .is_ok());
+    .is_err());
 }

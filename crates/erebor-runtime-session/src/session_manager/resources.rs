@@ -9,7 +9,9 @@ use std::{
     sync::Arc,
 };
 
-use erebor_runtime_core::{OutputEndpoints, SafePathBinding, SafePathKind, SessionSpec};
+use erebor_runtime_core::{
+    OutputEndpoints, PreparedFilesystemProjection, SafePathBinding, SafePathKind, SessionSpec,
+};
 use rustix::{
     fs::{makedev, open, statx, AtFlags, FileType, Mode, OFlags, StatxFlags},
     mount::{mount_bind, mount_remount, unmount, MountFlags, UnmountFlags},
@@ -41,7 +43,11 @@ pub trait SessionPathResolver: Send + Sync {
 }
 
 pub trait SessionInterceptionRouterFactory: Send + Sync {
-    fn router(&self, spec: &SessionSpec) -> SessionInterceptionRouter;
+    fn router(&self, spec: &SessionSpec) -> Result<SessionInterceptionRouter, SessionManagerError>;
+
+    fn cleanup(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
+        Ok(())
+    }
 }
 
 pub struct ResolvedSessionPath {
@@ -98,7 +104,15 @@ impl SessionRuntimeResources {
         &self,
         spec: &SessionSpec,
         recovering: bool,
-    ) -> Result<(PathBuf, Option<PathBuf>, Vec<PathBuf>), SessionManagerError> {
+    ) -> Result<
+        (
+            PathBuf,
+            Option<PathBuf>,
+            Vec<PathBuf>,
+            Vec<PreparedFilesystemProjection>,
+        ),
+        SessionManagerError,
+    > {
         let staging = self.staging_path(spec);
         let workspace = staging.join("workspace");
         let executable = spec.executable().map(|_| staging.join("executable"));
@@ -107,6 +121,18 @@ impl SessionRuntimeResources {
             .iter()
             .enumerate()
             .map(|(index, _binding)| staging.join("interpreters").join(index.to_string()))
+            .collect::<Vec<_>>();
+        let projections = spec
+            .filesystem_projections()
+            .iter()
+            .enumerate()
+            .map(|(index, projection)| {
+                PreparedFilesystemProjection::new(
+                    staging.join("projections").join(index.to_string()),
+                    projection.workload_path().to_path_buf(),
+                    projection.read_only(),
+                )
+            })
             .collect::<Vec<_>>();
         if recovering {
             self.verify_staging(spec, &workspace, spec.workspace())?;
@@ -130,7 +156,16 @@ impl SessionRuntimeResources {
                 }
                 self.verify_staging(spec, path, interpreter.executable())?;
             }
-            return Ok((workspace, executable, interpreters));
+            for (prepared, projection) in projections.iter().zip(spec.filesystem_projections()) {
+                if self.resolve(spec, projection.source())?.binding() != projection.source() {
+                    return self.invalid_runtime(
+                        spec,
+                        "filesystem projection identity changed before recovery",
+                    );
+                }
+                self.verify_staging(spec, prepared.staging_path(), projection.source())?;
+            }
+            return Ok((workspace, executable, interpreters, projections));
         }
 
         let workspace_source = self.resolve(spec, spec.workspace())?;
@@ -160,6 +195,20 @@ impl SessionRuntimeResources {
                     return self.invalid_runtime(
                         spec,
                         "script interpreter identity changed after session admission",
+                    );
+                }
+                Ok(source)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let projection_sources = spec
+            .filesystem_projections()
+            .iter()
+            .map(|projection| {
+                let source = self.resolve(spec, projection.source())?;
+                if source.binding() != projection.source() {
+                    return self.invalid_runtime(
+                        spec,
+                        "filesystem projection identity changed after session admission",
                     );
                 }
                 Ok(source)
@@ -207,7 +256,35 @@ impl SessionRuntimeResources {
                 bind_descriptor(source.descriptor(), target, true)?;
             }
         }
-        Ok((workspace, executable, interpreters))
+        if !projections.is_empty() {
+            let projection_root = staging.join("projections");
+            fs::create_dir(&projection_root).context(RuntimeIoSnafu {
+                action: "creating filesystem projection staging directory",
+                path: &projection_root,
+            })?;
+            for ((prepared, projection), source) in projections
+                .iter()
+                .zip(spec.filesystem_projections())
+                .zip(projection_sources.iter())
+            {
+                match projection.source().kind() {
+                    SafePathKind::Directory => fs::create_dir(prepared.staging_path()),
+                    SafePathKind::Executable | SafePathKind::File => {
+                        File::create(prepared.staging_path()).map(|_file| ())
+                    }
+                }
+                .context(RuntimeIoSnafu {
+                    action: "creating filesystem projection staging mountpoint",
+                    path: prepared.staging_path(),
+                })?;
+                bind_descriptor(
+                    source.descriptor(),
+                    prepared.staging_path(),
+                    projection.read_only(),
+                )?;
+            }
+        }
+        Ok((workspace, executable, interpreters, projections))
     }
 
     fn resolve(
@@ -411,6 +488,12 @@ impl SessionRuntimeResources {
                 .enumerate()
                 .map(|(index, _interpreter)| staging.join("interpreters").join(index.to_string())),
         );
+        targets.extend(
+            spec.filesystem_projections()
+                .iter()
+                .enumerate()
+                .map(|(index, _projection)| staging.join("projections").join(index.to_string())),
+        );
         for target in targets {
             match unmount(&target, UnmountFlags::NOFOLLOW) {
                 Ok(()) => {}
@@ -517,9 +600,11 @@ impl SessionRuntime for SessionRuntimeResources {
         spec: &SessionSpec,
         recovering: bool,
     ) -> Result<OutputEndpoints, SessionManagerError> {
-        let (workspace, executable, interpreters) = self.prepare_staging(spec, recovering)?;
+        let (workspace, executable, interpreters, projections) = self.prepare_staging(spec, recovering)?;
         let _stores = self.output_stores(spec)?;
-        Ok(output_endpoints(spec).with_prepared_execution(workspace, executable, interpreters))
+        Ok(output_endpoints(spec)
+            .with_prepared_execution(workspace, executable, interpreters)
+            .with_prepared_filesystem_projections(projections))
     }
 
     fn start_runtime_guard(
@@ -533,7 +618,7 @@ impl SessionRuntime for SessionRuntimeResources {
                 spec.owner().uid(),
                 spec.session_id().as_str(),
                 "agent",
-                self.router_factory.router(spec),
+                self.router_factory.router(spec)?,
                 Some(credential.token),
             )
             .context(RuntimeGuardSnafu)
@@ -544,6 +629,7 @@ impl SessionRuntime for SessionRuntimeResources {
         self.guard
             .stop_session(spec.owner().uid(), spec.session_id().as_str())
             .context(RuntimeGuardSnafu)?;
+        self.router_factory.cleanup(spec)?;
         let credential = self.guard_credential_path(spec);
         match fs::remove_file(&credential) {
             Ok(()) => {}
