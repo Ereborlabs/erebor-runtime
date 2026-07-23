@@ -43,7 +43,11 @@ pub trait SessionPathResolver: Send + Sync {
 }
 
 pub trait SessionInterceptionRouterFactory: Send + Sync {
-    fn router(&self, spec: &SessionSpec) -> Result<SessionInterceptionRouter, SessionManagerError>;
+    fn router(
+        &self,
+        spec: &SessionSpec,
+        output: &OutputEndpoints,
+    ) -> Result<SessionInterceptionRouter, SessionManagerError>;
 
     fn cleanup(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
         Ok(())
@@ -593,6 +597,7 @@ pub(crate) trait SessionRuntime: Send + Sync {
     fn start_runtime_guard(
         &self,
         spec: &SessionSpec,
+        output: &OutputEndpoints,
         recovering: bool,
     ) -> Result<Vec<(String, String)>, SessionManagerError>;
 
@@ -623,6 +628,7 @@ impl SessionRuntime for SessionRuntimeResources {
     fn start_runtime_guard(
         &self,
         spec: &SessionSpec,
+        output: &OutputEndpoints,
         recovering: bool,
     ) -> Result<Vec<(String, String)>, SessionManagerError> {
         let credential = self.guard_credential(spec, recovering)?;
@@ -631,7 +637,7 @@ impl SessionRuntime for SessionRuntimeResources {
                 spec.owner().uid(),
                 spec.session_id().as_str(),
                 "agent",
-                self.router_factory.router(spec)?,
+                self.router_factory.router(spec, output)?,
                 Some(credential.token),
             )
             .context(RuntimeGuardSnafu)

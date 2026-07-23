@@ -39,6 +39,7 @@ const BROKER_SOCKET: &str = "codex-hook.sock";
 const SESSION_BROKER_ENDPOINT: &str = "/run/erebor/codex-hook.sock";
 const MAX_NATIVE_EVENT_BYTES: usize = 32 * 1024;
 const MAX_PROFILE_ANCESTOR_DEPTH: usize = 16;
+const INVOCATION_LEASE_AUDIT_FILE: &str = "codex-invocation-leases.jsonl";
 
 /// One daemon-owned hook listener shared by registered Codex sessions.
 ///
@@ -73,17 +74,12 @@ pub struct CodexSessionHookRegistration {
 impl CodexSessionHookRegistration {
     fn from_spec(
         spec: &SessionSpec,
+        guard_executable: &Path,
         definition: &CodexPackageDefinition,
     ) -> Result<Self, CodexSessionError> {
-        let executable =
-            spec.executable()
-                .ok_or_else(|| CodexSessionError::IncompatibleProfile {
-                    reason: String::from("Codex session has no descriptor-verified executable"),
-                    location: snafu::Location::default(),
-                })?;
         let managed_session = CodexManagedSession::from_package(
             spec.session_id().as_str(),
-            executable.requested_path().to_path_buf(),
+            guard_executable.to_path_buf(),
             definition,
         )?;
         let dispatch = definition
@@ -115,7 +111,12 @@ impl CodexSessionHookRegistration {
                     .collect(),
             ),
             trust,
-            Some(spec.output().root().join("evidence")),
+            Some(
+                spec.output()
+                    .root()
+                    .join("evidence")
+                    .join(INVOCATION_LEASE_AUDIT_FILE),
+            ),
         ));
         let context_root = spec.output().root().join("codex-context");
         let repository = if context_root.exists() {
@@ -307,9 +308,11 @@ impl CodexHookService {
     pub fn register_session(
         &self,
         spec: &SessionSpec,
+        guard_executable: &Path,
         definition: &CodexPackageDefinition,
     ) -> Result<CodexSessionHookRegistration, CodexSessionError> {
-        let registration = CodexSessionHookRegistration::from_spec(spec, definition)?;
+        let registration =
+            CodexSessionHookRegistration::from_spec(spec, guard_executable, definition)?;
         self.register(
             registration.managed_session.clone(),
             Arc::clone(&registration.reconciliation),
@@ -427,19 +430,42 @@ impl CodexHookBrokerProtocol {
                 )?;
                 break;
             }
-            let event: HookEvent = envelope
+            let event: HookEvent = match envelope
                 .decode_typed_payload(KIND_HOOK_EVENT)
-                .context(HookBrokerProtocolSnafu)?;
+                .context(HookBrokerProtocolSnafu)
+            {
+                Ok(event) => event,
+                Err(error) => {
+                    Self::write_rejection(
+                        stream,
+                        &envelope,
+                        HookRejectionCode::InvalidSchema,
+                        error.to_string(),
+                    )?;
+                    break;
+                }
+            };
             match self.validate_event(&event) {
                 Ok(event_kind) => {
-                    self.reconciliation
-                        .record_authenticated_hook(event_kind, &event.native_event_json)?;
-                    self.lease_owner.record_authenticated_hook(
-                        event_kind,
-                        &event.native_event_json,
-                        runtime.clone(),
-                        observed_peer.observed_pid,
-                    )?;
+                    let recording = (|| {
+                        self.reconciliation
+                            .record_authenticated_hook(event_kind, &event.native_event_json)?;
+                        self.lease_owner.record_authenticated_hook(
+                            event_kind,
+                            &event.native_event_json,
+                            runtime.clone(),
+                            observed_peer.observed_pid,
+                        )
+                    })();
+                    if let Err(error) = recording {
+                        Self::write_rejection(
+                            stream,
+                            &envelope,
+                            HookRejectionCode::BrokerUnavailable,
+                            error.to_string(),
+                        )?;
+                        break;
+                    }
                     let result = HookResult {
                         event: event_kind as i32,
                         accepted: true,
@@ -838,9 +864,7 @@ impl LinuxHookProcess {
 
 #[cfg(test)]
 mod tests {
-    use std::os::unix::net::UnixStream;
-
-    use std::sync::Arc;
+    use std::{os::unix::net::UnixStream, path::PathBuf, sync::Arc};
 
     use erebor_runtime_events::{ActorIdentity, ActorKind};
     use erebor_runtime_ipc::v1::HookEvent;
@@ -1071,6 +1095,57 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn managed_profile_uses_staged_executable_and_private_hook_path(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let staged_executable = "/var/lib/erebor/sessions/session-test/staging/executable";
+        let definition = package(&"a".repeat(64))?;
+        let session = CodexManagedSession::from_package(
+            "session-test",
+            staged_executable.into(),
+            &definition,
+        )?;
+        let profile = session.profile();
+
+        assert_eq!(
+            profile.executable(),
+            std::path::Path::new(staged_executable)
+        );
+        assert_eq!(
+            profile.managed_hook_path(),
+            std::path::Path::new("/run/erebor/codex/hooks/erebor-codex-hook")
+        );
+        assert_eq!(
+            profile.hook_exec_history(),
+            [
+                std::path::PathBuf::from(staged_executable),
+                std::path::PathBuf::from("/run/erebor/codex/hooks/erebor-codex-hook"),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invocation_lease_audit_is_a_file_inside_the_evidence_store(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let evidence = temporary.path().join("evidence");
+        std::fs::create_dir(&evidence)?;
+        let audit = evidence.join(super::INVOCATION_LEASE_AUDIT_FILE);
+        let owner = test_lease_owner_with_audit(Some(audit.clone()));
+
+        owner.record_authenticated_hook(
+            HookEventKind::SessionStart,
+            br#"{"hook_event_name":"SessionStart"}"#,
+            super::CodexLeaseRuntimeEvidence::new(1, 2, String::from("/opt/codex/codex")),
+            3,
+        )?;
+
+        assert!(audit.is_file());
+        assert!(std::fs::read_to_string(audit)?.contains("session-start"));
+        Ok(())
+    }
+
     fn session(
         executable: impl Into<std::path::PathBuf>,
         schema_sha256: &str,
@@ -1125,6 +1200,10 @@ mod tests {
     }
 
     fn test_lease_owner() -> Arc<CodexInvocationLeaseOwner> {
+        test_lease_owner_with_audit(None)
+    }
+
+    fn test_lease_owner_with_audit(audit_path: Option<PathBuf>) -> Arc<CodexInvocationLeaseOwner> {
         Arc::new(CodexInvocationLeaseOwner::new(
             "session-test",
             ActorIdentity {
@@ -1139,7 +1218,7 @@ mod tests {
                 )],
             ),
             super::super::CodexInvocationLeaseTrust::default(),
-            None,
+            audit_path,
         ))
     }
 }

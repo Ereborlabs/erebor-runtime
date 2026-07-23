@@ -30,12 +30,16 @@ const MANAGED_HOOK_PATH: &str = "/run/erebor/codex/erebor-codex-hook";
 const REQUIREMENTS_PATH: &str = "/run/erebor/codex/requirements.toml";
 const SHELL_STARTUP_PATH: &str = "/run/erebor/codex/shell-startup";
 const SESSION_START_EVENT: &[u8] = br#"{"hook_event_name":"SessionStart"}"#;
+const HOOK_MODE_ENV: &str = "EREBOR_FIXTURE_HOOK_MODE";
 
 type FixtureResult<T> = Result<T, Box<dyn Error>>;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     match arguments.as_slice() {
+        [] if env::var_os(HOOK_MODE_ENV).is_some() => {
+            run_managed_hook(HookMode::from_environment()?)
+        }
         [] => run_tty(),
         [command, rest @ ..] if command == "configure" => configure(rest),
         [command, option] if command == "app-server" && option == "--stdio" => run_app_server(),
@@ -64,7 +68,7 @@ fn run_tty() -> FixtureResult<()> {
             "absent"
         }
     );
-    invoke_managed_hook("managed-hook")?;
+    invoke_managed_hook(HookMode::Normal)?;
     println!("fixture-hook=accepted");
     let mut line = String::new();
     io::stdin().read_line(&mut line)?;
@@ -94,19 +98,19 @@ fn run_app_server() -> FixtureResult<()> {
         }
         let result = match method {
             "fixture/hook" => {
-                invoke_managed_hook("managed-hook")?;
+                invoke_managed_hook(HookMode::Normal)?;
                 "accepted"
             }
             "fixture/hook-replay" => {
-                invoke_managed_hook("managed-hook-replay")?;
+                invoke_managed_hook(HookMode::Replay)?;
                 "replay-rejected"
             }
             "fixture/hook-wrong-peer" => {
-                invoke_managed_hook("managed-hook-wrong-peer")?;
+                invoke_managed_hook(HookMode::WrongPeer)?;
                 "wrong-peer-rejected"
             }
             "fixture/hook-wrong-session" => {
-                invoke_managed_hook("managed-hook-wrong-session")?;
+                invoke_managed_hook(HookMode::WrongSession)?;
                 "wrong-session-rejected"
             }
             "$/cancelRequest" => "cancelled",
@@ -134,6 +138,28 @@ enum HookMode {
     Replay,
     WrongPeer,
     WrongSession,
+}
+
+impl HookMode {
+    fn from_environment() -> FixtureResult<Self> {
+        match env::var(HOOK_MODE_ENV).as_deref() {
+            Ok("normal") => Ok(Self::Normal),
+            Ok("replay") => Ok(Self::Replay),
+            Ok("wrong-peer") => Ok(Self::WrongPeer),
+            Ok("wrong-session") => Ok(Self::WrongSession),
+            Ok(value) => Err(format!("unsupported fixture hook mode `{value}`").into()),
+            Err(_error) => Err("managed hook invocation omitted its fixture mode".into()),
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Replay => "replay",
+            Self::WrongPeer => "wrong-peer",
+            Self::WrongSession => "wrong-session",
+        }
+    }
 }
 
 fn run_managed_hook(mode: HookMode) -> FixtureResult<()> {
@@ -185,9 +211,9 @@ fn submit_hook(event: &CodexNativeHookEvent, native_event_json: Vec<u8>) -> Fixt
     Ok(())
 }
 
-fn invoke_managed_hook(mode: &str) -> FixtureResult<()> {
+fn invoke_managed_hook(mode: HookMode) -> FixtureResult<()> {
     let mut child = Command::new(MANAGED_HOOK_PATH)
-        .arg(mode)
+        .env(HOOK_MODE_ENV, mode.name())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -200,7 +226,8 @@ fn invoke_managed_hook(mode: &str) -> FixtureResult<()> {
     let output = child.wait_with_output()?;
     if !output.status.success() {
         return Err(format!(
-            "managed hook `{mode}` failed: stdout={} stderr={}",
+            "managed hook `{}` failed: stdout={} stderr={}",
+            mode.name(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         )

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use erebor_runtime_core::{
-    ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionSpec,
+    OutputEndpoints, ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionSpec,
     SurfaceInterceptionDecision,
 };
 use erebor_runtime_events::{
@@ -41,7 +41,11 @@ impl StoredPolicyInterceptionRouterFactory {
 }
 
 impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory {
-    fn router(&self, spec: &SessionSpec) -> Result<SessionInterceptionRouter, SessionManagerError> {
+    fn router(
+        &self,
+        spec: &SessionSpec,
+        output: &OutputEndpoints,
+    ) -> Result<SessionInterceptionRouter, SessionManagerError> {
         let router = SessionInterceptionRouter::new().with_process_exec_handler(
             StoredPolicyProcessExecHandler::from_session(Arc::clone(&self.local_store), spec),
         );
@@ -63,7 +67,16 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
             .map_err(|error| self.invalid_error(spec, error.to_string()))?;
         let registration = self
             .codex_hook_service
-            .register_session(spec, codex.package().definition())
+            .register_session(
+                spec,
+                output.prepared_executable().ok_or_else(|| {
+                    self.invalid_error(
+                        spec,
+                        "Codex session has no prepared executable guard identity",
+                    )
+                })?,
+                codex.package().definition(),
+            )
             .map_err(|error| self.invalid_error(spec, error.to_string()))?;
         if self.is_codex_app_server(spec, codex.package().definition()) {
             if let Err(error) = self

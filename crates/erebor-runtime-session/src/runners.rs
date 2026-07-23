@@ -287,7 +287,7 @@ impl<'a> RunnerPreparation<'a> {
         output: OutputEndpoints,
     ) -> Result<OutputEndpoints, SessionManagerError> {
         self.runtime
-            .start_runtime_guard(spec, self.recovering)
+            .start_runtime_guard(spec, &output, self.recovering)
             .map(|environment| output.with_runtime_environment(environment))
     }
 }

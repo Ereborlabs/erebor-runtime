@@ -1211,6 +1211,7 @@ mod tests {
         fn start_runtime_guard(
             &self,
             _spec: &SessionSpec,
+            _output: &OutputEndpoints,
             _recovering: bool,
         ) -> Result<Vec<(String, String)>, SessionManagerError> {
             Ok(Vec::new())
