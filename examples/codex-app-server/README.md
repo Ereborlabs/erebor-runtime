@@ -34,8 +34,9 @@ erebor run --policy fixture --workspace "$PWD" codex
 ```
 
 The second command attaches to a daemon-owned TTY. The fixture prints
-`fixture-tty=ready` and `fixture-daemon-socket=absent`; enter one line to let
-the deterministic TTY session finish.
+`fixture-tty=ready` and `fixture-daemon-socket=absent`, then echoes each input
+line as `fixture-tty-input=<line>`. Type `exit` to end the deterministic TTY
+session normally.
 
 To exercise the daemon-owned typed App Server path instead:
 
