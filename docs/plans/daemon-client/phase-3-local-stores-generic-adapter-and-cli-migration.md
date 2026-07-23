@@ -1,0 +1,640 @@
+# Phase 3: Local Stores, Generic Adapter, And CLI Migration
+
+Status: In progress — this is the complete local, non-OCI generic-product and
+non-Codex CLI phase. External distribution is deferred to later Phase 10.
+
+## Purpose
+
+Add the local package, installation, policy, approval, and generic-adapter
+objects needed for a complete public daemon-owned generic governed run. Migrate
+every Phase 3 non-Codex product command to `erebor`; the legacy filesystem
+surface and its transaction management move together to Phase 5.
+
+The public binary remains `erebor`. The current direct Codex implementation
+remains temporarily behind that command tree while Phase 3 moves generic
+commands to the daemon. Phase 4 migrates Codex and removes that final
+direct-launch implementation. This sequencing avoids a knowingly broken
+product between two independently approved phases.
+
+### Core Boundary: No OCI Distribution
+
+Phase 3 admits only the daemon-installed built-in package and root-curated
+package digests. It does not accept local user OCI layouts, remote packages, or
+publisher signatures, and it exposes no `erebor agent import` command or
+protocol. The immutable package/install/policy/session binding still applies:
+the removal is a package-distribution and publisher-trust boundary, not an
+execution-governance bypass.
+
+Later Phase 10 owns external OCI package transport and
+discovery, Notation signature/trust verification, trust-policy/expiry/
+revocation/publisher-scope checks, formal packaging, and signed-layout
+conformance fixtures. Until then, an attempted external package import fails
+closed before it can write the daemon store.
+
+## Scope
+
+### Immutable Local Stores
+
+- Add validated core models and daemon-owned stores for:
+  - agent package manifests and content digests;
+  - policy packages containing immutable rules, examples, tests, and
+    documentation;
+  - root-curated installations linked to an exact package digest;
+  - immutable policy-set revisions composed from exact policy-package digests,
+    root/package minimums, and local overrides;
+  - durable approval records and their pending/terminal indexes;
+  - package aliases and tags resolved to an exact digest; and
+  - garbage-collection leases from installations, policy sets, approvals, and
+    sessions to every package/policy/evidence object they still require.
+- Define versioned canonical encodings for agent-package config,
+policy-package config, policy-set composition, installation records, and
+aliases. Digests are computed from the declared canonical bytes;
+duplicate fields, ambiguous names, unknown required semantics, and
+non-canonical digest claims reject rather than being normalized differently by
+two owners.
+- Store shared, root-curated content under
+`/var/lib/erebor/packages/<digest>/` and per-user records under
+`/var/lib/erebor/users/<uid>/`. All writes use the Phase 2 durable-write
+rules and safe path/owner checks.
+- Store the daemon-installed built-in package as canonical daemon-owned files,
+  not an OCI image layout. Later Phase 10 may map a local
+  package revision to a separately verified OCI subject; existing session
+  evidence retains the historical local identity.
+- Later Phase 10 adds publisher signatures, Notation
+  verification, remote referrer discovery, credentials, provenance, review
+  attestations, and revocation feeds. Phase 3 rejects package import rather
+  than making a partial signature-verification claim.
+
+### Generic Adapter And Policy Composition
+
+- Add an Erebor-compiled `generic-process-v1` adapter and a daemon-installed
+  built-in package. It permits an arbitrary initial argv as
+  its declared invocation shape but has no agent-specific hooks or trusted
+  event protocol.
+- For Linux-host, resolve the initial executable under the caller UID and
+  sanitized PATH, pin hash/owner/device/inode plus script interpreter chain,
+  and use the safe path-binding contract from Phase 2. It must never resolve
+  against root daemon `PATH`.
+- Docker package/image admission and `--image` are later Phase 6 work. Core
+  Phase 3 reports the Docker runner unavailable and admits
+  generic workloads only through Linux-host.
+- Add a built-in adapter registry. Package manifests select an immutable
+  adapter id and compatible daemon version; packages cannot load native code,
+  shared objects, WebAssembly, scripts, or subprocess plugins into `erebord`.
+- Implement adapter validation, installation verification, preparation,
+  entrypoint resolution, and lifecycle observation behind one narrow adapter
+  trait under `erebor-runtime-session::agents`; core owns immutable adapter
+  descriptors/capabilities and the daemon owns registry selection. The CLI
+  owns none of them.
+- `erebor policy package apply PATH` reads a directory through the Phase 2
+  UID-dropped descriptor broker, validates it from held descriptors, and
+  stores an immutable policy-package revision. A small bounded single-file or
+  stdin form may instead use the declared-size/digest upload transaction.
+  `erebor policy set create` stores an immutable composition. Aliases point to
+  digests and updates never mutate prior revisions. The shape remains
+  compatible with the existing development-plan contract (`policy.toml`,
+  `rules/`, `examples/`, `tests/`, and `README.md`).
+- Compose the root host minimum, package minimum, and selected user policy
+  without weakening any layer:
+  - any applicable deny is final;
+  - compatible mediation constraints accumulate to the strictest result;
+    incompatible mediations deny;
+  - otherwise any applicable approval requirement gates that already-composed
+    result; approval cannot erase mediation or convert a deny;
+  - direct allow is possible only when every mandatory layer is compatible;
+  - an allow in one layer never short-circuits evaluation of another layer; and
+  - missing required coverage fails admission or the effect, according to the
+    owning surface contract.
+- Preserve first-match semantics within one existing policy revision, but add
+  an explicit `NoMatch`/`NotApplicable` evaluation result at the layer seam.
+  The current `Allow { rule_id: None }` no-match result cannot be used to prove
+  mandatory coverage. A named layered evaluator consumes all mandatory layers;
+  an allow from one layer never ends evaluation of the others.
+- Persist the exact composed inputs and policy digest in `SessionSpec`; do not
+  flatten them into an unauditable mutable policy file.
+- Runtime physical-effect and guard-lifecycle evaluation enters through the
+  Phase 2 runtime guard service and its session-bound router. The daemon
+  control service may create/inspect sessions and approvals, but it must not
+  become an alternate interception endpoint or accept guard envelopes.
+
+### Durable Approvals
+
+- Add `crates/erebor-runtime-approvals` for the validated approval binding,
+  state machine, expiry/single-use rules, and repository contract. Replace the
+  current in-memory/deny-only seam with a daemon-supplied root-owned durable
+  repository and typed protocol:
+
+  ```text
+  erebor approval ls | inspect | approve | deny
+  ```
+
+- Bind one approval to owner UID, session id/generation, exact effect digest,
+  process identity, policy-set digest/rule id, creation time, and expiry. States
+  are `pending`, `approved`, `denied`, `expired`, `cancelled`, and `consumed`.
+  Approval is single-use and releases only the still-pending exact effect after
+  revalidation; timeout, daemon ambiguity, session exit, or identity change
+  fails closed.
+- Root configuration may define an approver role, but the governed agent can
+  never approve its own request by seeing a socket/file. All transitions,
+  retries, replay rejection, cancellation, and restart recovery are audited.
+- Each enforcing surface must prove how it holds or cancels the physical effect
+  while approval is pending. Phase 3 continues to reject
+  `continue_if_enforced` for Linux-host, including sessions whose
+  policy can require approval. A future runner guard may advertise the mode
+  only after proving that exact pinned policy decisions, approval hold/timeout/
+  denial, output/evidence continuity, and restart binding remain independently
+  fail-closed without `erebord`.
+- Approval commands use the daemon control service. The held effect remains in
+  its runtime guard or surface owner and is released only through a typed,
+  exact approval binding; no CLI connection or control message is forwarded as
+  a guard decision.
+
+### Basic Quotas And Safe Local Inputs
+
+- Enforce root-configured per-UID limits for concurrent sessions, retained
+  output/evidence bytes, stored policies/packages, pending approvals, streams,
+  and IPC uploads before exposing the public CLI. Later Phase 9
+  load-tests and tunes these limits; it is not where unbounded storage first
+  becomes safe.
+- Local file/stdin uploads are chunked and bounded by declared digest and total
+  size. Policy-package directories, executable/image-layout installations, and
+  other trees use the Phase 2 UID-dropped descriptor broker; `erebord` consumes
+  its held descriptors and `statx` identity and never reopens an unchecked user
+  path string. The CLI does not proxy unbounded blobs.
+- Do not expose `erebor agent import` in Phase 3. The daemon receives its
+  built-in package from its own installation and may accept only a root-curated
+  exact digest through an administrative installation path. Private-key
+  authoring, local OCI-layout import, and publisher-signature verification are
+later Phase 10 work.
+
+### Non-Codex CLI Migration
+
+- Complete the `erebor` client introduced for daemon control in Phase 1. Keep
+  `erebord` as the daemon binary. The new client owns generic sessions, policy,
+  audit, transitional surfaces, packages, runners, approvals, and daemon
+  commands. The legacy filesystem surface remains direct only until its Phase 5
+  daemon-owned surface lifecycle and artifact requests replace it.
+- Expose the Phase 2 capability contract directly through
+  `erebor runner ls|inspect`. These commands render the existing versioned
+  `RunnerCapabilityDocument`, implementation id/version, availability, and
+  conformance status used by admission; they do not construct a second runner
+  capability model.
+- Keep only the existing direct Codex implementation behind `erebor` until
+  Phase 4. It is not a fallback for generic sessions or any daemonized
+  operation. A migrated `erebor` command fails explicitly rather than launching
+  directly. Its temporary `session run` path must prove that current Codex
+  profile matching selected the Codex broker before launch; a generic/raw
+  command is rejected.
+- Remove the generic direct foreground adapter for the constructible runtime
+  guard server. The only remaining foreground construction is the explicitly
+  identified Codex path, which Phase 4 removes when the real hook broker and
+  Codex session move into `erebord`.
+- Rewrite `crates/erebor-runtime-cli/src/cli.rs` and its command modules as
+  wiring over `erebor-runtime-client`. Keep the sole `erebor` target behind the
+  shared logging/error/output harness; migrate modules without copying domain
+  behavior. The CLI may
+  read user input files for upload as bounded request content, but the daemon
+  validates, persists, and owns them.
+- Implement the session command contract:
+
+  ```text
+  erebor create | run | start | ps | inspect | logs | attach | events
+  erebor stop | kill | wait | rm | prune
+  ```
+
+- Expose the parent command contract for explicit `--env NAME=VALUE` and
+  `--secret NAME=PROVIDER_REF`; keep secret resolution in the daemon's approved
+  provider boundary. Generic Docker `--image REF` belongs to later Phase 6.
+- Preserve all currently real non-Codex capabilities through daemon-owned
+  operations, even where command spelling changes, except adoption:
+
+  | Current CLI owner | Phase 3 daemon-owned destination |
+  | --- | --- |
+  | `cli/session.rs` and `cli/session/args.rs` | create/run/start, list/inspect/describe, and diagnosis requests; adoption is deliberately removed |
+| `cli/start.rs` | retained direct until Phase 5 replaces it with the typed daemon-owned ambient-surface lifecycle |
+  | `cli/policy.rs` | apply/list/inspect/verify plus policy test |
+  | `cli/audit.rs` | audit tail and evidence/context trace streams |
+  | `cli/filesystem.rs` and `cli/filesystem/` | retained until Phase 5 moves the filesystem surface plus its transaction, evidence, and retention requests to `erebord` |
+  | `cli/dev.rs` | dropped by explicit product decision; do not replace it with another foreground proxy |
+
+- A pure parser/formatter may remain local. Anything that reads authoritative
+  state, evaluates policy, opens a governed surface, mutates artifacts, or
+  launches a process must call the daemon.
+- Phase 5 removes caller-selected `--registry` roots from filesystem
+  operations; observed UID plus surface/session/object id selects daemon-owned
+  storage. Domain crates continue to own JSON/text/report rendering and
+  output-artifact behavior; CLI modules only parse, call the client, and
+  present the returned stream/receipt.
+- Remove the new product's adoption command. The daemon cannot retroactively
+  supply an existing process with the private filesystem, startup control
+  lease, complete process ownership, historical output, or full evidence
+  required by `SessionSpec`; do not label it a partially governed session.
+- `run` is `create` followed by one legal `start`. Attached is the default;
+  `-d` detaches; `-it` requests an admitted PTY. Client exit cannot orphan
+  finalization or make the CLI the output sink.
+- Implement the parent interrupt contract: PTY input requires the lease,
+  `Ctrl-P Ctrl-Q` detaches locally, non-PTY `run` SIGINT is one typed allowed
+  runner interrupt, and mere transport loss/read-only stream exit never
+  signals a workload.
+- Support exact id, unique id prefix, and local alias resolution inside the
+  caller's UID namespace. Ambiguous prefixes and aliases fail.
+
+### Legacy Data Boundary
+
+- Do not import, mutate, or delete workspace-local `.erebor/sessions` data from
+  `SessionRegistry` automatically. The new daemon store is authoritative only
+  for sessions it creates.
+- Document the clean break and provide a read-only note explaining where old
+  evidence remains. No hidden migration, fallback lookup, or “best effort”
+  conversion is allowed.
+
+## Non-Goals
+
+- Do not add remote registry pull/push/search or Hub network access.
+- Do not migrate Codex-specific config or claim Claude support.
+- Do not remove the final direct Codex path until Phase 4 proves the daemon
+  replacement.
+- Do not implement generic `exec` into a running session.
+- Do not migrate or expose session adoption.
+- Do not let users select another daemon endpoint or another UID.
+
+## Required Implementation Order
+
+1. Establish the built-in/root-curated package admission boundary and prove no
+   user package-import path reaches the daemon store.
+2. Add immutable content/install/policy/approval stores and their
+   crash-safe/UID-isolation tests.
+3. Add layered policy evaluation, held-effect approvals, the generic adapter,
+   and safe Linux executable resolution.
+4. Add quotas and bounded policy-upload flows.
+5. Migrate and test one non-Codex command family at a time, disabling its
+   direct implementation as its daemon replacement passes.
+6. Run the complete public generic CLI matrix while retaining only the named
+   Codex exception.
+
+## Checkpoint
+
+Extend `examples/codex-app-server` with the real generic daemon-owned `erebor`
+walkthrough, including the daemon-unavailable-before-launch result. Keep the
+temporary direct Codex implementation explicitly separate until Phase 4.
+
+Add store/adapter/policy tests and real daemon/client e2e tests covering:
+
+- the built-in/root-curated package admission boundary, including rejected
+  local/remote package-import attempts before a daemon-store write;
+- safe path creation, UID isolation, aliases, ambiguous ids, package GC leases,
+  policy/approval/session retention leases, and crash-safe updates;
+- policy-package validation, immutable policy-set composition, first-match
+  within a layer, explicit no-match, cross-layer deny/approval precedence, and
+  missing mandatory coverage;
+- approval creation, approve/deny, single-use consumption, timeout, replay,
+  effect/process/session mismatch, cancellation, and daemon restart;
+- approval followed by preserved mediation, incompatible-mediation denial, and
+  re-evaluation preventing approval from overriding a later deny;
+- package attempts to load arbitrary adapter code or select an incompatible
+  adapter;
+- generic create-without-start, run, detach, attach, input lease, logs, events,
+  stop, kill, wait, remove, and dry-run prune on Linux-host;
+- PTY detach escape, non-PTY SIGINT delivery, read-only stream exit, abrupt
+  transport loss, and ambiguous interrupt acknowledgement;
+- Linux executable/interpreter pinning and root-PATH/environment
+  non-inheritance;
+- per-UID session/output/policy-upload/approval quota enforcement before side
+  effects;
+- every Phase 3 migration-table capability except the explicitly Phase 5-owned
+  filesystem surface reaching a typed daemon request;
+- daemon-unavailable errors with no direct-launch fallback;
+- two users unable to resolve or mutate each other's aliases, policy
+  packages/sets, approvals, installations, sessions, or streams;
+- old `.erebor/sessions` data left untouched and ignored;
+- adoption absent from the daemon protocol and new CLI; and
+- existing direct Codex invocation still working inside `erebor` until Phase
+  4, while every migrated generic command refuses direct launch.
+
+Run the Phase 3 CLI matrix in `lifecycle-probe.md`, then:
+
+Run model/store/policy/approval/rendering tests in the normal workspace lane.
+Extend the serial Ubuntu 24.04 `privileged-linux` installed-product target with
+the staged public generic CLI matrix, two-UID isolation, safe descriptor-broker
+path resolution, and real Linux-host sessions. Required privileged conditions
+never skip in that lane.
+
+```sh
+rtk cargo fmt --all -- --check
+rtk cargo test --workspace --all-targets --all-features
+rtk cargo clippy --workspace --all-targets --all-features -- -D warnings
+rtk git diff --check
+```
+
+## Required Evidence
+
+- Package, installation, policy-package, policy-set, approval, alias, and
+  GC-reference schema inventory.
+- Approved Phase 3 deferral of external package admission and proof that no
+  package-import command or protocol reaches the daemon store.
+- Old-to-new non-Codex CLI capability mapping with e2e test names, the exact
+  Phase 5 filesystem-surface exception, and the remaining direct Codex-only
+  surface inside `erebor`.
+- Proof that stopping `erebord` makes `erebor run` fail before process launch.
+- Linux-host generic-session lifecycle results and Docker's explicit
+  unavailable result.
+- `erebor runner ls|inspect` output matched to the exact Phase 2 capability
+  documents used by admission.
+- Proof that pre-daemon workspace state was neither imported nor deleted.
+
+## Acceptance
+
+- `erebor` never starts or adopts a workload directly and is the public client
+  for every Phase 3 non-Codex operation. The legacy filesystem surface remains
+  the explicit Phase 5 exception until its daemon replacement exists.
+- Every Phase 3 authoritative non-Codex CLI capability crosses the
+authenticated daemon protocol; the only remaining direct execution paths are
+the explicitly Phase-5-owned filesystem and ambient-surface start commands,
+and Codex inside `erebor` until Phase 4.
+- A generic process runs only from an admitted daemon-installed or
+  root-curated package digest, layered policy set, immutable `SessionSpec`,
+  and active runner.
+- Package, policy-package, and policy-set aliases resolve to immutable digests
+  before start; approvals are durable, exact-effect-bound, and single-use.
+- There is no generic compatibility command, adoption, alternate daemon, or
+  old-state fallback.
+
+## Stop Point
+
+Stop after Phase 3 evidence and the result update. Wait for explicit approval
+before Phase 4.
+
+## Phase 3 Result
+
+State: Done — Phase 3 implementation and its required privileged-Linux
+installed-product evidence completed on 2026-07-21.
+
+### Deferred Signature-Verifier Result (2026-07-21)
+
+The feasibility audit found no production-suitable native Rust implementation
+of the Notary Project OCI signature and trust-policy contract. The maintained
+implementations are Go (`notation`, `notation-go`, and `notation-core-go`).
+After reviewing the official executable's trust-store, revocation, plugin, and
+machine-result-contract complexity, the user approved deferring external
+package admission to Phase 10. This is not approval for hand-rolled signature
+crypto or acceptance based only on parsing a signature.
+
+The isolated Notation verifier and canonical receipt prototype were removed
+from `erebor-runtime-packages`: they had no Phase 3 owner and made an OCI
+admission claim outside this phase. Phase 10 must reintroduce a verifier only
+with an explicitly approved, version-and-artifact-digest-pinned contract and
+its own signed-layout conformance tests.
+
+### Current Implementation Result (2026-07-21)
+
+Implemented in this in-progress slice:
+
+- `erebor-runtime-packages` now owns canonical local agent-package,
+  policy-package, installation, policy-set, and alias models without OCI or
+  signature-verifier code.
+- Root configuration supplies validated root-curated package/install/policy-set
+  records. `erebord` materializes canonical immutable records under its own
+  package and per-UID stores, rejects unsafe/noncanonical records, and resolves
+  the package, installation, generic adapter, and policy-set identities from
+  those stores at create and start. The old `PhaseTwoValidatedFixture`
+  admission fallback is gone. Configuration reload also seeds only compatible
+  immutable root-curated records before publishing the new generation.
+- `erebor session` now sends create/start/list/inspect/logs/attach/events/stop/
+  kill/wait/remove/prune lifecycle requests to the daemon. It no longer exposes
+  generic direct run, diagnosis, adoption, or audit-file review. The temporary
+  foreground branch must positively match a configured brokered Codex App
+  Server profile; raw/generic commands cannot select it.
+- The cumulative example now derives and installs root-curated local records,
+  uses public daemon-client session commands, and records Docker as an explicit
+  Phase 6 unavailable path rather than a Phase 3 workflow.
+
+Implemented in the current continuation:
+
+- `erebord` compiles one immutable `generic-process-v1` adapter registry and
+  daemon-installs its canonical package plus host-minimum policy package. A
+  generic create/run request may omit all four package identities to select
+  that built-in admission; supplying any custom identity requires the complete
+  package, installation, adapter, and policy-set tuple. The daemon, not the
+  CLI, materializes the per-UID installation and policy-set records.
+- Linux-host admission resolves a bare executable only through the caller's
+  explicitly requested `PATH` (or a fixed sanitized fallback), never the
+  daemon environment. The descriptor broker hashes every executable under the
+  caller UID. Script shebang interpreters are now resolved under the same
+  contract, represented in `SessionSpec`, rechecked on recovery, staged from
+  held descriptors, and executed by descriptor path. Unsupported dynamic
+  `env` interpreter options fail closed rather than falling back to ambient
+  lookup.
+- Policy package apply is daemon-owned. Its descriptor-backed reader accepts
+  exactly `policy.toml`, `rules/`, `examples/`, `tests/`, and `README.md`,
+  rejects unknown root entries and unsafe descendants, bounds bytes, validates
+  rule JSON before storage, and persists an immutable revision. Immutable
+  user policy sets require a root-curated minimum and are reconstructed as
+  mandatory layered policy inputs for the session guard router.
+- `erebor policy test`, `policy package apply`, `policy set create`, and
+  `runner ls|inspect` use daemon RPCs. The runner report is the same versioned
+  capability document used by admission, with availability as a transport
+  status rather than a second model.
+- Generic lifecycle requests resolve an exact session ID or one unique prefix
+  inside the caller UID namespace. Ambiguous or missing prefixes fail; streams
+  return the resolved canonical ID.
+
+Focused checks after the continuation:
+
+```sh
+rtk cargo test -p erebor-runtime-core --lib --all-features
+rtk cargo test -p erebor-runtime-session runners::linux::tests --all-features
+rtk cargo test -p erebor-runtime-daemon path_broker::tests::held_directory_reader --all-features
+rtk cargo test -p erebor-runtime-daemon session_api::tests --all-features
+rtk cargo test -p erebor-runtime-cli --lib --all-features
+rtk cargo check --workspace
+rtk cargo clippy -p erebor-runtime-core -p erebor-runtime-session \
+  -p erebor-runtime-daemon --all-targets --all-features -- -D warnings
+rtk git diff --check
+```
+
+The focused checks pass. The final
+`rtk bash .github/scripts/verify-rust-ci.sh` passes formatting, workspace
+check, and warning-denied Clippy, then reaches the full test stage and stops at
+the existing CDP proxy e2e listener (`erebor-runtime-e2e/src/websocket.rs:42`)
+with `Operation not permitted`. The full `erebor-runtime-session` test target
+also remains blocked by the same restricted-host policy when its existing
+runtime-guard Unix-socket tests reach
+`runtime_interception_broker/platform.rs:194`; this is not a skipped
+privileged-lane requirement.
+
+Focused checks passed after this slice:
+
+```sh
+rtk cargo test -p erebor-runtime-packages --all-targets --all-features
+rtk cargo test -p erebor-runtime-daemon \
+  local_store::tests::root_curated_records_are_immutable_and_resolved_per_owner \
+  --all-features
+rtk cargo test -p erebor-runtime-cli --lib --all-features
+rtk cargo test -p erebor-runtime-e2e --test daemon_control_plane --no-run
+rtk cargo check --workspace
+rtk cargo clippy --workspace --all-targets --all-features -- -D warnings
+rtk git diff --check
+```
+
+All of those focused checks pass. `bash .github/scripts/verify-rust-ci.sh`
+also passes its formatting, workspace check, and warning-denied Clippy stages,
+then stops in the full test stage because this restricted host rejects the
+existing CDP e2e WebSocket listener (`Operation not permitted` in
+`erebor-runtime-e2e/src/websocket.rs`). The Phase 3 privileged matrix remains
+required outside this host.
+
+### Current CLI And Acceptance Result (2026-07-21)
+
+Implemented in this continuation:
+
+- Session aliases are durable daemon-owned per-UID records. `erebor session
+  alias set|remove|list` crosses the authenticated daemon protocol; alias
+  targets are resolved to an exact owned session before they enter the
+  idempotency record. Session lookup accepts exact IDs first, then a valid
+  local alias, then one unique prefix. The repository test proves durability,
+  ownership isolation, unsafe-alias rejection, and exact target binding.
+- `erebor audit tail` now streams the daemon-owned bounded session-event page
+  and durable cursor. It no longer reads a legacy workspace audit file.
+- The installed privileged Linux acceptance now builds and uses only the
+  public `erebor` client for the generic lifecycle, output, audit tail,
+  daemon-unavailable-before-launch result, aliases, two-UID isolation, and
+  explicit Docker rejection. The stale direct
+  `erebor-daemon-session-driver`, Phase 2 fixture configuration, in-container
+  Docker fixture, and duplicated old acceptance entries were removed.
+- The cumulative example has the matching simple public client walkthrough;
+  building the process guard explicitly enables its required
+  `editor-process-guard-target` feature.
+- `erebor audit evidence-trace` now reads the bounded durable evidence stream
+  through the daemon. The stale CLI path that opened a workspace-local
+  `SessionRegistry`, read legacy JSONL/config/policy artifacts, rendered a
+  report, and wrote an arbitrary local output path is gone. The client now
+  presents only the typed daemon response, alongside `audit tail` for the
+  lifecycle-event stream.
+- `erebor policy package ls|inspect|verify` and `erebor policy set
+  ls|inspect|verify` now use typed daemon control requests. Listing and
+  inspection enumerate only canonical root-curated or caller-owned immutable
+  records; `verify` re-reads and validates the canonical bytes and referenced
+  policy inputs before it returns the immutable identity.
+
+Verification for this continuation:
+
+```sh
+rtk cargo fmt --all
+rtk cargo test -p erebor-runtime-session \
+  aliases_are_durable_scoped_and_resolve_to_exact_session_ids --all-features
+rtk cargo test -p erebor-runtime-client --lib --all-features
+rtk cargo test -p erebor-runtime-cli --lib --all-features
+rtk cargo test -p erebor-runtime-e2e --test daemon_control_plane --no-run
+rtk cargo check --workspace
+bash -n .github/scripts/daemon-installed-session-runtime.sh
+bash -n .github/scripts/daemon-systemd-control-plane.sh
+EREBOR_DAEMON_SYSTEMD_IMAGE=erebor-daemon-systemd:phase3-test \
+  rtk cargo test -p erebor-runtime-e2e --test daemon_control_plane \
+  public_generic_cli_runs_in_systemd_container -- --ignored --nocapture
+```
+
+The listed checks pass. The full daemon and session test targets cannot finish
+on this restricted host because the existing runtime-guard Unix-socket tests
+are denied `Operation not permitted`; the installed privileged test above was
+run outside that sandbox restriction.
+
+Verification after the audit/policy continuation:
+
+```sh
+rtk cargo fmt --all
+rtk cargo test -p erebor-runtime-ipc --test contract --all-features
+rtk cargo test -p erebor-runtime-daemon \
+  local_store::tests::policy_catalogs_are_daemon_owned_and_revalidate_canonical_records \
+  --all-features
+rtk cargo test -p erebor-runtime-cli --lib --all-features
+rtk cargo test -p erebor-runtime-client --lib --all-features
+rtk cargo check --workspace
+rtk cargo clippy --workspace --all-targets --all-features -- -D warnings
+rtk git diff --check
+```
+
+Those checks pass. The final `rtk bash .github/scripts/verify-rust-ci.sh` was
+also run after this Rust edit: formatting, workspace check, warning-denied
+Clippy, and all preceding tests passed. It stops at the existing
+`erebor-runtime-cdp` proxy e2e WebSocket listener
+(`erebor-runtime-e2e/src/websocket.rs:42`) because this restricted host returns
+`Operation not permitted`; the Phase 3 installed-product matrix still belongs
+to the privileged Linux lane.
+
+### Final Implementation Update (2026-07-21)
+
+- Durable session content leases now retain the exact package, installation,
+  adapter, policy-set, and policy-package identities named by each session.
+  Lease release is crash-safe, idempotent, and happens only after the daemon
+  has durably pruned that session's retained output/evidence. This is the
+  Phase 3 GC-reference contract; no user-facing content-delete operation exists
+  in this phase.
+- Root configuration now bounds concurrent sessions, retained output/evidence,
+  stored policy revisions, active IPC streams, and IPC uploads per observed
+  UID. The daemon rejects each bounded request before the corresponding store
+  or session side effect.
+- Linux-host interactive sessions now have a daemon-owned PTY. Input crosses a
+  typed non-replayable request bound to the current lease and client identity;
+  the controller validates an acknowledgement before accepting the write.
+  The public client renews the lease, `Ctrl-P Ctrl-Q` detaches locally, and a
+  non-PTY attached `run` turns one client SIGINT into one typed runner
+  `interrupt`. Read-only attach, input-lease expiry, and client transport loss
+  never signal a workload.
+- `erebor start` remains direct because the approved Phase 5 ambient-surface
+  plan owns its replacement. The migration table and acceptance wording above
+  now name that boundary explicitly. The filesystem transaction/retention
+  surface remains the other Phase 5 exception. `dev proxy-cdp` remains removed
+  by explicit product decision.
+- The durable approval repository and public approval client commands are
+  present, but Linux-host policy requiring approval continues to fail closed:
+  Phase 3 deliberately does not claim a held physical effect without a runner
+  guard that proves exact release, timeout, cancellation, and recovery. A
+  future approval-capable enforcing surface must add that proof before creating
+  approval-gated Linux effects.
+- `erebord` now handles SIGTERM and SIGINT gracefully, allowing its owned
+  socket guard to unlink only its own socket during a systemd stop. The
+  installed service probe covers clean stop, safe stale-socket replacement,
+  configuration-reload rollback, and systemd recovery after a SIGKILL.
+  The obsolete temporary-daemon probe and its old `daemon --socket` spelling
+  were deleted. Phase 4 restores the approved root-level
+  `erebor --socket <absolute-path>` foreground selector for daemon-backed
+  commands; it remains process-local, defaults to the installed socket when
+  omitted, and does not create a persisted alternate-daemon model.
+
+The serial privileged-Linux installed-product lifecycle matrix has passed
+outside the restricted host. It uses the staged installed daemon and public
+CLI across two UIDs; proves daemon-unavailable-before-launch, alias isolation,
+Linux-host lifecycle, explicit Docker rejection, real PTY input and local
+detach, non-PTY SIGINT delivery, and that terminating a read-only client does
+not signal its workload. Local/remote package import and Notation-backed
+package admission remain deferred to Phase 10; Docker product admission remains
+Phase 6; and the final direct Codex path remains Phase 4 work.
+
+Final verification for this update:
+
+```sh
+rtk cargo fmt --all
+rtk cargo test -p erebor-runtime-session \
+  forwards_only_current_interactive --lib --all-features
+rtk cargo test -p erebor-runtime-ipc --test contract --all-features
+rtk cargo test -p erebor-runtime-cli --lib --all-features
+rtk cargo check --workspace
+rtk cargo clippy --workspace --all-targets --all-features -- -D warnings
+rtk cargo build -p erebor-runtime-daemon --bin erebord --bin erebor-path-broker
+rtk cargo build -p erebor-runtime-cli --bin erebor
+rtk cargo build -p erebor-runtime-session --features editor-process-guard-target \
+  --bin erebor-linux-session-controller --bin erebor-linux-process-guard
+rtk docker build -f .github/containers/daemon-systemd.Dockerfile \
+  -t erebor-daemon-systemd:phase3-test .
+rtk env EREBOR_DAEMON_SYSTEMD_IMAGE=erebor-daemon-systemd:phase3-test \
+  cargo test -p erebor-runtime-e2e --test daemon_control_plane \
+  public_generic_cli_runs_in_systemd_container -- --ignored --nocapture
+rtk bash .github/scripts/verify-rust-ci.sh # outside the restricted sandbox
+rtk git diff --check
+```
+
+The focused tests, workspace check, warning-denied Clippy, formatting, and
+diff check pass. The CI-equivalent verifier initially reached the existing CDP
+proxy e2e WebSocket listener and was denied by the restricted sandbox; the
+required rerun outside that restriction passed the complete verifier. The
+privileged installed-product test above also passes.
