@@ -11,7 +11,7 @@ pub(crate) struct SessionArgs {
     pub(crate) command: SessionCommand,
 }
 
-/// The public Phase 4 Codex run request. The daemon resolves its local alias
+/// The public Codex run request. The daemon resolves its local alias
 /// to the certified package entrypoint; this command deliberately has no raw
 /// executable or argv position.
 #[derive(Debug, Args)]

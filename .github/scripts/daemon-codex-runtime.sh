@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # CODEX_HOME, OCI import, or a caller-owned state projection.
 
 if [[ "$(id -u)" -ne 0 || "$(uname -s)" != "Linux" ]]; then
-  echo "the Phase 4 Codex runtime probe requires root on Linux" >&2
+  echo "the Codex runtime probe requires root on Linux" >&2
   exit 1
 fi
 
@@ -19,7 +19,7 @@ second_user="${EREBOR_INSTALLED_SESSION_USER_TWO:?second session user is require
 
 report_failure() {
   local status="$?"
-  echo "Phase 4 Codex runtime probe failed at line ${BASH_LINENO[0]}: $BASH_COMMAND" >&2
+  echo "Codex runtime probe failed at line ${BASH_LINENO[0]}: $BASH_COMMAND" >&2
   systemctl status erebord.service --no-pager >&2 || true
   journalctl -u erebord.service --no-pager >&2 || true
   exit "$status"
@@ -28,7 +28,7 @@ trap report_failure ERR
 
 for binary in "$erebor" "$fixture"; do
   [[ -x "$binary" ]] || {
-    echo "installed Phase 4 binary is missing: $binary" >&2
+    echo "installed Codex runtime binary is missing: $binary" >&2
     exit 1
   }
 done
@@ -83,7 +83,7 @@ remove_all_sessions() {
     [[ -n "$session_id" ]] || continue
     index=$((index + 1))
     as_user "$user" session rm "$session_id" --force \
-      --idempotency-key "phase4-codex-remove-$index" >/dev/null
+      --idempotency-key "codex-runtime-remove-$index" >/dev/null
   done < <(session_ids "$user")
 }
 
@@ -109,6 +109,7 @@ configure_fixture() {
     --config "$config_path" \
     --trust-root "$trust_root" \
     --socket-group-gid "$group_gid" \
+    --linux-runner-containment systemd \
     --owner-uid "$(id -u "$first_user")" \
     --owner-uid "$(id -u "$second_user")")"
   package_reference="$(sed -n 's/^package_reference=//p' <<<"$package_output")"
@@ -123,11 +124,11 @@ configure_policy() {
   local output policy_set_digest
   output="$(as_user "$user" policy set create \
     --root-minimum-digest "$root_policy_digest" \
-    --idempotency-key "phase4-codex-policy-$user")"
+    --idempotency-key "codex-runtime-policy-$user")"
   policy_set_digest="$(sed -n 's/^digest=//p' <<<"$output")"
   [[ -n "$policy_set_digest" ]]
   as_user "$user" policy set alias fixture "$policy_set_digest" \
-    --idempotency-key "phase4-codex-policy-alias-$user" \
+    --idempotency-key "codex-runtime-policy-alias-$user" \
     | grep -q 'alias=fixture'
 }
 
@@ -286,7 +287,7 @@ close_waiting_app_server_input "$disconnect_fifo"
 wait "$wait_client_parent" || true
 as_user "$first_user" session inspect "$disconnect_session_id" | grep -q 'state=running'
 as_user "$first_user" session stop "$disconnect_session_id" \
-  --idempotency-key phase4-codex-disconnect-stop >/dev/null
+  --idempotency-key codex-runtime-disconnect-stop >/dev/null
 await_terminal "$first_user" "$disconnect_session_id"
 remove_all_sessions "$first_user"
 
@@ -302,7 +303,7 @@ systemctl restart erebord.service
 await_daemon
 as_user "$first_user" session inspect "$recovery_session_id" | grep -q 'state=running'
 as_user "$first_user" session stop "$recovery_session_id" \
-  --idempotency-key phase4-codex-recovery-stop >/dev/null
+  --idempotency-key codex-runtime-recovery-stop >/dev/null
 await_terminal "$first_user" "$recovery_session_id"
 remove_all_sessions "$first_user"
 

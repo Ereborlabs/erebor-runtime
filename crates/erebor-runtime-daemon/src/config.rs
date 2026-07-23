@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     io::Read,
     path::{Component, Path, PathBuf},
 };
@@ -10,6 +10,7 @@ use erebor_runtime_packages::{
     AgentPackageManifest, CanonicalEncoding, CodexPackageDefinition, InstallationRecord,
     PolicyPackageRevision, PolicySetRevision,
 };
+use erebor_runtime_session::RunnerInstallConfig;
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 
@@ -33,6 +34,64 @@ const MIN_LOG_BYTES: u64 = 4096;
 const MAX_LOG_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_RECORDS: u32 = 4096;
 const MAX_IDEMPOTENCY_RECORDS: u32 = 4096;
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinuxRunnerContainment {
+    #[default]
+    Direct,
+    Systemd,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinuxRunnerConfig {
+    #[serde(default)]
+    containment: LinuxRunnerContainment,
+    #[serde(default)]
+    controller_path: Option<PathBuf>,
+    #[serde(default)]
+    process_guard_path: Option<PathBuf>,
+    #[serde(default)]
+    descriptor_broker_path: Option<PathBuf>,
+    #[serde(default)]
+    systemd_run_path: Option<PathBuf>,
+}
+
+impl LinuxRunnerConfig {
+    fn validate(&self) -> bool {
+        [
+            self.controller_path.as_deref(),
+            self.process_guard_path.as_deref(),
+            self.descriptor_broker_path.as_deref(),
+            self.systemd_run_path.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .all(normalized_absolute)
+    }
+
+    pub(crate) fn install_config(&self) -> RunnerInstallConfig {
+        let mut program_overrides = BTreeMap::new();
+        if let Some(path) = &self.controller_path {
+            program_overrides.insert(String::from("linux-session-controller"), path.clone());
+        }
+        if let Some(path) = &self.process_guard_path {
+            program_overrides.insert(String::from("linux-process-guard"), path.clone());
+        }
+        if let Some(path) = &self.systemd_run_path {
+            program_overrides.insert(String::from("systemd-run"), path.clone());
+        }
+        RunnerInstallConfig::new(
+            program_overrides,
+            matches!(self.containment, LinuxRunnerContainment::Systemd),
+        )
+    }
+
+    pub(crate) fn descriptor_broker_path(&self) -> Option<&Path> {
+        self.descriptor_broker_path.as_deref()
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -219,6 +278,8 @@ pub struct DaemonConfig {
     #[serde(default = "default_max_ipc_upload_bytes_per_uid")]
     pub max_ipc_upload_bytes_per_uid: u64,
     #[serde(default)]
+    pub linux_runner: LinuxRunnerConfig,
+    #[serde(default)]
     pub(crate) root_curated_admissions: Vec<RootCuratedAdmission>,
     #[serde(default)]
     pub(crate) root_curated_codex_packages: Vec<RootCuratedCodexPackage>,
@@ -242,6 +303,7 @@ impl Default for DaemonConfig {
                 DEFAULT_MAX_RETAINED_SESSION_OUTPUT_BYTES_PER_UID,
             max_stored_policy_bytes_per_uid: DEFAULT_MAX_STORED_POLICY_BYTES_PER_UID,
             max_ipc_upload_bytes_per_uid: DEFAULT_MAX_IPC_UPLOAD_BYTES_PER_UID,
+            linux_runner: LinuxRunnerConfig::default(),
             root_curated_admissions: Vec::new(),
             root_curated_codex_packages: Vec::new(),
         }
@@ -289,6 +351,7 @@ impl DaemonConfig {
             || self.max_stored_policy_bytes_per_uid < self.max_policy_upload_bytes
             || self.max_ipc_upload_bytes_per_uid < 1024
             || self.max_ipc_upload_bytes_per_uid > DEFAULT_MAX_IPC_UPLOAD_BYTES_PER_UID
+            || !self.linux_runner.validate()
             || !valid_root_curated_admissions(&self.root_curated_admissions)
             || !valid_root_curated_codex_packages(&self.root_curated_codex_packages)
         {
@@ -346,6 +409,10 @@ impl DaemonConfig {
 
     pub(crate) const fn max_ipc_upload_bytes_per_uid(&self) -> u64 {
         self.max_ipc_upload_bytes_per_uid
+    }
+
+    pub const fn linux_runner(&self) -> &LinuxRunnerConfig {
+        &self.linux_runner
     }
 }
 
@@ -431,6 +498,28 @@ mod tests {
     };
 
     use super::{DaemonConfig, RootCuratedAdmission};
+
+    #[test]
+    fn linux_runner_defaults_to_direct_and_accepts_root_selected_systemd(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let direct: DaemonConfig = serde_json::from_str(r#"{"socket_group_gid":1000}"#)?;
+        assert!(!direct.linux_runner().install_config().use_systemd_scope());
+
+        let systemd: DaemonConfig = serde_json::from_str(
+            r#"{"socket_group_gid":1000,"linux_runner":{"containment":"systemd"}}"#,
+        )?;
+        assert!(systemd.linux_runner().install_config().use_systemd_scope());
+        Ok(())
+    }
+
+    #[test]
+    fn linux_runner_rejects_non_absolute_program_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let config: DaemonConfig = serde_json::from_str(
+            r#"{"socket_group_gid":1000,"linux_runner":{"controller_path":"relative-controller"}}"#,
+        )?;
+        assert!(config.validate(Path::new("<test-config>")).is_err());
+        Ok(())
+    }
 
     #[test]
     fn root_curated_admissions_require_matching_unique_canonical_identities(

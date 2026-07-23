@@ -45,11 +45,12 @@ struct AgentLoadArgs {
 
 pub(super) struct AgentCommandOwner<'a> {
     args: &'a AgentArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> AgentCommandOwner<'a> {
-    pub(super) const fn new(args: &'a AgentArgs) -> Self {
-        Self { args }
+    pub(super) const fn new(args: &'a AgentArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     pub(super) fn execute(&self) -> Result<(), CliError> {
@@ -61,7 +62,7 @@ impl<'a> AgentCommandOwner<'a> {
         match &self.args.command {
             AgentCommand::Load(args) => {
                 let response = runtime
-                    .block_on(DaemonClient::local().agent_load_codex(
+                    .block_on(self.client.agent_load_codex(
                         &args.package_reference,
                         args.from.display().to_string(),
                         &format!("agent-load-{}", Uuid::new_v4()),

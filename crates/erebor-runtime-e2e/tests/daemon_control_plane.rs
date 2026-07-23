@@ -14,7 +14,7 @@ fn daemon_control_plane_runs_in_systemd_container() -> Result<(), Box<dyn Error>
 
 #[test]
 #[ignore = "requires Linux, Docker, and privileged containers"]
-fn phase4_codex_daemon_client_runs_in_systemd_container() -> Result<(), Box<dyn Error>> {
+fn codex_daemon_client_runs_in_systemd_container() -> Result<(), Box<dyn Error>> {
     run_systemd_probe(["/usr/local/lib/erebor/daemon-systemd-control-plane.sh"])
 }
 

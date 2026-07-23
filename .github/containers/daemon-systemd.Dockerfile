@@ -28,8 +28,8 @@ COPY .github/scripts/daemon-systemd-control-plane.sh \
     /usr/local/lib/erebor/daemon-systemd-control-plane.sh
 COPY .github/scripts/daemon-installed-session-runtime.sh \
     /usr/local/lib/erebor/daemon-installed-session-runtime.sh
-COPY .github/scripts/daemon-phase4-codex-runtime.sh \
-    /usr/local/lib/erebor/daemon-phase4-codex-runtime.sh
+COPY .github/scripts/daemon-codex-runtime.sh \
+    /usr/local/lib/erebor/daemon-codex-runtime.sh
 
 RUN chmod 0755 \
         /usr/lib/erebor/erebord \
@@ -40,7 +40,7 @@ RUN chmod 0755 \
         /usr/local/bin/erebor \
         /usr/local/lib/erebor/daemon-systemd-control-plane.sh \
         /usr/local/lib/erebor/daemon-installed-session-runtime.sh \
-        /usr/local/lib/erebor/daemon-phase4-codex-runtime.sh
+        /usr/local/lib/erebor/daemon-codex-runtime.sh
 
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]

@@ -37,11 +37,12 @@ struct RunnerInspectArgs {
 
 pub(super) struct RunnerCommandOwner<'a> {
     args: &'a RunnerArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> RunnerCommandOwner<'a> {
-    pub(super) const fn new(args: &'a RunnerArgs) -> Self {
-        Self { args }
+    pub(super) const fn new(args: &'a RunnerArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     pub(super) fn execute(&self) -> Result<(), CliError> {
@@ -52,13 +53,13 @@ impl<'a> RunnerCommandOwner<'a> {
             .context(DaemonRuntimeSnafu)?;
         match &self.args.command {
             RunnerCommand::Ls => runtime
-                .block_on(DaemonClient::local().runner_list())
+                .block_on(self.client.runner_list())
                 .context(DaemonClientSnafu)?
                 .iter()
                 .try_for_each(Self::write),
             RunnerCommand::Inspect(args) => {
                 let report = runtime
-                    .block_on(DaemonClient::local().runner_inspect(&args.runner_id))
+                    .block_on(self.client.runner_inspect(&args.runner_id))
                     .context(DaemonClientSnafu)?;
                 Self::write(&report)
             }

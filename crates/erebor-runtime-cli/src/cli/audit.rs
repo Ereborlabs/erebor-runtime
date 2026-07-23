@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use erebor_runtime_client::DaemonClient;
 use snafu::ResultExt;
 
 use crate::error::{CliError, DaemonClientSnafu, DaemonRuntimeSnafu};
@@ -58,28 +59,32 @@ struct AuditEvidenceTraceArgs {
 
 pub(super) struct AuditCommandOwner<'a> {
     args: &'a AuditArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> AuditCommandOwner<'a> {
-    pub(super) const fn new(args: &'a AuditArgs) -> Self {
-        Self { args }
+    pub(super) const fn new(args: &'a AuditArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     pub(super) fn execute(&self) -> Result<(), CliError> {
         match &self.args.command {
-            AuditCommand::Tail(args) => AuditTailCommand::new(args).execute(),
-            AuditCommand::EvidenceTrace(args) => AuditEvidenceTraceCommand::new(args).execute(),
+            AuditCommand::Tail(args) => AuditTailCommand::new(args, self.client).execute(),
+            AuditCommand::EvidenceTrace(args) => {
+                AuditEvidenceTraceCommand::new(args, self.client).execute()
+            }
         }
     }
 }
 
 struct AuditTailCommand<'a> {
     args: &'a AuditTailArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> AuditTailCommand<'a> {
-    const fn new(args: &'a AuditTailArgs) -> Self {
-        Self { args }
+    const fn new(args: &'a AuditTailArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     fn execute(&self) -> Result<(), CliError> {
@@ -89,7 +94,7 @@ impl<'a> AuditTailCommand<'a> {
             .build()
             .context(DaemonRuntimeSnafu)?;
         let page = runtime
-            .block_on(erebor_runtime_client::DaemonClient::local().session_events(
+            .block_on(self.client.session_events(
                 &self.args.session_id,
                 self.args.after_sequence,
                 self.args.maximum_records,
@@ -115,11 +120,12 @@ impl<'a> AuditTailCommand<'a> {
 
 struct AuditEvidenceTraceCommand<'a> {
     args: &'a AuditEvidenceTraceArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> AuditEvidenceTraceCommand<'a> {
-    const fn new(args: &'a AuditEvidenceTraceArgs) -> Self {
-        Self { args }
+    const fn new(args: &'a AuditEvidenceTraceArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     fn execute(&self) -> Result<(), CliError> {
@@ -129,13 +135,11 @@ impl<'a> AuditEvidenceTraceCommand<'a> {
             .build()
             .context(DaemonRuntimeSnafu)?;
         let page = runtime
-            .block_on(
-                erebor_runtime_client::DaemonClient::local().session_evidence(
-                    &self.args.session_id,
-                    self.args.after_sequence,
-                    self.args.maximum_records,
-                ),
-            )
+            .block_on(self.client.session_evidence(
+                &self.args.session_id,
+                self.args.after_sequence,
+                self.args.maximum_records,
+            ))
             .context(DaemonClientSnafu)?;
         for record in page.records {
             println!(

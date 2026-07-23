@@ -663,7 +663,7 @@ impl VerifiedLocalArtifact {
     }
 }
 
-/// Phase 4 supports only an explicit descriptor-backed local enrollment. OCI
+/// The local product supports only an explicit descriptor-backed enrollment. OCI
 /// import, remote download, and provider discovery remain Phase 10 work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

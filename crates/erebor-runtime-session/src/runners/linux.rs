@@ -1045,6 +1045,7 @@ mod tests {
             default.controller_path,
             PathBuf::from(DEFAULT_CONTROLLER_PATH)
         );
+        assert!(!default.use_systemd_scope);
 
         let override_path = PathBuf::from("/opt/erebor/linux-controller");
         let configured = LinuxRunnerDriver::from_install_config(&RunnerInstallConfig::new(

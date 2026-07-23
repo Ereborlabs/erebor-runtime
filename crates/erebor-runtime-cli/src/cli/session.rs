@@ -30,11 +30,12 @@ pub(super) use args::{CodexRunArgs, SessionArgs};
 
 pub(super) struct SessionCommandOwner<'a> {
     args: &'a SessionArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> SessionCommandOwner<'a> {
-    pub(super) const fn new(args: &'a SessionArgs) -> Self {
-        Self { args }
+    pub(super) const fn new(args: &'a SessionArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     pub(super) fn execute(&self) -> Result<(), CliError> {
@@ -46,28 +47,31 @@ impl<'a> SessionCommandOwner<'a> {
         runtime.block_on(self.execute_daemon())
     }
 
-    pub(super) fn execute_codex_run(args: &CodexRunArgs) -> Result<(), CliError> {
+    pub(super) fn execute_codex_run(
+        client: &DaemonClient,
+        args: &CodexRunArgs,
+    ) -> Result<(), CliError> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_io()
             .enable_time()
             .build()
             .context(DaemonRuntimeSnafu)?;
-        runtime.block_on(Self::run_codex_alias(&DaemonClient::local(), args))
+        runtime.block_on(Self::run_codex_alias(client, args))
     }
 
     async fn execute_daemon(&self) -> Result<(), CliError> {
-        let client = DaemonClient::local();
         match &self.args.command {
-            SessionCommand::Create(args) => self.create(&client, args).await?,
-            SessionCommand::Run(args) => self.run_generic(&client, args).await?,
+            SessionCommand::Create(args) => self.create(self.client, args).await?,
+            SessionCommand::Run(args) => self.run_generic(self.client, args).await?,
             SessionCommand::Start(args) => Self::write_record(
-                client
+                self.client
                     .session_start(&args.session_id, &args.idempotency_key)
                     .await
                     .context(DaemonClientSnafu)?,
             ),
             SessionCommand::Ps => {
-                for record in client
+                for record in self
+                    .client
                     .session_list()
                     .await
                     .context(DaemonClientSnafu)?
@@ -77,40 +81,41 @@ impl<'a> SessionCommandOwner<'a> {
                 }
             }
             SessionCommand::Inspect(args) => Self::write_record(
-                client
+                self.client
                     .session_inspect(&args.session_id)
                     .await
                     .context(DaemonClientSnafu)?,
             ),
-            SessionCommand::Logs(args) => self.logs(&client, args).await?,
-            SessionCommand::Attach(args) => self.attach(&client, args).await?,
-            SessionCommand::Events(args) => self.events(&client, args).await?,
+            SessionCommand::Logs(args) => self.logs(self.client, args).await?,
+            SessionCommand::Attach(args) => self.attach(self.client, args).await?,
+            SessionCommand::Events(args) => self.events(self.client, args).await?,
             SessionCommand::Stop(args) => Self::write_record(
-                client
+                self.client
                     .session_stop(&args.session_id, args.grace_seconds, &args.idempotency_key)
                     .await
                     .context(DaemonClientSnafu)?,
             ),
             SessionCommand::Kill(args) => Self::write_record(
-                client
+                self.client
                     .session_kill(&args.session_id, &args.signal, &args.idempotency_key)
                     .await
                     .context(DaemonClientSnafu)?,
             ),
             SessionCommand::Wait(args) => Self::write_record(
-                client
+                self.client
                     .session_wait(&args.session_id, args.after_generation)
                     .await
                     .context(DaemonClientSnafu)?,
             ),
             SessionCommand::Remove(args) => Self::write_record(
-                client
+                self.client
                     .session_remove(&args.session_id, args.force, &args.idempotency_key)
                     .await
                     .context(DaemonClientSnafu)?,
             ),
             SessionCommand::Prune(args) => {
-                let result = client
+                let result = self
+                    .client
                     .session_prune(
                         SessionPruneRequest {
                             terminal_before_unix_ms: args.terminal_before_unix_ms,
@@ -125,7 +130,7 @@ impl<'a> SessionCommandOwner<'a> {
                     println!("session_id={session_id}");
                 }
             }
-            SessionCommand::Alias(args) => self.aliases(&client, args).await?,
+            SessionCommand::Alias(args) => self.aliases(self.client, args).await?,
         }
         Ok(())
     }

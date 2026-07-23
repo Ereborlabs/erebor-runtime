@@ -232,7 +232,7 @@ fn linux_host_filesystem_storage_layout_is_prepared_without_host_copy(
     let session_project = workspace.join("project");
     fs::create_dir_all(&host_project)?;
     fs::create_dir_all(&session_project)?;
-    fs::write(host_project.join("settings.json"), "phase4-host-sentinel\n")?;
+    fs::write(host_project.join("settings.json"), "daemon-host-sentinel\n")?;
     let policy_path = support::write_empty_policy(&test_dir)?;
 
     let session_id = "session-filesystem-storage-layout";
@@ -300,7 +300,7 @@ fn linux_host_filesystem_storage_layout_is_prepared_without_host_copy(
     )?);
     assert_eq!(
         fs::read_to_string(host_project.join("settings.json"))?,
-        "phase4-host-sentinel\n"
+        "daemon-host-sentinel\n"
     );
 
     support::cleanup_overlay_test_dir(&test_dir, &workspace, session_id)?;

@@ -98,7 +98,7 @@ useradd --create-home "$outside_user"
 group_gid="$(getent group "$service_group" | cut -d: -f3)"
 
 install -d -o root -g root -m 0750 "$config_dir"
-printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":256,"max_session_output_bytes":67108864,"session_output_rotation_bytes":4194304,"max_daemon_loss_grace_seconds":2}\n' "$group_gid" \
+printf '{"socket_group_gid":%s,"linux_runner":{"containment":"systemd"},"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":256,"max_session_output_bytes":67108864,"session_output_rotation_bytes":4194304,"max_daemon_loss_grace_seconds":2}\n' "$group_gid" \
   >"$config_path"
 chown root:root "$config_path"
 chmod 0640 "$config_path"
@@ -111,10 +111,7 @@ await_service
 
 [[ "$(stat -c '%U:%G:%a' "$socket")" == "root:$service_group:660" ]]
 runuser -u "$service_user" -- "$erebor" daemon status | grep -q 'state=running'
-if "$erebor" daemon --socket "$socket" status >/dev/null 2>&1; then
-  echo "the CLI accepted a removed alternate-daemon selector" >&2
-  exit 1
-fi
+"$erebor" --socket "$socket" daemon status | grep -q 'state=running'
 if runuser -u "$outside_user" -- "$erebor" daemon status >/dev/null 2>&1; then
   echo "user outside the connection group reached the installed control socket" >&2
   exit 1
@@ -144,7 +141,7 @@ if "$erebor" daemon reload --idempotency-key daemon-systemd-invalid-reload >/dev
   exit 1
 fi
 [[ "$before_invalid_reload" == "$("$erebor" daemon status)" ]]
-printf '{"socket_group_gid":%s,"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":256,"max_session_output_bytes":67108864,"session_output_rotation_bytes":4194304,"max_daemon_loss_grace_seconds":2}\n' \
+printf '{"socket_group_gid":%s,"linux_runner":{"containment":"systemd"},"max_log_bytes":4096,"max_log_records":32,"max_idempotency_records":256,"max_session_output_bytes":67108864,"session_output_rotation_bytes":4194304,"max_daemon_loss_grace_seconds":2}\n' \
   "$group_gid" >"$config_path"
 chown root:root "$config_path"
 chmod 0640 "$config_path"
@@ -176,4 +173,4 @@ bash /usr/local/lib/erebor/daemon-installed-session-runtime.sh
 
 EREBOR_INSTALLED_SESSION_USER="$service_user" \
 EREBOR_INSTALLED_SESSION_USER_TWO="$service_user_two" \
-bash /usr/local/lib/erebor/daemon-phase4-codex-runtime.sh
+bash /usr/local/lib/erebor/daemon-codex-runtime.sh

@@ -12,11 +12,12 @@ pub(super) struct DaemonArgs {
 
 pub(super) struct DaemonCommandOwner<'a> {
     args: &'a DaemonArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> DaemonCommandOwner<'a> {
-    pub(super) fn new(args: &'a DaemonArgs) -> Self {
-        Self { args }
+    pub(super) const fn new(args: &'a DaemonArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     pub(super) fn execute(&self) -> Result<(), CliError> {
@@ -29,17 +30,17 @@ impl<'a> DaemonCommandOwner<'a> {
     }
 
     async fn execute_async(&self) -> Result<(), CliError> {
-        let client = DaemonClient::local();
         match &self.args.command {
             DaemonCommand::Status => {
-                let status = client.status().await.context(DaemonClientSnafu)?;
+                let status = self.client.status().await.context(DaemonClientSnafu)?;
                 println!(
                     "daemon_pid={} configuration_generation={} state={}",
                     status.daemon_pid, status.configuration_generation, status.service_state
                 );
             }
             DaemonCommand::Logs(args) => {
-                let records = client
+                let records = self
+                    .client
                     .logs(args.after_sequence, args.maximum_records)
                     .await
                     .context(DaemonClientSnafu)?;
@@ -51,14 +52,16 @@ impl<'a> DaemonCommandOwner<'a> {
                 }
             }
             DaemonCommand::Reload(args) => {
-                let message = client
+                let message = self
+                    .client
                     .reload(&args.idempotency_key)
                     .await
                     .context(DaemonClientSnafu)?;
                 println!("{message}");
             }
             DaemonCommand::Stop(args) => {
-                let message = client
+                let message = self
+                    .client
                     .stop(&args.idempotency_key)
                     .await
                     .context(DaemonClientSnafu)?;
@@ -117,12 +120,12 @@ mod tests {
         assert!(Cli::try_parse_from(["erebor", "daemon", "status"]).is_ok());
         assert!(Cli::try_parse_from([
             "erebor",
-            "daemon",
             "--socket",
             "/tmp/daemon.sock",
+            "daemon",
             "status"
         ])
-        .is_err());
+        .is_ok());
         assert!(Cli::try_parse_from(["erebor", "status"]).is_err());
         assert!(Cli::try_parse_from([
             "erebor",

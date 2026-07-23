@@ -32,6 +32,7 @@ fn fixture_builds_a_pinned_package_contract_without_vendor_state() -> TestResult
         String::from_utf8_lossy(&output.stderr)
     );
     let configuration: Value = serde_json::from_slice(&std::fs::read(config)?)?;
+    assert_eq!(configuration["linux_runner"]["containment"], "direct");
     let package = &configuration["root_curated_codex_packages"][0]["package"];
     let definition = &configuration["root_curated_codex_packages"][0]["definition"];
     assert_eq!(package["name"], "codex-v1-fixture");

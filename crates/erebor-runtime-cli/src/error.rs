@@ -94,6 +94,12 @@ pub(crate) enum CliError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("daemon socket selection is invalid: {reason}"))]
+    InvalidDaemonSocket {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("failed to encode JSON output: {source}"))]
     EncodeJson {
         source: serde_json::Error,
@@ -130,6 +136,7 @@ impl ErrorExt for CliError {
             Self::InvalidFilesystemCommand { .. } => StatusCode::InvalidArguments,
             Self::InvalidSessionCommand { .. } => StatusCode::InvalidArguments,
             Self::InvalidPolicyCommand { .. } => StatusCode::InvalidArguments,
+            Self::InvalidDaemonSocket { .. } => StatusCode::InvalidArguments,
             Self::EncodeJson { .. } => StatusCode::Internal,
             Self::DaemonClient { source, .. } => source.status_code(),
             Self::DaemonRuntime { .. } => StatusCode::Internal,
@@ -151,6 +158,7 @@ impl ErrorExt for CliError {
             Self::InvalidFilesystemCommand { .. } => RetryHint::NonRetryable,
             Self::InvalidSessionCommand { .. } => RetryHint::NonRetryable,
             Self::InvalidPolicyCommand { .. } => RetryHint::NonRetryable,
+            Self::InvalidDaemonSocket { .. } => RetryHint::NonRetryable,
             Self::EncodeJson { .. } => RetryHint::NonRetryable,
             Self::DaemonClient { source, .. } => source.retry_hint(),
             Self::DaemonRuntime { .. } => RetryHint::NonRetryable,
@@ -178,6 +186,7 @@ impl ErrorExt for CliError {
                 | Self::InvalidFilesystemCommand { .. }
                 | Self::InvalidSessionCommand { .. }
                 | Self::InvalidPolicyCommand { .. }
+                | Self::InvalidDaemonSocket { .. }
                 | Self::WriteSessionOutput { .. }
                 | Self::Terminal { .. }
                 | Self::EncodeJson { .. }

@@ -36,6 +36,15 @@ pub(crate) fn parse_non_empty_path(value: &str) -> Result<PathBuf, String> {
     }
 }
 
+pub(crate) fn parse_absolute_path(value: &str) -> Result<PathBuf, String> {
+    let path = parse_non_empty_path(value)?;
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(String::from("path must be absolute"))
+    }
+}
+
 pub(crate) fn parse_non_empty_string(value: &str) -> Result<String, String> {
     let value = value.trim();
     if value.is_empty() {

@@ -23,19 +23,10 @@ use crate::{
     SessionManagerError, SessionPathResolver, SessionRuntime,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct RunnerInstallConfig {
     program_overrides: BTreeMap<String, PathBuf>,
     use_systemd_scope: bool,
-}
-
-impl Default for RunnerInstallConfig {
-    fn default() -> Self {
-        Self {
-            program_overrides: BTreeMap::new(),
-            use_systemd_scope: true,
-        }
-    }
 }
 
 impl RunnerInstallConfig {

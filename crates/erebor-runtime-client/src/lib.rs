@@ -52,6 +52,11 @@ impl DaemonClient {
         }
     }
 
+    #[must_use]
+    pub fn at(socket_path: PathBuf) -> Self {
+        Self { socket_path }
+    }
+
     pub async fn status(&self) -> Result<DaemonStatusResponse> {
         let mut connection = self.connect().await?;
         connection
@@ -282,12 +287,27 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use erebor_runtime_ipc::{
         v1::{DaemonStatusResponse, Envelope, KIND_DAEMON_STATUS_RESPONSE},
         AsyncFrameCodec,
     };
 
-    use super::DaemonConnection;
+    use super::{DaemonClient, DaemonConnection};
+
+    #[test]
+    fn explicit_local_socket_replaces_only_the_default_path() {
+        let client = DaemonClient::at(PathBuf::from("/tmp/erebor-lab/daemon.sock"));
+        assert_eq!(
+            client.socket_path,
+            PathBuf::from("/tmp/erebor-lab/daemon.sock")
+        );
+        assert_eq!(
+            DaemonClient::local().socket_path,
+            PathBuf::from("/run/erebor/daemon.sock")
+        );
+    }
 
     #[tokio::test]
     async fn client_rejects_response_with_wrong_correlation_id(

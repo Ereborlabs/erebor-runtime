@@ -25,11 +25,12 @@ impl ApprovalArgs {
 
 pub(super) struct ApprovalCommandOwner<'a> {
     args: &'a ApprovalArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> ApprovalCommandOwner<'a> {
-    pub(super) const fn new(args: &'a ApprovalArgs) -> Self {
-        Self { args }
+    pub(super) const fn new(args: &'a ApprovalArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     pub(super) fn execute(&self) -> Result<(), CliError> {
@@ -42,25 +43,27 @@ impl<'a> ApprovalCommandOwner<'a> {
     }
 
     async fn execute_async(&self) -> Result<(), CliError> {
-        let client = DaemonClient::local();
         match &self.args.command {
-            ApprovalCommand::Ls => {
-                Self::render_page(client.approval_list().await.context(DaemonClientSnafu)?)
-            }
+            ApprovalCommand::Ls => Self::render_page(
+                self.client
+                    .approval_list()
+                    .await
+                    .context(DaemonClientSnafu)?,
+            ),
             ApprovalCommand::Inspect(args) => Self::render_record(
-                client
+                self.client
                     .approval_inspect(&args.approval_id, args.owner_uid)
                     .await
                     .context(DaemonClientSnafu)?,
             ),
             ApprovalCommand::Approve(args) => Self::render_record(
-                client
+                self.client
                     .approval_approve(&args.approval_id, args.owner_uid, &args.idempotency_key)
                     .await
                     .context(DaemonClientSnafu)?,
             ),
             ApprovalCommand::Deny(args) => Self::render_record(
-                client
+                self.client
                     .approval_deny(
                         &args.approval_id,
                         args.owner_uid,

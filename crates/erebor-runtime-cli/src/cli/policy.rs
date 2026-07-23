@@ -60,18 +60,21 @@ struct PolicyTestArgs {
 
 pub(super) struct PolicyCommandOwner<'a> {
     args: &'a PolicyArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> PolicyCommandOwner<'a> {
-    pub(super) const fn new(args: &'a PolicyArgs) -> Self {
-        Self { args }
+    pub(super) const fn new(args: &'a PolicyArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     pub(super) fn execute(&self) -> Result<(), CliError> {
         match &self.args.command {
-            PolicyCommand::Test(args) => PolicyTestCommand::new(args).execute(),
-            PolicyCommand::Package(args) => PolicyPackageCommandOwner::new(args).execute(),
-            PolicyCommand::Set(args) => PolicySetCommandOwner::new(args).execute(),
+            PolicyCommand::Test(args) => PolicyTestCommand::new(args, self.client).execute(),
+            PolicyCommand::Package(args) => {
+                PolicyPackageCommandOwner::new(args, self.client).execute()
+            }
+            PolicyCommand::Set(args) => PolicySetCommandOwner::new(args, self.client).execute(),
         }
     }
 }
@@ -125,11 +128,12 @@ struct PolicyPackageDigestArgs {
 
 struct PolicyPackageCommandOwner<'a> {
     args: &'a PolicyPackageArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> PolicyPackageCommandOwner<'a> {
-    const fn new(args: &'a PolicyPackageArgs) -> Self {
-        Self { args }
+    const fn new(args: &'a PolicyPackageArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     fn execute(&self) -> Result<(), CliError> {
@@ -141,7 +145,7 @@ impl<'a> PolicyPackageCommandOwner<'a> {
         match &self.args.command {
             PolicyPackageCommand::Apply(args) => {
                 let record = runtime
-                    .block_on(DaemonClient::local().policy_package_apply(
+                    .block_on(self.client.policy_package_apply(
                         args.path.display().to_string(),
                         &args.idempotency_key,
                     ))
@@ -151,7 +155,7 @@ impl<'a> PolicyPackageCommandOwner<'a> {
             }
             PolicyPackageCommand::Ls => {
                 let page = runtime
-                    .block_on(DaemonClient::local().policy_package_list())
+                    .block_on(self.client.policy_package_list())
                     .context(DaemonClientSnafu)?;
                 for record in page.packages {
                     println!("digest={} name={}", record.digest, record.name);
@@ -160,14 +164,14 @@ impl<'a> PolicyPackageCommandOwner<'a> {
             }
             PolicyPackageCommand::Inspect(args) => {
                 let record = runtime
-                    .block_on(DaemonClient::local().policy_package_inspect(&args.digest))
+                    .block_on(self.client.policy_package_inspect(&args.digest))
                     .context(DaemonClientSnafu)?;
                 println!("digest={} name={}", record.digest, record.name);
                 Ok(())
             }
             PolicyPackageCommand::Verify(args) => {
                 let record = runtime
-                    .block_on(DaemonClient::local().policy_package_verify(&args.digest))
+                    .block_on(self.client.policy_package_verify(&args.digest))
                     .context(DaemonClientSnafu)?;
                 println!("verified digest={} name={}", record.digest, record.name);
                 Ok(())
@@ -240,11 +244,12 @@ struct PolicySetAliasArgs {
 
 struct PolicySetCommandOwner<'a> {
     args: &'a PolicySetArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> PolicySetCommandOwner<'a> {
-    const fn new(args: &'a PolicySetArgs) -> Self {
-        Self { args }
+    const fn new(args: &'a PolicySetArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     fn execute(&self) -> Result<(), CliError> {
@@ -256,7 +261,7 @@ impl<'a> PolicySetCommandOwner<'a> {
         match &self.args.command {
             PolicySetSubcommand::Create(args) => {
                 let record = runtime
-                    .block_on(DaemonClient::local().policy_set_create(
+                    .block_on(self.client.policy_set_create(
                         &args.root_minimum_digest,
                         args.package_minimum_digests.clone(),
                         args.local_override_digest.clone(),
@@ -268,7 +273,7 @@ impl<'a> PolicySetCommandOwner<'a> {
             }
             PolicySetSubcommand::Alias(args) => {
                 let record = runtime
-                    .block_on(DaemonClient::local().policy_set_alias_set(
+                    .block_on(self.client.policy_set_alias_set(
                         &args.alias,
                         &args.policy_set_digest,
                         &args.idempotency_key,
@@ -282,7 +287,7 @@ impl<'a> PolicySetCommandOwner<'a> {
             }
             PolicySetSubcommand::Ls => {
                 let page = runtime
-                    .block_on(DaemonClient::local().policy_set_list())
+                    .block_on(self.client.policy_set_list())
                     .context(DaemonClientSnafu)?;
                 for record in page.policy_sets {
                     println!("digest={}", record.digest);
@@ -291,14 +296,14 @@ impl<'a> PolicySetCommandOwner<'a> {
             }
             PolicySetSubcommand::Inspect(args) => {
                 let record = runtime
-                    .block_on(DaemonClient::local().policy_set_inspect(&args.digest))
+                    .block_on(self.client.policy_set_inspect(&args.digest))
                     .context(DaemonClientSnafu)?;
                 println!("digest={}", record.digest);
                 Ok(())
             }
             PolicySetSubcommand::Verify(args) => {
                 let record = runtime
-                    .block_on(DaemonClient::local().policy_set_verify(&args.digest))
+                    .block_on(self.client.policy_set_verify(&args.digest))
                     .context(DaemonClientSnafu)?;
                 println!("verified digest={}", record.digest);
                 Ok(())
@@ -309,11 +314,12 @@ impl<'a> PolicySetCommandOwner<'a> {
 
 struct PolicyTestCommand<'a> {
     args: &'a PolicyTestArgs,
+    client: &'a DaemonClient,
 }
 
 impl<'a> PolicyTestCommand<'a> {
-    const fn new(args: &'a PolicyTestArgs) -> Self {
-        Self { args }
+    const fn new(args: &'a PolicyTestArgs, client: &'a DaemonClient) -> Self {
+        Self { args, client }
     }
 
     fn execute(&self) -> Result<(), CliError> {
@@ -327,7 +333,7 @@ impl<'a> PolicyTestCommand<'a> {
             .build()
             .context(DaemonRuntimeSnafu)?;
         let response = runtime
-            .block_on(DaemonClient::local().policy_test(policy_json, event_json))
+            .block_on(self.client.policy_test(policy_json, event_json))
             .context(DaemonClientSnafu)?;
         let mut output = std::io::stdout().lock();
         output

@@ -139,7 +139,7 @@ impl CliCommandFixture {
             "id": "evt-cli-command-owners-1",
             "session_id": self.session_id.as_str(),
             "actor": {
-                "id": "phase-4-cli-e2e",
+                "id": "daemon-cli-e2e",
                 "kind": "agent"
             },
             "surface": "terminal",
@@ -149,8 +149,8 @@ impl CliCommandFixture {
                 "uri": "process://sh"
             },
             "payload": {
-                "command": ["sh", "-lc", "rm -rf /tmp/erebor-phase-4"],
-                "argv_summary": "sh -lc rm -rf /tmp/erebor-phase-4",
+                "command": ["sh", "-lc", "rm -rf /tmp/erebor-cli-fixture"],
+                "argv_summary": "sh -lc rm -rf /tmp/erebor-cli-fixture",
                 "cwd": Self::path_string(&self.workspace)
             },
             "risk": {
@@ -167,7 +167,7 @@ impl CliCommandFixture {
             "session": {
                 "enabled": true,
                 "actor": {
-                    "id": "phase-4-cli-e2e",
+                    "id": "daemon-cli-e2e",
                     "kind": "agent"
                 },
                 "runner": {
@@ -206,12 +206,12 @@ impl CliCommandFixture {
             "schema_version": 1,
             "session_id": self.session_id.as_str(),
             "status": "failed",
-            "actor_id": "phase-4-cli-e2e",
+            "actor_id": "daemon-cli-e2e",
             "actor_kind": "agent",
             "runner": "linux_host",
             "surfaces": ["terminal"],
             "workspace": Self::path_string(&self.workspace),
-            "command": ["sh", "-lc", "rm -rf /tmp/erebor-phase-4"],
+            "command": ["sh", "-lc", "rm -rf /tmp/erebor-cli-fixture"],
             "diagnostic": null,
             "registry_path": Self::path_string(&self.registry_path),
             "session_dir": Self::path_string(&self.session_dir),

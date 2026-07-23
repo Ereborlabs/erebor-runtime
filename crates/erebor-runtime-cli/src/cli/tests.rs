@@ -1,6 +1,71 @@
 use clap::{CommandFactory, Parser};
 
-use super::Cli;
+use super::{Cli, DaemonSocketArgs};
+
+#[test]
+fn socket_override_is_available_to_each_daemon_client_command() {
+    for arguments in [
+        vec![
+            "erebor",
+            "--socket",
+            "/tmp/erebor.sock",
+            "agent",
+            "load",
+            "codex-v1@sha256:abc",
+            "--from",
+            "/tmp/codex",
+        ],
+        vec![
+            "erebor",
+            "--socket",
+            "/tmp/erebor.sock",
+            "run",
+            "--policy",
+            "fixture",
+            "codex",
+        ],
+        vec!["erebor", "--socket", "/tmp/erebor.sock", "session", "ps"],
+        vec![
+            "erebor",
+            "--socket",
+            "/tmp/erebor.sock",
+            "policy",
+            "package",
+            "ls",
+        ],
+        vec!["erebor", "--socket", "/tmp/erebor.sock", "runner", "ls"],
+        vec![
+            "erebor",
+            "--socket",
+            "/tmp/erebor.sock",
+            "audit",
+            "tail",
+            "session-1",
+        ],
+        vec!["erebor", "--socket", "/tmp/erebor.sock", "approval", "ls"],
+        vec!["erebor", "--socket", "/tmp/erebor.sock", "daemon", "status"],
+    ] {
+        let parsed = Cli::try_parse_from(arguments);
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+    assert!(
+        Cli::try_parse_from(["erebor", "--socket", "relative.sock", "daemon", "status"]).is_err()
+    );
+}
+
+#[test]
+fn socket_override_rejects_unmigrated_foreground_commands() {
+    let selected = DaemonSocketArgs {
+        socket: Some("/tmp/erebor.sock".into()),
+    };
+    assert!(selected.validate_legacy_command("erebor start").is_err());
+    assert!(selected
+        .validate_legacy_command("erebor filesystem")
+        .is_err());
+    assert!(DaemonSocketArgs { socket: None }
+        .validate_legacy_command("erebor start")
+        .is_ok());
+}
 
 #[test]
 fn rejects_unknown_arguments() {

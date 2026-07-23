@@ -1,4 +1,4 @@
-//! Deterministic Phase 4 Codex adapter fixture.
+//! Deterministic Codex adapter fixture.
 //!
 //! This is intentionally not a Codex replacement.  It only exercises Erebor's
 //! certified entrypoint, TTY, JSONL, managed-hook, and package-admission
@@ -239,6 +239,13 @@ fn configure(arguments: &[String]) -> FixtureResult<()> {
     let package_digest = package.canonical_digest()?;
     let configuration = json!({
         "socket_group_gid": options.socket_group_gid,
+        "linux_runner": {
+            "containment": options.linux_runner_containment,
+            "controller_path": options.linux_runner_controller,
+            "process_guard_path": options.linux_process_guard,
+            "descriptor_broker_path": options.descriptor_broker,
+            "systemd_run_path": options.systemd_run,
+        },
         "root_curated_admissions": root_admissions,
         "root_curated_codex_packages": [{
             "package": package,
@@ -264,6 +271,11 @@ struct ConfigureOptions {
     trust_root: PathBuf,
     socket_group_gid: u32,
     owner_uids: Vec<u32>,
+    linux_runner_containment: String,
+    linux_runner_controller: Option<PathBuf>,
+    linux_process_guard: Option<PathBuf>,
+    descriptor_broker: Option<PathBuf>,
+    systemd_run: Option<PathBuf>,
 }
 
 impl ConfigureOptions {
@@ -272,6 +284,11 @@ impl ConfigureOptions {
         let mut trust_root = None;
         let mut socket_group_gid = None;
         let mut owner_uids = Vec::new();
+        let mut linux_runner_containment = String::from("direct");
+        let mut linux_runner_controller = None;
+        let mut linux_process_guard = None;
+        let mut descriptor_broker = None;
+        let mut systemd_run = None;
         let mut index = 0;
         while let Some(option) = arguments.get(index) {
             let value = arguments
@@ -282,6 +299,25 @@ impl ConfigureOptions {
                 "--trust-root" => trust_root = Some(PathBuf::from(value)),
                 "--socket-group-gid" => socket_group_gid = Some(value.parse()?),
                 "--owner-uid" => owner_uids.push(value.parse()?),
+                "--linux-runner-containment" => {
+                    if !matches!(value.as_str(), "direct" | "systemd") {
+                        return Err(format!(
+                            "--linux-runner-containment must be `direct` or `systemd`, got `{value}`"
+                        )
+                        .into());
+                    }
+                    linux_runner_containment = value.clone();
+                }
+                "--linux-runner-controller" => {
+                    linux_runner_controller = Some(absolute_option_path(option, value)?);
+                }
+                "--linux-process-guard" => {
+                    linux_process_guard = Some(absolute_option_path(option, value)?);
+                }
+                "--descriptor-broker" => {
+                    descriptor_broker = Some(absolute_option_path(option, value)?);
+                }
+                "--systemd-run" => systemd_run = Some(absolute_option_path(option, value)?),
                 _ => return Err(format!("unknown configure option `{option}`").into()),
             }
             index += 2;
@@ -291,7 +327,21 @@ impl ConfigureOptions {
             trust_root: trust_root.ok_or("--trust-root is required")?,
             socket_group_gid: socket_group_gid.ok_or("--socket-group-gid is required")?,
             owner_uids,
+            linux_runner_containment,
+            linux_runner_controller,
+            linux_process_guard,
+            descriptor_broker,
+            systemd_run,
         })
+    }
+}
+
+fn absolute_option_path(option: &str, value: &str) -> FixtureResult<PathBuf> {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Err(format!("{option} must name an absolute path, got `{value}`").into())
     }
 }
 
@@ -418,7 +468,7 @@ fn root_policy() -> FixtureResult<PolicyPackageRevision> {
         )]),
         BTreeMap::new(),
         BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
-        b"# Deterministic Phase 4 fixture host minimum\n".to_vec(),
+        b"# Deterministic Codex fixture host minimum\n".to_vec(),
     )
     .map_err(Into::into)
 }

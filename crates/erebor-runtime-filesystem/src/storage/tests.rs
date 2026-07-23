@@ -12,7 +12,7 @@ fn prepare_creates_expected_layout_without_copying_host_tree(
     let session_path = test_dir.join("session/project");
     fs::create_dir_all(&host)?;
     fs::create_dir_all(&session_path)?;
-    fs::write(host.join("settings.json"), "phase4-host-sentinel\n")?;
+    fs::write(host.join("settings.json"), "daemon-host-sentinel\n")?;
 
     let request = FilesystemVolumeStorageRequest::new(
         "project",

@@ -28,9 +28,8 @@ use erebor_runtime_ipc::v1::{
 use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact};
 use erebor_runtime_session::{
     AgentAdapterRegistry, CodexAppServerService, CodexHookService, DurableSessionRecord,
-    RunnerAdmissionRequest, RunnerInstallConfig, RunnerRegistry, SessionManager,
-    SessionManagerError, SessionRepository, SessionRepositoryError, SessionRuntimeResources,
-    StreamKind, ValidatedStartConstraints,
+    RunnerAdmissionRequest, RunnerRegistry, SessionManager, SessionManagerError, SessionRepository,
+    SessionRepositoryError, SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
 };
 use prost::Message;
 use snafu::ResultExt;
@@ -84,7 +83,7 @@ impl DaemonSessionApi {
         Self::new(
             paths,
             config,
-            RunnerRegistry::compiled_linux_host(RunnerInstallConfig::default())
+            RunnerRegistry::compiled_linux_host(config.linux_runner().install_config())
                 .context(SessionSnafu)?,
         )
     }
@@ -96,7 +95,14 @@ impl DaemonSessionApi {
     ) -> Result<Self> {
         let state_root = paths.session_state_path();
         let runtime_root = paths.session_runtime_path();
-        let descriptor_broker = Arc::new(DescriptorBroker::installed());
+        let descriptor_broker = Arc::new(
+            config
+                .linux_runner()
+                .descriptor_broker_path()
+                .map(PathBuf::from)
+                .map(DescriptorBroker::new)
+                .unwrap_or_else(DescriptorBroker::installed),
+        );
         let local_store = Arc::new(DaemonLocalStore::installed(paths)?);
         let adapters = AgentAdapterRegistry::compiled().map_err(|error| {
             crate::error::InvalidRequestSnafu {

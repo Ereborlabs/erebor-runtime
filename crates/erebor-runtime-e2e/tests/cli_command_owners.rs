@@ -58,7 +58,7 @@ fn cli_policy_and_audit_commands_use_real_session_fixtures() -> Result<(), E2eEr
         record
             .pointer("/event/payload/argv_summary")
             .and_then(Value::as_str),
-        Some("sh -lc rm -rf /tmp/erebor-phase-4")
+        Some("sh -lc rm -rf /tmp/erebor-cli-fixture")
     );
     assert_eq!(
         record
@@ -82,7 +82,7 @@ fn cli_policy_and_audit_commands_use_real_session_fixtures() -> Result<(), E2eEr
             "--prompt",
             prompt_path.as_str(),
             "--purpose",
-            "Phase 4 CLI command-owner e2e fixture",
+            "Daemon CLI command-owner e2e fixture",
         ],
     )?;
     assert!(report.contains("# Governed OpenClaw Evidence Trace"));

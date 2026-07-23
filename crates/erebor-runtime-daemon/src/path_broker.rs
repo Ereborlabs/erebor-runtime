@@ -77,9 +77,11 @@ struct BrokerResponse {
 
 impl DescriptorBroker {
     pub(crate) fn installed() -> Self {
-        Self {
-            executable: PathBuf::from("/usr/libexec/erebor/erebor-path-broker"),
-        }
+        Self::new(PathBuf::from("/usr/libexec/erebor/erebor-path-broker"))
+    }
+
+    pub(crate) const fn new(executable: PathBuf) -> Self {
+        Self { executable }
     }
 
     pub(crate) fn resolve(
