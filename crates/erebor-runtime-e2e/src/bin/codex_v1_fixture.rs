@@ -70,9 +70,13 @@ fn run_tty() -> FixtureResult<()> {
     );
     invoke_managed_hook(HookMode::Normal)?;
     println!("fixture-hook=accepted");
-    let mut line = String::new();
-    io::stdin().read_line(&mut line)?;
-    println!("fixture-tty-input={}", line.trim_end());
+    for line in io::stdin().lock().lines() {
+        let line = line?;
+        println!("fixture-tty-input={line}");
+        if line == "exit" {
+            break;
+        }
+    }
     Ok(())
 }
 
