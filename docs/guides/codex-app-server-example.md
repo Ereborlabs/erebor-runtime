@@ -26,10 +26,10 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
   | erebor run --policy fixture --workspace "$PWD" codex-app-server
 ```
 
-The normal `codex` alias is an interactive daemon-owned TTY; enter one line
-after the fixture reports ready. `codex-app-server` is a separate bounded
-JSON-RPC JSONL bridge, whose protocol output alone is written to standard
-output.
+The normal `codex` alias is an interactive daemon-owned TTY. After the fixture
+reports ready, it echoes each line as `fixture-tty-input=<line>`; type `exit`
+to end it normally. `codex-app-server` is a separate bounded JSON-RPC JSONL
+bridge, whose protocol output alone is written to standard output.
 
 The shell's `erebor` function passes `--socket "$EREBOR_SOCKET"` to each
 daemon-backed command. Outside this lab, omit `--socket` to use the normal

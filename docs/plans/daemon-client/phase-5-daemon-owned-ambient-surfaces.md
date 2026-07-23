@@ -58,6 +58,13 @@ shortcut.
   `codex-v1`, the adapter's fixed target is a private `CODEX_HOME` path such as
   `/run/erebor/state/codex`; the caller cannot supply `HOME`, `CODEX_HOME`, or
   an equivalent state path in `erebor run`.
+- A state source is a bundle, not an implied home-directory bind. It may contain
+  provider configuration, authentication material, and caches admitted by the
+  source class, but package-specific managed configuration is rendered only in
+  the daemon-owned projection. For Codex this includes the managed hook
+  configuration and any required feature setting. Erebor never edits the
+  caller's `.codex`, `config.toml`, `hooks.json`, shell aliases, or another
+  live user-state file to make a governed session work.
 - A filesystem-surface specification binds the allowed source class, access
   mode, snapshot/refresh rule, writable-upper policy, retention, and export
   policy. The root filesystem configuration limits which source classes and
@@ -72,6 +79,11 @@ shortcut.
   writable upper is per-session by default. It may retain only under the
   filesystem surface's explicit retention rule; any refresh, promotion, or
   export is a typed, policy-governed filesystem operation with evidence.
+- The writable upper is necessary even when the lower is immutable: an agent
+  may update its own aliases, cache, session data, or configuration while it
+  runs. Those writes stay private to the daemon-owned upper. They neither
+  modify the source directory nor become durable caller state unless an
+  explicitly allowed typed retention, promotion, or export action succeeds.
 - The runner projects only the resulting daemon-owned lower/upper view into
   the private session namespace and sets the package-declared fixed target.
   The workload never receives the daemon control socket, the source host path,
@@ -83,6 +95,9 @@ shortcut.
   record. Revalidate source eligibility on every typed refresh; stale,
   replaced, symlinked, cross-UID, or policy-revoked state is unavailable until
   explicitly refreshed.
+- Record only state identities, manifests, policy decisions, and rendered
+  configuration identities in evidence; do not put source contents, tokens,
+  or authentication material in logs, session output, or receipts.
 - Store surface state beneath `/var/lib/erebor/users/<uid>/surfaces/` and live
   endpoints beneath `/run/erebor/surfaces/<uid>/`; no ambient listener shares or
   replaces daemon-control or runtime-guard endpoints.
@@ -106,12 +121,34 @@ shortcut.
   root policy and per-connection authentication; agent namespaces never receive
   the daemon-control socket.
 
+### Local Codex Enrollment And Real Host Walkthrough
+
+- A local Codex launcher or installer layout is not a runtime discovery
+  mechanism. It may be documented as a way for the user to identify a candidate
+  for `erebor agent load … --from`, but the daemon follows the candidate through
+  the descriptor broker, records the resolved final regular executable and its
+  resolution provenance, verifies the declared version and digest, and stages
+  that installation. A later session runs the staged installation; it does not
+  rescan the caller's home or follow a mutable launcher/symlink.
+- The Phase 5 Linux host walkthrough uses that explicitly enrolled, pinned
+  executable and a typed state surface. It runs the actual `erebor run … codex`
+  TUI through the Phase 4 controller-PTY contract: initial terminal geometry,
+  controller-only resize/input, read-only observers, and detach/reattach of the
+  same daemon-owned session.
+- The walkthrough must prove the daemon socket and source-host path are absent
+  from the workload, the fixed private `CODEX_HOME` is present, the managed hook
+  works from the projection, and the caller's live Codex state remains
+  unchanged. The deterministic Phase 4 fixture remains a fast regression
+  harness; it is not presented as the real-Codex user experience.
+
 ## Non-Goals
 
 - Do not add OCI packages, registry access, Notation, Hub discovery, or formal
   packaging. Those are later Phase 10.
-- Do not require Docker parity, PTY parity, macOS, or new runner capabilities.
-  Those are later Phase 6.
+- Do not require Docker parity, macOS, or new runner capabilities. Linux
+  controller-PTY geometry and detach/reattach are already required Phase 4
+  behavior and are consumed here; Docker-specific interactive parity is later
+  Phase 6.
 - Do not add arbitrary surface plugins, remote listeners, or session adoption.
 
 ## Checkpoint
@@ -126,7 +163,12 @@ Add crate-local surface lifecycle tests and daemon/client e2e coverage for:
   including no caller-selected registry path and two-UID isolation;
 - agent state projection with a read-only lower snapshot, per-session writable
   upper, rejected ambient `HOME`/`CODEX_HOME`, refresh/revocation behavior,
-  no source-host-path or daemon-socket visibility, and two-UID isolation;
+  no source-host-path or daemon-socket visibility, no mutation of caller state,
+  redacted evidence, and two-UID isolation;
+- a real local Codex executable enrolled from an explicit candidate with a
+  recorded final-file/version/digest identity; a projected managed hook and
+  private `CODEX_HOME`; and a real TUI walkthrough using the Phase 4 PTY
+  controller/geometry contract;
 - listener authorization, daemon-socket absence, and root-owned endpoint paths;
 - daemon restart for each advertised surface failure mode; and
 - rejection of `erebor start` without creating a listener, process, record, or
@@ -156,7 +198,11 @@ rtk git diff --check
 - Agent configuration/authentication state reaches a workload only through an
   admitted filesystem-surface projection with immutable source evidence and a
   daemon-owned private target; package, CLI, and session environment inputs
-  cannot select an ambient host state path.
+  cannot select an ambient host state path or modify caller state.
+- A real local Codex walkthrough uses a descriptor-broker-verified, pinned,
+  staged executable and the private state projection. It does not rely on
+  `PATH`, live-home scanning, mutable launcher resolution, or a fixture TTY as
+  a substitute for the real user experience.
 - Linux-host sessions and ambient surfaces retain UID isolation, private
   endpoints, policy enforcement, output, and evidence.
 - Unsupported runner, distribution, agent, and platform capabilities are

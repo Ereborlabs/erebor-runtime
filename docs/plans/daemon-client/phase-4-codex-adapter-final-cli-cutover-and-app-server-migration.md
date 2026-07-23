@@ -9,6 +9,14 @@ accepted again until the deterministic privileged evidence and host lab pass.
   `erebor run ... codex` session uses the existing TTY/PTY attachment: the
   daemon owns the PTY and workload process, while the CLI relays terminal bytes
   through its exclusive input lease. Codex's TUI is not an App Server protocol.
+- Terminal geometry is part of that governed I/O boundary, not an output-log
+  convenience. Session creation records initial rows and columns. Only the
+  exclusive controller/input lease may issue a later resize; the daemon applies
+  it to its PTY and its foreground process group receives the normal resize
+  notification. A read-only observer may neither write bytes nor resize. On
+  disconnect the daemon retains the same PTY and workload; a later permitted
+  controller attaches to it rather than launching a replacement. This is
+  required Linux Phase 4 behavior, not deferred Docker parity.
 - A certified `codex-app-server` entrypoint uses a distinct, typed, bounded
   JSON-RPC-over-stdio contract. The daemon owns the child pipes, validates
   frames, correlation, cancellation, EOF, and output before exposing them to
@@ -151,7 +159,11 @@ routing table, queues, deadlines, cancellation, and shutdown contract.
   UID-dropped descriptor broker; installation hashes/copies from its held
   descriptor and `statx` identity, and root never reopens a separately checked
   raw path. Fleet-managed package requirements retain root ownership and
-  safe-path checks.
+  safe-path checks. A user-facing launcher or installer release layout may
+  help select the explicit candidate, but it establishes no trust: enrollment
+  records the resolved final regular executable, its resolution provenance,
+  version, and digest. The daemon never scans a user state directory or trusts
+  a mutable launcher/symlink at run time.
 - Create a local `codex` alias only after the installation is complete and
   linked to the exact package digest. Create `codex-app-server` only for a
   package/entrypoint that passed the App Server compatibility fixture.
@@ -189,6 +201,11 @@ routing table, queues, deadlines, cancellation, and shutdown contract.
   `erebor session run --runner linux-host --config runtime.json ...`.
   Do not claim automatic installation if the fixture still requires an
   externally provided Codex binary.
+- The deterministic fixture host lab is a developer acceptance harness, not a
+  useful substitute for the real Codex TUI. It proves package enrollment,
+  daemon-owned PTY routing, private endpoints, hook attribution, and typed App
+  Server behavior without a vendor binary or user state. A real-Codex host
+  walkthrough is Phase 5 work after generic private state projection exists.
 
 ### Codex Clean Cutover
 
@@ -249,6 +266,8 @@ Codex tests, and extend the installed-product systemd probe at
 - invocation lease and Context DAG attribution continuity;
 - App Server message, cancellation, EOF, malformed output, child failure, and
   daemon/client disconnect;
+- terminal initial geometry, controller-authorized resize, observer resize
+  rejection, and detach/reattach of the same running PTY/workload;
 - daemon-socket absence and exact per-session endpoint presence;
 - supported/rejected failure modes with honest evidence;
 - continuing absence of `erebor-runtime` plus final absence of direct-launch
@@ -263,6 +282,12 @@ the optional `EREBOR_CODEX_LINUX_V1_*` compatibility probe as daemon acceptance:
 it exercises a vendor binary outside the daemon-owned state surface. Phase 5
 rewrites and runs that probe as authenticated real-vendor evidence through the
 same daemon/client path after state projection is implemented.
+
+The fixture's interactive test must use the same terminal contract needed by a
+real TUI: it starts at the requested geometry, follows controller resize, and
+remains the same live session across a controller disconnect. It need not mimic
+Codex's display or login; presentation of a real Codex TUI is deliberately
+deferred to Phase 5.
 
 Run package/config migration, parser, and crate-local Codex tests in the normal
 workspace lane. Extend the serial Ubuntu 24.04 `privileged-linux`
@@ -287,6 +312,9 @@ rtk git diff --check
   session evidence.
 - Shared-hook-service listener/registration evidence, including cross-session
   ticket-routing rejection and separate-service dispatch rejection.
+- TTY evidence showing requested initial geometry, an accepted controller
+  resize, rejected observer resize/input, and detach/reattach without a new
+  workload or PTY.
 - Proof that daemon telemetry, App Server transport, and workload output are
   separate.
 - Old-to-new Codex command mapping and proof that distribution/import commands
@@ -302,6 +330,8 @@ remain unavailable until later Phase 10.
   governed Codex session without hand-written runtime profile JSON.
 - Every current Codex security check remains represented and tested.
 - The exact App Server example works through `erebor` and the daemon.
+- The deterministic interactive fixture proves the Linux controller PTY
+  contract; it is not represented as a real Codex TUI demonstration.
 - Codex cannot see the daemon control socket or impersonate another session.
 - One shared Codex hook listener serves registered sessions without a
   per-session hook server, while preserving exact ticket/peer/session binding
@@ -418,3 +448,7 @@ Not done:
   generic filesystem-surface state binding described there; Phase 4
   intentionally rejects ambient caller-selected `HOME`/`CODEX_HOME` rather
   than inventing a Codex-specific credential provider.
+- Phase 4 still needs the Linux terminal-geometry/controller evidence above.
+  The deterministic fixture may remain intentionally simple, but it must prove
+  that a real interactive TUI can retain one daemon-owned PTY across resize and
+  reattach before this phase is accepted.

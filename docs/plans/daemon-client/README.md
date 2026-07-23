@@ -44,8 +44,8 @@ alternate daemon path.
 The Linux core must support both:
 
 - an interactive governed agent, for example `erebor run … codex`, where the
-  daemon owns the PTY and workload and the client only relays terminal I/O;
-  and
+  daemon owns the PTY and workload, the exclusive controller client relays
+  terminal I/O and geometry, and observers are read-only; and
 - a typed agent protocol, for example `codex-app-server`, where the daemon
   owns the child stdio and validates bounded JSONL/JSON-RPC messages rather
   than proxying arbitrary bytes through daemon control.
@@ -80,6 +80,11 @@ second process launcher.
 - The daemon owns process lifetime, namespaces, private endpoints, output,
   audit/evidence, cancellation, recovery, and retention. A client disconnect
   is not authority to lose or recreate those resources.
+- The daemon owns interactive terminal state. The controller/input lease is
+  the only authority that may send terminal bytes or change terminal geometry;
+  a read-only attachment may observe neither input nor resize. Detach and
+  reattach preserve the same PTY and workload rather than creating a client
+  owned substitute.
 - A child agent inherits the enclosing session's governance, but never its
   trust. Nested Codex cannot reach the daemon socket, mint aliases, load an
   agent, register an App Server, or impersonate another session.
@@ -176,11 +181,14 @@ phases must preserve them unless the user explicitly changes the architecture.
    removes the direct client storage access.
 4. **Phase 4 is fixture-first.** It uses a deterministic `codex-v1`
    executable/package fixture—not the user’s real Codex installation, login,
-   or `CODEX_HOME`. Real authenticated Codex state is a Phase 5 filesystem
-   projection case.
+   or `CODEX_HOME`. The fixture is acceptance evidence, not a stand-in for a
+   useful real-Codex demonstration. Real authenticated Codex state and the
+   corresponding walkthrough are Phase 5 filesystem-projection work.
 5. **Interactive Codex stays interactive.** `erebor run … codex` presents the
-   governed Codex TUI over the daemon-owned PTY. `codex-app-server` is a
-   different, typed daemon-owned JSONL protocol path.
+   governed Codex TUI over the daemon-owned PTY. Phase 4 owns Linux TTY
+   fidelity: initial rows/columns, controller-authorized resize, `SIGWINCH`
+   delivery, read-only observers, and session-preserving detach/reattach.
+   `codex-app-server` is a different, typed daemon-owned JSONL protocol path.
 6. **Nested agent processes do not escape governance.** They run as descendants
    under the admitted session's namespace, guard, cgroup, endpoint projection,
    policy, and daemon-loss contract. They receive no independent agent trust.
@@ -196,6 +204,18 @@ phases must preserve them unless the user explicitly changes the architecture.
    `notation` executable boundary: version and artifact-digest pinning,
    daemon-owned non-shell invocation, and a pinned validated result contract
    before an Erebor verification receipt is issued.
+9. **Real agent state is a generic private projection.** A package declares a
+   logical state requirement and a fixed in-namespace target; a typed
+   filesystem surface selects an eligible source class. The daemon snapshots
+   the source through the descriptor broker, applies a private writable upper
+   and any managed configuration there, then mounts only that result. It never
+   inherits or mutates caller `HOME`/`CODEX_HOME` or other live user state.
+10. **Installer layout is a convenience, not trust.** A visible local Codex
+    launcher or release layout may help a user choose an explicit `agent load
+    --from` candidate. The daemon trusts only the descriptor-broker-held final
+    regular executable, its recorded resolution provenance, version, and
+    digest; it does not scan a user home or trust a mutable symlink at run
+    time.
 
 ## Phase Plan
 
@@ -241,6 +261,8 @@ last direct Codex launch. Its intended evidence is:
 
 - a deterministic `codex-v1` package and executable fixture loaded with
   `erebor agent load`, then run through the daemon-owned TTY path;
+- a Linux TTY contract covering initial geometry, controller-only resize and
+  input, read-only observers, and disconnect/reattach of the same session;
 - typed App Server JSONL tests covering input, cancellation, EOF, malformed
   output, child failure, and client/daemon disconnect;
 - package/artifact/entrypoint failures, raw-argv rejection, generic-package
@@ -250,8 +272,9 @@ last direct Codex launch. Its intended evidence is:
 - the same deterministic fixture in the privileged Linux/systemd/two-UID
   matrix, including process-guard and daemon-loss cases.
 
-The recovered `examples/codex-app-server` host lab is a small foreground test,
-not a system-wide installation. It now has two entry commands:
+The recovered `examples/codex-app-server` host lab is a small foreground
+fixture-acceptance test, not a system-wide installation or a real-Codex TUI
+demonstration. It now has two entry commands:
 
 1. `build-host-lab.sh` builds the local debug daemon, client, trusted helpers,
    and deterministic fixture only;
@@ -261,7 +284,7 @@ not a system-wide installation. It now has two entry commands:
    `erebor --socket <temporary-socket>` client wrapper;
 3. load the deterministic fixture with `erebor agent load`; then run both the
    interactive `codex` fixture and the typed `codex-app-server` fixture; and
-4. prove the fixture TTY is usable, the daemon socket is absent in the
+4. prove the fixture TTY contract, the daemon socket is absent in the
    workload, and terminal/session evidence is coherent.
 
 The restored CLI has one process-local absolute `--socket` selector for every
@@ -275,7 +298,9 @@ only the Phase 4 owner identified by that evidence before marking this phase
 `Done`.
 
 Phase 4 does **not** add filesystem surfaces, state bindings, caller
-`HOME`/`CODEX_HOME`, real authenticated Codex, OCI, or Notation.
+`HOME`/`CODEX_HOME`, real authenticated Codex, OCI, or Notation. Phase 5
+replaces the fixture-facing walkthrough with the real local-Codex path after
+it can safely project agent state.
 
 ### Phase 5 — Daemon-owned ambient surfaces — Not started
 
@@ -289,17 +314,23 @@ cutover. It owns:
   a daemon-owned filesystem surface; and
 - generic filesystem state projections, including a daemon-owned lower
   snapshot and per-session writable upper for a fixed private Codex state
-  target, never a caller-selected host `HOME` or `CODEX_HOME`.
+  target, never a caller-selected host `HOME` or `CODEX_HOME`; and
+- the real-Codex Linux walkthrough: a user explicitly enrolls a resolved,
+  pinned local executable and binds approved state through that projection.
+  The daemon stages the verified executable and private state; it neither
+  scans nor changes the user's live Codex directory.
 
 This is where the public CLI becomes a daemon client for every public command.
 It does not add OCI, Notation, Docker parity, remote listeners, plugins, or
 session adoption.
 
-### Phase 6 — Docker, PTY, and runner parity — Later, detailed plan to be restored
+### Phase 6 — Docker and runner parity — Later, detailed plan to be restored
 
 The surviving lifecycle material preserves this phase's boundary: extend the
-runner capability contract with real PTY/interactive parity and Docker
-execution evidence; pin admitted Docker images and prohibit implicit pulls.
+runner capability contract with Docker execution evidence; pin admitted Docker
+images and prohibit implicit pulls. Phase 4 already owns the Linux PTY
+controller/geometry contract, so this phase must preserve it rather than
+deferring basic interactive behavior.
 It must not weaken the Linux-host ownership or daemon-loss contract and must
 fail closed when its enforcement or recovery guarantees are unavailable. Its
 detailed phase file was not recovered, so it must be written and approved
@@ -341,7 +372,8 @@ not be pulled into local package loading as a partial or unsound verifier.
 - Do not edit Phases 1 or 2 while completing Phases 3–5.
 - Complete and verify Phase 4's deterministic fixture and disposable host lab
   before beginning Phase 5. A real vendor Codex test belongs to Phase 5 only
-  after filesystem state projection exists.
+  after filesystem state projection exists; basic Linux PTY geometry and
+  controller behavior are Phase 4 evidence, not a later Docker prerequisite.
 - Do not treat a successful foreground lab as a substitute for committed
   daemon/client and privileged two-UID tests.
 - Stop after every later phase result. Phase 6, 7, 8, 9, and 10 each require
