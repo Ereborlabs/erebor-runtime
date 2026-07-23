@@ -282,7 +282,7 @@ impl RunnerDriver for LinuxRunnerDriver {
             context.invalid("Linux-host admission requires an executable command")
         })?;
         let executable = self.resolve_executable(context, program)?;
-        let workload_privileges = WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)
+        let workload_privileges = WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 16_384, 0)
             .map_err(|source| context.invalid(source.to_string()))?;
         // The held workspace descriptor is the workload current directory. It
         // is not a separate namespace projection, so do not claim a `/workspace`
@@ -1110,6 +1110,7 @@ mod tests {
             ),
             &ScriptResolver,
         )?;
+        assert_eq!(admission.workload_privileges.maximum_processes(), 16_384);
         assert_eq!(admission.script_interpreters.len(), 1);
         let interpreter = &admission.script_interpreters[0];
         assert_eq!(

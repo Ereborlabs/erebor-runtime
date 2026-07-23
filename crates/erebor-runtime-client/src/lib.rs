@@ -38,6 +38,11 @@ pub use runner::RunnerCapability;
 pub use session::{SessionEventPage, SessionEvidencePage, SessionLogPage};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+// Daemon mutations may synchronously perform bounded, root-owned admission
+// work (for example descriptor re-verification). Keep connection, write, and
+// ordinary response operations short, but allow the mutation response budget
+// to cover that work.
+pub(crate) const SESSION_MUTATION_TIMEOUT: Duration = Duration::from_secs(35);
 
 #[derive(Clone, Debug)]
 pub struct DaemonClient {
@@ -204,8 +209,20 @@ where
         response_kind: &str,
         headers: Vec<Header>,
     ) -> Result<R> {
+        self.unary_with_timeout(kind, request, response_kind, headers, REQUEST_TIMEOUT)
+            .await
+    }
+
+    async fn unary_with_timeout<T: prost::Message, R: prost::Message + Default>(
+        &mut self,
+        kind: &str,
+        request: &T,
+        response_kind: &str,
+        headers: Vec<Header>,
+        timeout: Duration,
+    ) -> Result<R> {
         let request_id = self.send(kind, request, headers).await?;
-        let envelope = self.receive(request_id).await?;
+        let envelope = self.receive_with_timeout(request_id, timeout).await?;
         if envelope.message_kind == KIND_DAEMON_ERROR {
             return Err(self.daemon_error(envelope)?);
         }

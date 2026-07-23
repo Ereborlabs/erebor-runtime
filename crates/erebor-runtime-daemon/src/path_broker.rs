@@ -147,6 +147,11 @@ impl DescriptorBroker {
         let received = match receive_descriptor(&parent) {
             Ok(received) => received,
             Err(error) => {
+                // A timed-out or malformed broker response must not leave the
+                // daemon control handler blocked in `wait` behind a child that
+                // is still running. The caller receives the bounded broker
+                // failure instead of an unrelated client read timeout.
+                let _result = child_process.kill();
                 let _status = child_process.wait();
                 let mut diagnostics = String::new();
                 if let Some(stderr) = child_process.stderr.as_mut() {
@@ -858,9 +863,39 @@ const fn kind_name(kind: SafePathKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{self, File};
+    use std::{
+        fs::{self, File},
+        os::unix::fs::PermissionsExt,
+        time::Instant,
+    };
 
-    use super::PolicyPackageDirectoryReader;
+    use super::{DescriptorBroker, PolicyPackageDirectoryReader, SafePathKind, BROKER_TIMEOUT};
+
+    #[test]
+    fn descriptor_broker_timeout_stops_a_nonresponding_child(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let broker = root.path().join("nonresponding-broker");
+        fs::write(&broker, "#!/bin/sh\nexec /bin/sleep 60\n")?;
+        fs::set_permissions(&broker, fs::Permissions::from_mode(0o755))?;
+
+        let resolver = DescriptorBroker::new(broker);
+        let target = std::env::current_exe()?;
+        let started = Instant::now();
+        let result = resolver.resolve(
+            rustix::process::geteuid().as_raw(),
+            rustix::process::getegid().as_raw(),
+            &target,
+            SafePathKind::Executable,
+        );
+
+        assert!(result.is_err());
+        assert!(
+            started.elapsed() < BROKER_TIMEOUT + std::time::Duration::from_secs(3),
+            "a broker response timeout must kill and reap the broker child"
+        );
+        Ok(())
+    }
 
     #[test]
     fn held_directory_reader_accepts_the_fixed_policy_package_layout(

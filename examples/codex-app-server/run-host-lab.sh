@@ -38,13 +38,14 @@ done
 # failure so the developer can inspect daemon logs, config, and state.
 lab_root="$(mktemp -d -p /tmp "erebor-codex-app-server-${caller_uid}.XXXXXX")"
 chmod 0711 "$lab_root"
+install -d -o root -g "$caller_gid" -m 0750 \
+  "$lab_root/bin"
 install -d -o root -g root -m 0750 \
-  "$lab_root/bin" \
   "$lab_root/etc" \
   "$lab_root/log" \
   "$lab_root/run" \
-  "$lab_root/state" \
-  "$lab_root/trust"
+  "$lab_root/state"
+install -d -o root -g "$caller_gid" -m 0750 "$lab_root/trust"
 install -d -o "$caller_uid" -g "$caller_gid" -m 0750 "$lab_root/caller"
 
 stage_root_binary() {
@@ -100,8 +101,9 @@ as_caller() {
 }
 
 daemon_ready=false
+last_readiness_error=""
 for _ in $(seq 1 100); do
-  if as_caller daemon status >/dev/null 2>&1; then
+  if last_readiness_error="$(as_caller daemon status 2>&1)"; then
     daemon_ready=true
     break
   fi
@@ -109,6 +111,7 @@ for _ in $(seq 1 100); do
 done
 if [[ "$daemon_ready" != true ]]; then
   printf '%s\n' "foreground erebord did not become ready; retained lab: $lab_root" >&2
+  printf '%s\n' "$last_readiness_error" >&2
   exit 1
 fi
 

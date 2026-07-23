@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use crate::{
     error::{IpcSnafu, ProtocolSnafu},
-    DaemonClient, Result,
+    DaemonClient, Result, SESSION_MUTATION_TIMEOUT,
 };
 
 const SESSION_WAIT_TIMEOUT: Duration = Duration::from_secs(24 * 60 * 60);
@@ -581,7 +581,7 @@ impl DaemonClient {
     ) -> Result<R> {
         let mut connection = self.connect().await?;
         connection
-            .unary(
+            .unary_with_timeout(
                 kind,
                 request,
                 response_kind,
@@ -589,6 +589,7 @@ impl DaemonClient {
                     key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_owned(),
                     value: idempotency_key.to_owned(),
                 }],
+                SESSION_MUTATION_TIMEOUT,
             )
             .await
     }
