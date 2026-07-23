@@ -12,14 +12,14 @@ use std::{
 
 use erebor_runtime_core::{
     ActiveSessionSignal, EndpointProjection, FilesystemProjection, ImmutableIdentity,
-    SafePathBinding, SafePathKind, SessionLifecycleState, SessionOwner, SessionSpec,
+    SafePathBinding, SafePathKind, SessionLifecycleState, SessionOwner, SessionSpec, TerminalSize,
 };
 use erebor_runtime_ipc::v1::{
     AgentInstallResponse, CodexAppServerAttachResponse, CodexAppServerInputCloseResponse,
     CodexAppServerInputResponse, CodexRunRequest, PolicyPackageRecord, PolicySetAliasRecord,
     PolicySetRecord, SessionAliasListResponse, SessionAliasRecord, SessionAttachResponse,
     SessionCreateRequest, SessionCreateResponse, SessionInputLeaseResponse, SessionInputResponse,
-    SessionListResponse, SessionPruneResponse, SessionRecord,
+    SessionListResponse, SessionPruneResponse, SessionRecord, SessionTerminalResizeResponse,
     KIND_CODEX_APP_SERVER_ATTACH_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
     KIND_POLICY_SET_ALIAS_RECORD, KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD,
     KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE,
@@ -424,6 +424,8 @@ impl DaemonSessionApi {
                 container_image_digest: String::new(),
                 tty: request.tty,
                 detached: request.detached,
+                terminal_rows: request.terminal_rows,
+                terminal_columns: request.terminal_columns,
             },
             owner_uid,
             owner_gid,
@@ -1260,6 +1262,50 @@ impl DaemonSessionApi {
                 }
                 .build()
             })?,
+        })
+    }
+
+    pub(crate) fn resize_terminal(
+        &self,
+        uid: u32,
+        session_id: &str,
+        lease_id: &str,
+        client_instance_id: &str,
+        rows: u32,
+        columns: u32,
+    ) -> Result<SessionTerminalResizeResponse> {
+        let rows = u16::try_from(rows).map_err(|_error| {
+            crate::error::InvalidRequestSnafu {
+                reason: String::from("terminal rows must fit in a Linux terminal size"),
+            }
+            .build()
+        })?;
+        let columns = u16::try_from(columns).map_err(|_error| {
+            crate::error::InvalidRequestSnafu {
+                reason: String::from("terminal columns must fit in a Linux terminal size"),
+            }
+            .build()
+        })?;
+        let terminal_size = TerminalSize::new(rows, columns).map_err(|error| {
+            crate::error::InvalidRequestSnafu {
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        let session_id = self.resolve_session_reference(uid, session_id)?;
+        self.manager
+            .resize_terminal(
+                uid,
+                &session_id,
+                lease_id,
+                client_instance_id,
+                terminal_size,
+            )
+            .context(SessionSnafu)?;
+        Ok(SessionTerminalResizeResponse {
+            session_id,
+            rows: u32::from(rows),
+            columns: u32::from(columns),
         })
     }
 

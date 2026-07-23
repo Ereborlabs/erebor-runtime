@@ -6,7 +6,7 @@ use std::{
 
 use erebor_runtime_core::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal, DaemonFailureMode,
-    OutputEndpoints, RunnerBinding, RunnerId, SessionLifecycleState, SessionSpec,
+    OutputEndpoints, RunnerBinding, RunnerId, SessionLifecycleState, SessionSpec, TerminalSize,
 };
 use snafu::{OptionExt, ResultExt};
 
@@ -300,6 +300,32 @@ impl SessionManager {
                 .build()
             })?
             .write_input(data)
+            .context(RunnerSnafu)
+    }
+
+    /// Changes the daemon-owned PTY size only after proving the caller still
+    /// owns the current interactive input lease.
+    pub fn resize_terminal(
+        &self,
+        uid: u32,
+        session_id: &str,
+        lease_id: &str,
+        client_instance_id: &str,
+        terminal_size: TerminalSize,
+    ) -> Result<(), SessionManagerError> {
+        self.require_input_lease_session(uid, session_id)?;
+        self.lease(uid, session_id)?
+            .require_current(lease_id, client_instance_id)
+            .context(OutputSnafu)?;
+        self.handle(uid, session_id)?
+            .lock()
+            .map_err(|_error| {
+                ActiveHandleLockSnafu {
+                    session_id: session_id.to_owned(),
+                }
+                .build()
+            })?
+            .resize_terminal(terminal_size)
             .context(RunnerSnafu)
     }
 
@@ -1154,6 +1180,7 @@ mod tests {
         recoveries: AtomicUsize,
         removals: AtomicUsize,
         inputs: Arc<Mutex<Vec<Vec<u8>>>>,
+        resizes: Arc<Mutex<Vec<erebor_runtime_core::TerminalSize>>>,
         input_closed: Arc<AtomicBool>,
     }
 
@@ -1248,6 +1275,7 @@ mod tests {
         recovery: RunnerRecovery,
         running: Arc<AtomicBool>,
         inputs: Arc<Mutex<Vec<Vec<u8>>>>,
+        resizes: Arc<Mutex<Vec<erebor_runtime_core::TerminalSize>>>,
         input_closed: Arc<AtomicBool>,
     }
 
@@ -1307,6 +1335,23 @@ mod tests {
                     },
                 )?
                 .push(data.to_vec());
+            Ok(())
+        }
+
+        fn resize_terminal(
+            &mut self,
+            terminal_size: erebor_runtime_core::TerminalSize,
+        ) -> Result<(), erebor_runtime_core::RuntimeError> {
+            self.resizes
+                .lock()
+                .map_err(
+                    |_error| erebor_runtime_core::RuntimeError::SessionRunnerProtocol {
+                        runner: String::from("test-runner"),
+                        reason: String::from("fake terminal resize lock is poisoned"),
+                        location: snafu::Location::default(),
+                    },
+                )?
+                .push(terminal_size);
             Ok(())
         }
 
@@ -1406,6 +1451,7 @@ mod tests {
                 })?,
                 running: Arc::clone(&self.state.running),
                 inputs: Arc::clone(&self.state.inputs),
+                resizes: Arc::clone(&self.state.resizes),
                 input_closed: Arc::clone(&self.state.input_closed),
             }))
         }
@@ -1428,6 +1474,7 @@ mod tests {
                 })?,
                 running: Arc::clone(&self.state.running),
                 inputs: Arc::clone(&self.state.inputs),
+                resizes: Arc::clone(&self.state.resizes),
                 input_closed: Arc::clone(&self.state.input_closed),
             }))
         }
@@ -1489,6 +1536,7 @@ mod tests {
             recoveries: AtomicUsize::new(0),
             removals: AtomicUsize::new(0),
             inputs: Arc::new(Mutex::new(Vec::new())),
+            resizes: Arc::new(Mutex::new(Vec::new())),
             input_closed: Arc::new(AtomicBool::new(false)),
         });
         let runner = Arc::new(FakeRunner {
@@ -1554,6 +1602,7 @@ mod tests {
             )?,
             evidence_requirements: vec![EvidenceRequirement::new("audit", true)?],
             tty,
+            terminal_size: tty.then(erebor_runtime_core::TerminalSize::default_tty),
             detached: true,
             daemon_failure_mode,
             loss_grace_seconds: 1,
@@ -1678,6 +1727,71 @@ mod tests {
                 .lock()
                 .map_err(|_error| "fake input lock is poisoned")?,
             vec![b"echo governed\n".to_vec()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn manager_allows_terminal_resize_only_for_the_current_controller_and_keeps_the_session(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = TempDir::new()?;
+        let (manager, state, _runtime, spec) = interactive_fixture(&root)?;
+        manager.create(spec)?;
+        manager.start(1000, "session-manager-test", &start_constraints(), false)?;
+
+        let controller = manager
+            .attach(1000, "session-manager-test", true, "controller-a")?
+            .lease()
+            .cloned()
+            .ok_or("interactive attach did not create a controller lease")?;
+        let observer = manager.attach(1000, "session-manager-test", false, "observer")?;
+        assert!(observer.lease().is_none());
+
+        let first = erebor_runtime_core::TerminalSize::new(40, 120)?;
+        manager.resize_terminal(
+            1000,
+            "session-manager-test",
+            controller.lease_id(),
+            controller.client_id(),
+            first,
+        )?;
+        assert!(manager
+            .resize_terminal(
+                1000,
+                "session-manager-test",
+                "observer-lease",
+                "observer",
+                first
+            )
+            .is_err());
+
+        manager.release_input_lease(
+            1000,
+            "session-manager-test",
+            controller.lease_id(),
+            controller.client_id(),
+        )?;
+        let reattached = manager
+            .attach(1000, "session-manager-test", true, "controller-b")?
+            .lease()
+            .cloned()
+            .ok_or("reattachment did not create a controller lease")?;
+        let second = erebor_runtime_core::TerminalSize::new(50, 140)?;
+        manager.resize_terminal(
+            1000,
+            "session-manager-test",
+            reattached.lease_id(),
+            reattached.client_id(),
+            second,
+        )?;
+
+        assert_eq!(state.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            *state
+                .resizes
+                .lock()
+                .map_err(|_error| "fake terminal resize lock is poisoned")?,
+            vec![first, second]
         );
         Ok(())
     }

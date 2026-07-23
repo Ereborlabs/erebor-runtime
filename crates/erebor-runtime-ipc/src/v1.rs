@@ -74,6 +74,10 @@ pub const KIND_SESSION_INPUT_LEASE_RESPONSE: &str =
     "erebor.runtime.ipc.v1.SessionInputLeaseResponse";
 pub const KIND_SESSION_INPUT_REQUEST: &str = "erebor.runtime.ipc.v1.SessionInputRequest";
 pub const KIND_SESSION_INPUT_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionInputResponse";
+pub const KIND_SESSION_TERMINAL_RESIZE_REQUEST: &str =
+    "erebor.runtime.ipc.v1.SessionTerminalResizeRequest";
+pub const KIND_SESSION_TERMINAL_RESIZE_RESPONSE: &str =
+    "erebor.runtime.ipc.v1.SessionTerminalResizeResponse";
 pub const KIND_CODEX_APP_SERVER_ATTACH_REQUEST: &str =
     "erebor.runtime.ipc.v1.CodexAppServerAttachRequest";
 pub const KIND_CODEX_APP_SERVER_ATTACH_RESPONSE: &str =

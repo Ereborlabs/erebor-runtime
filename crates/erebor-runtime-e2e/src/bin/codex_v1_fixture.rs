@@ -23,6 +23,7 @@ use erebor_runtime_packages::{
     PolicyPackageRevision, PolicySetRevision,
 };
 use erebor_runtime_session::{CodexHookClient, CodexHookResultOutput, CodexNativeHookEvent};
+use rustix::termios::tcgetwinsize;
 use serde_json::{json, Value};
 
 const FIXTURE_NAME: &str = "codex-v1-fixture";
@@ -60,6 +61,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn run_tty() -> FixtureResult<()> {
     println!("fixture-tty=ready");
+    report_terminal_size()?;
     println!(
         "fixture-daemon-socket={}",
         if Path::new("/run/erebor/daemon.sock").exists() {
@@ -73,10 +75,22 @@ fn run_tty() -> FixtureResult<()> {
     for line in io::stdin().lock().lines() {
         let line = line?;
         println!("fixture-tty-input={line}");
+        if line == "terminal-size" {
+            report_terminal_size()?;
+        }
         if line == "exit" {
             break;
         }
     }
+    Ok(())
+}
+
+fn report_terminal_size() -> FixtureResult<()> {
+    let terminal = tcgetwinsize(io::stdin())?;
+    println!(
+        "fixture-tty-size=rows={} columns={}",
+        terminal.ws_row, terminal.ws_col
+    );
     Ok(())
 }
 

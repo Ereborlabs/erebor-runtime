@@ -6,10 +6,11 @@ use erebor_runtime_ipc::{
         DenyDecision, Envelope, GuardHello, GuardLifecycleEvent, GuardLifecycleEventKind,
         GuardLifecycleReply, GuardLifecycleReplyKind, InterceptionDecision, InterceptionOperation,
         InterceptionRequest, InterceptionSource, MediateDecision, ProcessExecOperation,
-        SessionEvidenceRequest, SessionInputRequest, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
-        KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT,
-        KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
-        KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST, PROTOCOL_VERSION,
+        SessionEvidenceRequest, SessionInputRequest, SessionTerminalResizeRequest,
+        KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, KIND_CODEX_APP_SERVER_INPUT_REQUEST,
+        KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
+        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, KIND_SESSION_EVIDENCE_REQUEST,
+        KIND_SESSION_INPUT_REQUEST, KIND_SESSION_TERMINAL_RESIZE_REQUEST, PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
 };
@@ -68,6 +69,25 @@ fn public_api_round_trips_lease_bound_interactive_input() -> Result<(), Box<dyn 
     let decoded: SessionInputRequest = frame
         .decode_payload::<Envelope>()?
         .decode_typed_payload(KIND_SESSION_INPUT_REQUEST)?;
+
+    assert_eq!(decoded, request);
+    Ok(())
+}
+
+#[test]
+fn public_api_round_trips_lease_bound_terminal_resize() -> Result<(), Box<dyn Error>> {
+    let request = SessionTerminalResizeRequest {
+        session_id: String::from("session-terminal-contract"),
+        input_lease_id: String::from("lease-contract"),
+        client_instance_id: String::from("cli-contract"),
+        rows: 40,
+        columns: 120,
+    };
+    let envelope = Envelope::wrap_message(10, 0, KIND_SESSION_TERMINAL_RESIZE_REQUEST, &request)?;
+    let frame = EreborIpcFrame::decode(&envelope.into_frame()?.encode()?)?;
+    let decoded: SessionTerminalResizeRequest = frame
+        .decode_payload::<Envelope>()?
+        .decode_typed_payload(KIND_SESSION_TERMINAL_RESIZE_REQUEST)?;
 
     assert_eq!(decoded, request);
     Ok(())
@@ -358,6 +378,7 @@ fn split_proto_contract_files_contain_the_v1_schema() {
     assert!(proto.contains("message SessionEventsRequest"));
     assert!(proto.contains("message SessionAttachRequest"));
     assert!(proto.contains("message SessionInputRequest"));
+    assert!(proto.contains("message SessionTerminalResizeRequest"));
     assert!(proto.contains("message CodexAppServerInputRequest"));
     assert!(proto.contains("message SessionPruneRequest"));
     assert!(proto.contains("message AdminSessionStopRequest"));

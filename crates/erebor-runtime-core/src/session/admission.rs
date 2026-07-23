@@ -10,9 +10,53 @@ use snafu::ensure;
 
 use crate::{error::session_spec::InvalidSnafu, SessionSpecError};
 
-pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 4;
+pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 5;
 pub const RUNNER_CAPABILITY_SCHEMA_VERSION: u32 = 2;
 pub const RUNNER_RECOVERY_SCHEMA_VERSION: u32 = 1;
+
+/// Immutable initial geometry for an admitted daemon-owned terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct TerminalSize {
+    rows: u16,
+    columns: u16,
+}
+
+impl TerminalSize {
+    #[must_use]
+    pub const fn default_tty() -> Self {
+        Self {
+            rows: 24,
+            columns: 80,
+        }
+    }
+
+    pub fn new(rows: u16, columns: u16) -> Result<Self, SessionSpecError> {
+        let value = Self { rows, columns };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn validate(&self) -> Result<(), SessionSpecError> {
+        ensure!(
+            self.rows > 0 && self.columns > 0,
+            InvalidSnafu {
+                field: "terminal_size",
+                reason: String::from("rows and columns must be positive"),
+            }
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn rows(&self) -> u16 {
+        self.rows
+    }
+
+    #[must_use]
+    pub const fn columns(&self) -> u16 {
+        self.columns
+    }
+}
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -918,6 +962,7 @@ pub struct RunRequest {
     environment: Vec<(String, String)>,
     secret_references: Vec<String>,
     tty: bool,
+    terminal_size: Option<TerminalSize>,
     detached: bool,
     daemon_failure_mode: DaemonFailureMode,
     requested_loss_grace_seconds: u64,
@@ -937,6 +982,7 @@ impl RunRequest {
         environment: Vec<(String, String)>,
         secret_references: Vec<String>,
         tty: bool,
+        terminal_size: Option<TerminalSize>,
         detached: bool,
         daemon_failure_mode: DaemonFailureMode,
         requested_loss_grace_seconds: u64,
@@ -953,6 +999,7 @@ impl RunRequest {
             environment,
             secret_references,
             tty,
+            terminal_size,
             detached,
             daemon_failure_mode,
             requested_loss_grace_seconds,
@@ -988,6 +1035,15 @@ impl RunRequest {
         }
         validate_environment(&self.environment)?;
         validate_secret_references(&self.secret_references)?;
+        ensure!(
+            self.tty == self.terminal_size.is_some(),
+            InvalidSnafu {
+                field: "run_request.terminal_size",
+                reason: String::from(
+                    "TTY sessions require terminal geometry and non-TTY sessions must not have it"
+                ),
+            }
+        );
         Ok(())
     }
 
@@ -1047,6 +1103,11 @@ impl RunRequest {
     }
 
     #[must_use]
+    pub const fn terminal_size(&self) -> Option<TerminalSize> {
+        self.terminal_size
+    }
+
+    #[must_use]
     pub const fn detached(&self) -> bool {
         self.detached
     }
@@ -1099,6 +1160,7 @@ pub struct SessionAdmission {
     pub output: OutputPlan,
     pub evidence_requirements: Vec<EvidenceRequirement>,
     pub tty: bool,
+    pub terminal_size: Option<TerminalSize>,
     pub detached: bool,
     pub daemon_failure_mode: DaemonFailureMode,
     pub loss_grace_seconds: u64,
@@ -1131,6 +1193,7 @@ pub struct SessionSpec {
     output: OutputPlan,
     evidence_requirements: Vec<EvidenceRequirement>,
     tty: bool,
+    terminal_size: Option<TerminalSize>,
     detached: bool,
     daemon_failure_mode: DaemonFailureMode,
     loss_grace_seconds: u64,
@@ -1164,6 +1227,7 @@ impl SessionSpec {
             output: admission.output,
             evidence_requirements: admission.evidence_requirements,
             tty: admission.tty,
+            terminal_size: admission.terminal_size,
             detached: admission.detached,
             daemon_failure_mode: admission.daemon_failure_mode,
             loss_grace_seconds: admission.loss_grace_seconds,
@@ -1290,6 +1354,18 @@ impl SessionSpec {
                 reason: String::from("is not supported by the admitted runner"),
             }
         );
+        ensure!(
+            self.tty == self.terminal_size.is_some(),
+            InvalidSnafu {
+                field: "session_spec.terminal_size",
+                reason: String::from(
+                    "TTY sessions require terminal geometry and non-TTY sessions must not have it"
+                ),
+            }
+        );
+        self.terminal_size
+            .iter()
+            .try_for_each(TerminalSize::validate)?;
         ensure!(
             self.loss_grace_seconds > 0
                 && self.root_configuration_generation > 0
@@ -1425,6 +1501,11 @@ impl SessionSpec {
     #[must_use]
     pub const fn tty(&self) -> bool {
         self.tty
+    }
+
+    #[must_use]
+    pub const fn terminal_size(&self) -> Option<TerminalSize> {
+        self.terminal_size
     }
 
     #[must_use]
@@ -1575,6 +1656,7 @@ mod tests {
             )?,
             evidence_requirements: vec![EvidenceRequirement::new("audit", true)?],
             tty: false,
+            terminal_size: None,
             detached: true,
             daemon_failure_mode: mode,
             loss_grace_seconds: 10,

@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use erebor_runtime_core::DaemonFailureMode;
+use erebor_runtime_core::{DaemonFailureMode, TerminalSize};
 use snafu::ResultExt;
 
 use crate::{
@@ -26,7 +26,12 @@ pub fn run_linux_session_controller() -> Result<(), SessionControllerError> {
     let mut workload = LinuxWorkload::start(&handoff, &output)?;
     output.record_event(
         "workload_started",
-        serde_json::json!({"stable_identity": workload.stable_identity()}),
+        serde_json::json!({
+            "stable_identity": workload.stable_identity(),
+            "terminal_size": handoff.spec.terminal_size().map(|size| {
+                serde_json::json!({"rows": size.rows(), "columns": size.columns()})
+            }),
+        }),
     )?;
     write_event(&LinuxControllerEvent::Started {
         workload_identity: workload.stable_identity().to_owned(),
@@ -60,7 +65,7 @@ pub fn run_linux_session_controller() -> Result<(), SessionControllerError> {
         }
         match receiver.try_recv() {
             Ok(ControlInput::Command(command)) => {
-                if let Some(exit) = apply_command(&mut workload, command)? {
+                if let Some(exit) = apply_command(&mut workload, &output, command)? {
                     if let Some(failure) = workload.take_output_failure() {
                         fail_closed_for_output(&mut workload, failure, control_connected);
                         return Ok(());
@@ -115,6 +120,7 @@ fn fail_closed_for_output(
 
 fn apply_command(
     workload: &mut LinuxWorkload,
+    output: &HelperOutput,
     command: LinuxControllerCommand,
 ) -> Result<Option<WorkloadExit>, SessionControllerError> {
     match command {
@@ -135,6 +141,21 @@ fn apply_command(
             })?;
             workload.write_input(&data)?;
             write_event(&LinuxControllerEvent::InputAccepted { accepted_bytes })?;
+            Ok(None)
+        }
+        LinuxControllerCommand::Resize { rows, columns } => {
+            let size = TerminalSize::new(rows, columns).map_err(|error| {
+                SessionControllerError::InvalidHandoff {
+                    reason: error.to_string(),
+                    location: snafu::Location::default(),
+                }
+            })?;
+            workload.resize_terminal(size)?;
+            output.record_event(
+                "terminal_resized",
+                serde_json::json!({"rows": rows, "columns": columns}),
+            )?;
+            write_event(&LinuxControllerEvent::Resized { rows, columns })?;
             Ok(None)
         }
         LinuxControllerCommand::CloseInput => {

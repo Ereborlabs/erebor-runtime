@@ -71,9 +71,9 @@ pub use session::{
     OutputStreamRequirements, PreparedFilesystemProjection, RunRequest, RunnerBinding,
     RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding, SafePathKind,
     ScriptInterpreterBinding, SessionAdmission, SessionCapturedRunOutcome, SessionLifecycleState,
-    SessionOwner, SessionRunOutcome, SessionRunnerLauncher, SessionSpec, WorkloadPrivilegePlan,
-    AGENT_ADAPTER_DESCRIPTOR_SCHEMA_VERSION, RUNNER_CAPABILITY_SCHEMA_VERSION,
-    RUNNER_RECOVERY_SCHEMA_VERSION, SESSION_SPEC_SCHEMA_VERSION,
+    SessionOwner, SessionRunOutcome, SessionRunnerLauncher, SessionSpec, TerminalSize,
+    WorkloadPrivilegePlan, AGENT_ADAPTER_DESCRIPTOR_SCHEMA_VERSION,
+    RUNNER_CAPABILITY_SCHEMA_VERSION, RUNNER_RECOVERY_SCHEMA_VERSION, SESSION_SPEC_SCHEMA_VERSION,
 };
 pub use session_registry::{
     SessionContextArtifact, SessionRegistry, SessionRegistryFinish, SessionRegistryRecord,

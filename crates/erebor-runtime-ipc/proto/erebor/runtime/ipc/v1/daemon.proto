@@ -67,6 +67,8 @@ message CodexRunRequest {
   uint64 requested_loss_grace_seconds = 5;
   bool tty = 6;
   bool detached = 7;
+  uint32 terminal_rows = 8;
+  uint32 terminal_columns = 9;
 }
 
 message SessionCreateRequest {
@@ -84,6 +86,8 @@ message SessionCreateRequest {
   string container_image_digest = 12;
   bool tty = 13;
   bool detached = 14;
+  uint32 terminal_rows = 15;
+  uint32 terminal_columns = 16;
 }
 
 message SessionEnvironmentEntry {
@@ -257,6 +261,22 @@ message SessionInputRequest {
 message SessionInputResponse {
   string session_id = 1;
   uint32 accepted_bytes = 2;
+}
+
+// Terminal geometry is separate from terminal input. It is accepted only from
+// the current exclusive input-lease holder for an admitted TTY session.
+message SessionTerminalResizeRequest {
+  string session_id = 1;
+  string input_lease_id = 2;
+  string client_instance_id = 3;
+  uint32 rows = 4;
+  uint32 columns = 5;
+}
+
+message SessionTerminalResizeResponse {
+  string session_id = 1;
+  uint32 rows = 2;
+  uint32 columns = 3;
 }
 
 // Codex App Server has a distinct structured-stdio attachment. It never uses

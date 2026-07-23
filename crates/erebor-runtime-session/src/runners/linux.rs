@@ -13,7 +13,7 @@ use erebor_runtime_core::{
     ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, OutputEndpoints,
     PreparedFilesystemProjection, RunnerBinding, RunnerCapabilityDocument, RunnerId,
     RunnerRecovery, RuntimeError, SafePathBinding, ScriptInterpreterBinding, SessionSpec,
-    WorkloadPrivilegePlan,
+    TerminalSize, WorkloadPrivilegePlan,
 };
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,7 @@ const SYSTEMD_RUN_PROGRAM: &str = "systemd-run";
 const DEFAULT_CONTROLLER_PATH: &str = "/usr/libexec/erebor/erebor-linux-session-controller";
 const DEFAULT_PROCESS_GUARD_PATH: &str = "/usr/libexec/erebor/erebor-linux-process-guard";
 const DEFAULT_SYSTEMD_RUN_PATH: &str = "/usr/bin/systemd-run";
-pub(crate) const LINUX_CONTROLLER_PROTOCOL_VERSION: u32 = 1;
+pub(crate) const LINUX_CONTROLLER_PROTOCOL_VERSION: u32 = 2;
 const LINUX_RECOVERY_FORMAT_VERSION: u32 = 1;
 const DEFAULT_SANITIZED_EXECUTABLE_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 const MAX_SCRIPT_INTERPRETER_CHAIN: usize = 4;
@@ -549,6 +549,7 @@ pub(crate) enum LinuxControllerCommand {
     Stop { grace_period_ms: u64 },
     Kill { signal: ActiveSessionSignal },
     Input { data: Vec<u8> },
+    Resize { rows: u16, columns: u16 },
     CloseInput,
     Health,
 }
@@ -565,6 +566,10 @@ pub(crate) enum LinuxControllerEvent {
     },
     InputAccepted {
         accepted_bytes: u32,
+    },
+    Resized {
+        rows: u16,
+        columns: u16,
     },
     InputClosed,
     Exited {
@@ -623,6 +628,7 @@ impl LinuxControllerSession {
                 LinuxControllerEvent::Started { .. }
                 | LinuxControllerEvent::Health { .. }
                 | LinuxControllerEvent::InputAccepted { .. }
+                | LinuxControllerEvent::Resized { .. }
                 | LinuxControllerEvent::InputClosed => {}
             }
         }
@@ -701,6 +707,22 @@ impl ActiveSession for LinuxControllerSession {
         }
     }
 
+    fn resize_terminal(&mut self, size: TerminalSize) -> Result<(), RuntimeError> {
+        match self.command(&LinuxControllerCommand::Resize {
+            rows: size.rows(),
+            columns: size.columns(),
+        })? {
+            LinuxControllerEvent::Resized { rows, columns }
+                if rows == size.rows() && columns == size.columns() =>
+            {
+                Ok(())
+            }
+            event => Err(self.protocol(format!(
+                "expected terminal-resize acknowledgement, received {event:?}"
+            ))),
+        }
+    }
+
     fn close_input(&mut self) -> Result<(), RuntimeError> {
         match self.command(&LinuxControllerCommand::CloseInput)? {
             LinuxControllerEvent::InputClosed => Ok(()),
@@ -740,6 +762,7 @@ impl ActiveSession for LinuxControllerSession {
             }
             LinuxControllerEvent::Started { .. }
             | LinuxControllerEvent::InputAccepted { .. }
+            | LinuxControllerEvent::Resized { .. }
             | LinuxControllerEvent::InputClosed => Ok(ActiveSessionHealth::Starting),
         }
     }
@@ -758,6 +781,7 @@ impl LinuxControllerSession {
             LinuxControllerEvent::Started { .. }
             | LinuxControllerEvent::Health { .. }
             | LinuxControllerEvent::InputAccepted { .. }
+            | LinuxControllerEvent::Resized { .. }
             | LinuxControllerEvent::InputClosed => self.wait_for_exit(),
         }
     }

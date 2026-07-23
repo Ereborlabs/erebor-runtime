@@ -6,7 +6,7 @@ use std::{
 use erebor_runtime_core::{
     DaemonFailureMode, EvidenceRequirement, FilesystemProjection, ImmutableIdentity, OutputPlan,
     OutputStreamRequirements, RunRequest, RunnerCapabilityDocument, RunnerId, SessionAdmission,
-    SessionOwner, SessionSpec,
+    SessionOwner, SessionSpec, TerminalSize,
 };
 use erebor_runtime_events::SessionId;
 use erebor_runtime_ipc::v1::SessionCreateRequest;
@@ -42,6 +42,8 @@ pub(super) fn parse_request(request: SessionCreateRequest) -> Result<RunRequest>
         .into_iter()
         .map(|entry| (entry.key, entry.value))
         .collect::<Vec<_>>();
+    let terminal_size =
+        parse_terminal_size(request.tty, request.terminal_rows, request.terminal_columns)?;
     RunRequest::new(
         runner,
         request.command,
@@ -54,11 +56,42 @@ pub(super) fn parse_request(request: SessionCreateRequest) -> Result<RunRequest>
         environment,
         request.secret_references,
         request.tty,
+        terminal_size,
         request.detached,
         failure_mode,
         request.requested_loss_grace_seconds,
     )
     .map_err(invalid_spec)
+}
+
+fn parse_terminal_size(tty: bool, rows: u32, columns: u32) -> Result<Option<TerminalSize>> {
+    if !tty {
+        if rows == 0 && columns == 0 {
+            return Ok(None);
+        }
+        return InvalidRequestSnafu {
+            reason: String::from("terminal geometry requires a TTY session"),
+        }
+        .fail();
+    }
+    if rows == 0 && columns == 0 {
+        return Ok(Some(TerminalSize::default_tty()));
+    }
+    let rows = u16::try_from(rows).map_err(|_error| {
+        invalid_spec(erebor_runtime_core::SessionSpecError::invalid(
+            "terminal_size",
+            "rows must fit in a Linux terminal size",
+        ))
+    })?;
+    let columns = u16::try_from(columns).map_err(|_error| {
+        invalid_spec(erebor_runtime_core::SessionSpecError::invalid(
+            "terminal_size",
+            "columns must fit in a Linux terminal size",
+        ))
+    })?;
+    TerminalSize::new(rows, columns)
+        .map(Some)
+        .map_err(invalid_spec)
 }
 
 pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> Result<SessionSpec> {
@@ -154,6 +187,7 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
             EvidenceRequirement::new("governance-audit", true).map_err(invalid_spec)?
         ],
         tty: run_request.tty(),
+        terminal_size: run_request.terminal_size(),
         detached: run_request.detached(),
         daemon_failure_mode: run_request.daemon_failure_mode(),
         loss_grace_seconds,
@@ -205,4 +239,22 @@ fn unix_time_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(1, |duration| duration.as_millis() as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_terminal_size;
+
+    #[test]
+    fn terminal_geometry_is_defaulted_only_for_tty_sessions(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let default = parse_terminal_size(true, 0, 0)?.ok_or("TTY did not receive a default")?;
+        assert_eq!((default.rows(), default.columns()), (24, 80));
+        let exact = parse_terminal_size(true, 40, 120)?.ok_or("TTY did not retain geometry")?;
+        assert_eq!((exact.rows(), exact.columns()), (40, 120));
+        assert!(parse_terminal_size(false, 0, 0)?.is_none());
+        assert!(parse_terminal_size(false, 40, 120).is_err());
+        assert!(parse_terminal_size(true, 0, 120).is_err());
+        Ok(())
+    }
 }

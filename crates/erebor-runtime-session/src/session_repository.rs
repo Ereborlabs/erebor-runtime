@@ -903,6 +903,7 @@ mod tests {
             )?,
             evidence_requirements: Vec::new(),
             tty: false,
+            terminal_size: None,
             detached: true,
             daemon_failure_mode: DaemonFailureMode::Terminate,
             loss_grace_seconds: 10,

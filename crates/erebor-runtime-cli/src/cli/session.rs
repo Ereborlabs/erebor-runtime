@@ -4,11 +4,12 @@ use std::{
 };
 
 use erebor_runtime_client::DaemonClient;
+use erebor_runtime_core::TerminalSize;
 use erebor_runtime_ipc::v1::{
     CodexAppServerAttachRequest, CodexAppServerInputCloseRequest, CodexAppServerInputRequest,
     CodexRunRequest, SessionAttachRequest, SessionCreateRequest, SessionEnvironmentEntry,
     SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputRequest,
-    SessionPruneRequest, SessionRecord,
+    SessionPruneRequest, SessionRecord, SessionTerminalResizeRequest,
 };
 use snafu::ResultExt;
 use uuid::Uuid;
@@ -140,11 +141,30 @@ impl<'a> SessionCommandOwner<'a> {
         client: &DaemonClient,
         args: &GenericSessionCreateArgs,
     ) -> Result<(), CliError> {
+        let mut request = args.request.to_request();
+        Self::set_initial_terminal_size(&mut request, false)?;
         let response = client
-            .session_create(args.request.to_request(), &args.idempotency_key)
+            .session_create(request, &args.idempotency_key)
             .await
             .context(DaemonClientSnafu)?;
         Self::write_create(response);
+        Ok(())
+    }
+
+    fn set_initial_terminal_size(
+        request: &mut SessionCreateRequest,
+        require_terminal: bool,
+    ) -> Result<(), CliError> {
+        if !request.tty {
+            return Ok(());
+        }
+        let terminal_size = if require_terminal {
+            InteractiveTerminal::current_size()?
+        } else {
+            InteractiveTerminal::current_size_or_default()?
+        };
+        request.terminal_rows = u32::from(terminal_size.rows());
+        request.terminal_columns = u32::from(terminal_size.columns());
         Ok(())
     }
 
@@ -153,7 +173,8 @@ impl<'a> SessionCommandOwner<'a> {
         client: &DaemonClient,
         args: &SessionRunArgs,
     ) -> Result<(), CliError> {
-        let request = args.request.to_request();
+        let mut request = args.request.to_request();
+        Self::set_initial_terminal_size(&mut request, !args.request.detached)?;
         let key = args.idempotency_key.as_str();
         let created = client
             .session_create(request, key)
@@ -185,6 +206,13 @@ impl<'a> SessionCommandOwner<'a> {
             std::env::current_dir().unwrap_or_else(|_error| std::path::PathBuf::from("."))
         });
         let key = format!("codex-run-{}", Uuid::new_v4());
+        let terminal_size = if app_server {
+            None
+        } else if args.detached {
+            Some(InteractiveTerminal::current_size_or_default()?)
+        } else {
+            Some(InteractiveTerminal::current_size()?)
+        };
         let created = client
             .codex_run(
                 CodexRunRequest {
@@ -195,6 +223,8 @@ impl<'a> SessionCommandOwner<'a> {
                     requested_loss_grace_seconds: args.loss_grace_seconds,
                     tty: !app_server,
                     detached: args.detached,
+                    terminal_rows: terminal_size.map_or(0, |size| u32::from(size.rows())),
+                    terminal_columns: terminal_size.map_or(0, |size| u32::from(size.columns())),
                 },
                 &key,
             )
@@ -466,6 +496,15 @@ impl<'a> SessionCommandOwner<'a> {
         let terminal = request_input_lease
             .then(InteractiveTerminal::open)
             .transpose()?;
+        let mut terminal_size = None;
+        if let Some(size) = terminal
+            .as_ref()
+            .map(InteractiveTerminal::size)
+            .transpose()?
+        {
+            Self::resize_terminal(client, &attachment, client_instance_id, size).await?;
+            terminal_size = Some(size);
+        }
         let mut stdout_cursor = after_output_sequence;
         let mut stderr_cursor = after_output_sequence;
         let mut renew_at = Instant::now() + Duration::from_secs(10);
@@ -475,6 +514,11 @@ impl<'a> SessionCommandOwner<'a> {
         tokio::pin!(interrupt);
         loop {
             if let Some(terminal) = terminal.as_ref() {
+                let size = terminal.size()?;
+                if terminal_size != Some(size) {
+                    Self::resize_terminal(client, &attachment, client_instance_id, size).await?;
+                    terminal_size = Some(size);
+                }
                 while let Some(input) = terminal.try_input() {
                     match input {
                         InteractiveInput::Bytes(data) => {
@@ -601,6 +645,34 @@ impl<'a> SessionCommandOwner<'a> {
             )
             .await
             .context(DaemonClientSnafu)?;
+        Ok(())
+    }
+
+    async fn resize_terminal(
+        client: &DaemonClient,
+        attachment: &erebor_runtime_ipc::v1::SessionAttachResponse,
+        client_instance_id: &str,
+        terminal_size: TerminalSize,
+    ) -> Result<(), CliError> {
+        let response = client
+            .session_terminal_resize(SessionTerminalResizeRequest {
+                session_id: attachment.session_id.clone(),
+                input_lease_id: attachment.input_lease_id.clone(),
+                client_instance_id: client_instance_id.to_owned(),
+                rows: u32::from(terminal_size.rows()),
+                columns: u32::from(terminal_size.columns()),
+            })
+            .await
+            .context(DaemonClientSnafu)?;
+        if response.session_id != attachment.session_id
+            || response.rows != u32::from(terminal_size.rows())
+            || response.columns != u32::from(terminal_size.columns())
+        {
+            return InvalidSessionCommandSnafu {
+                reason: String::from("daemon did not acknowledge the exact terminal resize"),
+            }
+            .fail();
+        }
         Ok(())
     }
 
@@ -814,6 +886,8 @@ impl GenericSessionRequestArgs {
             container_image_digest: String::new(),
             tty: self.tty,
             detached: self.detached,
+            terminal_rows: 0,
+            terminal_columns: 0,
         }
     }
 }

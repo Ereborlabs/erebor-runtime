@@ -19,8 +19,8 @@ pub use admission::{
     FilesystemProjection, ImmutableIdentity, OutputPlan, OutputStreamRequirements, RunRequest,
     RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding,
     SafePathKind, ScriptInterpreterBinding, SessionAdmission, SessionOwner, SessionSpec,
-    WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION, RUNNER_RECOVERY_SCHEMA_VERSION,
-    SESSION_SPEC_SCHEMA_VERSION,
+    TerminalSize, WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION,
+    RUNNER_RECOVERY_SCHEMA_VERSION, SESSION_SPEC_SCHEMA_VERSION,
 };
 use docker::DockerSessionOutputMode;
 pub use docker::DockerSessionRunner;
@@ -263,6 +263,14 @@ pub trait ActiveSession: Send {
         UnsupportedSessionRunnerOperationSnafu {
             runner: self.capability_snapshot().runner().as_str().to_owned(),
             operation: String::from("interactive input"),
+        }
+        .fail()
+    }
+
+    fn resize_terminal(&mut self, _size: TerminalSize) -> Result<(), RuntimeError> {
+        UnsupportedSessionRunnerOperationSnafu {
+            runner: self.capability_snapshot().runner().as_str().to_owned(),
+            operation: String::from("terminal resize"),
         }
         .fail()
     }

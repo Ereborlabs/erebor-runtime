@@ -12,7 +12,7 @@ use std::{
 #[path = "linux/prepared.rs"]
 mod prepared;
 
-use erebor_runtime_core::ActiveSessionSignal;
+use erebor_runtime_core::{ActiveSessionSignal, TerminalSize};
 use rustix::process::{kill_process_group, Pid, Signal};
 #[allow(deprecated)]
 use rustix::thread::unshare;
@@ -21,7 +21,7 @@ use rustix::{
     mount::{mount, mount_bind, mount_change, mount_remount, MountFlags, MountPropagationFlags},
     process::{ioctl_tiocsctty, setsid},
     pty::{grantpt, ioctl_tiocgptpeer, openpt, unlockpt, OpenptFlags},
-    termios::tcsetpgrp,
+    termios::{tcsetpgrp, tcsetwinsize, Winsize},
     thread::UnshareFlags,
 };
 
@@ -122,6 +122,17 @@ impl LinuxWorkload {
                 location: snafu::Location::default(),
             })?;
             let (master, slave) = Self::open_pty()?;
+            let terminal_size = handoff.spec.terminal_size().ok_or_else(|| {
+                SessionControllerError::InvalidHandoff {
+                    reason: String::from("TTY session did not retain initial terminal geometry"),
+                    location: snafu::Location::default(),
+                }
+            })?;
+            Self::set_terminal_size(
+                &slave,
+                terminal_size,
+                "setting initial Linux pseudoterminal size",
+            )?;
             let controlling_terminal =
                 slave
                     .try_clone()
@@ -313,8 +324,50 @@ impl LinuxWorkload {
         })
     }
 
+    pub(crate) fn resize_terminal(
+        &mut self,
+        terminal_size: TerminalSize,
+    ) -> Result<(), SessionControllerError> {
+        let input = self
+            .input
+            .as_ref()
+            .ok_or_else(|| SessionControllerError::InvalidHandoff {
+                reason: String::from("Linux workload terminal is unavailable"),
+                location: snafu::Location::default(),
+            })?;
+        let LinuxWorkloadInput::Terminal(terminal) = input else {
+            return Err(SessionControllerError::InvalidHandoff {
+                reason: String::from("Linux workload does not have a terminal"),
+                location: snafu::Location::default(),
+            });
+        };
+        Self::set_terminal_size(terminal, terminal_size, "resizing Linux pseudoterminal")
+    }
+
     pub(crate) fn close_input(&mut self) {
         self.input.take();
+    }
+
+    fn set_terminal_size(
+        terminal: &File,
+        terminal_size: TerminalSize,
+        action: &'static str,
+    ) -> Result<(), SessionControllerError> {
+        tcsetwinsize(
+            terminal,
+            Winsize {
+                ws_row: terminal_size.rows(),
+                ws_col: terminal_size.columns(),
+                ws_xpixel: 0,
+                ws_ypixel: 0,
+            },
+        )
+        .map_err(|source| SessionControllerError::Io {
+            action,
+            path: PathBuf::from("<pty-master>"),
+            source: source.into(),
+            location: snafu::Location::default(),
+        })
     }
 
     pub(crate) fn try_wait(&mut self) -> Result<Option<WorkloadExit>, SessionControllerError> {

@@ -11,7 +11,8 @@ use erebor_runtime_ipc::v1::{
     SessionInputRequest, SessionInputResponse, SessionInspectRequest, SessionKillRequest,
     SessionListRequest, SessionListResponse, SessionLogChunk, SessionLogsEnd, SessionLogsRequest,
     SessionPruneRequest, SessionPruneResponse, SessionRecord, SessionRemoveRequest,
-    SessionStartRequest, SessionStopRequest, SessionWaitRequest, EREBOR_IDEMPOTENCY_KEY_HEADER,
+    SessionStartRequest, SessionStopRequest, SessionTerminalResizeRequest,
+    SessionTerminalResizeResponse, SessionWaitRequest, EREBOR_IDEMPOTENCY_KEY_HEADER,
     KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
     KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
     KIND_ADMIN_SESSION_STOP_REQUEST, KIND_CODEX_APP_SERVER_ATTACH_REQUEST,
@@ -29,7 +30,8 @@ use erebor_runtime_ipc::v1::{
     KIND_SESSION_LIST_RESPONSE, KIND_SESSION_LOGS_END, KIND_SESSION_LOGS_REQUEST,
     KIND_SESSION_LOG_CHUNK, KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_PRUNE_RESPONSE,
     KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST, KIND_SESSION_START_REQUEST,
-    KIND_SESSION_STOP_REQUEST, KIND_SESSION_WAIT_REQUEST,
+    KIND_SESSION_STOP_REQUEST, KIND_SESSION_TERMINAL_RESIZE_REQUEST,
+    KIND_SESSION_TERMINAL_RESIZE_RESPONSE, KIND_SESSION_WAIT_REQUEST,
 };
 use snafu::ResultExt;
 use std::time::Duration;
@@ -446,6 +448,21 @@ impl DaemonClient {
             idempotency_key,
         )
         .await
+    }
+
+    pub async fn session_terminal_resize(
+        &self,
+        request: SessionTerminalResizeRequest,
+    ) -> Result<SessionTerminalResizeResponse> {
+        let mut connection = self.connect().await?;
+        connection
+            .unary(
+                KIND_SESSION_TERMINAL_RESIZE_REQUEST,
+                &request,
+                KIND_SESSION_TERMINAL_RESIZE_RESPONSE,
+                Vec::new(),
+            )
+            .await
     }
 
     pub async fn codex_app_server_attach(

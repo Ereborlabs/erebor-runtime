@@ -4,7 +4,10 @@ use std::{
     thread,
 };
 
+use rustix::termios::tcgetwinsize;
 use rustix::termios::{tcgetattr, tcsetattr, OptionalActions, Termios};
+
+use erebor_runtime_core::TerminalSize;
 
 use crate::error::CliError;
 
@@ -54,6 +57,26 @@ impl StructuredJsonlInput {
 }
 
 impl InteractiveTerminal {
+    pub(super) fn current_size() -> Result<TerminalSize, CliError> {
+        let stdin = io::stdin();
+        if !stdin.is_terminal() {
+            return Err(CliError::InvalidSessionCommand {
+                reason: String::from("interactive attachment requires a terminal standard input"),
+                location: snafu::Location::default(),
+            });
+        }
+        terminal_size(&stdin)
+    }
+
+    pub(super) fn current_size_or_default() -> Result<TerminalSize, CliError> {
+        let stdin = io::stdin();
+        if stdin.is_terminal() {
+            terminal_size(&stdin)
+        } else {
+            Ok(TerminalSize::default_tty())
+        }
+    }
+
     pub(super) fn open() -> Result<Self, CliError> {
         let stdin = io::stdin();
         if !stdin.is_terminal() {
@@ -88,6 +111,10 @@ impl InteractiveTerminal {
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => Some(InteractiveInput::Closed),
         }
+    }
+
+    pub(super) fn size(&self) -> Result<TerminalSize, CliError> {
+        terminal_size(&self.stdin)
     }
 }
 
@@ -132,6 +159,17 @@ fn read_terminal_input(sender: mpsc::Sender<InteractiveInput>) {
             }
         }
     }
+}
+
+fn terminal_size(terminal: impl rustix::fd::AsFd) -> Result<TerminalSize, CliError> {
+    let size = tcgetwinsize(terminal).map_err(|source| CliError::Terminal {
+        source: source.into(),
+        location: snafu::Location::default(),
+    })?;
+    TerminalSize::new(size.ws_row, size.ws_col).map_err(|error| CliError::InvalidSessionCommand {
+        reason: format!("terminal did not report usable geometry: {error}"),
+        location: snafu::Location::default(),
+    })
 }
 
 fn read_structured_jsonl(sender: mpsc::Sender<StructuredJsonlEvent>) {
