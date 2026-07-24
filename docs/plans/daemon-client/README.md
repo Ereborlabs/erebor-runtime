@@ -189,9 +189,14 @@ phases must preserve them unless the user explicitly changes the architecture.
    fidelity: initial rows/columns, controller-authorized resize, `SIGWINCH`
    delivery, read-only observers, and session-preserving detach/reattach.
    `codex-app-server` is a different, typed daemon-owned JSONL protocol path.
-6. **Nested agent processes do not escape governance.** They run as descendants
-   under the admitted session's namespace, guard, cgroup, endpoint projection,
-   policy, and daemon-loss contract. They receive no independent agent trust.
+6. **Nested agent processes do not escape governance.** A raw nested process
+   runs only as a descendant under the admitted session's namespace, guard,
+   cgroup, endpoint projection, policy, and daemon-loss contract. It receives
+   no independent agent trust. The only exception is the explicit,
+   daemon-mediated child-agent contract in the proposed Phase 4
+   [Codex Context DAG subplan](phase-4-codex-context-dag/README.md). That
+   contract creates a separately admitted child session in one shared context
+   family; it never promotes a raw `exec codex` descendant.
 7. **The host example is deliberately temporary.** It starts a foreground root
    daemon with isolated temporary state/runtime/log roots and a unique absolute
    Unix socket. The explicit client `--socket` points only to that local
@@ -271,6 +276,16 @@ last direct Codex launch. Its intended evidence is:
   session rejection, cleanup, and daemon recovery; and
 - the same deterministic fixture in the privileged Linux/systemd/two-UID
   matrix, including process-guard and daemon-loss cases.
+
+The proposed [Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
+extends this evidence with an explicit child-session path. It preserves the
+direct-nested-process denial boundary while proving a Git-shaped context family
+with causal forks, child-originated deliveries, parent-owned integration
+decisions, repeatable pinned merges, and physical descendant attribution. It
+does not require Phase 5 state projection or a real authenticated vendor binary.
+For stock Codex, native child threads remain logical observations inside the
+outer governed invocation; a separately governed child requires the subplan's
+explicit pre-spawn delegation bridge.
 
 The recovered `examples/codex-app-server` host lab is a small foreground
 fixture-acceptance test, not a system-wide installation or a real-Codex TUI

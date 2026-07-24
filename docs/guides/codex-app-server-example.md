@@ -27,9 +27,15 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
 ```
 
 The normal `codex` alias is an interactive daemon-owned TTY. After the fixture
-reports ready, it echoes each line as `fixture-tty-input=<line>`; type `exit`
-to end it normally. `codex-app-server` is a separate bounded JSON-RPC JSONL
-bridge, whose protocol output alone is written to standard output.
+reports ready, it prints the kernel geometry as
+`fixture-tty-size=rows=<rows> columns=<columns>` and echoes each line as
+`fixture-tty-input=<line>`; type `exit` to end it normally.
+`codex-app-server` is a separate bounded JSON-RPC JSONL bridge, whose protocol
+output alone is written to standard output.
+
+For a live resize check, resize the terminal window and enter `terminal-size`.
+The fixture prints its current kernel PTY geometry without starting another
+workload.
 
 The shell's `erebor` function passes `--socket "$EREBOR_SOCKET"` to each
 daemon-backed command. Outside this lab, omit `--socket` to use the normal

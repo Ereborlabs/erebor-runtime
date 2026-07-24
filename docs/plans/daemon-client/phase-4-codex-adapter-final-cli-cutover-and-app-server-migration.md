@@ -24,11 +24,14 @@ accepted again until the deterministic privileged evidence and host lab pass.
   byte passthrough.
 - Nested workloads inherit the session's Linux namespace, guard, cgroup,
   filesystem projections, policy, and daemon-loss contract, but cannot gain
-  trust. A child Codex process cannot reach the daemon socket, install a
+  trust. A raw child Codex process cannot reach the daemon socket, install a
   package, mint an alias, register an App Server, or impersonate the admitted
-  App Server. A later explicit daemon-mediated child-session capability is the
-  only route to a separately trusted child agent. Until then, nested Codex
-  execution is governed as a descendant effect and may be denied by policy.
+  App Server. The proposed
+  [Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
+  is the only route to a separately trusted child agent: it uses an explicit
+  daemon-mediated child admission, not raw nested exec. Until that subplan is
+  complete, nested Codex execution is governed only as a descendant effect and
+  may be denied by policy.
 - Codex hook admission binds the daemon session, guarded peer, ticket, and
   admitted agent-instance lineage. Inherited environment values alone never
   establish trusted hook or App Server identity.
@@ -185,6 +188,26 @@ routing table, queues, deadlines, cancellation, and shutdown contract.
 - The effective daemon-failure mode must be one the Codex guard, hook broker,
   Context DAG/evidence owners, and selected runner jointly support. Otherwise
   admission fails.
+
+### Context DAG And Child-Agent Delegation
+
+The deterministic Codex fixture must eventually prove the real Git-shaped
+ContextRepository topology for nested agent work, not merely emit correlated
+JSONL audit records. The proposed
+[Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
+owns the context-family repository, immutable causal fork, separately admitted
+child, source-pinned collaboration mapping, child-originated delivery,
+parent-owned integration decisions, repeatable two-parent pinned merges,
+recovery, and deterministic Linux evidence. It is part of Phase 4's remaining
+acceptance work, but no implementation phase within it starts until explicitly
+approved.
+
+The local Codex source makes a necessary distinction: native `spawn_agent`
+creates an internal Codex thread, while its hooks and App Server collaboration
+events are post-creation observation. A stock Codex profile can therefore
+contribute a native logical DAG only. Separately governed physical child
+sessions require a pinned pre-spawn Erebor delegation bridge; no hook, thread
+ID, or App Server notification can upgrade an observed child into one.
 
 ### Example And Documentation
 
@@ -377,6 +400,14 @@ Implemented so far:
 - Added Linux runner stdin EOF handling. The non-TTY process guard owns child
   pipes; the daemon writes or closes them through the active runner only after
   the exact App Server admission check.
+- Added the governed Linux terminal contract: initial rows/columns are an
+  immutable TTY `SessionSpec` fact; only the current input-lease holder can
+  issue a typed resize; the Linux controller applies it with `TIOCSWINSZ` and
+  records it as terminal evidence. The CLI reads its terminal geometry before
+  an attached run, acknowledges every resize, and resizes again when polling
+  observes a changed local terminal. The deterministic fixture reports the
+  kernel PTY geometry. Focused tests prove observer rejection and controller
+  lease handoff without a second workload start.
 - Removed the stale direct `codex_linux_v1_session_run` test and its foreground
   session-driver binary. The retained lifecycle probe is compatibility-only;
   it is not a product launch route.
@@ -448,7 +479,13 @@ Not done:
   generic filesystem-surface state binding described there; Phase 4
   intentionally rejects ambient caller-selected `HOME`/`CODEX_HOME` rather
   than inventing a Codex-specific credential provider.
-- Phase 4 still needs the Linux terminal-geometry/controller evidence above.
-  The deterministic fixture may remain intentionally simple, but it must prove
-  that a real interactive TUI can retain one daemon-owned PTY across resize and
-  reattach before this phase is accepted.
+- The proposed [Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
+  has not started. Its deterministic fixture must prove actual causal forks,
+  parent-owned integration of repeatable child deliveries, source-surface
+  routing/denial, and guarded child physical descendants before it can
+  contribute to a renewed Phase 4 acceptance claim.
+- The implemented Linux terminal contract still needs its privileged fixture
+  evidence: prove the requested initial geometry and a real `SIGWINCH` resize
+  in the staged controller, then prove detach/reattach from the foreground
+  host lab and two-UID matrix. The deterministic fixture may remain simple;
+  it must not be represented as the real Codex TUI.
