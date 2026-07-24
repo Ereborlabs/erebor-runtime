@@ -19,47 +19,68 @@ topology through the private delegation contract:
 P: outer App Server prompt / parent scope
   ├─ B: `fork_turns=all`; two child prompts
   │    ├─ B-1 -> lease -> shell -> ls
-  │    ├─ B sends queued message m1 -> P inbox
-  │    ├─ P explicitly accepts m1 -> merge B:m1 into P
+  │    ├─ B starts long command q -> continues B-2 -> q writes partial/final deliveries
+  │    ├─ B polls q -> receives each selected q delivery by merge into B
+  │    ├─ B sends queued message m1 -> P derived inbox
+  │    ├─ P explicitly receives m1 -> merge B:m1 into P
   │    ├─ P sends follow-up -> B's next turn
   │    └─ D: `fork_turns=last(1)`
   │         ├─ lease -> shell -> ls
-  │         ├─ D result -> B inbox
-  │         └─ B accepts D result -> merge D:r1 into B
+  │         ├─ D result -> B derived inbox
+  │         └─ B receives D result -> merge D:r1 into B
   └─ C: `fork_turns=none`; child prompt -> parent cancellation
 ```
 
-B publishes a final result to P after it has accepted D's result. P's immutable
-edge policy auto-integrates that terminal result, producing a second P merge.
-C produces a cancellation fact and no success result. P continues while B and
-C run. The test submits exact typed App Server frames and fixture commands; it
-does not infer prompts from terminal echo or manufacture a graph by writing
-directly to ContextRepository.
+B publishes a final result to P after it has received D's result. P explicitly
+receives that terminal delivery, producing a second P merge. C produces a
+cancellation fact and no success result. P continues while B and C run. The
+test submits exact typed App Server frames and fixture commands; it does not
+infer prompts from terminal echo or manufacture a graph by writing directly to
+ContextRepository.
 
 The fixture suite also exposes the capability matrix. It must prove `list_agents`, a
-queued message, a follow-up turn, descendant cancellation, automatic completion
-delivery, and all three frozen-context modes. It must reject direct sibling or
+queued message, a follow-up turn, descendant cancellation, completion delivery
+that remains unmerged until a parent receive, and all three frozen-context
+modes. It must reject direct sibling or
 ancestor control, raw nested `codex`, `thread/fork`, resume/foreign-thread
 operations, and unsupported source option overrides.
 
+It must also prove the command lifecycle: B receives an initial yielded command
+response, continues with unrelated B work, receives bounded client stream/end
+evidence, then explicitly polls and receives q deliveries. q's partial/final
+output must not advance B, wake P, or reach P's context until B later sends m1
+through the normal child-delivery path.
+
 ## Required Assertions
 
-- Reopen the daemon-owned context-family repository and validate all refs,
-  commits, selected blobs, pins, and parent order with ContextRepository APIs.
+- Reopen the root session's existing `ContextRepository` and validate all refs,
+  commits, selected blobs, pins, parent order, edge blobs, source-scope
+  delivery blobs, and merge/rejection receipts with ContextRepository APIs.
 - Assert P is the causal ancestor of B and C, B is the causal ancestor of D,
   and B/C are siblings. Assert no unexpected scope/ref exists.
-- Assert the parent-owned inbox distinguishes received, accepted, rejected,
-  and auto-integrated deliveries. The B message does not change P before P's
-  explicit acceptance. C's cancellation is retained but never becomes a
-  successful integration.
-- Assert every accepted child delivery creates one two-parent merge into its
-  fixed parent, with a deterministic contribution receipt and no child-ref
+- Assert the derived direct-child inbox distinguishes published, received, and
+  rejected deliveries from scope blobs and receipts. The B message does not
+  change P before P's explicit receive. C's cancellation is retained but never
+  becomes a successful integration.
+- Assert every received child delivery creates one two-parent merge into its
+  fixed parent, with a deterministic delivery receipt and no child-ref
   mutation. Assert the D result merges into B first, then B's final result
   merges into P. Assert no grandchild result bypasses B.
+- Assert edge/delivery/rejection metadata remains only under
+  `erebor/context-dag/` and is never selected by the adapter prompt projection;
+  a receive merge adds only its selected bounded result at the declared
+  model-visible result path.
 - Assert the selected fork pin and bounded spawn projection for `none`, `all`,
   and last-one-turn are exact, immutable, and free of forbidden internal tool,
   inter-agent, credential, socket, and ambient-environment content.
-- Assert graph listing is daemon-derived and family scoped; queued message and
+- Assert q has one B owner, launch pin, invocation/lease, adapter source
+  operation key, exact process identity, and child operation scope. Its
+  terminal event leaves B's ref unchanged; B's explicit polls receive bounded
+  partial/final delivery pins as
+  separate two-parent merges after B's intervening work. Replayed receive,
+  forged PID, late output, cancellation, owner replacement, and parent/sibling
+  receive attempts fail closed.
+- Assert graph listing is daemon-derived and root-scope scoped; queued message and
   follow-up are distinct; only P can cancel C; P cannot be woken by a child
   follow-up; and no child can address a sibling or ancestor as a control target.
 - Assert the source observer creates only `native-logical` nodes and pins their
@@ -73,9 +94,9 @@ operations, and unsupported source option overrides.
   lease contract.
 - Assert controller/TTY, daemon-socket absence, package identity, hook ticket,
   input lease, cancellation, detach, child failure, and daemon-loss contracts
-  remain intact for every session in the family.
+  remain intact for every session in the root-scope subtree.
 - Assert direct nested fixture execution, forged child spawn, forged child
-  contribution, replay, wrong edge, wrong parent, wrong peer, sibling access,
+  delivery, replay, wrong edge, wrong parent, wrong peer, sibling access,
   exhausted depth/fan-out, malformed output, App Server peer-thread request,
   forbidden spawn option, and lost daemon all fail closed.
 

@@ -198,6 +198,7 @@ JSONL audit records. The proposed
 owns the context-family repository, immutable causal fork, separately admitted
 child, source-pinned collaboration mapping, child-originated delivery,
 parent-owned integration decisions, repeatable two-parent pinned merges,
+owner-received asynchronous command results through the same merge contract,
 recovery, and deterministic Linux evidence. It is part of Phase 4's remaining
 acceptance work, but no implementation phase within it starts until explicitly
 approved.

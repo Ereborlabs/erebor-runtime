@@ -11,15 +11,20 @@ a raw nested executable is never a trusted child agent.
 
 ## Scope
 
-- Define a generic child-admission request owned by the daemon. It selects only
-  package-declared child entrypoints and policy-approved child profiles; it
-  never accepts raw argv, a path, an alias minted by the child, a caller UID,
-  or a client-provided parent ID.
+- Reuse the existing daemon-internal `SessionAdmission` and `SessionSpec`
+  construction for a physical child. The private request supplies only the
+  checked parent `ContextPin`, declared child profile, and frozen-context mode;
+  the daemon resolves package, installation, adapter, policy, runner, and
+  command through the existing admission path. It never accepts raw argv, a
+  path, an alias minted by the child, a caller UID, or a client-provided parent
+  ID. Do not add a second generic child-admission model.
 - Add a distinct private child-delegation endpoint. It is neither the daemon
   control socket, the Codex hook service, the runtime guard, nor generic
   terminal/App Server input. It authenticates the exact parent session,
   currently permitted parent invocation, private peer, one-use request, and
-  bounded spawn intent.
+  bounded spawn intent. It extends the existing authenticated service/ticket
+  machinery only where its binding is sufficient; it does not introduce a
+  parallel registry or bearer-identity scheme.
 - Establish the source boundary before implementing a physical Codex child.
   The reviewed stock Codex `spawn_agent` creates an internal thread before its
   `SubagentStart` hook, and that hook cannot stop it. Its App Server
@@ -49,8 +54,9 @@ a raw nested executable is never a trusted child agent.
   create or repair an Erebor parent edge.
 - Admit the child through the ordinary daemon session path with a new session
   ID, package/installation/policy/runner identities, process guard, private
-  hook registration, App Server registration where declared, and context-family
-  membership from Phase 1.
+  hook registration, App Server registration where declared, and the optional
+  existing parent `ContextPin` from Phase 1. The child reuses the root session's
+  context repository; it does not receive a second store.
 - Give the child a frozen, bounded spawn-context projection selected from the
   parent pin. Support explicit `none`, `all`, and bounded-last-turns modes only
   when the selected Codex profile exposes equivalent source facts. No live
@@ -63,12 +69,22 @@ a raw nested executable is never a trusted child agent.
   Child-provided argv, paths, socket paths, `HOME`, `CODEX_HOME`, arbitrary
   environment, model provider, or policy overrides are rejected.
 - Provide daemon-mediated collaboration control with directional authority:
-  the parent can list its family subtree, queue a message to a direct child,
+  the parent can list its root-scope subtree, queue a message to a direct child,
   request an allowed child follow-up turn, and cancel a descendant. A child
   can publish a message or terminal result to its direct parent. A child may
   request its own child only through the same admission path. Child-to-ancestor,
   child-to-sibling, sibling-to-sibling, and child-to-root control routes are
   rejected in this first contract; the common parent is the deliberate relay.
+- Map source command lifecycle separately from collaboration. A Codex command
+  launch creates an operation child scope from the owner/launch pin and binds a
+  process capability. Source output deltas and terminal notifications are
+  evidence; the daemon coalesces them into a policy-bounded, monotonic sequence
+  of delivery blobs in the operation scope rather than one blob per raw client
+  delta. A later source poll that selects output asks the owner to receive one
+  exact delivery through the ordinary two-parent merge. An input-only
+  `write_stdin` records process input without a merge. Only a receive makes the
+  selected result model-visible in the owner's context. App Server output
+  notifications never impersonate that receive.
 - Enforce root-owned limits for depth, children per parent, live descendants,
   queued deliveries, follow-up turns, package/entrypoint allowlists, deadlines,
   and output/context bytes.
@@ -89,6 +105,10 @@ a raw nested executable is never a trusted child agent.
 - A stock `SubagentStart` hook or post-operation `collabToolCall` cannot claim
   a daemon-physical child, child guard, child socket/ticket, or per-child
   physical-effect pin.
+- A command terminal event, output delta, PID, or copied process capability
+  cannot receive a result, update an owner context scope, or deliver command
+  output to a parent/sibling. Only the exact owning node and current daemon
+  operation registration may poll or provide input.
 
 ## Checkpoint
 

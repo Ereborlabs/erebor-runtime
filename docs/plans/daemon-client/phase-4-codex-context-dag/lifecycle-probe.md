@@ -5,9 +5,10 @@ it does not replace committed Rust tests.
 
 ## Purpose
 
-Exercise one daemon-owned context family across nested sessions and verify the
-Git topology, frozen forks, routed communication, parent-owned integration,
-and Linux physical effects under real process lifecycle conditions.
+Exercise one root session's daemon-owned context repository across nested
+sessions and verify the Git topology, frozen forks, routed communication,
+parent-owned integration, and Linux physical effects under real process
+lifecycle conditions.
 
 ## Safety Boundary
 
@@ -30,32 +31,38 @@ and Linux physical effects under real process lifecycle conditions.
    session and that its physical effects remain under P's invocation.
 4. Request B (`all`) and C (`none`) through P's private child-delegation
    endpoint. Request D (`last(1)`) through B. Record every admission, scope
-   ref, family ID, package, hook registration, guard registration, parent pin,
-   frozen-projection digest, and integration policy.
-5. Have B queue a contribution for P. Verify P's ref is unchanged, then have P
-   accept it. Have P send B a follow-up; B requests D; D queues a result for B;
-   B accepts it. Have B publish a final result that P's predeclared policy
-   auto-integrates. Cancel C from P. Run the declared shell-to-`ls` effect in B
-   and D.
-6. Exercise family-scoped graph listing, permitted parent-to-child messaging,
+   ref, derived root scope, package, hook registration, guard registration,
+   parent pin, frozen-projection digest, and explicit parent-receive contract.
+5. Have B queue a delivery for P. Verify P's ref is unchanged, then have P
+   receive it. Have P send B a follow-up; B requests D; D queues a result for
+   B; B receives it. Have B publish a final result and have P explicitly
+   receive it. Cancel C from P. Run the declared shell-to-`ls` effect in B and
+   D.
+6. In B, start a long command with a short initial yield, append unrelated B
+   work while it remains alive, and retain its stream/end evidence. Verify the
+   partial/final delivery blobs enter only B's operation scope; then poll and
+   receive each selected delivery through the daemon coordinator.
+   Attempt parent/sibling receive, replay, forged PID, owner restart, and
+   completion after cancellation.
+7. Exercise root-scope-scoped graph listing, permitted parent-to-child messaging,
    follow-up, and cancellation. Reject child-to-parent wake, sibling routing,
    child-to-ancestor control, App Server `thread/fork`, thread resume, raw
    nested execution, and child option/config escalation.
-7. Reopen and inspect the family repository. Verify exact scope ancestry,
-   parent inbox sequence, acceptance identities, parent ref sequence, child ref
-   stability, ordered two-parent merges, and all contribution/physical-effect
-   pins.
-8. Repeat with concurrent contribution delivery, daemon restart at each durable
+8. Reopen and inspect the root session repository. Verify exact scope ancestry,
+   derived inbox sequence, receive identities, parent ref sequence, child ref
+   stability, ordered two-parent merges, operation launch/delivery/receive
+   sequence, and all delivery/physical-effect pins.
+9. Repeat with concurrent delivery publication, daemon restart at each durable
    transition, child crash, hook replay/wrong-peer/wrong-session, forged parent
-   pin, stale acceptance, accepted-delivery replay, and two-UID attacker
+   pin, stale receive, received-delivery replay, and two-UID attacker
    attempts.
 
 ## Required Evidence
 
 - daemon/client requests and responses with secrets, tickets, and workload
   payloads redacted;
-- context-family/ref inventory, commit parent lists, selected blobs, pin
-  validation results, delivery/inbox sequence, and integration decisions;
+- root-scope/ref inventory, commit parent lists, selected blobs, pin validation
+  results, derived delivery/inbox sequence, and merge/rejection receipts;
 - child session/admission/endpoint identities and package/installation hashes;
 - hook, lease, process-guard, fork/exec/reparent, and final allow/deny audit
   records for P, B, C, and D;
@@ -68,4 +75,4 @@ and Linux physical effects under real process lifecycle conditions.
 Every asserted DAG edge and merge is durable and validated from repository
 objects, every protected child effect names its exact child context pin, and
 every unsupported or forged path fails before it can create trust or mutate a
-family ref.
+scope ref outside its root subtree.

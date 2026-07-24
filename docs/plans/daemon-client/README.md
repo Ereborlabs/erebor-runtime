@@ -279,10 +279,12 @@ last direct Codex launch. Its intended evidence is:
 
 The proposed [Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
 extends this evidence with an explicit child-session path. It preserves the
-direct-nested-process denial boundary while proving a Git-shaped context family
-with causal forks, child-originated deliveries, parent-owned integration
-decisions, repeatable pinned merges, and physical descendant attribution. It
-does not require Phase 5 state projection or a real authenticated vendor binary.
+direct-nested-process denial boundary while proving a Git-shaped scope DAG in
+the existing context repository: causal forks, child-originated delivery blobs,
+parent-owned receives, repeatable pinned merges, owner-received asynchronous
+command results through the same parent-owned merge contract, and physical
+descendant attribution. It does not require Phase 5 state projection or a real
+authenticated vendor binary.
 For stock Codex, native child threads remain logical observations inside the
 outer governed invocation; a separately governed child requires the subplan's
 explicit pre-spawn delegation bridge.
