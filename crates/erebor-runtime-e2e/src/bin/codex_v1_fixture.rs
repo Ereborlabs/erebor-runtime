@@ -17,8 +17,7 @@ use std::{
 
 use erebor_runtime_core::AgentAdapterDescriptor;
 use erebor_runtime_packages::{
-    AgentPackageManifest, CanonicalEncoding, CodexArtifact, CodexChildDelegationContract,
-    CodexChildProfile, CodexEntrypoint, CodexFrozenContextMode, CodexHookContract,
+    AgentPackageManifest, CanonicalEncoding, CodexArtifact, CodexEntrypoint, CodexHookContract,
     CodexHookEventName, CodexHookEventSchema, CodexHookExec, CodexHookShell, CodexManagedArtifacts,
     CodexPackageDefinition, CodexSupportedPlatform, ContentDigest, InstallationRecord,
     PolicyPackageRevision, PolicySetRevision,
@@ -31,22 +30,41 @@ const FIXTURE_NAME: &str = "codex-v1-fixture";
 const MANAGED_HOOK_PATH: &str = "/run/erebor/codex/erebor-codex-hook";
 const REQUIREMENTS_PATH: &str = "/run/erebor/codex/requirements.toml";
 const SHELL_STARTUP_PATH: &str = "/run/erebor/codex/shell-startup";
-const DELEGATION_BRIDGE_PATH: &str = "/run/erebor/codex/erebor-child-delegation";
 const SESSION_START_EVENT: &[u8] = br#"{"hook_event_name":"SessionStart"}"#;
 const TERMINAL_TURN_EVENT: &[u8] = br#"{"hook_event_name":"UserPromptSubmit","session_id":"fixture-thread","turn_id":"fixture-turn"}"#;
-const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"child_profile":"fixture-child","frozen_context_mode":"all","last_turns":0,"command":"","erebor_operation_key":""}}"#;
+const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"child_thread_id":"fixture-child-thread","child_turn_id":"fixture-child-turn","frozen_context_mode":"all","last_turns":0}}"#;
 const DELIVERY_EVENT: &[u8] = br#"{"hook_event_name":"PostToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delivery-1","tool_response":{"status":"ok"},"erebor_delivery":{"emit":true,"sequence":1,"kind":"result","mode":"queue","selected_text":"fixture result","operation_key":""}}"#;
 const HOOK_MODE_ENV: &str = "EREBOR_FIXTURE_HOOK_MODE";
 const MAX_FIXTURE_DELEGATION_LAST_TURNS: u64 = 8;
 
 type FixtureResult<T> = Result<T, Box<dyn Error>>;
 
+#[derive(Clone)]
+struct FixtureTurn {
+    thread_id: String,
+    turn_id: String,
+}
+
+impl FixtureTurn {
+    fn root() -> Self {
+        Self {
+            thread_id: String::from("fixture-thread"),
+            turn_id: String::from("fixture-turn"),
+        }
+    }
+
+    fn terminal_event(&self) -> FixtureResult<Vec<u8>> {
+        Ok(serde_json::to_vec(&json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": self.thread_id,
+            "turn_id": self.turn_id,
+        }))?)
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     match arguments.as_slice() {
-        [] if env::current_exe()?.as_path() == Path::new(DELEGATION_BRIDGE_PATH) => {
-            run_delegation_bridge()
-        }
         [] if env::var_os(HOOK_MODE_ENV).is_some() => {
             run_managed_hook(HookMode::from_environment()?)
         }
@@ -69,6 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn run_tty() -> FixtureResult<()> {
+    let mut active_turn = FixtureTurn::root();
     println!("fixture-tty=ready");
     report_terminal_size()?;
     println!(
@@ -91,25 +110,29 @@ fn run_tty() -> FixtureResult<()> {
         let line = line?;
         println!("fixture-tty-input={line}");
         if let Some(params) = line.strip_prefix("fixture/deliver ") {
-            let event = delivery_event(&json!({"params": serde_json::from_str::<Value>(params)?}))?;
+            let event = delivery_event(
+                &json!({"params": serde_json::from_str::<Value>(params)?}),
+                &active_turn,
+            )?;
             invoke_managed_hook_event(HookMode::Normal, &event)?;
             println!("fixture-delivery=accepted");
         }
         if let Some(params) = line.strip_prefix("fixture/delegate ") {
-            let event =
-                delegation_event(&json!({"params": serde_json::from_str::<Value>(params)?}))?;
-            invoke_delegation_bridge(&event)?;
+            let request = json!({"params": serde_json::from_str::<Value>(params)?});
+            let event = delegation_event(&request, &active_turn)?;
+            invoke_managed_hook_event(HookMode::Normal, &event)?;
+            active_turn = delegated_turn(&request)?;
             println!("fixture-delegation=accepted");
         }
         if let Some(params) = line.strip_prefix("fixture/command ") {
             let request = json!({"params": serde_json::from_str::<Value>(params)?});
-            run_guarded_command(&request)?;
+            run_guarded_command(&request, &active_turn)?;
         }
         if line == "fixture/start-q" {
-            start_long_operation()?;
+            start_long_operation(&active_turn)?;
         }
         if line == "fixture/turn" {
-            invoke_managed_hook_event(HookMode::Normal, TERMINAL_TURN_EVENT)?;
+            invoke_managed_hook_event(HookMode::Normal, &active_turn.terminal_event()?)?;
             println!("fixture-turn=accepted");
         }
         if line == "terminal-size" {
@@ -169,21 +192,21 @@ fn run_app_server() -> FixtureResult<()> {
                 "wrong-session-rejected"
             }
             "fixture/delegate" => {
-                let event = delegation_event(&request)?;
-                invoke_delegation_bridge(&event)?;
+                let event = delegation_event(&request, &FixtureTurn::root())?;
+                invoke_managed_hook_event(HookMode::Normal, &event)?;
                 "delegated"
             }
             "fixture/deliver" => {
-                let event = delivery_event(&request)?;
+                let event = delivery_event(&request, &FixtureTurn::root())?;
                 invoke_managed_hook_event(HookMode::Normal, &event)?;
                 "delivered"
             }
             "fixture/command" => {
-                run_guarded_command(&request)?;
+                run_guarded_command(&request, &FixtureTurn::root())?;
                 "command-completed"
             }
             "fixture/start-q" => {
-                start_long_operation()?;
+                start_long_operation(&FixtureTurn::root())?;
                 "operation-started"
             }
             "$/cancelRequest" => "cancelled",
@@ -205,21 +228,8 @@ fn run_app_server() -> FixtureResult<()> {
     Ok(())
 }
 
-fn invoke_delegation_bridge(event: &[u8]) -> FixtureResult<()> {
-    invoke_managed_hook_event(HookMode::Delegation, event)?;
-    let status = Command::new(DELEGATION_BRIDGE_PATH)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()?;
-    if !status.success() {
-        return Err("delegation bridge did not complete successfully".into());
-    }
-    Ok(())
-}
-
-fn run_guarded_command(request: &Value) -> FixtureResult<()> {
-    let event = command_event(request)?;
+fn run_guarded_command(request: &Value, turn: &FixtureTurn) -> FixtureResult<()> {
+    let event = command_event(request, turn)?;
     let params = fixture_params(request, "fixture/command")?;
     let command = params
         .get("command")
@@ -236,12 +246,12 @@ fn run_guarded_command(request: &Value) -> FixtureResult<()> {
     }
     let rendered = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     println!("fixture-command-output={rendered}");
-    invoke_managed_hook_event(HookMode::Normal, &post_tool_event(tool_use_id, None)?)?;
+    invoke_managed_hook_event(HookMode::Normal, &post_tool_event(tool_use_id, None, turn)?)?;
     println!("fixture-command=completed");
     Ok(())
 }
 
-fn start_long_operation() -> FixtureResult<()> {
+fn start_long_operation(turn: &FixtureTurn) -> FixtureResult<()> {
     const OPERATION_KEY: &str = "fixture-q";
     const TOOL_USE_ID: &str = "fixture-q-command-1";
     const COMMAND: &str = "printf 'q-partial\\n'; sleep 3; printf 'q-final\\n'";
@@ -253,7 +263,7 @@ fn start_long_operation() -> FixtureResult<()> {
             "operation_key": OPERATION_KEY,
         },
     });
-    invoke_managed_hook_event(HookMode::Normal, &command_event(&request)?)?;
+    invoke_managed_hook_event(HookMode::Normal, &command_event(&request, turn)?)?;
     let mut child = Command::new("/bin/sh")
         .args(["-c", COMMAND])
         .stdout(Stdio::piped())
@@ -262,22 +272,26 @@ fn start_long_operation() -> FixtureResult<()> {
         .stdout
         .take()
         .ok_or("fixture long operation did not expose stdout")?;
+    let turn = turn.clone();
     println!("fixture-operation=q-started");
     std::thread::spawn(move || {
         let result = (|| -> FixtureResult<()> {
             for (index, line) in io::BufReader::new(stdout).lines().enumerate() {
                 let text = line?;
                 let sequence = u64::try_from(index.saturating_add(1))?;
-                let event = delivery_event(&json!({
-                    "params": {
-                        "sequence": sequence,
-                        "kind": "result",
-                        "mode": "queue",
-                        "selected_text": text,
-                        "operation_key": OPERATION_KEY,
-                        "tool_use_id": TOOL_USE_ID,
-                    },
-                }))?;
+                let event = delivery_event(
+                    &json!({
+                        "params": {
+                            "sequence": sequence,
+                            "kind": "result",
+                            "mode": "queue",
+                            "selected_text": text,
+                            "operation_key": OPERATION_KEY,
+                            "tool_use_id": TOOL_USE_ID,
+                        },
+                    }),
+                    &turn,
+                )?;
                 invoke_managed_hook_event(HookMode::Normal, &event)?;
                 println!("fixture-operation=q-delivery-{sequence}");
             }
@@ -297,7 +311,6 @@ fn start_long_operation() -> FixtureResult<()> {
 #[derive(Clone, Copy)]
 enum HookMode {
     Normal,
-    Delegation,
     Replay,
     WrongPeer,
     WrongSession,
@@ -307,7 +320,6 @@ impl HookMode {
     fn from_environment() -> FixtureResult<Self> {
         match env::var(HOOK_MODE_ENV).as_deref() {
             Ok("normal") => Ok(Self::Normal),
-            Ok("delegation") => Ok(Self::Delegation),
             Ok("replay") => Ok(Self::Replay),
             Ok("wrong-peer") => Ok(Self::WrongPeer),
             Ok("wrong-session") => Ok(Self::WrongSession),
@@ -319,7 +331,6 @@ impl HookMode {
     const fn name(self) -> &'static str {
         match self {
             Self::Normal => "normal",
-            Self::Delegation => "delegation",
             Self::Replay => "replay",
             Self::WrongPeer => "wrong-peer",
             Self::WrongSession => "wrong-session",
@@ -333,7 +344,7 @@ fn run_managed_hook(mode: HookMode) -> FixtureResult<()> {
     io::stdin().take(32 * 1024).read_to_end(&mut input)?;
     let event = CodexNativeHookEvent::parse(&input)?;
     let result = match mode {
-        HookMode::Normal | HookMode::Delegation => submit_hook(&event, input)?,
+        HookMode::Normal => submit_hook(&event, input)?,
         HookMode::Replay => {
             let first = submit_hook(&event, input.clone())?;
             if submit_hook(&event, input).is_ok() {
@@ -413,14 +424,7 @@ fn invoke_managed_hook_event(mode: HookMode, event: &[u8]) -> FixtureResult<Valu
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
-fn run_delegation_bridge() -> FixtureResult<()> {
-    if env::var_os(HOOK_MODE_ENV).is_some() {
-        return Err("delegation bridge inherited a managed-hook mode".into());
-    }
-    Ok(())
-}
-
-fn delegation_event(request: &Value) -> FixtureResult<Vec<u8>> {
+fn delegation_event(request: &Value, turn: &FixtureTurn) -> FixtureResult<Vec<u8>> {
     let params = match request.get("params") {
         None | Some(Value::Null) => None,
         Some(Value::Object(params)) => Some(params),
@@ -456,20 +460,63 @@ fn delegation_event(request: &Value) -> FixtureResult<Vec<u8>> {
                 .ok_or("fixture/delegate tool_use_id must be a bounded non-empty string")
         },
     )?;
+    let child_thread_id = params
+        .and_then(|params| params.get("child_thread_id"))
+        .map_or(Ok("fixture-child-thread"), |value| {
+            value
+                .as_str()
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= 128
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                })
+                .ok_or("fixture/delegate child_thread_id must be a bounded identifier")
+        })?;
+    let child_turn_id = params
+        .and_then(|params| params.get("child_turn_id"))
+        .map_or(Ok("fixture-child-turn"), |value| {
+            value
+                .as_str()
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= 128
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                })
+                .ok_or("fixture/delegate child_turn_id must be a bounded identifier")
+        })?;
     Ok(serde_json::to_vec(&json!({
         "hook_event_name": "PreToolUse",
-        "session_id": "fixture-thread",
-        "turn_id": "fixture-turn",
+        "session_id": turn.thread_id,
+        "turn_id": turn.turn_id,
         "tool_use_id": tool_use_id,
         "tool_name": "erebor_delegate",
         "tool_input": {
-            "child_profile": "fixture-child",
+            "child_thread_id": child_thread_id,
+            "child_turn_id": child_turn_id,
             "frozen_context_mode": mode,
             "last_turns": last_turns,
-            "command": "",
-            "erebor_operation_key": "",
         },
     }))?)
+}
+
+fn delegated_turn(request: &Value) -> FixtureResult<FixtureTurn> {
+    let params = fixture_params(request, "fixture/delegate")?;
+    let thread_id = params
+        .get("child_thread_id")
+        .and_then(Value::as_str)
+        .unwrap_or("fixture-child-thread");
+    let turn_id = params
+        .get("child_turn_id")
+        .and_then(Value::as_str)
+        .unwrap_or("fixture-child-turn");
+    Ok(FixtureTurn {
+        thread_id: thread_id.to_owned(),
+        turn_id: turn_id.to_owned(),
+    })
 }
 
 fn fixture_params<'a>(
@@ -482,7 +529,7 @@ fn fixture_params<'a>(
     }
 }
 
-fn command_event(request: &Value) -> FixtureResult<Vec<u8>> {
+fn command_event(request: &Value, turn: &FixtureTurn) -> FixtureResult<Vec<u8>> {
     let params = fixture_params(request, "fixture/command")?;
     let command = params
         .get("command")
@@ -511,16 +558,13 @@ fn command_event(request: &Value) -> FixtureResult<Vec<u8>> {
         Some(_) => return Err("fixture/command operation_key is not supported".into()),
     };
     let input = json!({
-        "child_profile": "",
-        "frozen_context_mode": "none",
-        "last_turns": 0,
         "command": command,
         "erebor_operation_key": operation_key.unwrap_or(""),
     });
     Ok(serde_json::to_vec(&json!({
         "hook_event_name": "PreToolUse",
-        "session_id": "fixture-thread",
-        "turn_id": "fixture-turn",
+        "session_id": turn.thread_id,
+        "turn_id": turn.turn_id,
         "tool_use_id": tool_use_id,
         "tool_name": "bash",
         "tool_input": input,
@@ -530,6 +574,7 @@ fn command_event(request: &Value) -> FixtureResult<Vec<u8>> {
 fn post_tool_event(
     tool_use_id: &str,
     delivery: Option<serde_json::Map<String, Value>>,
+    turn: &FixtureTurn,
 ) -> FixtureResult<Vec<u8>> {
     let mut canonical_delivery = json!({
         "emit": false,
@@ -548,8 +593,8 @@ fn post_tool_event(
     }
     let event = json!({
         "hook_event_name": "PostToolUse",
-        "session_id": "fixture-thread",
-        "turn_id": "fixture-turn",
+        "session_id": turn.thread_id,
+        "turn_id": turn.turn_id,
         "tool_use_id": tool_use_id,
         "tool_response": {"status": "ok"},
         "erebor_delivery": canonical_delivery,
@@ -557,7 +602,7 @@ fn post_tool_event(
     Ok(serde_json::to_vec(&event)?)
 }
 
-fn delivery_event(request: &Value) -> FixtureResult<Vec<u8>> {
+fn delivery_event(request: &Value, turn: &FixtureTurn) -> FixtureResult<Vec<u8>> {
     let params = match request.get("params") {
         None | Some(Value::Null) => None,
         Some(Value::Object(params)) => Some(params),
@@ -610,7 +655,11 @@ fn delivery_event(request: &Value) -> FixtureResult<Vec<u8>> {
             Value::String(operation_key.to_owned()),
         );
     }
-    post_tool_event(tool_use_id.unwrap_or("fixture-delivery-1"), Some(delivery))
+    post_tool_event(
+        tool_use_id.unwrap_or("fixture-delivery-1"),
+        Some(delivery),
+        turn,
+    )
 }
 
 fn configure(arguments: &[String]) -> FixtureResult<()> {
@@ -815,20 +864,6 @@ fn package_definition(trust_root: &Path, fixture: &Path) -> FixtureResult<CodexP
             event_schemas,
             None,
         )?,
-        Some(CodexChildDelegationContract::new(
-            CodexArtifact::new(fixture.to_path_buf(), fixture_digest.clone())?,
-            PathBuf::from(DELEGATION_BRIDGE_PATH),
-            CodexChildProfile::new(
-                "fixture-child",
-                "codex",
-                vec![
-                    CodexFrozenContextMode::None,
-                    CodexFrozenContextMode::All,
-                    CodexFrozenContextMode::LastTurns,
-                ],
-                MAX_FIXTURE_DELEGATION_LAST_TURNS as u32,
-            )?,
-        )?),
     )
     .map_err(Into::into)
 }
@@ -914,20 +949,23 @@ fn fixture_requirements() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_event, delivery_event, post_tool_event, CodexNativeHookEvent, Value,
+        command_event, delivery_event, post_tool_event, CodexNativeHookEvent, FixtureTurn, Value,
         DELEGATION_EVENT, DELIVERY_EVENT,
     };
 
     #[test]
     fn fixture_command_and_delegation_hooks_share_the_pinned_pre_tool_schema(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let command = command_event(&serde_json::json!({
-            "params": {
-                "command": "ls",
-                "tool_use_id": "fixture-command-test",
-                "operation_key": "fixture-q",
-            },
-        }))?;
+        let command = command_event(
+            &serde_json::json!({
+                "params": {
+                    "command": "ls",
+                    "tool_use_id": "fixture-command-test",
+                    "operation_key": "fixture-q",
+                },
+            }),
+            &FixtureTurn::root(),
+        )?;
         assert_eq!(
             CodexNativeHookEvent::parse(DELEGATION_EVENT)?.schema_sha256(),
             CodexNativeHookEvent::parse(&command)?.schema_sha256(),
@@ -938,17 +976,20 @@ mod tests {
     #[test]
     fn fixture_operation_and_non_delivery_hooks_share_the_pinned_post_tool_schema(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let delivery = delivery_event(&serde_json::json!({
-            "params": {
-                "sequence": 1,
-                "kind": "result",
-                "mode": "queue",
-                "selected_text": "partial",
-                "operation_key": "fixture-q",
-                "tool_use_id": "fixture-operation-test",
-            },
-        }))?;
-        let no_delivery = post_tool_event("fixture-command-test", None)?;
+        let delivery = delivery_event(
+            &serde_json::json!({
+                "params": {
+                    "sequence": 1,
+                    "kind": "result",
+                    "mode": "queue",
+                    "selected_text": "partial",
+                    "operation_key": "fixture-q",
+                    "tool_use_id": "fixture-operation-test",
+                },
+            }),
+            &FixtureTurn::root(),
+        )?;
+        let no_delivery = post_tool_event("fixture-command-test", None, &FixtureTurn::root())?;
         let expected = CodexNativeHookEvent::parse(DELIVERY_EVENT)?
             .schema_sha256()
             .to_owned();

@@ -1,6 +1,5 @@
 mod adoption;
 mod agents;
-mod child_admission;
 mod child_delivery;
 mod context_operation;
 mod controller_support;
@@ -35,9 +34,6 @@ pub use agents::codex::{
     MAX_APP_SERVER_FRAME_BYTES,
 };
 pub use agents::{AgentAdapter, AgentAdapterRegistry, PreparedAgentInvocation};
-pub use child_admission::{
-    ChildSessionAdmission, ChildSessionAdmissionDispatcher, ChildSessionAdmissionHandler,
-};
 pub use child_delivery::{
     ChildContextDelivery, ChildContextDeliveryDispatcher, ChildContextDeliveryHandler,
 };

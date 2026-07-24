@@ -838,8 +838,8 @@ impl<'a> SessionCommandOwner<'a> {
                         delivery.receiver_scope,
                         delivery.child_scope,
                         delivery.delivery_path,
-                        Self::short_id(&delivery.delivery_commit),
-                        Self::short_id(&delivery.expected_parent_head),
+                        delivery.delivery_commit,
+                        delivery.expected_parent_head,
                     ]);
                 }
                 println!("{table}");

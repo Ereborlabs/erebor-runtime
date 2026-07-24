@@ -173,6 +173,63 @@ impl CodexContextDag {
         Ok(binding)
     }
 
+    /// Bind a daemon-admitted logical child scope to an exact Codex
+    /// `(thread_id, turn_id)` pair. This is an in-session routing fact: it
+    /// neither starts a child session nor projects a second hook socket or
+    /// process guard.
+    pub(crate) fn bind_admitted_scope(
+        &self,
+        thread_id: String,
+        turn_id: String,
+        reference: ScopeRef,
+    ) -> Result<CodexScopeContextBinding, CodexSessionError> {
+        if reference.session_id() != self.session_id {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from(
+                    "daemon-admitted Codex logical scope belongs to another session",
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        let mut state = self.lock_state()?;
+        let key = (thread_id.clone(), turn_id.clone());
+        if let Some(existing) = state.bindings.get(&key).cloned() {
+            if existing.scope_ref() == reference.as_str() {
+                return Ok(existing);
+            }
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: format!(
+                    "Codex thread `{thread_id}` turn `{turn_id}` is already bound to a different context scope"
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        let head = self
+            .repository
+            .scope_head(&reference)
+            .map_err(Self::context_error)?;
+        state
+            .scopes
+            .entry(reference.as_str().to_owned())
+            .or_insert(CodexContextScope {
+                reference: reference.clone(),
+                head,
+            });
+        let item_node_stream = format!(
+            "agents/codex/logical-threads/{}.json",
+            &Self::digest(format!("{thread_id}\0{turn_id}").as_bytes())[..20]
+        );
+        let binding = CodexScopeContextBinding::new(
+            thread_id,
+            turn_id,
+            reference.as_str().to_owned(),
+            item_node_stream,
+            head.to_string(),
+        );
+        state.bindings.insert(key, binding.clone());
+        Ok(binding)
+    }
+
     pub(crate) fn exact_binding(
         &self,
         thread_id: &str,
@@ -409,7 +466,21 @@ impl CodexContextDag {
         })?;
         let message = format!("Record authenticated Codex {} hook", Self::hook_name(kind));
         if let Some(binding) = binding {
-            self.append_named_scope_locked(&mut state, binding.scope_ref(), &path, bytes, &message)
+            let is_root_binding = state
+                .root
+                .as_ref()
+                .is_some_and(|root| root.reference.as_str() == binding.scope_ref());
+            if is_root_binding {
+                self.append_root_locked(&mut state, &path, bytes, &message)
+            } else {
+                self.append_named_scope_locked(
+                    &mut state,
+                    binding.scope_ref(),
+                    &path,
+                    bytes,
+                    &message,
+                )
+            }
         } else {
             self.append_root_locked(&mut state, &path, bytes, &message)
         }
@@ -801,6 +872,15 @@ mod tests {
         assert!(binding
             .item_node_stream()
             .starts_with("agents/codex/terminal/turns/"));
+        let hook = dag.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::UserPromptSubmit,
+            &payload,
+            json!({"hook_pid": 7}),
+        )?;
+        assert_eq!(
+            hook.scope_ref(),
+            ScopeRef::root("session-terminal")?.as_str()
+        );
         assert_eq!(
             repository.scope_refs()?,
             vec![ScopeRef::root("session-terminal")?]

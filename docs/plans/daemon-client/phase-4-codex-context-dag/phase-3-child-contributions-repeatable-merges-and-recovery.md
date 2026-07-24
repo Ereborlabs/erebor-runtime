@@ -17,8 +17,8 @@ the parent.
   execution binding and source identity where applicable, sequence, kind
   (`message`, `result`, `failure`, or `cancelled`), delivery mode (`queue` or
   `follow-up`), bounded selected bytes, and the pin to its exact source commit.
-- Let the child publish through its authenticated daemon-owned session path.
-  The daemon
+- Let the child publish through the existing authenticated hook path of its
+  root session. The daemon
   verifies membership by walking existing edge blobs, active session state,
   sequence, message bounds, source commit, and route before it appends the
   delivery blob to the child scope. This leaves the parent ref unchanged. The
@@ -60,11 +60,10 @@ the parent.
   parent-tree-preserving two-parent merge used for an agent-child result.
   Input-only process writes create no merge. Partial and final receives are
   independently ordered and cannot be replayed.
-- Keep physical claims binding-aware. A daemon-physical child shell, `ls`, fork,
-  reparent, and later descendant remain attributable to the child invocation
-  even after one or more result merges into the parent. A native logical child
-  may retain its own context evidence, but its physical effects remain
-  attributable to the outer governed Codex invocation.
+- Keep physical claims binding-aware. A logical child shell command, `ls`,
+  fork, reparent, and later descendant remain attributable to the exact child
+  invocation lease inside the one root session process tree, even after one or
+  more result merges. A logical scope never implies another session or guard.
 
 ## Required Negative Cases
 
@@ -72,8 +71,8 @@ the parent.
   fixed parent, or a stale/replaced parent scope.
 - A child cannot receive, reject, or merge its own delivery. A
   parent cannot receive a derived inbox item from a child it does not directly own.
-- A `native-logical` edge cannot be upgraded to `daemon-physical` from a
-  completion, hook, App Server event, thread ID, or process observation.
+- A logical edge cannot be upgraded into a separate session from a completion,
+  hook, App Server event, thread ID, or process observation.
 - A running operation cannot be received by an ancestor, sibling, later
   replacement invocation, or copied process ID. Completion after owner
   cancellation/session closure is retained only as the declared terminal audit
@@ -120,19 +119,20 @@ agent text or timing.
 Implemented the delivery/merge owner in
 `crates/erebor-runtime-daemon/src/context_dag/delivery.rs`.
 
-- A direct child (including a future operation scope admitted through the same
-  checked edge API) publishes a schema-v1 blob at its deterministic sequence
+- A direct same-session child scope (including a future operation scope
+  admitted through the same checked edge API) publishes a schema-v1 blob at its deterministic sequence
   path. The blob retains its direct-parent pin, receiver scope, binding/source
   identity, exact source pin, kind/mode, and bounded selected bytes.
 - Publication is reached only from the existing authenticated managed Codex
   hook route. `PostToolUse` may carry the package-pinned `erebor_delivery`
   shape; it crosses the in-process daemon callback installed at daemon startup.
   No listener, socket, or Codex-specific control protocol was added.
-- The daemon requires a running child session, validates the retained edge and
-  source ancestry, rejects altered/replayed/oversized/out-of-order blobs, and
-  never changes a parent ref during publish. The coordinator is deliberately
-  scope-generic: an adapter can use the same checked direct-child scope for a
-  bounded operation delivery without a generic operation-result state machine.
+- The daemon requires the one root session to be running, validates the
+  retained edge and source ancestry, rejects altered/replayed/oversized/out-of-order
+  blobs, and never changes a parent ref during publish. The coordinator is
+  deliberately scope-generic: an adapter can use the same checked direct-child
+  scope for a bounded operation delivery without a generic operation-result
+  state machine.
 - `erebor session context inbox`, `receive`, and `reject` are daemon-client
   calls. A parent-client names its session and an immutable child
   path/commit/expected head; the daemon derives the receiver scope, verifies

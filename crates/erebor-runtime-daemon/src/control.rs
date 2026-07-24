@@ -98,9 +98,8 @@ use crate::{
 use erebor_runtime_core::ActiveSessionSignal;
 use erebor_runtime_policy::{LocalPolicy, PolicyEvaluator};
 use erebor_runtime_session::{
-    ChildContextDelivery, ChildContextDeliveryHandler, ChildSessionAdmission,
-    ChildSessionAdmissionHandler, ContextOperationAdmission, ContextOperationAdmissionHandler,
-    StreamKind,
+    ChildContextDelivery, ChildContextDeliveryHandler, ContextOperationAdmission,
+    ContextOperationAdmissionHandler, StreamKind,
 };
 
 const CONNECTION_LIMIT: usize = 32;
@@ -130,18 +129,6 @@ struct DaemonControlState {
 struct DaemonConfiguration {
     value: DaemonConfig,
     generation: u64,
-}
-
-impl ChildSessionAdmissionHandler for DaemonControlState {
-    fn admit_child(&self, admission: ChildSessionAdmission) -> std::result::Result<(), String> {
-        let configuration = self
-            .configuration
-            .read()
-            .map_err(|_error| String::from("daemon configuration state is unavailable"))?;
-        self.sessions
-            .admit_delegated_child(admission, configuration.generation, &configuration.value)
-            .map_err(|error| error.to_string())
-    }
 }
 
 impl ChildContextDeliveryHandler for DaemonControlState {
@@ -288,10 +275,6 @@ impl DaemonControlService {
             connections: Arc::new(Semaphore::new(CONNECTION_LIMIT)),
             active_streams: Arc::new(PerUidStreamLimiter::new()),
         });
-        let child_admissions: Arc<dyn ChildSessionAdmissionHandler> = state.clone();
-        state
-            .sessions
-            .bind_child_admission_handler(child_admissions)?;
         let child_deliveries: Arc<dyn ChildContextDeliveryHandler> = state.clone();
         state
             .sessions
@@ -3045,11 +3028,6 @@ mod tests {
             connections: Arc::new(Semaphore::new(1)),
             active_streams: Arc::new(super::PerUidStreamLimiter::new()),
         });
-        let child_admissions: Arc<dyn erebor_runtime_session::ChildSessionAdmissionHandler> =
-            state.clone();
-        state
-            .sessions
-            .bind_child_admission_handler(child_admissions)?;
         let child_deliveries: Arc<dyn erebor_runtime_session::ChildContextDeliveryHandler> =
             state.clone();
         state

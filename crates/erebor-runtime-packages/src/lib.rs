@@ -5,10 +5,9 @@ mod error;
 mod model;
 
 pub use codex::{
-    CodexArtifact, CodexChildDelegationContract, CodexChildProfile, CodexCommandDispatch,
-    CodexEntrypoint, CodexFrozenContextMode, CodexHookContract, CodexHookEventName,
-    CodexHookEventSchema, CodexHookExec, CodexHookShell, CodexManagedArtifacts,
-    CodexPackageDefinition, CodexSupportedPlatform,
+    CodexArtifact, CodexCommandDispatch, CodexEntrypoint, CodexFrozenContextMode,
+    CodexHookContract, CodexHookEventName, CodexHookEventSchema, CodexHookExec, CodexHookShell,
+    CodexManagedArtifacts, CodexPackageDefinition, CodexSupportedPlatform,
 };
 pub use error::{PackageError, Result};
 pub use model::{

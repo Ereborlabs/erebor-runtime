@@ -19,11 +19,12 @@ use erebor_runtime_telemetry::warn;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::{ChildSessionAdmission, ContextOperationAdmission, ContextOperationAdmissionHandler};
+use crate::{ContextOperationAdmission, ContextOperationAdmissionHandler};
 
 use super::{CodexContextDag, CodexScopeContextBinding, CodexSessionError};
 
 const LEASE_LIFETIME: Duration = Duration::from_secs(30);
+const MAX_LOGICAL_FORK_LAST_TURNS: u32 = 64;
 
 /// Kernel-observed identity of the Codex process that launched an authenticated
 /// managed hook. It is kept outside the generic ptrace guard protocol.
@@ -62,7 +63,6 @@ pub(crate) struct CodexInvocationLeaseProfile {
     id: String,
     executable: String,
     trusted_execs: Vec<String>,
-    delegation_bridge: Option<String>,
     terminal_root_context: bool,
 }
 
@@ -72,13 +72,8 @@ impl CodexInvocationLeaseProfile {
             id,
             executable,
             trusted_execs,
-            delegation_bridge: None,
             terminal_root_context: false,
         }
-    }
-
-    pub(crate) fn set_delegation_bridge(&mut self, bridge: Option<String>) {
-        self.delegation_bridge = bridge;
     }
 
     pub(crate) fn set_terminal_root_context(&mut self, enabled: bool) {
@@ -138,7 +133,7 @@ impl InvocationLeaseState {
 enum EffectClass {
     Command,
     InProcessMutation,
-    Delegation,
+    LogicalFork,
     Unsupported,
 }
 
@@ -147,7 +142,7 @@ impl EffectClass {
         match self {
             Self::Command => "command",
             Self::InProcessMutation => "in-process-mutation",
-            Self::Delegation => "delegation",
+            Self::LogicalFork => "logical-fork",
             Self::Unsupported => "unsupported",
         }
     }
@@ -177,8 +172,9 @@ enum InvocationCapability {
     InProcessMutation {
         targets: Vec<String>,
     },
-    Delegation {
-        child_profile: String,
+    LogicalFork {
+        child_thread_id: String,
+        child_turn_id: String,
         frozen_context_mode: CodexFrozenContextMode,
         last_turns: u32,
     },
@@ -240,7 +236,6 @@ pub(crate) struct CodexInvocationLeaseOwner {
     profile_id: String,
     profile_executable: String,
     trusted_profile_execs: Vec<String>,
-    delegation_bridge: Option<String>,
     terminal_root_context: bool,
     command_dispatch: Option<CodexCommandDispatch>,
     audit: Option<JsonlAuditSink>,
@@ -263,7 +258,6 @@ impl CodexInvocationLeaseOwner {
             profile_id: profile.id,
             profile_executable: profile.executable,
             trusted_profile_execs: profile.trusted_execs,
-            delegation_bridge: profile.delegation_bridge,
             terminal_root_context: profile.terminal_root_context,
             command_dispatch: trust.command_dispatch,
             audit: audit_path.map(JsonlAuditSink::new),
@@ -354,8 +348,13 @@ impl CodexInvocationLeaseOwner {
             };
             let transition = if succeeded {
                 if lease.state == InvocationLeaseState::ResponseIssued {
-                    lease.state = InvocationLeaseState::Armed;
-                    Some((lease.clone(), "guarded-hook-exit-success"))
+                    if lease.effect_class == EffectClass::LogicalFork {
+                        lease.state = InvocationLeaseState::DispatchComplete;
+                        Some((lease.clone(), "logical-fork-admitted"))
+                    } else {
+                        lease.state = InvocationLeaseState::Armed;
+                        Some((lease.clone(), "guarded-hook-exit-success"))
+                    }
                 } else {
                     None
                 }
@@ -374,6 +373,16 @@ impl CodexInvocationLeaseOwner {
             state
                 .processes
                 .retain(|_pid, binding| !lease_ids.contains(&binding.lease_id));
+        } else {
+            let logical_fork_leases = state
+                .leases
+                .iter()
+                .filter(|(_lease_id, lease)| lease.effect_class == EffectClass::LogicalFork)
+                .map(|(lease_id, _lease)| lease_id.clone())
+                .collect::<HashSet<_>>();
+            state
+                .lanes
+                .retain(|_lane, lease_id| !logical_fork_leases.contains(lease_id));
         }
         Ok(succeeded)
     }
@@ -527,155 +536,6 @@ impl CodexInvocationLeaseOwner {
             ),
         }?;
         Ok(())
-    }
-
-    pub(crate) fn prepare_child_admission(
-        &self,
-        bridge_pid: i64,
-        runtime: &CodexLeaseRuntimeEvidence,
-    ) -> Result<ChildSessionAdmission, CodexSessionError> {
-        let mut state = self.lock_state()?;
-        self.expire_locked(&mut state)?;
-        let Some(lease_id) = state
-            .processes
-            .get(&bridge_pid)
-            .map(|bound| bound.lease_id.clone())
-        else {
-            return Err(CodexSessionError::IncompatibleProfile {
-                reason: String::from("delegation bridge was not bound by the process guard"),
-                location: snafu::Location::default(),
-            });
-        };
-        let Some(lease) = state.leases.get(&lease_id) else {
-            return Err(CodexSessionError::IncompatibleProfile {
-                reason: String::from(
-                    "delegation bridge lease disappeared before lifecycle admission",
-                ),
-                location: snafu::Location::default(),
-            });
-        };
-        if lease.effect_class != EffectClass::Delegation
-            || lease.state != InvocationLeaseState::EffectBound
-            || lease.identity.runtime_id != runtime.runtime_id()
-        {
-            return Err(CodexSessionError::IncompatibleProfile {
-                reason: String::from("delegation bridge did not match one armed parent invocation"),
-                location: snafu::Location::default(),
-            });
-        }
-        let InvocationCapability::Delegation {
-            child_profile,
-            frozen_context_mode,
-            last_turns,
-        } = &lease.capability
-        else {
-            return Err(CodexSessionError::IncompatibleProfile {
-                reason: String::from("bridge lease does not carry a delegation capability"),
-                location: snafu::Location::default(),
-            });
-        };
-        let Some(parent_context) = lease.context_pin.clone() else {
-            return Err(CodexSessionError::IncompatibleProfile {
-                reason: String::from("delegation lease has no exact causal context pin"),
-                location: snafu::Location::default(),
-            });
-        };
-        Ok(ChildSessionAdmission::new(
-            &self.session_id,
-            parent_context,
-            child_profile,
-            *frozen_context_mode,
-            *last_turns,
-        ))
-    }
-
-    pub(crate) fn complete_child_admission(
-        &self,
-        bridge_pid: i64,
-        accepted: bool,
-    ) -> Result<(), CodexSessionError> {
-        let mut state = self.lock_state()?;
-        self.expire_locked(&mut state)?;
-        let Some(lease_id) = state
-            .processes
-            .get(&bridge_pid)
-            .map(|bound| bound.lease_id.clone())
-        else {
-            return Err(CodexSessionError::IncompatibleProfile {
-                reason: String::from("delegation bridge was not bound by the process guard"),
-                location: snafu::Location::default(),
-            });
-        };
-        let Some(lease) = state.leases.get_mut(&lease_id) else {
-            return Err(CodexSessionError::IncompatibleProfile {
-                reason: String::from("delegation lease disappeared before child admission"),
-                location: snafu::Location::default(),
-            });
-        };
-        if lease.effect_class != EffectClass::Delegation
-            || lease.state != InvocationLeaseState::EffectBound
-        {
-            return Err(CodexSessionError::IncompatibleProfile {
-                reason: String::from("delegation bridge no longer has an armed parent capability"),
-                location: snafu::Location::default(),
-            });
-        }
-        lease.state = if accepted {
-            InvocationLeaseState::DispatchComplete
-        } else {
-            InvocationLeaseState::Closed
-        };
-        let lease = lease.clone();
-        self.record_transition_locked(
-            &mut state,
-            &lease,
-            if accepted {
-                "delegation-guard-event-admitted"
-            } else {
-                "delegation-guard-event-rejected"
-            },
-            None,
-        )?;
-        if !accepted {
-            state.processes.remove(&bridge_pid);
-            state.lanes.retain(|_lane, id| id != &lease_id);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn record_guarded_delegation_exit(
-        &self,
-        bridge_pid: i64,
-        succeeded: bool,
-    ) -> Result<bool, CodexSessionError> {
-        let mut state = self.lock_state()?;
-        let Some(lease_id) = state
-            .processes
-            .remove(&bridge_pid)
-            .map(|bound| bound.lease_id)
-        else {
-            return Ok(false);
-        };
-        let Some(lease) = state.leases.get_mut(&lease_id) else {
-            return Ok(false);
-        };
-        let released = succeeded && lease.state == InvocationLeaseState::DispatchComplete;
-        lease.state = InvocationLeaseState::Closed;
-        let lease = lease.clone();
-        self.record_transition_locked(
-            &mut state,
-            &lease,
-            if released {
-                "delegation-bridge-exit-success"
-            } else {
-                "delegation-bridge-exit-failure"
-            },
-            None,
-        )?;
-        state
-            .processes
-            .retain(|_pid, bound| bound.lease_id != lease_id);
-        Ok(released)
     }
 
     fn record_hook_context(
@@ -951,17 +811,6 @@ impl CodexInvocationLeaseOwner {
                 context_pin,
             );
         }
-        let Some(context) =
-            self.exact_scope_context(state, &input.codex_session_id, &input.turn_id)?
-        else {
-            return self.record_hook_fact_locked(
-                state,
-                "pre-tool-use-no-exact-context",
-                None,
-                payload,
-                context_pin,
-            );
-        };
         let (effect_class, capability) = InvocationCapability::from_input(&input);
         if effect_class == EffectClass::Unsupported {
             if input
@@ -985,15 +834,34 @@ impl CodexInvocationLeaseOwner {
                 context_pin,
             );
         }
+        let Some(context) =
+            self.exact_scope_context(state, &input.codex_session_id, &input.turn_id)?
+        else {
+            if effect_class == EffectClass::LogicalFork {
+                return Err(CodexSessionError::IncompatibleProfile {
+                    reason: String::from(
+                        "Codex logical fork has no exact authenticated parent thread/turn context",
+                    ),
+                    location: snafu::Location::default(),
+                });
+            }
+            return self.record_hook_fact_locked(
+                state,
+                "pre-tool-use-no-exact-context",
+                None,
+                payload,
+                context_pin,
+            );
+        };
         let context_pin = match &capability {
-            InvocationCapability::Delegation {
+            InvocationCapability::LogicalFork {
                 frozen_context_mode,
                 last_turns,
                 ..
             } => {
                 let parent = context_pin.ok_or_else(|| CodexSessionError::IncompatibleProfile {
                     reason: String::from(
-                        "Codex delegation has no authenticated causal context to freeze",
+                        "Codex logical fork has no authenticated causal context to freeze",
                     ),
                     location: snafu::Location::default(),
                 })?;
@@ -1001,7 +869,7 @@ impl CodexInvocationLeaseOwner {
                     self.context_dag()?
                         .ok_or_else(|| CodexSessionError::IncompatibleProfile {
                             reason: String::from(
-                                "Codex delegation has no daemon-owned context repository",
+                                "Codex logical fork has no daemon-owned context repository",
                             ),
                             location: snafu::Location::default(),
                         })?;
@@ -1015,6 +883,7 @@ impl CodexInvocationLeaseOwner {
             | InvocationCapability::InProcessMutation { .. }
             | InvocationCapability::Unsupported => context_pin.cloned(),
         };
+        let mut logical_child_binding = None;
         let operation_scope = match &capability {
             InvocationCapability::Command {
                 operation_key: Some(operation_key),
@@ -1058,9 +927,72 @@ impl CodexInvocationLeaseOwner {
                 ..
             }
             | InvocationCapability::InProcessMutation { .. }
-            | InvocationCapability::Delegation { .. }
             | InvocationCapability::Unsupported => None,
+            InvocationCapability::LogicalFork {
+                child_thread_id,
+                child_turn_id,
+                ..
+            } => {
+                let parent_context =
+                    context_pin
+                        .clone()
+                        .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                            reason: String::from(
+                                "Codex logical fork has no authenticated causal context to pin",
+                            ),
+                            location: snafu::Location::default(),
+                        })?;
+                let handler = self
+                    .operation_admissions
+                    .lock()
+                    .map_err(|_error| CodexSessionError::InvocationLeaseStateLock {
+                        location: snafu::Location::default(),
+                    })?
+                    .clone()
+                    .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                        reason: String::from("Codex logical-fork admission is not daemon-bound"),
+                        location: snafu::Location::default(),
+                    })?;
+                let digest = format!(
+                    "{:x}",
+                    Sha256::digest(format!("{child_thread_id}\0{child_turn_id}").as_bytes())
+                );
+                let key = format!("fork-{}", &digest[..32]);
+                let scope = handler
+                    .admit_operation(
+                        ContextOperationAdmission::new(
+                            self.session_id.clone(),
+                            parent_context,
+                            key,
+                        )
+                        .select_parent_context(),
+                    )
+                    .map_err(|reason| CodexSessionError::IncompatibleProfile {
+                        reason: format!("daemon rejected Codex logical-fork admission: {reason}"),
+                        location: snafu::Location::default(),
+                    })?;
+                let context_dag =
+                    self.context_dag()?
+                        .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                            reason: String::from(
+                                "Codex logical fork has no daemon-owned context repository",
+                            ),
+                            location: snafu::Location::default(),
+                        })?;
+                logical_child_binding = Some(context_dag.bind_admitted_scope(
+                    child_thread_id.clone(),
+                    child_turn_id.clone(),
+                    scope.clone(),
+                )?);
+                Some(scope)
+            }
         };
+        if let Some(binding) = logical_child_binding {
+            state.scopes.insert(
+                (binding.thread_id().to_owned(), binding.turn_id().to_owned()),
+                binding,
+            );
+        }
         let lane = HandoffLane {
             scope_ref: context.scope_ref().to_owned(),
             item_node_stream: context.item_node_stream().to_owned(),
@@ -1260,6 +1192,40 @@ impl CodexInvocationLeaseOwner {
             })
     }
 
+    /// Select the exact same-session source scope for a bounded delivery.
+    /// A completed admitted command owns its dedicated operation scope; every
+    /// other delivery is attributed to the authenticated Codex thread/turn
+    /// that emitted it. No child session identity is involved.
+    pub(crate) fn delivery_scope(
+        &self,
+        payload: &Value,
+        runtime: &CodexLeaseRuntimeEvidence,
+        operation_key: Option<&str>,
+    ) -> Result<ScopeRef, CodexSessionError> {
+        if let Some(operation_key) = operation_key {
+            return self.operation_delivery_scope(payload, runtime, operation_key);
+        }
+        let fields = InvocationTurnFields::parse(payload).ok_or_else(|| {
+            CodexSessionError::InvalidHookEvent {
+                reason: String::from("delivery must identify its exact Codex thread and turn"),
+                location: snafu::Location::default(),
+            }
+        })?;
+        let state = self.lock_state()?;
+        let binding = self
+            .exact_scope_context(&state, &fields.codex_session_id, &fields.turn_id)?
+            .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                reason: String::from("delivery has no exact admitted Codex context scope"),
+                location: snafu::Location::default(),
+            })?;
+        ScopeRef::parse(binding.scope_ref().to_owned()).map_err(|error| {
+            CodexSessionError::InvalidHookEvent {
+                reason: format!("delivery scope reference is invalid: {error}"),
+                location: snafu::Location::default(),
+            }
+        })
+    }
+
     fn record_lifecycle_locked(
         &self,
         state: &mut LeaseState,
@@ -1413,21 +1379,6 @@ impl CodexInvocationLeaseOwner {
             }
             state.processes.remove(&request.pid);
         }
-        if self.is_delegation_bridge_executable(request) {
-            if self.is_delegation_launch(request) {
-                return self.authorize_delegation_launch_locked(state, request);
-            }
-            return self
-                .record_physical_decision_locked(
-                    state,
-                    None,
-                    request,
-                    false,
-                    "erebor-codex-delegation-invalid-bridge-argv",
-                    "the guarded delegation bridge must have its package-declared exact argv",
-                )
-                .map(Some);
-        }
         if !self.is_known_command_handoff(state, request) {
             return Ok(None);
         }
@@ -1480,63 +1431,6 @@ impl CodexInvocationLeaseOwner {
             true,
             "erebor-codex-invocation-lease-command-bound",
             "stopped command child is bound to its exact Codex invocation lease",
-        )
-        .map(Some)
-    }
-
-    fn authorize_delegation_launch_locked(
-        &self,
-        state: &mut LeaseState,
-        request: &InterceptionRequest,
-    ) -> Result<Option<erebor_runtime_core::SurfaceInterceptionDecision>, CodexSessionError> {
-        let candidates = state
-            .leases
-            .values()
-            .filter(|lease| lease.effect_class == EffectClass::Delegation)
-            .filter(|lease| lease.state == InvocationLeaseState::Armed)
-            .filter(|lease| lease.runtime_pid == request.ppid)
-            .map(|lease| lease.id.clone())
-            .collect::<Vec<_>>();
-        let [lease_id] = candidates.as_slice() else {
-            return self
-                .record_physical_decision_locked(
-                    state,
-                    None,
-                    request,
-                    false,
-                    "erebor-codex-delegation-no-matching-parent-lease",
-                    "the guarded delegation bridge has no exact armed parent invocation",
-                )
-                .map(Some);
-        };
-        let Some(lease) = state.leases.get_mut(lease_id) else {
-            return self
-                .record_physical_decision_locked(
-                    state,
-                    None,
-                    request,
-                    false,
-                    "erebor-codex-delegation-missing-parent-lease",
-                    "the guarded delegation bridge lease disappeared before process binding",
-                )
-                .map(Some);
-        };
-        lease.state = InvocationLeaseState::EffectBound;
-        let lease = lease.clone();
-        self.record_transition_locked(state, &lease, "delegation-bridge-process-bound", None)?;
-        state.processes.insert(
-            request.pid,
-            BoundProcess {
-                lease_id: lease_id.clone(),
-            },
-        );
-        self.record_physical_decision_locked(
-            state,
-            Some(&lease),
-            request,
-            true,
-            "erebor-codex-delegation-bridge-bound",
-            "the guarded delegation bridge is bound to its exact Codex invocation lease",
         )
         .map(Some)
     }
@@ -1632,25 +1526,6 @@ impl CodexInvocationLeaseOwner {
                 && lease.runtime_pid == request.ppid
                 && self.command_handoff_matches(lease, request)
         }) || self.is_dispatch_attempt_from_runtime(state, request)
-    }
-
-    fn is_delegation_launch(&self, request: &InterceptionRequest) -> bool {
-        self.delegation_bridge.as_ref().is_some_and(|bridge| {
-            self.is_delegation_bridge_executable(request)
-                && Self::process_argv(request) == [bridge.as_str()]
-        })
-    }
-
-    fn is_delegation_bridge_executable(&self, request: &InterceptionRequest) -> bool {
-        self.delegation_bridge.as_ref().is_some_and(|bridge| {
-            request
-                .process_exec
-                .as_ref()
-                .map_or(request.executable.as_str(), |process| {
-                    process.executable.as_str()
-                })
-                == bridge
-        })
     }
 
     fn is_dispatch_attempt_from_runtime(
@@ -2151,12 +2026,31 @@ impl InvocationCapability {
     fn from_input(input: &InvocationInput) -> (EffectClass, Self) {
         let tool = input.tool_name.to_ascii_lowercase();
         if matches!(tool.as_str(), "erebor_delegate" | "erebor-delegate") {
-            let profile = input
+            let child_thread_id = input
                 .tool_input
-                .get("child_profile")
-                .or_else(|| input.tool_input.get("childProfile"))
+                .get("child_thread_id")
+                .or_else(|| input.tool_input.get("childThreadId"))
                 .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= 128
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                })
+                .map(str::to_owned);
+            let child_turn_id = input
+                .tool_input
+                .get("child_turn_id")
+                .or_else(|| input.tool_input.get("childTurnId"))
+                .and_then(Value::as_str)
+                .filter(|value| {
+                    !value.is_empty()
+                        && value.len() <= 128
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                })
                 .map(str::to_owned);
             let mode = input
                 .tool_input
@@ -2175,18 +2069,25 @@ impl InvocationCapability {
                 .or_else(|| input.tool_input.get("lastTurns"))
                 .and_then(Value::as_u64)
                 .and_then(|value| u32::try_from(value).ok());
-            if let (Some(child_profile), Some(frozen_context_mode), Some(last_turns)) =
-                (profile, mode, last_turns)
+            if let (
+                Some(child_thread_id),
+                Some(child_turn_id),
+                Some(frozen_context_mode),
+                Some(last_turns),
+            ) = (child_thread_id, child_turn_id, mode, last_turns)
             {
                 let valid_turn_count = match frozen_context_mode {
-                    CodexFrozenContextMode::LastTurns => last_turns > 0,
+                    CodexFrozenContextMode::LastTurns => {
+                        (1..=MAX_LOGICAL_FORK_LAST_TURNS).contains(&last_turns)
+                    }
                     CodexFrozenContextMode::None | CodexFrozenContextMode::All => last_turns == 0,
                 };
                 if valid_turn_count {
                     return (
-                        EffectClass::Delegation,
-                        Self::Delegation {
-                            child_profile,
+                        EffectClass::LogicalFork,
+                        Self::LogicalFork {
+                            child_thread_id,
+                            child_turn_id,
                             frozen_context_mode,
                             last_turns,
                         },
@@ -2313,6 +2214,12 @@ impl InterceptionOperationName for InterceptionOperation {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use super::{
+        CodexCommandDispatch, CodexContextDag, CodexInvocationLeaseOwner,
+        CodexInvocationLeaseTrust, CodexLeaseRuntimeEvidence, CodexScopeContextBinding,
+        CodexSessionError, InvocationLeaseState,
+    };
+    use crate::{ContextOperationAdmission, ContextOperationAdmissionHandler};
     use erebor_runtime_context::{
         CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature,
         CommitTime, ScopeRef, ScopeStart,
@@ -2322,14 +2229,6 @@ mod tests {
         FileOperation, FileOperationKind, InterceptionOperation, InterceptionRequest,
         ProcessExecOperation,
     };
-    use erebor_runtime_packages::CodexFrozenContextMode;
-
-    use super::{
-        CodexCommandDispatch, CodexContextDag, CodexInvocationLeaseOwner,
-        CodexInvocationLeaseTrust, CodexLeaseRuntimeEvidence, CodexScopeContextBinding,
-        CodexSessionError, InvocationLeaseState,
-    };
-    use crate::{ContextOperationAdmission, ContextOperationAdmissionHandler};
 
     struct RecordingOperationAdmission {
         scope: ScopeRef,
@@ -3106,7 +3005,7 @@ mod tests {
     }
 
     #[test]
-    fn delegated_child_admission_uses_only_the_guard_bound_lease(
+    fn logical_child_fork_binds_a_new_thread_without_a_child_session(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
         let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
@@ -3134,18 +3033,27 @@ mod tests {
             &scope_ref,
             prompt_path.clone(),
         )?;
-        let mut profile = test_profile();
-        profile.set_delegation_bridge(Some(String::from(
-            "/run/erebor/codex/erebor-child-delegation",
-        )));
+        let child_scope = ScopeRef::scope("session-test", "codex-operation-logical-child")?;
+        assert_eq!(child_scope.session_id(), "session-test");
+        repository.create_scope(
+            child_scope.clone(),
+            ScopeStart::existing_commit(
+                repository.scope_head(&ScopeRef::parse(scope_ref.clone())?)?,
+            ),
+        )?;
+        let admissions = Arc::new(RecordingOperationAdmission {
+            scope: child_scope.clone(),
+            admissions: Mutex::new(Vec::new()),
+        });
         let owner = CodexInvocationLeaseOwner::new(
             "session-test",
             test_actor(),
-            profile,
+            test_profile(),
             CodexInvocationLeaseTrust::default(),
             None,
         );
         owner.set_context_dag(context_dag)?;
+        owner.set_operation_admission_handler(Arc::clone(&admissions) as Arc<_>)?;
         owner.record_scope_context(binding)?;
         owner.record_authenticated_hook(
             erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
@@ -3154,37 +3062,26 @@ mod tests {
             101,
         )?;
         assert!(owner.record_guarded_hook_exit(101, true)?);
-        let mut malformed = delegation_request(200, 42);
-        malformed.argv.push(String::from("--untrusted"));
-        malformed
-            .process_exec
-            .as_mut()
-            .ok_or("delegation request omitted process execution facts")?
-            .argv
-            .push(String::from("--untrusted"));
-        let malformed_decision = owner
-            .physical_effect_decision(&malformed)
-            .ok_or("malformed delegation bridge was not intercepted")?;
+        let admitted = admissions
+            .admissions
+            .lock()
+            .map_err(|_error| "logical-fork admission lock poisoned")?;
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(admitted[0].session_id(), "session-test");
+        assert!(admitted[0].selects_parent_context());
+        assert_eq!(admitted[0].parent_context().used_paths(), &[prompt_path]);
+        drop(admitted);
+        let delivery = serde_json::json!({
+            "session_id": "child-thread",
+            "turn_id": "child-turn",
+        });
         assert_eq!(
-            malformed_decision.into_parts().0,
-            SessionInterceptionDecision::Deny
+            owner.delivery_scope(&delivery, &runtime(), None)?,
+            child_scope
         );
-        let decision = owner
-            .physical_effect_decision(&delegation_request(201, 42))
-            .ok_or("delegation bridge was not physically attributed")?;
-        assert_eq!(decision.into_parts().0, SessionInterceptionDecision::Allow);
-
-        let admission = owner.prepare_child_admission(201, &runtime())?;
-        assert_eq!(admission.parent_session_id(), "session-test");
-        assert_eq!(admission.child_profile(), "fixture-child");
-        assert_eq!(admission.frozen_context_mode(), CodexFrozenContextMode::All);
-        assert_eq!(admission.last_turns(), 0);
-        assert_eq!(admission.parent_context().used_paths(), &[prompt_path]);
-        repository.validate_pin(admission.parent_context())?;
-
-        owner.complete_child_admission(201, true)?;
-        assert!(owner.record_guarded_delegation_exit(201, true)?);
-        assert!(owner.prepare_child_admission(201, &runtime()).is_err());
+        assert!(owner
+            .physical_effect_decision(&process_request(201, 42, "echo unrelated"))
+            .is_none());
         Ok(())
     }
 
@@ -3314,7 +3211,7 @@ mod tests {
 
     fn delegation_event() -> String {
         String::from(
-            r#"{"hook_event_name":"PreToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"delegate-1","tool_name":"erebor_delegate","tool_input":{"child_profile":"fixture-child","frozen_context_mode":"all","last_turns":0}}"#,
+            r#"{"hook_event_name":"PreToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"delegate-1","tool_name":"erebor_delegate","tool_input":{"child_thread_id":"child-thread","child_turn_id":"child-turn","frozen_context_mode":"all","last_turns":0}}"#,
         )
     }
 
@@ -3354,23 +3251,6 @@ mod tests {
                     String::from("-c"),
                     command.to_owned(),
                 ],
-                ..ProcessExecOperation::default()
-            }),
-            ..InterceptionRequest::default()
-        }
-    }
-
-    fn delegation_request(pid: i64, ppid: i64) -> InterceptionRequest {
-        let bridge = String::from("/run/erebor/codex/erebor-child-delegation");
-        InterceptionRequest {
-            pid,
-            ppid,
-            operation: InterceptionOperation::ProcessExec as i32,
-            executable: bridge.clone(),
-            argv: vec![bridge.clone()],
-            process_exec: Some(ProcessExecOperation {
-                executable: bridge.clone(),
-                argv: vec![bridge],
                 ..ProcessExecOperation::default()
             }),
             ..InterceptionRequest::default()

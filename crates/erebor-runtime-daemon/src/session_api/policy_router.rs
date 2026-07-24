@@ -13,8 +13,8 @@ use erebor_runtime_policy::{
     LayeredDecision, LayeredPolicySet, LocalPolicy, PolicyLayer, PolicySet,
 };
 use erebor_runtime_session::{
-    ChildContextDeliveryHandler, ChildSessionAdmissionHandler, CodexAppServerService,
-    CodexHookService, ContextOperationAdmissionHandler, SessionManagerError,
+    ChildContextDeliveryHandler, CodexAppServerService, CodexHookService,
+    ContextOperationAdmissionHandler, SessionManagerError,
 };
 use erebor_runtime_session::{SessionInterceptionRouter, SessionInterceptionRouterFactory};
 
@@ -29,7 +29,6 @@ pub(super) struct StoredPolicyInterceptionRouterFactory {
     codex_hook_service: Arc<CodexHookService>,
     codex_app_server_service: Arc<CodexAppServerService>,
     context_resolver: Arc<SessionContextResolver>,
-    child_admissions: Arc<dyn ChildSessionAdmissionHandler>,
     child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
     operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
 }
@@ -40,7 +39,6 @@ impl StoredPolicyInterceptionRouterFactory {
         codex_hook_service: Arc<CodexHookService>,
         codex_app_server_service: Arc<CodexAppServerService>,
         context_resolver: Arc<SessionContextResolver>,
-        child_admissions: Arc<dyn ChildSessionAdmissionHandler>,
         child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
         operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
     ) -> Self {
@@ -49,7 +47,6 @@ impl StoredPolicyInterceptionRouterFactory {
             codex_hook_service,
             codex_app_server_service,
             context_resolver,
-            child_admissions,
             child_deliveries,
             operation_admissions,
         }
@@ -110,7 +107,7 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
                 return Err(self.invalid_error(spec, error.to_string()));
             }
         }
-        Ok(registration.with_interception_router(router, Arc::clone(&self.child_admissions)))
+        Ok(registration.with_interception_router(router))
     }
 
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {

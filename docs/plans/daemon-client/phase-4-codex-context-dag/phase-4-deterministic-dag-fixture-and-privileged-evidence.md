@@ -1,12 +1,23 @@
 # Phase 4: Deterministic DAG Fixture, Lifecycle, And Privileged Evidence
 
-Status: Proposed. Depends on nested Phases 1–3 and explicit approval.
+Status: In progress. Depends on completed nested Phases 1–3. The fixture is
+being corrected to prove a single session with nested logical scopes; a
+daemon-derived graph-listing client view and renewed privileged evidence remain
+required.
 
 ## Purpose
 
 Prove the complete child-agent Context DAG through the public daemon/client
 path, real daemon-owned processes, Codex-adapter capability mapping, recovery,
 and Linux physical-effect enforcement.
+
+The deterministic fixture has a guarded `ls` command and one long-lived `q`
+command. A logical child fork creates B's same-session scope from P's exact
+pin. A later command from B is a physical descendant of the one root session's
+guarded process tree, attributed by B's invocation lease. q similarly uses its
+own logical operation scope. Hook evidence and deliveries advance only their
+source scopes; a parent changes only when the public receive operation creates
+its two-parent merge.
 
 ## Runner Boundary And Future Docker Contract
 
@@ -41,14 +52,12 @@ daemon recovery, interactive TTY behavior, and real descendant interception.
 
 ## Deterministic Scenario
 
-The pinned fixture suite has two modes. The `codex-v1` observer fixture emits
-the source-pinned native logical collaboration facts. The separate delegation
-fixture owns the approved pre-spawn bridge and creates this physical-child
-topology through the guarded delegation contract:
+The pinned `codex-v1` fixture emits source-pinned logical collaboration facts.
+It has one interactive root process and no delegation bridge:
 
 ```text
-P: outer App Server prompt / parent scope
-  ├─ B: `fork_turns=all`; two child prompts
+P: outer prompt / parent scope in one Erebor session
+  ├─ B: logical child scope from `fork_turns=all`; two child prompts
   │    ├─ B-1 -> lease -> shell -> ls
   │    ├─ B starts long command q -> continues B-2 -> q writes partial/final deliveries
   │    ├─ B polls q -> receives each selected q delivery by merge into B
@@ -59,7 +68,7 @@ P: outer App Server prompt / parent scope
   │         ├─ lease -> shell -> ls
   │         ├─ D result -> B derived inbox
   │         └─ B receives D result -> merge D:r1 into B
-  └─ C: `fork_turns=none`; child prompt -> parent cancellation
+  └─ C: logical child scope from `fork_turns=none`; child prompt -> parent cancellation
 ```
 
 B publishes a final result to P after it has received D's result. P explicitly
@@ -114,18 +123,15 @@ through the normal child-delivery path.
 - Assert graph listing is daemon-derived and root-scope scoped; queued message and
   follow-up are distinct; only P can cancel C; P cannot be woken by a child
   follow-up; and no child can address a sibling or ancestor as a control target.
-- Assert the source observer creates only `native-logical` nodes and pins their
-  physical effects to P's outer invocation. It must be impossible to turn its
-  hook/App Server/thread facts into B or D daemon sessions. Assert the
-  delegation fixture creates `daemon-physical` nodes before their workloads
-  start, with separate child guard/hook/session identities.
-- Assert the delegation fixture's child `ls` audit records validate pins in B
-  or D respectively, never P merely because P spawned them. Assert physical
-  descendants survive their immediate shell's exit according to the existing
-  lease contract.
+- Assert P, B, C, D, and q are scopes under exactly one session. It must be
+  impossible to turn hook/App Server/thread facts into another daemon session.
+- Assert B or D's guarded `ls` audit records validate the exact logical source
+  scope and invocation lease while remaining physical descendants of P's one
+  process guard. Assert descendants survive their immediate shell's exit under
+  the existing lease contract.
 - Assert controller/TTY, daemon-socket absence, package identity, hook ticket,
   input lease, cancellation, detach, child failure, and daemon-loss contracts
-  remain intact for every session in the root-scope subtree.
+  remain intact for the one root session.
 - Assert direct nested fixture execution, forged child spawn, forged child
   delivery, replay, wrong edge, wrong parent, wrong peer, sibling access,
   exhausted depth/fan-out, malformed output, App Server peer-thread request,
@@ -135,22 +141,31 @@ through the normal child-delivery path.
 
 - Crate-local context, daemon, session, and IPC tests cover validated types,
   transaction/recovery states, and adapter translation.
-- `erebor-runtime-e2e` owns the deterministic multi-session daemon/client
+- `erebor-runtime-e2e` owns the deterministic single-session daemon/client
   fixture, repository inspection, two-UID isolation, and negative matrix.
 - The privileged Linux installed-product lane proves the guard's real fork,
-  exec, reparent, cancellation, daemon-loss, and descendant evidence for B and
-  D. The foreground host lab remains a manual diagnostic aid only and never
-  substitutes for those tests.
+  exec, reparent, cancellation, daemon-loss, and descendant evidence for
+  logical B and D scopes. The foreground host lab remains a manual diagnostic
+  aid only and never substitutes for those tests.
 
 ## Acceptance
 
 Phase 4 may use this evidence only when the deterministic fixture proves a
 real Git DAG, not just a parent ID in JSON; parent-owned integration of repeated
-child deliveries; complete supported/denied collaboration routing; and real
-guarded descendant attribution. A real vendor Codex source profile still remains
-Phase 5 evidence because it requires private state projection.
+child deliveries; exactly one session for the nested scopes; and real guarded
+descendant attribution. A real vendor Codex source profile still remains Phase
+5 evidence because it requires private state projection.
 
 ## Stop Point
 
-Stop after the Phase 4 result and update the parent Phase 4 status honestly.
-Do not begin Phase 5 without explicit approval.
+Do not begin Phase 5: nested Phase 4 needs renewed single-session privileged
+evidence and its required daemon-derived graph listing.
+
+## Phase 4 Result
+
+The former privileged result was for the discarded physical-child bridge model
+and is not Phase 4 evidence. Renew the deterministic and privileged matrix
+after the single-session fixture proves P/B/C/D/q as scopes, then add the
+daemon-derived graph-listing command. Docker/Kubernetes execution remains the
+separately deferred design described above, and real authenticated Codex state
+projection remains Phase 5 work.

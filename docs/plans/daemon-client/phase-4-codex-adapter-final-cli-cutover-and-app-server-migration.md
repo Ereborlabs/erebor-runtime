@@ -195,8 +195,8 @@ The deterministic Codex fixture must eventually prove the real Git-shaped
 ContextRepository topology for nested agent work, not merely emit correlated
 JSONL audit records. The proposed
 [Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
-owns the context-family repository, immutable causal fork, separately admitted
-child, source-pinned collaboration mapping, child-originated delivery,
+owns the shared context repository, immutable causal fork, same-session
+logical child scope, source-pinned collaboration mapping, child-originated delivery,
 parent-owned integration decisions, repeatable two-parent pinned merges,
 owner-received asynchronous command results through the same merge contract,
 recovery, and deterministic Linux evidence. It is part of Phase 4's remaining
@@ -206,9 +206,9 @@ approved.
 The local Codex source makes a necessary distinction: native `spawn_agent`
 creates an internal Codex thread, while its hooks and App Server collaboration
 events are post-creation observation. A stock Codex profile can therefore
-contribute a native logical DAG only. Separately governed physical child
-sessions require a pinned pre-spawn Erebor delegation bridge; no hook, thread
-ID, or App Server notification can upgrade an observed child into one.
+contribute a native logical DAG only. No hook, thread ID, App Server
+notification, PID, or nested executable can upgrade an observed child into a
+separate Erebor session.
 
 ### Example And Documentation
 
@@ -480,15 +480,15 @@ Not done:
   generic filesystem-surface state binding described there; Phase 4
   intentionally rejects ambient caller-selected `HOME`/`CODEX_HOME` rather
   than inventing a Codex-specific credential provider.
-- Phase 1 of the [Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
-  is done: checked shared-repository scope forks, parent pins, edge facts, and
-  thread-to-scope routing exist without child-process admission. Phase 2 is in
-  progress: it has the package-declared guarded bridge, exact guard-bound
-  admission, and child session creation, but still needs privileged end-to-end
-  evidence and real frozen-prompt projection. Phases 3–4 still must prove
-  parent-owned repeatable deliveries, source-surface routing/denial, guarded
-  child physical descendants, and deterministic fixture evidence before they
-  can contribute to a renewed Phase 4 acceptance claim.
+- Phases 1–3 of the [Codex Context DAG subplan](phase-4-codex-context-dag/README.md)
+  establish checked same-session scope forks, parent pins, edge facts,
+  thread-to-scope routing, and parent-owned deliveries. Phase 2 deliberately
+  removed the package-declared bridge and child-session path: a Codex thread is
+  never another Erebor session. Nested Phase 4 still must prove the complete
+  deterministic P/B/C/D/q fixture, source-surface routing/denial, guarded
+  descendants attributed to logical scopes, a public graph view, and renewed
+  privileged evidence before it can contribute to a renewed Phase 4 acceptance
+  claim.
 - The implemented Linux terminal contract still needs its privileged fixture
   evidence: prove the requested initial geometry and a real `SIGWINCH` resize
   in the staged controller, then prove detach/reattach from the foreground

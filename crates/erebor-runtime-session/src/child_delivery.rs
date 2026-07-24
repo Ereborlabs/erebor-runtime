@@ -7,7 +7,7 @@ use erebor_runtime_context::ScopeRef;
 /// workload socket or a second process-guard protocol.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChildContextDelivery {
-    child_session_id: String,
+    source_session_id: String,
     sequence: u64,
     kind: String,
     mode: String,
@@ -18,14 +18,14 @@ pub struct ChildContextDelivery {
 impl ChildContextDelivery {
     #[must_use]
     pub fn new(
-        child_session_id: impl Into<String>,
+        source_session_id: impl Into<String>,
         sequence: u64,
         kind: impl Into<String>,
         mode: impl Into<String>,
         selected_bytes: Vec<u8>,
     ) -> Self {
         Self {
-            child_session_id: child_session_id.into(),
+            source_session_id: source_session_id.into(),
             sequence,
             kind: kind.into(),
             mode: mode.into(),
@@ -41,8 +41,8 @@ impl ChildContextDelivery {
     }
 
     #[must_use]
-    pub fn child_session_id(&self) -> &str {
-        &self.child_session_id
+    pub fn source_session_id(&self) -> &str {
+        &self.source_session_id
     }
 
     #[must_use]

@@ -192,11 +192,10 @@ phases must preserve them unless the user explicitly changes the architecture.
 6. **Nested agent processes do not escape governance.** A raw nested process
    runs only as a descendant under the admitted session's namespace, guard,
    cgroup, endpoint projection, policy, and daemon-loss contract. It receives
-   no independent agent trust. The only exception is the explicit,
-   daemon-mediated child-agent contract in the proposed Phase 4
-   [Codex Context DAG subplan](phase-4-codex-context-dag/README.md). That
-   contract creates a separately admitted child session in one shared context
-   family; it never promotes a raw `exec codex` descendant.
+   no independent agent trust. The Phase 4
+   [Codex Context DAG subplan](phase-4-codex-context-dag/README.md) records
+   Codex threads as checked logical scopes inside that same session; it never
+   promotes a raw `exec codex` descendant or creates a child session.
 7. **The host example is deliberately temporary.** It starts a foreground root
    daemon with isolated temporary state/runtime/log roots and a unique absolute
    Unix socket. The explicit client `--socket` points only to that local
@@ -277,17 +276,14 @@ last direct Codex launch. Its intended evidence is:
 - the same deterministic fixture in the privileged Linux/systemd/two-UID
   matrix, including process-guard and daemon-loss cases.
 
-The proposed [Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
-extends this evidence with an explicit child-session path. It preserves the
-direct-nested-process denial boundary while proving a Git-shaped scope DAG in
-the existing context repository: causal forks, child-originated delivery blobs,
-parent-owned receives, repeatable pinned merges, owner-received asynchronous
-command results through the same parent-owned merge contract, and physical
-descendant attribution. It does not require Phase 5 state projection or a real
-authenticated vendor binary.
-For stock Codex, native child threads remain logical observations inside the
-outer governed invocation; a separately governed child requires the subplan's
-explicit pre-spawn delegation bridge.
+The [Codex Context DAG subplan](phase-4-codex-context-dag/README.md) extends
+this evidence with a same-session logical scope DAG. It preserves the
+direct-nested-process denial boundary while proving causal forks,
+child-originated delivery blobs, parent-owned receives, repeatable pinned
+merges, owner-received asynchronous command results, and physical descendant
+attribution. It does not require Phase 5 state projection or a real
+authenticated vendor binary. Stock Codex child threads remain logical scopes
+inside the outer governed invocation.
 
 The recovered `examples/codex-app-server` host lab is a small foreground
 fixture-acceptance test, not a system-wide installation or a real-Codex TUI

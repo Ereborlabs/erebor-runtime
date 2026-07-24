@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::HashSet,
     sync::{Arc, Mutex},
 };
 
@@ -7,7 +7,7 @@ use erebor_runtime_ipc::v1::{
     GuardLifecycleEvent, GuardLifecycleEventKind, GuardLifecycleReply, GuardLifecycleReplyKind,
 };
 
-use crate::{runtime_interception_broker::GuardLifecycleHandler, ChildSessionAdmissionHandler};
+use crate::runtime_interception_broker::GuardLifecycleHandler;
 
 use super::{broker::LinuxHookPeerInspector, CodexInvocationLeaseOwner, CodexManagedSession};
 
@@ -18,27 +18,18 @@ use super::{broker::LinuxHookPeerInspector, CodexInvocationLeaseOwner, CodexMana
 pub(crate) struct CodexGuardLifecycleHandler {
     managed_session: CodexManagedSession,
     lease_owner: Arc<CodexInvocationLeaseOwner>,
-    child_admissions: Arc<dyn ChildSessionAdmissionHandler>,
-    tracked_pids: Mutex<HashMap<i64, ManagedLifecycle>>,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum ManagedLifecycle {
-    Hook,
-    DelegationBridge,
+    hook_pids: Mutex<HashSet<i64>>,
 }
 
 impl CodexGuardLifecycleHandler {
     pub(crate) fn new(
         managed_session: CodexManagedSession,
         lease_owner: Arc<CodexInvocationLeaseOwner>,
-        child_admissions: Arc<dyn ChildSessionAdmissionHandler>,
     ) -> Self {
         Self {
             managed_session,
             lease_owner,
-            child_admissions,
-            tracked_pids: Mutex::new(HashMap::new()),
+            hook_pids: Mutex::new(HashSet::new()),
         }
     }
 
@@ -62,10 +53,14 @@ impl CodexGuardLifecycleHandler {
             .iter()
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>();
-        if event.exec_history == expected_history {
-            return self.admit_hook_exec(event);
+        if event.exec_history != expected_history {
+            return Self::reply(
+                event,
+                GuardLifecycleReplyKind::Ignore,
+                "exec chain is not a managed Codex hook",
+            );
         }
-        self.admit_delegation_exec(event)
+        self.admit_hook_exec(event)
     }
 
     fn admit_hook_exec(&self, event: &GuardLifecycleEvent) -> GuardLifecycleReply {
@@ -113,9 +108,9 @@ impl CodexGuardLifecycleHandler {
             );
         }
         match self.managed_session.issue_guarded_hook_ticket(peer) {
-            Ok(_ticket) => match self.tracked_pids.lock() {
-                Ok(mut pids) => {
-                    pids.insert(event.pid, ManagedLifecycle::Hook);
+            Ok(_ticket) => match self.hook_pids.lock() {
+                Ok(mut hook_pids) => {
+                    hook_pids.insert(event.pid);
                     Self::reply(
                         event,
                         GuardLifecycleReplyKind::Hold,
@@ -141,145 +136,6 @@ impl CodexGuardLifecycleHandler {
                     "managed Codex hook ticket issuance failed",
                 )
             }
-        }
-    }
-
-    fn admit_delegation_exec(&self, event: &GuardLifecycleEvent) -> GuardLifecycleReply {
-        let Some(bridge_path) = self.managed_session.profile().delegation_bridge_path() else {
-            return Self::reply(
-                event,
-                GuardLifecycleReplyKind::Ignore,
-                "Codex package has no daemon-physical delegation bridge",
-            );
-        };
-        let bridge = bridge_path.display().to_string();
-        let expected_history = vec![
-            self.managed_session
-                .profile()
-                .executable()
-                .display()
-                .to_string(),
-            bridge.clone(),
-        ];
-        if event.exec_history != expected_history {
-            return Self::reply(
-                event,
-                GuardLifecycleReplyKind::Ignore,
-                "exec chain is not the managed Codex delegation bridge",
-            );
-        }
-        let pid = match i32::try_from(event.pid) {
-            Ok(pid) if pid > 0 => pid,
-            _ => {
-                return Self::reply(
-                    event,
-                    GuardLifecycleReplyKind::Deny,
-                    "managed Codex delegation lifecycle event had an invalid process id",
-                );
-            }
-        };
-        let peer = match LinuxHookPeerInspector::inspect_pid(pid, "") {
-            Ok(peer) => peer,
-            Err(error) => {
-                erebor_runtime_telemetry::log!(
-                    erebor_runtime_telemetry::tracing::Level::WARN,
-                    error = ?error,
-                    pid = event.pid,
-                    "managed Codex delegation bridge peer inspection failed"
-                );
-                return Self::reply(
-                    event,
-                    GuardLifecycleReplyKind::Deny,
-                    "managed Codex delegation bridge peer inspection failed",
-                );
-            }
-        };
-        if peer.executable != bridge || peer.argv.as_slice() != [bridge.as_str()] {
-            return Self::reply(
-                event,
-                GuardLifecycleReplyKind::Deny,
-                "managed Codex delegation bridge identity did not match its projected profile",
-            );
-        }
-        let runtime = match LinuxHookPeerInspector::runtime_evidence(
-            &peer,
-            self.managed_session.profile().executable(),
-        ) {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                erebor_runtime_telemetry::log!(
-                    erebor_runtime_telemetry::tracing::Level::WARN,
-                    error = ?error,
-                    pid = event.pid,
-                    "managed Codex delegation bridge runtime evidence failed"
-                );
-                return Self::reply(
-                    event,
-                    GuardLifecycleReplyKind::Deny,
-                    "managed Codex delegation bridge runtime evidence failed",
-                );
-            }
-        };
-        let admission = match self
-            .lease_owner
-            .prepare_child_admission(event.pid, &runtime)
-        {
-            Ok(admission) => admission,
-            Err(error) => {
-                erebor_runtime_telemetry::log!(
-                    erebor_runtime_telemetry::tracing::Level::WARN,
-                    error = ?error,
-                    pid = event.pid,
-                    "managed delegation bridge has no exact parent lease"
-                );
-                return Self::reply(
-                    event,
-                    GuardLifecycleReplyKind::Deny,
-                    "managed delegation bridge has no exact parent lease",
-                );
-            }
-        };
-        if let Err(reason) = self.child_admissions.admit_child(admission) {
-            let _result = self.lease_owner.complete_child_admission(event.pid, false);
-            erebor_runtime_telemetry::log!(
-                erebor_runtime_telemetry::tracing::Level::WARN,
-                %reason,
-                pid = event.pid,
-                "daemon rejected managed child admission"
-            );
-            return Self::reply(
-                event,
-                GuardLifecycleReplyKind::Deny,
-                "daemon rejected managed child admission",
-            );
-        }
-        if let Err(error) = self.lease_owner.complete_child_admission(event.pid, true) {
-            erebor_runtime_telemetry::log!(
-                erebor_runtime_telemetry::tracing::Level::WARN,
-                error = ?error,
-                pid = event.pid,
-                "managed child admission could not complete its delegation lease"
-            );
-            return Self::reply(
-                event,
-                GuardLifecycleReplyKind::Deny,
-                "managed child admission could not complete its delegation lease",
-            );
-        }
-        match self.tracked_pids.lock() {
-            Ok(mut pids) => {
-                pids.insert(event.pid, ManagedLifecycle::DelegationBridge);
-                Self::reply(
-                    event,
-                    GuardLifecycleReplyKind::Hold,
-                    "daemon admitted child from the managed delegation bridge",
-                )
-            }
-            Err(_error) => Self::reply(
-                event,
-                GuardLifecycleReplyKind::Deny,
-                "managed delegation lifecycle state is unavailable",
-            ),
         }
     }
 
@@ -311,8 +167,8 @@ impl CodexGuardLifecycleHandler {
     }
 
     fn handle_exit(&self, event: &GuardLifecycleEvent) -> GuardLifecycleReply {
-        let tracked = match self.tracked_pids.lock() {
-            Ok(mut pids) => pids.remove(&event.pid),
+        let managed_hook = match self.hook_pids.lock() {
+            Ok(mut hook_pids) => hook_pids.remove(&event.pid),
             Err(_error) => {
                 return Self::reply(
                     event,
@@ -321,7 +177,7 @@ impl CodexGuardLifecycleHandler {
                 );
             }
         };
-        let Some(tracked) = tracked else {
+        if !managed_hook {
             if let Err(error) = self.lease_owner.record_guarded_process_exit(event.pid) {
                 erebor_runtime_telemetry::log!(
                     erebor_runtime_telemetry::tracing::Level::WARN,
@@ -341,29 +197,22 @@ impl CodexGuardLifecycleHandler {
                 "process exit is not a managed Codex hook",
             );
         };
-        if tracked == ManagedLifecycle::Hook {
-            if let Err(error) = self.lease_owner.record_guarded_process_exit(event.pid) {
-                erebor_runtime_telemetry::log!(
-                    erebor_runtime_telemetry::tracing::Level::WARN,
-                    error = ?error,
-                    pid = event.pid,
-                    "managed Codex hook exit observation failed"
-                );
-                return Self::reply(
-                    event,
-                    GuardLifecycleReplyKind::Deny,
-                    "managed Codex hook exit observation failed",
-                );
-            }
+        if let Err(error) = self.lease_owner.record_guarded_process_exit(event.pid) {
+            erebor_runtime_telemetry::log!(
+                erebor_runtime_telemetry::tracing::Level::WARN,
+                error = ?error,
+                pid = event.pid,
+                "managed Codex hook exit observation failed"
+            );
+            return Self::reply(
+                event,
+                GuardLifecycleReplyKind::Deny,
+                "managed Codex hook exit observation failed",
+            );
         }
-        let released = match tracked {
-            ManagedLifecycle::Hook => self
-                .lease_owner
-                .record_guarded_hook_exit(event.pid, event.exited_successfully),
-            ManagedLifecycle::DelegationBridge => self
-                .lease_owner
-                .record_guarded_delegation_exit(event.pid, event.exited_successfully),
-        };
+        let released = self
+            .lease_owner
+            .record_guarded_hook_exit(event.pid, event.exited_successfully);
         match released {
             Ok(true) => Self::reply(
                 event,

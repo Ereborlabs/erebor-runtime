@@ -6,7 +6,7 @@ it does not replace committed Rust tests.
 ## Purpose
 
 Exercise one root session's daemon-owned context repository across nested
-sessions and verify the Git topology, frozen forks, routed communication,
+logical scopes and verify the Git topology, frozen forks, routed communication,
 parent-owned integration, and Linux physical effects under real process
 lifecycle conditions.
 
@@ -26,12 +26,11 @@ lifecycle conditions.
    state/runtime/log roots and a pinned deterministic package.
 2. Load the fixture, create parent P through typed App Server input, and record
    its immutable prompt decision pin.
-3. Run the stock-Codex observer fixture and record its native logical child
-   facts. Prove that its thread/hook/App Server facts create no child daemon
-   session and that its physical effects remain under P's invocation.
-4. Have P execute the package-declared guarded bridge for B (`all`) and C
-   (`none`), then have B do the same for D (`last(1)`). Record every admission, scope
-   ref, derived root scope, package, hook registration, guard registration,
+3. Run the deterministic fixture and record its native logical child facts.
+   Prove that thread/hook/App Server facts create no child daemon session and
+   that physical effects remain under P's one invocation.
+4. Have P create B (`all`) and C (`none`) through authenticated logical-fork
+   facts, then have B create D (`last(1)`). Record each same-session scope ref,
    parent pin, frozen-projection digest, and explicit parent-receive contract.
 5. Have B queue a delivery for P. Verify P's ref is unchanged, then have P
    receive it. Have P send B a follow-up; B requests D; D queues a result for
@@ -63,7 +62,8 @@ lifecycle conditions.
   payloads redacted;
 - root-scope/ref inventory, commit parent lists, selected blobs, pin validation
   results, derived delivery/inbox sequence, and merge/rejection receipts;
-- child session/admission/endpoint identities and package/installation hashes;
+- one root session identity plus logical scope/parent-pin identities and
+  package/installation hashes;
 - hook, lease, process-guard, fork/exec/reparent, and final allow/deny audit
   records for P, B, C, and D;
 - explicit outcome for each daemon-loss and recovery point; and

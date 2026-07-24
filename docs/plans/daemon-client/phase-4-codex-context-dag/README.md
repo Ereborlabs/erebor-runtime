@@ -1,18 +1,19 @@
-# Phase 4 Codex Context DAG And Child-Agent Delegation
+# Phase 4 Codex Context DAG
 
-Status: In progress. Phases 1–3 are done; Phase 4 remains proposed.
+Status: In progress. The deterministic fixture and privileged Linux evidence
+pass, but nested Phase 4 still needs its required daemon-derived graph-listing
+client view. The broader parent Phase 4 has its separately recorded foreground
+host-lab recovery verification.
 
 Parent plan: [Phase 4: Codex Adapter, Final CLI Cutover, And App Server Migration](../phase-4-codex-adapter-final-cli-cutover-and-app-server-migration.md)
 
 ## Goal
 
-Make nested Codex work belong to a durable Git-shaped scope DAG. Where an
-approved pre-spawn bridge exists, make a separately trusted child an explicit
-daemon-owned session; otherwise retain the native child only as a logical node
-inside the outer session. Prove causal forks, sibling branches, nested branches,
-frozen spawn inputs, routed inter-agent communication, parent-owned integration
-decisions, repeatable merges, lifecycle control, and accurate physical-effect
-attribution for each binding.
+Make nested Codex work belong to a durable Git-shaped scope DAG inside one
+daemon-owned Erebor session. One `erebor run … codex` creates one session, one
+TTY, one hook registration, and one Linux guarded process tree. Codex threads,
+turns, `spawn_agent` children, and asynchronous operations are named scopes in
+that session, not separately trusted child sessions.
 
 The DAG has no new `ContextFamilyId`. Its identity is the daemon-owned
 `ContextRepository` plus the top-level root `ScopeRef`; immutable direct-parent
@@ -23,20 +24,16 @@ value that must be kept consistent with those facts.
 
 Here “root scope” means the initial agent scope for this DAG—P's outer prompt
 scope in the fixture—not necessarily the repository's `ScopeRef::root(...)`.
-The latter is merely a session's default ref. A physical child starts at its own
-`ScopeRef::root(child_session_id)` forked from the exact parent pin; a native
-logical child uses a named scope in its existing session.
+The latter is merely the session's default ref. Every nested Codex thread and
+operation uses a named scope in the same session namespace.
 
 ## Minimal Durable Model
 
 Keep the durable model inside the existing scopes and repository:
 
-- Reuse `ScopeRef` for the root, agent-child, and operation refs; reuse
-  `ContextPin` for every exact fork source and received result; reuse existing
-  `SessionAdmission` and `SessionSpec` for a physical child session.
-- Add only an optional parent `ContextPin` to a child `SessionSpec`. It lets the
-  daemon reopen the parent/root repository on recovery; the child root scope is
-  already derivable from the child `SessionId`.
+- Reuse `ScopeRef` for root, logical child, and operation refs, and reuse
+  `ContextPin` for every exact fork source and received result. A logical child
+  has no `SessionSpec`, session admission, or separate runtime identity.
 - Use `ContextRepository::fork_scope`'s existing parent append to write one
   schema-versioned edge blob into the parent scope atomically with creation of
   the child ref. A child or operation writes each bounded delivery blob only in
@@ -75,7 +72,7 @@ every App Server thread as a child agent.
 
 | Codex mechanism | What the source does | Erebor direction |
 | --- | --- | --- |
-| `spawn_agent` | Creates a directed internal Codex thread, carrying a parent thread, depth, canonical agent path, role/nickname, and open/closed lifecycle. A child has one persisted parent, but it is not a new operating-system process. | It provides native logical-DAG facts only. A separately governed daemon child requires an explicit pre-spawn Erebor delegation bridge; observing the native spawn afterward cannot create one. |
+| `spawn_agent` | Creates a directed internal Codex thread, carrying a parent thread, depth, canonical agent path, role/nickname, and open/closed lifecycle. A child has one persisted parent, but it is not a new operating-system process. | It is a checked logical scope fork in the same Erebor session. Observing it cannot create a session, guard, hook socket, or separate process tree. |
 | `fork_turns` | Materializes the parent's history, copies a filtered frozen projection using `none`, `all`, or last *N* turns, and deliberately excludes internal tool traffic and inter-agent traffic. | The daemon creates a checked child scope from an exact parent `ContextPin`; a profile may select an equivalent bounded projection. It is never live sharing. |
 | `send_message` | Queues a bounded inter-agent delivery without waking the recipient. | The daemon appends a candidate delivery in the sender's scope; the receiver derives it in its inbox query. It cannot write the receiver's scope. |
 | `followup_task` | Delivers a message and requests a target child turn. | The receiver's existing session receives a policy-checked follow-up request; only an allowed ancestor-to-descendant route may wake a child initially. |
@@ -99,22 +96,22 @@ Erebor adopts the useful collaboration semantics while keeping the
 hook payload, a PID, or a child-supplied parent ID—as the authoritative
 provenance graph.
 
-### Native And Physical Child Modes
+### Logical Child Scope Contract
 
-The general Context DAG has two explicit execution bindings. They share the
-same parent-edge, frozen-fork, derived-inbox, and parent-integration semantics,
-but do not make the same containment claim.
+The general Context DAG uses `native-logical` child scopes for Codex work. The
+authenticated adapter supplies bounded child thread/turn IDs and a frozen
+parent projection. The daemon creates the direct scope edge from that exact pin
+and binds the returned scope to the declared thread/turn.
 
-| Binding | Creation | Physical-effect attribution | Trust boundary |
-| --- | --- | --- | --- |
-| Native logical child | Stock Codex internally executes `spawn_agent`. Erebor observes source-pinned facts after creation. | Effects remain under the one outer governed Codex invocation; a per-thread process-guard claim is impossible. | No separate daemon session, no new socket/ticket/UID/process isolation, and no retroactive elevation. |
-| Daemon physical child | An approved Erebor delegation bridge obtains admission **before** starting the child workload. | Effects are pinned to the child invocation, with its own session/guard/hook registrations. | Separately governed child, fixed parent edge, and no parent-branch write capability. |
+This records causal ownership without inventing operating-system containment:
+all physical descendants remain in the root session's existing guarded process
+tree. A command launched by logical child B is pinned to B's invocation lease,
+but it is not a new session or another guard. There is no delegation bridge,
+child session, child hook listener, or bridge package contract in this phase.
 
-Phase 4 may implement the native logical adapter only as evidence unless a
-pinned pre-spawn bridge exists. The deterministic fixture must exercise the
-physical-child contract. A real Codex profile may claim physical-child support
-only after it supplies an audited, version-pinned bridge; neither a hook nor an
-App Server notification is that bridge.
+An independently launched agent session can be designed later as an explicit
+user-facing runner feature. It must never be inferred from a Codex thread,
+hook, PID, or App Server notification.
 
 ## Asynchronous Command Results
 
@@ -185,7 +182,8 @@ command operation each append a bounded delivery blob in their own scope that
 names the exact source pin and receiver scope. The owner's receive request
 names that delivery and its expected current head; the coordinator creates the
 same two-parent merge and receipt in either case. The only differences are the
-source identity and execution binding: child session versus process capability.
+source scope and the existing invocation/operation lease that carries physical
+attribution.
 
 The automatic Codex completion notification maps to the second step, not the
 fourth. In this contract a parent must explicitly receive the selected delivery;
@@ -196,19 +194,18 @@ its own.
 
 ## Target Context Topology
 
-This diagram shows the daemon-physical fixture. A native logical run has the
-same context edges and derived inboxes, but each child has `P`'s one physical
-invocation instead of its own guard/session binding.
+This diagram shows the single-session fixture. P, B, C, D, and q are scopes in
+one daemon-owned repository and one guarded Linux process tree.
 
 ```text
-one daemon-owned ContextRepository, rooted at P's ScopeRef
-  parent session P / parent scope (the DAG root)
-    ├─ fork: child session B / child scope
+one daemon-owned ContextRepository and one Erebor session, rooted at P's ScopeRef
+  parent scope P (the DAG root)
+    ├─ fork: logical child scope B
     │    ├─ B delivery blob -> P derived inbox -> P receives -> merge into P
     │    ├─ prompt B-2 -> lease -> shell -> ls descendants
     │    └─ fork: grandchild D / grandchild scope
     │         └─ D delivery blob -> B derived inbox -> B receives -> merge into B
-    └─ fork: child session C / child scope
+    └─ fork: logical child scope C
          └─ cancelled: no delivery merge
 ```
 
@@ -251,7 +248,7 @@ ordered parent merges.
   outer invocation's physical attribution.
 - A raw nested process, copied ticket, inherited environment, direct hook,
   direct daemon-socket connection, or unleased `exec codex` cannot create a
-  child session, scope, delivery, or merge.
+  scope edge, delivery, merge, or second session.
 - Parent and child continue independently. Cancellation, failure, expiry,
   daemon loss, or recovery cannot invent a delivery or merge from output,
   history, PID reuse, or a stale in-memory graph.
@@ -284,21 +281,19 @@ erebor-runtime-context
   refs, object validation, and safe helpers to add edge/delivery/receipt trees
 
 erebor-runtime-core
-  existing SessionAdmission/SessionSpec, with only an optional parent
-  ContextPin for a child; no DAG ID, contribution/decision object, or
-  operation ID
+  existing session identity and no nested-session extension; no DAG ID,
+  contribution/decision object, or operation ID
 
 erebor-runtime-daemon
   a context coordinator that resolves the existing root session artifact,
-  serializes scope writes, uses ordinary session admission, handles the
-  existing guard lifecycle event for the declared bridge, derives delivery
-  queries/receives from scopes, and owns recovery/audit. No parallel registry
-  or graph ledger.
+  serializes scope writes, admits same-session logical forks, derives delivery
+  queries/receives from scopes, and owns recovery/audit. No parallel registry,
+  graph ledger, or child-session lifecycle path.
 
 erebor-runtime-session/src/agents/codex
   authenticated native spawn, communication, completion, lifecycle, and
-  App-Server-surface mapping; source command/poll mapping, child hook
-  registration, child context writes, and lease-to-physical-effect pins
+  App-Server-surface mapping; source command/poll mapping, same-session child
+  context writes, and lease-to-physical-effect pins
 
 erebor-runtime-ipc
   the existing guard lifecycle event and normal hold/release/deny reply; never
@@ -313,11 +308,11 @@ erebor-runtime-e2e
 
 - [Lifecycle probe](lifecycle-probe.md)
 - [Phase 1: Context Scopes And Causal Fork Contract](phase-1-context-family-and-causal-fork-contract.md)
-- [Phase 2: Child Admission And Guarded Delegation Bridge](phase-2-child-admission-and-private-delegation-bridge.md)
+- [Phase 2: Logical Child Scope Admission](phase-2-child-admission-and-private-delegation-bridge.md)
 - [Phase 3: Child Deliveries, Parent-Owned Receives, Repeatable Merges, And Recovery](phase-3-child-contributions-repeatable-merges-and-recovery.md)
 - [Phase 4: Deterministic DAG Fixture, Lifecycle, And Privileged Evidence](phase-4-deterministic-dag-fixture-and-privileged-evidence.md)
 
 ## Stop Point
 
-Implement only one approved nested phase at a time. The first implementation
-step is Phase 1. Do not begin Phase 5 merely because this plan exists.
+Do not begin Phase 5 merely because the fixture evidence passes. Nested Phase 4
+remains open until the required graph-listing client view is implemented.

@@ -10,6 +10,7 @@ pub struct ContextOperationAdmission {
     session_id: String,
     parent_context: ContextPin,
     operation_key: String,
+    select_parent_context: bool,
 }
 
 impl ContextOperationAdmission {
@@ -23,7 +24,19 @@ impl ContextOperationAdmission {
             session_id: session_id.into(),
             parent_context,
             operation_key: operation_key.into(),
+            select_parent_context: false,
         }
+    }
+
+    /// Make the admitted scope a causal child of the supplied context pin.
+    ///
+    /// Ordinary asynchronous operations keep their own detached result scope
+    /// and are later merged through a delivery. A logical agent/thread fork is
+    /// different: the daemon must first record the parent-to-child scope edge.
+    #[must_use]
+    pub const fn select_parent_context(mut self) -> Self {
+        self.select_parent_context = true;
+        self
     }
 
     #[must_use]
@@ -39,6 +52,11 @@ impl ContextOperationAdmission {
     #[must_use]
     pub fn operation_key(&self) -> &str {
         &self.operation_key
+    }
+
+    #[must_use]
+    pub const fn selects_parent_context(&self) -> bool {
+        self.select_parent_context
     }
 }
 

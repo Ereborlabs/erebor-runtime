@@ -20,29 +20,22 @@ directly.
   pin, child scope, depth, source identity where applicable, and execution
   binding. Membership is derived by walking those checked edge blobs to root.
 - Treat that top-level root as the initial agent scope, not necessarily the
-  repository's `ScopeRef::root(...)`. A physical child does begin at its own
-  `ScopeRef::root(child_session_id)`; a native logical child uses a named scope
-  in the already-running session.
-- Add only `parent_context: Option<ContextPin>` to an otherwise ordinary child
-  `SessionSpec`. This lets recovery locate the root repository through existing
-  session records; the child scope remains `ScopeRef::root(child_session_id)`.
-  A `native-logical` child has no SessionSpec or separate process guard; a
-  `daemon-physical` child uses the existing session-admission path and does.
+  repository's `ScopeRef::root(...)`. Every nested Codex child uses a named
+  same-session scope. It has no SessionSpec or separate process guard.
 - Assign each authenticated Codex App Server/collaboration thread a distinct
   named scope in that same repository. A thread ID remains a same-session
   routing key: a generic App Server `thread/fork` does not by itself create a
   trusted child edge or a child session. Only an authenticated source action
   plus the checked coordinator fork can do that.
-- Change the session registry accordingly: only the root session owns a
-  `SessionContextArtifact`; a child with `parent_context` resolves that artifact
-  recursively instead of creating a second per-session repository.
+- Only the one root session owns the `SessionContextArtifact`; all nested
+  logical scopes live in that one repository.
 - Expose only a checked `ScopeRef` decode for the scope string retained in a
   `ContextPin`, so recovery can resolve the parent session without treating a
   raw ref string as authority. Do not add another identifier for that lookup.
 - Replace the current per-session `output/codex-context` repository assumption
   with the root session's existing daemon-owned `SessionContextArtifact`
   repository. That one repository contains the direct scope refs for the parent
-  and every admitted child session; it is not a second repository.
+  and every admitted logical child; it is not a second repository.
 - Add one daemon-owned coordinator that creates the child ref with
   `ContextRepository::fork_scope` from the verified parent pin commit and
   atomically appends a bounded parent-side child-admitted fact. The coordinator
@@ -60,9 +53,10 @@ directly.
   remain pinned to the outer session invocation. It must never acquire a
   child-session identity from an App Server event, a hook, a thread ID, or a
   later process observation.
-- Keep session-local audit validation exact: a child physical-effect audit pin
-  still names the child session's scope ref. Parent/child relationship evidence
-  is an additional checked edge fact, never an exemption from pin validation.
+- Keep session-local audit validation exact: a logical child effect is pinned
+  to its exact same-session scope and invocation lease. Parent/child
+  relationship evidence is additional checked context, never an exemption from
+  pin validation.
 - Extend the context crate only where needed to construct a safe result tree
   from an existing parent tree. Do not expose raw Git mutation or unchecked
   object IDs to the daemon, adapter, CLI, or fixture.
@@ -81,8 +75,8 @@ directly.
 - Parent-side child-admitted facts and refs change together or neither changes.
 - The scope graph proves `P -> B`, `P -> C`, and `B -> D`; no direct edge or ref can
   make B a child of C or an independent root.
-- The repository proves the same logical graph for both bindings, while audit
-  evidence proves a separate child process only for `daemon-physical` edges.
+- The repository proves the same logical graph while audit evidence remains in
+  the one root session process tree.
 - Reopen reconstructs only durable scope/ref facts; it does not infer an edge
   from session history, a process tree, or an audit record.
 
@@ -106,20 +100,17 @@ No child process is admitted or launched in this phase.
   under `erebor/context-dag/edges/` in that same transaction. It proves depth,
   direct-parent uniqueness, and causal ancestry on reopen without process- or
   session-history inference.
-- Added optional `parent_context: Option<ContextPin>` to `SessionSpec`. Both
-  session-record implementations now record a context artifact only for a root
-  session; a child resolves and validates the root artifact through its parent
-  pin. The active daemon resolver follows the persisted session records and no
-  longer derives a Codex repository from `output/codex-context`.
+- Session records retain one context artifact for the root session. The active
+  daemon resolver uses that artifact and no longer derives a Codex repository
+  from `output/codex-context`.
 - Updated the Codex hook registration to receive the resolved daemon-owned
   repository. Each authenticated App Server thread continues to receive its
   own named scope, and prompt projection rejects the reserved context-DAG
   metadata path.
-- Added focused tests for sibling/grandchild topology, physical versus logical
-  bindings, exact causal pins, duplicate child refs, re-parenting, foreign
-  roots, depth limits, shared root-artifact recovery, and distinct thread
-  scopes. No child process, bridge, IPC message, hook registration, or daemon
-  admission endpoint was added.
+- Added focused tests for sibling/grandchild topology, exact causal pins,
+  duplicate child refs, re-parenting, foreign roots, depth limits, root-artifact
+  recovery, and distinct thread scopes. No child process, bridge, IPC message,
+  hook registration, or daemon admission endpoint was added.
 
 The delivery/inbox/receive/rejection mechanics described above remain Phase 3
 work. This phase establishes their durable scope, edge, pin, and reserved-path

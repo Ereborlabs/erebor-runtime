@@ -29,10 +29,7 @@ use serde::Deserialize;
 use serde_json::json;
 use snafu::{ensure, ResultExt};
 
-use crate::{
-    ChildContextDelivery, ChildContextDeliveryHandler, ChildSessionAdmissionHandler,
-    ContextOperationAdmissionHandler,
-};
+use crate::{ChildContextDelivery, ChildContextDeliveryHandler, ContextOperationAdmissionHandler};
 
 use super::{
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
@@ -115,12 +112,6 @@ impl CodexSessionHookRegistration {
                 .map(|path| path.display().to_string())
                 .collect(),
         );
-        lease_profile.set_delegation_bridge(
-            managed_session
-                .profile()
-                .delegation_bridge_path()
-                .map(|path| path.display().to_string()),
-        );
         lease_profile.set_terminal_root_context(spec.tty());
         let lease_owner = Arc::new(CodexInvocationLeaseOwner::new(
             spec.session_id().as_str(),
@@ -165,14 +156,12 @@ impl CodexSessionHookRegistration {
     pub fn with_interception_router(
         &self,
         router: crate::SessionInterceptionRouter,
-        child_admissions: Arc<dyn ChildSessionAdmissionHandler>,
     ) -> crate::SessionInterceptionRouter {
         router
             .with_codex_invocation_lease_owner(Arc::clone(&self.lease_owner))
             .with_guard_lifecycle_handler(CodexGuardLifecycleHandler::new(
                 self.managed_session.clone(),
                 Arc::clone(&self.lease_owner),
-                child_admissions,
             ))
     }
 
@@ -563,16 +552,11 @@ impl CodexHookBrokerProtocol {
             delivery.mode,
             delivery.selected_text.into_bytes(),
         );
-        let delivery = match operation_key.as_deref() {
-            Some(operation_key) => {
-                delivery.with_source_scope(self.lease_owner.operation_delivery_scope(
-                    &payload_value(native_event)?,
-                    runtime,
-                    operation_key,
-                )?)
-            }
-            None => delivery,
-        };
+        let delivery = delivery.with_source_scope(self.lease_owner.delivery_scope(
+            &payload_value(native_event)?,
+            runtime,
+            operation_key.as_deref(),
+        )?);
         self.child_deliveries
             .publish_delivery(delivery)
             .map_err(|reason| CodexSessionError::InvalidHookEvent {
@@ -1000,7 +984,8 @@ mod tests {
     };
     use crate::{
         agents::codex::{
-            CodexHookClient, CodexInvocationLeaseProfile, CodexManagedSession, CodexNativeHookEvent,
+            CodexHookClient, CodexInvocationLeaseProfile, CodexManagedSession,
+            CodexNativeHookEvent, CodexScopeContextBinding,
         },
         ChildContextDelivery, ChildContextDeliveryHandler, CodexSessionError,
     };
@@ -1133,27 +1118,37 @@ mod tests {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let delivered = Arc::new(Mutex::new(Vec::new()));
         let schema = "a".repeat(64);
+        let owner = test_lease_owner();
+        let root_scope = erebor_runtime_context::ScopeRef::root("session-test")?;
+        owner.record_scope_context(CodexScopeContextBinding::new(
+            String::from("fixture-thread"),
+            String::from("fixture-turn"),
+            root_scope.as_str().to_owned(),
+            String::from("fixture-item-stream"),
+            String::from("fixture-head"),
+        ))?;
         let broker = CodexHookBrokerProtocol::new(
             session("/opt/codex/codex", &schema)?,
             Arc::new(CodexPromptReconciliation::default()),
-            test_lease_owner(),
+            owner,
             None,
             Arc::new(RecordingChildDelivery(Arc::clone(&delivered))),
         );
         broker.publish_child_delivery(
             HookEventKind::PostToolUse,
-            br#"{"hook_event_name":"PostToolUse","erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"child result"}}"#,
+            br#"{"hook_event_name":"PostToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"child result"}}"#,
             &CodexLeaseRuntimeEvidence::new(1, 1, String::from("/opt/codex/codex")),
         )?;
         let deliveries = delivered
             .lock()
             .map_err(|_error| "recording delivery lock poisoned")?;
         assert_eq!(deliveries.len(), 1);
-        assert_eq!(deliveries[0].child_session_id(), "session-test");
+        assert_eq!(deliveries[0].source_session_id(), "session-test");
         assert_eq!(deliveries[0].sequence(), 1);
         assert_eq!(deliveries[0].kind(), "result");
         assert_eq!(deliveries[0].mode(), "queue");
         assert_eq!(deliveries[0].selected_bytes(), b"child result");
+        assert_eq!(deliveries[0].source_scope(), Some(&root_scope));
         Ok(())
     }
 
@@ -1420,7 +1415,6 @@ mod tests {
                 )?],
                 None,
             )?,
-            None,
         )?)
     }
 

@@ -80,24 +80,48 @@ the staged client against that same socket:
 
 ```sh
 lab=/tmp/erebor-codex-app-server-<uid>.<suffix>
-"$lab/bin/erebor" --socket "$lab/run/daemon.sock" session ps
-"$lab/bin/erebor" --socket "$lab/run/daemon.sock" session inspect <session-id>
+erebor_lab() { "$lab/bin/erebor" --socket "$lab/run/daemon.sock" "$@"; }
+erebor_lab daemon status
+erebor_lab session ps
+```
+
+`session ps` uses compact, Docker-like 12-character IDs. The displayed short
+ID is a unique prefix, so it can be pasted directly into every session command:
+
+```sh
+erebor_lab session inspect <short-id>
+erebor_lab session logs <short-id>
+erebor_lab session events <short-id>
 ```
 
 For an admitted parent session, its pending direct-child contributions are
 visible through the daemon-owned view:
 
 ```sh
-"$lab/bin/erebor" --socket "$lab/run/daemon.sock" \
-  session context inbox <parent-session-id>
+erebor_lab session context inbox <parent-short-id>
 ```
 
 This prints the child scope and immutable delivery pin that the parent may
-receive or reject. Phase 4 does **not** yet expose a complete graph-listing
-client command; `session ps` plus `session context inbox` is the available
-manual inspection surface. The complete P/B/C/D/q topology is asserted by the
-privileged deterministic test rather than requiring callers to read the
-root-owned context Git repository.
+receive or reject. Delivery and parent-pin values are deliberately full-length:
+they are compare-and-set inputs, unlike the safely abbreviated session IDs.
+An ordinary `erebor run … codex` fixture is a root session, so its inbox is
+correctly empty until the fixture creates a logical child scope. A Codex
+thread is such a scope inside this same session, never a second session or
+TTY. In the first terminal, create B and run a real guarded descendant from B:
+
+```text
+fixture/turn
+fixture/delegate {"child_thread_id":"fixture-b","child_turn_id":"turn-1","frozen_context_mode":"all","last_turns":0}
+fixture/command {"command":"ls"}
+fixture/deliver {"sequence":1,"selected_text":"B completed ls"}
+```
+
+`erebor_lab session ps` must still show exactly one session. The `ls` process
+is physically governed by that one session's Linux guard and causally bound to
+B's scope. The daemon-derived graph-listing command is still required before
+the complete P/B/C/D/q topology can be rendered in the client; until then the
+inbox and focused fixture tests are the public evidence without reading the
+root-owned repository directly.
 
 ## Socket selection
 

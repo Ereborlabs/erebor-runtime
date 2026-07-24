@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, ContentArrangement, Table};
 use erebor_runtime_client::DaemonClient;
 use snafu::ResultExt;
 
@@ -33,10 +34,14 @@ impl<'a> DaemonCommandOwner<'a> {
         match &self.args.command {
             DaemonCommand::Status => {
                 let status = self.client.status().await.context(DaemonClientSnafu)?;
-                println!(
-                    "daemon_pid={} configuration_generation={} state={}",
-                    status.daemon_pid, status.configuration_generation, status.service_state
-                );
+                let mut table = Self::table();
+                table.set_header(["PID", "CONFIGURATION", "STATE"]);
+                table.add_row([
+                    status.daemon_pid.to_string(),
+                    status.configuration_generation.to_string(),
+                    status.service_state,
+                ]);
+                println!("{table}");
             }
             DaemonCommand::Logs(args) => {
                 let records = self
@@ -44,12 +49,17 @@ impl<'a> DaemonCommandOwner<'a> {
                     .logs(args.after_sequence, args.maximum_records)
                     .await
                     .context(DaemonClientSnafu)?;
+                let mut table = Self::table();
+                table.set_header(["SEQUENCE", "TIMESTAMP", "LEVEL", "MESSAGE"]);
                 for record in records {
-                    println!(
-                        "sequence={} timestamp={} level={} message={}",
-                        record.sequence, record.timestamp, record.level, record.message
-                    );
+                    table.add_row([
+                        record.sequence.to_string(),
+                        record.timestamp,
+                        record.level,
+                        record.message,
+                    ]);
                 }
+                println!("{table}");
             }
             DaemonCommand::Reload(args) => {
                 let message = self
@@ -69,6 +79,15 @@ impl<'a> DaemonCommandOwner<'a> {
             }
         }
         Ok(())
+    }
+
+    fn table() -> Table {
+        let mut table = Table::new();
+        table
+            .load_preset(UTF8_FULL)
+            .apply_modifier(UTF8_ROUND_CORNERS)
+            .set_content_arrangement(ContentArrangement::Dynamic);
+        table
     }
 }
 
