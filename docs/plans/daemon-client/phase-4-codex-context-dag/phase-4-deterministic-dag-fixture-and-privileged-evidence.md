@@ -8,6 +8,37 @@ Prove the complete child-agent Context DAG through the public daemon/client
 path, real daemon-owned processes, Codex-adapter capability mapping, recovery,
 and Linux physical-effect enforcement.
 
+## Runner Boundary And Future Docker Contract
+
+This phase proves the Linux-host runner only. It must not enable the deferred
+Docker runner or expand this acceptance lane into Kubernetes implementation.
+
+The future Docker design is recorded in the separate
+[Container and Kubernetes execution architecture](../../container-orchestration/README.md).
+It preserves the same Context DAG and daemon ownership model:
+
+```text
+erebor client
+  -> erebord: session, policy, context DAG, runtime-guard listener
+       -> Docker runner/controller
+            -> container
+                 -> erebor-linux-process-guard (PID 1)
+                      -> admitted Codex/agent and its descendants
+```
+
+The Docker runner—not the client—will create and recover the physical
+container. The guard will be the application container's entrypoint and use
+only the daemon-owned, per-session runtime-guard channel. The container must
+not receive `daemon.sock` or the Docker socket. A sidecar is not the primary
+guard: even with a shared PID namespace it cannot become the parent of the
+application process tree or reliably decide before `exec`.
+
+Docker implementation needs its own approved phase because the current
+deferred driver does not yet register this runtime guard or make it the
+container entrypoint. Its acceptance must separately prove immutable image and
+command admission, UID/user-namespace mapping, stable endpoint reconnect after
+daemon recovery, interactive TTY behavior, and real descendant interception.
+
 ## Deterministic Scenario
 
 The pinned fixture suite has two modes. The `codex-v1` observer fixture emits
