@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     error::Error,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -8,7 +8,8 @@ use std::{
 
 use erebor_runtime_context::{
     CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature, CommitTime,
-    ContextPin, ContextRepository, ForkParentAppend, ForkTarget, ScopeRef, Snapshot, TreeEdit,
+    ContextPin, ContextRepository, ContextTreeEntryKind, ForkParentAppend, ForkTarget, ScopeRef,
+    Snapshot, TreeEdit,
 };
 use erebor_runtime_core::SessionSpec;
 use erebor_runtime_session::SessionRepository;
@@ -157,6 +158,28 @@ impl ContextScopeGraphNode {
     #[must_use]
     pub(crate) const fn depth(&self) -> u8 {
         self.depth
+    }
+}
+
+/// One durable, scope-owned activity rendered beneath its branch. This is a
+/// compact daemon projection of authenticated context facts, never a client
+/// read of the root-owned repository or a raw context-blob dump.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ContextScopeGraphActivity {
+    scope: ScopeRef,
+    path: String,
+    summary: String,
+}
+
+impl ContextScopeGraphActivity {
+    #[must_use]
+    pub(crate) const fn scope(&self) -> &ScopeRef {
+        &self.scope
+    }
+
+    #[must_use]
+    pub(crate) fn summary(&self) -> &str {
+        &self.summary
     }
 }
 
@@ -342,7 +365,9 @@ impl ContextDagCoordinator {
     /// Return the complete durable scope topology rooted at this coordinator.
     /// Every non-root scope is revalidated through its retained parent edge so
     /// a graph display cannot hide malformed or reparented context state.
-    pub(crate) fn graph(&self) -> Result<Vec<ContextScopeGraphNode>> {
+    pub(crate) fn graph(
+        &self,
+    ) -> Result<(Vec<ContextScopeGraphNode>, Vec<ContextScopeGraphActivity>)> {
         let _guard = self.mutation_lock.lock().map_err(|_error| {
             InvalidRequestSnafu {
                 reason: String::from("context DAG coordinator mutation lock is poisoned"),
@@ -356,6 +381,7 @@ impl ContextDagCoordinator {
             .build()
         })?;
         let mut nodes = Vec::with_capacity(scopes.len());
+        let mut activities = Vec::new();
         for scope in scopes {
             let head_commit = self.repository.scope_head(&scope).map_err(|error| {
                 InvalidRequestSnafu {
@@ -364,6 +390,7 @@ impl ContextDagCoordinator {
                 .build()
             })?;
             if scope == self.root_scope {
+                activities.extend(self.scope_activities(&scope, head_commit, None)?);
                 nodes.push(ContextScopeGraphNode {
                     scope,
                     parent_scope: None,
@@ -389,6 +416,11 @@ impl ContextDagCoordinator {
                 .build()
             })?;
             let depth = self.scope_depth(&scope, &mut HashSet::new())?;
+            activities.extend(self.scope_activities(
+                &scope,
+                head_commit,
+                Some(fork_parent_commit),
+            )?);
             nodes.push(ContextScopeGraphNode {
                 scope,
                 parent_scope: Some(parent_scope),
@@ -410,7 +442,198 @@ impl ContextDagCoordinator {
                 .cmp(&right.depth)
                 .then_with(|| left.scope.as_str().cmp(right.scope.as_str()))
         });
-        Ok(nodes)
+        activities.sort_by(|left, right| {
+            left.scope
+                .as_str()
+                .cmp(right.scope.as_str())
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        Ok((nodes, activities))
+    }
+
+    fn scope_activities(
+        &self,
+        scope: &ScopeRef,
+        head_commit: erebor_runtime_context::ContextObjectId,
+        fork_parent_commit: Option<erebor_runtime_context::ContextObjectId>,
+    ) -> Result<Vec<ContextScopeGraphActivity>> {
+        let head_blobs = self.commit_blobs(head_commit)?;
+        let parent_blobs = fork_parent_commit
+            .map_or_else(|| Ok(BTreeMap::new()), |commit| self.commit_blobs(commit))?;
+        let mut activities = Vec::new();
+        for (path, object) in head_blobs {
+            if parent_blobs.get(&path) == Some(&object) {
+                continue;
+            }
+            let Some(summary) = self.activity_summary(&path, object)? else {
+                continue;
+            };
+            activities.push(ContextScopeGraphActivity {
+                scope: scope.clone(),
+                path,
+                summary,
+            });
+        }
+        Ok(activities)
+    }
+
+    fn commit_blobs(
+        &self,
+        commit: erebor_runtime_context::ContextObjectId,
+    ) -> Result<BTreeMap<String, erebor_runtime_context::ContextObjectId>> {
+        let tree = self.repository.read_commit(commit).map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("could not inspect context graph commit `{commit}`: {error}"),
+            }
+            .build()
+        })?;
+        let mut blobs = BTreeMap::new();
+        self.collect_tree_blobs(tree.tree(), "", &mut blobs)?;
+        Ok(blobs)
+    }
+
+    fn collect_tree_blobs(
+        &self,
+        tree: erebor_runtime_context::ContextObjectId,
+        prefix: &str,
+        blobs: &mut BTreeMap<String, erebor_runtime_context::ContextObjectId>,
+    ) -> Result<()> {
+        let tree = self.repository.read_tree(tree).map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("could not inspect context graph tree: {error}"),
+            }
+            .build()
+        })?;
+        for entry in tree.entries() {
+            let name = std::str::from_utf8(entry.name()).map_err(|_error| {
+                InvalidRequestSnafu {
+                    reason: String::from("context graph tree path is not UTF-8"),
+                }
+                .build()
+            })?;
+            let path = if prefix.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            match entry.kind() {
+                ContextTreeEntryKind::Tree => {
+                    self.collect_tree_blobs(entry.object(), &path, blobs)?;
+                }
+                ContextTreeEntryKind::Blob => {
+                    blobs.insert(path, entry.object());
+                }
+                ContextTreeEntryKind::Commit => {
+                    return InvalidRequestSnafu {
+                        reason: String::from("context graph tree unexpectedly contains a commit"),
+                    }
+                    .fail();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn activity_summary(
+        &self,
+        path: &str,
+        object: erebor_runtime_context::ContextObjectId,
+    ) -> Result<Option<String>> {
+        const HOOK_PREFIX: &str = "agents/codex/hooks/";
+        if !path.starts_with(HOOK_PREFIX) {
+            return Ok(None);
+        }
+        let object = self.repository.read_object(object).map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("could not read retained context hook `{path}`: {error}"),
+            }
+            .build()
+        })?;
+        let record: serde_json::Value =
+            serde_json::from_slice(object.bytes()).map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("retained context hook `{path}` is not valid JSON: {error}"),
+                }
+                .build()
+            })?;
+        let native = record.get("native").unwrap_or(&record);
+        let event = native
+            .get("hook_event_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("hook");
+        let summary = match event {
+            "UserPromptSubmit" | "user_prompt_submit" => {
+                let thread = Self::activity_string(native, &["session_id", "sessionId"]);
+                let turn = Self::activity_string(native, &["turn_id", "turnId"]);
+                format!("turn {thread}/{turn}")
+            }
+            "PreToolUse" | "pre_tool_use" => {
+                let tool = Self::activity_token(native, &["tool_name", "toolName"]);
+                let input = native.get("tool_input").or_else(|| native.get("toolInput"));
+                let command = input
+                    .and_then(|input| input.get("command"))
+                    .and_then(serde_json::Value::as_str);
+                if let Some(command) = command.filter(|command| !command.is_empty()) {
+                    format!("tool {tool} command={}", Self::quoted_activity(command))
+                } else if matches!(tool.as_str(), "erebor_delegate" | "erebor-delegate") {
+                    let child_thread = input.map_or_else(
+                        || String::from("unknown"),
+                        |input| Self::activity_string(input, &["child_thread_id", "childThreadId"]),
+                    );
+                    let child_turn = input.map_or_else(
+                        || String::from("unknown"),
+                        |input| Self::activity_string(input, &["child_turn_id", "childTurnId"]),
+                    );
+                    format!("logical fork {child_thread}/{child_turn}")
+                } else {
+                    format!("tool {tool}")
+                }
+            }
+            "PostToolUse" | "post_tool_use" => {
+                let tool_use = Self::activity_string(native, &["tool_use_id", "toolUseId"]);
+                format!("tool completed {tool_use}")
+            }
+            other => format!("hook {other}"),
+        };
+        Ok(Some(summary))
+    }
+
+    fn activity_string(value: &serde_json::Value, names: &[&str]) -> String {
+        names
+            .iter()
+            .find_map(|name| value.get(*name).and_then(serde_json::Value::as_str))
+            .map_or_else(|| String::from("unknown"), Self::quoted_activity)
+    }
+
+    fn activity_token(value: &serde_json::Value, names: &[&str]) -> String {
+        names
+            .iter()
+            .find_map(|name| value.get(*name).and_then(serde_json::Value::as_str))
+            .filter(|value| !value.is_empty())
+            .map_or_else(
+                || String::from("unknown"),
+                |value| {
+                    if value.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || "._-".contains(character)
+                    }) {
+                        value.to_owned()
+                    } else {
+                        Self::quoted_activity(value)
+                    }
+                },
+            )
+    }
+
+    fn quoted_activity(value: &str) -> String {
+        const MAX_ACTIVITY_VALUE_CHARS: usize = 160;
+        let mut shortened = value
+            .chars()
+            .take(MAX_ACTIVITY_VALUE_CHARS)
+            .collect::<String>();
+        if value.chars().nth(MAX_ACTIVITY_VALUE_CHARS).is_some() {
+            shortened.push_str("…");
+        }
+        format!("{shortened:?}")
     }
 
     fn selected_parent_context_tree(&self, parent: &ContextPin) -> Result<ForkTarget> {
@@ -979,6 +1202,16 @@ mod tests {
             child.clone(),
             ContextExecutionBinding::NativeLogical,
         )?)?;
+        let child_head = repository.scope_head(&child)?;
+        repository.append_snapshot(
+            child.clone(),
+            child_head,
+            Snapshot::new(vec![TreeEdit::blob(
+                "agents/codex/hooks/00000000000000000001-pre-tool-use.json",
+                br#"{"native":{"hook_event_name":"PreToolUse","tool_name":"bash","tool_input":{"command":"ls"}}}"#.to_vec(),
+            )?])?,
+            "Record governed command",
+        )?;
         let child_pin = repository.pin_scope_head(child.clone(), &[])?.pin().clone();
         let grandchild = ScopeRef::scope("parent-session", "grandchild")?;
         coordinator.admit_child(request(
@@ -987,7 +1220,7 @@ mod tests {
             ContextExecutionBinding::DaemonPhysical,
         )?)?;
 
-        let graph = coordinator.graph()?;
+        let (graph, activities) = coordinator.graph()?;
         assert_eq!(graph.len(), 3);
         let root_node = graph
             .iter()
@@ -1017,6 +1250,9 @@ mod tests {
             Some(ContextExecutionBinding::DaemonPhysical)
         );
         assert!(grandchild_node.fork_parent_commit().is_some());
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities[0].scope(), &child);
+        assert_eq!(activities[0].summary(), "tool bash command=\"ls\"");
         Ok(())
     }
 

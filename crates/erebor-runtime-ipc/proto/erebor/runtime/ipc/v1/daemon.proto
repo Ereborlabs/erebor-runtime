@@ -386,9 +386,17 @@ message ContextScopeGraphNode {
   uint32 depth = 7;
 }
 
+// A compact, daemon-derived summary of an authenticated fact retained on one
+// context branch. The client never reads the root-owned context repository.
+message ContextGraphActivity {
+  string scope = 1;
+  string summary = 2;
+}
+
 message ContextGraphResponse {
   string root_scope = 1;
   repeated ContextScopeGraphNode nodes = 2;
+  repeated ContextGraphActivity activities = 3;
 }
 
 message ContextDeliveryReceiveRequest {

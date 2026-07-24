@@ -966,16 +966,17 @@ impl<'a> SessionCommandOwner<'a> {
     }
 
     fn write_context_graph(graph: ContextGraphResponse) {
-        let Some(root_index) = graph
-            .nodes
-            .iter()
-            .position(|node| node.scope == graph.root_scope)
-        else {
+        let ContextGraphResponse {
+            root_scope,
+            nodes,
+            activities: graph_activities,
+        } = graph;
+        let Some(root_index) = nodes.iter().position(|node| node.scope == root_scope) else {
             println!("Context DAG is unavailable: daemon response has no root node");
             return;
         };
         let mut children = BTreeMap::<String, Vec<usize>>::new();
-        for (index, node) in graph.nodes.iter().enumerate() {
+        for (index, node) in nodes.iter().enumerate() {
             if !node.parent_scope.is_empty() {
                 children
                     .entry(node.parent_scope.clone())
@@ -984,20 +985,27 @@ impl<'a> SessionCommandOwner<'a> {
             }
         }
         for indexes in children.values_mut() {
-            indexes.sort_by(|left, right| graph.nodes[*left].scope.cmp(&graph.nodes[*right].scope));
+            indexes.sort_by(|left, right| nodes[*left].scope.cmp(&nodes[*right].scope));
         }
-        let session = graph
-            .root_scope
+        let mut activities = BTreeMap::<String, Vec<String>>::new();
+        for activity in graph_activities {
+            activities
+                .entry(activity.scope)
+                .or_default()
+                .push(activity.summary);
+        }
+        let session = root_scope
             .strip_prefix("refs/scopes/")
             .and_then(|scope| scope.split_once('/'))
-            .map_or(graph.root_scope.as_str(), |(session, _rest)| session);
+            .map_or(root_scope.as_str(), |(session, _rest)| session);
         println!("CONTEXT DAG  {}", Self::short_id(session));
-        Self::write_context_graph_node(&graph.nodes, &children, root_index, "", true);
+        Self::write_context_graph_node(&nodes, &children, &activities, root_index, "", true);
     }
 
     fn write_context_graph_node(
         nodes: &[ContextScopeGraphNode],
         children: &BTreeMap<String, Vec<usize>>,
+        activities: &BTreeMap<String, Vec<String>>,
         index: usize,
         prefix: &str,
         is_last: bool,
@@ -1026,9 +1034,12 @@ impl<'a> SessionCommandOwner<'a> {
             detail.push_str(&format!("  {}", node.source_identity));
         }
         println!("{prefix}{branch} {label}  {detail}");
-        let Some(child_indexes) = children.get(&node.scope) else {
+        let scope_activities = activities.get(&node.scope).map_or(&[][..], Vec::as_slice);
+        let child_indexes = children.get(&node.scope).map_or(&[][..], Vec::as_slice);
+        let entry_count = scope_activities.len() + child_indexes.len();
+        if entry_count == 0 {
             return;
-        };
+        }
         let child_prefix = if is_root {
             String::new()
         } else if is_last {
@@ -1036,13 +1047,22 @@ impl<'a> SessionCommandOwner<'a> {
         } else {
             format!("{prefix}│  ")
         };
+        for (offset, summary) in scope_activities.iter().enumerate() {
+            let branch = if offset + 1 == entry_count {
+                "└─"
+            } else {
+                "├─"
+            };
+            println!("{child_prefix}{branch} {summary}");
+        }
         for (offset, child_index) in child_indexes.iter().enumerate() {
             Self::write_context_graph_node(
                 nodes,
                 children,
+                activities,
                 *child_index,
                 &child_prefix,
-                offset + 1 == child_indexes.len(),
+                scope_activities.len() + offset + 1 == entry_count,
             );
         }
     }

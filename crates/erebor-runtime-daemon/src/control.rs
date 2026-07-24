@@ -20,8 +20,8 @@ use erebor_runtime_ipc::{
         CodexAppServerInputCloseRequest, CodexAppServerInputRequest, CodexRunRequest,
         ContextDeliveryDecisionResponse, ContextDeliveryInboxRequest, ContextDeliveryInboxResponse,
         ContextDeliveryReceiveRequest, ContextDeliveryRecord, ContextDeliveryRejectRequest,
-        ContextGraphRequest, ContextGraphResponse, ContextScopeGraphNode, DaemonCommandResult,
-        DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
+        ContextGraphActivity, ContextGraphRequest, ContextGraphResponse, ContextScopeGraphNode,
+        DaemonCommandResult, DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
         DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
         Envelope, EnvelopeServiceFamily, PolicyPackageApplyRequest, PolicyPackageInspectRequest,
@@ -1241,7 +1241,8 @@ impl DaemonControlState {
         let request: ContextGraphRequest = envelope
             .decode_typed_payload(KIND_CONTEXT_GRAPH_REQUEST)
             .context(IpcSnafu)?;
-        let (root_scope, nodes) = self.sessions.context_graph(peer.uid, &request.session_id)?;
+        let (root_scope, nodes, activities) =
+            self.sessions.context_graph(peer.uid, &request.session_id)?;
         let nodes = nodes
             .into_iter()
             .map(|node| ContextScopeGraphNode {
@@ -1260,6 +1261,13 @@ impl DaemonControlState {
                 depth: u32::from(node.depth()),
             })
             .collect();
+        let activities = activities
+            .into_iter()
+            .map(|activity| ContextGraphActivity {
+                scope: activity.scope().as_str().to_owned(),
+                summary: activity.summary().to_owned(),
+            })
+            .collect();
         self.write_message(
             stream,
             envelope.message_id.saturating_add(1),
@@ -1268,6 +1276,7 @@ impl DaemonControlState {
             &ContextGraphResponse {
                 root_scope: root_scope.as_str().to_owned(),
                 nodes,
+                activities,
             },
         )
         .await

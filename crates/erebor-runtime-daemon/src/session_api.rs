@@ -47,7 +47,7 @@ use crate::{
             ContextDeliveryReceipt, ContextDeliveryRecord,
         },
         ContextChildForkRequest, ContextDagCoordinator, ContextExecutionBinding,
-        ContextScopeGraphNode, SessionContextResolver,
+        ContextScopeGraphActivity, ContextScopeGraphNode, SessionContextResolver,
     },
     error::SessionSnafu,
     idempotency::{MutationIntent, MutationResponse},
@@ -381,7 +381,11 @@ impl DaemonSessionApi {
         &self,
         owner_uid: u32,
         session_id: &str,
-    ) -> Result<(erebor_runtime_context::ScopeRef, Vec<ContextScopeGraphNode>)> {
+    ) -> Result<(
+        erebor_runtime_context::ScopeRef,
+        Vec<ContextScopeGraphNode>,
+        Vec<ContextScopeGraphActivity>,
+    )> {
         let session_id = self.resolve_session_reference(owner_uid, session_id)?;
         let session = self
             .manager
@@ -389,7 +393,8 @@ impl DaemonSessionApi {
             .context(SessionSnafu)?;
         let coordinator = self.context_coordinator(session.spec())?;
         let root_scope = coordinator.root_scope.clone();
-        Ok((root_scope, coordinator.graph()?))
+        let (nodes, activities) = coordinator.graph()?;
+        Ok((root_scope, nodes, activities))
     }
 
     pub(crate) fn receive_context_delivery(
