@@ -35,6 +35,7 @@ const DELEGATION_BRIDGE_PATH: &str = "/run/erebor/codex/erebor-child-delegation"
 const SESSION_START_EVENT: &[u8] = br#"{"hook_event_name":"SessionStart"}"#;
 const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"child_profile":"fixture-child","frozen_context_mode":"all","last_turns":0}}"#;
 const HOOK_MODE_ENV: &str = "EREBOR_FIXTURE_HOOK_MODE";
+const MAX_FIXTURE_DELEGATION_LAST_TURNS: u64 = 8;
 
 type FixtureResult<T> = Result<T, Box<dyn Error>>;
 
@@ -138,7 +139,8 @@ fn run_app_server() -> FixtureResult<()> {
                 "wrong-session-rejected"
             }
             "fixture/delegate" => {
-                invoke_managed_hook_event(HookMode::Delegation, DELEGATION_EVENT)?;
+                let event = delegation_event(&request)?;
+                invoke_managed_hook_event(HookMode::Delegation, &event)?;
                 let status = Command::new(DELEGATION_BRIDGE_PATH)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
@@ -284,6 +286,47 @@ fn run_delegation_bridge() -> FixtureResult<()> {
         return Err("delegation bridge inherited a managed-hook mode".into());
     }
     Ok(())
+}
+
+fn delegation_event(request: &Value) -> FixtureResult<Vec<u8>> {
+    let params = match request.get("params") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(params)) => Some(params),
+        Some(_) => return Err("fixture/delegate params must be an object".into()),
+    };
+    let mode = params
+        .and_then(|params| params.get("frozen_context_mode"))
+        .and_then(Value::as_str)
+        .unwrap_or("all");
+    let last_turns = params
+        .and_then(|params| params.get("last_turns"))
+        .map_or(Ok(0), |value| {
+            value
+                .as_u64()
+                .ok_or("fixture/delegate last_turns must be an unsigned integer")
+        })?;
+    let valid = match mode {
+        "none" | "all" => last_turns == 0,
+        "last_turns" => (1..=MAX_FIXTURE_DELEGATION_LAST_TURNS).contains(&last_turns),
+        _ => false,
+    };
+    if !valid {
+        return Err(
+            "fixture/delegate must request none/all with zero turns or bounded last_turns".into(),
+        );
+    }
+    Ok(serde_json::to_vec(&json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "fixture-thread",
+        "turn_id": "fixture-turn",
+        "tool_use_id": "fixture-delegation-1",
+        "tool_name": "erebor_delegate",
+        "tool_input": {
+            "child_profile": "fixture-child",
+            "frozen_context_mode": mode,
+            "last_turns": last_turns,
+        },
+    }))?)
 }
 
 fn configure(arguments: &[String]) -> FixtureResult<()> {
@@ -490,8 +533,12 @@ fn package_definition(trust_root: &Path, fixture: &Path) -> FixtureResult<CodexP
             CodexChildProfile::new(
                 "fixture-child",
                 "codex",
-                vec![CodexFrozenContextMode::All],
-                0,
+                vec![
+                    CodexFrozenContextMode::None,
+                    CodexFrozenContextMode::All,
+                    CodexFrozenContextMode::LastTurns,
+                ],
+                MAX_FIXTURE_DELEGATION_LAST_TURNS as u32,
             )?,
         )?),
     )

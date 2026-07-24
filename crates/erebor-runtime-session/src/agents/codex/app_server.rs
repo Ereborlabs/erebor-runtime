@@ -243,9 +243,11 @@ impl CodexAppServerLedger {
             }
             return Ok(CodexAppServerInput::Forward(frame.to_vec()));
         }
-        if sensitive_method(method) {
-            let id =
-                id.ok_or_else(|| protocol_error("sensitive App Server methods require an id"))?;
+        if sensitive_method(method)
+            || peer_thread_method(method)
+            || object.get("params").is_some_and(contains_peer_thread_claim)
+        {
+            let id = id.ok_or_else(|| protocol_error("denied App Server methods require an id"))?;
             return Ok(CodexAppServerInput::Deny(denial(&id, method)?));
         }
         if let Some(id) = id {
@@ -429,6 +431,30 @@ fn sensitive_method(method: &str) -> bool {
         || method.starts_with("injection/")
 }
 
+fn peer_thread_method(method: &str) -> bool {
+    method.starts_with("thread/") && method != "thread/start"
+}
+
+fn contains_peer_thread_claim(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.keys().any(|key| {
+                matches!(
+                    key.as_str(),
+                    "parentThreadId"
+                        | "parent_thread_id"
+                        | "forkedFromId"
+                        | "forked_from_id"
+                        | "ancestorThreadId"
+                        | "ancestor_thread_id"
+                )
+            }) || object.values().any(contains_peer_thread_claim)
+        }
+        Value::Array(values) => values.iter().any(contains_peer_thread_claim),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
+}
+
 fn protocol_error(reason: impl Into<String>) -> CodexSessionError {
     CodexSessionError::AppServerTransportProtocol {
         reason: reason.into(),
@@ -472,6 +498,75 @@ mod tests {
             response.pointer("/error/code").and_then(Value::as_i64),
             Some(-32003)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn peer_thread_operations_and_claims_are_denied_without_forwarding(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let registered = registered_service()?;
+        for method in [
+            "thread/fork",
+            "thread/resume",
+            "thread/rollback",
+            "thread/archive",
+            "thread/list",
+            "thread/read",
+        ] {
+            let mut frame =
+                format!(r#"{{"jsonrpc":"2.0","id":"{method}","method":"{method}","params":{{}}}}"#);
+            frame.push('\n');
+            assert!(matches!(
+                registered
+                    .service
+                    .accept_input("session-test", frame.as_bytes())?,
+                CodexAppServerInput::Deny(_)
+            ));
+        }
+        for claim in ["parentThreadId", "forkedFromId", "ancestorThreadId"] {
+            let mut frame = format!(
+                r#"{{"jsonrpc":"2.0","id":"{claim}","method":"turn/start","params":{{"threadId":"thread-1","{claim}":"peer-thread"}}}}"#
+            );
+            frame.push('\n');
+            assert!(matches!(
+                registered
+                    .service
+                    .accept_input("session-test", frame.as_bytes())?,
+                CodexAppServerInput::Deny(_)
+            ));
+        }
+        assert!(registered
+            .service
+            .ledger("session-test")?
+            .lock()
+            .map_err(|_error| "ledger lock is poisoned")?
+            .pending
+            .is_empty());
+        assert!(registered
+            .context_dag
+            .exact_binding("thread-1", "peer-thread")?
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn new_app_server_thread_remains_a_same_session_scope_key(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let registered = registered_service()?;
+        let request =
+            b"{\"jsonrpc\":\"2.0\",\"id\":\"thread-start\",\"method\":\"thread/start\",\"params\":{}}\n";
+        assert!(matches!(
+            registered.service.accept_input("session-test", request)?,
+            CodexAppServerInput::Forward(_)
+        ));
+        registered.service.abort_input("session-test", request)?;
+        assert!(registered
+            .service
+            .ledger("session-test")?
+            .lock()
+            .map_err(|_error| "ledger lock is poisoned")?
+            .pending
+            .is_empty());
         Ok(())
     }
 
