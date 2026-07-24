@@ -934,7 +934,7 @@ impl<'a> SessionCommandOwner<'a> {
         ]);
         for record in records {
             table.add_row([
-                record.session_id.clone(),
+                Self::short_id(&record.session_id),
                 record.state.clone(),
                 record.generation.to_string(),
                 record.owner_uid.to_string(),
