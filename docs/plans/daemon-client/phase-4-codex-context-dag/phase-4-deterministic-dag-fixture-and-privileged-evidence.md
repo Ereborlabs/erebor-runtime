@@ -13,7 +13,7 @@ and Linux physical-effect enforcement.
 The pinned fixture suite has two modes. The `codex-v1` observer fixture emits
 the source-pinned native logical collaboration facts. The separate delegation
 fixture owns the approved pre-spawn bridge and creates this physical-child
-topology through the private delegation contract:
+topology through the guarded delegation contract:
 
 ```text
 P: outer App Server prompt / parent scope

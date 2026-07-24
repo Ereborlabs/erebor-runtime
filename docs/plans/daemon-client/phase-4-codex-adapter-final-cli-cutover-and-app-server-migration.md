@@ -480,11 +480,15 @@ Not done:
   generic filesystem-surface state binding described there; Phase 4
   intentionally rejects ambient caller-selected `HOME`/`CODEX_HOME` rather
   than inventing a Codex-specific credential provider.
-- The proposed [Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
-  has not started. Its deterministic fixture must prove actual causal forks,
-  parent-owned integration of repeatable child deliveries, source-surface
-  routing/denial, and guarded child physical descendants before it can
-  contribute to a renewed Phase 4 acceptance claim.
+- Phase 1 of the [Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
+  is done: checked shared-repository scope forks, parent pins, edge facts, and
+  thread-to-scope routing exist without child-process admission. Phase 2 is in
+  progress: it has the package-declared guarded bridge, exact guard-bound
+  admission, and child session creation, but still needs privileged end-to-end
+  evidence and real frozen-prompt projection. Phases 3–4 still must prove
+  parent-owned repeatable deliveries, source-surface routing/denial, guarded
+  child physical descendants, and deterministic fixture evidence before they
+  can contribute to a renewed Phase 4 acceptance claim.
 - The implemented Linux terminal contract still needs its privileged fixture
   evidence: prove the requested initial geometry and a real `SIGWINCH` resize
   in the staged controller, then prove detach/reattach from the foreground

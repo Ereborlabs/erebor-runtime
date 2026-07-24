@@ -29,8 +29,8 @@ lifecycle conditions.
 3. Run the stock-Codex observer fixture and record its native logical child
    facts. Prove that its thread/hook/App Server facts create no child daemon
    session and that its physical effects remain under P's invocation.
-4. Request B (`all`) and C (`none`) through P's private child-delegation
-   endpoint. Request D (`last(1)`) through B. Record every admission, scope
+4. Have P execute the package-declared guarded bridge for B (`all`) and C
+   (`none`), then have B do the same for D (`last(1)`). Record every admission, scope
    ref, derived root scope, package, hook registration, guard registration,
    parent pin, frozen-projection digest, and explicit parent-receive contract.
 5. Have B queue a delivery for P. Verify P's ref is unchanged, then have P

@@ -1,6 +1,6 @@
 # Phase 1: Context Scopes And Causal Fork Contract
 
-Status: Proposed. Requires explicit approval before implementation.
+Status: Done (2026-07-23).
 
 ## Purpose
 
@@ -28,6 +28,11 @@ directly.
   session records; the child scope remains `ScopeRef::root(child_session_id)`.
   A `native-logical` child has no SessionSpec or separate process guard; a
   `daemon-physical` child uses the existing session-admission path and does.
+- Assign each authenticated Codex App Server/collaboration thread a distinct
+  named scope in that same repository. A thread ID remains a same-session
+  routing key: a generic App Server `thread/fork` does not by itself create a
+  trusted child edge or a child session. Only an authenticated source action
+  plus the checked coordinator fork can do that.
 - Change the session registry accordingly: only the root session owns a
   `SessionContextArtifact`; a child with `parent_context` resolves that artifact
   recursively instead of creating a second per-session repository.
@@ -46,25 +51,10 @@ directly.
   has exactly one direct parent and may never re-parent, promote itself to a
   root, or select an arbitrary scope ref outside the root subtree. A grandchild
   is admitted by its direct parent and remains inside that subtree.
-- Add one schema-versioned delivery blob in the source child/operation scope
-  for every bounded result. A parent turn or parent client explicitly receives
-  or rejects it; a receive creates the normal parent merge with a receipt in
-  that merge tree, while a rejection appends a parent-only rejection receipt.
-  The inbox is derived from direct-child delivery blobs and receipts. There is
-  no auto-integration and no separate contribution, decision, inbox, or ledger
-  entity.
-- Reserve `erebor/context-dag/` for edge, delivery, and rejection metadata;
-  adapter prompt projection never selects it. A receive merge writes the
-  selected bounded result at the adapter's declared model-visible result path
-  and a receipt under that reserved metadata path in the same merge tree. A
-  rejection writes metadata only, so it does not add rejected content to the
-  parent's model context.
-- Identify a command by its owner scope plus the adapter's bounded source
-  operation key, launch `ContextPin`, existing invocation/lease evidence, and
-  exact process identity. Its partial/final result is an ordinary `delivery`
-  from an operation scope. Keep only the adapter's live-process cache in memory;
-  persist delivery facts and merge receipts, not a second generic operation
-  state machine.
+- Reserve `erebor/context-dag/` for the edge metadata added here and the
+  delivery/receipt metadata that Phase 3 will add; adapter prompt projection
+  never selects it. Phase 3 owns writing model-visible received results and
+  parent-only rejection receipts.
 - Keep execution and context provenance separate. A native logical child may
   prove a source relationship and own a context scope, but its process effects
   remain pinned to the outer session invocation. It must never acquire a
@@ -80,10 +70,9 @@ directly.
   child refs, depth overflow, attempted parent-ref write, attempted re-parent,
   confused logical/physical bindings, failed atomic fork, reopen, and full
   graph verification.
-- Add operation-contract tests for stale/forged owner, stale launch pin, PID
-  reuse, duplicate delivery, partial-result ordering, duplicate receive, result
-  receive after later owner appends, owner cancellation, and a result that tries
-  to bypass its owner.
+- Phase 3 owns operation-contract tests for stale/forged owner, stale launch
+  pin, PID reuse, duplicate delivery, partial-result ordering, duplicate
+  receive, owner cancellation, and owner-bypass attempts.
 
 ## Checkpoint
 
@@ -94,9 +83,6 @@ directly.
   make B a child of C or an independent root.
 - The repository proves the same logical graph for both bindings, while audit
   evidence proves a separate child process only for `daemon-physical` edges.
-- A completed operation leaves its owner's ref unchanged until a checked
-  explicit receive; receiving one exact delivery merges it at the owner's
-  current head while retaining the original launch pin and result artifact.
 - Reopen reconstructs only durable scope/ref facts; it does not infer an edge
   from session history, a process tree, or an audit record.
 
@@ -107,6 +93,45 @@ atomic parent edge blob, and causal commit ancestry. The edge blob is not a
 standalone JSON assertion: it must agree with the checked `fork_scope`
 transaction and refs.
 No child process is admitted or launched in this phase.
+
+## Result
+
+- Added a checked `ScopeRef::parse` path and `ContextPin` scope/commit decoders,
+  so recovery never treats a serialized ref string as authority. Added safe
+  checked helpers for reading one blob from an exact commit and for building a
+  result tree from an exact parent commit.
+- Added the daemon-owned `ContextDagCoordinator`. It serializes topology
+  writes, validates the exact parent pin and root-subtree membership, creates
+  the child ref with `fork_scope`, and appends the schema-versioned edge blob
+  under `erebor/context-dag/edges/` in that same transaction. It proves depth,
+  direct-parent uniqueness, and causal ancestry on reopen without process- or
+  session-history inference.
+- Added optional `parent_context: Option<ContextPin>` to `SessionSpec`. Both
+  session-record implementations now record a context artifact only for a root
+  session; a child resolves and validates the root artifact through its parent
+  pin. The active daemon resolver follows the persisted session records and no
+  longer derives a Codex repository from `output/codex-context`.
+- Updated the Codex hook registration to receive the resolved daemon-owned
+  repository. Each authenticated App Server thread continues to receive its
+  own named scope, and prompt projection rejects the reserved context-DAG
+  metadata path.
+- Added focused tests for sibling/grandchild topology, physical versus logical
+  bindings, exact causal pins, duplicate child refs, re-parenting, foreign
+  roots, depth limits, shared root-artifact recovery, and distinct thread
+  scopes. No child process, bridge, IPC message, hook registration, or daemon
+  admission endpoint was added.
+
+The delivery/inbox/receive/rejection mechanics described above remain Phase 3
+work. This phase establishes their durable scope, edge, pin, and reserved-path
+contract without adding the later child-delivery surface.
+
+Verification:
+
+- `cargo test -p erebor-runtime-context -p erebor-runtime-core --lib`
+- `cargo test -p erebor-runtime-daemon context_dag::tests --lib`
+- `cargo test -p erebor-runtime-session app_server_threads_have_distinct_scopes --lib`
+- `cargo test -p erebor-runtime-core child_session_reuses_the_checked_parent_context_repository --lib`
+- `bash .github/scripts/verify-rust-ci.sh`
 
 ## Stop Point
 

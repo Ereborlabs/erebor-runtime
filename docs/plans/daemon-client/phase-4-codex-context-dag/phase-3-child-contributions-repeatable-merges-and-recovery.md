@@ -1,6 +1,6 @@
 # Phase 3: Child Deliveries, Parent-Owned Receives, Repeatable Merges, And Recovery
 
-Status: Proposed. Depends on nested Phases 1–2 and explicit approval.
+Status: Done. Depends on nested Phases 1–2 and explicit approval.
 
 ## Purpose
 
@@ -17,7 +17,8 @@ the parent.
   execution binding and source identity where applicable, sequence, kind
   (`message`, `result`, `failure`, or `cancelled`), delivery mode (`queue` or
   `follow-up`), bounded selected bytes, and the pin to its exact source commit.
-- Let the child publish through its private delegated channel. The daemon
+- Let the child publish through its authenticated daemon-owned session path.
+  The daemon
   verifies membership by walking existing edge blobs, active session state,
   sequence, message bounds, source commit, and route before it appends the
   delivery blob to the child scope. This leaves the parent ref unchanged. The
@@ -48,6 +49,10 @@ the parent.
   Reopen either retains a completed merge/receipt or leaves the parent ref and
   delivery unchanged; it never reconstructs from stdout, rollout history, a
   PID, or remembered child status.
+  A receipt is keyed by the exact child commit that first introduced its
+  immutable delivery blob, rather than the child's later current head. This
+  keeps an already decided delivery decided when the child subsequently
+  publishes another delivery.
 - Do not add a generic operation-result state machine. The adapter owns its
   live-process cache, while the daemon stores only operation-scope delivery
   blobs keyed by owner scope, source operation key, and sequence. A checked
@@ -109,6 +114,73 @@ the direct parent explicitly received it. Multiple child-to-parent merges are
 ordinary operation, not an exceptional finalization step. The DAG records
 causality, delivery, receive decision, and integration without guessing from
 agent text or timing.
+
+## Result
+
+Implemented the delivery/merge owner in
+`crates/erebor-runtime-daemon/src/context_dag/delivery.rs`.
+
+- A direct child (including a future operation scope admitted through the same
+  checked edge API) publishes a schema-v1 blob at its deterministic sequence
+  path. The blob retains its direct-parent pin, receiver scope, binding/source
+  identity, exact source pin, kind/mode, and bounded selected bytes.
+- Publication is reached only from the existing authenticated managed Codex
+  hook route. `PostToolUse` may carry the package-pinned `erebor_delivery`
+  shape; it crosses the in-process daemon callback installed at daemon startup.
+  No listener, socket, or Codex-specific control protocol was added.
+- The daemon requires a running child session, validates the retained edge and
+  source ancestry, rejects altered/replayed/oversized/out-of-order blobs, and
+  never changes a parent ref during publish. The coordinator is deliberately
+  scope-generic: an adapter can use the same checked direct-child scope for a
+  bounded operation delivery without a generic operation-result state machine.
+- `erebor session context inbox`, `receive`, and `reject` are daemon-client
+  calls. A parent-client names its session and an immutable child
+  path/commit/expected head; the daemon derives the receiver scope, verifies
+  that it belongs to that session, and is the sole writer. Each inbox item also
+  returns the exact receiver head observed by that query, so the public client
+  can submit the required compare-and-set value without reading the daemon's
+  Git repository. Receive writes one parent-tree-preserving two-parent merge
+  and a deterministic receipt; reject writes one parent-only receipt append.
+  No `IntegrationDecision`, inbox ref, or second daemon channel exists.
+- Inbox records and receipt paths use the unique child commit that first
+  introduced each retained delivery blob. A later child append therefore
+  exposes only its new delivery; it cannot make an earlier received or rejected
+  delivery reappear after restart or retry.
+- The deterministic Codex fixture now has a package-pinned
+  `fixture/deliver` `PostToolUse` shape for Phase 4's full daemon/client DAG
+  scenario. Phase 4 owns that privileged multi-process scenario, including q's
+  real process/lease cache and its partial/final delivery evidence.
+
+The crate-local delivery tests prove idempotent publication, stale/malformed
+delivery rejection, receive/reject ownership, no child-ref mutation, ordered
+two-parent merges, and the required two-child/four-delivery checkpoint. The
+Codex hook test proves that a delivery can be forwarded only after the existing
+authenticated hook route has accepted it.
+
+## Verification
+
+Passed while implementing this phase:
+
+```sh
+cargo test -p erebor-runtime-daemon context_dag::delivery --lib
+cargo test -p erebor-runtime-session agents::codex::broker --lib
+cargo check -p erebor-runtime-e2e -p erebor-runtime-daemon -p erebor-runtime-client -p erebor-runtime-cli
+```
+
+Repository-wide verification passed on the final Rust source state:
+
+```sh
+cargo fmt --all --check
+cargo check --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-targets --all-features
+```
+
+The same sequence is the body of
+`.github/scripts/verify-rust-ci.sh`. The streamed full-script invocation hit a
+test-output transport limit after format/check/Clippy had passed; the final
+workspace test command was rerun with suppressed Cargo progress output and
+exited successfully.
 
 ## Stop Point
 

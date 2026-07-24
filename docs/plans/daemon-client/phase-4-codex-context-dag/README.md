@@ -1,7 +1,6 @@
 # Phase 4 Codex Context DAG And Child-Agent Delegation
 
-Status: Proposed. This is a nested Phase 4 plan. No implementation phase has
-started.
+Status: In progress. Phases 1–3 are done; Phase 4 remains proposed.
 
 Parent plan: [Phase 4: Codex Adapter, Final CLI Cutover, And App Server Migration](../phase-4-codex-adapter-final-cli-cutover-and-app-server-migration.md)
 
@@ -291,9 +290,10 @@ erebor-runtime-core
 
 erebor-runtime-daemon
   a context coordinator that resolves the existing root session artifact,
-  serializes scope writes, uses ordinary session admission, owns the private
-  delegation endpoint, derives delivery queries/receives from scopes, and owns
-  recovery/audit. No parallel registry or graph ledger.
+  serializes scope writes, uses ordinary session admission, handles the
+  existing guard lifecycle event for the declared bridge, derives delivery
+  queries/receives from scopes, and owns recovery/audit. No parallel registry
+  or graph ledger.
 
 erebor-runtime-session/src/agents/codex
   authenticated native spawn, communication, completion, lifecycle, and
@@ -301,8 +301,8 @@ erebor-runtime-session/src/agents/codex
   registration, child context writes, and lease-to-physical-effect pins
 
 erebor-runtime-ipc
-  distinct bounded child-delegation and delivery messages; never daemon
-  control or generic session-input bytes
+  the existing guard lifecycle event and normal hold/release/deny reply; never
+  a child-delegation request, daemon control, or generic session-input bytes
 
 erebor-runtime-e2e
   deterministic nested Codex fixture, graph inspection, two-UID, guard, and
@@ -313,7 +313,7 @@ erebor-runtime-e2e
 
 - [Lifecycle probe](lifecycle-probe.md)
 - [Phase 1: Context Scopes And Causal Fork Contract](phase-1-context-family-and-causal-fork-contract.md)
-- [Phase 2: Child Admission And Private Delegation Bridge](phase-2-child-admission-and-private-delegation-bridge.md)
+- [Phase 2: Child Admission And Guarded Delegation Bridge](phase-2-child-admission-and-private-delegation-bridge.md)
 - [Phase 3: Child Deliveries, Parent-Owned Receives, Repeatable Merges, And Recovery](phase-3-child-contributions-repeatable-merges-and-recovery.md)
 - [Phase 4: Deterministic DAG Fixture, Lifecycle, And Privileged Evidence](phase-4-deterministic-dag-fixture-and-privileged-evidence.md)
 

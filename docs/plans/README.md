@@ -19,6 +19,13 @@ master plan invented for them.
 - [Session interception backend refactor](session-interception-backend-refactor/README.md)
 - [Linux OSTree OverlayFS V3 implementation](revert/filesystem-surface/linux-ostree-overlay-v3-implementation/README.md)
 
+## Draft Architecture Lines
+
+- [Container and Kubernetes execution](container-orchestration/README.md) — a
+  separate, not-yet-approved design for Docker runners and Kubernetes
+  controller/node-agent execution. It does not expand the daemon-client phase
+  scope.
+
 ## Recovered Phase Families Without Their Original Master
 
 - `daemon-client/` — Phase 1 through Phase 10 daemon/client migration work.
