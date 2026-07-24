@@ -78,6 +78,17 @@ impl ContextPin {
         &self.used_blob_ids
     }
 
+    /// Decode the persisted scope reference through the repository-owned
+    /// scope parser.
+    pub fn scope(&self) -> Result<ScopeRef> {
+        ScopeRef::parse(self.scope_ref.clone())
+    }
+
+    /// Decode the persisted immutable commit identifier.
+    pub fn commit(&self) -> Result<ContextObjectId> {
+        ContextObjectId::from_str(&self.commit_id)
+    }
+
     fn validate_shape(&self) -> Result<()> {
         ensure!(
             self.used_paths.len() == self.used_blob_ids.len(),
@@ -150,6 +161,60 @@ impl PinnedContext {
 }
 
 impl ContextRepository {
+    /// Read one checked blob path from an exact immutable commit. A missing
+    /// path is not an error; a malformed path or non-blob tree entry is.
+    pub fn read_commit_blob(
+        &self,
+        commit_id: ContextObjectId,
+        path: &str,
+    ) -> Result<Option<PinnedContextBlob>> {
+        let commit = self.read_commit(commit_id)?;
+        let components = Self::pin_path_components(path)?;
+        let mut tree = commit.tree();
+        for (index, component) in components.iter().enumerate() {
+            let tree_object = self.read_tree(tree)?;
+            let Some(entry) = tree_object
+                .entries()
+                .iter()
+                .find(|entry| entry.name() == component.as_bytes())
+            else {
+                return Ok(None);
+            };
+            if index + 1 != components.len() {
+                if entry.kind() != ContextTreeEntryKind::Tree {
+                    return ContextPinPathNotBlobSnafu {
+                        path: Box::<str>::from(path),
+                        actual: Self::tree_entry_kind_name(entry.kind()),
+                    }
+                    .fail();
+                }
+                tree = entry.object();
+                continue;
+            }
+            if entry.kind() != ContextTreeEntryKind::Blob {
+                return ContextPinPathNotBlobSnafu {
+                    path: Box::<str>::from(path),
+                    actual: Self::tree_entry_kind_name(entry.kind()),
+                }
+                .fail();
+            }
+            let object = self.read_object(entry.object())?;
+            if object.kind() != ContextObjectKind::Blob {
+                return ContextPinPathNotBlobSnafu {
+                    path: Box::<str>::from(path),
+                    actual: Self::object_kind_name(object.kind()),
+                }
+                .fail();
+            }
+            return Ok(Some(PinnedContextBlob {
+                path: path.to_owned(),
+                id: object.id(),
+                bytes: object.into_bytes(),
+            }));
+        }
+        unreachable!("validated context pin paths contain at least one component")
+    }
+
     /// Detach one direct scope head and return only caller-selected blob bytes from its tree.
     pub fn pin_scope_head(
         &self,
@@ -203,13 +268,13 @@ impl ContextRepository {
 
     /// Verify that a deserialized audit pin still identifies the exact recorded objects.
     pub fn validate_pin(&self, pin: &ContextPin) -> Result<()> {
-        let scope = ScopeRef::from_full_name(pin.scope_ref.clone())?;
+        let scope = pin.scope()?;
         self.validate_pin_for_scope(pin, &scope)
     }
 
     /// Verify that a deserialized audit pin belongs to one session and its exact recorded objects.
     pub fn validate_session_pin(&self, session_id: &str, pin: &ContextPin) -> Result<()> {
-        let scope = ScopeRef::from_full_name(pin.scope_ref.clone())?;
+        let scope = pin.scope()?;
         ensure!(
             scope.session_id() == session_id,
             InvalidContextPinSnafu {

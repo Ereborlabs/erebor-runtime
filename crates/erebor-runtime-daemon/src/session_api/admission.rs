@@ -149,6 +149,7 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
     filesystem_projections.extend(context.additional_filesystem_projections);
     SessionSpec::new(SessionAdmission {
         session_id: SessionId::new(context.session_id),
+        parent_context: None,
         owner: context.owner,
         workload_privileges,
         command: prepared.command().to_vec(),

@@ -4,6 +4,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
+use erebor_runtime_context::ContextPin;
 use erebor_runtime_events::SessionId;
 use serde::{Deserialize, Serialize};
 use snafu::ensure;
@@ -1139,6 +1140,10 @@ fn validate_secret_references(secret_references: &[String]) -> Result<(), Sessio
 #[derive(Clone, Debug)]
 pub struct SessionAdmission {
     pub session_id: SessionId,
+    /// The exact parent decision which admitted this separately governed child.
+    /// Root sessions leave this unset; a child never receives another context
+    /// repository of its own.
+    pub parent_context: Option<ContextPin>,
     pub owner: SessionOwner,
     pub workload_privileges: WorkloadPrivilegePlan,
     pub command: Vec<String>,
@@ -1172,6 +1177,8 @@ pub struct SessionAdmission {
 pub struct SessionSpec {
     schema_version: u32,
     session_id: SessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_context: Option<ContextPin>,
     owner: SessionOwner,
     workload_privileges: WorkloadPrivilegePlan,
     command: Vec<String>,
@@ -1206,6 +1213,7 @@ impl SessionSpec {
         let value = Self {
             schema_version: SESSION_SPEC_SCHEMA_VERSION,
             session_id: admission.session_id,
+            parent_context: admission.parent_context,
             owner: admission.owner,
             workload_privileges: admission.workload_privileges,
             command: admission.command,
@@ -1255,6 +1263,23 @@ impl SessionSpec {
                 reason: String::from("safe session id and command are required"),
             }
         );
+        if let Some(parent_context) = self.parent_context.as_ref() {
+            let parent_scope = parent_context.scope().map_err(|error| {
+                SessionSpecError::invalid("session_spec.parent_context", error.to_string())
+            })?;
+            ensure!(
+                parent_scope.session_id() != self.session_id.as_str(),
+                InvalidSnafu {
+                    field: "session_spec.parent_context",
+                    reason: String::from(
+                        "a separately governed child must name a parent session scope",
+                    ),
+                }
+            );
+            parent_context.commit().map_err(|error| {
+                SessionSpecError::invalid("session_spec.parent_context", error.to_string())
+            })?;
+        }
         self.runner_capability.validate()?;
         self.workload_privileges.validate()?;
         self.workspace.validate()?;
@@ -1401,6 +1426,11 @@ impl SessionSpec {
     #[must_use]
     pub fn session_id(&self) -> &SessionId {
         &self.session_id
+    }
+
+    #[must_use]
+    pub fn parent_context(&self) -> Option<&ContextPin> {
+        self.parent_context.as_ref()
     }
 
     #[must_use]
@@ -1629,6 +1659,7 @@ mod tests {
     fn admission(mode: DaemonFailureMode) -> Result<SessionAdmission, Box<dyn std::error::Error>> {
         Ok(SessionAdmission {
             session_id: SessionId::new("session-9f7b7f6e"),
+            parent_context: None,
             owner: SessionOwner::new(1000, 1000),
             workload_privileges: WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)?,
             command: vec![String::from("/usr/bin/agent"), String::from("run")],

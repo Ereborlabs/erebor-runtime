@@ -185,6 +185,19 @@ pub enum SessionRegistryError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("context parent for session `{session_id}` is invalid: {reason}"))]
+    InvalidContextParent {
+        session_id: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("context-parent resolution for session `{session_id}` contains a cycle"))]
+    ContextParentCycle {
+        session_id: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 impl ErrorExt for SessionRegistryError {
@@ -204,7 +217,9 @@ impl ErrorExt for SessionRegistryError {
             | Self::SessionIdMismatch { .. }
             | Self::SessionDirectoryMismatch { .. }
             | Self::InvalidContextArtifactMetadata { .. }
-            | Self::InvalidContextArtifactPath { .. } => StatusCode::InvalidArguments,
+            | Self::InvalidContextArtifactPath { .. }
+            | Self::InvalidContextParent { .. }
+            | Self::ContextParentCycle { .. } => StatusCode::InvalidArguments,
             Self::MissingContextArtifact { .. } => StatusCode::NotFound,
             Self::SessionDirectorySymlink { .. } | Self::ContextArtifactSymlink { .. } => {
                 StatusCode::IllegalState
@@ -233,6 +248,8 @@ impl ErrorExt for SessionRegistryError {
             | Self::SessionDirectorySymlink { .. }
             | Self::InvalidContextArtifactMetadata { .. }
             | Self::InvalidContextArtifactPath { .. }
+            | Self::InvalidContextParent { .. }
+            | Self::ContextParentCycle { .. }
             | Self::MissingContextArtifact { .. }
             | Self::ContextArtifactSymlink { .. } => RetryHint::NonRetryable,
         }

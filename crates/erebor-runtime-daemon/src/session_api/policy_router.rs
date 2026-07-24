@@ -15,6 +15,7 @@ use erebor_runtime_policy::{
 use erebor_runtime_session::{CodexAppServerService, CodexHookService, SessionManagerError};
 use erebor_runtime_session::{SessionInterceptionRouter, SessionInterceptionRouterFactory};
 
+use crate::context_dag::SessionContextResolver;
 use crate::local_store::DaemonLocalStore;
 
 /// The session-bound policy route. It reconstructs every immutable policy
@@ -24,6 +25,7 @@ pub(super) struct StoredPolicyInterceptionRouterFactory {
     local_store: Arc<DaemonLocalStore>,
     codex_hook_service: Arc<CodexHookService>,
     codex_app_server_service: Arc<CodexAppServerService>,
+    context_resolver: Arc<SessionContextResolver>,
 }
 
 impl StoredPolicyInterceptionRouterFactory {
@@ -31,11 +33,13 @@ impl StoredPolicyInterceptionRouterFactory {
         local_store: Arc<DaemonLocalStore>,
         codex_hook_service: Arc<CodexHookService>,
         codex_app_server_service: Arc<CodexAppServerService>,
+        context_resolver: Arc<SessionContextResolver>,
     ) -> Self {
         Self {
             local_store,
             codex_hook_service,
             codex_app_server_service,
+            context_resolver,
         }
     }
 }
@@ -76,6 +80,9 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
                     )
                 })?,
                 codex.package().definition(),
+                self.context_resolver
+                    .resolve(spec)
+                    .map_err(|error| self.invalid_error(spec, error.to_string()))?,
             )
             .map_err(|error| self.invalid_error(spec, error.to_string()))?;
         if self.is_codex_app_server(spec, codex.package().definition()) {

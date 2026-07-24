@@ -13,6 +13,7 @@ erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 erebor-runtime-packages = { path = "../erebor-runtime-packages" }
 erebor-runtime-policy = { path = "../erebor-runtime-policy" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
+erebor-runtime-context = { path = "../erebor-runtime-context" }
 erebor-runtime-session = { path = "../erebor-runtime-session" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
 prost.workspace = true

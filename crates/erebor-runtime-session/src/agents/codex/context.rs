@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 
 use super::CodexSessionError;
 
+const CONTEXT_DAG_METADATA_PREFIX: &str = "erebor/context-dag/";
+
 /// Exact App Server facts that may be used to bind a Codex invocation. The
 /// binding is only created by the owned transport after it has durably written
 /// the originating prompt node.
@@ -94,6 +96,10 @@ impl CodexContextDag {
         }
     }
 
+    /// Every authenticated Codex App Server thread is assigned a distinct
+    /// named scope in the shared daemon-owned repository. A thread identifier
+    /// is only a same-session routing key here; it does not by itself create a
+    /// trusted child-agent edge or child session.
     pub(crate) fn ensure_prompt_scope(&self, scope_key: &str) -> Result<String, CodexSessionError> {
         let mut state = self.lock_state()?;
         let scope_id = format!(
@@ -126,6 +132,7 @@ impl CodexContextDag {
         bytes: Vec<u8>,
         message: &str,
     ) -> Result<(), CodexSessionError> {
+        Self::ensure_model_visible_path(path)?;
         let mut state = self.lock_state()?;
         self.append_named_scope_locked(&mut state, scope_ref, path, bytes, message)
             .map(|_| ())
@@ -316,6 +323,20 @@ impl CodexContextDag {
             .map_err(Self::context_error)
     }
 
+    fn ensure_model_visible_path(path: &str) -> Result<(), CodexSessionError> {
+        if path == CONTEXT_DAG_METADATA_PREFIX.trim_end_matches('/')
+            || path.starts_with(CONTEXT_DAG_METADATA_PREFIX)
+        {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: format!(
+                    "Codex prompt projection must not write reserved context DAG metadata `{path}`"
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        Ok(())
+    }
+
     fn pin(&self, scope: &ScopeRef, path: &str) -> Result<ContextPin, CodexSessionError> {
         self.repository
             .pin_scope_head(scope.clone(), &[ContextPinSelection::blob(path)])
@@ -475,6 +496,37 @@ mod tests {
                 Some("authenticated_codex_hook_broker")
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn app_server_threads_have_distinct_scopes_and_never_project_dag_metadata(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
+            temporary.path().join("context"),
+            FixedMetadataSource,
+        )?);
+        repository.initialize_root(
+            "session-threads",
+            Default::default(),
+            "Initialize session root",
+        )?;
+        let dag = CodexContextDag::new(Arc::clone(&repository), "session-threads");
+
+        let first = dag.ensure_prompt_scope("thread-1")?;
+        let second = dag.ensure_prompt_scope("thread-2")?;
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("refs/scopes/session-threads/scope/"));
+        assert!(dag
+            .append_prompt(
+                &first,
+                "erebor/context-dag/edges/forbidden.json",
+                Vec::new(),
+                "Attempt reserved metadata projection",
+            )
+            .is_err());
         Ok(())
     }
 

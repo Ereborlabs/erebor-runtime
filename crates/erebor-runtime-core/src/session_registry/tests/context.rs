@@ -89,6 +89,54 @@ fn new_session_records_and_reopens_its_isolated_context_repository(
 }
 
 #[test]
+fn child_session_reuses_the_checked_parent_context_repository(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root = temp_dir("child-context-artifact")?;
+    let config = runtime_config(&root)?;
+    let parent_plan = plan(&config, "parent-context")?;
+    let child_plan = plan(&config, "child-context")?;
+    let registry = SessionRegistry::new(parent_plan.registry_path().to_path_buf());
+    let parent = registry.start_session(&config, &parent_plan)?;
+    let parent_scope = ScopeRef::root("parent-context")?;
+    parent.context_repository().initialize_root(
+        "parent-context",
+        Snapshot::new(vec![TreeEdit::blob("decision", b"fork")?])?,
+        "Initialize parent context",
+    )?;
+    let parent_pin = parent
+        .context_repository()
+        .pin_scope_head(parent_scope, &[])?
+        .pin()
+        .clone();
+
+    let child = registry.start_child_session(&config, &child_plan, parent_pin.clone())?;
+
+    assert!(child.record().context_artifact.is_none());
+    assert_eq!(child.record().parent_context.as_ref(), Some(&parent_pin));
+    assert_eq!(
+        child.context_repository().path(),
+        parent.context_repository().path()
+    );
+    drop(child);
+    drop(parent);
+
+    let reopened = registry
+        .open_context_repository("child-context")?
+        .ok_or_else(|| io::Error::other("child did not resolve the parent context repository"))?;
+    reopened.validate_pin(&parent_pin)?;
+    assert_eq!(
+        reopened.path(),
+        registry
+            .open_context_repository("parent-context")?
+            .ok_or_else(|| { io::Error::other("parent context repository disappeared") })?
+            .path()
+    );
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[test]
 fn colliding_normalized_ids_never_open_another_sessions_record_or_context(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let root = temp_dir("context-collision")?;

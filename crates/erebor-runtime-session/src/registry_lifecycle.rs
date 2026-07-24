@@ -118,7 +118,8 @@ pub(crate) fn prepare_registry_session(
         }
     };
     let storage = SessionStorage::new(started.audit_path().to_path_buf(), filesystem);
-    let context_repository = Arc::new(started.into_context_repository());
+    let context_repository = started.into_context_repository();
+    let context_repository = Arc::new(context_repository);
     Ok(Some(PreparedSession {
         registry,
         storage,

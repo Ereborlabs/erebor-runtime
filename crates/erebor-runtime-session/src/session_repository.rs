@@ -8,7 +8,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use erebor_runtime_core::{RunnerBinding, SessionLifecycleState, SessionSpec};
+use erebor_runtime_core::{
+    RunnerBinding, SessionContextArtifact, SessionLifecycleState, SessionSpec,
+};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 
@@ -61,6 +63,8 @@ pub struct DurableSessionRecord {
     retention_hold: bool,
     #[serde(default = "default_content_retained")]
     content_retained: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_artifact: Option<SessionContextArtifact>,
     updated_at_unix_ms: u64,
 }
 
@@ -98,6 +102,11 @@ impl DurableSessionRecord {
     #[must_use]
     pub const fn retains_content(&self) -> bool {
         self.content_retained
+    }
+
+    #[must_use]
+    pub const fn context_artifact(&self) -> Option<&SessionContextArtifact> {
+        self.context_artifact.as_ref()
     }
 
     #[must_use]
@@ -147,6 +156,10 @@ impl SessionRepository {
             .fail();
         }
         self.create_directory(&directory)?;
+        let context_artifact = spec
+            .parent_context()
+            .is_none()
+            .then(SessionContextArtifact::new);
         let record = DurableSessionRecord {
             schema_version: SESSION_RECORD_SCHEMA_VERSION,
             spec,
@@ -156,6 +169,7 @@ impl SessionRepository {
             failure: None,
             retention_hold: false,
             content_retained: true,
+            context_artifact,
             updated_at_unix_ms: unix_time_ms(),
         };
         self.write(&directory, &record)?;
@@ -857,6 +871,7 @@ mod tests {
         )?;
         Ok(SessionSpec::new(SessionAdmission {
             session_id: SessionId::new("session-9f7b7f6e"),
+            parent_context: None,
             owner: SessionOwner::new(1000, 1000),
             workload_privileges: WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)?,
             command: vec![String::from("/usr/bin/agent")],
@@ -919,6 +934,10 @@ mod tests {
         let repository = SessionRepository::new(temporary.path());
         let created = repository.create(spec()?)?;
         assert_eq!(created.state(), SessionLifecycleState::Created);
+        assert_eq!(
+            created.context_artifact().map(|artifact| artifact.path()),
+            Some(std::path::Path::new("context"))
+        );
 
         let starting = repository.transition(
             1000,

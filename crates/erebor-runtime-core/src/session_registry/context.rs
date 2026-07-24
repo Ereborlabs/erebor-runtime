@@ -32,7 +32,8 @@ pub struct SessionContextArtifact {
 }
 
 impl SessionContextArtifact {
-    pub(super) fn new() -> Self {
+    #[must_use]
+    pub fn new() -> Self {
         Self {
             path: PathBuf::from(CONTEXT_DIRECTORY),
             repository_kind: BARE_REPOSITORY_KIND.to_owned(),
@@ -75,6 +76,12 @@ impl SessionContextArtifact {
             .fail();
         }
         Ok(())
+    }
+}
+
+impl Default for SessionContextArtifact {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

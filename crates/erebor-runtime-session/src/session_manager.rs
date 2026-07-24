@@ -1556,6 +1556,7 @@ mod tests {
         let output_root = root.path().join("output");
         let spec = SessionSpec::new(SessionAdmission {
             session_id: SessionId::new("session-manager-test"),
+            parent_context: None,
             owner: SessionOwner::new(1000, 1000),
             workload_privileges: WorkloadPrivilegePlan::new(Vec::new(), 0o077, 1024, 512, 0)?,
             command: vec![String::from("/usr/bin/agent")],

@@ -12,7 +12,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use erebor_runtime_core::SessionSpec;
@@ -76,6 +76,7 @@ impl CodexSessionHookRegistration {
         spec: &SessionSpec,
         guard_executable: &Path,
         definition: &CodexPackageDefinition,
+        context_repository: Arc<erebor_runtime_context::ContextRepository>,
     ) -> Result<Self, CodexSessionError> {
         let managed_session = CodexManagedSession::from_package(
             spec.session_id().as_str(),
@@ -118,21 +119,8 @@ impl CodexSessionHookRegistration {
                     .join(INVOCATION_LEASE_AUDIT_FILE),
             ),
         ));
-        let context_root = spec.output().root().join("codex-context");
-        let repository = if context_root.exists() {
-            erebor_runtime_context::ContextRepository::open(&context_root, DaemonContextMetadata)
-        } else {
-            erebor_runtime_context::ContextRepository::init(&context_root, DaemonContextMetadata)
-        }
-        .map_err(|error| CodexSessionError::IncompatibleProfile {
-            reason: format!(
-                "could not open the daemon-owned Codex context repository `{}`: {error}",
-                context_root.display()
-            ),
-            location: snafu::Location::default(),
-        })?;
         let context_dag = Arc::new(super::CodexContextDag::new(
-            Arc::new(repository),
+            context_repository,
             spec.session_id().as_str(),
         ));
         lease_owner.set_context_dag(Arc::clone(&context_dag))?;
@@ -165,33 +153,6 @@ impl CodexSessionHookRegistration {
             Arc::clone(&self.reconciliation),
             Arc::clone(&self.lease_owner),
         )
-    }
-}
-
-struct DaemonContextMetadata;
-
-impl erebor_runtime_context::CommitMetadataSource for DaemonContextMetadata {
-    fn metadata(
-        &self,
-    ) -> std::result::Result<
-        erebor_runtime_context::CommitMetadata,
-        erebor_runtime_context::CommitMetadataSourceError,
-    > {
-        let seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_secs() as i64);
-        let time = erebor_runtime_context::CommitTime::new(seconds, 0).map_err(|error| {
-            Box::new(error) as erebor_runtime_context::CommitMetadataSourceError
-        })?;
-        let signature =
-            erebor_runtime_context::CommitSignature::new("erebord", "erebord@localhost", time)
-                .map_err(|error| {
-                    Box::new(error) as erebor_runtime_context::CommitMetadataSourceError
-                })?;
-        Ok(erebor_runtime_context::CommitMetadata::new(
-            signature.clone(),
-            signature,
-        ))
     }
 }
 
@@ -310,9 +271,14 @@ impl CodexHookService {
         spec: &SessionSpec,
         guard_executable: &Path,
         definition: &CodexPackageDefinition,
+        context_repository: Arc<erebor_runtime_context::ContextRepository>,
     ) -> Result<CodexSessionHookRegistration, CodexSessionError> {
-        let registration =
-            CodexSessionHookRegistration::from_spec(spec, guard_executable, definition)?;
+        let registration = CodexSessionHookRegistration::from_spec(
+            spec,
+            guard_executable,
+            definition,
+            context_repository,
+        )?;
         self.register(
             registration.managed_session.clone(),
             Arc::clone(&registration.reconciliation),

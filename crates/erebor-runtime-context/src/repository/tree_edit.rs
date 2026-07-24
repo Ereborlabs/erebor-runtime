@@ -109,6 +109,18 @@ impl ContextRepository {
         self.write_snapshot_tree(None, &snapshot)
     }
 
+    /// Construct a replacement tree from the exact tree of one existing
+    /// commit. This keeps callers out of raw Git tree editing while allowing a
+    /// checked parent-side fact or merge result to retain all prior content.
+    pub fn create_tree_from_commit(
+        &self,
+        base_commit: ContextObjectId,
+        snapshot: Snapshot,
+    ) -> Result<ContextObjectId> {
+        self.require_object_kind(base_commit, ContextObjectKind::Commit)?;
+        self.write_snapshot_tree(Some(self.commit_tree_id(base_commit)?), &snapshot)
+    }
+
     pub(super) fn write_snapshot_tree(
         &self,
         base_tree: Option<ContextObjectId>,

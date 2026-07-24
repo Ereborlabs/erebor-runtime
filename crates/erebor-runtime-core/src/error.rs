@@ -24,10 +24,11 @@ pub(crate) use runtime::{
     SurfaceExitedSnafu, UnsupportedSessionRunnerOperationSnafu, UnsupportedSessionSurfaceSnafu,
 };
 pub(crate) use session_registry::{
-    ContextArtifactSymlinkSnafu, ContextRepositorySnafu, CopyArtifactSnafu, CreateDirSnafu,
-    DecodeRecordSnafu, EncodeRecordSnafu, InspectContextArtifactSnafu,
-    InvalidContextArtifactMetadataSnafu, InvalidContextArtifactPathSnafu,
-    InvalidSessionDirectoryNameSnafu, MissingContextArtifactSnafu, ReadRecordSnafu,
-    SessionDirectoryCollisionSnafu, SessionDirectoryMismatchSnafu, SessionDirectoryOccupiedSnafu,
-    SessionDirectorySymlinkSnafu, SessionIdMismatchSnafu, UnknownSessionSnafu, WriteRecordSnafu,
+    ContextArtifactSymlinkSnafu, ContextParentCycleSnafu, ContextRepositorySnafu,
+    CopyArtifactSnafu, CreateDirSnafu, DecodeRecordSnafu, EncodeRecordSnafu,
+    InspectContextArtifactSnafu, InvalidContextArtifactMetadataSnafu,
+    InvalidContextArtifactPathSnafu, InvalidContextParentSnafu, InvalidSessionDirectoryNameSnafu,
+    MissingContextArtifactSnafu, ReadRecordSnafu, SessionDirectoryCollisionSnafu,
+    SessionDirectoryMismatchSnafu, SessionDirectoryOccupiedSnafu, SessionDirectorySymlinkSnafu,
+    SessionIdMismatchSnafu, UnknownSessionSnafu, WriteRecordSnafu,
 };

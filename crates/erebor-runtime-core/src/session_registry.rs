@@ -1,8 +1,10 @@
 use std::{
+    collections::HashSet,
     fs,
     path::{Path, PathBuf},
 };
 
+use erebor_runtime_context::ContextPin;
 use erebor_runtime_events::{ActorKind, SessionId};
 use erebor_runtime_telemetry::info;
 use serde::{Deserialize, Serialize};
@@ -23,9 +25,9 @@ use paths::SessionRegistryPath;
 use record_io::SessionRecordIo;
 
 use crate::error::{
-    CreateDirSnafu, InspectContextArtifactSnafu, SessionDirectoryCollisionSnafu,
-    SessionDirectoryMismatchSnafu, SessionDirectoryOccupiedSnafu, SessionIdMismatchSnafu,
-    UnknownSessionSnafu,
+    ContextParentCycleSnafu, CreateDirSnafu, InspectContextArtifactSnafu,
+    InvalidContextParentSnafu, SessionDirectoryCollisionSnafu, SessionDirectoryMismatchSnafu,
+    SessionDirectoryOccupiedSnafu, SessionIdMismatchSnafu, UnknownSessionSnafu,
 };
 use crate::{RuntimeConfig, SessionRegistryError, SessionRunOutcome, SessionRunPlan};
 
@@ -66,6 +68,27 @@ impl SessionRegistry {
         config: &RuntimeConfig,
         plan: &SessionRunPlan,
     ) -> Result<StartedSessionRegistryRecord, SessionRegistryError> {
+        self.start_session_with_parent(config, plan, None)
+    }
+
+    /// Start a separately governed child without allocating a second context
+    /// repository. Its checked parent pin is enough to reopen the root
+    /// session's existing artifact after recovery.
+    pub fn start_child_session(
+        &self,
+        config: &RuntimeConfig,
+        plan: &SessionRunPlan,
+        parent_context: ContextPin,
+    ) -> Result<StartedSessionRegistryRecord, SessionRegistryError> {
+        self.start_session_with_parent(config, plan, Some(parent_context))
+    }
+
+    fn start_session_with_parent(
+        &self,
+        config: &RuntimeConfig,
+        plan: &SessionRunPlan,
+        parent_context: Option<ContextPin>,
+    ) -> Result<StartedSessionRegistryRecord, SessionRegistryError> {
         let session_dir = self.prepare_session_dir(plan.session_id())?;
 
         let artifacts = SessionArtifactCopier::new(&session_dir);
@@ -80,11 +103,32 @@ impl SessionRegistry {
                 path: parent.to_path_buf(),
             })?;
         }
-        let context_artifact = SessionContextArtifact::new();
-        let context_path =
-            self.context_path(plan.session_id().as_str(), &session_dir, &context_artifact)?;
-        let context_repository =
-            SessionContextRepository::initialize(plan.session_id().as_str(), &context_path)?;
+        let owned_context_repository = if let Some(parent_context) = parent_context.as_ref() {
+            let parent_scope = parent_context.scope().map_err(|error| {
+                InvalidContextParentSnafu {
+                    session_id: plan.session_id().as_str().to_owned(),
+                    reason: error.to_string(),
+                }
+                .build()
+            })?;
+            if parent_scope.session_id() == plan.session_id().as_str() {
+                return InvalidContextParentSnafu {
+                    session_id: plan.session_id().as_str().to_owned(),
+                    reason: String::from("a child context must name a different parent session"),
+                }
+                .fail();
+            }
+            None
+        } else {
+            let context_artifact = SessionContextArtifact::new();
+            let context_path =
+                self.context_path(plan.session_id().as_str(), &session_dir, &context_artifact)?;
+            Some(SessionContextRepository::initialize(
+                plan.session_id().as_str(),
+                &context_path,
+            )?)
+        };
+        let context_artifact = parent_context.is_none().then(SessionContextArtifact::new);
 
         let record = SessionRegistryRecord {
             schema_version: CURRENT_SESSION_REGISTRY_SCHEMA_VERSION,
@@ -108,7 +152,8 @@ impl SessionRegistry {
             source_config_path: plan.config_path().map(Path::to_path_buf),
             policy_artifact_paths,
             source_policy_paths: plan.policies().to_vec(),
-            context_artifact: Some(context_artifact),
+            context_artifact,
+            parent_context,
             started_at_unix_ms: SessionRegistryClock::unix_time_ms(),
             ended_at_unix_ms: None,
             exit_code: None,
@@ -122,6 +167,20 @@ impl SessionRegistry {
             "created session registry record"
         );
 
+        let context_repository = match owned_context_repository {
+            Some(repository) => repository,
+            None => self
+                .open_context_repository(plan.session_id().as_str())?
+                .ok_or_else(|| {
+                    InvalidContextParentSnafu {
+                        session_id: plan.session_id().as_str().to_owned(),
+                        reason: String::from(
+                            "child session could not resolve its parent context repository",
+                        ),
+                    }
+                    .build()
+                })?,
+        };
         Ok(StartedSessionRegistryRecord {
             record,
             audit_path,
@@ -194,12 +253,63 @@ impl SessionRegistry {
         &self,
         session_id: &str,
     ) -> Result<Option<erebor_runtime_context::ContextRepository>, SessionRegistryError> {
+        self.open_context_repository_inner(session_id, &mut HashSet::new())
+    }
+
+    fn open_context_repository_inner(
+        &self,
+        session_id: &str,
+        visited: &mut HashSet<String>,
+    ) -> Result<Option<erebor_runtime_context::ContextRepository>, SessionRegistryError> {
+        if !visited.insert(session_id.to_owned()) {
+            return ContextParentCycleSnafu {
+                session_id: session_id.to_owned(),
+            }
+            .fail();
+        }
         let record = self.load_session(session_id)?;
-        let Some(context_artifact) = record.context_artifact.as_ref() else {
+        if let Some(context_artifact) = record.context_artifact.as_ref() {
+            let context_path =
+                self.context_path(session_id, &record.session_dir, context_artifact)?;
+            return SessionContextRepository::open(session_id, &context_path).map(Some);
+        }
+        let Some(parent_context) = record.parent_context.as_ref() else {
             return Ok(None);
         };
-        let context_path = self.context_path(session_id, &record.session_dir, context_artifact)?;
-        SessionContextRepository::open(session_id, &context_path).map(Some)
+        let parent_scope = parent_context.scope().map_err(|error| {
+            InvalidContextParentSnafu {
+                session_id: session_id.to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        if parent_scope.session_id() == session_id {
+            return InvalidContextParentSnafu {
+                session_id: session_id.to_owned(),
+                reason: String::from("a child context must name a different parent session"),
+            }
+            .fail();
+        }
+        let repository = self
+            .open_context_repository_inner(parent_scope.session_id(), visited)?
+            .ok_or_else(|| {
+                InvalidContextParentSnafu {
+                    session_id: session_id.to_owned(),
+                    reason: format!(
+                        "parent session `{}` has no context artifact",
+                        parent_scope.session_id()
+                    ),
+                }
+                .build()
+            })?;
+        repository.validate_pin(parent_context).map_err(|error| {
+            InvalidContextParentSnafu {
+                session_id: session_id.to_owned(),
+                reason: error.to_string(),
+            }
+            .build()
+        })?;
+        Ok(Some(repository))
     }
 
     fn prepare_session_dir(&self, session_id: &SessionId) -> Result<PathBuf, SessionRegistryError> {
@@ -270,6 +380,31 @@ impl SessionRegistry {
         }
         if let Some(context_artifact) = record.context_artifact.as_ref() {
             self.context_path(requested_session_id, expected_session_dir, context_artifact)?;
+        }
+        if let Some(parent_context) = record.parent_context.as_ref() {
+            let parent_scope = parent_context.scope().map_err(|error| {
+                InvalidContextParentSnafu {
+                    session_id: requested_session_id.to_owned(),
+                    reason: error.to_string(),
+                }
+                .build()
+            })?;
+            if parent_scope.session_id() == requested_session_id {
+                return InvalidContextParentSnafu {
+                    session_id: requested_session_id.to_owned(),
+                    reason: String::from("a child context must name a different parent session"),
+                }
+                .fail();
+            }
+            if record.context_artifact.is_some() {
+                return InvalidContextParentSnafu {
+                    session_id: requested_session_id.to_owned(),
+                    reason: String::from(
+                        "a child context must resolve its parent artifact instead of owning one",
+                    ),
+                }
+                .fail();
+            }
         }
         Ok(())
     }
@@ -394,6 +529,8 @@ pub struct SessionRegistryRecord {
     pub source_policy_paths: Vec<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_artifact: Option<SessionContextArtifact>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_context: Option<ContextPin>,
     pub started_at_unix_ms: u64,
     pub ended_at_unix_ms: Option<u64>,
     pub exit_code: Option<i32>,

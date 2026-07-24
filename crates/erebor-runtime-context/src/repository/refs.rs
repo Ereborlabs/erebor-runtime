@@ -102,6 +102,16 @@ impl ScopeRef {
         })
     }
 
+    /// Decode one persisted scope-ref name after validating that it remains in
+    /// Erebor's owned scope namespace.
+    ///
+    /// This is intentionally the only public route from a serialized ref
+    /// string back to a [`ScopeRef`]. Callers must not treat an arbitrary Git
+    /// ref string as a scope capability.
+    pub fn parse(full_name: impl Into<String>) -> Result<Self> {
+        Self::from_full_name(full_name.into())
+    }
+
     pub(super) fn from_full_name(full_name: String) -> Result<Self> {
         let Some(remainder) = full_name.strip_prefix(&format!("{SCOPE_PREFIX}/")) else {
             return InvalidScopeRefSnafu {

@@ -37,6 +37,7 @@ use uuid::Uuid;
 
 use crate::{
     config::DaemonConfig,
+    context_dag::SessionContextResolver,
     error::SessionSnafu,
     idempotency::{MutationIntent, MutationResponse},
     local_store::DaemonLocalStore,
@@ -122,6 +123,7 @@ impl DaemonSessionApi {
             },
         )?);
         let codex_app_server_service = Arc::new(CodexAppServerService::default());
+        let context_resolver = Arc::new(SessionContextResolver::new(state_root.clone()));
         let runtime = SessionRuntimeResources::new(
             state_root.clone(),
             runtime_root.clone(),
@@ -130,6 +132,7 @@ impl DaemonSessionApi {
                 Arc::clone(&local_store),
                 Arc::clone(&codex_hook_service),
                 Arc::clone(&codex_app_server_service),
+                Arc::clone(&context_resolver),
             )),
         )
         .context(SessionSnafu)?;
