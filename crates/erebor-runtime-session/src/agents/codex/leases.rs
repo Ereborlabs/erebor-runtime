@@ -63,6 +63,7 @@ pub(crate) struct CodexInvocationLeaseProfile {
     executable: String,
     trusted_execs: Vec<String>,
     delegation_bridge: Option<String>,
+    terminal_root_context: bool,
 }
 
 impl CodexInvocationLeaseProfile {
@@ -72,11 +73,16 @@ impl CodexInvocationLeaseProfile {
             executable,
             trusted_execs,
             delegation_bridge: None,
+            terminal_root_context: false,
         }
     }
 
     pub(crate) fn set_delegation_bridge(&mut self, bridge: Option<String>) {
         self.delegation_bridge = bridge;
+    }
+
+    pub(crate) fn set_terminal_root_context(&mut self, enabled: bool) {
+        self.terminal_root_context = enabled;
     }
 }
 
@@ -233,6 +239,7 @@ pub(crate) struct CodexInvocationLeaseOwner {
     profile_executable: String,
     trusted_profile_execs: Vec<String>,
     delegation_bridge: Option<String>,
+    terminal_root_context: bool,
     command_dispatch: Option<CodexCommandDispatch>,
     audit: Option<JsonlAuditSink>,
     context_dag: Mutex<Option<Arc<CodexContextDag>>>,
@@ -254,6 +261,7 @@ impl CodexInvocationLeaseOwner {
             profile_executable: profile.executable,
             trusted_profile_execs: profile.trusted_execs,
             delegation_bridge: profile.delegation_bridge,
+            terminal_root_context: profile.terminal_root_context,
             command_dispatch: trust.command_dispatch,
             audit: audit_path.map(JsonlAuditSink::new),
             context_dag: Mutex::new(None),
@@ -418,6 +426,14 @@ impl CodexInvocationLeaseOwner {
                 location: snafu::Location::default(),
             }
         })?;
+        if kind == HookEventKind::UserPromptSubmit && self.terminal_root_context {
+            if let Some(binding) = self.context_dag()?.map_or_else(
+                || Ok(None),
+                |context_dag| context_dag.bind_terminal_turn(&payload),
+            )? {
+                self.record_scope_context(binding)?;
+            }
+        }
         let context_pin = self.record_hook_context(kind, &payload, &runtime, hook_pid)?;
         let mut state = self.lock_state()?;
         self.expire_locked(&mut state)?;

@@ -118,6 +118,7 @@ impl CodexSessionHookRegistration {
                 .delegation_bridge_path()
                 .map(|path| path.display().to_string()),
         );
+        lease_profile.set_terminal_root_context(spec.tty());
         let lease_owner = Arc::new(CodexInvocationLeaseOwner::new(
             spec.session_id().as_str(),
             erebor_runtime_events::ActorIdentity {

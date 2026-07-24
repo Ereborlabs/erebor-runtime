@@ -33,6 +33,7 @@ const REQUIREMENTS_PATH: &str = "/run/erebor/codex/requirements.toml";
 const SHELL_STARTUP_PATH: &str = "/run/erebor/codex/shell-startup";
 const DELEGATION_BRIDGE_PATH: &str = "/run/erebor/codex/erebor-child-delegation";
 const SESSION_START_EVENT: &[u8] = br#"{"hook_event_name":"SessionStart"}"#;
+const TERMINAL_TURN_EVENT: &[u8] = br#"{"hook_event_name":"UserPromptSubmit","session_id":"fixture-thread","turn_id":"fixture-turn"}"#;
 const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"child_profile":"fixture-child","frozen_context_mode":"all","last_turns":0}}"#;
 const DELIVERY_EVENT: &[u8] = br#"{"hook_event_name":"PostToolUse","erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"fixture result"}}"#;
 const HOOK_MODE_ENV: &str = "EREBOR_FIXTURE_HOOK_MODE";
@@ -89,6 +90,21 @@ fn run_tty() -> FixtureResult<()> {
     for line in io::stdin().lock().lines() {
         let line = line?;
         println!("fixture-tty-input={line}");
+        if let Some(params) = line.strip_prefix("fixture/deliver ") {
+            let event = delivery_event(&json!({"params": serde_json::from_str::<Value>(params)?}))?;
+            invoke_managed_hook_event(HookMode::Normal, &event)?;
+            println!("fixture-delivery=accepted");
+        }
+        if let Some(params) = line.strip_prefix("fixture/delegate ") {
+            let event =
+                delegation_event(&json!({"params": serde_json::from_str::<Value>(params)?}))?;
+            invoke_delegation_bridge(&event)?;
+            println!("fixture-delegation=accepted");
+        }
+        if line == "fixture/turn" {
+            invoke_managed_hook_event(HookMode::Normal, TERMINAL_TURN_EVENT)?;
+            println!("fixture-turn=accepted");
+        }
         if line == "terminal-size" {
             report_terminal_size()?;
         }
@@ -147,15 +163,7 @@ fn run_app_server() -> FixtureResult<()> {
             }
             "fixture/delegate" => {
                 let event = delegation_event(&request)?;
-                invoke_managed_hook_event(HookMode::Delegation, &event)?;
-                let status = Command::new(DELEGATION_BRIDGE_PATH)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()?;
-                if !status.success() {
-                    return Err("delegation bridge did not complete successfully".into());
-                }
+                invoke_delegation_bridge(&event)?;
                 "delegated"
             }
             "fixture/deliver" => {
@@ -178,6 +186,19 @@ fn run_app_server() -> FixtureResult<()> {
             )?;
             stdout.flush()?;
         }
+    }
+    Ok(())
+}
+
+fn invoke_delegation_bridge(event: &[u8]) -> FixtureResult<()> {
+    invoke_managed_hook_event(HookMode::Delegation, event)?;
+    let status = Command::new(DELEGATION_BRIDGE_PATH)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !status.success() {
+        return Err("delegation bridge did not complete successfully".into());
     }
     Ok(())
 }
@@ -335,11 +356,20 @@ fn delegation_event(request: &Value) -> FixtureResult<Vec<u8>> {
             "fixture/delegate must request none/all with zero turns or bounded last_turns".into(),
         );
     }
+    let tool_use_id = params.and_then(|params| params.get("tool_use_id")).map_or(
+        Ok("fixture-delegation-1"),
+        |value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty() && value.len() <= 128)
+                .ok_or("fixture/delegate tool_use_id must be a bounded non-empty string")
+        },
+    )?;
     Ok(serde_json::to_vec(&json!({
         "hook_event_name": "PreToolUse",
         "session_id": "fixture-thread",
         "turn_id": "fixture-turn",
-        "tool_use_id": "fixture-delegation-1",
+        "tool_use_id": tool_use_id,
         "tool_name": "erebor_delegate",
         "tool_input": {
             "child_profile": "fixture-child",
@@ -547,7 +577,9 @@ fn package_definition(trust_root: &Path, fixture: &Path) -> FixtureResult<CodexP
     ]
     .into_iter()
     .map(|(event, name)| {
-        let native = if event == CodexHookEventName::PreToolUse {
+        let native = if event == CodexHookEventName::UserPromptSubmit {
+            TERMINAL_TURN_EVENT.to_vec()
+        } else if event == CodexHookEventName::PreToolUse {
             DELEGATION_EVENT.to_vec()
         } else if event == CodexHookEventName::PostToolUse {
             DELIVERY_EVENT.to_vec()

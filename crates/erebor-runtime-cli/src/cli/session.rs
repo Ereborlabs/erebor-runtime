@@ -828,11 +828,12 @@ impl<'a> SessionCommandOwner<'a> {
                     .deliveries
                 {
                     println!(
-                        "receiver_scope={} child_scope={} delivery_path={} delivery_commit={}",
+                        "receiver_scope={} child_scope={} delivery_path={} delivery_commit={} expected_parent_head={}",
                         delivery.receiver_scope,
                         delivery.child_scope,
                         delivery.delivery_path,
                         delivery.delivery_commit,
+                        delivery.expected_parent_head,
                     );
                 }
             }

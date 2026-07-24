@@ -1217,6 +1217,7 @@ impl DaemonControlState {
                 child_scope: delivery.source_scope().as_str().to_owned(),
                 delivery_path: delivery.delivery_path().to_owned(),
                 delivery_commit: delivery.delivery_commit().to_string(),
+                expected_parent_head: delivery.expected_parent_head().to_string(),
             })
             .collect();
         self.write_message(

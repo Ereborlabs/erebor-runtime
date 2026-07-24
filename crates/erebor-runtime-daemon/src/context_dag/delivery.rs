@@ -98,12 +98,15 @@ pub(crate) struct ContextDelivery {
 
 /// One derived direct-parent inbox record. The delivery itself remains in the
 /// child scope at `delivery_commit` until the parent explicitly decides it.
+/// `expected_parent_head` is the daemon-observed receiver snapshot that makes
+/// the public receive/reject compare-and-set usable without repository access.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ContextDeliveryRecord {
     receiver_scope: ScopeRef,
     source_scope: ScopeRef,
     delivery_path: String,
     delivery_commit: ContextObjectId,
+    expected_parent_head: ContextObjectId,
 }
 
 impl ContextDeliveryRecord {
@@ -117,6 +120,13 @@ impl ContextDeliveryRecord {
 
     pub(crate) const fn delivery_commit(&self) -> ContextObjectId {
         self.delivery_commit
+    }
+
+    /// The receiver scope head observed while deriving this inbox record. A
+    /// caller supplies it unchanged to receive or reject, so the coordinator
+    /// can reject a stale parent decision without exposing repository writes.
+    pub(crate) const fn expected_parent_head(&self) -> ContextObjectId {
+        self.expected_parent_head
     }
 
     pub(crate) fn delivery_path(&self) -> &str {
@@ -192,14 +202,18 @@ impl ContextDagCoordinator {
                 && existing.source_identity == delivery.source_identity
             {
                 self.validate_delivery(&child_scope, child_head, &path, &existing)?;
+                let delivery_commit = self.delivery_origin_commit(child_head, &path)?;
+                let receiver_scope = existing
+                    .parent_context
+                    .scope()
+                    .map_err(Self::invalid_context)?;
+                let expected_parent_head = self.scope_head(&receiver_scope, "delivery parent")?;
                 return Ok(ContextDeliveryRecord {
-                    receiver_scope: existing
-                        .parent_context
-                        .scope()
-                        .map_err(Self::invalid_context)?,
+                    receiver_scope,
                     source_scope: child_scope,
                     delivery_path: path,
-                    delivery_commit: child_head,
+                    delivery_commit,
+                    expected_parent_head,
                 });
             }
             return InvalidRequestSnafu {
@@ -222,6 +236,7 @@ impl ContextDagCoordinator {
             .parent_context
             .scope()
             .map_err(Self::invalid_context)?;
+        let expected_parent_head = self.scope_head(&receiver_scope, "delivery parent")?;
         let next_head = self
             .repository
             .append_snapshot(
@@ -239,6 +254,7 @@ impl ContextDagCoordinator {
             source_scope: child_scope,
             delivery_path: path,
             delivery_commit: next_head,
+            expected_parent_head,
         })
     }
 
@@ -262,15 +278,17 @@ impl ContextDagCoordinator {
             }
             let child_head = self.scope_head(&child_scope, "delivery child")?;
             for (path, delivery) in self.deliveries_at(child_head)? {
-                if self.decision_exists(parent_head, &child_scope, &path, child_head)? {
+                let delivery_commit = self.delivery_origin_commit(child_head, &path)?;
+                if self.decision_exists(parent_head, &child_scope, &path, delivery_commit)? {
                     continue;
                 }
-                self.validate_delivery(&child_scope, child_head, &path, &delivery)?;
+                self.validate_delivery(&child_scope, delivery_commit, &path, &delivery)?;
                 items.push(ContextDeliveryRecord {
                     receiver_scope: parent_scope.clone(),
                     source_scope: child_scope.clone(),
                     delivery_path: path,
-                    delivery_commit: child_head,
+                    delivery_commit,
+                    expected_parent_head: parent_head,
                 });
             }
         }
@@ -648,6 +666,88 @@ impl ContextDagCoordinator {
             .collect()
     }
 
+    /// Find the immutable commit that first introduced the exact delivery blob
+    /// visible at `head`. A child can append later deliveries without changing
+    /// an earlier blob, so the current child head is not a stable delivery
+    /// identity. Receipt paths must instead bind the first introduction commit
+    /// or an already-decided delivery would reappear after a later append.
+    fn delivery_origin_commit(&self, head: ContextObjectId, path: &str) -> Result<ContextObjectId> {
+        let expected_blob = self
+            .repository
+            .read_commit_blob(head, path)
+            .map_err(Self::invalid_context)?
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: String::from("context delivery is missing at its selected child head"),
+                }
+                .build()
+            })?
+            .id();
+        let mut pending = vec![head];
+        let mut visited = HashSet::new();
+        let mut origins = Vec::new();
+        while let Some(commit) = pending.pop() {
+            if !visited.insert(commit) {
+                continue;
+            }
+            let blob = self
+                .repository
+                .read_commit_blob(commit, path)
+                .map_err(Self::invalid_context)?
+                .ok_or_else(|| {
+                    InvalidRequestSnafu {
+                        reason: String::from(
+                            "context delivery history stopped retaining its immutable blob",
+                        ),
+                    }
+                    .build()
+                })?;
+            if blob.id() != expected_blob {
+                return InvalidRequestSnafu {
+                    reason: String::from(
+                        "context delivery history replaced an immutable delivery blob",
+                    ),
+                }
+                .fail();
+            }
+            let mut inherited = false;
+            for parent in self
+                .repository
+                .read_commit(commit)
+                .map_err(Self::invalid_context)?
+                .parents()
+            {
+                let Some(parent_blob) = self
+                    .repository
+                    .read_commit_blob(*parent, path)
+                    .map_err(Self::invalid_context)?
+                else {
+                    continue;
+                };
+                if parent_blob.id() == expected_blob {
+                    inherited = true;
+                    pending.push(*parent);
+                }
+            }
+            if !inherited {
+                origins.push(commit);
+            }
+        }
+        match origins.as_slice() {
+            [origin] => Ok(*origin),
+            [] => InvalidRequestSnafu {
+                reason: String::from("context delivery has no immutable introduction commit"),
+            }
+            .fail(),
+            _ => InvalidRequestSnafu {
+                reason: String::from(
+                    "context delivery has ambiguous immutable introduction commits",
+                ),
+            }
+            .fail(),
+        }
+    }
+
     fn read_delivery(
         &self,
         commit: ContextObjectId,
@@ -890,6 +990,13 @@ mod tests {
             .read_commit_blob(parent_after, received.receipt_path())?
             .is_some());
         assert!(coordinator.inbox(&parent)?.is_empty());
+
+        let second = coordinator.publish_delivery(delivery(child.clone(), 2, "second")?)?;
+        let second_inbox = coordinator.inbox(&parent)?;
+        assert_eq!(second_inbox.len(), 1);
+        assert_eq!(second_inbox[0].delivery_path(), second.delivery_path());
+        assert_eq!(second_inbox[0].delivery_commit(), second.delivery_commit());
+        assert_eq!(second_inbox[0].expected_parent_head(), parent_after);
         assert_eq!(
             coordinator
                 .receive_delivery(
@@ -901,6 +1008,12 @@ mod tests {
                 .parent_head(),
             parent_after
         );
+        let retry = coordinator.publish_delivery(delivery(child, 1, "first")?)?;
+        assert_eq!(retry.delivery_commit(), child_after_first);
+        let inbox_after_retry = coordinator.inbox(&parent)?;
+        assert_eq!(inbox_after_retry.len(), 1);
+        assert_eq!(inbox_after_retry[0].delivery_path(), second.delivery_path());
+        assert_eq!(inbox_after_retry[0].expected_parent_head(), parent_after);
         Ok(())
     }
 
@@ -973,11 +1086,11 @@ mod tests {
             .is_err());
 
         for (path, commit) in [
-            (b_first.delivery_path(), b_head),
-            (c_first.delivery_path(), c_head),
+            (b_first.delivery_path(), b_first.delivery_commit()),
+            (c_first.delivery_path(), c_first.delivery_commit()),
             (
                 "erebor/context-dag/deliveries/00000000000000000002.json",
-                b_head,
+                b_second.delivery_commit(),
             ),
         ] {
             let received = coordinator.receive_delivery(&parent, path, commit, parent_head)?;

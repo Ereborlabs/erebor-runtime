@@ -83,6 +83,9 @@ struct CodexContextScope {
 /// Serializes all durable Codex context writes. The App Server transport owns
 /// prompt creation; authenticated hook facts are separate immutable blobs that
 /// may use an existing exact prompt scope, but never create or select a prompt.
+/// A governed terminal session has no App Server transport, so its authenticated
+/// user-prompt turn binds to its already-owned root scope without creating a
+/// prompt scope or projecting untrusted terminal data.
 pub(crate) struct CodexContextDag {
     repository: Arc<ContextRepository>,
     session_id: String,
@@ -180,6 +183,58 @@ impl CodexContextDag {
             .bindings
             .get(&(thread_id.to_owned(), turn_id.to_owned()))
             .cloned())
+    }
+
+    /// Bind one authenticated terminal turn to this session's existing root
+    /// scope. Unlike an App Server binding, this creates no named scope or
+    /// model-visible prompt blob: terminal input is not an App Server prompt
+    /// projection. It only gives a later authenticated pre-tool event an exact
+    /// causal scope and immutable root head.
+    pub(crate) fn bind_terminal_turn(
+        &self,
+        payload: &Value,
+    ) -> Result<Option<CodexScopeContextBinding>, CodexSessionError> {
+        let Some(thread_id) = Self::event_string(
+            payload,
+            &["session_id", "sessionId", "thread_id", "threadId"],
+        ) else {
+            return Ok(None);
+        };
+        let Some(turn_id) = Self::event_string(payload, &["turn_id", "turnId"]) else {
+            return Ok(None);
+        };
+        let mut state = self.lock_state()?;
+        if let Some(binding) = state
+            .bindings
+            .get(&(thread_id.clone(), turn_id.clone()))
+            .cloned()
+        {
+            return Ok(Some(binding));
+        }
+        self.root_head_locked(&mut state)?;
+        let root = state
+            .root
+            .as_ref()
+            .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                reason: String::from("Codex terminal root context was not initialized"),
+                location: snafu::Location::default(),
+            })?;
+        let item_node_stream = format!(
+            "agents/codex/terminal/turns/{}.json",
+            &Self::digest(format!("{thread_id}\0{turn_id}").as_bytes())[..20]
+        );
+        let binding = CodexScopeContextBinding::new(
+            thread_id,
+            turn_id,
+            root.reference.as_str().to_owned(),
+            item_node_stream,
+            root.head.to_string(),
+        );
+        state.bindings.insert(
+            (binding.thread_id.clone(), binding.turn_id.clone()),
+            binding.clone(),
+        );
+        Ok(Some(binding))
     }
 
     /// Select one immutable, model-visible prompt projection from the exact
@@ -533,7 +588,7 @@ mod tests {
 
     use erebor_runtime_context::{
         CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature,
-        CommitTime,
+        CommitTime, ScopeRef,
     };
     use erebor_runtime_packages::CodexFrozenContextMode;
     use serde_json::json;
@@ -657,6 +712,42 @@ mod tests {
         let path = dag.append_prompt(&first, Vec::new(), "Record test prompt")?;
         assert!(path.starts_with("agents/codex/app-server/prompts/"));
         assert!(!path.starts_with("erebor/context-dag/"));
+        Ok(())
+    }
+
+    #[test]
+    fn authenticated_terminal_turn_binds_only_the_existing_root_scope(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
+            temporary.path().join("context"),
+            FixedMetadataSource,
+        )?);
+        let root =
+            repository.initialize_root("session-terminal", Default::default(), "Initialize")?;
+        let dag = CodexContextDag::new(Arc::clone(&repository), "session-terminal");
+        let payload = json!({"session_id": "terminal-thread", "turn_id": "terminal-turn"});
+
+        let binding = dag
+            .bind_terminal_turn(&payload)?
+            .ok_or("terminal turn did not bind")?;
+
+        assert_eq!(
+            binding.scope_ref(),
+            ScopeRef::root("session-terminal")?.as_str()
+        );
+        assert_eq!(binding.decision_head(), root.to_string());
+        assert!(binding
+            .item_node_stream()
+            .starts_with("agents/codex/terminal/turns/"));
+        assert_eq!(
+            repository.scope_refs()?,
+            vec![ScopeRef::root("session-terminal")?]
+        );
+        assert_eq!(
+            dag.exact_binding("terminal-thread", "terminal-turn")?,
+            Some(binding)
+        );
         Ok(())
     }
 
