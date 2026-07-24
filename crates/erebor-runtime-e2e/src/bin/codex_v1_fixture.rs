@@ -32,7 +32,10 @@ const REQUIREMENTS_PATH: &str = "/run/erebor/codex/requirements.toml";
 const SHELL_STARTUP_PATH: &str = "/run/erebor/codex/shell-startup";
 const SESSION_START_EVENT: &[u8] = br#"{"hook_event_name":"SessionStart"}"#;
 const TERMINAL_TURN_EVENT: &[u8] = br#"{"hook_event_name":"UserPromptSubmit","session_id":"fixture-thread","turn_id":"fixture-turn"}"#;
-const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"child_thread_id":"fixture-child-thread","child_turn_id":"fixture-child-turn","frozen_context_mode":"all","last_turns":0}}"#;
+// The managed package pins one structural schema per native hook kind. Keep
+// every fixture PreToolUse event structurally identical while its tool name
+// and values select the bounded command or logical-fork capability.
+const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"command":"","erebor_operation_key":"","child_thread_id":"fixture-child-thread","child_turn_id":"fixture-child-turn","frozen_context_mode":"all","last_turns":0}}"#;
 const DELIVERY_EVENT: &[u8] = br#"{"hook_event_name":"PostToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delivery-1","tool_response":{"status":"ok"},"erebor_delivery":{"emit":true,"sequence":1,"kind":"result","mode":"queue","selected_text":"fixture result","operation_key":""}}"#;
 const HOOK_MODE_ENV: &str = "EREBOR_FIXTURE_HOOK_MODE";
 const MAX_FIXTURE_DELEGATION_LAST_TURNS: u64 = 8;
@@ -495,6 +498,8 @@ fn delegation_event(request: &Value, turn: &FixtureTurn) -> FixtureResult<Vec<u8
         "tool_use_id": tool_use_id,
         "tool_name": "erebor_delegate",
         "tool_input": {
+            "command": "",
+            "erebor_operation_key": "",
             "child_thread_id": child_thread_id,
             "child_turn_id": child_turn_id,
             "frozen_context_mode": mode,
@@ -560,6 +565,10 @@ fn command_event(request: &Value, turn: &FixtureTurn) -> FixtureResult<Vec<u8>> 
     let input = json!({
         "command": command,
         "erebor_operation_key": operation_key.unwrap_or(""),
+        "child_thread_id": "",
+        "child_turn_id": "",
+        "frozen_context_mode": "none",
+        "last_turns": 0,
     });
     Ok(serde_json::to_vec(&json!({
         "hook_event_name": "PreToolUse",
@@ -949,23 +958,37 @@ fn fixture_requirements() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_event, delivery_event, post_tool_event, CodexNativeHookEvent, FixtureTurn, Value,
-        DELEGATION_EVENT, DELIVERY_EVENT,
+        command_event, delegation_event, delivery_event, post_tool_event, CodexNativeHookEvent,
+        FixtureTurn, Value, DELEGATION_EVENT, DELIVERY_EVENT,
     };
 
     #[test]
     fn fixture_command_and_delegation_hooks_share_the_pinned_pre_tool_schema(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let command = command_event(
+        let delegation = delegation_event(
             &serde_json::json!({
                 "params": {
-                    "command": "ls",
-                    "tool_use_id": "fixture-command-test",
-                    "operation_key": "fixture-q",
+                    "child_thread_id": "fixture-b",
+                    "child_turn_id": "turn-1",
+                    "frozen_context_mode": "all",
+                    "last_turns": 0,
                 },
             }),
             &FixtureTurn::root(),
         )?;
+        let command = command_event(
+            &serde_json::json!({
+                "params": {
+                    "command": "ls",
+                    "tool_use_id": "fixture-command-test"
+                },
+            }),
+            &FixtureTurn::root(),
+        )?;
+        assert_eq!(
+            CodexNativeHookEvent::parse(DELEGATION_EVENT)?.schema_sha256(),
+            CodexNativeHookEvent::parse(&delegation)?.schema_sha256(),
+        );
         assert_eq!(
             CodexNativeHookEvent::parse(DELEGATION_EVENT)?.schema_sha256(),
             CodexNativeHookEvent::parse(&command)?.schema_sha256(),
