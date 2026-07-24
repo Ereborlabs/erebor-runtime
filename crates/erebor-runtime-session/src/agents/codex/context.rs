@@ -5,12 +5,17 @@ use std::{
 
 use erebor_runtime_context::{
     ContextObjectId, ContextPin, ContextPinSelection, ContextRepository, ContextTreeEntryKind,
-    ScopeRef, ScopeStart, Snapshot, TreeEdit,
+    ScopeRef, Snapshot, TreeEdit,
 };
 use erebor_runtime_ipc::v1::HookEventKind;
 use erebor_runtime_packages::CodexFrozenContextMode;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+
+use crate::context_operation::{ContextOperationAdmission, ContextOperationAdmissionHandler};
+
+#[cfg(test)]
+use erebor_runtime_context::ScopeStart;
 
 use super::CodexSessionError;
 
@@ -89,6 +94,7 @@ struct CodexContextScope {
 pub(crate) struct CodexContextDag {
     repository: Arc<ContextRepository>,
     session_id: String,
+    operation_admissions: Mutex<Option<Arc<dyn ContextOperationAdmissionHandler>>>,
     state: Mutex<CodexContextDagState>,
 }
 
@@ -97,36 +103,157 @@ impl CodexContextDag {
         Self {
             repository,
             session_id: session_id.to_owned(),
+            operation_admissions: Mutex::new(None),
             state: Mutex::new(CodexContextDagState::default()),
         }
     }
 
+    /// Bind the one in-process daemon admission path used for all named Codex
+    /// scopes. This is deliberately not a workload-facing protocol: App
+    /// Server input reaches the daemon-owned adapter, which asks the daemon to
+    /// atomically retain the exact parent-edge fact before it records a prompt.
+    pub(crate) fn set_operation_admission_handler(
+        &self,
+        handler: Arc<dyn ContextOperationAdmissionHandler>,
+    ) -> Result<(), CodexSessionError> {
+        let mut installed = self.operation_admissions.lock().map_err(|_error| {
+            CodexSessionError::ContextDagStateLock {
+                location: snafu::Location::default(),
+            }
+        })?;
+        if installed.is_some() {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from("Codex context-operation handler is already installed"),
+                location: snafu::Location::default(),
+            });
+        }
+        *installed = Some(handler);
+        Ok(())
+    }
+
     /// Every authenticated Codex App Server thread is assigned a distinct
-    /// named scope in the shared daemon-owned repository. A thread identifier
-    /// is only a same-session routing key here; it does not by itself create a
+    /// daemon-admitted scope in the shared repository. A thread identifier is
+    /// only a same-session routing key here; it does not by itself create a
     /// trusted child-agent edge or child session.
     pub(crate) fn ensure_prompt_scope(&self, scope_key: &str) -> Result<String, CodexSessionError> {
         let mut state = self.lock_state()?;
-        let scope_id = format!(
-            "codex-app-server-{}",
-            &Self::digest(scope_key.as_bytes())[..20]
+        let operation_key = format!(
+            "app-server-thread-{}",
+            &Self::digest(scope_key.as_bytes())[..32]
         );
-        let reference =
+        let scope_id = format!(
+            "codex-operation-{}",
+            &Self::digest(operation_key.as_bytes())[..20]
+        );
+        let expected_reference =
             ScopeRef::scope(self.session_id.clone(), scope_id).map_err(Self::context_error)?;
-        if !state.scopes.contains_key(reference.as_str()) {
-            let root_head = self.root_head_locked(&mut state)?;
-            let head = self
-                .repository
-                .create_scope(reference.clone(), ScopeStart::existing_commit(root_head))
-                .map_err(Self::context_error)?;
-            state.scopes.insert(
-                reference.as_str().to_owned(),
-                CodexContextScope {
-                    reference: reference.clone(),
-                    head,
-                },
-            );
+        if state.scopes.contains_key(expected_reference.as_str()) {
+            return Ok(expected_reference.as_str().to_owned());
         }
+        self.root_head_locked(&mut state)?;
+        let root_reference = state
+            .root
+            .as_ref()
+            .map(|root| root.reference.clone())
+            .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                reason: String::from("Codex context root was not initialized"),
+                location: snafu::Location::default(),
+            })?;
+        let parent_context = self
+            .repository
+            .pin_scope_head(root_reference.clone(), &[])
+            .map_err(Self::context_error)?
+            .pin()
+            .clone();
+        let handler = self
+            .operation_admissions
+            .lock()
+            .map_err(|_error| CodexSessionError::ContextDagStateLock {
+                location: snafu::Location::default(),
+            })?
+            .clone();
+        let reference = match handler {
+            Some(handler) => handler
+                .admit_operation(ContextOperationAdmission::new(
+                    self.session_id.clone(),
+                    parent_context.clone(),
+                    operation_key,
+                ))
+                .map_err(|reason| CodexSessionError::IncompatibleProfile {
+                    reason: format!("daemon rejected Codex App Server scope admission: {reason}"),
+                    location: snafu::Location::default(),
+                })?,
+            None => {
+                #[cfg(test)]
+                {
+                    let parent_commit = parent_context.commit().map_err(Self::context_error)?;
+                    match self.repository.scope_head(&expected_reference) {
+                        Ok(_head) => {}
+                        Err(erebor_runtime_context::ContextRepositoryError::ScopeNotFound {
+                            ..
+                        }) => {
+                            self.repository
+                                .create_scope(
+                                    expected_reference.clone(),
+                                    ScopeStart::existing_commit(parent_commit),
+                                )
+                                .map_err(Self::context_error)?;
+                        }
+                        Err(error) => return Err(Self::context_error(error)),
+                    }
+                    expected_reference.clone()
+                }
+                #[cfg(not(test))]
+                {
+                    return Err(CodexSessionError::IncompatibleProfile {
+                        reason: String::from(
+                            "Codex App Server scope admission is not daemon-bound",
+                        ),
+                        location: snafu::Location::default(),
+                    });
+                }
+            }
+        };
+        if reference != expected_reference {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from(
+                    "daemon-admitted Codex App Server scope does not match its deterministic key",
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        if reference.session_id() != self.session_id {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from(
+                    "daemon-admitted Codex App Server scope belongs to another session",
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        let head = self
+            .repository
+            .scope_head(&reference)
+            .map_err(Self::context_error)?;
+        let root_head = self
+            .repository
+            .scope_head(&root_reference)
+            .map_err(Self::context_error)?;
+        let current_root =
+            state
+                .root
+                .as_mut()
+                .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                    reason: String::from("Codex context root disappeared during scope admission"),
+                    location: snafu::Location::default(),
+                })?;
+        current_root.head = root_head;
+        state.scopes.insert(
+            reference.as_str().to_owned(),
+            CodexContextScope {
+                reference: reference.clone(),
+                head,
+            },
+        );
         Ok(reference.as_str().to_owned())
     }
 
@@ -228,6 +355,42 @@ impl CodexContextDag {
         );
         state.bindings.insert(key, binding.clone());
         Ok(binding)
+    }
+
+    /// Refresh the local append cursor for a scope whose ref the daemon
+    /// advanced while atomically recording a child edge. The ref is still the
+    /// source of truth; this cache only serializes later adapter-owned writes.
+    pub(crate) fn refresh_scope_head(&self, context: &ContextPin) -> Result<(), CodexSessionError> {
+        let scope = context.scope().map_err(Self::context_error)?;
+        let head = self
+            .repository
+            .scope_head(&scope)
+            .map_err(Self::context_error)?;
+        let mut state = self.lock_state()?;
+        if state
+            .root
+            .as_ref()
+            .is_some_and(|root| root.reference == scope)
+        {
+            let root =
+                state
+                    .root
+                    .as_mut()
+                    .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                        reason: String::from("Codex context root disappeared while refreshing"),
+                        location: snafu::Location::default(),
+                    })?;
+            root.head = head;
+            return Ok(());
+        }
+        let named = state.scopes.get_mut(scope.as_str()).ok_or_else(|| {
+            CodexSessionError::IncompatibleProfile {
+                reason: format!("Codex context scope `{scope}` was not registered"),
+                location: snafu::Location::default(),
+            }
+        })?;
+        named.head = head;
+        Ok(())
     }
 
     pub(crate) fn exact_binding(
@@ -716,7 +879,7 @@ impl CodexContextDag {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use erebor_runtime_context::{
         CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature,
@@ -724,8 +887,47 @@ mod tests {
     };
     use erebor_runtime_packages::CodexFrozenContextMode;
     use serde_json::json;
+    use sha2::{Digest, Sha256};
 
     use super::{CodexContextDag, PROMPT_PREFIX};
+    use crate::context_operation::{ContextOperationAdmission, ContextOperationAdmissionHandler};
+
+    struct RecordingAdmission {
+        repository: Arc<erebor_runtime_context::ContextRepository>,
+        admissions: Mutex<Vec<ContextOperationAdmission>>,
+    }
+
+    impl ContextOperationAdmissionHandler for RecordingAdmission {
+        fn admit_operation(
+            &self,
+            admission: ContextOperationAdmission,
+        ) -> Result<ScopeRef, String> {
+            let digest = format!("{:x}", Sha256::digest(admission.operation_key().as_bytes()));
+            let scope = ScopeRef::scope(
+                admission.session_id(),
+                format!("codex-operation-{}", &digest[..20]),
+            )
+            .map_err(|error| error.to_string())?;
+            if self.repository.scope_head(&scope).is_err() {
+                self.repository
+                    .create_scope(
+                        scope.clone(),
+                        erebor_runtime_context::ScopeStart::existing_commit(
+                            admission
+                                .parent_context()
+                                .commit()
+                                .map_err(|error| error.to_string())?,
+                        ),
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+            self.admissions
+                .lock()
+                .map_err(|_error| String::from("recording admissions lock is poisoned"))?
+                .push(admission);
+            Ok(scope)
+        }
+    }
 
     #[test]
     fn every_authenticated_hook_kind_is_an_immutable_dag_record(
@@ -818,6 +1020,42 @@ mod tests {
                 Some("authenticated_codex_hook_broker")
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn app_server_scope_requires_the_daemon_operation_admission_path(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
+            temporary.path().join("context"),
+            FixedMetadataSource,
+        )?);
+        repository.initialize_root("session-admission", Default::default(), "Initialize")?;
+        let dag = CodexContextDag::new(Arc::clone(&repository), "session-admission");
+        let handler = Arc::new(RecordingAdmission {
+            repository: Arc::clone(&repository),
+            admissions: Mutex::new(Vec::new()),
+        });
+        dag.set_operation_admission_handler(
+            Arc::clone(&handler) as Arc<dyn ContextOperationAdmissionHandler>
+        )?;
+
+        let scope = dag.ensure_prompt_scope("thread-1")?;
+        assert!(scope.starts_with("refs/scopes/session-admission/scope/codex-operation-"));
+        let admissions = handler
+            .admissions
+            .lock()
+            .map_err(|_error| "recording admissions lock is poisoned")?;
+        assert_eq!(admissions.len(), 1);
+        assert_eq!(admissions[0].session_id(), "session-admission");
+        assert_eq!(
+            admissions[0].parent_context().scope_ref(),
+            "refs/scopes/session-admission/root"
+        );
+        assert!(admissions[0]
+            .operation_key()
+            .starts_with("app-server-thread-"));
         Ok(())
     }
 

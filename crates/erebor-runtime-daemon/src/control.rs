@@ -20,7 +20,8 @@ use erebor_runtime_ipc::{
         CodexAppServerInputCloseRequest, CodexAppServerInputRequest, CodexRunRequest,
         ContextDeliveryDecisionResponse, ContextDeliveryInboxRequest, ContextDeliveryInboxResponse,
         ContextDeliveryReceiveRequest, ContextDeliveryRecord, ContextDeliveryRejectRequest,
-        DaemonCommandResult, DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
+        ContextGraphRequest, ContextGraphResponse, ContextScopeGraphNode, DaemonCommandResult,
+        DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
         DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
         Envelope, EnvelopeServiceFamily, PolicyPackageApplyRequest, PolicyPackageInspectRequest,
@@ -46,22 +47,23 @@ use erebor_runtime_ipc::{
         KIND_CODEX_RUN_REQUEST, KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
         KIND_CONTEXT_DELIVERY_INBOX_REQUEST, KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
         KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST, KIND_CONTEXT_DELIVERY_REJECT_REQUEST,
-        KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
-        KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD,
-        KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
-        KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
-        KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
-        KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
-        KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_ALIAS_SET_REQUEST,
-        KIND_POLICY_SET_CREATE_REQUEST, KIND_POLICY_SET_INSPECT_REQUEST,
-        KIND_POLICY_SET_LIST_REQUEST, KIND_POLICY_SET_LIST_RESPONSE, KIND_POLICY_SET_RECORD,
-        KIND_POLICY_SET_VERIFY_REQUEST, KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE,
-        KIND_RUNNER_CAPABILITY_RECORD, KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST,
-        KIND_RUNNER_LIST_RESPONSE, KIND_SESSION_ALIAS_LIST_REQUEST,
-        KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_REMOVE_REQUEST,
-        KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST,
-        KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
-        KIND_SESSION_EVIDENCE_END, KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
+        KIND_CONTEXT_GRAPH_REQUEST, KIND_CONTEXT_GRAPH_RESPONSE, KIND_DAEMON_COMMAND_RESULT,
+        KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END,
+        KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST,
+        KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST,
+        KIND_POLICY_PACKAGE_APPLY_REQUEST, KIND_POLICY_PACKAGE_INSPECT_REQUEST,
+        KIND_POLICY_PACKAGE_LIST_REQUEST, KIND_POLICY_PACKAGE_LIST_RESPONSE,
+        KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_PACKAGE_VERIFY_REQUEST,
+        KIND_POLICY_SET_ALIAS_SET_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
+        KIND_POLICY_SET_INSPECT_REQUEST, KIND_POLICY_SET_LIST_REQUEST,
+        KIND_POLICY_SET_LIST_RESPONSE, KIND_POLICY_SET_RECORD, KIND_POLICY_SET_VERIFY_REQUEST,
+        KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE, KIND_RUNNER_CAPABILITY_RECORD,
+        KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST, KIND_RUNNER_LIST_RESPONSE,
+        KIND_SESSION_ALIAS_LIST_REQUEST, KIND_SESSION_ALIAS_LIST_RESPONSE,
+        KIND_SESSION_ALIAS_REMOVE_REQUEST, KIND_SESSION_ALIAS_SET_REQUEST,
+        KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST, KIND_SESSION_EVENTS_END,
+        KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD, KIND_SESSION_EVIDENCE_END,
+        KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
         KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
         KIND_SESSION_INPUT_REQUEST, KIND_SESSION_INPUT_RESPONSE, KIND_SESSION_INSPECT_REQUEST,
         KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST, KIND_SESSION_LIST_RESPONSE,
@@ -541,6 +543,7 @@ impl DaemonControlState {
             KIND_CONTEXT_DELIVERY_INBOX_REQUEST => {
                 self.context_delivery_inbox(stream, peer, &envelope).await
             }
+            KIND_CONTEXT_GRAPH_REQUEST => self.context_graph(stream, peer, &envelope).await,
             KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST => {
                 self.context_delivery_receive(stream, peer, &envelope).await
             }
@@ -1225,6 +1228,47 @@ impl DaemonControlState {
             envelope.message_id,
             KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
             &ContextDeliveryInboxResponse { deliveries },
+        )
+        .await
+    }
+
+    async fn context_graph(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: ContextGraphRequest = envelope
+            .decode_typed_payload(KIND_CONTEXT_GRAPH_REQUEST)
+            .context(IpcSnafu)?;
+        let (root_scope, nodes) = self.sessions.context_graph(peer.uid, &request.session_id)?;
+        let nodes = nodes
+            .into_iter()
+            .map(|node| ContextScopeGraphNode {
+                scope: node.scope().as_str().to_owned(),
+                parent_scope: node
+                    .parent_scope()
+                    .map_or_else(String::new, |scope| scope.as_str().to_owned()),
+                head_commit: node.head_commit().to_string(),
+                fork_parent_commit: node
+                    .fork_parent_commit()
+                    .map_or_else(String::new, |commit| commit.to_string()),
+                source_identity: node.source_identity().unwrap_or_default().to_owned(),
+                execution_binding: node
+                    .execution_binding()
+                    .map_or_else(String::new, |binding| binding.as_str().to_owned()),
+                depth: u32::from(node.depth()),
+            })
+            .collect();
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_CONTEXT_GRAPH_RESPONSE,
+            &ContextGraphResponse {
+                root_scope: root_scope.as_str().to_owned(),
+                nodes,
+            },
         )
         .await
     }

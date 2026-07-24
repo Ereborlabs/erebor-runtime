@@ -369,6 +369,28 @@ message ContextDeliveryInboxResponse {
   repeated ContextDeliveryRecord deliveries = 1;
 }
 
+// The daemon's durable view of the contained context-scope topology. A node's
+// head may have advanced after its fork; fork_parent_commit remains the exact
+// immutable parent decision from which that scope was admitted.
+message ContextGraphRequest {
+  string session_id = 1;
+}
+
+message ContextScopeGraphNode {
+  string scope = 1;
+  string parent_scope = 2;
+  string head_commit = 3;
+  string fork_parent_commit = 4;
+  string source_identity = 5;
+  string execution_binding = 6;
+  uint32 depth = 7;
+}
+
+message ContextGraphResponse {
+  string root_scope = 1;
+  repeated ContextScopeGraphNode nodes = 2;
+}
+
 message ContextDeliveryReceiveRequest {
   string parent_session_id = 1;
   string delivery_path = 2;

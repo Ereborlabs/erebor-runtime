@@ -40,6 +40,15 @@ pub(crate) enum ContextExecutionBinding {
     DaemonPhysical,
 }
 
+impl ContextExecutionBinding {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::NativeLogical => "native-logical",
+            Self::DaemonPhysical => "daemon-physical",
+        }
+    }
+}
+
 /// The bounded daemon input required to create one immutable child scope.
 /// There is no child identity beyond `child_scope` and no mutable graph state.
 #[derive(Clone, Debug)]
@@ -96,6 +105,59 @@ pub(super) struct ContextChildEdge {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) source_identity: Option<String>,
     pub(super) execution_binding: ContextExecutionBinding,
+}
+
+/// One durable scope node returned to a session owner. The context repository
+/// remains authoritative; this is a read-only projection of its refs and
+/// checked parent-edge facts.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ContextScopeGraphNode {
+    scope: ScopeRef,
+    parent_scope: Option<ScopeRef>,
+    head_commit: erebor_runtime_context::ContextObjectId,
+    fork_parent_commit: Option<erebor_runtime_context::ContextObjectId>,
+    source_identity: Option<String>,
+    execution_binding: Option<ContextExecutionBinding>,
+    depth: u8,
+}
+
+impl ContextScopeGraphNode {
+    #[must_use]
+    pub(crate) const fn scope(&self) -> &ScopeRef {
+        &self.scope
+    }
+
+    #[must_use]
+    pub(crate) const fn parent_scope(&self) -> Option<&ScopeRef> {
+        self.parent_scope.as_ref()
+    }
+
+    #[must_use]
+    pub(crate) const fn head_commit(&self) -> erebor_runtime_context::ContextObjectId {
+        self.head_commit
+    }
+
+    #[must_use]
+    pub(crate) const fn fork_parent_commit(
+        &self,
+    ) -> Option<erebor_runtime_context::ContextObjectId> {
+        self.fork_parent_commit
+    }
+
+    #[must_use]
+    pub(crate) fn source_identity(&self) -> Option<&str> {
+        self.source_identity.as_deref()
+    }
+
+    #[must_use]
+    pub(crate) const fn execution_binding(&self) -> Option<ContextExecutionBinding> {
+        self.execution_binding
+    }
+
+    #[must_use]
+    pub(crate) const fn depth(&self) -> u8 {
+        self.depth
+    }
 }
 
 /// Serializes durable scope topology in one root session repository. This is
@@ -275,6 +337,80 @@ impl ContextDagCoordinator {
                 .build()
             })?;
         Ok(())
+    }
+
+    /// Return the complete durable scope topology rooted at this coordinator.
+    /// Every non-root scope is revalidated through its retained parent edge so
+    /// a graph display cannot hide malformed or reparented context state.
+    pub(crate) fn graph(&self) -> Result<Vec<ContextScopeGraphNode>> {
+        let _guard = self.mutation_lock.lock().map_err(|_error| {
+            InvalidRequestSnafu {
+                reason: String::from("context DAG coordinator mutation lock is poisoned"),
+            }
+            .build()
+        })?;
+        let scopes = self.repository.scope_refs().map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("could not enumerate context scopes: {error}"),
+            }
+            .build()
+        })?;
+        let mut nodes = Vec::with_capacity(scopes.len());
+        for scope in scopes {
+            let head_commit = self.repository.scope_head(&scope).map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("could not read context scope `{scope}`: {error}"),
+                }
+                .build()
+            })?;
+            if scope == self.root_scope {
+                nodes.push(ContextScopeGraphNode {
+                    scope,
+                    parent_scope: None,
+                    head_commit,
+                    fork_parent_commit: None,
+                    source_identity: None,
+                    execution_binding: None,
+                    depth: 0,
+                });
+                continue;
+            }
+            let edge = self.direct_edge(&scope)?;
+            let parent_scope = edge.parent_context.scope().map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("context edge has an invalid parent scope: {error}"),
+                }
+                .build()
+            })?;
+            let fork_parent_commit = edge.parent_context.commit().map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("context edge has an invalid parent commit: {error}"),
+                }
+                .build()
+            })?;
+            let depth = self.scope_depth(&scope, &mut HashSet::new())?;
+            nodes.push(ContextScopeGraphNode {
+                scope,
+                parent_scope: Some(parent_scope),
+                head_commit,
+                fork_parent_commit: Some(fork_parent_commit),
+                source_identity: edge.source_identity,
+                execution_binding: Some(edge.execution_binding),
+                depth,
+            });
+        }
+        if !nodes.iter().any(|node| node.scope == self.root_scope) {
+            return InvalidRequestSnafu {
+                reason: String::from("context DAG root scope disappeared"),
+            }
+            .fail();
+        }
+        nodes.sort_by(|left, right| {
+            left.depth
+                .cmp(&right.depth)
+                .then_with(|| left.scope.as_str().cmp(right.scope.as_str()))
+        });
+        Ok(nodes)
     }
 
     fn selected_parent_context_tree(&self, parent: &ContextPin) -> Result<ForkTarget> {
@@ -830,6 +966,57 @@ mod tests {
             .read_commit_blob(root_head, &edge_path)?
             .is_some());
         assert_eq!(repository.scope_refs()?.len(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn graph_returns_the_complete_checked_scope_topology() -> Result<(), Box<dyn Error>> {
+        let (_temporary, repository, root, root_pin) = root_fixture()?;
+        let coordinator = ContextDagCoordinator::new(Arc::clone(&repository), root.clone())?;
+        let child = ScopeRef::scope("parent-session", "child")?;
+        coordinator.admit_child(request(
+            root_pin,
+            child.clone(),
+            ContextExecutionBinding::NativeLogical,
+        )?)?;
+        let child_pin = repository.pin_scope_head(child.clone(), &[])?.pin().clone();
+        let grandchild = ScopeRef::scope("parent-session", "grandchild")?;
+        coordinator.admit_child(request(
+            child_pin,
+            grandchild.clone(),
+            ContextExecutionBinding::DaemonPhysical,
+        )?)?;
+
+        let graph = coordinator.graph()?;
+        assert_eq!(graph.len(), 3);
+        let root_node = graph
+            .iter()
+            .find(|node| node.scope() == &root)
+            .ok_or("missing root graph node")?;
+        assert_eq!(root_node.depth(), 0);
+        assert!(root_node.parent_scope().is_none());
+        let child_node = graph
+            .iter()
+            .find(|node| node.scope() == &child)
+            .ok_or("missing child graph node")?;
+        assert_eq!(child_node.parent_scope(), Some(&root));
+        assert_eq!(child_node.depth(), 1);
+        assert_eq!(
+            child_node.execution_binding(),
+            Some(ContextExecutionBinding::NativeLogical)
+        );
+        assert_eq!(child_node.source_identity(), Some("codex-v1:test"));
+        let grandchild_node = graph
+            .iter()
+            .find(|node| node.scope() == &grandchild)
+            .ok_or("missing grandchild graph node")?;
+        assert_eq!(grandchild_node.parent_scope(), Some(&child));
+        assert_eq!(grandchild_node.depth(), 2);
+        assert_eq!(
+            grandchild_node.execution_binding(),
+            Some(ContextExecutionBinding::DaemonPhysical)
+        );
+        assert!(grandchild_node.fork_parent_commit().is_some());
         Ok(())
     }
 

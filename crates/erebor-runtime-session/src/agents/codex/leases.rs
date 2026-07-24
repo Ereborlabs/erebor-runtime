@@ -913,12 +913,23 @@ impl CodexInvocationLeaseOwner {
                     handler
                         .admit_operation(ContextOperationAdmission::new(
                             self.session_id.clone(),
-                            parent_context,
+                            parent_context.clone(),
                             operation_key.clone(),
                         ))
                         .map_err(|reason| CodexSessionError::IncompatibleProfile {
                             reason: format!("daemon rejected Codex operation admission: {reason}"),
                             location: snafu::Location::default(),
+                        })
+                        .and_then(|scope| {
+                            self.context_dag()?
+                                .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                                    reason: String::from(
+                                        "Codex operation has no daemon-owned context repository",
+                                    ),
+                                    location: snafu::Location::default(),
+                                })?
+                                .refresh_scope_head(&parent_context)?;
+                            Ok(scope)
                         })?,
                 )
             }
@@ -962,7 +973,7 @@ impl CodexInvocationLeaseOwner {
                     .admit_operation(
                         ContextOperationAdmission::new(
                             self.session_id.clone(),
-                            parent_context,
+                            parent_context.clone(),
                             key,
                         )
                         .select_parent_context(),
@@ -979,6 +990,7 @@ impl CodexInvocationLeaseOwner {
                             ),
                             location: snafu::Location::default(),
                         })?;
+                context_dag.refresh_scope_head(&parent_context)?;
                 logical_child_binding = Some(context_dag.bind_admitted_scope(
                     child_thread_id.clone(),
                     child_turn_id.clone(),

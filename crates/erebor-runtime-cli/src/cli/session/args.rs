@@ -269,12 +269,21 @@ pub(crate) struct SessionContextArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SessionContextCommand {
+    /// Render the daemon-owned context scope DAG for one session.
+    Graph(SessionContextGraphArgs),
     /// List pending deliveries from direct child contexts.
     Inbox(SessionContextInboxArgs),
     /// Merge one pending child delivery into its direct parent context.
     Receive(SessionContextDecisionArgs),
     /// Record that the direct parent declined one pending child delivery.
     Reject(SessionContextRejectArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionContextGraphArgs {
+    /// A session id, its unique short prefix, or a daemon-owned session alias.
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) session_id: String,
 }
 
 #[derive(Debug, Args)]

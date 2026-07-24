@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     io::{self, Write},
     time::{Duration, Instant},
 };
@@ -9,9 +10,9 @@ use erebor_runtime_core::TerminalSize;
 use erebor_runtime_ipc::v1::{
     CodexAppServerAttachRequest, CodexAppServerInputCloseRequest, CodexAppServerInputRequest,
     CodexRunRequest, ContextDeliveryReceiveRequest, ContextDeliveryRejectRequest,
-    SessionAttachRequest, SessionCreateRequest, SessionEnvironmentEntry,
-    SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputRequest,
-    SessionPruneRequest, SessionRecord, SessionTerminalResizeRequest,
+    ContextGraphResponse, ContextScopeGraphNode, SessionAttachRequest, SessionCreateRequest,
+    SessionEnvironmentEntry, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
+    SessionInputRequest, SessionPruneRequest, SessionRecord, SessionTerminalResizeRequest,
 };
 use snafu::ResultExt;
 use uuid::Uuid;
@@ -24,7 +25,7 @@ mod interactive;
 use args::{
     GenericSessionCreateArgs, GenericSessionRequestArgs, SessionAliasArgs, SessionAliasCommand,
     SessionAttachArgs, SessionCommand, SessionContextArgs, SessionContextCommand,
-    SessionEventsArgs, SessionLogsArgs, SessionRunArgs,
+    SessionContextGraphArgs, SessionEventsArgs, SessionLogsArgs, SessionRunArgs,
 };
 use interactive::{
     InteractiveInput, InteractiveTerminal, StructuredJsonlEvent, StructuredJsonlInput,
@@ -819,6 +820,7 @@ impl<'a> SessionCommandOwner<'a> {
         args: &SessionContextArgs,
     ) -> Result<(), CliError> {
         match &args.command {
+            SessionContextCommand::Graph(args) => self.context_graph(client, args).await?,
             SessionContextCommand::Inbox(args) => {
                 let deliveries = client
                     .context_delivery_inbox(&args.parent_session_id)
@@ -882,6 +884,19 @@ impl<'a> SessionCommandOwner<'a> {
                 );
             }
         }
+        Ok(())
+    }
+
+    async fn context_graph(
+        &self,
+        client: &DaemonClient,
+        args: &SessionContextGraphArgs,
+    ) -> Result<(), CliError> {
+        let graph = client
+            .context_graph(&args.session_id)
+            .await
+            .context(DaemonClientSnafu)?;
+        Self::write_context_graph(graph);
         Ok(())
     }
 
@@ -950,6 +965,88 @@ impl<'a> SessionCommandOwner<'a> {
         println!("{table}");
     }
 
+    fn write_context_graph(graph: ContextGraphResponse) {
+        let Some(root_index) = graph
+            .nodes
+            .iter()
+            .position(|node| node.scope == graph.root_scope)
+        else {
+            println!("Context DAG is unavailable: daemon response has no root node");
+            return;
+        };
+        let mut children = BTreeMap::<String, Vec<usize>>::new();
+        for (index, node) in graph.nodes.iter().enumerate() {
+            if !node.parent_scope.is_empty() {
+                children
+                    .entry(node.parent_scope.clone())
+                    .or_default()
+                    .push(index);
+            }
+        }
+        for indexes in children.values_mut() {
+            indexes.sort_by(|left, right| graph.nodes[*left].scope.cmp(&graph.nodes[*right].scope));
+        }
+        let session = graph
+            .root_scope
+            .strip_prefix("refs/scopes/")
+            .and_then(|scope| scope.split_once('/'))
+            .map_or(graph.root_scope.as_str(), |(session, _rest)| session);
+        println!("CONTEXT DAG  {}", Self::short_id(session));
+        Self::write_context_graph_node(&graph.nodes, &children, root_index, "", true);
+    }
+
+    fn write_context_graph_node(
+        nodes: &[ContextScopeGraphNode],
+        children: &BTreeMap<String, Vec<usize>>,
+        index: usize,
+        prefix: &str,
+        is_last: bool,
+    ) {
+        let node = &nodes[index];
+        let is_root = node.parent_scope.is_empty();
+        let branch = if is_root {
+            "●"
+        } else if is_last {
+            "└─●"
+        } else {
+            "├─●"
+        };
+        let label = Self::short_scope(&node.scope);
+        let mut detail = format!("HEAD {}", Self::short_id(&node.head_commit));
+        if !node.fork_parent_commit.is_empty() {
+            detail.push_str(&format!(
+                "  FROM {}",
+                Self::short_id(&node.fork_parent_commit)
+            ));
+        }
+        if !node.execution_binding.is_empty() {
+            detail.push_str(&format!("  {}", node.execution_binding));
+        }
+        if !node.source_identity.is_empty() {
+            detail.push_str(&format!("  {}", node.source_identity));
+        }
+        println!("{prefix}{branch} {label}  {detail}");
+        let Some(child_indexes) = children.get(&node.scope) else {
+            return;
+        };
+        let child_prefix = if is_root {
+            String::new()
+        } else if is_last {
+            format!("{prefix}   ")
+        } else {
+            format!("{prefix}│  ")
+        };
+        for (offset, child_index) in child_indexes.iter().enumerate() {
+            Self::write_context_graph_node(
+                nodes,
+                children,
+                *child_index,
+                &child_prefix,
+                offset + 1 == child_indexes.len(),
+            );
+        }
+    }
+
     fn table() -> Table {
         let mut table = Table::new();
         table
@@ -966,6 +1063,25 @@ impl<'a> SessionCommandOwner<'a> {
             .chars()
             .take(12)
             .collect()
+    }
+
+    fn short_scope(scope: &str) -> String {
+        let Some((_session, leaf)) = scope
+            .strip_prefix("refs/scopes/")
+            .and_then(|scope| scope.split_once('/'))
+        else {
+            return Self::short_id(scope);
+        };
+        if leaf == "root" {
+            return String::from("root");
+        }
+        let Some(identifier) = leaf.strip_prefix("scope/") else {
+            return Self::short_id(leaf);
+        };
+        if let Some(hash) = identifier.strip_prefix("codex-operation-") {
+            return format!("codex-operation-{}", Self::short_id(hash));
+        }
+        Self::short_id(identifier)
     }
 }
 

@@ -2,15 +2,17 @@ use std::error::Error;
 
 use erebor_runtime_ipc::{
     v1::{
-        AllowDecision, CodexAppServerInputCloseRequest, CodexAppServerInputRequest, DecisionKind,
+        AllowDecision, CodexAppServerInputCloseRequest, CodexAppServerInputRequest,
+        ContextGraphRequest, ContextGraphResponse, ContextScopeGraphNode, DecisionKind,
         DenyDecision, Envelope, GuardHello, GuardLifecycleEvent, GuardLifecycleEventKind,
         GuardLifecycleReply, GuardLifecycleReplyKind, InterceptionDecision, InterceptionOperation,
         InterceptionRequest, InterceptionSource, MediateDecision, ProcessExecOperation,
         SessionEvidenceRequest, SessionInputRequest, SessionTerminalResizeRequest,
         KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, KIND_CODEX_APP_SERVER_INPUT_REQUEST,
-        KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
-        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, KIND_SESSION_EVIDENCE_REQUEST,
-        KIND_SESSION_INPUT_REQUEST, KIND_SESSION_TERMINAL_RESIZE_REQUEST, PROTOCOL_VERSION,
+        KIND_CONTEXT_GRAPH_REQUEST, KIND_CONTEXT_GRAPH_RESPONSE, KIND_GUARD_HELLO,
+        KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION,
+        KIND_INTERCEPTION_REQUEST, KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST,
+        KIND_SESSION_TERMINAL_RESIZE_REQUEST, PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
 };
@@ -53,6 +55,41 @@ fn public_api_round_trips_daemon_owned_evidence_stream_request() -> Result<(), B
         .decode_typed_payload(KIND_SESSION_EVIDENCE_REQUEST)?;
 
     assert_eq!(decoded, request);
+    Ok(())
+}
+
+#[test]
+fn public_api_round_trips_daemon_owned_context_graph() -> Result<(), Box<dyn Error>> {
+    let request = ContextGraphRequest {
+        session_id: String::from("session-context-contract"),
+    };
+    let request_envelope = Envelope::wrap_message(61, 0, KIND_CONTEXT_GRAPH_REQUEST, &request)?;
+    let request_frame = EreborIpcFrame::decode(&request_envelope.into_frame()?.encode()?)?;
+    let decoded_request: ContextGraphRequest = request_frame
+        .decode_payload::<Envelope>()?
+        .decode_typed_payload(KIND_CONTEXT_GRAPH_REQUEST)?;
+    assert_eq!(decoded_request, request);
+
+    let response = ContextGraphResponse {
+        root_scope: String::from("refs/scopes/session-context-contract/root"),
+        nodes: vec![ContextScopeGraphNode {
+            scope: String::from("refs/scopes/session-context-contract/root"),
+            parent_scope: String::new(),
+            head_commit: String::from(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            fork_parent_commit: String::new(),
+            source_identity: String::new(),
+            execution_binding: String::new(),
+            depth: 0,
+        }],
+    };
+    let response_envelope = Envelope::wrap_message(62, 61, KIND_CONTEXT_GRAPH_RESPONSE, &response)?;
+    let response_frame = EreborIpcFrame::decode(&response_envelope.into_frame()?.encode()?)?;
+    let decoded_response: ContextGraphResponse = response_frame
+        .decode_payload::<Envelope>()?
+        .decode_typed_payload(KIND_CONTEXT_GRAPH_RESPONSE)?;
+    assert_eq!(decoded_response, response);
     Ok(())
 }
 

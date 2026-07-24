@@ -1,5 +1,6 @@
 use clap::Parser;
 
+use super::SessionCommandOwner;
 use crate::cli::Cli;
 
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -104,6 +105,25 @@ fn session_lifecycle_is_a_daemon_command_family() {
     .is_ok());
     assert!(Cli::try_parse_from(["erebor", "session", "adopt", "--pid", "1"]).is_err());
     assert!(Cli::try_parse_from(["erebor", "session", "diagnose", "test"]).is_err());
+}
+
+#[test]
+fn context_graph_accepts_a_short_session_reference_and_keeps_scope_labels_readable() {
+    assert!(
+        Cli::try_parse_from(["erebor", "session", "context", "graph", "23f741c3-5ce",]).is_ok()
+    );
+    assert_eq!(
+        SessionCommandOwner::short_scope(
+            "refs/scopes/session-23f741c3-5cea-4285-8a0a-e46da1c5465c/root",
+        ),
+        "root"
+    );
+    assert_eq!(
+        SessionCommandOwner::short_scope(
+            "refs/scopes/session-23f741c3-5cea-4285-8a0a-e46da1c5465c/scope/codex-operation-1234567890abcdef",
+        ),
+        "codex-operation-1234567890ab"
+    );
 }
 
 #[test]

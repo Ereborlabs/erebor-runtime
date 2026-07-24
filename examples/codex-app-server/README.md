@@ -118,10 +118,19 @@ fixture/deliver {"sequence":1,"selected_text":"B completed ls"}
 
 `erebor_lab session ps` must still show exactly one session. The `ls` process
 is physically governed by that one session's Linux guard and causally bound to
-B's scope. The daemon-derived graph-listing command is still required before
-the complete P/B/C/D/q topology can be rendered in the client; until then the
-inbox and focused fixture tests are the public evidence without reading the
-root-owned repository directly.
+B's scope. Back in the second terminal, render the daemon-owned scope DAG:
+
+```sh
+erebor_lab session context graph <parent-short-id>
+```
+
+The graph is a compact Git-style tree of the durable scopes. `HEAD` is each
+scope's current commit; `FROM` is the exact immutable parent commit selected
+when that branch was admitted. It also shows whether the edge is native-logical
+or daemon-physical and its authenticated source identity. Scope and commit IDs
+are safely abbreviated for display; the full values remain available in the
+delivery inbox when a compare-and-set receive or reject needs them. The client
+never opens the root-owned context repository.
 
 ## Socket selection
 

@@ -102,6 +102,8 @@ pub const KIND_CONTEXT_DELIVERY_INBOX_REQUEST: &str =
     "erebor.runtime.ipc.v1.ContextDeliveryInboxRequest";
 pub const KIND_CONTEXT_DELIVERY_INBOX_RESPONSE: &str =
     "erebor.runtime.ipc.v1.ContextDeliveryInboxResponse";
+pub const KIND_CONTEXT_GRAPH_REQUEST: &str = "erebor.runtime.ipc.v1.ContextGraphRequest";
+pub const KIND_CONTEXT_GRAPH_RESPONSE: &str = "erebor.runtime.ipc.v1.ContextGraphResponse";
 pub const KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST: &str =
     "erebor.runtime.ipc.v1.ContextDeliveryReceiveRequest";
 pub const KIND_CONTEXT_DELIVERY_REJECT_REQUEST: &str =

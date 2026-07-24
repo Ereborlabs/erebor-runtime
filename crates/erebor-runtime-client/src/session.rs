@@ -4,16 +4,16 @@ use erebor_runtime_ipc::v1::{
     CodexAppServerAttachResponse, CodexAppServerInputCloseRequest,
     CodexAppServerInputCloseResponse, CodexAppServerInputRequest, CodexAppServerInputResponse,
     ContextDeliveryDecisionResponse, ContextDeliveryInboxRequest, ContextDeliveryInboxResponse,
-    ContextDeliveryReceiveRequest, ContextDeliveryRejectRequest, Header, SessionAliasListRequest,
-    SessionAliasListResponse, SessionAliasRecord, SessionAliasRemoveRequest,
-    SessionAliasSetRequest, SessionAttachRequest, SessionAttachResponse, SessionCreateRequest,
-    SessionCreateResponse, SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
-    SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
-    SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputLeaseResponse,
-    SessionInputRequest, SessionInputResponse, SessionInspectRequest, SessionKillRequest,
-    SessionListRequest, SessionListResponse, SessionLogChunk, SessionLogsEnd, SessionLogsRequest,
-    SessionPruneRequest, SessionPruneResponse, SessionRecord, SessionRemoveRequest,
-    SessionStartRequest, SessionStopRequest, SessionTerminalResizeRequest,
+    ContextDeliveryReceiveRequest, ContextDeliveryRejectRequest, ContextGraphRequest,
+    ContextGraphResponse, Header, SessionAliasListRequest, SessionAliasListResponse,
+    SessionAliasRecord, SessionAliasRemoveRequest, SessionAliasSetRequest, SessionAttachRequest,
+    SessionAttachResponse, SessionCreateRequest, SessionCreateResponse, SessionEventRecord,
+    SessionEventsEnd, SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord,
+    SessionEvidenceRequest, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
+    SessionInputLeaseResponse, SessionInputRequest, SessionInputResponse, SessionInspectRequest,
+    SessionKillRequest, SessionListRequest, SessionListResponse, SessionLogChunk, SessionLogsEnd,
+    SessionLogsRequest, SessionPruneRequest, SessionPruneResponse, SessionRecord,
+    SessionRemoveRequest, SessionStartRequest, SessionStopRequest, SessionTerminalResizeRequest,
     SessionTerminalResizeResponse, SessionWaitRequest, EREBOR_IDEMPOTENCY_KEY_HEADER,
     KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
     KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
@@ -22,7 +22,8 @@ use erebor_runtime_ipc::v1::{
     KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE, KIND_CODEX_APP_SERVER_INPUT_REQUEST,
     KIND_CODEX_APP_SERVER_INPUT_RESPONSE, KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
     KIND_CONTEXT_DELIVERY_INBOX_REQUEST, KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
-    KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST, KIND_CONTEXT_DELIVERY_REJECT_REQUEST, KIND_DAEMON_ERROR,
+    KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST, KIND_CONTEXT_DELIVERY_REJECT_REQUEST,
+    KIND_CONTEXT_GRAPH_REQUEST, KIND_CONTEXT_GRAPH_RESPONSE, KIND_DAEMON_ERROR,
     KIND_SESSION_ALIAS_LIST_REQUEST, KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_RECORD,
     KIND_SESSION_ALIAS_REMOVE_REQUEST, KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST,
     KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_REQUEST, KIND_SESSION_CREATE_RESPONSE,
@@ -78,6 +79,23 @@ impl DaemonClient {
                     parent_session_id: parent_session_id.into(),
                 },
                 KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
+                Vec::new(),
+            )
+            .await
+    }
+
+    pub async fn context_graph(
+        &self,
+        session_id: impl Into<String>,
+    ) -> Result<ContextGraphResponse> {
+        let mut connection = self.connect().await?;
+        connection
+            .unary(
+                KIND_CONTEXT_GRAPH_REQUEST,
+                &ContextGraphRequest {
+                    session_id: session_id.into(),
+                },
+                KIND_CONTEXT_GRAPH_RESPONSE,
                 Vec::new(),
             )
             .await

@@ -309,6 +309,9 @@ impl CodexHookService {
         )?;
         registration
             .lease_owner
+            .set_operation_admission_handler(Arc::clone(&operation_admissions))?;
+        registration
+            .context_dag
             .set_operation_admission_handler(operation_admissions)?;
         self.register(
             registration.managed_session.clone(),
