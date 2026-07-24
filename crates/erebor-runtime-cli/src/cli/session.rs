@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, ContentArrangement, Table};
 use erebor_runtime_client::DaemonClient;
 use erebor_runtime_core::TerminalSize;
 use erebor_runtime_ipc::v1::{
@@ -73,15 +74,13 @@ impl<'a> SessionCommandOwner<'a> {
                     .context(DaemonClientSnafu)?,
             ),
             SessionCommand::Ps => {
-                for record in self
+                let records = self
                     .client
                     .session_list()
                     .await
                     .context(DaemonClientSnafu)?
-                    .sessions
-                {
-                    Self::write_record(record);
-                }
+                    .sessions;
+                Self::write_records(&records);
             }
             SessionCommand::Inspect(args) => Self::write_record(
                 self.client
@@ -821,21 +820,29 @@ impl<'a> SessionCommandOwner<'a> {
     ) -> Result<(), CliError> {
         match &args.command {
             SessionContextCommand::Inbox(args) => {
-                for delivery in client
+                let deliveries = client
                     .context_delivery_inbox(&args.parent_session_id)
                     .await
                     .context(DaemonClientSnafu)?
-                    .deliveries
-                {
-                    println!(
-                        "receiver_scope={} child_scope={} delivery_path={} delivery_commit={} expected_parent_head={}",
+                    .deliveries;
+                let mut table = Self::table();
+                table.set_header([
+                    "PARENT SCOPE",
+                    "CHILD SCOPE",
+                    "DELIVERY",
+                    "CHILD PIN",
+                    "PARENT PIN",
+                ]);
+                for delivery in deliveries {
+                    table.add_row([
                         delivery.receiver_scope,
                         delivery.child_scope,
                         delivery.delivery_path,
-                        delivery.delivery_commit,
-                        delivery.expected_parent_head,
-                    );
+                        Self::short_id(&delivery.delivery_commit),
+                        Self::short_id(&delivery.expected_parent_head),
+                    ]);
                 }
+                println!("{table}");
             }
             SessionContextCommand::Receive(args) => {
                 let decision = client
@@ -905,27 +912,55 @@ impl<'a> SessionCommandOwner<'a> {
     }
 
     fn write_create(record: erebor_runtime_ipc::v1::SessionCreateResponse) {
-        println!(
-            "session_id={} state={} generation={} retry_expires_unix_ms={}",
+        let mut table = Self::table();
+        table.set_header(["ID", "STATE", "GENERATION", "RETRY EXPIRES (MS)"]);
+        table.add_row([
             record.session_id,
             record.state,
-            record.generation,
-            record.retry_guarantee_expires_unix_ms,
-        );
+            record.generation.to_string(),
+            record.retry_guarantee_expires_unix_ms.to_string(),
+        ]);
+        println!("{table}");
     }
 
     fn write_record(record: SessionRecord) {
-        println!(
-            "session_id={} state={} generation={} owner_uid={} runner_id={} recovery={} retention_hold={} failure={}",
-            record.session_id,
-            record.state,
-            record.generation,
-            record.owner_uid,
-            record.runner_id,
-            record.runner_recovery,
-            record.retention_hold,
-            record.failure,
-        );
+        Self::write_records(&[record]);
+    }
+
+    fn write_records(records: &[SessionRecord]) {
+        let mut table = Self::table();
+        table.set_header([
+            "ID", "STATE", "GEN", "OWNER", "RUNNER", "RETAINED", "FAILURE",
+        ]);
+        for record in records {
+            table.add_row([
+                record.session_id.clone(),
+                record.state.clone(),
+                record.generation.to_string(),
+                record.owner_uid.to_string(),
+                record.runner_id.clone(),
+                record.retention_hold.to_string(),
+                if record.failure.is_empty() {
+                    String::from("-")
+                } else {
+                    record.failure.clone()
+                },
+            ]);
+        }
+        println!("{table}");
+    }
+
+    fn table() -> Table {
+        let mut table = Table::new();
+        table
+            .load_preset(UTF8_FULL)
+            .apply_modifier(UTF8_ROUND_CORNERS)
+            .set_content_arrangement(ContentArrangement::Dynamic);
+        table
+    }
+
+    fn short_id(value: &str) -> String {
+        value.chars().take(12).collect()
     }
 }
 
