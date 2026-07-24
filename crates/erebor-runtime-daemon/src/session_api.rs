@@ -30,11 +30,14 @@ use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLoca
 use erebor_runtime_session::{
     AgentAdapterRegistry, ChildContextDelivery, ChildContextDeliveryDispatcher,
     ChildContextDeliveryHandler, ChildSessionAdmission, ChildSessionAdmissionDispatcher,
-    ChildSessionAdmissionHandler, CodexAppServerService, CodexHookService, DurableSessionRecord,
-    RunnerAdmissionRequest, RunnerRegistry, SessionManager, SessionManagerError, SessionRepository,
-    SessionRepositoryError, SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
+    ChildSessionAdmissionHandler, CodexAppServerService, CodexHookService,
+    ContextOperationAdmission, ContextOperationAdmissionDispatcher,
+    ContextOperationAdmissionHandler, DurableSessionRecord, RunnerAdmissionRequest, RunnerRegistry,
+    SessionManager, SessionManagerError, SessionRepository, SessionRepositoryError,
+    SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
 };
 use prost::Message;
+use sha2::{Digest, Sha256};
 use snafu::ResultExt;
 use uuid::Uuid;
 
@@ -73,6 +76,7 @@ pub(crate) struct DaemonSessionApi {
     codex_app_server_service: Arc<CodexAppServerService>,
     child_admissions: Arc<ChildSessionAdmissionDispatcher>,
     child_deliveries: Arc<ChildContextDeliveryDispatcher>,
+    operation_admissions: Arc<ContextOperationAdmissionDispatcher>,
     context_resolver: Arc<SessionContextResolver>,
     context_coordinators: Arc<Mutex<BTreeMap<String, Arc<ContextDagCoordinator>>>>,
     codex_app_server_output_monitors: Arc<Mutex<BTreeSet<String>>>,
@@ -161,6 +165,7 @@ impl DaemonSessionApi {
         let codex_app_server_service = Arc::new(CodexAppServerService::default());
         let child_admissions = Arc::new(ChildSessionAdmissionDispatcher::default());
         let child_deliveries = Arc::new(ChildContextDeliveryDispatcher::default());
+        let operation_admissions = Arc::new(ContextOperationAdmissionDispatcher::default());
         let context_resolver = Arc::new(SessionContextResolver::new(state_root.clone()));
         let runtime = SessionRuntimeResources::new(
             state_root.clone(),
@@ -173,6 +178,7 @@ impl DaemonSessionApi {
                 Arc::clone(&context_resolver),
                 Arc::clone(&child_admissions) as Arc<dyn ChildSessionAdmissionHandler>,
                 Arc::clone(&child_deliveries) as Arc<dyn ChildContextDeliveryHandler>,
+                Arc::clone(&operation_admissions) as Arc<dyn ContextOperationAdmissionHandler>,
             )),
         )
         .context(SessionSnafu)?;
@@ -192,6 +198,7 @@ impl DaemonSessionApi {
             codex_app_server_service,
             child_admissions,
             child_deliveries,
+            operation_admissions,
             context_resolver,
             context_coordinators: Arc::new(Mutex::new(BTreeMap::new())),
             codex_app_server_output_monitors: Arc::new(Mutex::new(BTreeSet::new())),
@@ -222,6 +229,20 @@ impl DaemonSessionApi {
         })
     }
 
+    pub(crate) fn bind_operation_admission_handler(
+        &self,
+        handler: Arc<dyn ContextOperationAdmissionHandler>,
+    ) -> Result<()> {
+        self.operation_admissions
+            .install(handler)
+            .map_err(|reason| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("binding daemon context-operation handler failed: {reason}"),
+                }
+                .build()
+            })
+    }
+
     pub(crate) fn publish_child_delivery(&self, delivery: ChildContextDelivery) -> Result<()> {
         let record = self
             .manager
@@ -242,13 +263,27 @@ impl DaemonSessionApi {
             .fail();
         }
         let child_spec = record.spec();
-        let child_scope = erebor_runtime_context::ScopeRef::root(child_spec.session_id().as_str())
+        let child_scope = delivery
+            .source_scope()
+            .cloned()
+            .map_or_else(
+                || erebor_runtime_context::ScopeRef::root(child_spec.session_id().as_str()),
+                Ok,
+            )
             .map_err(|error| {
                 crate::error::InvalidRequestSnafu {
                     reason: format!("could not resolve child delivery scope: {error}"),
                 }
                 .build()
             })?;
+        if child_scope.session_id() != child_spec.session_id().as_str() {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "authenticated delivery source scope does not belong to its session",
+                ),
+            }
+            .fail();
+        }
         let kind = match delivery.kind() {
             "message" => ContextDeliveryKind::Message,
             "result" => ContextDeliveryKind::Result,
@@ -281,6 +316,84 @@ impl DaemonSessionApi {
         self.context_coordinator(child_spec)?
             .publish_delivery(publication)?;
         Ok(())
+    }
+
+    pub(crate) fn admit_context_operation(
+        &self,
+        admission: ContextOperationAdmission,
+    ) -> Result<erebor_runtime_context::ScopeRef> {
+        let parent = self
+            .manager
+            .list_all()
+            .context(SessionSnafu)?
+            .into_iter()
+            .find(|record| record.spec().session_id().as_str() == admission.session_id())
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from("context operation session no longer exists"),
+                }
+                .build()
+            })?;
+        if parent.state() != SessionLifecycleState::Running {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("authenticated context operation requires a running session"),
+            }
+            .fail();
+        }
+        let parent_spec = parent.spec();
+        let parent_admission = self.local_store.validate_session_spec(parent_spec)?;
+        if parent_admission.package().adapter_id() != "codex-v1" {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("only a certified Codex session may admit an operation"),
+            }
+            .fail();
+        }
+        let key = admission.operation_key();
+        if key.is_empty()
+            || key.len() > 128
+            || !key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("context operation key must be a bounded ASCII identifier"),
+            }
+            .fail();
+        }
+        let parent_scope = admission.parent_context().scope().map_err(|error| {
+            crate::error::InvalidRequestSnafu {
+                reason: format!("context operation parent scope is invalid: {error}"),
+            }
+            .build()
+        })?;
+        if parent_scope.session_id() != parent_spec.session_id().as_str() {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "context operation parent pin does not belong to its authenticated session",
+                ),
+            }
+            .fail();
+        }
+        let digest = format!("{:x}", Sha256::digest(key.as_bytes()));
+        let child_scope = erebor_runtime_context::ScopeRef::scope(
+            parent_spec.session_id().as_str(),
+            format!("codex-operation-{}", &digest[..20]),
+        )
+        .map_err(|error| {
+            crate::error::InvalidRequestSnafu {
+                reason: format!("could not construct context operation scope: {error}"),
+            }
+            .build()
+        })?;
+        let context_fork = ContextChildForkRequest::new(
+            admission.parent_context().clone(),
+            child_scope.clone(),
+            ContextExecutionBinding::NativeLogical,
+            Some(format!("codex-v1:operation:{key}")),
+        )?;
+        self.context_coordinator(parent_spec)?
+            .admit_child(context_fork)?;
+        Ok(child_scope)
     }
 
     pub(crate) fn context_delivery_inbox(

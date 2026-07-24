@@ -1,5 +1,5 @@
 use std::{
-    io::Read,
+    io::{self, Read},
     process::Child,
     sync::{mpsc, Arc},
     thread,
@@ -34,6 +34,7 @@ pub(super) fn pump_output(
     mut source: impl Read + Send + 'static,
     sink: Arc<DurableStreamStore>,
     source_name: &'static str,
+    source_is_terminal_master: bool,
     failure_sender: mpsc::Sender<SessionControllerError>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
@@ -42,6 +43,12 @@ pub(super) fn pump_output(
         loop {
             match source.read(&mut buffer) {
                 Ok(0) => return,
+                // On Linux, closing the last slave file descriptor makes a
+                // pseudoterminal master report EIO rather than EOF.  It is
+                // the normal end of an interactive workload, not a failure
+                // to record its output.  Do not extend this exception to
+                // ordinary pipes, where EIO remains an actionable error.
+                Err(source) if source_is_terminal_master && is_pty_eof(&source) => return,
                 Err(source) => {
                     if required {
                         let _result = failure_sender.send(SessionControllerError::Io {
@@ -71,6 +78,10 @@ pub(super) fn pump_output(
     })
 }
 
+fn is_pty_eof(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(rustix::io::Errno::IO.raw_os_error())
+}
+
 pub(super) fn child_exit(status: std::process::ExitStatus) -> WorkloadExit {
     use std::os::unix::process::ExitStatusExt;
 
@@ -92,7 +103,10 @@ pub(super) fn wait_child(child: &mut Child) -> Result<WorkloadExit, SessionContr
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Cursor, sync::Arc};
+    use std::{
+        io::{self, Cursor, Read},
+        sync::Arc,
+    };
 
     use tempfile::TempDir;
 
@@ -112,7 +126,7 @@ mod tests {
             true,
         )?);
         let (monitor, sender) = OutputFailureMonitor::new();
-        let pump = pump_output(Cursor::new(vec![b'x'; 256]), sink, "stdout", sender);
+        let pump = pump_output(Cursor::new(vec![b'x'; 256]), sink, "stdout", false, sender);
 
         pump.join().map_err(|_panic| "output pump panicked")?;
         let failure = monitor
@@ -137,7 +151,35 @@ mod tests {
             false,
         )?);
         let (monitor, sender) = OutputFailureMonitor::new();
-        let pump = pump_output(Cursor::new(vec![b'x'; 256]), sink, "stdout", sender);
+        let pump = pump_output(Cursor::new(vec![b'x'; 256]), sink, "stdout", false, sender);
+
+        pump.join().map_err(|_panic| "output pump panicked")?;
+        assert!(monitor.take_failure().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn terminal_master_eio_is_a_normal_end_of_stream() -> Result<(), Box<dyn std::error::Error>> {
+        struct EioReader;
+
+        impl Read for EioReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::from_raw_os_error(
+                    rustix::io::Errno::IO.raw_os_error(),
+                ))
+            }
+        }
+
+        let temporary = TempDir::new()?;
+        let sink = Arc::new(DurableStreamStore::open(
+            temporary.path(),
+            StreamKind::Stdout,
+            128,
+            128,
+            true,
+        )?);
+        let (monitor, sender) = OutputFailureMonitor::new();
+        let pump = pump_output(EioReader, sink, "stdout", true, sender);
 
         pump.join().map_err(|_panic| "output pump panicked")?;
         assert!(monitor.take_failure().is_none());

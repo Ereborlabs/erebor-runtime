@@ -1,5 +1,7 @@
 use std::sync::{Arc, Mutex};
 
+use erebor_runtime_context::ScopeRef;
+
 /// A bounded child-owned Codex result accepted only from the existing
 /// authenticated hook route. This is an in-process daemon callback, not a
 /// workload socket or a second process-guard protocol.
@@ -10,6 +12,7 @@ pub struct ChildContextDelivery {
     kind: String,
     mode: String,
     selected_bytes: Vec<u8>,
+    source_scope: Option<ScopeRef>,
 }
 
 impl ChildContextDelivery {
@@ -27,7 +30,14 @@ impl ChildContextDelivery {
             kind: kind.into(),
             mode: mode.into(),
             selected_bytes,
+            source_scope: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_source_scope(mut self, source_scope: ScopeRef) -> Self {
+        self.source_scope = Some(source_scope);
+        self
     }
 
     #[must_use]
@@ -53,6 +63,11 @@ impl ChildContextDelivery {
     #[must_use]
     pub fn selected_bytes(&self) -> &[u8] {
         &self.selected_bytes
+    }
+
+    #[must_use]
+    pub const fn source_scope(&self) -> Option<&ScopeRef> {
+        self.source_scope.as_ref()
     }
 }
 

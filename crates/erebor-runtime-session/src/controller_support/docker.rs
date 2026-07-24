@@ -142,6 +142,7 @@ impl DockerWorkload {
                 stdout,
                 Arc::clone(&output.stdout),
                 StreamKind::Stdout.as_str(),
+                false,
                 failure_sender.clone(),
             ));
         }
@@ -150,6 +151,7 @@ impl DockerWorkload {
                 stderr,
                 Arc::clone(&output.stderr),
                 StreamKind::Stderr.as_str(),
+                false,
                 failure_sender,
             ));
         }

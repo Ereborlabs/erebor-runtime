@@ -6,7 +6,7 @@ use std::{
 };
 
 use erebor_runtime_audit::JsonlAuditSink;
-use erebor_runtime_context::ContextPin;
+use erebor_runtime_context::{ContextPin, ScopeRef};
 use erebor_runtime_core::{AuditRecord, DurableAuditSink};
 use erebor_runtime_events::{
     ActionKind, ActorIdentity, EventId, ExecutionSurface, RiskLevel, RiskMetadata, RuntimeEvent,
@@ -19,7 +19,7 @@ use erebor_runtime_telemetry::warn;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::ChildSessionAdmission;
+use crate::{ChildSessionAdmission, ContextOperationAdmission, ContextOperationAdmissionHandler};
 
 use super::{CodexContextDag, CodexScopeContextBinding, CodexSessionError};
 
@@ -172,6 +172,7 @@ struct HandoffLane {
 enum InvocationCapability {
     Command {
         command: String,
+        operation_key: Option<String>,
     },
     InProcessMutation {
         targets: Vec<String>,
@@ -211,6 +212,7 @@ struct InvocationLease {
     hook_profile_epoch: String,
     expires_at_millis: u128,
     context_pin: Option<ContextPin>,
+    operation_scope: Option<ScopeRef>,
 }
 
 #[derive(Clone, Debug)]
@@ -243,6 +245,7 @@ pub(crate) struct CodexInvocationLeaseOwner {
     command_dispatch: Option<CodexCommandDispatch>,
     audit: Option<JsonlAuditSink>,
     context_dag: Mutex<Option<Arc<CodexContextDag>>>,
+    operation_admissions: Mutex<Option<Arc<dyn ContextOperationAdmissionHandler>>>,
     state: Mutex<LeaseState>,
 }
 
@@ -265,6 +268,7 @@ impl CodexInvocationLeaseOwner {
             command_dispatch: trust.command_dispatch,
             audit: audit_path.map(JsonlAuditSink::new),
             context_dag: Mutex::new(None),
+            operation_admissions: Mutex::new(None),
             state: Mutex::new(LeaseState::default()),
         }
     }
@@ -290,6 +294,25 @@ impl CodexInvocationLeaseOwner {
             .map_err(|_error| CodexSessionError::ContextDagStateLock {
                 location: snafu::Location::default(),
             })
+    }
+
+    pub(crate) fn set_operation_admission_handler(
+        &self,
+        handler: Arc<dyn ContextOperationAdmissionHandler>,
+    ) -> Result<(), CodexSessionError> {
+        let mut installed = self.operation_admissions.lock().map_err(|_error| {
+            CodexSessionError::InvocationLeaseStateLock {
+                location: snafu::Location::default(),
+            }
+        })?;
+        if installed.is_some() {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from("Codex context-operation handler is already installed"),
+                location: snafu::Location::default(),
+            });
+        }
+        *installed = Some(handler);
+        Ok(())
     }
 
     pub(crate) fn record_scope_context(
@@ -434,7 +457,23 @@ impl CodexInvocationLeaseOwner {
                 self.record_scope_context(binding)?;
             }
         }
-        let context_pin = self.record_hook_context(kind, &payload, &runtime, hook_pid)?;
+        let operation_scope = if kind == HookEventKind::PostToolUse {
+            self.operation_scope_for_post_tool_delivery(&payload, &runtime)?
+        } else {
+            None
+        };
+        let context_pin = operation_scope.as_ref().map_or_else(
+            || self.record_hook_context(kind, &payload, &runtime, hook_pid),
+            |operation_scope| {
+                self.record_operation_hook_context(
+                    kind,
+                    &payload,
+                    &runtime,
+                    hook_pid,
+                    operation_scope,
+                )
+            },
+        )?;
         let mut state = self.lock_state()?;
         self.expire_locked(&mut state)?;
         if Self::cancelled(&payload) {
@@ -665,6 +704,115 @@ impl CodexInvocationLeaseOwner {
         )
     }
 
+    fn record_operation_hook_context(
+        &self,
+        kind: HookEventKind,
+        payload: &Value,
+        runtime: &CodexLeaseRuntimeEvidence,
+        hook_pid: i64,
+        operation_scope: &ScopeRef,
+    ) -> Result<Option<ContextPin>, CodexSessionError> {
+        self.context_dag()?.map_or_else(
+            || {
+                Err(CodexSessionError::IncompatibleProfile {
+                    reason: String::from(
+                        "Codex operation delivery has no daemon-owned context repository",
+                    ),
+                    location: snafu::Location::default(),
+                })
+            },
+            |context_dag| {
+                context_dag
+                    .record_authenticated_operation_hook(
+                        kind,
+                        payload,
+                        serde_json::json!({
+                            "runtime_pid": runtime.pid,
+                            "runtime_start_time_ticks": runtime.process_start_time_ticks,
+                            "runtime_executable": runtime.executable,
+                            "hook_pid": hook_pid,
+                        }),
+                        operation_scope,
+                    )
+                    .map(Some)
+            },
+        )
+    }
+
+    fn operation_scope_for_post_tool_delivery(
+        &self,
+        payload: &Value,
+        runtime: &CodexLeaseRuntimeEvidence,
+    ) -> Result<Option<ScopeRef>, CodexSessionError> {
+        let Some(operation_key) = payload
+            .pointer("/erebor_delivery/operation_key")
+            .and_then(Value::as_str)
+            .filter(|key| !key.is_empty())
+        else {
+            return Ok(None);
+        };
+        let fields = InvocationIdentityFields::parse(payload).ok_or_else(|| {
+            CodexSessionError::InvalidHookEvent {
+                reason: String::from(
+                    "operation delivery must identify its exact Codex tool invocation",
+                ),
+                location: snafu::Location::default(),
+            }
+        })?;
+        let identity = InvocationIdentity {
+            runtime_id: runtime.runtime_id(),
+            codex_session_id: fields.codex_session_id,
+            turn_id: fields.turn_id,
+            tool_use_id: fields.tool_use_id,
+        };
+        let mut state = self.lock_state()?;
+        self.expire_locked(&mut state)?;
+        let lease_id =
+            state
+                .identities
+                .get(&identity)
+                .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                    reason: String::from(
+                        "operation delivery has no authenticated invocation lease",
+                    ),
+                    location: snafu::Location::default(),
+                })?;
+        let lease =
+            state
+                .leases
+                .get(lease_id)
+                .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                    reason: String::from("operation delivery invocation lease disappeared"),
+                    location: snafu::Location::default(),
+                })?;
+        let InvocationCapability::Command {
+            operation_key: Some(expected_key),
+            ..
+        } = &lease.capability
+        else {
+            return Err(CodexSessionError::InvalidHookEvent {
+                reason: String::from("operation delivery invocation is not an admitted command"),
+                location: snafu::Location::default(),
+            });
+        };
+        if expected_key != operation_key || lease.state == InvocationLeaseState::Closed {
+            return Err(CodexSessionError::InvalidHookEvent {
+                reason: String::from(
+                    "operation delivery does not match an active admitted command",
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        lease
+            .operation_scope
+            .clone()
+            .map(Some)
+            .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                reason: String::from("operation delivery has no daemon-created source scope"),
+                location: snafu::Location::default(),
+            })
+    }
+
     /// Returns a decision only for a process or file effect that this owner
     /// can attribute to a Codex invocation. The generic interception policy
     /// remains responsible for all other observed effects.
@@ -816,6 +964,19 @@ impl CodexInvocationLeaseOwner {
         };
         let (effect_class, capability) = InvocationCapability::from_input(&input);
         if effect_class == EffectClass::Unsupported {
+            if input
+                .tool_input
+                .get("erebor_operation_key")
+                .or_else(|| input.tool_input.get("ereborOperationKey"))
+                .is_some()
+            {
+                return Err(CodexSessionError::InvalidHookEvent {
+                    reason: String::from(
+                        "Codex operation source option is not a supported bounded command key",
+                    ),
+                    location: snafu::Location::default(),
+                });
+            }
             return self.record_hook_fact_locked(
                 state,
                 "pre-tool-use-unsupported-tool",
@@ -853,6 +1014,52 @@ impl CodexInvocationLeaseOwner {
             InvocationCapability::Command { .. }
             | InvocationCapability::InProcessMutation { .. }
             | InvocationCapability::Unsupported => context_pin.cloned(),
+        };
+        let operation_scope = match &capability {
+            InvocationCapability::Command {
+                operation_key: Some(operation_key),
+                ..
+            } => {
+                let parent_context =
+                    context_pin
+                        .clone()
+                        .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                            reason: String::from(
+                                "Codex operation has no authenticated causal context to pin",
+                            ),
+                            location: snafu::Location::default(),
+                        })?;
+                let handler = self
+                    .operation_admissions
+                    .lock()
+                    .map_err(|_error| CodexSessionError::InvocationLeaseStateLock {
+                        location: snafu::Location::default(),
+                    })?
+                    .clone()
+                    .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                        reason: String::from("Codex operation admission is not daemon-bound"),
+                        location: snafu::Location::default(),
+                    })?;
+                Some(
+                    handler
+                        .admit_operation(ContextOperationAdmission::new(
+                            self.session_id.clone(),
+                            parent_context,
+                            operation_key.clone(),
+                        ))
+                        .map_err(|reason| CodexSessionError::IncompatibleProfile {
+                            reason: format!("daemon rejected Codex operation admission: {reason}"),
+                            location: snafu::Location::default(),
+                        })?,
+                )
+            }
+            InvocationCapability::Command {
+                operation_key: None,
+                ..
+            }
+            | InvocationCapability::InProcessMutation { .. }
+            | InvocationCapability::Delegation { .. }
+            | InvocationCapability::Unsupported => None,
         };
         let lane = HandoffLane {
             scope_ref: context.scope_ref().to_owned(),
@@ -895,6 +1102,7 @@ impl CodexInvocationLeaseOwner {
             hook_profile_epoch: self.profile_id.clone(),
             expires_at_millis: Self::now_millis() + LEASE_LIFETIME.as_millis(),
             context_pin,
+            operation_scope,
         };
         self.record_transition_locked(
             state,
@@ -984,6 +1192,72 @@ impl CodexInvocationLeaseOwner {
             self.record_transition_locked(state, lease, "post-tool-use", context_pin)?;
         }
         Ok(())
+    }
+
+    pub(crate) fn operation_delivery_scope(
+        &self,
+        payload: &Value,
+        runtime: &CodexLeaseRuntimeEvidence,
+        operation_key: &str,
+    ) -> Result<ScopeRef, CodexSessionError> {
+        let fields = InvocationIdentityFields::parse(payload).ok_or_else(|| {
+            CodexSessionError::InvalidHookEvent {
+                reason: String::from(
+                    "operation delivery must identify its exact Codex tool invocation",
+                ),
+                location: snafu::Location::default(),
+            }
+        })?;
+        let identity = InvocationIdentity {
+            runtime_id: runtime.runtime_id(),
+            codex_session_id: fields.codex_session_id,
+            turn_id: fields.turn_id,
+            tool_use_id: fields.tool_use_id,
+        };
+        let state = self.lock_state()?;
+        let lease_id =
+            state
+                .identities
+                .get(&identity)
+                .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                    reason: String::from(
+                        "operation delivery has no authenticated invocation lease",
+                    ),
+                    location: snafu::Location::default(),
+                })?;
+        let lease =
+            state
+                .leases
+                .get(lease_id)
+                .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                    reason: String::from("operation delivery invocation lease disappeared"),
+                    location: snafu::Location::default(),
+                })?;
+        let InvocationCapability::Command {
+            operation_key: Some(expected_key),
+            ..
+        } = &lease.capability
+        else {
+            return Err(CodexSessionError::InvalidHookEvent {
+                reason: String::from("operation delivery invocation is not an admitted command"),
+                location: snafu::Location::default(),
+            });
+        };
+        if expected_key != operation_key || lease.state != InvocationLeaseState::DispatchComplete {
+            return Err(CodexSessionError::InvalidHookEvent {
+                reason: String::from(
+                    "operation delivery does not match a completed admitted command",
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        lease
+            .operation_scope
+            .clone()
+            .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                reason: String::from("operation delivery has no daemon-created source scope"),
+                location: snafu::Location::default(),
+            })
     }
 
     fn record_lifecycle_locked(
@@ -1412,7 +1686,7 @@ impl CodexInvocationLeaseOwner {
     }
 
     fn command_launch_matches(lease: &InvocationLease, request: &InterceptionRequest) -> bool {
-        let InvocationCapability::Command { command } = &lease.capability else {
+        let InvocationCapability::Command { command, .. } = &lease.capability else {
             return false;
         };
         request
@@ -1627,6 +1901,7 @@ impl CodexInvocationLeaseOwner {
                 "hook_pid": lease.hook_pid,
                 "profile_health_epoch": lease.hook_profile_epoch,
                 "expires_at_millis": lease.expires_at_millis,
+                "operation_scope": lease.operation_scope.as_ref().map(ToString::to_string),
             })
         });
         let event = RuntimeEvent {
@@ -1926,10 +2201,28 @@ impl InvocationCapability {
                 .and_then(Value::as_str)
                 .filter(|command| !command.is_empty())
             {
+                let operation_key = match input
+                    .tool_input
+                    .get("erebor_operation_key")
+                    .or_else(|| input.tool_input.get("ereborOperationKey"))
+                {
+                    None => None,
+                    Some(Value::String(key)) if key.is_empty() => None,
+                    Some(Value::String(key))
+                        if key.len() <= 128
+                            && key.bytes().all(|byte| {
+                                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
+                            }) =>
+                    {
+                        Some(key.clone())
+                    }
+                    Some(_) => return (EffectClass::Unsupported, Self::Unsupported),
+                };
                 return (
                     EffectClass::Command,
                     Self::Command {
                         command: command.to_owned(),
+                        operation_key,
                     },
                 );
             }
@@ -2018,11 +2311,11 @@ impl InterceptionOperationName for InterceptionOperation {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use erebor_runtime_context::{
         CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature,
-        CommitTime,
+        CommitTime, ScopeRef, ScopeStart,
     };
     use erebor_runtime_core::SessionInterceptionDecision;
     use erebor_runtime_ipc::v1::{
@@ -2034,8 +2327,27 @@ mod tests {
     use super::{
         CodexCommandDispatch, CodexContextDag, CodexInvocationLeaseOwner,
         CodexInvocationLeaseTrust, CodexLeaseRuntimeEvidence, CodexScopeContextBinding,
-        InvocationLeaseState,
+        CodexSessionError, InvocationLeaseState,
     };
+    use crate::{ContextOperationAdmission, ContextOperationAdmissionHandler};
+
+    struct RecordingOperationAdmission {
+        scope: ScopeRef,
+        admissions: Mutex<Vec<ContextOperationAdmission>>,
+    }
+
+    impl ContextOperationAdmissionHandler for RecordingOperationAdmission {
+        fn admit_operation(
+            &self,
+            admission: ContextOperationAdmission,
+        ) -> std::result::Result<ScopeRef, String> {
+            self.admissions
+                .lock()
+                .map_err(|_error| String::from("operation admission lock poisoned"))?
+                .push(admission);
+            Ok(self.scope.clone())
+        }
+    }
 
     #[test]
     fn response_issued_lease_holds_its_physical_effect_until_hook_exit(
@@ -2658,6 +2970,142 @@ mod tests {
     }
 
     #[test]
+    fn operation_delivery_uses_only_its_admitted_scope_and_exact_lease(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
+            root.path().join("context"),
+            FixedMetadataSource,
+        )?);
+        repository.initialize_root(
+            "session-test",
+            Default::default(),
+            "Initialize session root",
+        )?;
+        let context_dag = Arc::new(CodexContextDag::new(
+            Arc::clone(&repository),
+            "session-test",
+        ));
+        let prompt_scope = context_dag.ensure_prompt_scope("thread-1")?;
+        let prompt_path = context_dag.append_prompt(
+            &prompt_scope,
+            br#"{"request":{"prompt":"start q"}}"#.to_vec(),
+            "Record test prompt",
+        )?;
+        context_dag.bind_prompt(
+            String::from("thread-1"),
+            String::from("turn-1"),
+            &prompt_scope,
+            prompt_path,
+        )?;
+        let operation_scope = ScopeRef::scope("session-test", "codex-operation-test")?;
+        let root_scope = ScopeRef::root("session-test")?;
+        repository.create_scope(
+            operation_scope.clone(),
+            ScopeStart::existing_commit(repository.scope_head(&root_scope)?),
+        )?;
+        let admissions = Arc::new(RecordingOperationAdmission {
+            scope: operation_scope.clone(),
+            admissions: Mutex::new(Vec::new()),
+        });
+        let owner = CodexInvocationLeaseOwner::new(
+            "session-test",
+            test_actor(),
+            test_profile(),
+            CodexInvocationLeaseTrust::default(),
+            None,
+        );
+        owner.set_context_dag(context_dag)?;
+        owner.set_operation_admission_handler(Arc::clone(&admissions) as Arc<_>)?;
+        let pre = operation_command_event("operation-1");
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            pre.as_bytes(),
+            runtime(),
+            101,
+        )?;
+        let admitted = admissions
+            .admissions
+            .lock()
+            .map_err(|_error| "operation admission lock poisoned")?;
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(admitted[0].session_id(), "session-test");
+        assert_eq!(admitted[0].operation_key(), "fixture-q");
+        assert_eq!(admitted[0].parent_context().scope_ref(), prompt_scope);
+        let owner_scope = admitted[0].parent_context().scope()?;
+        let owner_head_before_delivery = repository.scope_head(&owner_scope)?;
+        let operation_head_before_delivery = repository.scope_head(&operation_scope)?;
+        drop(admitted);
+        owner.record_guarded_hook_exit(101, true)?;
+        assert_eq!(
+            owner
+                .physical_effect_decision(&process_request(201, 42, "sleep 1"))
+                .ok_or("missing operation command decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Allow
+        );
+        let post = String::from(
+            r#"{"hook_event_name":"PostToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"operation-1","tool_response":{"status":"ok"},"erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"partial","operation_key":"fixture-q"}}"#,
+        );
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PostToolUse,
+            post.as_bytes(),
+            runtime(),
+            102,
+        )?;
+        assert_eq!(
+            owner.operation_delivery_scope(
+                &serde_json::from_str(&post)?,
+                &runtime(),
+                "fixture-q",
+            )?,
+            operation_scope
+        );
+        assert_eq!(
+            repository.scope_head(&owner_scope)?,
+            owner_head_before_delivery
+        );
+        assert_ne!(
+            repository.scope_head(&operation_scope)?,
+            operation_head_before_delivery
+        );
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::Stop,
+            stop_event("thread-1", "turn-1").as_bytes(),
+            runtime(),
+            103,
+        )?;
+        assert!(owner
+            .operation_delivery_scope(&serde_json::from_str(&post)?, &runtime(), "fixture-q")
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_operation_source_override_is_rejected_before_command_admission(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let owner = owner_with_scope()?;
+        let event = br#"{"hook_event_name":"PreToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"invalid-operation","tool_name":"Bash","tool_input":{"command":"ls","erebor_operation_key":"not/a-key"}}"#;
+        assert!(matches!(
+            owner.record_authenticated_hook(
+                erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+                event,
+                runtime(),
+                101,
+            ),
+            Err(CodexSessionError::InvalidHookEvent { .. })
+        ));
+        assert!(owner
+            .state
+            .lock()
+            .map_err(|_error| "lease state lock poisoned")?
+            .leases
+            .is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn delegated_child_admission_uses_only_the_guard_bound_lease(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
@@ -2837,6 +3285,12 @@ mod tests {
     fn command_event_for(thread_id: &str, turn_id: &str, tool_use_id: &str) -> String {
         format!(
             "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"{thread_id}\",\"turn_id\":\"{turn_id}\",\"tool_use_id\":\"{tool_use_id}\",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":\"echo permitted\"}}}}"
+        )
+    }
+
+    fn operation_command_event(tool_use_id: &str) -> String {
+        format!(
+            "{{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"tool_use_id\":\"{tool_use_id}\",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":\"sleep 1\",\"erebor_operation_key\":\"fixture-q\"}}}}"
         )
     }
 

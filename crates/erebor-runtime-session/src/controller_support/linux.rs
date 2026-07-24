@@ -2,7 +2,7 @@ use std::{
     ffi::CString,
     fs::{self, File},
     io::{Read, Write},
-    os::unix::process::CommandExt,
+    os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     thread,
@@ -229,6 +229,7 @@ impl LinuxWorkload {
                     output_terminal,
                     Arc::clone(&output.stdout),
                     StreamKind::Stdout.as_str(),
+                    true,
                     failure_sender,
                 ));
             }
@@ -238,6 +239,7 @@ impl LinuxWorkload {
                         stdout,
                         Arc::clone(&output.stdout),
                         StreamKind::Stdout.as_str(),
+                        false,
                         failure_sender.clone(),
                     ));
                 }
@@ -246,6 +248,7 @@ impl LinuxWorkload {
                         stderr,
                         Arc::clone(&output.stderr),
                         StreamKind::Stderr.as_str(),
+                        false,
                         failure_sender,
                     ));
                 }
@@ -754,12 +757,7 @@ fn create_projection_target(path: &Path, directory: bool) -> Result<(), SessionC
                 reason: format!("projection target `{}` has no parent", path.display()),
                 location: snafu::Location::default(),
             })?;
-        fs::create_dir_all(parent).map_err(|source| SessionControllerError::Io {
-            action: "creating private projection parent",
-            path: parent.to_path_buf(),
-            source,
-            location: snafu::Location::default(),
-        })?;
+        create_private_projection_parent(private_runtime, parent)?;
         if directory {
             fs::create_dir_all(path).map_err(|source| SessionControllerError::Io {
                 action: "creating private filesystem projection mountpoint",
@@ -797,9 +795,75 @@ fn create_projection_target(path: &Path, directory: bool) -> Result<(), SessionC
     Ok(())
 }
 
+/// Private runtime projections are root-owned, but their declared paths are
+/// deliberately usable by the workload.  The daemon service may have a
+/// restrictive umask, so make each newly created parent searchable without
+/// making it listable or writable by the workload user.
+fn create_private_projection_parent(
+    private_runtime: &Path,
+    parent: &Path,
+) -> Result<(), SessionControllerError> {
+    fs::create_dir_all(parent).map_err(|source| SessionControllerError::Io {
+        action: "creating private projection parent",
+        path: parent.to_path_buf(),
+        source,
+        location: snafu::Location::default(),
+    })?;
+    let relative = parent.strip_prefix(private_runtime).map_err(|_error| {
+        SessionControllerError::InvalidHandoff {
+            reason: format!(
+                "private projection parent `{}` escaped `{}`",
+                parent.display(),
+                private_runtime.display()
+            ),
+            location: snafu::Location::default(),
+        }
+    })?;
+    let mut current = private_runtime.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(component) = component else {
+            continue;
+        };
+        current.push(component);
+        fs::set_permissions(&current, fs::Permissions::from_mode(0o711)).map_err(|source| {
+            SessionControllerError::Io {
+                action: "making private projection parent searchable",
+                path: current.clone(),
+                source,
+                location: snafu::Location::default(),
+            }
+        })?;
+    }
+    Ok(())
+}
+
 fn environment_value(environment: &[(String, String)], key: &str) -> Option<String> {
     environment
         .iter()
         .find(|(candidate, _value)| candidate == key)
         .map(|(_key, value)| value.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    use super::create_private_projection_parent;
+
+    #[test]
+    fn private_projection_parents_are_searchable_but_not_listable(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let runtime = temporary.path().join("erebor");
+        fs::create_dir(&runtime)?;
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o711))?;
+        let parent = runtime.join("codex").join("hooks");
+
+        create_private_projection_parent(&runtime, &parent)?;
+
+        for directory in [runtime.join("codex"), parent] {
+            assert_eq!(fs::metadata(directory)?.permissions().mode() & 0o777, 0o711);
+        }
+        Ok(())
+    }
 }

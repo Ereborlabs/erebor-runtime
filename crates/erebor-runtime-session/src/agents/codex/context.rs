@@ -415,6 +415,67 @@ impl CodexContextDag {
         }
     }
 
+    /// Retain an authenticated hook fact for an already-admitted operation in
+    /// that operation's own scope. In particular, asynchronous output must
+    /// never advance its owner's ref before the owner explicitly receives the
+    /// bounded delivery.
+    pub(crate) fn record_authenticated_operation_hook(
+        &self,
+        kind: HookEventKind,
+        payload: &Value,
+        observer: Value,
+        operation_scope: &ScopeRef,
+    ) -> Result<ContextPin, CodexSessionError> {
+        if operation_scope.session_id() != self.session_id {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from(
+                    "authenticated Codex operation hook belongs to another session scope",
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        let mut state = self.lock_state()?;
+        state.next_hook_event += 1;
+        let path = format!(
+            "agents/codex/hooks/{:020}-{}-{}.json",
+            state.next_hook_event,
+            Self::hook_name(kind),
+            &Self::digest(&serde_json::to_vec(payload).unwrap_or_default())[..20],
+        );
+        let detail = json!({
+            "schema_version": 1,
+            "source": "authenticated_codex_hook_broker",
+            "event_kind": Self::hook_name(kind),
+            "native": payload,
+            "observer": observer,
+            "context_binding": {
+                "status": "admitted-operation",
+                "scope_ref": operation_scope.as_str(),
+            },
+        });
+        let bytes = serde_json::to_vec_pretty(&detail).map_err(|error| {
+            CodexSessionError::IncompatibleProfile {
+                reason: format!("could not encode authenticated Codex operation hook: {error}"),
+                location: snafu::Location::default(),
+            }
+        })?;
+        let head = self
+            .repository
+            .scope_head(operation_scope)
+            .map_err(Self::context_error)?;
+        self.append_snapshot(
+            operation_scope,
+            head,
+            &path,
+            bytes,
+            &format!(
+                "Record authenticated Codex {} operation hook",
+                Self::hook_name(kind)
+            ),
+        )?;
+        self.pin(operation_scope, &path)
+    }
+
     fn root_head_locked(
         &self,
         state: &mut CodexContextDagState,

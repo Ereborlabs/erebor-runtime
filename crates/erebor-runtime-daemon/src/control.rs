@@ -99,7 +99,8 @@ use erebor_runtime_core::ActiveSessionSignal;
 use erebor_runtime_policy::{LocalPolicy, PolicyEvaluator};
 use erebor_runtime_session::{
     ChildContextDelivery, ChildContextDeliveryHandler, ChildSessionAdmission,
-    ChildSessionAdmissionHandler, StreamKind,
+    ChildSessionAdmissionHandler, ContextOperationAdmission, ContextOperationAdmissionHandler,
+    StreamKind,
 };
 
 const CONNECTION_LIMIT: usize = 32;
@@ -147,6 +148,17 @@ impl ChildContextDeliveryHandler for DaemonControlState {
     fn publish_delivery(&self, delivery: ChildContextDelivery) -> std::result::Result<(), String> {
         self.sessions
             .publish_child_delivery(delivery)
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl ContextOperationAdmissionHandler for DaemonControlState {
+    fn admit_operation(
+        &self,
+        admission: ContextOperationAdmission,
+    ) -> std::result::Result<erebor_runtime_context::ScopeRef, String> {
+        self.sessions
+            .admit_context_operation(admission)
             .map_err(|error| error.to_string())
     }
 }
@@ -284,6 +296,10 @@ impl DaemonControlService {
         state
             .sessions
             .bind_child_delivery_handler(child_deliveries)?;
+        let operation_admissions: Arc<dyn ContextOperationAdmissionHandler> = state.clone();
+        state
+            .sessions
+            .bind_operation_admission_handler(operation_admissions)?;
         Ok(Self {
             listener,
             state,
@@ -3039,6 +3055,12 @@ mod tests {
         state
             .sessions
             .bind_child_delivery_handler(child_deliveries)?;
+        let operation_admissions: Arc<
+            dyn erebor_runtime_session::ContextOperationAdmissionHandler,
+        > = state.clone();
+        state
+            .sessions
+            .bind_operation_admission_handler(operation_admissions)?;
         Ok(TestState { state, _root: root })
     }
 

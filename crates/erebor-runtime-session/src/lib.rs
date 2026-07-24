@@ -2,6 +2,7 @@ mod adoption;
 mod agents;
 mod child_admission;
 mod child_delivery;
+mod context_operation;
 mod controller_support;
 mod diagnostic;
 mod docker_controller;
@@ -39,6 +40,10 @@ pub use child_admission::{
 };
 pub use child_delivery::{
     ChildContextDelivery, ChildContextDeliveryDispatcher, ChildContextDeliveryHandler,
+};
+pub use context_operation::{
+    ContextOperationAdmission, ContextOperationAdmissionDispatcher,
+    ContextOperationAdmissionHandler,
 };
 pub use diagnostic::SessionDiagnosticOutcome;
 #[doc(hidden)]

@@ -29,7 +29,10 @@ use serde::Deserialize;
 use serde_json::json;
 use snafu::{ensure, ResultExt};
 
-use crate::{ChildContextDelivery, ChildContextDeliveryHandler, ChildSessionAdmissionHandler};
+use crate::{
+    ChildContextDelivery, ChildContextDeliveryHandler, ChildSessionAdmissionHandler,
+    ContextOperationAdmissionHandler,
+};
 
 use super::{
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
@@ -307,6 +310,7 @@ impl CodexHookService {
         definition: &CodexPackageDefinition,
         context_repository: Arc<erebor_runtime_context::ContextRepository>,
         child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+        operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
     ) -> Result<CodexSessionHookRegistration, CodexSessionError> {
         let registration = CodexSessionHookRegistration::from_spec(
             spec,
@@ -314,6 +318,9 @@ impl CodexHookService {
             definition,
             context_repository,
         )?;
+        registration
+            .lease_owner
+            .set_operation_admission_handler(operation_admissions)?;
         self.register(
             registration.managed_session.clone(),
             Arc::clone(&registration.reconciliation),
@@ -465,7 +472,7 @@ impl CodexHookBrokerProtocol {
                             runtime.clone(),
                             observed_peer.observed_pid,
                         )?;
-                        self.publish_child_delivery(event_kind, &event.native_event_json)
+                        self.publish_child_delivery(event_kind, &event.native_event_json, &runtime)
                     })();
                     if let Err(error) = recording {
                         Self::write_rejection(
@@ -507,10 +514,10 @@ impl CodexHookBrokerProtocol {
 
     fn session_start_result(&self, event: HookEventKind) -> Result<Vec<u8>, CodexSessionError> {
         if event != HookEventKind::SessionStart {
-            return Ok(br#"{\"continue\":true}"#.to_vec());
+            return Ok(br#"{"continue":true}"#.to_vec());
         }
         self.session_start_context.as_ref().map_or_else(
-            || Ok(br#"{\"continue\":true}"#.to_vec()),
+            || Ok(br#"{"continue":true}"#.to_vec()),
             |context| {
                 serde_json::to_vec(&json!({
                     "continue": true,
@@ -531,6 +538,7 @@ impl CodexHookBrokerProtocol {
         &self,
         event: HookEventKind,
         native_event: &[u8],
+        runtime: &CodexLeaseRuntimeEvidence,
     ) -> Result<(), CodexSessionError> {
         if event != HookEventKind::PostToolUse {
             return Ok(());
@@ -544,14 +552,29 @@ impl CodexHookBrokerProtocol {
         let Some(delivery) = payload.erebor_delivery else {
             return Ok(());
         };
+        if !delivery.emit {
+            return Ok(());
+        }
+        let operation_key = delivery.operation_key.filter(|key| !key.is_empty());
+        let delivery = ChildContextDelivery::new(
+            self.managed_session.session_id(),
+            delivery.sequence,
+            delivery.kind,
+            delivery.mode,
+            delivery.selected_text.into_bytes(),
+        );
+        let delivery = match operation_key.as_deref() {
+            Some(operation_key) => {
+                delivery.with_source_scope(self.lease_owner.operation_delivery_scope(
+                    &payload_value(native_event)?,
+                    runtime,
+                    operation_key,
+                )?)
+            }
+            None => delivery,
+        };
         self.child_deliveries
-            .publish_delivery(ChildContextDelivery::new(
-                self.managed_session.session_id(),
-                delivery.sequence,
-                delivery.kind,
-                delivery.mode,
-                delivery.selected_text.into_bytes(),
-            ))
+            .publish_delivery(delivery)
             .map_err(|reason| CodexSessionError::InvalidHookEvent {
                 reason: format!("daemon rejected authenticated child delivery: {reason}"),
                 location: snafu::Location::default(),
@@ -682,10 +705,25 @@ struct HookDeliveryEvent {
 
 #[derive(Deserialize)]
 struct HookDeliveryPayload {
+    #[serde(default = "default_delivery_emit")]
+    emit: bool,
     sequence: u64,
     kind: String,
     mode: String,
     selected_text: String,
+    #[serde(default)]
+    operation_key: Option<String>,
+}
+
+const fn default_delivery_emit() -> bool {
+    true
+}
+
+fn payload_value(native_event: &[u8]) -> Result<serde_json::Value, CodexSessionError> {
+    serde_json::from_slice(native_event).map_err(|error| CodexSessionError::InvalidHookEvent {
+        reason: format!("PostToolUse delivery event is not valid JSON: {error}"),
+        location: snafu::Location::default(),
+    })
 }
 
 fn package_event(event: erebor_runtime_ipc::v1::HookEventKind) -> CodexHookEventName {
@@ -956,8 +994,9 @@ mod tests {
     };
 
     use super::{
-        CodexHookBrokerProtocol, CodexInvocationLeaseOwner, CodexPromptReconciliation,
-        HookEventKind, LinuxHookPeerInspector, LinuxHookProcess, LinuxProcessIdentity,
+        CodexHookBrokerProtocol, CodexInvocationLeaseOwner, CodexLeaseRuntimeEvidence,
+        CodexPromptReconciliation, HookEventKind, LinuxHookPeerInspector, LinuxHookProcess,
+        LinuxProcessIdentity,
     };
     use crate::{
         agents::codex::{
@@ -1067,6 +1106,29 @@ mod tests {
     }
 
     #[test]
+    fn default_session_start_result_is_valid_json() -> Result<(), Box<dyn std::error::Error>> {
+        let broker = CodexHookBrokerProtocol::new(
+            session("/opt/codex/codex", &"a".repeat(64))?,
+            Arc::new(CodexPromptReconciliation::default()),
+            test_lease_owner(),
+            None,
+            child_deliveries(),
+        );
+
+        let result: serde_json::Value =
+            serde_json::from_slice(&broker.session_start_result(HookEventKind::SessionStart)?)?;
+
+        assert_eq!(
+            result
+                .pointer("/continue")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert!(result.pointer("/hookSpecificOutput").is_none());
+        Ok(())
+    }
+
+    #[test]
     fn post_tool_use_delivery_is_forwarded_only_through_the_authenticated_hook_route(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let delivered = Arc::new(Mutex::new(Vec::new()));
@@ -1081,6 +1143,7 @@ mod tests {
         broker.publish_child_delivery(
             HookEventKind::PostToolUse,
             br#"{"hook_event_name":"PostToolUse","erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"child result"}}"#,
+            &CodexLeaseRuntimeEvidence::new(1, 1, String::from("/opt/codex/codex")),
         )?;
         let deliveries = delivered
             .lock()

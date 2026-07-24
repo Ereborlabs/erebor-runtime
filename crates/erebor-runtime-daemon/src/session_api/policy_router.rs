@@ -14,7 +14,7 @@ use erebor_runtime_policy::{
 };
 use erebor_runtime_session::{
     ChildContextDeliveryHandler, ChildSessionAdmissionHandler, CodexAppServerService,
-    CodexHookService, SessionManagerError,
+    CodexHookService, ContextOperationAdmissionHandler, SessionManagerError,
 };
 use erebor_runtime_session::{SessionInterceptionRouter, SessionInterceptionRouterFactory};
 
@@ -31,6 +31,7 @@ pub(super) struct StoredPolicyInterceptionRouterFactory {
     context_resolver: Arc<SessionContextResolver>,
     child_admissions: Arc<dyn ChildSessionAdmissionHandler>,
     child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+    operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
 }
 
 impl StoredPolicyInterceptionRouterFactory {
@@ -41,6 +42,7 @@ impl StoredPolicyInterceptionRouterFactory {
         context_resolver: Arc<SessionContextResolver>,
         child_admissions: Arc<dyn ChildSessionAdmissionHandler>,
         child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+        operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
     ) -> Self {
         Self {
             local_store,
@@ -49,6 +51,7 @@ impl StoredPolicyInterceptionRouterFactory {
             context_resolver,
             child_admissions,
             child_deliveries,
+            operation_admissions,
         }
     }
 }
@@ -93,6 +96,7 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
                     .resolve(spec)
                     .map_err(|error| self.invalid_error(spec, error.to_string()))?,
                 Arc::clone(&self.child_deliveries),
+                Arc::clone(&self.operation_admissions),
             )
             .map_err(|error| self.invalid_error(spec, error.to_string()))?;
         if self.is_codex_app_server(spec, codex.package().definition()) {
