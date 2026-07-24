@@ -3,6 +3,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use erebor_runtime_context::ContextPin;
 use erebor_runtime_core::{
     DaemonFailureMode, EvidenceRequirement, FilesystemProjection, ImmutableIdentity, OutputPlan,
     OutputStreamRequirements, RunRequest, RunnerCapabilityDocument, RunnerId, SessionAdmission,
@@ -19,6 +20,7 @@ use erebor_runtime_session::{AgentAdapterRegistry, RunnerExecutionAdmission};
 pub(super) struct AdmissionContext<'a> {
     pub(super) owner: SessionOwner,
     pub(super) session_id: &'a str,
+    pub(super) parent_context: Option<ContextPin>,
     pub(super) root_configuration_generation: u64,
     pub(super) state_root: &'a Path,
     pub(super) capability: RunnerCapabilityDocument,
@@ -149,7 +151,7 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
     filesystem_projections.extend(context.additional_filesystem_projections);
     SessionSpec::new(SessionAdmission {
         session_id: SessionId::new(context.session_id),
-        parent_context: None,
+        parent_context: context.parent_context,
         owner: context.owner,
         workload_privileges,
         command: prepared.command().to_vec(),

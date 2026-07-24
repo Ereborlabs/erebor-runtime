@@ -45,6 +45,18 @@ fn fixture_builds_a_pinned_package_contract_without_vendor_state() -> TestResult
             .map(Vec::len),
         Some(8)
     );
+    assert_eq!(
+        definition["child_delegation"]["bridge_path"],
+        "/run/erebor/codex/erebor-child-delegation"
+    );
+    assert_eq!(
+        definition["child_delegation"]["child_profile"]["entrypoint"],
+        "codex"
+    );
+    assert_eq!(
+        definition["child_delegation"]["child_profile"]["frozen_context_modes"],
+        serde_json::json!(["all"])
+    );
     assert!(trust_root.join("codex-v1-fixture").is_file());
     assert!(
         String::from_utf8(output.stdout)?.contains("package_reference=codex-v1-fixture@sha256:")

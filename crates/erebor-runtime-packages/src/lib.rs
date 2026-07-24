@@ -5,7 +5,8 @@ mod error;
 mod model;
 
 pub use codex::{
-    CodexArtifact, CodexCommandDispatch, CodexEntrypoint, CodexHookContract, CodexHookEventName,
+    CodexArtifact, CodexChildDelegationContract, CodexChildProfile, CodexCommandDispatch,
+    CodexEntrypoint, CodexFrozenContextMode, CodexHookContract, CodexHookEventName,
     CodexHookEventSchema, CodexHookExec, CodexHookShell, CodexManagedArtifacts,
     CodexPackageDefinition, CodexSupportedPlatform,
 };

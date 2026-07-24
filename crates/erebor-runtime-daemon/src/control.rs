@@ -92,7 +92,7 @@ use crate::{
 };
 use erebor_runtime_core::ActiveSessionSignal;
 use erebor_runtime_policy::{LocalPolicy, PolicyEvaluator};
-use erebor_runtime_session::StreamKind;
+use erebor_runtime_session::{ChildSessionAdmission, ChildSessionAdmissionHandler, StreamKind};
 
 const CONNECTION_LIMIT: usize = 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -121,6 +121,18 @@ struct DaemonControlState {
 struct DaemonConfiguration {
     value: DaemonConfig,
     generation: u64,
+}
+
+impl ChildSessionAdmissionHandler for DaemonControlState {
+    fn admit_child(&self, admission: ChildSessionAdmission) -> std::result::Result<(), String> {
+        let configuration = self
+            .configuration
+            .read()
+            .map_err(|_error| String::from("daemon configuration state is unavailable"))?;
+        self.sessions
+            .admit_delegated_child(admission, configuration.generation, &configuration.value)
+            .map_err(|error| error.to_string())
+    }
 }
 
 struct MutationOutcome {
@@ -248,6 +260,10 @@ impl DaemonControlService {
             connections: Arc::new(Semaphore::new(CONNECTION_LIMIT)),
             active_streams: Arc::new(PerUidStreamLimiter::new()),
         });
+        let child_admissions: Arc<dyn ChildSessionAdmissionHandler> = state.clone();
+        state
+            .sessions
+            .bind_child_admission_handler(child_admissions)?;
         Ok(Self {
             listener,
             state,
@@ -2870,29 +2886,32 @@ mod tests {
         let sessions = DaemonSessionApi::installed(&paths, &configuration)?;
         let approvals = DaemonApprovalRepository::installed(&paths)?;
         let (shutdown, _receiver) = tokio::sync::watch::channel(false);
-        Ok(TestState {
-            state: Arc::new(DaemonControlState {
-                idempotency: Mutex::new(DaemonIdempotencyStore::new(
-                    paths.idempotency_path(),
-                    paths.session_state_path(),
-                    configuration.max_idempotency_records as usize,
-                    Duration::from_secs(configuration.session_retry_horizon_seconds),
-                )),
-                paths,
-                security,
-                configuration: RwLock::new(DaemonConfiguration {
-                    value: configuration,
-                    generation: 1,
-                }),
-                logs,
-                sessions,
-                approvals,
-                shutdown,
-                connections: Arc::new(Semaphore::new(1)),
-                active_streams: Arc::new(super::PerUidStreamLimiter::new()),
+        let state = Arc::new(DaemonControlState {
+            idempotency: Mutex::new(DaemonIdempotencyStore::new(
+                paths.idempotency_path(),
+                paths.session_state_path(),
+                configuration.max_idempotency_records as usize,
+                Duration::from_secs(configuration.session_retry_horizon_seconds),
+            )),
+            paths,
+            security,
+            configuration: RwLock::new(DaemonConfiguration {
+                value: configuration,
+                generation: 1,
             }),
-            _root: root,
-        })
+            logs,
+            sessions,
+            approvals,
+            shutdown,
+            connections: Arc::new(Semaphore::new(1)),
+            active_streams: Arc::new(super::PerUidStreamLimiter::new()),
+        });
+        let child_admissions: Arc<dyn erebor_runtime_session::ChildSessionAdmissionHandler> =
+            state.clone();
+        state
+            .sessions
+            .bind_child_admission_handler(child_admissions)?;
+        Ok(TestState { state, _root: root })
     }
 
     struct TestState {

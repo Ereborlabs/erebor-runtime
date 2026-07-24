@@ -3,7 +3,7 @@ mod policy_router;
 mod response;
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
@@ -11,8 +11,9 @@ use std::{
 };
 
 use erebor_runtime_core::{
-    ActiveSessionSignal, EndpointProjection, FilesystemProjection, ImmutableIdentity,
-    SafePathBinding, SafePathKind, SessionLifecycleState, SessionOwner, SessionSpec, TerminalSize,
+    ActiveSessionSignal, DaemonFailureMode, EndpointProjection, FilesystemProjection,
+    ImmutableIdentity, SafePathBinding, SafePathKind, SessionLifecycleState, SessionOwner,
+    SessionSpec, TerminalSize,
 };
 use erebor_runtime_ipc::v1::{
     AgentInstallResponse, CodexAppServerAttachResponse, CodexAppServerInputCloseResponse,
@@ -27,7 +28,8 @@ use erebor_runtime_ipc::v1::{
 };
 use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact};
 use erebor_runtime_session::{
-    AgentAdapterRegistry, CodexAppServerService, CodexHookService, DurableSessionRecord,
+    AgentAdapterRegistry, ChildSessionAdmission, ChildSessionAdmissionDispatcher,
+    ChildSessionAdmissionHandler, CodexAppServerService, CodexHookService, DurableSessionRecord,
     RunnerAdmissionRequest, RunnerRegistry, SessionManager, SessionManagerError, SessionRepository,
     SessionRepositoryError, SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
 };
@@ -37,7 +39,10 @@ use uuid::Uuid;
 
 use crate::{
     config::DaemonConfig,
-    context_dag::SessionContextResolver,
+    context_dag::{
+        ContextChildForkRequest, ContextDagCoordinator, ContextExecutionBinding,
+        SessionContextResolver,
+    },
     error::SessionSnafu,
     idempotency::{MutationIntent, MutationResponse},
     local_store::DaemonLocalStore,
@@ -61,6 +66,9 @@ pub(crate) struct DaemonSessionApi {
     adapters: AgentAdapterRegistry,
     codex_hook_service: Arc<CodexHookService>,
     codex_app_server_service: Arc<CodexAppServerService>,
+    child_admissions: Arc<ChildSessionAdmissionDispatcher>,
+    context_resolver: Arc<SessionContextResolver>,
+    context_coordinators: Arc<Mutex<BTreeMap<String, Arc<ContextDagCoordinator>>>>,
     codex_app_server_output_monitors: Arc<Mutex<BTreeSet<String>>>,
 }
 
@@ -76,6 +84,28 @@ impl VerifiedCodexInstallation {
 
     pub(crate) const fn artifact(&self) -> &VerifiedLocalArtifact {
         &self.artifact
+    }
+}
+
+fn valid_delegation_context_request(
+    mode: erebor_runtime_packages::CodexFrozenContextMode,
+    last_turns: u32,
+    maximum_last_turns: u32,
+) -> bool {
+    match mode {
+        erebor_runtime_packages::CodexFrozenContextMode::None
+        | erebor_runtime_packages::CodexFrozenContextMode::All => last_turns == 0,
+        erebor_runtime_packages::CodexFrozenContextMode::LastTurns => {
+            last_turns > 0 && last_turns <= maximum_last_turns
+        }
+    }
+}
+
+const fn daemon_failure_mode_name(mode: DaemonFailureMode) -> &'static str {
+    match mode {
+        DaemonFailureMode::Terminate => "terminate",
+        DaemonFailureMode::Continue => "continue",
+        DaemonFailureMode::ContinueIfEnforced => "continue_if_enforced",
     }
 }
 
@@ -123,6 +153,7 @@ impl DaemonSessionApi {
             },
         )?);
         let codex_app_server_service = Arc::new(CodexAppServerService::default());
+        let child_admissions = Arc::new(ChildSessionAdmissionDispatcher::default());
         let context_resolver = Arc::new(SessionContextResolver::new(state_root.clone()));
         let runtime = SessionRuntimeResources::new(
             state_root.clone(),
@@ -133,6 +164,7 @@ impl DaemonSessionApi {
                 Arc::clone(&codex_hook_service),
                 Arc::clone(&codex_app_server_service),
                 Arc::clone(&context_resolver),
+                Arc::clone(&child_admissions) as Arc<dyn ChildSessionAdmissionHandler>,
             )),
         )
         .context(SessionSnafu)?;
@@ -150,7 +182,22 @@ impl DaemonSessionApi {
             adapters,
             codex_hook_service,
             codex_app_server_service,
+            child_admissions,
+            context_resolver,
+            context_coordinators: Arc::new(Mutex::new(BTreeMap::new())),
             codex_app_server_output_monitors: Arc::new(Mutex::new(BTreeSet::new())),
+        })
+    }
+
+    pub(crate) fn bind_child_admission_handler(
+        &self,
+        handler: Arc<dyn ChildSessionAdmissionHandler>,
+    ) -> Result<()> {
+        self.child_admissions.install(handler).map_err(|reason| {
+            crate::error::InvalidRequestSnafu {
+                reason: format!("binding daemon child admission handler failed: {reason}"),
+            }
+            .build()
         })
     }
 
@@ -174,12 +221,34 @@ impl DaemonSessionApi {
 
     fn admit_request_with_adapter(
         &self,
+        request: SessionCreateRequest,
+        owner_uid: u32,
+        owner_gid: u32,
+        configuration_generation: u64,
+        config: &DaemonConfig,
+        allow_codex_adapter: bool,
+    ) -> Result<SessionSpec> {
+        self.admit_request_with_adapter_and_parent(
+            request,
+            owner_uid,
+            owner_gid,
+            configuration_generation,
+            config,
+            allow_codex_adapter,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn admit_request_with_adapter_and_parent(
+        &self,
         mut request: SessionCreateRequest,
         owner_uid: u32,
         owner_gid: u32,
         configuration_generation: u64,
         config: &DaemonConfig,
         allow_codex_adapter: bool,
+        parent_context: Option<erebor_runtime_context::ContextPin>,
     ) -> Result<SessionSpec> {
         let session_id = format!("session-{}", Uuid::new_v4());
         let identity_fields = [
@@ -259,6 +328,7 @@ impl DaemonSessionApi {
             AdmissionContext {
                 owner,
                 session_id: &session_id,
+                parent_context,
                 root_configuration_generation: configuration_generation,
                 state_root: &self.state_root,
                 capability,
@@ -447,6 +517,156 @@ impl DaemonSessionApi {
         Ok(spec)
     }
 
+    pub(crate) fn admit_delegated_child(
+        &self,
+        admission: ChildSessionAdmission,
+        configuration_generation: u64,
+        config: &DaemonConfig,
+    ) -> Result<()> {
+        let parent = self
+            .manager
+            .list_all()
+            .context(SessionSnafu)?
+            .into_iter()
+            .find(|record| record.spec().session_id().as_str() == admission.parent_session_id())
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from("delegation parent session no longer exists"),
+                }
+                .build()
+            })?;
+        let parent_spec = parent.spec();
+        let owner = parent_spec.owner();
+        let parent_admission = self.local_store.validate_session_spec(parent_spec)?;
+        if parent_admission.package().adapter_id() != "codex-v1" {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("only a certified Codex session may admit this child"),
+            }
+            .fail();
+        }
+        if !parent_spec.environment().is_empty()
+            || !parent_spec.secret_references().is_empty()
+            || parent_spec.container_image().is_some()
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "a delegated child cannot inherit environment, secrets, or container state",
+                ),
+            }
+            .fail();
+        }
+        let installation = self.local_store.resolve_codex_installation(
+            owner.uid(),
+            parent_admission.package_digest(),
+            parent_admission.installation_digest(),
+            None,
+        )?;
+        let definition = installation.package().definition();
+        let contract = definition.child_delegation().ok_or_else(|| {
+            crate::error::InvalidRequestSnafu {
+                reason: String::from("the admitted Codex package has no child delegation bridge"),
+            }
+            .build()
+        })?;
+        let profile = contract.child_profile();
+        if profile.id() != admission.child_profile()
+            || !profile.allows_context_mode(admission.frozen_context_mode())
+            || !valid_delegation_context_request(
+                admission.frozen_context_mode(),
+                admission.last_turns(),
+                profile.maximum_last_turns(),
+            )
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "delegation does not match its package-declared child profile",
+                ),
+            }
+            .fail();
+        }
+        let entrypoint = definition.entrypoint(profile.entrypoint()).ok_or_else(|| {
+            crate::error::InvalidRequestSnafu {
+                reason: String::from("delegation child profile has no certified entrypoint"),
+            }
+            .build()
+        })?;
+        let artifact = installation
+            .installation()
+            .local_artifact()
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from(
+                        "delegation parent installation has no verified local artifact",
+                    ),
+                }
+                .build()
+            })?;
+        let executable = self.reverify_codex_artifact(owner.uid(), owner.gid(), artifact)?;
+        let mut command = vec![artifact.path().display().to_string()];
+        command.extend(entrypoint.argv_suffix().iter().cloned());
+        let spec = self.admit_request_with_adapter_and_parent(
+            SessionCreateRequest {
+                runner_id: parent_spec.runner_capability().runner().as_str().to_owned(),
+                command,
+                workspace: parent_spec
+                    .workspace()
+                    .requested_path()
+                    .display()
+                    .to_string(),
+                policy_set_digest: parent_spec.policy_set().sha256().to_owned(),
+                package_digest: parent_admission.package_digest().to_owned(),
+                installation_digest: parent_admission.installation_digest().to_owned(),
+                adapter_digest: parent_admission.adapter_digest().to_owned(),
+                daemon_failure_mode: daemon_failure_mode_name(parent_spec.daemon_failure_mode())
+                    .to_owned(),
+                requested_loss_grace_seconds: parent_spec.loss_grace_seconds(),
+                environment: Vec::new(),
+                secret_references: Vec::new(),
+                container_image_digest: String::new(),
+                tty: !entrypoint.app_server_stdio(),
+                detached: true,
+                terminal_rows: 0,
+                terminal_columns: 0,
+            },
+            owner.uid(),
+            owner.gid(),
+            configuration_generation,
+            config,
+            true,
+            Some(admission.parent_context().clone()),
+        )?;
+        if spec.executable() != Some(&executable) {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "delegation executable changed between installation verification and admission",
+                ),
+            }
+            .fail();
+        }
+        let child_scope = erebor_runtime_context::ScopeRef::root(spec.session_id().as_str())
+            .map_err(|error| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("could not construct child context scope: {error}"),
+                }
+                .build()
+            })?;
+        self.context_coordinator(parent_spec)?
+            .admit_child(ContextChildForkRequest::new(
+                admission.parent_context().clone(),
+                child_scope,
+                ContextExecutionBinding::DaemonPhysical,
+                Some(format!("codex-v1:{}", profile.id())),
+            )?)?;
+        self.create(spec.clone())?;
+        let constraints = ValidatedStartConstraints::new(
+            owner.uid(),
+            spec.session_id().as_str(),
+            configuration_generation,
+        );
+        self.start(owner.uid(), spec.session_id().as_str(), &constraints, false)?;
+        Ok(())
+    }
+
     pub(crate) fn install_verified_codex(
         &self,
         owner_uid: u32,
@@ -553,6 +773,9 @@ impl DaemonSessionApi {
         ) {
             sources.push((source, target));
         }
+        if let Some(contract) = package.definition().child_delegation() {
+            sources.push((contract.bridge_source(), contract.bridge_path()));
+        }
         sources
             .into_iter()
             .map(|(artifact, target)| {
@@ -591,6 +814,66 @@ impl DaemonSessionApi {
                 )
             })
             .collect()
+    }
+
+    fn context_coordinator(&self, parent: &SessionSpec) -> Result<Arc<ContextDagCoordinator>> {
+        let root_scope = self.root_context_scope(parent)?;
+        let root_session_id = root_scope.session_id().to_owned();
+        let mut coordinators = self.context_coordinators.lock().map_err(|_error| {
+            crate::error::InvalidRequestSnafu {
+                reason: String::from("context DAG coordinator state is unavailable"),
+            }
+            .build()
+        })?;
+        if let Some(coordinator) = coordinators.get(&root_session_id) {
+            return Ok(Arc::clone(coordinator));
+        }
+        let coordinator = Arc::new(ContextDagCoordinator::new(
+            self.context_resolver.resolve(parent)?,
+            root_scope,
+        )?);
+        coordinators.insert(root_session_id, Arc::clone(&coordinator));
+        Ok(coordinator)
+    }
+
+    fn root_context_scope(&self, parent: &SessionSpec) -> Result<erebor_runtime_context::ScopeRef> {
+        let mut current = parent.clone();
+        let mut visited = BTreeSet::new();
+        loop {
+            let current_id = current.session_id().as_str().to_owned();
+            if !visited.insert(current_id.clone()) {
+                return crate::error::InvalidRequestSnafu {
+                    reason: format!("context parent chain contains session `{current_id}` twice"),
+                }
+                .fail();
+            }
+            let Some(parent_context) = current.parent_context() else {
+                return erebor_runtime_context::ScopeRef::root(current.session_id().as_str())
+                    .map_err(|error| {
+                        crate::error::InvalidRequestSnafu {
+                            reason: format!("could not resolve root context scope: {error}"),
+                        }
+                        .build()
+                    });
+            };
+            let parent_scope = parent_context.scope().map_err(|error| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("session context parent scope is invalid: {error}"),
+                }
+                .build()
+            })?;
+            let record = self
+                .manager
+                .inspect(current.owner().uid(), parent_scope.session_id())
+                .context(SessionSnafu)?;
+            if record.spec().owner().uid() != current.owner().uid() {
+                return crate::error::InvalidRequestSnafu {
+                    reason: String::from("context parent crosses session owner identities"),
+                }
+                .fail();
+            }
+            current = record.spec().clone();
+        }
     }
 
     pub(crate) fn runner_reports(

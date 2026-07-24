@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Phase 1 installs the coordinator before Phase 2 exposes its private bridge.
-
 use std::{
     collections::HashSet,
     error::Error,
@@ -267,6 +265,7 @@ impl ContextDagCoordinator {
     /// Verify the durable ancestry and parent-edge chain for one contained
     /// scope. It never infers a relationship from a process, session record,
     /// or App Server thread identifier.
+    #[cfg(test)]
     pub(crate) fn verify_scope(&self, scope: &ScopeRef) -> Result<()> {
         self.scope_depth(scope, &mut HashSet::new())
             .map(|_depth| ())

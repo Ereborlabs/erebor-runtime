@@ -17,7 +17,8 @@ use std::{
 
 use erebor_runtime_core::AgentAdapterDescriptor;
 use erebor_runtime_packages::{
-    AgentPackageManifest, CanonicalEncoding, CodexArtifact, CodexEntrypoint, CodexHookContract,
+    AgentPackageManifest, CanonicalEncoding, CodexArtifact, CodexChildDelegationContract,
+    CodexChildProfile, CodexEntrypoint, CodexFrozenContextMode, CodexHookContract,
     CodexHookEventName, CodexHookEventSchema, CodexHookExec, CodexHookShell, CodexManagedArtifacts,
     CodexPackageDefinition, CodexSupportedPlatform, ContentDigest, InstallationRecord,
     PolicyPackageRevision, PolicySetRevision,
@@ -30,7 +31,9 @@ const FIXTURE_NAME: &str = "codex-v1-fixture";
 const MANAGED_HOOK_PATH: &str = "/run/erebor/codex/erebor-codex-hook";
 const REQUIREMENTS_PATH: &str = "/run/erebor/codex/requirements.toml";
 const SHELL_STARTUP_PATH: &str = "/run/erebor/codex/shell-startup";
+const DELEGATION_BRIDGE_PATH: &str = "/run/erebor/codex/erebor-child-delegation";
 const SESSION_START_EVENT: &[u8] = br#"{"hook_event_name":"SessionStart"}"#;
+const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"child_profile":"fixture-child","frozen_context_mode":"all","last_turns":0}}"#;
 const HOOK_MODE_ENV: &str = "EREBOR_FIXTURE_HOOK_MODE";
 
 type FixtureResult<T> = Result<T, Box<dyn Error>>;
@@ -38,6 +41,9 @@ type FixtureResult<T> = Result<T, Box<dyn Error>>;
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     match arguments.as_slice() {
+        [] if env::current_exe()?.as_path() == Path::new(DELEGATION_BRIDGE_PATH) => {
+            run_delegation_bridge()
+        }
         [] if env::var_os(HOOK_MODE_ENV).is_some() => {
             run_managed_hook(HookMode::from_environment()?)
         }
@@ -131,6 +137,18 @@ fn run_app_server() -> FixtureResult<()> {
                 invoke_managed_hook(HookMode::WrongSession)?;
                 "wrong-session-rejected"
             }
+            "fixture/delegate" => {
+                invoke_managed_hook_event(HookMode::Delegation, DELEGATION_EVENT)?;
+                let status = Command::new(DELEGATION_BRIDGE_PATH)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()?;
+                if !status.success() {
+                    return Err("delegation bridge did not complete successfully".into());
+                }
+                "delegated"
+            }
             "$/cancelRequest" => "cancelled",
             _ => "ok",
         };
@@ -153,6 +171,7 @@ fn run_app_server() -> FixtureResult<()> {
 #[derive(Clone, Copy)]
 enum HookMode {
     Normal,
+    Delegation,
     Replay,
     WrongPeer,
     WrongSession,
@@ -162,6 +181,7 @@ impl HookMode {
     fn from_environment() -> FixtureResult<Self> {
         match env::var(HOOK_MODE_ENV).as_deref() {
             Ok("normal") => Ok(Self::Normal),
+            Ok("delegation") => Ok(Self::Delegation),
             Ok("replay") => Ok(Self::Replay),
             Ok("wrong-peer") => Ok(Self::WrongPeer),
             Ok("wrong-session") => Ok(Self::WrongSession),
@@ -173,6 +193,7 @@ impl HookMode {
     const fn name(self) -> &'static str {
         match self {
             Self::Normal => "normal",
+            Self::Delegation => "delegation",
             Self::Replay => "replay",
             Self::WrongPeer => "wrong-peer",
             Self::WrongSession => "wrong-session",
@@ -186,7 +207,7 @@ fn run_managed_hook(mode: HookMode) -> FixtureResult<()> {
     io::stdin().take(32 * 1024).read_to_end(&mut input)?;
     let event = CodexNativeHookEvent::parse(&input)?;
     match mode {
-        HookMode::Normal => submit_hook(&event, input)?,
+        HookMode::Normal | HookMode::Delegation => submit_hook(&event, input)?,
         HookMode::Replay => {
             submit_hook(&event, input.clone())?;
             if submit_hook(&event, input).is_ok() {
@@ -230,6 +251,10 @@ fn submit_hook(event: &CodexNativeHookEvent, native_event_json: Vec<u8>) -> Fixt
 }
 
 fn invoke_managed_hook(mode: HookMode) -> FixtureResult<()> {
+    invoke_managed_hook_event(mode, SESSION_START_EVENT)
+}
+
+fn invoke_managed_hook_event(mode: HookMode, event: &[u8]) -> FixtureResult<()> {
     let mut child = Command::new(MANAGED_HOOK_PATH)
         .env(HOOK_MODE_ENV, mode.name())
         .stdin(Stdio::piped())
@@ -240,7 +265,7 @@ fn invoke_managed_hook(mode: HookMode) -> FixtureResult<()> {
         .stdin
         .as_mut()
         .ok_or("managed-hook fixture did not expose stdin")?
-        .write_all(SESSION_START_EVENT)?;
+        .write_all(event)?;
     let output = child.wait_with_output()?;
     if !output.status.success() {
         return Err(format!(
@@ -250,6 +275,13 @@ fn invoke_managed_hook(mode: HookMode) -> FixtureResult<()> {
             String::from_utf8_lossy(&output.stderr),
         )
         .into());
+    }
+    Ok(())
+}
+
+fn run_delegation_bridge() -> FixtureResult<()> {
+    if env::var_os(HOOK_MODE_ENV).is_some() {
+        return Err("delegation bridge inherited a managed-hook mode".into());
     }
     Ok(())
 }
@@ -416,8 +448,12 @@ fn package_definition(trust_root: &Path, fixture: &Path) -> FixtureResult<CodexP
     ]
     .into_iter()
     .map(|(event, name)| {
-        let native = format!(r#"{{"hook_event_name":"{name}"}}"#);
-        let digest = CodexNativeHookEvent::parse(native.as_bytes())?
+        let native = if event == CodexHookEventName::PreToolUse {
+            DELEGATION_EVENT.to_vec()
+        } else {
+            format!(r#"{{"hook_event_name":"{name}"}}"#).into_bytes()
+        };
+        let digest = CodexNativeHookEvent::parse(&native)?
             .schema_sha256()
             .to_owned();
         Ok(CodexHookEventSchema::new(
@@ -428,7 +464,7 @@ fn package_definition(trust_root: &Path, fixture: &Path) -> FixtureResult<CodexP
     .collect::<FixtureResult<Vec<_>>>()?;
     CodexPackageDefinition::new(
         FIXTURE_NAME,
-        fixture_digest,
+        fixture_digest.clone(),
         CodexSupportedPlatform::LinuxX86_64,
         vec![
             CodexEntrypoint::new("codex", Vec::new(), false)?,
@@ -448,6 +484,16 @@ fn package_definition(trust_root: &Path, fixture: &Path) -> FixtureResult<CodexP
             event_schemas,
             None,
         )?,
+        Some(CodexChildDelegationContract::new(
+            CodexArtifact::new(fixture.to_path_buf(), fixture_digest.clone())?,
+            PathBuf::from(DELEGATION_BRIDGE_PATH),
+            CodexChildProfile::new(
+                "fixture-child",
+                "codex",
+                vec![CodexFrozenContextMode::All],
+                0,
+            )?,
+        )?),
     )
     .map_err(Into::into)
 }

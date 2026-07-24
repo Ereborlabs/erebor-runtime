@@ -41,6 +41,7 @@ pub(crate) struct CodexManagedProfile {
     id: String,
     executable: PathBuf,
     managed_hook_path: PathBuf,
+    delegation_bridge_path: Option<PathBuf>,
     hook_exec_history: Vec<PathBuf>,
     event_schemas: Vec<CodexManagedEventSchema>,
 }
@@ -60,6 +61,9 @@ impl CodexManagedProfile {
                 .managed_artifacts()
                 .managed_hook_path()
                 .to_path_buf(),
+            delegation_bridge_path: definition
+                .child_delegation()
+                .map(|contract| contract.bridge_path().to_path_buf()),
             hook_exec_history: definition
                 .hook_contract()
                 .exec_history()
@@ -95,6 +99,10 @@ impl CodexManagedProfile {
 
     pub(crate) fn managed_hook_path(&self) -> &Path {
         &self.managed_hook_path
+    }
+
+    pub(crate) fn delegation_bridge_path(&self) -> Option<&Path> {
+        self.delegation_bridge_path.as_deref()
     }
 
     pub(crate) fn hook_exec_history(&self) -> &[PathBuf] {

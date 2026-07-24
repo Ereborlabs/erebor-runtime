@@ -13,10 +13,13 @@ use erebor_runtime_events::{
     SessionId, TargetRef,
 };
 use erebor_runtime_ipc::v1::{HookEventKind, InterceptionOperation, InterceptionRequest};
+use erebor_runtime_packages::CodexFrozenContextMode;
 use erebor_runtime_policy::Decision;
 use erebor_runtime_telemetry::warn;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+
+use crate::ChildSessionAdmission;
 
 use super::{CodexContextDag, CodexScopeContextBinding, CodexSessionError};
 
@@ -59,6 +62,7 @@ pub(crate) struct CodexInvocationLeaseProfile {
     id: String,
     executable: String,
     trusted_execs: Vec<String>,
+    delegation_bridge: Option<String>,
 }
 
 impl CodexInvocationLeaseProfile {
@@ -67,7 +71,12 @@ impl CodexInvocationLeaseProfile {
             id,
             executable,
             trusted_execs,
+            delegation_bridge: None,
         }
+    }
+
+    pub(crate) fn set_delegation_bridge(&mut self, bridge: Option<String>) {
+        self.delegation_bridge = bridge;
     }
 }
 
@@ -123,6 +132,7 @@ impl InvocationLeaseState {
 enum EffectClass {
     Command,
     InProcessMutation,
+    Delegation,
     Unsupported,
 }
 
@@ -131,6 +141,7 @@ impl EffectClass {
         match self {
             Self::Command => "command",
             Self::InProcessMutation => "in-process-mutation",
+            Self::Delegation => "delegation",
             Self::Unsupported => "unsupported",
         }
     }
@@ -153,8 +164,17 @@ struct HandoffLane {
 
 #[derive(Clone, Debug)]
 enum InvocationCapability {
-    Command { command: String },
-    InProcessMutation { targets: Vec<String> },
+    Command {
+        command: String,
+    },
+    InProcessMutation {
+        targets: Vec<String>,
+    },
+    Delegation {
+        child_profile: String,
+        frozen_context_mode: CodexFrozenContextMode,
+        last_turns: u32,
+    },
     Unsupported,
 }
 
@@ -212,6 +232,7 @@ pub(crate) struct CodexInvocationLeaseOwner {
     profile_id: String,
     profile_executable: String,
     trusted_profile_execs: Vec<String>,
+    delegation_bridge: Option<String>,
     command_dispatch: Option<CodexCommandDispatch>,
     audit: Option<JsonlAuditSink>,
     context_dag: Mutex<Option<Arc<CodexContextDag>>>,
@@ -232,6 +253,7 @@ impl CodexInvocationLeaseOwner {
             profile_id: profile.id,
             profile_executable: profile.executable,
             trusted_profile_execs: profile.trusted_execs,
+            delegation_bridge: profile.delegation_bridge,
             command_dispatch: trust.command_dispatch,
             audit: audit_path.map(JsonlAuditSink::new),
             context_dag: Mutex::new(None),
@@ -400,13 +422,14 @@ impl CodexInvocationLeaseOwner {
         let mut state = self.lock_state()?;
         self.expire_locked(&mut state)?;
         if Self::cancelled(&payload) {
-            return self.close_matching_locked(
+            self.close_matching_locked(
                 &mut state,
                 &payload,
                 runtime,
                 "hook-cancellation",
                 context_pin.as_ref(),
-            );
+            )?;
+            return Ok(());
         }
         match kind {
             HookEventKind::PreToolUse => self.record_pre_tool_use_locked(
@@ -447,7 +470,157 @@ impl CodexInvocationLeaseOwner {
                 kind.name(),
                 context_pin.as_ref(),
             ),
+        }?;
+        Ok(())
+    }
+
+    pub(crate) fn prepare_child_admission(
+        &self,
+        bridge_pid: i64,
+        runtime: &CodexLeaseRuntimeEvidence,
+    ) -> Result<ChildSessionAdmission, CodexSessionError> {
+        let mut state = self.lock_state()?;
+        self.expire_locked(&mut state)?;
+        let Some(lease_id) = state
+            .processes
+            .get(&bridge_pid)
+            .map(|bound| bound.lease_id.clone())
+        else {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from("delegation bridge was not bound by the process guard"),
+                location: snafu::Location::default(),
+            });
+        };
+        let Some(lease) = state.leases.get(&lease_id) else {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from(
+                    "delegation bridge lease disappeared before lifecycle admission",
+                ),
+                location: snafu::Location::default(),
+            });
+        };
+        if lease.effect_class != EffectClass::Delegation
+            || lease.state != InvocationLeaseState::EffectBound
+            || lease.identity.runtime_id != runtime.runtime_id()
+        {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from("delegation bridge did not match one armed parent invocation"),
+                location: snafu::Location::default(),
+            });
         }
+        let InvocationCapability::Delegation {
+            child_profile,
+            frozen_context_mode,
+            last_turns,
+        } = &lease.capability
+        else {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from("bridge lease does not carry a delegation capability"),
+                location: snafu::Location::default(),
+            });
+        };
+        let Some(parent_context) = lease.context_pin.clone() else {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from("delegation lease has no exact causal context pin"),
+                location: snafu::Location::default(),
+            });
+        };
+        Ok(ChildSessionAdmission::new(
+            &self.session_id,
+            parent_context,
+            child_profile,
+            *frozen_context_mode,
+            *last_turns,
+        ))
+    }
+
+    pub(crate) fn complete_child_admission(
+        &self,
+        bridge_pid: i64,
+        accepted: bool,
+    ) -> Result<(), CodexSessionError> {
+        let mut state = self.lock_state()?;
+        self.expire_locked(&mut state)?;
+        let Some(lease_id) = state
+            .processes
+            .get(&bridge_pid)
+            .map(|bound| bound.lease_id.clone())
+        else {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from("delegation bridge was not bound by the process guard"),
+                location: snafu::Location::default(),
+            });
+        };
+        let Some(lease) = state.leases.get_mut(&lease_id) else {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from("delegation lease disappeared before child admission"),
+                location: snafu::Location::default(),
+            });
+        };
+        if lease.effect_class != EffectClass::Delegation
+            || lease.state != InvocationLeaseState::EffectBound
+        {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from("delegation bridge no longer has an armed parent capability"),
+                location: snafu::Location::default(),
+            });
+        }
+        lease.state = if accepted {
+            InvocationLeaseState::DispatchComplete
+        } else {
+            InvocationLeaseState::Closed
+        };
+        let lease = lease.clone();
+        self.record_transition_locked(
+            &mut state,
+            &lease,
+            if accepted {
+                "delegation-guard-event-admitted"
+            } else {
+                "delegation-guard-event-rejected"
+            },
+            None,
+        )?;
+        if !accepted {
+            state.processes.remove(&bridge_pid);
+            state.lanes.retain(|_lane, id| id != &lease_id);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record_guarded_delegation_exit(
+        &self,
+        bridge_pid: i64,
+        succeeded: bool,
+    ) -> Result<bool, CodexSessionError> {
+        let mut state = self.lock_state()?;
+        let Some(lease_id) = state
+            .processes
+            .remove(&bridge_pid)
+            .map(|bound| bound.lease_id)
+        else {
+            return Ok(false);
+        };
+        let Some(lease) = state.leases.get_mut(&lease_id) else {
+            return Ok(false);
+        };
+        let released = succeeded && lease.state == InvocationLeaseState::DispatchComplete;
+        lease.state = InvocationLeaseState::Closed;
+        let lease = lease.clone();
+        self.record_transition_locked(
+            &mut state,
+            &lease,
+            if released {
+                "delegation-bridge-exit-success"
+            } else {
+                "delegation-bridge-exit-failure"
+            },
+            None,
+        )?;
+        state
+            .processes
+            .retain(|_pid, bound| bound.lease_id != lease_id);
+        Ok(released)
     }
 
     fn record_hook_context(
@@ -910,6 +1083,21 @@ impl CodexInvocationLeaseOwner {
             }
             state.processes.remove(&request.pid);
         }
+        if self.is_delegation_bridge_executable(request) {
+            if self.is_delegation_launch(request) {
+                return self.authorize_delegation_launch_locked(state, request);
+            }
+            return self
+                .record_physical_decision_locked(
+                    state,
+                    None,
+                    request,
+                    false,
+                    "erebor-codex-delegation-invalid-bridge-argv",
+                    "the guarded delegation bridge must have its package-declared exact argv",
+                )
+                .map(Some);
+        }
         if !self.is_known_command_handoff(state, request) {
             return Ok(None);
         }
@@ -962,6 +1150,63 @@ impl CodexInvocationLeaseOwner {
             true,
             "erebor-codex-invocation-lease-command-bound",
             "stopped command child is bound to its exact Codex invocation lease",
+        )
+        .map(Some)
+    }
+
+    fn authorize_delegation_launch_locked(
+        &self,
+        state: &mut LeaseState,
+        request: &InterceptionRequest,
+    ) -> Result<Option<erebor_runtime_core::SurfaceInterceptionDecision>, CodexSessionError> {
+        let candidates = state
+            .leases
+            .values()
+            .filter(|lease| lease.effect_class == EffectClass::Delegation)
+            .filter(|lease| lease.state == InvocationLeaseState::Armed)
+            .filter(|lease| lease.runtime_pid == request.ppid)
+            .map(|lease| lease.id.clone())
+            .collect::<Vec<_>>();
+        let [lease_id] = candidates.as_slice() else {
+            return self
+                .record_physical_decision_locked(
+                    state,
+                    None,
+                    request,
+                    false,
+                    "erebor-codex-delegation-no-matching-parent-lease",
+                    "the guarded delegation bridge has no exact armed parent invocation",
+                )
+                .map(Some);
+        };
+        let Some(lease) = state.leases.get_mut(lease_id) else {
+            return self
+                .record_physical_decision_locked(
+                    state,
+                    None,
+                    request,
+                    false,
+                    "erebor-codex-delegation-missing-parent-lease",
+                    "the guarded delegation bridge lease disappeared before process binding",
+                )
+                .map(Some);
+        };
+        lease.state = InvocationLeaseState::EffectBound;
+        let lease = lease.clone();
+        self.record_transition_locked(state, &lease, "delegation-bridge-process-bound", None)?;
+        state.processes.insert(
+            request.pid,
+            BoundProcess {
+                lease_id: lease_id.clone(),
+            },
+        );
+        self.record_physical_decision_locked(
+            state,
+            Some(&lease),
+            request,
+            true,
+            "erebor-codex-delegation-bridge-bound",
+            "the guarded delegation bridge is bound to its exact Codex invocation lease",
         )
         .map(Some)
     }
@@ -1057,6 +1302,25 @@ impl CodexInvocationLeaseOwner {
                 && lease.runtime_pid == request.ppid
                 && self.command_handoff_matches(lease, request)
         }) || self.is_dispatch_attempt_from_runtime(state, request)
+    }
+
+    fn is_delegation_launch(&self, request: &InterceptionRequest) -> bool {
+        self.delegation_bridge.as_ref().is_some_and(|bridge| {
+            self.is_delegation_bridge_executable(request)
+                && Self::process_argv(request) == [bridge.as_str()]
+        })
+    }
+
+    fn is_delegation_bridge_executable(&self, request: &InterceptionRequest) -> bool {
+        self.delegation_bridge.as_ref().is_some_and(|bridge| {
+            request
+                .process_exec
+                .as_ref()
+                .map_or(request.executable.as_str(), |process| {
+                    process.executable.as_str()
+                })
+                == bridge
+        })
     }
 
     fn is_dispatch_attempt_from_runtime(
@@ -1555,6 +1819,50 @@ impl InvocationIdentityFields {
 impl InvocationCapability {
     fn from_input(input: &InvocationInput) -> (EffectClass, Self) {
         let tool = input.tool_name.to_ascii_lowercase();
+        if matches!(tool.as_str(), "erebor_delegate" | "erebor-delegate") {
+            let profile = input
+                .tool_input
+                .get("child_profile")
+                .or_else(|| input.tool_input.get("childProfile"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
+            let mode = input
+                .tool_input
+                .get("frozen_context_mode")
+                .or_else(|| input.tool_input.get("frozenContextMode"))
+                .and_then(Value::as_str)
+                .and_then(|value| match value {
+                    "none" => Some(CodexFrozenContextMode::None),
+                    "all" => Some(CodexFrozenContextMode::All),
+                    "last_turns" => Some(CodexFrozenContextMode::LastTurns),
+                    _ => None,
+                });
+            let last_turns = input
+                .tool_input
+                .get("last_turns")
+                .or_else(|| input.tool_input.get("lastTurns"))
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok());
+            if let (Some(child_profile), Some(frozen_context_mode), Some(last_turns)) =
+                (profile, mode, last_turns)
+            {
+                let valid_turn_count = match frozen_context_mode {
+                    CodexFrozenContextMode::LastTurns => last_turns > 0,
+                    CodexFrozenContextMode::None | CodexFrozenContextMode::All => last_turns == 0,
+                };
+                if valid_turn_count {
+                    return (
+                        EffectClass::Delegation,
+                        Self::Delegation {
+                            child_profile,
+                            frozen_context_mode,
+                            last_turns,
+                        },
+                    );
+                }
+            }
+        }
         if matches!(tool.as_str(), "bash" | "shell" | "command") {
             if let Some(command) = input
                 .tool_input
@@ -1665,6 +1973,7 @@ mod tests {
         FileOperation, FileOperationKind, InterceptionOperation, InterceptionRequest,
         ProcessExecOperation,
     };
+    use erebor_runtime_packages::CodexFrozenContextMode;
 
     use super::{
         CodexCommandDispatch, CodexContextDag, CodexInvocationLeaseOwner,
@@ -2294,6 +2603,89 @@ mod tests {
     }
 
     #[test]
+    fn delegated_child_admission_uses_only_the_guard_bound_lease(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
+            root.path().join("context"),
+            FixedMetadataSource,
+        )?);
+        repository.initialize_root(
+            "session-test",
+            Default::default(),
+            "Initialize session root",
+        )?;
+        let context_dag = Arc::new(CodexContextDag::new(
+            Arc::clone(&repository),
+            "session-test",
+        ));
+        let scope_ref = context_dag.ensure_prompt_scope("thread-1")?;
+        context_dag.append_prompt(
+            &scope_ref,
+            "agents/codex/app-server/prompts/prompt.json",
+            br#"{"source":"test"}"#.to_vec(),
+            "Record test prompt",
+        )?;
+        let binding = context_dag.bind_prompt(
+            String::from("thread-1"),
+            String::from("turn-1"),
+            &scope_ref,
+            String::from("agents/codex/app-server/prompts/prompt.json#item-1"),
+        )?;
+        let mut profile = test_profile();
+        profile.set_delegation_bridge(Some(String::from(
+            "/run/erebor/codex/erebor-child-delegation",
+        )));
+        let owner = CodexInvocationLeaseOwner::new(
+            "session-test",
+            test_actor(),
+            profile,
+            CodexInvocationLeaseTrust::default(),
+            None,
+        );
+        owner.set_context_dag(context_dag)?;
+        owner.record_scope_context(binding)?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            delegation_event().as_bytes(),
+            runtime(),
+            101,
+        )?;
+        assert!(owner.record_guarded_hook_exit(101, true)?);
+        let mut malformed = delegation_request(200, 42);
+        malformed.argv.push(String::from("--untrusted"));
+        malformed
+            .process_exec
+            .as_mut()
+            .ok_or("delegation request omitted process execution facts")?
+            .argv
+            .push(String::from("--untrusted"));
+        let malformed_decision = owner
+            .physical_effect_decision(&malformed)
+            .ok_or("malformed delegation bridge was not intercepted")?;
+        assert_eq!(
+            malformed_decision.into_parts().0,
+            SessionInterceptionDecision::Deny
+        );
+        let decision = owner
+            .physical_effect_decision(&delegation_request(201, 42))
+            .ok_or("delegation bridge was not physically attributed")?;
+        assert_eq!(decision.into_parts().0, SessionInterceptionDecision::Allow);
+
+        let admission = owner.prepare_child_admission(201, &runtime())?;
+        assert_eq!(admission.parent_session_id(), "session-test");
+        assert_eq!(admission.child_profile(), "fixture-child");
+        assert_eq!(admission.frozen_context_mode(), CodexFrozenContextMode::All);
+        assert_eq!(admission.last_turns(), 0);
+        repository.validate_pin(admission.parent_context())?;
+
+        owner.complete_child_admission(201, true)?;
+        assert!(owner.record_guarded_delegation_exit(201, true)?);
+        assert!(owner.prepare_child_admission(201, &runtime()).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn cancellation_closes_the_exact_lease_from_its_native_ids(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let owner = test_owner();
@@ -2411,6 +2803,12 @@ mod tests {
         )
     }
 
+    fn delegation_event() -> String {
+        String::from(
+            r#"{"hook_event_name":"PreToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"delegate-1","tool_name":"erebor_delegate","tool_input":{"child_profile":"fixture-child","frozen_context_mode":"all","last_turns":0}}"#,
+        )
+    }
+
     fn post_event(tool_use_id: &str) -> String {
         format!(
             "{{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"thread-1\",\"turn_id\":\"turn-1\",\"tool_use_id\":\"{tool_use_id}\",\"tool_response\":{{\"status\":\"ok\"}}}}"
@@ -2447,6 +2845,23 @@ mod tests {
                     String::from("-c"),
                     command.to_owned(),
                 ],
+                ..ProcessExecOperation::default()
+            }),
+            ..InterceptionRequest::default()
+        }
+    }
+
+    fn delegation_request(pid: i64, ppid: i64) -> InterceptionRequest {
+        let bridge = String::from("/run/erebor/codex/erebor-child-delegation");
+        InterceptionRequest {
+            pid,
+            ppid,
+            operation: InterceptionOperation::ProcessExec as i32,
+            executable: bridge.clone(),
+            argv: vec![bridge.clone()],
+            process_exec: Some(ProcessExecOperation {
+                executable: bridge.clone(),
+                argv: vec![bridge],
                 ..ProcessExecOperation::default()
             }),
             ..InterceptionRequest::default()

@@ -27,6 +27,8 @@ use erebor_runtime_ipc::{
 use erebor_runtime_packages::{CodexHookEventName, CodexPackageDefinition};
 use snafu::{ensure, ResultExt};
 
+use crate::ChildSessionAdmissionHandler;
+
 use super::{
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
     CodexAppServerRegistration, CodexCommandDispatch, CodexGuardLifecycleHandler,
@@ -95,22 +97,29 @@ impl CodexSessionHookRegistration {
         let trust = dispatch
             .map(CodexInvocationLeaseTrust::with_command_dispatch)
             .unwrap_or_default();
+        let mut lease_profile = CodexInvocationLeaseProfile::new(
+            managed_session.profile().id().to_owned(),
+            managed_session.profile().executable().display().to_string(),
+            managed_session
+                .profile()
+                .hook_exec_history()
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+        );
+        lease_profile.set_delegation_bridge(
+            managed_session
+                .profile()
+                .delegation_bridge_path()
+                .map(|path| path.display().to_string()),
+        );
         let lease_owner = Arc::new(CodexInvocationLeaseOwner::new(
             spec.session_id().as_str(),
             erebor_runtime_events::ActorIdentity {
                 id: String::from("agent"),
                 kind: erebor_runtime_events::ActorKind::Agent,
             },
-            CodexInvocationLeaseProfile::new(
-                managed_session.profile().id().to_owned(),
-                managed_session.profile().executable().display().to_string(),
-                managed_session
-                    .profile()
-                    .hook_exec_history()
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect(),
-            ),
+            lease_profile,
             trust,
             Some(
                 spec.output()
@@ -136,12 +145,14 @@ impl CodexSessionHookRegistration {
     pub fn with_interception_router(
         &self,
         router: crate::SessionInterceptionRouter,
+        child_admissions: Arc<dyn ChildSessionAdmissionHandler>,
     ) -> crate::SessionInterceptionRouter {
         router
             .with_codex_invocation_lease_owner(Arc::clone(&self.lease_owner))
             .with_guard_lifecycle_handler(CodexGuardLifecycleHandler::new(
                 self.managed_session.clone(),
                 Arc::clone(&self.lease_owner),
+                child_admissions,
             ))
     }
 
@@ -435,7 +446,7 @@ impl CodexHookBrokerProtocol {
                     let result = HookResult {
                         event: event_kind as i32,
                         accepted: true,
-                        result_json: br#"{"continue":true}"#.to_vec(),
+                        result_json: br#"{\"continue\":true}"#.to_vec(),
                     };
                     let response = Envelope::wrap_message(
                         envelope.message_id.saturating_add(1),
@@ -1162,6 +1173,7 @@ mod tests {
                 )?],
                 None,
             )?,
+            None,
         )?)
     }
 

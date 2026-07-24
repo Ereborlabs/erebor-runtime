@@ -20,6 +20,8 @@ pub struct CodexPackageDefinition {
     entrypoints: Vec<CodexEntrypoint>,
     managed_artifacts: CodexManagedArtifacts,
     hook_contract: CodexHookContract,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    child_delegation: Option<CodexChildDelegationContract>,
 }
 
 impl CodexPackageDefinition {
@@ -30,6 +32,7 @@ impl CodexPackageDefinition {
         entrypoints: Vec<CodexEntrypoint>,
         managed_artifacts: CodexManagedArtifacts,
         hook_contract: CodexHookContract,
+        child_delegation: Option<CodexChildDelegationContract>,
     ) -> Result<Self> {
         let definition = Self {
             format_version: CANONICAL_FORMAT_VERSION,
@@ -39,6 +42,7 @@ impl CodexPackageDefinition {
             entrypoints,
             managed_artifacts,
             hook_contract,
+            child_delegation,
         };
         definition.validate()?;
         Ok(definition)
@@ -67,6 +71,18 @@ impl CodexPackageDefinition {
         }
         self.managed_artifacts.validate()?;
         self.hook_contract.validate()?;
+        if let Some(contract) = &self.child_delegation {
+            contract.validate()?;
+            ensure!(
+                self.entrypoint(contract.child_profile_entrypoint())
+                    .is_some(),
+                InvalidModelSnafu {
+                    reason: String::from(
+                        "Codex child-delegation profiles must select certified package entrypoints"
+                    )
+                }
+            );
+        }
         Ok(())
     }
 
@@ -105,6 +121,11 @@ impl CodexPackageDefinition {
     #[must_use]
     pub const fn hook_contract(&self) -> &CodexHookContract {
         &self.hook_contract
+    }
+
+    #[must_use]
+    pub const fn child_delegation(&self) -> Option<&CodexChildDelegationContract> {
+        self.child_delegation.as_ref()
     }
 }
 
@@ -178,6 +199,150 @@ impl CodexEntrypoint {
     pub const fn app_server_stdio(&self) -> bool {
         self.app_server_stdio
     }
+}
+
+/// The one pre-spawn bridge a curated Codex package may project. A package
+/// without this contract has no daemon-physical child-delegation capability.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexChildDelegationContract {
+    bridge_source: CodexArtifact,
+    bridge_path: PathBuf,
+    child_profile: CodexChildProfile,
+}
+
+impl CodexChildDelegationContract {
+    pub fn new(
+        bridge_source: CodexArtifact,
+        bridge_path: PathBuf,
+        child_profile: CodexChildProfile,
+    ) -> Result<Self> {
+        let contract = Self {
+            bridge_source,
+            bridge_path,
+            child_profile,
+        };
+        contract.validate()?;
+        Ok(contract)
+    }
+
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            normalized_absolute(&self.bridge_path)
+                && self.bridge_path.starts_with("/run/erebor/codex/")
+                && self.bridge_source.path() != self.bridge_path,
+            InvalidModelSnafu {
+                reason: String::from(
+                    "Codex child-delegation bridge must be a distinct root-owned runtime artifact"
+                )
+            }
+        );
+        self.bridge_source.validate()?;
+        self.child_profile.validate()
+    }
+
+    #[must_use]
+    pub const fn bridge_source(&self) -> &CodexArtifact {
+        &self.bridge_source
+    }
+
+    #[must_use]
+    pub fn bridge_path(&self) -> &Path {
+        &self.bridge_path
+    }
+
+    #[must_use]
+    pub const fn child_profile(&self) -> &CodexChildProfile {
+        &self.child_profile
+    }
+
+    fn child_profile_entrypoint(&self) -> &str {
+        self.child_profile.entrypoint()
+    }
+}
+
+/// Root-curated child class selected by a bridge request. It deliberately has
+/// no argv, path, environment, policy, or caller identity fields.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexChildProfile {
+    id: String,
+    entrypoint: String,
+    frozen_context_modes: Vec<CodexFrozenContextMode>,
+    maximum_last_turns: u32,
+}
+
+impl CodexChildProfile {
+    pub fn new(
+        id: impl Into<String>,
+        entrypoint: impl Into<String>,
+        frozen_context_modes: Vec<CodexFrozenContextMode>,
+        maximum_last_turns: u32,
+    ) -> Result<Self> {
+        let profile = Self {
+            id: id.into(),
+            entrypoint: entrypoint.into(),
+            frozen_context_modes,
+            maximum_last_turns,
+        };
+        profile.validate()?;
+        Ok(profile)
+    }
+
+    fn validate(&self) -> Result<()> {
+        let modes = self
+            .frozen_context_modes
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        ensure!(
+            valid_identifier(&self.id)
+                && valid_identifier(&self.entrypoint)
+                && !self.frozen_context_modes.is_empty()
+                && modes.len() == self.frozen_context_modes.len()
+                && (self
+                    .frozen_context_modes
+                    .contains(&CodexFrozenContextMode::LastTurns)
+                    || self.maximum_last_turns == 0)
+                && (!self
+                    .frozen_context_modes
+                    .contains(&CodexFrozenContextMode::LastTurns)
+                    || self.maximum_last_turns > 0),
+            InvalidModelSnafu {
+                reason: String::from(
+                    "Codex child profile must have a safe identity and bounded frozen-context modes"
+                )
+            }
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    #[must_use]
+    pub fn entrypoint(&self) -> &str {
+        &self.entrypoint
+    }
+
+    #[must_use]
+    pub fn allows_context_mode(&self, mode: CodexFrozenContextMode) -> bool {
+        self.frozen_context_modes.contains(&mode)
+    }
+
+    #[must_use]
+    pub const fn maximum_last_turns(&self) -> u32 {
+        self.maximum_last_turns
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexFrozenContextMode {
+    None,
+    All,
+    LastTurns,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -622,6 +787,7 @@ mod tests {
                 )?],
                 None,
             )?,
+            None,
         )?;
         assert_eq!(
             definition.canonical_digest()?,

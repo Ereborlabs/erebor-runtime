@@ -1,5 +1,6 @@
 mod adoption;
 mod agents;
+mod child_admission;
 mod controller_support;
 mod diagnostic;
 mod docker_controller;
@@ -32,6 +33,9 @@ pub use agents::codex::{
     MAX_APP_SERVER_FRAME_BYTES,
 };
 pub use agents::{AgentAdapter, AgentAdapterRegistry, PreparedAgentInvocation};
+pub use child_admission::{
+    ChildSessionAdmission, ChildSessionAdmissionDispatcher, ChildSessionAdmissionHandler,
+};
 pub use diagnostic::SessionDiagnosticOutcome;
 #[doc(hidden)]
 pub use docker_controller::run_docker_session_controller;
