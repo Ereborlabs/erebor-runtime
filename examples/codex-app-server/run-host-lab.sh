@@ -33,6 +33,10 @@ for binary in \
     exit 1
   fi
 done
+if ! command -v strip >/dev/null; then
+  printf '%s\n' 'missing strip; install your distribution binutils package, then rerun the host lab' >&2
+  exit 1
+fi
 
 # mktemp creates a fresh directory. It is retained after both success and
 # failure so the developer can inspect daemon logs, config, and state.
@@ -61,6 +65,12 @@ stage_root_binary erebor-linux-process-guard
 stage_root_binary codex-v1-fixture
 install -o "$caller_uid" -g "$caller_gid" -m 0755 \
   "$target_dir/codex-v1-fixture" "$lab_root/caller/codex-v1-fixture"
+# The fixture is descriptor-verified repeatedly as the executable, managed
+# hook, and delegation bridge. Strip only the lab copies so that this real
+# admission path stays interactive without altering the developer build.
+strip --strip-debug \
+  "$lab_root/bin/codex-v1-fixture" \
+  "$lab_root/caller/codex-v1-fixture"
 
 fixture_output="$("$lab_root/bin/codex-v1-fixture" configure \
   --config "$lab_root/etc/erebord.json" \

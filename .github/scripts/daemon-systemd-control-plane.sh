@@ -91,6 +91,22 @@ await_service() {
   exit 1
 }
 
+await_restarted_service() {
+  local previous_main_pid="$1"
+  local main_pid=""
+  for _ in $(seq 1 100); do
+    main_pid="$(systemctl show --property=MainPID --value erebord.service)"
+    if [[ "$main_pid" != 0 && "$main_pid" != "$previous_main_pid" ]] && [[ -S "$socket" ]] && "$erebor" daemon status >/dev/null 2>&1; then
+      return
+    fi
+    sleep 0.1
+  done
+  systemctl status erebord.service --no-pager >&2 || true
+  journalctl -u erebord.service --no-pager >&2 || true
+  echo "erebord.service did not restart after main PID $previous_main_pid exited" >&2
+  exit 1
+}
+
 groupadd --system "$service_group"
 useradd --create-home --groups "$service_group" "$service_user"
 useradd --create-home --groups "$service_group" "$service_user_two"
@@ -164,7 +180,7 @@ await_service
 main_pid="$(systemctl show --property=MainPID --value erebord.service)"
 [[ "$main_pid" != 0 ]]
 kill -KILL "$main_pid"
-await_service
+await_restarted_service "$main_pid"
 [[ "$lock_inode" == "$(stat -c '%i' "$lock_path")" ]]
 
 EREBOR_INSTALLED_SESSION_USER="$service_user" \

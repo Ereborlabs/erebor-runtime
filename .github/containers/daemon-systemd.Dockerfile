@@ -6,7 +6,9 @@ ENV container=docker
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
+        binutils \
         dbus \
+        git \
         libostree-1-1 \
         passwd \
         python3 \
@@ -40,7 +42,8 @@ RUN chmod 0755 \
         /usr/local/bin/erebor \
         /usr/local/lib/erebor/daemon-systemd-control-plane.sh \
         /usr/local/lib/erebor/daemon-installed-session-runtime.sh \
-        /usr/local/lib/erebor/daemon-codex-runtime.sh
+        /usr/local/lib/erebor/daemon-codex-runtime.sh \
+    && strip --strip-debug /usr/lib/erebor/codex-v1-fixture
 
 STOPSIGNAL SIGRTMIN+3
 CMD ["/sbin/init"]

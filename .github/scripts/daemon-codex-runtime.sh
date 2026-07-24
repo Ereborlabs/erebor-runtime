@@ -59,6 +59,63 @@ running_session_id() {
     | head -n 1
 }
 
+running_session_ids() {
+  local user="$1"
+  as_user "$user" session ps \
+    | sed -n 's/^session_id=\([^ ]*\).*state=running.*/\1/p'
+}
+
+await_running_session_count() {
+  local user="$1"
+  local expected="$2"
+  local -a sessions=()
+  for _ in $(seq 1 150); do
+    mapfile -t sessions < <(running_session_ids "$user")
+    if [[ "${#sessions[@]}" == "$expected" ]]; then
+      printf '%s\n' "${sessions[@]}"
+      return
+    fi
+    sleep 0.1
+  done
+  echo "expected $expected running Codex sessions" >&2
+  as_user "$user" session ps >&2
+  exit 1
+}
+
+await_running_session() {
+  local user="$1"
+  local session_id=""
+  for _ in $(seq 1 150); do
+    session_id="$(running_session_id "$user")"
+    [[ -n "$session_id" ]] && {
+      printf '%s\n' "$session_id"
+      return
+    }
+    sleep 0.1
+  done
+  echo "Codex session did not become running" >&2
+  as_user "$user" session ps >&2
+  exit 1
+}
+
+await_session_stdout() {
+  local user="$1"
+  local session_id="$2"
+  local expected="$3"
+  local output=""
+  for _ in $(seq 1 150); do
+    output="$(as_user "$user" session logs "$session_id" 2>&1 || true)"
+    grep -Fq "$expected" <<<"$output" && {
+      printf '%s\n' "$output"
+      return
+    }
+    sleep 0.1
+  done
+  echo "Codex session $session_id did not write expected stdout: $expected" >&2
+  echo "$output" >&2
+  exit 1
+}
+
 await_terminal() {
   local user="$1"
   local session_id="$2"
@@ -162,6 +219,69 @@ run_app_server_frame() {
     --workspace "/home/$user" codex-app-server >"$output" 2>&1
 }
 
+send_fixture_tty_control() {
+  local user="$1"
+  local session_id="$2"
+  local control="$3"
+  local label="$4"
+  local output="$5"
+  {
+    sleep 1
+    printf '%s\n' "$control"
+    sleep 1
+    printf '\020\021'
+  } | runuser -u "$user" -- script -qefc \
+    "stty rows 24 cols 80; $erebor session attach $session_id --input --client-instance-id $label --idempotency-key $label" \
+    /dev/null >"$output" 2>&1
+}
+
+record_field() {
+  local record="$1"
+  local field="$2"
+  tr ' ' '\n' <<<"$record" | sed -n "s/^${field}=//p" | head -n 1
+}
+
+context_record_for_child() {
+  local user="$1"
+  local parent_session="$2"
+  local child_session="$3"
+  as_user "$user" session context inbox "$parent_session" \
+    | grep -F "child_scope=refs/scopes/$child_session/root "
+}
+
+context_record_for_scope() {
+  local user="$1"
+  local parent_session="$2"
+  local child_scope="$3"
+  as_user "$user" session context inbox "$parent_session" \
+    | grep -F "child_scope=$child_scope "
+}
+
+receive_context_delivery() {
+  local user="$1"
+  local parent_session="$2"
+  local record="$3"
+  local key="$4"
+  as_user "$user" session context receive "$parent_session" \
+    "$(record_field "$record" delivery_path)" \
+    "$(record_field "$record" delivery_commit)" \
+    --expected-parent-head "$(record_field "$record" expected_parent_head)" \
+    --idempotency-key "$key"
+}
+
+reject_context_delivery() {
+  local user="$1"
+  local parent_session="$2"
+  local record="$3"
+  local key="$4"
+  as_user "$user" session context reject "$parent_session" \
+    "$(record_field "$record" delivery_path)" \
+    "$(record_field "$record" delivery_commit)" \
+    --expected-parent-head "$(record_field "$record" expected_parent_head)" \
+    --reason "fixture parent rejected cancellation" \
+    --idempotency-key "$key"
+}
+
 start_waiting_app_server() {
   local user="$1"
   local fifo="$2"
@@ -208,8 +328,11 @@ if as_user "$first_user" run --policy fixture --workspace "/home/$first_user" \
 fi
 
 tty_output="$(mktemp)"
-printf 'governed\n' | runuser -u "$first_user" -- script -qefc \
-  "$erebor run --policy fixture --workspace /home/$first_user codex" \
+# A real interactive Codex client remains owned by the daemon after the user
+# detaches.  Exercise that path instead of making this long-lived fixture exit
+# during the controller's input acknowledgement.
+printf 'governed\n\020\021' | timeout 20s runuser -u "$first_user" -- script -qefc \
+  "stty rows 24 cols 80; $erebor run --policy fixture --workspace /home/$first_user codex" \
   /dev/null >"$tty_output"
 grep -q 'fixture-tty=ready' "$tty_output"
 grep -q 'fixture-daemon-socket=absent' "$tty_output"
@@ -226,6 +349,177 @@ printf '%s\n' \
       codex-app-server >"$app_server_output" 2>&1
 grep -q '"fixture":"accepted"' "$app_server_output"
 grep -q '"fixture":"cancelled"' "$app_server_output"
+remove_all_sessions "$first_user"
+
+for delegation_params in \
+  '"frozen_context_mode":"none","last_turns":0' \
+  '"frozen_context_mode":"all","last_turns":0' \
+  '"frozen_context_mode":"last_turns","last_turns":1'; do
+  delegation_output="$(mktemp)"
+  run_app_server_frame "$first_user" \
+    $'{"jsonrpc":"2.0","id":6,"method":"turn/start","params":{"threadId":"fixture-thread"}}\n'"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"fixture/delegate\",\"params\":{$delegation_params}}" \
+    "$delegation_output"
+  grep -q '"fixture":"delegated"' "$delegation_output"
+  delegated_child="$(await_running_session "$first_user")"
+  delegated_session_count="$(session_ids "$first_user" | wc -l | tr -d ' ')"
+  [[ "$delegated_session_count" == 2 ]] || {
+    echo "delegation did not retain exactly parent P and child B sessions" >&2
+    as_user "$first_user" session ps >&2
+    exit 1
+  }
+  as_user "$first_user" session inspect "$delegated_child" | grep -q 'state=running'
+  delegated_logs="$(await_session_stdout "$first_user" "$delegated_child" 'fixture-hook=accepted')"
+  if [[ "$delegation_params" == *'"none"'* ]]; then
+    ! grep -q 'fixture-frozen-context=' <<<"$delegated_logs"
+  else
+    grep -q 'fixture-frozen-context={"schema_version":1,"source":"erebor_frozen_codex_prompt_projection"' <<<"$delegated_logs"
+  fi
+  remove_all_sessions "$first_user"
+done
+
+# Exercise the complete public parent/child delivery path. P admits sibling
+# children B and C through the guarded bridge. B publishes a message, C
+# publishes a cancellation fact, the parent explicitly decides both, then B
+# binds its own authenticated terminal turn and admits D. D's result must be
+# received by B before B's second result can be received by P.
+dag_parent_output="$(mktemp)"
+dag_parent_frame=$'{"jsonrpc":"2.0","id":100,"method":"turn/start","params":{"threadId":"fixture-thread"}}\n'
+dag_parent_frame+=$'{"jsonrpc":"2.0","id":101,"method":"fixture/delegate","params":{"frozen_context_mode":"all","last_turns":0,"tool_use_id":"fixture-p-b"}}\n'
+dag_parent_frame+=$'{"jsonrpc":"2.0","id":102,"method":"fixture/delegate","params":{"frozen_context_mode":"none","last_turns":0,"tool_use_id":"fixture-p-c"}}'
+run_app_server_frame "$first_user" "$dag_parent_frame" "$dag_parent_output"
+grep -c '"fixture":"delegated"' "$dag_parent_output" | grep -q '^2$'
+
+mapfile -t dag_running < <(await_running_session_count "$first_user" 2)
+mapfile -t dag_sessions < <(session_ids "$first_user")
+[[ "${#dag_sessions[@]}" == 3 ]]
+dag_b_session="${dag_running[0]}"
+dag_c_session="${dag_running[1]}"
+dag_parent_session=""
+for session_id in "${dag_sessions[@]}"; do
+  if [[ "$session_id" != "$dag_b_session" && "$session_id" != "$dag_c_session" ]]; then
+    dag_parent_session="$session_id"
+  fi
+done
+[[ -n "$dag_parent_session" ]]
+await_session_stdout "$first_user" "$dag_b_session" 'fixture-hook=accepted' >/dev/null
+await_session_stdout "$first_user" "$dag_c_session" 'fixture-hook=accepted' >/dev/null
+
+dag_b_message_output="$(mktemp)"
+send_fixture_tty_control "$first_user" "$dag_b_session" \
+  $'fixture/turn\nfixture/command {"tool_use_id":"fixture-b-ls","command":"ls"}\nfixture/start-q\nfixture/deliver {"sequence":1,"kind":"message","mode":"queue","selected_text":"B queued message"}' \
+  dag-b-message "$dag_b_message_output"
+grep -q 'fixture-turn=accepted' "$dag_b_message_output"
+grep -q 'fixture-command=completed' "$dag_b_message_output"
+grep -q 'fixture-operation=q-started' "$dag_b_message_output"
+grep -q 'fixture-delivery=accepted' "$dag_b_message_output"
+
+dag_c_cancel_output="$(mktemp)"
+send_fixture_tty_control "$first_user" "$dag_c_session" \
+  'fixture/deliver {"sequence":1,"kind":"cancelled","mode":"queue","selected_text":"C cancelled"}' \
+  dag-c-cancel "$dag_c_cancel_output"
+grep -q 'fixture-delivery=accepted' "$dag_c_cancel_output"
+
+dag_b_message_record="$(context_record_for_child "$first_user" "$dag_parent_session" "$dag_b_session")"
+dag_c_cancel_record="$(context_record_for_child "$first_user" "$dag_parent_session" "$dag_c_session")"
+[[ -n "$dag_b_message_record" && -n "$dag_c_cancel_record" ]]
+dag_parent_after_b="$(receive_context_delivery "$first_user" "$dag_parent_session" "$dag_b_message_record" dag-parent-receive-b)"
+dag_parent_after_b_head="$(record_field "$dag_parent_after_b" parent_head)"
+dag_parent_b_receipt="$(record_field "$dag_parent_after_b" receipt_path)"
+[[ -n "$dag_parent_after_b_head" && -n "$dag_parent_b_receipt" ]]
+dag_c_cancel_record="$(context_record_for_child "$first_user" "$dag_parent_session" "$dag_c_session")"
+dag_parent_after_c="$(reject_context_delivery "$first_user" "$dag_parent_session" "$dag_c_cancel_record" dag-parent-reject-c)"
+dag_parent_after_c_head="$(record_field "$dag_parent_after_c" parent_head)"
+dag_parent_c_receipt="$(record_field "$dag_parent_after_c" receipt_path)"
+[[ -n "$dag_parent_after_c_head" && -n "$dag_parent_c_receipt" ]]
+
+# q is a long-lived operation inside B, not another daemon session. Its
+# delivery scope is admitted from B's exact command pin, so B alone must make
+# two explicit receives while P's head remains unchanged.
+await_session_stdout "$first_user" "$dag_b_session" 'fixture-operation=q-delivery-1' >/dev/null
+dag_q_scope="refs/scopes/$dag_b_session/scope/codex-operation-$(printf 'fixture-q' | sha256sum | awk '{print substr($1, 1, 20)}')"
+dag_q_partial_record="$(context_record_for_scope "$first_user" "$dag_b_session" "$dag_q_scope")"
+dag_b_after_q_partial="$(receive_context_delivery "$first_user" "$dag_b_session" "$dag_q_partial_record" dag-b-receive-q-partial)"
+dag_b_after_q_partial_head="$(record_field "$dag_b_after_q_partial" parent_head)"
+[[ -n "$dag_b_after_q_partial_head" ]]
+[[ "$(git --git-dir="/var/lib/erebor/users/$(id -u "$first_user")/sessions/$dag_parent_session/context" rev-parse "refs/scopes/$dag_parent_session/root")" == "$dag_parent_after_c_head" ]]
+await_session_stdout "$first_user" "$dag_b_session" 'fixture-operation=q-delivery-2' >/dev/null
+dag_q_final_record="$(context_record_for_scope "$first_user" "$dag_b_session" "$dag_q_scope")"
+dag_b_after_q_final="$(receive_context_delivery "$first_user" "$dag_b_session" "$dag_q_final_record" dag-b-receive-q-final)"
+dag_b_after_q_final_head="$(record_field "$dag_b_after_q_final" parent_head)"
+[[ -n "$dag_b_after_q_final_head" ]]
+
+as_user "$first_user" session stop "$dag_c_session" \
+  --idempotency-key dag-parent-cancel-c >/dev/null
+await_terminal "$first_user" "$dag_c_session"
+
+dag_b_delegate_output="$(mktemp)"
+send_fixture_tty_control "$first_user" "$dag_b_session" \
+  $'fixture/turn\nfixture/delegate {"frozen_context_mode":"none","last_turns":0,"tool_use_id":"fixture-b-d"}' \
+  dag-b-delegate "$dag_b_delegate_output"
+grep -q 'fixture-turn=accepted' "$dag_b_delegate_output"
+grep -q 'fixture-delegation=accepted' "$dag_b_delegate_output"
+mapfile -t dag_running < <(await_running_session_count "$first_user" 2)
+if [[ "${dag_running[0]}" == "$dag_b_session" ]]; then
+  dag_d_session="${dag_running[1]}"
+else
+  dag_d_session="${dag_running[0]}"
+fi
+[[ "$dag_d_session" != "$dag_b_session" ]]
+await_session_stdout "$first_user" "$dag_d_session" 'fixture-hook=accepted' >/dev/null
+
+dag_d_result_output="$(mktemp)"
+send_fixture_tty_control "$first_user" "$dag_d_session" \
+  'fixture/deliver {"sequence":1,"kind":"result","mode":"queue","selected_text":"D result"}' \
+  dag-d-result "$dag_d_result_output"
+grep -q 'fixture-delivery=accepted' "$dag_d_result_output"
+dag_d_result_record="$(context_record_for_child "$first_user" "$dag_b_session" "$dag_d_session")"
+dag_b_before_d_head="$(record_field "$dag_d_result_record" expected_parent_head)"
+dag_b_after_d="$(receive_context_delivery "$first_user" "$dag_b_session" "$dag_d_result_record" dag-b-receive-d)"
+dag_b_after_d_head="$(record_field "$dag_b_after_d" parent_head)"
+dag_b_d_receipt="$(record_field "$dag_b_after_d" receipt_path)"
+[[ -n "$dag_b_before_d_head" && -n "$dag_b_after_d_head" && -n "$dag_b_d_receipt" ]]
+
+dag_b_final_output="$(mktemp)"
+send_fixture_tty_control "$first_user" "$dag_b_session" \
+  'fixture/deliver {"sequence":2,"kind":"result","mode":"follow-up","selected_text":"B final after D"}' \
+  dag-b-final "$dag_b_final_output"
+grep -q 'fixture-delivery=accepted' "$dag_b_final_output"
+dag_b_final_record="$(context_record_for_child "$first_user" "$dag_parent_session" "$dag_b_session")"
+dag_b_final_commit="$(record_field "$dag_b_final_record" delivery_commit)"
+dag_parent_after_final="$(receive_context_delivery "$first_user" "$dag_parent_session" "$dag_b_final_record" dag-parent-receive-b-final)"
+dag_parent_after_final_head="$(record_field "$dag_parent_after_final" parent_head)"
+dag_parent_b_final_receipt="$(record_field "$dag_parent_after_final" receipt_path)"
+[[ -n "$dag_b_final_commit" && -n "$dag_parent_after_final_head" && -n "$dag_parent_b_final_receipt" ]]
+
+# Inspect the real daemon-owned SHA-256 Git artifact. This is evidence only:
+# all creates, deliveries, and decisions above used the public client.
+context_git="/var/lib/erebor/users/$(id -u "$first_user")/sessions/$dag_parent_session/context"
+[[ -d "$context_git" ]]
+git --git-dir="$context_git" fsck --no-dangling --no-progress
+[[ "$(git --git-dir="$context_git" rev-parse "refs/scopes/$dag_parent_session/root")" == "$dag_parent_after_final_head" ]]
+mapfile -t dag_parent_merge_parents < <(git --git-dir="$context_git" cat-file -p "$dag_parent_after_final_head" | sed -n 's/^parent //p')
+[[ "${dag_parent_merge_parents[0]}" == "$dag_parent_after_c_head" ]]
+[[ "${dag_parent_merge_parents[1]}" == "$dag_b_final_commit" ]]
+mapfile -t dag_b_merge_parents < <(git --git-dir="$context_git" cat-file -p "$dag_b_after_d_head" | sed -n 's/^parent //p')
+[[ "${dag_b_merge_parents[0]}" == "$dag_b_before_d_head" ]]
+[[ "${dag_b_merge_parents[1]}" == "$(record_field "$dag_d_result_record" delivery_commit)" ]]
+for receipt in "$dag_parent_b_receipt" "$dag_parent_c_receipt" "$dag_parent_b_final_receipt"; do
+  git --git-dir="$context_git" cat-file -e "$dag_parent_after_final_head:$receipt"
+done
+git --git-dir="$context_git" cat-file -e "$dag_b_after_d_head:$dag_b_d_receipt"
+git --git-dir="$context_git" grep -F "\"child_scope\":\"refs/scopes/$dag_b_session/root\"" \
+  "$dag_parent_after_final_head" -- erebor/context-dag/edges >/dev/null
+git --git-dir="$context_git" grep -F "\"child_scope\":\"refs/scopes/$dag_c_session/root\"" \
+  "$dag_parent_after_final_head" -- erebor/context-dag/edges >/dev/null
+git --git-dir="$context_git" grep -F "\"child_scope\":\"refs/scopes/$dag_d_session/root\"" \
+  "$dag_b_after_d_head" -- erebor/context-dag/edges >/dev/null
+git --git-dir="$context_git" grep -F "\"child_scope\":\"$dag_q_scope\"" \
+  "$dag_b_after_q_final_head" -- erebor/context-dag/edges >/dev/null
+git --git-dir="$context_git" grep -F '"execution_binding":"native_logical"' \
+  "$dag_b_after_q_final_head" -- erebor/context-dag/edges >/dev/null
+mapfile -t dag_q_final_merge_parents < <(git --git-dir="$context_git" cat-file -p "$dag_b_after_q_final_head" | sed -n 's/^parent //p')
+[[ "${dag_q_final_merge_parents[0]}" == "$dag_b_after_q_partial_head" ]]
+[[ "${dag_q_final_merge_parents[1]}" == "$(record_field "$dag_q_final_record" delivery_commit)" ]]
 remove_all_sessions "$first_user"
 
 for hook_case in hook-replay hook-wrong-peer hook-wrong-session; do

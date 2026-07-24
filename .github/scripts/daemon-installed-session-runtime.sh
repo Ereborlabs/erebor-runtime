@@ -203,7 +203,7 @@ start_session "$first_user" "$tty_session" tty-first
   sleep 1
   printf '\020\021'
 } | runuser -u "$first_user" -- script -qefc \
-  "$erebor session attach $tty_session --input --client-instance-id tty-first --idempotency-key tty-attach-first" \
+  "stty rows 24 cols 80; $erebor session attach $tty_session --input --client-instance-id tty-first --idempotency-key tty-attach-first" \
   /dev/null >/dev/null
 await_log "$first_user" "$tty_session" 'tty-input-governed'
 as_user "$first_user" session inspect "$tty_session" | grep -q 'state=running'
