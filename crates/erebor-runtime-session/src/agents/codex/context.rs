@@ -197,7 +197,14 @@ impl CodexContextDag {
         let scope = parent.scope().map_err(Self::context_error)?;
         let commit = parent.commit().map_err(Self::context_error)?;
         let mut paths = Vec::new();
-        self.collect_prompt_paths(self.repository.read_commit(commit).map_err(Self::context_error)?.tree(), "", &mut paths)?;
+        self.collect_prompt_paths(
+            self.repository
+                .read_commit(commit)
+                .map_err(Self::context_error)?
+                .tree(),
+            "",
+            &mut paths,
+        )?;
         paths.sort();
         let selected = match mode {
             CodexFrozenContextMode::None => Vec::new(),
@@ -205,13 +212,17 @@ impl CodexContextDag {
             CodexFrozenContextMode::LastTurns => {
                 let count = usize::try_from(last_turns).map_err(|_error| {
                     CodexSessionError::IncompatibleProfile {
-                        reason: String::from("Codex frozen-context turn count does not fit this host"),
+                        reason: String::from(
+                            "Codex frozen-context turn count does not fit this host",
+                        ),
                         location: snafu::Location::default(),
                     }
                 })?;
                 if count == 0 {
                     return Err(CodexSessionError::IncompatibleProfile {
-                        reason: String::from("Codex frozen-context last_turns has no matching prompt history"),
+                        reason: String::from(
+                            "Codex frozen-context last_turns has no matching prompt history",
+                        ),
                         location: snafu::Location::default(),
                     });
                 }
@@ -451,7 +462,9 @@ impl CodexContextDag {
                 format!("{prefix}/{name}")
             };
             match entry.kind() {
-                ContextTreeEntryKind::Tree => self.collect_prompt_paths(entry.object(), &path, paths)?,
+                ContextTreeEntryKind::Tree => {
+                    self.collect_prompt_paths(entry.object(), &path, paths)?
+                }
                 ContextTreeEntryKind::Blob if path.starts_with(PROMPT_PREFIX) => paths.push(path),
                 ContextTreeEntryKind::Blob | ContextTreeEntryKind::Commit => {}
             }
@@ -694,18 +707,23 @@ mod tests {
 
         let all = dag.frozen_prompt_projection(&parent, CodexFrozenContextMode::All, 0)?;
         assert_eq!(all.used_paths(), paths.as_slice());
-        let all_rendered = CodexContextDag::render_frozen_prompt_context(repository.as_ref(), &all)?
-            .ok_or("all projection was not rendered")?;
+        let all_rendered =
+            CodexContextDag::render_frozen_prompt_context(repository.as_ref(), &all)?
+                .ok_or("all projection was not rendered")?;
         let all_json: serde_json::Value = serde_json::from_str(&all_rendered)?;
         assert_eq!(
-            all_json.pointer("/prompts/0/prompt").and_then(serde_json::Value::as_str),
+            all_json
+                .pointer("/prompts/0/prompt")
+                .and_then(serde_json::Value::as_str),
             Some("first")
         );
         assert_eq!(
-            all_json.pointer("/prompts/2/prompt").and_then(serde_json::Value::as_str),
+            all_json
+                .pointer("/prompts/2/prompt")
+                .and_then(serde_json::Value::as_str),
             Some("third")
         );
-        assert!(all_rendered.find("must not be projected").is_none());
+        assert!(!all_rendered.contains("must not be projected"));
 
         let last = dag.frozen_prompt_projection(&parent, CodexFrozenContextMode::LastTurns, 2)?;
         assert_eq!(last.used_paths(), &paths[1..]);
@@ -714,14 +732,21 @@ mod tests {
                 .ok_or("last-turns projection was not rendered")?;
         let last_json: serde_json::Value = serde_json::from_str(&last_rendered)?;
         assert_eq!(
-            last_json.pointer("/prompts/0/prompt").and_then(serde_json::Value::as_str),
+            last_json
+                .pointer("/prompts/0/prompt")
+                .and_then(serde_json::Value::as_str),
             Some("second")
         );
         assert_eq!(
-            last_json.pointer("/prompts/1/prompt").and_then(serde_json::Value::as_str),
+            last_json
+                .pointer("/prompts/1/prompt")
+                .and_then(serde_json::Value::as_str),
             Some("third")
         );
-        assert!(last.used_paths().iter().all(|path| path.starts_with(PROMPT_PREFIX)));
+        assert!(last
+            .used_paths()
+            .iter()
+            .all(|path| path.starts_with(PROMPT_PREFIX)));
         Ok(())
     }
 

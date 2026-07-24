@@ -276,21 +276,26 @@ impl ContextDagCoordinator {
     }
 
     fn selected_parent_context_tree(&self, parent: &ContextPin) -> Result<ForkTarget> {
-        let selected = self.repository.read_pinned_context(parent).map_err(|error| {
-            InvalidRequestSnafu {
-                reason: format!("could not read selected parent context: {error}"),
-            }
-            .build()
-        })?;
+        let selected = self
+            .repository
+            .read_pinned_context(parent)
+            .map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("could not read selected parent context: {error}"),
+                }
+                .build()
+            })?;
         let edits = selected
             .selected_blobs()
             .iter()
-            .map(|blob| TreeEdit::blob(blob.path(), blob.bytes()).map_err(|error| {
-                InvalidRequestSnafu {
-                    reason: format!("could not select parent context blob: {error}"),
-                }
-                .build()
-            }))
+            .map(|blob| {
+                TreeEdit::blob(blob.path(), blob.bytes()).map_err(|error| {
+                    InvalidRequestSnafu {
+                        reason: format!("could not select parent context blob: {error}"),
+                    }
+                    .build()
+                })
+            })
             .collect::<Result<Vec<_>>>()?;
         let tree = self
             .repository
@@ -837,7 +842,10 @@ mod tests {
                     "agents/codex/app-server/prompts/00000000000000000002.json",
                     br#"{"request":{"prompt":"excluded"}}"#.to_vec(),
                 )?,
-                TreeEdit::blob("agents/codex/hooks/audit.json", br#"{"audit":true}"#.to_vec())?,
+                TreeEdit::blob(
+                    "agents/codex/hooks/audit.json",
+                    br#"{"audit":true}"#.to_vec(),
+                )?,
             ])?,
             "Record parent prompts and audit",
         )?;

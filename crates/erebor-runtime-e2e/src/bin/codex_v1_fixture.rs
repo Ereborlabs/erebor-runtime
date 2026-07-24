@@ -256,11 +256,13 @@ fn submit_hook(
     event: &CodexNativeHookEvent,
     native_event_json: Vec<u8>,
 ) -> FixtureResult<erebor_runtime_ipc::v1::HookResult> {
-    Ok(CodexHookClient::default().submit(erebor_runtime_ipc::v1::HookEvent {
-        event: event.kind() as i32,
-        schema_sha256: event.schema_sha256().to_owned(),
-        native_event_json,
-    })?)
+    Ok(
+        CodexHookClient::default().submit(erebor_runtime_ipc::v1::HookEvent {
+            event: event.kind() as i32,
+            schema_sha256: event.schema_sha256().to_owned(),
+            native_event_json,
+        })?,
+    )
 }
 
 fn invoke_managed_hook(mode: HookMode) -> FixtureResult<Value> {
@@ -273,7 +275,8 @@ fn invoke_managed_hook_event(mode: HookMode, event: &[u8]) -> FixtureResult<Valu
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
+        .spawn()
+        .map_err(|error| format!("starting managed hook `{}`: {error}", mode.name()))?;
     child
         .stdin
         .as_mut()

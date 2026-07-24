@@ -524,6 +524,7 @@ fn prepare_private_namespace(
             })?;
     }
     let endpoint_projections = hold_endpoint_projections(handoff)?;
+    let filesystem_projections = hold_filesystem_projections(handoff)?;
 
     std::fs::create_dir_all("/run/erebor").map_err(|source| SessionControllerError::Io {
         action: "creating private Erebor runtime mountpoint",
@@ -541,7 +542,9 @@ fn prepare_private_namespace(
         "tmpfs",
         "/run/erebor",
         "tmpfs",
-        MountFlags::NOSUID | MountFlags::NODEV | MountFlags::NOEXEC,
+        // The private runtime intentionally hosts exact, read-only managed hooks.
+        // They must remain executable so the guarded workload can invoke them.
+        MountFlags::NOSUID | MountFlags::NODEV,
         Some(data.as_c_str()),
     )
     .map_err(std::io::Error::from)
@@ -570,7 +573,7 @@ fn prepare_private_namespace(
             })?;
     }
     project_endpoints(&endpoint_projections)?;
-    project_filesystems(handoff)?;
+    project_filesystems(&filesystem_projections)?;
     Ok(handoff
         .runtime_environment
         .iter()
@@ -637,7 +640,16 @@ fn project_endpoints(projections: &[(PathBuf, PathBuf)]) -> Result<(), SessionCo
     Ok(())
 }
 
-fn project_filesystems(handoff: &LinuxControllerHandoff) -> Result<(), SessionControllerError> {
+struct HeldFilesystemProjection {
+    source: PathBuf,
+    workload_path: PathBuf,
+    read_only: bool,
+    directory: bool,
+}
+
+fn hold_filesystem_projections(
+    handoff: &LinuxControllerHandoff,
+) -> Result<Vec<HeldFilesystemProjection>, SessionControllerError> {
     if handoff.prepared_filesystem_projections.len() != handoff.spec.filesystem_projections().len()
     {
         return Err(SessionControllerError::InvalidHandoff {
@@ -647,10 +659,13 @@ fn project_filesystems(handoff: &LinuxControllerHandoff) -> Result<(), SessionCo
             location: snafu::Location::default(),
         });
     }
-    for (prepared, admitted) in handoff
+    let root = handoff.evidence_path.join("filesystem-projections");
+    let mut held = Vec::new();
+    for (index, (prepared, admitted)) in handoff
         .prepared_filesystem_projections
         .iter()
         .zip(handoff.spec.filesystem_projections())
+        .enumerate()
     {
         if prepared.workload_path() != admitted.workload_path()
             || prepared.read_only() != admitted.read_only()
@@ -662,27 +677,67 @@ fn project_filesystems(handoff: &LinuxControllerHandoff) -> Result<(), SessionCo
                 location: snafu::Location::default(),
             });
         }
+        fs::create_dir_all(&root).map_err(|source| SessionControllerError::Io {
+            action: "creating daemon-owned filesystem projection directory",
+            path: root.clone(),
+            source,
+            location: snafu::Location::default(),
+        })?;
         let directory = admitted.source().kind() == erebor_runtime_core::SafePathKind::Directory;
-        create_projection_target(prepared.workload_path(), directory)?;
-        mount_bind(prepared.staging_path(), prepared.workload_path())
+        let source = root.join(index.to_string());
+        if directory {
+            fs::create_dir(&source)
+        } else {
+            File::create(&source).map(|_file| ())
+        }
+        .map_err(|source_error| SessionControllerError::Io {
+            action: "creating held filesystem projection mountpoint",
+            path: source.clone(),
+            source: source_error,
+            location: snafu::Location::default(),
+        })?;
+        mount_bind(prepared.staging_path(), &source)
             .map_err(std::io::Error::from)
-            .map_err(|error| SessionControllerError::Io {
-                action: "projecting held filesystem artifact into the workload",
-                path: prepared.workload_path().to_path_buf(),
-                source: error,
+            .map_err(|source_error| SessionControllerError::Io {
+                action: "holding admitted filesystem artifact before hiding host runtime",
+                path: prepared.staging_path().to_path_buf(),
+                source: source_error,
                 location: snafu::Location::default(),
             })?;
-        if prepared.read_only() {
+        held.push(HeldFilesystemProjection {
+            source,
+            workload_path: prepared.workload_path().to_path_buf(),
+            read_only: prepared.read_only(),
+            directory,
+        });
+    }
+    Ok(held)
+}
+
+fn project_filesystems(
+    projections: &[HeldFilesystemProjection],
+) -> Result<(), SessionControllerError> {
+    for projection in projections {
+        create_projection_target(&projection.workload_path, projection.directory)?;
+        mount_bind(&projection.source, &projection.workload_path)
+            .map_err(std::io::Error::from)
+            .map_err(|source| SessionControllerError::Io {
+                action: "projecting held filesystem artifact into the workload",
+                path: projection.workload_path.clone(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        if projection.read_only {
             mount_remount(
-                prepared.workload_path(),
+                &projection.workload_path,
                 MountFlags::BIND | MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
                 "",
             )
             .map_err(std::io::Error::from)
-            .map_err(|error| SessionControllerError::Io {
+            .map_err(|source| SessionControllerError::Io {
                 action: "locking filesystem projection read-only",
-                path: prepared.workload_path().to_path_buf(),
-                source: error,
+                path: projection.workload_path.clone(),
+                source,
                 location: snafu::Location::default(),
             })?;
         }

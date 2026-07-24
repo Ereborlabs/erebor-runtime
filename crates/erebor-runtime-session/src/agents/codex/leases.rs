@@ -820,14 +820,14 @@ impl CodexInvocationLeaseOwner {
                     ),
                     location: snafu::Location::default(),
                 })?;
-                let context_dag = self.context_dag()?.ok_or_else(|| {
-                    CodexSessionError::IncompatibleProfile {
-                        reason: String::from(
-                            "Codex delegation has no daemon-owned context repository",
-                        ),
-                        location: snafu::Location::default(),
-                    }
-                })?;
+                let context_dag =
+                    self.context_dag()?
+                        .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                            reason: String::from(
+                                "Codex delegation has no daemon-owned context repository",
+                            ),
+                            location: snafu::Location::default(),
+                        })?;
                 Some(context_dag.frozen_prompt_projection(
                     parent,
                     *frozen_context_mode,
@@ -2602,7 +2602,7 @@ mod tests {
             String::from("thread-1"),
             String::from("turn-1"),
             &scope_ref,
-            prompt_path,
+            prompt_path.clone(),
         )?;
         let owner = CodexInvocationLeaseOwner::new(
             "session-test",
@@ -2668,7 +2668,7 @@ mod tests {
             String::from("thread-1"),
             String::from("turn-1"),
             &scope_ref,
-            prompt_path,
+            prompt_path.clone(),
         )?;
         let mut profile = test_profile();
         profile.set_delegation_bridge(Some(String::from(
