@@ -1,6 +1,7 @@
 mod adoption;
 mod agents;
 mod child_admission;
+mod child_delivery;
 mod controller_support;
 mod diagnostic;
 mod docker_controller;
@@ -35,6 +36,9 @@ pub use agents::codex::{
 pub use agents::{AgentAdapter, AgentAdapterRegistry, PreparedAgentInvocation};
 pub use child_admission::{
     ChildSessionAdmission, ChildSessionAdmissionDispatcher, ChildSessionAdmissionHandler,
+};
+pub use child_delivery::{
+    ChildContextDelivery, ChildContextDeliveryDispatcher, ChildContextDeliveryHandler,
 };
 pub use diagnostic::SessionDiagnosticOutcome;
 #[doc(hidden)]

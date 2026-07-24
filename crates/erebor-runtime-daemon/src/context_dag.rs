@@ -17,10 +17,12 @@ use sha2::{Digest, Sha256};
 
 use crate::{error::InvalidRequestSnafu, Result};
 
-const CONTEXT_DIRECTORY: &str = "context";
-const CONTEXT_DAG_METADATA_PREFIX: &str = "erebor/context-dag";
-const CONTEXT_DAG_EDGE_SCHEMA_VERSION: u32 = 1;
-const MAX_CONTEXT_DAG_DEPTH: u8 = 16;
+pub(crate) mod delivery;
+
+pub(super) const CONTEXT_DIRECTORY: &str = "context";
+pub(super) const CONTEXT_DAG_METADATA_PREFIX: &str = "erebor/context-dag";
+pub(super) const CONTEXT_DAG_EDGE_SCHEMA_VERSION: u32 = 1;
+pub(super) const MAX_CONTEXT_DAG_DEPTH: u8 = 16;
 
 /// Opens the one daemon-owned context repository for a root session. A child
 /// session follows its checked parent pin until it reaches that root, so it
@@ -86,23 +88,23 @@ impl ContextChildForkRequest {
 /// The one durable relationship fact retained in the parent's scope tree.
 /// It is written in the same checked transaction that creates the child ref.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-struct ContextChildEdge {
-    schema_version: u32,
-    parent_context: ContextPin,
-    child_scope: String,
-    depth: u8,
+pub(super) struct ContextChildEdge {
+    pub(super) schema_version: u32,
+    pub(super) parent_context: ContextPin,
+    pub(super) child_scope: String,
+    pub(super) depth: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    source_identity: Option<String>,
-    execution_binding: ContextExecutionBinding,
+    pub(super) source_identity: Option<String>,
+    pub(super) execution_binding: ContextExecutionBinding,
 }
 
 /// Serializes durable scope topology in one root session repository. This is
 /// deliberately not a graph registry: refs and checked edge blobs are the
 /// complete retained graph.
 pub(crate) struct ContextDagCoordinator {
-    repository: Arc<ContextRepository>,
-    root_scope: ScopeRef,
-    mutation_lock: Mutex<()>,
+    pub(super) repository: Arc<ContextRepository>,
+    pub(super) root_scope: ScopeRef,
+    pub(super) mutation_lock: Mutex<()>,
 }
 
 impl ContextDagCoordinator {
@@ -326,7 +328,11 @@ impl ContextDagCoordinator {
             .map(|_depth| ())
     }
 
-    fn scope_depth(&self, scope: &ScopeRef, visited: &mut HashSet<String>) -> Result<u8> {
+    pub(super) fn scope_depth(
+        &self,
+        scope: &ScopeRef,
+        visited: &mut HashSet<String>,
+    ) -> Result<u8> {
         if scope == &self.root_scope {
             return Ok(0);
         }
@@ -405,7 +411,7 @@ impl ContextDagCoordinator {
         Ok(edge.depth)
     }
 
-    fn direct_edge(&self, child: &ScopeRef) -> Result<ContextChildEdge> {
+    pub(super) fn direct_edge(&self, child: &ScopeRef) -> Result<ContextChildEdge> {
         let edge_path = Self::edge_path(child);
         let mut found = None;
         for candidate_parent in self.repository.scope_refs().map_err(|error| {
@@ -469,7 +475,7 @@ impl ContextDagCoordinator {
         })
     }
 
-    fn edge_path(child_scope: &ScopeRef) -> String {
+    pub(super) fn edge_path(child_scope: &ScopeRef) -> String {
         let digest = Sha256::digest(child_scope.as_str().as_bytes());
         format!("{CONTEXT_DAG_METADATA_PREFIX}/edges/{digest:x}.json")
     }

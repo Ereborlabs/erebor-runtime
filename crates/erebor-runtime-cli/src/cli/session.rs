@@ -7,7 +7,8 @@ use erebor_runtime_client::DaemonClient;
 use erebor_runtime_core::TerminalSize;
 use erebor_runtime_ipc::v1::{
     CodexAppServerAttachRequest, CodexAppServerInputCloseRequest, CodexAppServerInputRequest,
-    CodexRunRequest, SessionAttachRequest, SessionCreateRequest, SessionEnvironmentEntry,
+    CodexRunRequest, ContextDeliveryReceiveRequest, ContextDeliveryRejectRequest,
+    SessionAttachRequest, SessionCreateRequest, SessionEnvironmentEntry,
     SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputRequest,
     SessionPruneRequest, SessionRecord, SessionTerminalResizeRequest,
 };
@@ -21,7 +22,8 @@ mod interactive;
 
 use args::{
     GenericSessionCreateArgs, GenericSessionRequestArgs, SessionAliasArgs, SessionAliasCommand,
-    SessionAttachArgs, SessionCommand, SessionEventsArgs, SessionLogsArgs, SessionRunArgs,
+    SessionAttachArgs, SessionCommand, SessionContextArgs, SessionContextCommand,
+    SessionEventsArgs, SessionLogsArgs, SessionRunArgs,
 };
 use interactive::{
     InteractiveInput, InteractiveTerminal, StructuredJsonlEvent, StructuredJsonlInput,
@@ -132,6 +134,7 @@ impl<'a> SessionCommandOwner<'a> {
                 }
             }
             SessionCommand::Alias(args) => self.aliases(self.client, args).await?,
+            SessionCommand::Context(args) => self.context_deliveries(self.client, args).await?,
         }
         Ok(())
     }
@@ -806,6 +809,69 @@ impl<'a> SessionCommandOwner<'a> {
                 {
                     println!("alias={} session_id={}", alias.alias, alias.session_id);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    async fn context_deliveries(
+        &self,
+        client: &DaemonClient,
+        args: &SessionContextArgs,
+    ) -> Result<(), CliError> {
+        match &args.command {
+            SessionContextCommand::Inbox(args) => {
+                for delivery in client
+                    .context_delivery_inbox(&args.parent_session_id)
+                    .await
+                    .context(DaemonClientSnafu)?
+                    .deliveries
+                {
+                    println!(
+                        "receiver_scope={} child_scope={} delivery_path={} delivery_commit={}",
+                        delivery.receiver_scope,
+                        delivery.child_scope,
+                        delivery.delivery_path,
+                        delivery.delivery_commit,
+                    );
+                }
+            }
+            SessionContextCommand::Receive(args) => {
+                let decision = client
+                    .context_delivery_receive(
+                        ContextDeliveryReceiveRequest {
+                            parent_session_id: args.parent_session_id.clone(),
+                            delivery_path: args.delivery_path.clone(),
+                            delivery_commit: args.delivery_commit.clone(),
+                            expected_parent_head: args.expected_parent_head.clone(),
+                        },
+                        &args.idempotency_key,
+                    )
+                    .await
+                    .context(DaemonClientSnafu)?;
+                println!(
+                    "parent_head={} receipt_path={} rejected={}",
+                    decision.parent_head, decision.receipt_path, decision.rejected
+                );
+            }
+            SessionContextCommand::Reject(args) => {
+                let decision = client
+                    .context_delivery_reject(
+                        ContextDeliveryRejectRequest {
+                            parent_session_id: args.decision.parent_session_id.clone(),
+                            delivery_path: args.decision.delivery_path.clone(),
+                            delivery_commit: args.decision.delivery_commit.clone(),
+                            expected_parent_head: args.decision.expected_parent_head.clone(),
+                            reason: args.reason.clone(),
+                        },
+                        &args.decision.idempotency_key,
+                    )
+                    .await
+                    .context(DaemonClientSnafu)?;
+                println!(
+                    "parent_head={} receipt_path={} rejected={}",
+                    decision.parent_head, decision.receipt_path, decision.rejected
+                );
             }
         }
         Ok(())

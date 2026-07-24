@@ -25,10 +25,11 @@ use erebor_runtime_ipc::{
     SyncFrameCodec,
 };
 use erebor_runtime_packages::{CodexHookEventName, CodexPackageDefinition};
+use serde::Deserialize;
 use serde_json::json;
 use snafu::{ensure, ResultExt};
 
-use crate::ChildSessionAdmissionHandler;
+use crate::{ChildContextDelivery, ChildContextDeliveryHandler, ChildSessionAdmissionHandler};
 
 use super::{
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
@@ -63,6 +64,7 @@ struct CodexHookRegistration {
     reconciliation: Arc<CodexPromptReconciliation>,
     lease_owner: Arc<CodexInvocationLeaseOwner>,
     session_start_context: Option<String>,
+    child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
 }
 
 /// Session-local Codex authorities retained by the shared listener's
@@ -241,6 +243,7 @@ impl CodexHookService {
                                 registration.reconciliation,
                                 registration.lease_owner,
                                 registration.session_start_context,
+                                registration.child_deliveries,
                             )
                             .serve_after_hello(
                                 &mut stream,
@@ -270,6 +273,7 @@ impl CodexHookService {
         reconciliation: Arc<CodexPromptReconciliation>,
         lease_owner: Arc<CodexInvocationLeaseOwner>,
         session_start_context: Option<String>,
+        child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
     ) -> Result<(), CodexSessionError> {
         let session_id = managed_session.session_id().to_owned();
         let mut registrations = self
@@ -289,6 +293,7 @@ impl CodexHookService {
                 reconciliation,
                 lease_owner,
                 session_start_context,
+                child_deliveries,
             },
         );
         Ok(())
@@ -300,6 +305,7 @@ impl CodexHookService {
         guard_executable: &Path,
         definition: &CodexPackageDefinition,
         context_repository: Arc<erebor_runtime_context::ContextRepository>,
+        child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
     ) -> Result<CodexSessionHookRegistration, CodexSessionError> {
         let registration = CodexSessionHookRegistration::from_spec(
             spec,
@@ -312,6 +318,7 @@ impl CodexHookService {
             Arc::clone(&registration.reconciliation),
             Arc::clone(&registration.lease_owner),
             registration.session_start_context.clone(),
+            child_deliveries,
         )?;
         Ok(registration)
     }
@@ -353,6 +360,7 @@ struct CodexHookBrokerProtocol {
     reconciliation: std::sync::Arc<CodexPromptReconciliation>,
     lease_owner: std::sync::Arc<CodexInvocationLeaseOwner>,
     session_start_context: Option<String>,
+    child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
 }
 
 impl CodexHookBrokerProtocol {
@@ -361,12 +369,14 @@ impl CodexHookBrokerProtocol {
         reconciliation: std::sync::Arc<CodexPromptReconciliation>,
         lease_owner: std::sync::Arc<CodexInvocationLeaseOwner>,
         session_start_context: Option<String>,
+        child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
     ) -> Self {
         Self {
             managed_session,
             reconciliation,
             lease_owner,
             session_start_context,
+            child_deliveries,
         }
     }
 
@@ -453,7 +463,8 @@ impl CodexHookBrokerProtocol {
                             &event.native_event_json,
                             runtime.clone(),
                             observed_peer.observed_pid,
-                        )
+                        )?;
+                        self.publish_child_delivery(event_kind, &event.native_event_json)
                     })();
                     if let Err(error) = recording {
                         Self::write_rejection(
@@ -513,6 +524,37 @@ impl CodexHookBrokerProtocol {
                 })
             },
         )
+    }
+
+    fn publish_child_delivery(
+        &self,
+        event: HookEventKind,
+        native_event: &[u8],
+    ) -> Result<(), CodexSessionError> {
+        if event != HookEventKind::PostToolUse {
+            return Ok(());
+        }
+        let payload: HookDeliveryEvent = serde_json::from_slice(native_event).map_err(|error| {
+            CodexSessionError::InvalidHookEvent {
+                reason: format!("PostToolUse delivery event is not valid JSON: {error}"),
+                location: snafu::Location::default(),
+            }
+        })?;
+        let Some(delivery) = payload.erebor_delivery else {
+            return Ok(());
+        };
+        self.child_deliveries
+            .publish_delivery(ChildContextDelivery::new(
+                self.managed_session.session_id(),
+                delivery.sequence,
+                delivery.kind,
+                delivery.mode,
+                delivery.selected_text.into_bytes(),
+            ))
+            .map_err(|reason| CodexSessionError::InvalidHookEvent {
+                reason: format!("daemon rejected authenticated child delivery: {reason}"),
+                location: snafu::Location::default(),
+            })
     }
 
     fn validate_event(&self, event: &HookEvent) -> Result<HookEventKind, CodexSessionError> {
@@ -629,6 +671,20 @@ impl CodexHookBrokerProtocol {
         let frame = envelope.into_frame().context(HookBrokerProtocolSnafu)?;
         SyncFrameCodec::write_frame(stream, &frame).context(HookBrokerProtocolSnafu)
     }
+}
+
+#[derive(Deserialize)]
+struct HookDeliveryEvent {
+    #[serde(default)]
+    erebor_delivery: Option<HookDeliveryPayload>,
+}
+
+#[derive(Deserialize)]
+struct HookDeliveryPayload {
+    sequence: u64,
+    kind: String,
+    mode: String,
+    selected_text: String,
 }
 
 fn package_event(event: erebor_runtime_ipc::v1::HookEventKind) -> CodexHookEventName {
@@ -884,7 +940,11 @@ impl LinuxHookProcess {
 
 #[cfg(test)]
 mod tests {
-    use std::{os::unix::net::UnixStream, path::PathBuf, sync::Arc};
+    use std::{
+        os::unix::net::UnixStream,
+        path::PathBuf,
+        sync::{Arc, Mutex},
+    };
 
     use erebor_runtime_events::{ActorIdentity, ActorKind};
     use erebor_runtime_ipc::v1::HookEvent;
@@ -902,8 +962,38 @@ mod tests {
         agents::codex::{
             CodexHookClient, CodexInvocationLeaseProfile, CodexManagedSession, CodexNativeHookEvent,
         },
-        CodexSessionError,
+        ChildContextDelivery, ChildContextDeliveryHandler, CodexSessionError,
     };
+
+    struct AcceptChildDelivery;
+
+    impl ChildContextDeliveryHandler for AcceptChildDelivery {
+        fn publish_delivery(
+            &self,
+            _delivery: ChildContextDelivery,
+        ) -> std::result::Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn child_deliveries() -> Arc<dyn ChildContextDeliveryHandler> {
+        Arc::new(AcceptChildDelivery)
+    }
+
+    struct RecordingChildDelivery(Arc<Mutex<Vec<ChildContextDelivery>>>);
+
+    impl ChildContextDeliveryHandler for RecordingChildDelivery {
+        fn publish_delivery(
+            &self,
+            delivery: ChildContextDelivery,
+        ) -> std::result::Result<(), String> {
+            self.0
+                .lock()
+                .map_err(|_error| String::from("recording delivery lock poisoned"))?
+                .push(delivery);
+            Ok(())
+        }
+    }
 
     #[test]
     fn inspector_observes_kernel_bound_unix_peer_identity() -> Result<(), Box<dyn std::error::Error>>
@@ -937,6 +1027,7 @@ mod tests {
             Arc::new(CodexPromptReconciliation::default()),
             test_lease_owner(),
             None,
+            child_deliveries(),
         );
         let valid = HookEvent {
             event: HookEventKind::SessionStart as i32,
@@ -971,6 +1062,34 @@ mod tests {
             broker.validate_event(&mismatched_kind),
             Err(CodexSessionError::InvalidHookEvent { .. })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn post_tool_use_delivery_is_forwarded_only_through_the_authenticated_hook_route(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let delivered = Arc::new(Mutex::new(Vec::new()));
+        let schema = "a".repeat(64);
+        let broker = CodexHookBrokerProtocol::new(
+            session("/opt/codex/codex", &schema)?,
+            Arc::new(CodexPromptReconciliation::default()),
+            test_lease_owner(),
+            None,
+            Arc::new(RecordingChildDelivery(Arc::clone(&delivered))),
+        );
+        broker.publish_child_delivery(
+            HookEventKind::PostToolUse,
+            br#"{"hook_event_name":"PostToolUse","erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"child result"}}"#,
+        )?;
+        let deliveries = delivered
+            .lock()
+            .map_err(|_error| "recording delivery lock poisoned")?;
+        assert_eq!(deliveries.len(), 1);
+        assert_eq!(deliveries[0].child_session_id(), "session-test");
+        assert_eq!(deliveries[0].sequence(), 1);
+        assert_eq!(deliveries[0].kind(), "result");
+        assert_eq!(deliveries[0].mode(), "queue");
+        assert_eq!(deliveries[0].selected_bytes(), b"child result");
         Ok(())
     }
 
@@ -1042,6 +1161,7 @@ mod tests {
                 Arc::new(CodexPromptReconciliation::default()),
                 test_lease_owner(),
                 Some(frozen_context),
+                child_deliveries(),
             )
             .serve(&mut broker_stream)
         });
@@ -1101,6 +1221,7 @@ mod tests {
                 Arc::new(CodexPromptReconciliation::default()),
                 test_lease_owner(),
                 None,
+                child_deliveries(),
             )
             .serve(&mut broker_stream)
         });

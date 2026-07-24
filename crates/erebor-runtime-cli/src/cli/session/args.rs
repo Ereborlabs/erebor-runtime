@@ -51,6 +51,7 @@ impl SessionArgs {
             SessionCommand::Remove(args) => format!("session rm {}", args.session_id),
             SessionCommand::Prune(_) => String::from("session prune"),
             SessionCommand::Alias(_) => String::from("session alias"),
+            SessionCommand::Context(_) => String::from("session context"),
         }
     }
 }
@@ -87,6 +88,8 @@ pub(crate) enum SessionCommand {
     Prune(SessionPruneArgs),
     /// Manage daemon-owned local aliases for your sessions.
     Alias(SessionAliasArgs),
+    /// Inspect and explicitly decide direct child context deliveries.
+    Context(SessionContextArgs),
 }
 
 #[derive(Debug, Args)]
@@ -256,6 +259,50 @@ pub(crate) struct SessionPruneArgs {
 pub(crate) struct SessionAliasArgs {
     #[command(subcommand)]
     pub(crate) command: SessionAliasCommand,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionContextArgs {
+    #[command(subcommand)]
+    pub(crate) command: SessionContextCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum SessionContextCommand {
+    /// List pending deliveries from direct child contexts.
+    Inbox(SessionContextInboxArgs),
+    /// Merge one pending child delivery into its direct parent context.
+    Receive(SessionContextDecisionArgs),
+    /// Record that the direct parent declined one pending child delivery.
+    Reject(SessionContextRejectArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionContextInboxArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) parent_session_id: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionContextDecisionArgs {
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) parent_session_id: String,
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) delivery_path: String,
+    #[arg(value_parser = parse_non_empty_string)]
+    pub(crate) delivery_commit: String,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) expected_parent_head: String,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) idempotency_key: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SessionContextRejectArgs {
+    #[command(flatten)]
+    pub(crate) decision: SessionContextDecisionArgs,
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) reason: String,
 }
 
 #[derive(Debug, Subcommand)]

@@ -3,7 +3,10 @@ use std::collections::HashSet;
 use gix::{hash::Kind as HashKind, objs};
 use snafu::ResultExt;
 
-use super::{refs::SCOPE_PREFIX, ContextObjectId, ContextObjectKind, ContextRepository, ScopeRef};
+use super::{
+    refs::SCOPE_PREFIX, ContextObjectId, ContextObjectKind, ContextRepository, PinnedContextBlob,
+    ScopeRef,
+};
 use crate::error::{
     BoxedError, ReadScopeRefSnafu, Result, TreeEntryReadSnafu, TreeEntryWrongKindSnafu,
 };
@@ -140,6 +143,90 @@ struct VerificationState {
 }
 
 impl ContextRepository {
+    /// Read every blob below one validated relative directory from an exact
+    /// immutable commit. Callers receive paths and bytes only; no mutable ref
+    /// lookup is performed after the commit is supplied.
+    pub fn list_commit_blobs_under(
+        &self,
+        commit_id: ContextObjectId,
+        directory: &str,
+    ) -> Result<Vec<PinnedContextBlob>> {
+        let commit = self.read_commit(commit_id)?;
+        let components = Self::pin_path_components(directory)?;
+        let mut tree = commit.tree();
+        for component in components {
+            let entries = self.read_tree(tree)?;
+            let Some(entry) = entries
+                .entries()
+                .iter()
+                .find(|entry| entry.name() == component.as_bytes())
+            else {
+                return Ok(Vec::new());
+            };
+            if entry.kind() != ContextTreeEntryKind::Tree {
+                return TreeEntryWrongKindSnafu {
+                    tree: Box::<str>::from(tree.to_string()),
+                    path: Box::<str>::from(directory),
+                    entry: Box::<str>::from(entry.object().to_string()),
+                    expected: Box::<str>::from("tree"),
+                    actual: Box::<str>::from(format!("{:?}", entry.kind()).to_lowercase()),
+                }
+                .fail();
+            }
+            tree = entry.object();
+        }
+        let mut blobs = Vec::new();
+        self.collect_commit_blobs(tree, directory, &mut blobs)?;
+        blobs.sort_by(|left, right| left.path().cmp(right.path()));
+        Ok(blobs)
+    }
+
+    fn collect_commit_blobs(
+        &self,
+        tree: ContextObjectId,
+        prefix: &str,
+        blobs: &mut Vec<PinnedContextBlob>,
+    ) -> Result<()> {
+        for entry in self.read_tree(tree)?.entries() {
+            let name = String::from_utf8_lossy(entry.name());
+            let path = format!("{prefix}/{name}");
+            match entry.kind() {
+                ContextTreeEntryKind::Blob => {
+                    let object = self.read_object(entry.object())?;
+                    if object.kind() != ContextObjectKind::Blob {
+                        return TreeEntryWrongKindSnafu {
+                            tree: Box::<str>::from(tree.to_string()),
+                            path: Box::<str>::from(path),
+                            entry: Box::<str>::from(entry.object().to_string()),
+                            expected: Box::<str>::from("blob"),
+                            actual: Box::<str>::from(object.kind().to_string()),
+                        }
+                        .fail();
+                    }
+                    blobs.push(PinnedContextBlob::from_parts(
+                        path,
+                        object.id(),
+                        object.into_bytes(),
+                    ));
+                }
+                ContextTreeEntryKind::Tree => {
+                    self.collect_commit_blobs(entry.object(), &path, blobs)?
+                }
+                ContextTreeEntryKind::Commit => {
+                    return TreeEntryWrongKindSnafu {
+                        tree: Box::<str>::from(tree.to_string()),
+                        path: Box::<str>::from(path),
+                        entry: Box::<str>::from(entry.object().to_string()),
+                        expected: Box::<str>::from("blob or tree"),
+                        actual: Box::<str>::from("commit"),
+                    }
+                    .fail();
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn scope_refs(&self) -> Result<Vec<ScopeRef>> {
         let repository = self.repository();
         if repository

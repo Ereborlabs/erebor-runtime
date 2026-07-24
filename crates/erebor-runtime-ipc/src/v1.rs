@@ -98,6 +98,16 @@ pub const KIND_SESSION_ALIAS_REMOVE_REQUEST: &str =
 pub const KIND_SESSION_ALIAS_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.SessionAliasListRequest";
 pub const KIND_SESSION_ALIAS_RECORD: &str = "erebor.runtime.ipc.v1.SessionAliasRecord";
 pub const KIND_SESSION_ALIAS_LIST_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionAliasListResponse";
+pub const KIND_CONTEXT_DELIVERY_INBOX_REQUEST: &str =
+    "erebor.runtime.ipc.v1.ContextDeliveryInboxRequest";
+pub const KIND_CONTEXT_DELIVERY_INBOX_RESPONSE: &str =
+    "erebor.runtime.ipc.v1.ContextDeliveryInboxResponse";
+pub const KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST: &str =
+    "erebor.runtime.ipc.v1.ContextDeliveryReceiveRequest";
+pub const KIND_CONTEXT_DELIVERY_REJECT_REQUEST: &str =
+    "erebor.runtime.ipc.v1.ContextDeliveryRejectRequest";
+pub const KIND_CONTEXT_DELIVERY_DECISION_RESPONSE: &str =
+    "erebor.runtime.ipc.v1.ContextDeliveryDecisionResponse";
 pub const KIND_ADMIN_SESSION_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.AdminSessionListRequest";
 pub const KIND_ADMIN_SESSION_INSPECT_REQUEST: &str =
     "erebor.runtime.ipc.v1.AdminSessionInspectRequest";

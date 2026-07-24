@@ -34,6 +34,7 @@ const SHELL_STARTUP_PATH: &str = "/run/erebor/codex/shell-startup";
 const DELEGATION_BRIDGE_PATH: &str = "/run/erebor/codex/erebor-child-delegation";
 const SESSION_START_EVENT: &[u8] = br#"{"hook_event_name":"SessionStart"}"#;
 const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"child_profile":"fixture-child","frozen_context_mode":"all","last_turns":0}}"#;
+const DELIVERY_EVENT: &[u8] = br#"{"hook_event_name":"PostToolUse","erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"fixture result"}}"#;
 const HOOK_MODE_ENV: &str = "EREBOR_FIXTURE_HOOK_MODE";
 const MAX_FIXTURE_DELEGATION_LAST_TURNS: u64 = 8;
 
@@ -156,6 +157,11 @@ fn run_app_server() -> FixtureResult<()> {
                     return Err("delegation bridge did not complete successfully".into());
                 }
                 "delegated"
+            }
+            "fixture/deliver" => {
+                let event = delivery_event(&request)?;
+                invoke_managed_hook_event(HookMode::Normal, &event)?;
+                "delivered"
             }
             "$/cancelRequest" => "cancelled",
             _ => "ok",
@@ -343,6 +349,42 @@ fn delegation_event(request: &Value) -> FixtureResult<Vec<u8>> {
     }))?)
 }
 
+fn delivery_event(request: &Value) -> FixtureResult<Vec<u8>> {
+    let params = match request.get("params") {
+        None | Some(Value::Null) => None,
+        Some(Value::Object(params)) => Some(params),
+        Some(_) => return Err("fixture/deliver params must be an object".into()),
+    };
+    let sequence = params
+        .and_then(|params| params.get("sequence"))
+        .map_or(Ok(1), |value| {
+            value
+                .as_u64()
+                .ok_or("fixture/deliver sequence must be unsigned")
+        })?;
+    let kind = params
+        .and_then(|params| params.get("kind"))
+        .and_then(Value::as_str)
+        .unwrap_or("result");
+    let mode = params
+        .and_then(|params| params.get("mode"))
+        .and_then(Value::as_str)
+        .unwrap_or("queue");
+    let selected_text = params
+        .and_then(|params| params.get("selected_text"))
+        .and_then(Value::as_str)
+        .unwrap_or("fixture result");
+    Ok(serde_json::to_vec(&json!({
+        "hook_event_name": "PostToolUse",
+        "erebor_delivery": {
+            "sequence": sequence,
+            "kind": kind,
+            "mode": mode,
+            "selected_text": selected_text,
+        },
+    }))?)
+}
+
 fn configure(arguments: &[String]) -> FixtureResult<()> {
     let options = ConfigureOptions::parse(arguments)?;
     fs::create_dir_all(&options.trust_root)?;
@@ -507,6 +549,8 @@ fn package_definition(trust_root: &Path, fixture: &Path) -> FixtureResult<CodexP
     .map(|(event, name)| {
         let native = if event == CodexHookEventName::PreToolUse {
             DELEGATION_EVENT.to_vec()
+        } else if event == CodexHookEventName::PostToolUse {
+            DELIVERY_EVENT.to_vec()
         } else {
             format!(r#"{{"hook_event_name":"{name}"}}"#).into_bytes()
         };

@@ -119,6 +119,10 @@ pub struct PinnedContextBlob {
 }
 
 impl PinnedContextBlob {
+    pub(super) fn from_parts(path: String, id: ContextObjectId, bytes: Vec<u8>) -> Self {
+        Self { path, id, bytes }
+    }
+
     #[must_use]
     pub fn path(&self) -> &str {
         &self.path
@@ -313,7 +317,7 @@ impl ContextRepository {
         self.read_pinned_context(pin).map(|_context| ())
     }
 
-    fn pin_path_components(path: &str) -> Result<Vec<&str>> {
+    pub(super) fn pin_path_components(path: &str) -> Result<Vec<&str>> {
         ensure!(
             !path.is_empty(),
             InvalidContextPinPathSnafu {

@@ -18,6 +18,8 @@ use erebor_runtime_ipc::{
         ApprovalApproveRequest, ApprovalDenyRequest, ApprovalInspectRequest, ApprovalListRequest,
         ApprovalListResponse, ApprovalRecord as ApprovalRecordMessage, CodexAppServerAttachRequest,
         CodexAppServerInputCloseRequest, CodexAppServerInputRequest, CodexRunRequest,
+        ContextDeliveryDecisionResponse, ContextDeliveryInboxRequest, ContextDeliveryInboxResponse,
+        ContextDeliveryReceiveRequest, ContextDeliveryRecord, ContextDeliveryRejectRequest,
         DaemonCommandResult, DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
         DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
@@ -41,10 +43,13 @@ use erebor_runtime_ipc::{
         KIND_APPROVAL_LIST_RESPONSE, KIND_APPROVAL_RECORD, KIND_CODEX_APP_SERVER_ATTACH_REQUEST,
         KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE,
         KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_CODEX_APP_SERVER_INPUT_RESPONSE,
-        KIND_CODEX_RUN_REQUEST, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO,
-        KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
-        KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
-        KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
+        KIND_CODEX_RUN_REQUEST, KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
+        KIND_CONTEXT_DELIVERY_INBOX_REQUEST, KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
+        KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST, KIND_CONTEXT_DELIVERY_REJECT_REQUEST,
+        KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
+        KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD,
+        KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
+        KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
         KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
         KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
         KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_ALIAS_SET_REQUEST,
@@ -92,7 +97,10 @@ use crate::{
 };
 use erebor_runtime_core::ActiveSessionSignal;
 use erebor_runtime_policy::{LocalPolicy, PolicyEvaluator};
-use erebor_runtime_session::{ChildSessionAdmission, ChildSessionAdmissionHandler, StreamKind};
+use erebor_runtime_session::{
+    ChildContextDelivery, ChildContextDeliveryHandler, ChildSessionAdmission,
+    ChildSessionAdmissionHandler, StreamKind,
+};
 
 const CONNECTION_LIMIT: usize = 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -131,6 +139,14 @@ impl ChildSessionAdmissionHandler for DaemonControlState {
             .map_err(|_error| String::from("daemon configuration state is unavailable"))?;
         self.sessions
             .admit_delegated_child(admission, configuration.generation, &configuration.value)
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl ChildContextDeliveryHandler for DaemonControlState {
+    fn publish_delivery(&self, delivery: ChildContextDelivery) -> std::result::Result<(), String> {
+        self.sessions
+            .publish_child_delivery(delivery)
             .map_err(|error| error.to_string())
     }
 }
@@ -264,6 +280,10 @@ impl DaemonControlService {
         state
             .sessions
             .bind_child_admission_handler(child_admissions)?;
+        let child_deliveries: Arc<dyn ChildContextDeliveryHandler> = state.clone();
+        state
+            .sessions
+            .bind_child_delivery_handler(child_deliveries)?;
         Ok(Self {
             listener,
             state,
@@ -518,6 +538,15 @@ impl DaemonControlState {
             }
             KIND_SESSION_ALIAS_LIST_REQUEST => {
                 self.session_alias_list(stream, peer, &envelope).await
+            }
+            KIND_CONTEXT_DELIVERY_INBOX_REQUEST => {
+                self.context_delivery_inbox(stream, peer, &envelope).await
+            }
+            KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST => {
+                self.context_delivery_receive(stream, peer, &envelope).await
+            }
+            KIND_CONTEXT_DELIVERY_REJECT_REQUEST => {
+                self.context_delivery_reject(stream, peer, &envelope).await
             }
             KIND_SESSION_INSPECT_REQUEST => self.session_inspect(stream, peer, &envelope).await,
             KIND_SESSION_LIST_REQUEST => self.session_list(stream, peer, &envelope).await,
@@ -1166,6 +1195,97 @@ impl DaemonControlState {
             envelope.message_id,
             KIND_SESSION_ALIAS_LIST_RESPONSE,
             &response,
+        )
+        .await
+    }
+
+    async fn context_delivery_inbox(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: ContextDeliveryInboxRequest = envelope
+            .decode_typed_payload(KIND_CONTEXT_DELIVERY_INBOX_REQUEST)
+            .context(IpcSnafu)?;
+        let deliveries = self
+            .sessions
+            .context_delivery_inbox(peer.uid, &request.parent_session_id)?
+            .into_iter()
+            .map(|delivery| ContextDeliveryRecord {
+                receiver_scope: delivery.receiver_scope().as_str().to_owned(),
+                child_scope: delivery.source_scope().as_str().to_owned(),
+                delivery_path: delivery.delivery_path().to_owned(),
+                delivery_commit: delivery.delivery_commit().to_string(),
+            })
+            .collect();
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
+            &ContextDeliveryInboxResponse { deliveries },
+        )
+        .await
+    }
+
+    async fn context_delivery_receive(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: ContextDeliveryReceiveRequest = envelope
+            .decode_typed_payload(KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST)
+            .context(IpcSnafu)?;
+        let decision = self.sessions.receive_context_delivery(
+            peer.uid,
+            &request.parent_session_id,
+            &request.delivery_path,
+            &request.delivery_commit,
+            &request.expected_parent_head,
+        )?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
+            &ContextDeliveryDecisionResponse {
+                parent_head: decision.parent_head().to_string(),
+                receipt_path: decision.receipt_path().to_owned(),
+                rejected: decision.rejected(),
+            },
+        )
+        .await
+    }
+
+    async fn context_delivery_reject(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: ContextDeliveryRejectRequest = envelope
+            .decode_typed_payload(KIND_CONTEXT_DELIVERY_REJECT_REQUEST)
+            .context(IpcSnafu)?;
+        let decision = self.sessions.reject_context_delivery(
+            peer.uid,
+            &request.parent_session_id,
+            &request.delivery_path,
+            &request.delivery_commit,
+            &request.expected_parent_head,
+            &request.reason,
+        )?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
+            &ContextDeliveryDecisionResponse {
+                parent_head: decision.parent_head().to_string(),
+                receipt_path: decision.receipt_path().to_owned(),
+                rejected: decision.rejected(),
+            },
         )
         .await
     }
@@ -2511,6 +2631,8 @@ fn is_mutating_message(kind: &str) -> bool {
             | KIND_SESSION_PRUNE_REQUEST
             | KIND_SESSION_ALIAS_SET_REQUEST
             | KIND_SESSION_ALIAS_REMOVE_REQUEST
+            | KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST
+            | KIND_CONTEXT_DELIVERY_REJECT_REQUEST
             | KIND_ADMIN_SESSION_STOP_REQUEST
             | KIND_ADMIN_SESSION_KILL_REQUEST
             | KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST
@@ -2911,6 +3033,11 @@ mod tests {
         state
             .sessions
             .bind_child_admission_handler(child_admissions)?;
+        let child_deliveries: Arc<dyn erebor_runtime_session::ChildContextDeliveryHandler> =
+            state.clone();
+        state
+            .sessions
+            .bind_child_delivery_handler(child_deliveries)?;
         Ok(TestState { state, _root: root })
     }
 

@@ -3,10 +3,12 @@ use erebor_runtime_ipc::v1::{
     AdminSessionSetRetentionHoldRequest, AdminSessionStopRequest, CodexAppServerAttachRequest,
     CodexAppServerAttachResponse, CodexAppServerInputCloseRequest,
     CodexAppServerInputCloseResponse, CodexAppServerInputRequest, CodexAppServerInputResponse,
-    Header, SessionAliasListRequest, SessionAliasListResponse, SessionAliasRecord,
-    SessionAliasRemoveRequest, SessionAliasSetRequest, SessionAttachRequest, SessionAttachResponse,
-    SessionCreateRequest, SessionCreateResponse, SessionEventRecord, SessionEventsEnd,
-    SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
+    ContextDeliveryDecisionResponse, ContextDeliveryInboxRequest, ContextDeliveryInboxResponse,
+    ContextDeliveryReceiveRequest, ContextDeliveryRejectRequest, Header, SessionAliasListRequest,
+    SessionAliasListResponse, SessionAliasRecord, SessionAliasRemoveRequest,
+    SessionAliasSetRequest, SessionAttachRequest, SessionAttachResponse, SessionCreateRequest,
+    SessionCreateResponse, SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
+    SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
     SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputLeaseResponse,
     SessionInputRequest, SessionInputResponse, SessionInspectRequest, SessionKillRequest,
     SessionListRequest, SessionListResponse, SessionLogChunk, SessionLogsEnd, SessionLogsRequest,
@@ -18,12 +20,14 @@ use erebor_runtime_ipc::v1::{
     KIND_ADMIN_SESSION_STOP_REQUEST, KIND_CODEX_APP_SERVER_ATTACH_REQUEST,
     KIND_CODEX_APP_SERVER_ATTACH_RESPONSE, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
     KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE, KIND_CODEX_APP_SERVER_INPUT_REQUEST,
-    KIND_CODEX_APP_SERVER_INPUT_RESPONSE, KIND_DAEMON_ERROR, KIND_SESSION_ALIAS_LIST_REQUEST,
-    KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ALIAS_REMOVE_REQUEST,
-    KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_ATTACH_RESPONSE,
-    KIND_SESSION_CREATE_REQUEST, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_EVENTS_END,
-    KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD, KIND_SESSION_EVIDENCE_END,
-    KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
+    KIND_CODEX_APP_SERVER_INPUT_RESPONSE, KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
+    KIND_CONTEXT_DELIVERY_INBOX_REQUEST, KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
+    KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST, KIND_CONTEXT_DELIVERY_REJECT_REQUEST, KIND_DAEMON_ERROR,
+    KIND_SESSION_ALIAS_LIST_REQUEST, KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_RECORD,
+    KIND_SESSION_ALIAS_REMOVE_REQUEST, KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST,
+    KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_REQUEST, KIND_SESSION_CREATE_RESPONSE,
+    KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
+    KIND_SESSION_EVIDENCE_END, KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
     KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
     KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_INPUT_REQUEST, KIND_SESSION_INPUT_RESPONSE,
     KIND_SESSION_INSPECT_REQUEST, KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST,
@@ -62,6 +66,51 @@ pub struct SessionEvidencePage {
 }
 
 impl DaemonClient {
+    pub async fn context_delivery_inbox(
+        &self,
+        parent_session_id: impl Into<String>,
+    ) -> Result<ContextDeliveryInboxResponse> {
+        let mut connection = self.connect().await?;
+        connection
+            .unary(
+                KIND_CONTEXT_DELIVERY_INBOX_REQUEST,
+                &ContextDeliveryInboxRequest {
+                    parent_session_id: parent_session_id.into(),
+                },
+                KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
+                Vec::new(),
+            )
+            .await
+    }
+
+    pub async fn context_delivery_receive(
+        &self,
+        request: ContextDeliveryReceiveRequest,
+        idempotency_key: &str,
+    ) -> Result<ContextDeliveryDecisionResponse> {
+        self.session_mutation(
+            KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST,
+            &request,
+            KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
+            idempotency_key,
+        )
+        .await
+    }
+
+    pub async fn context_delivery_reject(
+        &self,
+        request: ContextDeliveryRejectRequest,
+        idempotency_key: &str,
+    ) -> Result<ContextDeliveryDecisionResponse> {
+        self.session_mutation(
+            KIND_CONTEXT_DELIVERY_REJECT_REQUEST,
+            &request,
+            KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
+            idempotency_key,
+        )
+        .await
+    }
+
     pub async fn session_create(
         &self,
         request: SessionCreateRequest,

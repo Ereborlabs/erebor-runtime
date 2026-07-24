@@ -350,6 +350,44 @@ message SessionAliasListResponse {
   repeated SessionAliasRecord aliases = 1;
 }
 
+// A delivery stays on the child context branch until the direct parent client
+// explicitly receives or rejects this exact child commit/path pair.
+message ContextDeliveryInboxRequest {
+  string parent_session_id = 1;
+}
+
+message ContextDeliveryRecord {
+  string receiver_scope = 1;
+  string child_scope = 2;
+  string delivery_path = 3;
+  string delivery_commit = 4;
+}
+
+message ContextDeliveryInboxResponse {
+  repeated ContextDeliveryRecord deliveries = 1;
+}
+
+message ContextDeliveryReceiveRequest {
+  string parent_session_id = 1;
+  string delivery_path = 2;
+  string delivery_commit = 3;
+  string expected_parent_head = 4;
+}
+
+message ContextDeliveryRejectRequest {
+  string parent_session_id = 1;
+  string delivery_path = 2;
+  string delivery_commit = 3;
+  string expected_parent_head = 4;
+  string reason = 5;
+}
+
+message ContextDeliveryDecisionResponse {
+  string parent_head = 1;
+  string receipt_path = 2;
+  bool rejected = 3;
+}
+
 message AdminSessionListRequest {
   uint32 target_uid = 1;
   bool all_users = 2;

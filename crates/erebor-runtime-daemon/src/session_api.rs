@@ -28,7 +28,8 @@ use erebor_runtime_ipc::v1::{
 };
 use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact};
 use erebor_runtime_session::{
-    AgentAdapterRegistry, ChildSessionAdmission, ChildSessionAdmissionDispatcher,
+    AgentAdapterRegistry, ChildContextDelivery, ChildContextDeliveryDispatcher,
+    ChildContextDeliveryHandler, ChildSessionAdmission, ChildSessionAdmissionDispatcher,
     ChildSessionAdmissionHandler, CodexAppServerService, CodexHookService, DurableSessionRecord,
     RunnerAdmissionRequest, RunnerRegistry, SessionManager, SessionManagerError, SessionRepository,
     SessionRepositoryError, SessionRuntimeResources, StreamKind, ValidatedStartConstraints,
@@ -40,6 +41,10 @@ use uuid::Uuid;
 use crate::{
     config::DaemonConfig,
     context_dag::{
+        delivery::{
+            ContextDeliveryKind, ContextDeliveryMode, ContextDeliveryPublication,
+            ContextDeliveryReceipt, ContextDeliveryRecord,
+        },
         ContextChildForkRequest, ContextDagCoordinator, ContextExecutionBinding,
         SessionContextResolver,
     },
@@ -67,6 +72,7 @@ pub(crate) struct DaemonSessionApi {
     codex_hook_service: Arc<CodexHookService>,
     codex_app_server_service: Arc<CodexAppServerService>,
     child_admissions: Arc<ChildSessionAdmissionDispatcher>,
+    child_deliveries: Arc<ChildContextDeliveryDispatcher>,
     context_resolver: Arc<SessionContextResolver>,
     context_coordinators: Arc<Mutex<BTreeMap<String, Arc<ContextDagCoordinator>>>>,
     codex_app_server_output_monitors: Arc<Mutex<BTreeSet<String>>>,
@@ -154,6 +160,7 @@ impl DaemonSessionApi {
         )?);
         let codex_app_server_service = Arc::new(CodexAppServerService::default());
         let child_admissions = Arc::new(ChildSessionAdmissionDispatcher::default());
+        let child_deliveries = Arc::new(ChildContextDeliveryDispatcher::default());
         let context_resolver = Arc::new(SessionContextResolver::new(state_root.clone()));
         let runtime = SessionRuntimeResources::new(
             state_root.clone(),
@@ -165,6 +172,7 @@ impl DaemonSessionApi {
                 Arc::clone(&codex_app_server_service),
                 Arc::clone(&context_resolver),
                 Arc::clone(&child_admissions) as Arc<dyn ChildSessionAdmissionHandler>,
+                Arc::clone(&child_deliveries) as Arc<dyn ChildContextDeliveryHandler>,
             )),
         )
         .context(SessionSnafu)?;
@@ -183,6 +191,7 @@ impl DaemonSessionApi {
             codex_hook_service,
             codex_app_server_service,
             child_admissions,
+            child_deliveries,
             context_resolver,
             context_coordinators: Arc::new(Mutex::new(BTreeMap::new())),
             codex_app_server_output_monitors: Arc::new(Mutex::new(BTreeSet::new())),
@@ -199,6 +208,189 @@ impl DaemonSessionApi {
             }
             .build()
         })
+    }
+
+    pub(crate) fn bind_child_delivery_handler(
+        &self,
+        handler: Arc<dyn ChildContextDeliveryHandler>,
+    ) -> Result<()> {
+        self.child_deliveries.install(handler).map_err(|reason| {
+            crate::error::InvalidRequestSnafu {
+                reason: format!("binding daemon child delivery handler failed: {reason}"),
+            }
+            .build()
+        })
+    }
+
+    pub(crate) fn publish_child_delivery(&self, delivery: ChildContextDelivery) -> Result<()> {
+        let record = self
+            .manager
+            .list_all()
+            .context(SessionSnafu)?
+            .into_iter()
+            .find(|record| record.spec().session_id().as_str() == delivery.child_session_id())
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from("child delivery session no longer exists"),
+                }
+                .build()
+            })?;
+        if record.state() != SessionLifecycleState::Running {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("authenticated child delivery requires a running session"),
+            }
+            .fail();
+        }
+        let child_spec = record.spec();
+        let child_scope = erebor_runtime_context::ScopeRef::root(child_spec.session_id().as_str())
+            .map_err(|error| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("could not resolve child delivery scope: {error}"),
+                }
+                .build()
+            })?;
+        let kind = match delivery.kind() {
+            "message" => ContextDeliveryKind::Message,
+            "result" => ContextDeliveryKind::Result,
+            "failure" => ContextDeliveryKind::Failure,
+            "cancelled" => ContextDeliveryKind::Cancelled,
+            _ => {
+                return crate::error::InvalidRequestSnafu {
+                    reason: String::from("child delivery kind is not supported"),
+                }
+                .fail()
+            }
+        };
+        let mode = match delivery.mode() {
+            "queue" => ContextDeliveryMode::Queue,
+            "follow-up" => ContextDeliveryMode::FollowUp,
+            _ => {
+                return crate::error::InvalidRequestSnafu {
+                    reason: String::from("child delivery mode is not supported"),
+                }
+                .fail()
+            }
+        };
+        let publication = ContextDeliveryPublication::new(
+            child_scope,
+            delivery.sequence(),
+            kind,
+            mode,
+            delivery.selected_bytes().to_vec(),
+        )?;
+        self.context_coordinator(child_spec)?
+            .publish_delivery(publication)?;
+        Ok(())
+    }
+
+    pub(crate) fn context_delivery_inbox(
+        &self,
+        owner_uid: u32,
+        parent_session_id: &str,
+    ) -> Result<Vec<ContextDeliveryRecord>> {
+        let parent = self
+            .manager
+            .inspect(owner_uid, parent_session_id)
+            .context(SessionSnafu)?;
+        self.context_coordinator(parent.spec())?
+            .inbox_for_session(parent.spec().session_id().as_str())
+    }
+
+    pub(crate) fn receive_context_delivery(
+        &self,
+        owner_uid: u32,
+        parent_session_id: &str,
+        delivery_path: &str,
+        delivery_commit: &str,
+        expected_parent_head: &str,
+    ) -> Result<ContextDeliveryReceipt> {
+        self.decide_context_delivery(
+            owner_uid,
+            parent_session_id,
+            delivery_path,
+            delivery_commit,
+            expected_parent_head,
+            None,
+        )
+    }
+
+    pub(crate) fn reject_context_delivery(
+        &self,
+        owner_uid: u32,
+        parent_session_id: &str,
+        delivery_path: &str,
+        delivery_commit: &str,
+        expected_parent_head: &str,
+        reason: &str,
+    ) -> Result<ContextDeliveryReceipt> {
+        self.decide_context_delivery(
+            owner_uid,
+            parent_session_id,
+            delivery_path,
+            delivery_commit,
+            expected_parent_head,
+            Some(reason),
+        )
+    }
+
+    fn decide_context_delivery(
+        &self,
+        owner_uid: u32,
+        parent_session_id: &str,
+        delivery_path: &str,
+        delivery_commit: &str,
+        expected_parent_head: &str,
+        rejection_reason: Option<&str>,
+    ) -> Result<ContextDeliveryReceipt> {
+        use std::str::FromStr;
+
+        let parent = self
+            .manager
+            .inspect(owner_uid, parent_session_id)
+            .context(SessionSnafu)?;
+        let coordinator = self.context_coordinator(parent.spec())?;
+        let delivery_commit = erebor_runtime_context::ContextObjectId::from_str(delivery_commit)
+            .map_err(|error| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("delivery commit is invalid: {error}"),
+                }
+                .build()
+            })?;
+        let expected_parent_head = erebor_runtime_context::ContextObjectId::from_str(
+            expected_parent_head,
+        )
+        .map_err(|error| {
+            crate::error::InvalidRequestSnafu {
+                reason: format!("expected parent head is invalid: {error}"),
+            }
+            .build()
+        })?;
+        let receiver = coordinator.delivery_receiver(delivery_path, delivery_commit)?;
+        if receiver.session_id() != parent.spec().session_id().as_str() {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("only the delivery's direct parent session may decide it"),
+            }
+            .fail();
+        }
+        rejection_reason.map_or_else(
+            || {
+                coordinator.receive_delivery(
+                    &receiver,
+                    delivery_path,
+                    delivery_commit,
+                    expected_parent_head,
+                )
+            },
+            |reason| {
+                coordinator.reject_delivery(
+                    &receiver,
+                    delivery_path,
+                    delivery_commit,
+                    expected_parent_head,
+                    reason,
+                )
+            },
+        )
     }
 
     pub(crate) fn admit_request(
