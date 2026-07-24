@@ -960,7 +960,12 @@ impl<'a> SessionCommandOwner<'a> {
     }
 
     fn short_id(value: &str) -> String {
-        value.chars().take(12).collect()
+        value
+            .strip_prefix("session-")
+            .unwrap_or(value)
+            .chars()
+            .take(12)
+            .collect()
     }
 }
 

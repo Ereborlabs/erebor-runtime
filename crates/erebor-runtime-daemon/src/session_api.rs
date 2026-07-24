@@ -401,9 +401,10 @@ impl DaemonSessionApi {
         owner_uid: u32,
         parent_session_id: &str,
     ) -> Result<Vec<ContextDeliveryRecord>> {
+        let parent_session_id = self.resolve_session_reference(owner_uid, parent_session_id)?;
         let parent = self
             .manager
-            .inspect(owner_uid, parent_session_id)
+            .inspect(owner_uid, &parent_session_id)
             .context(SessionSnafu)?;
         self.context_coordinator(parent.spec())?
             .inbox_for_session(parent.spec().session_id().as_str())
@@ -457,9 +458,10 @@ impl DaemonSessionApi {
     ) -> Result<ContextDeliveryReceipt> {
         use std::str::FromStr;
 
+        let parent_session_id = self.resolve_session_reference(owner_uid, parent_session_id)?;
         let parent = self
             .manager
-            .inspect(owner_uid, parent_session_id)
+            .inspect(owner_uid, &parent_session_id)
             .context(SessionSnafu)?;
         let coordinator = self.context_coordinator(parent.spec())?;
         let delivery_commit = erebor_runtime_context::ContextObjectId::from_str(delivery_commit)
@@ -2282,7 +2284,12 @@ impl DaemonSessionApi {
         }
         let matches = candidates
             .into_iter()
-            .filter(|session_id| session_id.starts_with(reference))
+            .filter(|session_id| {
+                session_id.starts_with(reference)
+                    || session_id
+                        .strip_prefix("session-")
+                        .is_some_and(|short| short.starts_with(reference))
+            })
             .collect::<Vec<_>>();
         match matches.as_slice() {
             [session_id] => Ok((*session_id).to_owned()),
