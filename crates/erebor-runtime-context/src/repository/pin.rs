@@ -222,8 +222,20 @@ impl ContextRepository {
         selections: &[ContextPinSelection],
     ) -> Result<PinnedContext> {
         let head = self.scope_head(&scope)?;
-        let commit = self.read_commit(head)?;
-        self.read_tree(commit.tree())?;
+        self.pin_commit(scope, head, selections)
+    }
+
+    /// Detach one known immutable commit and return only caller-selected blob
+    /// bytes. The caller supplies a checked scope identity because a causal
+    /// pin may intentionally predate that scope's current head.
+    pub fn pin_commit(
+        &self,
+        scope: ScopeRef,
+        commit: ContextObjectId,
+        selections: &[ContextPinSelection],
+    ) -> Result<PinnedContext> {
+        let tree = self.read_commit(commit)?.tree();
+        self.read_tree(tree)?;
         let mut selected_paths = HashSet::with_capacity(selections.len());
         let mut selected_blobs = Vec::with_capacity(selections.len());
         for selection in selections {
@@ -234,7 +246,7 @@ impl ContextRepository {
                 }
                 .fail();
             }
-            let selected = self.resolve_pinned_blob(commit.tree(), selection.path())?;
+            let selected = self.resolve_pinned_blob(tree, selection.path())?;
             if let Some(expected) = selection.expected_blob() {
                 if expected != selected.id {
                     return ContextPinBlobMismatchSnafu {
@@ -249,7 +261,7 @@ impl ContextRepository {
         }
         let pin = ContextPin {
             scope_ref: scope.to_string(),
-            commit_id: head.to_string(),
+            commit_id: commit.to_string(),
             used_paths: selected_blobs
                 .iter()
                 .map(|blob| blob.path.clone())
@@ -266,10 +278,27 @@ impl ContextRepository {
         })
     }
 
+    /// Rehydrate the exact blob bytes named by a previously validated-looking
+    /// pin. This never reads a mutable scope head.
+    pub fn read_pinned_context(&self, pin: &ContextPin) -> Result<PinnedContext> {
+        pin.validate_shape()?;
+        let scope = pin.scope()?;
+        let commit = pin.commit()?;
+        let selections = pin
+            .used_paths
+            .iter()
+            .zip(&pin.used_blob_ids)
+            .map(|(path, blob_id)| {
+                ContextObjectId::from_str(blob_id)
+                    .map(|blob| ContextPinSelection::exact_blob(path.clone(), blob))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.pin_commit(scope, commit, &selections)
+    }
+
     /// Verify that a deserialized audit pin still identifies the exact recorded objects.
     pub fn validate_pin(&self, pin: &ContextPin) -> Result<()> {
-        let scope = pin.scope()?;
-        self.validate_pin_for_scope(pin, &scope)
+        self.read_pinned_context(pin).map(|_context| ())
     }
 
     /// Verify that a deserialized audit pin belongs to one session and its exact recorded objects.
@@ -281,27 +310,7 @@ impl ContextRepository {
                 reason: "scope ref session id does not match the audit event session id",
             }
         );
-        self.validate_pin_for_scope(pin, &scope)
-    }
-
-    fn validate_pin_for_scope(&self, pin: &ContextPin, _scope: &ScopeRef) -> Result<()> {
-        pin.validate_shape()?;
-        let commit = ContextObjectId::from_str(&pin.commit_id)?;
-        let root = self.read_commit(commit)?.tree();
-        self.read_tree(root)?;
-        for (path, blob_id) in pin.used_paths.iter().zip(&pin.used_blob_ids) {
-            let expected = ContextObjectId::from_str(blob_id)?;
-            let selected = self.resolve_pinned_blob(root, path)?;
-            if selected.id != expected {
-                return ContextPinBlobMismatchSnafu {
-                    path: Box::<str>::from(path.as_str()),
-                    expected: Box::<str>::from(expected.to_string()),
-                    actual: Box::<str>::from(selected.id.to_string()),
-                }
-                .fail();
-            }
-        }
-        Ok(())
+        self.read_pinned_context(pin).map(|_context| ())
     }
 
     fn pin_path_components(path: &str) -> Result<Vec<&str>> {

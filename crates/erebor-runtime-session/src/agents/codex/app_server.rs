@@ -4,7 +4,6 @@ use std::{
 };
 
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 use super::{
     CodexContextDag, CodexInvocationLeaseOwner, CodexPromptReconciliation, CodexSessionError,
@@ -196,6 +195,7 @@ struct CodexAppServerLedger {
 struct PendingPrompt {
     scope_ref: String,
     thread_id: Option<String>,
+    prompt_path: Option<String>,
 }
 
 impl CodexAppServerLedger {
@@ -217,7 +217,7 @@ impl CodexAppServerLedger {
     }
 
     fn accept_input(&mut self, frame: &[u8]) -> Result<CodexAppServerInput, CodexSessionError> {
-        let (raw, payload) = parse_frame(frame)?;
+        let (_raw, payload) = parse_frame(frame)?;
         let object = payload
             .as_object()
             .ok_or_else(|| protocol_error("App Server JSON-RPC payload is not an object"))?;
@@ -266,10 +266,6 @@ impl CodexAppServerLedger {
                 let scope_ref = self.context_dag.ensure_prompt_scope(
                     thread_id.as_deref().unwrap_or(&format!("request-{key}")),
                 )?;
-                let path = format!(
-                    "agents/codex/app-server/prompts/{:x}.json",
-                    Sha256::digest(raw.as_bytes())
-                );
                 let hook_count = self
                     .reconciliation
                     .matching_user_prompt_submit(thread_id.as_deref(), None)?
@@ -288,9 +284,8 @@ impl CodexAppServerLedger {
                     "authenticated_user_prompt_submit_count": hook_count,
                     "authenticated_subagent_hook_count": subagent_hook_count,
                 });
-                self.context_dag.append_prompt(
+                let prompt_path = self.context_dag.append_prompt(
                     &scope_ref,
-                    &path,
                     serde_json::to_vec_pretty(&record)
                         .map_err(|error| protocol_error(error.to_string()))?,
                     "Record Codex App Server prompt ingress",
@@ -300,6 +295,7 @@ impl CodexAppServerLedger {
                     PendingPrompt {
                         scope_ref,
                         thread_id,
+                        prompt_path: Some(prompt_path),
                     },
                 );
             } else {
@@ -308,6 +304,7 @@ impl CodexAppServerLedger {
                     PendingPrompt {
                         scope_ref: String::new(),
                         thread_id: None,
+                        prompt_path: None,
                     },
                 );
             }
@@ -335,12 +332,16 @@ impl CodexAppServerLedger {
             return Ok(());
         }
         let turn_id = payload.pointer("/result/turnId").and_then(Value::as_str);
-        if let (Some(thread_id), Some(turn_id)) = (prompt.thread_id.as_deref(), turn_id) {
+        if let (Some(thread_id), Some(turn_id), Some(prompt_path)) = (
+            prompt.thread_id.as_deref(),
+            turn_id,
+            prompt.prompt_path.as_deref(),
+        ) {
             let binding = self.context_dag.bind_prompt(
                 thread_id.to_owned(),
                 turn_id.to_owned(),
                 &prompt.scope_ref,
-                format!("agents/codex/app-server/{thread_id}/{turn_id}"),
+                prompt_path.to_owned(),
             )?;
             self.lease_owner.record_scope_context(binding)?;
         }

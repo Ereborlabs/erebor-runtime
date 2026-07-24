@@ -77,8 +77,14 @@ fn run_tty() -> FixtureResult<()> {
             "absent"
         }
     );
-    invoke_managed_hook(HookMode::Normal)?;
+    let hook_result = invoke_managed_hook(HookMode::Normal)?;
     println!("fixture-hook=accepted");
+    if let Some(context) = hook_result
+        .pointer("/hookSpecificOutput/additionalContext")
+        .and_then(Value::as_str)
+    {
+        println!("fixture-frozen-context={context}");
+    }
     for line in io::stdin().lock().lines() {
         let line = line?;
         println!("fixture-tty-input={line}");
@@ -208,13 +214,14 @@ fn run_managed_hook(mode: HookMode) -> FixtureResult<()> {
     let mut input = Vec::new();
     io::stdin().take(32 * 1024).read_to_end(&mut input)?;
     let event = CodexNativeHookEvent::parse(&input)?;
-    match mode {
+    let result = match mode {
         HookMode::Normal | HookMode::Delegation => submit_hook(&event, input)?,
         HookMode::Replay => {
-            submit_hook(&event, input.clone())?;
+            let first = submit_hook(&event, input.clone())?;
             if submit_hook(&event, input).is_ok() {
                 return Err("a consumed managed-hook ticket was accepted twice".into());
             }
+            first
         }
         HookMode::WrongPeer => {
             let status = Command::new(env::current_exe()?)
@@ -223,6 +230,7 @@ fn run_managed_hook(mode: HookMode) -> FixtureResult<()> {
             if status.success() {
                 return Err("a managed-hook ticket accepted a different process peer".into());
             }
+            submit_hook(&event, input)?
         }
         HookMode::WrongSession => {
             let status = Command::new(env::current_exe()?)
@@ -232,31 +240,34 @@ fn run_managed_hook(mode: HookMode) -> FixtureResult<()> {
             if status.success() {
                 return Err("a managed-hook ticket accepted a different session".into());
             }
+            submit_hook(&event, input)?
         }
-    }
-    output.write_result(br#"{"continue":true}"#)?;
+    };
+    output.write_result(&result.result_json)?;
     Ok(())
 }
 
 fn run_hook_client_only() -> FixtureResult<()> {
     let event = CodexNativeHookEvent::parse(SESSION_START_EVENT)?;
-    submit_hook(&event, SESSION_START_EVENT.to_vec())
+    submit_hook(&event, SESSION_START_EVENT.to_vec()).map(|_result| ())
 }
 
-fn submit_hook(event: &CodexNativeHookEvent, native_event_json: Vec<u8>) -> FixtureResult<()> {
-    CodexHookClient::default().submit(erebor_runtime_ipc::v1::HookEvent {
+fn submit_hook(
+    event: &CodexNativeHookEvent,
+    native_event_json: Vec<u8>,
+) -> FixtureResult<erebor_runtime_ipc::v1::HookResult> {
+    Ok(CodexHookClient::default().submit(erebor_runtime_ipc::v1::HookEvent {
         event: event.kind() as i32,
         schema_sha256: event.schema_sha256().to_owned(),
         native_event_json,
-    })?;
-    Ok(())
+    })?)
 }
 
-fn invoke_managed_hook(mode: HookMode) -> FixtureResult<()> {
+fn invoke_managed_hook(mode: HookMode) -> FixtureResult<Value> {
     invoke_managed_hook_event(mode, SESSION_START_EVENT)
 }
 
-fn invoke_managed_hook_event(mode: HookMode, event: &[u8]) -> FixtureResult<()> {
+fn invoke_managed_hook_event(mode: HookMode, event: &[u8]) -> FixtureResult<Value> {
     let mut child = Command::new(MANAGED_HOOK_PATH)
         .env(HOOK_MODE_ENV, mode.name())
         .stdin(Stdio::piped())
@@ -278,7 +289,7 @@ fn invoke_managed_hook_event(mode: HookMode, event: &[u8]) -> FixtureResult<()> 
         )
         .into());
     }
-    Ok(())
+    Ok(serde_json::from_slice(&output.stdout)?)
 }
 
 fn run_delegation_bridge() -> FixtureResult<()> {

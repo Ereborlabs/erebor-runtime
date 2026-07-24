@@ -808,6 +808,36 @@ impl CodexInvocationLeaseOwner {
                 context_pin,
             );
         }
+        let context_pin = match &capability {
+            InvocationCapability::Delegation {
+                frozen_context_mode,
+                last_turns,
+                ..
+            } => {
+                let parent = context_pin.ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                    reason: String::from(
+                        "Codex delegation has no authenticated causal context to freeze",
+                    ),
+                    location: snafu::Location::default(),
+                })?;
+                let context_dag = self.context_dag()?.ok_or_else(|| {
+                    CodexSessionError::IncompatibleProfile {
+                        reason: String::from(
+                            "Codex delegation has no daemon-owned context repository",
+                        ),
+                        location: snafu::Location::default(),
+                    }
+                })?;
+                Some(context_dag.frozen_prompt_projection(
+                    parent,
+                    *frozen_context_mode,
+                    *last_turns,
+                )?)
+            }
+            InvocationCapability::Command { .. }
+            | InvocationCapability::InProcessMutation { .. }
+            | InvocationCapability::Unsupported => context_pin.cloned(),
+        };
         let lane = HandoffLane {
             scope_ref: context.scope_ref().to_owned(),
             item_node_stream: context.item_node_stream().to_owned(),
@@ -820,7 +850,7 @@ impl CodexInvocationLeaseOwner {
                 "pre-tool-use-lane-busy",
                 lease.as_ref(),
                 payload,
-                context_pin,
+                context_pin.as_ref(),
             );
         }
 
@@ -848,11 +878,21 @@ impl CodexInvocationLeaseOwner {
             hook_pid,
             hook_profile_epoch: self.profile_id.clone(),
             expires_at_millis: Self::now_millis() + LEASE_LIFETIME.as_millis(),
-            context_pin: context_pin.cloned(),
+            context_pin,
         };
-        self.record_transition_locked(state, &lease, "pre-tool-use-authenticated", context_pin)?;
+        self.record_transition_locked(
+            state,
+            &lease,
+            "pre-tool-use-authenticated",
+            lease.context_pin.as_ref(),
+        )?;
         lease.state = InvocationLeaseState::ResponseIssued;
-        self.record_transition_locked(state, &lease, "hook-response-issued", context_pin)?;
+        self.record_transition_locked(
+            state,
+            &lease,
+            "hook-response-issued",
+            lease.context_pin.as_ref(),
+        )?;
         state.lanes.insert(lane, id.clone());
         state.identities.insert(identity, id.clone());
         state.leases.insert(id, lease);
@@ -2553,9 +2593,8 @@ mod tests {
             "session-test",
         ));
         let scope_ref = context_dag.ensure_prompt_scope("thread-1")?;
-        context_dag.append_prompt(
+        let prompt_path = context_dag.append_prompt(
             &scope_ref,
-            "agents/codex/app-server/prompts/prompt.json",
             br#"{"source":"test"}"#.to_vec(),
             "Record test prompt",
         )?;
@@ -2563,7 +2602,7 @@ mod tests {
             String::from("thread-1"),
             String::from("turn-1"),
             &scope_ref,
-            String::from("agents/codex/app-server/prompts/prompt.json#item-1"),
+            prompt_path,
         )?;
         let owner = CodexInvocationLeaseOwner::new(
             "session-test",
@@ -2620,17 +2659,16 @@ mod tests {
             "session-test",
         ));
         let scope_ref = context_dag.ensure_prompt_scope("thread-1")?;
-        context_dag.append_prompt(
+        let prompt_path = context_dag.append_prompt(
             &scope_ref,
-            "agents/codex/app-server/prompts/prompt.json",
-            br#"{"source":"test"}"#.to_vec(),
+            br#"{"request":{"prompt":"delegate this context"}}"#.to_vec(),
             "Record test prompt",
         )?;
         let binding = context_dag.bind_prompt(
             String::from("thread-1"),
             String::from("turn-1"),
             &scope_ref,
-            String::from("agents/codex/app-server/prompts/prompt.json#item-1"),
+            prompt_path,
         )?;
         let mut profile = test_profile();
         profile.set_delegation_bridge(Some(String::from(
@@ -2677,6 +2715,7 @@ mod tests {
         assert_eq!(admission.child_profile(), "fixture-child");
         assert_eq!(admission.frozen_context_mode(), CodexFrozenContextMode::All);
         assert_eq!(admission.last_turns(), 0);
+        assert_eq!(admission.parent_context().used_paths(), &[prompt_path]);
         repository.validate_pin(admission.parent_context())?;
 
         owner.complete_child_admission(201, true)?;

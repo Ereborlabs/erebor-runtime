@@ -46,6 +46,7 @@ pub(crate) struct ContextChildForkRequest {
     child_scope: ScopeRef,
     execution_binding: ContextExecutionBinding,
     source_identity: Option<String>,
+    selected_parent_context: bool,
 }
 
 impl ContextChildForkRequest {
@@ -71,7 +72,14 @@ impl ContextChildForkRequest {
             child_scope,
             execution_binding,
             source_identity,
+            selected_parent_context: false,
         })
+    }
+
+    /// Make the child start from precisely the immutable blobs selected by its
+    /// checked parent pin, rather than the whole causal tree.
+    pub(crate) fn select_parent_context(&mut self) {
+        self.selected_parent_context = true;
     }
 }
 
@@ -202,6 +210,11 @@ impl ContextDagCoordinator {
             }
             .fail();
         }
+        let fork_target = if request.selected_parent_context {
+            self.selected_parent_context_tree(&request.parent_context)?
+        } else {
+            ForkTarget::reuse_causal_commit()
+        };
         let edge = ContextChildEdge {
             schema_version: CONTEXT_DAG_EDGE_SCHEMA_VERSION,
             parent_context: request.parent_context,
@@ -245,7 +258,7 @@ impl ContextDagCoordinator {
             .fork_scope(
                 causal_commit,
                 request.child_scope,
-                ForkTarget::reuse_causal_commit(),
+                fork_target,
                 Some(ForkParentAppend::new(
                     parent_scope,
                     parent_head,
@@ -260,6 +273,43 @@ impl ContextDagCoordinator {
                 .build()
             })?;
         Ok(())
+    }
+
+    fn selected_parent_context_tree(&self, parent: &ContextPin) -> Result<ForkTarget> {
+        let selected = self.repository.read_pinned_context(parent).map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("could not read selected parent context: {error}"),
+            }
+            .build()
+        })?;
+        let edits = selected
+            .selected_blobs()
+            .iter()
+            .map(|blob| TreeEdit::blob(blob.path(), blob.bytes()).map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("could not select parent context blob: {error}"),
+                }
+                .build()
+            }))
+            .collect::<Result<Vec<_>>>()?;
+        let tree = self
+            .repository
+            .create_tree(Snapshot::new(edits).map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("could not construct selected parent context tree: {error}"),
+                }
+                .build()
+            })?)
+            .map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("could not create selected parent context tree: {error}"),
+                }
+                .build()
+            })?;
+        Ok(ForkTarget::selected_tree(
+            tree,
+            "Freeze selected parent context for child",
+        ))
     }
 
     /// Verify the durable ancestry and parent-edge chain for one contained
@@ -561,7 +611,8 @@ mod tests {
 
     use erebor_runtime_context::{
         CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature,
-        CommitTime, ContextPin, ContextRepository, ScopeRef, Snapshot,
+        CommitTime, ContextPin, ContextPinSelection, ContextRepository, ScopeRef, Snapshot,
+        TreeEdit,
     };
     use erebor_runtime_core::{
         ActiveSessionSignalKind, DaemonFailureMode, ImmutableIdentity, OutputPlan,
@@ -768,6 +819,64 @@ mod tests {
             .read_commit_blob(root_head, &edge_path)?
             .is_some());
         assert_eq!(repository.scope_refs()?.len(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn selected_parent_context_forks_only_the_pinned_blobs() -> Result<(), Box<dyn Error>> {
+        let (_temporary, repository, root, root_pin) = root_fixture()?;
+        repository.append_snapshot(
+            root.clone(),
+            root_pin.commit()?,
+            Snapshot::new(vec![
+                TreeEdit::blob(
+                    "agents/codex/app-server/prompts/00000000000000000001.json",
+                    br#"{"request":{"prompt":"selected"}}"#.to_vec(),
+                )?,
+                TreeEdit::blob(
+                    "agents/codex/app-server/prompts/00000000000000000002.json",
+                    br#"{"request":{"prompt":"excluded"}}"#.to_vec(),
+                )?,
+                TreeEdit::blob("agents/codex/hooks/audit.json", br#"{"audit":true}"#.to_vec())?,
+            ])?,
+            "Record parent prompts and audit",
+        )?;
+        let parent = repository
+            .pin_scope_head(
+                root.clone(),
+                &[ContextPinSelection::blob(
+                    "agents/codex/app-server/prompts/00000000000000000001.json",
+                )],
+            )?
+            .pin()
+            .clone();
+        let coordinator = ContextDagCoordinator::new(Arc::clone(&repository), root)?;
+        let child = ScopeRef::root("selected-child")?;
+        let mut child_request = request(
+            parent,
+            child.clone(),
+            ContextExecutionBinding::DaemonPhysical,
+        )?;
+        child_request.select_parent_context();
+        coordinator.admit_child(child_request)?;
+
+        let child_head = repository.scope_head(&child)?;
+        assert!(repository
+            .read_commit_blob(
+                child_head,
+                "agents/codex/app-server/prompts/00000000000000000001.json",
+            )?
+            .is_some());
+        assert!(repository
+            .read_commit_blob(
+                child_head,
+                "agents/codex/app-server/prompts/00000000000000000002.json",
+            )?
+            .is_none());
+        assert!(repository
+            .read_commit_blob(child_head, "agents/codex/hooks/audit.json")?
+            .is_none());
+        coordinator.verify_scope(&child)?;
         Ok(())
     }
 

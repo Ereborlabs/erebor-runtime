@@ -650,13 +650,15 @@ impl DaemonSessionApi {
                 }
                 .build()
             })?;
+        let mut context_fork = ContextChildForkRequest::new(
+            admission.parent_context().clone(),
+            child_scope,
+            ContextExecutionBinding::DaemonPhysical,
+            Some(format!("codex-v1:{}", profile.id())),
+        )?;
+        context_fork.select_parent_context();
         self.context_coordinator(parent_spec)?
-            .admit_child(ContextChildForkRequest::new(
-                admission.parent_context().clone(),
-                child_scope,
-                ContextExecutionBinding::DaemonPhysical,
-                Some(format!("codex-v1:{}", profile.id())),
-            )?)?;
+            .admit_child(context_fork)?;
         self.create(spec.clone())?;
         let constraints = ValidatedStartConstraints::new(
             owner.uid(),

@@ -25,6 +25,7 @@ use erebor_runtime_ipc::{
     SyncFrameCodec,
 };
 use erebor_runtime_packages::{CodexHookEventName, CodexPackageDefinition};
+use serde_json::json;
 use snafu::{ensure, ResultExt};
 
 use crate::ChildSessionAdmissionHandler;
@@ -61,6 +62,7 @@ struct CodexHookRegistration {
     managed_session: CodexManagedSession,
     reconciliation: Arc<CodexPromptReconciliation>,
     lease_owner: Arc<CodexInvocationLeaseOwner>,
+    session_start_context: Option<String>,
 }
 
 /// Session-local Codex authorities retained by the shared listener's
@@ -71,6 +73,7 @@ pub struct CodexSessionHookRegistration {
     reconciliation: Arc<CodexPromptReconciliation>,
     lease_owner: Arc<CodexInvocationLeaseOwner>,
     context_dag: Arc<super::CodexContextDag>,
+    session_start_context: Option<String>,
 }
 
 impl CodexSessionHookRegistration {
@@ -129,15 +132,26 @@ impl CodexSessionHookRegistration {
             ),
         ));
         let context_dag = Arc::new(super::CodexContextDag::new(
-            context_repository,
+            Arc::clone(&context_repository),
             spec.session_id().as_str(),
         ));
         lease_owner.set_context_dag(Arc::clone(&context_dag))?;
+        let session_start_context = spec
+            .parent_context()
+            .map(|projection| {
+                super::CodexContextDag::render_frozen_prompt_context(
+                    context_repository.as_ref(),
+                    projection,
+                )
+            })
+            .transpose()?
+            .flatten();
         Ok(Self {
             managed_session,
             reconciliation: Arc::new(CodexPromptReconciliation::default()),
             lease_owner,
             context_dag,
+            session_start_context,
         })
     }
 
@@ -226,6 +240,7 @@ impl CodexHookService {
                                 registration.managed_session,
                                 registration.reconciliation,
                                 registration.lease_owner,
+                                registration.session_start_context,
                             )
                             .serve_after_hello(
                                 &mut stream,
@@ -254,6 +269,7 @@ impl CodexHookService {
         managed_session: CodexManagedSession,
         reconciliation: Arc<CodexPromptReconciliation>,
         lease_owner: Arc<CodexInvocationLeaseOwner>,
+        session_start_context: Option<String>,
     ) -> Result<(), CodexSessionError> {
         let session_id = managed_session.session_id().to_owned();
         let mut registrations = self
@@ -272,6 +288,7 @@ impl CodexHookService {
                 managed_session,
                 reconciliation,
                 lease_owner,
+                session_start_context,
             },
         );
         Ok(())
@@ -294,6 +311,7 @@ impl CodexHookService {
             registration.managed_session.clone(),
             Arc::clone(&registration.reconciliation),
             Arc::clone(&registration.lease_owner),
+            registration.session_start_context.clone(),
         )?;
         Ok(registration)
     }
@@ -334,6 +352,7 @@ struct CodexHookBrokerProtocol {
     managed_session: CodexManagedSession,
     reconciliation: std::sync::Arc<CodexPromptReconciliation>,
     lease_owner: std::sync::Arc<CodexInvocationLeaseOwner>,
+    session_start_context: Option<String>,
 }
 
 impl CodexHookBrokerProtocol {
@@ -341,11 +360,13 @@ impl CodexHookBrokerProtocol {
         managed_session: CodexManagedSession,
         reconciliation: std::sync::Arc<CodexPromptReconciliation>,
         lease_owner: std::sync::Arc<CodexInvocationLeaseOwner>,
+        session_start_context: Option<String>,
     ) -> Self {
         Self {
             managed_session,
             reconciliation,
             lease_owner,
+            session_start_context,
         }
     }
 
@@ -446,7 +467,7 @@ impl CodexHookBrokerProtocol {
                     let result = HookResult {
                         event: event_kind as i32,
                         accepted: true,
-                        result_json: br#"{\"continue\":true}"#.to_vec(),
+                        result_json: self.session_start_result(event_kind)?,
                     };
                     let response = Envelope::wrap_message(
                         envelope.message_id.saturating_add(1),
@@ -470,6 +491,28 @@ impl CodexHookBrokerProtocol {
         }
         let _ticket = ticket;
         Ok(())
+    }
+
+    fn session_start_result(&self, event: HookEventKind) -> Result<Vec<u8>, CodexSessionError> {
+        if event != HookEventKind::SessionStart {
+            return Ok(br#"{\"continue\":true}"#.to_vec());
+        }
+        self.session_start_context.as_ref().map_or_else(
+            || Ok(br#"{\"continue\":true}"#.to_vec()),
+            |context| {
+                serde_json::to_vec(&json!({
+                    "continue": true,
+                    "hookSpecificOutput": {
+                        "hookEventName": "SessionStart",
+                        "additionalContext": context,
+                    },
+                }))
+                .map_err(|error| CodexSessionError::IncompatibleProfile {
+                    reason: format!("could not encode Codex SessionStart context: {error}"),
+                    location: snafu::Location::default(),
+                })
+            },
+        )
     }
 
     fn validate_event(&self, event: &HookEvent) -> Result<HookEventKind, CodexSessionError> {
@@ -893,6 +936,7 @@ mod tests {
             session,
             Arc::new(CodexPromptReconciliation::default()),
             test_lease_owner(),
+            None,
         );
         let valid = HookEvent {
             event: HookEventKind::SessionStart as i32,
@@ -988,11 +1032,16 @@ mod tests {
         let session = session(executable, native_event.schema_sha256())?;
         let _ticket = session.issue_guarded_hook_ticket(observed_peer)?;
         let broker_session = session.clone();
+        let frozen_context = String::from(
+            r#"{"schema_version":1,"source":"erebor_frozen_codex_prompt_projection","prompts":[{"prompt":"selected"}]}"#,
+        );
+        let expected_context = frozen_context.clone();
         let worker = std::thread::spawn(move || {
             CodexHookBrokerProtocol::new(
                 broker_session,
                 Arc::new(CodexPromptReconciliation::default()),
                 test_lease_owner(),
+                Some(frozen_context),
             )
             .serve(&mut broker_stream)
         });
@@ -1007,7 +1056,19 @@ mod tests {
             },
         )?;
         assert!(result.accepted);
-        assert_eq!(result.result_json, br#"{"continue":true}"#);
+        let result_json: serde_json::Value = serde_json::from_slice(&result.result_json)?;
+        assert_eq!(
+            result_json
+                .pointer("/hookSpecificOutput/hookEventName")
+                .and_then(serde_json::Value::as_str),
+            Some("SessionStart")
+        );
+        assert_eq!(
+            result_json
+                .pointer("/hookSpecificOutput/additionalContext")
+                .and_then(serde_json::Value::as_str),
+            Some(expected_context.as_str())
+        );
         drop(hook_stream);
         let worker_result = worker
             .join()
@@ -1039,6 +1100,7 @@ mod tests {
                 broker_session,
                 Arc::new(CodexPromptReconciliation::default()),
                 test_lease_owner(),
+                None,
             )
             .serve(&mut broker_stream)
         });

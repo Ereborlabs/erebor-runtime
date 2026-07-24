@@ -4,16 +4,17 @@ use std::{
 };
 
 use erebor_runtime_context::{
-    ContextObjectId, ContextPin, ContextPinSelection, ContextRepository, ScopeRef, ScopeStart,
-    Snapshot, TreeEdit,
+    ContextObjectId, ContextPin, ContextPinSelection, ContextRepository, ContextTreeEntryKind,
+    ScopeRef, ScopeStart, Snapshot, TreeEdit,
 };
 use erebor_runtime_ipc::v1::HookEventKind;
+use erebor_runtime_packages::CodexFrozenContextMode;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::CodexSessionError;
 
-const CONTEXT_DAG_METADATA_PREFIX: &str = "erebor/context-dag/";
+const PROMPT_PREFIX: &str = "agents/codex/app-server/prompts/";
 
 /// Exact App Server facts that may be used to bind a Codex invocation. The
 /// binding is only created by the owned transport after it has durably written
@@ -70,6 +71,7 @@ struct CodexContextDagState {
     root: Option<CodexContextScope>,
     scopes: HashMap<String, CodexContextScope>,
     bindings: HashMap<(String, String), CodexScopeContextBinding>,
+    next_prompt: u64,
     next_hook_event: u64,
 }
 
@@ -128,14 +130,14 @@ impl CodexContextDag {
     pub(crate) fn append_prompt(
         &self,
         scope_ref: &str,
-        path: &str,
         bytes: Vec<u8>,
         message: &str,
-    ) -> Result<(), CodexSessionError> {
-        Self::ensure_model_visible_path(path)?;
+    ) -> Result<String, CodexSessionError> {
         let mut state = self.lock_state()?;
-        self.append_named_scope_locked(&mut state, scope_ref, path, bytes, message)
-            .map(|_| ())
+        state.next_prompt = state.next_prompt.saturating_add(1);
+        let path = format!("{PROMPT_PREFIX}{:020}.json", state.next_prompt);
+        self.append_named_scope_locked(&mut state, scope_ref, &path, bytes, message)?;
+        Ok(path)
     }
 
     pub(crate) fn bind_prompt(
@@ -178,6 +180,108 @@ impl CodexContextDag {
             .bindings
             .get(&(thread_id.to_owned(), turn_id.to_owned()))
             .cloned())
+    }
+
+    /// Select one immutable, model-visible prompt projection from the exact
+    /// parent pin. The projection pin retains only prompt blobs; hook and DAG
+    /// evidence remain causal/audit facts, never child model context.
+    pub(crate) fn frozen_prompt_projection(
+        &self,
+        parent: &ContextPin,
+        mode: CodexFrozenContextMode,
+        last_turns: u32,
+    ) -> Result<ContextPin, CodexSessionError> {
+        self.repository
+            .validate_pin(parent)
+            .map_err(Self::context_error)?;
+        let scope = parent.scope().map_err(Self::context_error)?;
+        let commit = parent.commit().map_err(Self::context_error)?;
+        let mut paths = Vec::new();
+        self.collect_prompt_paths(self.repository.read_commit(commit).map_err(Self::context_error)?.tree(), "", &mut paths)?;
+        paths.sort();
+        let selected = match mode {
+            CodexFrozenContextMode::None => Vec::new(),
+            CodexFrozenContextMode::All => paths,
+            CodexFrozenContextMode::LastTurns => {
+                let count = usize::try_from(last_turns).map_err(|_error| {
+                    CodexSessionError::IncompatibleProfile {
+                        reason: String::from("Codex frozen-context turn count does not fit this host"),
+                        location: snafu::Location::default(),
+                    }
+                })?;
+                if count == 0 {
+                    return Err(CodexSessionError::IncompatibleProfile {
+                        reason: String::from("Codex frozen-context last_turns has no matching prompt history"),
+                        location: snafu::Location::default(),
+                    });
+                }
+                let start = paths.len().saturating_sub(count);
+                paths.split_off(start)
+            }
+        };
+        self.repository
+            .pin_commit(
+                scope,
+                commit,
+                &selected
+                    .iter()
+                    .map(|path| ContextPinSelection::blob(path.clone()))
+                    .collect::<Vec<_>>(),
+            )
+            .map(|context| context.pin().clone())
+            .map_err(Self::context_error)
+    }
+
+    /// Render a checked frozen prompt projection for Codex's existing
+    /// `SessionStart` hook result. No filesystem, argv, environment, or second
+    /// workload-to-daemon channel carries this model context.
+    pub(crate) fn render_frozen_prompt_context(
+        repository: &ContextRepository,
+        projection: &ContextPin,
+    ) -> Result<Option<String>, CodexSessionError> {
+        let selected = repository
+            .read_pinned_context(projection)
+            .map_err(Self::context_error)?;
+        if selected.selected_blobs().is_empty() {
+            return Ok(None);
+        }
+        let prompts = selected
+            .selected_blobs()
+            .iter()
+            .map(|blob| {
+                if !blob.path().starts_with(PROMPT_PREFIX) {
+                    return Err(CodexSessionError::IncompatibleProfile {
+                        reason: format!(
+                            "Codex frozen-context projection selected non-prompt path `{}`",
+                            blob.path()
+                        ),
+                        location: snafu::Location::default(),
+                    });
+                }
+                let record: Value = serde_json::from_slice(blob.bytes()).map_err(|error| {
+                    CodexSessionError::IncompatibleProfile {
+                        reason: format!("Codex frozen-context prompt is not valid JSON: {error}"),
+                        location: snafu::Location::default(),
+                    }
+                })?;
+                record.get("request").cloned().ok_or_else(|| {
+                    CodexSessionError::IncompatibleProfile {
+                        reason: String::from("Codex frozen-context prompt omitted its request"),
+                        location: snafu::Location::default(),
+                    }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        serde_json::to_string(&json!({
+            "schema_version": 1,
+            "source": "erebor_frozen_codex_prompt_projection",
+            "prompts": prompts,
+        }))
+        .map(Some)
+        .map_err(|error| CodexSessionError::IncompatibleProfile {
+            reason: format!("could not encode Codex frozen prompt projection: {error}"),
+            location: snafu::Location::default(),
+        })
     }
 
     pub(crate) fn record_authenticated_hook(
@@ -323,16 +427,34 @@ impl CodexContextDag {
             .map_err(Self::context_error)
     }
 
-    fn ensure_model_visible_path(path: &str) -> Result<(), CodexSessionError> {
-        if path == CONTEXT_DAG_METADATA_PREFIX.trim_end_matches('/')
-            || path.starts_with(CONTEXT_DAG_METADATA_PREFIX)
+    fn collect_prompt_paths(
+        &self,
+        tree: ContextObjectId,
+        prefix: &str,
+        paths: &mut Vec<String>,
+    ) -> Result<(), CodexSessionError> {
+        for entry in self
+            .repository
+            .read_tree(tree)
+            .map_err(Self::context_error)?
+            .entries()
         {
-            return Err(CodexSessionError::IncompatibleProfile {
-                reason: format!(
-                    "Codex prompt projection must not write reserved context DAG metadata `{path}`"
-                ),
-                location: snafu::Location::default(),
-            });
+            let name = std::str::from_utf8(entry.name()).map_err(|_error| {
+                CodexSessionError::IncompatibleProfile {
+                    reason: String::from("Codex context tree contains a non-UTF-8 path"),
+                    location: snafu::Location::default(),
+                }
+            })?;
+            let path = if prefix.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            match entry.kind() {
+                ContextTreeEntryKind::Tree => self.collect_prompt_paths(entry.object(), &path, paths)?,
+                ContextTreeEntryKind::Blob if path.starts_with(PROMPT_PREFIX) => paths.push(path),
+                ContextTreeEntryKind::Blob | ContextTreeEntryKind::Commit => {}
+            }
         }
         Ok(())
     }
@@ -400,9 +522,10 @@ mod tests {
         CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature,
         CommitTime,
     };
+    use erebor_runtime_packages::CodexFrozenContextMode;
     use serde_json::json;
 
-    use super::CodexContextDag;
+    use super::{CodexContextDag, PROMPT_PREFIX};
 
     #[test]
     fn every_authenticated_hook_kind_is_an_immutable_dag_record(
@@ -415,9 +538,8 @@ mod tests {
         repository.initialize_root("session-1", Default::default(), "Initialize session root")?;
         let dag = CodexContextDag::new(Arc::clone(&repository), "session-1");
         let scope_ref = dag.ensure_prompt_scope("thread-1")?;
-        dag.append_prompt(
+        let prompt_path = dag.append_prompt(
             &scope_ref,
-            "agents/codex/app-server/prompts/prompt.json",
             br#"{"source":"test"}"#.to_vec(),
             "Record test prompt",
         )?;
@@ -425,7 +547,7 @@ mod tests {
             String::from("thread-1"),
             String::from("turn-1"),
             &scope_ref,
-            String::from("agents/codex/app-server/prompts/prompt.json#item-1"),
+            prompt_path,
         )?;
 
         let events = [
@@ -500,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn app_server_threads_have_distinct_scopes_and_never_project_dag_metadata(
+    fn app_server_threads_have_distinct_scopes_and_project_only_prompt_paths(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let temporary = tempfile::tempdir()?;
         let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
@@ -519,14 +641,87 @@ mod tests {
 
         assert_ne!(first, second);
         assert!(first.starts_with("refs/scopes/session-threads/scope/"));
-        assert!(dag
-            .append_prompt(
-                &first,
-                "erebor/context-dag/edges/forbidden.json",
-                Vec::new(),
-                "Attempt reserved metadata projection",
-            )
-            .is_err());
+        let path = dag.append_prompt(&first, Vec::new(), "Record test prompt")?;
+        assert!(path.starts_with("agents/codex/app-server/prompts/"));
+        assert!(!path.starts_with("erebor/context-dag/"));
+        Ok(())
+    }
+
+    #[test]
+    fn frozen_projection_selects_only_the_requested_prompt_history(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
+            temporary.path().join("context"),
+            FixedMetadataSource,
+        )?);
+        repository.initialize_root(
+            "session-projection",
+            Default::default(),
+            "Initialize session root",
+        )?;
+        let dag = CodexContextDag::new(Arc::clone(&repository), "session-projection");
+        let scope = dag.ensure_prompt_scope("thread-1")?;
+        let mut paths = Vec::new();
+        for prompt in ["first", "second", "third"] {
+            paths.push(dag.append_prompt(
+                &scope,
+                serde_json::to_vec(&json!({
+                    "request": {"prompt": prompt},
+                    "internal": "must not be projected",
+                }))?,
+                "Record deterministic prompt",
+            )?);
+        }
+        dag.bind_prompt(
+            String::from("thread-1"),
+            String::from("turn-3"),
+            &scope,
+            paths.last().ok_or("missing third prompt")?.clone(),
+        )?;
+        let parent = dag.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            &json!({"session_id": "thread-1", "turn_id": "turn-3"}),
+            json!({"hook_pid": 7}),
+        )?;
+
+        let none = dag.frozen_prompt_projection(&parent, CodexFrozenContextMode::None, 0)?;
+        assert!(none.used_paths().is_empty());
+        assert_eq!(
+            CodexContextDag::render_frozen_prompt_context(repository.as_ref(), &none)?,
+            None
+        );
+
+        let all = dag.frozen_prompt_projection(&parent, CodexFrozenContextMode::All, 0)?;
+        assert_eq!(all.used_paths(), paths.as_slice());
+        let all_rendered = CodexContextDag::render_frozen_prompt_context(repository.as_ref(), &all)?
+            .ok_or("all projection was not rendered")?;
+        let all_json: serde_json::Value = serde_json::from_str(&all_rendered)?;
+        assert_eq!(
+            all_json.pointer("/prompts/0/prompt").and_then(serde_json::Value::as_str),
+            Some("first")
+        );
+        assert_eq!(
+            all_json.pointer("/prompts/2/prompt").and_then(serde_json::Value::as_str),
+            Some("third")
+        );
+        assert!(all_rendered.find("must not be projected").is_none());
+
+        let last = dag.frozen_prompt_projection(&parent, CodexFrozenContextMode::LastTurns, 2)?;
+        assert_eq!(last.used_paths(), &paths[1..]);
+        let last_rendered =
+            CodexContextDag::render_frozen_prompt_context(repository.as_ref(), &last)?
+                .ok_or("last-turns projection was not rendered")?;
+        let last_json: serde_json::Value = serde_json::from_str(&last_rendered)?;
+        assert_eq!(
+            last_json.pointer("/prompts/0/prompt").and_then(serde_json::Value::as_str),
+            Some("second")
+        );
+        assert_eq!(
+            last_json.pointer("/prompts/1/prompt").and_then(serde_json::Value::as_str),
+            Some("third")
+        );
+        assert!(last.used_paths().iter().all(|path| path.starts_with(PROMPT_PREFIX)));
         Ok(())
     }
 
