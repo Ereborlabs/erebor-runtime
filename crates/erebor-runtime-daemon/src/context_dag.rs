@@ -478,12 +478,11 @@ impl ContextDagCoordinator {
                 .cmp(&right.depth)
                 .then_with(|| left.scope.as_str().cmp(right.scope.as_str()))
         });
-        activities.sort_by(|left, right| {
-            left.scope
-                .as_str()
-                .cmp(right.scope.as_str())
-                .then_with(|| left.path.cmp(&right.path))
-        });
+        // Keep the activity order recorded by each scope's first-parent Git
+        // history. A final-tree path order would place `hooks/` before
+        // `physical-effects/` even when the guard observed the execution
+        // between PreToolUse and PostToolUse.
+        activities.sort_by(|left, right| left.scope.as_str().cmp(right.scope.as_str()));
         Ok((nodes, activities))
     }
 
@@ -493,25 +492,68 @@ impl ContextDagCoordinator {
         head_commit: erebor_runtime_context::ContextObjectId,
         fork_parent_commit: Option<erebor_runtime_context::ContextObjectId>,
     ) -> Result<Vec<ContextScopeGraphActivity>> {
-        let head_blobs = self.commit_blobs(head_commit)?;
-        let parent_blobs = fork_parent_commit
-            .map_or_else(|| Ok(BTreeMap::new()), |commit| self.commit_blobs(commit))?;
         let mut activities = Vec::new();
-        for (path, object) in head_blobs {
-            if parent_blobs.get(&path) == Some(&object) {
-                continue;
+        for (commit, first_parent) in
+            self.scope_activity_commits(head_commit, fork_parent_commit)?
+        {
+            let commit_blobs = self.commit_blobs(commit)?;
+            let parent_blobs = first_parent
+                .map_or_else(|| Ok(BTreeMap::new()), |parent| self.commit_blobs(parent))?;
+            for (path, object) in commit_blobs {
+                if parent_blobs.get(&path) == Some(&object) {
+                    continue;
+                }
+                let Some(activity) = self.activity_summary(scope, &path, object)? else {
+                    continue;
+                };
+                activities.push(ContextScopeGraphActivity {
+                    scope: scope.clone(),
+                    path,
+                    summary: activity.summary,
+                    tool_use_id: activity.tool_use_id,
+                });
             }
-            let Some(activity) = self.activity_summary(scope, &path, object)? else {
-                continue;
-            };
-            activities.push(ContextScopeGraphActivity {
-                scope: scope.clone(),
-                path,
-                summary: activity.summary,
-                tool_use_id: activity.tool_use_id,
-            });
         }
         Ok(activities)
+    }
+
+    fn scope_activity_commits(
+        &self,
+        head_commit: erebor_runtime_context::ContextObjectId,
+        fork_parent_commit: Option<erebor_runtime_context::ContextObjectId>,
+    ) -> Result<
+        Vec<(
+            erebor_runtime_context::ContextObjectId,
+            Option<erebor_runtime_context::ContextObjectId>,
+        )>,
+    > {
+        let mut reverse_history = Vec::new();
+        let mut current = Some(head_commit);
+        while let Some(commit) = current {
+            if Some(commit) == fork_parent_commit {
+                reverse_history.reverse();
+                return Ok(reverse_history);
+            }
+            let commit_fact = self.repository.read_commit(commit).map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("could not inspect context graph commit `{commit}`: {error}"),
+                }
+                .build()
+            })?;
+            let first_parent = commit_fact.parents().first().copied();
+            reverse_history.push((commit, first_parent));
+            current = first_parent;
+        }
+        if fork_parent_commit.is_some() {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "context graph activity history does not reach its checked fork parent on the first-parent chain",
+                ),
+            }
+            .fail();
+        }
+        reverse_history.reverse();
+        Ok(reverse_history)
     }
 
     fn commit_blobs(
@@ -1454,17 +1496,32 @@ mod tests {
                 },
             },
         });
-        repository.append_snapshot(
+        let pre_tool_head = repository.append_snapshot(
             child.clone(),
             child_head,
             Snapshot::new(vec![TreeEdit::blob(
                 "agents/codex/hooks/00000000000000000001-pre-tool-use.json",
-                br#"{"native":{"hook_event_name":"PreToolUse","tool_name":"bash","tool_input":{"command":"ls"}}}"#.to_vec(),
-            )?, TreeEdit::blob(
+                br#"{"native":{"hook_event_name":"PreToolUse","tool_use_id":"tool","tool_name":"bash","tool_input":{"command":"ls"}}}"#.to_vec(),
+            )?])?,
+            "Record command admission",
+        )?;
+        let physical_effect_head = repository.append_snapshot(
+            child.clone(),
+            pre_tool_head,
+            Snapshot::new(vec![TreeEdit::blob(
                 "agents/codex/physical-effects/00000000000000000001.json",
                 serde_json::to_vec(&physical_effect)?,
             )?])?,
-            "Record governed command",
+            "Record governed command execution",
+        )?;
+        repository.append_snapshot(
+            child.clone(),
+            physical_effect_head,
+            Snapshot::new(vec![TreeEdit::blob(
+                "agents/codex/hooks/00000000000000000002-post-tool-use.json",
+                br#"{"native":{"hook_event_name":"PostToolUse","tool_use_id":"tool"}}"#.to_vec(),
+            )?])?,
+            "Record command completion",
         )?;
         let child_pin = repository.pin_scope_head(child.clone(), &[])?.pin().clone();
         let grandchild = ScopeRef::scope("parent-session", "grandchild")?;
@@ -1504,13 +1561,18 @@ mod tests {
             Some(ContextExecutionBinding::DaemonPhysical)
         );
         assert!(grandchild_node.fork_parent_commit().is_some());
-        assert_eq!(activities.len(), 2);
-        assert_eq!(activities[0].scope(), &child);
-        assert_eq!(activities[0].summary(), "tool bash command=\"ls\"");
-        assert_eq!(activities[1].scope(), &child);
+        let child_activity_summaries = activities
+            .iter()
+            .filter(|activity| activity.scope() == &child)
+            .map(|activity| activity.summary())
+            .collect::<Vec<_>>();
         assert_eq!(
-            activities[1].summary(),
-            "exec /bin/ls allowed pid=123 via bash tool"
+            child_activity_summaries,
+            [
+                "tool bash command=\"ls\"",
+                "exec /bin/ls allowed pid=123 via bash tool",
+                "tool completed \"tool\"",
+            ]
         );
         Ok(())
     }

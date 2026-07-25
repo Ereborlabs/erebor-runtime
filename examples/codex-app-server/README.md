@@ -115,6 +115,7 @@ fixture/delegate {"child_thread_id":"fixture-b","child_turn_id":"turn-1","frozen
 fixture/start-q
 fixture/command {"command":"ls"}
 fixture/deliver {"sequence":1,"selected_text":"B completed ls"}
+fixture/command {"command":"ls"}
 ```
 
 `erebor_lab session ps` must still show exactly one session. The `ls` process
@@ -122,7 +123,15 @@ is physically governed by that one session's Linux guard and causally bound to
 B's scope. `fixture/start-q` declares retained operation key `fixture-q` before
 the shell starts; q is therefore a separate operation scope below B, while B
 continues to run `ls`. It is not inferred later from an alive PID or from the
-next command. Back in the second terminal, render the daemon-owned scope DAG:
+next command. Each `fixture/command` without `tool_use_id` receives a fresh
+fixture-native tool-use ID, so repeating the same command is valid. If a test
+supplies `tool_use_id` explicitly, it must remain unique within that native
+thread/turn. q may deliver output while B issues later commands. A
+daemon-published delivery can advance B's ref between hooks; the next
+authenticated B fact refreshes the authoritative ref and performs a bounded
+compare-and-set retry, preserving both immutable facts instead of failing on a
+stale cached head. Back in the second terminal, render the daemon-owned scope
+DAG:
 
 ```sh
 erebor_lab session context graph <parent-short-id>
@@ -131,11 +140,12 @@ erebor_lab session context graph <parent-short-id>
 The graph is a compact Git-style tree of durable scopes and their retained,
 authenticated activity. `HEAD` is each scope's current commit; `FROM` is the
 exact immutable parent commit selected when that branch was admitted. The B
-branch therefore shows `tool bash command="ls"`, one or more guard-observed
-`exec … allowed pid=… via Bash <tool-use-id>` leaves, and its completion after
-the fixture command above; its q child branch shows q's own physical `exec`
-and delivery leaves, including q's shell descendants such as `sleep`. q owns
-those process effects; a normal process does not create another context scope.
+branch nests q immediately below the `tool bash command="printf …"` activity
+that admitted it. q's branch shows its physical `exec` and queued delivery
+leaves, including q's shell descendants such as `sleep`. B's later
+`tool bash command="ls"` and its `exec … allowed pid=… via Bash <tool-use-id>`
+leaves remain siblings in B because `ls` is not a retained operation. q owns
+its process effects; a normal process does not create another context scope.
 The execution leaves are retained Git facts bound to the same invocation lease,
 not guesses from hook output or terminal text. It also shows whether the edge
 is native-logical or daemon-physical and its authenticated source identity.
@@ -143,6 +153,22 @@ Inherited activity is not repeated on descendants. Scope and commit IDs are
 safely abbreviated for display; the full values remain available in the
 delivery inbox when a compare-and-set receive or reject needs them. The client
 never opens the root-owned context repository or JSONL audit files.
+
+q publishes output; it does not merge itself into B. After q prints both
+`fixture-operation=q-delivery-*` lines, list the inbox and choose a row whose
+`CHILD SCOPE` is q's scope. Then copy its three full values into this command:
+
+```sh
+erebor_lab session context inbox <parent-short-id>
+erebor_lab session context receive <parent-short-id> \
+  <delivery-path> <child-pin> \
+  --expected-parent-head <parent-pin> \
+  --idempotency-key receive-q-1
+```
+
+The next graph shows `merge received delivery #… from <q scope>` in B. This is
+the two-parent Git merge. It happens only after B explicitly receives that
+delivery; a queued q result alone leaves B unchanged.
 
 ## Socket selection
 

@@ -65,6 +65,33 @@ impl FixtureTurn {
     }
 }
 
+#[derive(Default)]
+struct FixtureToolUseIds {
+    next_command: u64,
+}
+
+impl FixtureToolUseIds {
+    fn command_request(&mut self, request: &Value) -> FixtureResult<Value> {
+        let mut request = request.clone();
+        let params = request
+            .pointer_mut("/params")
+            .and_then(Value::as_object_mut)
+            .ok_or("fixture/command params must be an object")?;
+        if params.contains_key("tool_use_id") {
+            return Ok(request);
+        }
+        self.next_command = self
+            .next_command
+            .checked_add(1)
+            .ok_or("fixture command tool use ID sequence overflowed")?;
+        params.insert(
+            String::from("tool_use_id"),
+            Value::String(format!("fixture-command-{}", self.next_command)),
+        );
+        Ok(request)
+    }
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     match arguments.as_slice() {
@@ -91,6 +118,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn run_tty() -> FixtureResult<()> {
     let mut active_turn = FixtureTurn::root();
+    let mut tool_uses = FixtureToolUseIds::default();
     println!("fixture-tty=ready");
     report_terminal_size()?;
     println!(
@@ -129,7 +157,7 @@ fn run_tty() -> FixtureResult<()> {
         }
         if let Some(params) = line.strip_prefix("fixture/command ") {
             let request = json!({"params": serde_json::from_str::<Value>(params)?});
-            run_guarded_command(&request, &active_turn)?;
+            run_guarded_command(&request, &active_turn, &mut tool_uses)?;
         }
         if line == "fixture/start-q" {
             start_long_operation(&active_turn)?;
@@ -160,6 +188,7 @@ fn report_terminal_size() -> FixtureResult<()> {
 fn run_app_server() -> FixtureResult<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
+    let mut tool_uses = FixtureToolUseIds::default();
     for line in stdin.lock().lines() {
         let line = line?;
         let request: Value = serde_json::from_str(&line)?;
@@ -205,7 +234,7 @@ fn run_app_server() -> FixtureResult<()> {
                 "delivered"
             }
             "fixture/command" => {
-                run_guarded_command(&request, &FixtureTurn::root())?;
+                run_guarded_command(&request, &FixtureTurn::root(), &mut tool_uses)?;
                 "command-completed"
             }
             "fixture/start-q" => {
@@ -231,9 +260,14 @@ fn run_app_server() -> FixtureResult<()> {
     Ok(())
 }
 
-fn run_guarded_command(request: &Value, turn: &FixtureTurn) -> FixtureResult<()> {
-    let event = command_event(request, turn)?;
-    let params = fixture_params(request, "fixture/command")?;
+fn run_guarded_command(
+    request: &Value,
+    turn: &FixtureTurn,
+    tool_uses: &mut FixtureToolUseIds,
+) -> FixtureResult<()> {
+    let request = tool_uses.command_request(request)?;
+    let event = command_event(&request, turn)?;
+    let params = fixture_params(&request, "fixture/command")?;
     let command = params
         .get("command")
         .and_then(Value::as_str)
@@ -959,7 +993,7 @@ fn fixture_requirements() -> &'static str {
 mod tests {
     use super::{
         command_event, delegation_event, delivery_event, post_tool_event, CodexNativeHookEvent,
-        FixtureTurn, DELEGATION_EVENT, DELIVERY_EVENT,
+        FixtureToolUseIds, FixtureTurn, DELEGATION_EVENT, DELIVERY_EVENT,
     };
 
     #[test]
@@ -992,6 +1026,36 @@ mod tests {
         assert_eq!(
             CodexNativeHookEvent::parse(DELEGATION_EVENT)?.schema_sha256(),
             CodexNativeHookEvent::parse(&command)?.schema_sha256(),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fixture_allocates_a_unique_native_tool_use_for_each_default_command(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let request = serde_json::json!({"params": {"command": "ls"}});
+        let mut tool_uses = FixtureToolUseIds::default();
+        let first = tool_uses.command_request(&request)?;
+        let second = tool_uses.command_request(&request)?;
+        let first = serde_json::from_slice::<serde_json::Value>(&command_event(
+            &first,
+            &FixtureTurn::root(),
+        )?)?;
+        let second = serde_json::from_slice::<serde_json::Value>(&command_event(
+            &second,
+            &FixtureTurn::root(),
+        )?)?;
+        assert_eq!(
+            first
+                .pointer("/tool_use_id")
+                .and_then(serde_json::Value::as_str),
+            Some("fixture-command-1")
+        );
+        assert_eq!(
+            second
+                .pointer("/tool_use_id")
+                .and_then(serde_json::Value::as_str),
+            Some("fixture-command-2")
         );
         Ok(())
     }

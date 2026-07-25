@@ -20,6 +20,7 @@ use erebor_runtime_context::ScopeStart;
 use super::CodexSessionError;
 
 const PROMPT_PREFIX: &str = "agents/codex/app-server/prompts/";
+const MAX_SCOPE_APPEND_ATTEMPTS: usize = 8;
 
 /// Exact App Server facts that may be used to bind a Codex invocation. The
 /// binding is only created by the owned transport after it has durably written
@@ -695,21 +696,16 @@ impl CodexContextDag {
                 location: snafu::Location::default(),
             }
         })?;
-        let head = self
-            .repository
-            .scope_head(operation_scope)
-            .map_err(Self::context_error)?;
-        self.append_snapshot(
+        self.append_scope_locked(
+            &mut state,
             operation_scope,
-            head,
             &path,
             bytes,
             &format!(
                 "Record authenticated Codex {} operation hook",
                 Self::hook_name(kind)
             ),
-        )?;
-        self.pin(operation_scope, &path)
+        )
     }
 
     /// Retain one lease-validated process-guard observation in the source
@@ -757,17 +753,31 @@ impl CodexContextDag {
             reason: format!("could not encode guarded Codex physical effect: {error}"),
             location: snafu::Location::default(),
         })?;
-        let head = self.append_snapshot(
+        self.append_scope_locked(
+            &mut state,
             effect_scope,
-            head,
             &path,
             bytes,
             "Record guarded Codex physical effect",
-        )?;
+        )
+    }
+
+    /// Append one immutable fact to a scope that another daemon-owned writer
+    /// may also advance, such as a child-delivery publisher. The cached head
+    /// only accelerates local routing; the ref remains authoritative.
+    fn append_scope_locked(
+        &self,
+        state: &mut CodexContextDagState,
+        scope: &ScopeRef,
+        path: &str,
+        bytes: Vec<u8>,
+        message: &str,
+    ) -> Result<ContextPin, CodexSessionError> {
+        let head = self.append_current_scope_snapshot(scope, path, bytes, message)?;
         if state
             .root
             .as_ref()
-            .is_some_and(|root| root.reference == *effect_scope)
+            .is_some_and(|root| root.reference == *scope)
         {
             let root =
                 state
@@ -775,16 +785,16 @@ impl CodexContextDag {
                     .as_mut()
                     .ok_or_else(|| CodexSessionError::IncompatibleProfile {
                         reason: String::from(
-                            "Codex context root disappeared while recording effect",
+                            "Codex context root disappeared while recording a daemon scope fact",
                         ),
                         location: snafu::Location::default(),
                     })?;
             root.head = head;
         }
-        if let Some(scope) = state.scopes.get_mut(effect_scope.as_str()) {
-            scope.head = head;
+        if let Some(known_scope) = state.scopes.get_mut(scope.as_str()) {
+            known_scope.head = head;
         }
-        self.pin(effect_scope, &path)
+        self.pin_commit(scope, head, path)
     }
 
     fn root_head_locked(
@@ -819,15 +829,16 @@ impl CodexContextDag {
         message: &str,
     ) -> Result<ContextPin, CodexSessionError> {
         self.root_head_locked(state)?;
-        let root = state
+        let reference = state
             .root
-            .as_mut()
+            .as_ref()
             .ok_or_else(|| CodexSessionError::IncompatibleProfile {
                 reason: String::from("Codex context root disappeared after initialization"),
                 location: snafu::Location::default(),
-            })?;
-        root.head = self.append_snapshot(&root.reference, root.head, path, bytes, message)?;
-        self.pin(&root.reference, path)
+            })?
+            .reference
+            .clone();
+        self.append_scope_locked(state, &reference, path, bytes, message)
     }
 
     fn append_named_scope_locked(
@@ -838,20 +849,21 @@ impl CodexContextDag {
         bytes: Vec<u8>,
         message: &str,
     ) -> Result<ContextPin, CodexSessionError> {
-        let scope = state.scopes.get_mut(scope_ref).ok_or_else(|| {
-            CodexSessionError::IncompatibleProfile {
+        let reference = state
+            .scopes
+            .get(scope_ref)
+            .ok_or_else(|| CodexSessionError::IncompatibleProfile {
                 reason: format!("Codex context scope `{scope_ref}` was not registered"),
                 location: snafu::Location::default(),
-            }
-        })?;
-        scope.head = self.append_snapshot(&scope.reference, scope.head, path, bytes, message)?;
-        self.pin(&scope.reference, path)
+            })?
+            .reference
+            .clone();
+        self.append_scope_locked(state, &reference, path, bytes, message)
     }
 
-    fn append_snapshot(
+    fn append_current_scope_snapshot(
         &self,
         scope: &ScopeRef,
-        head: ContextObjectId,
         path: &str,
         bytes: Vec<u8>,
         message: &str,
@@ -860,9 +872,47 @@ impl CodexContextDag {
             TreeEdit::blob(path, bytes).map_err(Self::context_error)?
         ])
         .map_err(Self::context_error)?;
-        self.repository
-            .append_snapshot(scope.clone(), head, snapshot, message)
-            .map_err(Self::context_error)
+        for attempt in 0..MAX_SCOPE_APPEND_ATTEMPTS {
+            let head = self
+                .repository
+                .scope_head(scope)
+                .map_err(Self::context_error)?;
+            match self
+                .repository
+                .append_snapshot(scope.clone(), head, snapshot.clone(), message)
+            {
+                Ok(next_head) => return Ok(next_head),
+                Err(erebor_runtime_context::ContextRepositoryError::StaleScopeHead { .. }) => {
+                    if attempt + 1 == MAX_SCOPE_APPEND_ATTEMPTS {
+                        return Err(CodexSessionError::IncompatibleProfile {
+                            reason: format!(
+                                "Codex context scope `{scope}` advanced too often while recording immutable evidence"
+                            ),
+                            location: snafu::Location::default(),
+                        });
+                    }
+                    let current_head = self
+                        .repository
+                        .scope_head(scope)
+                        .map_err(Self::context_error)?;
+                    if self
+                        .repository
+                        .read_commit_blob(current_head, path)
+                        .map_err(Self::context_error)?
+                        .is_some()
+                    {
+                        return Err(CodexSessionError::IncompatibleProfile {
+                            reason: format!(
+                                "Codex context fact path `{path}` already exists after a concurrent scope advance"
+                            ),
+                            location: snafu::Location::default(),
+                        });
+                    }
+                }
+                Err(error) => return Err(Self::context_error(error)),
+            }
+        }
+        unreachable!("bounded scope append retry must return from its final attempt")
     }
 
     fn collect_prompt_paths(
@@ -899,9 +949,14 @@ impl CodexContextDag {
         Ok(())
     }
 
-    fn pin(&self, scope: &ScopeRef, path: &str) -> Result<ContextPin, CodexSessionError> {
+    fn pin_commit(
+        &self,
+        scope: &ScopeRef,
+        commit: ContextObjectId,
+        path: &str,
+    ) -> Result<ContextPin, CodexSessionError> {
         self.repository
-            .pin_scope_head(scope.clone(), &[ContextPinSelection::blob(path)])
+            .pin_commit(scope.clone(), commit, &[ContextPinSelection::blob(path)])
             .map(|pinned| pinned.pin().clone())
             .map_err(Self::context_error)
     }
@@ -956,17 +1011,18 @@ impl CodexContextDag {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Barrier, Mutex};
 
     use erebor_runtime_context::{
         CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature,
-        CommitTime, ScopeRef,
+        CommitTime, ScopeRef, Snapshot, TreeEdit,
     };
+    use erebor_runtime_ipc::v1::HookEventKind;
     use erebor_runtime_packages::CodexFrozenContextMode;
     use serde_json::{json, Value};
     use sha2::{Digest, Sha256};
 
-    use super::{CodexContextDag, PROMPT_PREFIX};
+    use super::{CodexContextDag, CodexSessionError, PROMPT_PREFIX};
     use crate::context_operation::{ContextOperationAdmission, ContextOperationAdmissionHandler};
 
     struct RecordingAdmission {
@@ -1163,6 +1219,66 @@ mod tests {
     }
 
     #[test]
+    fn hook_append_refreshes_a_named_scope_after_daemon_delivery_advances_it(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
+            temporary.path().join("context"),
+            FixedMetadataSource,
+        )?);
+        repository.initialize_root("session-delivery", Default::default(), "Initialize")?;
+        let dag = CodexContextDag::new(Arc::clone(&repository), "session-delivery");
+        let scope_ref = dag.ensure_prompt_scope("thread-1")?;
+        let prompt_path = dag.append_prompt(
+            &scope_ref,
+            br#"{\"prompt\":\"before delivery\"}"#.to_vec(),
+            "Record prompt",
+        )?;
+        dag.bind_prompt(
+            String::from("thread-1"),
+            String::from("turn-1"),
+            &scope_ref,
+            prompt_path,
+        )?;
+        let scope = repository
+            .scope_refs()?
+            .into_iter()
+            .find(|candidate| candidate.as_str() == scope_ref)
+            .ok_or("named Codex scope was not created")?;
+        let head = repository.scope_head(&scope)?;
+        repository.append_snapshot(
+            scope.clone(),
+            head,
+            Snapshot::new(vec![TreeEdit::blob(
+                "deliveries/00000000000000000001.json",
+                br#"{\"selected_text\":\"completed\"}"#.to_vec(),
+            )?])?,
+            "Publish child context delivery",
+        )?;
+
+        let hook = dag.record_authenticated_hook(
+            HookEventKind::PreToolUse,
+            &hook_payload(),
+            json!({"hook_pid": 7}),
+        )?;
+
+        assert_eq!(hook.scope_ref(), scope_ref);
+        let head = repository.scope_head(&scope)?;
+        assert!(repository
+            .read_commit_blob(
+                head,
+                hook.used_paths()
+                    .first()
+                    .ok_or("missing hook evidence path")?,
+            )?
+            .is_some());
+        assert!(repository
+            .read_commit_blob(head, "deliveries/00000000000000000001.json")?
+            .is_some());
+        Ok(())
+    }
+
+    #[test]
     fn authenticated_terminal_turn_binds_only_the_existing_root_scope(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let temporary = tempfile::tempdir()?;
@@ -1304,6 +1420,104 @@ mod tests {
         {
             assert!(repository.read_commit_blob(head, path)?.is_some());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_operation_hooks_and_physical_effects_serialize_one_operation_scope(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        const RECORDS_PER_WRITER: usize = 16;
+
+        let temporary = tempfile::tempdir()?;
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
+            temporary.path().join("context"),
+            FixedMetadataSource,
+        )?);
+        let root = repository.initialize_root(
+            "session-concurrent-operation",
+            Default::default(),
+            "Initialize",
+        )?;
+        let operation =
+            ScopeRef::scope("session-concurrent-operation", "codex-operation-concurrent")?;
+        repository.create_scope(
+            operation.clone(),
+            erebor_runtime_context::ScopeStart::existing_commit(root),
+        )?;
+        let source_context = repository
+            .pin_scope_head(operation.clone(), &[])?
+            .pin()
+            .clone();
+        let dag = Arc::new(CodexContextDag::new(
+            Arc::clone(&repository),
+            "session-concurrent-operation",
+        ));
+        let start = Arc::new(Barrier::new(3));
+
+        let hook_writer = {
+            let dag = Arc::clone(&dag);
+            let operation = operation.clone();
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || -> Result<(), CodexSessionError> {
+                start.wait();
+                for index in 0..RECORDS_PER_WRITER {
+                    dag.record_authenticated_operation_hook(
+                        HookEventKind::PostToolUse,
+                        &json!({
+                            "hook_event_name": "PostToolUse",
+                            "tool_use_id": format!("operation-hook-{index}"),
+                        }),
+                        json!({"hook_pid": 7}),
+                        &operation,
+                    )?;
+                }
+                Ok(())
+            })
+        };
+        let effect_writer = {
+            let dag = Arc::clone(&dag);
+            let operation = operation.clone();
+            let source_context = source_context.clone();
+            let start = Arc::clone(&start);
+            std::thread::spawn(move || -> Result<(), CodexSessionError> {
+                start.wait();
+                for index in 0..RECORDS_PER_WRITER {
+                    dag.record_guarded_physical_effect(
+                        &source_context,
+                        &operation,
+                        json!({
+                            "allowed": true,
+                            "operation": "process_exec",
+                            "pid": index,
+                            "lease": {"tool_use_id": format!("operation-effect-{index}")},
+                        }),
+                    )?;
+                }
+                Ok(())
+            })
+        };
+
+        start.wait();
+        hook_writer
+            .join()
+            .map_err(|_error| "operation hook writer panicked")??;
+        effect_writer
+            .join()
+            .map_err(|_error| "physical-effect writer panicked")??;
+
+        let head = repository.scope_head(&operation)?;
+        assert_eq!(
+            repository
+                .list_commit_blobs_under(head, "agents/codex/hooks")?
+                .len(),
+            RECORDS_PER_WRITER
+        );
+        assert_eq!(
+            repository
+                .list_commit_blobs_under(head, "agents/codex/physical-effects")?
+                .len(),
+            RECORDS_PER_WRITER
+        );
         Ok(())
     }
 
