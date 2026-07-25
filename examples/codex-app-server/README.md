@@ -132,8 +132,10 @@ The graph is a compact Git-style tree of durable scopes and their retained,
 authenticated activity. `HEAD` is each scope's current commit; `FROM` is the
 exact immutable parent commit selected when that branch was admitted. The B
 branch therefore shows `tool bash command="ls"`, one or more guard-observed
-`exec … allowed pid=…` leaves, and its completion after the fixture command
-above; its q child branch shows q's own physical `exec` and delivery leaves.
+`exec … allowed pid=… via Bash <tool-use-id>` leaves, and its completion after
+the fixture command above; its q child branch shows q's own physical `exec`
+and delivery leaves, including q's shell descendants such as `sleep`. q owns
+those process effects; a normal process does not create another context scope.
 The execution leaves are retained Git facts bound to the same invocation lease,
 not guesses from hook output or terminal text. It also shows whether the edge
 is native-logical or daemon-physical and its authenticated source identity.

@@ -160,6 +160,7 @@ struct InvocationIdentity {
 struct HandoffLane {
     scope_ref: String,
     item_node_stream: String,
+    tool_use_id: String,
     effect_class: EffectClass,
 }
 
@@ -1008,6 +1009,7 @@ impl CodexInvocationLeaseOwner {
         let lane = HandoffLane {
             scope_ref: context.scope_ref().to_owned(),
             item_node_stream: context.item_node_stream().to_owned(),
+            tool_use_id: input.tool_use_id.clone(),
             effect_class,
         };
         if let Some(existing) = state.lanes.get(&lane) {
@@ -2654,7 +2656,7 @@ mod tests {
     }
 
     #[test]
-    fn lanes_are_exact_to_scope_and_do_not_select_by_command_text(
+    fn leases_are_exact_to_scope_and_tool_use_without_command_text(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let owner = test_owner();
         owner.record_scope_context(binding("scope-a", "item-a"))?;
@@ -2684,7 +2686,7 @@ mod tests {
             103,
         )?;
         let state = owner.state.lock().map_err(|_error| "lock")?;
-        assert_eq!(state.leases.len(), 2);
+        assert_eq!(state.leases.len(), 3);
         assert!(state
             .leases
             .values()
@@ -3044,6 +3046,33 @@ mod tests {
             repository.scope_head(&operation_scope)?,
             operation_head_before_delivery
         );
+        let operation_head_after_operation_effect = repository.scope_head(&operation_scope)?;
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            command_event("parallel-command").as_bytes(),
+            runtime(),
+            102,
+        )?;
+        let owner_head_after_parallel_hook = repository.scope_head(&owner_scope)?;
+        assert_ne!(owner_head_after_parallel_hook, owner_head_before_delivery);
+        owner.record_guarded_hook_exit(102, true)?;
+        assert_eq!(
+            owner
+                .physical_effect_decision(&process_request(202, 42, "echo permitted"))
+                .ok_or("missing concurrent command decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Allow
+        );
+        let owner_head_after_parallel_effect = repository.scope_head(&owner_scope)?;
+        assert_ne!(
+            owner_head_after_parallel_effect,
+            owner_head_after_parallel_hook
+        );
+        assert_eq!(
+            repository.scope_head(&operation_scope)?,
+            operation_head_after_operation_effect
+        );
         let post = String::from(
             r#"{"hook_event_name":"PostToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"operation-1","tool_response":{"status":"ok"},"erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"partial","operation_key":"fixture-q"}}"#,
         );
@@ -3063,7 +3092,7 @@ mod tests {
         );
         assert_eq!(
             repository.scope_head(&owner_scope)?,
-            owner_head_before_delivery
+            owner_head_after_parallel_effect
         );
         assert_ne!(
             repository.scope_head(&operation_scope)?,

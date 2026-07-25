@@ -689,6 +689,30 @@ impl ContextDagCoordinator {
                 }
                 .build()
             })?;
+        let tool_name = effect
+            .pointer("/lease/tool_name")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: format!(
+                        "retained physical effect `{path}` omits its originating tool name"
+                    ),
+                }
+                .build()
+            })?;
+        let tool_use_id = effect
+            .pointer("/lease/tool_use_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: format!(
+                        "retained physical effect `{path}` omits its originating tool use ID"
+                    ),
+                }
+                .build()
+            })?;
         let verdict = if allowed { "allowed" } else { "denied" };
         let target = if operation == "process_exec" {
             let executable = effect
@@ -707,7 +731,11 @@ impl ContextDagCoordinator {
         } else {
             format!("effect {}", Self::activity_token_text(operation))
         };
-        Ok(format!("{target} {verdict} pid={pid}"))
+        Ok(format!(
+            "{target} {verdict} pid={pid} via {} {}",
+            Self::activity_token_text(tool_name),
+            Self::activity_token_text(tool_use_id)
+        ))
     }
 
     fn activity_string(value: &serde_json::Value, names: &[&str]) -> String {
@@ -1394,7 +1422,10 @@ mod tests {
         assert_eq!(activities[0].scope(), &child);
         assert_eq!(activities[0].summary(), "tool bash command=\"ls\"");
         assert_eq!(activities[1].scope(), &child);
-        assert_eq!(activities[1].summary(), "exec /bin/ls allowed pid=123");
+        assert_eq!(
+            activities[1].summary(),
+            "exec /bin/ls allowed pid=123 via bash tool"
+        );
         Ok(())
     }
 
