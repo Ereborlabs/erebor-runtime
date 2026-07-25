@@ -604,6 +604,7 @@ name = "erebor-runtime-daemon"
 version = "0.1.0"
 dependencies = [
  "erebor-runtime-approvals",
+ "erebor-runtime-context",
  "erebor-runtime-core",
  "erebor-runtime-error",
  "erebor-runtime-events",

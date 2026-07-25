@@ -112,25 +112,35 @@ TTY. In the first terminal, create B and run a real guarded descendant from B:
 ```text
 fixture/turn
 fixture/delegate {"child_thread_id":"fixture-b","child_turn_id":"turn-1","frozen_context_mode":"all","last_turns":0}
+fixture/start-q
 fixture/command {"command":"ls"}
 fixture/deliver {"sequence":1,"selected_text":"B completed ls"}
 ```
 
 `erebor_lab session ps` must still show exactly one session. The `ls` process
 is physically governed by that one session's Linux guard and causally bound to
-B's scope. Back in the second terminal, render the daemon-owned scope DAG:
+B's scope. `fixture/start-q` declares retained operation key `fixture-q` before
+the shell starts; q is therefore a separate operation scope below B, while B
+continues to run `ls`. It is not inferred later from an alive PID or from the
+next command. Back in the second terminal, render the daemon-owned scope DAG:
 
 ```sh
 erebor_lab session context graph <parent-short-id>
 ```
 
-The graph is a compact Git-style tree of the durable scopes. `HEAD` is each
-scope's current commit; `FROM` is the exact immutable parent commit selected
-when that branch was admitted. It also shows whether the edge is native-logical
-or daemon-physical and its authenticated source identity. Scope and commit IDs
-are safely abbreviated for display; the full values remain available in the
+The graph is a compact Git-style tree of durable scopes and their retained,
+authenticated activity. `HEAD` is each scope's current commit; `FROM` is the
+exact immutable parent commit selected when that branch was admitted. The B
+branch therefore shows `tool bash command="ls"`, one or more guard-observed
+`exec … allowed pid=…` leaves, and its completion after the fixture command
+above; its q child branch shows q's own physical `exec` and delivery leaves.
+The execution leaves are retained Git facts bound to the same invocation lease,
+not guesses from hook output or terminal text. It also shows whether the edge
+is native-logical or daemon-physical and its authenticated source identity.
+Inherited activity is not repeated on descendants. Scope and commit IDs are
+safely abbreviated for display; the full values remain available in the
 delivery inbox when a compare-and-set receive or reject needs them. The client
-never opens the root-owned context repository.
+never opens the root-owned context repository or JSONL audit files.
 
 ## Socket selection
 

@@ -465,7 +465,7 @@ impl ContextDagCoordinator {
             if parent_blobs.get(&path) == Some(&object) {
                 continue;
             }
-            let Some(summary) = self.activity_summary(&path, object)? else {
+            let Some(summary) = self.activity_summary(scope, &path, object)? else {
                 continue;
             };
             activities.push(ContextScopeGraphActivity {
@@ -536,26 +536,33 @@ impl ContextDagCoordinator {
 
     fn activity_summary(
         &self,
+        scope: &ScopeRef,
         path: &str,
         object: erebor_runtime_context::ContextObjectId,
     ) -> Result<Option<String>> {
         const HOOK_PREFIX: &str = "agents/codex/hooks/";
-        if !path.starts_with(HOOK_PREFIX) {
+        const PHYSICAL_EFFECT_PREFIX: &str = "agents/codex/physical-effects/";
+        if !path.starts_with(HOOK_PREFIX) && !path.starts_with(PHYSICAL_EFFECT_PREFIX) {
             return Ok(None);
         }
         let object = self.repository.read_object(object).map_err(|error| {
             InvalidRequestSnafu {
-                reason: format!("could not read retained context hook `{path}`: {error}"),
+                reason: format!("could not read retained context activity `{path}`: {error}"),
             }
             .build()
         })?;
         let record: serde_json::Value =
             serde_json::from_slice(object.bytes()).map_err(|error| {
                 InvalidRequestSnafu {
-                    reason: format!("retained context hook `{path}` is not valid JSON: {error}"),
+                    reason: format!(
+                        "retained context activity `{path}` is not valid JSON: {error}"
+                    ),
                 }
                 .build()
             })?;
+        if path.starts_with(PHYSICAL_EFFECT_PREFIX) {
+            return self.physical_effect_summary(scope, path, &record).map(Some);
+        }
         let native = record.get("native").unwrap_or(&record);
         let event = native
             .get("hook_event_name")
@@ -598,6 +605,111 @@ impl ContextDagCoordinator {
         Ok(Some(summary))
     }
 
+    fn physical_effect_summary(
+        &self,
+        scope: &ScopeRef,
+        path: &str,
+        record: &serde_json::Value,
+    ) -> Result<String> {
+        if record
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(1)
+            || record.get("source").and_then(serde_json::Value::as_str)
+                != Some("erebor_guarded_physical_effect")
+            || record.get("kind").and_then(serde_json::Value::as_str) != Some("physical-effect")
+        {
+            return InvalidRequestSnafu {
+                reason: format!("retained physical effect `{path}` has an invalid record shape"),
+            }
+            .fail();
+        }
+        let effect = record.get("effect").ok_or_else(|| {
+            InvalidRequestSnafu {
+                reason: format!("retained physical effect `{path}` omits its effect"),
+            }
+            .build()
+        })?;
+        let lease_scope = effect
+            .pointer("/lease/scope_ref")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: format!("retained physical effect `{path}` omits its lease scope"),
+                }
+                .build()
+            })?;
+        let source_scope = record
+            .pointer("/source_context/scope_ref")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: format!(
+                        "retained physical effect `{path}` omits its causal source context"
+                    ),
+                }
+                .build()
+            })?;
+        let operation_scope = effect
+            .pointer("/lease/operation_scope")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty());
+        if source_scope != lease_scope || operation_scope.unwrap_or(lease_scope) != scope.as_str() {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "retained physical effect `{path}` is not bound to its containing context scope"
+                ),
+            }
+            .fail();
+        }
+        let allowed = effect
+            .get("allowed")
+            .and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: format!("retained physical effect `{path}` omits its decision"),
+                }
+                .build()
+            })?;
+        let operation = effect
+            .get("operation")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: format!("retained physical effect `{path}` omits its operation"),
+                }
+                .build()
+            })?;
+        let pid = effect
+            .get("pid")
+            .and_then(serde_json::Value::as_i64)
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: format!("retained physical effect `{path}` omits its process ID"),
+                }
+                .build()
+            })?;
+        let verdict = if allowed { "allowed" } else { "denied" };
+        let target = if operation == "process_exec" {
+            let executable = effect
+                .get("executable")
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    InvalidRequestSnafu {
+                        reason: format!(
+                            "retained physical effect `{path}` omits its process executable"
+                        ),
+                    }
+                    .build()
+                })?;
+            format!("exec {}", Self::activity_token_text(executable))
+        } else {
+            format!("effect {}", Self::activity_token_text(operation))
+        };
+        Ok(format!("{target} {verdict} pid={pid}"))
+    }
+
     fn activity_string(value: &serde_json::Value, names: &[&str]) -> String {
         names
             .iter()
@@ -610,18 +722,18 @@ impl ContextDagCoordinator {
             .iter()
             .find_map(|name| value.get(*name).and_then(serde_json::Value::as_str))
             .filter(|value| !value.is_empty())
-            .map_or_else(
-                || String::from("unknown"),
-                |value| {
-                    if value.chars().all(|character| {
-                        character.is_ascii_alphanumeric() || "._-".contains(character)
-                    }) {
-                        value.to_owned()
-                    } else {
-                        Self::quoted_activity(value)
-                    }
-                },
-            )
+            .map_or_else(|| String::from("unknown"), Self::activity_token_text)
+    }
+
+    fn activity_token_text(value: &str) -> String {
+        if value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-/".contains(character))
+        {
+            value.to_owned()
+        } else {
+            Self::quoted_activity(value)
+        }
     }
 
     fn quoted_activity(value: &str) -> String {
@@ -631,7 +743,7 @@ impl ContextDagCoordinator {
             .take(MAX_ACTIVITY_VALUE_CHARS)
             .collect::<String>();
         if value.chars().nth(MAX_ACTIVITY_VALUE_CHARS).is_some() {
-            shortened.push_str("…");
+            shortened.push('…');
         }
         format!("{shortened:?}")
     }
@@ -1203,12 +1315,40 @@ mod tests {
             ContextExecutionBinding::NativeLogical,
         )?)?;
         let child_head = repository.scope_head(&child)?;
+        let physical_effect = serde_json::json!({
+            "schema_version": 1,
+            "source": "erebor_guarded_physical_effect",
+            "kind": "physical-effect",
+            "source_context": {"scope_ref": child.as_str()},
+            "effect": {
+                "allowed": true,
+                "operation": "process_exec",
+                "pid": 123,
+                "ppid": 42,
+                "executable": "/bin/ls",
+                "argv": ["/bin/ls"],
+                "lease": {
+                    "id": "lease-1",
+                    "scope_ref": child.as_str(),
+                    "item_node_stream": "item",
+                    "decision_head": "head",
+                    "codex_session_id": "thread",
+                    "turn_id": "turn",
+                    "tool_use_id": "tool",
+                    "tool_name": "bash",
+                    "operation_scope": serde_json::Value::Null,
+                },
+            },
+        });
         repository.append_snapshot(
             child.clone(),
             child_head,
             Snapshot::new(vec![TreeEdit::blob(
                 "agents/codex/hooks/00000000000000000001-pre-tool-use.json",
                 br#"{"native":{"hook_event_name":"PreToolUse","tool_name":"bash","tool_input":{"command":"ls"}}}"#.to_vec(),
+            )?, TreeEdit::blob(
+                "agents/codex/physical-effects/00000000000000000001.json",
+                serde_json::to_vec(&physical_effect)?,
             )?])?,
             "Record governed command",
         )?;
@@ -1250,9 +1390,11 @@ mod tests {
             Some(ContextExecutionBinding::DaemonPhysical)
         );
         assert!(grandchild_node.fork_parent_commit().is_some());
-        assert_eq!(activities.len(), 1);
+        assert_eq!(activities.len(), 2);
         assert_eq!(activities[0].scope(), &child);
         assert_eq!(activities[0].summary(), "tool bash command=\"ls\"");
+        assert_eq!(activities[1].scope(), &child);
+        assert_eq!(activities[1].summary(), "exec /bin/ls allowed pid=123");
         Ok(())
     }
 

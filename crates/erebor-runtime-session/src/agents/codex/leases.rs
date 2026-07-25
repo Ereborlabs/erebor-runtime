@@ -1694,6 +1694,14 @@ impl CodexInvocationLeaseOwner {
                 }),
             })
         });
+        self.record_physical_effect_context(
+            lease,
+            request,
+            allowed,
+            rule_id,
+            reason,
+            file.clone(),
+        )?;
         self.record_audit_locked(
             state,
             "physical-effect",
@@ -1717,6 +1725,66 @@ impl CodexInvocationLeaseOwner {
         } else {
             erebor_runtime_core::SurfaceInterceptionDecision::deny(rule_id, reason)
         })
+    }
+
+    fn record_physical_effect_context(
+        &self,
+        lease: Option<&InvocationLease>,
+        request: &InterceptionRequest,
+        allowed: bool,
+        rule_id: &str,
+        reason: &str,
+        file: Option<Value>,
+    ) -> Result<(), CodexSessionError> {
+        let Some(lease) = lease else {
+            return Ok(());
+        };
+        let Some(source_context) = lease.context_pin.as_ref() else {
+            return Ok(());
+        };
+        let Some(context_dag) = self.context_dag()? else {
+            return Ok(());
+        };
+        let effect_scope = lease.operation_scope.as_ref().map_or_else(
+            || {
+                source_context
+                    .scope()
+                    .map_err(|error| CodexSessionError::IncompatibleProfile {
+                        reason: format!(
+                            "Codex physical-effect source context has an invalid scope: {error}"
+                        ),
+                        location: snafu::Location::default(),
+                    })
+            },
+            |scope| Ok(scope.clone()),
+        )?;
+        context_dag.record_guarded_physical_effect(
+            source_context,
+            &effect_scope,
+            serde_json::json!({
+                "allowed": allowed,
+                "rule_id": rule_id,
+                "reason": reason,
+                "operation": request.operation_family().name(),
+                "pid": request.pid,
+                "ppid": request.ppid,
+                "executable": request.executable,
+                "argv": request.argv,
+                "file": file,
+                "lease": {
+                    "id": lease.id,
+                    "scope_ref": lease.key.scope_ref,
+                    "item_node_stream": lease.key.item_node_stream,
+                    "decision_head": lease.key.decision_head,
+                    "codex_session_id": lease.key.codex_session_id,
+                    "turn_id": lease.key.turn_id,
+                    "tool_use_id": lease.key.tool_use_id,
+                    "tool_name": lease.tool_name,
+                    "operation_scope": lease.operation_scope.as_ref().map(ToString::to_string),
+                },
+            }),
+        )?;
+        Ok(())
     }
 
     fn record_hook_fact_locked(
@@ -2857,6 +2925,18 @@ mod tests {
             runtime(),
             101,
         )?;
+        let scope = ScopeRef::parse(scope_ref.clone())?;
+        let head_before_effect = repository.scope_head(&scope)?;
+        owner.record_guarded_hook_exit(101, true)?;
+        assert_eq!(
+            owner
+                .physical_effect_decision(&process_request(201, 42, "echo permitted"))
+                .ok_or("missing guarded process decision")?
+                .into_parts()
+                .0,
+            SessionInterceptionDecision::Allow
+        );
+        assert_ne!(repository.scope_head(&scope)?, head_before_effect);
 
         let records = erebor_runtime_audit::read_audit_records(audit_path)?;
         let record = records
@@ -2955,6 +3035,14 @@ mod tests {
                 .into_parts()
                 .0,
             SessionInterceptionDecision::Allow
+        );
+        assert_eq!(
+            repository.scope_head(&owner_scope)?,
+            owner_head_before_delivery
+        );
+        assert_ne!(
+            repository.scope_head(&operation_scope)?,
+            operation_head_before_delivery
         );
         let post = String::from(
             r#"{"hook_event_name":"PostToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"operation-1","tool_response":{"status":"ok"},"erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"partial","operation_key":"fixture-q"}}"#,

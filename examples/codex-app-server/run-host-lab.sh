@@ -65,9 +65,9 @@ stage_root_binary erebor-linux-process-guard
 stage_root_binary codex-v1-fixture
 install -o "$caller_uid" -g "$caller_gid" -m 0755 \
   "$target_dir/codex-v1-fixture" "$lab_root/caller/codex-v1-fixture"
-# The fixture is descriptor-verified repeatedly as the executable, managed
-# hook, and delegation bridge. Strip only the lab copies so that this real
-# admission path stays interactive without altering the developer build.
+# The fixture is descriptor-verified repeatedly as the executable and managed
+# hook. Strip only the lab copies so that this real admission path stays
+# interactive without altering the developer build.
 strip --strip-debug \
   "$lab_root/bin/codex-v1-fixture" \
   "$lab_root/caller/codex-v1-fixture"

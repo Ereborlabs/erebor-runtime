@@ -959,7 +959,7 @@ fn fixture_requirements() -> &'static str {
 mod tests {
     use super::{
         command_event, delegation_event, delivery_event, post_tool_event, CodexNativeHookEvent,
-        FixtureTurn, Value, DELEGATION_EVENT, DELIVERY_EVENT,
+        FixtureTurn, DELEGATION_EVENT, DELIVERY_EVENT,
     };
 
     #[test]
