@@ -384,6 +384,10 @@ message ContextScopeGraphNode {
   string source_identity = 5;
   string execution_binding = 6;
   uint32 depth = 7;
+  // The authenticated native tool use that caused this child admission, when
+  // the source runtime exposes one. It lets a client render an operation below
+  // its causal tool activity without opening the context repository.
+  string source_tool_use_id = 8;
 }
 
 // A compact, daemon-derived summary of an authenticated fact retained on one
@@ -391,6 +395,9 @@ message ContextScopeGraphNode {
 message ContextGraphActivity {
   string scope = 1;
   string summary = 2;
+  // The native tool use represented by this activity when it is an exact
+  // PreToolUse fact. Empty for activity that is not a tool admission source.
+  string tool_use_id = 3;
 }
 
 message ContextGraphResponse {

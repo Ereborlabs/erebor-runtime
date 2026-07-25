@@ -83,10 +83,12 @@ fn public_api_round_trips_daemon_owned_context_graph() -> Result<(), Box<dyn Err
             source_identity: String::new(),
             execution_binding: String::new(),
             depth: 0,
+            source_tool_use_id: String::new(),
         }],
         activities: vec![ContextGraphActivity {
             scope: String::from("refs/scopes/session-context-contract/root"),
             summary: String::from("tool bash command=\"ls\""),
+            tool_use_id: String::from("fixture-command-1"),
         }],
     };
     let response_envelope = Envelope::wrap_message(62, 61, KIND_CONTEXT_GRAPH_RESPONSE, &response)?;

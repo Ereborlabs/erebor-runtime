@@ -916,6 +916,7 @@ impl CodexInvocationLeaseOwner {
                             self.session_id.clone(),
                             parent_context.clone(),
                             operation_key.clone(),
+                            Some(input.tool_use_id.clone()),
                         ))
                         .map_err(|reason| CodexSessionError::IncompatibleProfile {
                             reason: format!("daemon rejected Codex operation admission: {reason}"),
@@ -976,6 +977,7 @@ impl CodexInvocationLeaseOwner {
                             self.session_id.clone(),
                             parent_context.clone(),
                             key,
+                            Some(input.tool_use_id.clone()),
                         )
                         .select_parent_context(),
                     )

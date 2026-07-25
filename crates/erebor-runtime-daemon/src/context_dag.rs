@@ -58,6 +58,7 @@ pub(crate) struct ContextChildForkRequest {
     child_scope: ScopeRef,
     execution_binding: ContextExecutionBinding,
     source_identity: Option<String>,
+    source_tool_use_id: Option<String>,
     selected_parent_context: bool,
 }
 
@@ -67,6 +68,7 @@ impl ContextChildForkRequest {
         child_scope: ScopeRef,
         execution_binding: ContextExecutionBinding,
         source_identity: Option<String>,
+        source_tool_use_id: Option<String>,
     ) -> Result<Self> {
         if source_identity
             .as_ref()
@@ -79,11 +81,23 @@ impl ContextChildForkRequest {
             }
             .fail();
         }
+        if source_tool_use_id
+            .as_ref()
+            .is_some_and(|value| value.is_empty() || value.len() > 128 || value.contains('\0'))
+        {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "context child source tool use ID must be non-empty, bounded, and NUL-free",
+                ),
+            }
+            .fail();
+        }
         Ok(Self {
             parent_context,
             child_scope,
             execution_binding,
             source_identity,
+            source_tool_use_id,
             selected_parent_context: false,
         })
     }
@@ -105,6 +119,8 @@ pub(super) struct ContextChildEdge {
     pub(super) depth: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) source_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) source_tool_use_id: Option<String>,
     pub(super) execution_binding: ContextExecutionBinding,
 }
 
@@ -118,6 +134,7 @@ pub(crate) struct ContextScopeGraphNode {
     head_commit: erebor_runtime_context::ContextObjectId,
     fork_parent_commit: Option<erebor_runtime_context::ContextObjectId>,
     source_identity: Option<String>,
+    source_tool_use_id: Option<String>,
     execution_binding: Option<ContextExecutionBinding>,
     depth: u8,
 }
@@ -151,6 +168,11 @@ impl ContextScopeGraphNode {
     }
 
     #[must_use]
+    pub(crate) fn source_tool_use_id(&self) -> Option<&str> {
+        self.source_tool_use_id.as_deref()
+    }
+
+    #[must_use]
     pub(crate) const fn execution_binding(&self) -> Option<ContextExecutionBinding> {
         self.execution_binding
     }
@@ -169,6 +191,7 @@ pub(crate) struct ContextScopeGraphActivity {
     scope: ScopeRef,
     path: String,
     summary: String,
+    tool_use_id: Option<String>,
 }
 
 impl ContextScopeGraphActivity {
@@ -181,6 +204,16 @@ impl ContextScopeGraphActivity {
     pub(crate) fn summary(&self) -> &str {
         &self.summary
     }
+
+    #[must_use]
+    pub(crate) fn tool_use_id(&self) -> Option<&str> {
+        self.tool_use_id.as_deref()
+    }
+}
+
+struct ContextScopeGraphActivitySummary {
+    summary: String,
+    tool_use_id: Option<String>,
 }
 
 /// Serializes durable scope topology in one root session repository. This is
@@ -308,6 +341,7 @@ impl ContextDagCoordinator {
             child_scope: request.child_scope.to_string(),
             depth,
             source_identity: request.source_identity,
+            source_tool_use_id: request.source_tool_use_id,
             execution_binding: request.execution_binding,
         };
         let edge_bytes = serde_json::to_vec(&edge).map_err(|error| {
@@ -397,6 +431,7 @@ impl ContextDagCoordinator {
                     head_commit,
                     fork_parent_commit: None,
                     source_identity: None,
+                    source_tool_use_id: None,
                     execution_binding: None,
                     depth: 0,
                 });
@@ -427,6 +462,7 @@ impl ContextDagCoordinator {
                 head_commit,
                 fork_parent_commit: Some(fork_parent_commit),
                 source_identity: edge.source_identity,
+                source_tool_use_id: edge.source_tool_use_id,
                 execution_binding: Some(edge.execution_binding),
                 depth,
             });
@@ -465,13 +501,14 @@ impl ContextDagCoordinator {
             if parent_blobs.get(&path) == Some(&object) {
                 continue;
             }
-            let Some(summary) = self.activity_summary(scope, &path, object)? else {
+            let Some(activity) = self.activity_summary(scope, &path, object)? else {
                 continue;
             };
             activities.push(ContextScopeGraphActivity {
                 scope: scope.clone(),
                 path,
-                summary,
+                summary: activity.summary,
+                tool_use_id: activity.tool_use_id,
             });
         }
         Ok(activities)
@@ -539,10 +576,14 @@ impl ContextDagCoordinator {
         scope: &ScopeRef,
         path: &str,
         object: erebor_runtime_context::ContextObjectId,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<ContextScopeGraphActivitySummary>> {
         const HOOK_PREFIX: &str = "agents/codex/hooks/";
         const PHYSICAL_EFFECT_PREFIX: &str = "agents/codex/physical-effects/";
-        if !path.starts_with(HOOK_PREFIX) && !path.starts_with(PHYSICAL_EFFECT_PREFIX) {
+        const CONTEXT_DAG_PREFIX: &str = "erebor/context-dag/";
+        if !path.starts_with(HOOK_PREFIX)
+            && !path.starts_with(PHYSICAL_EFFECT_PREFIX)
+            && !path.starts_with(CONTEXT_DAG_PREFIX)
+        {
             return Ok(None);
         }
         let object = self.repository.read_object(object).map_err(|error| {
@@ -561,27 +602,53 @@ impl ContextDagCoordinator {
                 .build()
             })?;
         if path.starts_with(PHYSICAL_EFFECT_PREFIX) {
-            return self.physical_effect_summary(scope, path, &record).map(Some);
+            return self
+                .physical_effect_summary(scope, path, &record)
+                .map(|summary| {
+                    Some(ContextScopeGraphActivitySummary {
+                        summary,
+                        tool_use_id: None,
+                    })
+                });
+        }
+        if path.starts_with(CONTEXT_DAG_PREFIX) {
+            return self
+                .delivery_graph_activity_summary(scope, path, &record)
+                .map(|summary| {
+                    summary.map(|summary| ContextScopeGraphActivitySummary {
+                        summary,
+                        tool_use_id: None,
+                    })
+                });
         }
         let native = record.get("native").unwrap_or(&record);
         let event = native
             .get("hook_event_name")
             .and_then(serde_json::Value::as_str)
             .unwrap_or("hook");
-        let summary = match event {
+        let (summary, tool_use_id) = match event {
             "UserPromptSubmit" | "user_prompt_submit" => {
                 let thread = Self::activity_string(native, &["session_id", "sessionId"]);
                 let turn = Self::activity_string(native, &["turn_id", "turnId"]);
-                format!("turn {thread}/{turn}")
+                (format!("turn {thread}/{turn}"), None)
             }
             "PreToolUse" | "pre_tool_use" => {
                 let tool = Self::activity_token(native, &["tool_name", "toolName"]);
+                let tool_use_id = native
+                    .get("tool_use_id")
+                    .or_else(|| native.get("toolUseId"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned);
                 let input = native.get("tool_input").or_else(|| native.get("toolInput"));
                 let command = input
                     .and_then(|input| input.get("command"))
                     .and_then(serde_json::Value::as_str);
                 if let Some(command) = command.filter(|command| !command.is_empty()) {
-                    format!("tool {tool} command={}", Self::quoted_activity(command))
+                    (
+                        format!("tool {tool} command={}", Self::quoted_activity(command)),
+                        tool_use_id,
+                    )
                 } else if matches!(tool.as_str(), "erebor_delegate" | "erebor-delegate") {
                     let child_thread = input.map_or_else(
                         || String::from("unknown"),
@@ -591,18 +658,24 @@ impl ContextDagCoordinator {
                         || String::from("unknown"),
                         |input| Self::activity_string(input, &["child_turn_id", "childTurnId"]),
                     );
-                    format!("logical fork {child_thread}/{child_turn}")
+                    (
+                        format!("logical fork {child_thread}/{child_turn}"),
+                        tool_use_id,
+                    )
                 } else {
-                    format!("tool {tool}")
+                    (format!("tool {tool}"), tool_use_id)
                 }
             }
             "PostToolUse" | "post_tool_use" => {
                 let tool_use = Self::activity_string(native, &["tool_use_id", "toolUseId"]);
-                format!("tool completed {tool_use}")
+                (format!("tool completed {tool_use}"), None)
             }
-            other => format!("hook {other}"),
+            other => (format!("hook {other}"), None),
         };
-        Ok(Some(summary))
+        Ok(Some(ContextScopeGraphActivitySummary {
+            summary,
+            tool_use_id,
+        }))
     }
 
     fn physical_effect_summary(
@@ -762,6 +835,15 @@ impl ContextDagCoordinator {
         } else {
             Self::quoted_activity(value)
         }
+    }
+
+    fn activity_scope_label(scope: &ScopeRef) -> String {
+        let label = scope.as_str().rsplit('/').next().unwrap_or(scope.as_str());
+        let mut shortened = label.chars().take(24).collect::<String>();
+        if label.chars().nth(24).is_some() {
+            shortened.push('…');
+        }
+        shortened
     }
 
     fn quoted_activity(value: &str) -> String {
@@ -1132,7 +1214,10 @@ mod tests {
     use erebor_runtime_events::SessionId;
     use erebor_runtime_session::SessionRepository;
 
-    use super::{ContextChildForkRequest, ContextDagCoordinator, ContextExecutionBinding};
+    use super::{
+        delivery::{ContextDeliveryKind, ContextDeliveryMode, ContextDeliveryPublication},
+        ContextChildForkRequest, ContextDagCoordinator, ContextExecutionBinding,
+    };
 
     type RootFixture = (
         tempfile::TempDir,
@@ -1167,6 +1252,7 @@ mod tests {
             child_scope,
             binding,
             Some(String::from("codex-v1:test")),
+            None,
         )?)
     }
 
@@ -1426,6 +1512,67 @@ mod tests {
             activities[1].summary(),
             "exec /bin/ls allowed pid=123 via bash tool"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn graph_keeps_tool_caused_operations_and_parent_merges_durable() -> Result<(), Box<dyn Error>>
+    {
+        let (_temporary, repository, root, _root_pin) = root_fixture()?;
+        let hook_head = repository.append_snapshot(
+            root.clone(),
+            repository.scope_head(&root)?,
+            Snapshot::new(vec![TreeEdit::blob(
+                "agents/codex/hooks/00000000000000000001-pre-tool-use.json",
+                br#"{"native":{"hook_event_name":"PreToolUse","tool_use_id":"q-tool","tool_name":"bash","tool_input":{"command":"sleep 1","erebor_operation_key":"fixture-q"}}}"#.to_vec(),
+            )?])?,
+            "Record q admission hook",
+        )?;
+        let parent_pin = repository
+            .pin_commit(root.clone(), hook_head, &[])?
+            .pin()
+            .clone();
+        let coordinator = ContextDagCoordinator::new(Arc::clone(&repository), root.clone())?;
+        let operation = ScopeRef::scope("parent-session", "codex-operation-fixture-q")?;
+        coordinator.admit_child(ContextChildForkRequest::new(
+            parent_pin,
+            operation.clone(),
+            ContextExecutionBinding::NativeLogical,
+            Some(String::from("codex-v1:operation:fixture-q")),
+            Some(String::from("q-tool")),
+        )?)?;
+        let published = coordinator.publish_delivery(ContextDeliveryPublication::new(
+            operation.clone(),
+            1,
+            ContextDeliveryKind::Result,
+            ContextDeliveryMode::Queue,
+            b"q partial".to_vec(),
+        )?)?;
+        coordinator.receive_delivery(
+            &root,
+            published.delivery_path(),
+            published.delivery_commit(),
+            published.expected_parent_head(),
+        )?;
+
+        let (nodes, activities) = coordinator.graph()?;
+        let operation_node = nodes
+            .iter()
+            .find(|node| node.scope() == &operation)
+            .ok_or("missing operation graph node")?;
+        assert_eq!(operation_node.source_tool_use_id(), Some("q-tool"));
+        assert!(activities.iter().any(|activity| {
+            activity.scope() == &root
+                && activity.tool_use_id() == Some("q-tool")
+                && activity.summary() == "tool bash command=\"sleep 1\""
+        }));
+        assert!(activities.iter().any(|activity| {
+            activity.scope() == &operation && activity.summary() == "delivery result #1 queued"
+        }));
+        assert!(activities.iter().any(|activity| {
+            activity.scope() == &root
+                && activity.summary() == "merge received delivery #1 from codex-operation-fixture-…"
+        }));
         Ok(())
     }
 

@@ -1,4 +1,5 @@
 use clap::Parser;
+use erebor_runtime_ipc::v1::{ContextGraphActivity, ContextGraphResponse, ContextScopeGraphNode};
 
 use super::SessionCommandOwner;
 use crate::cli::Cli;
@@ -124,6 +125,71 @@ fn context_graph_accepts_a_short_session_reference_and_keeps_scope_labels_readab
         ),
         "codex-operation-1234567890ab"
     );
+}
+
+#[test]
+fn context_graph_nests_an_operation_under_its_source_tool_and_keeps_parent_merges_visible() {
+    let root = String::from("refs/scopes/session-graph/root");
+    let child = String::from("refs/scopes/session-graph/scope/codex-operation-q");
+    let lines = SessionCommandOwner::context_graph_lines(ContextGraphResponse {
+        root_scope: root.clone(),
+        nodes: vec![
+            ContextScopeGraphNode {
+                scope: root.clone(),
+                parent_scope: String::new(),
+                head_commit: String::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                fork_parent_commit: String::new(),
+                source_identity: String::new(),
+                execution_binding: String::new(),
+                depth: 0,
+                source_tool_use_id: String::new(),
+            },
+            ContextScopeGraphNode {
+                scope: child.clone(),
+                parent_scope: root.clone(),
+                head_commit: String::from("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+                fork_parent_commit: String::from("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                source_identity: String::from("codex-v1:operation:q"),
+                execution_binding: String::from("native-logical"),
+                depth: 1,
+                source_tool_use_id: String::from("q-tool"),
+            },
+        ],
+        activities: vec![
+            ContextGraphActivity {
+                scope: root.clone(),
+                summary: String::from("tool bash command=\"q\""),
+                tool_use_id: String::from("q-tool"),
+            },
+            ContextGraphActivity {
+                scope: root.clone(),
+                summary: String::from("tool bash command=\"ls\""),
+                tool_use_id: String::from("ls-tool"),
+            },
+            ContextGraphActivity {
+                scope: root.clone(),
+                summary: String::from("exec /usr/bin/ls allowed pid=2 via bash ls-tool"),
+                tool_use_id: String::new(),
+            },
+            ContextGraphActivity {
+                scope: root,
+                summary: String::from("merge received delivery #1 from codex-operation-q"),
+                tool_use_id: String::new(),
+            },
+            ContextGraphActivity {
+                scope: child,
+                summary: String::from("delivery result #1 queued"),
+                tool_use_id: String::new(),
+            },
+        ],
+    });
+    let rendered = lines.join("\n");
+    assert!(rendered
+        .contains("├─ tool bash command=\"q\"\n│  └─● codex-operation-q  HEAD bbbbbbbbbbbb"));
+    assert!(rendered.contains(
+        "├─ tool bash command=\"ls\"\n├─ exec /usr/bin/ls allowed pid=2 via bash ls-tool"
+    ));
+    assert!(rendered.contains("└─ merge received delivery #1 from codex-operation-q"));
 }
 
 #[test]

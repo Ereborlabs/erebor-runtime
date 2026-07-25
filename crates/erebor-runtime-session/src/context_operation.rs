@@ -10,6 +10,7 @@ pub struct ContextOperationAdmission {
     session_id: String,
     parent_context: ContextPin,
     operation_key: String,
+    source_tool_use_id: Option<String>,
     select_parent_context: bool,
 }
 
@@ -19,11 +20,13 @@ impl ContextOperationAdmission {
         session_id: impl Into<String>,
         parent_context: ContextPin,
         operation_key: impl Into<String>,
+        source_tool_use_id: Option<String>,
     ) -> Self {
         Self {
             session_id: session_id.into(),
             parent_context,
             operation_key: operation_key.into(),
+            source_tool_use_id,
             select_parent_context: false,
         }
     }
@@ -52,6 +55,13 @@ impl ContextOperationAdmission {
     #[must_use]
     pub fn operation_key(&self) -> &str {
         &self.operation_key
+    }
+
+    /// The authenticated native tool use that caused this operation admission,
+    /// when the source runtime exposes one.
+    #[must_use]
+    pub fn source_tool_use_id(&self) -> Option<&str> {
+        self.source_tool_use_id.as_deref()
     }
 
     #[must_use]

@@ -1259,6 +1259,7 @@ impl DaemonControlState {
                     .execution_binding()
                     .map_or_else(String::new, |binding| binding.as_str().to_owned()),
                 depth: u32::from(node.depth()),
+                source_tool_use_id: node.source_tool_use_id().unwrap_or_default().to_owned(),
             })
             .collect();
         let activities = activities
@@ -1266,6 +1267,7 @@ impl DaemonControlState {
             .map(|activity| ContextGraphActivity {
                 scope: activity.scope().as_str().to_owned(),
                 summary: activity.summary().to_owned(),
+                tool_use_id: activity.tool_use_id().unwrap_or_default().to_owned(),
             })
             .collect();
         self.write_message(

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, str::FromStr};
 
 use erebor_runtime_context::{ContextObjectId, ContextPin, ScopeRef, Snapshot, TreeEdit};
 use serde::{Deserialize, Serialize};
@@ -173,8 +173,11 @@ struct DeliveryReceipt<'a> {
 #[derive(Deserialize)]
 struct RecordedDeliveryReceipt {
     schema_version: u32,
+    action: String,
     child_scope: String,
     delivery_path: String,
+    delivery_commit: String,
+    source_context: ContextPin,
 }
 
 impl ContextDagCoordinator {
@@ -795,6 +798,116 @@ impl ContextDagCoordinator {
                 .is_some())
     }
 
+    pub(super) fn delivery_graph_activity_summary(
+        &self,
+        scope: &ScopeRef,
+        path: &str,
+        record: &serde_json::Value,
+    ) -> Result<Option<String>> {
+        let delivery_prefix = format!("{CONTEXT_DAG_METADATA_PREFIX}/{DELIVERY_DIRECTORY}/");
+        if path.starts_with(&delivery_prefix) {
+            let delivery: ContextDelivery =
+                serde_json::from_value(record.clone()).map_err(Self::invalid_json)?;
+            let head = self.scope_head(scope, "context graph delivery")?;
+            self.validate_delivery(scope, head, path, &delivery)?;
+            let kind = match delivery.kind {
+                ContextDeliveryKind::Message => "message",
+                ContextDeliveryKind::Result => "result",
+                ContextDeliveryKind::Failure => "failure",
+                ContextDeliveryKind::Cancelled => "cancelled",
+            };
+            let mode = match delivery.mode {
+                ContextDeliveryMode::Queue => "queued",
+                ContextDeliveryMode::FollowUp => "follow-up",
+            };
+            return Ok(Some(format!(
+                "delivery {kind} #{} {mode}",
+                delivery.sequence
+            )));
+        }
+
+        let (directory, rejected) = if path.starts_with(&format!(
+            "{CONTEXT_DAG_METADATA_PREFIX}/{RECEIPT_DIRECTORY}/"
+        )) {
+            (RECEIPT_DIRECTORY, false)
+        } else if path.starts_with(&format!(
+            "{CONTEXT_DAG_METADATA_PREFIX}/{REJECTION_DIRECTORY}/"
+        )) {
+            (REJECTION_DIRECTORY, true)
+        } else {
+            return Ok(None);
+        };
+        let receipt: RecordedDeliveryReceipt =
+            serde_json::from_value(record.clone()).map_err(Self::invalid_json)?;
+        let expected_action = if rejected { "rejected" } else { "received" };
+        if receipt.schema_version != DELIVERY_SCHEMA_VERSION || receipt.action != expected_action {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "retained context {directory} record `{path}` has an invalid action or schema"
+                ),
+            }
+            .fail();
+        }
+        let child_scope =
+            ScopeRef::parse(receipt.child_scope.clone()).map_err(Self::invalid_context)?;
+        let delivery_commit =
+            ContextObjectId::from_str(&receipt.delivery_commit).map_err(Self::invalid_context)?;
+        if path
+            != Self::decision_path(
+                &child_scope,
+                &receipt.delivery_path,
+                delivery_commit,
+                rejected,
+            )
+        {
+            return InvalidRequestSnafu {
+                reason: format!("retained context {directory} record `{path}` has an invalid path"),
+            }
+            .fail();
+        }
+        let delivery = self
+            .read_delivery(delivery_commit, &receipt.delivery_path)?
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: format!(
+                        "retained context {directory} record `{path}` references a missing delivery"
+                    ),
+                }
+                .build()
+            })?;
+        self.validate_delivery(
+            &child_scope,
+            delivery_commit,
+            &receipt.delivery_path,
+            &delivery,
+        )?;
+        if delivery.source_context != receipt.source_context
+            || delivery
+                .parent_context
+                .scope()
+                .map_err(Self::invalid_context)?
+                != *scope
+        {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "retained context {directory} record `{path}` is not bound to its containing scope"
+                ),
+            }
+            .fail();
+        }
+        let source = Self::activity_scope_label(&child_scope);
+        let action = if rejected { "rejected" } else { "received" };
+        let summary = if rejected {
+            format!("delivery {action} #{} from {source}", delivery.sequence)
+        } else {
+            format!(
+                "merge {action} delivery #{} from {source}",
+                delivery.sequence
+            )
+        };
+        Ok(Some(summary))
+    }
+
     fn prior_delivery_is_decided(
         &self,
         parent_head: ContextObjectId,
@@ -934,6 +1047,7 @@ mod tests {
             child.clone(),
             ContextExecutionBinding::DaemonPhysical,
             Some(String::from("codex-v1:fixture")),
+            None,
         )?)?;
         Ok((temporary, repository, parent, child, coordinator))
     }
@@ -1032,6 +1146,7 @@ mod tests {
             sibling.clone(),
             ContextExecutionBinding::DaemonPhysical,
             Some(String::from("codex-v1:fixture")),
+            None,
         )?)?;
         assert!(coordinator
             .receive_delivery(
@@ -1072,6 +1187,7 @@ mod tests {
             child_c.clone(),
             ContextExecutionBinding::DaemonPhysical,
             Some(String::from("codex-v1:fixture")),
+            None,
         )?)?;
         let b_first = coordinator.publish_delivery(delivery(child_b.clone(), 1, "b-1")?)?;
         let b_second = coordinator.publish_delivery(delivery(child_b.clone(), 2, "b-2")?)?;

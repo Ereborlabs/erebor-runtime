@@ -10,9 +10,10 @@ use erebor_runtime_core::TerminalSize;
 use erebor_runtime_ipc::v1::{
     CodexAppServerAttachRequest, CodexAppServerInputCloseRequest, CodexAppServerInputRequest,
     CodexRunRequest, ContextDeliveryReceiveRequest, ContextDeliveryRejectRequest,
-    ContextGraphResponse, ContextScopeGraphNode, SessionAttachRequest, SessionCreateRequest,
-    SessionEnvironmentEntry, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
-    SessionInputRequest, SessionPruneRequest, SessionRecord, SessionTerminalResizeRequest,
+    ContextGraphActivity, ContextGraphResponse, ContextScopeGraphNode, SessionAttachRequest,
+    SessionCreateRequest, SessionEnvironmentEntry, SessionInputLeaseReleaseRequest,
+    SessionInputLeaseRenewRequest, SessionInputRequest, SessionPruneRequest, SessionRecord,
+    SessionTerminalResizeRequest,
 };
 use snafu::ResultExt;
 use uuid::Uuid;
@@ -36,6 +37,62 @@ pub(super) use args::{CodexRunArgs, SessionArgs};
 pub(super) struct SessionCommandOwner<'a> {
     args: &'a SessionArgs,
     client: &'a DaemonClient,
+}
+
+struct ContextGraphTree {
+    children: BTreeMap<String, Vec<usize>>,
+    activity_children: BTreeMap<(String, String), Vec<usize>>,
+    activities: BTreeMap<String, Vec<ContextGraphActivity>>,
+}
+
+impl ContextGraphTree {
+    fn new(nodes: &[ContextScopeGraphNode], graph_activities: Vec<ContextGraphActivity>) -> Self {
+        let mut activities = BTreeMap::<String, Vec<ContextGraphActivity>>::new();
+        for activity in graph_activities {
+            activities
+                .entry(activity.scope.clone())
+                .or_default()
+                .push(activity);
+        }
+        let mut children = BTreeMap::<String, Vec<usize>>::new();
+        let mut activity_children = BTreeMap::<(String, String), Vec<usize>>::new();
+        for (index, node) in nodes.iter().enumerate() {
+            if node.parent_scope.is_empty() {
+                continue;
+            }
+            let source_tool = node.source_tool_use_id.as_str();
+            let parent_has_source_tool = !source_tool.is_empty()
+                && activities
+                    .get(&node.parent_scope)
+                    .is_some_and(|parent_activities| {
+                        parent_activities
+                            .iter()
+                            .any(|activity| activity.tool_use_id == source_tool)
+                    });
+            if parent_has_source_tool {
+                activity_children
+                    .entry((node.parent_scope.clone(), source_tool.to_owned()))
+                    .or_default()
+                    .push(index);
+            } else {
+                children
+                    .entry(node.parent_scope.clone())
+                    .or_default()
+                    .push(index);
+            }
+        }
+        for indexes in children.values_mut() {
+            indexes.sort_by(|left, right| nodes[*left].scope.cmp(&nodes[*right].scope));
+        }
+        for indexes in activity_children.values_mut() {
+            indexes.sort_by(|left, right| nodes[*left].scope.cmp(&nodes[*right].scope));
+        }
+        Self {
+            children,
+            activity_children,
+            activities,
+        }
+    }
 }
 
 impl<'a> SessionCommandOwner<'a> {
@@ -966,49 +1023,39 @@ impl<'a> SessionCommandOwner<'a> {
     }
 
     fn write_context_graph(graph: ContextGraphResponse) {
+        for line in Self::context_graph_lines(graph) {
+            println!("{line}");
+        }
+    }
+
+    fn context_graph_lines(graph: ContextGraphResponse) -> Vec<String> {
         let ContextGraphResponse {
             root_scope,
             nodes,
             activities: graph_activities,
         } = graph;
         let Some(root_index) = nodes.iter().position(|node| node.scope == root_scope) else {
-            println!("Context DAG is unavailable: daemon response has no root node");
-            return;
+            return vec![String::from(
+                "Context DAG is unavailable: daemon response has no root node",
+            )];
         };
-        let mut children = BTreeMap::<String, Vec<usize>>::new();
-        for (index, node) in nodes.iter().enumerate() {
-            if !node.parent_scope.is_empty() {
-                children
-                    .entry(node.parent_scope.clone())
-                    .or_default()
-                    .push(index);
-            }
-        }
-        for indexes in children.values_mut() {
-            indexes.sort_by(|left, right| nodes[*left].scope.cmp(&nodes[*right].scope));
-        }
-        let mut activities = BTreeMap::<String, Vec<String>>::new();
-        for activity in graph_activities {
-            activities
-                .entry(activity.scope)
-                .or_default()
-                .push(activity.summary);
-        }
+        let tree = ContextGraphTree::new(&nodes, graph_activities);
         let session = root_scope
             .strip_prefix("refs/scopes/")
             .and_then(|scope| scope.split_once('/'))
             .map_or(root_scope.as_str(), |(session, _rest)| session);
-        println!("CONTEXT DAG  {}", Self::short_id(session));
-        Self::write_context_graph_node(&nodes, &children, &activities, root_index, "", true);
+        let mut lines = vec![format!("CONTEXT DAG  {}", Self::short_id(session))];
+        Self::write_context_graph_node(&nodes, &tree, root_index, "", true, &mut lines);
+        lines
     }
 
     fn write_context_graph_node(
         nodes: &[ContextScopeGraphNode],
-        children: &BTreeMap<String, Vec<usize>>,
-        activities: &BTreeMap<String, Vec<String>>,
+        tree: &ContextGraphTree,
         index: usize,
         prefix: &str,
         is_last: bool,
+        lines: &mut Vec<String>,
     ) {
         let node = &nodes[index];
         let is_root = node.parent_scope.is_empty();
@@ -1033,9 +1080,15 @@ impl<'a> SessionCommandOwner<'a> {
         if !node.source_identity.is_empty() {
             detail.push_str(&format!("  {}", node.source_identity));
         }
-        println!("{prefix}{branch} {label}  {detail}");
-        let scope_activities = activities.get(&node.scope).map_or(&[][..], Vec::as_slice);
-        let child_indexes = children.get(&node.scope).map_or(&[][..], Vec::as_slice);
+        lines.push(format!("{prefix}{branch} {label}  {detail}"));
+        let scope_activities = tree
+            .activities
+            .get(&node.scope)
+            .map_or(&[][..], Vec::as_slice);
+        let child_indexes = tree
+            .children
+            .get(&node.scope)
+            .map_or(&[][..], Vec::as_slice);
         let entry_count = scope_activities.len() + child_indexes.len();
         if entry_count == 0 {
             return;
@@ -1047,22 +1100,41 @@ impl<'a> SessionCommandOwner<'a> {
         } else {
             format!("{prefix}│  ")
         };
-        for (offset, summary) in scope_activities.iter().enumerate() {
-            let branch = if offset + 1 == entry_count {
-                "└─"
+        for (offset, activity) in scope_activities.iter().enumerate() {
+            let entry_is_last = offset + 1 == entry_count;
+            let branch = if entry_is_last { "└─" } else { "├─" };
+            lines.push(format!("{child_prefix}{branch} {}", activity.summary));
+            if activity.tool_use_id.is_empty() {
+                continue;
+            }
+            let anchored_children = tree
+                .activity_children
+                .get(&(node.scope.clone(), activity.tool_use_id.clone()))
+                .map_or(&[][..], Vec::as_slice);
+            let activity_prefix = if entry_is_last {
+                format!("{child_prefix}   ")
             } else {
-                "├─"
+                format!("{child_prefix}│  ")
             };
-            println!("{child_prefix}{branch} {summary}");
+            for (child_offset, child_index) in anchored_children.iter().enumerate() {
+                Self::write_context_graph_node(
+                    nodes,
+                    tree,
+                    *child_index,
+                    &activity_prefix,
+                    child_offset + 1 == anchored_children.len(),
+                    lines,
+                );
+            }
         }
         for (offset, child_index) in child_indexes.iter().enumerate() {
             Self::write_context_graph_node(
                 nodes,
-                children,
-                activities,
+                tree,
                 *child_index,
                 &child_prefix,
                 scope_activities.len() + offset + 1 == entry_count,
+                lines,
             );
         }
     }

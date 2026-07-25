@@ -354,6 +354,7 @@ impl DaemonSessionApi {
             } else {
                 format!("codex-v1:operation:{key}")
             }),
+            admission.source_tool_use_id().map(ToOwned::to_owned),
         )?;
         if admission.selects_parent_context() {
             context_fork.select_parent_context();

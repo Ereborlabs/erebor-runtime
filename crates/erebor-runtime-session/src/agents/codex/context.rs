@@ -179,6 +179,7 @@ impl CodexContextDag {
                     self.session_id.clone(),
                     parent_context.clone(),
                     operation_key,
+                    None,
                 ))
                 .map_err(|reason| CodexSessionError::IncompatibleProfile {
                     reason: format!("daemon rejected Codex App Server scope admission: {reason}"),
