@@ -1,6 +1,7 @@
 mod adoption;
 mod agents;
 mod child_delivery;
+mod context_agent_control;
 mod context_operation;
 mod controller_support;
 mod diagnostic;
@@ -29,13 +30,17 @@ mod tests;
 pub use adoption::SessionAdoptionService;
 pub use agents::codex::{
     CodexAppServerInput, CodexAppServerService, CodexHookClient, CodexHookResultOutput,
-    CodexHookService, CodexHookTicket, CodexHookTicketRegistry, CodexManagedSession,
-    CodexNativeHookEvent, CodexSessionError, CodexSessionHookRegistration,
+    CodexHookService, CodexHookSessionHandlers, CodexHookTicket, CodexHookTicketRegistry,
+    CodexManagedSession, CodexNativeHookEvent, CodexSessionError, CodexSessionHookRegistration,
     MAX_APP_SERVER_FRAME_BYTES,
 };
 pub use agents::{AgentAdapter, AgentAdapterRegistry, PreparedAgentInvocation};
 pub use child_delivery::{
     ChildContextDelivery, ChildContextDeliveryDispatcher, ChildContextDeliveryHandler,
+};
+pub use context_agent_control::{
+    ContextAgentControl, ContextAgentControlAction, ContextAgentControlDispatcher,
+    ContextAgentControlHandler, ContextAgentControlResult, ContextAgentIdentity,
 };
 pub use context_operation::{
     ContextOperationAdmission, ContextOperationAdmissionDispatcher,

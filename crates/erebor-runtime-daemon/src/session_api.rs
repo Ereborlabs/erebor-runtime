@@ -28,7 +28,8 @@ use erebor_runtime_ipc::v1::{
 use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact};
 use erebor_runtime_session::{
     AgentAdapterRegistry, ChildContextDelivery, ChildContextDeliveryDispatcher,
-    ChildContextDeliveryHandler, CodexAppServerService, CodexHookService,
+    ChildContextDeliveryHandler, CodexAppServerService, CodexHookService, ContextAgentControl,
+    ContextAgentControlDispatcher, ContextAgentControlHandler, ContextAgentControlResult,
     ContextOperationAdmission, ContextOperationAdmissionDispatcher,
     ContextOperationAdmissionHandler, DurableSessionRecord, RunnerAdmissionRequest, RunnerRegistry,
     SessionManager, SessionManagerError, SessionRepository, SessionRepositoryError,
@@ -73,6 +74,7 @@ pub(crate) struct DaemonSessionApi {
     codex_hook_service: Arc<CodexHookService>,
     codex_app_server_service: Arc<CodexAppServerService>,
     child_deliveries: Arc<ChildContextDeliveryDispatcher>,
+    agent_controls: Arc<ContextAgentControlDispatcher>,
     operation_admissions: Arc<ContextOperationAdmissionDispatcher>,
     context_resolver: Arc<SessionContextResolver>,
     context_coordinators: Arc<Mutex<BTreeMap<String, Arc<ContextDagCoordinator>>>>,
@@ -139,6 +141,7 @@ impl DaemonSessionApi {
         )?);
         let codex_app_server_service = Arc::new(CodexAppServerService::default());
         let child_deliveries = Arc::new(ChildContextDeliveryDispatcher::default());
+        let agent_controls = Arc::new(ContextAgentControlDispatcher::default());
         let operation_admissions = Arc::new(ContextOperationAdmissionDispatcher::default());
         let context_resolver = Arc::new(SessionContextResolver::new(state_root.clone()));
         let runtime = SessionRuntimeResources::new(
@@ -151,6 +154,7 @@ impl DaemonSessionApi {
                 Arc::clone(&codex_app_server_service),
                 Arc::clone(&context_resolver),
                 Arc::clone(&child_deliveries) as Arc<dyn ChildContextDeliveryHandler>,
+                Arc::clone(&agent_controls) as Arc<dyn ContextAgentControlHandler>,
                 Arc::clone(&operation_admissions) as Arc<dyn ContextOperationAdmissionHandler>,
             )),
         )
@@ -170,6 +174,7 @@ impl DaemonSessionApi {
             codex_hook_service,
             codex_app_server_service,
             child_deliveries,
+            agent_controls,
             operation_admissions,
             context_resolver,
             context_coordinators: Arc::new(Mutex::new(BTreeMap::new())),
@@ -184,6 +189,18 @@ impl DaemonSessionApi {
         self.child_deliveries.install(handler).map_err(|reason| {
             crate::error::InvalidRequestSnafu {
                 reason: format!("binding daemon child delivery handler failed: {reason}"),
+            }
+            .build()
+        })
+    }
+
+    pub(crate) fn bind_agent_control_handler(
+        &self,
+        handler: Arc<dyn ContextAgentControlHandler>,
+    ) -> Result<()> {
+        self.agent_controls.install(handler).map_err(|reason| {
+            crate::error::InvalidRequestSnafu {
+                reason: format!("binding daemon context-agent-control handler failed: {reason}"),
             }
             .build()
         })
@@ -276,6 +293,47 @@ impl DaemonSessionApi {
         self.context_coordinator(child_spec)?
             .publish_delivery(publication)?;
         Ok(())
+    }
+
+    pub(crate) fn handle_agent_control(
+        &self,
+        control: ContextAgentControl,
+    ) -> Result<ContextAgentControlResult> {
+        let record = self
+            .manager
+            .list_all()
+            .context(SessionSnafu)?
+            .into_iter()
+            .find(|record| record.spec().session_id().as_str() == control.session_id())
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: String::from("context agent control session no longer exists"),
+                }
+                .build()
+            })?;
+        if record.state() != SessionLifecycleState::Running {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "authenticated context agent control requires a running session",
+                ),
+            }
+            .fail();
+        }
+        let spec = record.spec();
+        if self
+            .local_store
+            .validate_session_spec(spec)?
+            .package()
+            .adapter_id()
+            != "codex-v1"
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("only a certified Codex session may use context controls"),
+            }
+            .fail();
+        }
+        self.context_coordinator(spec)?
+            .authorize_agent_control(control)
     }
 
     pub(crate) fn admit_context_operation(

@@ -49,37 +49,25 @@ await_daemon() {
 
 session_ids() {
   local user="$1"
-  as_user "$user" session ps | sed -n 's/^session_id=\([^ ]*\).*/\1/p'
+  local session_root="/var/lib/erebor/users/$(id -u "$user")/sessions"
+  local session_id=""
+  local record=""
+  [[ -d "$session_root" ]] || return
+  while IFS= read -r session_id; do
+    record="$(as_user "$user" session inspect "$session_id" 2>/dev/null || true)"
+    grep -q 'removed' <<<"$record" || printf '%s\n' "$session_id"
+  done < <(find "$session_root" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
 }
 
 running_session_id() {
   local user="$1"
-  as_user "$user" session ps \
-    | sed -n 's/^session_id=\([^ ]*\).*state=running.*/\1/p' \
-    | head -n 1
-}
-
-running_session_ids() {
-  local user="$1"
-  as_user "$user" session ps \
-    | sed -n 's/^session_id=\([^ ]*\).*state=running.*/\1/p'
-}
-
-await_running_session_count() {
-  local user="$1"
-  local expected="$2"
-  local -a sessions=()
-  for _ in $(seq 1 150); do
-    mapfile -t sessions < <(running_session_ids "$user")
-    if [[ "${#sessions[@]}" == "$expected" ]]; then
-      printf '%s\n' "${sessions[@]}"
+  local session_id=""
+  while IFS= read -r session_id; do
+    as_user "$user" session inspect "$session_id" 2>/dev/null | grep -q 'running' && {
+      printf '%s\n' "$session_id"
       return
-    fi
-    sleep 0.1
-  done
-  echo "expected $expected running Codex sessions" >&2
-  as_user "$user" session ps >&2
-  exit 1
+    }
+  done < <(session_ids "$user")
 }
 
 await_running_session() {
@@ -98,31 +86,13 @@ await_running_session() {
   exit 1
 }
 
-await_session_stdout() {
-  local user="$1"
-  local session_id="$2"
-  local expected="$3"
-  local output=""
-  for _ in $(seq 1 150); do
-    output="$(as_user "$user" session logs "$session_id" 2>&1 || true)"
-    grep -Fq "$expected" <<<"$output" && {
-      printf '%s\n' "$output"
-      return
-    }
-    sleep 0.1
-  done
-  echo "Codex session $session_id did not write expected stdout: $expected" >&2
-  echo "$output" >&2
-  exit 1
-}
-
 await_terminal() {
   local user="$1"
   local session_id="$2"
   local output=""
   for _ in $(seq 1 150); do
     output="$(as_user "$user" session inspect "$session_id" 2>&1 || true)"
-    if grep -Eq 'state=(succeeded|failed|interrupted)' <<<"$output"; then
+    if grep -Eq '(succeeded|failed|interrupted)' <<<"$output"; then
       return
     fi
     sleep 0.1
@@ -219,42 +189,73 @@ run_app_server_frame() {
     --workspace "/home/$user" codex-app-server >"$output" 2>&1
 }
 
-send_fixture_tty_control() {
-  local user="$1"
-  local session_id="$2"
-  local control="$3"
-  local label="$4"
-  local output="$5"
-  {
-    sleep 1
-    printf '%s\n' "$control"
-    sleep 1
-    printf '\020\021'
-  } | runuser -u "$user" -- script -qefc \
-    "stty rows 24 cols 80; $erebor session attach $session_id --input --client-instance-id $label --idempotency-key $label" \
-    /dev/null >"$output" 2>&1
-}
-
 record_field() {
   local record="$1"
   local field="$2"
-  tr ' ' '\n' <<<"$record" | sed -n "s/^${field}=//p" | head -n 1
+  sed -n "s/^${field}=//p" <<<"$record" | head -n 1
 }
 
-context_record_for_child() {
-  local user="$1"
-  local parent_session="$2"
-  local child_session="$3"
-  as_user "$user" session context inbox "$parent_session" \
-    | grep -F "child_scope=refs/scopes/$child_session/root "
+scope_for_operation() {
+  local session_id="$1"
+  local operation_key="$2"
+  local digest
+  digest="$(printf '%s' "$operation_key" | sha256sum | awk '{print substr($1, 1, 20)}')"
+  printf 'refs/scopes/%s/scope/codex-operation-%s\n' "$session_id" "$digest"
+}
+
+scope_for_logical_thread() {
+  local session_id="$1"
+  local thread_id="$2"
+  local turn_id="$3"
+  local child_digest operation_key
+  child_digest="$(printf '%s\0%s' "$thread_id" "$turn_id" | sha256sum | awk '{print substr($1, 1, 32)}')"
+  operation_key="fork-$child_digest"
+  scope_for_operation "$session_id" "$operation_key"
+}
+
+scope_for_app_server_thread() {
+  local session_id="$1"
+  local thread_id="$2"
+  local thread_digest
+  thread_digest="$(printf '%s' "$thread_id" | sha256sum | awk '{print substr($1, 1, 32)}')"
+  scope_for_operation "$session_id" "app-server-thread-$thread_digest"
+}
+
+edge_path_for_scope() {
+  local scope="$1"
+  local digest
+  digest="$(printf '%s' "$scope" | sha256sum | awk '{print $1}')"
+  printf 'erebor/context-dag/edges/%s.json\n' "$digest"
+}
+
+require_context_record() {
+  local record="$1"
+  [[ -n "$(record_field "$record" delivery_path)" \
+    && -n "$(record_field "$record" delivery_commit)" \
+    && -n "$(record_field "$record" expected_parent_head)" ]] || {
+    echo "expected pending context delivery was not present" >&2
+    exit 1
+  }
 }
 
 context_record_for_scope() {
   local user="$1"
   local parent_session="$2"
   local child_scope="$3"
-  as_user "$user" session context inbox "$parent_session" \
-    | grep -F "child_scope=$child_scope "
+  as_user "$user" session context inbox "$parent_session" | awk -F '┆' \
+    -v child_scope="$child_scope" '
+      /^│/ {
+        for (field = 1; field <= NF; field += 1) {
+          gsub(/^[[:space:]]+|[[:space:]]+$/, "", $field)
+        }
+        if ($2 == child_scope) {
+          print "delivery_path=" $3
+          print "delivery_commit=" $4
+          print "expected_parent_head=" $5
+          exit
+        }
+      }
+    '
 }
 
 receive_context_delivery() {
@@ -307,6 +308,230 @@ close_waiting_app_server_input() {
   rm -f "$1"
 }
 
+start_live_app_server() {
+  local user="$1"
+  local fifo="$2"
+  local output="$3"
+  mkfifo "$fifo"
+  runuser -u "$user" -- bash -c \
+    'exec "$1" run --policy fixture --workspace "$2" codex-app-server <"$3"' \
+    -- "$erebor" "/home/$user" "$fifo" >"$output" 2>&1 &
+  live_client_pid="$!"
+  exec {live_writer}>"$fifo"
+}
+
+send_live_app_server_frame() {
+  printf '%s\n' "$1" >&"$live_writer"
+}
+
+await_live_app_server_output() {
+  local output="$1"
+  local expected="$2"
+  for _ in $(seq 1 150); do
+    grep -Fq "$expected" "$output" && return
+    sleep 0.1
+  done
+  echo "live Codex App Server did not write expected output: $expected" >&2
+  cat "$output" >&2
+  exit 1
+}
+
+close_live_app_server_input() {
+  local fifo="$1"
+  exec {live_writer}>&-
+  rm -f "$fifo"
+}
+
+exercise_single_session_context_dag() {
+  local user="$1"
+  local dag_output dag_fifo dag_session context_git p_scope b_scope c_scope d_scope q_scope
+  local b_message_record c_cancel_record q_partial_record q_final_record d_result_record
+  local b_final_record p_after_b p_after_c p_after_final b_after_q_partial b_after_q_final b_after_d
+  local p_after_b_head p_after_c_head p_after_follow_head p_after_final_head b_after_q_partial_head
+  local b_after_q_final_head b_after_d_head b_before_d_head
+
+  dag_fifo="$(mktemp -u)"
+  dag_output="$(mktemp)"
+  start_live_app_server "$user" "$dag_fifo" "$dag_output"
+
+  # App Server owns P's prompt binding. The subsequent fixture operations are
+  # native hook facts from the same daemon-owned process and session.
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":100,"method":"turn/start","params":{"threadId":"fixture-thread"}}'
+  await_live_app_server_output "$dag_output" '"fixture":"ok"'
+  dag_session="$(await_running_session "$user")"
+  [[ "$(session_ids "$user" | wc -l | tr -d ' ')" == 1 ]] || {
+    echo "typed App Server start created more than one Erebor session" >&2
+    as_user "$user" session ps >&2
+    exit 1
+  }
+  context_git="/var/lib/erebor/users/$(id -u "$user")/sessions/$dag_session/context"
+  [[ -d "$context_git" ]]
+  p_scope="$(scope_for_app_server_thread "$dag_session" fixture-thread)"
+  b_scope="$(scope_for_logical_thread "$dag_session" fixture-b turn-1)"
+  c_scope="$(scope_for_logical_thread "$dag_session" fixture-c turn-1)"
+  d_scope="$(scope_for_logical_thread "$dag_session" fixture-d turn-1)"
+  q_scope="$(scope_for_operation "$dag_session" fixture-q)"
+
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":101,"method":"fixture/delegate","params":{"child_thread_id":"fixture-b","child_turn_id":"turn-1","frozen_context_mode":"all","last_turns":0,"tool_use_id":"fixture-p-b"}}'
+  await_live_app_server_output "$dag_output" '"id":101,"result":{"fixture":"delegated"'
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":102,"method":"fixture/turn"}'
+  await_live_app_server_output "$dag_output" '"id":102,"result":{"fixture":"ok"'
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":103,"method":"fixture/command","params":{"tool_use_id":"fixture-b-ls","command":"ls"}}'
+  await_live_app_server_output "$dag_output" '"id":103,"result":{"fixture":"command-completed"'
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":104,"method":"fixture/start-q"}'
+  await_live_app_server_output "$dag_output" '"id":104,"result":{"fixture":"operation-started"'
+
+  # Switches are fixture scheduler operations only. Each subsequent hook still
+  # names a daemon-bound native thread/turn and cannot create another session.
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":105,"method":"fixture/switch","params":{"thread_id":"fixture-thread","turn_id":"fixture-turn"}}'
+  await_live_app_server_output "$dag_output" '"id":105,"result":{"fixture":"switched"'
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":106,"method":"fixture/delegate","params":{"child_thread_id":"fixture-c","child_turn_id":"turn-1","frozen_context_mode":"none","last_turns":0,"tool_use_id":"fixture-p-c"}}'
+  await_live_app_server_output "$dag_output" '"id":106,"result":{"fixture":"delegated"'
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":107,"method":"fixture/switch","params":{"thread_id":"fixture-thread","turn_id":"fixture-turn"}}'
+  await_live_app_server_output "$dag_output" '"id":107,"result":{"fixture":"switched"'
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":108,"method":"fixture/control","params":{"action":"list_agents","tool_use_id":"fixture-p-list"}}'
+  await_live_app_server_output "$dag_output" '"id":108,"result":{"control":'
+  grep -q '"action":"list_agents"' "$dag_output"
+  grep -q '"thread_id":"fixture-b"' "$dag_output"
+  grep -q '"thread_id":"fixture-c"' "$dag_output"
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":109,"method":"fixture/control","params":{"action":"interrupt","target_thread_id":"fixture-c","target_turn_id":"turn-1","tool_use_id":"fixture-p-interrupt-c"}}'
+  await_live_app_server_output "$dag_output" '"id":109,"result":{"control":'
+  grep -q '"action":"interrupt"' "$dag_output"
+
+  # C emits its cancellation fact only after P's authenticated interruption
+  # succeeds. P decides its receipt before taking any later action, so the
+  # public compare-and-set parent head remains exact.
+  c_cancel_record="$(context_record_for_scope "$user" "$dag_session" "$c_scope")"
+  require_context_record "$c_cancel_record"
+  p_after_c="$(reject_context_delivery "$user" "$dag_session" "$c_cancel_record" dag-parent-reject-c)"
+  p_after_c_head="$(record_field "$p_after_c" parent_head)"
+  [[ -n "$p_after_c_head" ]]
+
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":110,"method":"fixture/control","params":{"action":"follow_up","target_thread_id":"fixture-b","target_turn_id":"turn-1","follow_up_text":"continue B after C was cancelled","tool_use_id":"fixture-p-follow-b"}}'
+  await_live_app_server_output "$dag_output" '"id":110,"result":{"control":'
+  grep -q '"action":"follow_up"' "$dag_output"
+  p_after_follow_head="$(git --git-dir="$context_git" rev-parse "$p_scope")"
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":111,"method":"fixture/command","params":{"tool_use_id":"fixture-b-after-q","command":"ls"}}'
+  await_live_app_server_output "$dag_output" '"id":111,"result":{"fixture":"command-completed"'
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":112,"method":"fixture/deliver","params":{"sequence":1,"kind":"message","mode":"queue","selected_text":"B queued message"}}'
+  await_live_app_server_output "$dag_output" '"id":112,"result":{"fixture":"delivered"'
+
+  b_message_record="$(context_record_for_scope "$user" "$dag_session" "$b_scope")"
+  require_context_record "$b_message_record"
+  p_after_b="$(receive_context_delivery "$user" "$dag_session" "$b_message_record" dag-parent-receive-b)"
+  p_after_b_head="$(record_field "$p_after_b" parent_head)"
+  [[ -n "$p_after_b_head" ]]
+  [[ "$p_after_b_head" != "$p_after_follow_head" ]]
+
+  # q is an operation scope below B. Its stream facts do not advance B; each
+  # selected result enters B only through a public daemon/client receive.
+  await_live_app_server_output "$dag_output" 'fixture-operation=q-delivery-1'
+  q_partial_record="$(context_record_for_scope "$user" "$dag_session" "$q_scope")"
+  require_context_record "$q_partial_record"
+  b_after_q_partial="$(receive_context_delivery "$user" "$dag_session" "$q_partial_record" dag-b-receive-q-partial)"
+  b_after_q_partial_head="$(record_field "$b_after_q_partial" parent_head)"
+  [[ -n "$b_after_q_partial_head" ]]
+  [[ "$(git --git-dir="$context_git" rev-parse "$p_scope")" == "$p_after_b_head" ]]
+
+  await_live_app_server_output "$dag_output" 'fixture-operation=q-delivery-2'
+  q_final_record="$(context_record_for_scope "$user" "$dag_session" "$q_scope")"
+  require_context_record "$q_final_record"
+  b_after_q_final="$(receive_context_delivery "$user" "$dag_session" "$q_final_record" dag-b-receive-q-final)"
+  b_after_q_final_head="$(record_field "$b_after_q_final" parent_head)"
+  [[ -n "$b_after_q_final_head" ]]
+
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":113,"method":"fixture/delegate","params":{"child_thread_id":"fixture-d","child_turn_id":"turn-1","frozen_context_mode":"last_turns","last_turns":1,"tool_use_id":"fixture-b-d"}}'
+  await_live_app_server_output "$dag_output" '"id":113,"result":{"fixture":"delegated"'
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":114,"method":"fixture/command","params":{"tool_use_id":"fixture-d-ls","command":"ls"}}'
+  await_live_app_server_output "$dag_output" '"id":114,"result":{"fixture":"command-completed"'
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":115,"method":"fixture/deliver","params":{"sequence":1,"kind":"result","mode":"queue","selected_text":"D result"}}'
+  await_live_app_server_output "$dag_output" '"id":115,"result":{"fixture":"delivered"'
+
+  d_result_record="$(context_record_for_scope "$user" "$dag_session" "$d_scope")"
+  require_context_record "$d_result_record"
+  b_before_d_head="$(record_field "$d_result_record" expected_parent_head)"
+  b_after_d="$(receive_context_delivery "$user" "$dag_session" "$d_result_record" dag-b-receive-d)"
+  b_after_d_head="$(record_field "$b_after_d" parent_head)"
+  [[ -n "$b_before_d_head" && -n "$b_after_d_head" ]]
+
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":116,"method":"fixture/switch","params":{"thread_id":"fixture-b","turn_id":"turn-1"}}'
+  await_live_app_server_output "$dag_output" '"id":116,"result":{"fixture":"switched"'
+  send_live_app_server_frame \
+    '{"jsonrpc":"2.0","id":117,"method":"fixture/deliver","params":{"sequence":2,"kind":"result","mode":"follow-up","selected_text":"B final after D"}}'
+  await_live_app_server_output "$dag_output" '"id":117,"result":{"fixture":"delivered"'
+
+  b_final_record="$(context_record_for_scope "$user" "$dag_session" "$b_scope")"
+  require_context_record "$b_final_record"
+  p_after_final="$(receive_context_delivery "$user" "$dag_session" "$b_final_record" dag-parent-receive-b-final)"
+  p_after_final_head="$(record_field "$p_after_final" parent_head)"
+  [[ -n "$p_after_final_head" ]]
+
+  # The only repository access in this probe is a post-action inspection of
+  # daemon-owned Git facts. All admits, delivery decisions, and graph reads
+  # above use public daemon/client paths.
+  git --git-dir="$context_git" fsck --no-dangling --no-progress
+  /usr/lib/erebor/codex-context-dag-inspector \
+    --repository "$context_git" \
+    --session-id "$dag_session" \
+    --edge "$p_scope|$b_scope|$(edge_path_for_scope "$b_scope")" \
+    --edge "$p_scope|$c_scope|$(edge_path_for_scope "$c_scope")" \
+    --edge "$b_scope|$d_scope|$(edge_path_for_scope "$d_scope")" \
+    --edge "$b_scope|$q_scope|$(edge_path_for_scope "$q_scope")" \
+    | grep -q 'context_dag_scopes=6'
+  [[ "$(git --git-dir="$context_git" for-each-ref --format='%(refname)' "refs/scopes/$dag_session" | wc -l | tr -d ' ')" == 6 ]]
+  [[ "$(git --git-dir="$context_git" rev-parse "$p_scope")" == "$p_after_final_head" ]]
+  git --git-dir="$context_git" grep -F "\"child_scope\":\"$b_scope\"" "$p_after_final_head" -- erebor/context-dag/edges >/dev/null
+  git --git-dir="$context_git" grep -F "\"child_scope\":\"$c_scope\"" "$p_after_final_head" -- erebor/context-dag/edges >/dev/null
+  git --git-dir="$context_git" grep -F "\"child_scope\":\"$d_scope\"" "$b_after_d_head" -- erebor/context-dag/edges >/dev/null
+  git --git-dir="$context_git" grep -F "\"child_scope\":\"$q_scope\"" "$b_after_q_final_head" -- erebor/context-dag/edges >/dev/null
+  git --git-dir="$context_git" grep -F '"execution_binding":"native_logical"' "$p_after_final_head" -- erebor/context-dag/edges >/dev/null
+  git --git-dir="$context_git" ls-tree -r "$p_after_final_head" -- agents/codex/app-server/prompts | grep -q .
+  git --git-dir="$context_git" ls-tree -r "$b_after_d_head" -- agents/codex/physical-effects | grep -q .
+  git --git-dir="$context_git" ls-tree -r "$(git --git-dir="$context_git" rev-parse "$d_scope")" -- agents/codex/physical-effects | grep -q .
+  git --git-dir="$context_git" ls-tree -r "$(git --git-dir="$context_git" rev-parse "$q_scope")" -- agents/codex/physical-effects | grep -q .
+
+  mapfile -t dag_p_merge_parents < <(git --git-dir="$context_git" cat-file -p "$p_after_final_head" | sed -n 's/^parent //p')
+  [[ "${dag_p_merge_parents[0]}" == "$p_after_b_head" ]]
+  [[ "${dag_p_merge_parents[1]}" == "$(record_field "$b_final_record" delivery_commit)" ]]
+  mapfile -t dag_b_merge_parents < <(git --git-dir="$context_git" cat-file -p "$b_after_d_head" | sed -n 's/^parent //p')
+  [[ "${dag_b_merge_parents[0]}" == "$b_before_d_head" ]]
+  [[ "${dag_b_merge_parents[1]}" == "$(record_field "$d_result_record" delivery_commit)" ]]
+  mapfile -t dag_q_merge_parents < <(git --git-dir="$context_git" cat-file -p "$b_after_q_final_head" | sed -n 's/^parent //p')
+  [[ "${dag_q_merge_parents[0]}" == "$b_after_q_partial_head" ]]
+  [[ "${dag_q_merge_parents[1]}" == "$(record_field "$q_final_record" delivery_commit)" ]]
+
+  dag_graph="$(as_user "$user" session context graph "$dag_session")"
+  grep -q 'logical fork fixture-b/turn-1' <<<"$dag_graph"
+  grep -q 'tool bash command="ls"' <<<"$dag_graph"
+  grep -q 'exec /usr/bin/ls allowed pid=' <<<"$dag_graph"
+  grep -q 'delivery result #1 queued' <<<"$dag_graph"
+  grep -q 'agent control list_agents' <<<"$dag_graph"
+  grep -q 'agent control follow_up fixture-b/turn-1' <<<"$dag_graph"
+  grep -q 'agent control interrupt fixture-c/turn-1' <<<"$dag_graph"
+
+  close_live_app_server_input "$dag_fifo"
+  wait "$live_client_pid"
+  await_terminal "$user" "$dag_session"
+  remove_all_sessions "$user"
+}
+
 configure_fixture
 systemctl restart erebord.service
 await_daemon
@@ -351,177 +576,40 @@ grep -q '"fixture":"accepted"' "$app_server_output"
 grep -q '"fixture":"cancelled"' "$app_server_output"
 remove_all_sessions "$first_user"
 
-for delegation_params in \
-  '"frozen_context_mode":"none","last_turns":0' \
-  '"frozen_context_mode":"all","last_turns":0' \
-  '"frozen_context_mode":"last_turns","last_turns":1'; do
-  delegation_output="$(mktemp)"
-  run_app_server_frame "$first_user" \
-    $'{"jsonrpc":"2.0","id":6,"method":"turn/start","params":{"threadId":"fixture-thread"}}\n'"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"fixture/delegate\",\"params\":{$delegation_params}}" \
-    "$delegation_output"
-  grep -q '"fixture":"delegated"' "$delegation_output"
-  delegated_child="$(await_running_session "$first_user")"
-  delegated_session_count="$(session_ids "$first_user" | wc -l | tr -d ' ')"
-  [[ "$delegated_session_count" == 2 ]] || {
-    echo "delegation did not retain exactly parent P and child B sessions" >&2
-    as_user "$first_user" session ps >&2
-    exit 1
-  }
-  as_user "$first_user" session inspect "$delegated_child" | grep -q 'state=running'
-  delegated_logs="$(await_session_stdout "$first_user" "$delegated_child" 'fixture-hook=accepted')"
-  if [[ "$delegation_params" == *'"none"'* ]]; then
-    ! grep -q 'fixture-frozen-context=' <<<"$delegated_logs"
+for frozen_context_mode in none all last_turns; do
+  mode_output="$(mktemp)"
+  mode_thread="fixture-mode-$frozen_context_mode"
+  mode_child="fixture-child-$frozen_context_mode"
+  if [[ "$frozen_context_mode" == last_turns ]]; then
+    mode_params='"frozen_context_mode":"last_turns","last_turns":1'
   else
-    grep -q 'fixture-frozen-context={"schema_version":1,"source":"erebor_frozen_codex_prompt_projection"' <<<"$delegated_logs"
+    mode_params="\"frozen_context_mode\":\"$frozen_context_mode\",\"last_turns\":0"
+  fi
+  run_app_server_frame "$first_user" \
+    $'{"jsonrpc":"2.0","id":6,"method":"turn/start","params":{"threadId":"'"$mode_thread"'"}}\n' \
+    $'{"jsonrpc":"2.0","id":7,"method":"fixture/delegate","params":{"child_thread_id":"'"$mode_child"'","child_turn_id":"turn-1",'"$mode_params"$'}}' \
+    "$mode_output"
+  grep -q '"fixture":"delegated"' "$mode_output"
+  mode_session="$(session_ids "$first_user" | head -n 1)"
+  [[ -n "$mode_session" && "$(session_ids "$first_user" | wc -l | tr -d ' ')" == 1 ]]
+  mode_context_git="/var/lib/erebor/users/$(id -u "$first_user")/sessions/$mode_session/context"
+  mode_parent_scope="$(scope_for_app_server_thread "$mode_session" "$mode_thread")"
+  mode_child_scope="$(scope_for_logical_thread "$mode_session" "$mode_child" turn-1)"
+  mode_parent_head="$(git --git-dir="$mode_context_git" rev-parse "$mode_parent_scope")"
+  mode_edge_path="$(edge_path_for_scope "$mode_child_scope")"
+  mode_edge="$(git --git-dir="$mode_context_git" show "$mode_parent_head:$mode_edge_path")"
+  grep -Fq "\"child_scope\":\"$mode_child_scope\"" <<<"$mode_edge"
+  grep -Fq "\"frozen_context_mode\":\"$frozen_context_mode\"" \
+    <(git --git-dir="$mode_context_git" grep -h 'frozen_context_mode' "$mode_parent_head" -- agents/codex/hooks)
+  if [[ "$frozen_context_mode" == none ]]; then
+    ! grep -q '"used_paths"' <<<"$mode_edge"
+  else
+    grep -Fq '"used_paths":["agents/codex/app-server/prompts/' <<<"$mode_edge"
   fi
   remove_all_sessions "$first_user"
 done
 
-# Exercise the complete public parent/child delivery path. P admits sibling
-# children B and C through the guarded bridge. B publishes a message, C
-# publishes a cancellation fact, the parent explicitly decides both, then B
-# binds its own authenticated terminal turn and admits D. D's result must be
-# received by B before B's second result can be received by P.
-dag_parent_output="$(mktemp)"
-dag_parent_frame=$'{"jsonrpc":"2.0","id":100,"method":"turn/start","params":{"threadId":"fixture-thread"}}\n'
-dag_parent_frame+=$'{"jsonrpc":"2.0","id":101,"method":"fixture/delegate","params":{"frozen_context_mode":"all","last_turns":0,"tool_use_id":"fixture-p-b"}}\n'
-dag_parent_frame+=$'{"jsonrpc":"2.0","id":102,"method":"fixture/delegate","params":{"frozen_context_mode":"none","last_turns":0,"tool_use_id":"fixture-p-c"}}'
-run_app_server_frame "$first_user" "$dag_parent_frame" "$dag_parent_output"
-grep -c '"fixture":"delegated"' "$dag_parent_output" | grep -q '^2$'
-
-mapfile -t dag_running < <(await_running_session_count "$first_user" 2)
-mapfile -t dag_sessions < <(session_ids "$first_user")
-[[ "${#dag_sessions[@]}" == 3 ]]
-dag_b_session="${dag_running[0]}"
-dag_c_session="${dag_running[1]}"
-dag_parent_session=""
-for session_id in "${dag_sessions[@]}"; do
-  if [[ "$session_id" != "$dag_b_session" && "$session_id" != "$dag_c_session" ]]; then
-    dag_parent_session="$session_id"
-  fi
-done
-[[ -n "$dag_parent_session" ]]
-await_session_stdout "$first_user" "$dag_b_session" 'fixture-hook=accepted' >/dev/null
-await_session_stdout "$first_user" "$dag_c_session" 'fixture-hook=accepted' >/dev/null
-
-dag_b_message_output="$(mktemp)"
-send_fixture_tty_control "$first_user" "$dag_b_session" \
-  $'fixture/turn\nfixture/command {"tool_use_id":"fixture-b-ls","command":"ls"}\nfixture/start-q\nfixture/deliver {"sequence":1,"kind":"message","mode":"queue","selected_text":"B queued message"}' \
-  dag-b-message "$dag_b_message_output"
-grep -q 'fixture-turn=accepted' "$dag_b_message_output"
-grep -q 'fixture-command=completed' "$dag_b_message_output"
-grep -q 'fixture-operation=q-started' "$dag_b_message_output"
-grep -q 'fixture-delivery=accepted' "$dag_b_message_output"
-
-dag_c_cancel_output="$(mktemp)"
-send_fixture_tty_control "$first_user" "$dag_c_session" \
-  'fixture/deliver {"sequence":1,"kind":"cancelled","mode":"queue","selected_text":"C cancelled"}' \
-  dag-c-cancel "$dag_c_cancel_output"
-grep -q 'fixture-delivery=accepted' "$dag_c_cancel_output"
-
-dag_b_message_record="$(context_record_for_child "$first_user" "$dag_parent_session" "$dag_b_session")"
-dag_c_cancel_record="$(context_record_for_child "$first_user" "$dag_parent_session" "$dag_c_session")"
-[[ -n "$dag_b_message_record" && -n "$dag_c_cancel_record" ]]
-dag_parent_after_b="$(receive_context_delivery "$first_user" "$dag_parent_session" "$dag_b_message_record" dag-parent-receive-b)"
-dag_parent_after_b_head="$(record_field "$dag_parent_after_b" parent_head)"
-dag_parent_b_receipt="$(record_field "$dag_parent_after_b" receipt_path)"
-[[ -n "$dag_parent_after_b_head" && -n "$dag_parent_b_receipt" ]]
-dag_c_cancel_record="$(context_record_for_child "$first_user" "$dag_parent_session" "$dag_c_session")"
-dag_parent_after_c="$(reject_context_delivery "$first_user" "$dag_parent_session" "$dag_c_cancel_record" dag-parent-reject-c)"
-dag_parent_after_c_head="$(record_field "$dag_parent_after_c" parent_head)"
-dag_parent_c_receipt="$(record_field "$dag_parent_after_c" receipt_path)"
-[[ -n "$dag_parent_after_c_head" && -n "$dag_parent_c_receipt" ]]
-
-# q is a long-lived operation inside B, not another daemon session. Its
-# delivery scope is admitted from B's exact command pin, so B alone must make
-# two explicit receives while P's head remains unchanged.
-await_session_stdout "$first_user" "$dag_b_session" 'fixture-operation=q-delivery-1' >/dev/null
-dag_q_scope="refs/scopes/$dag_b_session/scope/codex-operation-$(printf 'fixture-q' | sha256sum | awk '{print substr($1, 1, 20)}')"
-dag_q_partial_record="$(context_record_for_scope "$first_user" "$dag_b_session" "$dag_q_scope")"
-dag_b_after_q_partial="$(receive_context_delivery "$first_user" "$dag_b_session" "$dag_q_partial_record" dag-b-receive-q-partial)"
-dag_b_after_q_partial_head="$(record_field "$dag_b_after_q_partial" parent_head)"
-[[ -n "$dag_b_after_q_partial_head" ]]
-[[ "$(git --git-dir="/var/lib/erebor/users/$(id -u "$first_user")/sessions/$dag_parent_session/context" rev-parse "refs/scopes/$dag_parent_session/root")" == "$dag_parent_after_c_head" ]]
-await_session_stdout "$first_user" "$dag_b_session" 'fixture-operation=q-delivery-2' >/dev/null
-dag_q_final_record="$(context_record_for_scope "$first_user" "$dag_b_session" "$dag_q_scope")"
-dag_b_after_q_final="$(receive_context_delivery "$first_user" "$dag_b_session" "$dag_q_final_record" dag-b-receive-q-final)"
-dag_b_after_q_final_head="$(record_field "$dag_b_after_q_final" parent_head)"
-[[ -n "$dag_b_after_q_final_head" ]]
-
-as_user "$first_user" session stop "$dag_c_session" \
-  --idempotency-key dag-parent-cancel-c >/dev/null
-await_terminal "$first_user" "$dag_c_session"
-
-dag_b_delegate_output="$(mktemp)"
-send_fixture_tty_control "$first_user" "$dag_b_session" \
-  $'fixture/turn\nfixture/delegate {"frozen_context_mode":"none","last_turns":0,"tool_use_id":"fixture-b-d"}' \
-  dag-b-delegate "$dag_b_delegate_output"
-grep -q 'fixture-turn=accepted' "$dag_b_delegate_output"
-grep -q 'fixture-delegation=accepted' "$dag_b_delegate_output"
-mapfile -t dag_running < <(await_running_session_count "$first_user" 2)
-if [[ "${dag_running[0]}" == "$dag_b_session" ]]; then
-  dag_d_session="${dag_running[1]}"
-else
-  dag_d_session="${dag_running[0]}"
-fi
-[[ "$dag_d_session" != "$dag_b_session" ]]
-await_session_stdout "$first_user" "$dag_d_session" 'fixture-hook=accepted' >/dev/null
-
-dag_d_result_output="$(mktemp)"
-send_fixture_tty_control "$first_user" "$dag_d_session" \
-  'fixture/deliver {"sequence":1,"kind":"result","mode":"queue","selected_text":"D result"}' \
-  dag-d-result "$dag_d_result_output"
-grep -q 'fixture-delivery=accepted' "$dag_d_result_output"
-dag_d_result_record="$(context_record_for_child "$first_user" "$dag_b_session" "$dag_d_session")"
-dag_b_before_d_head="$(record_field "$dag_d_result_record" expected_parent_head)"
-dag_b_after_d="$(receive_context_delivery "$first_user" "$dag_b_session" "$dag_d_result_record" dag-b-receive-d)"
-dag_b_after_d_head="$(record_field "$dag_b_after_d" parent_head)"
-dag_b_d_receipt="$(record_field "$dag_b_after_d" receipt_path)"
-[[ -n "$dag_b_before_d_head" && -n "$dag_b_after_d_head" && -n "$dag_b_d_receipt" ]]
-
-dag_b_final_output="$(mktemp)"
-send_fixture_tty_control "$first_user" "$dag_b_session" \
-  'fixture/deliver {"sequence":2,"kind":"result","mode":"follow-up","selected_text":"B final after D"}' \
-  dag-b-final "$dag_b_final_output"
-grep -q 'fixture-delivery=accepted' "$dag_b_final_output"
-dag_b_final_record="$(context_record_for_child "$first_user" "$dag_parent_session" "$dag_b_session")"
-dag_b_final_commit="$(record_field "$dag_b_final_record" delivery_commit)"
-dag_parent_after_final="$(receive_context_delivery "$first_user" "$dag_parent_session" "$dag_b_final_record" dag-parent-receive-b-final)"
-dag_parent_after_final_head="$(record_field "$dag_parent_after_final" parent_head)"
-dag_parent_b_final_receipt="$(record_field "$dag_parent_after_final" receipt_path)"
-[[ -n "$dag_b_final_commit" && -n "$dag_parent_after_final_head" && -n "$dag_parent_b_final_receipt" ]]
-
-# Inspect the real daemon-owned SHA-256 Git artifact. This is evidence only:
-# all creates, deliveries, and decisions above used the public client.
-context_git="/var/lib/erebor/users/$(id -u "$first_user")/sessions/$dag_parent_session/context"
-[[ -d "$context_git" ]]
-git --git-dir="$context_git" fsck --no-dangling --no-progress
-[[ "$(git --git-dir="$context_git" rev-parse "refs/scopes/$dag_parent_session/root")" == "$dag_parent_after_final_head" ]]
-mapfile -t dag_parent_merge_parents < <(git --git-dir="$context_git" cat-file -p "$dag_parent_after_final_head" | sed -n 's/^parent //p')
-[[ "${dag_parent_merge_parents[0]}" == "$dag_parent_after_c_head" ]]
-[[ "${dag_parent_merge_parents[1]}" == "$dag_b_final_commit" ]]
-mapfile -t dag_b_merge_parents < <(git --git-dir="$context_git" cat-file -p "$dag_b_after_d_head" | sed -n 's/^parent //p')
-[[ "${dag_b_merge_parents[0]}" == "$dag_b_before_d_head" ]]
-[[ "${dag_b_merge_parents[1]}" == "$(record_field "$dag_d_result_record" delivery_commit)" ]]
-for receipt in "$dag_parent_b_receipt" "$dag_parent_c_receipt" "$dag_parent_b_final_receipt"; do
-  git --git-dir="$context_git" cat-file -e "$dag_parent_after_final_head:$receipt"
-done
-git --git-dir="$context_git" cat-file -e "$dag_b_after_d_head:$dag_b_d_receipt"
-git --git-dir="$context_git" grep -F "\"child_scope\":\"refs/scopes/$dag_b_session/root\"" \
-  "$dag_parent_after_final_head" -- erebor/context-dag/edges >/dev/null
-git --git-dir="$context_git" grep -F "\"child_scope\":\"refs/scopes/$dag_c_session/root\"" \
-  "$dag_parent_after_final_head" -- erebor/context-dag/edges >/dev/null
-git --git-dir="$context_git" grep -F "\"child_scope\":\"refs/scopes/$dag_d_session/root\"" \
-  "$dag_b_after_d_head" -- erebor/context-dag/edges >/dev/null
-git --git-dir="$context_git" grep -F "\"child_scope\":\"$dag_q_scope\"" \
-  "$dag_b_after_q_final_head" -- erebor/context-dag/edges >/dev/null
-git --git-dir="$context_git" grep -F '"execution_binding":"native_logical"' \
-  "$dag_b_after_q_final_head" -- erebor/context-dag/edges >/dev/null
-mapfile -t dag_q_final_merge_parents < <(git --git-dir="$context_git" cat-file -p "$dag_b_after_q_final_head" | sed -n 's/^parent //p')
-[[ "${dag_q_final_merge_parents[0]}" == "$dag_b_after_q_partial_head" ]]
-[[ "${dag_q_final_merge_parents[1]}" == "$(record_field "$dag_q_final_record" delivery_commit)" ]]
-remove_all_sessions "$first_user"
-
+exercise_single_session_context_dag "$first_user"
 for hook_case in hook-replay hook-wrong-peer hook-wrong-session; do
   hook_output="$(mktemp)"
   run_app_server_frame "$first_user" \
@@ -558,7 +646,7 @@ fi
 malformed_session="$(session_ids "$first_user" | head -n 1)"
 [[ -n "$malformed_session" ]]
 await_terminal "$first_user" "$malformed_session"
-as_user "$first_user" session inspect "$malformed_session" | grep -q 'state=failed'
+as_user "$first_user" session inspect "$malformed_session" | grep -q 'failed'
 remove_all_sessions "$first_user"
 
 cancellation_fifo="$(mktemp -u)"
@@ -579,7 +667,7 @@ disconnect_session_id="$wait_session_id"
 kill -TERM "$disconnect_client_pid"
 close_waiting_app_server_input "$disconnect_fifo"
 wait "$wait_client_parent" || true
-as_user "$first_user" session inspect "$disconnect_session_id" | grep -q 'state=running'
+as_user "$first_user" session inspect "$disconnect_session_id" | grep -q 'running'
 as_user "$first_user" session stop "$disconnect_session_id" \
   --idempotency-key codex-runtime-disconnect-stop >/dev/null
 await_terminal "$first_user" "$disconnect_session_id"
@@ -595,7 +683,7 @@ close_waiting_app_server_input "$recovery_fifo"
 wait "$wait_client_parent" || true
 systemctl restart erebord.service
 await_daemon
-as_user "$first_user" session inspect "$recovery_session_id" | grep -q 'state=running'
+as_user "$first_user" session inspect "$recovery_session_id" | grep -q 'running'
 as_user "$first_user" session stop "$recovery_session_id" \
   --idempotency-key codex-runtime-recovery-stop >/dev/null
 await_terminal "$first_user" "$recovery_session_id"

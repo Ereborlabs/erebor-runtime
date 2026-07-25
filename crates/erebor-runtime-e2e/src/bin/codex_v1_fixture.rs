@@ -35,7 +35,7 @@ const TERMINAL_TURN_EVENT: &[u8] = br#"{"hook_event_name":"UserPromptSubmit","se
 // The managed package pins one structural schema per native hook kind. Keep
 // every fixture PreToolUse event structurally identical while its tool name
 // and values select the bounded command or logical-fork capability.
-const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"command":"","erebor_operation_key":"","child_thread_id":"fixture-child-thread","child_turn_id":"fixture-child-turn","frozen_context_mode":"all","last_turns":0}}"#;
+const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"command":"","erebor_operation_key":"","child_thread_id":"fixture-child-thread","child_turn_id":"fixture-child-turn","frozen_context_mode":"all","last_turns":0,"erebor_context_action":"","target_thread_id":"","target_turn_id":"","follow_up_text":""}}"#;
 const DELIVERY_EVENT: &[u8] = br#"{"hook_event_name":"PostToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delivery-1","tool_response":{"status":"ok"},"erebor_delivery":{"emit":true,"sequence":1,"kind":"result","mode":"queue","selected_text":"fixture result","operation_key":""}}"#;
 const HOOK_MODE_ENV: &str = "EREBOR_FIXTURE_HOOK_MODE";
 const MAX_FIXTURE_DELEGATION_LAST_TURNS: u64 = 8;
@@ -72,6 +72,7 @@ impl FixtureTurn {
 struct FixtureTurns {
     active: FixtureTurn,
     known: BTreeMap<(String, String), FixtureTurn>,
+    interrupted: BTreeMap<(String, String), ()>,
 }
 
 impl FixtureTurns {
@@ -82,6 +83,7 @@ impl FixtureTurns {
         Self {
             active: root,
             known,
+            interrupted: BTreeMap::new(),
         }
     }
 
@@ -112,12 +114,34 @@ impl FixtureTurns {
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .ok_or("fixture/switch requires a non-empty turn_id")?;
+        self.activate((thread_id.to_owned(), turn_id.to_owned()))
+    }
+
+    fn activate(&mut self, key: (String, String)) -> FixtureResult<()> {
+        if self.interrupted.contains_key(&key) {
+            return Err("fixture/switch cannot enter an interrupted thread/turn".into());
+        }
         self.active = self
             .known
-            .get(&(thread_id.to_owned(), turn_id.to_owned()))
+            .get(&key)
             .cloned()
             .ok_or("fixture/switch may select only a previously delegated thread/turn")?;
         Ok(())
+    }
+
+    fn follow_up(&mut self, request: &Value) -> FixtureResult<()> {
+        self.activate(control_target(request)?)
+    }
+
+    fn interrupt(&mut self, request: &Value) -> FixtureResult<FixtureTurn> {
+        let key = control_target(request)?;
+        let target = self
+            .known
+            .get(&key)
+            .cloned()
+            .ok_or("fixture/control interruption target is not a known thread/turn")?;
+        self.interrupted.insert(key, ());
+        Ok(target)
     }
 }
 
@@ -245,6 +269,12 @@ fn run_tty() -> FixtureResult<()> {
             turns.switch(&request)?;
             println!("fixture-switch=accepted");
         }
+        if let Some(params) = line.strip_prefix("fixture/control ") {
+            let request = json!({"params": serde_json::from_str::<Value>(params)?});
+            let result = invoke_fixture_control(&request, turns.active())?;
+            apply_fixture_control(&mut turns, &request, &result)?;
+            println!("fixture-control={}", control_action(&request)?);
+        }
         if let Some(params) = line.strip_prefix("fixture/command ") {
             let request = json!({"params": serde_json::from_str::<Value>(params)?});
             let output = run_guarded_command(&request, turns.active(), &mut tool_uses)?;
@@ -331,6 +361,11 @@ fn run_app_server() -> FixtureResult<()> {
             "fixture/switch" => {
                 turns.switch(&request)?;
                 json!({"fixture": "switched"})
+            }
+            "fixture/control" => {
+                let result = invoke_fixture_control(&request, turns.active())?;
+                apply_fixture_control(&mut turns, &request, &result)?;
+                json!({"fixture": "control", "control": result})
             }
             "fixture/command" => {
                 let output = run_guarded_command(&request, turns.active(), &mut tool_uses)?;
@@ -643,6 +678,152 @@ fn delegation_event(request: &Value, turn: &FixtureTurn) -> FixtureResult<Vec<u8
             "child_turn_id": child_turn_id,
             "frozen_context_mode": mode,
             "last_turns": last_turns,
+            "erebor_context_action": "",
+            "target_thread_id": "",
+            "target_turn_id": "",
+            "follow_up_text": "",
+        },
+    }))?)
+}
+
+fn invoke_fixture_control(request: &Value, turn: &FixtureTurn) -> FixtureResult<Value> {
+    let action = control_action(request)?;
+    let result = invoke_managed_hook_event(HookMode::Normal, &control_event(request, turn)?)?;
+    if result
+        .pointer("/erebor_context_control/action")
+        .and_then(Value::as_str)
+        != Some(action)
+    {
+        return Err("managed hook did not return the authorized context control action".into());
+    }
+    Ok(result)
+}
+
+fn apply_fixture_control(
+    turns: &mut FixtureTurns,
+    request: &Value,
+    result: &Value,
+) -> FixtureResult<()> {
+    let action = control_action(request)?;
+    if result
+        .pointer("/erebor_context_control/action")
+        .and_then(Value::as_str)
+        != Some(action)
+    {
+        return Err("fixture control result action does not match its request".into());
+    }
+    match action {
+        "list_agents" => {
+            let agents = result
+                .pointer("/erebor_context_control/agents")
+                .and_then(Value::as_array)
+                .ok_or("fixture list_agents result omitted its authorized agent list")?;
+            if agents.iter().any(|agent| {
+                agent.get("thread_id").and_then(Value::as_str).is_none()
+                    || agent.get("turn_id").and_then(Value::as_str).is_none()
+            }) {
+                return Err("fixture list_agents result contains an invalid agent identity".into());
+            }
+            Ok(())
+        }
+        "follow_up" => turns.follow_up(request),
+        "interrupt" => {
+            let target = turns.interrupt(request)?;
+            let cancellation = delivery_event(
+                &json!({
+                    "params": {
+                        "sequence": 1,
+                        "kind": "cancelled",
+                        "mode": "queue",
+                        "selected_text": "interrupted by parent context control",
+                    },
+                }),
+                &target,
+            )?;
+            invoke_managed_hook_event(HookMode::Normal, &cancellation)?;
+            Ok(())
+        }
+        _ => Err("fixture control action is not supported".into()),
+    }
+}
+
+fn control_action(request: &Value) -> FixtureResult<&str> {
+    fixture_params(request, "fixture/control")?
+        .get("action")
+        .and_then(Value::as_str)
+        .filter(|action| matches!(*action, "list_agents" | "follow_up" | "interrupt"))
+        .ok_or("fixture/control action must be list_agents, follow_up, or interrupt".into())
+}
+
+fn control_target(request: &Value) -> FixtureResult<(String, String)> {
+    let params = fixture_params(request, "fixture/control")?;
+    let thread_id = params
+        .get("target_thread_id")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+        .ok_or("fixture/control target_thread_id must be a bounded identifier")?;
+    let turn_id = params
+        .get("target_turn_id")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+        .ok_or("fixture/control target_turn_id must be a bounded identifier")?;
+    Ok((thread_id.to_owned(), turn_id.to_owned()))
+}
+
+fn control_event(request: &Value, turn: &FixtureTurn) -> FixtureResult<Vec<u8>> {
+    let params = fixture_params(request, "fixture/control")?;
+    let action = control_action(request)?;
+    let (target_thread_id, target_turn_id, follow_up_text) = match action {
+        "list_agents" => (String::new(), String::new(), String::new()),
+        "follow_up" => {
+            let (thread_id, turn_id) = control_target(request)?;
+            let text = params
+                .get("follow_up_text")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty() && value.len() <= 4 * 1024)
+                .ok_or("fixture/control follow_up_text must be bounded and non-empty")?;
+            (thread_id, turn_id, text.to_owned())
+        }
+        "interrupt" => {
+            let (thread_id, turn_id) = control_target(request)?;
+            (thread_id, turn_id, String::new())
+        }
+        _ => return Err("fixture/control action is not supported".into()),
+    };
+    let tool_use_id = params
+        .get("tool_use_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .unwrap_or("fixture-context-control-1");
+    Ok(serde_json::to_vec(&json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": turn.thread_id,
+        "turn_id": turn.turn_id,
+        "tool_use_id": tool_use_id,
+        "tool_name": "erebor_context_control",
+        "tool_input": {
+            "command": "",
+            "erebor_operation_key": "",
+            "child_thread_id": "",
+            "child_turn_id": "",
+            "frozen_context_mode": "none",
+            "last_turns": 0,
+            "erebor_context_action": action,
+            "target_thread_id": target_thread_id,
+            "target_turn_id": target_turn_id,
+            "follow_up_text": follow_up_text,
         },
     }))?)
 }
@@ -708,6 +889,10 @@ fn command_event(request: &Value, turn: &FixtureTurn) -> FixtureResult<Vec<u8>> 
         "child_turn_id": "",
         "frozen_context_mode": "none",
         "last_turns": 0,
+        "erebor_context_action": "",
+        "target_thread_id": "",
+        "target_turn_id": "",
+        "follow_up_text": "",
     });
     Ok(serde_json::to_vec(&json!({
         "hook_event_name": "PreToolUse",

@@ -12,7 +12,10 @@ use erebor_runtime_context::{
     Snapshot, TreeEdit,
 };
 use erebor_runtime_core::SessionSpec;
-use erebor_runtime_session::SessionRepository;
+use erebor_runtime_session::{
+    ContextAgentControl, ContextAgentControlAction, ContextAgentControlResult,
+    ContextAgentIdentity, SessionRepository,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -24,6 +27,7 @@ pub(super) const CONTEXT_DIRECTORY: &str = "context";
 pub(super) const CONTEXT_DAG_METADATA_PREFIX: &str = "erebor/context-dag";
 pub(super) const CONTEXT_DAG_EDGE_SCHEMA_VERSION: u32 = 1;
 pub(super) const MAX_CONTEXT_DAG_DEPTH: u8 = 16;
+const CONTEXT_DAG_CONTROL_DIRECTORY: &str = "controls";
 
 /// Opens the one daemon-owned context repository for a root session. A child
 /// session follows its checked parent pin until it reaches that root, so it
@@ -396,6 +400,62 @@ impl ContextDagCoordinator {
         Ok(())
     }
 
+    /// Authorize a source-authenticated agent collaboration action from the
+    /// immutable scope topology. The adapter supplies only thread/turn
+    /// bindings it already owns; this coordinator verifies their scope
+    /// membership and never accepts a target scope from the workload.
+    pub(crate) fn authorize_agent_control(
+        &self,
+        control: ContextAgentControl,
+    ) -> Result<ContextAgentControlResult> {
+        let _guard = self.mutation_lock.lock().map_err(|_error| {
+            InvalidRequestSnafu {
+                reason: String::from("context DAG coordinator mutation lock is poisoned"),
+            }
+            .build()
+        })?;
+        if control.session_id() != self.root_scope.session_id() {
+            return InvalidRequestSnafu {
+                reason: String::from("context agent control belongs to another session"),
+            }
+            .fail();
+        }
+        self.validate_agent_control_shape(&control)?;
+        self.validate_agent_identity(control.requester())?;
+        let agents = match control.action() {
+            ContextAgentControlAction::List => {
+                let mut visible = Vec::new();
+                for agent in control.known_agents() {
+                    self.validate_agent_identity(agent)?;
+                    if self.is_strict_descendant(agent.scope(), control.requester().scope())? {
+                        visible.push(agent.clone());
+                    }
+                }
+                visible
+            }
+            ContextAgentControlAction::FollowUp | ContextAgentControlAction::Interrupt => {
+                let target = control.target().ok_or_else(|| {
+                    InvalidRequestSnafu {
+                        reason: String::from("context agent control omitted its target"),
+                    }
+                    .build()
+                })?;
+                self.validate_agent_identity(target)?;
+                if !self.is_strict_descendant(target.scope(), control.requester().scope())? {
+                    return InvalidRequestSnafu {
+                        reason: String::from(
+                            "context agent controls may address only a strict descendant scope",
+                        ),
+                    }
+                    .fail();
+                }
+                Vec::new()
+            }
+        };
+        self.record_agent_control(&control, &agents)?;
+        Ok(ContextAgentControlResult::allowed(control.action(), agents))
+    }
+
     /// Return the complete durable scope topology rooted at this coordinator.
     /// Every non-root scope is revalidated through its retained parent edge so
     /// a graph display cannot hide malformed or reparented context state.
@@ -654,6 +714,18 @@ impl ContextDagCoordinator {
                 });
         }
         if path.starts_with(CONTEXT_DAG_PREFIX) {
+            if path.starts_with(&format!(
+                "{CONTEXT_DAG_METADATA_PREFIX}/{CONTEXT_DAG_CONTROL_DIRECTORY}/"
+            )) {
+                return self
+                    .agent_control_activity_summary(scope, path, &record)
+                    .map(|summary| {
+                        Some(ContextScopeGraphActivitySummary {
+                            summary,
+                            tool_use_id: None,
+                        })
+                    });
+            }
             return self
                 .delivery_graph_activity_summary(scope, path, &record)
                 .map(|summary| {
@@ -718,6 +790,274 @@ impl ContextDagCoordinator {
             summary,
             tool_use_id,
         }))
+    }
+
+    fn validate_agent_identity(&self, identity: &ContextAgentIdentity) -> Result<()> {
+        if identity.scope().session_id() != self.root_scope.session_id() {
+            return InvalidRequestSnafu {
+                reason: String::from("context agent identity escaped its session namespace"),
+            }
+            .fail();
+        }
+        self.scope_depth(identity.scope(), &mut HashSet::new())?;
+        Ok(())
+    }
+
+    fn is_strict_descendant(&self, child: &ScopeRef, ancestor: &ScopeRef) -> Result<bool> {
+        if child == ancestor {
+            return Ok(false);
+        }
+        let mut current = child.clone();
+        let mut visited = HashSet::new();
+        while current != self.root_scope {
+            if !visited.insert(current.as_str().to_owned()) {
+                return InvalidRequestSnafu {
+                    reason: String::from("context agent control detected an edge cycle"),
+                }
+                .fail();
+            }
+            let edge = self.direct_edge(&current)?;
+            let parent = edge.parent_context.scope().map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("context agent control has an invalid edge parent: {error}"),
+                }
+                .build()
+            })?;
+            if &parent == ancestor {
+                return Ok(true);
+            }
+            current = parent;
+        }
+        Ok(false)
+    }
+
+    fn validate_agent_control_shape(&self, control: &ContextAgentControl) -> Result<()> {
+        if !control
+            .known_agents()
+            .iter()
+            .any(|agent| agent == control.requester())
+        {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "context agent control requester is not an exact source-known identity",
+                ),
+            }
+            .fail();
+        }
+        match control.action() {
+            ContextAgentControlAction::List => {
+                if control.target().is_some() || control.content_sha256().is_some() {
+                    return InvalidRequestSnafu {
+                        reason: String::from(
+                            "list_agents context control must not carry a target or content",
+                        ),
+                    }
+                    .fail();
+                }
+            }
+            ContextAgentControlAction::FollowUp => {
+                let content_sha256 = control.content_sha256().ok_or_else(|| {
+                    InvalidRequestSnafu {
+                        reason: String::from(
+                            "follow_up context control must carry a content digest",
+                        ),
+                    }
+                    .build()
+                })?;
+                if content_sha256.len() != 64
+                    || content_sha256.bytes().any(|byte| !byte.is_ascii_hexdigit())
+                {
+                    return InvalidRequestSnafu {
+                        reason: String::from(
+                            "follow_up context control content digest must be a SHA-256 hex digest",
+                        ),
+                    }
+                    .fail();
+                }
+                self.require_known_control_target(control)?;
+            }
+            ContextAgentControlAction::Interrupt => {
+                if control.content_sha256().is_some() {
+                    return InvalidRequestSnafu {
+                        reason: String::from(
+                            "interrupt context control must not carry follow-up content",
+                        ),
+                    }
+                    .fail();
+                }
+                self.require_known_control_target(control)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn require_known_control_target(&self, control: &ContextAgentControl) -> Result<()> {
+        let target = control.target().ok_or_else(|| {
+            InvalidRequestSnafu {
+                reason: String::from("context agent control omitted its target"),
+            }
+            .build()
+        })?;
+        if !control.known_agents().iter().any(|agent| agent == target) {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "context agent control target is not an exact source-known identity",
+                ),
+            }
+            .fail();
+        }
+        Ok(())
+    }
+
+    fn record_agent_control(
+        &self,
+        control: &ContextAgentControl,
+        agents: &[ContextAgentIdentity],
+    ) -> Result<()> {
+        let requester = control.requester().scope().clone();
+        let head = self.repository.scope_head(&requester).map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("could not read context control requester scope: {error}"),
+            }
+            .build()
+        })?;
+        let mut digest = Sha256::new();
+        digest.update(head.to_string().as_bytes());
+        digest.update([0]);
+        digest.update(control.action().as_str().as_bytes());
+        digest.update([0]);
+        digest.update(control.requester().scope().as_str().as_bytes());
+        if let Some(target) = control.target() {
+            digest.update([0]);
+            digest.update(target.scope().as_str().as_bytes());
+        }
+        let path = format!(
+            "{CONTEXT_DAG_METADATA_PREFIX}/{CONTEXT_DAG_CONTROL_DIRECTORY}/{:x}.json",
+            digest.finalize()
+        );
+        let record = serde_json::json!({
+            "schema_version": 1,
+            "source": "erebor_context_agent_control",
+            "kind": "agent-control",
+            "action": control.action().as_str(),
+            "requester": {
+                "thread_id": control.requester().thread_id(),
+                "turn_id": control.requester().turn_id(),
+                "scope": control.requester().scope().as_str(),
+            },
+            "target": control.target().map(|target| serde_json::json!({
+                "thread_id": target.thread_id(),
+                "turn_id": target.turn_id(),
+                "scope": target.scope().as_str(),
+            })),
+            "content_sha256": control.content_sha256(),
+            "agents": agents.iter().map(|agent| serde_json::json!({
+                "thread_id": agent.thread_id(),
+                "turn_id": agent.turn_id(),
+                "scope": agent.scope().as_str(),
+            })).collect::<Vec<_>>(),
+        });
+        let bytes = serde_json::to_vec(&record).map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("could not encode context agent control evidence: {error}"),
+            }
+            .build()
+        })?;
+        self.repository
+            .append_snapshot(
+                requester,
+                head,
+                Snapshot::new(vec![TreeEdit::blob(path, bytes).map_err(|error| {
+                    InvalidRequestSnafu {
+                        reason: format!(
+                            "could not construct context agent control evidence: {error}"
+                        ),
+                    }
+                    .build()
+                })?])
+                .map_err(|error| {
+                    InvalidRequestSnafu {
+                        reason: format!(
+                            "could not construct context agent control snapshot: {error}"
+                        ),
+                    }
+                    .build()
+                })?,
+                "Record source-authenticated agent control",
+            )
+            .map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!("could not record context agent control: {error}"),
+                }
+                .build()
+            })?;
+        Ok(())
+    }
+
+    fn agent_control_activity_summary(
+        &self,
+        scope: &ScopeRef,
+        path: &str,
+        record: &serde_json::Value,
+    ) -> Result<String> {
+        if record
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(1)
+            || record.get("source").and_then(serde_json::Value::as_str)
+                != Some("erebor_context_agent_control")
+            || record.get("kind").and_then(serde_json::Value::as_str) != Some("agent-control")
+            || record
+                .pointer("/requester/scope")
+                .and_then(serde_json::Value::as_str)
+                != Some(scope.as_str())
+        {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "retained context agent control `{path}` has an invalid record shape"
+                ),
+            }
+            .fail();
+        }
+        match record.get("action").and_then(serde_json::Value::as_str) {
+            Some("list_agents") => Ok(String::from("agent control list_agents")),
+            Some("follow_up") => Ok(format!(
+                "agent control follow_up {}",
+                Self::control_target_label(record, path)?
+            )),
+            Some("interrupt") => Ok(format!(
+                "agent control interrupt {}",
+                Self::control_target_label(record, path)?
+            )),
+            _ => InvalidRequestSnafu {
+                reason: format!("retained context agent control `{path}` has an invalid action"),
+            }
+            .fail(),
+        }
+    }
+
+    fn control_target_label(record: &serde_json::Value, path: &str) -> Result<String> {
+        let thread = record
+            .pointer("/target/thread_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: format!("retained context agent control `{path}` omits target thread"),
+                }
+                .build()
+            })?;
+        let turn = record
+            .pointer("/target/turn_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                InvalidRequestSnafu {
+                    reason: format!("retained context agent control `{path}` omits target turn"),
+                }
+                .build()
+            })?;
+        Ok(format!("{thread}/{turn}"))
     }
 
     fn physical_effect_summary(
@@ -1254,7 +1594,9 @@ mod tests {
         SafePathKind, SessionAdmission, SessionOwner, SessionSpec, WorkloadPrivilegePlan,
     };
     use erebor_runtime_events::SessionId;
-    use erebor_runtime_session::SessionRepository;
+    use erebor_runtime_session::{
+        ContextAgentControl, ContextAgentControlAction, ContextAgentIdentity, SessionRepository,
+    };
 
     use super::{
         delivery::{ContextDeliveryKind, ContextDeliveryMode, ContextDeliveryPublication},
@@ -1457,6 +1799,123 @@ mod tests {
             .read_commit_blob(root_head, &edge_path)?
             .is_some());
         assert_eq!(repository.scope_refs()?.len(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn source_authenticated_agent_controls_follow_only_the_durable_descendant_tree(
+    ) -> Result<(), Box<dyn Error>> {
+        let (_temporary, repository, root, root_pin) = root_fixture()?;
+        let coordinator = ContextDagCoordinator::new(Arc::clone(&repository), root.clone())?;
+        let parent = ScopeRef::scope("parent-session", "parent")?;
+        coordinator.admit_child(request(
+            root_pin,
+            parent.clone(),
+            ContextExecutionBinding::NativeLogical,
+        )?)?;
+        let parent_pin = repository
+            .pin_scope_head(parent.clone(), &[])?
+            .pin()
+            .clone();
+        let child_b = ScopeRef::scope("parent-session", "child-b")?;
+        coordinator.admit_child(request(
+            parent_pin,
+            child_b.clone(),
+            ContextExecutionBinding::NativeLogical,
+        )?)?;
+        let parent_pin = repository
+            .pin_scope_head(parent.clone(), &[])?
+            .pin()
+            .clone();
+        let child_c = ScopeRef::scope("parent-session", "child-c")?;
+        coordinator.admit_child(request(
+            parent_pin,
+            child_c.clone(),
+            ContextExecutionBinding::NativeLogical,
+        )?)?;
+        let child_b_pin = repository
+            .pin_scope_head(child_b.clone(), &[])?
+            .pin()
+            .clone();
+        let grandchild = ScopeRef::scope("parent-session", "grandchild")?;
+        coordinator.admit_child(request(
+            child_b_pin,
+            grandchild.clone(),
+            ContextExecutionBinding::NativeLogical,
+        )?)?;
+
+        let parent_identity = ContextAgentIdentity::new("parent", "turn-1", parent.clone())?;
+        let child_b_identity = ContextAgentIdentity::new("child-b", "turn-1", child_b.clone())?;
+        let child_c_identity = ContextAgentIdentity::new("child-c", "turn-1", child_c.clone())?;
+        let grandchild_identity =
+            ContextAgentIdentity::new("grandchild", "turn-1", grandchild.clone())?;
+        let known = vec![
+            parent_identity.clone(),
+            child_b_identity.clone(),
+            child_c_identity.clone(),
+            grandchild_identity.clone(),
+        ];
+
+        let listed = coordinator.authorize_agent_control(ContextAgentControl::new(
+            "parent-session",
+            parent_identity.clone(),
+            None,
+            ContextAgentControlAction::List,
+            None,
+            known.clone(),
+        ))?;
+        assert_eq!(
+            listed
+                .agents()
+                .iter()
+                .map(|agent| agent.scope().as_str())
+                .collect::<Vec<_>>(),
+            vec![child_b.as_str(), child_c.as_str(), grandchild.as_str()]
+        );
+        coordinator.authorize_agent_control(ContextAgentControl::new(
+            "parent-session",
+            parent_identity.clone(),
+            Some(child_b_identity.clone()),
+            ContextAgentControlAction::FollowUp,
+            Some("a".repeat(64)),
+            known.clone(),
+        ))?;
+        coordinator.authorize_agent_control(ContextAgentControl::new(
+            "parent-session",
+            parent_identity,
+            Some(child_c_identity.clone()),
+            ContextAgentControlAction::Interrupt,
+            None,
+            known.clone(),
+        ))?;
+        coordinator.authorize_agent_control(ContextAgentControl::new(
+            "parent-session",
+            child_b_identity.clone(),
+            Some(grandchild_identity),
+            ContextAgentControlAction::FollowUp,
+            Some("b".repeat(64)),
+            known.clone(),
+        ))?;
+        assert!(coordinator
+            .authorize_agent_control(ContextAgentControl::new(
+                "parent-session",
+                child_b_identity,
+                Some(child_c_identity),
+                ContextAgentControlAction::Interrupt,
+                None,
+                known,
+            ))
+            .is_err());
+
+        let (_nodes, activities) = coordinator.graph()?;
+        let summaries = activities
+            .iter()
+            .map(|activity| activity.summary())
+            .collect::<Vec<_>>();
+        assert!(summaries.contains(&"agent control list_agents"));
+        assert!(summaries.contains(&"agent control follow_up child-b/turn-1"));
+        assert!(summaries.contains(&"agent control interrupt child-c/turn-1"));
+        assert!(summaries.contains(&"agent control follow_up grandchild/turn-1"));
         Ok(())
     }
 

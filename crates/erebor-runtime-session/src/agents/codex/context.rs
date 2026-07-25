@@ -12,7 +12,10 @@ use erebor_runtime_packages::CodexFrozenContextMode;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::context_operation::{ContextOperationAdmission, ContextOperationAdmissionHandler};
+use crate::{
+    ContextAgentControl, ContextAgentControlAction, ContextAgentIdentity,
+    ContextOperationAdmission, ContextOperationAdmissionHandler,
+};
 
 #[cfg(test)]
 use erebor_runtime_context::ScopeStart;
@@ -365,15 +368,28 @@ impl CodexContextDag {
     /// source of truth; this cache only serializes later adapter-owned writes.
     pub(crate) fn refresh_scope_head(&self, context: &ContextPin) -> Result<(), CodexSessionError> {
         let scope = context.scope().map_err(Self::context_error)?;
+        self.refresh_scope(&scope)
+    }
+
+    /// Refresh one locally cached scope cursor after a daemon-owned action
+    /// advances that ref. The caller may supply only a daemon-bound scope;
+    /// this does not accept a workload-provided ref.
+    pub(crate) fn refresh_scope(&self, scope: &ScopeRef) -> Result<(), CodexSessionError> {
+        if scope.session_id() != self.session_id {
+            return Err(CodexSessionError::IncompatibleProfile {
+                reason: String::from("Codex context scope belongs to another session"),
+                location: snafu::Location::default(),
+            });
+        }
         let head = self
             .repository
-            .scope_head(&scope)
+            .scope_head(scope)
             .map_err(Self::context_error)?;
         let mut state = self.lock_state()?;
         if state
             .root
             .as_ref()
-            .is_some_and(|root| root.reference == scope)
+            .is_some_and(|root| root.reference == *scope)
         {
             let root =
                 state
@@ -406,6 +422,124 @@ impl CodexContextDag {
             .bindings
             .get(&(thread_id.to_owned(), turn_id.to_owned()))
             .cloned())
+    }
+
+    /// Parse a source-native collaboration control only after the hook broker
+    /// has authenticated the event. The returned identities come solely from
+    /// existing daemon-bound thread/turn bindings; a hook payload cannot name
+    /// an arbitrary context ref.
+    pub(crate) fn agent_control(
+        &self,
+        payload: &Value,
+    ) -> Result<Option<ContextAgentControl>, CodexSessionError> {
+        let tool_name = Self::event_string(payload, &["tool_name", "toolName"]);
+        if tool_name.as_deref() != Some("erebor_context_control") {
+            return Ok(None);
+        }
+        let input = payload
+            .get("tool_input")
+            .or_else(|| payload.get("toolInput"))
+            .and_then(Value::as_object)
+            .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                reason: String::from("Codex context control omitted its structured tool input"),
+                location: snafu::Location::default(),
+            })?;
+        let action = input
+            .get("erebor_context_action")
+            .and_then(Value::as_str)
+            .and_then(|value| match value {
+                "list_agents" => Some(ContextAgentControlAction::List),
+                "follow_up" => Some(ContextAgentControlAction::FollowUp),
+                "interrupt" => Some(ContextAgentControlAction::Interrupt),
+                _ => None,
+            })
+            .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                reason: String::from("Codex context control action is not supported"),
+                location: snafu::Location::default(),
+            })?;
+        let requester_thread = Self::event_string(payload, &["session_id", "sessionId"])
+            .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                reason: String::from("Codex context control omitted its source thread ID"),
+                location: snafu::Location::default(),
+            })?;
+        let requester_turn =
+            Self::event_string(payload, &["turn_id", "turnId"]).ok_or_else(|| {
+                CodexSessionError::InvalidHookEvent {
+                    reason: String::from("Codex context control omitted its source turn ID"),
+                    location: snafu::Location::default(),
+                }
+            })?;
+        let state = self.lock_state()?;
+        let requester = state
+            .bindings
+            .get(&(requester_thread, requester_turn))
+            .cloned()
+            .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                reason: String::from(
+                    "Codex context control has no exact authenticated source thread/turn binding",
+                ),
+                location: snafu::Location::default(),
+            })?;
+        let target = match action {
+            ContextAgentControlAction::List => {
+                Self::require_empty_control_field(input, "target_thread_id")?;
+                Self::require_empty_control_field(input, "target_turn_id")?;
+                None
+            }
+            ContextAgentControlAction::FollowUp | ContextAgentControlAction::Interrupt => {
+                let target_thread = Self::control_identifier(input, "target_thread_id")?;
+                let target_turn = Self::control_identifier(input, "target_turn_id")?;
+                let binding = state
+                    .bindings
+                    .get(&(target_thread, target_turn))
+                    .cloned()
+                    .ok_or_else(|| CodexSessionError::IncompatibleProfile {
+                        reason: String::from(
+                            "Codex context control target has no exact authenticated thread/turn binding",
+                        ),
+                        location: snafu::Location::default(),
+                    })?;
+                Some(Self::agent_identity(binding)?)
+            }
+        };
+        let content_sha256 = match action {
+            ContextAgentControlAction::FollowUp => {
+                let text = input
+                    .get("follow_up_text")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty() && value.len() <= 4 * 1024)
+                    .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                        reason: String::from(
+                            "Codex follow-up control requires bounded non-empty text",
+                        ),
+                        location: snafu::Location::default(),
+                    })?;
+                Some(format!("{:x}", Sha256::digest(text.as_bytes())))
+            }
+            ContextAgentControlAction::List | ContextAgentControlAction::Interrupt => {
+                Self::require_empty_control_field(input, "follow_up_text")?;
+                None
+            }
+        };
+        let mut known_agents = state
+            .bindings
+            .values()
+            .cloned()
+            .map(Self::agent_identity)
+            .collect::<Result<Vec<_>, _>>()?;
+        known_agents.sort_by(|left, right| {
+            left.thread_id()
+                .cmp(right.thread_id())
+                .then_with(|| left.turn_id().cmp(right.turn_id()))
+        });
+        Ok(Some(ContextAgentControl::new(
+            self.session_id.clone(),
+            Self::agent_identity(requester)?,
+            target,
+            action,
+            content_sha256,
+            known_agents,
+        )))
     }
 
     /// Bind one authenticated terminal turn to this session's existing root
@@ -915,6 +1049,52 @@ impl CodexContextDag {
         unreachable!("bounded scope append retry must return from its final attempt")
     }
 
+    fn agent_identity(
+        binding: CodexScopeContextBinding,
+    ) -> Result<ContextAgentIdentity, CodexSessionError> {
+        let scope = ScopeRef::parse(binding.scope_ref()).map_err(Self::context_error)?;
+        ContextAgentIdentity::new(binding.thread_id, binding.turn_id, scope).map_err(|reason| {
+            CodexSessionError::IncompatibleProfile {
+                reason,
+                location: snafu::Location::default(),
+            }
+        })
+    }
+
+    fn control_identifier(
+        input: &serde_json::Map<String, Value>,
+        field: &str,
+    ) -> Result<String, CodexSessionError> {
+        input
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|value| {
+                !value.is_empty()
+                    && value.len() <= 128
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| CodexSessionError::InvalidHookEvent {
+                reason: format!("Codex context control `{field}` must be a bounded identifier"),
+                location: snafu::Location::default(),
+            })
+    }
+
+    fn require_empty_control_field(
+        input: &serde_json::Map<String, Value>,
+        field: &str,
+    ) -> Result<(), CodexSessionError> {
+        if input.get(field).and_then(Value::as_str) == Some("") {
+            return Ok(());
+        }
+        Err(CodexSessionError::InvalidHookEvent {
+            reason: format!("Codex context control `{field}` must be empty for this action"),
+            location: snafu::Location::default(),
+        })
+    }
+
     fn collect_prompt_paths(
         &self,
         tree: ContextObjectId,
@@ -1023,7 +1203,10 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::{CodexContextDag, CodexSessionError, PROMPT_PREFIX};
-    use crate::context_operation::{ContextOperationAdmission, ContextOperationAdmissionHandler};
+    use crate::{
+        context_operation::{ContextOperationAdmission, ContextOperationAdmissionHandler},
+        ContextAgentControlAction,
+    };
 
     struct RecordingAdmission {
         repository: Arc<erebor_runtime_context::ContextRepository>,
@@ -1060,6 +1243,71 @@ mod tests {
                 .push(admission);
             Ok(scope)
         }
+    }
+
+    #[test]
+    fn context_control_uses_only_exact_daemon_bound_thread_turn_scopes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
+            temporary.path().join("context"),
+            FixedMetadataSource,
+        )?);
+        repository.initialize_root("session-control", Default::default(), "Initialize")?;
+        let dag = CodexContextDag::new(Arc::clone(&repository), "session-control");
+        dag.bind_terminal_turn(&json!({
+            "session_id": "parent-thread",
+            "turn_id": "parent-turn",
+        }))?
+        .ok_or("parent terminal turn did not bind")?;
+        dag.bind_terminal_turn(&json!({
+            "session_id": "child-thread",
+            "turn_id": "child-turn",
+        }))?
+        .ok_or("child terminal turn did not bind")?;
+
+        let control = dag
+            .agent_control(&json!({
+                "tool_name": "erebor_context_control",
+                "session_id": "parent-thread",
+                "turn_id": "parent-turn",
+                "tool_input": {
+                    "erebor_context_action": "follow_up",
+                    "target_thread_id": "child-thread",
+                    "target_turn_id": "child-turn",
+                    "target_scope": "refs/scopes/forged/root",
+                    "follow_up_text": "continue the delegated work",
+                },
+            }))?
+            .ok_or("context control was not recognized")?;
+
+        assert_eq!(control.action(), ContextAgentControlAction::FollowUp);
+        assert_eq!(control.session_id(), "session-control");
+        assert_eq!(control.requester().thread_id(), "parent-thread");
+        assert_eq!(
+            control.target().map(|target| target.thread_id()),
+            Some("child-thread")
+        );
+        assert_eq!(
+            control.target().map(|target| target.scope().as_str()),
+            Some("refs/scopes/session-control/root")
+        );
+        assert_eq!(control.content_sha256().map(str::len), Some(64));
+        assert_eq!(control.known_agents().len(), 2);
+        assert!(dag
+            .agent_control(&json!({
+                "tool_name": "erebor_context_control",
+                "session_id": "parent-thread",
+                "turn_id": "parent-turn",
+                "tool_input": {
+                    "erebor_context_action": "follow_up",
+                    "target_thread_id": "unbound-thread",
+                    "target_turn_id": "unbound-turn",
+                    "follow_up_text": "forged target",
+                },
+            }))
+            .is_err());
+        Ok(())
     }
 
     #[test]

@@ -13,8 +13,8 @@ use erebor_runtime_policy::{
     LayeredDecision, LayeredPolicySet, LocalPolicy, PolicyLayer, PolicySet,
 };
 use erebor_runtime_session::{
-    ChildContextDeliveryHandler, CodexAppServerService, CodexHookService,
-    ContextOperationAdmissionHandler, SessionManagerError,
+    ChildContextDeliveryHandler, CodexAppServerService, CodexHookService, CodexHookSessionHandlers,
+    ContextAgentControlHandler, ContextOperationAdmissionHandler, SessionManagerError,
 };
 use erebor_runtime_session::{SessionInterceptionRouter, SessionInterceptionRouterFactory};
 
@@ -30,6 +30,7 @@ pub(super) struct StoredPolicyInterceptionRouterFactory {
     codex_app_server_service: Arc<CodexAppServerService>,
     context_resolver: Arc<SessionContextResolver>,
     child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+    agent_controls: Arc<dyn ContextAgentControlHandler>,
     operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
 }
 
@@ -40,6 +41,7 @@ impl StoredPolicyInterceptionRouterFactory {
         codex_app_server_service: Arc<CodexAppServerService>,
         context_resolver: Arc<SessionContextResolver>,
         child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+        agent_controls: Arc<dyn ContextAgentControlHandler>,
         operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
     ) -> Self {
         Self {
@@ -48,6 +50,7 @@ impl StoredPolicyInterceptionRouterFactory {
             codex_app_server_service,
             context_resolver,
             child_deliveries,
+            agent_controls,
             operation_admissions,
         }
     }
@@ -92,8 +95,11 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
                 self.context_resolver
                     .resolve(spec)
                     .map_err(|error| self.invalid_error(spec, error.to_string()))?,
-                Arc::clone(&self.child_deliveries),
-                Arc::clone(&self.operation_admissions),
+                CodexHookSessionHandlers::new(
+                    Arc::clone(&self.child_deliveries),
+                    Arc::clone(&self.operation_admissions),
+                    Arc::clone(&self.agent_controls),
+                ),
             )
             .map_err(|error| self.invalid_error(spec, error.to_string()))?;
         if self.is_codex_app_server(spec, codex.package().definition()) {

@@ -100,7 +100,8 @@ use crate::{
 use erebor_runtime_core::ActiveSessionSignal;
 use erebor_runtime_policy::{LocalPolicy, PolicyEvaluator};
 use erebor_runtime_session::{
-    ChildContextDelivery, ChildContextDeliveryHandler, ContextOperationAdmission,
+    ChildContextDelivery, ChildContextDeliveryHandler, ContextAgentControl,
+    ContextAgentControlHandler, ContextAgentControlResult, ContextOperationAdmission,
     ContextOperationAdmissionHandler, StreamKind,
 };
 
@@ -148,6 +149,17 @@ impl ContextOperationAdmissionHandler for DaemonControlState {
     ) -> std::result::Result<erebor_runtime_context::ScopeRef, String> {
         self.sessions
             .admit_context_operation(admission)
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl ContextAgentControlHandler for DaemonControlState {
+    fn handle_agent_control(
+        &self,
+        control: ContextAgentControl,
+    ) -> std::result::Result<ContextAgentControlResult, String> {
+        self.sessions
+            .handle_agent_control(control)
             .map_err(|error| error.to_string())
     }
 }
@@ -285,6 +297,8 @@ impl DaemonControlService {
         state
             .sessions
             .bind_operation_admission_handler(operation_admissions)?;
+        let agent_controls: Arc<dyn ContextAgentControlHandler> = state.clone();
+        state.sessions.bind_agent_control_handler(agent_controls)?;
         Ok(Self {
             listener,
             state,
@@ -3094,6 +3108,9 @@ mod tests {
         state
             .sessions
             .bind_operation_admission_handler(operation_admissions)?;
+        let agent_controls: Arc<dyn erebor_runtime_session::ContextAgentControlHandler> =
+            state.clone();
+        state.sessions.bind_agent_control_handler(agent_controls)?;
         Ok(TestState { state, _root: root })
     }
 

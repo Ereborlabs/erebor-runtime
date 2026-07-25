@@ -818,7 +818,8 @@ impl CodexInvocationLeaseOwner {
                 .tool_input
                 .get("erebor_operation_key")
                 .or_else(|| input.tool_input.get("ereborOperationKey"))
-                .is_some()
+                .and_then(Value::as_str)
+                .is_some_and(|operation_key| !operation_key.is_empty())
             {
                 return Err(CodexSessionError::InvalidHookEvent {
                     reason: String::from(
@@ -3126,6 +3127,28 @@ mod tests {
             ),
             Err(CodexSessionError::InvalidHookEvent { .. })
         ));
+        assert!(owner
+            .state
+            .lock()
+            .map_err(|_error| "lease state lock poisoned")?
+            .leases
+            .is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn non_effect_control_with_an_empty_command_key_is_retained_without_a_lease(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let owner = owner_with_scope()?;
+        let event = br#"{"hook_event_name":"PreToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"control-1","tool_name":"erebor_context_control","tool_input":{"command":"","erebor_operation_key":"","erebor_context_action":"list_agents"}}"#;
+
+        owner.record_authenticated_hook(
+            erebor_runtime_ipc::v1::HookEventKind::PreToolUse,
+            event,
+            runtime(),
+            101,
+        )?;
+
         assert!(owner
             .state
             .lock()

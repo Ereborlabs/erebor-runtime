@@ -29,7 +29,10 @@ use serde::Deserialize;
 use serde_json::json;
 use snafu::{ensure, ResultExt};
 
-use crate::{ChildContextDelivery, ChildContextDeliveryHandler, ContextOperationAdmissionHandler};
+use crate::{
+    ChildContextDelivery, ChildContextDeliveryHandler, ContextAgentControlHandler,
+    ContextAgentControlResult, ContextOperationAdmissionHandler,
+};
 
 use super::{
     error::{HookBrokerIoSnafu, HookBrokerProtocolSnafu, InvalidHookEventSnafu},
@@ -58,6 +61,30 @@ pub struct CodexHookService {
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
+/// The daemon-owned callbacks available to one registered Codex session.
+/// They remain in-process extensions of the existing guarded hook listener;
+/// none is a workload-facing channel.
+pub struct CodexHookSessionHandlers {
+    child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+    operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
+    agent_controls: Arc<dyn ContextAgentControlHandler>,
+}
+
+impl CodexHookSessionHandlers {
+    #[must_use]
+    pub fn new(
+        child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+        operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
+        agent_controls: Arc<dyn ContextAgentControlHandler>,
+    ) -> Self {
+        Self {
+            child_deliveries,
+            operation_admissions,
+            agent_controls,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct CodexHookRegistration {
     managed_session: CodexManagedSession,
@@ -65,6 +92,7 @@ struct CodexHookRegistration {
     lease_owner: Arc<CodexInvocationLeaseOwner>,
     session_start_context: Option<String>,
     child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+    agent_controls: Arc<dyn ContextAgentControlHandler>,
 }
 
 /// Session-local Codex authorities retained by the shared listener's
@@ -237,6 +265,7 @@ impl CodexHookService {
                                 registration.lease_owner,
                                 registration.session_start_context,
                                 registration.child_deliveries,
+                                registration.agent_controls,
                             )
                             .serve_after_hello(
                                 &mut stream,
@@ -267,6 +296,7 @@ impl CodexHookService {
         lease_owner: Arc<CodexInvocationLeaseOwner>,
         session_start_context: Option<String>,
         child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+        agent_controls: Arc<dyn ContextAgentControlHandler>,
     ) -> Result<(), CodexSessionError> {
         let session_id = managed_session.session_id().to_owned();
         let mut registrations = self
@@ -287,6 +317,7 @@ impl CodexHookService {
                 lease_owner,
                 session_start_context,
                 child_deliveries,
+                agent_controls,
             },
         );
         Ok(())
@@ -298,8 +329,7 @@ impl CodexHookService {
         guard_executable: &Path,
         definition: &CodexPackageDefinition,
         context_repository: Arc<erebor_runtime_context::ContextRepository>,
-        child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
-        operation_admissions: Arc<dyn ContextOperationAdmissionHandler>,
+        handlers: CodexHookSessionHandlers,
     ) -> Result<CodexSessionHookRegistration, CodexSessionError> {
         let registration = CodexSessionHookRegistration::from_spec(
             spec,
@@ -309,16 +339,17 @@ impl CodexHookService {
         )?;
         registration
             .lease_owner
-            .set_operation_admission_handler(Arc::clone(&operation_admissions))?;
+            .set_operation_admission_handler(Arc::clone(&handlers.operation_admissions))?;
         registration
             .context_dag
-            .set_operation_admission_handler(operation_admissions)?;
+            .set_operation_admission_handler(handlers.operation_admissions)?;
         self.register(
             registration.managed_session.clone(),
             Arc::clone(&registration.reconciliation),
             Arc::clone(&registration.lease_owner),
             registration.session_start_context.clone(),
-            child_deliveries,
+            handlers.child_deliveries,
+            handlers.agent_controls,
         )?;
         Ok(registration)
     }
@@ -361,6 +392,7 @@ struct CodexHookBrokerProtocol {
     lease_owner: std::sync::Arc<CodexInvocationLeaseOwner>,
     session_start_context: Option<String>,
     child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+    agent_controls: Arc<dyn ContextAgentControlHandler>,
 }
 
 impl CodexHookBrokerProtocol {
@@ -370,6 +402,7 @@ impl CodexHookBrokerProtocol {
         lease_owner: std::sync::Arc<CodexInvocationLeaseOwner>,
         session_start_context: Option<String>,
         child_deliveries: Arc<dyn ChildContextDeliveryHandler>,
+        agent_controls: Arc<dyn ContextAgentControlHandler>,
     ) -> Self {
         Self {
             managed_session,
@@ -377,6 +410,7 @@ impl CodexHookBrokerProtocol {
             lease_owner,
             session_start_context,
             child_deliveries,
+            agent_controls,
         }
     }
 
@@ -455,7 +489,7 @@ impl CodexHookBrokerProtocol {
             };
             match self.validate_event(&event) {
                 Ok(event_kind) => {
-                    let recording = (|| {
+                    let control = match (|| {
                         self.reconciliation
                             .record_authenticated_hook(event_kind, &event.native_event_json)?;
                         self.lease_owner.record_authenticated_hook(
@@ -464,21 +498,26 @@ impl CodexHookBrokerProtocol {
                             runtime.clone(),
                             observed_peer.observed_pid,
                         )?;
+                        let control =
+                            self.execute_agent_control(event_kind, &event.native_event_json)?;
                         self.publish_child_delivery(event_kind, &event.native_event_json, &runtime)
-                    })();
-                    if let Err(error) = recording {
-                        Self::write_rejection(
-                            stream,
-                            &envelope,
-                            HookRejectionCode::BrokerUnavailable,
-                            error.to_string(),
-                        )?;
-                        break;
-                    }
+                            .map(|()| control)
+                    })() {
+                        Ok(control) => control,
+                        Err(error) => {
+                            Self::write_rejection(
+                                stream,
+                                &envelope,
+                                HookRejectionCode::BrokerUnavailable,
+                                error.to_string(),
+                            )?;
+                            break;
+                        }
+                    };
                     let result = HookResult {
                         event: event_kind as i32,
                         accepted: true,
-                        result_json: self.session_start_result(event_kind)?,
+                        result_json: self.hook_result(event_kind, control)?,
                     };
                     let response = Envelope::wrap_message(
                         envelope.message_id.saturating_add(1),
@@ -504,7 +543,27 @@ impl CodexHookBrokerProtocol {
         Ok(())
     }
 
-    fn session_start_result(&self, event: HookEventKind) -> Result<Vec<u8>, CodexSessionError> {
+    fn hook_result(
+        &self,
+        event: HookEventKind,
+        control: Option<ContextAgentControlResult>,
+    ) -> Result<Vec<u8>, CodexSessionError> {
+        if let Some(control) = control {
+            return serde_json::to_vec(&json!({
+                "continue": true,
+                "erebor_context_control": {
+                    "action": control.action().as_str(),
+                    "agents": control.agents().iter().map(|agent| json!({
+                        "thread_id": agent.thread_id(),
+                        "turn_id": agent.turn_id(),
+                    })).collect::<Vec<_>>(),
+                },
+            }))
+            .map_err(|error| CodexSessionError::IncompatibleProfile {
+                reason: format!("could not encode Codex context control result: {error}"),
+                location: snafu::Location::default(),
+            });
+        }
         if event != HookEventKind::SessionStart {
             return Ok(br#"{"continue":true}"#.to_vec());
         }
@@ -524,6 +583,33 @@ impl CodexHookBrokerProtocol {
                 })
             },
         )
+    }
+
+    fn execute_agent_control(
+        &self,
+        event: HookEventKind,
+        native_event: &[u8],
+    ) -> Result<Option<ContextAgentControlResult>, CodexSessionError> {
+        if event != HookEventKind::PreToolUse {
+            return Ok(None);
+        }
+        let payload = payload_value(native_event)?;
+        let Some(context_dag) = self.lease_owner.context_dag()? else {
+            return Ok(None);
+        };
+        let Some(control) = context_dag.agent_control(&payload)? else {
+            return Ok(None);
+        };
+        let requester_scope = control.requester().scope().clone();
+        let result = self
+            .agent_controls
+            .handle_agent_control(control)
+            .map_err(|reason| CodexSessionError::InvalidHookEvent {
+                reason: format!("daemon rejected authenticated Codex context control: {reason}"),
+                location: snafu::Location::default(),
+            })?;
+        context_dag.refresh_scope(&requester_scope)?;
+        Ok(Some(result))
     }
 
     fn publish_child_delivery(
@@ -972,6 +1058,10 @@ mod tests {
         sync::{Arc, Mutex},
     };
 
+    use erebor_runtime_context::{
+        CommitMetadata, CommitMetadataSource, CommitMetadataSourceError, CommitSignature,
+        CommitTime, Snapshot, TreeEdit,
+    };
     use erebor_runtime_events::{ActorIdentity, ActorKind};
     use erebor_runtime_ipc::v1::HookEvent;
     use erebor_runtime_packages::{
@@ -990,8 +1080,21 @@ mod tests {
             CodexHookClient, CodexInvocationLeaseProfile, CodexManagedSession,
             CodexNativeHookEvent, CodexScopeContextBinding,
         },
-        ChildContextDelivery, ChildContextDeliveryHandler, CodexSessionError,
+        ChildContextDelivery, ChildContextDeliveryHandler, CodexSessionError, ContextAgentControl,
+        ContextAgentControlHandler, ContextAgentControlResult,
     };
+
+    struct FixedMetadataSource;
+
+    impl CommitMetadataSource for FixedMetadataSource {
+        fn metadata(&self) -> Result<CommitMetadata, CommitMetadataSourceError> {
+            let time = CommitTime::new(1_700_000_000, 0)
+                .map_err(|source| Box::new(source) as CommitMetadataSourceError)?;
+            let signature = CommitSignature::new("Erebor Test", "test@erebor.invalid", time)
+                .map_err(|source| Box::new(source) as CommitMetadataSourceError)?;
+            Ok(CommitMetadata::new(signature.clone(), signature))
+        }
+    }
 
     struct AcceptChildDelivery;
 
@@ -1006,6 +1109,63 @@ mod tests {
 
     fn child_deliveries() -> Arc<dyn ChildContextDeliveryHandler> {
         Arc::new(AcceptChildDelivery)
+    }
+
+    struct AcceptAgentControl;
+
+    impl ContextAgentControlHandler for AcceptAgentControl {
+        fn handle_agent_control(
+            &self,
+            control: ContextAgentControl,
+        ) -> std::result::Result<ContextAgentControlResult, String> {
+            Ok(ContextAgentControlResult::allowed(
+                control.action(),
+                Vec::new(),
+            ))
+        }
+    }
+
+    fn agent_controls() -> Arc<dyn ContextAgentControlHandler> {
+        Arc::new(AcceptAgentControl)
+    }
+
+    struct AdvancingAgentControl {
+        repository: Arc<erebor_runtime_context::ContextRepository>,
+        received: Arc<Mutex<Vec<ContextAgentControl>>>,
+    }
+
+    impl ContextAgentControlHandler for AdvancingAgentControl {
+        fn handle_agent_control(
+            &self,
+            control: ContextAgentControl,
+        ) -> std::result::Result<ContextAgentControlResult, String> {
+            let scope = control.requester().scope().clone();
+            let head = self
+                .repository
+                .scope_head(&scope)
+                .map_err(|error| error.to_string())?;
+            self.repository
+                .append_snapshot(
+                    scope,
+                    head,
+                    Snapshot::new(vec![TreeEdit::blob(
+                        "erebor/context-dag/controls/test.json",
+                        br#"{"kind":"agent-control"}"#.to_vec(),
+                    )
+                    .map_err(|error| error.to_string())?])
+                    .map_err(|error| error.to_string())?,
+                    "Record test context control",
+                )
+                .map_err(|error| error.to_string())?;
+            self.received
+                .lock()
+                .map_err(|_error| String::from("recording control lock poisoned"))?
+                .push(control.clone());
+            Ok(ContextAgentControlResult::allowed(
+                control.action(),
+                Vec::new(),
+            ))
+        }
     }
 
     struct RecordingChildDelivery(Arc<Mutex<Vec<ChildContextDelivery>>>);
@@ -1056,6 +1216,7 @@ mod tests {
             test_lease_owner(),
             None,
             child_deliveries(),
+            agent_controls(),
         );
         let valid = HookEvent {
             event: HookEventKind::SessionStart as i32,
@@ -1101,10 +1262,11 @@ mod tests {
             test_lease_owner(),
             None,
             child_deliveries(),
+            agent_controls(),
         );
 
         let result: serde_json::Value =
-            serde_json::from_slice(&broker.session_start_result(HookEventKind::SessionStart)?)?;
+            serde_json::from_slice(&broker.hook_result(HookEventKind::SessionStart, None)?)?;
 
         assert_eq!(
             result
@@ -1113,6 +1275,84 @@ mod tests {
             Some(true)
         );
         assert!(result.pointer("/hookSpecificOutput").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn authenticated_context_control_refreshes_its_source_scope_after_daemon_write(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let repository = Arc::new(erebor_runtime_context::ContextRepository::init(
+            temporary.path().join("context"),
+            FixedMetadataSource,
+        )?);
+        repository.initialize_root("session-test", Default::default(), "Initialize")?;
+        let context_dag = Arc::new(super::super::CodexContextDag::new(
+            Arc::clone(&repository),
+            "session-test",
+        ));
+        context_dag
+            .bind_terminal_turn(&serde_json::json!({
+                "session_id": "parent-thread",
+                "turn_id": "parent-turn",
+            }))?
+            .ok_or("control source turn did not bind")?;
+        let owner = test_lease_owner();
+        owner.set_context_dag(Arc::clone(&context_dag))?;
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let broker = CodexHookBrokerProtocol::new(
+            session("/opt/codex/codex", &"a".repeat(64))?,
+            Arc::new(CodexPromptReconciliation::default()),
+            owner,
+            None,
+            child_deliveries(),
+            Arc::new(AdvancingAgentControl {
+                repository: Arc::clone(&repository),
+                received: Arc::clone(&received),
+            }),
+        );
+        let payload = serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "parent-thread",
+            "turn_id": "parent-turn",
+            "tool_use_id": "control-1",
+            "tool_name": "erebor_context_control",
+            "tool_input": {
+                "erebor_context_action": "list_agents",
+                "target_thread_id": "",
+                "target_turn_id": "",
+                "follow_up_text": "",
+            },
+        });
+
+        context_dag.record_authenticated_hook(
+            HookEventKind::PreToolUse,
+            &payload,
+            serde_json::json!({"hook_pid": 7}),
+        )?;
+        let control = broker
+            .execute_agent_control(HookEventKind::PreToolUse, &serde_json::to_vec(&payload)?)?
+            .ok_or("broker did not recognize the authenticated context control")?;
+        assert_eq!(control.action().as_str(), "list_agents");
+        assert_eq!(
+            received
+                .lock()
+                .map_err(|_error| "recording control lock poisoned")?
+                .len(),
+            1
+        );
+
+        // The handler advanced the daemon-owned ref. This second append would
+        // fail with a stale expected head if the broker had not refreshed the
+        // adapter's cached scope cursor before accepting another hook.
+        context_dag.record_authenticated_hook(
+            HookEventKind::UserPromptSubmit,
+            &serde_json::json!({
+                "session_id": "parent-thread",
+                "turn_id": "parent-turn",
+            }),
+            serde_json::json!({"hook_pid": 7}),
+        )?;
         Ok(())
     }
 
@@ -1136,6 +1376,7 @@ mod tests {
             owner,
             None,
             Arc::new(RecordingChildDelivery(Arc::clone(&delivered))),
+            agent_controls(),
         );
         broker.publish_child_delivery(
             HookEventKind::PostToolUse,
@@ -1224,6 +1465,7 @@ mod tests {
                 test_lease_owner(),
                 Some(frozen_context),
                 child_deliveries(),
+                agent_controls(),
             )
             .serve(&mut broker_stream)
         });
@@ -1284,6 +1526,7 @@ mod tests {
                 test_lease_owner(),
                 None,
                 child_deliveries(),
+                agent_controls(),
             )
             .serve(&mut broker_stream)
         });

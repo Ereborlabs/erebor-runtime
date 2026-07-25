@@ -84,6 +84,35 @@ fn fixture_rejects_invalid_delegation_context_requests_before_hook_execution() -
 }
 
 #[test]
+fn fixture_rejects_invalid_context_controls_before_hook_execution() -> TestResult<()> {
+    for request in [
+        r#"{"jsonrpc":"2.0","id":1,"method":"fixture/control","params":{"action":"unknown"}}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"fixture/control","params":{"action":"follow_up","target_thread_id":"child","target_turn_id":"turn"}}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"fixture/control","params":{"action":"interrupt","target_thread_id":"bad scope","target_turn_id":"turn"}}"#,
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_codex-v1-fixture"))
+            .args(["app-server", "--stdio"])
+            .stdin(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        writeln!(
+            child
+                .stdin
+                .as_mut()
+                .ok_or("fixture App Server stdin is missing")?,
+            "{request}"
+        )?;
+        let output = child.wait_with_output()?;
+        assert!(
+            !output.status.success(),
+            "fixture accepted invalid context control: {request}"
+        );
+        assert!(String::from_utf8_lossy(&output.stderr).contains("fixture/control"));
+    }
+    Ok(())
+}
+
+#[test]
 fn fixture_app_server_is_bounded_jsonl_and_exits_at_eof() -> TestResult<()> {
     let mut child = Command::new(env!("CARGO_BIN_EXE_codex-v1-fixture"))
         .args(["app-server", "--stdio"])
