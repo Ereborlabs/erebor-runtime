@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 clap.workspace = true
 erebor-runtime-client = { path = "../erebor-runtime-client" }
+erebor-runtime-context = { path = "../erebor-runtime-context" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }
@@ -39,6 +40,12 @@ bench = false
 [[bin]]
 name = "codex-v1-fixture"
 path = "src/bin/codex_v1_fixture.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "codex-context-dag-inspector"
+path = "src/bin/codex_context_dag_inspector.rs"
 test = false
 bench = false
 

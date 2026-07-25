@@ -12,12 +12,6 @@ fn daemon_control_plane_runs_in_systemd_container() -> Result<(), Box<dyn Error>
     run_systemd_probe(["/usr/local/lib/erebor/daemon-systemd-control-plane.sh"])
 }
 
-#[test]
-#[ignore = "requires Linux, Docker, and privileged containers"]
-fn codex_daemon_client_runs_in_systemd_container() -> Result<(), Box<dyn Error>> {
-    run_systemd_probe(["/usr/local/lib/erebor/daemon-systemd-control-plane.sh"])
-}
-
 fn run_systemd_probe<const N: usize>(arguments: [&str; N]) -> Result<(), Box<dyn Error>> {
     if env::consts::OS != "linux" {
         return Err("the daemon systemd-container probe requires Linux".into());

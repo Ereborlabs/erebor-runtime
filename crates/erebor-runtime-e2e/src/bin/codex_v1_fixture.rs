@@ -65,9 +65,94 @@ impl FixtureTurn {
     }
 }
 
+/// The fixture's deterministic collaboration scheduler. This is deliberately
+/// local fixture state: switching focus selects an already daemon-admitted
+/// native thread/turn binding; it neither asks the daemon to create a scope
+/// nor turns a thread into another Erebor session.
+struct FixtureTurns {
+    active: FixtureTurn,
+    known: BTreeMap<(String, String), FixtureTurn>,
+}
+
+impl FixtureTurns {
+    fn new() -> Self {
+        let root = FixtureTurn::root();
+        let mut known = BTreeMap::new();
+        known.insert((root.thread_id.clone(), root.turn_id.clone()), root.clone());
+        Self {
+            active: root,
+            known,
+        }
+    }
+
+    fn active(&self) -> &FixtureTurn {
+        &self.active
+    }
+
+    fn delegate(&mut self, request: &Value) -> FixtureResult<()> {
+        let child = delegated_turn(request)?;
+        let key = (child.thread_id.clone(), child.turn_id.clone());
+        if self.known.contains_key(&key) {
+            return Err("fixture/delegate cannot reuse a native child thread/turn".into());
+        }
+        self.known.insert(key, child.clone());
+        self.active = child;
+        Ok(())
+    }
+
+    fn switch(&mut self, request: &Value) -> FixtureResult<()> {
+        let params = fixture_params(request, "fixture/switch")?;
+        let thread_id = params
+            .get("thread_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or("fixture/switch requires a non-empty thread_id")?;
+        let turn_id = params
+            .get("turn_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or("fixture/switch requires a non-empty turn_id")?;
+        self.active = self
+            .known
+            .get(&(thread_id.to_owned(), turn_id.to_owned()))
+            .cloned()
+            .ok_or("fixture/switch may select only a previously delegated thread/turn")?;
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct FixtureToolUseIds {
     next_command: u64,
+}
+
+#[derive(Clone, Copy)]
+enum FixtureOutput {
+    Tty,
+    AppServer,
+}
+
+impl FixtureOutput {
+    fn line(self, line: &str) -> FixtureResult<()> {
+        match self {
+            Self::Tty => println!("{line}"),
+            Self::AppServer => {
+                let stdout = io::stdout();
+                let mut stdout = stdout.lock();
+                writeln!(
+                    stdout,
+                    "{}",
+                    serde_json::to_string(&json!({
+                        "jsonrpc": "2.0",
+                        "method": "fixture/event",
+                        "params": {"line": line},
+                    }))?
+                )?;
+                stdout.flush()?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl FixtureToolUseIds {
@@ -117,7 +202,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn run_tty() -> FixtureResult<()> {
-    let mut active_turn = FixtureTurn::root();
+    let mut turns = FixtureTurns::new();
     let mut tool_uses = FixtureToolUseIds::default();
     println!("fixture-tty=ready");
     report_terminal_size()?;
@@ -143,27 +228,34 @@ fn run_tty() -> FixtureResult<()> {
         if let Some(params) = line.strip_prefix("fixture/deliver ") {
             let event = delivery_event(
                 &json!({"params": serde_json::from_str::<Value>(params)?}),
-                &active_turn,
+                turns.active(),
             )?;
             invoke_managed_hook_event(HookMode::Normal, &event)?;
             println!("fixture-delivery=accepted");
         }
         if let Some(params) = line.strip_prefix("fixture/delegate ") {
             let request = json!({"params": serde_json::from_str::<Value>(params)?});
-            let event = delegation_event(&request, &active_turn)?;
+            let event = delegation_event(&request, turns.active())?;
             invoke_managed_hook_event(HookMode::Normal, &event)?;
-            active_turn = delegated_turn(&request)?;
+            turns.delegate(&request)?;
             println!("fixture-delegation=accepted");
+        }
+        if let Some(params) = line.strip_prefix("fixture/switch ") {
+            let request = json!({"params": serde_json::from_str::<Value>(params)?});
+            turns.switch(&request)?;
+            println!("fixture-switch=accepted");
         }
         if let Some(params) = line.strip_prefix("fixture/command ") {
             let request = json!({"params": serde_json::from_str::<Value>(params)?});
-            run_guarded_command(&request, &active_turn, &mut tool_uses)?;
+            let output = run_guarded_command(&request, turns.active(), &mut tool_uses)?;
+            println!("fixture-command-output={output}");
+            println!("fixture-command=completed");
         }
         if line == "fixture/start-q" {
-            start_long_operation(&active_turn)?;
+            start_long_operation(turns.active(), FixtureOutput::Tty)?;
         }
         if line == "fixture/turn" {
-            invoke_managed_hook_event(HookMode::Normal, &active_turn.terminal_event()?)?;
+            invoke_managed_hook_event(HookMode::Normal, &turns.active().terminal_event()?)?;
             println!("fixture-turn=accepted");
         }
         if line == "terminal-size" {
@@ -187,8 +279,8 @@ fn report_terminal_size() -> FixtureResult<()> {
 
 fn run_app_server() -> FixtureResult<()> {
     let stdin = io::stdin();
-    let mut stdout = io::stdout().lock();
     let mut tool_uses = FixtureToolUseIds::default();
+    let mut turns = FixtureTurns::new();
     for line in stdin.lock().lines() {
         let line = line?;
         let request: Value = serde_json::from_str(&line)?;
@@ -197,6 +289,8 @@ fn run_app_server() -> FixtureResult<()> {
             .and_then(Value::as_str)
             .ok_or("fixture App Server request omitted method")?;
         if method == "fixture/malformed-output" {
+            let stdout = io::stdout();
+            let mut stdout = stdout.lock();
             writeln!(stdout, "this is intentionally not JSON-RPC")?;
             stdout.flush()?;
             continue;
@@ -206,52 +300,65 @@ fn run_app_server() -> FixtureResult<()> {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
-        let result = match method {
+        let mut result = match method {
             "fixture/hook" => {
                 invoke_managed_hook(HookMode::Normal)?;
-                "accepted"
+                json!({"fixture": "accepted"})
             }
             "fixture/hook-replay" => {
                 invoke_managed_hook(HookMode::Replay)?;
-                "replay-rejected"
+                json!({"fixture": "replay-rejected"})
             }
             "fixture/hook-wrong-peer" => {
                 invoke_managed_hook(HookMode::WrongPeer)?;
-                "wrong-peer-rejected"
+                json!({"fixture": "wrong-peer-rejected"})
             }
             "fixture/hook-wrong-session" => {
                 invoke_managed_hook(HookMode::WrongSession)?;
-                "wrong-session-rejected"
+                json!({"fixture": "wrong-session-rejected"})
             }
             "fixture/delegate" => {
-                let event = delegation_event(&request, &FixtureTurn::root())?;
+                let event = delegation_event(&request, turns.active())?;
                 invoke_managed_hook_event(HookMode::Normal, &event)?;
-                "delegated"
+                turns.delegate(&request)?;
+                json!({"fixture": "delegated"})
             }
             "fixture/deliver" => {
-                let event = delivery_event(&request, &FixtureTurn::root())?;
+                let event = delivery_event(&request, turns.active())?;
                 invoke_managed_hook_event(HookMode::Normal, &event)?;
-                "delivered"
+                json!({"fixture": "delivered"})
+            }
+            "fixture/switch" => {
+                turns.switch(&request)?;
+                json!({"fixture": "switched"})
             }
             "fixture/command" => {
-                run_guarded_command(&request, &FixtureTurn::root(), &mut tool_uses)?;
-                "command-completed"
+                let output = run_guarded_command(&request, turns.active(), &mut tool_uses)?;
+                json!({"fixture": "command-completed", "output": output})
             }
             "fixture/start-q" => {
-                start_long_operation(&FixtureTurn::root())?;
-                "operation-started"
+                start_long_operation(turns.active(), FixtureOutput::AppServer)?;
+                json!({"fixture": "operation-started"})
             }
-            "$/cancelRequest" => "cancelled",
-            _ => "ok",
+            "$/cancelRequest" => json!({"fixture": "cancelled"}),
+            _ => json!({"fixture": "ok"}),
         };
+        if let Value::Object(object) = &mut result {
+            object.insert(
+                String::from("turnId"),
+                Value::String(turns.active().turn_id.clone()),
+            );
+        }
         if let Some(id) = request.get("id") {
+            let stdout = io::stdout();
+            let mut stdout = stdout.lock();
             writeln!(
                 stdout,
                 "{}",
                 serde_json::to_string(&json!({
                     "jsonrpc": "2.0",
                     "id": id,
-                    "result": {"fixture": result, "turnId": "fixture-turn"},
+                    "result": result,
                 }))?
             )?;
             stdout.flush()?;
@@ -264,7 +371,7 @@ fn run_guarded_command(
     request: &Value,
     turn: &FixtureTurn,
     tool_uses: &mut FixtureToolUseIds,
-) -> FixtureResult<()> {
+) -> FixtureResult<String> {
     let request = tool_uses.command_request(request)?;
     let event = command_event(&request, turn)?;
     let params = fixture_params(&request, "fixture/command")?;
@@ -282,13 +389,11 @@ fn run_guarded_command(
         return Err(format!("fixture command failed with {}", output.status).into());
     }
     let rendered = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    println!("fixture-command-output={rendered}");
     invoke_managed_hook_event(HookMode::Normal, &post_tool_event(tool_use_id, None, turn)?)?;
-    println!("fixture-command=completed");
-    Ok(())
+    Ok(rendered)
 }
 
-fn start_long_operation(turn: &FixtureTurn) -> FixtureResult<()> {
+fn start_long_operation(turn: &FixtureTurn, output: FixtureOutput) -> FixtureResult<()> {
     const OPERATION_KEY: &str = "fixture-q";
     const TOOL_USE_ID: &str = "fixture-q-command-1";
     const COMMAND: &str = "printf 'q-partial\\n'; sleep 3; printf 'q-final\\n'";
@@ -310,7 +415,7 @@ fn start_long_operation(turn: &FixtureTurn) -> FixtureResult<()> {
         .take()
         .ok_or("fixture long operation did not expose stdout")?;
     let turn = turn.clone();
-    println!("fixture-operation=q-started");
+    output.line("fixture-operation=q-started")?;
     std::thread::spawn(move || {
         let result = (|| -> FixtureResult<()> {
             for (index, line) in io::BufReader::new(stdout).lines().enumerate() {
@@ -330,12 +435,12 @@ fn start_long_operation(turn: &FixtureTurn) -> FixtureResult<()> {
                     &turn,
                 )?;
                 invoke_managed_hook_event(HookMode::Normal, &event)?;
-                println!("fixture-operation=q-delivery-{sequence}");
+                output.line(&format!("fixture-operation=q-delivery-{sequence}"))?;
             }
             if !child.wait()?.success() {
                 return Err("fixture long operation failed".into());
             }
-            println!("fixture-operation=q-complete");
+            output.line("fixture-operation=q-complete")?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -993,7 +1098,7 @@ fn fixture_requirements() -> &'static str {
 mod tests {
     use super::{
         command_event, delegation_event, delivery_event, post_tool_event, CodexNativeHookEvent,
-        FixtureToolUseIds, FixtureTurn, DELEGATION_EVENT, DELIVERY_EVENT,
+        FixtureToolUseIds, FixtureTurn, FixtureTurns, DELEGATION_EVENT, DELIVERY_EVENT,
     };
 
     #[test]
@@ -1057,6 +1162,34 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("fixture-command-2")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn fixture_switches_only_to_its_previously_delegated_thread_turn(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut turns = FixtureTurns::new();
+        let child = serde_json::json!({
+            "params": {
+                "child_thread_id": "fixture-b",
+                "child_turn_id": "turn-1",
+                "frozen_context_mode": "all",
+                "last_turns": 0,
+            },
+        });
+        turns.delegate(&child)?;
+        assert_eq!(turns.active().thread_id, "fixture-b");
+
+        turns.switch(&serde_json::json!({
+            "params": {"thread_id": "fixture-thread", "turn_id": "fixture-turn"},
+        }))?;
+        assert_eq!(turns.active().thread_id, "fixture-thread");
+
+        assert!(turns
+            .switch(&serde_json::json!({
+                "params": {"thread_id": "fixture-c", "turn_id": "turn-1"},
+            }))
+            .is_err());
         Ok(())
     }
 
