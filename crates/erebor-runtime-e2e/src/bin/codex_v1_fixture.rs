@@ -13,6 +13,8 @@ use std::{
     os::unix::{fs::PermissionsExt, net::UnixStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::mpsc,
+    thread,
 };
 
 use erebor_runtime_core::AgentAdapterDescriptor;
@@ -34,6 +36,7 @@ use erebor_runtime_session::{
 };
 use rustix::termios::tcgetwinsize;
 use serde_json::{json, Value};
+use tokio::signal::unix::{signal, SignalKind};
 
 const FIXTURE_NAME: &str = "codex-v1-fixture";
 const MANAGED_HOOK_PATH: &str = "/run/erebor/codex/erebor-codex-hook";
@@ -160,6 +163,68 @@ struct FixtureToolUseIds {
     next_command: u64,
 }
 
+/// The fixture records a real terminal-window signal separately from the
+/// terminal-size read. The privileged probe needs both facts: the PTY geometry
+/// changed and the foreground workload received Linux's normal notification.
+struct TerminalWindowSignals {
+    received: mpsc::Receiver<()>,
+}
+
+impl TerminalWindowSignals {
+    fn start() -> FixtureResult<Self> {
+        let (received_sender, received) = mpsc::channel();
+        let (ready_sender, ready) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_current_thread()
+                .enable_io()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    let _result = ready_sender.send(Err(error.to_string()));
+                    return;
+                }
+            };
+            let signals = {
+                let _entered = runtime.enter();
+                signal(SignalKind::window_change())
+            };
+            let mut signals = match signals {
+                Ok(signals) => signals,
+                Err(error) => {
+                    let _result = ready_sender.send(Err(error.to_string()));
+                    return;
+                }
+            };
+            if ready_sender.send(Ok(())).is_err() {
+                return;
+            }
+            runtime.block_on(async move {
+                while signals.recv().await.is_some() {
+                    if received_sender.send(()).is_err() {
+                        break;
+                    }
+                }
+            });
+        });
+        match ready
+            .recv()
+            .map_err(|_error| io::Error::other("fixture SIGWINCH monitor did not initialize"))?
+        {
+            Ok(()) => Ok(Self { received }),
+            Err(reason) => Err(io::Error::other(reason).into()),
+        }
+    }
+
+    fn take_received(&self) -> bool {
+        let mut received = false;
+        while self.received.try_recv().is_ok() {
+            received = true;
+        }
+        received
+    }
+}
+
 #[derive(Clone, Copy)]
 enum FixtureOutput {
     Tty,
@@ -238,6 +303,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn run_tty() -> FixtureResult<()> {
     let mut turns = FixtureTurns::new();
     let mut tool_uses = FixtureToolUseIds::default();
+    let window_signals = TerminalWindowSignals::start()?;
     println!("fixture-tty=ready");
     report_terminal_size()?;
     println!(
@@ -300,6 +366,14 @@ fn run_tty() -> FixtureResult<()> {
         }
         if line == "terminal-size" {
             report_terminal_size()?;
+            println!(
+                "fixture-tty-sigwinch={}",
+                if window_signals.take_received() {
+                    "received"
+                } else {
+                    "not-observed"
+                }
+            );
         }
         if line == "exit" {
             break;

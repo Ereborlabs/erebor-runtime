@@ -12,6 +12,7 @@ fi
 
 erebor=/usr/local/bin/erebor
 fixture=/usr/lib/erebor/codex-v1-fixture
+terminal_lease_probe=/usr/lib/erebor/erebor-terminal-lease-probe
 config_path=/etc/erebor/erebord.json
 trust_root=/usr/lib/erebor/codex-v1-fixture-trust
 first_user="${EREBOR_INSTALLED_SESSION_USER:?first session user is required}"
@@ -26,7 +27,7 @@ report_failure() {
 }
 trap report_failure ERR
 
-for binary in "$erebor" "$fixture"; do
+for binary in "$erebor" "$fixture" "$terminal_lease_probe"; do
   [[ -x "$binary" ]] || {
     echo "installed Codex runtime binary is missing: $binary" >&2
     exit 1
@@ -100,6 +101,48 @@ await_terminal() {
   echo "Codex session $session_id did not become terminal" >&2
   echo "$output" >&2
   exit 1
+}
+
+start_tty_attachment() {
+  local user="$1"
+  local session_id="$2"
+  local output="$3"
+  local client_instance_id="$4"
+  local initial_rows="$5"
+  local initial_columns="$6"
+  local resize_rows="$7"
+  local resize_columns="$8"
+  local delayed_resize=""
+
+  tty_attachment_fifo="$(mktemp -u)"
+  mkfifo "$tty_attachment_fifo"
+  if [[ "$resize_rows" != 0 ]]; then
+    delayed_resize="( sleep 2; stty rows $resize_rows cols $resize_columns ) &"
+  fi
+  timeout 20s runuser -u "$user" -- script -qefc \
+    "stty rows $initial_rows cols $initial_columns; $delayed_resize exec $erebor session attach $session_id --input --client-instance-id $client_instance_id --idempotency-key $client_instance_id" \
+    /dev/null <"$tty_attachment_fifo" >"$output" 2>&1 &
+  tty_attachment_pid="$!"
+  exec {tty_attachment_writer}>"$tty_attachment_fifo"
+}
+
+await_tty_attachment_output() {
+  local output="$1"
+  local expected="$2"
+  for _ in $(seq 1 150); do
+    grep -Fq "$expected" "$output" && return
+    sleep 0.1
+  done
+  echo "TTY attachment did not emit expected output: $expected" >&2
+  cat "$output" >&2
+  exit 1
+}
+
+detach_tty_attachment() {
+  printf '\020\021' >&"$tty_attachment_writer"
+  exec {tty_attachment_writer}>&-
+  wait "$tty_attachment_pid"
+  rm -f "$tty_attachment_fifo"
 }
 
 remove_all_sessions() {
@@ -552,17 +595,50 @@ if as_user "$first_user" run --policy fixture --workspace "/home/$first_user" \
   exit 1
 fi
 
-tty_output="$(mktemp)"
-# A real interactive Codex client remains owned by the daemon after the user
-# detaches.  Exercise that path instead of making this long-lived fixture exit
-# during the controller's input acknowledgement.
-printf 'governed\n\020\021' | timeout 20s runuser -u "$first_user" -- script -qefc \
-  "stty rows 24 cols 80; $erebor run --policy fixture --workspace /home/$first_user codex" \
-  /dev/null >"$tty_output"
-grep -q 'fixture-tty=ready' "$tty_output"
-grep -q 'fixture-daemon-socket=absent' "$tty_output"
-grep -q 'fixture-hook=accepted' "$tty_output"
-grep -q 'fixture-tty-input=governed' "$tty_output"
+# This is the complete privileged interactive contract: a real PTY starts at
+# the requested geometry, controller resize reaches the workload as SIGWINCH,
+# an observer cannot write or resize, and a later controller reattaches to the
+# same workload rather than creating another session or PTY.
+tty_create_output="$(mktemp)"
+timeout 20s runuser -u "$first_user" -- script -qefc \
+  "stty rows 24 cols 80; $erebor run --policy fixture --workspace /home/$first_user codex -d" \
+  /dev/null >"$tty_create_output"
+tty_session="$(await_running_session "$first_user")"
+[[ "$(session_ids "$first_user" | wc -l | tr -d ' ')" == 1 ]]
+
+tty_first_output="$(mktemp)"
+start_tty_attachment "$first_user" "$tty_session" "$tty_first_output" \
+  phase4-tty-controller-a 24 80 40 120
+await_tty_attachment_output "$tty_first_output" 'fixture-tty=ready'
+await_tty_attachment_output "$tty_first_output" 'fixture-tty-size=rows=24 columns=80'
+await_tty_attachment_output "$tty_first_output" 'fixture-daemon-socket=absent'
+await_tty_attachment_output "$tty_first_output" 'fixture-hook=accepted'
+observer_output="$(as_user "$first_user" "$terminal_lease_probe" "$tty_session")"
+grep -q 'observer_input=denied observer_resize=denied' <<<"$observer_output"
+sleep 3
+printf 'terminal-size\n' >&"$tty_attachment_writer"
+await_tty_attachment_output "$tty_first_output" 'fixture-tty-size=rows=40 columns=120'
+await_tty_attachment_output "$tty_first_output" 'fixture-tty-sigwinch=received'
+detach_tty_attachment
+tty_before_reattach="$(as_user "$first_user" session inspect "$tty_session")"
+grep -q 'running' <<<"$tty_before_reattach"
+tty_workload_identity="$(grep -o '"workload_identity":"[^"]*"' <<<"$tty_before_reattach")"
+[[ -n "$tty_workload_identity" ]]
+
+tty_second_output="$(mktemp)"
+start_tty_attachment "$first_user" "$tty_session" "$tty_second_output" \
+  phase4-tty-controller-b 50 140 0 0
+await_tty_attachment_output "$tty_second_output" 'read_only=false'
+printf 'terminal-size\n' >&"$tty_attachment_writer"
+await_tty_attachment_output "$tty_second_output" 'fixture-tty-size=rows=50 columns=140'
+await_tty_attachment_output "$tty_second_output" 'fixture-tty-sigwinch=received'
+detach_tty_attachment
+tty_after_reattach="$(as_user "$first_user" session inspect "$tty_session")"
+grep -q 'running' <<<"$tty_after_reattach"
+[[ "$tty_workload_identity" == "$(grep -o '"workload_identity":"[^"]*"' <<<"$tty_after_reattach")" ]]
+as_user "$first_user" session stop "$tty_session" \
+  --idempotency-key phase4-tty-stop >/dev/null
+await_terminal "$first_user" "$tty_session"
 remove_all_sessions "$first_user"
 
 app_server_output="$(mktemp)"
@@ -618,6 +694,27 @@ for hook_case in hook-replay hook-wrong-peer hook-wrong-session; do
   grep -q "\"fixture\":\"${hook_case#hook-}-rejected\"" "$hook_output"
   remove_all_sessions "$first_user"
 done
+
+# A shared hook listener must not route by UID alone. Keep B registered under
+# the same UID while A's real managed hook claims B's session id. The hook wire
+# format deliberately carries no ticket string: the adapter derives A's
+# guard-issued authority from the kernel peer. B must reject that peer/session
+# combination, then A must still succeed, proving the failed hello neither
+# routed nor consumed A's authority.
+same_uid_fifo="$(mktemp -u)"
+same_uid_wait_output="$(mktemp)"
+start_waiting_app_server "$first_user" "$same_uid_fifo" "$same_uid_wait_output"
+same_uid_session_b="$wait_session_id"
+same_uid_cross_output="$(mktemp)"
+run_app_server_frame "$first_user" \
+  "{\"jsonrpc\":\"2.0\",\"id\":31,\"method\":\"fixture/hook-cross-session\",\"params\":{\"target_session_id\":\"$same_uid_session_b\"}}" \
+  "$same_uid_cross_output"
+grep -q '"fixture":"cross-session-rejected"' "$same_uid_cross_output"
+as_user "$first_user" session inspect "$same_uid_session_b" | grep -q 'running'
+close_waiting_app_server_input "$same_uid_fifo"
+wait "$wait_client_parent"
+await_terminal "$first_user" "$same_uid_session_b"
+remove_all_sessions "$first_user"
 
 first_concurrent_output="$(mktemp)"
 second_concurrent_output="$(mktemp)"

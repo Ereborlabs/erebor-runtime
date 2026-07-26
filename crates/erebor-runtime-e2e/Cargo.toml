@@ -49,5 +49,11 @@ path = "src/bin/codex_context_dag_inspector.rs"
 test = false
 bench = false
 
+[[bin]]
+name = "erebor-terminal-lease-probe"
+path = "src/bin/erebor_terminal_lease_probe.rs"
+test = false
+bench = false
+
 [lints]
 workspace = true

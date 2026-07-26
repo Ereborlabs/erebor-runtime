@@ -126,8 +126,8 @@ systemctl is-enabled --quiet erebord.service
 await_service
 
 [[ "$(stat -c '%U:%G:%a' "$socket")" == "root:$service_group:660" ]]
-runuser -u "$service_user" -- "$erebor" daemon status | grep -q 'state=running'
-"$erebor" --socket "$socket" daemon status | grep -q 'state=running'
+runuser -u "$service_user" -- "$erebor" daemon status | grep -q 'running'
+"$erebor" --socket "$socket" daemon status | grep -q 'running'
 if runuser -u "$outside_user" -- "$erebor" daemon status >/dev/null 2>&1; then
   echo "user outside the connection group reached the installed control socket" >&2
   exit 1

@@ -30,7 +30,17 @@ for binary in \
 done
 
 session_id_from() {
-  sed -n 's/^session_id=\([^ ]*\).*/\1/p'
+  awk -F '┆' '
+    /^│/ {
+      id = $1
+      sub(/^│[[:space:]]*/, "", id)
+      sub(/[[:space:]]*$/, "", id)
+      if (id != "ID") {
+        print id
+        exit
+      }
+    }
+  '
 }
 
 as_user() {
@@ -68,7 +78,7 @@ await_terminal_state() {
   local output=""
   for _ in $(seq 1 150); do
     output="$(as_user "$user" session inspect "$session_id" 2>&1 || true)"
-    if grep -Eq 'state=(succeeded|failed|interrupted)' <<<"$output"; then
+    if grep -Eq '(succeeded|failed|interrupted)' <<<"$output"; then
       return
     fi
     sleep 0.1
@@ -136,7 +146,7 @@ start_session() {
   local session_id="$2"
   local label="$3"
   as_user "$user" session start "$session_id" --idempotency-key "start-$label" \
-    | grep -q 'state=running'
+    | grep -q 'running'
 }
 
 stop_and_remove() {
@@ -147,7 +157,7 @@ stop_and_remove() {
     --idempotency-key "stop-$label" >/dev/null
   await_terminal_state "$user" "$session_id"
   as_user "$user" session rm "$session_id" --force \
-    --idempotency-key "remove-$label" | grep -q 'state=removed'
+    --idempotency-key "remove-$label" | grep -q 'removed'
 }
 
 write_config
@@ -179,8 +189,8 @@ as_user "$first_user" session logs "$first_session" --stream stderr \
   | grep -q 'linux-stderr-first'
 as_user "$first_user" audit tail "$first_session" | grep -q 'durable_cursor='
 as_user "$first_user" session alias set primary "$first_session" \
-  --idempotency-key alias-first | grep -q "session_id=$first_session"
-as_user "$first_user" session inspect primary | grep -q "session_id=$first_session"
+  --idempotency-key alias-first | grep -q 'alias=primary'
+as_user "$first_user" session inspect primary | grep -q 'running'
 if as_user "$second_user" session inspect "$first_session" >/dev/null 2>&1; then
   echo "second user inspected the first user's session" >&2
   exit 1
@@ -191,7 +201,7 @@ if as_user "$second_user" session inspect primary >/dev/null 2>&1; then
 fi
 stop_and_remove "$first_user" "$first_session" first
 as_user "$first_user" session alias remove primary \
-  --idempotency-key alias-remove-first | grep -q "session_id=$first_session"
+  --idempotency-key alias-remove-first | grep -q 'alias=primary'
 
 tty_output="$(create_tty_linux "$first_user" first)"
 tty_session="$(session_id_from <<<"$tty_output")"
@@ -206,7 +216,7 @@ start_session "$first_user" "$tty_session" tty-first
   "stty rows 24 cols 80; $erebor session attach $tty_session --input --client-instance-id tty-first --idempotency-key tty-attach-first" \
   /dev/null >/dev/null
 await_log "$first_user" "$tty_session" 'tty-input-governed'
-as_user "$first_user" session inspect "$tty_session" | grep -q 'state=running'
+as_user "$first_user" session inspect "$tty_session" | grep -q 'running'
 stop_and_remove "$first_user" "$tty_session" tty-first
 
 sigint_output="$(mktemp)"
@@ -235,9 +245,9 @@ sigint_erebor_pid="$(child_pid_of "$sigint_client_pid")"
 kill -INT "$sigint_erebor_pid"
 wait "$sigint_client_pid" || true
 await_terminal_state "$first_user" "$sigint_session"
-as_user "$first_user" session inspect "$sigint_session" | grep -q 'state=failed'
+as_user "$first_user" session inspect "$sigint_session" | grep -q 'failed'
 as_user "$first_user" session rm "$sigint_session" --force \
-  --idempotency-key sigint-remove-first | grep -q 'state=removed'
+  --idempotency-key sigint-remove-first | grep -q 'removed'
 
 transport_output="$(create_linux "$first_user" transport)"
 transport_session="$(session_id_from <<<"$transport_output")"
@@ -251,7 +261,7 @@ sleep 1
 readonly_attach_erebor_pid="$(child_pid_of "$readonly_attach_pid")"
 kill -TERM "$readonly_attach_erebor_pid"
 wait "$readonly_attach_pid" || true
-as_user "$first_user" session inspect "$transport_session" | grep -q 'state=running'
+as_user "$first_user" session inspect "$transport_session" | grep -q 'running'
 stop_and_remove "$first_user" "$transport_session" transport
 
 second_output="$(create_linux "$second_user" second)"

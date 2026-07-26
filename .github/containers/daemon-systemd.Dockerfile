@@ -27,6 +27,7 @@ COPY target/debug/erebor-linux-process-guard /usr/libexec/erebor/erebor-linux-pr
 COPY target/debug/erebor-path-broker /usr/libexec/erebor/erebor-path-broker
 COPY target/debug/codex-v1-fixture /usr/lib/erebor/codex-v1-fixture
 COPY target/debug/codex-context-dag-inspector /usr/lib/erebor/codex-context-dag-inspector
+COPY target/debug/erebor-terminal-lease-probe /usr/lib/erebor/erebor-terminal-lease-probe
 COPY .github/scripts/daemon-systemd-control-plane.sh \
     /usr/local/lib/erebor/daemon-systemd-control-plane.sh
 COPY .github/scripts/daemon-installed-session-runtime.sh \
@@ -41,6 +42,7 @@ RUN chmod 0755 \
         /usr/libexec/erebor/erebor-path-broker \
         /usr/lib/erebor/codex-v1-fixture \
         /usr/lib/erebor/codex-context-dag-inspector \
+        /usr/lib/erebor/erebor-terminal-lease-probe \
         /usr/local/bin/erebor \
         /usr/local/lib/erebor/daemon-systemd-control-plane.sh \
         /usr/local/lib/erebor/daemon-installed-session-runtime.sh \
