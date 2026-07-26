@@ -8,7 +8,8 @@ use std::{
 
 #[test]
 #[ignore = "requires Linux, Docker, and privileged containers"]
-fn daemon_control_plane_runs_in_systemd_container() -> Result<(), Box<dyn Error>> {
+fn daemon_control_plane_and_codex_context_dag_run_in_systemd_container(
+) -> Result<(), Box<dyn Error>> {
     run_systemd_probe(["/usr/local/lib/erebor/daemon-systemd-control-plane.sh"])
 }
 
