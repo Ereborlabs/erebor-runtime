@@ -48,10 +48,11 @@ const MAX_NATIVE_EVENT_BYTES: usize = 32 * 1024;
 const MAX_PROFILE_ANCESTOR_DEPTH: usize = 16;
 const INVOCATION_LEASE_AUDIT_FILE: &str = "codex-invocation-leases.jsonl";
 
-/// One daemon-owned hook listener shared by registered Codex sessions.
+/// One Codex-adapter-owned hook listener shared by registered Codex sessions.
 ///
-/// Registrations retain all session-local authorization state. The listener
-/// only selects a registration after the managed hook identifies its session;
+/// The daemon owns its process lifetime and supplies registrations. Those
+/// registrations retain all session-local authorization state. The listener
+/// selects a registration only after the managed hook identifies its session;
 /// the selected registration still performs one-use ticket and kernel-peer
 /// validation before processing any native event.
 pub struct CodexHookService {

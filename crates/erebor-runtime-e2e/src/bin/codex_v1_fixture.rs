@@ -10,19 +10,28 @@ use std::{
     error::Error,
     fs,
     io::{self, BufRead, Read, Write},
-    os::unix::fs::PermissionsExt,
+    os::unix::{fs::PermissionsExt, net::UnixStream},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
 use erebor_runtime_core::AgentAdapterDescriptor;
+use erebor_runtime_ipc::{
+    v1::{
+        Envelope, EnvelopeServiceFamily, HookHello, HookHelloAck, KIND_HOOK_HELLO,
+        KIND_HOOK_HELLO_ACK, PROTOCOL_VERSION,
+    },
+    SyncFrameCodec,
+};
 use erebor_runtime_packages::{
     AgentPackageManifest, CanonicalEncoding, CodexArtifact, CodexEntrypoint, CodexHookContract,
     CodexHookEventName, CodexHookEventSchema, CodexHookExec, CodexHookShell, CodexManagedArtifacts,
     CodexPackageDefinition, CodexSupportedPlatform, ContentDigest, InstallationRecord,
     PolicyPackageRevision, PolicySetRevision,
 };
-use erebor_runtime_session::{CodexHookClient, CodexHookResultOutput, CodexNativeHookEvent};
+use erebor_runtime_session::{
+    CodexHookClient, CodexHookResultOutput, CodexHookService, CodexNativeHookEvent,
+};
 use rustix::termios::tcgetwinsize;
 use serde_json::{json, Value};
 
@@ -38,6 +47,7 @@ const TERMINAL_TURN_EVENT: &[u8] = br#"{"hook_event_name":"UserPromptSubmit","se
 const DELEGATION_EVENT: &[u8] = br#"{"hook_event_name":"PreToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delegation-1","tool_name":"erebor_delegate","tool_input":{"command":"","erebor_operation_key":"","child_thread_id":"fixture-child-thread","child_turn_id":"fixture-child-turn","frozen_context_mode":"all","last_turns":0,"erebor_context_action":"","target_thread_id":"","target_turn_id":"","follow_up_text":""}}"#;
 const DELIVERY_EVENT: &[u8] = br#"{"hook_event_name":"PostToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","tool_use_id":"fixture-delivery-1","tool_response":{"status":"ok"},"erebor_delivery":{"emit":true,"sequence":1,"kind":"result","mode":"queue","selected_text":"fixture result","operation_key":""}}"#;
 const HOOK_MODE_ENV: &str = "EREBOR_FIXTURE_HOOK_MODE";
+const CROSS_SESSION_ENV: &str = "EREBOR_FIXTURE_CROSS_SESSION_ID";
 const MAX_FIXTURE_DELEGATION_LAST_TURNS: u64 = 8;
 
 type FixtureResult<T> = Result<T, Box<dyn Error>>;
@@ -347,6 +357,15 @@ fn run_app_server() -> FixtureResult<()> {
                 invoke_managed_hook(HookMode::WrongSession)?;
                 json!({"fixture": "wrong-session-rejected"})
             }
+            "fixture/hook-cross-session" => {
+                let target_session_id = fixture_params(&request, "fixture/hook-cross-session")?
+                    .get("target_session_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty() && value.len() <= 128)
+                    .ok_or("fixture/hook-cross-session requires a bounded target_session_id")?;
+                invoke_managed_hook_cross_session(target_session_id)?;
+                json!({"fixture": "cross-session-rejected"})
+            }
             "fixture/delegate" => {
                 let event = delegation_event(&request, turns.active())?;
                 invoke_managed_hook_event(HookMode::Normal, &event)?;
@@ -491,6 +510,7 @@ enum HookMode {
     Replay,
     WrongPeer,
     WrongSession,
+    CrossSession,
 }
 
 impl HookMode {
@@ -500,6 +520,7 @@ impl HookMode {
             Ok("replay") => Ok(Self::Replay),
             Ok("wrong-peer") => Ok(Self::WrongPeer),
             Ok("wrong-session") => Ok(Self::WrongSession),
+            Ok("cross-session") => Ok(Self::CrossSession),
             Ok(value) => Err(format!("unsupported fixture hook mode `{value}`").into()),
             Err(_error) => Err("managed hook invocation omitted its fixture mode".into()),
         }
@@ -511,6 +532,7 @@ impl HookMode {
             Self::Replay => "replay",
             Self::WrongPeer => "wrong-peer",
             Self::WrongSession => "wrong-session",
+            Self::CrossSession => "cross-session",
         }
     }
 }
@@ -548,6 +570,22 @@ fn run_managed_hook(mode: HookMode) -> FixtureResult<()> {
             }
             submit_hook(&event, input)?
         }
+        HookMode::CrossSession => {
+            let target_session_id = env::var(CROSS_SESSION_ENV)
+                .map_err(|_error| "cross-session hook omitted its target session")?;
+            if hook_hello_is_accepted(&target_session_id)? {
+                return Err(
+                    "a managed hook's guard-issued authority routed to another same-UID session"
+                        .into(),
+                );
+            }
+            // The protocol deliberately never sends a ticket value: the
+            // listener derives the guard-issued authority from this process's
+            // kernel peer. A cross-session hello must not consume it. This
+            // succeeding submission proves the authority remained valid only
+            // for this hook's own registration.
+            submit_hook(&event, input)?
+        }
     };
     output.write_result(&result.result_json)?;
     Ok(())
@@ -576,11 +614,32 @@ fn invoke_managed_hook(mode: HookMode) -> FixtureResult<Value> {
 }
 
 fn invoke_managed_hook_event(mode: HookMode, event: &[u8]) -> FixtureResult<Value> {
-    let mut child = Command::new(MANAGED_HOOK_PATH)
+    invoke_managed_hook_with_environment(mode, event, None)
+}
+
+fn invoke_managed_hook_cross_session(target_session_id: &str) -> FixtureResult<Value> {
+    invoke_managed_hook_with_environment(
+        HookMode::CrossSession,
+        SESSION_START_EVENT,
+        Some((CROSS_SESSION_ENV, target_session_id)),
+    )
+}
+
+fn invoke_managed_hook_with_environment(
+    mode: HookMode,
+    event: &[u8],
+    environment: Option<(&str, &str)>,
+) -> FixtureResult<Value> {
+    let mut command = Command::new(MANAGED_HOOK_PATH);
+    command
         .env(HOOK_MODE_ENV, mode.name())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some((key, value)) = environment {
+        command.env(key, value);
+    }
+    let mut child = command
         .spawn()
         .map_err(|error| format!("starting managed hook `{}`: {error}", mode.name()))?;
     child
@@ -599,6 +658,25 @@ fn invoke_managed_hook_event(mode: HookMode, event: &[u8]) -> FixtureResult<Valu
         .into());
     }
     Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn hook_hello_is_accepted(session_id: &str) -> FixtureResult<bool> {
+    let mut stream = UnixStream::connect(CodexHookService::session_endpoint())?;
+    let hello = HookHello {
+        protocol_version: PROTOCOL_VERSION,
+        // The real managed-hook protocol intentionally carries no ticket
+        // string. The adapter receives the ticket-derived authority from the
+        // guarded process's kernel peer instead.
+        ticket_id: String::new(),
+        session_id: session_id.to_owned(),
+    };
+    let request = Envelope::wrap_message(1, 0, KIND_HOOK_HELLO, &hello)?;
+    SyncFrameCodec::write_frame(&mut stream, &request.into_frame()?)?;
+    let frame = SyncFrameCodec::read_frame(&mut stream)?;
+    let response: Envelope = frame.decode_payload()?;
+    response.validate_headers(EnvelopeServiceFamily::Hook)?;
+    let acknowledgement: HookHelloAck = response.decode_typed_payload(KIND_HOOK_HELLO_ACK)?;
+    Ok(acknowledgement.accepted)
 }
 
 fn delegation_event(request: &Value, turn: &FixtureTurn) -> FixtureResult<Vec<u8>> {
