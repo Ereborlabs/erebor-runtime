@@ -934,12 +934,21 @@ impl DaemonLocalStore {
         let policy = PolicyPackageRevision::new(
             "generic-host-minimum",
             b"name = \"generic-host-minimum\"\n".to_vec(),
-            std::collections::BTreeMap::from([(
-                String::from("terminal.json"),
-                br#"{"rules":[{"id":"generic-host-allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
-            )]),
+            std::collections::BTreeMap::from([
+                (
+                    String::from("filesystem.json"),
+                    br#"{"rules":[{"id":"generic-host-allow-filesystem","match":{"surface":"filesystem"},"decision":"allow"}]}"#.to_vec(),
+                ),
+                (
+                    String::from("terminal.json"),
+                    br#"{"rules":[{"id":"generic-host-allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
+                ),
+            ]),
             std::collections::BTreeMap::new(),
-            std::collections::BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            std::collections::BTreeMap::from([
+                (String::from("filesystem.json"), br#"{}"#.to_vec()),
+                (String::from("terminal.json"), br#"{}"#.to_vec()),
+            ]),
             b"# Built-in generic host minimum\n".to_vec(),
         )
         .map_err(Self::invalid_model)?;
@@ -1268,6 +1277,59 @@ impl DaemonLocalStore {
                 self.read_policy_package(spec.owner().uid(), &digest)
             })
             .collect()
+    }
+
+    /// Proves that every immutable package selected for an admission has an
+    /// explicit rule for each intrinsic Surface required by that execution
+    /// contract. Wildcard rules do not satisfy this check: the policy package
+    /// must visibly participate in the relevant governance boundary.
+    pub(crate) fn require_admission_surface_coverage(
+        &self,
+        owner_uid: u32,
+        admission: &LocalAdmission,
+        required_surfaces: &[ExecutionSurface],
+    ) -> Result<()> {
+        for digest in admission.policy_input_digests() {
+            let digest = Self::parse_digest(digest, "policy package")?;
+            let revision = self.read_policy_package(owner_uid, &digest)?;
+            let policies = revision
+                .rules()
+                .values()
+                .map(|source| {
+                    let source = std::str::from_utf8(source).map_err(|error| {
+                        InvalidRequestSnafu {
+                            reason: format!(
+                                "policy package `{}` has non-UTF-8 rule bytes: {error}",
+                                revision.manifest().name()
+                            ),
+                        }
+                        .build()
+                    })?;
+                    LocalPolicy::from_json_str(source).map_err(|error| {
+                        InvalidRequestSnafu {
+                            reason: format!(
+                                "policy package `{}` has an invalid rule: {error}",
+                                revision.manifest().name()
+                            ),
+                        }
+                        .build()
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            for surface in required_surfaces {
+                if !policies.iter().any(|policy| policy.covers_surface(surface)) {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "admitted PolicySet has no explicit `{}` coverage in mandatory package `{}`",
+                            SurfaceRegistry::surface_name(surface),
+                            revision.manifest().name(),
+                        ),
+                    }
+                    .fail();
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn store_user_policy_package(
@@ -2760,6 +2822,21 @@ mod tests {
             "company-workspace"
         );
         assert!(store.list_policy_sets(1001)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn builtin_generic_host_policy_covers_the_intrinsic_filesystem_surface(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (_package, policy) = DaemonLocalStore::builtin_generic_content()?;
+        let rule = std::str::from_utf8(
+            policy
+                .rules()
+                .get("filesystem.json")
+                .ok_or("built-in filesystem policy rule is missing")?,
+        )?;
+        assert!(rule.contains("\"surface\":\"filesystem\""));
+        assert!(policy.tests().contains_key("filesystem.json"));
         Ok(())
     }
 

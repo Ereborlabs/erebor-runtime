@@ -8,6 +8,7 @@ use erebor_runtime_core::{
     ActiveSession, ActiveSessionExit, ActiveSessionHealth, ActiveSessionSignal, DaemonFailureMode,
     OutputEndpoints, RunnerBinding, RunnerId, SessionLifecycleState, SessionSpec, TerminalSize,
 };
+use erebor_runtime_filesystem::FilesystemSessionStorage;
 use snafu::{OptionExt, ResultExt};
 
 mod resources;
@@ -726,6 +727,7 @@ impl SessionManager {
             .get(record.spec().runner_capability().runner())?
             .remove(record.spec(), record.runner_binding())
             .context(RunnerSnafu)?;
+        self.runtime.remove(record.spec())?;
         let removed = self
             .repository
             .remove(uid, session_id, record.generation())
@@ -803,6 +805,24 @@ impl SessionManager {
         self.repository
             .prune(uid, terminal_before_unix_ms, maximum_sessions)
             .context(RepositorySnafu)
+    }
+
+    /// Opens filesystem storage only through the intrinsic filesystem runtime
+    /// associated with this owner's durable Session. No client-supplied
+    /// registry, storage root, or volume plan participates in this operation.
+    pub fn filesystem_storage(
+        &self,
+        uid: u32,
+        session_id: &str,
+    ) -> Result<FilesystemSessionStorage, SessionManagerError> {
+        let record = self.inspect(uid, session_id)?;
+        self.runtime
+            .filesystem_storage(record.spec())?
+            .ok_or_else(|| SessionManagerError::InvalidOperation {
+                session_id: record.spec().session_id().as_str().to_owned(),
+                reason: String::from("Session has no intrinsic filesystem binding"),
+                location: snafu::Location::default(),
+            })
     }
 
     fn begin_stopping(
@@ -1566,6 +1586,7 @@ mod tests {
             adapter: None,
             policy_inputs: vec![ImmutableIdentity::new("root-policy", digest)?],
             policy_set: ImmutableIdentity::new("policy-set", digest)?,
+            resource_association: None,
             runner_capability: capability("1", tty)?,
             workspace: SafePathBinding::new(
                 PathBuf::from("/workspace"),
@@ -1593,6 +1614,7 @@ mod tests {
             environment: Vec::new(),
             secret_references: Vec::new(),
             filesystem_projections: Vec::new(),
+            private_state_projection: None,
             endpoint_projections: Vec::new(),
             output: OutputPlan::new(
                 output_root,

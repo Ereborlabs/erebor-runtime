@@ -60,6 +60,11 @@ pub const KIND_SESSION_LIST_RESPONSE: &str = "erebor.runtime.ipc.v1.SessionListR
 pub const KIND_SESSION_WAIT_REQUEST: &str = "erebor.runtime.ipc.v1.SessionWaitRequest";
 pub const KIND_SESSION_REMOVE_REQUEST: &str = "erebor.runtime.ipc.v1.SessionRemoveRequest";
 pub const KIND_SESSION_RECORD: &str = "erebor.runtime.ipc.v1.SessionRecord";
+pub const KIND_FILESYSTEM_QUERY_REQUEST: &str = "erebor.runtime.ipc.v1.FilesystemQueryRequest";
+pub const KIND_FILESYSTEM_MUTATION_REQUEST: &str =
+    "erebor.runtime.ipc.v1.FilesystemMutationRequest";
+pub const KIND_FILESYSTEM_OPERATION_RESPONSE: &str =
+    "erebor.runtime.ipc.v1.FilesystemOperationResponse";
 pub const KIND_SESSION_LOGS_REQUEST: &str = "erebor.runtime.ipc.v1.SessionLogsRequest";
 pub const KIND_SESSION_LOG_CHUNK: &str = "erebor.runtime.ipc.v1.SessionLogChunk";
 pub const KIND_SESSION_LOGS_END: &str = "erebor.runtime.ipc.v1.SessionLogsEnd";

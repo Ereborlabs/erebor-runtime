@@ -114,6 +114,14 @@ pub(crate) enum MutationIntent {
         session_id: String,
         retention_hold: bool,
     },
+    FilesystemMutation {
+        uid: u32,
+        session_id: String,
+        operation: i32,
+        target: String,
+        name: String,
+        output_format: String,
+    },
     ApprovalApprove {
         owner_uid: u32,
         approval_id: String,
@@ -451,6 +459,9 @@ impl MutationIntent {
                 uid, session_id, ..
             }
             | Self::SessionSetRetentionHold {
+                uid, session_id, ..
+            }
+            | Self::FilesystemMutation {
                 uid, session_id, ..
             } => Some((*uid, session_id)),
             Self::Reload { .. }

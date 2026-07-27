@@ -16,11 +16,11 @@ pub use adapter::{
 };
 pub use admission::{
     ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, EvidenceRequirement,
-    FilesystemProjection, ImmutableIdentity, OutputPlan, OutputStreamRequirements, RunRequest,
-    RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding,
-    SafePathKind, ScriptInterpreterBinding, SessionAdmission, SessionOwner, SessionSpec,
-    TerminalSize, WorkloadPrivilegePlan, RUNNER_CAPABILITY_SCHEMA_VERSION,
-    RUNNER_RECOVERY_SCHEMA_VERSION, SESSION_SPEC_SCHEMA_VERSION,
+    FilesystemProjection, ImmutableIdentity, OutputPlan, OutputStreamRequirements,
+    PrivateStateProjection, RunRequest, RunnerBinding, RunnerCapabilityDocument, RunnerId,
+    RunnerRecovery, SafePathBinding, SafePathKind, ScriptInterpreterBinding, SessionAdmission,
+    SessionOwner, SessionResourceAssociation, SessionSpec, TerminalSize, WorkloadPrivilegePlan,
+    RUNNER_CAPABILITY_SCHEMA_VERSION, RUNNER_RECOVERY_SCHEMA_VERSION, SESSION_SPEC_SCHEMA_VERSION,
 };
 use docker::DockerSessionOutputMode;
 pub use docker::DockerSessionRunner;
@@ -51,6 +51,7 @@ pub struct OutputEndpoints {
     prepared_executable: Option<PathBuf>,
     prepared_interpreters: Vec<PathBuf>,
     prepared_filesystem_projections: Vec<PreparedFilesystemProjection>,
+    prepared_private_state_projection: Option<PreparedPrivateStateProjection>,
 }
 
 /// A daemon-held filesystem source paired with the only workload path to
@@ -88,6 +89,63 @@ impl PreparedFilesystemProjection {
     }
 }
 
+/// The daemon-owned writable view of a compiled adapter's private state.
+///
+/// This crosses only the daemon-to-runner handoff. It is not a client request,
+/// persistent user configuration, or workload-visible host-path contract.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct PreparedPrivateStateProjection {
+    lower: PathBuf,
+    upper: PathBuf,
+    workdir: PathBuf,
+    merged: PathBuf,
+    target: PathBuf,
+}
+
+impl PreparedPrivateStateProjection {
+    #[must_use]
+    pub fn new(
+        lower: PathBuf,
+        upper: PathBuf,
+        workdir: PathBuf,
+        merged: PathBuf,
+        target: PathBuf,
+    ) -> Self {
+        Self {
+            lower,
+            upper,
+            workdir,
+            merged,
+            target,
+        }
+    }
+
+    #[must_use]
+    pub fn lower(&self) -> &std::path::Path {
+        &self.lower
+    }
+
+    #[must_use]
+    pub fn upper(&self) -> &std::path::Path {
+        &self.upper
+    }
+
+    #[must_use]
+    pub fn workdir(&self) -> &std::path::Path {
+        &self.workdir
+    }
+
+    #[must_use]
+    pub fn merged(&self) -> &std::path::Path {
+        &self.merged
+    }
+
+    #[must_use]
+    pub fn target(&self) -> &std::path::Path {
+        &self.target
+    }
+}
+
 impl OutputEndpoints {
     #[must_use]
     pub fn new(
@@ -108,6 +166,7 @@ impl OutputEndpoints {
             prepared_executable: None,
             prepared_interpreters: Vec::new(),
             prepared_filesystem_projections: Vec::new(),
+            prepared_private_state_projection: None,
         }
     }
 
@@ -136,6 +195,15 @@ impl OutputEndpoints {
         projections: Vec<PreparedFilesystemProjection>,
     ) -> Self {
         self.prepared_filesystem_projections = projections;
+        self
+    }
+
+    #[must_use]
+    pub fn with_prepared_private_state_projection(
+        mut self,
+        projection: PreparedPrivateStateProjection,
+    ) -> Self {
+        self.prepared_private_state_projection = Some(projection);
         self
     }
 
@@ -187,6 +255,11 @@ impl OutputEndpoints {
     #[must_use]
     pub fn prepared_filesystem_projections(&self) -> &[PreparedFilesystemProjection] {
         &self.prepared_filesystem_projections
+    }
+
+    #[must_use]
+    pub fn prepared_private_state_projection(&self) -> Option<&PreparedPrivateStateProjection> {
+        self.prepared_private_state_projection.as_ref()
     }
 }
 

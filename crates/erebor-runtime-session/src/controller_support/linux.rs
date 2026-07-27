@@ -24,6 +24,7 @@ use rustix::{
     termios::{tcsetpgrp, tcsetwinsize, Winsize},
     thread::UnshareFlags,
 };
+use users::os::unix::UserExt;
 
 use crate::{runners::linux::LinuxControllerHandoff, SessionControllerError, StreamKind};
 
@@ -503,6 +504,8 @@ fn prepare_private_namespace(
         location: snafu::Location::default(),
     })?;
 
+    hide_caller_home_for_private_state(handoff)?;
+
     let guard_host_path = environment_value(
         &handoff.runtime_environment,
         "EREBOR_RUNTIME_INTERCEPTION_PATH",
@@ -528,6 +531,7 @@ fn prepare_private_namespace(
     }
     let endpoint_projections = hold_endpoint_projections(handoff)?;
     let filesystem_projections = hold_filesystem_projections(handoff)?;
+    let private_state_projection = hold_private_state_projection(handoff)?;
 
     std::fs::create_dir_all("/run/erebor").map_err(|source| SessionControllerError::Io {
         action: "creating private Erebor runtime mountpoint",
@@ -577,7 +581,10 @@ fn prepare_private_namespace(
     }
     project_endpoints(&endpoint_projections)?;
     project_filesystems(&filesystem_projections)?;
-    Ok(handoff
+    if let Some(projection) = private_state_projection.as_ref() {
+        project_private_state(projection)?;
+    }
+    let mut environment = handoff
         .runtime_environment
         .iter()
         .map(|(key, value)| {
@@ -587,7 +594,128 @@ fn prepare_private_namespace(
                 (key.clone(), value.clone())
             }
         })
-        .collect())
+        .collect::<Vec<_>>();
+    if let Some(projection) = private_state_projection {
+        environment.push((
+            String::from("CODEX_HOME"),
+            projection.target.display().to_string(),
+        ));
+    }
+    Ok(environment)
+}
+
+/// Hides the caller's live home directory only when the intrinsic filesystem
+/// Surface has supplied a private agent-state projection. Workspace and
+/// executable access is already held by descriptors before this namespace is
+/// created, so the workload keeps only its admitted inputs plus the fixed
+/// projected state target.
+fn hide_caller_home_for_private_state(
+    handoff: &LinuxControllerHandoff,
+) -> Result<(), SessionControllerError> {
+    if handoff.prepared_private_state_projection.is_none() {
+        return Ok(());
+    }
+    let home = users::get_user_by_uid(handoff.spec.owner().uid())
+        .map(|user| user.home_dir().to_path_buf())
+        .ok_or_else(|| SessionControllerError::InvalidHandoff {
+            reason: format!(
+                "private state projection cannot resolve a home directory for UID {}",
+                handoff.spec.owner().uid()
+            ),
+            location: snafu::Location::default(),
+        })?;
+    let metadata = fs::symlink_metadata(&home).map_err(|source| SessionControllerError::Io {
+        action: "checking caller home before hiding private state source",
+        path: home.clone(),
+        source,
+        location: snafu::Location::default(),
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SessionControllerError::InvalidHandoff {
+            reason: format!(
+                "private state projection requires a non-symlink caller home directory, found `{}`",
+                home.display()
+            ),
+            location: snafu::Location::default(),
+        });
+    }
+    mount_private_state_mask(&home, "hiding caller home from private state session")?;
+
+    if let Some(staged_state) = private_state_path_in_workspace(
+        handoff.spec.workspace().requested_path(),
+        &home,
+        handoff
+            .prepared_workspace
+            .as_deref()
+            .unwrap_or_else(|| handoff.spec.workspace().requested_path()),
+    ) {
+        mount_private_state_mask(
+            &staged_state,
+            "hiding caller private state from the admitted workspace",
+        )?;
+    }
+    Ok(())
+}
+
+/// Returns the staging path through which an admitted workspace would expose
+/// the caller's private Codex state. A workspace outside the caller home does
+/// not receive a mask because it has no lexical route to that state.
+fn private_state_path_in_workspace(
+    workspace: &Path,
+    home: &Path,
+    staged_workspace: &Path,
+) -> Option<PathBuf> {
+    home.join(".codex")
+        .strip_prefix(workspace)
+        .ok()
+        .map(|relative| staged_workspace.join(relative))
+}
+
+fn mount_private_state_mask(
+    path: &Path,
+    action: &'static str,
+) -> Result<(), SessionControllerError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(SessionControllerError::Io {
+                action: "checking private state mask target",
+                path: path.to_path_buf(),
+                source,
+                location: snafu::Location::default(),
+            });
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(SessionControllerError::InvalidHandoff {
+            reason: format!(
+                "private state mask target `{}` is not a non-symlink directory",
+                path.display()
+            ),
+            location: snafu::Location::default(),
+        });
+    }
+    let data = CString::new("mode=0700,size=65536").map_err(|error| {
+        SessionControllerError::InvalidHandoff {
+            reason: error.to_string(),
+            location: snafu::Location::default(),
+        }
+    })?;
+    mount(
+        "tmpfs",
+        path,
+        "tmpfs",
+        MountFlags::NOSUID | MountFlags::NODEV,
+        Some(data.as_c_str()),
+    )
+    .map_err(std::io::Error::from)
+    .map_err(|source| SessionControllerError::Io {
+        action,
+        path: path.to_path_buf(),
+        source,
+        location: snafu::Location::default(),
+    })
 }
 
 fn hold_endpoint_projections(
@@ -648,6 +776,172 @@ struct HeldFilesystemProjection {
     workload_path: PathBuf,
     read_only: bool,
     directory: bool,
+}
+
+struct HeldPrivateStateProjection {
+    lower: PathBuf,
+    upper: PathBuf,
+    workdir: PathBuf,
+    merged: PathBuf,
+    target: PathBuf,
+}
+
+fn hold_private_state_projection(
+    handoff: &LinuxControllerHandoff,
+) -> Result<Option<HeldPrivateStateProjection>, SessionControllerError> {
+    let Some(prepared) = handoff.prepared_private_state_projection.as_ref() else {
+        return Ok(None);
+    };
+    let root = handoff.evidence_path.join("private-state-projection");
+    fs::create_dir_all(&root).map_err(|source| SessionControllerError::Io {
+        action: "creating daemon-owned private state hold directory",
+        path: root.clone(),
+        source,
+        location: snafu::Location::default(),
+    })?;
+    let volume_root =
+        prepared
+            .lower()
+            .parent()
+            .ok_or_else(|| SessionControllerError::InvalidHandoff {
+                reason: format!(
+                    "private state lower path `{}` has no volume root",
+                    prepared.lower().display()
+                ),
+                location: snafu::Location::default(),
+            })?;
+    mount_bind(volume_root, &root)
+        .map_err(std::io::Error::from)
+        .map_err(|source| SessionControllerError::Io {
+            action: "holding the complete daemon-owned private state volume",
+            path: volume_root.to_path_buf(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+    mount_remount(
+        &root,
+        MountFlags::BIND | MountFlags::NOSUID | MountFlags::NODEV,
+        "",
+    )
+    .map_err(std::io::Error::from)
+    .map_err(|source| SessionControllerError::Io {
+        action: "locking daemon-owned private state volume mount flags",
+        path: root.clone(),
+        source,
+        location: snafu::Location::default(),
+    })?;
+    let lower = held_private_state_path(&root, volume_root, prepared.lower())?;
+    let upper = held_private_state_path(&root, volume_root, prepared.upper())?;
+    let workdir = held_private_state_path(&root, volume_root, prepared.workdir())?;
+    let merged = held_private_state_path(&root, volume_root, prepared.merged())?;
+    Ok(Some(HeldPrivateStateProjection {
+        lower,
+        upper,
+        workdir,
+        merged,
+        target: prepared.target().to_path_buf(),
+    }))
+}
+
+fn held_private_state_path(
+    held_volume_root: &Path,
+    source_volume_root: &Path,
+    source: &Path,
+) -> Result<PathBuf, SessionControllerError> {
+    let relative = source.strip_prefix(source_volume_root).map_err(|_error| {
+        SessionControllerError::InvalidHandoff {
+            reason: format!(
+                "private state path `{}` escapes volume root `{}`",
+                source.display(),
+                source_volume_root.display()
+            ),
+            location: snafu::Location::default(),
+        }
+    })?;
+    if relative.as_os_str().is_empty() {
+        return Err(SessionControllerError::InvalidHandoff {
+            reason: String::from("private state volume root cannot be an overlay component"),
+            location: snafu::Location::default(),
+        });
+    }
+    Ok(held_volume_root.join(relative))
+}
+
+fn project_private_state(
+    projection: &HeldPrivateStateProjection,
+) -> Result<(), SessionControllerError> {
+    let options = private_state_overlay_options(projection)?;
+    mount(
+        "overlay",
+        &projection.merged,
+        "overlay",
+        MountFlags::NOSUID | MountFlags::NODEV,
+        Some(options.as_c_str()),
+    )
+    .map_err(std::io::Error::from)
+    .map_err(|source| SessionControllerError::Io {
+        action: "mounting the daemon-owned private state overlay",
+        path: projection.merged.clone(),
+        source,
+        location: snafu::Location::default(),
+    })?;
+    create_projection_target(&projection.target, true)?;
+    mount_bind(&projection.merged, &projection.target)
+        .map_err(std::io::Error::from)
+        .map_err(|source| SessionControllerError::Io {
+            action: "projecting daemon-owned private state into the workload",
+            path: projection.target.clone(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+    mount_remount(
+        &projection.target,
+        MountFlags::BIND | MountFlags::NOSUID | MountFlags::NODEV,
+        "",
+    )
+    .map_err(std::io::Error::from)
+    .map_err(|source| SessionControllerError::Io {
+        action: "locking private state projection mount flags",
+        path: projection.target.clone(),
+        source,
+        location: snafu::Location::default(),
+    })
+}
+
+fn private_state_overlay_options(
+    projection: &HeldPrivateStateProjection,
+) -> Result<CString, SessionControllerError> {
+    let option_path = |path: &Path| {
+        let value = path
+            .to_str()
+            .ok_or_else(|| SessionControllerError::InvalidHandoff {
+                reason: format!(
+                    "private state overlay path `{}` is not UTF-8",
+                    path.display()
+                ),
+                location: snafu::Location::default(),
+            })?;
+        if value.contains(',') || value.contains(':') {
+            return Err(SessionControllerError::InvalidHandoff {
+                reason: format!(
+                    "private state overlay path `{}` contains an unsupported mount-option delimiter",
+                    path.display()
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        Ok(value.to_owned())
+    };
+    CString::new(format!(
+        "lowerdir={},upperdir={},workdir={}",
+        option_path(&projection.lower)?,
+        option_path(&projection.upper)?,
+        option_path(&projection.workdir)?,
+    ))
+    .map_err(|source| SessionControllerError::InvalidHandoff {
+        reason: format!("private state overlay options contain a NUL byte: {source}"),
+        location: snafu::Location::default(),
+    })
 }
 
 fn hold_filesystem_projections(
@@ -846,9 +1140,11 @@ fn environment_value(environment: &[(String, String)], key: &str) -> Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, os::unix::fs::PermissionsExt};
+    use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
-    use super::create_private_projection_parent;
+    use super::{
+        create_private_projection_parent, held_private_state_path, private_state_path_in_workspace,
+    };
 
     #[test]
     fn private_projection_parents_are_searchable_but_not_listable(
@@ -865,5 +1161,43 @@ mod tests {
             assert_eq!(fs::metadata(directory)?.permissions().mode() & 0o777, 0o711);
         }
         Ok(())
+    }
+
+    #[test]
+    fn private_state_overlay_components_stay_beneath_one_held_volume_root(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let held = Path::new("/evidence/private-state");
+        let source = Path::new("/state/session/filesystem/work/volumes/agent-state");
+
+        assert_eq!(
+            held_private_state_path(held, source, &source.join("lower-ro"))?,
+            held.join("lower-ro")
+        );
+        assert_eq!(
+            held_private_state_path(held, source, &source.join("overlay/upper"))?,
+            held.join("overlay/upper")
+        );
+        assert!(held_private_state_path(held, source, Path::new("/outside/upper")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn private_state_inside_an_admitted_home_workspace_is_masked_at_staging() {
+        assert_eq!(
+            private_state_path_in_workspace(
+                Path::new("/home/agent"),
+                Path::new("/home/agent"),
+                Path::new("/run/erebor/1000/session/staging/workspace"),
+            ),
+            Some(Path::new("/run/erebor/1000/session/staging/workspace/.codex").to_path_buf())
+        );
+        assert_eq!(
+            private_state_path_in_workspace(
+                Path::new("/workspace/project"),
+                Path::new("/home/agent"),
+                Path::new("/run/erebor/1000/session/staging/workspace"),
+            ),
+            None
+        );
     }
 }

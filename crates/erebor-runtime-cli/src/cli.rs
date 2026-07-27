@@ -26,7 +26,6 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
-pub(super) use config_paths::ConfigPathResolver;
 pub(super) use parsers::{
     parse_absolute_path, parse_non_empty_path, parse_non_empty_string, OutputFormat,
 };
@@ -96,11 +95,7 @@ impl Cli {
             Command::Runner(args) => runner::RunnerCommandOwner::new(args, &client).execute(),
             Command::Audit(args) => audit::AuditCommandOwner::new(args, &client).execute(),
             Command::Approval(args) => approval::ApprovalCommandOwner::new(args, &client).execute(),
-            Command::Filesystem(args) => {
-                self.daemon_socket
-                    .validate_legacy_command("erebor filesystem")?;
-                filesystem::execute(args)
-            }
+            Command::Filesystem(args) => filesystem::execute(args, &client),
             Command::Daemon(args) => daemon::DaemonCommandOwner::new(args, &client).execute(),
         }
     }

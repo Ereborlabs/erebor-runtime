@@ -1,4 +1,4 @@
-use erebor_runtime_ipc::v1::SessionRecord;
+use erebor_runtime_ipc::v1::{SessionRecord, SessionStateProjection};
 use erebor_runtime_session::DurableSessionRecord;
 
 pub(super) fn session_record(
@@ -22,10 +22,38 @@ pub(super) fn session_record(
         failure: record.failure().unwrap_or_default().to_owned(),
         retry_guarantee_expires_unix_ms,
         retention_hold: record.retention_hold(),
-        api_version: String::new(),
-        kind: String::new(),
-        agent_name: String::new(),
-        policy_set_name: String::new(),
-        surface_names: Vec::new(),
+        api_version: record
+            .spec()
+            .resource_association()
+            .map_or_else(String::new, |_| String::from("erebor.dev/v1")),
+        kind: record
+            .spec()
+            .resource_association()
+            .map_or_else(String::new, |_| String::from("Session")),
+        agent_name: record
+            .spec()
+            .resource_association()
+            .map_or_else(String::new, |association| {
+                association.agent_name().to_owned()
+            }),
+        policy_set_name: record
+            .spec()
+            .resource_association()
+            .map_or_else(String::new, |association| {
+                association.policy_set_name().to_owned()
+            }),
+        surface_names: record
+            .spec()
+            .resource_association()
+            .map_or_else(Vec::new, |association| association.surface_names().to_vec()),
+        state_projection: record.spec().private_state_projection().map(|projection| {
+            SessionStateProjection {
+                target: projection.target().display().to_string(),
+                lower_snapshot: projection.lower_snapshot().to_owned(),
+                writable_upper: projection.writable_upper().to_owned(),
+                refresh: String::from("explicit"),
+                retention: String::from("discard-on-session-removal"),
+            }
+        }),
     }
 }

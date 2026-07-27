@@ -24,6 +24,8 @@ fn filesystem_surface_and_file_actions_parse() -> Result<(), PolicyError> {
         }
         "#,
     )?;
+    assert!(policy.covers_surface(&ExecutionSurface::Filesystem));
+    assert!(!policy.covers_surface(&ExecutionSurface::Terminal));
     let mut file_open = PolicyEventFixture::event(
         ExecutionSurface::Filesystem,
         ActionKind::FileOpen,

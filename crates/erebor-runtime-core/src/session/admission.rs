@@ -724,6 +724,122 @@ pub struct FilesystemProjection {
     read_only: bool,
 }
 
+/// Immutable public resource names associated with one concrete runtime
+/// Session. Package revisions and physical bindings remain separate internal
+/// admission/runtime facts.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SessionResourceAssociation {
+    agent_name: String,
+    policy_set_name: String,
+    surface_names: Vec<String>,
+}
+
+impl SessionResourceAssociation {
+    pub fn new(
+        agent_name: impl Into<String>,
+        policy_set_name: impl Into<String>,
+        surface_names: Vec<String>,
+    ) -> Result<Self, SessionSpecError> {
+        let value = Self {
+            agent_name: agent_name.into(),
+            policy_set_name: policy_set_name.into(),
+            surface_names,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn validate(&self) -> Result<(), SessionSpecError> {
+        ensure!(
+            is_safe_component(&self.agent_name)
+                && is_safe_component(&self.policy_set_name)
+                && self
+                    .surface_names
+                    .iter()
+                    .all(|name| is_safe_component(name))
+                && self.surface_names.len()
+                    == self.surface_names.iter().collect::<BTreeSet<_>>().len(),
+            InvalidSnafu {
+                field: "session_resource_association",
+                reason: String::from(
+                    "requires Agent and PolicySet names plus a unique safe set of named Surfaces",
+                ),
+            }
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+
+    #[must_use]
+    pub fn policy_set_name(&self) -> &str {
+        &self.policy_set_name
+    }
+
+    #[must_use]
+    pub fn surface_names(&self) -> &[String] {
+        &self.surface_names
+    }
+}
+
+/// The daemon-owned private state view required by a compiled agent adapter.
+///
+/// This is persisted as part of the internal execution admission, not accepted
+/// from a client Session document. It deliberately contains no caller path,
+/// credential, mount source, or mutable policy reference.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PrivateStateProjection {
+    target: PathBuf,
+    lower_snapshot: String,
+    writable_upper: String,
+}
+
+impl PrivateStateProjection {
+    pub fn codex_v1(session_id: &SessionId) -> Result<Self, SessionSpecError> {
+        let value = Self {
+            target: PathBuf::from("/run/erebor/state/codex"),
+            lower_snapshot: format!("{}-state", session_id.as_str()),
+            writable_upper: format!("upper-{}", session_id.as_str()),
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn validate(&self) -> Result<(), SessionSpecError> {
+        ensure!(
+            is_normalized_absolute(&self.target)
+                && self.target == Path::new("/run/erebor/state/codex")
+                && is_safe_name(&self.lower_snapshot)
+                && is_safe_name(&self.writable_upper),
+            InvalidSnafu {
+                field: "private_state_projection",
+                reason: String::from(
+                    "requires the fixed Codex target and opaque safe daemon identities",
+                ),
+            }
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn target(&self) -> &Path {
+        &self.target
+    }
+
+    #[must_use]
+    pub fn lower_snapshot(&self) -> &str {
+        &self.lower_snapshot
+    }
+
+    #[must_use]
+    pub fn writable_upper(&self) -> &str {
+        &self.writable_upper
+    }
+}
+
 impl FilesystemProjection {
     pub fn new(
         source: SafePathBinding,
@@ -1153,6 +1269,7 @@ pub struct SessionAdmission {
     pub adapter: Option<ImmutableIdentity>,
     pub policy_inputs: Vec<ImmutableIdentity>,
     pub policy_set: ImmutableIdentity,
+    pub resource_association: Option<SessionResourceAssociation>,
     pub runner_capability: RunnerCapabilityDocument,
     pub workspace: SafePathBinding,
     pub executable: Option<SafePathBinding>,
@@ -1161,6 +1278,7 @@ pub struct SessionAdmission {
     pub environment: Vec<(String, String)>,
     pub secret_references: Vec<String>,
     pub filesystem_projections: Vec<FilesystemProjection>,
+    pub private_state_projection: Option<PrivateStateProjection>,
     pub endpoint_projections: Vec<EndpointProjection>,
     pub output: OutputPlan,
     pub evidence_requirements: Vec<EvidenceRequirement>,
@@ -1188,6 +1306,7 @@ pub struct SessionSpec {
     adapter: Option<ImmutableIdentity>,
     policy_inputs: Vec<ImmutableIdentity>,
     policy_set: ImmutableIdentity,
+    resource_association: Option<SessionResourceAssociation>,
     runner_capability: RunnerCapabilityDocument,
     workspace: SafePathBinding,
     executable: Option<SafePathBinding>,
@@ -1196,6 +1315,7 @@ pub struct SessionSpec {
     environment: Vec<(String, String)>,
     secret_references: Vec<String>,
     filesystem_projections: Vec<FilesystemProjection>,
+    private_state_projection: Option<PrivateStateProjection>,
     endpoint_projections: Vec<EndpointProjection>,
     output: OutputPlan,
     evidence_requirements: Vec<EvidenceRequirement>,
@@ -1223,6 +1343,7 @@ impl SessionSpec {
             adapter: admission.adapter,
             policy_inputs: admission.policy_inputs,
             policy_set: admission.policy_set,
+            resource_association: admission.resource_association,
             runner_capability: admission.runner_capability,
             workspace: admission.workspace,
             executable: admission.executable,
@@ -1231,6 +1352,7 @@ impl SessionSpec {
             environment: admission.environment,
             secret_references: admission.secret_references,
             filesystem_projections: admission.filesystem_projections,
+            private_state_projection: admission.private_state_projection,
             endpoint_projections: admission.endpoint_projections,
             output: admission.output,
             evidence_requirements: admission.evidence_requirements,
@@ -1310,6 +1432,12 @@ impl SessionSpec {
         self.filesystem_projections
             .iter()
             .try_for_each(FilesystemProjection::validate)?;
+        self.private_state_projection
+            .iter()
+            .try_for_each(PrivateStateProjection::validate)?;
+        self.resource_association
+            .iter()
+            .try_for_each(SessionResourceAssociation::validate)?;
         ensure!(
             self.filesystem_projections.iter().all(|projection| {
                 projection.source().kind() == SafePathKind::Directory
@@ -1401,6 +1529,19 @@ impl SessionSpec {
             }
         );
         validate_environment(&self.environment)?;
+        ensure!(
+            self.private_state_projection.is_none()
+                || self
+                    .environment
+                    .iter()
+                    .all(|(key, _value)| key != "HOME" && key != "CODEX_HOME"),
+            InvalidSnafu {
+                field: "session_spec.environment",
+                reason: String::from(
+                    "HOME and CODEX_HOME are adapter-owned when a private state projection is admitted",
+                ),
+            }
+        );
         validate_secret_references(&self.secret_references)?;
         ensure!(
             self.workspace.kind() == SafePathKind::Directory
@@ -1519,6 +1660,16 @@ impl SessionSpec {
     }
 
     #[must_use]
+    pub const fn private_state_projection(&self) -> Option<&PrivateStateProjection> {
+        self.private_state_projection.as_ref()
+    }
+
+    #[must_use]
+    pub const fn resource_association(&self) -> Option<&SessionResourceAssociation> {
+        self.resource_association.as_ref()
+    }
+
+    #[must_use]
     pub fn endpoint_projections(&self) -> &[EndpointProjection] {
         &self.endpoint_projections
     }
@@ -1613,8 +1764,9 @@ mod tests {
 
     use super::{
         ActiveSessionSignalKind, DaemonFailureMode, EvidenceRequirement, ImmutableIdentity,
-        OutputPlan, OutputStreamRequirements, RunnerBinding, RunnerCapabilityDocument, RunnerId,
-        RunnerRecovery, SafePathBinding, SafePathKind, SessionAdmission, SessionOwner, SessionSpec,
+        OutputPlan, OutputStreamRequirements, PrivateStateProjection, RunnerBinding,
+        RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding, SafePathKind,
+        SessionAdmission, SessionOwner, SessionResourceAssociation, SessionSpec,
         WorkloadPrivilegePlan,
     };
 
@@ -1669,6 +1821,7 @@ mod tests {
             adapter: Some(ImmutableIdentity::new("adapter", digest())?),
             policy_inputs: vec![ImmutableIdentity::new("root-policy", digest())?],
             policy_set: ImmutableIdentity::new("policy-set", digest())?,
+            resource_association: None,
             runner_capability: capability()?,
             workspace: path("/workspace", 2, SafePathKind::Directory)?,
             executable: Some(path("/usr/bin/agent", 3, SafePathKind::Executable)?),
@@ -1677,6 +1830,7 @@ mod tests {
             environment: vec![(String::from("LANG"), String::from("C"))],
             secret_references: vec![String::from("vault://session-token")],
             filesystem_projections: Vec::new(),
+            private_state_projection: None,
             endpoint_projections: Vec::new(),
             output: OutputPlan::new(
                 PathBuf::from("/var/lib/erebor/users/1000/sessions/session-9f7b7f6e/output"),
@@ -1716,6 +1870,53 @@ mod tests {
         let result = SessionSpec::new(admission);
 
         assert!(result.is_err_and(|error| error.to_string().contains("not supported")));
+        Ok(())
+    }
+
+    #[test]
+    fn codex_private_state_projection_owns_home_environment_names(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut admission = admission(DaemonFailureMode::Terminate)?;
+        admission.private_state_projection =
+            Some(PrivateStateProjection::codex_v1(&admission.session_id)?);
+        admission
+            .environment
+            .push((String::from("CODEX_HOME"), String::from("/tmp/override")));
+
+        let error = match SessionSpec::new(admission) {
+            Ok(_) => return Err(std::io::Error::other("CODEX_HOME override was admitted").into()),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("adapter-owned"));
+        Ok(())
+    }
+
+    #[test]
+    fn session_resource_association_preserves_only_declared_resource_names(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut admission = admission(DaemonFailureMode::Terminate)?;
+        admission.resource_association = Some(SessionResourceAssociation::new(
+            "local-codex",
+            "company-workspace",
+            vec![String::from("managed-browser")],
+        )?);
+
+        let spec = SessionSpec::new(admission)?;
+        let association = spec.resource_association().ok_or_else(|| {
+            std::io::Error::other("Session resource association was not retained")
+        })?;
+        assert_eq!(association.agent_name(), "local-codex");
+        assert_eq!(association.policy_set_name(), "company-workspace");
+        assert_eq!(association.surface_names(), ["managed-browser"]);
+        assert!(SessionResourceAssociation::new(
+            "local-codex",
+            "company-workspace",
+            vec![
+                String::from("managed-browser"),
+                String::from("managed-browser")
+            ],
+        )
+        .is_err());
         Ok(())
     }
 

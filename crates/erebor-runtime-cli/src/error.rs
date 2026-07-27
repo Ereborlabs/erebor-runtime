@@ -1,9 +1,8 @@
 use std::{any::Any, io, path::PathBuf};
 
 use erebor_runtime_client::DaemonClientError;
-use erebor_runtime_core::{RuntimeConfigError, RuntimeError, SessionRegistryError};
+use erebor_runtime_core::{RuntimeConfigError, RuntimeError};
 use erebor_runtime_error::{ErrorExt, RetryHint, StatusCode};
-use erebor_runtime_filesystem::FilesystemError;
 use erebor_runtime_session::SessionExecutionError;
 use snafu::{Location, Snafu};
 
@@ -63,25 +62,6 @@ pub(crate) enum CliError {
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("{source}"))]
-    SessionRegistry {
-        source: SessionRegistryError,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("{source}"))]
-    Filesystem {
-        #[snafu(source(from(FilesystemError, Box::new)))]
-        source: Box<FilesystemError>,
-        #[snafu(implicit)]
-        location: Location,
-    },
-    #[snafu(display("filesystem command is invalid: {reason}"))]
-    InvalidFilesystemCommand {
-        reason: String,
-        #[snafu(implicit)]
-        location: Location,
-    },
     #[snafu(display("session command is invalid: {reason}"))]
     InvalidSessionCommand {
         reason: String,
@@ -131,9 +111,6 @@ impl ErrorExt for CliError {
             Self::InvalidConfig { source, .. } => source.status_code(),
             Self::Runtime { source, .. } => source.status_code(),
             Self::SessionExecution { source, .. } => source.status_code(),
-            Self::SessionRegistry { source, .. } => source.status_code(),
-            Self::Filesystem { source, .. } => source.status_code(),
-            Self::InvalidFilesystemCommand { .. } => StatusCode::InvalidArguments,
             Self::InvalidSessionCommand { .. } => StatusCode::InvalidArguments,
             Self::InvalidPolicyCommand { .. } => StatusCode::InvalidArguments,
             Self::InvalidDaemonSocket { .. } => StatusCode::InvalidArguments,
@@ -153,9 +130,6 @@ impl ErrorExt for CliError {
             Self::InvalidConfig { source, .. } => source.retry_hint(),
             Self::Runtime { source, .. } => source.retry_hint(),
             Self::SessionExecution { source, .. } => source.retry_hint(),
-            Self::SessionRegistry { source, .. } => source.retry_hint(),
-            Self::Filesystem { source, .. } => source.retry_hint(),
-            Self::InvalidFilesystemCommand { .. } => RetryHint::NonRetryable,
             Self::InvalidSessionCommand { .. } => RetryHint::NonRetryable,
             Self::InvalidPolicyCommand { .. } => RetryHint::NonRetryable,
             Self::InvalidDaemonSocket { .. } => RetryHint::NonRetryable,
@@ -178,12 +152,9 @@ impl ErrorExt for CliError {
                 Self::InvalidConfig { source, .. } => source.to_string(),
                 Self::Runtime { source, .. } => source.to_string(),
                 Self::SessionExecution { source, .. } => source.to_string(),
-                Self::SessionRegistry { source, .. } => source.to_string(),
-                Self::Filesystem { source, .. } => source.to_string(),
                 Self::ReadConfig { .. }
                 | Self::ReadPolicy { .. }
                 | Self::ReadEvent { .. }
-                | Self::InvalidFilesystemCommand { .. }
                 | Self::InvalidSessionCommand { .. }
                 | Self::InvalidPolicyCommand { .. }
                 | Self::InvalidDaemonSocket { .. }

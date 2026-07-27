@@ -1,4 +1,5 @@
 mod admission;
+mod filesystem;
 mod policy_router;
 mod response;
 
@@ -12,7 +13,8 @@ use std::{
 
 use erebor_runtime_core::{
     ActiveSessionSignal, EndpointProjection, FilesystemProjection, ImmutableIdentity,
-    SafePathBinding, SafePathKind, SessionLifecycleState, SessionOwner, SessionSpec, TerminalSize,
+    SafePathBinding, SafePathKind, SessionLifecycleState, SessionOwner, SessionResourceAssociation,
+    SessionSpec, TerminalSize,
 };
 use erebor_runtime_ipc::v1::{
     AgentInstallResponse, CodexAppServerAttachResponse, CodexAppServerInputCloseResponse,
@@ -676,6 +678,33 @@ impl DaemonSessionApi {
         parent_context: Option<erebor_runtime_context::ContextPin>,
     ) -> Result<SessionSpec> {
         let session_id = format!("session-{}", Uuid::new_v4());
+        let resource_association = match (
+            request.agent_name.is_empty(),
+            request.policy_set_name.is_empty(),
+        ) {
+            (true, true) if request.surface_names.is_empty() => None,
+            (false, false) => Some(
+                SessionResourceAssociation::new(
+                    request.agent_name.clone(),
+                    request.policy_set_name.clone(),
+                    request.surface_names.clone(),
+                )
+                .map_err(|error: erebor_runtime_core::SessionSpecError| {
+                    crate::error::InvalidRequestSnafu {
+                        reason: error.to_string(),
+                    }
+                    .build()
+                })?,
+            ),
+            _ => {
+                return crate::error::InvalidRequestSnafu {
+                    reason: String::from(
+                        "runtime Session association requires both Agent and PolicySet names",
+                    ),
+                }
+                .fail()
+            }
+        };
         let request = parse_request(request, identity)?;
         self.enforce_session_quota(owner_uid, config)?;
         let runner = request.runner().clone();
@@ -742,6 +771,7 @@ impl DaemonSessionApi {
                 local_store: self.local_store.as_ref(),
                 config,
                 allow_codex_adapter,
+                resource_association,
                 additional_filesystem_projections,
             },
         )?;
@@ -909,8 +939,8 @@ impl DaemonSessionApi {
                 detached: request.detached,
                 terminal_rows: request.terminal_rows,
                 terminal_columns: request.terminal_columns,
-                agent_name: String::new(),
-                policy_set_name: String::new(),
+                agent_name: request.agent_name,
+                policy_set_name: request.policy_set_name,
                 surface_names: Vec::new(),
             },
             AdmissionIdentity {
@@ -1255,6 +1285,21 @@ impl DaemonSessionApi {
                 session_id,
                 retention_hold,
             } => self.set_retention_hold(*uid, session_id, *retention_hold),
+            MutationIntent::FilesystemMutation {
+                uid,
+                session_id,
+                operation,
+                target,
+                name,
+                output_format,
+            } => self
+                .filesystem_mutation(*uid, session_id, *operation, target, name, output_format)
+                .and_then(|response| {
+                    message(
+                        erebor_runtime_ipc::v1::KIND_FILESYSTEM_OPERATION_RESPONSE,
+                        &response,
+                    )
+                }),
             MutationIntent::PolicyPackageApply {
                 uid,
                 policy,
@@ -2251,6 +2296,7 @@ impl DaemonSessionApi {
             agent_name: session.agent_name().to_owned(),
             policy_set_name: session.policy_set_name().to_owned(),
             surface_names: session.surface_names().to_vec(),
+            state_projection: None,
         }
     }
 

@@ -6,10 +6,11 @@ use std::{
 use erebor_runtime_context::ContextPin;
 use erebor_runtime_core::{
     DaemonFailureMode, EvidenceRequirement, FilesystemProjection, ImmutableIdentity, OutputPlan,
-    OutputStreamRequirements, RunRequest, RunnerCapabilityDocument, RunnerId, SessionAdmission,
-    SessionOwner, SessionSpec, TerminalSize,
+    OutputStreamRequirements, PrivateStateProjection, RunRequest, RunnerCapabilityDocument,
+    RunnerId, SessionAdmission, SessionOwner, SessionResourceAssociation, SessionSpec,
+    TerminalSize,
 };
-use erebor_runtime_events::SessionId;
+use erebor_runtime_events::{ExecutionSurface, SessionId};
 use erebor_runtime_ipc::v1::SessionCreateRequest;
 
 use crate::{
@@ -36,6 +37,7 @@ pub(super) struct AdmissionContext<'a> {
     pub(super) local_store: &'a DaemonLocalStore,
     pub(super) config: &'a DaemonConfig,
     pub(super) allow_codex_adapter: bool,
+    pub(super) resource_association: Option<SessionResourceAssociation>,
     pub(super) additional_filesystem_projections: Vec<FilesystemProjection>,
 }
 
@@ -121,6 +123,13 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
         }
         .fail();
     }
+    if admission.package().adapter_id() == "codex-v1" {
+        context.local_store.require_admission_surface_coverage(
+            context.owner.uid(),
+            &admission,
+            &[ExecutionSurface::Terminal, ExecutionSurface::Filesystem],
+        )?;
+    }
     let prepared = context
         .adapters
         .prepare(
@@ -175,6 +184,7 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
             .collect::<Result<Vec<_>>>()?,
         policy_set: ImmutableIdentity::new("policy-set", admission.policy_set_digest())
             .map_err(invalid_spec)?,
+        resource_association: context.resource_association,
         runner_capability: context.capability,
         workspace,
         executable,
@@ -183,6 +193,11 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
         environment: run_request.environment().to_vec(),
         secret_references: run_request.secret_references().to_vec(),
         filesystem_projections,
+        private_state_projection: context
+            .allow_codex_adapter
+            .then(|| PrivateStateProjection::codex_v1(&SessionId::new(context.session_id)))
+            .transpose()
+            .map_err(invalid_spec)?,
         endpoint_projections,
         output: OutputPlan::new(
             output_root,

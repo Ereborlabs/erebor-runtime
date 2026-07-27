@@ -24,14 +24,15 @@ use erebor_runtime_ipc::{
         DaemonCommandResult, DaemonError as DaemonErrorMessage, DaemonHello, DaemonHelloAck,
         DaemonLogRecord as DaemonLogRecordMessage, DaemonLogsEnd, DaemonLogsRequest,
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
-        Envelope, EnvelopeServiceFamily, PolicyPackageApplyRequest, PolicyPackageInspectRequest,
-        PolicyPackageListRequest, PolicyPackageListResponse, PolicyPackageVerifyRequest,
-        PolicySetCreateRequest, PolicySetInspectRequest, PolicySetListRequest,
-        PolicySetListResponse, PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse,
-        RunnerCapabilityRecord, RunnerInspectRequest, RunnerListRequest, RunnerListResponse,
-        SessionAliasListRequest, SessionAliasRemoveRequest, SessionAliasSetRequest,
-        SessionAttachRequest, SessionCreateRequest, SessionEventRecord, SessionEventsEnd,
-        SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
+        Envelope, EnvelopeServiceFamily, FilesystemMutationRequest, FilesystemQueryRequest,
+        PolicyPackageApplyRequest, PolicyPackageInspectRequest, PolicyPackageListRequest,
+        PolicyPackageListResponse, PolicyPackageVerifyRequest, PolicySetCreateRequest,
+        PolicySetInspectRequest, PolicySetListRequest, PolicySetListResponse,
+        PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse, RunnerCapabilityRecord,
+        RunnerInspectRequest, RunnerListRequest, RunnerListResponse, SessionAliasListRequest,
+        SessionAliasRemoveRequest, SessionAliasSetRequest, SessionAttachRequest,
+        SessionCreateRequest, SessionEventRecord, SessionEventsEnd, SessionEventsRequest,
+        SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
         SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputRequest,
         SessionInspectRequest, SessionKillRequest, SessionListRequest, SessionLogChunk,
         SessionLogsEnd, SessionLogsRequest, SessionPruneRequest, SessionRemoveRequest,
@@ -52,18 +53,20 @@ use erebor_runtime_ipc::{
         KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END,
         KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST,
         KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST,
-        KIND_POLICY_PACKAGE_APPLY_REQUEST, KIND_POLICY_PACKAGE_INSPECT_REQUEST,
-        KIND_POLICY_PACKAGE_LIST_REQUEST, KIND_POLICY_PACKAGE_LIST_RESPONSE,
-        KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_PACKAGE_VERIFY_REQUEST,
-        KIND_POLICY_SET_CREATE_REQUEST, KIND_POLICY_SET_INSPECT_REQUEST,
-        KIND_POLICY_SET_LIST_REQUEST, KIND_POLICY_SET_LIST_RESPONSE, KIND_POLICY_SET_RECORD,
-        KIND_POLICY_SET_VERIFY_REQUEST, KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE,
-        KIND_RUNNER_CAPABILITY_RECORD, KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST,
-        KIND_RUNNER_LIST_RESPONSE, KIND_SESSION_ALIAS_LIST_REQUEST,
-        KIND_SESSION_ALIAS_LIST_RESPONSE, KIND_SESSION_ALIAS_REMOVE_REQUEST,
-        KIND_SESSION_ALIAS_SET_REQUEST, KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST,
-        KIND_SESSION_EVENTS_END, KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD,
-        KIND_SESSION_EVIDENCE_END, KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
+        KIND_FILESYSTEM_MUTATION_REQUEST, KIND_FILESYSTEM_OPERATION_RESPONSE,
+        KIND_FILESYSTEM_QUERY_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
+        KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
+        KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
+        KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
+        KIND_POLICY_SET_INSPECT_REQUEST, KIND_POLICY_SET_LIST_REQUEST,
+        KIND_POLICY_SET_LIST_RESPONSE, KIND_POLICY_SET_RECORD, KIND_POLICY_SET_VERIFY_REQUEST,
+        KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE, KIND_RUNNER_CAPABILITY_RECORD,
+        KIND_RUNNER_INSPECT_REQUEST, KIND_RUNNER_LIST_REQUEST, KIND_RUNNER_LIST_RESPONSE,
+        KIND_SESSION_ALIAS_LIST_REQUEST, KIND_SESSION_ALIAS_LIST_RESPONSE,
+        KIND_SESSION_ALIAS_REMOVE_REQUEST, KIND_SESSION_ALIAS_SET_REQUEST,
+        KIND_SESSION_ATTACH_REQUEST, KIND_SESSION_CREATE_REQUEST, KIND_SESSION_EVENTS_END,
+        KIND_SESSION_EVENTS_REQUEST, KIND_SESSION_EVENT_RECORD, KIND_SESSION_EVIDENCE_END,
+        KIND_SESSION_EVIDENCE_RECORD, KIND_SESSION_EVIDENCE_REQUEST,
         KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST, KIND_SESSION_INPUT_LEASE_RENEW_REQUEST,
         KIND_SESSION_INPUT_REQUEST, KIND_SESSION_INPUT_RESPONSE, KIND_SESSION_INSPECT_REQUEST,
         KIND_SESSION_KILL_REQUEST, KIND_SESSION_LIST_REQUEST, KIND_SESSION_LIST_RESPONSE,
@@ -556,6 +559,10 @@ impl DaemonControlState {
             KIND_SESSION_INPUT_REQUEST => self.session_input(stream, peer, &envelope).await,
             KIND_SESSION_TERMINAL_RESIZE_REQUEST => {
                 self.session_terminal_resize(stream, peer, &envelope).await
+            }
+            KIND_FILESYSTEM_QUERY_REQUEST => self.filesystem_query(stream, peer, &envelope).await,
+            KIND_FILESYSTEM_MUTATION_REQUEST => {
+                self.filesystem_mutation(stream, peer, &envelope).await
             }
             KIND_SESSION_PRUNE_REQUEST => self.session_prune(stream, peer, &envelope).await,
             KIND_SESSION_ALIAS_SET_REQUEST => self.session_alias_set(stream, peer, &envelope).await,
@@ -1172,6 +1179,61 @@ impl DaemonControlState {
                 uid: peer.uid,
                 terminal_before_unix_ms: request.terminal_before_unix_ms,
                 maximum_sessions: request.maximum_sessions,
+            },
+        )
+        .await
+    }
+
+    async fn filesystem_query(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: FilesystemQueryRequest = envelope
+            .decode_typed_payload(KIND_FILESYSTEM_QUERY_REQUEST)
+            .context(IpcSnafu)?;
+        let response = self.sessions.filesystem_query(
+            peer.uid,
+            &request.session_id,
+            request.operation,
+            &request.target,
+            &request.output_format,
+        )?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_FILESYSTEM_OPERATION_RESPONSE,
+            &response,
+        )
+        .await
+    }
+
+    async fn filesystem_mutation(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: FilesystemMutationRequest = envelope
+            .decode_typed_payload(KIND_FILESYSTEM_MUTATION_REQUEST)
+            .context(IpcSnafu)?;
+        let session_id = self
+            .sessions
+            .resolve_session_reference(peer.uid, &request.session_id)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "filesystem-mutation",
+            envelope,
+            MutationIntent::FilesystemMutation {
+                uid: peer.uid,
+                session_id,
+                operation: request.operation,
+                target: request.target,
+                name: request.name,
+                output_format: request.output_format,
             },
         )
         .await
@@ -2786,6 +2848,7 @@ fn is_mutating_message(kind: &str) -> bool {
             | KIND_SESSION_ATTACH_REQUEST
             | KIND_SESSION_INPUT_LEASE_RENEW_REQUEST
             | KIND_SESSION_INPUT_LEASE_RELEASE_REQUEST
+            | KIND_FILESYSTEM_MUTATION_REQUEST
             | KIND_SESSION_PRUNE_REQUEST
             | KIND_SESSION_ALIAS_SET_REQUEST
             | KIND_SESSION_ALIAS_REMOVE_REQUEST

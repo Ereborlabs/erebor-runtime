@@ -1,7 +1,14 @@
-use std::sync::Arc;
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+use erebor_runtime_audit::append_durable_audit_record;
 use erebor_runtime_core::{
-    OutputEndpoints, ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionSpec,
+    AuditRecord, FileInterceptionOperationKind, FileInterceptionRequest,
+    FileOperationSurfaceHandler, OutputEndpoints, ProcessExecInterceptionRequest,
+    ProcessExecSurfaceHandler, SessionInterceptionDecision, SessionSpec,
     SurfaceInterceptionDecision,
 };
 use erebor_runtime_events::{
@@ -10,13 +17,15 @@ use erebor_runtime_events::{
 };
 use erebor_runtime_packages::PolicyPackageRevision;
 use erebor_runtime_policy::{
-    LayeredDecision, LayeredPolicySet, LocalPolicy, PolicyLayer, PolicySet,
+    Decision, LayeredDecision, LayeredPolicySet, LocalPolicy, PolicyLayer, PolicySet,
 };
 use erebor_runtime_session::{
     ChildContextDeliveryHandler, CodexAppServerService, CodexHookService, CodexHookSessionHandlers,
     ContextAgentControlHandler, ContextOperationAdmissionHandler, SessionManagerError,
 };
 use erebor_runtime_session::{SessionInterceptionRouter, SessionInterceptionRouterFactory};
+use erebor_runtime_telemetry::warn;
+use uuid::Uuid;
 
 use crate::context_dag::SessionContextResolver;
 use crate::local_store::DaemonLocalStore;
@@ -62,9 +71,15 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
         spec: &SessionSpec,
         output: &OutputEndpoints,
     ) -> Result<SessionInterceptionRouter, SessionManagerError> {
-        let router = SessionInterceptionRouter::new().with_process_exec_handler(
-            StoredPolicyProcessExecHandler::from_session(Arc::clone(&self.local_store), spec),
-        );
+        let router = SessionInterceptionRouter::new()
+            .with_process_exec_handler(StoredPolicyProcessExecHandler::from_session(
+                Arc::clone(&self.local_store),
+                spec,
+            ))
+            .with_file_operation_handler(StoredPolicyFileOperationHandler::from_session(
+                Arc::clone(&self.local_store),
+                spec,
+            ));
         let admission = self
             .local_store
             .validate_session_spec(spec)
@@ -301,16 +316,238 @@ impl ProcessExecSurfaceHandler for StoredPolicyProcessExecHandler {
     }
 }
 
+/// The filesystem policy owner for a Session admitted from immutable stored
+/// packages. The guard asks this owner before the intercepted operation can
+/// reach the filesystem surface.
+pub(super) struct StoredPolicyFileOperationHandler {
+    session_id: SessionId,
+    policy_set_digest: String,
+    policies: std::result::Result<LayeredPolicySet, String>,
+    audit_path: PathBuf,
+}
+
+impl StoredPolicyFileOperationHandler {
+    pub(super) fn from_session(local_store: Arc<DaemonLocalStore>, spec: &SessionSpec) -> Self {
+        let policies = local_store
+            .policy_packages_for_session(spec)
+            .and_then(StoredPolicyProcessExecHandler::compile_layers)
+            .map_err(|error| error.to_string());
+        Self {
+            session_id: spec.session_id().clone(),
+            policy_set_digest: spec.policy_set().sha256().to_owned(),
+            policies,
+            audit_path: spec
+                .output()
+                .root()
+                .join("evidence/filesystem-decisions.jsonl"),
+        }
+    }
+
+    fn event(&self, request: &FileInterceptionRequest<'_>) -> RuntimeEvent {
+        let resolved_identity = request.resolved_identity().map_or_else(
+            || serde_json::Value::Null,
+            |identity| {
+                serde_json::json!({
+                    "device": identity.device(),
+                    "inode": identity.inode(),
+                })
+            },
+        );
+        RuntimeEvent {
+            id: EventId::new(format!(
+                "{}-{}-{}",
+                self.session_id.as_str(),
+                request.operation().as_str(),
+                Uuid::new_v4().simple(),
+            )),
+            session_id: self.session_id.clone(),
+            actor: ActorIdentity {
+                id: String::from("agent"),
+                kind: ActorKind::Agent,
+            },
+            surface: ExecutionSurface::Filesystem,
+            action: Self::action(request.operation()),
+            target: Some(TargetRef {
+                label: Some(request.path().to_owned()),
+                uri: request
+                    .path()
+                    .starts_with('/')
+                    .then(|| format!("file://{}", request.path())),
+            }),
+            payload: serde_json::json!({
+                "kind": "filesystem_file_operation",
+                "operation": request.operation().as_str(),
+                "path": request.path(),
+                "cwd": request.cwd(),
+                "pid": request.pid(),
+                "ppid": request.ppid(),
+                "resolved_identity": resolved_identity,
+            }),
+            risk: RiskMetadata {
+                level: Self::risk(request.operation()),
+                reasons: vec![request.operation().as_str().to_owned()],
+            },
+            timestamp: Self::timestamp(),
+        }
+    }
+
+    fn action(operation: FileInterceptionOperationKind) -> ActionKind {
+        match operation {
+            FileInterceptionOperationKind::Open => ActionKind::FileOpen,
+            FileInterceptionOperationKind::Read => ActionKind::FileRead,
+            FileInterceptionOperationKind::Mutation => ActionKind::FileMutation,
+        }
+    }
+
+    fn risk(operation: FileInterceptionOperationKind) -> RiskLevel {
+        match operation {
+            FileInterceptionOperationKind::Open | FileInterceptionOperationKind::Read => {
+                RiskLevel::Low
+            }
+            FileInterceptionOperationKind::Mutation => RiskLevel::Medium,
+        }
+    }
+
+    fn timestamp() -> String {
+        let seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs());
+        format!("unix:{seconds}")
+    }
+
+    fn decision(&self, decision: LayeredDecision) -> SurfaceInterceptionDecision {
+        match decision {
+            LayeredDecision::Allow => SurfaceInterceptionDecision::allow(
+                format!("policy-set-{}", self.policy_set_digest),
+                "all mandatory immutable policy layers allowed the filesystem operation",
+            ),
+            LayeredDecision::Deny { reason, rule_id } => SurfaceInterceptionDecision::deny(
+                rule_id.unwrap_or_else(|| String::from("policy-deny-without-rule-id")),
+                reason,
+            ),
+            LayeredDecision::RequireApproval {
+                reason, rule_ids, ..
+            } => SurfaceInterceptionDecision::require_approval(
+                rule_ids
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| String::from("policy-requires-approval")),
+                reason,
+            ),
+            LayeredDecision::Mediate {
+                reason, rule_ids, ..
+            } => SurfaceInterceptionDecision::deny(
+                rule_ids
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| String::from("policy-requires-mediation")),
+                format!(
+                    "{reason}; no filesystem mediation binding is admitted for this session, so the Linux guard denies the effect"
+                ),
+            ),
+        }
+    }
+
+    fn record_audit(&self, event: &RuntimeEvent, decision: &SurfaceInterceptionDecision) {
+        let policy_decision = Self::audit_decision(decision);
+        let final_decision = match &policy_decision {
+            Decision::RequireApproval {
+                reason, rule_id, ..
+            } => Decision::Deny {
+                reason: format!(
+                    "{reason}; denied fail-closed because the filesystem guard cannot satisfy approvals"
+                ),
+                rule_id: rule_id.clone(),
+            },
+            _ => policy_decision.clone(),
+        };
+        let record = AuditRecord {
+            event: event.clone(),
+            policy_decision,
+            final_decision,
+            context_pin: None,
+        };
+        if let Err(error) = append_durable_audit_record(&self.audit_path, &record) {
+            warn!(
+                error;
+                "filesystem surface audit record failed",
+                session_id = %event.session_id.as_str(),
+                event_id = %event.id.as_str()
+            );
+        }
+    }
+
+    fn audit_decision(decision: &SurfaceInterceptionDecision) -> Decision {
+        let (kind, rule_id, reason, mediation) = decision.clone().into_parts();
+        let rule_id = Some(rule_id);
+        match kind {
+            SessionInterceptionDecision::Allow => Decision::Allow { rule_id },
+            SessionInterceptionDecision::Deny => Decision::Deny { reason, rule_id },
+            SessionInterceptionDecision::RequireApproval => Decision::RequireApproval {
+                reason,
+                rule_id,
+                approval_id: None,
+            },
+            SessionInterceptionDecision::Mediate => Decision::Mediate {
+                reason,
+                rule_id,
+                mediation: mediation.map(|mediation| {
+                    let (kind, replacement_surface, endpoint, lease_id, print_line, keepalive) =
+                        mediation.into_parts();
+                    serde_json::json!({
+                        "kind": kind,
+                        "replacement_surface": replacement_surface,
+                        "endpoint": endpoint,
+                        "lease_id": lease_id,
+                        "print_line": print_line,
+                        "keepalive": keepalive,
+                    })
+                }),
+            },
+        }
+    }
+}
+
+impl FileOperationSurfaceHandler for StoredPolicyFileOperationHandler {
+    fn surface(&self) -> &str {
+        "filesystem"
+    }
+
+    fn decide_file_operation(
+        &self,
+        request: &FileInterceptionRequest<'_>,
+    ) -> SurfaceInterceptionDecision {
+        let event = self.event(request);
+        let decision = match &self.policies {
+            Ok(policy) => match policy.evaluate(&event) {
+                Ok(decision) => self.decision(decision),
+                Err(error) => SurfaceInterceptionDecision::deny(
+                    "stored-policy-evaluation-failed",
+                    format!("admitted policy evaluation failed closed: {error}"),
+                ),
+            },
+            Err(reason) => SurfaceInterceptionDecision::deny(
+                "stored-policy-load-failed",
+                format!("admitted policy package cannot be evaluated: {reason}"),
+            ),
+        };
+        self.record_audit(&event, &decision);
+        decision
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
+    use erebor_runtime_audit::read_audit_records;
     use erebor_runtime_core::{
+        FileInterceptionOperationKind, FileInterceptionRequest, FileOperationSurfaceHandler,
         ProcessExecInterceptionRequest, ProcessExecSurfaceHandler, SessionInterceptionDecision,
     };
     use erebor_runtime_packages::PolicyPackageRevision;
 
-    use super::StoredPolicyProcessExecHandler;
+    use super::{StoredPolicyFileOperationHandler, StoredPolicyProcessExecHandler};
 
     fn revision(source: &[u8]) -> Result<PolicyPackageRevision, Box<dyn std::error::Error>> {
         Ok(PolicyPackageRevision::new(
@@ -374,6 +611,54 @@ mod tests {
             .into_parts();
         assert_eq!(decision, SessionInterceptionDecision::Deny);
         assert!(reason.contains("no admitted mediation owner"));
+        Ok(())
+    }
+
+    #[test]
+    fn filesystem_policy_layers_deny_before_a_mutation_can_proceed(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let audit_path = temporary.path().join("filesystem-decisions.jsonl");
+        let handler = StoredPolicyFileOperationHandler {
+            session_id: erebor_runtime_events::SessionId::new("session-1"),
+            policy_set_digest: "a".repeat(64),
+            policies: StoredPolicyProcessExecHandler::compile_layers(vec![
+                revision(
+                    br#"{"rules":[{"id":"allow-filesystem","match":{"surface":"filesystem"},"decision":"allow"}]}"#,
+                )?,
+                revision(
+                    br#"{"rules":[{"id":"deny-private-state","match":{"surface":"filesystem","action":"file_mutation","target_contains":".erebor-denied"},"decision":"deny","reason":"private state mutation is blocked"}]}"#,
+                )?,
+            ])
+            .map_err(|error| error.to_string()),
+            audit_path: audit_path.clone(),
+        };
+        let (decision, rule_id, reason, _) = handler
+            .decide_file_operation(&FileInterceptionRequest::new(
+                FileInterceptionOperationKind::Mutation,
+                "/run/erebor/state/codex/.erebor-denied",
+                "/run/erebor/state/codex",
+                100,
+                99,
+            ))
+            .into_parts();
+        assert_eq!(decision, SessionInterceptionDecision::Deny);
+        assert_eq!(rule_id, "deny-private-state");
+        assert_eq!(reason, "private state mutation is blocked");
+        let records = read_audit_records(audit_path)?;
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].event.surface,
+            erebor_runtime_events::ExecutionSurface::Filesystem
+        );
+        assert_eq!(
+            records[0].event.action,
+            erebor_runtime_events::ActionKind::FileMutation
+        );
+        assert!(matches!(
+            records[0].final_decision,
+            erebor_runtime_policy::Decision::Deny { .. }
+        ));
         Ok(())
     }
 }

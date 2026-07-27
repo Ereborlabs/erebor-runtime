@@ -1,8 +1,8 @@
 //! Deterministic Codex adapter fixture.
 //!
 //! This is intentionally not a Codex replacement.  It only exercises Erebor's
-//! certified entrypoint, TTY, JSONL, managed-hook, and package-admission
-//! contracts without vendor authentication or mutable user state.
+//! certified entrypoint, TTY, JSONL, managed-hook, package-admission, and
+//! daemon-owned private-state contracts without vendor authentication.
 
 use std::{
     collections::BTreeMap,
@@ -52,6 +52,9 @@ const DELIVERY_EVENT: &[u8] = br#"{"hook_event_name":"PostToolUse","session_id":
 const HOOK_MODE_ENV: &str = "EREBOR_FIXTURE_HOOK_MODE";
 const CROSS_SESSION_ENV: &str = "EREBOR_FIXTURE_CROSS_SESSION_ID";
 const MAX_FIXTURE_DELEGATION_LAST_TURNS: u64 = 8;
+const PRIVATE_STATE_MARKER: &str = "erebor-phase53-state-marker";
+const PRIVATE_STATE_MARKER_CONTENT: &str = "fixture-private-state";
+const CODEX_STATE_TARGET: &str = "/run/erebor/state/codex";
 
 type FixtureResult<T> = Result<T, Box<dyn Error>>;
 
@@ -305,6 +308,7 @@ fn run_tty() -> FixtureResult<()> {
     let mut tool_uses = FixtureToolUseIds::default();
     let window_signals = TerminalWindowSignals::start()?;
     println!("fixture-tty=ready");
+    report_private_state_projection();
     report_terminal_size()?;
     println!(
         "fixture-daemon-socket={}",
@@ -380,6 +384,38 @@ fn run_tty() -> FixtureResult<()> {
         }
     }
     Ok(())
+}
+
+/// Reports only the projection result, never the caller path or state
+/// content. The privileged acceptance seeds this marker in the caller state
+/// before admission, so a projected marker and no visible caller marker prove
+/// the workload received a daemon-owned snapshot rather than the live home.
+fn report_private_state_projection() {
+    let projected = env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .is_some_and(|path| {
+            path == Path::new(CODEX_STATE_TARGET)
+                && fs::read_to_string(path.join(PRIVATE_STATE_MARKER))
+                    .is_ok_and(|content| content == PRIVATE_STATE_MARKER_CONTENT)
+        });
+    let caller_state_visible = fs::read_dir("/home").is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry
+                .path()
+                .join(".codex")
+                .join(PRIVATE_STATE_MARKER)
+                .exists()
+        })
+    });
+    println!(
+        "fixture-private-state={} caller-state={}",
+        if projected { "projected" } else { "invalid" },
+        if caller_state_visible {
+            "visible"
+        } else {
+            "hidden"
+        },
+    );
 }
 
 fn report_terminal_size() -> FixtureResult<()> {
@@ -1404,12 +1440,21 @@ fn root_policy() -> FixtureResult<PolicyPackageRevision> {
     PolicyPackageRevision::new(
         "fixture-host-minimum",
         b"name = \"fixture-host-minimum\"\n".to_vec(),
-        BTreeMap::from([(
-            String::from("terminal.json"),
-            br#"{"rules":[{"id":"fixture-allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
-        )]),
+        BTreeMap::from([
+            (
+                String::from("filesystem.json"),
+                br#"{"rules":[{"id":"fixture-allow-filesystem","match":{"surface":"filesystem"},"decision":"allow"}]}"#.to_vec(),
+            ),
+            (
+                String::from("terminal.json"),
+                br#"{"rules":[{"id":"fixture-allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
+            ),
+        ]),
         BTreeMap::new(),
-        BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+        BTreeMap::from([
+            (String::from("filesystem.json"), br#"{}"#.to_vec()),
+            (String::from("terminal.json"), br#"{}"#.to_vec()),
+        ]),
         b"# Deterministic Codex fixture host minimum\n".to_vec(),
     )
     .map_err(Into::into)
@@ -1463,6 +1508,32 @@ fn fixture_policy_package(trust_root: &Path) -> FixtureResult<PathBuf> {
 "#,
     )?;
     fs::write(package.join("tests").join("terminal.json"), "{}\n")?;
+    fs::write(
+        package.join("rules").join("filesystem.json"),
+        br#"{
+  "rules": [
+    {
+      "id": "deny-fixture-private-state-marker",
+      "match": {
+        "surface": "filesystem",
+        "action": "file_mutation",
+        "target_contains": ".erebor-denied"
+      },
+      "decision": "deny",
+      "reason": "the fixture private-state marker is denied"
+    },
+    {
+      "id": "allow-fixture-filesystem",
+      "match": {
+        "surface": "filesystem"
+      },
+      "decision": "allow"
+    }
+  ]
+}
+"#,
+    )?;
+    fs::write(package.join("tests").join("filesystem.json"), "{}\n")?;
     fs::write(
         package.join("README.md"),
         "# Fixture baseline PolicyPackage\n\nDeterministic Phase 5.1 host-lab policy.\n",

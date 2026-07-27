@@ -1,6 +1,6 @@
 # Phase 5.3: Intrinsic Terminal And Filesystem Surfaces
 
-Status: Not started.
+Status: Done (implemented 2026-07-27).
 
 Parent plan: [Phase 5: Agent, Policy, And Surface Resource Model](README.md)
 
@@ -266,4 +266,55 @@ those are Phase 5.4.
 
 ## Result
 
-State: Not started.
+State: Done.
+
+### Implemented
+
+- `terminal` remains an intrinsic Surface realized by one daemon-owned
+  `TerminalSurfaceRuntime`. It reuses the existing shared
+  `RuntimeGuardService` listener and gives each Session only its own
+  route/token/PTY/guard binding. Runners consume that binding; they do not
+  create interception.
+- `filesystem` is an intrinsic Surface realized by the daemon-owned
+  `LinuxOstreeOverlayFilesystemRuntime`. It preserves the existing
+  `FilesystemSessionStorage::prepare` and `open_existing` lifecycle, including
+  one OSTree repository and one storage layout per Session. Removal discards
+  only that Session's mutable overlay view.
+- Codex admission creates the adapter-owned private-state projection at the
+  fixed `CODEX_HOME` target. The runtime safely resolves the caller home
+  through the UID-dropped descriptor broker, treats an absent `.codex`
+  directory as an empty initial state, rejects unsafe state entries, copies a
+  daemon-owned immutable lower snapshot, records a redacted identity/content
+  manifest, and creates the Session writable upper/work view.
+- The Linux controller projects the overlay only at the fixed target, hides
+  the live caller home, and also masks the path inside a staged workspace when
+  that workspace would otherwise expose the caller's `.codex` directory. The
+  workload therefore cannot regain caller state merely by using its current
+  workspace directory.
+- Filesystem operations now have a stored immutable-PolicySet handler which
+  emits filesystem events, evaluates mandatory layers before an effect, writes
+  durable decisions, and fails closed for denied, approval-required, unknown,
+  or unsupported mediated effects. The direct filesystem CLI registry path was
+  replaced with typed daemon requests.
+- Session inspection now reports the daemon-written opaque projection result;
+  it contains the fixed target, lower snapshot identity, upper identity,
+  explicit refresh mode, and discard-on-removal retention, without a caller
+  path or state content.
+
+### Verification
+
+- `rtk cargo test -p erebor-runtime-core` — 80 passed.
+- `rtk cargo test -p erebor-runtime-session` — 183 passed.
+- `rtk env EREBOR_DAEMON_SYSTEMD_IMAGE=erebor-daemon-systemd:phase53-test cargo test -p erebor-runtime-e2e --test daemon_control_plane -- --ignored --nocapture` — passed. The privileged fixture seeds caller `.codex` state and proves
+  `fixture-private-state=projected caller-state=hidden` while retaining the
+  shared-terminal TTY and app-server coverage.
+- `git diff --check`, `bash -n .github/scripts/daemon-codex-runtime.sh`,
+  `rtk cargo check --workspace`, and
+  `rtk cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  — passed.
+- `bash .github/scripts/verify-rust-ci.sh` — passed after the final Rust edit.
+
+The Docker acceptance gives `/var/lib/erebor` a test-only tmpfs because
+Docker's own root OverlayFS cannot host a nested writable OverlayFS
+upper/work pair. This does not select or configure a user-visible filesystem
+Surface, and it does not change the daemon's production storage policy.

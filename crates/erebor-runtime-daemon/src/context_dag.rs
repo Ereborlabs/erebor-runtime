@@ -1676,6 +1676,7 @@ mod tests {
             adapter: None,
             policy_inputs: vec![ImmutableIdentity::new("root-policy", digest)?],
             policy_set: ImmutableIdentity::new("policy-set", digest)?,
+            resource_association: None,
             runner_capability,
             workspace: SafePathBinding::new(
                 PathBuf::from("/workspace"),
@@ -1703,6 +1704,7 @@ mod tests {
             environment: Vec::new(),
             secret_references: Vec::new(),
             filesystem_projections: Vec::new(),
+            private_state_projection: None,
             endpoint_projections: Vec::new(),
             output: OutputPlan::new(
                 state_root

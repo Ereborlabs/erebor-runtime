@@ -52,6 +52,14 @@ impl SystemdContainer {
                 "/run",
                 "--tmpfs",
                 "/run/lock",
+                // The daemon's intrinsic filesystem Surface creates an
+                // OverlayFS view. Docker's own root OverlayFS cannot host a
+                // nested writable OverlayFS upper/work pair, so this
+                // privileged test gives daemon state a valid independent
+                // backing filesystem. Production chooses its daemon state
+                // filesystem; this is test-fixture storage only.
+                "--tmpfs",
+                "/var/lib/erebor",
                 image,
             ])
             .output()?;

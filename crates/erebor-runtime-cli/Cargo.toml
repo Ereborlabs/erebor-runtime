@@ -14,7 +14,6 @@ erebor-runtime-client = { path = "../erebor-runtime-client" }
 erebor-runtime-core = { path = "../erebor-runtime-core" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-events = { path = "../erebor-runtime-events" }
-erebor-runtime-filesystem = { path = "../erebor-runtime-filesystem" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 erebor-runtime-session = { path = "../erebor-runtime-session" }
 erebor-runtime-telemetry = { path = "../erebor-runtime-telemetry" }

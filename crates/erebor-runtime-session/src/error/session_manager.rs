@@ -62,6 +62,13 @@ pub enum SessionManagerError {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("session filesystem runtime operation failed: {source}"))]
+    RuntimeFilesystem {
+        #[snafu(source(from(erebor_runtime_filesystem::FilesystemError, Box::new)))]
+        source: Box<erebor_runtime_filesystem::FilesystemError>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("session output operation failed: {source}"))]
     Output {
         source: SessionOutputError,
@@ -118,6 +125,7 @@ impl ErrorExt for SessionManagerError {
             Self::RunnerUnavailable { .. } => StatusCode::Unavailable,
             Self::RuntimeIo { .. } | Self::PathResolution { .. } => StatusCode::External,
             Self::RuntimeGuard { source, .. } => source.status_code(),
+            Self::RuntimeFilesystem { source, .. } => source.status_code(),
             Self::Output { source, .. } => source.status_code(),
             Self::InvalidRuntime { .. } | Self::InvalidOperation { .. } => {
                 StatusCode::InvalidArguments
@@ -137,6 +145,7 @@ impl ErrorExt for SessionManagerError {
             Self::RunnerUnavailable { .. } | Self::ActiveHandleLock { .. } => RetryHint::Retryable,
             Self::RuntimeIo { source, .. } => RetryHint::from_io_error(source),
             Self::RuntimeGuard { source, .. } => source.retry_hint(),
+            Self::RuntimeFilesystem { source, .. } => source.retry_hint(),
             Self::Output { source, .. } => source.retry_hint(),
             Self::PathResolution { .. }
             | Self::InvalidRuntime { .. }

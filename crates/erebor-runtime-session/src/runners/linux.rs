@@ -148,6 +148,7 @@ impl LinuxRunnerDriver {
             prepared_executable: output.prepared_executable().map(Path::to_path_buf),
             prepared_interpreters: output.prepared_interpreters().to_vec(),
             prepared_filesystem_projections: output.prepared_filesystem_projections().to_vec(),
+            prepared_private_state_projection: output.prepared_private_state_projection().cloned(),
             process_guard_path: self.process_guard_path.clone(),
             systemd_scope_unit: self.use_systemd_scope.then_some(unit.clone()),
             systemd_session_slice: self.use_systemd_scope.then_some(session_slice.clone()),
@@ -538,6 +539,8 @@ pub(crate) struct LinuxControllerHandoff {
     pub(crate) prepared_executable: Option<PathBuf>,
     pub(crate) prepared_interpreters: Vec<PathBuf>,
     pub(crate) prepared_filesystem_projections: Vec<PreparedFilesystemProjection>,
+    pub(crate) prepared_private_state_projection:
+        Option<erebor_runtime_core::PreparedPrivateStateProjection>,
     pub(crate) process_guard_path: PathBuf,
     pub(crate) systemd_scope_unit: Option<String>,
     pub(crate) systemd_session_slice: Option<String>,

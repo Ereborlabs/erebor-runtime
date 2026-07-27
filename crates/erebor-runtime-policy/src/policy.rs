@@ -120,6 +120,18 @@ impl LocalPolicy {
             rules: document.rules,
         })
     }
+
+    /// Returns whether this policy deliberately governs the supplied Surface.
+    ///
+    /// Coverage is stricter than wildcard event matching: a package must name
+    /// the Surface so admission can prove every mandatory package participates
+    /// in the governing boundary.
+    #[must_use]
+    pub fn covers_surface(&self, surface: &ExecutionSurface) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| rule.matcher.surface.as_ref() == Some(surface))
+    }
 }
 
 impl PolicyEvaluator for LocalPolicy {

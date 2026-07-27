@@ -10,8 +10,10 @@ use std::{
 };
 
 use erebor_runtime_core::{
-    OutputEndpoints, PreparedFilesystemProjection, SafePathBinding, SafePathKind, SessionSpec,
+    OutputEndpoints, PreparedFilesystemProjection, PreparedPrivateStateProjection, SafePathBinding,
+    SafePathKind, SessionSpec,
 };
+use erebor_runtime_filesystem::FilesystemSessionStorage;
 use rustix::{
     fs::{makedev, open, statx, AtFlags, FileType, Mode, OFlags, StatxFlags},
     mount::{mount_bind, mount_remount, unmount, MountFlags, UnmountFlags},
@@ -21,9 +23,10 @@ use snafu::ResultExt;
 use uuid::Uuid;
 
 use crate::{
-    error::session_manager::{OutputSnafu, RuntimeGuardSnafu, RuntimeIoSnafu},
-    DurableStreamCursor, RuntimeGuardService, SessionInterceptionRouter, SessionManagerError,
-    SessionOutputStores, StreamKind,
+    error::session_manager::{OutputSnafu, RuntimeIoSnafu},
+    surfaces::intrinsic::{LinuxOstreeOverlayFilesystemRuntime, TerminalSurfaceRuntime},
+    DurableStreamCursor, SessionInterceptionRouter, SessionManagerError, SessionOutputStores,
+    StreamKind,
 };
 
 use super::output_endpoints;
@@ -82,7 +85,8 @@ impl ResolvedSessionPath {
 pub struct SessionRuntimeResources {
     state_root: PathBuf,
     runtime_root: PathBuf,
-    guard: RuntimeGuardService,
+    terminal: TerminalSurfaceRuntime,
+    filesystem: LinuxOstreeOverlayFilesystemRuntime,
     path_resolver: Arc<dyn SessionPathResolver>,
     router_factory: Arc<dyn SessionInterceptionRouterFactory>,
 }
@@ -96,6 +100,7 @@ struct PreparedStaging {
     executable: Option<PathBuf>,
     interpreters: Vec<PathBuf>,
     projections: Vec<PreparedFilesystemProjection>,
+    private_state_projection: Option<PreparedPrivateStateProjection>,
 }
 
 impl SessionRuntimeResources {
@@ -105,11 +110,13 @@ impl SessionRuntimeResources {
         path_resolver: Arc<dyn SessionPathResolver>,
         router_factory: Arc<dyn SessionInterceptionRouterFactory>,
     ) -> Result<Self, SessionManagerError> {
-        let guard = RuntimeGuardService::new(&runtime_root).context(RuntimeGuardSnafu)?;
+        let terminal = TerminalSurfaceRuntime::new(&runtime_root)?;
+        let filesystem = LinuxOstreeOverlayFilesystemRuntime::new(state_root.clone());
         Ok(Self {
             state_root,
             runtime_root,
-            guard,
+            terminal,
+            filesystem,
             path_resolver,
             router_factory,
         })
@@ -177,6 +184,10 @@ impl SessionRuntimeResources {
                 executable,
                 interpreters,
                 projections,
+                private_state_projection: self
+                    .filesystem
+                    .bind(spec, self.path_resolver.as_ref(), true)?
+                    .map(|binding| binding.projection()),
             });
         }
 
@@ -301,6 +312,10 @@ impl SessionRuntimeResources {
             executable,
             interpreters,
             projections,
+            private_state_projection: self
+                .filesystem
+                .bind(spec, self.path_resolver.as_ref(), false)?
+                .map(|binding| binding.projection()),
         })
     }
 
@@ -603,6 +618,21 @@ pub(crate) trait SessionRuntime: Send + Sync {
 
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError>;
 
+    /// Applies the runtime-owned retention policy after a Session has stopped
+    /// and before its durable record is marked removed.
+    fn remove(&self, _spec: &SessionSpec) -> Result<(), SessionManagerError> {
+        Ok(())
+    }
+
+    /// Opens the Session's storage through the runtime that owns the intrinsic
+    /// filesystem Surface. It intentionally accepts no caller path or registry.
+    fn filesystem_storage(
+        &self,
+        _spec: &SessionSpec,
+    ) -> Result<Option<FilesystemSessionStorage>, SessionManagerError> {
+        Ok(None)
+    }
+
     fn stream(
         &self,
         spec: &SessionSpec,
@@ -620,9 +650,13 @@ impl SessionRuntime for SessionRuntimeResources {
     ) -> Result<OutputEndpoints, SessionManagerError> {
         let staging = self.prepare_staging(spec, recovering)?;
         let _stores = self.output_stores(spec)?;
-        Ok(output_endpoints(spec)
+        let output = output_endpoints(spec)
             .with_prepared_execution(staging.workspace, staging.executable, staging.interpreters)
-            .with_prepared_filesystem_projections(staging.projections))
+            .with_prepared_filesystem_projections(staging.projections);
+        match staging.private_state_projection {
+            Some(projection) => Ok(output.with_prepared_private_state_projection(projection)),
+            None => Ok(output),
+        }
     }
 
     fn start_runtime_guard(
@@ -632,22 +666,17 @@ impl SessionRuntime for SessionRuntimeResources {
         recovering: bool,
     ) -> Result<Vec<(String, String)>, SessionManagerError> {
         let credential = self.guard_credential(spec, recovering)?;
-        self.guard
-            .start_session_with_token(
-                spec.owner().uid(),
-                spec.session_id().as_str(),
-                "agent",
+        self.terminal
+            .bind(
+                spec,
                 self.router_factory.router(spec, output)?,
-                Some(credential.token),
+                credential.token,
             )
-            .context(RuntimeGuardSnafu)
-            .map(|endpoint| endpoint.environment())
+            .map(|binding| binding.environment())
     }
 
     fn cleanup(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
-        self.guard
-            .stop_session(spec.owner().uid(), spec.session_id().as_str())
-            .context(RuntimeGuardSnafu)?;
+        self.terminal.release(spec)?;
         self.router_factory.cleanup(spec)?;
         let credential = self.guard_credential_path(spec);
         match fs::remove_file(&credential) {
@@ -661,6 +690,17 @@ impl SessionRuntime for SessionRuntimeResources {
             }
         }
         self.cleanup_staging(spec)
+    }
+
+    fn remove(&self, spec: &SessionSpec) -> Result<(), SessionManagerError> {
+        self.filesystem.discard_writable_view(spec)
+    }
+
+    fn filesystem_storage(
+        &self,
+        spec: &SessionSpec,
+    ) -> Result<Option<FilesystemSessionStorage>, SessionManagerError> {
+        self.filesystem.open_storage(spec)
     }
 
     fn stream(

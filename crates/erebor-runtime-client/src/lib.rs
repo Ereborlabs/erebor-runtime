@@ -3,6 +3,7 @@
 mod agent;
 mod approvals;
 mod error;
+mod filesystem;
 mod policy;
 mod runner;
 mod session;

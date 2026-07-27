@@ -142,6 +142,53 @@ message SessionRecord {
   string agent_name = 12;
   string policy_set_name = 13;
   repeated string surface_names = 14;
+  // Daemon-created result for an intrinsic filesystem binding. It contains no
+  // caller source path, repository path, mount handle, or credential.
+  SessionStateProjection state_projection = 15;
+}
+
+message SessionStateProjection {
+  string target = 1;
+  string lower_snapshot = 2;
+  string writable_upper = 3;
+  string refresh = 4;
+  string retention = 5;
+}
+
+// Read-only filesystem operations address only a durable Session. They never
+// carry a registry, repository, host path, volume, mount, or storage root.
+message FilesystemQueryRequest {
+  string session_id = 1;
+  FilesystemOperationKind operation = 2;
+  string target = 3;
+  string output_format = 4;
+}
+
+// Mutating filesystem operations use the same daemon-owned Session storage
+// lookup. Their idempotency key is carried in the authenticated envelope.
+message FilesystemMutationRequest {
+  string session_id = 1;
+  FilesystemOperationKind operation = 2;
+  string target = 3;
+  string name = 4;
+  string output_format = 5;
+}
+
+enum FilesystemOperationKind {
+  FILESYSTEM_OPERATION_KIND_UNSPECIFIED = 0;
+  FILESYSTEM_OPERATION_KIND_TRANSACTIONS_LIST = 1;
+  FILESYSTEM_OPERATION_KIND_TRANSACTIONS_SHOW = 2;
+  FILESYSTEM_OPERATION_KIND_RETENTION_LIST = 3;
+  FILESYSTEM_OPERATION_KIND_TRANSACTIONS_COMMIT = 4;
+  FILESYSTEM_OPERATION_KIND_TRANSACTIONS_RENAME = 5;
+  FILESYSTEM_OPERATION_KIND_TRANSACTIONS_ROLLBACK = 6;
+  FILESYSTEM_OPERATION_KIND_RETENTION_PRUNE = 7;
+}
+
+message FilesystemOperationResponse {
+  // Fully rendered text or JSON selected by output_format. Physical storage
+  // results and their rendering remain daemon-owned.
+  string output = 1;
 }
 
 message SessionListResponse {
