@@ -19,6 +19,7 @@ mod policy;
 mod runner;
 mod session;
 mod start;
+mod surface;
 
 #[cfg(test)]
 mod test_support;
@@ -91,6 +92,7 @@ impl Cli {
             Command::Session(args) => session::SessionCommandOwner::new(args, &client).execute(),
             Command::Policy(args) => policy::PolicyCommandOwner::new(args, &client).execute(),
             Command::PolicySet(args) => policy::PolicySetCommandOwner::new(args, &client).execute(),
+            Command::Surface(args) => surface::SurfaceCommandOwner::new(args, &client).execute(),
             Command::Runner(args) => runner::RunnerCommandOwner::new(args, &client).execute(),
             Command::Audit(args) => audit::AuditCommandOwner::new(args, &client).execute(),
             Command::Approval(args) => approval::ApprovalCommandOwner::new(args, &client).execute(),
@@ -119,6 +121,8 @@ enum Command {
     /// Create and inspect named immutable PolicySets.
     #[command(name = "policyset")]
     PolicySet(policy::PolicySetArgs),
+    /// Create and inspect independently configured named Surfaces.
+    Surface(surface::SurfaceArgs),
     /// Inspect the daemon's installed runner capability documents.
     Runner(runner::RunnerArgs),
     /// Audit log commands.
@@ -140,6 +144,7 @@ impl fmt::Display for Command {
             Self::Session(args) => formatter.write_str(&args.display()),
             Self::Policy(args) => formatter.write_str(&args.display()),
             Self::PolicySet(args) => formatter.write_str(&args.display()),
+            Self::Surface(args) => formatter.write_str(&args.display()),
             Self::Runner(args) => formatter.write_str(&args.display()),
             Self::Audit(args) => formatter.write_str(&args.display()),
             Self::Approval(args) => formatter.write_str(&args.display()),

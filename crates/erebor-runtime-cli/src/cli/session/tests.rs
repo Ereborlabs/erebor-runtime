@@ -45,6 +45,38 @@ fn generic_session_commands_use_the_daemon_installed_admission() {
 }
 
 #[test]
+fn static_session_association_uses_only_named_resources() {
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "create",
+        "--agent",
+        "local-codex",
+        "--policy",
+        "company-workspace",
+        "--surface",
+        "engineering-browser",
+        "--idempotency-key",
+        "session-static-1",
+    ])
+    .is_ok());
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "run",
+        "--agent",
+        "local-codex",
+        "--policy",
+        "company-workspace",
+        "--surface",
+        "engineering-browser",
+        "--idempotency-key",
+        "session-static-2",
+    ])
+    .is_ok());
+}
+
+#[test]
 fn session_lifecycle_is_a_daemon_command_family() {
     assert!(Cli::try_parse_from([
         "erebor",

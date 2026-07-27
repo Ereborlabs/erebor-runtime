@@ -6,6 +6,7 @@ mod error;
 mod policy;
 mod runner;
 mod session;
+mod surface;
 
 use std::{path::PathBuf, time::Duration};
 
@@ -30,7 +31,7 @@ use tokio::{
 pub use approvals::{ApprovalPage, ApprovalRecord};
 pub use erebor_runtime_ipc::v1::{
     PolicyPackageListResponse, PolicyPackageRecord, PolicySetListResponse, PolicySetRecord,
-    PolicyTestResponse,
+    PolicyTestResponse, SurfaceListResponse, SurfaceRecord,
 };
 use error::{ConnectSnafu, DaemonSnafu, IpcSnafu, ProtocolSnafu, TimedOutSnafu};
 pub use error::{DaemonClientError, Result};

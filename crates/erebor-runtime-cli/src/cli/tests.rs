@@ -225,6 +225,23 @@ fn session_reviews_use_the_daemon_session_api() {
 }
 
 #[test]
+fn surface_commands_use_named_independent_resources() {
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "surface",
+        "create",
+        "engineering-browser",
+        "--type",
+        "browser_cdp",
+        "--idempotency-key",
+        "surface-1",
+    ])
+    .is_ok());
+    assert!(Cli::try_parse_from(["erebor", "surface", "ls"]).is_ok());
+    assert!(Cli::try_parse_from(["erebor", "surface", "inspect", "engineering-browser"]).is_ok());
+}
+
+#[test]
 fn accepts_daemon_owned_session_alias_commands() {
     let set = Cli::try_parse_from([
         "erebor",

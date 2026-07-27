@@ -132,6 +132,162 @@ impl StoredPolicySet {
     }
 }
 
+pub(crate) struct StoredSurface {
+    name: String,
+    surface_type: String,
+}
+
+impl StoredSurface {
+    fn new(name: impl Into<String>, surface_type: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            surface_type: surface_type.into(),
+        }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn surface_type(&self) -> &str {
+        &self.surface_type
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct StaticSessionAdmission {
+    session_name: String,
+    agent_name: String,
+    policy_set_name: String,
+    surface_names: Vec<String>,
+    agent_adapter: String,
+    agent_integrity_digest: String,
+    policy_set_integrity_digest: String,
+    policy_package_integrity_digests: Vec<String>,
+    surface_integrity_digests: Vec<String>,
+}
+
+impl StaticSessionAdmission {
+    pub(crate) fn session_name(&self) -> &str {
+        &self.session_name
+    }
+
+    pub(crate) fn agent_adapter(&self) -> &str {
+        &self.agent_adapter
+    }
+
+    fn resource_spec(&self) -> StaticSessionResourceSpec {
+        StaticSessionResourceSpec {
+            agent: self.agent_name.clone(),
+            policy_set: self.policy_set_name.clone(),
+            surfaces: self.surface_names.clone(),
+        }
+    }
+
+    fn resolution(&self) -> StaticSessionResolution {
+        StaticSessionResolution {
+            agent_integrity_digest: self.agent_integrity_digest.clone(),
+            policy_set_integrity_digest: self.policy_set_integrity_digest.clone(),
+            policy_package_integrity_digests: self.policy_package_integrity_digests.clone(),
+            surface_integrity_digests: self.surface_integrity_digests.clone(),
+        }
+    }
+}
+
+pub(crate) struct StoredStaticSession {
+    name: String,
+    agent_name: String,
+    policy_set_name: String,
+    surface_names: Vec<String>,
+}
+
+impl StoredStaticSession {
+    fn from_record(record: NamedResourceRecord) -> Result<Self> {
+        let name = record.metadata.name.clone();
+        let integrity_digest = record.validate("Session", &name)?;
+        let NamedResourceSpec::Session(spec) = record.spec else {
+            return InvalidRequestSnafu {
+                reason: String::from("Session resource has an invalid spec"),
+            }
+            .fail();
+        };
+        let _integrity_digest = integrity_digest;
+        Ok(Self {
+            name,
+            agent_name: spec.agent,
+            policy_set_name: spec.policy_set,
+            surface_names: spec.surfaces,
+        })
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn agent_name(&self) -> &str {
+        &self.agent_name
+    }
+
+    pub(crate) fn policy_set_name(&self) -> &str {
+        &self.policy_set_name
+    }
+
+    pub(crate) fn surface_names(&self) -> &[String] {
+        &self.surface_names
+    }
+}
+
+struct SurfaceRegistry;
+
+impl SurfaceRegistry {
+    fn require_registered(surface: &ExecutionSurface, field: &str) -> Result<()> {
+        if matches!(
+            surface,
+            ExecutionSurface::Terminal
+                | ExecutionSurface::Filesystem
+                | ExecutionSurface::BrowserCdp
+        ) {
+            return Ok(());
+        }
+        InvalidRequestSnafu {
+            reason: format!(
+                "{field} selects unregistered Surface `{}`",
+                Self::surface_name(surface)
+            ),
+        }
+        .fail()
+    }
+
+    fn validate_named_surface_type(surface_type: &str) -> Result<()> {
+        match surface_type {
+            "browser_cdp" => Ok(()),
+            "terminal" | "filesystem" => InvalidRequestSnafu {
+                reason: format!(
+                    "Surface spec.type `{surface_type}` is intrinsic and has no named Surface record"
+                ),
+            }
+            .fail(),
+            _ => InvalidRequestSnafu {
+                reason: format!("Surface spec.type `{surface_type}` is not registered"),
+            }
+            .fail(),
+        }
+    }
+
+    fn surface_name(surface: &ExecutionSurface) -> &'static str {
+        match surface {
+            ExecutionSurface::Terminal => "terminal",
+            ExecutionSurface::Filesystem => "filesystem",
+            ExecutionSurface::BrowserCdp => "browser_cdp",
+            ExecutionSurface::Mcp => "mcp",
+            ExecutionSurface::Network => "network",
+            ExecutionSurface::SaaS => "saas",
+            ExecutionSurface::Desktop => "desktop",
+            ExecutionSurface::InternalSystem => "internal_system",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct NamedResourceRecord {
@@ -155,6 +311,8 @@ enum NamedResourceSpec {
     Agent(AgentResourceSpec),
     PolicyPackage(PolicyPackageResourceSpec),
     PolicySet(PolicySetResourceSpec),
+    Surface(SurfaceResourceSpec),
+    Session(StaticSessionResourceSpec),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -239,6 +397,37 @@ struct PolicySetResourceSpec {
     packages: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SurfaceResourceSpec {
+    #[serde(rename = "type")]
+    surface_type: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StaticSessionResourceSpec {
+    agent: String,
+    #[serde(rename = "policySet")]
+    policy_set: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    surfaces: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StaticSessionResolution {
+    agent_integrity_digest: String,
+    policy_set_integrity_digest: String,
+    policy_package_integrity_digests: Vec<String>,
+    surface_integrity_digests: Vec<String>,
+}
+
+struct ResolvedNamedAgent {
+    adapter: String,
+    integrity_digest: ContentDigest,
+}
+
 impl NamedResourceRecord {
     const API_VERSION: &'static str = "erebor.dev/v1";
 
@@ -297,6 +486,47 @@ impl NamedResourceRecord {
         })
     }
 
+    fn surface(name: &str, surface_type: &str) -> Result<Self> {
+        let spec = SurfaceResourceSpec {
+            surface_type: surface_type.to_owned(),
+        };
+        spec.validate()?;
+        Ok(Self {
+            api_version: Self::API_VERSION.to_owned(),
+            kind: String::from("Surface"),
+            metadata: NamedResourceMetadata {
+                name: name.to_owned(),
+            },
+            integrity_digest: Self::integrity_digest_for_spec(&spec)?,
+            spec: NamedResourceSpec::Surface(spec),
+        })
+    }
+
+    fn session(name: &str, spec: StaticSessionResourceSpec) -> Result<Self> {
+        spec.validate()?;
+        Ok(Self {
+            api_version: Self::API_VERSION.to_owned(),
+            kind: String::from("Session"),
+            metadata: NamedResourceMetadata {
+                name: name.to_owned(),
+            },
+            integrity_digest: Self::integrity_digest_for_spec(&spec)?,
+            spec: NamedResourceSpec::Session(spec),
+        })
+    }
+
+    fn integrity_digest_for_spec(spec: &impl Serialize) -> Result<String> {
+        let encoded = serde_json::to_vec(spec).map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!("encoding a named resource specification failed: {error}"),
+            }
+            .build()
+        })?;
+        Ok(ContentDigest::from_canonical_bytes(&encoded)
+            .as_str()
+            .to_owned())
+    }
+
     fn validate(&self, expected_kind: &str, requested_name: &str) -> Result<ContentDigest> {
         if self.api_version != Self::API_VERSION
             || self.kind != expected_kind
@@ -314,6 +544,8 @@ impl NamedResourceRecord {
             ("Agent", NamedResourceSpec::Agent(spec)) if !spec.adapter.is_empty() => {}
             ("PolicyPackage", NamedResourceSpec::PolicyPackage(spec)) => spec.validate()?,
             ("PolicySet", NamedResourceSpec::PolicySet(spec)) => spec.validate()?,
+            ("Surface", NamedResourceSpec::Surface(spec)) => spec.validate()?,
+            ("Session", NamedResourceSpec::Session(spec)) => spec.validate()?,
             ("Agent", NamedResourceSpec::Agent(_)) => {
                 return InvalidRequestSnafu {
                     reason: String::from("Agent resource is missing explicit spec.adapter"),
@@ -328,6 +560,31 @@ impl NamedResourceRecord {
             }
         }
         DaemonLocalStore::parse_digest(&self.integrity_digest, expected_kind)
+    }
+}
+
+impl SurfaceResourceSpec {
+    fn validate(&self) -> Result<()> {
+        SurfaceRegistry::validate_named_surface_type(&self.surface_type)
+    }
+}
+
+impl StaticSessionResourceSpec {
+    fn validate(&self) -> Result<()> {
+        DaemonLocalStore::require_resource_name(&self.agent, "Session spec.agent")?;
+        DaemonLocalStore::require_resource_name(&self.policy_set, "Session spec.policySet")?;
+        let mut names = BTreeSet::new();
+        for surface in &self.surfaces {
+            if !DaemonLocalStore::is_path_component(surface) || !names.insert(surface.as_str()) {
+                return InvalidRequestSnafu {
+                    reason: format!(
+                        "Session spec.surfaces name `{surface}` is invalid or duplicated"
+                    ),
+                }
+                .fail();
+            }
+        }
+        Ok(())
     }
 }
 
@@ -389,6 +646,10 @@ impl PolicyPackageRule {
             }
             .build()
         })?;
+        SurfaceRegistry::require_registered(
+            surface,
+            &format!("PolicyPackage rule `{}` match.surface", self.id),
+        )?;
         if self.reason.as_deref().is_some_and(str::is_empty) {
             return InvalidRequestSnafu {
                 reason: format!("PolicyPackage rule `{}` has an empty reason", self.id),
@@ -422,6 +683,10 @@ impl PolicyPackageMediation {
         source_surface: &ExecutionSurface,
         action: Option<&ActionKind>,
     ) -> Result<()> {
+        SurfaceRegistry::require_registered(
+            &self.replacement_surface,
+            &format!("PolicyPackage rule `{rule_id}` mediation.replacement_surface"),
+        )?;
         if !matches!(self.kind, PolicyPackageMediationKind::ManagedBrowserCdp)
             || self.replacement_surface != ExecutionSurface::BrowserCdp
             || !matches!(
@@ -1162,6 +1427,251 @@ impl DaemonLocalStore {
         Ok(StoredPolicySet::new(name))
     }
 
+    pub(crate) fn create_user_surface(
+        &self,
+        owner_uid: u32,
+        name: &str,
+        surface_type: &str,
+    ) -> Result<StoredSurface> {
+        Self::require_resource_name(name, "Surface")?;
+        let record = NamedResourceRecord::surface(name, surface_type)?;
+        let path = self.surface_path(owner_uid, name);
+        let encoded =
+            serde_json::to_vec(&record).map_err(|source| crate::DaemonError::InvalidConfig {
+                path: path.clone(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_error| crate::error::StateLockSnafu.build())?;
+        self.write_immutable(&path, &encoded)?;
+        Ok(StoredSurface::new(name, surface_type))
+    }
+
+    pub(crate) fn list_surfaces(&self, owner_uid: u32) -> Result<Vec<StoredSurface>> {
+        let mut surfaces = Vec::new();
+        for name in
+            self.list_named_resources(owner_uid, "Surface", self.surface_directory(owner_uid))?
+        {
+            surfaces.push(self.inspect_surface(owner_uid, &name)?);
+        }
+        Ok(surfaces)
+    }
+
+    pub(crate) fn inspect_surface(&self, owner_uid: u32, name: &str) -> Result<StoredSurface> {
+        let record = self.read_named_resource_record(
+            owner_uid,
+            "Surface",
+            name,
+            self.surface_path(owner_uid, name),
+        )?;
+        let NamedResourceSpec::Surface(spec) = record.spec else {
+            return InvalidRequestSnafu {
+                reason: String::from("Surface resource has an invalid spec"),
+            }
+            .fail();
+        };
+        Ok(StoredSurface::new(name, spec.surface_type))
+    }
+
+    pub(crate) fn prepare_static_session_admission(
+        &self,
+        owner_uid: u32,
+        session_name: &str,
+        agent_name: &str,
+        policy_set_name: &str,
+        surface_names: &[String],
+    ) -> Result<StaticSessionAdmission> {
+        Self::require_resource_name(session_name, "Session")?;
+        let agent = self.resolve_named_agent(owner_uid, agent_name)?;
+        let (policy_set_digest, policy_packages) =
+            self.resolve_policy_set_for_static_session(owner_uid, policy_set_name)?;
+
+        let required_source_surfaces = policy_packages
+            .iter()
+            .flat_map(|(_digest, spec)| spec.rules.iter())
+            .filter_map(|rule| rule.matcher.surface.as_ref())
+            .map(SurfaceRegistry::surface_name)
+            .collect::<BTreeSet<_>>();
+        for required_surface in &required_source_surfaces {
+            if policy_packages.iter().any(|(_digest, spec)| {
+                !spec.rules.iter().any(|rule| {
+                    rule.matcher.surface.as_ref().is_some_and(|surface| {
+                        SurfaceRegistry::surface_name(surface) == *required_surface
+                    })
+                })
+            }) {
+                return InvalidRequestSnafu {
+                    reason: format!(
+                        "PolicySet `{policy_set_name}` has no mandatory-package coverage for `{required_surface}`"
+                    ),
+                }
+                .fail();
+            }
+        }
+
+        let mut normalized_surface_names = surface_names.to_vec();
+        normalized_surface_names.sort();
+        let session_spec = StaticSessionResourceSpec {
+            agent: agent_name.to_owned(),
+            policy_set: policy_set_name.to_owned(),
+            surfaces: normalized_surface_names.clone(),
+        };
+        session_spec.validate()?;
+
+        let requires_browser_cdp = policy_packages.iter().any(|(_digest, spec)| {
+            spec.rules.iter().any(|rule| {
+                rule.matcher.surface == Some(ExecutionSurface::BrowserCdp)
+                    || rule.mediation.as_ref().is_some_and(|mediation| {
+                        mediation.replacement_surface == ExecutionSurface::BrowserCdp
+                    })
+            })
+        });
+
+        let mut surface_types = BTreeSet::new();
+        let mut surface_integrity_digests = Vec::with_capacity(normalized_surface_names.len());
+        for surface_name in &normalized_surface_names {
+            let record = self.read_named_resource_record(
+                owner_uid,
+                "Surface",
+                surface_name,
+                self.surface_path(owner_uid, surface_name),
+            )?;
+            let integrity_digest = record.validate("Surface", surface_name)?;
+            let NamedResourceSpec::Surface(spec) = record.spec else {
+                return InvalidRequestSnafu {
+                    reason: format!("Surface `{surface_name}` has an invalid spec"),
+                }
+                .fail();
+            };
+            if !surface_types.insert(spec.surface_type.clone()) {
+                return InvalidRequestSnafu {
+                    reason: format!(
+                        "Session may name at most one Surface implementing `{}`",
+                        spec.surface_type
+                    ),
+                }
+                .fail();
+            }
+            surface_integrity_digests.push(integrity_digest.as_str().to_owned());
+        }
+
+        if requires_browser_cdp {
+            if surface_types != BTreeSet::from([String::from("browser_cdp")]) {
+                return InvalidRequestSnafu {
+                    reason: String::from(
+                        "Session PolicySet requires browser_cdp; name exactly one browser_cdp Surface",
+                    ),
+                }
+                .fail();
+            }
+        } else if !surface_types.is_empty() {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "Session names a Surface, but its PolicySet has no browser_cdp requirement",
+                ),
+            }
+            .fail();
+        }
+
+        Ok(StaticSessionAdmission {
+            session_name: session_name.to_owned(),
+            agent_name: agent_name.to_owned(),
+            policy_set_name: policy_set_name.to_owned(),
+            surface_names: normalized_surface_names,
+            agent_adapter: agent.adapter,
+            agent_integrity_digest: agent.integrity_digest.as_str().to_owned(),
+            policy_set_integrity_digest: policy_set_digest.as_str().to_owned(),
+            policy_package_integrity_digests: policy_packages
+                .into_iter()
+                .map(|(digest, _spec)| digest.as_str().to_owned())
+                .collect(),
+            surface_integrity_digests,
+        })
+    }
+
+    pub(crate) fn create_static_session(
+        &self,
+        owner_uid: u32,
+        admission: &StaticSessionAdmission,
+    ) -> Result<StoredStaticSession> {
+        let record =
+            NamedResourceRecord::session(admission.session_name(), admission.resource_spec())?;
+        let record_path = self.static_session_path(owner_uid, admission.session_name());
+        let record_encoded =
+            serde_json::to_vec(&record).map_err(|source| crate::DaemonError::InvalidConfig {
+                path: record_path.clone(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        let resolution_path =
+            self.static_session_resolution_path(owner_uid, admission.session_name());
+        let resolution_encoded = serde_json::to_vec(&admission.resolution()).map_err(|source| {
+            crate::DaemonError::InvalidConfig {
+                path: resolution_path.clone(),
+                source,
+                location: snafu::Location::default(),
+            }
+        })?;
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_error| crate::error::StateLockSnafu.build())?;
+        self.write_immutable(&resolution_path, &resolution_encoded)?;
+        self.write_immutable(&record_path, &record_encoded)?;
+        StoredStaticSession::from_record(record)
+    }
+
+    pub(crate) fn inspect_static_session(
+        &self,
+        owner_uid: u32,
+        name: &str,
+    ) -> Result<Option<StoredStaticSession>> {
+        Self::require_resource_name(name, "Session")?;
+        let path = self.static_session_path(owner_uid, name);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let record = self.read_named_resource_record(owner_uid, "Session", name, path)?;
+        let stored = StoredStaticSession::from_record(record)?;
+        let resolution: StaticSessionResolution = self.read_json_record(
+            &self.static_session_resolution_path(owner_uid, name),
+            "static Session resolution",
+        )?;
+        Self::parse_digest(
+            &resolution.agent_integrity_digest,
+            "Session agent resolution",
+        )?;
+        Self::parse_digest(
+            &resolution.policy_set_integrity_digest,
+            "Session PolicySet resolution",
+        )?;
+        for digest in resolution
+            .policy_package_integrity_digests
+            .iter()
+            .chain(resolution.surface_integrity_digests.iter())
+        {
+            Self::parse_digest(digest, "Session resolution")?;
+        }
+        Ok(Some(stored))
+    }
+
+    pub(crate) fn list_static_sessions(&self, owner_uid: u32) -> Result<Vec<StoredStaticSession>> {
+        let mut sessions = Vec::new();
+        for name in self.list_named_resources(
+            owner_uid,
+            "Session",
+            self.static_session_directory(owner_uid),
+        )? {
+            if let Some(session) = self.inspect_static_session(owner_uid, &name)? {
+                sessions.push(session);
+            }
+        }
+        Ok(sessions)
+    }
+
     pub(crate) fn record_session_lease(&self, spec: &SessionSpec) -> Result<()> {
         self.record_lease(SessionLease::from_spec(spec))
     }
@@ -1265,6 +1775,37 @@ impl DaemonLocalStore {
         self.users
             .join(owner_uid.to_string())
             .join("agents")
+            .join(format!("{name}.json"))
+    }
+
+    fn surface_directory(&self, owner_uid: u32) -> PathBuf {
+        self.users.join(owner_uid.to_string()).join("surfaces")
+    }
+
+    fn surface_path(&self, owner_uid: u32, name: &str) -> PathBuf {
+        self.surface_directory(owner_uid)
+            .join(format!("{name}.json"))
+    }
+
+    fn static_session_directory(&self, owner_uid: u32) -> PathBuf {
+        self.users
+            .join(owner_uid.to_string())
+            .join("static-sessions")
+    }
+
+    fn static_session_path(&self, owner_uid: u32, name: &str) -> PathBuf {
+        self.static_session_directory(owner_uid)
+            .join(format!("{name}.json"))
+    }
+
+    fn static_session_resolution_directory(&self, owner_uid: u32) -> PathBuf {
+        self.users
+            .join(owner_uid.to_string())
+            .join("static-session-resolutions")
+    }
+
+    fn static_session_resolution_path(&self, owner_uid: u32, name: &str) -> PathBuf {
+        self.static_session_resolution_directory(owner_uid)
             .join(format!("{name}.json"))
     }
 
@@ -1511,6 +2052,107 @@ impl DaemonLocalStore {
         }
     }
 
+    fn resolve_named_agent(&self, owner_uid: u32, name: &str) -> Result<ResolvedNamedAgent> {
+        let record = self.read_named_resource_record(
+            owner_uid,
+            "Agent",
+            name,
+            self.agent_path(owner_uid, name),
+        )?;
+        let integrity_digest = record.validate("Agent", name)?;
+        let NamedResourceSpec::Agent(spec) = record.spec else {
+            return InvalidRequestSnafu {
+                reason: String::from("Agent resource has an invalid spec"),
+            }
+            .fail();
+        };
+        let installation: InstallationRecord = self.read_canonical(
+            &self.installation_path(owner_uid, &integrity_digest),
+            &integrity_digest,
+            "Agent installation",
+        )?;
+        installation.validate().map_err(Self::invalid_model)?;
+        if installation.owner_uid() != owner_uid {
+            return InvalidRequestSnafu {
+                reason: String::from("Agent installation does not belong to the caller"),
+            }
+            .fail();
+        }
+        let package: AgentPackageManifest = self.read_canonical(
+            &self.package_manifest_path(installation.package_digest()),
+            installation.package_digest(),
+            "Agent package",
+        )?;
+        if package.adapter_id() != spec.adapter {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "Agent resource adapter does not match its immutable package revision",
+                ),
+            }
+            .fail();
+        }
+        Ok(ResolvedNamedAgent {
+            adapter: spec.adapter,
+            integrity_digest,
+        })
+    }
+
+    fn resolve_policy_set_for_static_session(
+        &self,
+        owner_uid: u32,
+        name: &str,
+    ) -> Result<(
+        ContentDigest,
+        Vec<(ContentDigest, PolicyPackageResourceSpec)>,
+    )> {
+        let record = self.read_named_resource_record(
+            owner_uid,
+            "PolicySet",
+            name,
+            self.policy_set_name_path(owner_uid, name),
+        )?;
+        let policy_set_digest = record.validate("PolicySet", name)?;
+        let NamedResourceSpec::PolicySet(spec) = record.spec else {
+            return InvalidRequestSnafu {
+                reason: String::from("PolicySet resource has an invalid spec"),
+            }
+            .fail();
+        };
+        let revision: PolicySetRevision = self.read_canonical(
+            &self.policy_set_path(owner_uid, &policy_set_digest),
+            &policy_set_digest,
+            "policy set",
+        )?;
+        revision.validate().map_err(Self::invalid_model)?;
+        if spec.packages.len() != revision.policy_input_digests().len() {
+            return InvalidRequestSnafu {
+                reason: String::from(
+                    "PolicySet package names do not match its immutable package revision",
+                ),
+            }
+            .fail();
+        }
+        let mut packages = Vec::with_capacity(spec.packages.len());
+        for (package_name, revision_digest) in spec
+            .packages
+            .iter()
+            .zip(revision.policy_input_digests().iter())
+        {
+            let digest = self.resolve_policy_package_name(owner_uid, package_name)?;
+            if digest.as_str() != revision_digest.as_str() {
+                return InvalidRequestSnafu {
+                    reason: format!(
+                        "PolicySet package `{package_name}` no longer matches its immutable membership"
+                    ),
+                }
+                .fail();
+            }
+            let policy = self.read_policy_package(owner_uid, &digest)?;
+            packages.push((digest, PolicyPackageResourceSpec::from_revision(&policy)?));
+        }
+        Ok((policy_set_digest, packages))
+    }
+
     fn read_named_resource(
         &self,
         owner_uid: u32,
@@ -1518,11 +2160,22 @@ impl DaemonLocalStore {
         name: &str,
         path: PathBuf,
     ) -> Result<ContentDigest> {
+        self.read_named_resource_record(owner_uid, kind, name, path)
+            .and_then(|record| record.validate(kind, name))
+    }
+
+    fn read_named_resource_record(
+        &self,
+        owner_uid: u32,
+        kind: &str,
+        name: &str,
+        path: PathBuf,
+    ) -> Result<NamedResourceRecord> {
         Self::require_resource_name(name, kind)?;
         let record: NamedResourceRecord = self.read_json_record(&path, "named resource")?;
-        let digest = record.validate(kind, name)?;
+        record.validate(kind, name)?;
         let _owner_uid = owner_uid;
-        Ok(digest)
+        Ok(record)
     }
 
     fn list_named_resources(
@@ -1864,6 +2517,74 @@ mod tests {
     use crate::{config::RootCuratedAdmission, DaemonPaths};
 
     const ADAPTER_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn store_named_generic_agent(
+        store: &DaemonLocalStore,
+        owner_uid: u32,
+        name: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let package = AgentPackageManifest::new(
+            "generic-process",
+            "generic-process-v1",
+            "0.1.0",
+            vec![String::from("<argv>")],
+            ContentDigest::new(ADAPTER_DIGEST)?,
+            Vec::new(),
+        )?;
+        let package_digest = package.canonical_digest()?;
+        store.write_immutable(
+            &store.package_manifest_path(&package_digest),
+            &package.canonical_bytes()?,
+        )?;
+        let installation = InstallationRecord::new(owner_uid, package_digest, 1);
+        let installation_digest = installation.canonical_digest()?;
+        store.write_immutable(
+            &store.installation_path(owner_uid, &installation_digest),
+            &installation.canonical_bytes()?,
+        )?;
+        let record = NamedResourceRecord::agent(name, &installation_digest, "generic-process-v1")?;
+        store.write_immutable(
+            &store.agent_path(owner_uid, name),
+            &serde_json::to_vec(&record)?,
+        )?;
+        Ok(())
+    }
+
+    fn browser_mediation_package(
+        name: &str,
+    ) -> Result<PolicyPackageRevision, Box<dyn std::error::Error>> {
+        Ok(PolicyPackageRevision::new(
+            name,
+            format!("name = \"{name}\"\n").into_bytes(),
+            BTreeMap::from([(
+                String::from("terminal.json"),
+                br#"{"rules":[{"id":"mediate-managed-browser-launch","match":{"surface":"terminal","action":"process_exec","command_contains":"--remote-debugging-port"},"decision":"mediate","reason":"replace raw browser debug launches","mediation":{"kind":"managed_browser_cdp","replacement_surface":"browser_cdp","return_endpoint":"requested_port"}},{"id":"allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
+            )]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            format!("# {name}\n").into_bytes(),
+        )?)
+    }
+
+    fn single_surface_package(
+        name: &str,
+        surface: &str,
+    ) -> Result<PolicyPackageRevision, Box<dyn std::error::Error>> {
+        Ok(PolicyPackageRevision::new(
+            name,
+            format!("name = \"{name}\"\n").into_bytes(),
+            BTreeMap::from([(
+                String::from("rules.json"),
+                format!(
+                    r#"{{"rules":[{{"id":"allow-{surface}","match":{{"surface":"{surface}"}},"decision":"allow"}}]}}"#
+                )
+                .into_bytes(),
+            )]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("rules.json"), br#"{}"#.to_vec())]),
+            format!("# {name}\n").into_bytes(),
+        )?)
+    }
 
     #[test]
     fn session_leases_are_crash_safe_idempotent_and_immutable(
@@ -2291,6 +3012,210 @@ mod tests {
             first.policy_set_digest(),
         )?;
         assert_eq!(resolved.package_digest(), first.package_digest());
+        Ok(())
+    }
+
+    #[test]
+    fn static_sessions_join_named_resources_without_creating_a_runtime(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        store_named_generic_agent(&store, 1000, "local-agent")?;
+        let first_policy = browser_mediation_package("browser-policy-first")?;
+        let second_policy = browser_mediation_package("browser-policy-second")?;
+        let first_policy_digest = store.store_user_policy_package(1000, &first_policy, u64::MAX)?;
+        let second_policy_digest =
+            store.store_user_policy_package(1000, &second_policy, u64::MAX)?;
+        store.create_user_policy_set(
+            1000,
+            "browser-policyset",
+            &[
+                String::from("browser-policy-first"),
+                String::from("browser-policy-second"),
+            ],
+        )?;
+        store.create_user_surface(1000, "engineering-browser", "browser_cdp")?;
+
+        let admission = store.prepare_static_session_admission(
+            1000,
+            "session-static-1",
+            "local-agent",
+            "browser-policyset",
+            &[String::from("engineering-browser")],
+        )?;
+        let session = store.create_static_session(1000, &admission)?;
+        assert_eq!(session.name(), "session-static-1");
+        assert_eq!(session.agent_name(), "local-agent");
+        assert_eq!(session.policy_set_name(), "browser-policyset");
+        assert_eq!(
+            session.surface_names(),
+            &[String::from("engineering-browser")]
+        );
+        assert!(store
+            .static_session_resolution_path(1000, "session-static-1")
+            .exists());
+        assert_eq!(
+            store
+                .inspect_static_session(1000, "session-static-1")?
+                .ok_or("static Session is missing")?
+                .name(),
+            "session-static-1"
+        );
+        assert_eq!(
+            store
+                .list_static_sessions(1000)?
+                .iter()
+                .map(|session| session.name())
+                .collect::<Vec<_>>(),
+            vec!["session-static-1"]
+        );
+        let record: NamedResourceRecord = serde_json::from_slice(&std::fs::read(
+            store.static_session_path(1000, "session-static-1"),
+        )?)?;
+        assert_eq!(record.api_version, "erebor.dev/v1");
+        assert_eq!(record.kind, "Session");
+        assert_eq!(record.metadata.name, "session-static-1");
+        let resolution: super::StaticSessionResolution = serde_json::from_slice(&std::fs::read(
+            store.static_session_resolution_path(1000, "session-static-1"),
+        )?)?;
+        assert_eq!(
+            resolution.policy_package_integrity_digests,
+            vec![first_policy_digest.as_str(), second_policy_digest.as_str(),]
+        );
+        assert!(!paths
+            .session_state_path()
+            .join("users/1000/sessions/session-static-1")
+            .exists());
+        assert!(!paths
+            .session_runtime_path()
+            .join("session-static-1")
+            .exists());
+        Ok(())
+    }
+
+    #[test]
+    fn static_sessions_require_exact_named_browser_configuration_and_owner_scope(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        store_named_generic_agent(&store, 1000, "local-agent")?;
+        let policy = browser_mediation_package("browser-policy")?;
+        store.store_user_policy_package(1000, &policy, u64::MAX)?;
+        store.create_user_policy_set(
+            1000,
+            "browser-policyset",
+            &[String::from("browser-policy")],
+        )?;
+        store.create_user_surface(1000, "engineering-browser", "browser_cdp")?;
+        assert!(store
+            .prepare_static_session_admission(
+                1000,
+                "session-without-browser",
+                "local-agent",
+                "browser-policyset",
+                &[],
+            )
+            .is_err());
+        assert!(store
+            .prepare_static_session_admission(
+                1000,
+                "session-duplicate-browser",
+                "local-agent",
+                "browser-policyset",
+                &[
+                    String::from("engineering-browser"),
+                    String::from("engineering-browser"),
+                ],
+            )
+            .is_err());
+        assert!(store
+            .prepare_static_session_admission(
+                1001,
+                "session-cross-owner",
+                "local-agent",
+                "browser-policyset",
+                &[String::from("engineering-browser")],
+            )
+            .is_err());
+        assert!(store
+            .create_user_surface(1000, "intrinsic-filesystem", "filesystem")
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn static_sessions_require_each_policy_package_to_cover_each_source_surface(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        store_named_generic_agent(&store, 1000, "local-agent")?;
+        let terminal = single_surface_package("terminal-policy", "terminal")?;
+        let filesystem = single_surface_package("filesystem-policy", "filesystem")?;
+        store.store_user_policy_package(1000, &terminal, u64::MAX)?;
+        store.store_user_policy_package(1000, &filesystem, u64::MAX)?;
+        store.create_user_policy_set(
+            1000,
+            "incomplete-coverage",
+            &[
+                String::from("terminal-policy"),
+                String::from("filesystem-policy"),
+            ],
+        )?;
+        assert!(store
+            .prepare_static_session_admission(
+                1000,
+                "session-incomplete-coverage",
+                "local-agent",
+                "incomplete-coverage",
+                &[],
+            )
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn surface_and_policy_envelopes_reject_reverse_references_and_unregistered_surfaces(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        let mut surface = serde_json::to_value(NamedResourceRecord::surface(
+            "engineering-browser",
+            "browser_cdp",
+        )?)?;
+        surface["spec"]["policySet"] = serde_json::Value::String(String::from("policy"));
+        assert!(serde_json::from_value::<NamedResourceRecord>(surface).is_err());
+        let mut unknown_version = NamedResourceRecord::surface("second-browser", "browser_cdp")?;
+        unknown_version.api_version = String::from("erebor.dev/v2");
+        assert!(unknown_version
+            .validate("Surface", "second-browser")
+            .is_err());
+        assert!(unknown_version
+            .validate("Session", "second-browser")
+            .is_err());
+
+        let unregistered = PolicyPackageRevision::new(
+            "mcp-policy",
+            b"name = \"mcp-policy\"\n".to_vec(),
+            BTreeMap::from([(
+                String::from("mcp.json"),
+                br#"{"rules":[{"id":"allow-mcp","match":{"surface":"mcp"},"decision":"allow"}]}"#
+                    .to_vec(),
+            )]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("mcp.json"), br#"{}"#.to_vec())]),
+            b"# MCP\n".to_vec(),
+        )?;
+        assert!(store
+            .store_user_policy_package(1000, &unregistered, u64::MAX)
+            .is_err());
         Ok(())
     }
 }

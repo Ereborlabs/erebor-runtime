@@ -117,10 +117,19 @@ pub(crate) struct SessionRunArgs {
 pub(crate) struct GenericSessionRequestArgs {
     /// The Phase 3 generic runner. Docker is unavailable until Phase 6.
     #[arg(long, alias = "runtime", value_enum)]
-    pub(crate) runner: SessionRunnerArg,
+    pub(crate) runner: Option<SessionRunnerArg>,
     /// Existing workspace admitted by the daemon under the caller UID.
     #[arg(long, value_parser = parse_non_empty_path)]
-    pub(crate) workspace: PathBuf,
+    pub(crate) workspace: Option<PathBuf>,
+    /// Named Agent for a static Phase 5 Session association.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) agent: Option<String>,
+    /// Named PolicySet for a static Phase 5 Session association.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    pub(crate) policy: Option<String>,
+    /// Independently configured Surface required by the PolicySet.
+    #[arg(long = "surface", value_parser = parse_non_empty_string)]
+    pub(crate) surfaces: Vec<String>,
     /// Failure contract for daemon loss.
     #[arg(long, default_value = "terminate", value_parser = parse_failure_mode)]
     pub(crate) failure_mode: String,
@@ -140,7 +149,7 @@ pub(crate) struct GenericSessionRequestArgs {
     #[arg(short = 'd', long)]
     pub(crate) detached: bool,
     /// Initial argv; the daemon never starts a shell for this request.
-    #[arg(required = true, trailing_var_arg = true, num_args = 1..)]
+    #[arg(trailing_var_arg = true, num_args = 0..)]
     pub(crate) command: Vec<String>,
 }
 

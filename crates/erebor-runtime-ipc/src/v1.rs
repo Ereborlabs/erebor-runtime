@@ -22,7 +22,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// control message makes an incompatible schema or meaning change. The generic
 /// envelope protocol remains independent so guard and hook transports are not
 /// needlessly invalidated by a daemon-control-only change.
-pub const DAEMON_CONTROL_PROTOCOL_VERSION: u32 = 2;
+pub const DAEMON_CONTROL_PROTOCOL_VERSION: u32 = 3;
 pub const KIND_GUARD_HELLO: &str = "erebor.runtime.ipc.v1.GuardHello";
 pub const KIND_GUARD_HELLO_ACK: &str = "erebor.runtime.ipc.v1.GuardHelloAck";
 pub const KIND_INTERCEPTION_REQUEST: &str = "erebor.runtime.ipc.v1.InterceptionRequest";
@@ -148,6 +148,11 @@ pub const KIND_POLICY_SET_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.PolicySetL
 pub const KIND_POLICY_SET_LIST_RESPONSE: &str = "erebor.runtime.ipc.v1.PolicySetListResponse";
 pub const KIND_POLICY_SET_INSPECT_REQUEST: &str = "erebor.runtime.ipc.v1.PolicySetInspectRequest";
 pub const KIND_POLICY_SET_VERIFY_REQUEST: &str = "erebor.runtime.ipc.v1.PolicySetVerifyRequest";
+pub const KIND_SURFACE_CREATE_REQUEST: &str = "erebor.runtime.ipc.v1.SurfaceCreateRequest";
+pub const KIND_SURFACE_RECORD: &str = "erebor.runtime.ipc.v1.SurfaceRecord";
+pub const KIND_SURFACE_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.SurfaceListRequest";
+pub const KIND_SURFACE_LIST_RESPONSE: &str = "erebor.runtime.ipc.v1.SurfaceListResponse";
+pub const KIND_SURFACE_INSPECT_REQUEST: &str = "erebor.runtime.ipc.v1.SurfaceInspectRequest";
 pub const KIND_RUNNER_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.RunnerListRequest";
 pub const KIND_RUNNER_INSPECT_REQUEST: &str = "erebor.runtime.ipc.v1.RunnerInspectRequest";
 pub const KIND_RUNNER_CAPABILITY_RECORD: &str = "erebor.runtime.ipc.v1.RunnerCapabilityRecord";

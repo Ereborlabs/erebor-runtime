@@ -19,10 +19,11 @@ use erebor_runtime_ipc::v1::{
     CodexAppServerInputResponse, CodexRunRequest, PolicyPackageRecord, PolicySetRecord,
     SessionAliasListResponse, SessionAliasRecord, SessionAttachResponse, SessionCreateRequest,
     SessionCreateResponse, SessionInputLeaseResponse, SessionInputResponse, SessionListResponse,
-    SessionPruneResponse, SessionRecord, SessionTerminalResizeResponse,
-    KIND_CODEX_APP_SERVER_ATTACH_RESPONSE, KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_SET_RECORD,
-    KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE,
-    KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD,
+    SessionPruneResponse, SessionRecord, SessionTerminalResizeResponse, SurfaceListResponse,
+    SurfaceRecord, KIND_CODEX_APP_SERVER_ATTACH_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
+    KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ATTACH_RESPONSE,
+    KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_PRUNE_RESPONSE,
+    KIND_SESSION_RECORD, KIND_SURFACE_RECORD,
 };
 use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact};
 use erebor_runtime_session::{
@@ -51,7 +52,7 @@ use crate::{
     },
     error::SessionSnafu,
     idempotency::{MutationIntent, MutationResponse},
-    local_store::DaemonLocalStore,
+    local_store::{DaemonLocalStore, StaticSessionAdmission, StoredStaticSession},
     path_broker::DescriptorBroker,
     DaemonPaths, Result,
 };
@@ -578,6 +579,67 @@ impl DaemonSessionApi {
         )
     }
 
+    pub(crate) fn admits_static_association(request: &SessionCreateRequest) -> bool {
+        !request.agent_name.is_empty()
+            || !request.policy_set_name.is_empty()
+            || !request.surface_names.is_empty()
+    }
+
+    pub(crate) fn admit_static_session(
+        &self,
+        request: SessionCreateRequest,
+        owner_uid: u32,
+    ) -> Result<StaticSessionAdmission> {
+        if !Self::admits_static_association(&request) {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from("Session static admission requires an Agent and PolicySet"),
+            }
+            .fail();
+        }
+        if !request.runner_id.is_empty()
+            || !request.command.is_empty()
+            || !request.workspace.is_empty()
+            || !request.daemon_failure_mode.is_empty()
+            || request.requested_loss_grace_seconds != 0
+            || !request.environment.is_empty()
+            || !request.secret_references.is_empty()
+            || request.tty
+            || request.detached
+            || request.terminal_rows != 0
+            || request.terminal_columns != 0
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "Session static admission accepts only Agent, PolicySet, and named Surface references",
+                ),
+            }
+            .fail();
+        }
+        let session_name = format!("session-{}", Uuid::new_v4());
+        let admission = self.local_store.prepare_static_session_admission(
+            owner_uid,
+            &session_name,
+            &request.agent_name,
+            &request.policy_set_name,
+            &request.surface_names,
+        )?;
+        if self
+            .adapters
+            .descriptor(admission.agent_adapter())
+            .is_none()
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: format!(
+                    "Agent `{}` selects unknown compiled adapter `{}`",
+                    request.agent_name,
+                    admission.agent_adapter()
+                ),
+            }
+            .fail();
+        }
+        Ok(admission)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn admit_request_with_adapter(
         &self,
@@ -847,6 +909,9 @@ impl DaemonSessionApi {
                 detached: request.detached,
                 terminal_rows: request.terminal_rows,
                 terminal_columns: request.terminal_columns,
+                agent_name: String::new(),
+                policy_set_name: String::new(),
+                surface_names: Vec::new(),
             },
             AdmissionIdentity {
                 package_digest: installation.package().package_digest().to_owned(),
@@ -1130,6 +1195,9 @@ impl DaemonSessionApi {
     pub(crate) fn apply(&self, intent: &MutationIntent) -> Result<MutationResponse> {
         match intent {
             MutationIntent::SessionCreate { spec } => self.create((**spec).clone()),
+            MutationIntent::StaticSessionCreate { uid, admission } => {
+                self.create_static_session(*uid, admission)
+            }
             MutationIntent::SessionStart { .. } => {
                 unreachable!("session start requires validated root constraints")
             }
@@ -1197,6 +1265,11 @@ impl DaemonSessionApi {
                 name,
                 package_names,
             } => self.create_policy_set(*uid, name, package_names),
+            MutationIntent::SurfaceCreate {
+                uid,
+                name,
+                surface_type,
+            } => self.create_surface(*uid, name, surface_type),
             MutationIntent::Reload { .. }
             | MutationIntent::Stop
             | MutationIntent::AgentInstall { .. }
@@ -1265,6 +1338,29 @@ impl DaemonSessionApi {
             })
     }
 
+    pub(crate) fn list_surfaces(&self, owner_uid: u32) -> Result<SurfaceListResponse> {
+        self.local_store
+            .list_surfaces(owner_uid)
+            .map(|surfaces| SurfaceListResponse {
+                surfaces: surfaces
+                    .into_iter()
+                    .map(|surface| SurfaceRecord {
+                        name: surface.name().to_owned(),
+                        surface_type: surface.surface_type().to_owned(),
+                    })
+                    .collect(),
+            })
+    }
+
+    pub(crate) fn inspect_surface(&self, owner_uid: u32, name: &str) -> Result<SurfaceRecord> {
+        self.local_store
+            .inspect_surface(owner_uid, name)
+            .map(|surface| SurfaceRecord {
+                name: surface.name().to_owned(),
+                surface_type: surface.surface_type().to_owned(),
+            })
+    }
+
     fn store_policy_package(
         &self,
         owner_uid: u32,
@@ -1298,7 +1394,28 @@ impl DaemonSessionApi {
         )
     }
 
+    fn create_surface(
+        &self,
+        owner_uid: u32,
+        name: &str,
+        surface_type: &str,
+    ) -> Result<MutationResponse> {
+        let surface = self
+            .local_store
+            .create_user_surface(owner_uid, name, surface_type)?;
+        message(
+            KIND_SURFACE_RECORD,
+            &SurfaceRecord {
+                name: surface.name().to_owned(),
+                surface_type: surface.surface_type().to_owned(),
+            },
+        )
+    }
+
     pub(crate) fn inspect(&self, uid: u32, session_id: &str) -> Result<SessionRecord> {
+        if let Some(session) = self.local_store.inspect_static_session(uid, session_id)? {
+            return Ok(Self::static_session_record(uid, &session));
+        }
         let session_id = self.resolve_session_reference(uid, session_id)?;
         let record = self
             .manager
@@ -1308,13 +1425,20 @@ impl DaemonSessionApi {
     }
 
     pub(crate) fn list(&self, uid: u32) -> Result<SessionListResponse> {
-        let sessions = self
+        let mut sessions = self
             .manager
             .list(uid)
             .context(SessionSnafu)?
             .iter()
             .map(|record| self.record(record))
-            .collect();
+            .collect::<Vec<_>>();
+        sessions.extend(
+            self.local_store
+                .list_static_sessions(uid)?
+                .iter()
+                .map(|session| Self::static_session_record(uid, session)),
+        );
+        sessions.sort_by(|left, right| left.session_id.cmp(&right.session_id));
         Ok(SessionListResponse { sessions })
     }
 
@@ -1388,6 +1512,18 @@ impl DaemonSessionApi {
         configuration_generation: u64,
         config: &DaemonConfig,
     ) -> Result<ValidatedStartConstraints> {
+        if self
+            .local_store
+            .inspect_static_session(uid, session_id)?
+            .is_some()
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "Session has static admission only; runtime activation is not available in Phase 5.2",
+                ),
+            }
+            .fail();
+        }
         let session_id = self.resolve_session_reference(uid, session_id)?;
         let record = self
             .manager
@@ -1514,6 +1650,25 @@ impl DaemonSessionApi {
                 state: record.state().as_str().to_owned(),
                 generation: record.generation(),
                 retry_guarantee_expires_unix_ms: self.retry_expiration(&record),
+            },
+        )
+    }
+
+    fn create_static_session(
+        &self,
+        owner_uid: u32,
+        admission: &StaticSessionAdmission,
+    ) -> Result<MutationResponse> {
+        let session = self
+            .local_store
+            .create_static_session(owner_uid, admission)?;
+        message(
+            KIND_SESSION_CREATE_RESPONSE,
+            &SessionCreateResponse {
+                session_id: session.name().to_owned(),
+                state: String::from("admitted"),
+                generation: 0,
+                retry_guarantee_expires_unix_ms: 0,
             },
         )
     }
@@ -2078,6 +2233,25 @@ impl DaemonSessionApi {
 
     fn record(&self, record: &DurableSessionRecord) -> SessionRecord {
         session_record(record, self.retry_expiration(record))
+    }
+
+    fn static_session_record(owner_uid: u32, session: &StoredStaticSession) -> SessionRecord {
+        SessionRecord {
+            session_id: session.name().to_owned(),
+            state: String::from("admitted"),
+            generation: 0,
+            owner_uid,
+            runner_id: String::new(),
+            runner_recovery: String::new(),
+            failure: String::new(),
+            retry_guarantee_expires_unix_ms: 0,
+            retention_hold: false,
+            api_version: String::from("erebor.dev/v1"),
+            kind: String::from("Session"),
+            agent_name: session.agent_name().to_owned(),
+            policy_set_name: session.policy_set_name().to_owned(),
+            surface_names: session.surface_names().to_vec(),
+        }
     }
 
     pub(crate) fn resolve_session_reference(&self, uid: u32, reference: &str) -> Result<String> {

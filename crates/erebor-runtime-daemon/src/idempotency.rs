@@ -12,6 +12,7 @@ use snafu::ResultExt;
 use crate::{
     config::DaemonConfig,
     error::{IdempotencyCapacitySnafu, IdempotencyConflictSnafu, IoSnafu},
+    local_store::StaticSessionAdmission,
     Result,
 };
 use erebor_runtime_core::{ActiveSessionSignal, SessionSpec};
@@ -47,6 +48,10 @@ pub(crate) enum MutationIntent {
     },
     SessionCreate {
         spec: Box<SessionSpec>,
+    },
+    StaticSessionCreate {
+        uid: u32,
+        admission: StaticSessionAdmission,
     },
     SessionStart {
         uid: u32,
@@ -127,6 +132,11 @@ pub(crate) enum MutationIntent {
         uid: u32,
         name: String,
         package_names: Vec<String>,
+    },
+    SurfaceCreate {
+        uid: u32,
+        name: String,
+        surface_type: String,
     },
 }
 
@@ -446,13 +456,15 @@ impl MutationIntent {
             Self::Reload { .. }
             | Self::Stop
             | Self::AgentInstall { .. }
+            | Self::StaticSessionCreate { .. }
             | Self::SessionPrune { .. }
             | Self::SessionAliasSet { .. }
             | Self::SessionAliasRemove { .. }
             | Self::ApprovalApprove { .. }
             | Self::ApprovalDeny { .. }
             | Self::PolicyPackageApply { .. }
-            | Self::PolicySetCreate { .. } => None,
+            | Self::PolicySetCreate { .. }
+            | Self::SurfaceCreate { .. } => None,
         }
     }
 }

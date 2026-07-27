@@ -241,6 +241,9 @@ impl<'a> SessionCommandOwner<'a> {
             .await
             .context(DaemonClientSnafu)?;
         Self::write_create(created.clone());
+        if args.request.is_static_association() {
+            return Ok(());
+        }
         let started = client
             .session_start(&created.session_id, &format!("{key}:start"))
             .await
@@ -1003,7 +1006,18 @@ impl<'a> SessionCommandOwner<'a> {
     fn write_records(records: &[SessionRecord]) {
         let mut table = Self::table();
         table.set_header([
-            "ID", "STATE", "GEN", "OWNER", "RUNNER", "RETAINED", "FAILURE",
+            "ID",
+            "STATE",
+            "GEN",
+            "OWNER",
+            "API",
+            "KIND",
+            "AGENT",
+            "POLICYSET",
+            "SURFACES",
+            "RUNNER",
+            "RETAINED",
+            "FAILURE",
         ]);
         for record in records {
             table.add_row([
@@ -1011,6 +1025,15 @@ impl<'a> SessionCommandOwner<'a> {
                 record.state.clone(),
                 record.generation.to_string(),
                 record.owner_uid.to_string(),
+                Self::empty_as_dash(&record.api_version),
+                Self::empty_as_dash(&record.kind),
+                Self::empty_as_dash(&record.agent_name),
+                Self::empty_as_dash(&record.policy_set_name),
+                if record.surface_names.is_empty() {
+                    String::from("-")
+                } else {
+                    record.surface_names.join(",")
+                },
                 record.runner_id.clone(),
                 record.retention_hold.to_string(),
                 if record.failure.is_empty() {
@@ -1021,6 +1044,14 @@ impl<'a> SessionCommandOwner<'a> {
             ]);
         }
         println!("{table}");
+    }
+
+    fn empty_as_dash(value: &str) -> String {
+        if value.is_empty() {
+            String::from("-")
+        } else {
+            value.to_owned()
+        }
     }
 
     fn write_context_graph(graph: ContextGraphResponse) {
@@ -1179,13 +1210,32 @@ impl<'a> SessionCommandOwner<'a> {
 }
 
 impl GenericSessionRequestArgs {
+    fn is_static_association(&self) -> bool {
+        self.agent.is_some() || self.policy.is_some() || !self.surfaces.is_empty()
+    }
+
     fn to_request(&self) -> SessionCreateRequest {
+        let static_association = self.is_static_association();
         SessionCreateRequest {
-            runner_id: self.runner.as_str().to_owned(),
+            runner_id: self
+                .runner
+                .as_ref()
+                .map_or_else(String::new, |runner| runner.as_str().to_owned()),
             command: self.command.clone(),
-            workspace: self.workspace.display().to_string(),
-            daemon_failure_mode: self.failure_mode.clone(),
-            requested_loss_grace_seconds: self.loss_grace_seconds,
+            workspace: self
+                .workspace
+                .as_ref()
+                .map_or_else(String::new, |workspace| workspace.display().to_string()),
+            daemon_failure_mode: if static_association {
+                String::new()
+            } else {
+                self.failure_mode.clone()
+            },
+            requested_loss_grace_seconds: if static_association {
+                0
+            } else {
+                self.loss_grace_seconds
+            },
             environment: self
                 .environment
                 .iter()
@@ -1199,6 +1249,9 @@ impl GenericSessionRequestArgs {
             detached: self.detached,
             terminal_rows: 0,
             terminal_columns: 0,
+            agent_name: self.agent.clone().unwrap_or_default(),
+            policy_set_name: self.policy.clone().unwrap_or_default(),
+            surface_names: self.surfaces.clone(),
         }
     }
 }

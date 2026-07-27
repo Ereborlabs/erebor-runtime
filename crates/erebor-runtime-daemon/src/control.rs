@@ -36,6 +36,7 @@ use erebor_runtime_ipc::{
         SessionInspectRequest, SessionKillRequest, SessionListRequest, SessionLogChunk,
         SessionLogsEnd, SessionLogsRequest, SessionPruneRequest, SessionRemoveRequest,
         SessionStartRequest, SessionStopRequest, SessionTerminalResizeRequest, SessionWaitRequest,
+        SurfaceCreateRequest, SurfaceInspectRequest, SurfaceListRequest,
         DAEMON_CONTROL_PROTOCOL_VERSION, KIND_ADMIN_SESSION_INSPECT_REQUEST,
         KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
         KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
@@ -70,7 +71,9 @@ use erebor_runtime_ipc::{
         KIND_SESSION_PRUNE_REQUEST, KIND_SESSION_RECORD, KIND_SESSION_REMOVE_REQUEST,
         KIND_SESSION_START_REQUEST, KIND_SESSION_STOP_REQUEST,
         KIND_SESSION_TERMINAL_RESIZE_REQUEST, KIND_SESSION_TERMINAL_RESIZE_RESPONSE,
-        KIND_SESSION_WAIT_REQUEST, PROTOCOL_VERSION,
+        KIND_SESSION_WAIT_REQUEST, KIND_SURFACE_CREATE_REQUEST, KIND_SURFACE_INSPECT_REQUEST,
+        KIND_SURFACE_LIST_REQUEST, KIND_SURFACE_LIST_RESPONSE, KIND_SURFACE_RECORD,
+        PROTOCOL_VERSION,
     },
     AsyncFrameCodec,
 };
@@ -617,6 +620,9 @@ impl DaemonControlState {
                 self.policy_set_inspect(stream, peer, &envelope).await
             }
             KIND_POLICY_SET_VERIFY_REQUEST => self.policy_set_verify(stream, peer, &envelope).await,
+            KIND_SURFACE_CREATE_REQUEST => self.surface_create(stream, peer, &envelope).await,
+            KIND_SURFACE_LIST_REQUEST => self.surface_list(stream, peer, &envelope).await,
+            KIND_SURFACE_INSPECT_REQUEST => self.surface_inspect(stream, peer, &envelope).await,
             KIND_RUNNER_LIST_REQUEST => self.runner_list(stream, &envelope).await,
             KIND_RUNNER_INSPECT_REQUEST => self.runner_inspect(stream, &envelope).await,
             _ => Err(InvalidRequestSnafu {
@@ -723,6 +729,21 @@ impl DaemonControlState {
         let request: SessionCreateRequest = envelope
             .decode_typed_payload(KIND_SESSION_CREATE_REQUEST)
             .context(IpcSnafu)?;
+        if DaemonSessionApi::admits_static_association(&request) {
+            let admission = self.sessions.admit_static_session(request, peer.uid)?;
+            self.apply_session_mutation(
+                stream,
+                peer,
+                "session-create-static",
+                envelope,
+                MutationIntent::StaticSessionCreate {
+                    uid: peer.uid,
+                    admission,
+                },
+            )
+            .await?;
+            return Ok(());
+        }
         let (configuration_generation, configuration) = {
             let active = self
                 .configuration
@@ -1813,6 +1834,67 @@ impl DaemonControlState {
         .await
     }
 
+    async fn surface_create(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SurfaceCreateRequest = envelope
+            .decode_typed_payload(KIND_SURFACE_CREATE_REQUEST)
+            .context(IpcSnafu)?;
+        self.apply_session_mutation(
+            stream,
+            peer,
+            "surface-create",
+            envelope,
+            MutationIntent::SurfaceCreate {
+                uid: peer.uid,
+                name: request.name,
+                surface_type: request.surface_type,
+            },
+        )
+        .await
+    }
+
+    async fn surface_list(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        envelope
+            .decode_typed_payload::<SurfaceListRequest>(KIND_SURFACE_LIST_REQUEST)
+            .context(IpcSnafu)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_SURFACE_LIST_RESPONSE,
+            &self.sessions.list_surfaces(peer.uid)?,
+        )
+        .await
+    }
+
+    async fn surface_inspect(
+        &self,
+        stream: &mut UnixStream,
+        peer: PeerIdentity,
+        envelope: &Envelope,
+    ) -> Result<()> {
+        let request: SurfaceInspectRequest = envelope
+            .decode_typed_payload(KIND_SURFACE_INSPECT_REQUEST)
+            .context(IpcSnafu)?;
+        self.write_message(
+            stream,
+            envelope.message_id.saturating_add(1),
+            envelope.message_id,
+            KIND_SURFACE_RECORD,
+            &self.sessions.inspect_surface(peer.uid, &request.name)?,
+        )
+        .await
+    }
+
     async fn runner_list(&self, stream: &mut UnixStream, envelope: &Envelope) -> Result<()> {
         envelope
             .decode_typed_payload::<RunnerListRequest>(KIND_RUNNER_LIST_REQUEST)
@@ -2716,6 +2798,7 @@ fn is_mutating_message(kind: &str) -> bool {
             | KIND_APPROVAL_DENY_REQUEST
             | KIND_POLICY_PACKAGE_APPLY_REQUEST
             | KIND_POLICY_SET_CREATE_REQUEST
+            | KIND_SURFACE_CREATE_REQUEST
     )
 }
 

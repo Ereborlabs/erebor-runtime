@@ -22,5 +22,10 @@ pub(super) fn session_record(
         failure: record.failure().unwrap_or_default().to_owned(),
         retry_guarantee_expires_unix_ms,
         retention_hold: record.retention_hold(),
+        api_version: String::new(),
+        kind: String::new(),
+        agent_name: String::new(),
+        policy_set_name: String::new(),
+        surface_names: Vec::new(),
     }
 }
