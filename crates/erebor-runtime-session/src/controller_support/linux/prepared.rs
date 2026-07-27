@@ -14,7 +14,9 @@ use crate::SessionControllerError;
 
 pub(super) struct PreparedLinuxExecution {
     workspace: File,
+    workspace_staging_path: PathBuf,
     executable: Option<File>,
+    executable_staging_path: Option<PathBuf>,
     interpreters: Vec<File>,
 }
 
@@ -29,6 +31,7 @@ impl PreparedLinuxExecution {
             OFlags::PATH | OFlags::DIRECTORY | OFlags::CLOEXEC | OFlags::NOFOLLOW,
             "opening admitted Linux workspace before namespace isolation",
         )?;
+        let workspace_staging_path = workspace_path.to_path_buf();
         let executable = handoff
             .prepared_executable
             .as_deref()
@@ -49,6 +52,7 @@ impl PreparedLinuxExecution {
                 Ok(executable)
             })
             .transpose()?;
+        let executable_staging_path = handoff.prepared_executable.clone();
         if handoff.prepared_interpreters.len() != handoff.spec.script_interpreters().len() {
             return Err(SessionControllerError::InvalidHandoff {
                 reason: String::from(
@@ -79,19 +83,35 @@ impl PreparedLinuxExecution {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             workspace,
+            workspace_staging_path,
             executable,
+            executable_staging_path,
             interpreters,
         })
     }
 
-    pub(super) fn workspace_path(&self) -> PathBuf {
-        descriptor_path(&self.workspace)
+    pub(super) fn workspace_staging_path(&self) -> &Path {
+        // Keep the descriptor open until the private workspace mount has been
+        // created. The source path is inside daemon-owned staging, so it cannot
+        // be replaced between this verification and the bind mount.
+        let _held_workspace_descriptor = &self.workspace;
+        &self.workspace_staging_path
     }
 
-    pub(super) fn admitted_command(&self, handoff: &LinuxControllerHandoff) -> Vec<String> {
+    pub(super) fn executable_staging_path(&self) -> Option<&Path> {
+        self.executable
+            .as_ref()
+            .and(self.executable_staging_path.as_deref())
+    }
+
+    pub(super) fn admitted_command(
+        &self,
+        handoff: &LinuxControllerHandoff,
+        private_executable_path: Option<&Path>,
+    ) -> Vec<String> {
         let mut command = handoff.spec.command().to_vec();
-        if let Some(executable) = &self.executable {
-            command[0] = descriptor_path(executable).display().to_string();
+        if let Some(path) = private_executable_path {
+            command[0] = path.display().to_string();
         }
         for (interpreter, binding) in self
             .interpreters

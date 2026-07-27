@@ -1,14 +1,12 @@
-use std::collections::BTreeSet;
-
 use erebor_runtime_ipc::v1::HookEventKind;
-use sha2::{Digest, Sha256};
 
-/// Parsed native Codex hook input and the stable structural fingerprint of its
-/// event-specific JSON schema.
+use super::native_schema::CodexV1HookSchema;
+
+/// Parsed native Codex hook input validated against the compiled Codex v1
+/// event schema.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CodexNativeHookEvent {
     kind: HookEventKind,
-    schema_sha256: String,
 }
 
 impl CodexNativeHookEvent {
@@ -20,16 +18,8 @@ impl CodexNativeHookEvent {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| String::from("native hook input omitted hook_event_name"))?;
         let kind = Self::kind_from_name(event)?;
-        let shape = Self::schema_shape(&payload);
-        let mut digest = Sha256::new();
-        digest.update(b"erebor.codex.native-hook-schema.v1\0");
-        digest.update(Self::kind_name(kind).as_bytes());
-        digest.update(b"\0");
-        digest.update(shape.as_bytes());
-        Ok(Self {
-            kind,
-            schema_sha256: format!("{:x}", digest.finalize()),
-        })
+        CodexV1HookSchema::validate(kind, &payload)?;
+        Ok(Self { kind })
     }
 
     #[must_use]
@@ -37,66 +27,18 @@ impl CodexNativeHookEvent {
         self.kind
     }
 
-    #[must_use]
-    pub fn schema_sha256(&self) -> &str {
-        &self.schema_sha256
-    }
-
     fn kind_from_name(event: &str) -> Result<HookEventKind, String> {
         Ok(match event {
-            "session_start" | "SessionStart" => HookEventKind::SessionStart,
-            "user_prompt_submit" | "UserPromptSubmit" => HookEventKind::UserPromptSubmit,
-            "pre_tool_use" | "PreToolUse" => HookEventKind::PreToolUse,
-            "permission_request" | "PermissionRequest" => HookEventKind::PermissionRequest,
-            "post_tool_use" | "PostToolUse" => HookEventKind::PostToolUse,
-            "subagent_start" | "SubagentStart" => HookEventKind::SubagentStart,
-            "subagent_stop" | "SubagentStop" => HookEventKind::SubagentStop,
-            "stop" | "Stop" => HookEventKind::Stop,
+            "SessionStart" => HookEventKind::SessionStart,
+            "UserPromptSubmit" => HookEventKind::UserPromptSubmit,
+            "PreToolUse" => HookEventKind::PreToolUse,
+            "PermissionRequest" => HookEventKind::PermissionRequest,
+            "PostToolUse" => HookEventKind::PostToolUse,
+            "SubagentStart" => HookEventKind::SubagentStart,
+            "SubagentStop" => HookEventKind::SubagentStop,
+            "Stop" => HookEventKind::Stop,
             _ => return Err(format!("unknown managed Codex hook event `{event}`")),
         })
-    }
-
-    const fn kind_name(kind: HookEventKind) -> &'static str {
-        match kind {
-            HookEventKind::SessionStart => "session_start",
-            HookEventKind::UserPromptSubmit => "user_prompt_submit",
-            HookEventKind::PreToolUse => "pre_tool_use",
-            HookEventKind::PermissionRequest => "permission_request",
-            HookEventKind::PostToolUse => "post_tool_use",
-            HookEventKind::SubagentStart => "subagent_start",
-            HookEventKind::SubagentStop => "subagent_stop",
-            HookEventKind::Stop => "stop",
-            HookEventKind::Unspecified => "unspecified",
-        }
-    }
-
-    fn schema_shape(value: &serde_json::Value) -> String {
-        match value {
-            serde_json::Value::Null => String::from("null"),
-            serde_json::Value::Bool(_) => String::from("boolean"),
-            serde_json::Value::Number(_) => String::from("number"),
-            serde_json::Value::String(_) => String::from("string"),
-            serde_json::Value::Array(values) => {
-                let shapes = values
-                    .iter()
-                    .map(Self::schema_shape)
-                    .collect::<BTreeSet<_>>();
-                format!(
-                    "array<{}>",
-                    shapes.into_iter().collect::<Vec<_>>().join("|")
-                )
-            }
-            serde_json::Value::Object(fields) => {
-                let fields = fields
-                    .iter()
-                    .map(|(key, value)| format!("{key:?}:{}", Self::schema_shape(value)))
-                    .collect::<BTreeSet<_>>();
-                format!(
-                    "object{{{}}}",
-                    fields.into_iter().collect::<Vec<_>>().join(",")
-                )
-            }
-        }
     }
 }
 
@@ -107,27 +49,54 @@ mod tests {
     use super::CodexNativeHookEvent;
 
     #[test]
-    fn accepts_the_observed_pascal_case_event_names() -> Result<(), String> {
-        let event = CodexNativeHookEvent::parse(br#"{"hook_event_name":"SessionStart"}"#)?;
-
-        assert_eq!(event.kind(), HookEventKind::SessionStart);
+    fn validates_all_supported_current_codex_v1_event_schemas() -> Result<(), String> {
+        for (event, expected_kind) in [
+            (
+                serde_json::json!({"cwd":"/workspace","hook_event_name":"SessionStart","model":"gpt-5","permission_mode":"default","session_id":"session","source":"startup","transcript_path":null}),
+                HookEventKind::SessionStart,
+            ),
+            (
+                serde_json::json!({"cwd":"/workspace","hook_event_name":"UserPromptSubmit","model":"gpt-5","permission_mode":"default","prompt":"review","session_id":"session","transcript_path":null,"turn_id":"turn"}),
+                HookEventKind::UserPromptSubmit,
+            ),
+            (
+                serde_json::json!({"cwd":"/workspace","hook_event_name":"PreToolUse","model":"gpt-5","permission_mode":"default","session_id":"session","tool_input":{},"tool_name":"Bash","tool_use_id":"tool","transcript_path":null,"turn_id":"turn"}),
+                HookEventKind::PreToolUse,
+            ),
+            (
+                serde_json::json!({"cwd":"/workspace","hook_event_name":"PermissionRequest","model":"gpt-5","permission_mode":"default","session_id":"session","tool_input":{},"tool_name":"Bash","transcript_path":null,"turn_id":"turn"}),
+                HookEventKind::PermissionRequest,
+            ),
+            (
+                serde_json::json!({"cwd":"/workspace","hook_event_name":"PostToolUse","model":"gpt-5","permission_mode":"default","session_id":"session","tool_input":{},"tool_name":"Bash","tool_response":{},"tool_use_id":"tool","transcript_path":null,"turn_id":"turn"}),
+                HookEventKind::PostToolUse,
+            ),
+            (
+                serde_json::json!({"agent_id":"agent","agent_type":"worker","cwd":"/workspace","hook_event_name":"SubagentStart","model":"gpt-5","permission_mode":"default","session_id":"session","transcript_path":null,"turn_id":"turn"}),
+                HookEventKind::SubagentStart,
+            ),
+            (
+                serde_json::json!({"agent_id":"agent","agent_transcript_path":null,"agent_type":"worker","cwd":"/workspace","hook_event_name":"SubagentStop","last_assistant_message":null,"model":"gpt-5","permission_mode":"default","session_id":"session","stop_hook_active":false,"transcript_path":null,"turn_id":"turn"}),
+                HookEventKind::SubagentStop,
+            ),
+            (
+                serde_json::json!({"cwd":"/workspace","hook_event_name":"Stop","last_assistant_message":null,"model":"gpt-5","permission_mode":"default","session_id":"session","stop_hook_active":false,"transcript_path":null,"turn_id":"turn"}),
+                HookEventKind::Stop,
+            ),
+        ] {
+            let event = CodexNativeHookEvent::parse(
+                &serde_json::to_vec(&event).map_err(|error| error.to_string())?,
+            )?;
+            assert_eq!(event.kind(), expected_kind);
+        }
         Ok(())
     }
 
     #[test]
-    fn schema_fingerprint_is_key_order_independent_and_shape_sensitive() -> Result<(), String> {
-        let first = CodexNativeHookEvent::parse(
-            br#"{"hook_event_name":"SessionStart","details":{"id":"one"}}"#,
-        )?;
-        let reordered = CodexNativeHookEvent::parse(
-            br#"{"details":{"id":"two"},"hook_event_name":"SessionStart"}"#,
-        )?;
-        let changed = CodexNativeHookEvent::parse(
-            br#"{"hook_event_name":"SessionStart","details":{"id":2}}"#,
-        )?;
-
-        assert_eq!(first.schema_sha256(), reordered.schema_sha256());
-        assert_ne!(first.schema_sha256(), changed.schema_sha256());
-        Ok(())
+    fn rejects_a_current_schema_violation() {
+        assert!(CodexNativeHookEvent::parse(
+            br#"{"cwd":"/workspace","hook_event_name":"SessionStart","model":"gpt-5","permission_mode":"default","session_id":"session","source":"startup","transcript_path":null,"unexpected":true}"#,
+        )
+        .is_err());
     }
 }

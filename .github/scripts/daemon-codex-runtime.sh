@@ -15,6 +15,7 @@ fixture=/usr/lib/erebor/codex-v1-fixture
 terminal_lease_probe=/usr/lib/erebor/erebor-terminal-lease-probe
 config_path=/etc/erebor/erebord.json
 trust_root=/usr/lib/erebor/codex-v1-fixture-trust
+codex_agent_name=fixture-codex
 first_user="${EREBOR_INSTALLED_SESSION_USER:?first session user is required}"
 second_user="${EREBOR_INSTALLED_SESSION_USER_TWO:?second session user is required}"
 
@@ -182,24 +183,24 @@ configure_fixture() {
     --linux-runner-containment systemd \
     --owner-uid "$(id -u "$first_user")" \
     --owner-uid "$(id -u "$second_user")")"
-  package_reference="$(sed -n 's/^package_reference=//p' <<<"$package_output")"
-  root_policy_digest="$(sed -n 's/^root_policy_digest=//p' <<<"$package_output")"
-  [[ -n "$package_reference" && -n "$root_policy_digest" ]]
+  package_name="$(sed -n 's/^package_name=//p' <<<"$package_output")"
+  fixture_policy_path="$(sed -n 's/^fixture_policy_path=//p' <<<"$package_output")"
+  [[ -n "$package_name" && -n "$fixture_policy_path" ]]
   chown root:root "$config_path"
   chmod 0640 "$config_path"
 }
 
 configure_policy() {
   local user="$1"
-  local output policy_set_digest
-  output="$(as_user "$user" policy set create \
-    --root-minimum-digest "$root_policy_digest" \
-    --idempotency-key "codex-runtime-policy-$user")"
-  policy_set_digest="$(sed -n 's/^digest=//p' <<<"$output")"
-  [[ -n "$policy_set_digest" ]]
-  as_user "$user" policy set alias fixture "$policy_set_digest" \
-    --idempotency-key "codex-runtime-policy-alias-$user" \
-    | grep -q 'alias=fixture'
+  as_user "$user" policy package apply "$fixture_policy_path" \
+    --name fixture-baseline \
+    --idempotency-key "codex-runtime-policy-package-$user" \
+    | grep -q 'policyPackage=fixture-baseline'
+  as_user "$user" policyset create \
+    --name fixture \
+    --package fixture-baseline \
+    --idempotency-key "codex-runtime-policy-set-$user" \
+    | grep -q 'policySet=fixture'
 }
 
 load_fixture() {
@@ -207,21 +208,23 @@ load_fixture() {
   local user_fixture="/home/$user/codex-v1-fixture"
   install -o "$user" -g "$user" -m 0755 "$fixture" "$user_fixture"
   if as_user "$user" agent load \
-    "codex-v1-fixture@sha256:$(printf 'a%.0s' {1..64})" \
-    --from "$user_fixture" >/dev/null 2>&1; then
+    unknown-codex-v1-fixture \
+    --from "$user_fixture" --adapter codex-v1 --name rejected-codex >/dev/null 2>&1; then
     echo "agent load accepted an unknown root-curated package" >&2
     exit 1
   fi
   cp "$user_fixture" "/home/$user/codex-v1-fixture-mutated"
   chown "$user:$user" "/home/$user/codex-v1-fixture-mutated"
   printf 'x' >>"/home/$user/codex-v1-fixture-mutated"
-  if as_user "$user" agent load "$package_reference" \
-    --from "/home/$user/codex-v1-fixture-mutated" >/dev/null 2>&1; then
+  if as_user "$user" agent load "$package_name" \
+    --from "/home/$user/codex-v1-fixture-mutated" \
+    --adapter codex-v1 --name rejected-codex >/dev/null 2>&1; then
     echo "agent load accepted an executable with the wrong artifact digest" >&2
     exit 1
   fi
-  as_user "$user" agent load "$package_reference" --from "$user_fixture" \
-    | grep -q 'alias=codex-app-server'
+  as_user "$user" agent load "$package_name" --from "$user_fixture" \
+    --adapter codex-v1 --name "$codex_agent_name" \
+    | grep -q "agent=$codex_agent_name"
 }
 
 run_app_server_frame() {
@@ -229,7 +232,7 @@ run_app_server_frame() {
   local frame="$2"
   local output="$3"
   printf '%s\n' "$frame" | as_user "$user" run --policy fixture \
-    --workspace "/home/$user" codex-app-server >"$output" 2>&1
+    --workspace "/home/$user" --app-server "$codex_agent_name" >"$output" 2>&1
 }
 
 record_field() {
@@ -332,8 +335,8 @@ start_waiting_app_server() {
   local output="$3"
   mkfifo "$fifo"
   runuser -u "$user" -- bash -c \
-    'exec "$1" run --policy fixture --workspace "$2" codex-app-server <"$3"' \
-    -- "$erebor" "/home/$user" "$fifo" >"$output" 2>&1 &
+    'exec "$1" run --policy fixture --workspace "$2" --app-server "$3" <"$4"' \
+    -- "$erebor" "/home/$user" "$codex_agent_name" "$fifo" >"$output" 2>&1 &
   wait_client_parent="$!"
   exec {wait_writer}>"$fifo"
   printf '%s\n' '{"jsonrpc":"2.0","id":90,"method":"fixture/wait"}' >&"$wait_writer"
@@ -357,8 +360,8 @@ start_live_app_server() {
   local output="$3"
   mkfifo "$fifo"
   runuser -u "$user" -- bash -c \
-    'exec "$1" run --policy fixture --workspace "$2" codex-app-server <"$3"' \
-    -- "$erebor" "/home/$user" "$fifo" >"$output" 2>&1 &
+    'exec "$1" run --policy fixture --workspace "$2" --app-server "$3" <"$4"' \
+    -- "$erebor" "/home/$user" "$codex_agent_name" "$fifo" >"$output" 2>&1 &
   live_client_pid="$!"
   exec {live_writer}>"$fifo"
 }
@@ -584,9 +587,19 @@ load_fixture "$second_user"
 configure_policy "$first_user"
 configure_policy "$second_user"
 
+# The fixture never receives this caller path. Its TTY output proves the
+# daemon copied the marker into the fixed CODEX_HOME projection and hid the
+# live caller state before the workload started.
+install -d -o "$first_user" -g "$first_user" -m 0700 \
+  "/home/$first_user/.codex"
+printf 'fixture-private-state' >"/home/$first_user/.codex/erebor-phase53-state-marker"
+chown "$first_user:$first_user" \
+  "/home/$first_user/.codex/erebor-phase53-state-marker"
+chmod 0600 "/home/$first_user/.codex/erebor-phase53-state-marker"
+
 if as_user "$first_user" run --policy fixture --workspace "/home/$first_user" \
-  codex -- --escape-daemon-entrypoint >/dev/null 2>&1; then
-  echo "the Codex alias accepted raw argv" >&2
+  "$codex_agent_name" -- --escape-daemon-entrypoint >/dev/null 2>&1; then
+  echo "the named Codex Agent accepted raw argv" >&2
   exit 1
 fi
 if as_user "$first_user" run --policy fixture --workspace "/home/$first_user" \
@@ -601,7 +614,7 @@ fi
 # same workload rather than creating another session or PTY.
 tty_create_output="$(mktemp)"
 timeout 20s runuser -u "$first_user" -- script -qefc \
-  "stty rows 24 cols 80; $erebor run --policy fixture --workspace /home/$first_user codex -d" \
+  "stty rows 24 cols 80; $erebor run --policy fixture --workspace /home/$first_user $codex_agent_name -d" \
   /dev/null >"$tty_create_output"
 tty_session="$(await_running_session "$first_user")"
 [[ "$(session_ids "$first_user" | wc -l | tr -d ' ')" == 1 ]]
@@ -610,10 +623,12 @@ tty_first_output="$(mktemp)"
 start_tty_attachment "$first_user" "$tty_session" "$tty_first_output" \
   phase4-tty-controller-a 24 80 40 120
 await_tty_attachment_output "$tty_first_output" 'fixture-tty=ready'
+await_tty_attachment_output "$tty_first_output" \
+  'fixture-private-state=projected caller-state=hidden'
 await_tty_attachment_output "$tty_first_output" 'fixture-tty-size=rows=24 columns=80'
 await_tty_attachment_output "$tty_first_output" 'fixture-daemon-socket=absent'
 await_tty_attachment_output "$tty_first_output" 'fixture-hook=accepted'
-observer_output="$(as_user "$first_user" "$terminal_lease_probe" "$tty_session")"
+observer_output="$(runuser -u "$first_user" -- "$terminal_lease_probe" "$tty_session")"
 grep -q 'observer_input=denied observer_resize=denied' <<<"$observer_output"
 sleep 3
 printf 'terminal-size\n' >&"$tty_attachment_writer"
@@ -647,7 +662,7 @@ printf '%s\n' \
   '{"jsonrpc":"2.0","id":2,"method":"fixture/hook"}' \
   '{"jsonrpc":"2.0","method":"$/cancelRequest","params":{"id":2}}' \
   | as_user "$first_user" run --policy fixture --workspace "/home/$first_user" \
-      codex-app-server >"$app_server_output" 2>&1
+      --app-server "$codex_agent_name" >"$app_server_output" 2>&1
 grep -q '"fixture":"accepted"' "$app_server_output"
 grep -q '"fixture":"cancelled"' "$app_server_output"
 remove_all_sessions "$first_user"
@@ -790,7 +805,7 @@ remove_all_sessions "$first_user"
 # later daemon admission; the daemon re-resolves its held descriptor identity.
 printf 'x' >>"/home/$first_user/codex-v1-fixture"
 if as_user "$first_user" run --policy fixture --workspace "/home/$first_user" \
-  codex -d >/dev/null 2>&1; then
+  "$codex_agent_name" -d >/dev/null 2>&1; then
   echo "the daemon admitted a replaced enrolled Codex artifact" >&2
   exit 1
 fi

@@ -34,6 +34,10 @@ tempfile = "3.23.0"
 [[bin]]
 name = "codex-linux-v1-test-hook"
 path = "src/bin/codex_linux_v1_test_hook.rs"
+
+[[bin]]
+name = "erebor-codex-real-profile"
+path = "src/bin/codex_real_profile.rs"
 test = false
 bench = false
 

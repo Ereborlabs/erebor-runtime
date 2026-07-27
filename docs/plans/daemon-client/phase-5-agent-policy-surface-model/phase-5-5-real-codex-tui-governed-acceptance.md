@@ -1,6 +1,6 @@
 # Phase 5.5: Real Codex TUI Governed Acceptance
 
-Status: Not started.
+Status: In progress (started 2026-07-27).
 
 Parent plan: [Phase 5: Agent, Policy, And Surface Resource Model](README.md)
 
@@ -10,6 +10,11 @@ Prove the Phase 5 product outcome: a real local Codex TUI runs through Erebor
 as one daemon-created Session of an admitted immutable Agent with the intrinsic
 `terminal` and `filesystem` Surface bindings. This is a real-host acceptance
 result, not a deterministic fixture or an Agentfile/Docker demonstration.
+
+This is deliberately a terminal/filesystem-only acceptance. Phase 5.4 remains
+deferred: the PolicySet selected by this phase has no `mediate` decision and no
+rule that names `browser_cdp`. A later run that selects either must first
+complete Phase 5.4.
 
 ## Scope
 
@@ -45,17 +50,17 @@ result, not a deterministic fixture or an Agentfile/Docker demonstration.
   `FilesystemSessionStorage` for this Session. If Linux-host prerequisites are
   unavailable, report the exact unavailable capability and command/error; do
   not fall back to an ungoverned local Codex launch.
-- Do not treat Browser CDP mediation as browser discovery. Phase 5.4 proves
-  that a terminal `mediate` rule may use only its explicit
-  `replacement_surface` binding. This walkthrough need not issue a browser
-  launch, but any policy that includes one must name a compatible Browser CDP
-  Surface in `Session.spec.surfaces` before the TUI starts.
+- This walkthrough has no Browser CDP Surface or mediation rule. If a later
+  PolicySet includes a terminal `mediate` rule with an explicit
+  `replacement_surface: browser_cdp`, Phase 5.4 must first provide the named
+  Browser CDP Surface lifecycle and binding it requires.
 
 ## Accepted Resource Schemas
 
-Phase 5.5 adds no fields. It accepts only the complete resource contract from
-Phases 5.1–5.4 below; a real Codex result is invalid if any document contains
-an extra field or a substituted reference.
+Phase 5.5 adds no fields. It accepts only the resource contract from Phases
+5.1–5.3 below; a real Codex result is invalid if any document contains an
+extra field or a substituted reference. Phase 5.4 is the conditional extension
+for a `mediate` Rule with an explicit `replacement_surface: browser_cdp`.
 
 ```json
 {
@@ -239,6 +244,42 @@ state_lower=session-a31-state
 session=session-a31...
 ```
 
+### Model-provider variants
+
+The same admitted Codex Agent and governed Session support two intentionally
+separate provider configurations. The provider configuration is private Codex
+state projected by the intrinsic filesystem Surface; it is not an Agent,
+PolicyPackage, PolicySet, or Session field.
+
+The committed acceptance uses a loopback provider so CI is deterministic and
+never spends model tokens:
+
+```toml
+model = "erebor-phase-5-local-mock"
+model_provider = "erebor-phase-5"
+
+[model_providers.erebor-phase-5]
+name = "Erebor Phase 5 local mock"
+base_url = "http://127.0.0.1:<port>/v1"
+wire_api = "responses"
+requires_openai_auth = false
+```
+
+For an interactive example that sends a real prompt to OpenAI, select the
+cheapest current model explicitly. It needs the user's normal OpenAI
+authentication outside this document; no key is written into the configuration
+or retained in Erebor evidence:
+
+```toml
+model = "gpt-5-nano"
+model_provider = "openai"
+```
+
+The local mock proves the TUI, managed hook, daemon admission, PTY, and
+filesystem enforcement deterministically. The hosted variant proves the same
+Erebor execution boundary with a real model response, but is an operator-run
+example rather than CI evidence.
+
 ### What does not qualify as Phase 5 acceptance
 
 ```text
@@ -293,9 +334,10 @@ Add committed daemon/client and privileged Linux-host coverage for:
   authorities.
 - Phase 5 is done only when this real-host result is recorded. A missing host
   prerequisite leaves Phase 5 not done, with precise diagnostic evidence.
-- A mediated terminal action may use only the typed replacement Surface
-  required by its matching Rule and the named Surface activated for that
-  Session; it cannot discover or substitute another surface.
+- Browser-CDP mediation is not part of this acceptance. A later mediated
+  acceptance may use only the typed replacement Surface required by its
+  matching Rule and the named Surface activated for that Session; it cannot
+  discover or substitute another Surface.
 
 ## Stop Point
 
@@ -304,4 +346,72 @@ status. Stop before any Agentfile or runner work; those begin in Phase 6.
 
 ## Result
 
-State: Not started.
+State: In progress.
+
+2026-07-27 implementation and verification progress:
+
+- The privileged Docker acceptance now runs the installed static Codex
+  `0.145.0` TUI through a daemon-created Session. It uses the actual current
+  Responses `function_call` shape for `shell_command`, passes the controller
+  geometry/input/observer/detach/reattach checks, rejects the real attempted
+  `.erebor-denied` workspace mutation before effect, and finds the filesystem
+  Surface evidence at the admitted Session output path
+  `output/evidence/filesystem-decisions.jsonl`. The final rebuilt-image run
+  passed in `87.41s`.
+- The CI provider remains the deterministic, zero-cost
+  `erebor-phase-5-local-mock`. The example above separately documents
+  `gpt-5-nano` as the explicit hosted-provider option for an operator-run real
+  prompt; it is not substituted into CI.
+- `cargo fmt --all -- --check`, the focused real-profile and Codex-session
+  tests, `cargo check --workspace`, and
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings` pass.
+  The real-profile test also now returns structured errors rather than using
+  disallowed `expect` calls.
+- The required `bash .github/scripts/verify-rust-ci.sh` was rerun with host
+  local-socket permission after the sandbox correctly blocked CDP WebSocket
+  binding. It then reached a legacy Browser-CDP e2e failure: the test invokes
+  removed `erebor session diagnose`, while the current CLI deliberately rejects
+  that foreground command. Reworking that test to use a named Browser-CDP
+  Surface would implement the deferred Phase 5.4 model; suppressing or
+  deleting it would weaken coverage. Neither action is included here. The
+  phase remains **In progress** until that scope is decided.
+
+2026-07-27 discovery and partial verification:
+
+- `CodexManagedArtifacts` now accepts exactly two intentional target layouts:
+  the existing deterministic fixture's private `/run/erebor/codex` layout and
+  the real Codex managed-profile layout
+  `/etc/codex/requirements.toml` plus
+  `/usr/lib/erebor/codex-hooks/{erebor-codex-hook,shell-startup}`. Mixed
+  layouts are rejected. This preserves the existing fixture while making the
+  real Codex path explicit; it does not add a CLI, Surface resource, or runner.
+- `cargo test -p erebor-runtime-packages
+  codex_package_binds_exact_entrypoint_and_hook_contract -- --nocapture` and
+  `cargo test -p erebor-runtime-packages
+  fixture_artifact_targets_cannot_mix_with_the_codex_managed_profile --
+  --nocapture` passed.
+- A privileged Docker probe mounted the installed static
+  `codex-cli 0.145.0` release read-only, including its bundled resources. It
+  verified that the real executable reads the system managed requirements,
+  sees the managed hook directory, executes the expected ordered hooks, and
+  cannot modify either session projection. The ordinary host probe correctly
+  did not expose the managed profile. The unprivileged local attempt is not
+  acceptance evidence because this host denies `unshare --user --mount` with
+  `Operation not permitted`.
+- The probe exposed and resolved a contract flaw: a hash of every observed
+  payload shape is not a hook schema, because valid Codex contexts omit or add
+  optional fields. The package now declares only its enabled event kinds. The
+  compiled `codex-v1` adapter validates each raw payload against the current
+  upstream event schema: exact event name, required fields, optional fields,
+  `additionalProperties: false`, nullable-string fields, permission-mode enum,
+  and the deliberately unrestricted `tool_input`/`tool_response` values.
+  `HookEvent` IPC no longer carries a caller-supplied schema hash. The daemon
+  derives the kind from validated JSON and still requires package admission,
+  a guard-issued ticket, and kernel-peer identity. Unknown fields, wrong types,
+  unsupported events, and unenabled events fail closed.
+- The live privileged probe passed again after this correction for both
+  app-server and exec hook sequences. All observed `SessionStart`,
+  `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` inputs matched
+  the compiled current schema. The fixture's Erebor-only delivery metadata was
+  moved beneath `tool_response`, whose upstream schema intentionally accepts
+  arbitrary JSON; no foreign top-level field is admitted.

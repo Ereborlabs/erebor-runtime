@@ -27,7 +27,7 @@ mod linux_host {
                     "command": [
                       "sh",
                       "-lc",
-                      "echo guard=$EREBOR_PROCESS_GUARD runner=$EREBOR_SESSION_RUNNER actor=$EREBOR_ACTOR_ID"
+                      "echo guard=$EREBOR_PROCESS_GUARD runner=$EREBOR_SESSION_RUNNER actor=$EREBOR_ACTOR_ID executable=$(readlink /proc/$$/exe) workspace=$(pwd -P)"
                     ]
                   }}
                 ],
@@ -55,6 +55,10 @@ mod linux_host {
         assert!(outcome.stdout().contains("guard=linux-ptrace"));
         assert!(outcome.stdout().contains("runner=linux-host"));
         assert!(outcome.stdout().contains("actor=openclaw"));
+        assert!(outcome
+            .stdout()
+            .contains("executable=/run/erebor/admitted-executable"));
+        assert!(outcome.stdout().contains("workspace=/run/erebor/workspace"));
         assert!(fixture.session_audit_path("session-linux-host").exists());
 
         Ok(())

@@ -8,6 +8,7 @@ mod hook_client;
 mod hook_output;
 mod leases;
 mod native_event;
+mod native_schema;
 mod reconciliation;
 mod ticket;
 

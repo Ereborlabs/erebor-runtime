@@ -474,9 +474,6 @@ pub(crate) mod fixtures {
     pub(crate) fn hook_event(event: HookEventKind) -> HookEvent {
         HookEvent {
             event: event as i32,
-            schema_sha256: String::from(
-                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            ),
             native_event_json: br#"{\"session_id\":\"native-session\"}"#.to_vec(),
         }
     }

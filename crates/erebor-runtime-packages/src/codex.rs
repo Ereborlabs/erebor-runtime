@@ -5,6 +5,11 @@ use snafu::ensure;
 
 use crate::{error::InvalidModelSnafu, ContentDigest, Result, CANONICAL_FORMAT_VERSION};
 
+const PRIVATE_RUNTIME_ROOT: &str = "/run/erebor/codex";
+const CODEX_REQUIREMENTS_PATH: &str = "/etc/codex/requirements.toml";
+const CODEX_MANAGED_HOOK_PATH: &str = "/usr/lib/erebor/codex-hooks/erebor-codex-hook";
+const CODEX_SHELL_STARTUP_PATH: &str = "/usr/lib/erebor/codex-hooks/shell-startup";
+
 /// Immutable, root-curated facts for one supported Codex release.
 ///
 /// The vendor executable itself is intentionally absent from this object. A
@@ -229,20 +234,14 @@ impl CodexManagedArtifacts {
 
     fn validate(&self) -> Result<()> {
         ensure!(
-            normalized_absolute(&self.requirements_path)
-                && self.requirements_path.starts_with("/run/erebor/codex/")
-                && self.managed_hook_path.starts_with("/run/erebor/codex/")
-                && self.shell_startup_path.starts_with("/run/erebor/codex/")
-                && self.sandbox_launcher_path.as_ref().is_none_or(
-                    |path| normalized_absolute(path) && path.starts_with("/run/erebor/codex/")
-                )
+            (self.private_runtime_targets() || self.codex_managed_profile_targets())
                 && (self.sandbox_launcher.is_some() == self.sandbox_launcher_path.is_some())
                 && self.managed_hook_path.parent() == self.shell_startup_path.parent()
                 && self.managed_hook_source.path.parent()
                     == self.shell_startup_source.path.parent(),
             InvalidModelSnafu {
                 reason: String::from(
-                    "Codex managed artifact targets must remain inside the private Erebor runtime"
+                    "Codex managed artifact targets must use the private fixture layout or the fixed Codex managed-profile layout"
                 )
             }
         );
@@ -253,6 +252,25 @@ impl CodexManagedArtifacts {
             launcher.validate()?;
         }
         Ok(())
+    }
+
+    fn private_runtime_targets(&self) -> bool {
+        normalized_absolute(&self.requirements_path)
+            && self.requirements_path.starts_with(PRIVATE_RUNTIME_ROOT)
+            && self.managed_hook_path.starts_with(PRIVATE_RUNTIME_ROOT)
+            && self.shell_startup_path.starts_with(PRIVATE_RUNTIME_ROOT)
+            && self.sandbox_launcher_path.as_ref().is_none_or(|path| {
+                normalized_absolute(path) && path.starts_with(PRIVATE_RUNTIME_ROOT)
+            })
+    }
+
+    fn codex_managed_profile_targets(&self) -> bool {
+        self.requirements_path == Path::new(CODEX_REQUIREMENTS_PATH)
+            && self.managed_hook_path == Path::new(CODEX_MANAGED_HOOK_PATH)
+            && self.shell_startup_path == Path::new(CODEX_SHELL_STARTUP_PATH)
+            && self.sandbox_launcher_path.as_ref().is_none_or(|path| {
+                normalized_absolute(path) && path.starts_with(PRIVATE_RUNTIME_ROOT)
+            })
     }
 
     #[must_use]
@@ -336,7 +354,7 @@ impl CodexArtifact {
 pub struct CodexHookContract {
     shell: CodexHookShell,
     exec_history: Vec<CodexHookExec>,
-    event_schemas: Vec<CodexHookEventSchema>,
+    events: Vec<CodexHookEventName>,
     command_dispatch: Option<CodexCommandDispatch>,
 }
 
@@ -344,13 +362,13 @@ impl CodexHookContract {
     pub fn new(
         shell: CodexHookShell,
         exec_history: Vec<CodexHookExec>,
-        event_schemas: Vec<CodexHookEventSchema>,
+        events: Vec<CodexHookEventName>,
         command_dispatch: Option<CodexCommandDispatch>,
     ) -> Result<Self> {
         let contract = Self {
             shell,
             exec_history,
-            event_schemas,
+            events,
             command_dispatch,
         };
         contract.validate()?;
@@ -377,25 +395,21 @@ impl CodexHookContract {
                         Some(CodexHookExec::AbsolutePath(path))
                             if path.file_name().and_then(|name| name.to_str()) == Some(expected)
                     ))
-                && !self.event_schemas.is_empty()
+                && !self.events.is_empty()
                 && self
-                    .event_schemas
+                    .events
                     .iter()
-                    .map(CodexHookEventSchema::event)
                     .collect::<std::collections::BTreeSet<_>>()
                     .len()
-                    == self.event_schemas.len(),
+                    == self.events.len(),
             InvalidModelSnafu {
                 reason: String::from(
-                    "Codex hook contract has an invalid exact exec chain or duplicate schema event"
+                    "Codex hook contract has an invalid exact exec chain or duplicate event"
                 )
             }
         );
         for entry in &self.exec_history {
             entry.validate()?;
-        }
-        for schema in &self.event_schemas {
-            schema.validate()?;
         }
         if let Some(dispatch) = &self.command_dispatch {
             dispatch.validate()?;
@@ -414,8 +428,8 @@ impl CodexHookContract {
     }
 
     #[must_use]
-    pub fn event_schemas(&self) -> &[CodexHookEventSchema] {
-        &self.event_schemas
+    pub fn events(&self) -> &[CodexHookEventName] {
+        &self.events
     }
 
     #[must_use]
@@ -479,35 +493,6 @@ pub enum CodexHookEventName {
     SubagentStart,
     SubagentStop,
     Stop,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CodexHookEventSchema {
-    event: CodexHookEventName,
-    sha256: ContentDigest,
-}
-
-impl CodexHookEventSchema {
-    pub fn new(event: CodexHookEventName, sha256: ContentDigest) -> Result<Self> {
-        let schema = Self { event, sha256 };
-        schema.validate()?;
-        Ok(schema)
-    }
-
-    fn validate(&self) -> Result<()> {
-        self.sha256.validate()
-    }
-
-    #[must_use]
-    pub const fn event(&self) -> &CodexHookEventName {
-        &self.event
-    }
-
-    #[must_use]
-    pub const fn sha256(&self) -> &ContentDigest {
-        &self.sha256
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -579,9 +564,9 @@ fn unique_entrypoint_names(entrypoints: &[CodexEntrypoint]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        CodexArtifact, CodexEntrypoint, CodexHookContract, CodexHookEventName,
-        CodexHookEventSchema, CodexHookExec, CodexHookShell, CodexManagedArtifacts,
-        CodexPackageDefinition, CodexSupportedPlatform,
+        CodexArtifact, CodexEntrypoint, CodexHookContract, CodexHookEventName, CodexHookExec,
+        CodexHookShell, CodexManagedArtifacts, CodexPackageDefinition, CodexSupportedPlatform,
+        CODEX_MANAGED_HOOK_PATH, CODEX_REQUIREMENTS_PATH, CODEX_SHELL_STARTUP_PATH,
     };
     use crate::{CanonicalEncoding, ContentDigest};
 
@@ -597,14 +582,14 @@ mod tests {
                 "/var/lib/erebor/codex/v1/requirements.toml".into(),
                 digest('a')?,
             )?,
-            "/run/erebor/codex/requirements.toml".into(),
+            CODEX_REQUIREMENTS_PATH.into(),
             CodexArtifact::new("/var/lib/erebor/codex/v1/hooks/hook".into(), digest('b')?)?,
-            "/run/erebor/codex/hooks/hook".into(),
+            CODEX_MANAGED_HOOK_PATH.into(),
             CodexArtifact::new(
                 "/var/lib/erebor/codex/v1/hooks/startup".into(),
                 digest('c')?,
             )?,
-            "/run/erebor/codex/hooks/startup".into(),
+            CODEX_SHELL_STARTUP_PATH.into(),
             None,
             None,
         )?;
@@ -624,10 +609,7 @@ mod tests {
                     CodexHookExec::InstalledExecutable,
                     CodexHookExec::ManagedHook,
                 ],
-                vec![CodexHookEventSchema::new(
-                    CodexHookEventName::SessionStart,
-                    digest('e')?,
-                )?],
+                vec![CodexHookEventName::SessionStart],
                 None,
             )?,
         )?;
@@ -636,6 +618,44 @@ mod tests {
             definition.canonical_digest()?
         );
         assert!(definition.entrypoint("codex-app-server").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn fixture_artifact_targets_cannot_mix_with_the_codex_managed_profile(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let requirements = CodexArtifact::new(
+            "/var/lib/erebor/codex/v1/requirements.toml".into(),
+            digest('a')?,
+        )?;
+        let hook = CodexArtifact::new("/var/lib/erebor/codex/v1/hooks/hook".into(), digest('b')?)?;
+        let startup = CodexArtifact::new(
+            "/var/lib/erebor/codex/v1/hooks/startup".into(),
+            digest('c')?,
+        )?;
+
+        assert!(CodexManagedArtifacts::new(
+            requirements.clone(),
+            "/run/erebor/codex/requirements.toml".into(),
+            hook.clone(),
+            CODEX_MANAGED_HOOK_PATH.into(),
+            startup.clone(),
+            "/run/erebor/codex/shell-startup".into(),
+            None,
+            None,
+        )
+        .is_err());
+        assert!(CodexManagedArtifacts::new(
+            requirements,
+            "/run/erebor/codex/requirements.toml".into(),
+            hook,
+            "/run/erebor/codex/hooks/hook".into(),
+            startup,
+            "/run/erebor/codex/hooks/startup".into(),
+            None,
+            None,
+        )
+        .is_ok());
         Ok(())
     }
 }

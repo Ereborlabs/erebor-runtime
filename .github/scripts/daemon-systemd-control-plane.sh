@@ -187,6 +187,14 @@ EREBOR_INSTALLED_SESSION_USER="$service_user" \
 EREBOR_INSTALLED_SESSION_USER_TWO="$service_user_two" \
 bash /usr/local/lib/erebor/daemon-installed-session-runtime.sh
 
-EREBOR_INSTALLED_SESSION_USER="$service_user" \
-EREBOR_INSTALLED_SESSION_USER_TWO="$service_user_two" \
-bash /usr/local/lib/erebor/daemon-codex-runtime.sh
+if [[ "${EREBOR_SKIP_FIXTURE_CODEX_PROBE:-0}" != 1 ]]; then
+  EREBOR_INSTALLED_SESSION_USER="$service_user" \
+  EREBOR_INSTALLED_SESSION_USER_TWO="$service_user_two" \
+  bash /usr/local/lib/erebor/daemon-codex-runtime.sh
+fi
+
+if [[ -x /opt/erebor-real-codex-release/bin/codex ]]; then
+  EREBOR_INSTALLED_SESSION_USER="$service_user" \
+  EREBOR_INSTALLED_SESSION_USER_TWO="$service_user_two" \
+  bash /usr/local/lib/erebor/daemon-real-codex-runtime.sh
+fi

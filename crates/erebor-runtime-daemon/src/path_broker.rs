@@ -42,10 +42,14 @@ use crate::{
 };
 
 const MAX_RESPONSE_BYTES: usize = 4096;
-const BROKER_TIMEOUT: Duration = Duration::from_secs(5);
+// Root-curated agent releases can be large static binaries. The broker still
+// bounds descriptor resolution, but five seconds is not enough to hash the
+// supported 297 MiB Codex release on a cold overlay-backed filesystem.
+const BROKER_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub(crate) struct DescriptorBroker {
     executable: PathBuf,
+    timeout: Duration,
 }
 
 pub(crate) struct ResolvedDescriptor {
@@ -81,7 +85,18 @@ impl DescriptorBroker {
     }
 
     pub(crate) const fn new(executable: PathBuf) -> Self {
-        Self { executable }
+        Self {
+            executable,
+            timeout: BROKER_TIMEOUT,
+        }
+    }
+
+    #[cfg(test)]
+    const fn new_with_timeout(executable: PathBuf, timeout: Duration) -> Self {
+        Self {
+            executable,
+            timeout,
+        }
     }
 
     pub(crate) fn resolve(
@@ -139,7 +154,7 @@ impl DescriptorBroker {
             })?;
         drop(child);
         parent
-            .set_read_timeout(Some(BROKER_TIMEOUT))
+            .set_read_timeout(Some(self.timeout))
             .context(IoSnafu {
                 action: "setting descriptor broker response deadline",
                 path: &self.executable,
@@ -168,7 +183,7 @@ impl DescriptorBroker {
                 .fail();
             }
         };
-        let deadline = Instant::now() + BROKER_TIMEOUT;
+        let deadline = Instant::now() + self.timeout;
         let status = loop {
             if let Some(status) = child_process.try_wait().context(IoSnafu {
                 action: "observing descriptor broker completion",
@@ -879,7 +894,7 @@ mod tests {
         time::Instant,
     };
 
-    use super::{DescriptorBroker, PolicyPackageDirectoryReader, SafePathKind, BROKER_TIMEOUT};
+    use super::{DescriptorBroker, PolicyPackageDirectoryReader, SafePathKind};
 
     #[test]
     fn descriptor_broker_timeout_stops_a_nonresponding_child(
@@ -889,7 +904,8 @@ mod tests {
         fs::write(&broker, "#!/bin/sh\nexec /bin/sleep 60\n")?;
         fs::set_permissions(&broker, fs::Permissions::from_mode(0o755))?;
 
-        let resolver = DescriptorBroker::new(broker);
+        let resolver =
+            DescriptorBroker::new_with_timeout(broker, std::time::Duration::from_millis(100));
         let target = std::env::current_exe()?;
         let started = Instant::now();
         let result = resolver.resolve(
@@ -901,7 +917,7 @@ mod tests {
 
         assert!(result.is_err());
         assert!(
-            started.elapsed() < BROKER_TIMEOUT + std::time::Duration::from_secs(3),
+            started.elapsed() < std::time::Duration::from_secs(3),
             "a broker response timeout must kill and reap the broker child"
         );
         Ok(())

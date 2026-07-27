@@ -14,6 +14,6 @@ cd -- "$EREBOR_WORKSPACE"
 PS1='[erebor host lab] \u@\h:\w$ '
 
 printf '%s\n' "The erebor function selects $EREBOR_SOCKET for this shell only."
-printf '%s\n' 'Run: erebor agent load "$EREBOR_CODEX_PACKAGE" --from "$EREBOR_CODEX_FIXTURE"'
-printf '%s\n' 'Then: erebor run --policy fixture --workspace "$PWD" codex'
+printf '%s\n' 'Run: erebor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" --adapter codex-v1 --name fixture-codex'
+printf '%s\n' 'Then: erebor run --policy fixture --workspace "$PWD" fixture-codex'
 printf '%s\n' 'Type exit to stop the foreground daemon. The lab directory is retained.'

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Run the deterministic Phase 4 Codex fixture on the host, without systemd.
+# Run the deterministic Phase 5.1 Codex fixture on the host, without systemd.
 # The lab is deliberately retained. This script never runs rm, never has a
 # deletion trap, and never operates on a repository directory.
 
@@ -81,10 +81,10 @@ fixture_output="$("$lab_root/bin/codex-v1-fixture" configure \
   --linux-runner-controller "$lab_root/bin/erebor-linux-session-controller" \
   --linux-process-guard "$lab_root/bin/erebor-linux-process-guard" \
   --descriptor-broker "$lab_root/bin/erebor-path-broker")"
-package_reference="$(sed -n 's/^package_reference=//p' <<<"$fixture_output")"
-root_policy_digest="$(sed -n 's/^root_policy_digest=//p' <<<"$fixture_output")"
-if [[ -z "$package_reference" || -z "$root_policy_digest" ]]; then
-  printf '%s\n' "fixture did not produce package and root-policy identities; retained lab: $lab_root" >&2
+package_name="$(sed -n 's/^package_name=//p' <<<"$fixture_output")"
+fixture_policy_path="$(sed -n 's/^fixture_policy_path=//p' <<<"$fixture_output")"
+if [[ -z "$package_name" || -z "$fixture_policy_path" ]]; then
+  printf '%s\n' "fixture did not produce package and PolicyPackage path; retained lab: $lab_root" >&2
   exit 1
 fi
 chown root:root "$lab_root/etc/erebord.json"
@@ -125,24 +125,32 @@ if [[ "$daemon_ready" != true ]]; then
   exit 1
 fi
 
-policy_output="$(as_caller policy set create \
-  --root-minimum-digest "$root_policy_digest" \
+policy_package_output="$(as_caller policy package apply \
+  "$fixture_policy_path" \
+  --name fixture-baseline \
+  --idempotency-key "host-lab-policy-package-$caller_uid")"
+if [[ "$policy_package_output" != "policyPackage=fixture-baseline" ]]; then
+  printf '%s\n' "could not create the fixture PolicyPackage; retained lab: $lab_root" >&2
+  exit 1
+fi
+
+policy_output="$(as_caller policyset create \
+  --name fixture \
+  --package fixture-baseline \
   --idempotency-key "host-lab-policy-$caller_uid")"
-policy_set_digest="$(sed -n 's/^digest=//p' <<<"$policy_output")"
-if [[ -z "$policy_set_digest" ]]; then
+if [[ "$policy_output" != "policySet=fixture" ]]; then
   printf '%s\n' "could not create the fixture policy set; retained lab: $lab_root" >&2
   exit 1
 fi
-as_caller policy set alias fixture "$policy_set_digest" \
-  --idempotency-key "host-lab-policy-alias-$caller_uid" >/dev/null
 
 printf '%s\n' "temporary erebord is ready at $socket; type exit in the lab shell to stop it"
 printf '%s\n' "The retained lab is $lab_root"
 runuser -u "$caller" -- env \
   EREBOR_BIN="$lab_root/bin/erebor" \
   EREBOR_SOCKET="$socket" \
-  EREBOR_CODEX_PACKAGE="$package_reference" \
+  EREBOR_CODEX_PACKAGE_NAME="$package_name" \
   EREBOR_CODEX_FIXTURE="$lab_root/caller/codex-v1-fixture" \
+  EREBOR_FIXTURE_POLICY="$fixture_policy_path" \
   EREBOR_WORKSPACE="$repo_root" \
   bash --noprofile --rcfile "$script_dir/host-lab-shell.bash" -i
 

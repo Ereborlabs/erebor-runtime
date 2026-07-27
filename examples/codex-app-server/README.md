@@ -1,15 +1,66 @@
 # Codex App Server Host Lab
 
-This is the Phase 4 host example. It exercises the real local `erebord`,
+This is the Phase 5.1 host example. It exercises the real local `erebord`,
 `erebor`, Linux runner, process guard, descriptor broker, package admission,
 TTY attachment, and typed App Server bridge. It does so with the deterministic
 `codex-v1-fixture`, not your installed Codex, login, `HOME`, or `CODEX_HOME`.
-Real authenticated Codex state belongs to Phase 5.
+The fixture keeps the lab deterministic while exercising the same named Agent,
+PolicyPackage, and PolicySet lifecycle.
 
 The daemon is not a systemd requirement. The lab starts one foreground root
 `erebord` with isolated paths and uses Linux direct-controller containment.
 Systemd scope is an explicit root configuration option for an installed host;
 it is not the baseline used here.
+
+## Model configurations for real Codex
+
+The host lab below is intentionally fixture-only: it never starts the installed
+Codex executable or contacts a model provider. That keeps it deterministic and
+safe to use as local or CI evidence. The real Codex TUI governed path is a
+separate Phase 5.5 acceptance scenario; when an operator runs it, Codex reads
+one of the following private `CODEX_HOME/config.toml` configurations. Provider
+selection is private Codex state projected through the filesystem surface. It
+is not an `Agent`, `PolicyPackage`, `PolicySet`, or `Session` field, and it is
+not supplied to `erebor agent load` or `erebor run`.
+
+Use this loopback configuration for deterministic local/CI runs. The Phase 5.5
+acceptance script starts the mock and supplies its actual port; `<port>` is not
+a fixed daemon endpoint:
+
+```toml
+model = "erebor-phase-5-local-mock"
+model_provider = "erebor-phase-5"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+
+[features]
+plugins = false
+
+[model_providers.erebor-phase-5]
+name = "Erebor Phase 5 local mock"
+base_url = "http://127.0.0.1:<port>/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+supports_websockets = false
+requires_openai_auth = false
+```
+
+For an operator-run real prompt, use the hosted configuration below. It uses
+`gpt-5-nano`, the selected lowest-cost hosted model for this example. Normal
+Codex/OpenAI authentication remains the operator's private state: do not put
+an API key in this file, an Erebor resource, or session evidence.
+
+```toml
+model = "gpt-5-nano"
+model_provider = "openai"
+```
+
+Both variants run the same admitted Codex Agent and governed Session. The
+loopback variant proves the TUI, hook, PTY, and enforcement without model cost;
+the hosted variant exercises that same boundary with a real response. See the
+[Phase 5.5 acceptance plan](../../docs/plans/daemon-client/phase-5-agent-policy-surface-model/phase-5-5-real-codex-tui-governed-acceptance.md)
+for the exact acceptance contract.
 
 ## Run the lab
 
@@ -23,8 +74,9 @@ sudo ./examples/codex-app-server/run-host-lab.sh
 The first command only builds local debug binaries. The second stages those
 binaries into a new root-owned directory under `/tmp`, strips debug symbols
 from its two fixture copies so repeated descriptor verification stays fast,
-starts a foreground daemon at `<lab>/run/daemon.sock`, creates the fixture
-policy alias, and opens a shell as your normal user. It does not install a
+starts a foreground daemon at `<lab>/run/daemon.sock`, creates the named fixture
+`fixture-baseline` PolicyPackage and `fixture` PolicySet, and opens a shell as
+your normal user. It does not install a
 service, use the default `/run/erebor/daemon.sock`, create a container, or
 delete anything. It requires the standard `strip` tool from your distribution's
 `binutils` package.
@@ -32,8 +84,9 @@ delete anything. It requires the standard `strip` tool from your distribution's
 Inside the printed `[erebor host lab]` shell, run:
 
 ```sh
-erebor agent load "$EREBOR_CODEX_PACKAGE" --from "$EREBOR_CODEX_FIXTURE"
-erebor run --policy fixture --workspace "$PWD" codex
+erebor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
+  --adapter codex-v1 --name fixture-codex
+erebor run --policy fixture --workspace "$PWD" fixture-codex
 ```
 
 The second command attaches to a daemon-owned TTY. The fixture prints
@@ -54,15 +107,16 @@ the Phase 4 contract being demonstrated is a long-lived interactive agent that
 the user detaches from and the daemon later stops.
 
 To verify a live resize, resize your terminal window, then type
-`terminal-size`. The fixture prints the current kernel PTY geometry again;
-the session should remain the same running workload.
+`terminal-size`. The fixture prints the current kernel PTY geometry again and
+`fixture-tty-sigwinch=received`; the session should remain the same running
+workload.
 
 To exercise the daemon-owned typed App Server path instead:
 
 ```sh
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
-  | erebor run --policy fixture --workspace "$PWD" codex-app-server
+  | erebor run --policy fixture --workspace "$PWD" --app-server fixture-codex
 ```
 
 Its standard output is JSONL protocol output only. Daemon/session diagnostics

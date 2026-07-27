@@ -606,7 +606,7 @@ impl CodexInvocationLeaseOwner {
         runtime: &CodexLeaseRuntimeEvidence,
     ) -> Result<Option<ScopeRef>, CodexSessionError> {
         let Some(operation_key) = payload
-            .pointer("/erebor_delivery/operation_key")
+            .pointer("/tool_response/erebor_delivery/operation_key")
             .and_then(Value::as_str)
             .filter(|key| !key.is_empty())
         else {
@@ -3077,7 +3077,7 @@ mod tests {
             operation_head_after_operation_effect
         );
         let post = String::from(
-            r#"{"hook_event_name":"PostToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"operation-1","tool_response":{"status":"ok"},"erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"partial","operation_key":"fixture-q"}}"#,
+            r#"{"hook_event_name":"PostToolUse","session_id":"thread-1","turn_id":"turn-1","tool_use_id":"operation-1","tool_response":{"status":"ok","erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"partial","operation_key":"fixture-q"}}}"#,
         );
         owner.record_authenticated_hook(
             erebor_runtime_ipc::v1::HookEventKind::PostToolUse,

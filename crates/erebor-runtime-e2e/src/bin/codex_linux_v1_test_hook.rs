@@ -48,7 +48,6 @@ fn run() -> io::Result<()> {
         let result = CodexHookClient::default()
             .submit(HookEvent {
                 event: event.kind() as i32,
-                schema_sha256: event.schema_sha256().to_owned(),
                 native_event_json: input.clone(),
             })
             .map_err(io::Error::other)?;

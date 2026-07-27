@@ -6,8 +6,8 @@ mod model;
 
 pub use codex::{
     CodexArtifact, CodexCommandDispatch, CodexEntrypoint, CodexFrozenContextMode,
-    CodexHookContract, CodexHookEventName, CodexHookEventSchema, CodexHookExec, CodexHookShell,
-    CodexManagedArtifacts, CodexPackageDefinition, CodexSupportedPlatform,
+    CodexHookContract, CodexHookEventName, CodexHookExec, CodexHookShell, CodexManagedArtifacts,
+    CodexPackageDefinition, CodexSupportedPlatform,
 };
 pub use error::{PackageError, Result};
 pub use model::{

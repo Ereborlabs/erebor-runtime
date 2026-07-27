@@ -40,7 +40,7 @@ fn fixture_builds_a_pinned_package_contract_without_vendor_state() -> TestResult
     assert_eq!(definition["release_id"], "codex-v1-fixture");
     assert_eq!(definition["entrypoints"].as_array().map(Vec::len), Some(2));
     assert_eq!(
-        definition["hook_contract"]["event_schemas"]
+        definition["hook_contract"]["events"]
             .as_array()
             .map(Vec::len),
         Some(8)

@@ -34,7 +34,6 @@ fn run() -> Result<(), String> {
     let result = CodexHookClient::default()
         .submit(HookEvent {
             event: event.kind() as i32,
-            schema_sha256: event.schema_sha256().to_owned(),
             native_event_json,
         })
         .map_err(|error| error.to_string())?;

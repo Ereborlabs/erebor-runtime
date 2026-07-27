@@ -628,7 +628,7 @@ impl CodexHookBrokerProtocol {
                 location: snafu::Location::default(),
             }
         })?;
-        let Some(delivery) = payload.erebor_delivery else {
+        let Some(delivery) = payload.tool_response.erebor_delivery else {
             return Ok(());
         };
         if !delivery.emit {
@@ -688,23 +688,11 @@ impl CodexHookBrokerProtocol {
             .fail();
         }
         let package_event = package_event(event_kind);
-        let expected_schema = self
-            .managed_session
-            .profile()
-            .event_schema(&package_event)
-            .ok_or_else(|| CodexSessionError::InvalidHookEvent {
-                reason: format!(
-                    "event `{}` is not enabled by the managed package",
-                    event_kind.as_str_name()
-                ),
-                location: snafu::Location::default(),
-            })?;
         ensure!(
-            event.schema_sha256 == native_event.schema_sha256()
-                && native_event.schema_sha256() == expected_schema.sha256(),
+            self.managed_session.profile().allows_event(&package_event),
             InvalidHookEventSnafu {
                 reason: format!(
-                    "event `{}` schema fingerprint does not match its native shape or managed profile",
+                    "event `{}` is not enabled by the managed package",
                     event_kind.as_str_name(),
                 )
             }
@@ -773,6 +761,12 @@ impl CodexHookBrokerProtocol {
 
 #[derive(Deserialize)]
 struct HookDeliveryEvent {
+    #[serde(default)]
+    tool_response: HookToolResponse,
+}
+
+#[derive(Default, Deserialize)]
+struct HookToolResponse {
     #[serde(default)]
     erebor_delivery: Option<HookDeliveryPayload>,
 }
@@ -1066,9 +1060,9 @@ mod tests {
     use erebor_runtime_events::{ActorIdentity, ActorKind};
     use erebor_runtime_ipc::v1::HookEvent;
     use erebor_runtime_packages::{
-        CodexArtifact, CodexEntrypoint, CodexHookContract, CodexHookEventName,
-        CodexHookEventSchema, CodexHookExec, CodexHookShell, CodexManagedArtifacts,
-        CodexPackageDefinition, CodexSupportedPlatform, ContentDigest,
+        CodexArtifact, CodexEntrypoint, CodexHookContract, CodexHookEventName, CodexHookExec,
+        CodexHookShell, CodexManagedArtifacts, CodexPackageDefinition, CodexSupportedPlatform,
+        ContentDigest,
     };
 
     use super::{
@@ -1079,13 +1073,15 @@ mod tests {
     use crate::{
         agents::codex::{
             CodexHookClient, CodexInvocationLeaseProfile, CodexManagedSession,
-            CodexNativeHookEvent, CodexScopeContextBinding,
+            CodexScopeContextBinding,
         },
         ChildContextDelivery, ChildContextDeliveryHandler, CodexSessionError, ContextAgentControl,
         ContextAgentControlHandler, ContextAgentControlResult,
     };
 
     struct FixedMetadataSource;
+
+    const SESSION_START_EVENT: &[u8] = br#"{"cwd":"/workspace","hook_event_name":"SessionStart","model":"gpt-5","permission_mode":"default","session_id":"session","source":"startup","transcript_path":null}"#;
 
     impl CommitMetadataSource for FixedMetadataSource {
         fn metadata(&self) -> Result<CommitMetadata, CommitMetadataSourceError> {
@@ -1206,11 +1202,10 @@ mod tests {
     }
 
     #[test]
-    fn broker_accepts_only_profile_pinned_event_schemas() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let native_event_json = br#"{"hook_event_name":"SessionStart"}"#.to_vec();
-        let native_event = CodexNativeHookEvent::parse(&native_event_json)?;
-        let session = session("/opt/codex/codex", native_event.schema_sha256())?;
+    fn broker_accepts_only_profile_enabled_current_schema_events(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let native_event_json = SESSION_START_EVENT.to_vec();
+        let session = session("/opt/codex/codex")?;
         let broker = CodexHookBrokerProtocol::new(
             session,
             Arc::new(CodexPromptReconciliation::default()),
@@ -1221,26 +1216,16 @@ mod tests {
         );
         let valid = HookEvent {
             event: HookEventKind::SessionStart as i32,
-            schema_sha256: native_event.schema_sha256().to_owned(),
             native_event_json,
         };
         assert_eq!(broker.validate_event(&valid)?, HookEventKind::SessionStart);
 
         let invalid = HookEvent {
-            schema_sha256: "c".repeat(64),
-            ..valid.clone()
+            event: HookEventKind::SessionStart as i32,
+            native_event_json: br#"{"cwd":"/workspace","hook_event_name":"SessionStart","model":"gpt-5","permission_mode":"default","session_id":"session","source":"startup","transcript_path":null,"unexpected":true}"#.to_vec(),
         };
         assert!(matches!(
             broker.validate_event(&invalid),
-            Err(CodexSessionError::InvalidHookEvent { .. })
-        ));
-
-        let omitted_schema = HookEvent {
-            schema_sha256: String::new(),
-            ..valid.clone()
-        };
-        assert!(matches!(
-            broker.validate_event(&omitted_schema),
             Err(CodexSessionError::InvalidHookEvent { .. })
         ));
 
@@ -1258,7 +1243,7 @@ mod tests {
     #[test]
     fn default_session_start_result_is_valid_json() -> Result<(), Box<dyn std::error::Error>> {
         let broker = CodexHookBrokerProtocol::new(
-            session("/opt/codex/codex", &"a".repeat(64))?,
+            session("/opt/codex/codex")?,
             Arc::new(CodexPromptReconciliation::default()),
             test_lease_owner(),
             None,
@@ -1302,7 +1287,7 @@ mod tests {
         owner.set_context_dag(Arc::clone(&context_dag))?;
         let received = Arc::new(Mutex::new(Vec::new()));
         let broker = CodexHookBrokerProtocol::new(
-            session("/opt/codex/codex", &"a".repeat(64))?,
+            session("/opt/codex/codex")?,
             Arc::new(CodexPromptReconciliation::default()),
             owner,
             None,
@@ -1361,7 +1346,6 @@ mod tests {
     fn post_tool_use_delivery_is_forwarded_only_through_the_authenticated_hook_route(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let delivered = Arc::new(Mutex::new(Vec::new()));
-        let schema = "a".repeat(64);
         let owner = test_lease_owner();
         let root_scope = erebor_runtime_context::ScopeRef::root("session-test")?;
         owner.record_scope_context(CodexScopeContextBinding::new(
@@ -1372,7 +1356,7 @@ mod tests {
             String::from("fixture-head"),
         ))?;
         let broker = CodexHookBrokerProtocol::new(
-            session("/opt/codex/codex", &schema)?,
+            session("/opt/codex/codex")?,
             Arc::new(CodexPromptReconciliation::default()),
             owner,
             None,
@@ -1381,7 +1365,7 @@ mod tests {
         );
         broker.publish_child_delivery(
             HookEventKind::PostToolUse,
-            br#"{"hook_event_name":"PostToolUse","session_id":"fixture-thread","turn_id":"fixture-turn","erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"child result"}}"#,
+            br#"{"cwd":"/workspace","hook_event_name":"PostToolUse","model":"gpt-5","permission_mode":"default","session_id":"fixture-thread","tool_input":{},"tool_name":"Bash","tool_response":{"erebor_delivery":{"sequence":1,"kind":"result","mode":"queue","selected_text":"child result"}},"tool_use_id":"tool","transcript_path":null,"turn_id":"fixture-turn"}"#,
             &CodexLeaseRuntimeEvidence::new(1, 1, String::from("/opt/codex/codex")),
         )?;
         let deliveries = delivered
@@ -1445,14 +1429,13 @@ mod tests {
             }
             Err(error) => return Err(error.into()),
         };
-        let native_event_json = br#"{"hook_event_name":"SessionStart"}"#.to_vec();
-        let native_event = CodexNativeHookEvent::parse(&native_event_json)?;
+        let native_event_json = SESSION_START_EVENT.to_vec();
         let executable = observed_peer
             .exec_chain
             .first()
             .ok_or("test peer omitted its parent executable")?
             .clone();
-        let session = session(executable, native_event.schema_sha256())?;
+        let session = session(executable)?;
         let _ticket = session.issue_guarded_hook_ticket(observed_peer)?;
         let broker_session = session.clone();
         let frozen_context = String::from(
@@ -1476,7 +1459,6 @@ mod tests {
             "session-test",
             HookEvent {
                 event: HookEventKind::SessionStart as i32,
-                schema_sha256: native_event.schema_sha256().to_owned(),
                 native_event_json,
             },
         )?;
@@ -1515,9 +1497,8 @@ mod tests {
             }
             Err(error) => return Err(error.into()),
         };
-        let native_event_json = br#"{"hook_event_name":"SessionStart"}"#.to_vec();
-        let native_event = CodexNativeHookEvent::parse(&native_event_json)?;
-        let session = session("/opt/codex/codex", native_event.schema_sha256())?;
+        let native_event_json = SESSION_START_EVENT.to_vec();
+        let session = session("/opt/codex/codex")?;
         let _ticket = session.issue_hook_ticket(observed_peer)?;
         let broker_session = session.clone();
         let worker = std::thread::spawn(move || {
@@ -1537,7 +1518,6 @@ mod tests {
             "session-test",
             HookEvent {
                 event: HookEventKind::SessionStart as i32,
-                schema_sha256: native_event.schema_sha256().to_owned(),
                 native_event_json,
             },
         ) {
@@ -1565,7 +1545,7 @@ mod tests {
     fn managed_profile_uses_staged_executable_and_private_hook_path(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let staged_executable = "/var/lib/erebor/sessions/session-test/staging/executable";
-        let definition = package(&"a".repeat(64))?;
+        let definition = package()?;
         let session = CodexManagedSession::from_package(
             "session-test",
             staged_executable.into(),
@@ -1614,16 +1594,15 @@ mod tests {
 
     fn session(
         executable: impl Into<std::path::PathBuf>,
-        schema_sha256: &str,
     ) -> Result<CodexManagedSession, Box<dyn std::error::Error>> {
         Ok(CodexManagedSession::from_package(
             "session-test",
             executable.into(),
-            &package(schema_sha256)?,
+            &package()?,
         )?)
     }
 
-    fn package(schema_sha256: &str) -> Result<CodexPackageDefinition, Box<dyn std::error::Error>> {
+    fn package() -> Result<CodexPackageDefinition, Box<dyn std::error::Error>> {
         let artifact = |path: &str, digest: char| {
             CodexArtifact::new(
                 path.into(),
@@ -1656,10 +1635,7 @@ mod tests {
                     CodexHookExec::InstalledExecutable,
                     CodexHookExec::ManagedHook,
                 ],
-                vec![CodexHookEventSchema::new(
-                    CodexHookEventName::SessionStart,
-                    ContentDigest::new(schema_sha256.to_owned())?,
-                )?],
+                vec![CodexHookEventName::SessionStart],
                 None,
             )?,
         )?)

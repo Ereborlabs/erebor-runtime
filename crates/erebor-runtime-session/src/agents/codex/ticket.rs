@@ -42,13 +42,7 @@ pub(crate) struct CodexManagedProfile {
     executable: PathBuf,
     managed_hook_path: PathBuf,
     hook_exec_history: Vec<PathBuf>,
-    event_schemas: Vec<CodexManagedEventSchema>,
-}
-
-#[derive(Clone)]
-pub(crate) struct CodexManagedEventSchema {
-    event: CodexHookEventName,
-    sha256: String,
+    events: Vec<CodexHookEventName>,
 }
 
 impl CodexManagedProfile {
@@ -73,15 +67,7 @@ impl CodexManagedProfile {
                         .to_path_buf(),
                 })
                 .collect(),
-            event_schemas: definition
-                .hook_contract()
-                .event_schemas()
-                .iter()
-                .map(|schema| CodexManagedEventSchema {
-                    event: schema.event().clone(),
-                    sha256: schema.sha256().as_str().to_owned(),
-                })
-                .collect(),
+            events: definition.hook_contract().events().to_vec(),
         }
     }
 
@@ -101,19 +87,8 @@ impl CodexManagedProfile {
         &self.hook_exec_history
     }
 
-    pub(crate) fn event_schema(
-        &self,
-        event: &CodexHookEventName,
-    ) -> Option<&CodexManagedEventSchema> {
-        self.event_schemas
-            .iter()
-            .find(|schema| &schema.event == event)
-    }
-}
-
-impl CodexManagedEventSchema {
-    pub(crate) fn sha256(&self) -> &str {
-        &self.sha256
+    pub(crate) fn allows_event(&self, event: &CodexHookEventName) -> bool {
+        self.events.contains(event)
     }
 }
 

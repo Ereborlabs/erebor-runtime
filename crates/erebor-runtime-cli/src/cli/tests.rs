@@ -276,8 +276,6 @@ fn accepts_filesystem_transaction_catalog_commands() {
         "filesystem",
         "transactions",
         "list",
-        "--registry",
-        ".erebor/sessions",
         "--session",
         "session-1",
     ]);
@@ -286,23 +284,23 @@ fn accepts_filesystem_transaction_catalog_commands() {
         "filesystem",
         "transactions",
         "commit",
-        "--registry",
-        ".erebor/sessions",
         "--session",
         "session-1",
         "--name",
         "before risky edit",
+        "--idempotency-key",
+        "transaction-commit-1",
     ]);
     let rollback = Cli::try_parse_from([
         "erebor",
         "filesystem",
         "transactions",
         "rollback",
-        "--registry",
-        ".erebor/sessions",
         "--session",
         "session-1",
         "tx@{0}.sub@{1}",
+        "--idempotency-key",
+        "transaction-rollback-1",
     ]);
 
     assert!(list.is_ok());
@@ -317,8 +315,6 @@ fn accepts_filesystem_retention_commands() {
         "filesystem",
         "retention",
         "list",
-        "--registry",
-        ".erebor/sessions",
         "--session",
         "session-1",
     ]);
@@ -327,19 +323,17 @@ fn accepts_filesystem_retention_commands() {
         "filesystem",
         "retention",
         "prune",
-        "--registry",
-        ".erebor/sessions",
         "--session",
         "session-1",
         "tx@{0}",
+        "--idempotency-key",
+        "retention-prune-1",
     ]);
     let json = Cli::try_parse_from([
         "erebor",
         "filesystem",
         "retention",
         "list",
-        "--registry",
-        ".erebor/sessions",
         "--session",
         "session-1",
         "--format",

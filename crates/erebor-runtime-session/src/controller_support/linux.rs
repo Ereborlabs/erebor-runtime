@@ -18,7 +18,10 @@ use rustix::process::{kill_process_group, Pid, Signal};
 use rustix::thread::unshare;
 use rustix::{
     fs::{openat, Mode, OFlags},
-    mount::{mount, mount_bind, mount_change, mount_remount, MountFlags, MountPropagationFlags},
+    mount::{
+        mount, mount_bind, mount_change, mount_move, mount_remount, MountFlags,
+        MountPropagationFlags,
+    },
     process::{ioctl_tiocsctty, setsid},
     pty::{grantpt, ioctl_tiocgptpeer, openpt, unlockpt, OpenptFlags},
     termios::{tcsetpgrp, tcsetwinsize, Winsize},
@@ -34,6 +37,9 @@ use super::{
     workload::{child_exit, pump_output, wait_child, OutputFailureMonitor, WorkloadExit},
 };
 
+const PRIVATE_ADMITTED_EXECUTABLE_PATH: &str = "/run/erebor/admitted-executable";
+const PRIVATE_WORKSPACE_PATH: &str = "/run/erebor/workspace";
+
 pub(crate) struct LinuxWorkload {
     child: Child,
     process_group: Pid,
@@ -48,6 +54,12 @@ enum LinuxWorkloadInput {
     Pipe(ChildStdin),
 }
 
+struct PrivateLinuxNamespace {
+    runtime_environment: Vec<(String, String)>,
+    executable_path: Option<PathBuf>,
+    workspace_path: PathBuf,
+}
+
 impl LinuxWorkload {
     pub(crate) fn start(
         handoff: &LinuxControllerHandoff,
@@ -60,14 +72,15 @@ impl LinuxWorkload {
             location: snafu::Location::default(),
         })?;
         let prepared = PreparedLinuxExecution::open(handoff)?;
-        let runtime_environment = prepare_private_namespace(handoff)?;
-        let admitted_command = prepared.admitted_command(handoff);
+        let private_namespace = prepare_private_namespace(handoff, &prepared)?;
+        let admitted_command =
+            prepared.admitted_command(handoff, private_namespace.executable_path.as_deref());
         let mut command = Command::new(&handoff.process_guard_path);
         command
             .args(&admitted_command)
             .env_clear()
             .envs(handoff.spec.environment().iter().cloned())
-            .envs(runtime_environment)
+            .envs(private_namespace.runtime_environment)
             .env("EREBOR_PRIVATE_SESSION_NAMESPACE", "1")
             .env("EREBOR_SESSION_ID", handoff.spec.session_id().as_str())
             .env("EREBOR_ACTOR_ID", "agent")
@@ -113,7 +126,7 @@ impl LinuxWorkload {
                     .maximum_core_bytes()
                     .to_string(),
             )
-            .current_dir(prepared.workspace_path())
+            .current_dir(private_namespace.workspace_path)
             .env("EREBOR_TERMINAL_TTY", handoff.spec.tty().to_string());
         let (mut input, controlling_terminal) = if handoff.spec.tty() {
             setsid().map_err(|source| SessionControllerError::Io {
@@ -482,7 +495,8 @@ fn process_start_time(host_proc: &File, pid: u32) -> Option<u64> {
 
 fn prepare_private_namespace(
     handoff: &LinuxControllerHandoff,
-) -> Result<Vec<(String, String)>, SessionControllerError> {
+    prepared: &PreparedLinuxExecution,
+) -> Result<PrivateLinuxNamespace, SessionControllerError> {
     #[allow(deprecated)]
     unshare(UnshareFlags::NEWNS)
         .map_err(std::io::Error::from)
@@ -532,6 +546,8 @@ fn prepare_private_namespace(
     let endpoint_projections = hold_endpoint_projections(handoff)?;
     let filesystem_projections = hold_filesystem_projections(handoff)?;
     let private_state_projection = hold_private_state_projection(handoff)?;
+    let held_admitted_executable = hold_admitted_executable(handoff, prepared)?;
+    let held_workspace = hold_workspace(handoff, prepared)?;
 
     std::fs::create_dir_all("/run/erebor").map_err(|source| SessionControllerError::Io {
         action: "creating private Erebor runtime mountpoint",
@@ -561,6 +577,9 @@ fn prepare_private_namespace(
         source,
         location: snafu::Location::default(),
     })?;
+
+    let private_executable_path = project_admitted_executable(held_admitted_executable.as_deref())?;
+    let workspace_path = project_workspace(&held_workspace)?;
 
     let private_guard = PathBuf::from("/run/erebor/runtime-interception.sock");
     if let Some(source) = projection_source {
@@ -601,7 +620,125 @@ fn prepare_private_namespace(
             projection.target.display().to_string(),
         ));
     }
-    Ok(environment)
+    Ok(PrivateLinuxNamespace {
+        runtime_environment: environment,
+        executable_path: private_executable_path,
+        workspace_path,
+    })
+}
+
+/// Holds the descriptor-verified workspace outside `/run/erebor` before that
+/// host runtime path is hidden from the workload.
+fn hold_workspace(
+    handoff: &LinuxControllerHandoff,
+    prepared: &PreparedLinuxExecution,
+) -> Result<PathBuf, SessionControllerError> {
+    let source = prepared.workspace_staging_path();
+    let target = handoff.evidence_path.join("workspace");
+    fs::create_dir_all(&target).map_err(|source_error| SessionControllerError::Io {
+        action: "creating held workspace mountpoint",
+        path: target.clone(),
+        source: source_error,
+        location: snafu::Location::default(),
+    })?;
+    mount_bind(source, &target)
+        .map_err(std::io::Error::from)
+        .map_err(|source_error| SessionControllerError::Io {
+            action: "holding admitted workspace before hiding host runtime",
+            path: source.to_path_buf(),
+            source: source_error,
+            location: snafu::Location::default(),
+        })?;
+    Ok(target)
+}
+
+/// Moves the held workspace to its stable, workload-visible private path so
+/// processes can resolve their current directory after the caller home is
+/// hidden for a private agent-state projection.
+fn project_workspace(source: &Path) -> Result<PathBuf, SessionControllerError> {
+    let target = PathBuf::from(PRIVATE_WORKSPACE_PATH);
+    fs::create_dir(&target).map_err(|source_error| SessionControllerError::Io {
+        action: "creating private workspace mountpoint",
+        path: target.clone(),
+        source: source_error,
+        location: snafu::Location::default(),
+    })?;
+    mount_move(source, &target)
+        .map_err(std::io::Error::from)
+        .map_err(|source_error| SessionControllerError::Io {
+            action: "moving held workspace into the workload",
+            path: source.to_path_buf(),
+            source: source_error,
+            location: snafu::Location::default(),
+        })?;
+    Ok(target)
+}
+
+/// Holds the descriptor-verified, daemon-owned executable staging mount outside
+/// `/run/erebor` before that host runtime path is hidden from the workload.
+fn hold_admitted_executable(
+    handoff: &LinuxControllerHandoff,
+    prepared: &PreparedLinuxExecution,
+) -> Result<Option<PathBuf>, SessionControllerError> {
+    let Some(source) = prepared.executable_staging_path() else {
+        return Ok(None);
+    };
+    let target = handoff.evidence_path.join("admitted-executable");
+    File::create(&target).map_err(|source_error| SessionControllerError::Io {
+        action: "creating held admitted executable mountpoint",
+        path: target.clone(),
+        source: source_error,
+        location: snafu::Location::default(),
+    })?;
+    mount_bind(source, &target)
+        .map_err(std::io::Error::from)
+        .map_err(|source_error| SessionControllerError::Io {
+            action: "holding admitted executable before hiding host runtime",
+            path: source.to_path_buf(),
+            source: source_error,
+            location: snafu::Location::default(),
+        })?;
+    Ok(Some(target))
+}
+
+/// Moves the held, descriptor-verified executable staging mount to its stable
+/// private runtime path. Moving rather than duplicating the mount ensures a
+/// program's `current_exe()` reports only the stable, workload-visible path,
+/// not the root-only holding path.
+fn project_admitted_executable(
+    source: Option<&Path>,
+) -> Result<Option<PathBuf>, SessionControllerError> {
+    let Some(source) = source else {
+        return Ok(None);
+    };
+    let target = PathBuf::from(PRIVATE_ADMITTED_EXECUTABLE_PATH);
+    File::create(&target).map_err(|source_error| SessionControllerError::Io {
+        action: "creating private admitted executable mountpoint",
+        path: target.clone(),
+        source: source_error,
+        location: snafu::Location::default(),
+    })?;
+    mount_move(source, &target)
+        .map_err(std::io::Error::from)
+        .map_err(|source_error| SessionControllerError::Io {
+            action: "moving held admitted executable into the workload",
+            path: source.to_path_buf(),
+            source: source_error,
+            location: snafu::Location::default(),
+        })?;
+    mount_remount(
+        &target,
+        MountFlags::BIND | MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
+        "",
+    )
+    .map_err(std::io::Error::from)
+    .map_err(|source_error| SessionControllerError::Io {
+        action: "locking private admitted executable read-only",
+        path: target.clone(),
+        source: source_error,
+        location: snafu::Location::default(),
+    })?;
+    Ok(Some(target))
 }
 
 /// Hides the caller's live home directory only when the intrinsic filesystem

@@ -37,7 +37,7 @@ message PipeIdentity {
 
 message HookEvent {
   HookEventKind event = 1;
-  string schema_sha256 = 2;
+  reserved 2;
   bytes native_event_json = 3;
 }
 

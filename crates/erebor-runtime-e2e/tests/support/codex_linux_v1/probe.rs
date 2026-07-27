@@ -453,17 +453,11 @@ fn assert_hook_events_in_order(log_path: &Path, expected_events: &[&str]) -> Tes
                 .copied()
                 .eq(observed_events.iter().map(String::as_str))
             {
-                let schema_fingerprints = source
-                    .lines()
-                    .filter(|line| !line.is_empty())
-                    .map(|line| {
-                        let event =
-                            CodexNativeHookEvent::parse(line.as_bytes()).map_err(test_error)?;
-                        Ok((event.kind(), event.schema_sha256().to_owned()))
-                    })
-                    .collect::<TestResult<Vec<_>>>()?;
+                for line in source.lines().filter(|line| !line.is_empty()) {
+                    CodexNativeHookEvent::parse(line.as_bytes()).map_err(test_error)?;
+                }
                 eprintln!(
-                    "Codex managed hook event order: {observed_events:?}; structural schema fingerprints: {schema_fingerprints:?}"
+                    "Codex managed hook event order: {observed_events:?}; all inputs match the compiled Codex v1 schemas"
                 );
                 return Ok(());
             }
