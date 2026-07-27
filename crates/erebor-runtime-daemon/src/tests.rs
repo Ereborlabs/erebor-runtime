@@ -10,8 +10,8 @@ use tokio::net::UnixListener;
 
 use erebor_runtime_ipc::{
     v1::{
-        DaemonHello, DaemonHelloAck, Envelope, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
-        PROTOCOL_VERSION,
+        DaemonHello, DaemonHelloAck, Envelope, DAEMON_CONTROL_PROTOCOL_VERSION, KIND_DAEMON_HELLO,
+        KIND_DAEMON_HELLO_ACK,
     },
     AsyncFrameCodec,
 };
@@ -240,7 +240,7 @@ async fn stale_socket_recovery_preserves_live_socket_and_persistent_lock(
             request.message_id,
             KIND_DAEMON_HELLO_ACK,
             &DaemonHelloAck {
-                protocol_version: PROTOCOL_VERSION,
+                protocol_version: DAEMON_CONTROL_PROTOCOL_VERSION,
                 daemon_version: String::from("test"),
                 capabilities: Vec::new(),
             },

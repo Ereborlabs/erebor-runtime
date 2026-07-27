@@ -18,6 +18,11 @@ use crate::error::{
 use crate::EreborIpcFrame;
 
 pub const PROTOCOL_VERSION: u32 = 1;
+/// Daemon-control message semantics. Increment this version whenever a daemon
+/// control message makes an incompatible schema or meaning change. The generic
+/// envelope protocol remains independent so guard and hook transports are not
+/// needlessly invalidated by a daemon-control-only change.
+pub const DAEMON_CONTROL_PROTOCOL_VERSION: u32 = 2;
 pub const KIND_GUARD_HELLO: &str = "erebor.runtime.ipc.v1.GuardHello";
 pub const KIND_GUARD_HELLO_ACK: &str = "erebor.runtime.ipc.v1.GuardHelloAck";
 pub const KIND_INTERCEPTION_REQUEST: &str = "erebor.runtime.ipc.v1.InterceptionRequest";
@@ -164,6 +169,20 @@ impl HookHello {
     #[must_use]
     pub const fn uses_supported_protocol(&self) -> bool {
         self.protocol_version == PROTOCOL_VERSION
+    }
+}
+
+impl DaemonHello {
+    #[must_use]
+    pub const fn uses_supported_control_protocol(&self) -> bool {
+        self.protocol_version == DAEMON_CONTROL_PROTOCOL_VERSION
+    }
+}
+
+impl DaemonHelloAck {
+    #[must_use]
+    pub const fn uses_supported_control_protocol(&self) -> bool {
+        self.protocol_version == DAEMON_CONTROL_PROTOCOL_VERSION
     }
 }
 

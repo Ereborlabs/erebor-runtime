@@ -7,8 +7,8 @@ use std::{
 
 use erebor_runtime_ipc::{
     v1::{
-        DaemonHello, DaemonHelloAck, Envelope, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
-        PROTOCOL_VERSION,
+        DaemonHello, DaemonHelloAck, Envelope, DAEMON_CONTROL_PROTOCOL_VERSION, KIND_DAEMON_HELLO,
+        KIND_DAEMON_HELLO_ACK,
     },
     AsyncFrameCodec,
 };
@@ -312,7 +312,7 @@ impl DaemonPaths {
             0,
             KIND_DAEMON_HELLO,
             &DaemonHello {
-                protocol_version: PROTOCOL_VERSION,
+                protocol_version: DAEMON_CONTROL_PROTOCOL_VERSION,
                 client_name: String::from("erebord stale-socket probe"),
                 capabilities: Vec::new(),
             },
@@ -349,7 +349,7 @@ impl DaemonPaths {
         let hello: DaemonHelloAck = response
             .decode_typed_payload(KIND_DAEMON_HELLO_ACK)
             .context(IpcSnafu)?;
-        if hello.protocol_version != PROTOCOL_VERSION {
+        if !hello.uses_supported_control_protocol() {
             return AlreadyRunningSnafu {
                 path: self.socket_path(),
             }

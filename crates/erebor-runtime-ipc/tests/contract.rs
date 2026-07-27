@@ -9,11 +9,12 @@ use erebor_runtime_ipc::{
         GuardLifecycleReplyKind, InterceptionDecision, InterceptionOperation, InterceptionRequest,
         InterceptionSource, MediateDecision, PolicySetCreateRequest, ProcessExecOperation,
         SessionEvidenceRequest, SessionInputRequest, SessionTerminalResizeRequest,
-        KIND_AGENT_INSTALL_REQUEST, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
-        KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_CODEX_RUN_REQUEST, KIND_CONTEXT_GRAPH_REQUEST,
-        KIND_CONTEXT_GRAPH_RESPONSE, KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT,
-        KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
-        KIND_POLICY_SET_CREATE_REQUEST, KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST,
+        DAEMON_CONTROL_PROTOCOL_VERSION, KIND_AGENT_INSTALL_REQUEST,
+        KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, KIND_CODEX_APP_SERVER_INPUT_REQUEST,
+        KIND_CODEX_RUN_REQUEST, KIND_CONTEXT_GRAPH_REQUEST, KIND_CONTEXT_GRAPH_RESPONSE,
+        KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
+        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
+        KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST,
         KIND_SESSION_TERMINAL_RESIZE_REQUEST, PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
@@ -67,6 +68,29 @@ fn public_named_resource_requests_round_trip_without_integrity_reference_fields(
     assert_eq!(decoded_policy, policy_set);
     assert_eq!(decoded_run, run);
     Ok(())
+}
+
+#[test]
+fn daemon_control_protocol_rejects_the_prior_control_contract() {
+    let prior = erebor_runtime_ipc::v1::DaemonHello {
+        protocol_version: PROTOCOL_VERSION,
+        client_name: String::from("prior-client"),
+        capabilities: Vec::new(),
+    };
+    let current = erebor_runtime_ipc::v1::DaemonHello {
+        protocol_version: DAEMON_CONTROL_PROTOCOL_VERSION,
+        client_name: String::from("current-client"),
+        capabilities: Vec::new(),
+    };
+    let prior_ack = erebor_runtime_ipc::v1::DaemonHelloAck {
+        protocol_version: PROTOCOL_VERSION,
+        daemon_version: String::from("prior-daemon"),
+        capabilities: Vec::new(),
+    };
+
+    assert!(!prior.uses_supported_control_protocol());
+    assert!(current.uses_supported_control_protocol());
+    assert!(!prior_ack.uses_supported_control_protocol());
 }
 
 #[test]

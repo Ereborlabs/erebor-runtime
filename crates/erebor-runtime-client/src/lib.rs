@@ -13,11 +13,11 @@ use erebor_runtime_ipc::{
     v1::{
         DaemonCommandResult, DaemonError, DaemonHello, DaemonHelloAck, DaemonLogRecord,
         DaemonLogsEnd, DaemonLogsRequest, DaemonReloadRequest, DaemonStatusRequest,
-        DaemonStatusResponse, DaemonStopRequest, Envelope, Header, EREBOR_IDEMPOTENCY_KEY_HEADER,
-        KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK,
-        KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD,
-        KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE,
-        KIND_DAEMON_STOP_REQUEST, PROTOCOL_VERSION,
+        DaemonStatusResponse, DaemonStopRequest, Envelope, Header, DAEMON_CONTROL_PROTOCOL_VERSION,
+        EREBOR_IDEMPOTENCY_KEY_HEADER, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR,
+        KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
+        KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
+        KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST,
     },
     AsyncFrameCodec,
 };
@@ -175,7 +175,7 @@ impl DaemonClient {
             .unary(
                 KIND_DAEMON_HELLO,
                 &DaemonHello {
-                    protocol_version: PROTOCOL_VERSION,
+                    protocol_version: DAEMON_CONTROL_PROTOCOL_VERSION,
                     client_name: String::from("erebor-runtime-client"),
                     capabilities: Vec::new(),
                 },
@@ -183,7 +183,7 @@ impl DaemonClient {
                 Vec::new(),
             )
             .await?;
-        if ack.protocol_version != PROTOCOL_VERSION {
+        if !ack.uses_supported_control_protocol() {
             return ProtocolSnafu {
                 reason: String::from("daemon negotiated an unsupported protocol version"),
             }
