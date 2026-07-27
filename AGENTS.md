@@ -52,6 +52,11 @@ boundary. The enforcement boundary is the Erebor-controlled execution path.
 - Do not make architecture decisions on the user's behalf. Provide honest
   analysis, tradeoffs, and recommendations when useful; the user decides the
   architecture.
+- Treat the documented phase and the user's explicit request as the complete
+  implementation authorization. Do only that work: do not add compatibility
+  layers, abstractions, architecture, protocol/data-model changes, or adjacent
+  cleanup merely because they seem prudent. Propose such work and wait for the
+  user's approval unless it is explicitly required by the documented scope.
 - When implementing a documented phase, update the relevant plan/status
   document before final handoff with a detailed current-status note, explicit
   verification results, and a clear `Done`, `Not done`, or `Blocked` state.
@@ -171,3 +176,14 @@ Use `rg` for search. Use `apply_patch` for manual edits. Treat user changes as
 owned by the user and do not revert them. If local verification is blocked by
 the host environment, report the exact command and error, then keep the code
 path diagnosable.
+
+## Plan Preservation
+
+Treat any file the user mentions or whose contents are being discussed as
+user-owned source material. Never replace, delete, condense, or reorganize its
+whole contents merely to add a plan, phase breakdown, summary, or related
+work. In particular, preserve existing plans, master READMEs, and design
+documents; add new material in a child file or an explicitly requested section.
+Rewrite or replace an existing planning document only when the user names that
+exact file and explicitly asks for its replacement or rewrite. Before a large
+plan edit, state the exact file and the preservation approach in commentary.

@@ -189,3 +189,25 @@ Not done in this phase:
   initializer.
 
 Stop point reached. Phase 3 is not started.
+
+## Subsequent Telemetry Completion (2026-07-27)
+
+State: Done.
+
+The daemon's local `log.rs` owner was removed. `erebor-runtime-telemetry` now
+owns the reusable `JsonlTelemetry` sink: it captures the existing telemetry
+macros through a tracing layer, writes durable rotated JSONL with sequence
+recovery, retains structured fields and targets, enforces root-only Unix file
+permissions, and centralizes sensitive-data redaction and bounded rendering.
+The daemon uses the telemetry macros for every operational event and preserves
+its root-authorized IPC log-reading contract. Existing daemon JSONL records
+without structured fields remain readable.
+
+Added tests cover structured event capture, redaction, permissions, sequence
+recovery, and reading pre-structured daemon records. Focused telemetry tests
+passed (7 tests), and `cargo check --workspace` passed. Final verification:
+
+```text
+bash .github/scripts/verify-rust-ci.sh
+result: passed
+```

@@ -27,6 +27,7 @@ uuid.workspace = true
 rustix = { version = "1.1.4", features = ["fs", "process", "net", "thread", "mount"] }
 
 [dev-dependencies]
+erebor-runtime-client = { path = "../erebor-runtime-client" }
 tempfile = "3.23.0"
 
 [[bin]]

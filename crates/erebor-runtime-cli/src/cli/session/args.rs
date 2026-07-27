@@ -116,26 +116,51 @@ pub(crate) struct SessionRunArgs {
 #[derive(Debug, Args)]
 pub(crate) struct GenericSessionRequestArgs {
     /// The Phase 3 generic runner. Docker is unavailable until Phase 6.
-    #[arg(long, alias = "runtime", value_enum)]
+    #[arg(
+        long,
+        alias = "runtime",
+        value_enum,
+        required_unless_present_all = ["agent", "policy"],
+        conflicts_with_all = ["agent", "policy", "surfaces"]
+    )]
     pub(crate) runner: Option<SessionRunnerArg>,
     /// Existing workspace admitted by the daemon under the caller UID.
-    #[arg(long, value_parser = parse_non_empty_path)]
+    #[arg(
+        long,
+        value_parser = parse_non_empty_path,
+        required_unless_present_all = ["agent", "policy"],
+        conflicts_with_all = ["agent", "policy", "surfaces"]
+    )]
     pub(crate) workspace: Option<PathBuf>,
     /// Named Agent for a static Phase 5 Session association.
-    #[arg(long, value_parser = parse_non_empty_string)]
+    #[arg(
+        long,
+        value_parser = parse_non_empty_string,
+        required_unless_present_all = ["runner", "workspace"],
+        conflicts_with_all = ["runner", "workspace"]
+    )]
     pub(crate) agent: Option<String>,
     /// Named PolicySet for a static Phase 5 Session association.
-    #[arg(long, value_parser = parse_non_empty_string)]
+    #[arg(
+        long,
+        value_parser = parse_non_empty_string,
+        required_unless_present_all = ["runner", "workspace"],
+        conflicts_with_all = ["runner", "workspace"]
+    )]
     pub(crate) policy: Option<String>,
     /// Independently configured Surface required by the PolicySet.
-    #[arg(long = "surface", value_parser = parse_non_empty_string)]
+    #[arg(
+        long = "surface",
+        value_parser = parse_non_empty_string,
+        conflicts_with_all = ["runner", "workspace"]
+    )]
     pub(crate) surfaces: Vec<String>,
     /// Failure contract for daemon loss.
-    #[arg(long, default_value = "terminate", value_parser = parse_failure_mode)]
-    pub(crate) failure_mode: String,
+    #[arg(long, value_parser = parse_failure_mode)]
+    pub(crate) failure_mode: Option<String>,
     /// Requested grace period, bounded by root daemon configuration.
-    #[arg(long, default_value_t = 2)]
-    pub(crate) loss_grace_seconds: u64,
+    #[arg(long)]
+    pub(crate) loss_grace_seconds: Option<u64>,
     /// Pass one explicitly declared environment value (NAME=VALUE).
     #[arg(long = "env", value_parser = parse_environment)]
     pub(crate) environment: Vec<(String, String)>,
@@ -149,7 +174,11 @@ pub(crate) struct GenericSessionRequestArgs {
     #[arg(short = 'd', long)]
     pub(crate) detached: bool,
     /// Initial argv; the daemon never starts a shell for this request.
-    #[arg(trailing_var_arg = true, num_args = 0..)]
+    #[arg(
+        trailing_var_arg = true,
+        num_args = 1..,
+        required_unless_present_all = ["agent", "policy"]
+    )]
     pub(crate) command: Vec<String>,
 }
 

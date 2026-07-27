@@ -4,6 +4,11 @@
 
 - Follow the active plan, milestone, stage, or step exactly.
 - Ask before moving to a different phase or changing architecture direction.
+- Treat the active plan and explicit user request as the full authorization.
+  Do not invent or add architecture, abstractions, compatibility behavior,
+  protocol/data-model changes, or adjacent cleanup beyond that scope. Surface
+  a suggestion and wait for approval unless the current phase explicitly
+  requires it.
 - When creating or rewriting plans, follow `planning.md` and use the repository
   phase-plan style.
 - Do not add placeholders just to make a folder look complete.

@@ -631,12 +631,12 @@ TUI session.
    PolicyPackage, PolicySet, and Surface. Remove raw content hashes from CLI
    inputs/outputs, schemas, examples, normal receipts, and tests; keep daemon
    integrity identity internal.
-1. **[5.1 Agent And Policy Resource Model](phase-5-1-agent-and-policy-resource-model.md).**
+1. **[5.1 Agent And Policy Resource Model](phase-5-1-agent-and-policy-resource-model.md) — Done.**
    Define the immutable, reusable `Agent`, `PolicyPackage`, and `PolicySet`
    resources. Require a declared Agent name on the existing verified-local
    `erebor agent load` flow with explicit `--adapter` and `--name`, and make
    package ordering and `PolicySet` resolution evidence-bearing.
-2. **[5.2 Surface Model — Intrinsic And Named Surfaces](phase-5-2-surface-and-session-admission-model.md).**
+2. **[5.2 Surface Model — Intrinsic And Named Surfaces](phase-5-2-surface-and-session-admission-model.md) — Done.**
    Fix the static v1 model: registered Surfaces, intrinsic versus named Surface
    records, typed mediation targets, and a Session that names an Agent,
    PolicySet, and a unique set of named Surfaces when it needs them. This phase

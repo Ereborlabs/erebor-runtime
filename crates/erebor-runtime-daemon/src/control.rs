@@ -2873,12 +2873,15 @@ impl Drop for DaemonControlService {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         fs,
         os::unix::{fs::PermissionsExt, net::UnixListener as StdUnixListener},
+        path::Path,
         sync::{Arc, Mutex, RwLock},
         time::Duration,
     };
 
+    use erebor_runtime_client::DaemonClient;
     use erebor_runtime_error::StatusCode;
     use erebor_runtime_ipc::{
         v1::{
@@ -2889,10 +2892,17 @@ mod tests {
         },
         AsyncFrameCodec, IpcProtocolError,
     };
+    use erebor_runtime_packages::{
+        AgentPackageManifest, CanonicalEncoding, ContentDigest, InstallationRecord,
+        PolicyPackageRevision, PolicySetRevision,
+    };
     use erebor_runtime_telemetry::JsonlTelemetry;
     use rustix::process::geteuid;
     use tempfile::TempDir;
-    use tokio::{net::UnixStream, sync::Semaphore};
+    use tokio::{
+        net::{UnixListener, UnixStream},
+        sync::Semaphore,
+    };
 
     use super::{
         evaluate_policy_test, DaemonApprovalRepository, DaemonConfiguration, DaemonControlState,
@@ -3125,6 +3135,89 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn typed_client_records_a_static_surface_session_without_a_runtime(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let test_state = state()?;
+        let owner_uid = geteuid().as_raw();
+        seed_static_session_resources(&test_state, owner_uid)?;
+        let socket_path = test_state._root.path().join("static-session.sock");
+        let listener = UnixListener::bind(&socket_path)?;
+        let server = tokio::spawn(serve_client_connections(
+            Arc::clone(&test_state.state),
+            listener,
+            7,
+        ));
+        let client = DaemonClient::at(socket_path);
+
+        let surface = client
+            .surface_create("engineering-browser", "browser_cdp", "surface-create-1")
+            .await?;
+        assert_eq!(surface.name, "engineering-browser");
+        assert_eq!(surface.surface_type, "browser_cdp");
+        assert_eq!(
+            client.surface_inspect("engineering-browser").await?,
+            surface
+        );
+        assert_eq!(client.surface_list().await?.surfaces, vec![surface]);
+
+        let created = client
+            .session_create(
+                erebor_runtime_ipc::v1::SessionCreateRequest {
+                    runner_id: String::new(),
+                    command: Vec::new(),
+                    workspace: String::new(),
+                    daemon_failure_mode: String::new(),
+                    requested_loss_grace_seconds: 0,
+                    environment: Vec::new(),
+                    secret_references: Vec::new(),
+                    tty: false,
+                    detached: false,
+                    terminal_rows: 0,
+                    terminal_columns: 0,
+                    agent_name: String::from("local-agent"),
+                    policy_set_name: String::from("browser-policyset"),
+                    surface_names: vec![String::from("engineering-browser")],
+                },
+                "static-session-create-1",
+            )
+            .await?;
+        assert_eq!(created.state, "admitted");
+
+        let session = client.session_inspect(&created.session_id).await?;
+        assert_eq!(session.api_version, "erebor.dev/v1");
+        assert_eq!(session.kind, "Session");
+        assert_eq!(session.agent_name, "local-agent");
+        assert_eq!(session.policy_set_name, "browser-policyset");
+        assert_eq!(session.surface_names, ["engineering-browser"]);
+        assert_eq!(client.session_list().await?.sessions, vec![session.clone()]);
+        let start_error = match client
+            .session_start(&created.session_id, "static-session-start-1")
+            .await
+        {
+            Ok(_record) => {
+                return Err("Phase 5.2 static Session must not activate a runtime".into())
+            }
+            Err(error) => error,
+        };
+        assert!(start_error.to_string().contains("static admission only"));
+        assert!(!test_state
+            .state
+            .paths
+            .session_state_path()
+            .join(format!("users/{owner_uid}/sessions/{}", created.session_id))
+            .exists());
+        assert!(!test_state
+            .state
+            .paths
+            .session_runtime_path()
+            .join(&created.session_id)
+            .exists());
+
+        server.await?;
+        Ok(())
+    }
+
     #[test]
     #[ignore = "requires host Unix-domain socket I/O"]
     fn daemon_socket_cleanup_preserves_a_replacement_socket(
@@ -3214,6 +3307,134 @@ mod tests {
         first.set_nonblocking(true)?;
         second.set_nonblocking(true)?;
         Ok((UnixStream::from_std(first)?, UnixStream::from_std(second)?))
+    }
+
+    async fn serve_client_connections(
+        state: Arc<DaemonControlState>,
+        listener: UnixListener,
+        connection_count: usize,
+    ) {
+        for _ in 0..connection_count {
+            let Ok((stream, _address)) = listener.accept().await else {
+                return;
+            };
+            let Ok(permit) = state.connections.clone().acquire_owned().await else {
+                return;
+            };
+            Arc::clone(&state).serve_connection(stream, permit).await;
+        }
+    }
+
+    fn seed_static_session_resources(
+        test_state: &TestState,
+        owner_uid: u32,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        const ADAPTER_DIGEST: &str =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let package = AgentPackageManifest::new(
+            "generic-process",
+            "generic-process-v1",
+            env!("CARGO_PKG_VERSION"),
+            vec![String::from("<argv>")],
+            ContentDigest::new(ADAPTER_DIGEST)?,
+            Vec::new(),
+        )?;
+        let package_digest = package.canonical_digest()?;
+        write_fixture_record(
+            &test_state
+                .state
+                .paths
+                .packages_state_path()
+                .join(package_digest.as_str())
+                .join("manifest.json"),
+            &package.canonical_bytes()?,
+        )?;
+        let installation = InstallationRecord::new(owner_uid, package_digest, 1);
+        let installation_digest = installation.canonical_digest()?;
+        let user_root = test_state
+            .state
+            .paths
+            .users_state_path()
+            .join(owner_uid.to_string());
+        write_fixture_record(
+            &user_root
+                .join("installations")
+                .join(format!("{}.json", installation_digest.as_str())),
+            &installation.canonical_bytes()?,
+        )?;
+        write_fixture_json(
+            &user_root.join("agents/local-agent.json"),
+            serde_json::json!({
+                "apiVersion": "erebor.dev/v1",
+                "kind": "Agent",
+                "metadata": { "name": "local-agent" },
+                "spec": { "adapter": "generic-process-v1" },
+                "integrity_digest": installation_digest.as_str(),
+            }),
+        )?;
+
+        let rule_document = br#"{"rules":[{"id":"mediate-managed-browser-launch","match":{"surface":"terminal","action":"process_exec","command_contains":"--remote-debugging-port"},"decision":"mediate","reason":"replace raw browser debug launches","mediation":{"kind":"managed_browser_cdp","replacement_surface":"browser_cdp","return_endpoint":"requested_port"}},{"id":"allow-terminal","match":{"surface":"terminal"},"decision":"allow"}]}"#;
+        let policy = PolicyPackageRevision::new(
+            "browser-policy",
+            b"name = \"browser-policy\"\n".to_vec(),
+            BTreeMap::from([(String::from("terminal.json"), rule_document.to_vec())]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# Browser policy\n".to_vec(),
+        )?;
+        let policy_digest = policy.canonical_digest()?;
+        write_fixture_record(
+            &user_root
+                .join("policy-packages")
+                .join(format!("{}.json", policy_digest.as_str())),
+            &policy.canonical_bytes()?,
+        )?;
+        write_fixture_json(
+            &user_root.join("policy-package-names/browser-policy.json"),
+            serde_json::json!({
+                "apiVersion": "erebor.dev/v1",
+                "kind": "PolicyPackage",
+                "metadata": { "name": "browser-policy" },
+                "spec": { "rules": serde_json::from_slice::<serde_json::Value>(rule_document)?["rules"] },
+                "integrity_digest": policy_digest.as_str(),
+            }),
+        )?;
+        let policy_set = PolicySetRevision::new(vec![policy_digest])?;
+        let policy_set_digest = policy_set.canonical_digest()?;
+        write_fixture_record(
+            &user_root
+                .join("policy-sets")
+                .join(format!("{}.json", policy_set_digest.as_str())),
+            &policy_set.canonical_bytes()?,
+        )?;
+        write_fixture_json(
+            &user_root.join("policy-set-names/browser-policyset.json"),
+            serde_json::json!({
+                "apiVersion": "erebor.dev/v1",
+                "kind": "PolicySet",
+                "metadata": { "name": "browser-policyset" },
+                "spec": { "packages": ["browser-policy"] },
+                "integrity_digest": policy_set_digest.as_str(),
+            }),
+        )
+    }
+
+    fn write_fixture_json(
+        path: &Path,
+        value: serde_json::Value,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        write_fixture_record(path, &serde_json::to_vec(&value)?)
+    }
+
+    fn write_fixture_record(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        let parent = path
+            .parent()
+            .ok_or("fixture record has no parent directory")?;
+        fs::create_dir_all(parent)?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+        fs::write(path, bytes)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        Ok(())
     }
 
     async fn write<T: prost::Message>(

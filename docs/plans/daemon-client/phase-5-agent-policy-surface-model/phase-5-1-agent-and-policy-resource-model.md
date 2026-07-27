@@ -1,6 +1,6 @@
 # Phase 5.1: Agent And Policy Resource Model
 
-Status: Not started.
+Status: Done (2026-07-27).
 
 Parent plan: [Phase 5: Agent, Policy, And Surface Resource Model](README.md)
 
@@ -340,4 +340,56 @@ erebor run --policy fixture --workspace "$PWD" fixture-codex
 
 ## Result
 
-State: Not started.
+State: Done.
+
+Implemented the Phase 5.1 resource boundary without adding an authoring
+format, a runner, a Surface/Session model, or an alternative policy owner:
+
+- `Agent` records now persist the exact validated compiled adapter in
+  `spec.adapter`; the existing verified-local Codex enrollment and immutable
+  installation evidence remain the authority for the executable.
+- `PolicyPackage` apply now requires an explicit `--name`. The descriptor-held
+  package directory must declare the same name in `policy.toml`; the daemon
+  records the versioned `PolicyPackage` envelope and a normalized ordered
+  `spec.rules` view. Every rule requires `match.surface`, and the only accepted
+  Phase 5 mediation shape is terminal `process_exec` to `browser_cdp` through
+  `managed_browser_cdp` with `requested_port` return behavior.
+- `PolicySetRevision` is now an ordered, non-empty list of ordinary package
+  revisions. It has no root package, root digest, local override, or alias.
+  The persisted `PolicySet.spec.packages` holds the corresponding ordered
+  package names; duplicate membership and name retargeting fail.
+- The Codex App Server fixture now supplies a `fixture-baseline` package
+  directory. The host-lab script applies it as `fixture-baseline`, then creates
+  `fixture` from that name. The shell and README use the explicit `codex-v1`
+  adapter and the `fixture-codex` Agent name.
+- Repository instructions now explicitly limit implementation to the active
+  phase and user request: no unrequested architecture, compatibility behavior,
+  protocol/data-model work, or adjacent cleanup.
+
+Verification passed for the final Rust source state:
+
+- `cargo test -p erebor-runtime-daemon local_store --lib` (9 tests)
+- `cargo test -p erebor-runtime-daemon path_broker --lib` (4 tests)
+- `cargo test -p erebor-runtime-cli cli::tests::policy_package_apply_requires_an_explicit_resource_name`
+- `cargo test -p erebor-runtime-ipc --test contract public_named_resource_requests_round_trip_without_integrity_reference_fields`
+- `cargo test -p erebor-runtime-e2e --test codex_v1_fixture fixture_builds_a_pinned_package_contract_without_vendor_state -- --nocapture`
+- `cargo check --workspace`
+- `bash .github/scripts/verify-rust-ci.sh`
+
+The root-owned host-lab acceptance passed in the repository's disposable
+privileged Docker environment, using its existing systemd test image. The
+checkout was bind-mounted read-only;
+the container created its own `erebor-lab` user and ran the documented host-lab
+script as root with `SUDO_USER=erebor-lab`. Its interactive command stream
+successfully:
+
+```text
+erebor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
+  --adapter codex-v1 --name fixture-codex
+erebor run --policy fixture --workspace "$PWD" -d fixture-codex
+erebor session ps
+```
+
+The daemon applied `fixture-baseline`, created `fixture`, enrolled
+`fixture-codex`, and reported the resulting Linux-host session as `running`.
+The disposable container was removed after the acceptance run.

@@ -604,6 +604,7 @@ name = "erebor-runtime-daemon"
 version = "0.1.0"
 dependencies = [
  "erebor-runtime-approvals",
+ "erebor-runtime-client",
  "erebor-runtime-context",
  "erebor-runtime-core",
  "erebor-runtime-error",
@@ -622,7 +623,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
- "tracing-subscriber",
  "uuid",
 ]
 
@@ -744,6 +744,10 @@ name = "erebor-runtime-telemetry"
 version = "0.1.0"
 dependencies = [
  "erebor-runtime-error",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
 ]

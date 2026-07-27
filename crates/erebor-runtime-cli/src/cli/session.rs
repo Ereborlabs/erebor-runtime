@@ -201,7 +201,7 @@ impl<'a> SessionCommandOwner<'a> {
         client: &DaemonClient,
         args: &GenericSessionCreateArgs,
     ) -> Result<(), CliError> {
-        let mut request = args.request.to_request();
+        let mut request = args.request.to_request()?;
         Self::set_initial_terminal_size(&mut request, false)?;
         let response = client
             .session_create(request, &args.idempotency_key)
@@ -233,7 +233,8 @@ impl<'a> SessionCommandOwner<'a> {
         client: &DaemonClient,
         args: &SessionRunArgs,
     ) -> Result<(), CliError> {
-        let mut request = args.request.to_request();
+        let mut request = args.request.to_request()?;
+        let static_association = !request.agent_name.is_empty();
         Self::set_initial_terminal_size(&mut request, !args.request.detached)?;
         let key = args.idempotency_key.as_str();
         let created = client
@@ -241,7 +242,7 @@ impl<'a> SessionCommandOwner<'a> {
             .await
             .context(DaemonClientSnafu)?;
         Self::write_create(created.clone());
-        if args.request.is_static_association() {
+        if static_association {
             return Ok(());
         }
         let started = client
@@ -1210,13 +1211,51 @@ impl<'a> SessionCommandOwner<'a> {
 }
 
 impl GenericSessionRequestArgs {
-    fn is_static_association(&self) -> bool {
-        self.agent.is_some() || self.policy.is_some() || !self.surfaces.is_empty()
+    fn is_static_association(&self) -> Result<bool, CliError> {
+        let static_association =
+            self.agent.is_some() || self.policy.is_some() || !self.surfaces.is_empty();
+        if static_association {
+            if self.agent.is_none() || self.policy.is_none() {
+                return InvalidSessionCommandSnafu {
+                    reason: String::from(
+                        "a static Session association requires both --agent and --policy",
+                    ),
+                }
+                .fail();
+            }
+            if self.runner.is_some()
+                || self.workspace.is_some()
+                || !self.command.is_empty()
+                || self.failure_mode.is_some()
+                || self.loss_grace_seconds.is_some()
+                || !self.environment.is_empty()
+                || !self.secret_references.is_empty()
+                || self.tty
+                || self.detached
+            {
+                return InvalidSessionCommandSnafu {
+                    reason: String::from(
+                        "a static Session association accepts only --agent, --policy, and optional --surface",
+                    ),
+                }
+                .fail();
+            }
+            return Ok(true);
+        }
+        if self.runner.is_none() || self.workspace.is_none() || self.command.is_empty() {
+            return InvalidSessionCommandSnafu {
+                reason: String::from(
+                    "a generic Session requires --runner, --workspace, and a command",
+                ),
+            }
+            .fail();
+        }
+        Ok(false)
     }
 
-    fn to_request(&self) -> SessionCreateRequest {
-        let static_association = self.is_static_association();
-        SessionCreateRequest {
+    fn to_request(&self) -> Result<SessionCreateRequest, CliError> {
+        let static_association = self.is_static_association()?;
+        Ok(SessionCreateRequest {
             runner_id: self
                 .runner
                 .as_ref()
@@ -1229,12 +1268,14 @@ impl GenericSessionRequestArgs {
             daemon_failure_mode: if static_association {
                 String::new()
             } else {
-                self.failure_mode.clone()
+                self.failure_mode
+                    .clone()
+                    .unwrap_or_else(|| String::from("terminate"))
             },
             requested_loss_grace_seconds: if static_association {
                 0
             } else {
-                self.loss_grace_seconds
+                self.loss_grace_seconds.unwrap_or(2)
             },
             environment: self
                 .environment
@@ -1252,7 +1293,7 @@ impl GenericSessionRequestArgs {
             agent_name: self.agent.clone().unwrap_or_default(),
             policy_set_name: self.policy.clone().unwrap_or_default(),
             surface_names: self.surfaces.clone(),
-        }
+        })
     }
 }
 

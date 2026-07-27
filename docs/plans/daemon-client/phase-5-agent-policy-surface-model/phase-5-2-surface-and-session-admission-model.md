@@ -1,6 +1,6 @@
 # Phase 5.2: Surface Model — Intrinsic And Named Surfaces
 
-Status: Not started.
+Status: Done (2026-07-27).
 
 Parent plan: [Phase 5: Agent, Policy, And Surface Resource Model](README.md)
 
@@ -281,4 +281,76 @@ bindings physical; Phase 5.4 makes Browser CDP and directed mediation physical.
 
 ## Result
 
-State: Not started.
+State: Done.
+
+Implemented the static Surface and Session admission boundary without creating
+a SurfaceRuntime, listener, endpoint, filesystem view, terminal binding,
+runner admission, or workload:
+
+- The daemon now has a compiled, daemon-controlled registry for the initial
+  `terminal`, `filesystem`, and `browser_cdp` governance Surfaces. Policy
+  package admission rejects any Rule `match.surface` or mediation
+  `replacement_surface` outside that registry. No policy, Agent, or document
+  can extend it.
+- `erebor surface create|ls|inspect` now manages immutable, owner-isolated
+  named Surface records. The delivered v1 schema accepts only
+  `spec.type: browser_cdp`; `terminal` and `filesystem` are explicitly
+  rejected as intrinsic Surfaces rather than stored as incomplete documents.
+  Surface records reject reverse Agent, PolicySet, Session, and policy fields.
+- `erebor session create` and `erebor session run` accept the static
+  `--agent`, `--policy`, and repeatable `--surface` association form. The
+  daemon assigns the Session name, stores the v1 `Session` envelope, resolves
+  and retains the Agent, PolicySet, ordered PolicyPackage revisions, and named
+  Surface revisions internally, then returns state `admitted`. In this phase,
+  `session run` records that association only; it does not start it.
+- Static admission rejects mixed legacy runner/workspace/workload fields,
+  cross-owner names, unknown compiled Agent adapters, duplicate Surface names
+  or kinds, a named Surface with no `browser_cdp` source/mediation requirement,
+  or a PolicySet that requires Browser CDP without exactly one named Browser
+  CDP Surface. It also requires every mandatory package to cover every source
+  Surface used by that PolicySet. Intrinsic bindings remain absent from
+  `Session.spec.surfaces`.
+- The existing immutable named-resource store, Agent-installation evidence,
+  PolicyPackage evaluator, PolicySet revision/order, and physical session
+  manager remain in place. The static record is stored separately from the
+  physical session manager, so successful admission creates no session output
+  directory, runtime directory, listener, endpoint, overlay, or process.
+- Daemon-control protocol negotiation is now version 3. A Phase 5.1 control
+  peer fails negotiation rather than decoding the new Session association
+  fields with the prior contract.
+
+Verification:
+
+- `cargo test -p erebor-runtime-daemon local_store::tests --lib` (13 passed)
+- `cargo test -p erebor-runtime-ipc --test contract` (15 passed)
+- `cargo test -p erebor-runtime-cli --lib` (40 passed)
+- `cargo check --workspace` (passed)
+- `bash .github/scripts/verify-rust-ci.sh` (passed outside the workspace
+  sandbox because its local WebSocket/Unix-socket tests require host socket
+  binding)
+
+Phase 5.2 stops here. Phase 5.3 remains responsible for realizing the
+intrinsic terminal/filesystem bindings, and Phase 5.4 remains responsible for
+the named Browser CDP endpoint and directed mediation.
+
+Follow-up correction (2026-07-27): CLI request-shape validation now rejects an
+incomplete Session request, a partial static association, or a mixed
+legacy/static request before it reaches daemon admission. A static association
+also rejects explicit runner, workspace, command, failure, environment, secret,
+TTY, or detach inputs instead of silently discarding them. The default legacy
+failure contract remains `terminate` with a two-second loss grace only for a
+complete legacy generic request.
+
+The daemon now has a typed client/control test that creates, lists, and
+inspects the named Browser CDP Surface; creates, lists, and inspects the static
+Session; proves `session start` fails with the Phase 5.2 static-admission-only
+error; and proves that no physical session state or runtime directory exists.
+
+Follow-up verification:
+
+- `cargo test -p erebor-runtime-cli --lib` (40 passed)
+- `cargo test -p erebor-runtime-daemon --lib` (49 passed, 5 ignored)
+- focused typed-client daemon-control test (passed outside the workspace
+  sandbox because the daemon-owned hook service uses Unix-domain sockets)
+- `bash .github/scripts/verify-rust-ci.sh` (passed outside the workspace
+  sandbox because its daemon/browser tests require local socket binding)

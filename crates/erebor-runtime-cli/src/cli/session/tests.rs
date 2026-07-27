@@ -1,13 +1,14 @@
 use clap::Parser;
 use erebor_runtime_ipc::v1::{ContextGraphActivity, ContextGraphResponse, ContextScopeGraphNode};
 
-use super::SessionCommandOwner;
-use crate::cli::Cli;
+use super::{args::SessionCommand, SessionCommandOwner};
+use crate::cli::{Cli, Command};
 
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[test]
-fn generic_session_commands_use_the_daemon_installed_admission() {
+fn generic_session_commands_use_the_daemon_installed_admission(
+) -> Result<(), Box<dyn std::error::Error>> {
     assert!(Cli::try_parse_from([
         "erebor",
         "session",
@@ -42,6 +43,27 @@ fn generic_session_commands_use_the_daemon_installed_admission() {
         "/usr/bin/true",
     ])
     .is_err());
+    let cli = Cli::try_parse_from([
+        "erebor",
+        "session",
+        "create",
+        "--agent",
+        "local-codex",
+        "--policy",
+        "company-workspace",
+        "--failure-mode",
+        "continue",
+        "--idempotency-key",
+        "static-legacy-field",
+    ])?;
+    let Command::Session(session) = cli.command else {
+        return Err("expected a session command".into());
+    };
+    let SessionCommand::Create(args) = session.command else {
+        return Err("expected session create".into());
+    };
+    assert!(args.request.to_request().is_err());
+    Ok(())
 }
 
 #[test]
@@ -74,6 +96,42 @@ fn static_session_association_uses_only_named_resources() {
         "session-static-2",
     ])
     .is_ok());
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "create",
+        "--idempotency-key",
+        "missing-request-shape",
+    ])
+    .is_err());
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "create",
+        "--agent",
+        "local-codex",
+        "--idempotency-key",
+        "missing-policy",
+    ])
+    .is_err());
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "create",
+        "--runner",
+        "linux-host",
+        "--workspace",
+        "/work",
+        "--agent",
+        "local-codex",
+        "--policy",
+        "company-workspace",
+        "--idempotency-key",
+        "mixed-request-shape",
+        "--",
+        "/usr/bin/true",
+    ])
+    .is_err());
 }
 
 #[test]

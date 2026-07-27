@@ -56,6 +56,10 @@ PolicyPackages. Daemon-internal integrity evidence remains internal.
   normal CLI output, examples, regular receipts, and acceptance assertions.
   A user can understand, create, inspect, and run every Phase 5 resource by
   name alone.
+- Treat the public name-model IPC migration as incompatible with the prior
+  daemon-control request semantics. A current client and prior daemon (or the
+  reverse) must fail during daemon-control negotiation before either decodes a
+  changed request.
 - Keep file/version/content verification inside daemon owners. Internal
   integrity records may detect a replaced local executable, package, snapshot,
   or artifact, but they are not reference syntax, an authoring concern, or
@@ -186,6 +190,12 @@ resource bodies in Phase 5.1.
 
 State: Done.
 
+Follow-up correction (2026-07-27): the original public-name IPC migration
+changed the meaning of existing protobuf fields while leaving daemon-control
+negotiation at version 1. Daemon control now negotiates its own version 2 while
+the generic envelope remains version 1 for guard and hook transports. Old/new
+daemon-control peers therefore fail before dispatch.
+
 Implemented the Phase 5.0 public naming boundary without replacing the
 existing daemon verifier, content store, replacement checks, session leases,
 or policy evaluator:
@@ -220,6 +230,10 @@ Verification:
 - `cargo test -p erebor-runtime-cli -p erebor-runtime-daemon -p erebor-runtime-client -p erebor-runtime-ipc -- --nocapture`
 - `bash .github/scripts/verify-rust-ci.sh` (passed after rerunning outside the
   sandbox so its local websocket/Unix-socket end-to-end tests could bind).
+- Follow-up IPC verification: `cargo test -p erebor-runtime-ipc --test contract`
+  and `cargo test -p erebor-runtime-client -p erebor-runtime-daemon` (the
+  latter passed outside the sandbox because daemon Unix-socket tests require
+  host socket operations).
 
 Phase 5.0 stops here. It does not add Agentfile, Ereborfile, resource import,
 Surface configuration, or the Phase 5.1 Agent/PolicyPackage/PolicySet bodies.
