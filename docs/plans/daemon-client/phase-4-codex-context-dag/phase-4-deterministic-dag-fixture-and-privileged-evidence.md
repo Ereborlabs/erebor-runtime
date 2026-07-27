@@ -1,9 +1,12 @@
 # Phase 4: Deterministic DAG Fixture, Lifecycle, And Privileged Evidence
 
-Status: In progress. Depends on completed nested Phases 1–3. The fixture is
-being corrected to prove a single session with nested logical scopes; a
-daemon-derived graph-listing client view and renewed privileged evidence remain
-required.
+Status: Done. Depends on completed nested Phases 1–3. The checked-in fixture
+drives one session with P/B/C/D/q scopes through the public daemon/client path,
+and a read-only ContextRepository inspector validates the resulting refs, edge
+blobs, pins, and causal ancestry. The fixture also drives source-authenticated
+`list_agents`, follow-up, and interruption through the existing hook broker.
+The privileged two-UID Linux installed-product execution passed in the
+systemd-container evidence lane.
 
 ## Purpose
 
@@ -78,12 +81,27 @@ test submits exact typed App Server frames and fixture commands; it does not
 infer prompts from terminal echo or manufacture a graph by writing directly to
 ContextRepository.
 
-The fixture suite also exposes the capability matrix. It must prove `list_agents`, a
-queued message, a follow-up turn, descendant cancellation, completion delivery
-that remains unmerged until a parent receive, and all three frozen-context
-modes. It must reject direct sibling or
-ancestor control, raw nested `codex`, `thread/fork`, resume/foreign-thread
-operations, and unsupported source option overrides.
+The fixture exposes the capability matrix: source-derived `list_agents`, a
+queued message, a parent-to-child follow-up turn, and
+ancestor-to-descendant interruption, as well as completion delivery that
+remains unmerged until a parent receive and all three frozen-context modes.
+The deterministic profile uses `erebor_context_control` only as its pinned
+native control shape. The existing ticketed hook broker resolves the requester
+and target from exact daemon-bound thread/turn identities, not a supplied scope
+ref; it calls the daemon through an in-process startup-bound handler, records
+the action in the requester's Git scope, refreshes the adapter's cursor, and
+returns the allow result on that same hook response. It opens no listener or
+second socket. `list_agents` returns only strict descendants. Follow-up stores
+only a SHA-256 of its bounded source text; source code resumes the target only
+after the allow result. Interruption likewise requires an ancestor target; the
+fixture then emits C's cancellation delivery only after P's interruption is
+accepted. The durable coordinator rejects a sibling, ancestor, self, unknown
+identity, malformed control shape, or non-descendant target.
+
+The fixture's `fixture/switch` remains local deterministic input routing only:
+it creates no session, guard, or daemon control path. It is used only where the
+scenario needs to model an already-active native thread; it is not used to
+claim parent-to-child follow-up or interruption.
 
 It must also prove the command lifecycle: B receives an initial yielded command
 response, continues with unrelated B work, receives bounded client stream/end
@@ -120,15 +138,36 @@ through the normal child-delivery path.
   separate two-parent merges after B's intervening work. Replayed receive,
   forged PID, late output, cancellation, owner replacement, and parent/sibling
   receive attempts fail closed.
-- Assert graph listing is daemon-derived and root-scope scoped; queued message and
-  follow-up are distinct; only P can cancel C; P cannot be woken by a child
+- Assert `erebor session context graph <session>` is daemon-derived and renders
+  the complete durable scope tree with each branch's current head, exact fork
+  parent pin, binding, authenticated source identity, and retained
+  scope-local hook and physical activity (for example `tool bash command="ls"`
+  and `exec /bin/ls allowed pid=…`). A native operation scope must render
+  beneath its exact authenticated `PreToolUse` activity, while an ordinary
+  command's physical effects remain beside that activity in the issuing scope.
+  Published child deliveries and parent receipt/rejection facts must render as
+  queued delivery and received-merge/rejection activity in their respective
+  scopes. It must read these leaves only from the root-owned Git
+  `ContextRepository`, subtract facts inherited at the fork pin so descendant
+  branches do not duplicate ancestor activity, and walk each scope's Git
+  first-parent commit history from its head back to its fork pin. It must not
+  derive causal order from final-tree path names: an admitted command's guarded
+  `exec` facts appear after its `PreToolUse` and before its `PostToolUse`,
+  even though those durable blobs live under different directories. It must not read
+  either the repository or JSONL audit files in the client. JSONL is a
+  parallel audit sink, never a graph input. Queued message and follow-up are
+  distinct; only P can cancel C; P cannot be woken by a child
   follow-up; and no child can address a sibling or ancestor as a control target.
 - Assert P, B, C, D, and q are scopes under exactly one session. It must be
   impossible to turn hook/App Server/thread facts into another daemon session.
-- Assert B or D's guarded `ls` audit records validate the exact logical source
-  scope and invocation lease while remaining physical descendants of P's one
-  process guard. Assert descendants survive their immediate shell's exit under
-  the existing lease contract.
+- Assert B or D's guarded `ls` writes both its parallel audit record and an
+  exact Git physical-effect blob in the source scope, bound to the invocation
+  lease and observed process identity, while remaining a physical descendant
+  of P's one process guard. Assert the explicitly admitted retained q operation
+  writes its own physical-effect blob only in q's operation scope, never in B,
+  and is admitted before its shell launches rather than inferred from a later
+  alive-process observation. Assert descendants survive their immediate shell's
+  exit under the existing lease contract.
 - Assert controller/TTY, daemon-socket absence, package identity, hook ticket,
   input lease, cancellation, detach, child failure, and daemon-loss contracts
   remain intact for the one root session.
@@ -158,14 +197,54 @@ descendant attribution. A real vendor Codex source profile still remains Phase
 
 ## Stop Point
 
-Do not begin Phase 5: nested Phase 4 needs renewed single-session privileged
-evidence and its required daemon-derived graph listing.
+Phase 4 is complete. Do not begin Phase 5 without its separate approval and
+scope; real authenticated Codex state projection remains deferred there.
 
 ## Phase 4 Result
 
-The former privileged result was for the discarded physical-child bridge model
-and is not Phase 4 evidence. Renew the deterministic and privileged matrix
-after the single-session fixture proves P/B/C/D/q as scopes, then add the
-daemon-derived graph-listing command. Docker/Kubernetes execution remains the
-separately deferred design described above, and real authenticated Codex state
-projection remains Phase 5 work.
+Current result: **Done.** The implementation records a lease-validated guard
+observation as a Git blob in the exact B or operation scope and the
+daemon-derived graph renders that blob without consulting JSONL. Every active
+native tool use has its own exact invocation lane, so B may start retained q
+and then issue `ls` without leaving the second command unleased. The retained
+edge records the source tool use for a native operation, so the graph nests q
+below its exact Bash activity while rendering B's `ls` effects beside B's `ls`
+activity. An ordinary descendant such as q's `sleep` remains an effect in q's
+admitted operation scope, rather than creating a spurious process scope.
+
+The deterministic lane is `.github/scripts/daemon-codex-runtime.sh`. It starts
+one live typed App Server fixture session, drives B/C/D/q as scopes, validates
+the resulting Git DAG through the test-only `codex-context-dag-inspector`, and
+checks the public graph view. The fixture's `fixture/switch` is local
+deterministic input routing only: it creates no session, guard, or daemon
+control path. Its App Server events are JSON-RPC notifications, so the protocol
+probe remains valid JSONL rather than TTY text. The inspector opens the
+existing repository read-only and validates direct edge records, exact parent
+pins, and causal ancestry with ContextRepository APIs.
+
+The completed code path is owned by `ContextDagCoordinator`, the session's
+existing Codex hook service, and its startup-bound daemon callback. It has no
+new daemon socket or process-guard message. The coordinator validates action
+shape, source-known identities, session namespace, strict descendant topology,
+and the follow-up digest before writing the Git evidence; the graph projection
+renders those records from Git. Focused tests cover source binding, malformed
+fixture controls, unsupported non-effect hook handling, strict-descendant
+authorization (including sibling rejection), durable graph activities, and the
+broker cursor refresh after a daemon write. The privileged script now exercises
+the successful P list/interruption/follow-up flow together with C's resulting
+cancellation receipt.
+
+The installed-product evidence is
+`EREBOR_DAEMON_SYSTEMD_IMAGE=erebor-daemon-systemd:phase4-context-dag cargo test -p erebor-runtime-e2e --test daemon_control_plane daemon_control_plane_and_codex_context_dag_run_in_systemd_container -- --ignored --nocapture`.
+It built the local image, booted systemd, created the service socket group and
+two unprivileged users, exercised daemon recovery and generic Linux sessions,
+then ran the deterministic Codex fixture with real guarded descendants. The
+test completed successfully. The container assertions were updated alongside
+the CLI table migration: scripts extract a short session ID from the table and
+assert table state values rather than the removed `session_id=`/`state=` output.
+
+`bash .github/scripts/verify-rust-ci.sh` passed on the final Rust and script
+source state.
+
+Docker/Kubernetes execution remains the separately deferred design described
+above, and real authenticated Codex state projection remains Phase 5 work.

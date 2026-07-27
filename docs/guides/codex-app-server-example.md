@@ -19,18 +19,19 @@ directory, without systemd, a container, an installed service, or the default
 socket. It opens a shell as the original caller. There:
 
 ```sh
-erebor agent load "$EREBOR_CODEX_PACKAGE" --from "$EREBOR_CODEX_FIXTURE"
-erebor run --policy fixture --workspace "$PWD" codex
+erebor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
+  --adapter codex-v1 --name local-codex
+erebor run --policy fixture --workspace "$PWD" local-codex
 
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
-  | erebor run --policy fixture --workspace "$PWD" codex-app-server
+  | erebor run --policy fixture --workspace "$PWD" --app-server local-codex
 ```
 
-The normal `codex` alias is an interactive daemon-owned TTY. After the fixture
+The named `local-codex` Agent uses an interactive daemon-owned TTY. After the fixture
 reports ready, it prints the kernel geometry as
 `fixture-tty-size=rows=<rows> columns=<columns>` and echoes each line as
 `fixture-tty-input=<line>`; type `exit` to end it normally.
-`codex-app-server` is a separate bounded JSON-RPC JSONL bridge, whose protocol
+Its `--app-server` entrypoint is a separate bounded JSON-RPC JSONL bridge, whose protocol
 output alone is written to standard output.
 
 For a live resize check, resize the terminal window and enter `terminal-size`.

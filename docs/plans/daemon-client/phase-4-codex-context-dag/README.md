@@ -1,9 +1,14 @@
 # Phase 4 Codex Context DAG
 
-Status: In progress. The deterministic fixture and privileged Linux evidence
-pass, but nested Phase 4 still needs its required daemon-derived graph-listing
-client view. The broader parent Phase 4 has its separately recorded foreground
-host-lab recovery verification.
+Status: Done. The daemon-derived graph listing reads the Git
+ContextRepository only, anchors an admitted native operation below its exact
+source tool, and renders lease-validated physical effects, delivery/merge
+facts, and source-authenticated agent controls. The checked-in deterministic
+lane drives P/B/C/D/q through the public daemon/client path and validates Git
+refs, pins, and causal ancestry. The privileged two-UID Linux
+installed-product run now passes in the systemd-container lane. The broader
+parent Phase 4 has its separately recorded foreground host-lab recovery
+verification.
 
 Parent plan: [Phase 4: Codex Adapter, Final CLI Cutover, And App Server Migration](../phase-4-codex-adapter-final-cli-cutover-and-app-server-migration.md)
 
@@ -75,14 +80,14 @@ every App Server thread as a child agent.
 | `spawn_agent` | Creates a directed internal Codex thread, carrying a parent thread, depth, canonical agent path, role/nickname, and open/closed lifecycle. A child has one persisted parent, but it is not a new operating-system process. | It is a checked logical scope fork in the same Erebor session. Observing it cannot create a session, guard, hook socket, or separate process tree. |
 | `fork_turns` | Materializes the parent's history, copies a filtered frozen projection using `none`, `all`, or last *N* turns, and deliberately excludes internal tool traffic and inter-agent traffic. | The daemon creates a checked child scope from an exact parent `ContextPin`; a profile may select an equivalent bounded projection. It is never live sharing. |
 | `send_message` | Queues a bounded inter-agent delivery without waking the recipient. | The daemon appends a candidate delivery in the sender's scope; the receiver derives it in its inbox query. It cannot write the receiver's scope. |
-| `followup_task` | Delivers a message and requests a target child turn. | The receiver's existing session receives a policy-checked follow-up request; only an allowed ancestor-to-descendant route may wake a child initially. |
+| `followup_task` | Delivers a message and requests a target child turn. | The fixture profile emits a bounded source control through the existing authenticated hook. The daemon permits only an ancestor-to-descendant target, records only the follow-up content digest in the requester's scope, and returns an allow result before the source resumes the child. |
 | completion forwarding | Delivers a bounded child completion/result to the parent with `trigger_turn=false`. | A terminal delivery becomes a candidate delivery. It is not an implicit Git mutation; the parent explicitly receives or rejects it. |
 | unified exec / background terminal | After its initial yield, Codex retains the process by process ID, streams output and a terminal event, and expects a later `write_stdin` poll or input to return a model-visible tool result. | Model every long-running command as an owned non-agent child branch. Partial and final output are bounded deliveries; the owner explicitly receives a selected sequence point through the same two-parent merge coordinator. |
 | Legacy collaboration tools | The older tool family reports `spawn_agent`, `send_input`, `resume_agent`, `wait`, and `close_agent` activity. Its meanings differ from V2 messaging and status handling. | A profile chooses one source variant. Erebor maps only a source-proven, directionally safe equivalent; an unproved legacy action is reported or rejected, never silently normalized. |
 | protocol-level multi-recipient/encrypted communication | The internal communication envelope has additional recipients and encrypted content fields beyond the single-target V2 tools. | Do not expose broadcast, opaque encrypted payloads, or arbitrary recipients until the daemon can authenticate every recipient and retain an inspectable bounded receipt. |
 | `SubagentStart` hook | Runs only after Codex has created a thread and is explicitly context-injection-only; its output cannot stop the subagent. | It is authenticated observation/evidence, never child admission or a way to retroactively grant a child session. |
 | App Server `collabToolCall` | Reports collaboration tool activity and resulting thread IDs/statuses to the App Server client after the native operation. | It is an adapter observation channel. It can populate a native logical-DAG record, but cannot be treated as a pre-spawn authorization boundary. |
-| `list_agents` and `interrupt_agent` | Enumerates the live/persisted graph and can control a known non-root agent. | Expose a daemon-derived, root-scope-scoped read view. Cancellation is restricted to the root owner or an ancestor over its descendant; no child may control an ancestor or sibling. |
+| `list_agents` and `interrupt_agent` | Enumerates the live/persisted graph and can control a known non-root agent. | Resolve only daemon-bound thread/turn identities from the durable scope tree. Listing returns strict descendants; interruption is restricted to an ancestor over its descendant. The hook payload never supplies a scope ref, and no child may control an ancestor or sibling. |
 | App Server peer-thread lifecycle | `thread/fork`, resume, rollback, archive, list/read, and historical-thread paths operate on App Server conversation threads. They are distinct from collaboration `spawn_agent` and do not establish the collaboration graph. | Keep peer-thread creation/reopening out of child admission. Phase 4 permits only the already-admitted session's exact App Server turn contract and rejects peer-thread operations until a separate daemon-owned peer-thread surface is designed. |
 
 Codex also permits model, role, effort, service-tier, environment, and execution
@@ -143,6 +148,22 @@ monotonic delivery sequence rather than a Git commit per client delta. The
 operation cannot choose its parent, advance B's ref, or send output directly to
 P. If B needs P to know a result, B makes a normal bounded delivery and P
 follows the same parent-owned receive/merge protocol above.
+
+An operation scope is admitted when the authenticated adapter source declares
+that the command is retained (`erebor_operation_key` in the current profile).
+The daemon must not infer a new scope retrospectively merely because a later
+command finds an earlier process still alive: that would race exits and rewrite
+causal ownership after physical effects have happened. The guard's observed
+fork/exec/exit lifecycle is evidence for the already-admitted operation; it
+does not independently create a scope. A command that completes in its initial
+turn, such as the fixture `ls`, remains an effect of B's existing scope.
+
+Every graph activity is a durable Git blob in the owning `ContextRepository`.
+Authenticated hooks live under `agents/codex/hooks/`; a lease-validated guard
+observation lives under `agents/codex/physical-effects/` and retains the exact
+source context pin, lease identity, observed PID/PPID, executable, argv, and
+allow/deny decision. JSONL continues as a parallel operational audit sink, but
+the graph command never reads it.
 
 ### Local Source Review Basis
 
@@ -287,8 +308,9 @@ erebor-runtime-core
 erebor-runtime-daemon
   a context coordinator that resolves the existing root session artifact,
   serializes scope writes, admits same-session logical forks, derives delivery
-  queries/receives from scopes, and owns recovery/audit. No parallel registry,
-  graph ledger, or child-session lifecycle path.
+  queries/receives from scopes, authorizes source-authenticated agent controls,
+  and owns recovery/audit. No parallel registry, graph ledger, child-session
+  lifecycle path, or workload-facing control listener.
 
 erebor-runtime-session/src/agents/codex
   authenticated native spawn, communication, completion, lifecycle, and
@@ -314,5 +336,7 @@ erebor-runtime-e2e
 
 ## Stop Point
 
-Do not begin Phase 5 merely because the fixture evidence passes. Nested Phase 4
-remains open until the required graph-listing client view is implemented.
+Nested Phase 4 is complete. Do not begin Phase 5 without its separate approval
+and scope. `erebor session context graph <session>` renders the daemon-derived
+durable scope tree; its current HEAD and exact fork-parent pin make each
+displayed branch auditable without client access to the repository.

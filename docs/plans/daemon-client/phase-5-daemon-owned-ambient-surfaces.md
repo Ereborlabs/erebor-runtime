@@ -4,14 +4,23 @@ Status: Not started. This is the final Linux daemon/client core phase. It does
 not require OCI distribution, Docker runner parity, another agent adapter, or
 release certification.
 
+Deliverable master: [Phase 5: Agent, Policy, And Surface Resource Model](phase-5-agent-policy-surface-model/README.md).
+The master divides this phase into independently deliverable subphases.
+Agentfile, a possible local OCI representation of `Agent`, mature-builder, and
+Docker/OCI-runner work are explicitly deferred to Phase 6; the Phase 5 outcome
+remains a real local Codex session inside the governed Linux-host and
+daemon-owned surface boundary.
+
 ## Purpose
 
-Replace the legacy foreground `erebor start` command with named,
-daemon-owned ambient-surface objects. After this phase, `erebor` is a client
-for every public command and `erebord` is the sole lifecycle, policy,
-evidence, and endpoint owner on the Linux-host core path. `erebor start` is
-removed, not retained as a compatibility wrapper or a configuration-driven
-shortcut.
+Replace the legacy foreground `erebor start` command with daemon-owned runtime
+implementations of intrinsic Surfaces, plus named Surface records only where a
+Surface needs independent configuration/lifecycle. `terminal` and `filesystem`
+remain intrinsic Surfaces; their runtime implementations are not additional
+Surface records. After this phase, `erebor` is a client for every public
+command and `erebord` is the sole lifecycle, policy, evidence, and endpoint
+owner on the Linux-host core path. `erebor start` is removed, not retained as a
+compatibility wrapper or a configuration-driven shortcut.
 
 ## Scope
 
@@ -26,29 +35,38 @@ shortcut.
   erebor surface create|start|ls|inspect|logs|events|stop|rm
   ```
 
-  `surface create` persists one named, immutable surface specification and
-  returns its id. `surface start` starts that exact durable object. There is no
-  ambiguous `surface run` shorthand for a resource that can outlive a client
-  and be bound by more than one session.
+  `surface create` persists one named, immutable Surface specification only
+  for a Surface that needs independent configuration/lifecycle, such as Browser
+  CDP. `surface start` starts that exact durable object. There is no ambiguous
+  `surface run` shorthand for a resource that can outlive a client and be
+  bound by more than one session. Intrinsic filesystem and terminal bindings
+  are never fake named Surface records.
 - A future declarative reconciliation command may be designed only after it
   can state create/update/delete, identity, ownership, and recovery semantics.
   It is not part of this phase and cannot reuse the removed `erebor start`
   spelling.
 
 - Move the legacy filesystem surface and `erebor filesystem transactions|retention`
-  operations into that lifecycle. `surface create|start` owns the declared
-  volume bindings, overlay/checkpoint storage, policy handler, audit/evidence,
-  promotion, recovery, and teardown. The client uses typed daemon requests to
-  list, commit, show, rename, roll back, and prune its resulting artifacts; it
-  never opens a workspace-local registry or selects `--registry`.
+  operations behind the daemon-owned runtime that realizes the intrinsic
+  `filesystem` Surface. It creates a Session filesystem binding with one OSTree
+  repository per Session, reusing `FilesystemSessionStorage` and its existing
+  layout/recovery behavior for overlay/checkpoint storage. The runtime adds
+  policy handling, audit/evidence, promotion, recovery, and teardown around
+  that owner. The client uses typed daemon requests to list, commit, show,
+  rename, roll back, and prune resulting artifacts; it never opens a
+  workspace-local registry, selects `--registry`, or creates a named filesystem
+  Surface merely to obtain governance.
 
-- Persist an immutable surface specification before start: owner UID, kind,
-  policy-set digest, upstream identity, listener policy, audit/evidence roots,
-  resource limits, and supported daemon-loss mode. Aliases resolve to immutable
-  surface ids.
-- For a filesystem surface, the immutable specification additionally binds the
-  admitted volume identities, backend, revert/promotion rules, and retention
-  requirements before any overlay is prepared.
+- Persist an immutable named Surface specification before start when the Surface
+  has independent lifecycle: required
+  `metadata.name`, owner UID, kind, upstream identity, listener policy,
+  audit/evidence roots, resource limits, and supported daemon-loss mode. The
+  declared name is the user-facing reference, not a separately generated alias.
+  A Surface contains no Agent or PolicySet reference.
+- Filesystem's current backing behavior is daemon-internal runtime policy. The
+  Session binding records the admitted volume identities, per-session OSTree
+  repository, snapshot/upper/projection state, revert/promotion rules, and
+  retention requirements before any overlay is prepared.
 
 ### Agent State Projections
 
@@ -65,13 +83,13 @@ shortcut.
   configuration and any required feature setting. Erebor never edits the
   caller's `.codex`, `config.toml`, `hooks.json`, shell aliases, or another
   live user-state file to make a governed session work.
-- A filesystem-surface specification binds the allowed source class, access
-  mode, snapshot/refresh rule, writable-upper policy, retention, and export
+- The daemon-owned runtime realizing the intrinsic filesystem Surface defines
+  the allowed source class, access mode, snapshot/refresh rule, writable-upper
+  policy, retention, and export
   policy. The root filesystem configuration limits which source classes and
-  modes are available; the admitted policy set decides whether a session may
-  use the binding. The exact user-facing surface command for creating a state
-  binding must remain typed and named; it must not accept a free-form session
-  environment variable or a raw mount request.
+  modes are available; the Session's selected compatible PolicySet decides
+  whether the Session may use its binding. Typed filesystem operations must not
+  accept a free-form session environment variable or a raw mount request.
 - A caller-owned source directory is resolved once through the UID-dropped
   descriptor broker and materialized as a daemon-owned, immutable lower
   snapshot with a recorded identity/content manifest. Do not bind a mutable
@@ -102,21 +120,34 @@ shortcut.
   endpoints beneath `/run/erebor/surfaces/<uid>/`; no ambient listener shares or
   replaces daemon-control or runtime-guard endpoints.
 - Replace the foreground `SessionSurfaceLauncher`, `SessionSurfaceSupervisor`,
-  and `SurfaceServiceRunner` lifecycle stack with one daemon-owned ambient
-  surface supervisor. It owns handles, health, restart classification, logs,
-  evidence, stop, and shutdown. Current `erebor start` behavior must not be
-  moved wholesale: Browser CDP becomes the first `surface` kind; the current
-  terminal and filesystem configuration entries do not become fake standalone
-  listeners.
-- Keep browser CDP as the first listener-bearing ambient-surface kind. The
-  filesystem surface is a non-listener surface whose daemon-owned artifact
-  operations remain bound to its immutable surface/session identity. Bind CDP
-  to a typed,
+  and `SurfaceServiceRunner` lifecycle stack with daemon-owned Surface
+  implementations. The named Browser CDP Surface owner supervises endpoint
+  records; the intrinsic terminal Surface is realized by one shared
+  interception runtime; and the intrinsic filesystem Surface is realized by one
+  `LinuxOstreeOverlayFilesystemRuntime` that returns per-session bindings.
+  Together they own handles, health, restart classification, logs, evidence,
+  stop, and shutdown. Current `erebor start` behavior must not be moved
+  wholesale: terminal and filesystem configuration entries do not become fake
+  standalone listeners or user-loadable plugins.
+- Keep browser CDP as the first listener-bearing named ambient Surface.
+  Filesystem remains a non-listener intrinsic Surface whose daemon-owned
+  artifact operations remain bound to its Session binding. Bind CDP to a typed,
   observed browser process/endpoint identity; reject cross-UID loopback,
   stale-upstream, unsafe redirect, and unapproved-credential cases.
-- Permit session-to-surface binding only when owner, kind, package/adapter
-  requirements, and policy-set identity are compatible. Record the immutable
-  surface id and policy digest in `SessionSpec`.
+- Let `SessionSpec` be the only execution association: it selects one Agent,
+  one PolicySet, and the optional named Surface records needed by its binding
+  plan. Intrinsic terminal/filesystem bindings are derived from the compiled
+  registry and policy/adapter requirements. PolicySet's ordered package
+  membership is a separate static composition relationship. Admit the Session
+  only when owner, kind, package/adapter requirements, and policy targets are
+  compatible. Record resolved names and intrinsic/named binding identities in
+  the Session evidence.
+- Implement mediation only as a typed, policy-directed replacement. The
+  matching Rule explicitly names `replacement_surface`, for example
+  `browser_cdp`; Session admission binds the required named Browser CDP Surface
+  before interception. Terminal interception uses only that binding's endpoint
+  or fails closed. It never discovers a random browser or creates an unadmitted
+  second Surface.
 - Default to owner-mode Unix sockets. Loopback TCP/WebSocket listeners require
   root policy and per-connection authentication; agent namespaces never receive
   the daemon-control socket.
@@ -127,7 +158,7 @@ shortcut.
   mechanism. It may be documented as a way for the user to identify a candidate
   for `erebor agent load … --from`, but the daemon follows the candidate through
   the descriptor broker, records the resolved final regular executable and its
-  resolution provenance, verifies the declared version and digest, and stages
+  resolution provenance, verifies the declared version, and stages
   that installation. A later session runs the staged installation; it does not
   rescan the caller's home or follow a mutable launcher/symlink.
 - The Phase 5 Linux host walkthrough uses that explicitly enrolled, pinned
@@ -158,15 +189,20 @@ Add crate-local surface lifecycle tests and daemon/client e2e coverage for:
 - create/start/health/log/events/stop/recovery/remove and two-UID isolation;
 - client exit while the daemon remains the only supervisor;
 - CDP allowed/denied actions and durable evidence;
-- compatible and incompatible session-to-surface binding;
-- filesystem surface create/start/checkpoint/promotion/rollback/retention,
-  including no caller-selected registry path and two-UID isolation;
+- compatible and incompatible Session-to-runtime/named-Surface binding,
+  including explicit terminal-to-Browser-CDP mediation targets and fail-closed
+  missing bindings;
+- one daemon-owned filesystem runtime across multiple Sessions, with one
+  reused `FilesystemSessionStorage`, OSTree repository, overlay/checkpoint
+  view, and attribution record per Session; typed
+  checkpoint/promotion/rollback/retention operations; no caller-selected
+  registry path; and two-UID isolation;
 - agent state projection with a read-only lower snapshot, per-session writable
   upper, rejected ambient `HOME`/`CODEX_HOME`, refresh/revocation behavior,
   no source-host-path or daemon-socket visibility, no mutation of caller state,
   redacted evidence, and two-UID isolation;
 - a real local Codex executable enrolled from an explicit candidate with a
-  recorded final-file/version/digest identity; a projected managed hook and
+  recorded final-file/version verification record; a projected managed hook and
   private `CODEX_HOME`; and a real TUI walkthrough using the Phase 4 PTY
   controller/geometry contract;
 - listener authorization, daemon-socket absence, and root-owned endpoint paths;
@@ -191,10 +227,11 @@ rtk git diff --check
 - Every public `erebor` command is a typed daemon client operation.
 - `erebor surface` is the sole public ambient-surface lifecycle. `erebor start`
   is absent from the parser, help, protocol, examples, and compatibility paths.
-- Long-lived surfaces have one daemon-owned lifecycle/evidence supervisor; no
-  foreground surface runtime remains.
+- Long-lived named Surfaces and the daemon-owned implementations of intrinsic
+  Surfaces have lifecycle/evidence supervision; no foreground surface runtime
+  remains.
 - Filesystem transaction and retention commands are typed daemon clients of
-  their daemon-owned filesystem surface; no client opens legacy session state.
+  the daemon-owned filesystem runtime; no client opens legacy session state.
 - Agent configuration/authentication state reaches a workload only through an
   admitted filesystem-surface projection with immutable source evidence and a
   daemon-owned private target; package, CLI, and session environment inputs
@@ -203,7 +240,7 @@ rtk git diff --check
   staged executable and the private state projection. It does not rely on
   `PATH`, live-home scanning, mutable launcher resolution, or a fixture TTY as
   a substitute for the real user experience.
-- Linux-host sessions and ambient surfaces retain UID isolation, private
+- Linux-host Sessions and registered Surfaces retain UID isolation, private
   endpoints, policy enforcement, output, and evidence.
 - Unsupported runner, distribution, agent, and platform capabilities are
   reported as unavailable rather than inferred from the core path.

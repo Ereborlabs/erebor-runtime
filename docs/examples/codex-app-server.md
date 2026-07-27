@@ -296,11 +296,12 @@ daemon-backed command; omitting `--socket` outside the lab still selects the
 installed `/run/erebor/daemon.sock`.
 
 ```sh
-erebor agent load "$EREBOR_CODEX_PACKAGE" --from "$EREBOR_CODEX_FIXTURE"
-erebor run --policy fixture --workspace "$PWD" codex
+erebor agent load "$EREBOR_CODEX_PACKAGE_NAME" --from "$EREBOR_CODEX_FIXTURE" \
+  --adapter codex-v1 --name local-codex
+erebor run --policy fixture --workspace "$PWD" local-codex
 
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
-  | erebor run --policy fixture --workspace "$PWD" codex-app-server
+  | erebor run --policy fixture --workspace "$PWD" --app-server local-codex
 ```
 
 The interactive command proves daemon-owned TTY and socket absence; the second

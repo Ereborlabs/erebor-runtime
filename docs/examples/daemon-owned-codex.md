@@ -81,13 +81,13 @@ fixture_config="$ (
 
 Correct the command substitution's harmless whitespace if your shell does not
 accept it: `fixture_config="$(sudo … configure …)"`. Then record the two
-immutable values printed by the fixture:
+declared names printed by the fixture:
 
 ```sh
-package_ref="$(sed -n 's/^package_reference=//p' <<<"$fixture_config")"
-root_policy_digest="$(sed -n 's/^root_policy_digest=//p' <<<"$fixture_config")"
-test -n "$package_ref"
-test -n "$root_policy_digest"
+package_name="$(sed -n 's/^package_name=//p' <<<"$fixture_config")"
+root_policy_name="$(sed -n 's/^root_policy_name=//p' <<<"$fixture_config")"
+test -n "$package_name"
+test -n "$root_policy_name"
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now erebord
@@ -108,34 +108,32 @@ sudo journalctl -u erebord --no-pager
 
 ## Load the deterministic Codex package
 
-Copy the fixture to a caller-owned executable path, load the exact
-root-curated package reference, and make a local policy-set alias:
+Copy the fixture to a caller-owned executable path, load it as a named Agent,
+and create a named PolicySet:
 
 ```sh
 fixture_bin="$HOME/.local/bin/codex-v1-fixture"
 install -D -m 0755 /usr/lib/erebor/codex-v1-fixture "$fixture_bin"
 
-erebor agent load "$package_ref" --from "$fixture_bin"
+erebor agent load "$package_name" --from "$fixture_bin" \
+  --adapter codex-v1 --name local-codex
 
-policy_set_digest="$(erebor policy set create \
-  --root-minimum-digest "$root_policy_digest" \
-  --idempotency-key codex-example-policy \
-  | sed -n 's/^digest=//p')"
-erebor policy set alias fixture "$policy_set_digest" \
-  --idempotency-key codex-example-policy-alias
+erebor policyset create --name fixture \
+  --package "$root_policy_name" \
+  --idempotency-key codex-example-policy
 ```
 
-The load result must include `alias=codex` and `alias=codex-app-server`. The
+The load result is `agent=local-codex`. The
 daemon resolves and hashes `fixture_bin` through its descriptor broker; do not
 replace it after loading it.
 
 ## Interactive TTY path
 
-The public `codex` alias creates a daemon-owned PTY. Type one line and press
+The public `local-codex` Agent creates a daemon-owned PTY. Type one line and press
 Enter; the deterministic fixture prints that line and exits.
 
 ```sh
-erebor run --policy fixture --workspace "$PWD" codex
+erebor run --policy fixture --workspace "$PWD" local-codex
 ```
 
 The output includes `fixture-daemon-socket=absent`, proving the workload cannot
@@ -143,7 +141,7 @@ reach the daemon control socket from its private namespace.
 
 ## Typed App Server JSONL path
 
-`codex-app-server` uses a bounded JSON-RPC JSONL bridge, not generic session
+The Agent's `--app-server` entrypoint uses a bounded JSON-RPC JSONL bridge, not generic session
 input. The daemon owns the child pipes, validates each frame, handles EOF, and
 validates child output before returning it to this command's stdout.
 
@@ -151,7 +149,7 @@ validates child output before returning it to this command's stdout.
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
   '{"jsonrpc":"2.0","id":2,"method":"fixture/hook"}' \
-  | erebor run --policy fixture --workspace "$PWD" codex-app-server
+  | erebor run --policy fixture --workspace "$PWD" --app-server local-codex
 ```
 
 The response contains `"turnId":"fixture-turn"` and
@@ -173,7 +171,8 @@ artifacts, and a generic private state projection. That is the explicit Phase
 the user-side enrollment shape remains:
 
 ```sh
-erebor agent load REAL_CODEX_PACKAGE@sha256:... --from /absolute/path/to/codex
+erebor agent load REAL_CODEX_PACKAGE --from /absolute/path/to/codex \
+  --adapter codex-v1 --name local-codex
 ```
 
 ## Inspect and stop

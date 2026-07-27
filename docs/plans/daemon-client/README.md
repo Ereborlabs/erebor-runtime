@@ -68,7 +68,7 @@ second process launcher.
   dispatch. Sharing an `erebord` process or IPC codec must not merge those
   authority boundaries.
 - Admission binds immutable identities: requesting UID, package, installation,
-  adapter, policy-set revision, runner capability snapshot, workspace and
+  adapter, PolicySet revision, runner capability snapshot, workspace and
   executable/image identity, endpoint and filesystem projection, and failure
   mode. Start revalidates facts that can change.
 - Every artifact or user input crossing privilege is bounded and read through
@@ -136,7 +136,7 @@ upon. This table is grounding, not an acceptance claim.
 An **agent package** declares an adapter and immutable entrypoint/support
 contract. An **installation** is the root-curated, locally verified binding of
 that package to a vendor or fixture executable. An **agent alias** selects an
-exact installation after admission. A **policy set** is an immutable policy
+exact installation after admission. A **PolicySet** is an immutable policy
 composition. A **session** is one durable, admitted workload. A **surface** is
 a named daemon-owned ambient resource that may outlive a client and may be
 bound to compatible sessions.
@@ -203,10 +203,14 @@ phases must preserve them unless the user explicitly changes the architecture.
    multi-daemon feature. The example does not install a system service or use
    the default system socket. Exiting it stops only that daemon; it never
    automatically deletes the retained lab directory.
-8. **OCI and Notation are later work.** They are not a prerequisite for the
-   local Linux daemon/client core. Phase 10 owns the approved official
-   `notation` executable boundary: version and artifact-digest pinning,
-   daemon-owned non-shell invocation, and a pinned validated result contract
+8. **OCI distribution and Notation are later work.** They are not a
+   prerequisite for the local Linux daemon/client core. Phase 6 may introduce
+   a local OCI image-layout representation of an immutable **Agent** for
+   image-backed execution, but it does not add registry transport, pulls,
+   publisher trust, signatures, catalog discovery, or formal packaging. Phase
+   10 owns those external-distribution concerns and the approved official
+   `notation` executable boundary: version and verified artifact identity,
+   daemon-owned non-shell invocation, and a validated result contract
    before an Erebor verification receipt is issued.
 9. **Real agent state is a generic private projection.** A package declares a
    logical state requirement and a fixed in-namespace target; a typed
@@ -217,9 +221,57 @@ phases must preserve them unless the user explicitly changes the architecture.
 10. **Installer layout is a convenience, not trust.** A visible local Codex
     launcher or release layout may help a user choose an explicit `agent load
     --from` candidate. The daemon trusts only the descriptor-broker-held final
-    regular executable, its recorded resolution provenance, version, and
-    digest; it does not scan a user home or trust a mutable symlink at run
-    time.
+    regular executable, its recorded resolution provenance and version, and
+    daemon-internal integrity verification; it does not scan a user home or
+    trust a mutable symlink at run time.
+
+## Later-Phase Decisions
+
+The following decisions set the target for later runner and artifact phases.
+They do not authorize an Agentfile builder, OCI runtime integration, Docker
+execution, Kubernetes work, registry access, or CLI change today.
+
+1. **One Agent contract serves image-backed runners.** An Agentfile will
+   eventually build one daemon-verified immutable named `Agent`, optionally
+   stored in a local OCI image layout. A derived Agentfile names its immutable
+   base Agent; the resulting Agent records the base, adapter, admitted build
+   inputs, and entrypoint contract as daemon-owned provenance. Users reference
+   Agents by name; the Agent is the input to session admission, while a session
+   remains its runtime instance.
+2. **Agent families are imported once; runners consume the common artifact.**
+   An agent family needs one compiled adapter and one family-specific importer
+   or stager that turns its verified vendor distribution into a sealed base
+   Agent. Derived agents then reuse that base. This avoids an
+   agent-family-by-runner implementation matrix: agent-specific work happens
+   once, and each runner supports the shared Agent contract once.
+3. **Use mature execution substrates instead of recreating container
+   mechanics.** The later Linux image-backed runner must use a mature OCI
+   runtime; the Docker runner must use Docker Engine; a later Kubernetes
+   runner must use native Pod, volume, and networking facilities. A direct
+   host-executable session is not automatically portable to those runners. It
+   must be staged into a complete sealed Agent before it becomes a
+   cross-runner artifact.
+4. **Surfaces express governed grants, not runtime flags.** A surface declares
+   typed filesystem, network, endpoint, state, and resource grants. The
+   selected runner maps those grants to its native mount, network, cgroup, and
+   endpoint mechanisms, then verifies the physical result against the admitted
+   plan. Neither the Agentfile nor an agent may supply raw Docker flags, host
+   mounts, network names, Pod specs, sockets, or runtime credentials.
+5. **Runner equivalence is capability-based and fail-closed.** Docker,
+   Linux-OCI, and future Kubernetes primitives need not provide identical
+   enforcement. A runner advertises only the grants it can both implement and
+   verify. If an admitted surface grant cannot be preserved on a runner, the
+   session is unavailable rather than approximated.
+6. **Static agent content stays separate from runtime authority.** An Agent's
+   local OCI layers may contain admitted non-secret executable and configuration
+   material. Policy packages, caller state snapshots, authentication material,
+   writable uppers, daemon-control access, and retention remain daemon-owned
+   surface/session projections.
+7. **Do not reimplement a general Dockerfile builder.** The exact Agentfile
+   grammar remains a Phase 6 design decision. If it eventually permits build
+   execution such as Dockerfile `RUN`, it must use a mature builder in an
+   ephemeral daemon-governed builder session with its own surface grants and
+   evidence; it cannot run host commands directly.
 
 ## Phase Plan
 
@@ -241,7 +293,7 @@ complete. Do not revise it as a shortcut around later phase scope.
 [Phase 3](phase-3-local-stores-generic-adapter-and-cli-migration.md) completes
 the non-OCI, local Linux generic product path:
 
-- daemon-owned immutable local package, installation, alias, policy-set,
+- daemon-owned immutable local package, installation, alias, PolicySet,
   approval, quota, and retention/lease records;
 - the built-in `generic-process-v1` adapter and daemon-owned adapter registry;
 - caller-UID executable/interpreter resolution with pinned identity rather
@@ -320,6 +372,8 @@ it can safely project agent state.
 [Phase 5](phase-5-daemon-owned-ambient-surfaces.md) is the final Linux core
 cutover. It owns:
 
+- a named-resource boundary: users create and reference Agents, policy, and
+  surfaces by declared names while integrity verification remains daemon-internal;
 - replacement of `erebor start` by the typed durable `erebor surface` lifecycle;
 - one daemon-owned supervisor for long-lived ambient resources, beginning with
   Browser CDP;
@@ -329,7 +383,7 @@ cutover. It owns:
   snapshot and per-session writable upper for a fixed private Codex state
   target, never a caller-selected host `HOME` or `CODEX_HOME`; and
 - the real-Codex Linux walkthrough: a user explicitly enrolls a resolved,
-  pinned local executable and binds approved state through that projection.
+  verified local executable and binds approved state through that projection.
   The daemon stages the verified executable and private state; it neither
   scans nor changes the user's live Codex directory.
 
@@ -337,17 +391,26 @@ This is where the public CLI becomes a daemon client for every public command.
 It does not add OCI, Notation, Docker parity, remote listeners, plugins, or
 session adoption.
 
-### Phase 6 — Docker and runner parity — Later, detailed plan to be restored
+### Phase 6 — Agentfile, Docker, and runner parity — Later, detailed plan to be restored
 
-The surviving lifecycle material preserves this phase's boundary: extend the
-runner capability contract with Docker execution evidence; pin admitted Docker
-images and prohibit implicit pulls. Phase 4 already owns the Linux PTY
-controller/geometry contract, so this phase must preserve it rather than
-deferring basic interactive behavior.
-It must not weaken the Linux-host ownership or daemon-loss contract and must
-fail closed when its enforcement or recovery guarantees are unavailable. Its
-detailed phase file was not recovered, so it must be written and approved
-before implementation.
+This phase defines and implements Agentfile as the builder for the immutable
+`Agent` resource fixed by Phase 5. Its initial portable representation may use
+a local OCI image layout for image-backed runners, and it extends the runner
+capability contract with Docker execution evidence. It uses existing image
+builders and execution substrates: a mature OCI runtime for Linux image
+execution and Docker Engine for the Docker runner. It must pin admitted local
+Agents/Docker images by their declared names, resolve those names internally,
+and prohibit implicit pulls. It does not introduce a registry, publisher trust,
+Notation, remote contexts, or Kubernetes execution.
+
+The runner maps the admitted typed surface grants to its native filesystem,
+network, endpoint, and resource mechanisms, then verifies the resulting
+physical configuration. It must fail closed when the requested grant,
+enforcement, recovery, or verification guarantee is unavailable. Phase 4
+already owns the Linux PTY controller/geometry contract, so this phase must
+preserve it rather than defer basic interactive behavior. Its detailed phase
+file was not recovered, so it must be written and approved before
+implementation.
 
 ### Phase 7 — Claude Code discovery and security decision — Later
 
@@ -375,10 +438,11 @@ the optional Claude track.
 ### Phase 10 — OCI registry, trust, Hub, and packaging — Deferred later
 
 [Phase 10](phase-10-oci-registry-trust-hub-and-packaging.md) begins only after
-Phase 9 and explicit approval. It owns OCI layout import, registry transport,
-publisher trust, Notation verification, expiry/revocation/stale-receipt
-rechecks, signed catalog discovery, and formal distribution packaging. It must
-not be pulled into local package loading as a partial or unsound verifier.
+Phase 9 and explicit approval. It owns external OCI layout import, registry
+transport, publisher trust, Notation verification, expiry/revocation/stale-
+receipt rechecks, signed catalog discovery, and formal distribution packaging.
+It must not be pulled into local package loading as a partial or unsound
+verifier.
 
 ## Phase Boundaries And Stop Points
 

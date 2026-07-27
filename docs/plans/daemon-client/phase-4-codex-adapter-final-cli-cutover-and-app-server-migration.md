@@ -1,7 +1,9 @@
 # Phase 4: Codex Adapter, Final CLI Cutover, And App Server Migration
 
-Status: Recovery verification — implementation is restored, but Phase 4 is not
-accepted again until the deterministic privileged evidence and host lab pass.
+Status: Done — the daemon/client Codex path, complete nested Context DAG,
+adapter-owned hook service, legacy-config removal inventory, same-UID/two-UID
+isolation, and privileged live TTY lifecycle evidence are complete. Phase 5
+remains separately scoped and unstarted.
 
 ## Approved Design Decisions
 
@@ -67,10 +69,12 @@ daemon architecture. Once the migrated Codex path passes, this phase removes
 the last direct foreground implementation. OCI distribution and the formal
 installable bundle are later Phase 10 work.
 
-The correct simpler hook shape is one daemon-owned Codex hook service with
-authenticated per-session registrations, not one hook server per session. This
-does not merge hook traffic into daemon control or runtime guard: correctness
-requires a distinct listener, message family, peer/ticket authentication,
+The correct simpler hook shape is one adapter-owned Codex hook service with
+authenticated per-session registrations, not one hook server per session. The
+daemon owns the service process lifetime and supplies its registrations; the
+Codex adapter owns the listener implementation, message family, ticket/peer
+authentication, and event dispatch. This does not merge hook traffic into
+daemon control or runtime guard: correctness requires a distinct listener,
 routing table, queues, deadlines, cancellation, and shutdown contract.
 
 ## Scope
@@ -100,6 +104,39 @@ routing table, queues, deadlines, cancellation, and shutdown contract.
   state source, snapshot, writable upper, retention, refresh, and fixed
   in-namespace target generically for all adapters.
 
+### Completed Legacy Config Inventory
+
+The removed `CodexGovernanceLayerConfig` and
+`CodexProfileLayerConfig` are inventoried from their final pre-migration source
+revision. This is a removal audit, not a compatibility parser: no current
+daemon path accepts `codex.profiles`, selects a profile from raw argv, or
+reconstructs the old runtime JSON. Each former field and its validation has one
+current owner or an explicit rejection.
+
+| Former field | Former rule | Current owner and proof |
+| --- | --- | --- |
+| `enabled`, `profiles` | Codex required the legacy session/filesystem layers, at least one profile, and unique profile IDs/executables. | **Removed.** A package/installation selected by typed `CodexRunRequest` is the only admission route. Package, installation, adapter, entrypoint, and policy-set identities are resolved by `DaemonSessionApi`; raw executable/profile selection is impossible. |
+| `id` | Safe unique profile identifier. | **Codex package:** `CodexPackageDefinition.release_id`, `AgentPackageManifest`, and canonical package digest; their validators require safe identities. |
+| `runner` | Linux-host only. | **Adapter package plus root daemon:** `CodexSupportedPlatform` and `CodexPackageDefinition` certify the supported host; `DaemonConfig.linux_runner` determines the available Linux runner. The public Codex request cannot name a raw runner. |
+| `executable`, `executable_sha256` | Normalized path and exact digest; fleet deployments rejected mutable user/temp locations. | **Caller installation:** `InstallationRecord` retains the descriptor-verified local artifact and owner UID after `erebor agent load`; admission revalidates held artifact identity. Root-curated definitions pin the expected executable digest. |
+| `deployment`, `trust_root` | Distinguished fleet-managed artifacts and required managed sources below one stable trust root. | **Root daemon configuration:** `RootCuratedCodexPackage.trust_root` validates support-artifact sources and package identity. The ambiguous deployment mode is removed: the daemon never trusts a caller path as fleet-managed, and caller enrollment is always descriptor-brokered. |
+| `requirements_source`, `requirements_sha256`, `requirements_path` | Trusted source/digest and fixed managed runtime target. | **Codex package:** `CodexManagedArtifacts.requirements_source` is a `CodexArtifact`; its target is validated under the private `/run/erebor/codex/` projection. |
+| `managed_hook_source`, `managed_hook_sha256`, `managed_hook_path` | Trusted source/digest, shared managed directory, fixed hook target. | **Codex package and adapter:** `CodexManagedArtifacts.managed_hook_source` and fixed private target; `CodexHookService` authenticates the projected hook's session, kernel peer, and one-use ticket. |
+| `shell_startup_source`, `shell_startup_sha256`, `shell_startup_path` | Trusted source/digest, same managed directory as the hook. | **Codex package:** `CodexManagedArtifacts.shell_startup_source` and target enforce the same package source/digest and private projection constraints. |
+| `hook_shell`, `hook_exec_history` | Exact direct/shell interpreter chain, normalized absolute paths, first executable, final managed hook. | **Codex package:** `CodexHookContract.shell` and `exec_history` preserve the exact validated chain using `CodexHookExec`; the adapter compares runtime evidence against that profile. |
+| `event_schemas` | Non-empty, unique event kinds with exact schema fingerprints. | **Codex package and adapter:** `CodexHookContract.event_schemas` validates package facts; `CodexHookBrokerProtocol` rejects an event unless parsed and package-pinned fingerprints match. |
+| `app_server_transport.enabled` | App Server was an explicit profile capability. | **Certified entrypoint:** `CodexEntrypoint.app_server_stdio` makes only the package-declared `codex-app-server` entrypoint eligible for the typed daemon-owned stdio bridge. |
+| `command_dispatch.program`, `command_dispatch.shell` | Safe exact program and normalized shell path. | **Codex package:** `CodexHookContract.command_dispatch` pins the command envelope; the invocation-lease owner admits only that exact dispatch shape. |
+| `command_dispatch.sandbox_launcher.path`, `command_dispatch.sandbox_launcher.sha256` | Optional trusted launcher under the trust root with exact digest. | **Codex package:** optional `CodexManagedArtifacts.sandbox_launcher` plus its private target, with package-digest and root-trust validation. |
+| caller `HOME`, `CODEX_HOME`, arbitrary state roots | Previously ambient/configurable state could influence the launch. | **Explicitly rejected in Phase 4.** No run request or installation records a caller state path. Phase 5 may add a generic daemon-owned filesystem binding; it must not reintroduce an ambient Codex exception. |
+
+The package validators live in `erebor-runtime-packages/src/codex.rs`; root
+trust ownership is in `erebor-runtime-daemon/src/config.rs`; verified local
+enrollment is represented by `InstallationRecord`. The deterministic fixture
+and installed-product probe exercise successful enrollment plus wrong package,
+artifact replacement, raw argv, non-certified entrypoint, hook-schema, ticket,
+and App Server failures.
+
 ### `codex-v1` Adapter
 
 - Keep Codex-specific owners under
@@ -128,8 +165,8 @@ routing table, queues, deadlines, cancellation, and shutdown contract.
 - Replace the foreground single-session `CodexHookBroker` listener shape in
   `crates/erebor-runtime-session/src/agents/codex/broker.rs` rather than
   migrating one Unix listener, host directory, accept loop, and server
-  lifetime per session into `erebord`. Run one root-owned Codex hook listener
-  inside `erebord` and give it a daemon-owned registration table. Starting a
+  lifetime per session into `erebord`. Run one adapter-owned Codex hook listener
+  inside the daemon process and give it daemon-owned registrations. Starting a
   Codex session registers its exact session id, single-use ticket authority,
   expected peer facts, reconciliation owner, and invocation-lease owner;
   terminal cleanup and recovery remove or replace that registration.
@@ -191,17 +228,15 @@ routing table, queues, deadlines, cancellation, and shutdown contract.
 
 ### Context DAG And Child-Agent Delegation
 
-The deterministic Codex fixture must eventually prove the real Git-shaped
-ContextRepository topology for nested agent work, not merely emit correlated
-JSONL audit records. The proposed
+The deterministic Codex fixture proves the real Git-shaped
+ContextRepository topology for nested agent work, not merely correlated JSONL
+audit records. The completed
 [Codex Context DAG and child-agent subplan](phase-4-codex-context-dag/README.md)
 owns the shared context repository, immutable causal fork, same-session
-logical child scope, source-pinned collaboration mapping, child-originated delivery,
-parent-owned integration decisions, repeatable two-parent pinned merges,
-owner-received asynchronous command results through the same merge contract,
-recovery, and deterministic Linux evidence. It is part of Phase 4's remaining
-acceptance work, but no implementation phase within it starts until explicitly
-approved.
+logical child scope, source-pinned collaboration mapping, child-originated
+delivery, parent-owned integration decisions, repeatable two-parent pinned
+merges, owner-received asynchronous command results through the same merge
+contract, recovery, and deterministic Linux evidence.
 
 The local Codex source makes a necessary distinction: native `spawn_agent`
 creates an internal Codex thread, while its hooks and App Server collaboration
@@ -375,14 +410,14 @@ before Phase 5 (ambient surfaces) or any later phase.
 
 ## Phase 4 Result
 
-State: Recovery verification — Phase 5 remains separately scoped and
-unstarted.
+State: Done — Phase 5 remains separately scoped and unstarted.
 
-The historical implementation/evidence list below describes the recovered
-Phase 4 source. It is not a renewed `Done` claim. The recovery work restores
-the missing process-local socket selector, explicit direct-controller root
-configuration, and no-cleanup host-lab scripts; the privileged live lab still
-requires an interactive developer `sudo` run before the phase can be accepted.
+The implementation/evidence list below records the completed Phase 4 source.
+Recovery restored the missing process-local socket selector, explicit
+direct-controller root configuration, and no-cleanup host-lab scripts. The
+privileged Docker/systemd fixture now supplies the required automated live TTY
+evidence; the interactive `sudo` host lab remains a useful manual example, not
+an additional acceptance gate.
 
 Implemented so far:
 
@@ -409,6 +444,15 @@ Implemented so far:
   observes a changed local terminal. The deterministic fixture reports the
   kernel PTY geometry. Focused tests prove observer rejection and controller
   lease handoff without a second workload start.
+- Extended the privileged installed-product fixture to prove the live terminal
+  contract through the public daemon/client attachment path. It starts the
+  deterministic workload in a real 24x80 PTY, changes the controller terminal
+  to 40x120, and proves both the workload's new kernel geometry and its real
+  `SIGWINCH`. While that controller owns the lease, a test-only client probe
+  attaches read-only and proves that daemon rejects both its input and its
+  resize RPCs. After detach, a second controller attaches at 50x140; the
+  fixture proves the new geometry and `SIGWINCH`, while the test compares the
+  immutable workload process identity before and after reattach.
 - Removed the stale direct `codex_linux_v1_session_run` test and its foreground
   session-driver binary. The retained lifecycle probe is compatibility-only;
   it is not a product launch route.
@@ -438,6 +482,26 @@ Implemented so far:
   EOF, malformed output, client disconnect, artifact replacement, raw-argv and
   entrypoint rejection, managed-hook replay/wrong-peer/wrong-session rejection,
   concurrent sessions, cleanup, daemon recovery, and daemon-socket absence.
+- Kept the Codex hook listener adapter-owned: `CodexHookService` and its
+  protocol, ticket/peer authentication, and event dispatch live under the
+  Codex adapter. `DaemonSessionApi` owns only its in-process lifetime and
+  supplies session registrations. The three listeners remain intentionally
+  separate: daemon control accepts `DaemonHello` and its control allowlist;
+  the runtime guard accepts `GuardHello` followed only by guard messages; the
+  adapter hook service accepts `HookHello` followed only by hook events. A
+  foreign RPC is rejected before an owner dispatches it.
+- Added the completed legacy `CodexGovernanceLayerConfig`/
+  `CodexProfileLayerConfig` field-by-field inventory above. Each former field
+  now has one package, installation, root-daemon, policy, session, or explicit
+  Phase 5 rejection owner; no compatibility parser or raw profile selection
+  remains.
+- Added same-UID shared-listener isolation to the installed-product fixture.
+  It holds Codex session B registered while the real guarded managed hook from
+  session A attempts a `HookHello` for B. The hook wire contract deliberately
+  carries no ticket string: the adapter derives A's one-use authority from its
+  kernel peer. B rejects that peer/session binding, after which A's own hook
+  still succeeds, proving a failed cross-session attempt neither routes nor
+  consumes A's authority.
 - Repaired the repository-wide Rust verification baseline without adding Phase
   5 behavior: formatted the workspace, replaced the staging-path positional
   tuple with its named owner, removed stale test-only configuration code, and
@@ -460,9 +524,21 @@ Verification completed on this source state:
   successfully in this host.
 - `rtk git diff --check` passed.
 - `rtk cargo test -p erebor-runtime-e2e --test daemon_control_plane
-  phase4_codex_daemon_client_runs_in_systemd_container -- --ignored --exact
+  daemon_control_plane_and_codex_context_dag_run_in_systemd_container -- --ignored
   --nocapture` passed against the disposable privileged Ubuntu 24.04 systemd
-  container after building the staged fixture image.
+  container after building the staged fixture image, including the same-UID
+  cross-session hook rejection and the full live TTY resize/observer/
+  detach/reattach contract.
+- `rtk cargo test -p erebor-runtime-e2e --test codex_v1_fixture` passed (five
+  tests), including malformed cross-session request rejection before a hook is
+  launched.
+- `rtk cargo test -p erebor-runtime-daemon
+  control_service_closes_guard_family_connection_before_dispatch -- --ignored
+  --nocapture` passed outside the restricted host sandbox. It sends a
+  `GuardHello` to the daemon-control listener and observes connection closure
+  before dispatch. `rtk cargo test -p erebor-runtime-session
+  managed_hook_client_requires_a_guard_issued_kernel_peer_ticket -- --nocapture`
+  passed outside the restricted host sandbox.
 - `rtk cargo fmt --all -- --check` and `rtk cargo clippy --workspace
   --all-targets --all-features -- -D warnings` passed.
 - `bash .github/scripts/verify-rust-ci.sh` passed after the final Rust edit.
@@ -470,27 +546,27 @@ Verification completed on this source state:
   daemon, and fixture tests cover explicit socket parsing/selection,
   root-owned helper configuration, and fixture emission. The repository Rust
   CI procedure passed after the final Rust edit. The live foreground-root
-  walkthrough needs the developer's interactive `sudo` password and was not
-  run from this non-interactive environment.
+  walkthrough remains optional manual developer evidence because the matching
+  privileged Docker/systemd acceptance fixture passes automatically.
 
-Not done:
+Deferred scope, not a Phase 4 acceptance blocker:
 
 - Phase 5 owns authenticated agent-state projection and the privileged
   state-backed real-vendor Codex acceptance fixture. It must provide the
   generic filesystem-surface state binding described there; Phase 4
   intentionally rejects ambient caller-selected `HOME`/`CODEX_HOME` rather
   than inventing a Codex-specific credential provider.
-- Phases 1–3 of the [Codex Context DAG subplan](phase-4-codex-context-dag/README.md)
-  establish checked same-session scope forks, parent pins, edge facts,
-  thread-to-scope routing, and parent-owned deliveries. Phase 2 deliberately
-  removed the package-declared bridge and child-session path: a Codex thread is
-  never another Erebor session. Nested Phase 4 still must prove the complete
-  deterministic P/B/C/D/q fixture, source-surface routing/denial, guarded
-  descendants attributed to logical scopes, a public graph view, and renewed
-  privileged evidence before it can contribute to a renewed Phase 4 acceptance
-  claim.
-- The implemented Linux terminal contract still needs its privileged fixture
-  evidence: prove the requested initial geometry and a real `SIGWINCH` resize
-  in the staged controller, then prove detach/reattach from the foreground
-  host lab and two-UID matrix. The deterministic fixture may remain simple;
-  it must not be represented as the real Codex TUI.
+
+Done within Phase 4:
+
+- All four phases of the
+  [Codex Context DAG subplan](phase-4-codex-context-dag/README.md) are complete:
+  the P/B/C/D/q deterministic fixture, source-surface routing/denial, guarded
+  descendants attributed to logical scopes, public Git-backed graph view, and
+  privileged Docker evidence are recorded there. A Codex thread remains a
+  same-session scope, never another Erebor session.
+
+There are no remaining Phase 4 acceptance gaps. The deterministic fixture is
+evidence for the governed TTY and App Server contracts, not a representation
+of the real Codex TUI. The authenticated real-vendor state-backed fixture
+remains explicitly deferred to Phase 5's generic filesystem binding.

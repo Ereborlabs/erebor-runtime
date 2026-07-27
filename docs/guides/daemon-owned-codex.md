@@ -17,8 +17,8 @@ foreground path.
   `root_curated_codex_packages`. That configuration pins the vendor executable
   digest, the managed hook and support-artifact digests, supported entrypoints,
   adapter digest, and root-owned artifact directory.
-- The administrator gives the caller the exact configured package reference,
-  for example `codex-v1@sha256:<64-lowercase-hex-digest>`.
+- The administrator gives the caller the configured package name, for example
+  `codex-v1`.
 - The caller has the matching vendor Codex executable at an absolute path.
   Erebor does not download it, search `PATH`, or accept a same-named binary.
 
@@ -27,39 +27,39 @@ distribution command. OCI/Notation distribution remains Phase 10 work.
 
 ## Enroll the local executable
 
-Replace the two values with the administrator-provided package reference and
-the caller-owned vendor executable. The daemon resolves this path under the
-caller UID, holds its descriptor, verifies identity and digest, and then makes
-the `codex` and (when certified) `codex-app-server` aliases available.
+Replace the values with the administrator-provided package name and the
+caller-owned vendor executable. The daemon resolves this path under the caller
+UID, holds its descriptor, and verifies its internal integrity record. The
+caller chooses the immutable Agent name and explicitly states its adapter.
 
 ```sh
-package_ref='codex-v1@sha256:<64-lowercase-hex-digest>'
+package_name='codex-v1'
 codex_bin="$HOME/.local/bin/codex"
 
-erebor agent install "$package_ref" --from "$codex_bin"
+erebor agent load "$package_name" --from "$codex_bin" \
+  --adapter codex-v1 --name local-codex
 ```
 
-Expected output names the immutable package and installation digests, followed
-by `alias=codex` and `alias=codex-app-server` when the release certifies both
-entrypoints.
+Expected output is `agent=local-codex`. The daemon keeps the package and
+installation integrity records private.
 
 ## Interactive Codex TUI
 
-`codex` is always an interactive daemon-owned TTY session. There is no `-t`
+`local-codex` is always an interactive daemon-owned TTY session. There is no `-t`
 requirement: the client attaches the terminal, while the daemon owns the PTY,
 workload, process guard, hook endpoint, output, and lifecycle.
 
 ```sh
-erebor run --policy engineering codex
+erebor run --policy engineering local-codex
 ```
 
 Use the normal Codex TUI. A nested Codex launched from that session remains a
 governed descendant; it cannot contact the daemon control socket, enroll an
-agent, mint an alias, or make itself a separately trusted App Server.
+Agent, create a named resource, or make itself a separately trusted App Server.
 
 ## Structured Codex App Server
 
-`codex-app-server` is different from the TUI. Its standard input and standard
+The Agent's `--app-server` entrypoint is different from the TUI. Its standard input and standard
 output are a bounded JSON-RPC JSONL bridge. The daemon validates each client
 frame, correlates requests and replies, sends EOF to the child when client
 input closes, validates child output before returning it, and never mixes
@@ -72,7 +72,7 @@ real prompts out of shell history and committed files.
 printf '%s\n' \
   '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"erebor-example","version":"1"},"capabilities":{"experimentalApi":true}}}' \
   '{"jsonrpc":"2.0","method":"initialized"}' \
-  | erebor run --policy engineering codex-app-server
+  | erebor run --policy engineering --app-server local-codex
 ```
 
 The command's stdout is only Codex App Server JSONL responses. Its stderr may
