@@ -42,52 +42,48 @@ message DaemonReloadRequest {}
 
 message DaemonStopRequest {}
 
-// Enrolls a vendor/user-provided Codex executable against one root-curated
-// release. The daemon resolves source_path through its UID-dropped descriptor
+// Enrolls a vendor/user-provided Codex executable as one explicitly named
+// Agent. The daemon resolves source_path through its UID-dropped descriptor
 // broker; it never searches PATH or downloads a binary.
 message AgentInstallRequest {
-  string package_reference = 1;
+  string package_name = 1;
   string source_path = 2;
+  string name = 3;
+  string adapter = 4;
 }
 
 message AgentInstallResponse {
-  string package_digest = 1;
-  string installation_digest = 2;
-  repeated string aliases = 3;
+  string name = 1;
 }
 
-// Creates a Codex session from a daemon-owned local alias. The request names
+// Creates a Codex session from a daemon-owned named Agent. The request names
 // no executable or argv: the daemon resolves the certified entrypoint after it
 // re-verifies the enrolled artifact.
 message CodexRunRequest {
-  string alias = 1;
+  string agent_name = 1;
   string workspace = 2;
-  string policy_set_reference = 3;
+  string policy_set_name = 3;
   string daemon_failure_mode = 4;
   uint64 requested_loss_grace_seconds = 5;
   bool tty = 6;
   bool detached = 7;
   uint32 terminal_rows = 8;
   uint32 terminal_columns = 9;
+  bool app_server = 10;
 }
 
 message SessionCreateRequest {
   string runner_id = 1;
   repeated string command = 2;
   string workspace = 3;
-  string policy_set_digest = 4;
-  string package_digest = 5;
-  string installation_digest = 6;
-  string adapter_digest = 7;
-  string daemon_failure_mode = 8;
-  uint64 requested_loss_grace_seconds = 9;
-  repeated SessionEnvironmentEntry environment = 10;
-  repeated string secret_references = 11;
-  string container_image_digest = 12;
-  bool tty = 13;
-  bool detached = 14;
-  uint32 terminal_rows = 15;
-  uint32 terminal_columns = 16;
+  string daemon_failure_mode = 4;
+  uint64 requested_loss_grace_seconds = 5;
+  repeated SessionEnvironmentEntry environment = 6;
+  repeated string secret_references = 7;
+  bool tty = 8;
+  bool detached = 9;
+  uint32 terminal_rows = 10;
+  uint32 terminal_columns = 11;
 }
 
 message SessionEnvironmentEntry {
@@ -513,8 +509,7 @@ message PolicyPackageApplyRequest {
 }
 
 message PolicyPackageRecord {
-  string digest = 1;
-  string name = 2;
+  string name = 1;
 }
 
 message PolicyPackageListRequest {}
@@ -524,31 +519,20 @@ message PolicyPackageListResponse {
 }
 
 message PolicyPackageInspectRequest {
-  string digest = 1;
+  string name = 1;
 }
 
 message PolicyPackageVerifyRequest {
-  string digest = 1;
+  string name = 1;
 }
 
 message PolicySetCreateRequest {
-  string root_minimum_digest = 1;
-  repeated string package_minimum_digests = 2;
-  string local_override_digest = 3;
-}
-
-message PolicySetAliasSetRequest {
-  string alias = 1;
-  string policy_set_digest = 2;
-}
-
-message PolicySetAliasRecord {
-  string alias = 1;
-  string policy_set_digest = 2;
+  string name = 1;
+  repeated string package_names = 2;
 }
 
 message PolicySetRecord {
-  string digest = 1;
+  string name = 1;
 }
 
 message PolicySetListRequest {}
@@ -558,11 +542,11 @@ message PolicySetListResponse {
 }
 
 message PolicySetInspectRequest {
-  string digest = 1;
+  string name = 1;
 }
 
 message PolicySetVerifyRequest {
-  string digest = 1;
+  string name = 1;
 }
 
 message RunnerListRequest {}

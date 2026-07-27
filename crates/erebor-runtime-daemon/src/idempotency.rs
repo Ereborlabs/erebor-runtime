@@ -40,6 +40,7 @@ pub(crate) enum MutationIntent {
     Stop,
     AgentInstall {
         uid: u32,
+        agent_name: String,
         package_digest: String,
         installed_at_unix_ms: u64,
         artifact: VerifiedLocalArtifact,
@@ -124,14 +125,8 @@ pub(crate) enum MutationIntent {
     },
     PolicySetCreate {
         uid: u32,
-        root_minimum_digest: String,
-        package_minimum_digests: Vec<String>,
-        local_override_digest: Option<String>,
-    },
-    PolicySetAliasSet {
-        uid: u32,
-        alias: String,
-        policy_set_digest: String,
+        name: String,
+        package_names: Vec<String>,
     },
 }
 
@@ -457,8 +452,7 @@ impl MutationIntent {
             | Self::ApprovalApprove { .. }
             | Self::ApprovalDeny { .. }
             | Self::PolicyPackageApply { .. }
-            | Self::PolicySetCreate { .. }
-            | Self::PolicySetAliasSet { .. } => None,
+            | Self::PolicySetCreate { .. } => None,
         }
     }
 }

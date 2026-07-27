@@ -1168,13 +1168,11 @@ fn configure(arguments: &[String]) -> FixtureResult<()> {
     let definition = package_definition(&options.trust_root, &fixture)?;
     let package = package_manifest(&definition)?;
     let root_policy = root_policy()?;
-    let root_policy_digest = root_policy.canonical_digest()?;
     let root_admissions = options
         .owner_uids
         .iter()
         .map(|owner_uid| root_admission(*owner_uid, &root_policy))
         .collect::<FixtureResult<Vec<_>>>()?;
-    let package_digest = package.canonical_digest()?;
     let configuration = json!({
         "socket_group_gid": options.socket_group_gid,
         "linux_runner": {
@@ -1196,11 +1194,8 @@ fn configure(arguments: &[String]) -> FixtureResult<()> {
     }
     fs::write(&options.config, serde_json::to_vec_pretty(&configuration)?)?;
     fs::set_permissions(&options.config, fs::Permissions::from_mode(0o640))?;
-    println!(
-        "package_reference={FIXTURE_NAME}@sha256:{}",
-        package_digest.as_str()
-    );
-    println!("root_policy_digest={}", root_policy_digest.as_str());
+    println!("package_name={FIXTURE_NAME}");
+    println!("root_policy_name={}", root_policy.manifest().name());
     Ok(())
 }
 

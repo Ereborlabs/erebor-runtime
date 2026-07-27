@@ -11,15 +11,19 @@ impl DaemonClient {
     /// release. The daemon, not this client, resolves and verifies the path.
     pub async fn agent_load_codex(
         &self,
-        package_reference: impl Into<String>,
+        package_name: impl Into<String>,
         source_path: impl Into<String>,
+        name: impl Into<String>,
+        adapter: impl Into<String>,
         idempotency_key: &str,
     ) -> Result<AgentInstallResponse> {
         self.session_mutation(
             KIND_AGENT_INSTALL_REQUEST,
             &AgentInstallRequest {
-                package_reference: package_reference.into(),
+                package_name: package_name.into(),
                 source_path: source_path.into(),
+                name: name.into(),
+                adapter: adapter.into(),
             },
             KIND_AGENT_INSTALL_RESPONSE,
             idempotency_key,

@@ -9,7 +9,7 @@ use std::{
 
 use erebor_runtime_core::{AgentAdapterDescriptor, ImmutableIdentity, SessionSpec};
 use erebor_runtime_packages::{
-    AgentPackageManifest, CanonicalEncoding, CodexPackageDefinition, ContentDigest, DigestAlias,
+    AgentPackageManifest, CanonicalEncoding, CodexPackageDefinition, ContentDigest,
     InstallationRecord, PolicyPackageRevision, PolicySetRevision, VerifiedLocalArtifact,
 };
 use erebor_runtime_policy::LocalPolicy;
@@ -102,20 +102,14 @@ pub(crate) struct BuiltInAdmission {
 }
 
 pub(crate) struct StoredPolicyPackage {
-    digest: String,
     name: String,
 }
 
 impl StoredPolicyPackage {
-    fn new(digest: &ContentDigest, revision: &PolicyPackageRevision) -> Self {
+    fn new(revision: &PolicyPackageRevision) -> Self {
         Self {
-            digest: digest.as_str().to_owned(),
             name: revision.manifest().name().to_owned(),
         }
-    }
-
-    pub(crate) fn digest(&self) -> &str {
-        &self.digest
     }
 
     pub(crate) fn name(&self) -> &str {
@@ -124,18 +118,95 @@ impl StoredPolicyPackage {
 }
 
 pub(crate) struct StoredPolicySet {
-    digest: String,
+    name: String,
 }
 
 impl StoredPolicySet {
-    fn new(digest: &ContentDigest) -> Self {
+    fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into() }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NamedResourceRecord {
+    #[serde(rename = "apiVersion")]
+    api_version: String,
+    kind: String,
+    metadata: NamedResourceMetadata,
+    spec: NamedResourceSpec,
+    integrity_digest: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NamedResourceMetadata {
+    name: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NamedResourceSpec {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    adapter: Option<String>,
+}
+
+impl NamedResourceRecord {
+    const API_VERSION: &'static str = "erebor.dev/v1";
+
+    fn new(kind: &str, name: &str, integrity_digest: &ContentDigest) -> Self {
         Self {
-            digest: digest.as_str().to_owned(),
+            api_version: Self::API_VERSION.to_owned(),
+            kind: kind.to_owned(),
+            metadata: NamedResourceMetadata {
+                name: name.to_owned(),
+            },
+            spec: NamedResourceSpec::default(),
+            integrity_digest: integrity_digest.as_str().to_owned(),
         }
     }
 
-    pub(crate) fn digest(&self) -> &str {
-        &self.digest
+    fn agent(name: &str, integrity_digest: &ContentDigest, adapter: &str) -> Result<Self> {
+        if adapter.is_empty() {
+            return InvalidRequestSnafu {
+                reason: String::from("Agent spec.adapter must be explicit"),
+            }
+            .fail();
+        }
+        Ok(Self {
+            spec: NamedResourceSpec {
+                adapter: Some(adapter.to_owned()),
+            },
+            ..Self::new("Agent", name, integrity_digest)
+        })
+    }
+
+    fn validate(&self, expected_kind: &str, requested_name: &str) -> Result<ContentDigest> {
+        if self.api_version != Self::API_VERSION
+            || self.kind != expected_kind
+            || self.metadata.name != requested_name
+            || !DaemonLocalStore::is_path_component(&self.metadata.name)
+        {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "named resource does not match required apiVersion, kind, and metadata.name for {expected_kind}"
+                ),
+            }
+            .fail();
+        }
+        if expected_kind == "Agent"
+            && !matches!(self.spec.adapter.as_deref(), Some(adapter) if !adapter.is_empty())
+        {
+            return InvalidRequestSnafu {
+                reason: String::from("Agent resource is missing explicit spec.adapter"),
+            }
+            .fail();
+        }
+        DaemonLocalStore::parse_digest(&self.integrity_digest, expected_kind)
     }
 }
 
@@ -450,45 +521,57 @@ impl DaemonLocalStore {
         })
     }
 
-    pub(crate) fn resolve_codex_package_reference(
-        &self,
-        reference: &str,
-    ) -> Result<LocalCodexPackage> {
-        let (name, digest) = reference.split_once("@sha256:").ok_or_else(|| {
-            InvalidRequestSnafu {
-                reason: String::from(
-                    "Codex package reference must use NAME@sha256:LOWERCASE_DIGEST",
-                ),
+    pub(crate) fn resolve_codex_package_name(&self, name: &str) -> Result<LocalCodexPackage> {
+        Self::require_resource_name(name, "AgentPackage")?;
+        let mut matches = Vec::new();
+        for entry in
+            self.directory_entries(&self.packages, "listing root-curated Codex packages")?
+        {
+            let path = entry.path();
+            let file_type = entry.file_type().context(IoSnafu {
+                action: "inspecting root-curated Codex package directory",
+                path: &path,
+            })?;
+            if file_type.is_symlink() || !file_type.is_dir() {
+                continue;
             }
-            .build()
-        })?;
-        if name.is_empty() || digest.is_empty() || digest.contains('@') {
-            return InvalidRequestSnafu {
-                reason: String::from(
-                    "Codex package reference must use NAME@sha256:LOWERCASE_DIGEST",
-                ),
+            let Some(digest) = entry
+                .file_name()
+                .to_str()
+                .and_then(|value| ContentDigest::new(value).ok())
+            else {
+                continue;
+            };
+            if !path.join("codex-v1.json").exists() {
+                continue;
             }
-            .fail();
+            let package = self.resolve_codex_package(digest.as_str())?;
+            if package.package().name() == name {
+                matches.push(package);
+            }
         }
-        let package = self.resolve_codex_package(digest)?;
-        if package.package().name() != name {
-            return InvalidRequestSnafu {
-                reason: String::from(
-                    "Codex package reference name does not match the root-curated package",
-                ),
+        match matches.len() {
+            1 => Ok(matches.remove(0)),
+            0 => InvalidRequestSnafu {
+                reason: format!("no root-curated Codex package is named `{name}`"),
             }
-            .fail();
+            .fail(),
+            _ => InvalidRequestSnafu {
+                reason: format!("root-curated Codex package name `{name}` is ambiguous"),
+            }
+            .fail(),
         }
-        Ok(package)
     }
 
     pub(crate) fn store_codex_installation(
         &self,
         owner_uid: u32,
+        agent_name: &str,
         package_digest: &str,
         installed_at_unix_ms: u64,
         artifact: VerifiedLocalArtifact,
     ) -> Result<LocalCodexInstallation> {
+        Self::require_resource_name(agent_name, "Agent")?;
         let package = self.resolve_codex_package(package_digest)?;
         if artifact.sha256() != package.definition().executable_sha256() {
             return InvalidRequestSnafu {
@@ -520,40 +603,43 @@ impl DaemonLocalStore {
                 .canonical_bytes()
                 .map_err(Self::invalid_model)?,
         )?;
-        self.create_codex_aliases(owner_uid, &package, &installation_digest)?;
+        let record = NamedResourceRecord::agent(
+            agent_name,
+            &installation_digest,
+            package.package().adapter_id(),
+        )?;
+        let encoded =
+            serde_json::to_vec(&record).map_err(|source| crate::DaemonError::InvalidConfig {
+                path: self.agent_path(owner_uid, agent_name),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        self.write_immutable(&self.agent_path(owner_uid, agent_name), &encoded)?;
         self.resolve_codex_installation(
             owner_uid,
             package.package_digest(),
             installation_digest.as_str(),
-            None,
+            Some("codex"),
         )
     }
 
-    pub(crate) fn resolve_codex_alias(
+    pub(crate) fn resolve_codex_agent(
         &self,
         owner_uid: u32,
-        alias: &str,
+        name: &str,
+        entrypoint: &str,
     ) -> Result<LocalCodexInstallation> {
-        let entrypoint = Self::codex_alias_entrypoint(alias)?;
-        let alias: DigestAlias = self.read_canonical_alias(
-            &self.codex_alias_path(owner_uid, alias),
-            "Codex installation alias",
-        )?;
-        if alias.name() != entrypoint {
-            return InvalidRequestSnafu {
-                reason: String::from("Codex alias record does not bind its requested entrypoint"),
-            }
-            .fail();
-        }
+        let installation_digest =
+            self.read_named_resource(owner_uid, "Agent", name, self.agent_path(owner_uid, name))?;
         let installation: InstallationRecord = self.read_canonical(
-            &self.installation_path(owner_uid, alias.digest()),
-            alias.digest(),
+            &self.installation_path(owner_uid, &installation_digest),
+            &installation_digest,
             "Codex installation",
         )?;
         self.resolve_codex_installation(
             owner_uid,
             installation.package_digest().as_str(),
-            alias.digest().as_str(),
+            installation_digest.as_str(),
             Some(entrypoint),
         )
     }
@@ -674,6 +760,21 @@ impl DaemonLocalStore {
     ) -> Result<ContentDigest> {
         self.validate_policy_package(policy)?;
         let digest = policy.canonical_digest().map_err(Self::invalid_model)?;
+        for existing in self.list_policy_packages(owner_uid)? {
+            if existing.name() == policy.manifest().name() {
+                let existing_digest =
+                    self.resolve_policy_package_name(owner_uid, existing.name())?;
+                if existing_digest != digest {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "PolicyPackage name `{}` already identifies a different immutable revision",
+                            policy.manifest().name()
+                        ),
+                    }
+                    .fail();
+                }
+            }
+        }
         let encoded = policy.canonical_bytes().map_err(Self::invalid_model)?;
         let path = self.user_policy_package_path(owner_uid, &digest);
         if !path.exists()
@@ -703,128 +804,100 @@ impl DaemonLocalStore {
     pub(crate) fn inspect_policy_package(
         &self,
         owner_uid: u32,
-        requested_digest: &str,
+        name: &str,
     ) -> Result<StoredPolicyPackage> {
-        let digest = Self::parse_digest(requested_digest, "policy package")?;
+        let digest = self.resolve_policy_package_name(owner_uid, name)?;
         let policy = self.read_policy_package(owner_uid, &digest)?;
         self.validate_policy_package(&policy)?;
-        Ok(StoredPolicyPackage::new(&digest, &policy))
+        Ok(StoredPolicyPackage::new(&policy))
     }
 
     pub(crate) fn create_user_policy_set(
         &self,
         owner_uid: u32,
-        root_minimum_digest: &str,
-        package_minimum_digests: &[String],
-        local_override_digest: Option<&str>,
-    ) -> Result<ContentDigest> {
-        let root_minimum = Self::parse_digest(root_minimum_digest, "root policy package")?;
-        self.read_canonical::<PolicyPackageRevision>(
-            &self.policy_package_path(&root_minimum),
-            &root_minimum,
-            "root policy package",
-        )?;
-        let package_minimums = package_minimum_digests
-            .iter()
-            .map(|digest| {
-                let digest = Self::parse_digest(digest, "package policy")?;
-                self.read_policy_package(owner_uid, &digest)?;
-                Ok(digest)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let local_override = local_override_digest
-            .filter(|digest| !digest.is_empty())
-            .map(|digest| {
-                let digest = Self::parse_digest(digest, "local policy")?;
-                self.read_policy_package(owner_uid, &digest)?;
-                Ok(digest)
-            })
-            .transpose()?;
-        let revision = PolicySetRevision::new(root_minimum, package_minimums, local_override)
+        name: &str,
+        package_names: &[String],
+    ) -> Result<StoredPolicySet> {
+        Self::require_resource_name(name, "PolicySet")?;
+        let mut root_minimum = None;
+        let mut package_minimums = Vec::new();
+        for package_name in package_names {
+            let digest = self.resolve_policy_package_name(owner_uid, package_name)?;
+            if self.policy_package_path(&digest).exists() {
+                if root_minimum.replace(digest).is_some() {
+                    return InvalidRequestSnafu {
+                        reason: String::from(
+                            "a PolicySet composition may include only one root-curated PolicyPackage",
+                        ),
+                    }
+                    .fail();
+                }
+            } else {
+                package_minimums.push(digest);
+            }
+        }
+        let root_minimum = root_minimum.ok_or_else(|| {
+            InvalidRequestSnafu {
+                reason: String::from(
+                    "a PolicySet composition must include the root-curated PolicyPackage by name",
+                ),
+            }
+            .build()
+        })?;
+        let revision = PolicySetRevision::new(root_minimum, package_minimums, None)
             .map_err(Self::invalid_model)?;
         let digest = revision.canonical_digest().map_err(Self::invalid_model)?;
-        self.write_immutable(
-            &self.policy_set_path(owner_uid, &digest),
-            &revision.canonical_bytes().map_err(Self::invalid_model)?,
-        )?;
-        Ok(digest)
-    }
-
-    pub(crate) fn set_policy_set_alias(
-        &self,
-        owner_uid: u32,
-        alias: &str,
-        policy_set_digest: &str,
-    ) -> Result<DigestAlias> {
-        let policy_set_digest = Self::parse_digest(policy_set_digest, "policy set")?;
-        let policy_set: PolicySetRevision = self.read_canonical(
-            &self.policy_set_path(owner_uid, &policy_set_digest),
-            &policy_set_digest,
-            "policy set",
-        )?;
-        policy_set.validate().map_err(Self::invalid_model)?;
-        let alias = DigestAlias::new(alias, policy_set_digest).map_err(Self::invalid_model)?;
+        let name_record = NamedResourceRecord::new("PolicySet", name, &digest);
+        let encoded = serde_json::to_vec(&name_record).map_err(|source| {
+            crate::DaemonError::InvalidConfig {
+                path: self.policy_set_name_path(owner_uid, name),
+                source,
+                location: snafu::Location::default(),
+            }
+        })?;
         let _guard = self
             .write_lock
             .lock()
             .map_err(|_error| crate::error::StateLockSnafu.build())?;
         self.write_immutable(
-            &self.policy_set_alias_path(owner_uid, alias.name()),
-            &alias.canonical_bytes().map_err(Self::invalid_model)?,
+            &self.policy_set_path(owner_uid, &digest),
+            &revision.canonical_bytes().map_err(Self::invalid_model)?,
         )?;
-        Ok(alias)
+        self.write_immutable(&self.policy_set_name_path(owner_uid, name), &encoded)?;
+        Ok(StoredPolicySet::new(name))
     }
 
-    pub(crate) fn resolve_policy_set_reference(
+    pub(crate) fn resolve_policy_set_name(
         &self,
         owner_uid: u32,
-        reference: &str,
+        name: &str,
     ) -> Result<ContentDigest> {
-        if let Ok(digest) = ContentDigest::new(reference) {
-            let policy_set: PolicySetRevision = self.read_canonical(
-                &self.policy_set_path(owner_uid, &digest),
-                &digest,
-                "policy set",
-            )?;
-            policy_set.validate().map_err(Self::invalid_model)?;
-            return Ok(digest);
-        }
-        let alias: DigestAlias = self.read_canonical_alias(
-            &self.policy_set_alias_path(owner_uid, reference),
-            "policy set alias",
+        let digest = self.read_named_resource(
+            owner_uid,
+            "PolicySet",
+            name,
+            self.policy_set_name_path(owner_uid, name),
         )?;
-        if alias.name() != reference {
-            return InvalidRequestSnafu {
-                reason: String::from("policy set alias does not bind its requested name"),
-            }
-            .fail();
-        }
         let policy_set: PolicySetRevision = self.read_canonical(
-            &self.policy_set_path(owner_uid, alias.digest()),
-            alias.digest(),
+            &self.policy_set_path(owner_uid, &digest),
+            &digest,
             "policy set",
         )?;
         policy_set.validate().map_err(Self::invalid_model)?;
-        Ok(alias.digest().clone())
+        Ok(digest)
     }
 
     pub(crate) fn list_policy_sets(&self, owner_uid: u32) -> Result<Vec<StoredPolicySet>> {
-        let directory = self.users.join(owner_uid.to_string()).join("policy-sets");
-        let mut policy_sets = BTreeMap::new();
-        for (digest, _revision) in
-            self.canonical_records_in_flat_directory::<PolicySetRevision>(&directory, "policy set")?
-        {
-            policy_sets.insert(digest.as_str().to_owned(), StoredPolicySet::new(&digest));
-        }
-        Ok(policy_sets.into_values().collect())
+        self.list_named_resources(
+            owner_uid,
+            "PolicySet",
+            self.policy_set_names_directory(owner_uid),
+        )
+        .map(|names| names.into_iter().map(StoredPolicySet::new).collect())
     }
 
-    pub(crate) fn inspect_policy_set(
-        &self,
-        owner_uid: u32,
-        requested_digest: &str,
-    ) -> Result<StoredPolicySet> {
-        let digest = Self::parse_digest(requested_digest, "policy set")?;
+    pub(crate) fn inspect_policy_set(&self, owner_uid: u32, name: &str) -> Result<StoredPolicySet> {
+        let digest = self.resolve_policy_set_name(owner_uid, name)?;
         let revision: PolicySetRevision = self.read_canonical(
             &self.policy_set_path(owner_uid, &digest),
             &digest,
@@ -834,7 +907,7 @@ impl DaemonLocalStore {
         for policy_digest in revision.policy_input_digests() {
             self.read_policy_package(owner_uid, policy_digest)?;
         }
-        Ok(StoredPolicySet::new(&digest))
+        Ok(StoredPolicySet::new(name))
     }
 
     pub(crate) fn record_session_lease(&self, spec: &SessionSpec) -> Result<()> {
@@ -936,11 +1009,11 @@ impl DaemonLocalStore {
         self.packages.join(digest.as_str()).join("codex-v1.json")
     }
 
-    fn codex_alias_path(&self, owner_uid: u32, alias: &str) -> PathBuf {
+    fn agent_path(&self, owner_uid: u32, name: &str) -> PathBuf {
         self.users
             .join(owner_uid.to_string())
-            .join("codex-aliases")
-            .join(format!("{alias}.json"))
+            .join("agents")
+            .join(format!("{name}.json"))
     }
 
     fn installation_path(&self, owner_uid: u32, digest: &ContentDigest) -> PathBuf {
@@ -957,11 +1030,15 @@ impl DaemonLocalStore {
             .join(format!("{}.json", digest.as_str()))
     }
 
-    fn policy_set_alias_path(&self, owner_uid: u32, alias: &str) -> PathBuf {
+    fn policy_set_names_directory(&self, owner_uid: u32) -> PathBuf {
         self.users
             .join(owner_uid.to_string())
-            .join("policy-set-aliases")
-            .join(format!("{alias}.json"))
+            .join("policy-set-names")
+    }
+
+    fn policy_set_name_path(&self, owner_uid: u32, name: &str) -> PathBuf {
+        self.policy_set_names_directory(owner_uid)
+            .join(format!("{name}.json"))
     }
 
     fn policy_package_path(&self, digest: &ContentDigest) -> PathBuf {
@@ -1024,7 +1101,7 @@ impl DaemonLocalStore {
             self.validate_policy_package(&revision)?;
             packages.insert(
                 digest.as_str().to_owned(),
-                StoredPolicyPackage::new(&digest, &revision),
+                StoredPolicyPackage::new(&revision),
             );
         }
         Ok(())
@@ -1048,7 +1125,7 @@ impl DaemonLocalStore {
             self.validate_policy_package(&revision)?;
             packages.insert(
                 digest.as_str().to_owned(),
-                StoredPolicyPackage::new(&digest, &revision),
+                StoredPolicyPackage::new(&revision),
             );
         }
         Ok(())
@@ -1112,6 +1189,120 @@ impl DaemonLocalStore {
         }
         records.sort_by(|(left, _), (right, _)| left.as_str().cmp(right.as_str()));
         Ok(records)
+    }
+
+    fn resolve_policy_package_name(&self, owner_uid: u32, name: &str) -> Result<ContentDigest> {
+        Self::require_resource_name(name, "PolicyPackage")?;
+        let matches = self
+            .list_policy_packages(owner_uid)?
+            .into_iter()
+            .filter(|package| package.name() == name)
+            .count();
+        if matches == 0 {
+            return InvalidRequestSnafu {
+                reason: format!("no PolicyPackage is named `{name}`"),
+            }
+            .fail();
+        }
+        if matches > 1 {
+            return InvalidRequestSnafu {
+                reason: format!("PolicyPackage name `{name}` is ambiguous"),
+            }
+            .fail();
+        }
+        let mut candidates = Vec::new();
+        for (digest, package) in self.canonical_records_in_flat_directory::<PolicyPackageRevision>(
+            &self
+                .users
+                .join(owner_uid.to_string())
+                .join("policy-packages"),
+            "policy package",
+        )? {
+            if package.manifest().name() == name {
+                candidates.push(digest);
+            }
+        }
+        for entry in
+            self.directory_entries(&self.packages, "listing root policy packages by name")?
+        {
+            let path = entry.path();
+            let file_type = entry.file_type().context(IoSnafu {
+                action: "inspecting root policy package directory",
+                path: &path,
+            })?;
+            if file_type.is_symlink() || !file_type.is_dir() {
+                continue;
+            }
+            let Some(digest) = entry
+                .file_name()
+                .to_str()
+                .and_then(|value| ContentDigest::new(value).ok())
+            else {
+                continue;
+            };
+            let policy_path = path.join("policy-package.json");
+            if !policy_path.exists() {
+                continue;
+            }
+            let package: PolicyPackageRevision =
+                self.read_canonical(&policy_path, &digest, "root policy package")?;
+            if package.manifest().name() == name {
+                candidates.push(digest);
+            }
+        }
+        candidates.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        candidates.dedup();
+        match candidates.as_slice() {
+            [digest] => Ok(digest.clone()),
+            _ => InvalidRequestSnafu {
+                reason: format!("PolicyPackage name `{name}` is ambiguous"),
+            }
+            .fail(),
+        }
+    }
+
+    fn read_named_resource(
+        &self,
+        owner_uid: u32,
+        kind: &str,
+        name: &str,
+        path: PathBuf,
+    ) -> Result<ContentDigest> {
+        Self::require_resource_name(name, kind)?;
+        let record: NamedResourceRecord = self.read_json_record(&path, "named resource")?;
+        let digest = record.validate(kind, name)?;
+        let _owner_uid = owner_uid;
+        Ok(digest)
+    }
+
+    fn list_named_resources(
+        &self,
+        owner_uid: u32,
+        kind: &str,
+        directory: PathBuf,
+    ) -> Result<Vec<String>> {
+        let mut names = Vec::new();
+        for entry in self.directory_entries(&directory, "listing named resources")? {
+            let path = entry.path();
+            let file_type = entry.file_type().context(IoSnafu {
+                action: "inspecting named resource entry",
+                path: &path,
+            })?;
+            if file_type.is_symlink() || !file_type.is_file() {
+                continue;
+            }
+            let file_name = entry.file_name();
+            let Some(name) = file_name
+                .to_str()
+                .and_then(|value| value.strip_suffix(".json"))
+            else {
+                continue;
+            };
+            let _digest = self.read_named_resource(owner_uid, kind, name, path)?;
+            names.push(name.to_owned());
+        }
+        names.sort();
+        Ok(names)
     }
 
     fn directory_entries(
@@ -1189,12 +1380,12 @@ impl DaemonLocalStore {
         Ok(record)
     }
 
-    fn read_canonical_alias<T>(&self, path: &Path, record_kind: &str) -> Result<T>
+    fn read_json_record<T>(&self, path: &Path, _record_kind: &str) -> Result<T>
     where
-        T: CanonicalEncoding + DeserializeOwned,
+        T: DeserializeOwned,
     {
         let metadata = fs::symlink_metadata(path).context(IoSnafu {
-            action: "inspecting immutable daemon alias record",
+            action: "inspecting named daemon store record",
             path,
         })?;
         if metadata.file_type().is_symlink()
@@ -1205,62 +1396,20 @@ impl DaemonLocalStore {
             return crate::error::UnsafePathSnafu {
                 path: path.to_path_buf(),
                 reason: String::from(
-                    "must be an effective-owner-controlled non-symlink non-writable alias file",
+                    "must be an effective-owner-controlled non-symlink non-writable file",
                 ),
             }
             .fail();
         }
         let bytes = fs::read(path).context(IoSnafu {
-            action: "reading immutable daemon alias record",
+            action: "reading named daemon store record",
             path,
         })?;
-        let record = serde_json::from_slice::<T>(&bytes).map_err(|source| {
-            crate::DaemonError::InvalidConfig {
-                path: path.to_path_buf(),
-                source,
-                location: snafu::Location::default(),
-            }
-        })?;
-        if record.canonical_bytes().map_err(Self::invalid_model)? != bytes {
-            return InvalidRequestSnafu {
-                reason: format!("stored {record_kind} does not use its canonical encoding"),
-            }
-            .fail();
-        }
-        Ok(record)
-    }
-
-    fn create_codex_aliases(
-        &self,
-        owner_uid: u32,
-        package: &LocalCodexPackage,
-        installation_digest: &ContentDigest,
-    ) -> Result<()> {
-        for alias in ["codex", "codex-app-server"] {
-            let Some(entrypoint) = package.definition().entrypoint(alias) else {
-                continue;
-            };
-            if alias == "codex-app-server" && !entrypoint.app_server_stdio() {
-                continue;
-            }
-            let alias = DigestAlias::new(alias, installation_digest.clone())
-                .map_err(Self::invalid_model)?;
-            self.write_immutable(
-                &self.codex_alias_path(owner_uid, alias.name()),
-                &alias.canonical_bytes().map_err(Self::invalid_model)?,
-            )?;
-        }
-        Ok(())
-    }
-
-    fn codex_alias_entrypoint(alias: &str) -> Result<&str> {
-        match alias {
-            "codex" | "codex-app-server" => Ok(alias),
-            _ => InvalidRequestSnafu {
-                reason: format!("unsupported Codex alias `{alias}`"),
-            }
-            .fail(),
-        }
+        serde_json::from_slice::<T>(&bytes).map_err(|source| crate::DaemonError::InvalidConfig {
+            path: path.to_path_buf(),
+            source,
+            location: snafu::Location::default(),
+        })
     }
 
     fn write_immutable(&self, path: &Path, encoded: &[u8]) -> Result<()> {
@@ -1363,6 +1512,16 @@ impl DaemonLocalStore {
                 .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     }
 
+    fn require_resource_name(name: &str, kind: &str) -> Result<()> {
+        if Self::is_path_component(name) {
+            return Ok(());
+        }
+        InvalidRequestSnafu {
+            reason: format!("{kind} metadata.name is not a safe immutable resource name"),
+        }
+        .fail()
+    }
+
     fn parse_digest(value: &str, kind: &str) -> Result<ContentDigest> {
         ContentDigest::new(value).map_err(|error| {
             InvalidRequestSnafu {
@@ -1450,7 +1609,7 @@ mod tests {
         PolicyPackageRevision, PolicySetRevision,
     };
 
-    use super::{DaemonLocalStore, SessionLease};
+    use super::{DaemonLocalStore, NamedResourceRecord, SessionLease};
     use crate::{config::RootCuratedAdmission, DaemonPaths};
 
     const ADAPTER_DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1487,6 +1646,36 @@ mod tests {
         store.release_session_lease(1000, "session-1")?;
         assert!(!store.lease_path("session-1").exists());
         store.release_session_lease(1000, "session-1")?;
+        Ok(())
+    }
+
+    #[test]
+    fn named_resource_envelopes_are_versioned_and_never_retargeted(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        let first = ContentDigest::new(ADAPTER_DIGEST)?;
+        let second =
+            ContentDigest::new("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")?;
+        let path = store.agent_path(1000, "local-codex");
+        let record = NamedResourceRecord::agent("local-codex", &first, "codex-v1")?;
+        let encoded = serde_json::to_vec(&record)?;
+        store.write_immutable(&path, &encoded)?;
+        assert_eq!(
+            store.read_named_resource(1000, "Agent", "local-codex", path.clone())?,
+            first
+        );
+        let replacement = NamedResourceRecord::agent("local-codex", &second, "codex-v1")?;
+        assert!(store
+            .write_immutable(&path, &serde_json::to_vec(&replacement)?)
+            .is_err());
+
+        let mut unknown_version = record;
+        unknown_version.api_version = String::from("erebor.dev/v2");
+        assert!(unknown_version.validate("Agent", "local-codex").is_err());
+        assert!(replacement.validate("PolicySet", "local-codex").is_err());
         Ok(())
     }
 
@@ -1567,26 +1756,28 @@ mod tests {
         let paths = DaemonPaths::for_testing(root.path());
         paths.prepare(crate::paths::DaemonSecurity::current_process())?;
         let store = DaemonLocalStore::installed(&paths)?;
-        let admission = store.ensure_builtin_admission(1000)?;
+        let _admission = store.ensure_builtin_admission(1000)?;
 
         let packages = store.list_policy_packages(1000)?;
         let package = packages
             .iter()
             .find(|package| package.name() == "generic-host-minimum")
             .ok_or("built-in host policy package was not listed")?;
-        let inspected_package = store.inspect_policy_package(1000, package.digest())?;
-        assert_eq!(inspected_package.digest(), package.digest());
+        let inspected_package = store.inspect_policy_package(1000, package.name())?;
         assert_eq!(inspected_package.name(), "generic-host-minimum");
 
+        let policy_set = store.create_user_policy_set(
+            1000,
+            "company-workspace",
+            &[String::from("generic-host-minimum")],
+        )?;
         let policy_sets = store.list_policy_sets(1000)?;
         assert!(policy_sets
             .iter()
-            .any(|policy_set| policy_set.digest() == admission.policy_set_digest()));
+            .any(|listed| listed.name() == policy_set.name()));
         assert_eq!(
-            store
-                .inspect_policy_set(1000, admission.policy_set_digest())?
-                .digest(),
-            admission.policy_set_digest()
+            store.inspect_policy_set(1000, "company-workspace")?.name(),
+            "company-workspace"
         );
         assert!(store.list_policy_sets(1001)?.is_empty());
         Ok(())
@@ -1677,16 +1868,16 @@ mod tests {
         let user_digest = store.store_user_policy_package(1000, &user_policy, u64::MAX)?;
         let policy_set = store.create_user_policy_set(
             1000,
-            root_digest.as_str(),
-            &[user_digest.as_str().to_owned()],
-            None,
+            "workspace-policy",
+            &[String::from("host-minimum"), String::from("user-guardrail")],
         )?;
         assert!(store
-            .create_user_policy_set(1000, user_digest.as_str(), &[], None)
+            .create_user_policy_set(1000, "invalid-policy", &[String::from("user-guardrail")])
             .is_err());
+        let policy_set_digest = store.resolve_policy_set_name(1000, policy_set.name())?;
         let revision: PolicySetRevision = store.read_canonical(
-            &store.policy_set_path(1000, &policy_set),
-            &policy_set,
+            &store.policy_set_path(1000, &policy_set_digest),
+            &policy_set_digest,
             "policy set",
         )?;
         assert_eq!(

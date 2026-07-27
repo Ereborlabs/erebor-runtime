@@ -138,9 +138,6 @@ pub const KIND_POLICY_PACKAGE_INSPECT_REQUEST: &str =
 pub const KIND_POLICY_PACKAGE_VERIFY_REQUEST: &str =
     "erebor.runtime.ipc.v1.PolicyPackageVerifyRequest";
 pub const KIND_POLICY_SET_CREATE_REQUEST: &str = "erebor.runtime.ipc.v1.PolicySetCreateRequest";
-pub const KIND_POLICY_SET_ALIAS_SET_REQUEST: &str =
-    "erebor.runtime.ipc.v1.PolicySetAliasSetRequest";
-pub const KIND_POLICY_SET_ALIAS_RECORD: &str = "erebor.runtime.ipc.v1.PolicySetAliasRecord";
 pub const KIND_POLICY_SET_RECORD: &str = "erebor.runtime.ipc.v1.PolicySetRecord";
 pub const KIND_POLICY_SET_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.PolicySetListRequest";
 pub const KIND_POLICY_SET_LIST_RESPONSE: &str = "erebor.runtime.ipc.v1.PolicySetListResponse";

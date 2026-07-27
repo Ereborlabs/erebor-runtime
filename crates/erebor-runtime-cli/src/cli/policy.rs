@@ -33,7 +33,6 @@ impl PolicyArgs {
                 args.event.display()
             ),
             PolicyCommand::Package(args) => args.display(),
-            PolicyCommand::Set(args) => args.display(),
         }
     }
 }
@@ -44,8 +43,6 @@ enum PolicyCommand {
     Test(PolicyTestArgs),
     /// Store an immutable daemon-owned policy package revision.
     Package(PolicyPackageArgs),
-    /// Store an immutable composition of existing policy-package revisions.
-    Set(PolicySetArgs),
 }
 
 #[derive(Debug, Args)]
@@ -74,7 +71,6 @@ impl<'a> PolicyCommandOwner<'a> {
             PolicyCommand::Package(args) => {
                 PolicyPackageCommandOwner::new(args, self.client).execute()
             }
-            PolicyCommand::Set(args) => PolicySetCommandOwner::new(args, self.client).execute(),
         }
     }
 }
@@ -92,10 +88,8 @@ impl PolicyPackageArgs {
                 format!("policy package apply {}", args.path.display())
             }
             PolicyPackageCommand::Ls => String::from("policy package ls"),
-            PolicyPackageCommand::Inspect(args) => {
-                format!("policy package inspect {}", args.digest)
-            }
-            PolicyPackageCommand::Verify(args) => format!("policy package verify {}", args.digest),
+            PolicyPackageCommand::Inspect(args) => format!("policy package inspect {}", args.name),
+            PolicyPackageCommand::Verify(args) => format!("policy package verify {}", args.name),
         }
     }
 }
@@ -106,10 +100,10 @@ enum PolicyPackageCommand {
     Apply(PolicyPackageApplyArgs),
     /// List policy packages visible to the caller's daemon namespace.
     Ls,
-    /// Show one immutable policy package selected by digest.
-    Inspect(PolicyPackageDigestArgs),
-    /// Re-read and validate one immutable policy package selected by digest.
-    Verify(PolicyPackageDigestArgs),
+    /// Show one immutable PolicyPackage selected by name.
+    Inspect(PolicyPackageNameArgs),
+    /// Re-read and validate one immutable PolicyPackage selected by name.
+    Verify(PolicyPackageNameArgs),
 }
 
 #[derive(Debug, Args)]
@@ -121,9 +115,9 @@ struct PolicyPackageApplyArgs {
 }
 
 #[derive(Debug, Args)]
-struct PolicyPackageDigestArgs {
+struct PolicyPackageNameArgs {
     #[arg(value_parser = super::parse_non_empty_string)]
-    digest: String,
+    name: String,
 }
 
 struct PolicyPackageCommandOwner<'a> {
@@ -150,7 +144,7 @@ impl<'a> PolicyPackageCommandOwner<'a> {
                         &args.idempotency_key,
                     ))
                     .context(DaemonClientSnafu)?;
-                println!("digest={} name={}", record.digest, record.name);
+                println!("policyPackage={}", record.name);
                 Ok(())
             }
             PolicyPackageCommand::Ls => {
@@ -158,22 +152,22 @@ impl<'a> PolicyPackageCommandOwner<'a> {
                     .block_on(self.client.policy_package_list())
                     .context(DaemonClientSnafu)?;
                 for record in page.packages {
-                    println!("digest={} name={}", record.digest, record.name);
+                    println!("policyPackage={}", record.name);
                 }
                 Ok(())
             }
             PolicyPackageCommand::Inspect(args) => {
                 let record = runtime
-                    .block_on(self.client.policy_package_inspect(&args.digest))
+                    .block_on(self.client.policy_package_inspect(&args.name))
                     .context(DaemonClientSnafu)?;
-                println!("digest={} name={}", record.digest, record.name);
+                println!("policyPackage={}", record.name);
                 Ok(())
             }
             PolicyPackageCommand::Verify(args) => {
                 let record = runtime
-                    .block_on(self.client.policy_package_verify(&args.digest))
+                    .block_on(self.client.policy_package_verify(&args.name))
                     .context(DaemonClientSnafu)?;
-                println!("verified digest={} name={}", record.digest, record.name);
+                println!("verified policyPackage={}", record.name);
                 Ok(())
             }
         }
@@ -181,78 +175,68 @@ impl<'a> PolicyPackageCommandOwner<'a> {
 }
 
 #[derive(Debug, Args)]
-struct PolicySetArgs {
+pub(super) struct PolicySetArgs {
     #[command(subcommand)]
     command: PolicySetSubcommand,
 }
 
 impl PolicySetArgs {
-    fn display(&self) -> String {
+    pub(super) fn display(&self) -> String {
         match &self.command {
-            PolicySetSubcommand::Create(_) => String::from("policy set create"),
-            PolicySetSubcommand::Alias(args) => {
-                format!("policy set alias {} {}", args.alias, args.policy_set_digest)
-            }
-            PolicySetSubcommand::Ls => String::from("policy set ls"),
-            PolicySetSubcommand::Inspect(args) => format!("policy set inspect {}", args.digest),
-            PolicySetSubcommand::Verify(args) => format!("policy set verify {}", args.digest),
+            PolicySetSubcommand::Create(_) => String::from("policyset create"),
+            PolicySetSubcommand::Ls => String::from("policyset ls"),
+            PolicySetSubcommand::Inspect(args) => format!("policyset inspect {}", args.name),
+            PolicySetSubcommand::Verify(args) => format!("policyset verify {}", args.name),
         }
     }
 }
 
 #[derive(Debug, Subcommand)]
 enum PolicySetSubcommand {
-    /// Compose root, package, and optional local policy revisions by exact digest.
+    /// Create one named, immutable ordered composition of PolicyPackages.
     Create(PolicySetCreateArgs),
-    /// Bind a caller-local policy-set alias to one immutable revision.
-    Alias(PolicySetAliasArgs),
-    /// List immutable policy-set revisions visible to the caller.
+    /// List named immutable PolicySets visible to the caller.
     Ls,
-    /// Show one immutable policy-set revision selected by digest.
-    Inspect(PolicySetDigestArgs),
-    /// Re-read and validate one immutable policy-set revision selected by digest.
-    Verify(PolicySetDigestArgs),
+    /// Show one immutable PolicySet selected by name.
+    Inspect(PolicySetNameArgs),
+    /// Re-read and validate one immutable PolicySet selected by name.
+    Verify(PolicySetNameArgs),
 }
 
 #[derive(Debug, Args)]
 struct PolicySetCreateArgs {
+    /// Immutable owner-scoped name for the new PolicySet.
     #[arg(long, value_parser = super::parse_non_empty_string)]
-    root_minimum_digest: String,
-    #[arg(long = "package", value_parser = super::parse_non_empty_string)]
-    package_minimum_digests: Vec<String>,
-    #[arg(long, value_parser = super::parse_non_empty_string)]
-    local_override_digest: Option<String>,
+    name: String,
+    /// Ordered PolicyPackage name. Supply once for each package in the composition.
+    #[arg(
+        long = "package",
+        required = true,
+        value_parser = super::parse_non_empty_string
+    )]
+    package_names: Vec<String>,
+    /// Stable key reused only after an uncertain create result.
     #[arg(long, value_parser = super::parse_non_empty_string)]
     idempotency_key: String,
 }
 
 #[derive(Debug, Args)]
-struct PolicySetDigestArgs {
+struct PolicySetNameArgs {
     #[arg(value_parser = super::parse_non_empty_string)]
-    digest: String,
+    name: String,
 }
 
-#[derive(Debug, Args)]
-struct PolicySetAliasArgs {
-    #[arg(value_parser = super::parse_non_empty_string)]
-    alias: String,
-    #[arg(value_parser = super::parse_non_empty_string)]
-    policy_set_digest: String,
-    #[arg(long, value_parser = super::parse_non_empty_string)]
-    idempotency_key: String,
-}
-
-struct PolicySetCommandOwner<'a> {
+pub(super) struct PolicySetCommandOwner<'a> {
     args: &'a PolicySetArgs,
     client: &'a DaemonClient,
 }
 
 impl<'a> PolicySetCommandOwner<'a> {
-    const fn new(args: &'a PolicySetArgs, client: &'a DaemonClient) -> Self {
+    pub(super) const fn new(args: &'a PolicySetArgs, client: &'a DaemonClient) -> Self {
         Self { args, client }
     }
 
-    fn execute(&self) -> Result<(), CliError> {
+    pub(super) fn execute(&self) -> Result<(), CliError> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_io()
             .enable_time()
@@ -262,27 +246,12 @@ impl<'a> PolicySetCommandOwner<'a> {
             PolicySetSubcommand::Create(args) => {
                 let record = runtime
                     .block_on(self.client.policy_set_create(
-                        &args.root_minimum_digest,
-                        args.package_minimum_digests.clone(),
-                        args.local_override_digest.clone(),
+                        &args.name,
+                        args.package_names.clone(),
                         &args.idempotency_key,
                     ))
                     .context(DaemonClientSnafu)?;
-                println!("digest={}", record.digest);
-                Ok(())
-            }
-            PolicySetSubcommand::Alias(args) => {
-                let record = runtime
-                    .block_on(self.client.policy_set_alias_set(
-                        &args.alias,
-                        &args.policy_set_digest,
-                        &args.idempotency_key,
-                    ))
-                    .context(DaemonClientSnafu)?;
-                println!(
-                    "alias={} policy_set_digest={}",
-                    record.alias, record.policy_set_digest
-                );
+                println!("policySet={}", record.name);
                 Ok(())
             }
             PolicySetSubcommand::Ls => {
@@ -290,22 +259,22 @@ impl<'a> PolicySetCommandOwner<'a> {
                     .block_on(self.client.policy_set_list())
                     .context(DaemonClientSnafu)?;
                 for record in page.policy_sets {
-                    println!("digest={}", record.digest);
+                    println!("policySet={}", record.name);
                 }
                 Ok(())
             }
             PolicySetSubcommand::Inspect(args) => {
                 let record = runtime
-                    .block_on(self.client.policy_set_inspect(&args.digest))
+                    .block_on(self.client.policy_set_inspect(&args.name))
                     .context(DaemonClientSnafu)?;
-                println!("digest={}", record.digest);
+                println!("policySet={}", record.name);
                 Ok(())
             }
             PolicySetSubcommand::Verify(args) => {
                 let record = runtime
-                    .block_on(self.client.policy_set_verify(&args.digest))
+                    .block_on(self.client.policy_set_verify(&args.name))
                     .context(DaemonClientSnafu)?;
-                println!("verified digest={}", record.digest);
+                println!("verified policySet={}", record.name);
                 Ok(())
             }
         }

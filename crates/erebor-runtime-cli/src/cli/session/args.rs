@@ -11,15 +11,15 @@ pub(crate) struct SessionArgs {
     pub(crate) command: SessionCommand,
 }
 
-/// The public Codex run request. The daemon resolves its local alias
+/// The public Codex run request. The daemon resolves its named Agent
 /// to the certified package entrypoint; this command deliberately has no raw
 /// executable or argv position.
 #[derive(Debug, Args)]
 pub(crate) struct CodexRunArgs {
-    /// Caller-local `codex` or `codex-app-server` installation alias.
+    /// Name of the enrolled Codex Agent.
     #[arg(value_parser = parse_non_empty_string)]
-    pub(crate) alias: String,
-    /// Caller-local policy-set alias or immutable policy-set digest.
+    pub(crate) agent_name: String,
+    /// Name of the named immutable PolicySet.
     #[arg(long, value_parser = parse_non_empty_string)]
     pub(crate) policy: String,
     /// Workspace admitted by the daemon under the caller UID. Defaults to the current directory.
@@ -32,6 +32,9 @@ pub(crate) struct CodexRunArgs {
     /// Create and start the session without attaching the client output stream.
     #[arg(short = 'd', long)]
     pub(crate) detached: bool,
+    /// Run the Agent's certified app-server entrypoint instead of its interactive entrypoint.
+    #[arg(long)]
+    pub(crate) app_server: bool,
 }
 
 impl SessionArgs {
@@ -118,20 +121,6 @@ pub(crate) struct GenericSessionRequestArgs {
     /// Existing workspace admitted by the daemon under the caller UID.
     #[arg(long, value_parser = parse_non_empty_path)]
     pub(crate) workspace: PathBuf,
-    /// Exact installed agent-package canonical digest. Omit all identity flags to use the
-    /// daemon-installed generic package and host-minimum policy.
-    #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) package_digest: Option<String>,
-    /// Exact caller-owned installation canonical digest. Supply with every other identity flag.
-    #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) installation_digest: Option<String>,
-    /// Exact generic adapter canonical digest selected by the package. Supply with every other
-    /// identity flag.
-    #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) adapter_digest: Option<String>,
-    /// Exact caller-owned immutable policy-set digest. Supply with every other identity flag.
-    #[arg(long, value_parser = parse_non_empty_string)]
-    pub(crate) policy_set_digest: Option<String>,
     /// Failure contract for daemon loss.
     #[arg(long, default_value = "terminate", value_parser = parse_failure_mode)]
     pub(crate) failure_mode: String,

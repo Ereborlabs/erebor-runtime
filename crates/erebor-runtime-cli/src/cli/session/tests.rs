@@ -7,7 +7,7 @@ use crate::cli::Cli;
 const DIGEST: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[test]
-fn generic_session_commands_accept_the_daemon_installed_package_or_exact_identities() {
+fn generic_session_commands_use_the_daemon_installed_admission() {
     assert!(Cli::try_parse_from([
         "erebor",
         "session",
@@ -18,28 +18,6 @@ fn generic_session_commands_accept_the_daemon_installed_package_or_exact_identit
         "/work",
         "--idempotency-key",
         "create-built-in",
-        "--",
-        "/usr/bin/true",
-    ])
-    .is_ok());
-    assert!(Cli::try_parse_from([
-        "erebor",
-        "session",
-        "create",
-        "--runner",
-        "linux-host",
-        "--workspace",
-        "/work",
-        "--package-digest",
-        DIGEST,
-        "--installation-digest",
-        DIGEST,
-        "--adapter-digest",
-        DIGEST,
-        "--policy-set-digest",
-        DIGEST,
-        "--idempotency-key",
-        "create-1",
         "--",
         "/usr/bin/true",
     ])
@@ -76,14 +54,6 @@ fn session_lifecycle_is_a_daemon_command_family() {
         "linux-host",
         "--workspace",
         "/work",
-        "--package-digest",
-        DIGEST,
-        "--installation-digest",
-        DIGEST,
-        "--adapter-digest",
-        DIGEST,
-        "--policy-set-digest",
-        DIGEST,
         "--idempotency-key",
         "run-1",
         "--env",
@@ -193,19 +163,19 @@ fn context_graph_nests_an_operation_under_its_source_tool_and_keeps_parent_merge
 }
 
 #[test]
-fn codex_runs_only_through_a_daemon_owned_alias_request() {
+fn codex_runs_only_through_a_daemon_owned_named_agent_request() {
+    assert!(
+        Cli::try_parse_from(["erebor", "run", "--policy", "engineering", "local-codex",]).is_ok()
+    );
     assert!(Cli::try_parse_from([
         "erebor",
         "run",
         "--policy",
         "engineering",
-        "codex-app-server",
+        "--tty",
+        "local-codex",
     ])
-    .is_ok());
-    assert!(
-        Cli::try_parse_from(["erebor", "run", "--policy", "engineering", "--tty", "codex",])
-            .is_err()
-    );
+    .is_err());
     assert!(Cli::try_parse_from([
         "erebor",
         "session",

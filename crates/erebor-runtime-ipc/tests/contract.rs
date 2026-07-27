@@ -2,21 +2,72 @@ use std::error::Error;
 
 use erebor_runtime_ipc::{
     v1::{
-        AllowDecision, CodexAppServerInputCloseRequest, CodexAppServerInputRequest,
-        ContextGraphActivity, ContextGraphRequest, ContextGraphResponse, ContextScopeGraphNode,
-        DecisionKind, DenyDecision, Envelope, GuardHello, GuardLifecycleEvent,
-        GuardLifecycleEventKind, GuardLifecycleReply, GuardLifecycleReplyKind,
-        InterceptionDecision, InterceptionOperation, InterceptionRequest, InterceptionSource,
-        MediateDecision, ProcessExecOperation, SessionEvidenceRequest, SessionInputRequest,
-        SessionTerminalResizeRequest, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
-        KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_CONTEXT_GRAPH_REQUEST,
+        AgentInstallRequest, AllowDecision, CodexAppServerInputCloseRequest,
+        CodexAppServerInputRequest, CodexRunRequest, ContextGraphActivity, ContextGraphRequest,
+        ContextGraphResponse, ContextScopeGraphNode, DecisionKind, DenyDecision, Envelope,
+        GuardHello, GuardLifecycleEvent, GuardLifecycleEventKind, GuardLifecycleReply,
+        GuardLifecycleReplyKind, InterceptionDecision, InterceptionOperation, InterceptionRequest,
+        InterceptionSource, MediateDecision, PolicySetCreateRequest, ProcessExecOperation,
+        SessionEvidenceRequest, SessionInputRequest, SessionTerminalResizeRequest,
+        KIND_AGENT_INSTALL_REQUEST, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
+        KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_CODEX_RUN_REQUEST, KIND_CONTEXT_GRAPH_REQUEST,
         KIND_CONTEXT_GRAPH_RESPONSE, KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT,
         KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
-        KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST,
+        KIND_POLICY_SET_CREATE_REQUEST, KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST,
         KIND_SESSION_TERMINAL_RESIZE_REQUEST, PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
 };
+
+#[test]
+fn public_named_resource_requests_round_trip_without_integrity_reference_fields(
+) -> Result<(), Box<dyn Error>> {
+    let agent = AgentInstallRequest {
+        package_name: String::from("codex-v1"),
+        source_path: String::from("/opt/codex/bin/codex"),
+        name: String::from("local-codex"),
+        adapter: String::from("codex-v1"),
+    };
+    let policy_set = PolicySetCreateRequest {
+        name: String::from("company-workspace"),
+        package_names: vec![
+            String::from("company-baseline"),
+            String::from("workspace-write"),
+        ],
+    };
+    let run = CodexRunRequest {
+        agent_name: String::from("local-codex"),
+        workspace: String::from("/work"),
+        policy_set_name: String::from("company-workspace"),
+        daemon_failure_mode: String::from("terminate"),
+        requested_loss_grace_seconds: 2,
+        tty: true,
+        detached: false,
+        terminal_rows: 24,
+        terminal_columns: 80,
+        app_server: false,
+    };
+    let agent_envelope = Envelope::wrap_message(101, 0, KIND_AGENT_INSTALL_REQUEST, &agent)?;
+    let policy_envelope =
+        Envelope::wrap_message(102, 0, KIND_POLICY_SET_CREATE_REQUEST, &policy_set)?;
+    let run_envelope = Envelope::wrap_message(103, 0, KIND_CODEX_RUN_REQUEST, &run)?;
+    let decoded_agent: AgentInstallRequest =
+        EreborIpcFrame::decode(&agent_envelope.into_frame()?.encode()?)?
+            .decode_payload::<Envelope>()?
+            .decode_typed_payload(KIND_AGENT_INSTALL_REQUEST)?;
+    let decoded_policy: PolicySetCreateRequest =
+        EreborIpcFrame::decode(&policy_envelope.into_frame()?.encode()?)?
+            .decode_payload::<Envelope>()?
+            .decode_typed_payload(KIND_POLICY_SET_CREATE_REQUEST)?;
+    let decoded_run: CodexRunRequest =
+        EreborIpcFrame::decode(&run_envelope.into_frame()?.encode()?)?
+            .decode_payload::<Envelope>()?
+            .decode_typed_payload(KIND_CODEX_RUN_REQUEST)?;
+    assert_eq!(decoded_agent, agent);
+    assert_eq!(decoded_policy, policy_set);
+    assert_eq!(decoded_run, run);
+    Ok(())
+}
 
 #[test]
 fn public_api_round_trips_guard_hello_through_envelope_and_frame() -> Result<(), Box<dyn Error>> {

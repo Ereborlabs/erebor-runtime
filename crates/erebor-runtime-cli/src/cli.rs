@@ -90,6 +90,7 @@ impl Cli {
             Command::Run(args) => session::SessionCommandOwner::execute_codex_run(&client, args),
             Command::Session(args) => session::SessionCommandOwner::new(args, &client).execute(),
             Command::Policy(args) => policy::PolicyCommandOwner::new(args, &client).execute(),
+            Command::PolicySet(args) => policy::PolicySetCommandOwner::new(args, &client).execute(),
             Command::Runner(args) => runner::RunnerCommandOwner::new(args, &client).execute(),
             Command::Audit(args) => audit::AuditCommandOwner::new(args, &client).execute(),
             Command::Approval(args) => approval::ApprovalCommandOwner::new(args, &client).execute(),
@@ -109,12 +110,15 @@ enum Command {
     Start(start::StartArgs),
     /// Load a locally verified agent executable into the daemon-owned inventory.
     Agent(agent::AgentArgs),
-    /// Create, start, and attach to one daemon-owned Codex session by local alias.
+    /// Create, start, and attach to one daemon-owned named Codex Agent session.
     Run(session::CodexRunArgs),
     /// Start or manage governed agent sessions.
     Session(session::SessionArgs),
     /// Policy development and validation commands.
     Policy(policy::PolicyArgs),
+    /// Create and inspect named immutable PolicySets.
+    #[command(name = "policyset")]
+    PolicySet(policy::PolicySetArgs),
     /// Inspect the daemon's installed runner capability documents.
     Runner(runner::RunnerArgs),
     /// Audit log commands.
@@ -132,9 +136,10 @@ impl fmt::Display for Command {
         match self {
             Self::Start(args) => formatter.write_str(&args.display()),
             Self::Agent(args) => formatter.write_str(&args.display()),
-            Self::Run(args) => formatter.write_str(&format!("run {}", args.alias)),
+            Self::Run(args) => formatter.write_str(&format!("run {}", args.agent_name)),
             Self::Session(args) => formatter.write_str(&args.display()),
             Self::Policy(args) => formatter.write_str(&args.display()),
+            Self::PolicySet(args) => formatter.write_str(&args.display()),
             Self::Runner(args) => formatter.write_str(&args.display()),
             Self::Audit(args) => formatter.write_str(&args.display()),
             Self::Approval(args) => formatter.write_str(&args.display()),

@@ -1,13 +1,12 @@
 use erebor_runtime_ipc::v1::{
     Header, PolicyPackageApplyRequest, PolicyPackageInspectRequest, PolicyPackageListRequest,
     PolicyPackageListResponse, PolicyPackageRecord, PolicyPackageVerifyRequest,
-    PolicySetAliasRecord, PolicySetAliasSetRequest, PolicySetCreateRequest,
-    PolicySetInspectRequest, PolicySetListRequest, PolicySetListResponse, PolicySetRecord,
-    PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse, EREBOR_IDEMPOTENCY_KEY_HEADER,
-    KIND_POLICY_PACKAGE_APPLY_REQUEST, KIND_POLICY_PACKAGE_INSPECT_REQUEST,
-    KIND_POLICY_PACKAGE_LIST_REQUEST, KIND_POLICY_PACKAGE_LIST_RESPONSE,
-    KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_ALIAS_RECORD,
-    KIND_POLICY_SET_ALIAS_SET_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
+    PolicySetCreateRequest, PolicySetInspectRequest, PolicySetListRequest, PolicySetListResponse,
+    PolicySetRecord, PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse,
+    EREBOR_IDEMPOTENCY_KEY_HEADER, KIND_POLICY_PACKAGE_APPLY_REQUEST,
+    KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
+    KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
+    KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
     KIND_POLICY_SET_INSPECT_REQUEST, KIND_POLICY_SET_LIST_REQUEST, KIND_POLICY_SET_LIST_RESPONSE,
     KIND_POLICY_SET_RECORD, KIND_POLICY_SET_VERIFY_REQUEST, KIND_POLICY_TEST_REQUEST,
     KIND_POLICY_TEST_RESPONSE,
@@ -68,15 +67,13 @@ impl DaemonClient {
 
     pub async fn policy_package_inspect(
         &self,
-        digest: impl Into<String>,
+        name: impl Into<String>,
     ) -> Result<PolicyPackageRecord> {
         let mut connection = self.connect().await?;
         connection
             .unary(
                 KIND_POLICY_PACKAGE_INSPECT_REQUEST,
-                &PolicyPackageInspectRequest {
-                    digest: digest.into(),
-                },
+                &PolicyPackageInspectRequest { name: name.into() },
                 KIND_POLICY_PACKAGE_RECORD,
                 Vec::new(),
             )
@@ -85,15 +82,13 @@ impl DaemonClient {
 
     pub async fn policy_package_verify(
         &self,
-        digest: impl Into<String>,
+        name: impl Into<String>,
     ) -> Result<PolicyPackageRecord> {
         let mut connection = self.connect().await?;
         connection
             .unary(
                 KIND_POLICY_PACKAGE_VERIFY_REQUEST,
-                &PolicyPackageVerifyRequest {
-                    digest: digest.into(),
-                },
+                &PolicyPackageVerifyRequest { name: name.into() },
                 KIND_POLICY_PACKAGE_RECORD,
                 Vec::new(),
             )
@@ -102,9 +97,8 @@ impl DaemonClient {
 
     pub async fn policy_set_create(
         &self,
-        root_minimum_digest: impl Into<String>,
-        package_minimum_digests: Vec<String>,
-        local_override_digest: Option<String>,
+        name: impl Into<String>,
+        package_names: Vec<String>,
         idempotency_key: &str,
     ) -> Result<PolicySetRecord> {
         let mut connection = self.connect().await?;
@@ -112,34 +106,10 @@ impl DaemonClient {
             .unary(
                 KIND_POLICY_SET_CREATE_REQUEST,
                 &PolicySetCreateRequest {
-                    root_minimum_digest: root_minimum_digest.into(),
-                    package_minimum_digests,
-                    local_override_digest: local_override_digest.unwrap_or_default(),
+                    name: name.into(),
+                    package_names,
                 },
                 KIND_POLICY_SET_RECORD,
-                vec![Header {
-                    key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_owned(),
-                    value: idempotency_key.to_owned(),
-                }],
-            )
-            .await
-    }
-
-    pub async fn policy_set_alias_set(
-        &self,
-        alias: impl Into<String>,
-        policy_set_digest: impl Into<String>,
-        idempotency_key: &str,
-    ) -> Result<PolicySetAliasRecord> {
-        let mut connection = self.connect().await?;
-        connection
-            .unary(
-                KIND_POLICY_SET_ALIAS_SET_REQUEST,
-                &PolicySetAliasSetRequest {
-                    alias: alias.into(),
-                    policy_set_digest: policy_set_digest.into(),
-                },
-                KIND_POLICY_SET_ALIAS_RECORD,
                 vec![Header {
                     key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_owned(),
                     value: idempotency_key.to_owned(),
@@ -160,28 +130,24 @@ impl DaemonClient {
             .await
     }
 
-    pub async fn policy_set_inspect(&self, digest: impl Into<String>) -> Result<PolicySetRecord> {
+    pub async fn policy_set_inspect(&self, name: impl Into<String>) -> Result<PolicySetRecord> {
         let mut connection = self.connect().await?;
         connection
             .unary(
                 KIND_POLICY_SET_INSPECT_REQUEST,
-                &PolicySetInspectRequest {
-                    digest: digest.into(),
-                },
+                &PolicySetInspectRequest { name: name.into() },
                 KIND_POLICY_SET_RECORD,
                 Vec::new(),
             )
             .await
     }
 
-    pub async fn policy_set_verify(&self, digest: impl Into<String>) -> Result<PolicySetRecord> {
+    pub async fn policy_set_verify(&self, name: impl Into<String>) -> Result<PolicySetRecord> {
         let mut connection = self.connect().await?;
         connection
             .unary(
                 KIND_POLICY_SET_VERIFY_REQUEST,
-                &PolicySetVerifyRequest {
-                    digest: digest.into(),
-                },
+                &PolicySetVerifyRequest { name: name.into() },
                 KIND_POLICY_SET_RECORD,
                 Vec::new(),
             )

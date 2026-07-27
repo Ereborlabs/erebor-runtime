@@ -17,6 +17,13 @@ use crate::{
 };
 use erebor_runtime_session::{AgentAdapterRegistry, RunnerExecutionAdmission};
 
+pub(super) struct AdmissionIdentity {
+    pub(super) package_digest: String,
+    pub(super) installation_digest: String,
+    pub(super) adapter_digest: String,
+    pub(super) policy_set_digest: String,
+}
+
 pub(super) struct AdmissionContext<'a> {
     pub(super) owner: SessionOwner,
     pub(super) session_id: &'a str,
@@ -32,13 +39,12 @@ pub(super) struct AdmissionContext<'a> {
     pub(super) additional_filesystem_projections: Vec<FilesystemProjection>,
 }
 
-pub(super) fn parse_request(request: SessionCreateRequest) -> Result<RunRequest> {
+pub(super) fn parse_request(
+    request: SessionCreateRequest,
+    identity: AdmissionIdentity,
+) -> Result<RunRequest> {
     let runner = RunnerId::new(request.runner_id).map_err(invalid_spec)?;
     let failure_mode = parse_failure_mode(&request.daemon_failure_mode)?;
-    let package_digest = optional(request.package_digest);
-    let installation_digest = optional(request.installation_digest);
-    let adapter_digest = optional(request.adapter_digest);
-    let image_digest = optional(request.container_image_digest);
     let environment = request
         .environment
         .into_iter()
@@ -50,11 +56,11 @@ pub(super) fn parse_request(request: SessionCreateRequest) -> Result<RunRequest>
         runner,
         request.command,
         PathBuf::from(request.workspace),
-        request.policy_set_digest,
-        package_digest,
-        installation_digest,
-        adapter_digest,
-        image_digest,
+        identity.policy_set_digest,
+        Some(identity.package_digest),
+        Some(identity.installation_digest),
+        Some(identity.adapter_digest),
+        None,
         environment,
         request.secret_references,
         request.tty,
@@ -110,7 +116,7 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
     if admission.package().adapter_id() == "codex-v1" && !context.allow_codex_adapter {
         return InvalidRequestSnafu {
             reason: String::from(
-                "codex-v1 must be selected through the daemon-owned Codex alias request",
+                "codex-v1 must be selected through the daemon-owned named Agent request",
             ),
         }
         .fail();
@@ -225,10 +231,6 @@ fn required_identity<'a>(digest: Option<&'a str>, kind: &str) -> Result<&'a str>
         }
         .build()
     })
-}
-
-fn optional(value: String) -> Option<String> {
-    (!value.is_empty()).then_some(value)
 }
 
 fn invalid_spec(source: erebor_runtime_core::SessionSpecError) -> crate::DaemonError {

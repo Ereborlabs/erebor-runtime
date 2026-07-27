@@ -118,7 +118,7 @@ impl<'a> SessionCommandOwner<'a> {
             .enable_time()
             .build()
             .context(DaemonRuntimeSnafu)?;
-        runtime.block_on(Self::run_codex_alias(client, args))
+        runtime.block_on(Self::run_codex_agent(client, args))
     }
 
     async fn execute_daemon(&self) -> Result<(), CliError> {
@@ -260,8 +260,8 @@ impl<'a> SessionCommandOwner<'a> {
         Ok(())
     }
 
-    async fn run_codex_alias(client: &DaemonClient, args: &CodexRunArgs) -> Result<(), CliError> {
-        let app_server = args.alias == "codex-app-server";
+    async fn run_codex_agent(client: &DaemonClient, args: &CodexRunArgs) -> Result<(), CliError> {
+        let app_server = args.app_server;
         let workspace = args.workspace.clone().unwrap_or_else(|| {
             std::env::current_dir().unwrap_or_else(|_error| std::path::PathBuf::from("."))
         });
@@ -276,15 +276,16 @@ impl<'a> SessionCommandOwner<'a> {
         let created = client
             .codex_run(
                 CodexRunRequest {
-                    alias: args.alias.clone(),
+                    agent_name: args.agent_name.clone(),
                     workspace: workspace.display().to_string(),
-                    policy_set_reference: args.policy.clone(),
+                    policy_set_name: args.policy.clone(),
                     daemon_failure_mode: args.failure_mode.clone(),
                     requested_loss_grace_seconds: args.loss_grace_seconds,
                     tty: !app_server,
                     detached: args.detached,
                     terminal_rows: terminal_size.map_or(0, |size| u32::from(size.rows())),
                     terminal_columns: terminal_size.map_or(0, |size| u32::from(size.columns())),
+                    app_server,
                 },
                 &key,
             )
@@ -1183,10 +1184,6 @@ impl GenericSessionRequestArgs {
             runner_id: self.runner.as_str().to_owned(),
             command: self.command.clone(),
             workspace: self.workspace.display().to_string(),
-            policy_set_digest: self.policy_set_digest.clone().unwrap_or_default(),
-            package_digest: self.package_digest.clone().unwrap_or_default(),
-            installation_digest: self.installation_digest.clone().unwrap_or_default(),
-            adapter_digest: self.adapter_digest.clone().unwrap_or_default(),
             daemon_failure_mode: self.failure_mode.clone(),
             requested_loss_grace_seconds: self.loss_grace_seconds,
             environment: self
@@ -1198,7 +1195,6 @@ impl GenericSessionRequestArgs {
                 })
                 .collect(),
             secret_references: self.secret_references.clone(),
-            container_image_digest: String::new(),
             tty: self.tty,
             detached: self.detached,
             terminal_rows: 0,

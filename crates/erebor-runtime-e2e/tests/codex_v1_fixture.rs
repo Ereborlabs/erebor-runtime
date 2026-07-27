@@ -47,9 +47,9 @@ fn fixture_builds_a_pinned_package_contract_without_vendor_state() -> TestResult
     );
     assert!(definition.get("child_delegation").is_none());
     assert!(trust_root.join("codex-v1-fixture").is_file());
-    assert!(
-        String::from_utf8(output.stdout)?.contains("package_reference=codex-v1-fixture@sha256:")
-    );
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("package_name=codex-v1-fixture"));
+    assert!(stdout.contains("root_policy_name=fixture-host-minimum"));
     Ok(())
 }
 

@@ -16,14 +16,13 @@ use erebor_runtime_core::{
 };
 use erebor_runtime_ipc::v1::{
     AgentInstallResponse, CodexAppServerAttachResponse, CodexAppServerInputCloseResponse,
-    CodexAppServerInputResponse, CodexRunRequest, PolicyPackageRecord, PolicySetAliasRecord,
-    PolicySetRecord, SessionAliasListResponse, SessionAliasRecord, SessionAttachResponse,
-    SessionCreateRequest, SessionCreateResponse, SessionInputLeaseResponse, SessionInputResponse,
-    SessionListResponse, SessionPruneResponse, SessionRecord, SessionTerminalResizeResponse,
-    KIND_CODEX_APP_SERVER_ATTACH_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
-    KIND_POLICY_SET_ALIAS_RECORD, KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD,
-    KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE,
-    KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD,
+    CodexAppServerInputResponse, CodexRunRequest, PolicyPackageRecord, PolicySetRecord,
+    SessionAliasListResponse, SessionAliasRecord, SessionAttachResponse, SessionCreateRequest,
+    SessionCreateResponse, SessionInputLeaseResponse, SessionInputResponse, SessionListResponse,
+    SessionPruneResponse, SessionRecord, SessionTerminalResizeResponse,
+    KIND_CODEX_APP_SERVER_ATTACH_RESPONSE, KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_SET_RECORD,
+    KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ATTACH_RESPONSE, KIND_SESSION_CREATE_RESPONSE,
+    KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_PRUNE_RESPONSE, KIND_SESSION_RECORD,
 };
 use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact};
 use erebor_runtime_session::{
@@ -58,7 +57,7 @@ use crate::{
 };
 
 use self::{
-    admission::{admit, parse_request, AdmissionContext},
+    admission::{admit, parse_request, AdmissionContext, AdmissionIdentity},
     policy_router::StoredPolicyInterceptionRouterFactory,
     response::session_record,
 };
@@ -562,8 +561,15 @@ impl DaemonSessionApi {
         configuration_generation: u64,
         config: &DaemonConfig,
     ) -> Result<SessionSpec> {
+        let builtin = self.local_store.ensure_builtin_admission(owner_uid)?;
         self.admit_request_with_adapter(
             request,
+            AdmissionIdentity {
+                package_digest: builtin.package_digest().to_owned(),
+                installation_digest: builtin.installation_digest().to_owned(),
+                adapter_digest: builtin.adapter_digest().to_owned(),
+                policy_set_digest: builtin.policy_set_digest().to_owned(),
+            },
             owner_uid,
             owner_gid,
             configuration_generation,
@@ -572,9 +578,11 @@ impl DaemonSessionApi {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn admit_request_with_adapter(
         &self,
         request: SessionCreateRequest,
+        identity: AdmissionIdentity,
         owner_uid: u32,
         owner_gid: u32,
         configuration_generation: u64,
@@ -583,6 +591,7 @@ impl DaemonSessionApi {
     ) -> Result<SessionSpec> {
         self.admit_request_with_adapter_and_parent(
             request,
+            identity,
             owner_uid,
             owner_gid,
             configuration_generation,
@@ -595,7 +604,8 @@ impl DaemonSessionApi {
     #[allow(clippy::too_many_arguments)]
     fn admit_request_with_adapter_and_parent(
         &self,
-        mut request: SessionCreateRequest,
+        request: SessionCreateRequest,
+        identity: AdmissionIdentity,
         owner_uid: u32,
         owner_gid: u32,
         configuration_generation: u64,
@@ -604,27 +614,7 @@ impl DaemonSessionApi {
         parent_context: Option<erebor_runtime_context::ContextPin>,
     ) -> Result<SessionSpec> {
         let session_id = format!("session-{}", Uuid::new_v4());
-        let identity_fields = [
-            &request.package_digest,
-            &request.installation_digest,
-            &request.adapter_digest,
-            &request.policy_set_digest,
-        ];
-        if identity_fields.iter().all(|value| value.is_empty()) {
-            let builtin = self.local_store.ensure_builtin_admission(owner_uid)?;
-            request.package_digest = builtin.package_digest().to_owned();
-            request.installation_digest = builtin.installation_digest().to_owned();
-            request.adapter_digest = builtin.adapter_digest().to_owned();
-            request.policy_set_digest = builtin.policy_set_digest().to_owned();
-        } else if identity_fields.iter().any(|value| value.is_empty()) {
-            return crate::error::InvalidRequestSnafu {
-                reason: String::from(
-                    "package, installation, adapter, and policy-set identities must be supplied together",
-                ),
-            }
-            .fail();
-        }
-        let request = parse_request(request)?;
+        let request = parse_request(request, identity)?;
         self.enforce_session_quota(owner_uid, config)?;
         let runner = request.runner().clone();
         let executable_search_path = request
@@ -708,14 +698,21 @@ impl DaemonSessionApi {
 
     pub(crate) fn verify_codex_installation(
         &self,
-        package_reference: &str,
+        package_name: &str,
+        adapter: &str,
         source_path: &Path,
         owner_uid: u32,
         owner_gid: u32,
     ) -> Result<VerifiedCodexInstallation> {
-        let package = self
-            .local_store
-            .resolve_codex_package_reference(package_reference)?;
+        let package = self.local_store.resolve_codex_package_name(package_name)?;
+        if package.package().adapter_id() != adapter {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "the requested Agent adapter does not match the selected root-curated package",
+                ),
+            }
+            .fail();
+        }
         let resolved = self.descriptor_broker.resolve(
             owner_uid,
             owner_gid,
@@ -783,15 +780,23 @@ impl DaemonSessionApi {
         configuration_generation: u64,
         config: &DaemonConfig,
     ) -> Result<SessionSpec> {
-        let installation = self
-            .local_store
-            .resolve_codex_alias(owner_uid, &request.alias)?;
+        let installation = self.local_store.resolve_codex_agent(
+            owner_uid,
+            &request.agent_name,
+            if request.app_server {
+                "codex-app-server"
+            } else {
+                "codex"
+            },
+        )?;
         let artifact = installation
             .installation()
             .local_artifact()
             .ok_or_else(|| {
                 crate::error::InvalidRequestSnafu {
-                    reason: String::from("Codex alias has no descriptor-verified local artifact"),
+                    reason: String::from(
+                        "named Codex Agent has no descriptor-verified local artifact",
+                    ),
                 }
                 .build()
             })?;
@@ -803,7 +808,7 @@ impl DaemonSessionApi {
             .ok_or_else(|| {
                 crate::error::InvalidRequestSnafu {
                     reason: String::from(
-                        "Codex alias does not name a certified package entrypoint",
+                        "named Codex Agent does not certify the requested entrypoint",
                     ),
                 }
                 .build()
@@ -828,13 +833,22 @@ impl DaemonSessionApi {
         command.extend(entrypoint.argv_suffix().iter().cloned());
         let policy_set_digest = self
             .local_store
-            .resolve_policy_set_reference(owner_uid, &request.policy_set_reference)?;
+            .resolve_policy_set_name(owner_uid, &request.policy_set_name)?;
         let spec = self.admit_request_with_adapter(
             SessionCreateRequest {
                 runner_id: String::from("linux-host"),
                 command,
                 workspace: request.workspace,
-                policy_set_digest: policy_set_digest.as_str().to_owned(),
+                daemon_failure_mode: request.daemon_failure_mode,
+                requested_loss_grace_seconds: request.requested_loss_grace_seconds,
+                environment: Vec::new(),
+                secret_references: Vec::new(),
+                tty: request.tty,
+                detached: request.detached,
+                terminal_rows: request.terminal_rows,
+                terminal_columns: request.terminal_columns,
+            },
+            AdmissionIdentity {
                 package_digest: installation.package().package_digest().to_owned(),
                 installation_digest: installation.installation_digest().to_owned(),
                 adapter_digest: installation
@@ -843,15 +857,7 @@ impl DaemonSessionApi {
                     .adapter_digest()
                     .as_str()
                     .to_owned(),
-                daemon_failure_mode: request.daemon_failure_mode,
-                requested_loss_grace_seconds: request.requested_loss_grace_seconds,
-                environment: Vec::new(),
-                secret_references: Vec::new(),
-                container_image_digest: String::new(),
-                tty: request.tty,
-                detached: request.detached,
-                terminal_rows: request.terminal_rows,
-                terminal_columns: request.terminal_columns,
+                policy_set_digest: policy_set_digest.as_str().to_owned(),
             },
             owner_uid,
             owner_gid,
@@ -873,30 +879,20 @@ impl DaemonSessionApi {
     pub(crate) fn install_verified_codex(
         &self,
         owner_uid: u32,
+        agent_name: &str,
         package_digest: &str,
         artifact: VerifiedLocalArtifact,
         installed_at_unix_ms: u64,
     ) -> Result<AgentInstallResponse> {
-        let installation = self.local_store.store_codex_installation(
+        let _installation = self.local_store.store_codex_installation(
             owner_uid,
+            agent_name,
             package_digest,
             installed_at_unix_ms,
             artifact,
         )?;
-        let definition = installation.package().definition();
-        let aliases = ["codex", "codex-app-server"]
-            .into_iter()
-            .filter(|alias| {
-                definition
-                    .entrypoint(alias)
-                    .is_some_and(|entrypoint| *alias == "codex" || entrypoint.app_server_stdio())
-            })
-            .map(str::to_owned)
-            .collect();
         Ok(AgentInstallResponse {
-            package_digest: installation.package().package_digest().to_owned(),
-            installation_digest: installation.installation_digest().to_owned(),
-            aliases,
+            name: agent_name.to_owned(),
         })
     }
 
@@ -1198,20 +1194,9 @@ impl DaemonSessionApi {
             } => self.store_policy_package(*uid, policy, *maximum_stored_bytes),
             MutationIntent::PolicySetCreate {
                 uid,
-                root_minimum_digest,
-                package_minimum_digests,
-                local_override_digest,
-            } => self.create_policy_set(
-                *uid,
-                root_minimum_digest,
-                package_minimum_digests,
-                local_override_digest.as_deref(),
-            ),
-            MutationIntent::PolicySetAliasSet {
-                uid,
-                alias,
-                policy_set_digest,
-            } => self.set_policy_set_alias(*uid, alias, policy_set_digest),
+                name,
+                package_names,
+            } => self.create_policy_set(*uid, name, package_names),
             MutationIntent::Reload { .. }
             | MutationIntent::Stop
             | MutationIntent::AgentInstall { .. }
@@ -1240,7 +1225,6 @@ impl DaemonSessionApi {
                 packages
                     .into_iter()
                     .map(|package| PolicyPackageRecord {
-                        digest: package.digest().to_owned(),
                         name: package.name().to_owned(),
                     })
                     .collect()
@@ -1250,12 +1234,11 @@ impl DaemonSessionApi {
     pub(crate) fn inspect_policy_package(
         &self,
         owner_uid: u32,
-        digest: &str,
+        name: &str,
     ) -> Result<PolicyPackageRecord> {
         self.local_store
-            .inspect_policy_package(owner_uid, digest)
+            .inspect_policy_package(owner_uid, name)
             .map(|package| PolicyPackageRecord {
-                digest: package.digest().to_owned(),
                 name: package.name().to_owned(),
             })
     }
@@ -1267,21 +1250,17 @@ impl DaemonSessionApi {
                 policy_sets
                     .into_iter()
                     .map(|policy_set| PolicySetRecord {
-                        digest: policy_set.digest().to_owned(),
+                        name: policy_set.name().to_owned(),
                     })
                     .collect()
             })
     }
 
-    pub(crate) fn inspect_policy_set(
-        &self,
-        owner_uid: u32,
-        digest: &str,
-    ) -> Result<PolicySetRecord> {
+    pub(crate) fn inspect_policy_set(&self, owner_uid: u32, name: &str) -> Result<PolicySetRecord> {
         self.local_store
-            .inspect_policy_set(owner_uid, digest)
+            .inspect_policy_set(owner_uid, name)
             .map(|policy_set| PolicySetRecord {
-                digest: policy_set.digest().to_owned(),
+                name: policy_set.name().to_owned(),
             })
     }
 
@@ -1291,13 +1270,11 @@ impl DaemonSessionApi {
         policy: &erebor_runtime_packages::PolicyPackageRevision,
         maximum_stored_bytes: u64,
     ) -> Result<MutationResponse> {
-        let digest =
-            self.local_store
-                .store_user_policy_package(owner_uid, policy, maximum_stored_bytes)?;
+        self.local_store
+            .store_user_policy_package(owner_uid, policy, maximum_stored_bytes)?;
         message(
             KIND_POLICY_PACKAGE_RECORD,
             &PolicyPackageRecord {
-                digest: digest.as_str().to_owned(),
                 name: policy.manifest().name().to_owned(),
             },
         )
@@ -1306,38 +1283,16 @@ impl DaemonSessionApi {
     fn create_policy_set(
         &self,
         owner_uid: u32,
-        root_minimum_digest: &str,
-        package_minimum_digests: &[String],
-        local_override_digest: Option<&str>,
+        name: &str,
+        package_names: &[String],
     ) -> Result<MutationResponse> {
-        let digest = self.local_store.create_user_policy_set(
-            owner_uid,
-            root_minimum_digest,
-            package_minimum_digests,
-            local_override_digest,
-        )?;
+        let policy_set = self
+            .local_store
+            .create_user_policy_set(owner_uid, name, package_names)?;
         message(
             KIND_POLICY_SET_RECORD,
             &PolicySetRecord {
-                digest: digest.as_str().to_owned(),
-            },
-        )
-    }
-
-    fn set_policy_set_alias(
-        &self,
-        owner_uid: u32,
-        alias: &str,
-        policy_set_digest: &str,
-    ) -> Result<MutationResponse> {
-        let alias = self
-            .local_store
-            .set_policy_set_alias(owner_uid, alias, policy_set_digest)?;
-        message(
-            KIND_POLICY_SET_ALIAS_RECORD,
-            &PolicySetAliasRecord {
-                alias: alias.name().to_owned(),
-                policy_set_digest: alias.digest().as_str().to_owned(),
+                name: policy_set.name().to_owned(),
             },
         )
     }

@@ -26,35 +26,34 @@ use erebor_runtime_ipc::{
         DaemonReloadRequest, DaemonStatusRequest, DaemonStatusResponse, DaemonStopRequest,
         Envelope, EnvelopeServiceFamily, PolicyPackageApplyRequest, PolicyPackageInspectRequest,
         PolicyPackageListRequest, PolicyPackageListResponse, PolicyPackageVerifyRequest,
-        PolicySetAliasSetRequest, PolicySetCreateRequest, PolicySetInspectRequest,
-        PolicySetListRequest, PolicySetListResponse, PolicySetVerifyRequest, PolicyTestRequest,
-        PolicyTestResponse, RunnerCapabilityRecord, RunnerInspectRequest, RunnerListRequest,
-        RunnerListResponse, SessionAliasListRequest, SessionAliasRemoveRequest,
-        SessionAliasSetRequest, SessionAttachRequest, SessionCreateRequest, SessionEventRecord,
-        SessionEventsEnd, SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord,
-        SessionEvidenceRequest, SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest,
-        SessionInputRequest, SessionInspectRequest, SessionKillRequest, SessionListRequest,
-        SessionLogChunk, SessionLogsEnd, SessionLogsRequest, SessionPruneRequest,
-        SessionRemoveRequest, SessionStartRequest, SessionStopRequest,
-        SessionTerminalResizeRequest, SessionWaitRequest, KIND_ADMIN_SESSION_INSPECT_REQUEST,
-        KIND_ADMIN_SESSION_KILL_REQUEST, KIND_ADMIN_SESSION_LIST_REQUEST,
-        KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST, KIND_ADMIN_SESSION_STOP_REQUEST,
-        KIND_AGENT_INSTALL_REQUEST, KIND_AGENT_INSTALL_RESPONSE, KIND_APPROVAL_APPROVE_REQUEST,
-        KIND_APPROVAL_DENY_REQUEST, KIND_APPROVAL_INSPECT_REQUEST, KIND_APPROVAL_LIST_REQUEST,
-        KIND_APPROVAL_LIST_RESPONSE, KIND_APPROVAL_RECORD, KIND_CODEX_APP_SERVER_ATTACH_REQUEST,
-        KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE,
-        KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_CODEX_APP_SERVER_INPUT_RESPONSE,
-        KIND_CODEX_RUN_REQUEST, KIND_CONTEXT_DELIVERY_DECISION_RESPONSE,
-        KIND_CONTEXT_DELIVERY_INBOX_REQUEST, KIND_CONTEXT_DELIVERY_INBOX_RESPONSE,
-        KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST, KIND_CONTEXT_DELIVERY_REJECT_REQUEST,
-        KIND_CONTEXT_GRAPH_REQUEST, KIND_CONTEXT_GRAPH_RESPONSE, KIND_DAEMON_COMMAND_RESULT,
-        KIND_DAEMON_ERROR, KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END,
-        KIND_DAEMON_LOGS_REQUEST, KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST,
-        KIND_DAEMON_STATUS_REQUEST, KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST,
-        KIND_POLICY_PACKAGE_APPLY_REQUEST, KIND_POLICY_PACKAGE_INSPECT_REQUEST,
-        KIND_POLICY_PACKAGE_LIST_REQUEST, KIND_POLICY_PACKAGE_LIST_RESPONSE,
-        KIND_POLICY_PACKAGE_RECORD, KIND_POLICY_PACKAGE_VERIFY_REQUEST,
-        KIND_POLICY_SET_ALIAS_SET_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
+        PolicySetCreateRequest, PolicySetInspectRequest, PolicySetListRequest,
+        PolicySetListResponse, PolicySetVerifyRequest, PolicyTestRequest, PolicyTestResponse,
+        RunnerCapabilityRecord, RunnerInspectRequest, RunnerListRequest, RunnerListResponse,
+        SessionAliasListRequest, SessionAliasRemoveRequest, SessionAliasSetRequest,
+        SessionAttachRequest, SessionCreateRequest, SessionEventRecord, SessionEventsEnd,
+        SessionEventsRequest, SessionEvidenceEnd, SessionEvidenceRecord, SessionEvidenceRequest,
+        SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputRequest,
+        SessionInspectRequest, SessionKillRequest, SessionListRequest, SessionLogChunk,
+        SessionLogsEnd, SessionLogsRequest, SessionPruneRequest, SessionRemoveRequest,
+        SessionStartRequest, SessionStopRequest, SessionTerminalResizeRequest, SessionWaitRequest,
+        KIND_ADMIN_SESSION_INSPECT_REQUEST, KIND_ADMIN_SESSION_KILL_REQUEST,
+        KIND_ADMIN_SESSION_LIST_REQUEST, KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST,
+        KIND_ADMIN_SESSION_STOP_REQUEST, KIND_AGENT_INSTALL_REQUEST, KIND_AGENT_INSTALL_RESPONSE,
+        KIND_APPROVAL_APPROVE_REQUEST, KIND_APPROVAL_DENY_REQUEST, KIND_APPROVAL_INSPECT_REQUEST,
+        KIND_APPROVAL_LIST_REQUEST, KIND_APPROVAL_LIST_RESPONSE, KIND_APPROVAL_RECORD,
+        KIND_CODEX_APP_SERVER_ATTACH_REQUEST, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
+        KIND_CODEX_APP_SERVER_INPUT_CLOSE_RESPONSE, KIND_CODEX_APP_SERVER_INPUT_REQUEST,
+        KIND_CODEX_APP_SERVER_INPUT_RESPONSE, KIND_CODEX_RUN_REQUEST,
+        KIND_CONTEXT_DELIVERY_DECISION_RESPONSE, KIND_CONTEXT_DELIVERY_INBOX_REQUEST,
+        KIND_CONTEXT_DELIVERY_INBOX_RESPONSE, KIND_CONTEXT_DELIVERY_RECEIVE_REQUEST,
+        KIND_CONTEXT_DELIVERY_REJECT_REQUEST, KIND_CONTEXT_GRAPH_REQUEST,
+        KIND_CONTEXT_GRAPH_RESPONSE, KIND_DAEMON_COMMAND_RESULT, KIND_DAEMON_ERROR,
+        KIND_DAEMON_HELLO, KIND_DAEMON_HELLO_ACK, KIND_DAEMON_LOGS_END, KIND_DAEMON_LOGS_REQUEST,
+        KIND_DAEMON_LOG_RECORD, KIND_DAEMON_RELOAD_REQUEST, KIND_DAEMON_STATUS_REQUEST,
+        KIND_DAEMON_STATUS_RESPONSE, KIND_DAEMON_STOP_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
+        KIND_POLICY_PACKAGE_INSPECT_REQUEST, KIND_POLICY_PACKAGE_LIST_REQUEST,
+        KIND_POLICY_PACKAGE_LIST_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
+        KIND_POLICY_PACKAGE_VERIFY_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
         KIND_POLICY_SET_INSPECT_REQUEST, KIND_POLICY_SET_LIST_REQUEST,
         KIND_POLICY_SET_LIST_RESPONSE, KIND_POLICY_SET_RECORD, KIND_POLICY_SET_VERIFY_REQUEST,
         KIND_POLICY_TEST_REQUEST, KIND_POLICY_TEST_RESPONSE, KIND_RUNNER_CAPABILITY_RECORD,
@@ -604,9 +603,6 @@ impl DaemonControlState {
                 self.policy_package_verify(stream, peer, &envelope).await
             }
             KIND_POLICY_SET_CREATE_REQUEST => self.policy_set_create(stream, peer, &envelope).await,
-            KIND_POLICY_SET_ALIAS_SET_REQUEST => {
-                self.policy_set_alias_set(stream, peer, &envelope).await
-            }
             KIND_POLICY_SET_LIST_REQUEST => self.policy_set_list(stream, peer, &envelope).await,
             KIND_POLICY_SET_INSPECT_REQUEST => {
                 self.policy_set_inspect(stream, peer, &envelope).await
@@ -753,7 +749,8 @@ impl DaemonControlState {
             .context(IpcSnafu)?;
         let source_path = PathBuf::from(request.source_path);
         let verified = self.sessions.verify_codex_installation(
-            &request.package_reference,
+            &request.package_name,
+            &request.adapter,
             &source_path,
             peer.uid,
             peer.gid,
@@ -765,6 +762,7 @@ impl DaemonControlState {
             envelope,
             MutationIntent::AgentInstall {
                 uid: peer.uid,
+                agent_name: request.name,
                 package_digest: verified.package_digest().to_owned(),
                 installed_at_unix_ms: DaemonSessionApi::installation_time(),
                 artifact: verified.artifact().clone(),
@@ -1689,7 +1687,7 @@ impl DaemonControlState {
             KIND_POLICY_PACKAGE_RECORD,
             &self
                 .sessions
-                .inspect_policy_package(peer.uid, &request.digest)?,
+                .inspect_policy_package(peer.uid, &request.name)?,
         )
         .await
     }
@@ -1710,7 +1708,7 @@ impl DaemonControlState {
             KIND_POLICY_PACKAGE_RECORD,
             &self
                 .sessions
-                .inspect_policy_package(peer.uid, &request.digest)?,
+                .inspect_policy_package(peer.uid, &request.name)?,
         )
         .await
     }
@@ -1731,33 +1729,8 @@ impl DaemonControlState {
             envelope,
             MutationIntent::PolicySetCreate {
                 uid: peer.uid,
-                root_minimum_digest: request.root_minimum_digest,
-                package_minimum_digests: request.package_minimum_digests,
-                local_override_digest: (!request.local_override_digest.is_empty())
-                    .then_some(request.local_override_digest),
-            },
-        )
-        .await
-    }
-
-    async fn policy_set_alias_set(
-        &self,
-        stream: &mut UnixStream,
-        peer: PeerIdentity,
-        envelope: &Envelope,
-    ) -> Result<()> {
-        let request: PolicySetAliasSetRequest = envelope
-            .decode_typed_payload(KIND_POLICY_SET_ALIAS_SET_REQUEST)
-            .context(IpcSnafu)?;
-        self.apply_session_mutation(
-            stream,
-            peer,
-            "policy-set-alias-set",
-            envelope,
-            MutationIntent::PolicySetAliasSet {
-                uid: peer.uid,
-                alias: request.alias,
-                policy_set_digest: request.policy_set_digest,
+                name: request.name,
+                package_names: request.package_names,
             },
         )
         .await
@@ -1798,9 +1771,7 @@ impl DaemonControlState {
             envelope.message_id.saturating_add(1),
             envelope.message_id,
             KIND_POLICY_SET_RECORD,
-            &self
-                .sessions
-                .inspect_policy_set(peer.uid, &request.digest)?,
+            &self.sessions.inspect_policy_set(peer.uid, &request.name)?,
         )
         .await
     }
@@ -1819,9 +1790,7 @@ impl DaemonControlState {
             envelope.message_id.saturating_add(1),
             envelope.message_id,
             KIND_POLICY_SET_RECORD,
-            &self
-                .sessions
-                .inspect_policy_set(peer.uid, &request.digest)?,
+            &self.sessions.inspect_policy_set(peer.uid, &request.name)?,
         )
         .await
     }
@@ -2362,12 +2331,14 @@ impl DaemonControlState {
             ),
             MutationIntent::AgentInstall {
                 uid,
+                agent_name,
                 package_digest,
                 installed_at_unix_ms,
                 artifact,
             } => {
                 let response = self.sessions.install_verified_codex(
                     *uid,
+                    agent_name,
                     package_digest,
                     artifact.clone(),
                     *installed_at_unix_ms,
@@ -2709,7 +2680,6 @@ fn is_mutating_message(kind: &str) -> bool {
             | KIND_APPROVAL_DENY_REQUEST
             | KIND_POLICY_PACKAGE_APPLY_REQUEST
             | KIND_POLICY_SET_CREATE_REQUEST
-            | KIND_POLICY_SET_ALIAS_SET_REQUEST
     )
 }
 

@@ -19,9 +19,11 @@ impl AgentArgs {
     pub(super) fn display(&self) -> String {
         match &self.command {
             AgentCommand::Load(args) => format!(
-                "agent load {} --from {}",
-                args.package_reference,
-                args.from.display()
+                "agent load {} --from {} --adapter {} --name {}",
+                args.package_name,
+                args.from.display(),
+                args.adapter,
+                args.name,
             ),
         }
     }
@@ -35,12 +37,18 @@ enum AgentCommand {
 
 #[derive(Debug, Args)]
 struct AgentLoadArgs {
-    /// Exact root-curated package reference: NAME@sha256:LOWERCASE_DIGEST.
+    /// Name of the root-curated AgentPackage to enroll.
     #[arg(value_parser = parse_non_empty_string)]
-    package_reference: String,
+    package_name: String,
     /// Absolute path to the vendor-provided executable to enroll.
     #[arg(long, value_parser = parse_non_empty_path)]
     from: PathBuf,
+    /// Adapter selected by the AgentPackage. It is required so enrollment never guesses.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    adapter: String,
+    /// Immutable owner-scoped name for the enrolled Agent.
+    #[arg(long, value_parser = parse_non_empty_string)]
+    name: String,
 }
 
 pub(super) struct AgentCommandOwner<'a> {
@@ -63,16 +71,14 @@ impl<'a> AgentCommandOwner<'a> {
             AgentCommand::Load(args) => {
                 let response = runtime
                     .block_on(self.client.agent_load_codex(
-                        &args.package_reference,
+                        &args.package_name,
                         args.from.display().to_string(),
+                        &args.name,
+                        &args.adapter,
                         &format!("agent-load-{}", Uuid::new_v4()),
                     ))
                     .context(DaemonClientSnafu)?;
-                println!("package_digest={}", response.package_digest);
-                println!("installation_digest={}", response.installation_digest);
-                for alias in response.aliases {
-                    println!("alias={alias}");
-                }
+                println!("agent={}", response.name);
                 Ok(())
             }
         }

@@ -11,9 +11,13 @@ fn socket_override_is_available_to_each_daemon_client_command() {
             "/tmp/erebor.sock",
             "agent",
             "load",
-            "codex-v1@sha256:abc",
+            "codex-v1",
             "--from",
             "/tmp/codex",
+            "--adapter",
+            "codex-v1",
+            "--name",
+            "local-codex",
         ],
         vec![
             "erebor",
@@ -90,13 +94,7 @@ fn requires_config_for_runtime_start() {
 
 #[test]
 fn accepts_daemon_owned_codex_run_and_generic_run() {
-    let run = Cli::try_parse_from([
-        "erebor",
-        "run",
-        "--policy",
-        "engineering",
-        "codex-app-server",
-    ]);
+    let run = Cli::try_parse_from(["erebor", "run", "--policy", "engineering", "local-codex"]);
     let generic = Cli::try_parse_from([
         "erebor",
         "session",
@@ -105,14 +103,6 @@ fn accepts_daemon_owned_codex_run_and_generic_run() {
         "linux-host",
         "--workspace",
         "/work",
-        "--package-digest",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "--installation-digest",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "--adapter-digest",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "--policy-set-digest",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "--idempotency-key",
         "run-1",
         "--",
@@ -129,15 +119,19 @@ fn agent_load_is_the_only_public_codex_enrollment_verb() {
         "erebor",
         "agent",
         "load",
-        "codex-v1-fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "codex-v1-fixture",
         "--from",
         "/opt/codex-v1-fixture",
+        "--adapter",
+        "codex-v1",
+        "--name",
+        "local-codex",
     ]);
     let stale_install = Cli::try_parse_from([
         "erebor",
         "agent",
         "install",
-        "codex-v1-fixture@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "codex-v1-fixture",
         "--from",
         "/opt/codex-v1-fixture",
     ]);
@@ -147,13 +141,13 @@ fn agent_load_is_the_only_public_codex_enrollment_verb() {
 }
 
 #[test]
-fn codex_aliases_do_not_accept_raw_arguments() {
+fn named_codex_agents_do_not_accept_raw_arguments() {
     let raw_argv = Cli::try_parse_from([
         "erebor",
         "run",
         "--policy",
         "fixture",
-        "codex",
+        "local-codex",
         "--",
         "--escape-daemon-entrypoint",
     ]);
@@ -171,14 +165,6 @@ fn generic_session_run_accepts_admitted_tty_request() {
         "linux-host",
         "--workspace",
         "/work",
-        "--package-digest",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "--installation-digest",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "--adapter-digest",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "--policy-set-digest",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "--idempotency-key",
         "run-1",
         "--tty",
@@ -187,6 +173,41 @@ fn generic_session_run_accepts_admitted_tty_request() {
     ]);
 
     assert!(run.is_ok());
+}
+
+#[test]
+fn phase_five_rejects_raw_identity_flags_and_retired_policy_set_aliases() {
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "session",
+        "run",
+        "--runner",
+        "linux-host",
+        "--workspace",
+        "/work",
+        "--package-digest",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "--idempotency-key",
+        "run-1",
+        "--",
+        "/usr/bin/true",
+    ])
+    .is_err());
+    assert!(
+        Cli::try_parse_from(["erebor", "policy", "set", "alias", "fixture", "anything",]).is_err()
+    );
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "policyset",
+        "create",
+        "--name",
+        "fixture",
+        "--package",
+        "host-minimum",
+        "--idempotency-key",
+        "policyset-1",
+    ])
+    .is_ok());
 }
 
 #[test]
@@ -354,35 +375,11 @@ fn accepts_policy_and_audit_commands() {
 fn accepts_daemon_owned_policy_catalog_commands() {
     for command in [
         vec!["erebor", "policy", "package", "ls"],
-        vec![
-            "erebor",
-            "policy",
-            "package",
-            "inspect",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ],
-        vec![
-            "erebor",
-            "policy",
-            "package",
-            "verify",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ],
-        vec!["erebor", "policy", "set", "ls"],
-        vec![
-            "erebor",
-            "policy",
-            "set",
-            "inspect",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ],
-        vec![
-            "erebor",
-            "policy",
-            "set",
-            "verify",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        ],
+        vec!["erebor", "policy", "package", "inspect", "workspace-write"],
+        vec!["erebor", "policy", "package", "verify", "workspace-write"],
+        vec!["erebor", "policyset", "ls"],
+        vec!["erebor", "policyset", "inspect", "company-workspace"],
+        vec!["erebor", "policyset", "verify", "company-workspace"],
     ] {
         assert!(Cli::try_parse_from(command).is_ok());
     }
