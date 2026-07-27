@@ -48,12 +48,8 @@ mod tests {
 
     #[test]
     fn policy_set_rejects_duplicate_package_digests() -> Result<(), Box<dyn std::error::Error>> {
-        assert!(PolicySetRevision::new(
-            digest(FIRST)?,
-            vec![digest(SECOND)?, digest(SECOND)?],
-            None
-        )
-        .is_err());
+        assert!(PolicySetRevision::new(vec![digest(FIRST)?, digest(FIRST)?]).is_err());
+        assert!(PolicySetRevision::new(Vec::new()).is_err());
         Ok(())
     }
 

@@ -506,6 +506,7 @@ message PolicyTestResponse {
 
 message PolicyPackageApplyRequest {
   string path = 1;
+  string name = 2;
 }
 
 message PolicyPackageRecord {

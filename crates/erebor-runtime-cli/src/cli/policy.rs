@@ -85,7 +85,11 @@ impl PolicyPackageArgs {
     fn display(&self) -> String {
         match &self.command {
             PolicyPackageCommand::Apply(args) => {
-                format!("policy package apply {}", args.path.display())
+                format!(
+                    "policy package apply {} --name {}",
+                    args.path.display(),
+                    args.name
+                )
             }
             PolicyPackageCommand::Ls => String::from("policy package ls"),
             PolicyPackageCommand::Inspect(args) => format!("policy package inspect {}", args.name),
@@ -110,6 +114,9 @@ enum PolicyPackageCommand {
 struct PolicyPackageApplyArgs {
     #[arg(value_parser = parse_non_empty_path)]
     path: PathBuf,
+    /// Immutable owner-scoped name for the PolicyPackage resource.
+    #[arg(long, value_parser = super::parse_non_empty_string)]
+    name: String,
     #[arg(long, value_parser = super::parse_non_empty_string)]
     idempotency_key: String,
 }
@@ -141,6 +148,7 @@ impl<'a> PolicyPackageCommandOwner<'a> {
                 let record = runtime
                     .block_on(self.client.policy_package_apply(
                         args.path.display().to_string(),
+                        &args.name,
                         &args.idempotency_key,
                     ))
                     .context(DaemonClientSnafu)?;

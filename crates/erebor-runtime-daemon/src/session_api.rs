@@ -1212,10 +1212,11 @@ impl DaemonSessionApi {
         owner_uid: u32,
         owner_gid: u32,
         path: &std::path::Path,
+        name: &str,
         maximum_bytes: u64,
     ) -> Result<erebor_runtime_packages::PolicyPackageRevision> {
         self.descriptor_broker
-            .read_policy_package(owner_uid, owner_gid, path, maximum_bytes)
+            .read_policy_package(owner_uid, owner_gid, path, name, maximum_bytes)
     }
 
     pub(crate) fn list_policy_packages(&self, owner_uid: u32) -> Result<Vec<PolicyPackageRecord>> {

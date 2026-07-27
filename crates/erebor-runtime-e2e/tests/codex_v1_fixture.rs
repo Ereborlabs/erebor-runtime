@@ -47,9 +47,22 @@ fn fixture_builds_a_pinned_package_contract_without_vendor_state() -> TestResult
     );
     assert!(definition.get("child_delegation").is_none());
     assert!(trust_root.join("codex-v1-fixture").is_file());
+    let fixture_policy = trust_root.join("fixture-baseline");
+    assert_eq!(
+        std::fs::read_to_string(fixture_policy.join("policy.toml"))?,
+        "name = \"fixture-baseline\"\n"
+    );
+    let rules: Value = serde_json::from_slice(&std::fs::read(
+        fixture_policy.join("rules").join("terminal.json"),
+    )?)?;
+    assert_eq!(rules["rules"].as_array().map(Vec::len), Some(3));
+    assert_eq!(
+        rules["rules"][0]["mediation"]["replacement_surface"],
+        "browser_cdp"
+    );
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("package_name=codex-v1-fixture"));
-    assert!(stdout.contains("root_policy_name=fixture-host-minimum"));
+    assert!(stdout.contains(&format!("fixture_policy_path={}", fixture_policy.display())));
     Ok(())
 }
 

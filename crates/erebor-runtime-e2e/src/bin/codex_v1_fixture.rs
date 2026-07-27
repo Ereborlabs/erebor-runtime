@@ -1167,6 +1167,7 @@ fn configure(arguments: &[String]) -> FixtureResult<()> {
 
     let definition = package_definition(&options.trust_root, &fixture)?;
     let package = package_manifest(&definition)?;
+    let fixture_policy = fixture_policy_package(&options.trust_root)?;
     let root_policy = root_policy()?;
     let root_admissions = options
         .owner_uids
@@ -1195,7 +1196,7 @@ fn configure(arguments: &[String]) -> FixtureResult<()> {
     fs::write(&options.config, serde_json::to_vec_pretty(&configuration)?)?;
     fs::set_permissions(&options.config, fs::Permissions::from_mode(0o640))?;
     println!("package_name={FIXTURE_NAME}");
-    println!("root_policy_name={}", root_policy.manifest().name());
+    println!("fixture_policy_path={}", fixture_policy.display());
     Ok(())
 }
 
@@ -1390,7 +1391,7 @@ fn root_admission(owner_uid: u32, policy: &PolicyPackageRevision) -> FixtureResu
     )?;
     let policy_digest = policy.canonical_digest()?;
     let installation = InstallationRecord::new(owner_uid, package.canonical_digest()?, 0);
-    let policy_set = PolicySetRevision::new(policy_digest, Vec::new(), None)?;
+    let policy_set = PolicySetRevision::new(vec![policy_digest])?;
     Ok(json!({
         "package": package,
         "installation": installation,
@@ -1412,6 +1413,61 @@ fn root_policy() -> FixtureResult<PolicyPackageRevision> {
         b"# Deterministic Codex fixture host minimum\n".to_vec(),
     )
     .map_err(Into::into)
+}
+
+fn fixture_policy_package(trust_root: &Path) -> FixtureResult<PathBuf> {
+    let package = trust_root.join("fixture-baseline");
+    fs::create_dir_all(package.join("rules"))?;
+    fs::create_dir_all(package.join("examples"))?;
+    fs::create_dir_all(package.join("tests"))?;
+    fs::write(package.join("policy.toml"), "name = \"fixture-baseline\"\n")?;
+    fs::write(
+        package.join("rules").join("terminal.json"),
+        br#"{
+  "rules": [
+    {
+      "id": "mediate-managed-browser-launch",
+      "match": {
+        "surface": "terminal",
+        "action": "process_exec",
+        "command_contains": "--remote-debugging-port"
+      },
+      "decision": "mediate",
+      "reason": "replace raw browser debug launches with an Erebor-owned endpoint",
+      "mediation": {
+        "kind": "managed_browser_cdp",
+        "replacement_surface": "browser_cdp",
+        "return_endpoint": "requested_port"
+      }
+    },
+    {
+      "id": "deny-destructive-fixture-command",
+      "match": {
+        "surface": "terminal",
+        "action": "process_exec",
+        "command_contains": "rm -rf"
+      },
+      "decision": "deny",
+      "reason": "destructive recursive removal is denied in the fixture session"
+    },
+    {
+      "id": "allow-fixture-processes",
+      "match": {
+        "surface": "terminal",
+        "action": "process_exec"
+      },
+      "decision": "allow"
+    }
+  ]
+}
+"#,
+    )?;
+    fs::write(package.join("tests").join("terminal.json"), "{}\n")?;
+    fs::write(
+        package.join("README.md"),
+        "# Fixture baseline PolicyPackage\n\nDeterministic Phase 5.1 host-lab policy.\n",
+    )?;
+    Ok(package)
 }
 
 fn artifact(path: &Path) -> FixtureResult<CodexArtifact> {

@@ -546,7 +546,7 @@ mod tests {
             BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
             b"# Host minimum\n".to_vec(),
         )?;
-        let policy_set = PolicySetRevision::new(policy.canonical_digest()?, Vec::new(), None)?;
+        let policy_set = PolicySetRevision::new(vec![policy.canonical_digest()?])?;
         let admission = RootCuratedAdmission::new(package, installation, policy_set, vec![policy]);
         let mut config = DaemonConfig {
             root_curated_admissions: vec![admission.clone()],

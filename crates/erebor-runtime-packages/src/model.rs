@@ -419,22 +419,14 @@ impl CanonicalEncoding for PolicyPackageRevision {}
 #[serde(deny_unknown_fields)]
 pub struct PolicySetRevision {
     format_version: u32,
-    root_minimum_digest: ContentDigest,
-    package_minimum_digests: Vec<ContentDigest>,
-    local_override_digest: Option<ContentDigest>,
+    package_digests: Vec<ContentDigest>,
 }
 
 impl PolicySetRevision {
-    pub fn new(
-        root_minimum_digest: ContentDigest,
-        package_minimum_digests: Vec<ContentDigest>,
-        local_override_digest: Option<ContentDigest>,
-    ) -> Result<Self> {
+    pub fn new(package_digests: Vec<ContentDigest>) -> Result<Self> {
         let revision = Self {
             format_version: CANONICAL_FORMAT_VERSION,
-            root_minimum_digest,
-            package_minimum_digests,
-            local_override_digest,
+            package_digests,
         };
         revision.validate()?;
         Ok(revision)
@@ -443,16 +435,13 @@ impl PolicySetRevision {
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.format_version == CANONICAL_FORMAT_VERSION
-                && AgentPackageManifest::unique_digests(&self.package_minimum_digests),
+                && !self.package_digests.is_empty()
+                && AgentPackageManifest::unique_digests(&self.package_digests),
             InvalidModelSnafu {
                 reason: String::from("policy-set revision is not canonical")
             }
         );
-        self.root_minimum_digest.validate()?;
-        for digest in &self.package_minimum_digests {
-            digest.validate()?;
-        }
-        if let Some(digest) = &self.local_override_digest {
+        for digest in &self.package_digests {
             digest.validate()?;
         }
         Ok(())
@@ -460,16 +449,7 @@ impl PolicySetRevision {
 
     #[must_use]
     pub fn policy_input_digests(&self) -> Vec<&ContentDigest> {
-        let mut digests = Vec::with_capacity(
-            1 + self.package_minimum_digests.len()
-                + usize::from(self.local_override_digest.is_some()),
-        );
-        digests.push(&self.root_minimum_digest);
-        digests.extend(&self.package_minimum_digests);
-        if let Some(digest) = &self.local_override_digest {
-            digests.push(digest);
-        }
-        digests
+        self.package_digests.iter().collect()
     }
 }
 

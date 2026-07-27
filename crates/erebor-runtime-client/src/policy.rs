@@ -37,13 +37,17 @@ impl DaemonClient {
     pub async fn policy_package_apply(
         &self,
         path: impl Into<String>,
+        name: impl Into<String>,
         idempotency_key: &str,
     ) -> Result<PolicyPackageRecord> {
         let mut connection = self.connect().await?;
         connection
             .unary(
                 KIND_POLICY_PACKAGE_APPLY_REQUEST,
-                &PolicyPackageApplyRequest { path: path.into() },
+                &PolicyPackageApplyRequest {
+                    path: path.into(),
+                    name: name.into(),
+                },
                 KIND_POLICY_PACKAGE_RECORD,
                 vec![Header {
                     key: EREBOR_IDEMPOTENCY_KEY_HEADER.to_owned(),

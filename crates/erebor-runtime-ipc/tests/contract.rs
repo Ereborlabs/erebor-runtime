@@ -7,14 +7,14 @@ use erebor_runtime_ipc::{
         ContextGraphResponse, ContextScopeGraphNode, DecisionKind, DenyDecision, Envelope,
         GuardHello, GuardLifecycleEvent, GuardLifecycleEventKind, GuardLifecycleReply,
         GuardLifecycleReplyKind, InterceptionDecision, InterceptionOperation, InterceptionRequest,
-        InterceptionSource, MediateDecision, PolicySetCreateRequest, ProcessExecOperation,
-        SessionEvidenceRequest, SessionInputRequest, SessionTerminalResizeRequest,
-        DAEMON_CONTROL_PROTOCOL_VERSION, KIND_AGENT_INSTALL_REQUEST,
+        InterceptionSource, MediateDecision, PolicyPackageApplyRequest, PolicySetCreateRequest,
+        ProcessExecOperation, SessionEvidenceRequest, SessionInputRequest,
+        SessionTerminalResizeRequest, DAEMON_CONTROL_PROTOCOL_VERSION, KIND_AGENT_INSTALL_REQUEST,
         KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, KIND_CODEX_APP_SERVER_INPUT_REQUEST,
         KIND_CODEX_RUN_REQUEST, KIND_CONTEXT_GRAPH_REQUEST, KIND_CONTEXT_GRAPH_RESPONSE,
         KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
-        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
-        KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST,
+        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
+        KIND_POLICY_SET_CREATE_REQUEST, KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST,
         KIND_SESSION_TERMINAL_RESIZE_REQUEST, PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
@@ -36,6 +36,10 @@ fn public_named_resource_requests_round_trip_without_integrity_reference_fields(
             String::from("workspace-write"),
         ],
     };
+    let policy_package = PolicyPackageApplyRequest {
+        path: String::from("/work/fixture-baseline"),
+        name: String::from("fixture-baseline"),
+    };
     let run = CodexRunRequest {
         agent_name: String::from("local-codex"),
         workspace: String::from("/work"),
@@ -51,7 +55,9 @@ fn public_named_resource_requests_round_trip_without_integrity_reference_fields(
     let agent_envelope = Envelope::wrap_message(101, 0, KIND_AGENT_INSTALL_REQUEST, &agent)?;
     let policy_envelope =
         Envelope::wrap_message(102, 0, KIND_POLICY_SET_CREATE_REQUEST, &policy_set)?;
-    let run_envelope = Envelope::wrap_message(103, 0, KIND_CODEX_RUN_REQUEST, &run)?;
+    let policy_package_envelope =
+        Envelope::wrap_message(103, 0, KIND_POLICY_PACKAGE_APPLY_REQUEST, &policy_package)?;
+    let run_envelope = Envelope::wrap_message(104, 0, KIND_CODEX_RUN_REQUEST, &run)?;
     let decoded_agent: AgentInstallRequest =
         EreborIpcFrame::decode(&agent_envelope.into_frame()?.encode()?)?
             .decode_payload::<Envelope>()?
@@ -60,12 +66,17 @@ fn public_named_resource_requests_round_trip_without_integrity_reference_fields(
         EreborIpcFrame::decode(&policy_envelope.into_frame()?.encode()?)?
             .decode_payload::<Envelope>()?
             .decode_typed_payload(KIND_POLICY_SET_CREATE_REQUEST)?;
+    let decoded_policy_package: PolicyPackageApplyRequest =
+        EreborIpcFrame::decode(&policy_package_envelope.into_frame()?.encode()?)?
+            .decode_payload::<Envelope>()?
+            .decode_typed_payload(KIND_POLICY_PACKAGE_APPLY_REQUEST)?;
     let decoded_run: CodexRunRequest =
         EreborIpcFrame::decode(&run_envelope.into_frame()?.encode()?)?
             .decode_payload::<Envelope>()?
             .decode_typed_payload(KIND_CODEX_RUN_REQUEST)?;
     assert_eq!(decoded_agent, agent);
     assert_eq!(decoded_policy, policy_set);
+    assert_eq!(decoded_policy_package, policy_package);
     assert_eq!(decoded_run, run);
     Ok(())
 }

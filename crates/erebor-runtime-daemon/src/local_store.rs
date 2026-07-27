@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::Write,
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
@@ -8,6 +8,7 @@ use std::{
 };
 
 use erebor_runtime_core::{AgentAdapterDescriptor, ImmutableIdentity, SessionSpec};
+use erebor_runtime_events::{ActionKind, ExecutionSurface, RiskLevel};
 use erebor_runtime_packages::{
     AgentPackageManifest, CanonicalEncoding, CodexPackageDefinition, ContentDigest,
     InstallationRecord, PolicyPackageRevision, PolicySetRevision, VerifiedLocalArtifact,
@@ -148,27 +149,98 @@ struct NamedResourceMetadata {
     name: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+enum NamedResourceSpec {
+    Agent(AgentResourceSpec),
+    PolicyPackage(PolicyPackageResourceSpec),
+    PolicySet(PolicySetResourceSpec),
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct NamedResourceSpec {
+struct AgentResourceSpec {
+    adapter: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyPackageResourceSpec {
+    rules: Vec<PolicyPackageRule>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyPackageRuleDocument {
+    rules: Vec<PolicyPackageRule>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyPackageRule {
+    id: String,
+    #[serde(rename = "match")]
+    matcher: PolicyPackageRuleMatch,
+    decision: PolicyPackageDecision,
     #[serde(skip_serializing_if = "Option::is_none")]
-    adapter: Option<String>,
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mediation: Option<PolicyPackageMediation>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyPackageRuleMatch {
+    surface: Option<ExecutionSurface>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action: Option<ActionKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_contains: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    payload_contains: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command_contains: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    risk_at_least: Option<RiskLevel>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PolicyPackageDecision {
+    Allow,
+    Deny,
+    RequireApproval,
+    Mediate,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyPackageMediation {
+    kind: PolicyPackageMediationKind,
+    replacement_surface: ExecutionSurface,
+    return_endpoint: PolicyPackageMediationReturnEndpoint,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PolicyPackageMediationKind {
+    ManagedBrowserCdp,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PolicyPackageMediationReturnEndpoint {
+    RequestedPort,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PolicySetResourceSpec {
+    packages: Vec<String>,
 }
 
 impl NamedResourceRecord {
     const API_VERSION: &'static str = "erebor.dev/v1";
-
-    fn new(kind: &str, name: &str, integrity_digest: &ContentDigest) -> Self {
-        Self {
-            api_version: Self::API_VERSION.to_owned(),
-            kind: kind.to_owned(),
-            metadata: NamedResourceMetadata {
-                name: name.to_owned(),
-            },
-            spec: NamedResourceSpec::default(),
-            integrity_digest: integrity_digest.as_str().to_owned(),
-        }
-    }
 
     fn agent(name: &str, integrity_digest: &ContentDigest, adapter: &str) -> Result<Self> {
         if adapter.is_empty() {
@@ -178,10 +250,50 @@ impl NamedResourceRecord {
             .fail();
         }
         Ok(Self {
-            spec: NamedResourceSpec {
-                adapter: Some(adapter.to_owned()),
+            api_version: Self::API_VERSION.to_owned(),
+            kind: String::from("Agent"),
+            metadata: NamedResourceMetadata {
+                name: name.to_owned(),
             },
-            ..Self::new("Agent", name, integrity_digest)
+            spec: NamedResourceSpec::Agent(AgentResourceSpec {
+                adapter: adapter.to_owned(),
+            }),
+            integrity_digest: integrity_digest.as_str().to_owned(),
+        })
+    }
+
+    fn policy_package(
+        name: &str,
+        integrity_digest: &ContentDigest,
+        spec: PolicyPackageResourceSpec,
+    ) -> Result<Self> {
+        spec.validate()?;
+        Ok(Self {
+            api_version: Self::API_VERSION.to_owned(),
+            kind: String::from("PolicyPackage"),
+            metadata: NamedResourceMetadata {
+                name: name.to_owned(),
+            },
+            spec: NamedResourceSpec::PolicyPackage(spec),
+            integrity_digest: integrity_digest.as_str().to_owned(),
+        })
+    }
+
+    fn policy_set(
+        name: &str,
+        integrity_digest: &ContentDigest,
+        packages: Vec<String>,
+    ) -> Result<Self> {
+        let spec = PolicySetResourceSpec { packages };
+        spec.validate()?;
+        Ok(Self {
+            api_version: Self::API_VERSION.to_owned(),
+            kind: String::from("PolicySet"),
+            metadata: NamedResourceMetadata {
+                name: name.to_owned(),
+            },
+            spec: NamedResourceSpec::PolicySet(spec),
+            integrity_digest: integrity_digest.as_str().to_owned(),
         })
     }
 
@@ -198,15 +310,156 @@ impl NamedResourceRecord {
             }
             .fail();
         }
-        if expected_kind == "Agent"
-            && !matches!(self.spec.adapter.as_deref(), Some(adapter) if !adapter.is_empty())
-        {
+        match (expected_kind, &self.spec) {
+            ("Agent", NamedResourceSpec::Agent(spec)) if !spec.adapter.is_empty() => {}
+            ("PolicyPackage", NamedResourceSpec::PolicyPackage(spec)) => spec.validate()?,
+            ("PolicySet", NamedResourceSpec::PolicySet(spec)) => spec.validate()?,
+            ("Agent", NamedResourceSpec::Agent(_)) => {
+                return InvalidRequestSnafu {
+                    reason: String::from("Agent resource is missing explicit spec.adapter"),
+                }
+                .fail()
+            }
+            _ => {
+                return InvalidRequestSnafu {
+                    reason: format!("{expected_kind} resource has an invalid spec"),
+                }
+                .fail()
+            }
+        }
+        DaemonLocalStore::parse_digest(&self.integrity_digest, expected_kind)
+    }
+}
+
+impl PolicyPackageResourceSpec {
+    fn from_revision(policy: &PolicyPackageRevision) -> Result<Self> {
+        let mut rules = Vec::new();
+        for (source_name, source) in policy.rules() {
+            let document: PolicyPackageRuleDocument = serde_json::from_slice(source).map_err(|error| {
+                InvalidRequestSnafu {
+                    reason: format!(
+                        "policy package `{}` rule document `{source_name}` does not match the Phase 5.1 rule schema: {error}",
+                        policy.manifest().name()
+                    ),
+                }
+                .build()
+            })?;
+            rules.extend(document.rules);
+        }
+        let spec = Self { rules };
+        spec.validate()?;
+        Ok(spec)
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.rules.is_empty() {
             return InvalidRequestSnafu {
-                reason: String::from("Agent resource is missing explicit spec.adapter"),
+                reason: String::from("PolicyPackage spec.rules must be non-empty"),
             }
             .fail();
         }
-        DaemonLocalStore::parse_digest(&self.integrity_digest, expected_kind)
+        let mut ids = BTreeSet::new();
+        for rule in &self.rules {
+            rule.validate()?;
+            if !ids.insert(rule.id.as_str()) {
+                return InvalidRequestSnafu {
+                    reason: format!("PolicyPackage rule id `{}` is duplicated", rule.id),
+                }
+                .fail();
+            }
+        }
+        Ok(())
+    }
+}
+
+impl PolicyPackageRule {
+    fn validate(&self) -> Result<()> {
+        if self.id.trim().is_empty() {
+            return InvalidRequestSnafu {
+                reason: String::from("PolicyPackage rule id must be non-empty"),
+            }
+            .fail();
+        }
+        let surface = self.matcher.surface.as_ref().ok_or_else(|| {
+            InvalidRequestSnafu {
+                reason: format!(
+                    "PolicyPackage rule `{}` must declare match.surface",
+                    self.id
+                ),
+            }
+            .build()
+        })?;
+        if self.reason.as_deref().is_some_and(str::is_empty) {
+            return InvalidRequestSnafu {
+                reason: format!("PolicyPackage rule `{}` has an empty reason", self.id),
+            }
+            .fail();
+        }
+        match (self.decision, &self.mediation) {
+            (PolicyPackageDecision::Mediate, Some(mediation)) => {
+                mediation.validate(&self.id, surface, self.matcher.action.as_ref())
+            }
+            (PolicyPackageDecision::Mediate, None) => InvalidRequestSnafu {
+                reason: format!("PolicyPackage rule `{}` requires mediation", self.id),
+            }
+            .fail(),
+            (_, Some(_)) => InvalidRequestSnafu {
+                reason: format!(
+                    "PolicyPackage rule `{}` may use mediation only with decision mediate",
+                    self.id
+                ),
+            }
+            .fail(),
+            (_, None) => Ok(()),
+        }
+    }
+}
+
+impl PolicyPackageMediation {
+    fn validate(
+        &self,
+        rule_id: &str,
+        source_surface: &ExecutionSurface,
+        action: Option<&ActionKind>,
+    ) -> Result<()> {
+        if !matches!(self.kind, PolicyPackageMediationKind::ManagedBrowserCdp)
+            || self.replacement_surface != ExecutionSurface::BrowserCdp
+            || !matches!(
+                self.return_endpoint,
+                PolicyPackageMediationReturnEndpoint::RequestedPort
+            )
+            || source_surface != &ExecutionSurface::Terminal
+            || action != Some(&ActionKind::ProcessExec)
+        {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "PolicyPackage rule `{rule_id}` must use managed_browser_cdp from terminal process_exec to browser_cdp with requested_port",
+                ),
+            }
+            .fail();
+        }
+        Ok(())
+    }
+}
+
+impl PolicySetResourceSpec {
+    fn validate(&self) -> Result<()> {
+        if self.packages.is_empty() {
+            return InvalidRequestSnafu {
+                reason: String::from("PolicySet spec.packages must be non-empty"),
+            }
+            .fail();
+        }
+        let mut names = BTreeSet::new();
+        for name in &self.packages {
+            if !DaemonLocalStore::is_path_component(name) || !names.insert(name.as_str()) {
+                return InvalidRequestSnafu {
+                    reason: format!("PolicySet package name `{name}` is invalid or duplicated"),
+                }
+                .fail();
+            }
+        }
+        Ok(())
     }
 }
 
@@ -377,7 +630,7 @@ impl DaemonLocalStore {
         )?;
         let policy_digest = policy.canonical_digest().map_err(Self::invalid_model)?;
         let policy_set =
-            PolicySetRevision::new(policy_digest, Vec::new(), None).map_err(Self::invalid_model)?;
+            PolicySetRevision::new(vec![policy_digest]).map_err(Self::invalid_model)?;
         let policy_set_digest = policy_set.canonical_digest().map_err(Self::invalid_model)?;
         self.write_immutable(
             &self.policy_set_path(owner_uid, &policy_set_digest),
@@ -760,27 +1013,46 @@ impl DaemonLocalStore {
     ) -> Result<ContentDigest> {
         self.validate_policy_package(policy)?;
         let digest = policy.canonical_digest().map_err(Self::invalid_model)?;
+        let name = policy.manifest().name();
+        Self::require_resource_name(name, "PolicyPackage")?;
+        let name_record = NamedResourceRecord::policy_package(
+            name,
+            &digest,
+            PolicyPackageResourceSpec::from_revision(policy)?,
+        )?;
+        let name_path = self.policy_package_name_path(owner_uid, name);
+        let name_record_encoded = serde_json::to_vec(&name_record).map_err(|source| {
+            crate::DaemonError::InvalidConfig {
+                path: name_path.clone(),
+                source,
+                location: snafu::Location::default(),
+            }
+        })?;
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_error| crate::error::StateLockSnafu.build())?;
         for existing in self.list_policy_packages(owner_uid)? {
-            if existing.name() == policy.manifest().name() {
+            if existing.name() == name {
                 let existing_digest =
                     self.resolve_policy_package_name(owner_uid, existing.name())?;
                 if existing_digest != digest {
                     return InvalidRequestSnafu {
                         reason: format!(
                             "PolicyPackage name `{}` already identifies a different immutable revision",
-                            policy.manifest().name()
+                            name
                         ),
                     }
                     .fail();
                 }
             }
         }
-        let encoded = policy.canonical_bytes().map_err(Self::invalid_model)?;
+        let policy_encoded = policy.canonical_bytes().map_err(Self::invalid_model)?;
         let path = self.user_policy_package_path(owner_uid, &digest);
         if !path.exists()
             && self
                 .user_policy_package_bytes(owner_uid)?
-                .saturating_add(encoded.len() as u64)
+                .saturating_add(policy_encoded.len() as u64)
                 > maximum_stored_bytes
         {
             return crate::error::InvalidRequestSnafu {
@@ -788,9 +1060,10 @@ impl DaemonLocalStore {
                     "owner UID {owner_uid} would exceed the {maximum_stored_bytes}-byte stored policy limit",
                 ),
             }
-            .fail();
+                .fail();
         }
-        self.write_immutable(&path, &encoded)?;
+        self.write_immutable(&path, &policy_encoded)?;
+        self.write_immutable(&name_path, &name_record_encoded)?;
         Ok(digest)
     }
 
@@ -819,35 +1092,14 @@ impl DaemonLocalStore {
         package_names: &[String],
     ) -> Result<StoredPolicySet> {
         Self::require_resource_name(name, "PolicySet")?;
-        let mut root_minimum = None;
-        let mut package_minimums = Vec::new();
+        let mut package_digests = Vec::with_capacity(package_names.len());
         for package_name in package_names {
             let digest = self.resolve_policy_package_name(owner_uid, package_name)?;
-            if self.policy_package_path(&digest).exists() {
-                if root_minimum.replace(digest).is_some() {
-                    return InvalidRequestSnafu {
-                        reason: String::from(
-                            "a PolicySet composition may include only one root-curated PolicyPackage",
-                        ),
-                    }
-                    .fail();
-                }
-            } else {
-                package_minimums.push(digest);
-            }
+            package_digests.push(digest);
         }
-        let root_minimum = root_minimum.ok_or_else(|| {
-            InvalidRequestSnafu {
-                reason: String::from(
-                    "a PolicySet composition must include the root-curated PolicyPackage by name",
-                ),
-            }
-            .build()
-        })?;
-        let revision = PolicySetRevision::new(root_minimum, package_minimums, None)
-            .map_err(Self::invalid_model)?;
+        let revision = PolicySetRevision::new(package_digests).map_err(Self::invalid_model)?;
         let digest = revision.canonical_digest().map_err(Self::invalid_model)?;
-        let name_record = NamedResourceRecord::new("PolicySet", name, &digest);
+        let name_record = NamedResourceRecord::policy_set(name, &digest, package_names.to_vec())?;
         let encoded = serde_json::to_vec(&name_record).map_err(|source| {
             crate::DaemonError::InvalidConfig {
                 path: self.policy_set_name_path(owner_uid, name),
@@ -1036,6 +1288,17 @@ impl DaemonLocalStore {
             .join("policy-set-names")
     }
 
+    fn policy_package_names_directory(&self, owner_uid: u32) -> PathBuf {
+        self.users
+            .join(owner_uid.to_string())
+            .join("policy-package-names")
+    }
+
+    fn policy_package_name_path(&self, owner_uid: u32, name: &str) -> PathBuf {
+        self.policy_package_names_directory(owner_uid)
+            .join(format!("{name}.json"))
+    }
+
     fn policy_set_name_path(&self, owner_uid: u32, name: &str) -> PathBuf {
         self.policy_set_names_directory(owner_uid)
             .join(format!("{name}.json"))
@@ -1112,16 +1375,18 @@ impl DaemonLocalStore {
         owner_uid: u32,
         packages: &mut BTreeMap<String, StoredPolicyPackage>,
     ) -> Result<()> {
-        let directory = self
-            .users
-            .join(owner_uid.to_string())
-            .join("policy-packages");
-        for (digest, revision) in self
-            .canonical_records_in_flat_directory::<PolicyPackageRevision>(
-                &directory,
-                "policy package",
-            )?
-        {
+        for name in self.list_named_resources(
+            owner_uid,
+            "PolicyPackage",
+            self.policy_package_names_directory(owner_uid),
+        )? {
+            let digest = self.read_named_resource(
+                owner_uid,
+                "PolicyPackage",
+                &name,
+                self.policy_package_name_path(owner_uid, &name),
+            )?;
+            let revision = self.read_policy_package(owner_uid, &digest)?;
             self.validate_policy_package(&revision)?;
             packages.insert(
                 digest.as_str().to_owned(),
@@ -1193,34 +1458,15 @@ impl DaemonLocalStore {
 
     fn resolve_policy_package_name(&self, owner_uid: u32, name: &str) -> Result<ContentDigest> {
         Self::require_resource_name(name, "PolicyPackage")?;
-        let matches = self
-            .list_policy_packages(owner_uid)?
-            .into_iter()
-            .filter(|package| package.name() == name)
-            .count();
-        if matches == 0 {
-            return InvalidRequestSnafu {
-                reason: format!("no PolicyPackage is named `{name}`"),
-            }
-            .fail();
-        }
-        if matches > 1 {
-            return InvalidRequestSnafu {
-                reason: format!("PolicyPackage name `{name}` is ambiguous"),
-            }
-            .fail();
-        }
         let mut candidates = Vec::new();
-        for (digest, package) in self.canonical_records_in_flat_directory::<PolicyPackageRevision>(
-            &self
-                .users
-                .join(owner_uid.to_string())
-                .join("policy-packages"),
-            "policy package",
-        )? {
-            if package.manifest().name() == name {
-                candidates.push(digest);
-            }
+        let user_name_path = self.policy_package_name_path(owner_uid, name);
+        if user_name_path.exists() {
+            candidates.push(self.read_named_resource(
+                owner_uid,
+                "PolicyPackage",
+                name,
+                user_name_path,
+            )?);
         }
         for entry in
             self.directory_entries(&self.packages, "listing root policy packages by name")?
@@ -1254,6 +1500,10 @@ impl DaemonLocalStore {
         candidates.dedup();
         match candidates.as_slice() {
             [digest] => Ok(digest.clone()),
+            [] => InvalidRequestSnafu {
+                reason: format!("no PolicyPackage is named `{name}`"),
+            }
+            .fail(),
             _ => InvalidRequestSnafu {
                 reason: format!("PolicyPackage name `{name}` is ambiguous"),
             }
@@ -1539,6 +1789,7 @@ impl DaemonLocalStore {
     }
 
     fn validate_policy_package(&self, policy: &PolicyPackageRevision) -> Result<()> {
+        PolicyPackageResourceSpec::from_revision(policy)?;
         std::str::from_utf8(policy.policy_config()).map_err(|error| {
             InvalidRequestSnafu {
                 reason: format!(
@@ -1676,6 +1927,14 @@ mod tests {
         unknown_version.api_version = String::from("erebor.dev/v2");
         assert!(unknown_version.validate("Agent", "local-codex").is_err());
         assert!(replacement.validate("PolicySet", "local-codex").is_err());
+
+        let mut agent_json = serde_json::to_value(NamedResourceRecord::agent(
+            "local-codex-2",
+            &first,
+            "codex-v1",
+        )?)?;
+        agent_json["spec"]["policy"] = serde_json::Value::String(String::from("fixture"));
+        assert!(serde_json::from_value::<NamedResourceRecord>(agent_json).is_err());
         Ok(())
     }
 
@@ -1710,7 +1969,7 @@ mod tests {
             b"# Host minimum\n".to_vec(),
         )?;
         let policy_digest = policy.canonical_digest()?;
-        let policy_set = PolicySetRevision::new(policy_digest.clone(), Vec::new(), None)?;
+        let policy_set = PolicySetRevision::new(vec![policy_digest.clone()])?;
         let policy_set_digest = policy_set.canonical_digest()?;
         store.seed_root_curated(&[RootCuratedAdmission::new(
             package,
@@ -1807,7 +2066,7 @@ mod tests {
             BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
             b"# Host minimum\n".to_vec(),
         )?;
-        let policy_set = PolicySetRevision::new(policy.canonical_digest()?, Vec::new(), None)?;
+        let policy_set = PolicySetRevision::new(vec![policy.canonical_digest()?])?;
         assert!(store
             .seed_root_curated(&[RootCuratedAdmission::new(
                 package,
@@ -1820,74 +2079,146 @@ mod tests {
     }
 
     #[test]
-    fn user_policy_revisions_compose_only_with_a_root_curated_minimum(
+    fn policy_sets_compose_ordered_named_user_policy_packages_without_a_root_special_case(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let root = tempfile::tempdir()?;
         let paths = DaemonPaths::for_testing(root.path());
         paths.prepare(crate::paths::DaemonSecurity::current_process())?;
         let store = DaemonLocalStore::installed(&paths)?;
-        let package = AgentPackageManifest::new(
-            "generic-process",
-            "generic-process-v1",
-            "0.1.0",
-            vec![String::from("<argv>")],
-            ContentDigest::new(ADAPTER_DIGEST)?,
-            Vec::new(),
-        )?;
-        let installation = InstallationRecord::new(1000, package.canonical_digest()?, 1);
-        let root_policy = PolicyPackageRevision::new(
-            "host-minimum",
-            b"name = \"host-minimum\"\n".to_vec(),
+        let baseline = PolicyPackageRevision::new(
+            "company-baseline",
+            b"name = \"company-baseline\"\n".to_vec(),
             BTreeMap::from([(
                 String::from("terminal.json"),
-                br#"{"rules":[{"id":"root-allow","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
+                br#"{"rules":[{"id":"baseline-allow","match":{"surface":"terminal"},"decision":"allow"}]}"#.to_vec(),
             )]),
             BTreeMap::new(),
             BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
-            b"# Host minimum\n".to_vec(),
+            b"# Company baseline\n".to_vec(),
         )?;
-        let root_digest = root_policy.canonical_digest()?;
-        let root_set = PolicySetRevision::new(root_digest.clone(), Vec::new(), None)?;
-        store.seed_root_curated(&[RootCuratedAdmission::new(
-            package,
-            installation,
-            root_set,
-            vec![root_policy],
-        )])?;
-        let user_policy = PolicyPackageRevision::new(
-            "user-guardrail",
-            b"name = \"user-guardrail\"\n".to_vec(),
+        let workspace = PolicyPackageRevision::new(
+            "workspace-write",
+            b"name = \"workspace-write\"\n".to_vec(),
             BTreeMap::from([(
                 String::from("terminal.json"),
-                br#"{"rules":[{"id":"user-deny","match":{"surface":"terminal"},"decision":"deny"}]}"#.to_vec(),
+                br#"{"rules":[{"id":"workspace-deny","match":{"surface":"terminal"},"decision":"deny"}]}"#.to_vec(),
             )]),
             BTreeMap::new(),
             BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
-            b"# User guardrail\n".to_vec(),
+            b"# Workspace write policy\n".to_vec(),
         )?;
-        let user_digest = store.store_user_policy_package(1000, &user_policy, u64::MAX)?;
-        let policy_set = store.create_user_policy_set(
+        let baseline_digest = store.store_user_policy_package(1000, &baseline, u64::MAX)?;
+        let workspace_digest = store.store_user_policy_package(1000, &workspace, u64::MAX)?;
+        let forward = store.create_user_policy_set(
             1000,
             "workspace-policy",
-            &[String::from("host-minimum"), String::from("user-guardrail")],
+            &[
+                String::from("company-baseline"),
+                String::from("workspace-write"),
+            ],
+        )?;
+        let reverse = store.create_user_policy_set(
+            1000,
+            "workspace-policy-reversed",
+            &[
+                String::from("workspace-write"),
+                String::from("company-baseline"),
+            ],
         )?;
         assert!(store
-            .create_user_policy_set(1000, "invalid-policy", &[String::from("user-guardrail")])
+            .create_user_policy_set(
+                1000,
+                "duplicate-package",
+                &[
+                    String::from("company-baseline"),
+                    String::from("company-baseline")
+                ],
+            )
             .is_err());
-        let policy_set_digest = store.resolve_policy_set_name(1000, policy_set.name())?;
-        let revision: PolicySetRevision = store.read_canonical(
-            &store.policy_set_path(1000, &policy_set_digest),
-            &policy_set_digest,
+
+        let forward_digest = store.resolve_policy_set_name(1000, forward.name())?;
+        let forward_revision: PolicySetRevision = store.read_canonical(
+            &store.policy_set_path(1000, &forward_digest),
+            &forward_digest,
             "policy set",
         )?;
         assert_eq!(
-            revision
+            forward_revision
                 .policy_input_digests()
                 .iter()
                 .map(|digest| digest.as_str())
                 .collect::<Vec<_>>(),
-            vec![root_digest.as_str(), user_digest.as_str()]
+            vec![baseline_digest.as_str(), workspace_digest.as_str()]
         );
+        assert_ne!(
+            forward_digest,
+            store.resolve_policy_set_name(1000, reverse.name())?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn policy_package_schema_requires_surface_coverage_and_persists_the_typed_resource(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let paths = DaemonPaths::for_testing(root.path());
+        paths.prepare(crate::paths::DaemonSecurity::current_process())?;
+        let store = DaemonLocalStore::installed(&paths)?;
+        let policy = PolicyPackageRevision::new(
+            "fixture-baseline",
+            b"name = \"fixture-baseline\"\n".to_vec(),
+            BTreeMap::from([(
+                String::from("terminal.json"),
+                br#"{"rules":[{"id":"mediate-managed-browser-launch","match":{"surface":"terminal","action":"process_exec","command_contains":"--remote-debugging-port"},"decision":"mediate","reason":"replace raw browser debug launches","mediation":{"kind":"managed_browser_cdp","replacement_surface":"browser_cdp","return_endpoint":"requested_port"}},{"id":"deny-destructive-fixture-command","match":{"surface":"terminal","action":"process_exec","command_contains":"rm -rf"},"decision":"deny","reason":"destructive recursive removal is denied"},{"id":"allow-fixture-processes","match":{"surface":"terminal","action":"process_exec"},"decision":"allow"}]}"#.to_vec(),
+            )]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# Fixture baseline\n".to_vec(),
+        )?;
+        let digest = store.store_user_policy_package(1000, &policy, u64::MAX)?;
+        let record: NamedResourceRecord = serde_json::from_slice(&std::fs::read(
+            store.policy_package_name_path(1000, "fixture-baseline"),
+        )?)?;
+        assert_eq!(record.api_version, "erebor.dev/v1");
+        assert_eq!(record.kind, "PolicyPackage");
+        assert_eq!(record.metadata.name, "fixture-baseline");
+        assert_eq!(record.integrity_digest, digest.as_str());
+        assert!(matches!(
+            record.spec,
+            super::NamedResourceSpec::PolicyPackage(super::PolicyPackageResourceSpec { ref rules })
+                if rules.len() == 3
+        ));
+
+        let restarted = DaemonLocalStore::installed(&paths)?;
+        assert_eq!(
+            restarted
+                .inspect_policy_package(1000, "fixture-baseline")?
+                .name(),
+            "fixture-baseline"
+        );
+        assert_eq!(
+            restarted
+                .list_policy_packages(1000)?
+                .iter()
+                .map(|package| package.name())
+                .collect::<Vec<_>>(),
+            vec!["fixture-baseline"]
+        );
+
+        let missing_surface = PolicyPackageRevision::new(
+            "missing-surface",
+            b"name = \"missing-surface\"\n".to_vec(),
+            BTreeMap::from([(
+                String::from("terminal.json"),
+                br#"{"rules":[{"id":"missing-surface","match":{"action":"process_exec"},"decision":"allow"}]}"#.to_vec(),
+            )]),
+            BTreeMap::new(),
+            BTreeMap::from([(String::from("terminal.json"), br#"{}"#.to_vec())]),
+            b"# Missing surface\n".to_vec(),
+        )?;
+        assert!(restarted
+            .store_user_policy_package(1000, &missing_surface, u64::MAX)
+            .is_err());
         Ok(())
     }
 

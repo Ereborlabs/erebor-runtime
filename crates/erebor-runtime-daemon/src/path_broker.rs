@@ -245,10 +245,11 @@ impl DescriptorBroker {
         uid: u32,
         gid: u32,
         path: &Path,
+        name: &str,
         maximum_bytes: u64,
     ) -> Result<PolicyPackageRevision> {
         let resolved = self.resolve(uid, gid, path, SafePathKind::Directory)?;
-        PolicyPackageDirectoryReader::new(resolved.descriptor, path, maximum_bytes).read()
+        PolicyPackageDirectoryReader::new(resolved.descriptor, path, maximum_bytes).read(name)
     }
 }
 
@@ -289,7 +290,7 @@ impl PolicyPackageDirectoryReader {
         }
     }
 
-    fn read(mut self) -> Result<PolicyPackageRevision> {
+    fn read(mut self, resource_name: &str) -> Result<PolicyPackageRevision> {
         self.validate_root_layout()?;
         let policy_config = self.read_file("policy.toml")?;
         let config_source = std::str::from_utf8(&policy_config).map_err(|error| {
@@ -304,6 +305,15 @@ impl PolicyPackageDirectoryReader {
             }
             .build()
         })?;
+        if config.name != resource_name {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "policy.toml name `{}` does not match requested PolicyPackage name `{resource_name}`",
+                    config.name
+                ),
+            }
+            .fail();
+        }
         PolicyPackageRevision::new(
             config.name,
             policy_config,
@@ -914,7 +924,7 @@ mod tests {
 
         let package =
             PolicyPackageDirectoryReader::new(File::open(root.path())?, root.path(), 4096)
-                .read()?;
+                .read("example")?;
         assert_eq!(package.manifest().name(), "example");
         assert_eq!(package.rules().len(), 1);
         Ok(())
@@ -938,7 +948,30 @@ mod tests {
 
         assert!(
             PolicyPackageDirectoryReader::new(File::open(root.path())?, root.path(), 4096)
-                .read()
+                .read("example")
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn held_directory_reader_requires_the_explicit_policy_package_name(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        fs::write(root.path().join("policy.toml"), "name = \"example\"\n")?;
+        fs::create_dir(root.path().join("rules"))?;
+        fs::write(
+            root.path().join("rules").join("terminal.json"),
+            br#"{"rules":[{"id":"allow","match":{"surface":"terminal"},"decision":"allow"}]}"#,
+        )?;
+        fs::create_dir(root.path().join("examples"))?;
+        fs::create_dir(root.path().join("tests"))?;
+        fs::write(root.path().join("tests").join("terminal.json"), "{}")?;
+        fs::write(root.path().join("README.md"), "# Example\n")?;
+
+        assert!(
+            PolicyPackageDirectoryReader::new(File::open(root.path())?, root.path(), 4096)
+                .read("different-name")
                 .is_err()
         );
         Ok(())

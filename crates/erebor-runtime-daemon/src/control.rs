@@ -1620,6 +1620,12 @@ impl DaemonControlState {
             }
             .fail();
         }
+        if request.name.trim().is_empty() {
+            return InvalidRequestSnafu {
+                reason: String::from("policy package apply requires a resource name"),
+            }
+            .fail();
+        }
         let (maximum, maximum_stored_bytes) = {
             let configuration = self
                 .configuration
@@ -1634,6 +1640,7 @@ impl DaemonControlState {
             peer.uid,
             peer.gid,
             std::path::Path::new(&request.path),
+            &request.name,
             maximum,
         )?;
         self.apply_session_mutation(

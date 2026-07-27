@@ -386,6 +386,32 @@ fn accepts_daemon_owned_policy_catalog_commands() {
 }
 
 #[test]
+fn policy_package_apply_requires_an_explicit_resource_name() {
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "policy",
+        "package",
+        "apply",
+        "/work/fixture-baseline",
+        "--name",
+        "fixture-baseline",
+        "--idempotency-key",
+        "policy-package-1",
+    ])
+    .is_ok());
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "policy",
+        "package",
+        "apply",
+        "/work/fixture-baseline",
+        "--idempotency-key",
+        "policy-package-1",
+    ])
+    .is_err());
+}
+
+#[test]
 fn rejects_removed_dev_and_invalid_audit_options() {
     let dev = Cli::try_parse_from(["erebor", "dev"]);
     let audit = Cli::try_parse_from([
