@@ -74,6 +74,7 @@ use erebor_runtime_ipc::{
     },
     AsyncFrameCodec,
 };
+use erebor_runtime_telemetry::{error, info, warn, JsonlTelemetry};
 use prost::Message;
 use rustix::{
     fs::chown,
@@ -89,9 +90,10 @@ use tokio::{
 use crate::{
     approvals::DaemonApprovalRepository,
     config::DaemonConfig,
-    error::{InvalidRequestSnafu, IoSnafu, IpcSnafu, StateLockSnafu, UnauthorizedSnafu},
+    error::{
+        InvalidRequestSnafu, IoSnafu, IpcSnafu, StateLockSnafu, TelemetrySnafu, UnauthorizedSnafu,
+    },
     idempotency::{DaemonIdempotencyStore, IdempotencyAction, MutationIntent},
-    log::DaemonLogStore,
     paths::{DaemonLock, DaemonSecurity},
     session_api::DaemonSessionApi,
     DaemonError, DaemonPaths, Result,
@@ -120,7 +122,7 @@ struct DaemonControlState {
     security: DaemonSecurity,
     configuration: RwLock<DaemonConfiguration>,
     idempotency: Mutex<DaemonIdempotencyStore>,
-    logs: DaemonLogStore,
+    telemetry: JsonlTelemetry,
     sessions: DaemonSessionApi,
     approvals: DaemonApprovalRepository,
     shutdown: watch::Sender<bool>,
@@ -256,16 +258,18 @@ impl DaemonControlService {
         let socket_path = paths.socket_path();
         let listener = Self::bind_listener(&socket_path, security)?;
         let socket = DaemonSocket::from_bound_path(socket_path)?;
-        let logs = DaemonLogStore::open(paths.log_path(), config.max_log_bytes)?;
+        let telemetry =
+            JsonlTelemetry::open(paths.log_path(), config.max_log_bytes).context(TelemetrySnafu)?;
         let sessions = DaemonSessionApi::installed(&paths, &config)?;
         let approvals = DaemonApprovalRepository::installed(&paths)?;
         let reconciled = sessions.reconcile()?;
-        logs.record("INFO", "erebord daemon control service started")?;
+        telemetry
+            .emit(|| info!("erebord daemon control service started"))
+            .context(TelemetrySnafu)?;
         if !reconciled.is_empty() {
-            logs.record(
-                "INFO",
-                format!("reconciled {} durable sessions", reconciled.len()),
-            )?;
+            telemetry
+                .emit(|| info!("reconciled durable sessions", count = %reconciled.len()))
+                .context(TelemetrySnafu)?;
         }
         let (shutdown_sender, shutdown) = watch::channel(false);
         let state = Arc::new(DaemonControlState {
@@ -281,7 +285,7 @@ impl DaemonControlService {
                 value: config,
                 generation: 1,
             }),
-            logs,
+            telemetry,
             sessions,
             approvals,
             shutdown: shutdown_sender,
@@ -338,8 +342,8 @@ impl DaemonControlService {
         if result.is_err() {
             let _result = self
                 .state
-                .logs
-                .record("ERROR", "daemon control service terminated unexpectedly");
+                .telemetry
+                .emit(|| error!("daemon control service terminated unexpectedly"));
         }
         result
     }
@@ -386,8 +390,8 @@ impl DaemonControlState {
             Ok(peer) => peer,
             Err(_error) => {
                 let _result = self
-                    .logs
-                    .record("ERROR", "daemon peer credential lookup failed");
+                    .telemetry
+                    .emit(|| error!("daemon peer credential lookup failed"));
                 return;
             }
         };
@@ -395,20 +399,21 @@ impl DaemonControlState {
             Ok(permit) => permit,
             Err(_error) => {
                 let _result = self
-                    .logs
-                    .record("WARN", "daemon peer exceeded its active-stream limit");
+                    .telemetry
+                    .emit(|| warn!("daemon peer exceeded its active-stream limit"));
                 return;
             }
         };
         if self
-            .logs
-            .record(
-                "INFO",
-                format!(
-                    "accepted daemon client pid={:?} uid={} gid={}",
-                    peer.pid, peer.uid, peer.gid
-                ),
-            )
+            .telemetry
+            .emit(|| {
+                info!(
+                    "accepted daemon client",
+                    pid = %peer.pid.unwrap_or_default(),
+                    uid = %peer.uid,
+                    gid = %peer.gid
+                )
+            })
             .is_err()
         {
             return;
@@ -418,7 +423,9 @@ impl DaemonControlState {
             Err(_error) => return,
         };
         if let Err(_error) = self.handle_hello(&mut stream, peer, hello).await {
-            let _result = self.logs.record("WARN", "daemon client handshake rejected");
+            let _result = self
+                .telemetry
+                .emit(|| warn!("daemon client handshake rejected"));
             return;
         }
         loop {
@@ -427,7 +434,9 @@ impl DaemonControlState {
                 Err(_error) => return,
             };
             if let Err(_error) = self.dispatch(&mut stream, peer, envelope).await {
-                let _result = self.logs.record("WARN", "daemon client request failed");
+                let _result = self
+                    .telemetry
+                    .emit(|| warn!("daemon client request failed"));
                 return;
             }
         }
@@ -670,12 +679,14 @@ impl DaemonControlState {
             .value
             .max_log_records as usize;
         let records = self
-            .logs
-            .records_after(request.after_sequence, maximum.min(configured))?;
+            .telemetry
+            .records_after(request.after_sequence, maximum.min(configured))
+            .context(TelemetrySnafu)?;
         let record_count = records.len();
         let mut last_sequence = request.after_sequence;
         for (index, record) in records.into_iter().enumerate() {
             last_sequence = record.sequence;
+            let message = record.rendered_message();
             self.write_message(
                 stream,
                 envelope.message_id.saturating_add(index as u64 + 1),
@@ -685,7 +696,7 @@ impl DaemonControlState {
                     sequence: record.sequence,
                     timestamp: record.timestamp,
                     level: record.level,
-                    message: record.message,
+                    message,
                 },
             )
             .await?;
@@ -2003,13 +2014,15 @@ impl DaemonControlState {
         } else {
             self.sessions.list(request.target_uid)?
         };
-        self.logs.record(
-            "INFO",
-            format!(
-                "root administration listed sessions target_uid={} all_users={}",
-                request.target_uid, request.all_users
-            ),
-        )?;
+        self.telemetry
+            .emit(|| {
+                info!(
+                    "root administration listed sessions",
+                    target_uid = %request.target_uid,
+                    all_users = %request.all_users
+                )
+            })
+            .context(TelemetrySnafu)?;
         self.write_message(
             stream,
             envelope.message_id.saturating_add(1),
@@ -2033,13 +2046,15 @@ impl DaemonControlState {
         let record = self
             .sessions
             .inspect(request.target_uid, &request.session_id)?;
-        self.logs.record(
-            "INFO",
-            format!(
-                "root administration inspected session target_uid={} session_id={}",
-                request.target_uid, request.session_id
-            ),
-        )?;
+        self.telemetry
+            .emit(|| {
+                info!(
+                    "root administration inspected session",
+                    target_uid = %request.target_uid,
+                    session_id = %request.session_id
+                )
+            })
+            .context(TelemetrySnafu)?;
         self.write_message(
             stream,
             envelope.message_id.saturating_add(1),
@@ -2141,12 +2156,16 @@ impl DaemonControlState {
             })?;
         let outcome = self.mutate(peer, operation, envelope, intent)?;
         if outcome.applied {
-            self.logs.record(
-                "INFO",
-                format!(
-                    "root administration applied {operation} target_uid={target_uid} session_id={session_id}"
-                ),
-            )?;
+            self.telemetry
+                .emit(|| {
+                    info!(
+                        "root administration applied session mutation",
+                        operation = %operation,
+                        target_uid = %target_uid,
+                        session_id = %session_id
+                    )
+                })
+                .context(TelemetrySnafu)?;
         }
         self.write_mutation_response(stream, envelope, outcome.response)
             .await
@@ -2192,10 +2211,16 @@ impl DaemonControlState {
                     .fail();
                 }
             };
-            self.logs.record(
-                "INFO",
-                format!("root approver {action} approval_id={approval_id} owner_uid={owner_uid}"),
-            )?;
+            self.telemetry
+                .emit(|| {
+                    info!(
+                        "root approver applied approval mutation",
+                        action = %action,
+                        approval_id = %approval_id,
+                        owner_uid = %owner_uid
+                    )
+                })
+                .context(TelemetrySnafu)?;
         }
         self.write_mutation_response(stream, envelope, outcome.response)
             .await
@@ -2222,7 +2247,9 @@ impl DaemonControlState {
             },
         )?;
         if outcome.applied {
-            self.logs.record("INFO", "daemon configuration reloaded")?;
+            self.telemetry
+                .emit(|| info!("daemon configuration reloaded"))
+                .context(TelemetrySnafu)?;
         }
         self.write_mutation_response(stream, envelope, outcome.response)
             .await
@@ -2248,7 +2275,9 @@ impl DaemonControlState {
         }
         let outcome = self.mutate(peer, "stop", envelope, MutationIntent::Stop)?;
         if outcome.applied {
-            self.logs.record("INFO", "daemon stop accepted")?;
+            self.telemetry
+                .emit(|| info!("daemon stop accepted"))
+                .context(TelemetrySnafu)?;
         }
         self.write_mutation_response(stream, envelope, outcome.response)
             .await?;
@@ -2777,13 +2806,14 @@ mod tests {
         },
         AsyncFrameCodec, IpcProtocolError,
     };
+    use erebor_runtime_telemetry::JsonlTelemetry;
     use rustix::process::geteuid;
     use tempfile::TempDir;
     use tokio::{net::UnixStream, sync::Semaphore};
 
     use super::{
         evaluate_policy_test, DaemonApprovalRepository, DaemonConfiguration, DaemonControlState,
-        DaemonLogStore, DaemonSecurity, DaemonSocket,
+        DaemonSecurity, DaemonSocket,
     };
     use crate::{
         config::DaemonConfig, idempotency::DaemonIdempotencyStore, session_api::DaemonSessionApi,
@@ -2837,9 +2867,9 @@ mod tests {
         let hello = read(&mut client).await?;
         assert_eq!(hello.correlation_id, 1);
         assert_eq!(hello.message_kind, KIND_DAEMON_HELLO_ACK);
-        assert!(state.logs.records_after(0, 10)?.iter().any(|record| {
+        assert!(state.telemetry.records_after(0, 10)?.iter().any(|record| {
             record
-                .message
+                .rendered_message()
                 .contains(&format!("uid={}", geteuid().as_raw()))
         }));
 
@@ -3050,7 +3080,7 @@ mod tests {
         fs::set_permissions(paths.config_path(), fs::Permissions::from_mode(0o600))?;
         paths.prepare(security)?;
         let configuration = DaemonConfig::load(&paths, security)?;
-        let logs = DaemonLogStore::open(paths.log_path(), configuration.max_log_bytes)?;
+        let telemetry = JsonlTelemetry::open(paths.log_path(), configuration.max_log_bytes)?;
         let sessions = DaemonSessionApi::installed(&paths, &configuration)?;
         let approvals = DaemonApprovalRepository::installed(&paths)?;
         let (shutdown, _receiver) = tokio::sync::watch::channel(false);
@@ -3067,7 +3097,7 @@ mod tests {
                 value: configuration,
                 generation: 1,
             }),
-            logs,
+            telemetry,
             sessions,
             approvals,
             shutdown,

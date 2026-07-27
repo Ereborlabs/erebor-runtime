@@ -2,8 +2,8 @@ use std::{ffi::OsString, path::PathBuf};
 
 use erebor_runtime_daemon::{DaemonControlService, DaemonPaths};
 use erebor_runtime_error::ErrorExt;
+use erebor_runtime_telemetry::{error, init_stderr_logging};
 use tokio::signal::unix::{signal, SignalKind};
-use tracing_subscriber::{filter::LevelFilter, EnvFilter};
 
 enum LaunchMode {
     Run(DaemonPaths),
@@ -53,8 +53,8 @@ async fn main() {
     let service = match DaemonControlService::start_with_paths(paths).await {
         Ok(service) => service,
         Err(error) => {
-            init_foreground_logging();
-            erebor_runtime_telemetry::error!(error; "erebord failed before daemon logging initialized");
+            init_stderr_logging();
+            error!(error; "erebord failed before daemon telemetry initialized");
             eprintln!("{}", error.output_msg());
             std::process::exit(1);
         }
@@ -62,8 +62,8 @@ async fn main() {
     let mut terminate = match signal(SignalKind::terminate()) {
         Ok(signal) => signal,
         Err(error) => {
-            init_foreground_logging();
-            erebor_runtime_telemetry::error!(error; "erebord could not register SIGTERM handling");
+            init_stderr_logging();
+            error!(error; "erebord could not register SIGTERM handling");
             eprintln!("erebord could not register SIGTERM handling: {error}");
             std::process::exit(1);
         }
@@ -71,8 +71,8 @@ async fn main() {
     let mut interrupt = match signal(SignalKind::interrupt()) {
         Ok(signal) => signal,
         Err(error) => {
-            init_foreground_logging();
-            erebor_runtime_telemetry::error!(error; "erebord could not register SIGINT handling");
+            init_stderr_logging();
+            error!(error; "erebord could not register SIGINT handling");
             eprintln!("erebord could not register SIGINT handling: {error}");
             std::process::exit(1);
         }
@@ -143,17 +143,6 @@ fn set_path_override(
 
 fn usage() -> &'static str {
     "Usage: erebord [OPTIONS]\n\nRun the privileged local Erebor daemon control service.\n\nOptions:\n  --config <PATH>       Root-owned daemon configuration (default: /etc/erebor/erebord.json)\n  --runtime-dir <PATH>  Socket and lock directory (default: /run/erebor)\n  --log-dir <PATH>      Daemon log directory (default: /var/log/erebor)\n  --state-dir <PATH>    Daemon persistent-state directory (default: /var/lib/erebor)\n  -h, --help            Print this help\n\nEach option overrides only its named local path. They do not add a remote endpoint, context, or daemon-selection model."
-}
-
-fn init_foreground_logging() {
-    let filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    let _result = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(true)
-        .with_writer(std::io::stderr)
-        .try_init();
 }
 
 #[cfg(test)]

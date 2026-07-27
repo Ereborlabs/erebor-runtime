@@ -7,7 +7,6 @@ mod control;
 mod error;
 mod idempotency;
 mod local_store;
-mod log;
 mod path_broker;
 mod paths;
 mod session_api;
