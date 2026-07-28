@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -29,6 +29,10 @@ use uuid::Uuid;
 
 use crate::context_dag::SessionContextResolver;
 use crate::local_store::DaemonLocalStore;
+
+// The Linux controller moves the descriptor-held executable to this private
+// path before the process guard observes Codex or its hook descendants.
+const CODEX_LINUX_WORKLOAD_EXECUTABLE: &str = "/run/erebor/admitted-executable";
 
 /// The session-bound policy route. It reconstructs every immutable policy
 /// input named by the admitted `SessionSpec`; it never reads a mutable policy
@@ -100,12 +104,7 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
             .codex_hook_service
             .register_session(
                 spec,
-                output.prepared_executable().ok_or_else(|| {
-                    self.invalid_error(
-                        spec,
-                        "Codex session has no prepared executable guard identity",
-                    )
-                })?,
+                self.codex_workload_executable(spec, output)?,
                 codex.package().definition(),
                 self.context_resolver
                     .resolve(spec)
@@ -140,6 +139,20 @@ impl SessionInterceptionRouterFactory for StoredPolicyInterceptionRouterFactory 
 }
 
 impl StoredPolicyInterceptionRouterFactory {
+    fn codex_workload_executable(
+        &self,
+        spec: &SessionSpec,
+        output: &OutputEndpoints,
+    ) -> Result<&'static Path, SessionManagerError> {
+        output.prepared_executable().ok_or_else(|| {
+            self.invalid_error(
+                spec,
+                "Codex session has no prepared executable guard identity",
+            )
+        })?;
+        Ok(Path::new(CODEX_LINUX_WORKLOAD_EXECUTABLE))
+    }
+
     fn is_codex_app_server(
         &self,
         spec: &SessionSpec,

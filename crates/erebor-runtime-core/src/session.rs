@@ -15,11 +15,13 @@ pub use adapter::{
     AgentAdapterDescriptor, AgentAdapterInvocationShape, AGENT_ADAPTER_DESCRIPTOR_SCHEMA_VERSION,
 };
 pub use admission::{
-    ActiveSessionSignalKind, DaemonFailureMode, EndpointProjection, EvidenceRequirement,
-    FilesystemProjection, ImmutableIdentity, OutputPlan, OutputStreamRequirements,
-    PrivateStateProjection, RunRequest, RunnerBinding, RunnerCapabilityDocument, RunnerId,
-    RunnerRecovery, SafePathBinding, SafePathKind, ScriptInterpreterBinding, SessionAdmission,
-    SessionOwner, SessionResourceAssociation, SessionSpec, TerminalSize, WorkloadPrivilegePlan,
+    ActiveSessionSignalKind, CallerHomeFilesystemSource, CallerHomeFilesystemSourceAccess,
+    CallerHomeFilesystemSourceKind, CallerHomeFilesystemSourceView, DaemonFailureMode,
+    EndpointProjection, EvidenceRequirement, FilesystemProjection, FilesystemProjectionTarget,
+    ImmutableIdentity, OutputPlan, OutputStreamRequirements, PrivateStateProjection, RunRequest,
+    RunnerBinding, RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding,
+    SafePathKind, ScriptInterpreterBinding, SessionAdmission, SessionOwner,
+    SessionResourceAssociation, SessionSpec, TerminalSize, WorkloadPrivilegePlan,
     RUNNER_CAPABILITY_SCHEMA_VERSION, RUNNER_RECOVERY_SCHEMA_VERSION, SESSION_SPEC_SCHEMA_VERSION,
 };
 use docker::DockerSessionOutputMode;

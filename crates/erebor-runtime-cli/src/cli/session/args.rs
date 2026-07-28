@@ -35,6 +35,16 @@ pub(crate) struct CodexRunArgs {
     /// Run the Agent's certified app-server entrypoint instead of its interactive entrypoint.
     #[arg(long)]
     pub(crate) app_server: bool,
+    /// Admit one caller-home file or directory as `relative-path:kind:access`.
+    #[arg(long = "caller-home-source", value_parser = parse_caller_home_source)]
+    pub(crate) caller_home_sources: Vec<CallerHomeSourceArg>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CallerHomeSourceArg {
+    pub(crate) relative_path: String,
+    pub(crate) kind: String,
+    pub(crate) access: String,
 }
 
 impl SessionArgs {
@@ -164,6 +174,9 @@ pub(crate) struct GenericSessionRequestArgs {
     /// Pass one explicitly declared environment value (NAME=VALUE).
     #[arg(long = "env", value_parser = parse_environment)]
     pub(crate) environment: Vec<(String, String)>,
+    /// Admit one caller-home file or directory as `relative-path:kind:access`.
+    #[arg(long = "caller-home-source", value_parser = parse_caller_home_source)]
+    pub(crate) caller_home_sources: Vec<CallerHomeSourceArg>,
     /// Pass one approved secret provider reference.
     #[arg(long = "secret", value_parser = parse_non_empty_string)]
     pub(crate) secret_references: Vec<String>,
@@ -419,6 +432,32 @@ fn parse_environment(value: &str) -> Result<(String, String), String> {
         return Err(String::from("environment name must be a shell identifier"));
     }
     Ok((name.to_owned(), value.to_owned()))
+}
+
+fn parse_caller_home_source(value: &str) -> Result<CallerHomeSourceArg, String> {
+    let mut fields = value.rsplitn(3, ':');
+    let access = fields
+        .next()
+        .ok_or_else(|| String::from("must use relative-path:kind:access"))?;
+    let kind = fields
+        .next()
+        .ok_or_else(|| String::from("must use relative-path:kind:access"))?;
+    let relative_path = fields
+        .next()
+        .ok_or_else(|| String::from("must use relative-path:kind:access"))?;
+    if relative_path.is_empty()
+        || !matches!(kind, "file" | "directory")
+        || !matches!(access, "read_only" | "read_write")
+    {
+        return Err(String::from(
+            "must use non-empty relative-path plus file|directory and read_only|read_write",
+        ));
+    }
+    Ok(CallerHomeSourceArg {
+        relative_path: relative_path.to_owned(),
+        kind: kind.to_owned(),
+        access: access.to_owned(),
+    })
 }
 
 fn parse_stream(value: &str) -> Result<String, String> {

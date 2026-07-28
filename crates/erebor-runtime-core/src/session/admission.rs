@@ -11,7 +11,7 @@ use snafu::ensure;
 
 use crate::{error::session_spec::InvalidSnafu, SessionSpecError};
 
-pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 5;
+pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 6;
 pub const RUNNER_CAPABILITY_SCHEMA_VERSION: u32 = 2;
 pub const RUNNER_RECOVERY_SCHEMA_VERSION: u32 = 1;
 
@@ -717,11 +717,182 @@ impl ImmutableIdentity {
     }
 }
 
+/// Declares how a filesystem projection's target is made available to the
+/// workload. This is an internal, daemon-admitted execution fact; it is never
+/// a user-supplied mount request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilesystemProjectionTarget {
+    /// The target is already present in the host filesystem and is used only
+    /// as a mountpoint in the private session namespace.
+    Preinstalled,
+    /// A private overlay is mounted over `mount_root` in the session namespace
+    /// before the target is created. This prevents managed artifacts from
+    /// creating files in the host filesystem.
+    SessionOverlay { mount_root: PathBuf },
+}
+
+impl FilesystemProjectionTarget {
+    fn validate(&self, workload_path: &Path) -> Result<(), SessionSpecError> {
+        match self {
+            Self::Preinstalled => Ok(()),
+            Self::SessionOverlay { mount_root } => {
+                ensure!(
+                    is_normalized_absolute(mount_root)
+                        && mount_root != workload_path
+                        && workload_path.starts_with(mount_root),
+                    InvalidSnafu {
+                        field: "filesystem_projection.target",
+                        reason: String::from(
+                            "session overlay requires an absolute strict parent of the workload path",
+                        ),
+                    }
+                );
+                Ok(())
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn session_overlay_root(&self) -> Option<&Path> {
+        match self {
+            Self::Preinstalled => None,
+            Self::SessionOverlay { mount_root } => Some(mount_root),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FilesystemProjection {
     source: SafePathBinding,
     workload_path: PathBuf,
     read_only: bool,
+    target: FilesystemProjectionTarget,
+}
+
+/// A caller-home path admitted as an input to one Session's intrinsic
+/// filesystem Surface binding.
+///
+/// This is a Session input, not Agent configuration: an Agent is portable,
+/// while the caller's home is specific to one concrete run.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CallerHomeFilesystemSource {
+    relative_path: PathBuf,
+    kind: CallerHomeFilesystemSourceKind,
+    access: CallerHomeFilesystemSourceAccess,
+}
+
+impl CallerHomeFilesystemSource {
+    pub fn new(
+        relative_path: PathBuf,
+        kind: CallerHomeFilesystemSourceKind,
+        access: CallerHomeFilesystemSourceAccess,
+    ) -> Result<Self, SessionSpecError> {
+        let value = Self {
+            relative_path,
+            kind,
+            access,
+        };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn validate(&self) -> Result<(), SessionSpecError> {
+        ensure!(
+            is_normalized_relative(&self.relative_path),
+            InvalidSnafu {
+                field: "caller_home_filesystem_source.relative_path",
+                reason: String::from("must be a normalized non-empty relative path"),
+            }
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn relative_path(&self) -> &Path {
+        &self.relative_path
+    }
+
+    #[must_use]
+    pub const fn kind(&self) -> CallerHomeFilesystemSourceKind {
+        self.kind
+    }
+
+    #[must_use]
+    pub const fn access(&self) -> CallerHomeFilesystemSourceAccess {
+        self.access
+    }
+}
+
+/// The filesystem object type admitted below the authenticated caller's home.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallerHomeFilesystemSourceKind {
+    File,
+    Directory,
+}
+
+/// The access granted to one caller-home source in the Session filesystem view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CallerHomeFilesystemSourceAccess {
+    ReadOnly,
+    ReadWrite,
+}
+
+impl CallerHomeFilesystemSourceAccess {
+    #[must_use]
+    pub const fn read_only(self) -> bool {
+        matches!(self, Self::ReadOnly)
+    }
+}
+
+/// A validated set of caller-home inputs for one Session filesystem view.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CallerHomeFilesystemSourceView {
+    sources: Vec<CallerHomeFilesystemSource>,
+}
+
+impl CallerHomeFilesystemSourceView {
+    pub fn new(sources: Vec<CallerHomeFilesystemSource>) -> Result<Self, SessionSpecError> {
+        let value = Self { sources };
+        value.validate()?;
+        Ok(value)
+    }
+
+    pub fn validate(&self) -> Result<(), SessionSpecError> {
+        self.sources
+            .iter()
+            .try_for_each(CallerHomeFilesystemSource::validate)?;
+        ensure!(
+            !self.sources.is_empty()
+                && self.sources.iter().enumerate().all(|(index, source)| {
+                    self.sources.iter().enumerate().all(|(other_index, other)| {
+                        index == other_index
+                            || (!source.relative_path.starts_with(&other.relative_path)
+                                && !other.relative_path.starts_with(&source.relative_path))
+                    })
+                }),
+            InvalidSnafu {
+                field: "caller_home_filesystem_source_view.sources",
+                reason: String::from("must be non-empty with no duplicate or overlapping paths"),
+            }
+        );
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn sources(&self) -> &[CallerHomeFilesystemSource] {
+        &self.sources
+    }
+
+    #[must_use]
+    pub fn includes_file(&self, relative_path: &Path) -> bool {
+        self.sources.iter().any(|source| {
+            source.relative_path == relative_path
+                && source.kind == CallerHomeFilesystemSourceKind::File
+        })
+    }
 }
 
 /// Immutable public resource names associated with one concrete runtime
@@ -846,10 +1017,39 @@ impl FilesystemProjection {
         workload_path: PathBuf,
         read_only: bool,
     ) -> Result<Self, SessionSpecError> {
+        Self::with_target(
+            source,
+            workload_path,
+            read_only,
+            FilesystemProjectionTarget::Preinstalled,
+        )
+    }
+
+    pub fn session_overlay(
+        source: SafePathBinding,
+        workload_path: PathBuf,
+        read_only: bool,
+        mount_root: PathBuf,
+    ) -> Result<Self, SessionSpecError> {
+        Self::with_target(
+            source,
+            workload_path,
+            read_only,
+            FilesystemProjectionTarget::SessionOverlay { mount_root },
+        )
+    }
+
+    fn with_target(
+        source: SafePathBinding,
+        workload_path: PathBuf,
+        read_only: bool,
+        target: FilesystemProjectionTarget,
+    ) -> Result<Self, SessionSpecError> {
         let value = Self {
             source,
             workload_path,
             read_only,
+            target,
         };
         value.validate()?;
         Ok(value)
@@ -864,6 +1064,7 @@ impl FilesystemProjection {
                 reason: String::from("must be absolute"),
             }
         );
+        self.target.validate(&self.workload_path)?;
         Ok(())
     }
 
@@ -880,6 +1081,11 @@ impl FilesystemProjection {
     #[must_use]
     pub const fn read_only(&self) -> bool {
         self.read_only
+    }
+
+    #[must_use]
+    pub const fn target(&self) -> &FilesystemProjectionTarget {
+        &self.target
     }
 }
 
@@ -1753,17 +1959,27 @@ fn is_normalized_absolute(path: &Path) -> bool {
         && components.all(|component| matches!(component, Component::Normal(_)))
 }
 
+fn is_normalized_relative(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
-        path::PathBuf,
+        path::{Path, PathBuf},
     };
 
     use erebor_runtime_events::SessionId;
 
     use super::{
-        ActiveSessionSignalKind, DaemonFailureMode, EvidenceRequirement, ImmutableIdentity,
+        ActiveSessionSignalKind, CallerHomeFilesystemSource, CallerHomeFilesystemSourceAccess,
+        CallerHomeFilesystemSourceKind, CallerHomeFilesystemSourceView, DaemonFailureMode,
+        EvidenceRequirement, FilesystemProjection, FilesystemProjectionTarget, ImmutableIdentity,
         OutputPlan, OutputStreamRequirements, PrivateStateProjection, RunnerBinding,
         RunnerCapabilityDocument, RunnerId, RunnerRecovery, SafePathBinding, SafePathKind,
         SessionAdmission, SessionOwner, SessionResourceAssociation, SessionSpec,
@@ -1874,6 +2090,52 @@ mod tests {
     }
 
     #[test]
+    fn caller_home_source_view_is_generic_and_rejects_overlapping_paths(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source =
+            |path, kind, access| CallerHomeFilesystemSource::new(PathBuf::from(path), kind, access);
+        let view = CallerHomeFilesystemSourceView::new(vec![
+            source(
+                ".bashrc",
+                CallerHomeFilesystemSourceKind::File,
+                CallerHomeFilesystemSourceAccess::ReadOnly,
+            )?,
+            source(
+                ".codex",
+                CallerHomeFilesystemSourceKind::Directory,
+                CallerHomeFilesystemSourceAccess::ReadWrite,
+            )?,
+            source(
+                "go/src/project",
+                CallerHomeFilesystemSourceKind::Directory,
+                CallerHomeFilesystemSourceAccess::ReadWrite,
+            )?,
+        ])?;
+
+        assert!(view.includes_file(Path::new(".bashrc")));
+        assert!(CallerHomeFilesystemSource::new(
+            PathBuf::from("../.codex"),
+            CallerHomeFilesystemSourceKind::Directory,
+            CallerHomeFilesystemSourceAccess::ReadWrite,
+        )
+        .is_err());
+        assert!(CallerHomeFilesystemSourceView::new(vec![
+            source(
+                ".codex",
+                CallerHomeFilesystemSourceKind::Directory,
+                CallerHomeFilesystemSourceAccess::ReadWrite,
+            )?,
+            source(
+                ".codex/config.toml",
+                CallerHomeFilesystemSourceKind::File,
+                CallerHomeFilesystemSourceAccess::ReadOnly,
+            )?,
+        ])
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
     fn codex_private_state_projection_owns_home_environment_names(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut admission = admission(DaemonFailureMode::Terminate)?;
@@ -1962,6 +2224,35 @@ mod tests {
         assert!(path("/usr/bin/agent", 3, SafePathKind::Executable)?
             .with_content_sha256("not-a-digest")
             .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn filesystem_projection_session_overlay_requires_a_strict_parent(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source = path("/var/lib/erebor/requirements.toml", 7, SafePathKind::File)?;
+        let projection = FilesystemProjection::session_overlay(
+            source.clone(),
+            PathBuf::from("/etc/codex/requirements.toml"),
+            true,
+            PathBuf::from("/etc"),
+        )?;
+
+        assert_eq!(
+            projection.target().session_overlay_root(),
+            Some(std::path::Path::new("/etc"))
+        );
+        assert!(FilesystemProjection::session_overlay(
+            source,
+            PathBuf::from("/etc/codex/requirements.toml"),
+            true,
+            PathBuf::from("/usr/lib"),
+        )
+        .is_err());
+        assert!(matches!(
+            projection.target(),
+            FilesystemProjectionTarget::SessionOverlay { .. }
+        ));
         Ok(())
     }
 }

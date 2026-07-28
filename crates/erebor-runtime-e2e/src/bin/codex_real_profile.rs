@@ -199,9 +199,10 @@ impl ConfigureOptions {
             ],
             managed_artifacts,
             CodexHookContract::new(
-                CodexHookShell::Direct,
+                CodexHookShell::Bash,
                 vec![
                     CodexHookExec::InstalledExecutable,
+                    CodexHookExec::AbsolutePath(PathBuf::from("/usr/bin/bash")),
                     CodexHookExec::ManagedHook,
                 ],
                 vec![

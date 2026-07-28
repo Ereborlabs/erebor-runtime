@@ -5,6 +5,7 @@ mod response;
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
@@ -12,22 +13,26 @@ use std::{
 };
 
 use erebor_runtime_core::{
-    ActiveSessionSignal, EndpointProjection, FilesystemProjection, ImmutableIdentity,
-    SafePathBinding, SafePathKind, SessionLifecycleState, SessionOwner, SessionResourceAssociation,
-    SessionSpec, TerminalSize,
+    ActiveSessionSignal, CallerHomeFilesystemSource, CallerHomeFilesystemSourceAccess,
+    CallerHomeFilesystemSourceKind, CallerHomeFilesystemSourceView, EndpointProjection,
+    FilesystemProjection, ImmutableIdentity, SafePathBinding, SafePathKind, SessionLifecycleState,
+    SessionOwner, SessionResourceAssociation, SessionSpec, TerminalSize,
 };
 use erebor_runtime_ipc::v1::{
-    AgentInstallResponse, CodexAppServerAttachResponse, CodexAppServerInputCloseResponse,
-    CodexAppServerInputResponse, CodexRunRequest, PolicyPackageRecord, PolicySetRecord,
-    SessionAliasListResponse, SessionAliasRecord, SessionAttachResponse, SessionCreateRequest,
-    SessionCreateResponse, SessionInputLeaseResponse, SessionInputResponse, SessionListResponse,
+    AgentInstallResponse, CallerHomeFilesystemSource as IpcCallerHomeFilesystemSource,
+    CodexAppServerAttachResponse, CodexAppServerInputCloseResponse, CodexAppServerInputResponse,
+    CodexRunRequest, PolicyPackageRecord, PolicySetRecord, SessionAliasListResponse,
+    SessionAliasRecord, SessionAttachResponse, SessionCreateRequest, SessionCreateResponse,
+    SessionEnvironmentEntry, SessionInputLeaseResponse, SessionInputResponse, SessionListResponse,
     SessionPruneResponse, SessionRecord, SessionTerminalResizeResponse, SurfaceListResponse,
     SurfaceRecord, KIND_CODEX_APP_SERVER_ATTACH_RESPONSE, KIND_POLICY_PACKAGE_RECORD,
     KIND_POLICY_SET_RECORD, KIND_SESSION_ALIAS_RECORD, KIND_SESSION_ATTACH_RESPONSE,
     KIND_SESSION_CREATE_RESPONSE, KIND_SESSION_INPUT_LEASE_RESPONSE, KIND_SESSION_PRUNE_RESPONSE,
     KIND_SESSION_RECORD, KIND_SURFACE_RECORD,
 };
-use erebor_runtime_packages::{ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact};
+use erebor_runtime_packages::{
+    CodexHookContract, ContentDigest, LocalArtifactProvider, VerifiedLocalArtifact,
+};
 use erebor_runtime_session::{
     AgentAdapterRegistry, ChildContextDelivery, ChildContextDeliveryDispatcher,
     ChildContextDeliveryHandler, CodexAppServerService, CodexHookService, ContextAgentControl,
@@ -40,6 +45,7 @@ use erebor_runtime_session::{
 use prost::Message;
 use sha2::{Digest, Sha256};
 use snafu::ResultExt;
+use users::os::unix::UserExt;
 use uuid::Uuid;
 
 use crate::{
@@ -578,6 +584,7 @@ impl DaemonSessionApi {
             configuration_generation,
             config,
             false,
+            false,
         )
     }
 
@@ -609,6 +616,7 @@ impl DaemonSessionApi {
             || request.detached
             || request.terminal_rows != 0
             || request.terminal_columns != 0
+            || !request.caller_home_sources.is_empty()
         {
             return crate::error::InvalidRequestSnafu {
                 reason: String::from(
@@ -652,6 +660,7 @@ impl DaemonSessionApi {
         configuration_generation: u64,
         config: &DaemonConfig,
         allow_codex_adapter: bool,
+        private_state_projection: bool,
     ) -> Result<SessionSpec> {
         self.admit_request_with_adapter_and_parent(
             request,
@@ -661,6 +670,7 @@ impl DaemonSessionApi {
             configuration_generation,
             config,
             allow_codex_adapter,
+            private_state_projection,
             None,
         )
     }
@@ -675,6 +685,7 @@ impl DaemonSessionApi {
         configuration_generation: u64,
         config: &DaemonConfig,
         allow_codex_adapter: bool,
+        private_state_projection: bool,
         parent_context: Option<erebor_runtime_context::ContextPin>,
     ) -> Result<SessionSpec> {
         let session_id = format!("session-{}", Uuid::new_v4());
@@ -705,6 +716,7 @@ impl DaemonSessionApi {
                 .fail()
             }
         };
+        let source_view = Self::caller_home_source_view(&request.caller_home_sources)?;
         let request = parse_request(request, identity)?;
         self.enforce_session_quota(owner_uid, config)?;
         let runner = request.runner().clone();
@@ -731,15 +743,25 @@ impl DaemonSessionApi {
                 self.descriptor_broker.as_ref(),
             )
             .context(SessionSnafu)?;
-        let additional_filesystem_projections = if allow_codex_adapter {
+        let mut additional_filesystem_projections = self.caller_home_source_projections(
+            owner_uid,
+            owner_gid,
+            source_view.as_ref(),
+            request.workspace(),
+        )?;
+        if allow_codex_adapter {
             let package_digest = request.package_sha256().ok_or_else(|| {
                 crate::error::InvalidRequestSnafu {
                     reason: String::from("Codex admission requires a package digest"),
                 }
                 .build()
             })?;
-            let projections =
-                self.codex_filesystem_projections(owner_uid, owner_gid, package_digest, config)?;
+            let projections = self.codex_managed_artifact_projections(
+                owner_uid,
+                owner_gid,
+                package_digest,
+                config,
+            )?;
             runner_admission.endpoint_projections.push(
                 EndpointProjection::new(
                     "codex-hook",
@@ -753,10 +775,8 @@ impl DaemonSessionApi {
                     .build()
                 })?,
             );
-            projections
-        } else {
-            Vec::new()
-        };
+            additional_filesystem_projections.extend(projections);
+        }
         let spec = admit(
             request,
             AdmissionContext {
@@ -771,6 +791,7 @@ impl DaemonSessionApi {
                 local_store: self.local_store.as_ref(),
                 config,
                 allow_codex_adapter,
+                private_state_projection,
                 resource_association,
                 additional_filesystem_projections,
             },
@@ -881,6 +902,14 @@ impl DaemonSessionApi {
                 "codex"
             },
         )?;
+        let definition = installation.package().definition();
+        let source_view = Self::caller_home_source_view(&request.caller_home_sources)?;
+        let environment = Self::codex_session_environment(
+            definition.hook_contract(),
+            source_view.as_ref(),
+            owner_uid,
+            &request.environment,
+        )?;
         let artifact = installation
             .installation()
             .local_artifact()
@@ -933,7 +962,7 @@ impl DaemonSessionApi {
                 workspace: request.workspace,
                 daemon_failure_mode: request.daemon_failure_mode,
                 requested_loss_grace_seconds: request.requested_loss_grace_seconds,
-                environment: Vec::new(),
+                environment,
                 secret_references: Vec::new(),
                 tty: request.tty,
                 detached: request.detached,
@@ -942,6 +971,7 @@ impl DaemonSessionApi {
                 agent_name: request.agent_name,
                 policy_set_name: request.policy_set_name,
                 surface_names: Vec::new(),
+                caller_home_sources: request.caller_home_sources,
             },
             AdmissionIdentity {
                 package_digest: installation.package().package_digest().to_owned(),
@@ -959,6 +989,7 @@ impl DaemonSessionApi {
             configuration_generation,
             config,
             true,
+            source_view.is_none(),
         )?;
         if spec.executable() != Some(&executable) {
             return crate::error::InvalidRequestSnafu {
@@ -1029,7 +1060,7 @@ impl DaemonSessionApi {
         Ok(binding.clone())
     }
 
-    fn codex_filesystem_projections(
+    fn codex_managed_artifact_projections(
         &self,
         owner_uid: u32,
         owner_gid: u32,
@@ -1067,7 +1098,7 @@ impl DaemonSessionApi {
         ) {
             sources.push((source, target));
         }
-        sources
+        let artifacts = sources
             .into_iter()
             .map(|(artifact, target)| {
                 if !artifact.path().starts_with(package.trust_root()) {
@@ -1097,14 +1128,260 @@ impl DaemonSessionApi {
                     }
                     .fail();
                 }
-                FilesystemProjection::new(binding.clone(), target.to_path_buf(), true).map_err(
-                    |error| crate::error::InvalidRequestSnafu {
+                Self::codex_artifact_projection(binding.clone(), target)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(artifacts)
+    }
+
+    fn caller_home_source_projections(
+        &self,
+        owner_uid: u32,
+        owner_gid: u32,
+        source_view: Option<&CallerHomeFilesystemSourceView>,
+        workspace: &Path,
+    ) -> Result<Vec<FilesystemProjection>> {
+        let Some(source_view) = source_view else {
+            return Ok(Vec::new());
+        };
+        let home = Self::caller_home(owner_uid)?;
+        let workspace_is_declared = source_view.sources().iter().any(|source| {
+            source.kind() == CallerHomeFilesystemSourceKind::Directory
+                && !source.access().read_only()
+                && workspace.starts_with(home.join(source.relative_path()))
+        });
+        if !workspace_is_declared {
+            return crate::error::InvalidRequestSnafu {
+                reason: format!(
+                    "workspace `{}` is not inside a declared writable caller-home source",
+                    workspace.display()
+                ),
+            }
+            .fail();
+        }
+        source_view
+            .sources()
+            .iter()
+            .map(|source| {
+                let source_path = home.join(source.relative_path());
+                let kind = match source.kind() {
+                    CallerHomeFilesystemSourceKind::File => SafePathKind::File,
+                    CallerHomeFilesystemSourceKind::Directory => SafePathKind::Directory,
+                };
+                let resolved =
+                    self.descriptor_broker
+                        .resolve(owner_uid, owner_gid, &source_path, kind)?;
+                let binding = resolved.binding();
+                if binding.owner_uid() != owner_uid {
+                    return crate::error::InvalidRequestSnafu {
+                        reason: format!(
+                            "caller-home source `{}` is not owned by the calling UID",
+                            source_path.display()
+                        ),
+                    }
+                    .fail();
+                }
+                FilesystemProjection::session_overlay(
+                    binding.clone(),
+                    source_path,
+                    source.access().read_only(),
+                    home.clone(),
+                )
+                .map_err(|error| {
+                    crate::error::InvalidRequestSnafu {
                         reason: error.to_string(),
                     }
-                    .build(),
-                )
+                    .build()
+                })
             })
             .collect()
+    }
+
+    fn caller_home(owner_uid: u32) -> Result<PathBuf> {
+        let home = users::get_user_by_uid(owner_uid)
+            .map(|user| user.home_dir().to_path_buf())
+            .ok_or_else(|| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("could not resolve a home directory for UID {owner_uid}"),
+                }
+                .build()
+            })?;
+        let metadata = fs::symlink_metadata(&home).context(crate::error::IoSnafu {
+            action: "checking caller home source root",
+            path: home.clone(),
+        })?;
+        if !home.is_absolute() || metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return crate::error::InvalidRequestSnafu {
+                reason: format!(
+                    "caller home must be a non-symlink directory, found `{}`",
+                    home.display()
+                ),
+            }
+            .fail();
+        }
+        Ok(home)
+    }
+
+    fn codex_artifact_projection(
+        source: SafePathBinding,
+        target: &Path,
+    ) -> Result<FilesystemProjection> {
+        let projection = match target {
+            path if path == Path::new("/etc/codex/requirements.toml") => {
+                FilesystemProjection::session_overlay(
+                    source,
+                    target.to_path_buf(),
+                    true,
+                    PathBuf::from("/etc"),
+                )
+            }
+            path if path == Path::new("/usr/lib/erebor/codex-hooks/erebor-codex-hook")
+                || path == Path::new("/usr/lib/erebor/codex-hooks/shell-startup") =>
+            {
+                FilesystemProjection::session_overlay(
+                    source,
+                    target.to_path_buf(),
+                    true,
+                    PathBuf::from("/usr/lib"),
+                )
+            }
+            path if path.starts_with("/run/erebor") => {
+                FilesystemProjection::new(source, target.to_path_buf(), true)
+            }
+            _path => {
+                return crate::error::InvalidRequestSnafu {
+                    reason: format!(
+                        "Codex managed artifact target `{}` is not an admitted private-runtime or session-overlay target",
+                        target.display()
+                    ),
+                }
+                .fail();
+            }
+        };
+        projection.map_err(|error| {
+            crate::error::InvalidRequestSnafu {
+                reason: error.to_string(),
+            }
+            .build()
+        })
+    }
+
+    fn codex_hook_shell_environment(contract: &CodexHookContract) -> Vec<SessionEnvironmentEntry> {
+        contract.shell_executable().map_or_else(Vec::new, |shell| {
+            vec![SessionEnvironmentEntry {
+                key: String::from("SHELL"),
+                value: shell.display().to_string(),
+            }]
+        })
+    }
+
+    fn codex_session_environment(
+        contract: &CodexHookContract,
+        source_view: Option<&CallerHomeFilesystemSourceView>,
+        owner_uid: u32,
+        client_environment: &[SessionEnvironmentEntry],
+    ) -> Result<Vec<SessionEnvironmentEntry>> {
+        let mut environment = Self::codex_hook_shell_environment(contract);
+        let Some(source_view) = source_view else {
+            return Ok(environment);
+        };
+        let path = Self::codex_client_path(client_environment)?;
+        let home = Self::caller_home(owner_uid)?;
+        environment.extend([
+            SessionEnvironmentEntry {
+                key: String::from("HOME"),
+                value: home.display().to_string(),
+            },
+            SessionEnvironmentEntry {
+                key: String::from("PATH"),
+                value: path,
+            },
+        ]);
+        if source_view.includes_file(Path::new(".bashrc")) {
+            environment.push(SessionEnvironmentEntry {
+                key: String::from("BASH_ENV"),
+                value: home.join(".bashrc").display().to_string(),
+            });
+        }
+        Ok(environment)
+    }
+
+    fn caller_home_source_view(
+        sources: &[IpcCallerHomeFilesystemSource],
+    ) -> Result<Option<CallerHomeFilesystemSourceView>> {
+        if sources.is_empty() {
+            return Ok(None);
+        }
+        let sources = sources
+            .iter()
+            .map(|source| {
+                let kind = match source.kind.as_str() {
+                    "file" => CallerHomeFilesystemSourceKind::File,
+                    "directory" => CallerHomeFilesystemSourceKind::Directory,
+                    _ => {
+                        return crate::error::InvalidRequestSnafu {
+                            reason: format!(
+                                "caller-home source `{}` has unsupported kind `{}`",
+                                source.relative_path, source.kind
+                            ),
+                        }
+                        .fail()
+                    }
+                };
+                let access = match source.access.as_str() {
+                    "read_only" => CallerHomeFilesystemSourceAccess::ReadOnly,
+                    "read_write" => CallerHomeFilesystemSourceAccess::ReadWrite,
+                    _ => {
+                        return crate::error::InvalidRequestSnafu {
+                            reason: format!(
+                                "caller-home source `{}` has unsupported access `{}`",
+                                source.relative_path, source.access
+                            ),
+                        }
+                        .fail()
+                    }
+                };
+                CallerHomeFilesystemSource::new(PathBuf::from(&source.relative_path), kind, access)
+                    .map_err(|error| {
+                        crate::error::InvalidRequestSnafu {
+                            reason: format!("invalid caller-home source: {error}"),
+                        }
+                        .build()
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        CallerHomeFilesystemSourceView::new(sources)
+            .map(Some)
+            .map_err(|error| {
+                crate::error::InvalidRequestSnafu {
+                    reason: format!("invalid caller-home source view: {error}"),
+                }
+                .build()
+            })
+    }
+
+    fn codex_client_path(client_environment: &[SessionEnvironmentEntry]) -> Result<String> {
+        let Some(entry) = client_environment.first() else {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "a caller-home Codex source view requires the client's non-empty PATH",
+                ),
+            }
+            .fail();
+        };
+        if client_environment.len() != 1
+            || entry.key != "PATH"
+            || entry.value.is_empty()
+            || entry.value.contains('\0')
+        {
+            return crate::error::InvalidRequestSnafu {
+                reason: String::from(
+                    "Codex accepts only one non-empty PATH environment entry from the client",
+                ),
+            }
+            .fail();
+        }
+        Ok(entry.value.clone())
     }
 
     fn context_coordinator(&self, parent: &SessionSpec) -> Result<Arc<ContextDagCoordinator>> {
@@ -2401,6 +2678,14 @@ fn message(kind: &str, value: &impl Message) -> Result<MutationResponse> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
+    use erebor_runtime_core::{FilesystemProjectionTarget, SafePathBinding, SafePathKind};
+    use erebor_runtime_ipc::v1::{CallerHomeFilesystemSource, SessionEnvironmentEntry};
+    use erebor_runtime_packages::{
+        CodexHookContract, CodexHookEventName, CodexHookExec, CodexHookShell,
+    };
+
     use super::DaemonSessionApi;
 
     #[test]
@@ -2417,6 +2702,139 @@ mod tests {
         );
         assert!(DaemonSessionApi::choose_session_id("session", sessions.into_iter()).is_err());
         assert!(DaemonSessionApi::choose_session_id("session-z", sessions.into_iter()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn codex_managed_profile_artifacts_use_session_overlay_targets(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source = SafePathBinding::new(
+            PathBuf::from("/var/lib/erebor/requirements.toml"),
+            1,
+            2,
+            3,
+            0,
+            0,
+            SafePathKind::File,
+        )?;
+
+        let requirements = DaemonSessionApi::codex_artifact_projection(
+            source.clone(),
+            Path::new("/etc/codex/requirements.toml"),
+        )?;
+        let hook = DaemonSessionApi::codex_artifact_projection(
+            source.clone(),
+            Path::new("/usr/lib/erebor/codex-hooks/erebor-codex-hook"),
+        )?;
+        let private_runtime = DaemonSessionApi::codex_artifact_projection(
+            source,
+            Path::new("/run/erebor/codex/requirements.toml"),
+        )?;
+
+        assert_eq!(
+            requirements.target().session_overlay_root(),
+            Some(Path::new("/etc"))
+        );
+        assert_eq!(
+            hook.target().session_overlay_root(),
+            Some(Path::new("/usr/lib"))
+        );
+        assert!(matches!(
+            private_runtime.target(),
+            FilesystemProjectionTarget::Preinstalled
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn codex_session_pins_the_declared_hook_shell_environment(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let direct = CodexHookContract::new(
+            CodexHookShell::Direct,
+            vec![
+                CodexHookExec::InstalledExecutable,
+                CodexHookExec::ManagedHook,
+            ],
+            vec![CodexHookEventName::SessionStart],
+            None,
+        )?;
+        let bash = CodexHookContract::new(
+            CodexHookShell::Bash,
+            vec![
+                CodexHookExec::InstalledExecutable,
+                CodexHookExec::AbsolutePath(PathBuf::from("/usr/bin/bash")),
+                CodexHookExec::ManagedHook,
+            ],
+            vec![CodexHookEventName::SessionStart],
+            None,
+        )?;
+
+        assert!(DaemonSessionApi::codex_hook_shell_environment(&direct).is_empty());
+        assert_eq!(
+            DaemonSessionApi::codex_hook_shell_environment(&bash),
+            vec![erebor_runtime_ipc::v1::SessionEnvironmentEntry {
+                key: String::from("SHELL"),
+                value: String::from("/usr/bin/bash"),
+            }]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn caller_source_view_accepts_only_the_client_path_environment(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let path = vec![SessionEnvironmentEntry {
+            key: String::from("PATH"),
+            value: String::from("/home/navid/.local/bin:/usr/bin:/bin"),
+        }];
+        assert_eq!(
+            DaemonSessionApi::codex_client_path(&path)?,
+            "/home/navid/.local/bin:/usr/bin:/bin"
+        );
+        assert!(DaemonSessionApi::codex_client_path(&[]).is_err());
+        assert!(DaemonSessionApi::codex_client_path(&[
+            SessionEnvironmentEntry {
+                key: String::from("PATH"),
+                value: String::from("/usr/bin"),
+            },
+            SessionEnvironmentEntry {
+                key: String::from("HOME"),
+                value: String::from("/home/navid"),
+            },
+        ])
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn caller_home_sources_are_a_generic_session_input() -> Result<(), Box<dyn std::error::Error>> {
+        let view = DaemonSessionApi::caller_home_source_view(&[
+            CallerHomeFilesystemSource {
+                relative_path: String::from(".bashrc"),
+                kind: String::from("file"),
+                access: String::from("read_only"),
+            },
+            CallerHomeFilesystemSource {
+                relative_path: String::from("workspace"),
+                kind: String::from("directory"),
+                access: String::from("read_write"),
+            },
+        ])?
+        .ok_or("source view must be present")?;
+        assert_eq!(view.sources().len(), 2);
+        assert!(DaemonSessionApi::caller_home_source_view(&[
+            CallerHomeFilesystemSource {
+                relative_path: String::from("workspace"),
+                kind: String::from("directory"),
+                access: String::from("read_write"),
+            },
+            CallerHomeFilesystemSource {
+                relative_path: String::from("workspace/file"),
+                kind: String::from("file"),
+                access: String::from("read_only"),
+            },
+        ])
+        .is_err());
         Ok(())
     }
 }

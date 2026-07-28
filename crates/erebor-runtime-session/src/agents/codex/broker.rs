@@ -25,6 +25,7 @@ use erebor_runtime_ipc::{
     SyncFrameCodec,
 };
 use erebor_runtime_packages::{CodexHookEventName, CodexPackageDefinition};
+use erebor_runtime_telemetry::warn;
 use serde::Deserialize;
 use serde_json::json;
 use snafu::{ensure, ResultExt};
@@ -110,13 +111,13 @@ pub struct CodexSessionHookRegistration {
 impl CodexSessionHookRegistration {
     fn from_spec(
         spec: &SessionSpec,
-        guard_executable: &Path,
+        runtime_executable: &Path,
         definition: &CodexPackageDefinition,
         context_repository: Arc<erebor_runtime_context::ContextRepository>,
     ) -> Result<Self, CodexSessionError> {
         let managed_session = CodexManagedSession::from_package(
             spec.session_id().as_str(),
-            guard_executable.to_path_buf(),
+            runtime_executable.to_path_buf(),
             definition,
         )?;
         let dispatch = definition
@@ -327,14 +328,14 @@ impl CodexHookService {
     pub fn register_session(
         &self,
         spec: &SessionSpec,
-        guard_executable: &Path,
+        runtime_executable: &Path,
         definition: &CodexPackageDefinition,
         context_repository: Arc<erebor_runtime_context::ContextRepository>,
         handlers: CodexHookSessionHandlers,
     ) -> Result<CodexSessionHookRegistration, CodexSessionError> {
         let registration = CodexSessionHookRegistration::from_spec(
             spec,
-            guard_executable,
+            runtime_executable,
             definition,
             context_repository,
         )?;
@@ -506,6 +507,12 @@ impl CodexHookBrokerProtocol {
                     })() {
                         Ok(control) => control,
                         Err(error) => {
+                            warn!(
+                                error;
+                                "rejected authenticated Codex hook event",
+                                session_id = %self.managed_session.session_id(),
+                                hook_event = %event_kind.as_str_name()
+                            );
                             Self::write_rejection(
                                 stream,
                                 &envelope,
@@ -628,7 +635,7 @@ impl CodexHookBrokerProtocol {
                 location: snafu::Location::default(),
             }
         })?;
-        let Some(delivery) = payload.tool_response.erebor_delivery else {
+        let Some(delivery) = payload.delivery()? else {
             return Ok(());
         };
         if !delivery.emit {
@@ -762,13 +769,21 @@ impl CodexHookBrokerProtocol {
 #[derive(Deserialize)]
 struct HookDeliveryEvent {
     #[serde(default)]
-    tool_response: HookToolResponse,
+    tool_response: serde_json::Value,
 }
 
-#[derive(Default, Deserialize)]
-struct HookToolResponse {
-    #[serde(default)]
-    erebor_delivery: Option<HookDeliveryPayload>,
+impl HookDeliveryEvent {
+    fn delivery(&self) -> Result<Option<HookDeliveryPayload>, CodexSessionError> {
+        let Some(delivery) = self.tool_response.get("erebor_delivery") else {
+            return Ok(None);
+        };
+        serde_json::from_value(delivery.clone())
+            .map(Some)
+            .map_err(|error| CodexSessionError::InvalidHookEvent {
+                reason: format!("PostToolUse Erebor delivery is invalid: {error}"),
+                location: snafu::Location::default(),
+            })
+    }
 }
 
 #[derive(Deserialize)]
@@ -1382,6 +1397,30 @@ mod tests {
     }
 
     #[test]
+    fn post_tool_use_with_an_ordinary_codex_tool_response_needs_no_delivery(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let broker = CodexHookBrokerProtocol::new(
+            session("/opt/codex/codex")?,
+            Arc::new(CodexPromptReconciliation::default()),
+            test_lease_owner(),
+            None,
+            child_deliveries(),
+            agent_controls(),
+        );
+
+        // Codex represents the normal Bash tool response as a JSON string.
+        // `erebor_delivery` is optional and exists only on object responses
+        // emitted by Erebor-aware child-context operations.
+        broker.publish_child_delivery(
+            HookEventKind::PostToolUse,
+            br#"{"cwd":"/workspace","hook_event_name":"PostToolUse","model":"gpt-5","permission_mode":"default","session_id":"fixture-thread","tool_input":{"command":"printf blocked > .erebor-denied"},"tool_name":"Bash","tool_response":"","tool_use_id":"tool","transcript_path":null,"turn_id":"fixture-turn"}"#,
+            &CodexLeaseRuntimeEvidence::new(1, 1, String::from("/opt/codex/codex")),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
     fn profile_runtime_identity_skips_shell_ancestors() -> Result<(), Box<dyn std::error::Error>> {
         let ancestry = vec![
             LinuxProcessIdentity {
@@ -1542,20 +1581,20 @@ mod tests {
     }
 
     #[test]
-    fn managed_profile_uses_staged_executable_and_private_hook_path(
+    fn managed_profile_uses_workload_executable_and_private_hook_path(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let staged_executable = "/var/lib/erebor/sessions/session-test/staging/executable";
+        let workload_executable = "/run/erebor/admitted-executable";
         let definition = package()?;
         let session = CodexManagedSession::from_package(
             "session-test",
-            staged_executable.into(),
+            workload_executable.into(),
             &definition,
         )?;
         let profile = session.profile();
 
         assert_eq!(
             profile.executable(),
-            std::path::Path::new(staged_executable)
+            std::path::Path::new(workload_executable)
         );
         assert_eq!(
             profile.managed_hook_path(),
@@ -1564,7 +1603,7 @@ mod tests {
         assert_eq!(
             profile.hook_exec_history(),
             [
-                std::path::PathBuf::from(staged_executable),
+                std::path::PathBuf::from(workload_executable),
                 std::path::PathBuf::from("/run/erebor/codex/hooks/erebor-codex-hook"),
             ]
         );

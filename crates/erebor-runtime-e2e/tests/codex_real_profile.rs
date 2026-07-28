@@ -48,6 +48,16 @@ fn real_codex_profile_uses_exact_managed_targets_and_intrinsic_guardrail(
         package["definition"]["managed_artifacts"]["shell_startup_path"],
         "/usr/lib/erebor/codex-hooks/shell-startup"
     );
+    assert_eq!(package["definition"]["hook_contract"]["shell"], "bash");
+    assert!(package["definition"].get("source_view").is_none());
+    assert_eq!(
+        package["definition"]["hook_contract"]["exec_history"],
+        serde_json::json!([
+            { "kind": "installed_executable" },
+            { "kind": "absolute_path", "path": "/usr/bin/bash" },
+            { "kind": "managed_hook" }
+        ])
+    );
     assert_eq!(
         package["definition"]["hook_contract"]["events"]
             .as_array()

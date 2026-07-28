@@ -37,6 +37,7 @@ pub(super) struct AdmissionContext<'a> {
     pub(super) local_store: &'a DaemonLocalStore,
     pub(super) config: &'a DaemonConfig,
     pub(super) allow_codex_adapter: bool,
+    pub(super) private_state_projection: bool,
     pub(super) resource_association: Option<SessionResourceAssociation>,
     pub(super) additional_filesystem_projections: Vec<FilesystemProjection>,
 }
@@ -194,7 +195,7 @@ pub(super) fn admit(run_request: RunRequest, context: AdmissionContext<'_>) -> R
         secret_references: run_request.secret_references().to_vec(),
         filesystem_projections,
         private_state_projection: context
-            .allow_codex_adapter
+            .private_state_projection
             .then(|| PrivateStateProjection::codex_v1(&SessionId::new(context.session_id)))
             .transpose()
             .map_err(invalid_spec)?,

@@ -8,14 +8,14 @@ use erebor_runtime_ipc::{
         GuardHello, GuardLifecycleEvent, GuardLifecycleEventKind, GuardLifecycleReply,
         GuardLifecycleReplyKind, InterceptionDecision, InterceptionOperation, InterceptionRequest,
         InterceptionSource, MediateDecision, PolicyPackageApplyRequest, PolicySetCreateRequest,
-        ProcessExecOperation, SessionCreateRequest, SessionEvidenceRequest, SessionInputRequest,
-        SessionTerminalResizeRequest, SurfaceCreateRequest, DAEMON_CONTROL_PROTOCOL_VERSION,
-        KIND_AGENT_INSTALL_REQUEST, KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST,
-        KIND_CODEX_APP_SERVER_INPUT_REQUEST, KIND_CODEX_RUN_REQUEST, KIND_CONTEXT_GRAPH_REQUEST,
-        KIND_CONTEXT_GRAPH_RESPONSE, KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT,
-        KIND_GUARD_LIFECYCLE_REPLY, KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST,
-        KIND_POLICY_PACKAGE_APPLY_REQUEST, KIND_POLICY_SET_CREATE_REQUEST,
-        KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST,
+        ProcessExecOperation, SessionCreateRequest, SessionEnvironmentEntry,
+        SessionEvidenceRequest, SessionInputRequest, SessionTerminalResizeRequest,
+        SurfaceCreateRequest, DAEMON_CONTROL_PROTOCOL_VERSION, KIND_AGENT_INSTALL_REQUEST,
+        KIND_CODEX_APP_SERVER_INPUT_CLOSE_REQUEST, KIND_CODEX_APP_SERVER_INPUT_REQUEST,
+        KIND_CODEX_RUN_REQUEST, KIND_CONTEXT_GRAPH_REQUEST, KIND_CONTEXT_GRAPH_RESPONSE,
+        KIND_GUARD_HELLO, KIND_GUARD_LIFECYCLE_EVENT, KIND_GUARD_LIFECYCLE_REPLY,
+        KIND_INTERCEPTION_DECISION, KIND_INTERCEPTION_REQUEST, KIND_POLICY_PACKAGE_APPLY_REQUEST,
+        KIND_POLICY_SET_CREATE_REQUEST, KIND_SESSION_EVIDENCE_REQUEST, KIND_SESSION_INPUT_REQUEST,
         KIND_SESSION_TERMINAL_RESIZE_REQUEST, KIND_SURFACE_CREATE_REQUEST, PROTOCOL_VERSION,
     },
     EreborIpcFrame, IpcProtocolError, FRAME_VERSION, HEADER_LEN, MAX_PAYLOAD_LEN,
@@ -52,6 +52,11 @@ fn public_named_resource_requests_round_trip_without_integrity_reference_fields(
         terminal_rows: 24,
         terminal_columns: 80,
         app_server: false,
+        environment: vec![SessionEnvironmentEntry {
+            key: String::from("PATH"),
+            value: String::from("/usr/bin:/bin"),
+        }],
+        caller_home_sources: Vec::new(),
     };
     let session = SessionCreateRequest {
         runner_id: String::new(),
@@ -68,6 +73,7 @@ fn public_named_resource_requests_round_trip_without_integrity_reference_fields(
         agent_name: String::from("local-codex"),
         policy_set_name: String::from("company-workspace"),
         surface_names: vec![String::from("engineering-browser")],
+        caller_home_sources: Vec::new(),
     };
     let surface = SurfaceCreateRequest {
         name: String::from("engineering-browser"),

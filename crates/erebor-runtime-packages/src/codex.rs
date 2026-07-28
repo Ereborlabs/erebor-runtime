@@ -422,6 +422,23 @@ impl CodexHookContract {
         self.shell
     }
 
+    /// The pinned interpreter path that Codex must receive in `SHELL` before
+    /// it starts a shell-wrapped managed hook. A direct hook has no shell
+    /// environment requirement.
+    #[must_use]
+    pub fn shell_executable(&self) -> Option<&Path> {
+        match self.shell {
+            CodexHookShell::Direct => None,
+            CodexHookShell::Sh | CodexHookShell::Bash | CodexHookShell::Zsh => {
+                match self.exec_history.get(1) {
+                    Some(CodexHookExec::AbsolutePath(path)) => Some(path),
+                    Some(CodexHookExec::InstalledExecutable | CodexHookExec::ManagedHook)
+                    | None => None,
+                }
+            }
+        }
+    }
+
     #[must_use]
     pub fn exec_history(&self) -> &[CodexHookExec] {
         &self.exec_history
@@ -563,6 +580,8 @@ fn unique_entrypoint_names(entrypoints: &[CodexEntrypoint]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use super::{
         CodexArtifact, CodexEntrypoint, CodexHookContract, CodexHookEventName, CodexHookExec,
         CodexHookShell, CodexManagedArtifacts, CodexPackageDefinition, CodexSupportedPlatform,
@@ -618,6 +637,34 @@ mod tests {
             definition.canonical_digest()?
         );
         assert!(definition.entrypoint("codex-app-server").is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn hook_contract_exposes_only_the_pinned_shell_environment(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let direct = CodexHookContract::new(
+            CodexHookShell::Direct,
+            vec![
+                CodexHookExec::InstalledExecutable,
+                CodexHookExec::ManagedHook,
+            ],
+            vec![CodexHookEventName::SessionStart],
+            None,
+        )?;
+        let bash = CodexHookContract::new(
+            CodexHookShell::Bash,
+            vec![
+                CodexHookExec::InstalledExecutable,
+                CodexHookExec::AbsolutePath(PathBuf::from("/usr/bin/bash")),
+                CodexHookExec::ManagedHook,
+            ],
+            vec![CodexHookEventName::SessionStart],
+            None,
+        )?;
+
+        assert_eq!(direct.shell_executable(), None);
+        assert_eq!(bash.shell_executable(), Some(Path::new("/usr/bin/bash")));
         Ok(())
     }
 

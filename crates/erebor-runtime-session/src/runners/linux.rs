@@ -36,6 +36,7 @@ const LINUX_RECOVERY_FORMAT_VERSION: u32 = 1;
 const DEFAULT_SANITIZED_EXECUTABLE_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 const MAX_SCRIPT_INTERPRETER_CHAIN: usize = 4;
 const MAX_SCRIPT_HEADER_BYTES: u64 = 4096;
+const MAX_CONTROLLER_DIAGNOSTIC_CHARS: usize = 4096;
 
 struct LinuxExecutableAdmission {
     executable: SafePathBinding,
@@ -205,9 +206,11 @@ impl LinuxRunnerDriver {
             .stdout
             .take()
             .ok_or_else(|| self.protocol("controller stdout missing"))?;
-        write_json_line(&mut input, &self.id, &handoff)?;
+        write_json_line(&mut input, &self.id, &handoff)
+            .map_err(|error| self.startup_error_with_diagnostics(error, &diagnostics_path))?;
         let mut output_reader = BufReader::new(output_pipe);
-        let started: LinuxControllerEvent = read_json_line(&mut output_reader, &self.id)?;
+        let started: LinuxControllerEvent = read_json_line(&mut output_reader, &self.id)
+            .map_err(|error| self.startup_error_with_diagnostics(error, &diagnostics_path))?;
         let LinuxControllerEvent::Started {
             workload_identity,
             controller_pid,
@@ -237,6 +240,35 @@ impl LinuxRunnerDriver {
             reason: reason.into(),
             location: snafu::Location::default(),
         }
+    }
+
+    fn startup_error_with_diagnostics(
+        &self,
+        error: RuntimeError,
+        diagnostics_path: &Path,
+    ) -> RuntimeError {
+        let Some(diagnostics) = Self::diagnostics_tail(diagnostics_path) else {
+            return error;
+        };
+        let RuntimeError::SessionRunnerProtocol { reason, .. } = error else {
+            return error;
+        };
+        self.protocol(format!("{reason}; controller diagnostics: {diagnostics}"))
+    }
+
+    fn diagnostics_tail(path: &Path) -> Option<String> {
+        let diagnostics = fs::read(path).ok()?;
+        let text = String::from_utf8_lossy(&diagnostics);
+        let tail = text
+            .chars()
+            .rev()
+            .take(MAX_CONTROLLER_DIAGNOSTIC_CHARS)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+        let tail = tail.trim();
+        (!tail.is_empty()).then(|| tail.replace('\n', " "))
     }
 
     fn launch_error(&self, path: &Path, source: std::io::Error) -> RuntimeError {
@@ -1034,13 +1066,15 @@ mod tests {
 
     use super::{
         decode_recovery, encode_recovery, LinuxRecovery, LinuxRunnerDriver, CONTROLLER_PROGRAM,
-        DEFAULT_CONTROLLER_PATH, RUNNER_ID,
+        DEFAULT_CONTROLLER_PATH, MAX_CONTROLLER_DIAGNOSTIC_CHARS, RUNNER_ID,
     };
     use crate::{
         ResolvedSessionPath, RunnerAdmissionRequest, RunnerInstallConfig, RunnerRegistry,
         SessionPathResolver, SessionPathResolverError,
     };
-    use erebor_runtime_core::{RunnerId, SafePathBinding, SafePathKind, SessionOwner};
+    use erebor_runtime_core::{
+        RunnerId, RuntimeError, SafePathBinding, SafePathKind, SessionOwner,
+    };
 
     struct ScriptResolver;
 
@@ -1151,5 +1185,37 @@ mod tests {
     #[test]
     fn script_shebang_rejects_ambient_env_options() {
         assert!(LinuxRunnerDriver::script_interpreter(b"#!/usr/bin/env -S python -I\n").is_err());
+    }
+
+    #[test]
+    fn controller_diagnostics_tail_is_bounded_and_single_line(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let diagnostics = root.path().join("linux-controller-diagnostics.log");
+        let prefix = "x".repeat(MAX_CONTROLLER_DIAGNOSTIC_CHARS);
+        std::fs::write(&diagnostics, format!("{prefix}\nmount namespace failed\n"))?;
+
+        let tail = LinuxRunnerDriver::diagnostics_tail(&diagnostics)
+            .ok_or("expected controller diagnostics tail")?;
+
+        assert!(tail.ends_with("mount namespace failed"));
+        assert!(!tail.contains('\n'));
+        assert!(tail.chars().count() <= MAX_CONTROLLER_DIAGNOSTIC_CHARS);
+
+        let startup_diagnostics = root.path().join("startup.log");
+        std::fs::write(&startup_diagnostics, "mount namespace failed\n")?;
+        let driver = LinuxRunnerDriver::from_install_config(&RunnerInstallConfig::default())?;
+        let error = driver.startup_error_with_diagnostics(
+            RuntimeError::SessionRunnerProtocol {
+                runner: String::from(RUNNER_ID),
+                reason: String::from("Broken pipe"),
+                location: snafu::Location::default(),
+            },
+            &startup_diagnostics,
+        );
+        assert!(error
+            .to_string()
+            .contains("Broken pipe; controller diagnostics: mount namespace failed"));
+        Ok(())
     }
 }

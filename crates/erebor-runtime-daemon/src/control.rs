@@ -3241,6 +3241,7 @@ mod tests {
                     agent_name: String::from("local-agent"),
                     policy_set_name: String::from("browser-policyset"),
                     surface_names: vec![String::from("engineering-browser")],
+                    caller_home_sources: Vec::new(),
                 },
                 "static-session-create-1",
             )

@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     ffi::CString,
     fs::{self, File},
     io::{Read, Write},
@@ -12,7 +13,7 @@ use std::{
 #[path = "linux/prepared.rs"]
 mod prepared;
 
-use erebor_runtime_core::{ActiveSessionSignal, TerminalSize};
+use erebor_runtime_core::{ActiveSessionSignal, FilesystemProjectionTarget, TerminalSize};
 use rustix::process::{kill_process_group, Pid, Signal};
 #[allow(deprecated)]
 use rustix::thread::unshare;
@@ -518,7 +519,7 @@ fn prepare_private_namespace(
         location: snafu::Location::default(),
     })?;
 
-    hide_caller_home_for_private_state(handoff)?;
+    hide_caller_home_for_session_view(handoff)?;
 
     let guard_host_path = environment_value(
         &handoff.runtime_environment,
@@ -599,7 +600,9 @@ fn prepare_private_namespace(
             })?;
     }
     project_endpoints(&endpoint_projections)?;
+    install_session_overlay_projection_roots(handoff, &filesystem_projections)?;
     project_filesystems(&filesystem_projections)?;
+    hide_unadmitted_codex_ipc(handoff)?;
     if let Some(projection) = private_state_projection.as_ref() {
         project_private_state(projection)?;
     }
@@ -741,28 +744,32 @@ fn project_admitted_executable(
     Ok(Some(target))
 }
 
-/// Hides the caller's live home directory only when the intrinsic filesystem
-/// Surface has supplied a private agent-state projection. Workspace and
-/// executable access is already held by descriptors before this namespace is
-/// created, so the workload keeps only its admitted inputs plus the fixed
-/// projected state target.
-fn hide_caller_home_for_private_state(
+/// Hides the caller's live home whenever the intrinsic filesystem Surface
+/// supplies either an isolated private-state view or declared caller-home
+/// projections. Workspace and executable access is held before the namespace
+/// is created, so the workload receives only its admitted view.
+fn hide_caller_home_for_session_view(
     handoff: &LinuxControllerHandoff,
 ) -> Result<(), SessionControllerError> {
-    if handoff.prepared_private_state_projection.is_none() {
-        return Ok(());
-    }
     let home = users::get_user_by_uid(handoff.spec.owner().uid())
         .map(|user| user.home_dir().to_path_buf())
         .ok_or_else(|| SessionControllerError::InvalidHandoff {
             reason: format!(
-                "private state projection cannot resolve a home directory for UID {}",
+                "session filesystem view cannot resolve a home directory for UID {}",
                 handoff.spec.owner().uid()
             ),
             location: snafu::Location::default(),
         })?;
+    let has_declared_home_projection = handoff
+        .spec
+        .filesystem_projections()
+        .iter()
+        .any(|projection| projection.target().session_overlay_root() == Some(home.as_path()));
+    if handoff.prepared_private_state_projection.is_none() && !has_declared_home_projection {
+        return Ok(());
+    }
     let metadata = fs::symlink_metadata(&home).map_err(|source| SessionControllerError::Io {
-        action: "checking caller home before hiding private state source",
+        action: "checking caller home before hiding the session filesystem view",
         path: home.clone(),
         source,
         location: snafu::Location::default(),
@@ -770,25 +777,57 @@ fn hide_caller_home_for_private_state(
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(SessionControllerError::InvalidHandoff {
             reason: format!(
-                "private state projection requires a non-symlink caller home directory, found `{}`",
+                "session filesystem view requires a non-symlink caller home directory, found `{}`",
                 home.display()
             ),
             location: snafu::Location::default(),
         });
     }
-    mount_private_state_mask(&home, "hiding caller home from private state session")?;
+    mount_private_state_mask(&home, "hiding caller home from session filesystem view")?;
 
-    if let Some(staged_state) = private_state_path_in_workspace(
-        handoff.spec.workspace().requested_path(),
-        &home,
-        handoff
-            .prepared_workspace
-            .as_deref()
-            .unwrap_or_else(|| handoff.spec.workspace().requested_path()),
-    ) {
+    if handoff.prepared_private_state_projection.is_some() {
+        if let Some(staged_state) = private_state_path_in_workspace(
+            handoff.spec.workspace().requested_path(),
+            &home,
+            handoff
+                .prepared_workspace
+                .as_deref()
+                .unwrap_or_else(|| handoff.spec.workspace().requested_path()),
+        ) {
+            mount_private_state_mask(
+                &staged_state,
+                "hiding caller private state from the admitted workspace",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// A generic declared `.codex` directory is a filesystem tree, not a grant of
+/// live IDE authority. Keep the live IPC directory out of the session until a
+/// separately admitted binding owns that authority.
+fn hide_unadmitted_codex_ipc(
+    handoff: &LinuxControllerHandoff,
+) -> Result<(), SessionControllerError> {
+    let home = users::get_user_by_uid(handoff.spec.owner().uid())
+        .map(|user| user.home_dir().to_path_buf())
+        .ok_or_else(|| SessionControllerError::InvalidHandoff {
+            reason: format!(
+                "session filesystem view cannot resolve a home directory for UID {}",
+                handoff.spec.owner().uid()
+            ),
+            location: snafu::Location::default(),
+        })?;
+    let codex_home = home.join(".codex");
+    let codex_state_is_projected = handoff
+        .spec
+        .filesystem_projections()
+        .iter()
+        .any(|projection| projection.workload_path() == codex_home);
+    if codex_state_is_projected {
         mount_private_state_mask(
-            &staged_state,
-            "hiding caller private state from the admitted workspace",
+            &codex_home.join("ipc"),
+            "hiding unadmitted Codex IDE IPC from the session",
         )?;
     }
     Ok(())
@@ -895,7 +934,7 @@ fn hold_endpoint_projections(
 
 fn project_endpoints(projections: &[(PathBuf, PathBuf)]) -> Result<(), SessionControllerError> {
     for (source, target) in projections {
-        create_projection_target(target, false)?;
+        create_preinstalled_projection_target(target, false)?;
         mount_bind(source, target)
             .map_err(std::io::Error::from)
             .map_err(|error| SessionControllerError::Io {
@@ -913,6 +952,7 @@ struct HeldFilesystemProjection {
     workload_path: PathBuf,
     read_only: bool,
     directory: bool,
+    target: FilesystemProjectionTarget,
 }
 
 struct HeldPrivateStateProjection {
@@ -1022,7 +1062,7 @@ fn project_private_state(
         source,
         location: snafu::Location::default(),
     })?;
-    create_projection_target(&projection.target, true)?;
+    create_preinstalled_projection_target(&projection.target, true)?;
     mount_bind(&projection.merged, &projection.target)
         .map_err(std::io::Error::from)
         .map_err(|source| SessionControllerError::Io {
@@ -1048,6 +1088,14 @@ fn project_private_state(
 fn private_state_overlay_options(
     projection: &HeldPrivateStateProjection,
 ) -> Result<CString, SessionControllerError> {
+    overlay_options(&projection.lower, &projection.upper, &projection.workdir)
+}
+
+fn overlay_options(
+    lower: &Path,
+    upper: &Path,
+    workdir: &Path,
+) -> Result<CString, SessionControllerError> {
     let option_path = |path: &Path| {
         let value = path
             .to_str()
@@ -1071,9 +1119,9 @@ fn private_state_overlay_options(
     };
     CString::new(format!(
         "lowerdir={},upperdir={},workdir={}",
-        option_path(&projection.lower)?,
-        option_path(&projection.upper)?,
-        option_path(&projection.workdir)?,
+        option_path(lower)?,
+        option_path(upper)?,
+        option_path(workdir)?,
     ))
     .map_err(|source| SessionControllerError::InvalidHandoff {
         reason: format!("private state overlay options contain a NUL byte: {source}"),
@@ -1143,6 +1191,7 @@ fn hold_filesystem_projections(
             workload_path: prepared.workload_path().to_path_buf(),
             read_only: prepared.read_only(),
             directory,
+            target: admitted.target().clone(),
         });
     }
     Ok(held)
@@ -1152,7 +1201,11 @@ fn project_filesystems(
     projections: &[HeldFilesystemProjection],
 ) -> Result<(), SessionControllerError> {
     for projection in projections {
-        create_projection_target(&projection.workload_path, projection.directory)?;
+        create_projection_target(
+            &projection.workload_path,
+            projection.directory,
+            &projection.target,
+        )?;
         mount_bind(&projection.source, &projection.workload_path)
             .map_err(std::io::Error::from)
             .map_err(|source| SessionControllerError::Io {
@@ -1179,7 +1232,84 @@ fn project_filesystems(
     Ok(())
 }
 
-fn create_projection_target(path: &Path, directory: bool) -> Result<(), SessionControllerError> {
+fn install_session_overlay_projection_roots(
+    handoff: &LinuxControllerHandoff,
+    projections: &[HeldFilesystemProjection],
+) -> Result<(), SessionControllerError> {
+    let roots = projections
+        .iter()
+        .filter_map(|projection| projection.target.session_overlay_root())
+        .map(Path::to_path_buf)
+        .collect::<BTreeSet<_>>();
+    for (index, root) in roots.into_iter().enumerate() {
+        let metadata =
+            fs::symlink_metadata(&root).map_err(|source| SessionControllerError::Io {
+                action: "checking session-overlay mount root",
+                path: root.clone(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(SessionControllerError::InvalidHandoff {
+                reason: format!(
+                    "session-overlay mount root `{}` is not a non-symlink directory",
+                    root.display()
+                ),
+                location: snafu::Location::default(),
+            });
+        }
+        let storage = handoff
+            .evidence_path
+            .join("filesystem-projection-overlays")
+            .join(index.to_string());
+        let upper = storage.join("upper");
+        let workdir = storage.join("work");
+        fs::create_dir_all(&upper).map_err(|source| SessionControllerError::Io {
+            action: "creating session-overlay upper directory",
+            path: upper.clone(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+        fs::create_dir_all(&workdir).map_err(|source| SessionControllerError::Io {
+            action: "creating session-overlay work directory",
+            path: workdir.clone(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+        let options = overlay_options(&root, &upper, &workdir)?;
+        mount(
+            "overlay",
+            &root,
+            "overlay",
+            MountFlags::NOSUID | MountFlags::NODEV,
+            Some(options.as_c_str()),
+        )
+        .map_err(std::io::Error::from)
+        .map_err(|source| SessionControllerError::Io {
+            action: "mounting session-overlay projection root",
+            path: root.clone(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+    }
+    Ok(())
+}
+
+fn create_projection_target(
+    path: &Path,
+    directory: bool,
+    target: &FilesystemProjectionTarget,
+) -> Result<(), SessionControllerError> {
+    if target.session_overlay_root().is_some() {
+        return create_session_overlay_projection_target(path, directory);
+    }
+    create_preinstalled_projection_target(path, directory)
+}
+
+fn create_preinstalled_projection_target(
+    path: &Path,
+    directory: bool,
+) -> Result<(), SessionControllerError> {
     let private_runtime = Path::new("/run/erebor");
     if path.starts_with(private_runtime) {
         let parent = path
@@ -1224,6 +1354,56 @@ fn create_projection_target(path: &Path, directory: bool) -> Result<(), SessionC
         });
     }
     Ok(())
+}
+
+fn create_session_overlay_projection_target(
+    path: &Path,
+    directory: bool,
+) -> Result<(), SessionControllerError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| SessionControllerError::InvalidHandoff {
+            reason: format!(
+                "session-overlay projection target `{}` has no parent",
+                path.display()
+            ),
+            location: snafu::Location::default(),
+        })?;
+    fs::create_dir_all(parent).map_err(|source| SessionControllerError::Io {
+        action: "creating session-overlay projection parent",
+        path: parent.to_path_buf(),
+        source,
+        location: snafu::Location::default(),
+    })?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_dir() == directory => {
+            Ok(())
+        }
+        Ok(_) => Err(SessionControllerError::InvalidHandoff {
+            reason: format!(
+                "session-overlay projection target `{}` has the wrong type or is a symlink",
+                path.display()
+            ),
+            location: snafu::Location::default(),
+        }),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => if directory {
+            fs::create_dir(path)
+        } else {
+            File::create(path).map(|_file| ())
+        }
+        .map_err(|source| SessionControllerError::Io {
+            action: "creating session-overlay projection mountpoint",
+            path: path.to_path_buf(),
+            source,
+            location: snafu::Location::default(),
+        }),
+        Err(source) => Err(SessionControllerError::Io {
+            action: "checking session-overlay projection mountpoint",
+            path: path.to_path_buf(),
+            source,
+            location: snafu::Location::default(),
+        }),
+    }
 }
 
 /// Private runtime projections are root-owned, but their declared paths are
@@ -1279,8 +1459,11 @@ fn environment_value(environment: &[(String, String)], key: &str) -> Option<Stri
 mod tests {
     use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
+    use erebor_runtime_core::FilesystemProjectionTarget;
+
     use super::{
-        create_private_projection_parent, held_private_state_path, private_state_path_in_workspace,
+        create_private_projection_parent, create_projection_target, held_private_state_path,
+        private_state_path_in_workspace,
     };
 
     #[test]
@@ -1336,5 +1519,22 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn session_overlay_target_is_created_without_a_host_mountpoint(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path().join("session-overlay");
+        fs::create_dir(&root)?;
+        let target = root.join("codex").join("requirements.toml");
+        let projection = FilesystemProjectionTarget::SessionOverlay {
+            mount_root: root.clone(),
+        };
+
+        create_projection_target(&target, false, &projection)?;
+
+        assert!(target.is_file());
+        Ok(())
     }
 }

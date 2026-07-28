@@ -260,6 +260,28 @@ fn codex_runs_only_through_a_daemon_owned_named_agent_request() {
     assert!(Cli::try_parse_from([
         "erebor",
         "run",
+        "--caller-home-source",
+        ".bashrc:file:read_only",
+        "--caller-home-source",
+        "workspace:directory:read_write",
+        "--policy",
+        "engineering",
+        "local-codex",
+    ])
+    .is_ok());
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "run",
+        "--caller-home-source",
+        "workspace:directory:write",
+        "--policy",
+        "engineering",
+        "local-codex",
+    ])
+    .is_err());
+    assert!(Cli::try_parse_from([
+        "erebor",
+        "run",
         "--policy",
         "engineering",
         "--tty",

@@ -70,6 +70,13 @@ message CodexRunRequest {
   uint32 terminal_rows = 8;
   uint32 terminal_columns = 9;
   bool app_server = 10;
+  // The client contributes only its selected execution PATH. The daemon
+  // validates it against the admitted Session filesystem sources; arbitrary
+  // inherited environment is never forwarded.
+  repeated SessionEnvironmentEntry environment = 11;
+  // Caller-home inputs for this concrete Session. They are generic intrinsic
+  // filesystem-Surface declarations, not Codex package or Agent configuration.
+  repeated CallerHomeFilesystemSource caller_home_sources = 12;
 }
 
 message SessionCreateRequest {
@@ -90,11 +97,22 @@ message SessionCreateRequest {
   string agent_name = 12;
   string policy_set_name = 13;
   repeated string surface_names = 14;
+  // Generic caller-home inputs for a runtime Session. Static Session
+  // associations must leave this empty.
+  repeated CallerHomeFilesystemSource caller_home_sources = 15;
 }
 
 message SessionEnvironmentEntry {
   string key = 1;
   string value = 2;
+}
+
+// One Session filesystem input below the authenticated caller's home. The
+// daemon resolves and holds it by descriptor before a Runner receives a view.
+message CallerHomeFilesystemSource {
+  string relative_path = 1;
+  string kind = 2;
+  string access = 3;
 }
 
 message SessionCreateResponse {

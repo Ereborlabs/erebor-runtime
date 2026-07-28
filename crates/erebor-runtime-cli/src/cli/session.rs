@@ -8,12 +8,12 @@ use comfy_table::{modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL, ContentArra
 use erebor_runtime_client::DaemonClient;
 use erebor_runtime_core::TerminalSize;
 use erebor_runtime_ipc::v1::{
-    CodexAppServerAttachRequest, CodexAppServerInputCloseRequest, CodexAppServerInputRequest,
-    CodexRunRequest, ContextDeliveryReceiveRequest, ContextDeliveryRejectRequest,
-    ContextGraphActivity, ContextGraphResponse, ContextScopeGraphNode, SessionAttachRequest,
-    SessionCreateRequest, SessionEnvironmentEntry, SessionInputLeaseReleaseRequest,
-    SessionInputLeaseRenewRequest, SessionInputRequest, SessionPruneRequest, SessionRecord,
-    SessionTerminalResizeRequest,
+    CallerHomeFilesystemSource, CodexAppServerAttachRequest, CodexAppServerInputCloseRequest,
+    CodexAppServerInputRequest, CodexRunRequest, ContextDeliveryReceiveRequest,
+    ContextDeliveryRejectRequest, ContextGraphActivity, ContextGraphResponse,
+    ContextScopeGraphNode, SessionAttachRequest, SessionCreateRequest, SessionEnvironmentEntry,
+    SessionInputLeaseReleaseRequest, SessionInputLeaseRenewRequest, SessionInputRequest,
+    SessionPruneRequest, SessionRecord, SessionTerminalResizeRequest,
 };
 use snafu::ResultExt;
 use uuid::Uuid;
@@ -290,6 +290,21 @@ impl<'a> SessionCommandOwner<'a> {
                     terminal_rows: terminal_size.map_or(0, |size| u32::from(size.rows())),
                     terminal_columns: terminal_size.map_or(0, |size| u32::from(size.columns())),
                     app_server,
+                    environment: std::env::var("PATH")
+                        .ok()
+                        .filter(|path| !path.is_empty())
+                        .map(|path| {
+                            vec![SessionEnvironmentEntry {
+                                key: String::from("PATH"),
+                                value: path,
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    caller_home_sources: args
+                        .caller_home_sources
+                        .iter()
+                        .map(Self::caller_home_source)
+                        .collect(),
                 },
                 &key,
             )
@@ -1208,6 +1223,14 @@ impl<'a> SessionCommandOwner<'a> {
         }
         Self::short_id(identifier)
     }
+
+    fn caller_home_source(source: &args::CallerHomeSourceArg) -> CallerHomeFilesystemSource {
+        CallerHomeFilesystemSource {
+            relative_path: source.relative_path.clone(),
+            kind: source.kind.clone(),
+            access: source.access.clone(),
+        }
+    }
 }
 
 impl GenericSessionRequestArgs {
@@ -1229,6 +1252,7 @@ impl GenericSessionRequestArgs {
                 || self.failure_mode.is_some()
                 || self.loss_grace_seconds.is_some()
                 || !self.environment.is_empty()
+                || !self.caller_home_sources.is_empty()
                 || !self.secret_references.is_empty()
                 || self.tty
                 || self.detached
@@ -1293,6 +1317,11 @@ impl GenericSessionRequestArgs {
             agent_name: self.agent.clone().unwrap_or_default(),
             policy_set_name: self.policy.clone().unwrap_or_default(),
             surface_names: self.surfaces.clone(),
+            caller_home_sources: self
+                .caller_home_sources
+                .iter()
+                .map(SessionCommandOwner::caller_home_source)
+                .collect(),
         })
     }
 }
