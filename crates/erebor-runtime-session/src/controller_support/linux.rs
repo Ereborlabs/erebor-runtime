@@ -13,7 +13,10 @@ use std::{
 #[path = "linux/prepared.rs"]
 mod prepared;
 
-use erebor_runtime_core::{ActiveSessionSignal, FilesystemProjectionTarget, TerminalSize};
+use erebor_runtime_core::{
+    ActiveSessionSignal, FilesystemProjectionTarget, PreparedWritableFilesystemView, SafePathKind,
+    TerminalSize,
+};
 use rustix::process::{kill_process_group, Pid, Signal};
 #[allow(deprecated)]
 use rustix::thread::unshare;
@@ -548,7 +551,12 @@ fn prepare_private_namespace(
     let filesystem_projections = hold_filesystem_projections(handoff)?;
     let private_state_projection = hold_private_state_projection(handoff)?;
     let held_admitted_executable = hold_admitted_executable(handoff, prepared)?;
-    let held_workspace = hold_workspace(handoff, prepared)?;
+    let workspace_is_projected = workspace_is_projected_by_writable_source(handoff);
+    let held_workspace = if workspace_is_projected {
+        None
+    } else {
+        Some(hold_workspace(handoff, prepared)?)
+    };
 
     std::fs::create_dir_all("/run/erebor").map_err(|source| SessionControllerError::Io {
         action: "creating private Erebor runtime mountpoint",
@@ -580,7 +588,6 @@ fn prepare_private_namespace(
     })?;
 
     let private_executable_path = project_admitted_executable(held_admitted_executable.as_deref())?;
-    let workspace_path = project_workspace(&held_workspace)?;
 
     let private_guard = PathBuf::from("/run/erebor/runtime-interception.sock");
     if let Some(source) = projection_source {
@@ -602,6 +609,18 @@ fn prepare_private_namespace(
     project_endpoints(&endpoint_projections)?;
     install_session_overlay_projection_roots(handoff, &filesystem_projections)?;
     project_filesystems(&filesystem_projections)?;
+    let workspace_path = if workspace_is_projected {
+        handoff.spec.workspace().requested_path().to_path_buf()
+    } else {
+        project_workspace(held_workspace.as_deref().ok_or_else(|| {
+            SessionControllerError::InvalidHandoff {
+                reason: String::from(
+                    "held workspace is unavailable for direct workspace projection",
+                ),
+                location: snafu::Location::default(),
+            }
+        })?)?
+    };
     hide_unadmitted_codex_ipc(handoff)?;
     if let Some(projection) = private_state_projection.as_ref() {
         project_private_state(projection)?;
@@ -653,6 +672,23 @@ fn hold_workspace(
             location: snafu::Location::default(),
         })?;
     Ok(target)
+}
+
+fn workspace_is_projected_by_writable_source(handoff: &LinuxControllerHandoff) -> bool {
+    handoff
+        .spec
+        .filesystem_projections()
+        .iter()
+        .any(|projection| {
+            !projection.read_only()
+                && projection.target().session_view_root().is_some()
+                && projection.source().kind() == SafePathKind::Directory
+                && handoff
+                    .spec
+                    .workspace()
+                    .requested_path()
+                    .starts_with(projection.workload_path())
+        })
 }
 
 /// Moves the held workspace to its stable, workload-visible private path so
@@ -764,7 +800,7 @@ fn hide_caller_home_for_session_view(
         .spec
         .filesystem_projections()
         .iter()
-        .any(|projection| projection.target().session_overlay_root() == Some(home.as_path()));
+        .any(|projection| projection.target().session_view_root() == Some(home.as_path()));
     if handoff.prepared_private_state_projection.is_none() && !has_declared_home_projection {
         return Ok(());
     }
@@ -783,7 +819,11 @@ fn hide_caller_home_for_session_view(
             location: snafu::Location::default(),
         });
     }
-    mount_private_state_mask(&home, "hiding caller home from session filesystem view")?;
+    if has_declared_home_projection {
+        mount_session_home_view(&home, "creating private caller-home session view")?;
+    } else {
+        mount_private_state_mask(&home, "hiding caller home from session filesystem view")?;
+    }
 
     if handoff.prepared_private_state_projection.is_some() {
         if let Some(staged_state) = private_state_path_in_workspace(
@@ -851,6 +891,21 @@ fn mount_private_state_mask(
     path: &Path,
     action: &'static str,
 ) -> Result<(), SessionControllerError> {
+    mount_empty_tmpfs(path, action, "0700")
+}
+
+fn mount_session_home_view(
+    path: &Path,
+    action: &'static str,
+) -> Result<(), SessionControllerError> {
+    mount_empty_tmpfs(path, action, "0711")
+}
+
+fn mount_empty_tmpfs(
+    path: &Path,
+    action: &'static str,
+    mode: &str,
+) -> Result<(), SessionControllerError> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -872,7 +927,7 @@ fn mount_private_state_mask(
             location: snafu::Location::default(),
         });
     }
-    let data = CString::new("mode=0700,size=65536").map_err(|error| {
+    let data = CString::new(format!("mode={mode},size=65536")).map_err(|error| {
         SessionControllerError::InvalidHandoff {
             reason: error.to_string(),
             location: snafu::Location::default(),
@@ -953,6 +1008,12 @@ struct HeldFilesystemProjection {
     read_only: bool,
     directory: bool,
     target: FilesystemProjectionTarget,
+    writable_view: Option<HeldWritableFilesystemView>,
+}
+
+enum HeldWritableFilesystemView {
+    Overlay { upper: PathBuf, workdir: PathBuf },
+    PrivateFile { source: PathBuf },
 }
 
 struct HeldPrivateStateProjection {
@@ -1151,6 +1212,7 @@ fn hold_filesystem_projections(
     {
         if prepared.workload_path() != admitted.workload_path()
             || prepared.read_only() != admitted.read_only()
+            || !filesystem_projection_view_matches(prepared.writable_view(), admitted)
         {
             return Err(SessionControllerError::InvalidHandoff {
                 reason: String::from(
@@ -1186,15 +1248,133 @@ fn hold_filesystem_projections(
                 source: source_error,
                 location: snafu::Location::default(),
             })?;
+        let writable_view = prepared
+            .writable_view()
+            .map(|view| hold_writable_filesystem_view(handoff, index, view))
+            .transpose()?;
+        if matches!(
+            writable_view,
+            Some(HeldWritableFilesystemView::Overlay { .. })
+        ) {
+            mount_remount(
+                &source,
+                MountFlags::BIND | MountFlags::RDONLY | MountFlags::NOSUID | MountFlags::NODEV,
+                "",
+            )
+            .map_err(std::io::Error::from)
+            .map_err(|source_error| SessionControllerError::Io {
+                action: "locking writable filesystem projection lower source read-only",
+                path: source.clone(),
+                source: source_error,
+                location: snafu::Location::default(),
+            })?;
+        }
         held.push(HeldFilesystemProjection {
             source,
             workload_path: prepared.workload_path().to_path_buf(),
             read_only: prepared.read_only(),
             directory,
             target: admitted.target().clone(),
+            writable_view,
         });
     }
     Ok(held)
+}
+
+fn filesystem_projection_view_matches(
+    prepared: Option<&PreparedWritableFilesystemView>,
+    admitted: &erebor_runtime_core::FilesystemProjection,
+) -> bool {
+    matches!(
+        (
+            prepared,
+            admitted.read_only(),
+            admitted.target().session_view_root().is_some(),
+            admitted.source().kind(),
+        ),
+        (None, true, _, _)
+            | (None, false, false, _)
+            | (
+                Some(PreparedWritableFilesystemView::Overlay { .. }),
+                false,
+                true,
+                SafePathKind::Directory,
+            )
+            | (
+                Some(PreparedWritableFilesystemView::PrivateFile { .. }),
+                false,
+                true,
+                SafePathKind::File,
+            )
+    )
+}
+
+fn hold_writable_filesystem_view(
+    handoff: &LinuxControllerHandoff,
+    index: usize,
+    view: &PreparedWritableFilesystemView,
+) -> Result<HeldWritableFilesystemView, SessionControllerError> {
+    let root = handoff
+        .evidence_path
+        .join("filesystem-projection-views")
+        .join(index.to_string());
+    fs::create_dir_all(&root).map_err(|source| SessionControllerError::Io {
+        action: "creating daemon-owned writable filesystem projection view",
+        path: root.clone(),
+        source,
+        location: snafu::Location::default(),
+    })?;
+    mount_bind(view.volume_root(), &root)
+        .map_err(std::io::Error::from)
+        .map_err(|source| SessionControllerError::Io {
+            action: "holding daemon-owned writable filesystem projection view",
+            path: view.volume_root().to_path_buf(),
+            source,
+            location: snafu::Location::default(),
+        })?;
+    mount_remount(
+        &root,
+        MountFlags::BIND | MountFlags::NOSUID | MountFlags::NODEV,
+        "",
+    )
+    .map_err(std::io::Error::from)
+    .map_err(|source| SessionControllerError::Io {
+        action: "locking daemon-owned writable filesystem projection view mount flags",
+        path: root.clone(),
+        source,
+        location: snafu::Location::default(),
+    })?;
+    match view {
+        PreparedWritableFilesystemView::Overlay { upper, workdir, .. } => {
+            Ok(HeldWritableFilesystemView::Overlay {
+                upper: held_filesystem_view_path(&root, view.volume_root(), upper)?,
+                workdir: held_filesystem_view_path(&root, view.volume_root(), workdir)?,
+            })
+        }
+        PreparedWritableFilesystemView::PrivateFile { source, .. } => {
+            Ok(HeldWritableFilesystemView::PrivateFile {
+                source: held_filesystem_view_path(&root, view.volume_root(), source)?,
+            })
+        }
+    }
+}
+
+fn held_filesystem_view_path(
+    held_root: &Path,
+    volume_root: &Path,
+    path: &Path,
+) -> Result<PathBuf, SessionControllerError> {
+    let relative = path.strip_prefix(volume_root).map_err(|_error| {
+        SessionControllerError::InvalidHandoff {
+            reason: format!(
+                "writable filesystem projection path `{}` escaped volume root `{}`",
+                path.display(),
+                volume_root.display()
+            ),
+            location: snafu::Location::default(),
+        }
+    })?;
+    Ok(held_root.join(relative))
 }
 
 fn project_filesystems(
@@ -1206,14 +1386,43 @@ fn project_filesystems(
             projection.directory,
             &projection.target,
         )?;
-        mount_bind(&projection.source, &projection.workload_path)
-            .map_err(std::io::Error::from)
-            .map_err(|source| SessionControllerError::Io {
-                action: "projecting held filesystem artifact into the workload",
-                path: projection.workload_path.clone(),
-                source,
-                location: snafu::Location::default(),
-            })?;
+        match projection.writable_view.as_ref() {
+            Some(HeldWritableFilesystemView::Overlay { upper, workdir }) => {
+                let options = overlay_options(&projection.source, upper, workdir)?;
+                mount(
+                    "overlay",
+                    &projection.workload_path,
+                    "overlay",
+                    MountFlags::NOSUID | MountFlags::NODEV,
+                    Some(options.as_c_str()),
+                )
+                .map_err(std::io::Error::from)
+                .map_err(|source| SessionControllerError::Io {
+                    action: "mounting writable filesystem projection overlay",
+                    path: projection.workload_path.clone(),
+                    source,
+                    location: snafu::Location::default(),
+                })?;
+            }
+            Some(HeldWritableFilesystemView::PrivateFile { source }) => {
+                mount_bind(source, &projection.workload_path)
+                    .map_err(std::io::Error::from)
+                    .map_err(|source_error| SessionControllerError::Io {
+                        action: "projecting private writable filesystem file into the workload",
+                        path: projection.workload_path.clone(),
+                        source: source_error,
+                        location: snafu::Location::default(),
+                    })?;
+            }
+            None => mount_bind(&projection.source, &projection.workload_path)
+                .map_err(std::io::Error::from)
+                .map_err(|source| SessionControllerError::Io {
+                    action: "projecting held filesystem artifact into the workload",
+                    path: projection.workload_path.clone(),
+                    source,
+                    location: snafu::Location::default(),
+                })?,
+        }
         if projection.read_only {
             mount_remount(
                 &projection.workload_path,
@@ -1300,7 +1509,7 @@ fn create_projection_target(
     directory: bool,
     target: &FilesystemProjectionTarget,
 ) -> Result<(), SessionControllerError> {
-    if target.session_overlay_root().is_some() {
+    if target.session_overlay_root().is_some() || target.session_view_root().is_some() {
         return create_session_overlay_projection_target(path, directory);
     }
     create_preinstalled_projection_target(path, directory)
@@ -1457,12 +1666,20 @@ fn environment_value(environment: &[(String, String)], key: &str) -> Option<Stri
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, os::unix::fs::PermissionsExt, path::Path};
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        path::{Path, PathBuf},
+    };
 
-    use erebor_runtime_core::FilesystemProjectionTarget;
+    use erebor_runtime_core::{
+        FilesystemProjection, FilesystemProjectionTarget, PreparedWritableFilesystemView,
+        SafePathBinding, SafePathKind,
+    };
 
     use super::{
-        create_private_projection_parent, create_projection_target, held_private_state_path,
+        create_private_projection_parent, create_projection_target,
+        filesystem_projection_view_matches, held_private_state_path,
         private_state_path_in_workspace,
     };
 
@@ -1535,6 +1752,38 @@ mod tests {
         create_projection_target(&target, false, &projection)?;
 
         assert!(target.is_file());
+        Ok(())
+    }
+
+    #[test]
+    fn writable_session_view_directory_requires_a_daemon_owned_overlay(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source = SafePathBinding::new(
+            PathBuf::from("/home/agent/project"),
+            1,
+            2,
+            3,
+            1000,
+            1000,
+            SafePathKind::Directory,
+        )?;
+        let projection = FilesystemProjection::session_view(
+            source,
+            PathBuf::from("/home/agent/project"),
+            false,
+            PathBuf::from("/home/agent"),
+        )?;
+        let overlay = PreparedWritableFilesystemView::overlay(
+            PathBuf::from("/daemon/volume"),
+            PathBuf::from("/daemon/volume/overlay/upper"),
+            PathBuf::from("/daemon/volume/overlay/workdir"),
+        );
+
+        assert!(filesystem_projection_view_matches(
+            Some(&overlay),
+            &projection
+        ));
+        assert!(!filesystem_projection_view_matches(None, &projection));
         Ok(())
     }
 }

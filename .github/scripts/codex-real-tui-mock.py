@@ -43,6 +43,46 @@ def response_body(response_number):
                         "type": "response.output_item.done",
                         "item": {
                             "type": "function_call",
+                            "call_id": "erebor-real-tui-allowed-write",
+                            "name": "shell_command",
+                            "arguments": json.dumps(
+                                {"command": "printf session-only > .erebor-cow"},
+                                separators=(",", ":"),
+                            ),
+                        },
+                    },
+                ),
+                event(
+                    "response.completed",
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "erebor-real-tui-tool",
+                            "usage": {
+                                "input_tokens": 0,
+                                "input_tokens_details": None,
+                                "output_tokens": 0,
+                                "output_tokens_details": None,
+                                "total_tokens": 0,
+                            },
+                        },
+                    },
+                ),
+            ]
+        )
+    if response_number == 1:
+        return "".join(
+            [
+                event(
+                    "response.created",
+                    {"type": "response.created", "response": {"id": "erebor-real-tui-denied"}},
+                ),
+                event(
+                    "response.output_item.done",
+                    {
+                        "type": "response.output_item.done",
+                        "item": {
+                            "type": "function_call",
                             "call_id": "erebor-real-tui-denied-write",
                             "name": "shell_command",
                             "arguments": json.dumps(
@@ -57,7 +97,7 @@ def response_body(response_number):
                     {
                         "type": "response.completed",
                         "response": {
-                            "id": "erebor-real-tui-tool",
+                            "id": "erebor-real-tui-denied",
                             "usage": {
                                 "input_tokens": 0,
                                 "input_tokens_details": None,

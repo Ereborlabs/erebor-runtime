@@ -63,15 +63,22 @@ pub struct PreparedFilesystemProjection {
     staging_path: PathBuf,
     workload_path: PathBuf,
     read_only: bool,
+    writable_view: Option<PreparedWritableFilesystemView>,
 }
 
 impl PreparedFilesystemProjection {
     #[must_use]
-    pub fn new(staging_path: PathBuf, workload_path: PathBuf, read_only: bool) -> Self {
+    pub fn new(
+        staging_path: PathBuf,
+        workload_path: PathBuf,
+        read_only: bool,
+        writable_view: Option<PreparedWritableFilesystemView>,
+    ) -> Self {
         Self {
             staging_path,
             workload_path,
             read_only,
+            writable_view,
         }
     }
 
@@ -88,6 +95,58 @@ impl PreparedFilesystemProjection {
     #[must_use]
     pub const fn read_only(&self) -> bool {
         self.read_only
+    }
+
+    #[must_use]
+    pub const fn writable_view(&self) -> Option<&PreparedWritableFilesystemView> {
+        self.writable_view.as_ref()
+    }
+}
+
+/// The daemon-owned session view for one writable filesystem projection.
+///
+/// Directory sources use the overlay upper and work directories. A regular
+/// file has no mountable OverlayFS target, so its session-owned private copy
+/// is supplied instead. Neither path is a client request or workload-visible
+/// host path.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum PreparedWritableFilesystemView {
+    Overlay {
+        volume_root: PathBuf,
+        upper: PathBuf,
+        workdir: PathBuf,
+    },
+    PrivateFile {
+        volume_root: PathBuf,
+        source: PathBuf,
+    },
+}
+
+impl PreparedWritableFilesystemView {
+    #[must_use]
+    pub fn overlay(volume_root: PathBuf, upper: PathBuf, workdir: PathBuf) -> Self {
+        Self::Overlay {
+            volume_root,
+            upper,
+            workdir,
+        }
+    }
+
+    #[must_use]
+    pub fn private_file(volume_root: PathBuf, source: PathBuf) -> Self {
+        Self::PrivateFile {
+            volume_root,
+            source,
+        }
+    }
+
+    #[must_use]
+    pub fn volume_root(&self) -> &std::path::Path {
+        match self {
+            Self::Overlay { volume_root, .. } | Self::PrivateFile { volume_root, .. } => {
+                volume_root
+            }
+        }
     }
 }
 

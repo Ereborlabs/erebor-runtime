@@ -13,8 +13,8 @@ use std::{
 };
 
 use erebor_runtime_core::{
-    PreparedPrivateStateProjection, PrivateStateProjection, SafePathBinding, SafePathKind,
-    SessionSpec,
+    FilesystemProjection, PreparedPrivateStateProjection, PreparedWritableFilesystemView,
+    PrivateStateProjection, SafePathBinding, SafePathKind, SessionSpec,
 };
 use erebor_runtime_filesystem::{
     FilesystemSessionStorage, FilesystemVolumeMode, FilesystemVolumeStorageRequest,
@@ -37,6 +37,8 @@ use crate::{
 
 const CODEX_STATE_DIRECTORY: &str = ".codex";
 const STATE_VOLUME_ID: &str = "agent-state";
+const CALLER_SOURCE_VOLUME_PREFIX: &str = "caller-source-";
+const PRIVATE_FILE_SOURCE_NAME: &str = "source";
 const SNAPSHOT_MANIFEST: &str = "state-snapshot-manifest.json";
 
 /// Daemon-long-lived realization of the intrinsic `terminal` Surface.
@@ -106,7 +108,7 @@ pub struct LinuxOstreeOverlayFilesystemRuntime {
 
 pub(crate) struct FilesystemBinding {
     storage: FilesystemSessionStorage,
-    projection: PreparedPrivateStateProjection,
+    private_state_projection: Option<PreparedPrivateStateProjection>,
 }
 
 impl LinuxOstreeOverlayFilesystemRuntime {
@@ -120,81 +122,101 @@ impl LinuxOstreeOverlayFilesystemRuntime {
         resolver: &dyn SessionPathResolver,
         recovering: bool,
     ) -> Result<Option<FilesystemBinding>, SessionManagerError> {
-        let Some(projection) = spec.private_state_projection() else {
+        let volumes = self.filesystem_volumes(spec)?;
+        if volumes.is_empty() {
             return Ok(None);
-        };
+        }
         let session_dir = self.session_directory(spec);
-        let volume = self.private_state_volume(&session_dir, projection)?;
         let storage = if recovering {
-            FilesystemSessionStorage::open_existing(&session_dir, [volume])
+            FilesystemSessionStorage::open_existing(&session_dir, volumes)
         } else {
-            FilesystemSessionStorage::prepare(&session_dir, [volume])
+            FilesystemSessionStorage::prepare(&session_dir, volumes)
         }
         .context(RuntimeFilesystemSnafu)?;
-        let state_volume =
-            storage
-                .volumes()
-                .first()
-                .ok_or_else(|| SessionManagerError::InvalidRuntime {
-                    session_id: spec.session_id().as_str().to_owned(),
-                    reason: String::from("filesystem binding has no private state volume"),
-                    location: snafu::Location::default(),
-                })?;
-        if recovering {
-            self.require_existing_view(spec, &storage, state_volume)?;
+        let private_state_projection = if let Some(projection) = spec.private_state_projection() {
+            let state_volume = self.volume(&storage, STATE_VOLUME_ID, spec)?;
+            if recovering {
+                self.require_existing_private_state_view(spec, &storage, state_volume)?;
+            } else {
+                self.snapshot_codex_state(
+                    spec,
+                    resolver,
+                    projection,
+                    storage.root(),
+                    state_volume.lower_ro_path(),
+                )?;
+                self.prepare_writable_overlay(spec, state_volume)?;
+            }
+            Some(PreparedPrivateStateProjection::new(
+                state_volume.lower_ro_path().to_path_buf(),
+                state_volume.overlay().upper_path().to_path_buf(),
+                state_volume.overlay().workdir_path().to_path_buf(),
+                state_volume.overlay().merged_path().to_path_buf(),
+                projection.target().to_path_buf(),
+            ))
         } else {
-            self.snapshot_codex_state(
-                spec,
-                resolver,
-                projection,
-                storage.root(),
-                state_volume.lower_ro_path(),
-            )?;
-            self.prepare_writable_overlay(spec, state_volume)?;
+            None
+        };
+        for (index, filesystem_projection) in spec.filesystem_projections().iter().enumerate() {
+            if !Self::requires_writable_session_view(filesystem_projection) {
+                continue;
+            }
+            let volume = self.volume(&storage, &Self::caller_source_volume_id(index), spec)?;
+            if recovering {
+                self.require_existing_caller_source_view(spec, volume, filesystem_projection)?;
+            } else {
+                self.prepare_writable_overlay(spec, volume)?;
+                if filesystem_projection.source().kind() == SafePathKind::File {
+                    self.copy_writable_file_source(
+                        spec,
+                        resolver,
+                        filesystem_projection,
+                        &volume
+                            .overlay()
+                            .merged_path()
+                            .join(PRIVATE_FILE_SOURCE_NAME),
+                    )?;
+                }
+            }
         }
-        let prepared = PreparedPrivateStateProjection::new(
-            state_volume.lower_ro_path().to_path_buf(),
-            state_volume.overlay().upper_path().to_path_buf(),
-            state_volume.overlay().workdir_path().to_path_buf(),
-            state_volume.overlay().merged_path().to_path_buf(),
-            projection.target().to_path_buf(),
-        );
         Ok(Some(FilesystemBinding {
             storage,
-            projection: prepared,
+            private_state_projection,
         }))
     }
 
-    /// Removes only the mutable overlay state when a Session is removed.
-    /// The repository, lower snapshot, and manifest remain available to the
-    /// daemon's retained session evidence; no caller state is ever touched.
+    /// Removes only the mutable session views when a Session is removed.
+    /// The repository, lower snapshots, and manifests remain available to the
+    /// daemon's retained evidence; caller sources are never touched.
     pub(crate) fn discard_writable_view(
         &self,
         spec: &SessionSpec,
     ) -> Result<(), SessionManagerError> {
-        let Some(projection) = spec.private_state_projection() else {
+        let volumes = self.filesystem_volumes(spec)?;
+        if volumes.is_empty() {
             return Ok(());
-        };
+        }
         let session_dir = self.session_directory(spec);
-        let volume = self.private_state_volume(&session_dir, projection)?;
-        let storage = FilesystemSessionStorage::open_existing(&session_dir, [volume])
+        let storage = FilesystemSessionStorage::open_existing(&session_dir, volumes)
             .context(RuntimeFilesystemSnafu)?;
-        let Some(state_volume) = storage.volumes().first() else {
-            return self.invalid_runtime(spec, "filesystem binding has no private state volume");
-        };
-        for path in [
-            state_volume.overlay().upper_path(),
-            state_volume.overlay().workdir_path(),
-            state_volume.overlay().merged_path(),
-        ] {
-            match fs::remove_dir_all(path) {
-                Ok(()) => {}
-                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
-                Err(source) => {
-                    return Err(source).context(RuntimeIoSnafu {
-                        action: "discarding removed session's private state writable overlay",
-                        path,
-                    });
+        for volume in storage.volumes() {
+            if volume.mode() != FilesystemVolumeMode::Writable {
+                continue;
+            }
+            for path in [
+                volume.overlay().upper_path(),
+                volume.overlay().workdir_path(),
+                volume.overlay().merged_path(),
+            ] {
+                match fs::remove_dir_all(path) {
+                    Ok(()) => {}
+                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(source) => {
+                        return Err(source).context(RuntimeIoSnafu {
+                            action: "discarding removed session's writable filesystem view",
+                            path,
+                        });
+                    }
                 }
             }
         }
@@ -202,20 +224,76 @@ impl LinuxOstreeOverlayFilesystemRuntime {
     }
 
     /// Opens the existing per-Session storage owned by this intrinsic Surface.
-    /// A caller receives no path input: the immutable admitted projection fixes
+    /// A caller receives no path input: the immutable admitted projections fix
     /// the one storage plan for the Session.
     pub(crate) fn open_storage(
         &self,
         spec: &SessionSpec,
     ) -> Result<Option<FilesystemSessionStorage>, SessionManagerError> {
-        let Some(projection) = spec.private_state_projection() else {
+        let volumes = self.filesystem_volumes(spec)?;
+        if volumes.is_empty() {
             return Ok(None);
-        };
+        }
         let session_dir = self.session_directory(spec);
-        let volume = self.private_state_volume(&session_dir, projection)?;
-        FilesystemSessionStorage::open_existing(&session_dir, [volume])
+        FilesystemSessionStorage::open_existing(&session_dir, volumes)
             .context(RuntimeFilesystemSnafu)
             .map(Some)
+    }
+
+    fn filesystem_volumes(
+        &self,
+        spec: &SessionSpec,
+    ) -> Result<Vec<FilesystemVolumeStorageRequest>, SessionManagerError> {
+        let session_dir = self.session_directory(spec);
+        let mut volumes = Vec::new();
+        if let Some(projection) = spec.private_state_projection() {
+            volumes.push(self.private_state_volume(&session_dir, projection)?);
+        }
+        for (index, projection) in spec.filesystem_projections().iter().enumerate() {
+            if Self::requires_writable_session_view(projection) {
+                volumes.push(self.caller_source_volume(index, projection)?);
+            }
+        }
+        Ok(volumes)
+    }
+
+    fn requires_writable_session_view(projection: &FilesystemProjection) -> bool {
+        !projection.read_only() && projection.target().session_view_root().is_some()
+    }
+
+    fn caller_source_volume(
+        &self,
+        index: usize,
+        projection: &FilesystemProjection,
+    ) -> Result<FilesystemVolumeStorageRequest, SessionManagerError> {
+        FilesystemVolumeStorageRequest::new(
+            Self::caller_source_volume_id(index),
+            projection.source().requested_path().to_path_buf(),
+            projection.workload_path().to_path_buf(),
+            FilesystemVolumeMode::Writable,
+        )
+        .context(RuntimeFilesystemSnafu)
+    }
+
+    fn caller_source_volume_id(index: usize) -> String {
+        format!("{CALLER_SOURCE_VOLUME_PREFIX}{index}")
+    }
+
+    fn volume<'a>(
+        &self,
+        storage: &'a FilesystemSessionStorage,
+        id: &str,
+        spec: &SessionSpec,
+    ) -> Result<&'a erebor_runtime_filesystem::FilesystemVolumeStorage, SessionManagerError> {
+        storage
+            .volumes()
+            .iter()
+            .find(|volume| volume.id() == id)
+            .ok_or_else(|| SessionManagerError::InvalidRuntime {
+                session_id: spec.session_id().as_str().to_owned(),
+                reason: format!("filesystem binding has no `{id}` volume"),
+                location: snafu::Location::default(),
+            })
     }
 
     fn private_state_volume(
@@ -363,7 +441,7 @@ impl LinuxOstreeOverlayFilesystemRuntime {
         Ok(())
     }
 
-    fn require_existing_view(
+    fn require_existing_private_state_view(
         &self,
         spec: &SessionSpec,
         storage: &FilesystemSessionStorage,
@@ -394,6 +472,88 @@ impl LinuxOstreeOverlayFilesystemRuntime {
             }
         }
         Ok(())
+    }
+
+    fn require_existing_caller_source_view(
+        &self,
+        spec: &SessionSpec,
+        volume: &erebor_runtime_filesystem::FilesystemVolumeStorage,
+        projection: &FilesystemProjection,
+    ) -> Result<(), SessionManagerError> {
+        for path in [
+            volume.overlay().upper_path().to_path_buf(),
+            volume.overlay().workdir_path().to_path_buf(),
+            volume.overlay().merged_path().to_path_buf(),
+        ] {
+            let metadata = fs::symlink_metadata(&path).context(RuntimeIoSnafu {
+                action: "opening recovered caller-source filesystem view",
+                path: &path,
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return self.invalid_runtime(
+                    spec,
+                    format!(
+                        "recovered caller-source view `{}` is unsafe",
+                        path.display()
+                    ),
+                );
+            }
+        }
+        if projection.source().kind() == SafePathKind::File {
+            let source = volume
+                .overlay()
+                .merged_path()
+                .join(PRIVATE_FILE_SOURCE_NAME);
+            let metadata = fs::symlink_metadata(&source).context(RuntimeIoSnafu {
+                action: "opening recovered writable caller-source file view",
+                path: &source,
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return self.invalid_runtime(
+                    spec,
+                    format!(
+                        "recovered writable caller-source file view `{}` is unsafe",
+                        source.display()
+                    ),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn copy_writable_file_source(
+        &self,
+        spec: &SessionSpec,
+        resolver: &dyn SessionPathResolver,
+        projection: &FilesystemProjection,
+        target: &Path,
+    ) -> Result<(), SessionManagerError> {
+        let source = resolver
+            .resolve(
+                spec.owner().uid(),
+                spec.owner().gid(),
+                projection.source().requested_path(),
+                SafePathKind::File,
+            )
+            .map_err(|source| SessionManagerError::PathResolution {
+                uid: spec.owner().uid(),
+                gid: spec.owner().gid(),
+                path: projection.source().requested_path().to_path_buf(),
+                source,
+                location: snafu::Location::default(),
+            })?;
+        if source.binding() != projection.source() {
+            return self.invalid_runtime(
+                spec,
+                "writable caller-source file identity changed after session admission",
+            );
+        }
+        copy_file_from_descriptor(
+            source.descriptor(),
+            target,
+            spec.owner().uid(),
+            spec.owner().gid(),
+        )
     }
 
     fn clear_directory(&self, path: &Path) -> Result<(), SessionManagerError> {
@@ -470,12 +630,67 @@ impl LinuxOstreeOverlayFilesystemRuntime {
 }
 
 impl FilesystemBinding {
-    pub(crate) fn projection(&self) -> PreparedPrivateStateProjection {
-        debug_assert!(self.projection.lower().starts_with(self.storage.root()));
-        debug_assert!(self.projection.upper().starts_with(self.storage.root()));
-        debug_assert!(self.projection.workdir().starts_with(self.storage.root()));
-        debug_assert!(self.projection.merged().starts_with(self.storage.root()));
-        self.projection.clone()
+    pub(crate) fn private_state_projection(&self) -> Option<PreparedPrivateStateProjection> {
+        self.private_state_projection.as_ref().map(|projection| {
+            debug_assert!(projection.lower().starts_with(self.storage.root()));
+            debug_assert!(projection.upper().starts_with(self.storage.root()));
+            debug_assert!(projection.workdir().starts_with(self.storage.root()));
+            debug_assert!(projection.merged().starts_with(self.storage.root()));
+            projection.clone()
+        })
+    }
+
+    pub(crate) fn writable_projection_view(
+        &self,
+        spec: &SessionSpec,
+        index: usize,
+    ) -> Result<Option<PreparedWritableFilesystemView>, SessionManagerError> {
+        let projection = spec.filesystem_projections().get(index).ok_or_else(|| {
+            SessionManagerError::InvalidRuntime {
+                session_id: spec.session_id().as_str().to_owned(),
+                reason: format!("filesystem projection index {index} is unavailable"),
+                location: snafu::Location::default(),
+            }
+        })?;
+        if !LinuxOstreeOverlayFilesystemRuntime::requires_writable_session_view(projection) {
+            return Ok(None);
+        }
+        let volume = self
+            .storage
+            .volumes()
+            .iter()
+            .find(|volume| {
+                volume.id() == LinuxOstreeOverlayFilesystemRuntime::caller_source_volume_id(index)
+            })
+            .ok_or_else(|| SessionManagerError::InvalidRuntime {
+                session_id: spec.session_id().as_str().to_owned(),
+                reason: format!("filesystem binding has no caller-source-{index} volume"),
+                location: snafu::Location::default(),
+            })?;
+        let view = match projection.source().kind() {
+            SafePathKind::Directory => PreparedWritableFilesystemView::overlay(
+                volume.root().to_path_buf(),
+                volume.overlay().upper_path().to_path_buf(),
+                volume.overlay().workdir_path().to_path_buf(),
+            ),
+            SafePathKind::File => PreparedWritableFilesystemView::private_file(
+                volume.root().to_path_buf(),
+                volume
+                    .overlay()
+                    .merged_path()
+                    .join(PRIVATE_FILE_SOURCE_NAME),
+            ),
+            SafePathKind::Executable => {
+                return Err(SessionManagerError::InvalidRuntime {
+                    session_id: spec.session_id().as_str().to_owned(),
+                    reason: String::from(
+                        "a writable caller-source projection cannot be an executable",
+                    ),
+                    location: snafu::Location::default(),
+                });
+            }
+        };
+        Ok(Some(view))
     }
 }
 
@@ -574,6 +789,74 @@ fn copy_directory_from_descriptor(
     for name in names {
         copy_directory_entry(source, &name, destination, digest)?;
     }
+    Ok(())
+}
+
+fn copy_file_from_descriptor(
+    source: &File,
+    target: &Path,
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<(), SessionManagerError> {
+    let source_path = PathBuf::from(format!("/proc/self/fd/{}", source.as_raw_fd()));
+    let mut source_file = File::open(&source_path).context(RuntimeIoSnafu {
+        action: "opening held writable caller-source file",
+        path: &source_path,
+    })?;
+    let metadata = source_file.metadata().context(RuntimeIoSnafu {
+        action: "observing held writable caller-source file",
+        path: &source_path,
+    })?;
+    if !metadata.is_file() {
+        return Err(SessionManagerError::InvalidRuntime {
+            session_id: String::from("writable-caller-source"),
+            reason: format!(
+                "writable caller-source `{}` is not a regular file",
+                source_path.display()
+            ),
+            location: snafu::Location::default(),
+        });
+    }
+    let mode = metadata.permissions().mode() & 0o777;
+    let mut target_file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(mode)
+        .open(target)
+        .context(RuntimeIoSnafu {
+            action: "creating private writable caller-source file view",
+            path: target,
+        })?;
+    let mut buffer = [0_u8; 32 * 1024];
+    loop {
+        let count = source_file.read(&mut buffer).context(RuntimeIoSnafu {
+            action: "reading held writable caller-source file",
+            path: &source_path,
+        })?;
+        if count == 0 {
+            break;
+        }
+        target_file
+            .write_all(&buffer[..count])
+            .context(RuntimeIoSnafu {
+                action: "writing private writable caller-source file view",
+                path: target,
+            })?;
+    }
+    target_file.sync_all().context(RuntimeIoSnafu {
+        action: "syncing private writable caller-source file view",
+        path: target,
+    })?;
+    rustix::fs::chown(
+        target,
+        Some(Uid::from_raw(owner_uid)),
+        Some(Gid::from_raw(owner_gid)),
+    )
+    .map_err(std::io::Error::from)
+    .context(RuntimeIoSnafu {
+        action: "assigning private writable caller-source file ownership",
+        path: target,
+    })?;
     Ok(())
 }
 
@@ -722,9 +1005,11 @@ fn copy_tree_ownership(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{fs, fs::File, path::Path};
 
-    use super::StateSnapshotManifest;
+    use rustix::process::{getgid, getuid};
+
+    use super::{copy_file_from_descriptor, StateSnapshotManifest};
 
     #[test]
     fn absent_caller_state_is_recorded_as_an_empty_initial_snapshot(
@@ -738,6 +1023,23 @@ mod tests {
         let encoded = serde_json::to_value(manifest)?;
         assert_eq!(encoded["source"]["kind"], "absent");
         assert_eq!(encoded["lower_snapshot"], "session-1-state");
+        Ok(())
+    }
+
+    #[test]
+    fn writable_file_source_is_copied_into_its_private_session_view(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let temporary = tempfile::tempdir()?;
+        let source = temporary.path().join("source");
+        let target = temporary.path().join("target");
+        fs::write(&source, "caller-content")?;
+        let source_file = File::open(&source)?;
+
+        copy_file_from_descriptor(&source_file, &target, getuid().as_raw(), getgid().as_raw())?;
+        fs::write(&target, "session-content")?;
+
+        assert_eq!(fs::read_to_string(&source)?, "caller-content");
+        assert_eq!(fs::read_to_string(&target)?, "session-content");
         Ok(())
     }
 }

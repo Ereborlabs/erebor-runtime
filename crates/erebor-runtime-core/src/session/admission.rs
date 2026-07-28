@@ -11,7 +11,7 @@ use snafu::ensure;
 
 use crate::{error::session_spec::InvalidSnafu, SessionSpecError};
 
-pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 6;
+pub const SESSION_SPEC_SCHEMA_VERSION: u32 = 7;
 pub const RUNNER_CAPABILITY_SCHEMA_VERSION: u32 = 2;
 pub const RUNNER_RECOVERY_SCHEMA_VERSION: u32 = 1;
 
@@ -730,13 +730,17 @@ pub enum FilesystemProjectionTarget {
     /// before the target is created. This prevents managed artifacts from
     /// creating files in the host filesystem.
     SessionOverlay { mount_root: PathBuf },
+    /// An empty private view is mounted at `mount_root` before the target is
+    /// created. This is used for declared caller sources: only explicitly
+    /// admitted paths are added to the caller's otherwise inaccessible home.
+    SessionView { mount_root: PathBuf },
 }
 
 impl FilesystemProjectionTarget {
     fn validate(&self, workload_path: &Path) -> Result<(), SessionSpecError> {
         match self {
             Self::Preinstalled => Ok(()),
-            Self::SessionOverlay { mount_root } => {
+            Self::SessionOverlay { mount_root } | Self::SessionView { mount_root } => {
                 ensure!(
                     is_normalized_absolute(mount_root)
                         && mount_root != workload_path
@@ -756,8 +760,16 @@ impl FilesystemProjectionTarget {
     #[must_use]
     pub fn session_overlay_root(&self) -> Option<&Path> {
         match self {
-            Self::Preinstalled => None,
+            Self::Preinstalled | Self::SessionView { .. } => None,
             Self::SessionOverlay { mount_root } => Some(mount_root),
+        }
+    }
+
+    #[must_use]
+    pub fn session_view_root(&self) -> Option<&Path> {
+        match self {
+            Self::Preinstalled | Self::SessionOverlay { .. } => None,
+            Self::SessionView { mount_root } => Some(mount_root),
         }
     }
 }
@@ -1036,6 +1048,20 @@ impl FilesystemProjection {
             workload_path,
             read_only,
             FilesystemProjectionTarget::SessionOverlay { mount_root },
+        )
+    }
+
+    pub fn session_view(
+        source: SafePathBinding,
+        workload_path: PathBuf,
+        read_only: bool,
+        mount_root: PathBuf,
+    ) -> Result<Self, SessionSpecError> {
+        Self::with_target(
+            source,
+            workload_path,
+            read_only,
+            FilesystemProjectionTarget::SessionView { mount_root },
         )
     }
 
@@ -2252,6 +2278,36 @@ mod tests {
         assert!(matches!(
             projection.target(),
             FilesystemProjectionTarget::SessionOverlay { .. }
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn filesystem_projection_session_view_requires_a_strict_parent(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let source = path("/home/agent/project", 7, SafePathKind::Directory)?;
+        let projection = FilesystemProjection::session_view(
+            source.clone(),
+            PathBuf::from("/home/agent/project"),
+            false,
+            PathBuf::from("/home/agent"),
+        )?;
+
+        assert_eq!(
+            projection.target().session_view_root(),
+            Some(std::path::Path::new("/home/agent"))
+        );
+        assert_eq!(projection.target().session_overlay_root(), None);
+        assert!(FilesystemProjection::session_view(
+            source,
+            PathBuf::from("/home/agent/project"),
+            false,
+            PathBuf::from("/home/other"),
+        )
+        .is_err());
+        assert!(matches!(
+            projection.target(),
+            FilesystemProjectionTarget::SessionView { .. }
         ));
         Ok(())
     }

@@ -24,7 +24,9 @@ use uuid::Uuid;
 
 use crate::{
     error::session_manager::{OutputSnafu, RuntimeIoSnafu},
-    surfaces::intrinsic::{LinuxOstreeOverlayFilesystemRuntime, TerminalSurfaceRuntime},
+    surfaces::intrinsic::{
+        FilesystemBinding, LinuxOstreeOverlayFilesystemRuntime, TerminalSurfaceRuntime,
+    },
     DurableStreamCursor, SessionInterceptionRouter, SessionManagerError, SessionOutputStores,
     StreamKind,
 };
@@ -136,18 +138,6 @@ impl SessionRuntimeResources {
             .enumerate()
             .map(|(index, _binding)| staging.join("interpreters").join(index.to_string()))
             .collect::<Vec<_>>();
-        let projections = spec
-            .filesystem_projections()
-            .iter()
-            .enumerate()
-            .map(|(index, projection)| {
-                PreparedFilesystemProjection::new(
-                    staging.join("projections").join(index.to_string()),
-                    projection.workload_path().to_path_buf(),
-                    projection.read_only(),
-                )
-            })
-            .collect::<Vec<_>>();
         if recovering {
             self.verify_staging(spec, &workspace, spec.workspace())?;
             if let (Some(path), Some(binding)) = (&executable, spec.executable()) {
@@ -170,24 +160,32 @@ impl SessionRuntimeResources {
                 }
                 self.verify_staging(spec, path, interpreter.executable())?;
             }
-            for (prepared, projection) in projections.iter().zip(spec.filesystem_projections()) {
+            for (index, projection) in spec.filesystem_projections().iter().enumerate() {
                 if self.resolve(spec, projection.source())?.binding() != projection.source() {
                     return self.invalid_runtime(
                         spec,
                         "filesystem projection identity changed before recovery",
                     );
                 }
-                self.verify_staging(spec, prepared.staging_path(), projection.source())?;
+                self.verify_staging(
+                    spec,
+                    &staging.join("projections").join(index.to_string()),
+                    projection.source(),
+                )?;
             }
+            let filesystem_binding =
+                self.filesystem
+                    .bind(spec, self.path_resolver.as_ref(), true)?;
+            let projections =
+                self.prepared_filesystem_projections(spec, &staging, filesystem_binding.as_ref())?;
             return Ok(PreparedStaging {
                 workspace,
                 executable,
                 interpreters,
                 projections,
-                private_state_projection: self
-                    .filesystem
-                    .bind(spec, self.path_resolver.as_ref(), true)?
-                    .map(|binding| binding.projection()),
+                private_state_projection: filesystem_binding
+                    .as_ref()
+                    .and_then(|binding| binding.private_state_projection()),
             });
         }
 
@@ -237,6 +235,11 @@ impl SessionRuntimeResources {
                 Ok(source)
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let filesystem_binding = self
+            .filesystem
+            .bind(spec, self.path_resolver.as_ref(), false)?;
+        let projections =
+            self.prepared_filesystem_projections(spec, &staging, filesystem_binding.as_ref())?;
 
         fs::create_dir_all(&staging).context(RuntimeIoSnafu {
             action: "creating daemon-owned session staging directory",
@@ -312,11 +315,34 @@ impl SessionRuntimeResources {
             executable,
             interpreters,
             projections,
-            private_state_projection: self
-                .filesystem
-                .bind(spec, self.path_resolver.as_ref(), false)?
-                .map(|binding| binding.projection()),
+            private_state_projection: filesystem_binding
+                .as_ref()
+                .and_then(|binding| binding.private_state_projection()),
         })
+    }
+
+    fn prepared_filesystem_projections(
+        &self,
+        spec: &SessionSpec,
+        staging: &Path,
+        filesystem_binding: Option<&FilesystemBinding>,
+    ) -> Result<Vec<PreparedFilesystemProjection>, SessionManagerError> {
+        spec.filesystem_projections()
+            .iter()
+            .enumerate()
+            .map(|(index, projection)| {
+                let writable_view = filesystem_binding
+                    .map(|binding| binding.writable_projection_view(spec, index))
+                    .transpose()?
+                    .flatten();
+                Ok(PreparedFilesystemProjection::new(
+                    staging.join("projections").join(index.to_string()),
+                    projection.workload_path().to_path_buf(),
+                    projection.read_only(),
+                    writable_view,
+                ))
+            })
+            .collect()
     }
 
     fn resolve(

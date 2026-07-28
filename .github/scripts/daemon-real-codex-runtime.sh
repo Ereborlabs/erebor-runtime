@@ -259,7 +259,10 @@ fi
 
 tty_create_output="$(mktemp)"
 timeout 180s runuser -u "$first_user" -- script -qefc \
-  "stty rows 24 cols 80; $erebor run --policy $policy_set --workspace $workspace $agent_name -d" \
+  "stty rows 24 cols 80; $erebor run --policy $policy_set --workspace $workspace \
+    --caller-home-source .codex:directory:read_write \
+    --caller-home-source workspace:directory:read_write \
+    $agent_name -d" \
   /dev/null >"$tty_create_output"
 tty_session="$(await_running_session "$first_user")"
 [[ "$(session_ids "$first_user" | wc -l | tr -d ' ')" == 1 ]]
@@ -284,8 +287,11 @@ printf '\r' >&"$tty_attachment_writer"
 await_tty_output "$tty_output" 'Erebor guardrail test completed.'
 
 [[ ! -e "$workspace/.erebor-denied" ]]
+[[ ! -e "$workspace/.erebor-cow" ]]
 session_root="/var/lib/erebor/users/$(id -u "$first_user")/sessions/$tty_session"
 [[ -d "$session_root/filesystem/repo" ]]
+grep -Fxq 'session-only' \
+  "$session_root/filesystem/work/volumes/caller-source-1/overlay/upper/.erebor-cow"
 [[ -f "$session_root/filesystem/work/volumes/agent-state/lower-ro/erebor-phase55-state-marker" ]]
 grep -Fxq 'real-codex-private-state' \
   "$session_root/filesystem/work/volumes/agent-state/lower-ro/erebor-phase55-state-marker"

@@ -1181,7 +1181,7 @@ impl DaemonSessionApi {
                     }
                     .fail();
                 }
-                FilesystemProjection::session_overlay(
+                FilesystemProjection::session_view(
                     binding.clone(),
                     source_path,
                     source.access().read_only(),
