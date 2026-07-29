@@ -283,10 +283,13 @@ endpoint configuration/lifecycle, so it may have a named `Surface` document.
 
 `Session` is the only runtime association point. It selects an Agent and
 PolicySet and may name the independent Surface records needed by its binding
-plan. The daemon derives intrinsic bindings from the compiled adapter and the
-PolicySet's surface rules, validates every named binding against the same plan,
-and records the resolved identities. Neither a Surface nor an Agent can merge,
-weaken, or select policy by itself.
+plan. Its runtime request may also declare caller-relative filesystem inputs
+for the intrinsic filesystem Surface; those are not Agent fields, package
+facts, or raw runner mount requests. The daemon derives intrinsic bindings
+from the compiled adapter and the PolicySet's surface rules, validates every
+named binding and source against the same plan, and records the resolved
+identities. Neither a Surface nor an Agent can merge, weaken, or select policy
+by itself.
 
 ### Session
 

@@ -76,6 +76,53 @@ The context DAG remains control-authority owned in every deployment model.
 Node-local enforcement may report an effect or use a sealed policy snapshot,
 but it never writes a context merge, receipt, package installation, or alias.
 
+## Declared Workload Sources And Runner Bases
+
+One source configuration declares the complete filesystem view that an Agent
+may receive. It must name caller inputs rather than silently granting an
+entire home directory. A local Codex configuration, for example, can declare
+its Bash startup file, Codex state directory, source tree, and other working
+directories as individual sources:
+
+```text
+sources
+  caller-home/.bashrc       -> $HOME/.bashrc
+  caller-home/.codex/       -> $HOME/.codex/
+  caller-home/go/src/       -> $HOME/go/src/
+  other declared directories -> their declared workload targets
+```
+
+Each source has a caller-relative source path, workload target, access mode,
+and regular-file or directory-tree kind. The declaration is an admitted input
+to the Session: it is not an untracked bind mount made by a client or runner.
+`~/.bashrc` must be declared as a source and selected by the Bash startup
+contract; mounting it alone does not cause a directly executed agent binary to
+read it.
+
+The source view is portable, but a runner base is not:
+
+```text
+LinuxHostRunner
+  caller sources -> admitted host-path projections
+  system base    -> host-system base, verified to provide required Bash/tools
+
+DockerRunner
+  caller sources -> admitted Docker mounts at the same workload targets
+  system base    -> admitted immutable image, which provides Bash/tools
+```
+
+`host-system` is a Linux-host-only base. It is deliberately not a source list
+of `/usr/bin/bash`, `/bin`, the dynamic loader, and shared libraries: that
+dependency closure belongs to the host operating system. Docker must not copy
+or bind the host system tree. Its image supplies the system base and must be
+validated to meet the same declared shell/tool contract.
+
+Generic filesystem sources accept only regular files and directory trees. A
+Unix socket such as `~/.codex/ipc/ipc.sock` is a live authority, not a
+snapshot-compatible source. Exposing one requires a separately admitted,
+governed live binding; it cannot become an incidental consequence of mounting
+the `.codex` tree.
+
 ## Docker Runner Design
 
 For Docker on a single host, the existing `erebord` is both the control
@@ -129,6 +176,11 @@ bypass Erebor with `docker exec`.
   projection into the controller handoff.
 - The controller mounts the guard and stable narrow endpoint, uses the guard
   as entrypoint, and preserves the admitted child command without a shell.
+- The controller realizes the full admitted caller-source mapping at its
+  declared workload targets. It substitutes the admitted image base for the
+  Linux host-system base and verifies the declared Bash/tool contract there.
+  It must not infer sources, bind the host system tree, or use a client-created
+  mount.
 - Image digest, command, mounts, user, capabilities, no-pull behavior, and
   recovery identity are revalidated from Docker inspection.
 - TTY attach, cancellation, output, daemon-loss, restart/reconnect, and
@@ -317,4 +369,3 @@ draft.
   or rejects it and only the controller writes the Git receipt/merge.
 - Multi-node tests verify that an agent cannot use a node-local endpoint to
   impersonate another Pod, session, or tenant.
-

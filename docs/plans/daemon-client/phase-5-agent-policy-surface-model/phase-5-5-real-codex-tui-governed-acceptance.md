@@ -30,16 +30,18 @@ complete Phase 5.4.
 - Select the exact Phase 5.1 PolicySet with the Agent. Admission must bind the
   daemon implementations of the intrinsic terminal and filesystem Surfaces;
   record the resolved Agent, package order, PolicySet name, terminal/filesystem
-  bindings, state snapshot, projection, and Session identities in the result
-  chain. A named Surface is supplied only if the selected policy requires a
-  Surface with independent configuration, such as Browser CDP.
+  bindings, declared source view, runner base, and Session identities in the
+  result chain. A named Surface is supplied only if the selected policy
+  requires a Surface with independent configuration, such as Browser CDP.
 - Run the actual Codex TUI through the daemon-owned Phase 4 controller PTY.
   Preserve initial geometry, controller-only input/resize, read-only
   observation, and detach/reattach of the same session.
-- Prove the Phase 5.3 private-state boundary in the live workload: fixed
-  private `CODEX_HOME`, managed hook/configuration works, caller state is not
-  mutated, source host paths and daemon-control sockets are absent, and secrets
-  are absent from logs, output, receipts, and evidence.
+- Prove the declared source-view boundary in the live workload: the admitted
+  caller sources, including the configured Bash startup file, Codex state, and
+  working directories, are visible at their declared workload targets and are
+  subject to filesystem policy. The runner must not expose an undeclared caller
+  path, daemon-control socket, Docker socket, or other control credential.
+  Secrets remain absent from logs, output, receipts, and evidence.
 - Prove real filesystem policy enforcement, not just policy admission: the
   `codex-runtime-guardrail` package must deny a Codex-attempted write or
   mutation of `.erebor-denied` before any physical effect, while its explicit
@@ -55,12 +57,104 @@ complete Phase 5.4.
   `replacement_surface: browser_cdp`, Phase 5.4 must first provide the named
   Browser CDP Surface lifecycle and binding it requires.
 
+## Declared Source View Decision
+
+The real local Codex experience is a governed use of its configured caller
+inputs, not a synthetic temporary user, a fabricated Codex home, or an
+implicit caller-home mount. The full workload-visible input set must be
+declared on the concrete Session run. It is not part of the immutable Codex
+package or Agent: an Agent is portable, while caller paths vary by Session.
+The existing `erebor run` route is merely its first caller. The generic
+filesystem Surface input is:
+
+```json
+{
+  "caller_home_sources": [
+    { "relative_path": ".bashrc", "kind": "file", "access": "read_only" },
+    { "relative_path": ".codex", "kind": "directory", "access": "read_write" },
+    { "relative_path": "go/src/project", "kind": "directory", "access": "read_write" }
+  ]
+}
+```
+
+The current Docker-inspired CLI spells the same Session input as repeatable
+`--caller-home-source relative-path:kind:access`; it introduces no command or
+resource category. A later declarative configuration can express this same
+Session input without changing the filesystem Surface contract.
+
+| Field | Use and validation | Owner |
+| --- | --- | --- |
+| `caller_home_sources` | Optional repeated input for one runtime Session. It is rejected on a static Session association and has no Agent or package equivalent. An empty list retains the adapter's existing isolated-private-state route where that route exists. | Session admission / intrinsic filesystem Surface |
+| `…relative_path` | Required normalized non-empty path below the authenticated caller's non-symlink home. It cannot be absolute or contain `.` or `..`; daemon descriptor resolution rejects a missing, symlinked, wrong-kind, or wrong-owner source. | Session admission |
+| `…kind` | Required source shape: `file` for one regular file or `directory` for a directory tree. It prevents the request from silently accepting a different filesystem object. | Session admission |
+| `…access` | Required projection mode: `read_only` or `read_write`. A Session workspace must fall under a declared writable directory source. | Intrinsic filesystem Surface |
+
+The daemon resolves every `relative_path` below the authenticated caller's
+non-symlink home and projects it to the same `$HOME` relative target. The
+individual caller paths must be named; a magic, unrestricted `callerHome` is
+not an equivalent source declaration. Sources are regular files or directory
+trees with explicit access. The requested workspace must be inside one
+declared writable directory source.
+
+The projection contract is physical, not just admission metadata:
+
+```text
+undeclared path             -> absent from the private caller-home view
+read_only source            -> descriptor-verified bind, remounted read-only
+read_write directory source -> per-Session COW overlay at that source target
+                               (lower=verified source; upper/work=the existing
+                               FilesystemSessionStorage volume)
+read_write file source      -> private Session copy at that source target
+```
+
+`OverlayFS` can mount a directory but not a regular-file target, so the file
+case is a session-owned copy rather than a writable host bind. In neither case
+does a write reach the caller source. A workspace within a declared writable
+directory uses that directory's merged overlay path as its process working
+directory; it is never also mounted through a direct writable workspace bind.
+No source view is automatically promoted back to the caller. Promotion remains
+a later typed, policy-governed filesystem operation.
+
+`~/.bashrc` is both a visible source and
+the declared Bash startup input: the daemon admits the caller's `PATH`, fixes
+`HOME` and the hook `SHELL`, and sets `BASH_ENV` only when `.bashrc` is
+declared. No other inherited client environment is forwarded.
+
+```text
+runner base
+  linux-host -> admitted host-system base, including Bash
+  docker     -> admitted image base, including Bash
+```
+
+`host-system` is one Linux-host-only runner base, not a copied list of
+`/usr/bin/bash`, the dynamic loader, libraries, `/bin`, and other host paths.
+The Linux runner verifies the required Bash contract against that base. A
+Docker runner reuses the caller-source mapping but supplies the shell and all
+system dependencies from its admitted image; it must not copy or bind the
+host's system tree into a container.
+
+A generic filesystem source accepts regular files and directory trees. A
+directory source does not implicitly grant live IDE authority: when `.codex`
+is projected, the Linux controller masks `.codex/ipc` in the Session. The
+socket requires its own explicitly governed live binding before it can be
+exposed.
+
+This implemented host profile retains the existing private-state acceptance:
+the intrinsic filesystem Surface snapshots Codex state into the Session's
+private `CODEX_HOME` view while the separately declared caller sources provide
+the permitted `$HOME` and workspace paths. `FilesystemSessionStorage` remains
+the owner of that per-Session state storage. This decision does not add a
+second Agent, Session, PolicyPackage, or PolicySet resource.
+
 ## Accepted Resource Schemas
 
-Phase 5.5 adds no fields. It accepts only the resource contract from Phases
-5.1–5.3 below; a real Codex result is invalid if any document contains an
-extra field or a substituted reference. Phase 5.4 is the conditional extension
-for a `mediate` Rule with an explicit `replacement_surface: browser_cdp`.
+Phase 5.5 adds no declared-resource field. It adds the runtime-only generic
+`caller_home_sources` Session input described above; it is not serializable as
+an Agent, PolicyPackage, PolicySet, or Surface field. It accepts only the
+resource contract from Phases 5.1–5.3 below; a real Codex result is invalid if
+any document contains an extra field or a substituted reference. Phase 5.4 is
+the conditional extension for a `mediate` Rule with an explicit
+`replacement_surface: browser_cdp`.
 
 ```json
 {
@@ -247,9 +341,9 @@ session=session-a31...
 ### Model-provider variants
 
 The same admitted Codex Agent and governed Session support two intentionally
-separate provider configurations. The provider configuration is private Codex
-state projected by the intrinsic filesystem Surface; it is not an Agent,
-PolicyPackage, PolicySet, or Session field.
+separate provider configurations. The provider configuration is part of the
+declared Codex-state source view governed by the intrinsic filesystem Surface;
+it is not an Agent, PolicyPackage, PolicySet, or Session field.
 
 The committed acceptance uses a loopback provider so CI is deterministic and
 never spends model tokens:
@@ -284,7 +378,7 @@ example rather than CI evidence.
 
 ```text
 codex
-  -> rejected as evidence: bypasses daemon admission and private state
+  -> rejected as evidence: bypasses daemon admission and the declared source view
 
 erebor start --config codex.toml
   -> rejected: foreground start was removed
@@ -298,9 +392,9 @@ Agentfile -> Agent -> Session
 - Do not validate Agentfile, `FROM`, `COPY`, `ADAPTER`, `RUN`, `Ereborfile`,
   OCI, Docker, Kubernetes, registry, or distribution behavior. Agentfile is
   exclusively Phase 6.
-- Do not accept a fixture TTY, `PATH` launch, caller-home bind, mutable
-  launcher, agent-selected policy, or client-owned lifecycle as equivalent to
-  the real governed path.
+- Do not accept a fixture TTY, an implicit or undeclared caller-home bind,
+  mutable launcher, agent-selected policy, or client-owned lifecycle as
+  equivalent to the real governed path.
 
 ## Checkpoint
 
@@ -311,8 +405,9 @@ Add committed daemon/client and privileged Linux-host coverage for:
 - exact PolicyPackage order, PolicySet name, Agent admission, terminal and
   filesystem binding identities, and durable evidence/receipts for the real
   Session;
-- private `CODEX_HOME`, managed hook behavior, source-path/daemon-socket
-  absence, caller-state non-mutation, and secret redaction;
+- declared caller-source mapping, Bash startup behavior, managed hook
+  behavior, undeclared-source/daemon-socket absence, source attribution, and
+  secret redaction;
 - emitted filesystem events and a real denied `.erebor-denied` write/mutation
   with no workspace or state effect; and
 - controller geometry, input, observer, detach, and reattach behavior in the
@@ -329,6 +424,9 @@ Add committed daemon/client and privileged Linux-host coverage for:
 - The resource model is visible in the real result:
   `PolicySet -> PolicyPackage` for static ordered composition, and
   `Session -> Agent + PolicySet + Surface bindings` for this concrete execution.
+- The real result records the complete declared source view and selected runner
+  base. Linux-host provides its admitted host-system base; a future Docker
+  runner must realize the same caller sources against an admitted image base.
 - The daemon remains the lifecycle, enforcement, state, PTY, evidence, and
   physical-effect owner; the client, agent, and source files are not alternate
   authorities.
@@ -348,8 +446,91 @@ status. Stop before any Agentfile or runner work; those begin in Phase 6.
 
 State: In progress.
 
+2026-07-28 writable source-view correction:
+
+- The prior direct writable bind was incorrect: it allowed a governed
+  workload to mutate the caller workspace, as demonstrated by a host-visible
+  `hello.frominside` file. Declared caller sources now use an internal
+  `SessionView` target (Session-spec schema version 7), which masks the caller
+  home with an empty private view and creates only the declared target paths.
+  This is distinct from the existing `SessionOverlay` target, which remains
+  the daemon-managed COW mount-root mechanism for managed `/etc` and `/usr/lib`
+  artifacts.
+- Every declared writable directory now receives a per-Session OverlayFS view
+  backed by a volume in the existing `FilesystemSessionStorage`; its verified
+  source is the read-only lower and the Session-owned upper/work directories
+  receive changes. Read-only sources remain direct read-only binds. Writable
+  regular files receive a private Session copy because Linux OverlayFS cannot
+  mount a file target. The runner uses the merged directory view as its
+  workspace rather than a separate direct workspace bind.
+- Crate-local regression tests cover the new `SessionView` contract, require a
+  daemon-owned overlay for a writable directory view, and prove a writable
+  regular-file view does not mutate its source. `cargo check --workspace`, the
+  focused Rust tests, the real-Codex mock-provider syntax checks, and the
+  rebuilt privileged daemon image passed.
+- The privileged real-Codex run reached the governed Session and successfully
+  read its declared `.codex` SessionView, but stopped before the TUI readiness
+  prompt: Codex received `EACCES` while reading the separately projected,
+  policy-allowed `/etc/codex/requirements.toml`. A comparison run with both
+  caller-source flags removed failed at the same managed-requirements read.
+  The writable-source change therefore did not cause that failure, but it
+  means the live COW workspace proof is still pending. This phase remains in
+  progress; no managed-artifact redesign is included in this correction.
+- The final CI procedure passed formatting, workspace checking, and Clippy for
+  this source state. Its workspace-test stage remains blocked by the existing
+  `erebor-codex-hook` binary test: it supplies a `SessionStart` JSON event
+  without the now-required `cwd` field. That stale managed-hook test is outside
+  this source-view correction and was not changed.
+
 2026-07-27 implementation and verification progress:
 
+- The interactive example is now a direct persistent host setup, not a lab.
+  The recovered Codex revision places its fixed host/systemd daemon profiles,
+  managed-hook requirements, and `codex-runtime-guardrail` PolicyPackage under
+  `examples/codex-real-tui/config/` and `trust/`. Its README has one
+  root-owned install of those checked-in artifacts, one foreground `erebord`
+  command, and ordinary same-UID `erebor` enrollment/run commands. It has no
+  profile generator. The former temporary-directory, copied-binary,
+  temporary-user, `runuser`, mock-provider, and wrapper-shell scripts remain
+  removed. This changes only the operator walkthrough: the existing daemon,
+  agent loading, policy setup, source-view admission, Linux runner, and
+  managed Codex hook contract are retained. The direct example declares the
+  caller's `.bashrc`, `.codex`, and selected home-relative workspace; it does
+  not expose the live `.codex/ipc` endpoint.
+- Recovery verification passed: both recovered daemon profiles parse as JSON;
+  the checked-in requirements and shell-startup digests exactly match their
+  pinned configuration values; the current `erebor-codex-hook` digest matches
+  the pinned managed-hook digest; and the README shell fences parse with
+  `bash -n`. This restoration did not rerun a privileged host Session.
+  Real-TUI acceptance remains **In progress** pending that operator-run proof.
+- The current direct-host/source-view workflow supersedes the temporary-user
+  host-lab notes below. The generic Session filesystem input declares
+  non-overlapping caller-home file/directory sources with access mode; it is
+  deliberately absent from `CodexPackageDefinition` and the Agent resource.
+  The direct example passes the caller's `.bashrc`, `.codex`, and current
+  repository source through the existing `erebor run` request. Generic and Codex
+  admission reject a workspace outside a declared writable directory, project
+  only those descriptor-verified paths, hide the rest of the caller home, and
+  mask `.codex/ipc`. The root daemon retains ownership of hooks, policy,
+  terminal interception, filesystem enforcement, and lifecycle; the normal
+  developer UID remains the Erebor client and Codex workload UID. The existing
+  isolated fixture path continues to use `FilesystemSessionStorage` and its
+  per-Session OSTree repository unchanged.
+- The direct workflow starts only the root daemon, then performs enrollment,
+  policy setup, and the interactive `erebor run` command as the invoking
+  developer. It does not make a user, copy a Codex home, write
+  `~/.codex/config.toml`, or start a provider. The real TUI uses the declared
+  existing Codex configuration. The deterministic mock remains CI-only.
+- Generic source-input verification passed: core source-model tests, daemon
+  admission tests, CLI parsing tests, package tests, the real-profile
+  integration test, IPC contract test, Linux controller unit tests,
+  `bash -n examples/codex-real-tui/run-host-lab.sh`, the complete
+  `build-host-lab.sh`, `cargo check --workspace`, clean
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and
+  `bash .github/scripts/verify-rust-ci.sh`. The fresh privileged host probe
+  remains unrun here: `sudo -n true` was rejected because the environment
+  requires an interactive sudo password. This is a host-validation gap, not a
+  completed real-TUI acceptance claim.
 - The privileged Docker acceptance now runs the installed static Codex
   `0.145.0` TUI through a daemon-created Session. It uses the actual current
   Responses `function_call` shape for `shell_command`, passes the controller
@@ -362,6 +543,102 @@ State: In progress.
   `erebor-phase-5-local-mock`. The example above separately documents
   `gpt-5-nano` as the explicit hosted-provider option for an operator-run real
   prompt; it is not substituted into CI.
+- `examples/codex-real-tui/` is the distinct interactive real-Codex **host**
+  lab. It starts the existing foreground daemon and direct Linux runner, then
+  creates a fresh temporary local user and one daemon-owned real Codex Session.
+  `mock` retains the deterministic CI provider; `openai` uses `gpt-5-nano` and
+  asks the operator to authenticate only in the governed TUI. The fixture lab
+  remains separate and never claims to execute real Codex. The lab intentionally
+  omits the caller's live `~/.codex/ipc/ipc.sock`: it is Codex's `/ide`
+  IDE-context transport, not copyable persistent state. A governed `/ide`
+  capability needs a later explicit live surface binding.
+- `bash -n` passed for the real host-lab scripts and `git diff --check`
+  passed. Each exact local `cargo build` target used by `build-host-lab.sh`
+  passed.
+  The agent could not rerun the privileged host lab from this non-interactive
+  shell because `sudo` requested an interactive password; existing privileged
+  acceptance remains recorded above.
+- The first operator host-lab run reached the Linux runner but its controller
+  closed the control stream because the lab had made the controller/guard
+  binaries non-executable to the temporary Session user. The staged `bin/`
+  directory remains root-owned and non-writable (`root:<lab-group> 0750`), but
+  its root-owned binaries now use the existing direct-runner host-lab mode
+  (`0755`). A fresh lab run is required to verify that correction.
+- The host-lab launch instruction now invokes `erebor run` with no trailing
+  Codex option. The previously documented `-d` is not a current Codex CLI
+  option and was an invalid command. It did not request the TUI. The actual
+  dangerous bypass is the distinct long
+  `--dangerously-bypass-approvals-and-sandbox`/`--yolo` option, which the host
+  lab does not pass. Its private config intentionally uses `never` approval
+  and `danger-full-access` sandbox so the deterministic request reaches the
+  Erebor boundary; this does not alter that the command starts Codex's real
+  interactive TUI.
+- The host-lab mock provider previously redirected its temporary user's output
+  to the root-only daemon log directory, so its shell could not create the log
+  and the provider never started. Its retained log now lives in that temporary
+  user's private home directory. Separately, Linux-runner startup now appends a
+  bounded controller-stderr tail to a control-stream-closure error before the
+  failed Session rolls back its state. This preserves the actionable mount,
+  projection, or process-guard cause for the owning CLI caller. The focused
+  regression test for bounded, single-line diagnostic tails passes.
+- After that final edit, `cargo fmt --all -- --check`, `cargo check --workspace`,
+  and clippy within `bash .github/scripts/verify-rust-ci.sh` passed. The script
+  then reached the unrelated Browser-CDP `proxy_e2e` tests and this agent's
+  sandbox denied their local WebSocket bind with `Operation not permitted` at
+  `crates/erebor-runtime-e2e/src/websocket.rs:42`. The three mini-upstream
+  proxy tests therefore failed before the suite could reach the existing
+  deferred-Phase-5.4 Browser-CDP legacy failure. This is an environment block,
+  not evidence that the real-Codex host lab passed; privileged host validation
+  remains required.
+- The complete `examples/codex-real-tui/build-host-lab.sh` was run after the
+  diagnostic change, rebuilding both the standalone controller and `erebord`,
+  which statically links the runner that reads startup diagnostics. A lab run
+  made before that rebuild necessarily continued to report the old generic
+  control-stream error. A fresh privileged host-lab run is still required.
+- Real-Codex managed artifacts no longer require host paths such as
+  `/etc/codex/requirements.toml` or
+  `/usr/lib/erebor/codex-hooks/erebor-codex-hook` to be preinstalled. The
+  internal Session admission introduced a `SessionOverlay` projection target
+  in schema version 6 (the current source-view contract is schema version 7):
+  the Linux controller mounts a private copy-on-write
+  overlay over `/etc` and `/usr/lib` only after entering the Session mount
+  namespace, then creates the exact managed mountpoints and binds the trusted
+  artifacts read-only. The host gets neither the managed hook path nor the
+  requirements file. Existing `/run/erebor` intrinsic-runtime projections keep
+  their current private-runtime mountpoint behavior. Core, daemon mapping, and
+  controller target-creation regression tests pass; the required privileged
+  host-lab run remains pending.
+- For the overlay implementation, `cargo check --workspace`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and
+  the focused core, daemon, and controller regression tests pass. The host-lab
+  binary set was rebuilt. The repository-wide verification procedure was also
+  rerun; its Browser-CDP `proxy_e2e` portion remains blocked by this agent
+  sandbox's denied local WebSocket bind, as recorded above.
+- The first successful real-TUI operator run exposed a managed-hook admission
+  defect: Codex displayed `UserPromptSubmit` and `Stop` as exit-code-1 hooks.
+  This was not a policy denial. The local Codex command-hook implementation
+  launches commands as `$SHELL -lc <managed-hook>`, while static named-Agent
+  admission clears caller environment. Codex therefore used its `/bin/sh`
+  fallback, but the real profile incorrectly claimed the direct two-process
+  lineage `Codex -> hook`. It also recorded the daemon-only prepared-executable
+  staging path even though the Linux controller moves that executable into the
+  Session namespace at `/run/erebor/admitted-executable` before the guard
+  observes it. The lifecycle guard consequently could not mint the required
+  exact-lineage ticket, and the hook correctly failed closed.
+- The real profile now pins the observable three-process lineage
+  `/run/erebor/admitted-executable -> /usr/bin/bash ->
+  /usr/lib/erebor/codex-hooks/erebor-codex-hook`. Named Codex admission derives
+  `SHELL=/usr/bin/bash` only from that immutable hook contract; callers still
+  cannot pass arbitrary session environment. The router retains the
+  descriptor-preparation check but gives the hook-registration profile the
+  controller's actual workload-visible executable path. The guard still
+  requires the complete lineage, original pipe identities, PID identity,
+  namespace/cgroup evidence, and one-use ticket; no authentication check was
+  relaxed. Package, daemon, session-profile, and real-profile regression tests
+  cover the pinned shell and workload-visible executable identity. The exact
+  `examples/codex-real-tui/build-host-lab.sh` binary set was rebuilt after this
+  correction. A fresh privileged host-lab run is required to prove the hooks
+  now complete and the deterministic filesystem policy denial still occurs.
 - `cargo fmt --all -- --check`, the focused real-profile and Codex-session
   tests, `cargo check --workspace`, and
   `cargo clippy --workspace --all-targets --all-features -- -D warnings` pass.
