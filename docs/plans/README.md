@@ -19,6 +19,13 @@ master plan invented for them.
 - [Session interception backend refactor](session-interception-backend-refactor/README.md)
 - [Linux OSTree OverlayFS V3 implementation](revert/filesystem-surface/linux-ostree-overlay-v3-implementation/README.md)
 
+## Proposed Master Plans
+
+- [Mithril Hugging Face intrusion prevention](mithril-hugging-face-intrusion-prevention/README.md)
+  — phased single-gatherer Linux/Kubernetes/provider prevention, causal
+  correlation, and verified response built around the published incident
+  acceptance chain.
+
 ## Draft Architecture Lines
 
 - [Container and Kubernetes execution](container-orchestration/README.md) — a
