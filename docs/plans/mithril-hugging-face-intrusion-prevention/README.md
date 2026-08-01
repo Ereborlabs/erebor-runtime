@@ -7,6 +7,7 @@ Parent plan: none. This is a new product implementation master plan.
 
 Design authorities:
 
+- [Policy And Protection Algorithm Architecture](./policy-and-protection-algorithm-architecture.md)
 - [Mithril Single-Gatherer Architecture and Upstream Adoption Plan](../../research/erebor-warden-single-gatherer-architecture-plan.md)
 - [Erebor Defender: Linux Enforcement, Correlation, and Response Engineering](../../research/erebor-defender-learning-from-tetragon-and-falco.md)
 - [Hugging Face Agent Intrusion: Erebor Defender Implementation Analysis](../../research/hugging-face-agent-intrusion-analysis.md)
