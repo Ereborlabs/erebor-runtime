@@ -984,6 +984,263 @@ an `EntryInstance`. It never trusts container annotations alone; it re-resolves
 the full container, cgroup live interval, Pod UID, image digest, and policy
 generation.
 
+### General authenticated intent-proof channels
+
+`RuntimeEntryIntent` proves the runtime operation and caller transport. It does
+not, by itself, prove the human or coordinator purpose behind the operation.
+The same distinction applies outside Kubernetes. Seeing `aws sso login`,
+`gcloud auth login`, `gsutil cp`, `kubectl`, or `/app/healthcheck` in argv does
+not prove that a human, CI job, kubelet probe, or approved deployment intended
+that action. An attacker can execute the same binary and arguments.
+
+**The AWS and Google CLI examples are analogies for proving intent through a
+separate authenticated channel; they are not entry kinds.** Mithril does not
+create `AwsLoginEntry`, `GcloudLoginEntry`, or `GsutilEntry`. Those processes
+keep their real native parent/exec lineage. Only the separately obtained
+provider authority is represented as an `AuthorityLeaseIntent` and, after
+issuance is proven, a `CredentialLease`. The reason to study those login flows
+is to reuse their signed issuer, audience, nonce, expiry, approval, and session
+binding ideas for kubelet and CI intent proof.
+
+The correct extension is a general **intent-proof channel**: a trusted
+coordinator sends a signed, replay-resistant assertion before the relevant
+entry, transition, or authority acquisition. This is another input to the one
+`mithril-node` gatherer, not a second gatherer. The producer does not load BPF,
+collect kernel events, own policy, or maintain a competing process graph.
+
+```text
+trusted coordinator or identity provider
+    -> signed one-use IntentProofEnvelope
+       -> authenticated local socket or central signed stream
+          -> mithril-node validates issuer, nonce, time, target, and policy
+             -> pending entry / transition / authority-lease proof
+                -> exact task claims proof at the matching pre-effect point
+```
+
+#### Intent proof envelope
+
+```text
+IntentProofEnvelope {
+  proof_id
+  issuer_id
+  issuer_kind: kubelet | ci_coordinator | human_approval | identity_provider |
+               deployment_controller | connector
+  issuer_key_id
+  signature
+  issued_at
+  not_before
+  expires_at
+  nonce
+  sequence
+
+  subject_scope {
+    cluster_uid?
+    node_id?
+    pod_uid?
+    full_container_id?
+    cgroup_binding_id?
+    execution_set_id?
+    process_lineage_id?
+    ci_run_id?
+    ci_job_id?
+    ci_step_id?
+    human_session_id?
+  }
+
+  declared_intent {
+    kind: runtime_entry | native_transition | authority_lease |
+          artifact_handoff | provider_operation
+    operation
+    command_digest?
+    executable_object?
+    image_digest?
+    provider?
+    account_or_project?
+    requested_role_or_permission_set?
+    credential_audience?
+    artifact_digests[]
+    lifecycle_state?
+  }
+
+  trigger {
+    actor_id?
+    event_type?
+    workflow_or_manifest_ref?
+    immutable_definition_digest?
+    approval_id?
+    parent_proof_id?
+  }
+
+  allowed_claim_count
+  disposition_on_mismatch
+  disposition_on_expiry
+}
+```
+
+Secrets, OAuth authorization codes, bearer tokens, and cloud secret keys are
+not stored in this envelope. It contains stable public identifiers, digests,
+lease IDs, audiences, and provider request/session identifiers when available.
+
+#### Four ways an intent proof is consumed
+
+| Intended action | Linux/runtime shape | Mithril object created | Practical example |
+| --- | --- | --- | --- |
+| Runtime creates a process with no labeled native parent | External root | `EntryInstance` | kubelet exec probe, `kubectl exec`, Docker container action, Tekton step container |
+| A labeled runner or worker forks/execs a child | Native child or exec transition | `TransitionIntent`, consumed by the already-labeled lineage | GitHub Actions `run:` shell step, Jenkins `sh`, approved worker helper |
+| A process obtains or activates credentials | Usually no new root beyond the CLI process | `AuthorityLeaseIntent` bound to a task/process lineage and provider identity | AWS SSO login, STS web-identity exchange, Google Workload Identity Federation, GitHub job token |
+| One job publishes data consumed by another job or node | No Linux parent relation | `ArtifactHandoffIntent` plus typed causal edge | CI artifact, cache entry, image digest, deployment manifest, queue message |
+
+This corrects a tempting but wrong model: **not every coordinator action is an
+entry**. If a GitHub runner forks a shell for a step, the shell is a native
+descendant and must retain that physical parent edge. The signed step intent
+authorizes a role transition. If the runner asks Docker to start a container
+action, that container root needs an entry admission. If a later job downloads
+the first job's artifact, the relationship is an artifact edge, never a native
+parent.
+
+#### Proof-strength and use matrix
+
+| Proof | Strength when verified | What it may authorize | What it cannot prove alone |
+| --- | --- | --- | --- |
+| Signed pre-exec coordinator assertion with one-use nonce, immutable definition digest, exact target, and short TTL | Exact for the asserted coordinator intent | Entry admission, native transition, or credential-lease request | That the resulting provider operation later succeeded |
+| Provider-signed OIDC token with issuer, audience, subject, token ID, run/job/ref claims, and expiry | Exact for the claims the provider actually signed | A job-level authority exchange whose trust policy matches those claims | A particular shell command or step when the token has no step claim |
+| Provider issuance record with exact request/session/access-key/lease identity | Exact for credential issuance | Bind the authority lease and later provider audit operations | Which local task requested it unless joined through a broker, nonce, or exact coordinator proof |
+| Kubernetes, cloud, source-control, mesh, or connector audit after completion | Exact for fields and result supplied by that authority | Finding, causal edge, response eligibility | Retroactive local prevention of an operation that already succeeded |
+| Measured runner/kubelet event without a carried nonce | Strong or conservative depending uniqueness and source measurement | Same-budget classification when every remaining candidate is equally restrictive | Exact selection among concurrent identical requests with unequal authority |
+| Command, process name, timestamp, cadence, label, or destination alone | Contextual | Candidate matching and operator explanation | Intent, caller authority, or an allow decision |
+
+`mithril-node` verifies an intent proof as follows:
+
+```text
+verify_and_stage_intent(envelope, live_context):
+    verify issuer key, signature, key validity, and revocation state
+    verify node boot/cluster/tenant and profile trust domain
+    reject expired, future, replayed, or non-monotonic proof
+    resolve immutable workflow/manifest/image/command digests
+    resolve exact live Pod/container/cgroup or labeled process lineage
+    verify actor, trigger trust class, approval, and requested authority
+    ensure requested role/effects are a subset of signed policy
+    ensure claim count, concurrency, rate, and lifetime budgets remain
+
+    if any required field is missing or conflicts:
+        apply configured mismatch disposition; never silently widen
+
+    stage one of EntryIntent, TransitionIntent, AuthorityLeaseIntent,
+    or ArtifactHandoffIntent with a one-use claim key
+```
+
+The kernel remains the final task binder. A valid proof for job 55 cannot be
+claimed by job 56, a different cgroup, a native child with an existing label,
+or the same task after expiry. The userspace assertion supplies purpose; live
+kernel identity supplies the process that will exercise it.
+
+#### Practical kubelet-probe proof
+
+The stock CRI gap remains real: `ExecSyncRequest` does not carry “readiness,”
+“liveness,” `PostStart`, or `PreStop`. Mithril can close it with an optional
+authenticated kubelet-side channel:
+
+1. Immediately before invoking the runtime, measured kubelet integration
+   emits a signed proof containing Pod UID/resource version, full container
+   ID, lifecycle generation, exact probe or hook field, canonical command
+   digest, monotonic sequence, deadline, and one-use nonce.
+2. The local CRI admission path observes the corresponding `ExecSync` and
+   supplies its authenticated peer, container, command, and request order.
+3. `mithril-node` requires the two records to agree and stages the exact
+   `KubeletExecProbeEntry`, `KubeletPostStartEntry`, or
+   `KubeletPreStopEntry`.
+4. The runtime-held pidfd root or exact `bprm_check_security` claimant consumes
+   the proof before the executable image begins.
+5. A duplicate, expired, wrong-command, wrong-container, wrong-lifecycle, or
+   already-claimed proof follows the configured rejection action.
+
+For exact classification under concurrent identical `ExecSync` requests, the
+nonce must travel through a measured kubelet/runtime extension or the
+integration must hold and bind the exact task. Merely correlating two identical
+commands by time is not exact. If no nonce can be carried, same-budget
+conservative classification remains valid; unequal budgets remain ambiguous
+and default to rejection in protect mode.
+
+#### Practical AWS CLI login and session mapping
+
+Observing `aws sso login` proves only that a process executed that CLI command.
+It does not prove that the login was approved or which later AWS session belongs
+to the process. A strong mapping is:
+
+```text
+approved human or CI intent
+  -> AuthorityLeaseIntent(provider=aws, account, role/permission-set,
+                          target lineage, TTL, approval/run identity)
+  -> exact labeled `aws` process performs browser/device/OIDC exchange
+  -> provider issuance/audit supplies session/access-key identifier
+  -> CredentialLease(lease_id, provider_session_id, source_identity,
+                     owning process lineage, expires_at)
+  -> CloudTrail operations join by exact session/access-key/source identity
+```
+
+The policy separately controls:
+
+- exec of the measured AWS CLI object;
+- access to `~/.aws/config`, `~/.aws/sso/cache`, `~/.aws/login/cache`, or an
+  approved `credential_process` endpoint;
+- network access to the expected identity and AWS API destinations;
+- requested account, role, audience, source identity, session tags, and TTL;
+- which descendant roles may use the resulting lease; and
+- provider operations allowed for that session.
+
+AWS CLI SSO caches an authentication token under `~/.aws/sso/cache`; newer
+interactive AWS login also uses a local cache. A shared cache read is therefore
+not a unique provider-session proof. Exact task-to-session binding requires a
+credential broker/process provider that can carry the Mithril lease nonce, or
+provider issuance fields such as source identity/session name/tags that are
+cryptographically tied to the approved coordinator identity. Without that,
+Mithril records a strong local login lineage and provider session evidence but
+marks their join conservative or contextual rather than inventing certainty.
+
+No TLS interception is required. AWS STS/IAM and CloudTrail provide semantic
+session and operation evidence; the local kernel provides the task and socket
+identity.
+
+#### Practical `gcloud`/`gsutil` and Google workload-identity mapping
+
+`gcloud auth login` can store user credentials in the Cloud CLI configuration,
+and `gcloud auth login --cred-file` supports external-account configurations.
+`gsutil` can use the same authenticated Cloud CLI or workload identity. The
+binary name still does not prove purpose.
+
+For CI, the preferred exact path is:
+
+1. GitHub Actions, GitLab, or another coordinator issues a signed OIDC token
+   containing its run/job/repository/ref claims and unique token ID.
+2. A signed `AuthorityLeaseIntent` binds the expected issuer, audience, job,
+   immutable workflow definition, target Google project/service account,
+   scope, and lifetime to the exact CI task lineage.
+3. Google Security Token Service validates the OIDC token and returns a
+   federated credential, optionally followed by service-account
+   impersonation.
+4. Google audit identifies the federated principal or impersonated service
+   account and operation. Mithril joins it to the job proof through the signed
+   subject/audience/token ID and provider request/lease evidence available.
+5. A `gsutil cp`, `gcloud storage cp`, client library, or raw HTTPS client all
+   receive the same authority decision because policy follows the lease and
+   provider operation, not the CLI filename.
+
+For a human browser login with persistent cached credentials, use a human
+approval proof scoped to the administrative session and classify every cache
+read. If the provider flow exposes no bindable nonce/session identifier, the
+join to later provider operations is weaker and automatic narrow response is
+ineligible until the exact principal/session is resolved.
+
+#### Non-negotiable limitation
+
+An intent channel can prove what a trusted issuer asked for. It cannot make a
+compromised issuer truthful. If kubelet, the CI coordinator, its signing key,
+or the cloud identity provider is controlled by the attacker, the assertion is
+inside the compromised authority boundary. Mithril still applies product hard
+invariants and role/effect limits, records issuer identity, and requires an
+independent provider/kernel postcondition where configured, but it cannot
+cryptographically recover honest intent from a dishonest trust root.
+
 ### ExecSync classification algorithm
 
 ```text
@@ -2363,6 +2620,806 @@ Consequences:
   changing them; and
 - `preStop` remains subject to active containment policy.
 
+## Configuration And Detection Disposition Model
+
+The earlier `EffectRule.decision: allow | audit | deny` is correct for a small
+kernel decision table, but it is incomplete as the operator-facing model.
+`audit` does not say whether to notify anyone, `deny` does not distinguish a
+syscall denial from rejecting a runtime request, and provider audit may arrive
+after the effect can no longer be denied. The complete configuration separates
+**physical disposition**, **finding delivery**, and **optional response**.
+
+This is an additive clarification, not a replacement of the earlier rule.
+The compiler still lowers effect rules to compact allow/audit/deny values. It
+now compiles the full source rule into the correct entry, kernel, finding, and
+response plans.
+
+### Exact meaning of the four requested dispositions
+
+| Configured disposition | Physical meaning | Evidence and notification | Valid decision point |
+| --- | --- | --- | --- |
+| `allow` | Let the entry or effect proceed | Emit only required coverage/evidence or configured sampling; no finding by default | Entry, transition, local effect, or provider behavior rule |
+| `alert` | Let the action proceed | Persist a finding and route the configured notifications; no claim of prevention | Any observable point, including provider audit after completion |
+| `deny` | Return the hook-specific failure before the protected local effect completes, such as `EACCES` for file/exec or `EPERM` for a security operation | Always persist a denial finding when evidence transport is available; notification routing remains configurable | Synchronous local pre-effect hook only |
+| `reject` | Refuse the higher-level request before its process/lease/provider operation is admitted | Persist a rejection finding and return a typed reason to the runtime, CI coordinator, admission service, or semantic connector | Entry admission or another synchronous semantic request boundary |
+
+`alert` is therefore “allow plus finding,” not a weaker spelling of deny.
+`reject` is not a different errno for `open(2)`: a file hook can deny the open,
+but it cannot reject a CI job that already started. Conversely, a provider
+audit record that says a GitHub token was minted can alert and trigger response,
+but cannot deny the already-completed mint. If a typed GitHub/connector
+pre-admission integration exists, that integration can reject the request.
+
+### Source configuration objects
+
+```text
+DetectionDispositionRule {
+  rule_id
+  enabled
+  priority
+  match {
+    finding_id?
+    entry_kind?
+    role_id?
+    effect_family?
+    operation?
+    object_class?
+    authority?
+    provider_operation?
+    lifecycle_state?
+    intent_issuer?
+    intent_strength_at_least?
+    source_quality_at_least?
+    trigger_trust_class?
+    namespaces_or_workloads?
+  }
+
+  disposition: allow | alert | deny | reject
+  errno?
+  severity
+  evidence_level: minimal | standard | forensic
+  notify[]
+  response_playbook?
+
+  fallbacks {
+    missing_intent
+    ambiguous_intent
+    source_unavailable
+    classifier_unknown
+    control_plane_unavailable
+    response_authority_unavailable
+  }
+
+  budgets {
+    max_per_interval?
+    max_concurrent?
+    max_lifetime?
+    notification_dedupe_window?
+    automatic_response_limit?
+  }
+
+  exceptions[]
+  valid_from?
+  valid_until?
+  approval_id?
+}
+```
+
+Notification and response are explicit collaborators:
+
+```text
+NotificationRoute {
+  route_id
+  sink: pager | chat | email | siem | webhook | ticket
+  minimum_severity
+  grouping_key
+  dedupe_window
+  rate_limit
+  include_evidence_fields[]
+  redact_fields[]
+  delivery_failure_action
+}
+
+ResponseBinding {
+  playbook_id
+  action: restrict_lineage | fence_sockets | freeze_cgroup |
+          reject_replacement | revoke_credential | disable_mesh_device |
+          quarantine_artifact | suspend_installation | provider_specific
+  required_proof
+  approval: automatic | preapproved | human
+  max_blast_radius
+  target_revalidation
+  physical_postcondition
+  watch_interval
+}
+```
+
+No rule sends secret bytes, token values, full environments, or unrestricted
+argv into a notification. Evidence fields are allowlisted and redacted before
+leaving the node.
+
+### Compiler output and impossible configurations
+
+One source rule compiles to a capability-specific plan:
+
+```text
+CompiledActionPlan {
+  local_pre_effect_result: allow | audit_allow | errno_deny | not_applicable
+  entry_admission_result: admit | reject | not_applicable
+  emit_finding: yes | no
+  severity
+  notification_route_ids[]
+  response_binding_id?
+  required_proof
+  fallback_plan
+}
+```
+
+The compiler rejects configurations that promise an impossible physical
+outcome:
+
+- `reject` on a plain file/socket hook, because only `deny` is physically
+  available there;
+- `deny` on a GitHub, AWS, mesh, database, or Kubernetes audit event that
+  arrives after the operation completed;
+- `reject` on a provider operation without a configured synchronous provider,
+  admission, broker, or connector boundary;
+- `allow` that would erase a prior SELinux/AppArmor/Landlock/BPF LSM denial;
+- `allow` for a hard product invariant such as a stale protected identity in a
+  strict profile;
+- an automatic response whose required identity or postcondition is absent;
+- `alert` with a notification route that can leak a protected credential; or
+- a fail-open fallback for a required classifier in a profile that claims
+  prevention.
+
+Configuration controls Mithril's behavior where Mithril has authority. It
+cannot configure history. An already-completed external AWS call cannot become
+“denied” by choosing that word in YAML.
+
+### Precedence between configuration rules
+
+For rules that match the same action:
+
+1. A nonzero prior security-module denial remains final.
+2. Active response restrictions and immutable product invariants apply.
+3. Exact workload, role, entry, object, provider principal, and operation
+   matches outrank broader matches.
+4. A more restrictive physical disposition wins: `reject` at an admission
+   point or `deny` at an effect point outranks `alert`, which outranks `allow`.
+5. Notifications and response bindings are unioned only within configured
+   budget and blast-radius limits.
+6. An explicit exception must name the rule it narrows, its exact subject,
+   approver, expiry, and maximum authority. A broad exception cannot erase a
+   hard invariant.
+
+The compiler emits a conflict report that names both source rules, the exact
+tuple, the selected result, and why. It never depends on source-file ordering.
+
+### Practical configuration example
+
+This remains prospective YAML, but it is concrete enough to define parser,
+compiler, simulator, and acceptance-test behavior:
+
+```yaml
+profile: hf-conversion-worker
+version: 8
+mode: protect
+
+failurePosture:
+  missingTaskIdentity: deny
+  requiredClassifierUnknown: deny
+  intentChannelUnavailable: reject
+  providerFeedUnavailable: alert
+  notificationUnavailable: keep-enforcement-and-buffer
+
+notificationRoutes:
+  security-pager:
+    sink: pager
+    minimumSeverity: critical
+    groupingKey: [executionSetId, processLineageId, findingId]
+    dedupeWindow: 2m
+    redact: [argvSecrets, environmentValues, tokenBytes]
+
+  defender-stream:
+    sink: siem
+    minimumSeverity: medium
+    groupingKey: [findingId, providerPrincipalId, objectId]
+    dedupeWindow: 15s
+    redact: [tokenBytes]
+
+responses:
+  restrict-compromised-worker:
+    action: restrict_lineage
+    approval: preapproved
+    requiredProof: exact-task-lineage
+    maxBlastRadius:
+      processes: 32
+      executionSets: 1
+    verify: no-new-protected-effect-from-lineage
+
+  revoke-exact-aws-session:
+    action: revoke_credential
+    approval: human
+    requiredProof: exact-provider-session
+    verify: session-rejected-and-no-later-cloud-events
+
+dispositions:
+  - id: admit-exact-readiness-probe
+    match:
+      entryKind: kubelet-exec-probe
+      intentStrengthAtLeast: exact
+      lifecycleState: running
+    disposition: allow
+    evidenceLevel: standard
+    fallbacks:
+      missingIntent: reject
+      ambiguousIntent: reject
+
+  - id: observe-same-budget-probe-ambiguity
+    match:
+      entryKind: kubelet-exec-probe
+      intentStrengthAtLeast: conservative
+    disposition: alert
+    severity: medium
+    notify: [defender-stream]
+    budgets:
+      maxConcurrent: 2
+      maxLifetime: 3s
+
+  - id: reject-unapproved-runtime-root
+    match:
+      findingId: UNAPPROVED_RUNTIME_ENTRY
+    disposition: reject
+    severity: high
+    notify: [defender-stream]
+
+  - id: deny-conversion-worker-token-read
+    match:
+      roleId: conversion-worker-root
+      effectFamily: file
+      operation: read
+      objectClass: projected-service-account-token
+    disposition: deny
+    errno: EACCES
+    severity: critical
+    notify: [security-pager, defender-stream]
+    responsePlaybook: restrict-compromised-worker
+
+  - id: deny-worker-control-plane-connect
+    match:
+      roleId: conversion-worker-root
+      effectFamily: network
+      operation: connect
+      objectClass: [kubernetes-api, cloud-imds, mesh-control]
+    disposition: deny
+    errno: EACCES
+    severity: critical
+    notify: [security-pager, defender-stream]
+
+  - id: alert-completed-aws-deviation
+    match:
+      findingId: HF-DW-001
+      authority: aws
+      sourceQualityAtLeast: exact-provider-session
+    disposition: alert
+    severity: critical
+    notify: [security-pager, defender-stream]
+    responsePlaybook: revoke-exact-aws-session
+
+  - id: reject-github-token-mint-at-typed-connector
+    match:
+      authority: github
+      providerOperation: create-installation-token
+      intentStrengthAtLeast: exact
+    disposition: reject
+    severity: critical
+    notify: [security-pager, defender-stream]
+    # Valid only when the configured connector is a synchronous semantic gate.
+
+  - id: alert-github-token-mint-from-audit
+    match:
+      authority: github
+      providerOperation: create-installation-token
+      sourceQualityAtLeast: authoritative-audit
+    disposition: alert
+    severity: critical
+    notify: [security-pager, defender-stream]
+    # Audit-only deployments cannot claim that token minting was rejected.
+```
+
+### One detection evaluated in four configurations
+
+Assume the exact `conversion-worker-root` task opens the projected token:
+
+| Configuration | Kernel result | Finding result | What the operator sees |
+| --- | --- | --- | --- |
+| `allow` | `open(2)` succeeds | No finding unless evidence sampling is enabled | Normal workload evidence only |
+| `alert` | `open(2)` succeeds | `HF-PROC-001` is persisted and routed | Alert explicitly says `semantic_effect_completed` |
+| `deny` | `open(2)` returns `EACCES` before bytes are read | Denial finding is persisted and optionally paged | Alert says `prevented`, with hook and errno proof |
+| `reject` | Compiler error for this match | No generation is activated | Compiler explains that file effects support `deny`, not entry rejection |
+
+Now assume an unapproved `kubectl exec` request:
+
+| Configuration | Admission result | Meaning |
+| --- | --- | --- |
+| `allow` | Runtime root is admitted with the explicitly configured administrative role | The process still receives that role's effect limits |
+| `alert` | Root is admitted and a finding is routed | Useful during rollout, but not prevention |
+| `deny` | Compiler error at this semantic entry boundary | Configure `reject`; a syscall deny may still happen later but is a weaker lifecycle result |
+| `reject` | Runtime/CRI admission returns a typed rejection before the user command starts | Correct physical prevention for an entry request |
+
+### Rollout and exceptions
+
+Every rule can be simulated and rolled out without silently changing its
+meaning:
+
+```yaml
+rollout:
+  phase: observe            # simulate deny/reject, physically allow, alert
+  selectedNodes: 5%
+  minimumHealthyCoverage: 99.99%
+  promoteAfter: 24h
+  abortOn:
+    - required-hook-detached
+    - identity-classifier-miss-rate-above: 0.001%
+    - legitimate-entry-rejection-above: 0
+```
+
+In `observe`, the result is named `would_deny` or `would_reject`; it is never
+reported as physical prevention. Promotion creates a new signed policy
+generation. A temporary exception names exact Pod/container/image/role/object
+or provider identity, has an owner and expiry, is simulated, and is visible in
+every affected finding.
+
+## CI/CD Execution And Intent Mapping
+
+CI/CD is not one process tree. A workflow can fan out to jobs on different
+nodes, run native shell/JavaScript children, create job and service containers,
+start privileged build daemons, pass caches/artifacts to later jobs, obtain
+short-lived cloud credentials, wait for human approval, deploy, and run cleanup
+after failure. Mithril must preserve each physical shape instead of calling the
+whole workflow one container or one process.
+
+### Current execution practices the model must cover
+
+- GitHub Actions workflows contain jobs, and jobs contain ordered steps. Jobs
+  can run directly on a runner or in a job container. Docker container actions
+  can run as sibling containers on the same network and shared workspace. See
+  GitHub's [Actions execution overview](https://docs.github.com/en/actions/get-started/understand-github-actions),
+  [job-container documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/run-jobs-in-a-container),
+  and [custom container hooks](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/customize-containers).
+- GitHub creates a job-scoped `GITHUB_TOKEN`, and a job with `id-token: write`
+  can request an OIDC token containing claims such as repository, ref,
+  workflow, workflow SHA, run ID/attempt, actor, environment, and runner type.
+  These are job/workflow claims, not a proof of one shell step. See the
+  [`GITHUB_TOKEN` contract](https://docs.github.com/en/actions/concepts/security/github_token)
+  and [OIDC claim reference](https://docs.github.com/en/actions/reference/security/oidc).
+- GitLab's Docker executor has prepare, pre-job, job, and post-job phases, with
+  helper and service containers. Its Kubernetes executor creates a Pod for
+  each job with build, helper, and service containers. See the
+  [Docker executor](https://docs.gitlab.com/runner/executors/docker/) and
+  [Kubernetes executor](https://docs.gitlab.com/runner/executors/kubernetes/).
+- GitLab CI ID tokens contain exact pipeline/job/runner/project/ref/config
+  claims and a unique token ID. They prove the signed claims for the job, not
+  arbitrary step intent. See [GitLab ID token authentication](https://docs.gitlab.com/ci/secrets/id_token_authentication/).
+- Tekton runs a Task as a Kubernetes Pod. Steps are ordered containers;
+  sidecars overlap the steps and workspaces/results cross step boundaries. See
+  [Tekton Tasks](https://tekton.dev/docs/pipelines/tasks/).
+- Jenkins can allocate a different agent for a pipeline or stage, run shell or
+  container steps, execute parallel/matrix branches, and run `post`/`cleanup`
+  steps after success, failure, or abort. See the
+  [Jenkins Pipeline syntax](https://www.jenkins.io/doc/book/pipeline/syntax/).
+
+These are examples of stable execution shapes, not mandatory vendor
+integrations. The core model is coordinator-neutral.
+
+### CI identity objects
+
+```text
+PipelineRun {
+  pipeline_run_id
+  coordinator_id
+  tenant_id
+  repository_or_project_id
+  trigger_event
+  trigger_actor
+  trigger_trust_class: trusted_ref | untrusted_change | scheduled |
+                       manual_approved | policy_generated
+  source_ref
+  source_sha
+  pipeline_definition_ref
+  pipeline_definition_digest
+  run_number
+  run_attempt
+  parent_pipeline_run_id?
+}
+
+PipelineJob {
+  pipeline_job_id
+  pipeline_run_id
+  job_definition_id
+  matrix_coordinates?
+  environment?
+  runner_id
+  runner_group
+  node_id?
+  executor_kind: host | vm | container | kubernetes | remote
+  job_image_digest?
+  credential_audiences[]
+  state
+}
+
+PipelineStepIntent {
+  step_intent_id
+  pipeline_job_id
+  step_definition_path
+  step_definition_digest
+  action_or_script_digest
+  action_source_ref_and_sha?
+  expected_shape: native_transition | runtime_container_root |
+                  service_root | coordinator_builtin
+  input_artifact_digests[]
+  requested_role_id
+  requested_authority_leases[]
+  parent_step_intent_id?
+  one_use_nonce
+  not_before
+  deadline
+}
+```
+
+Display names such as `Build`, `Test`, or `Deploy` are contextual labels. The
+authority key uses immutable coordinator IDs, workflow/config digests, job and
+step definition identities, run attempt, and signed trigger trust.
+
+### CI physical-shape matrix
+
+| CI practice | Physical execution | Mithril representation | Default security treatment |
+| --- | --- | --- | --- |
+| Host/shell executor job | Long-lived runner forks job shell and tools | Runner task keeps `ci-runner-control`; signed job proof authorizes native transition to `ci-job`; every fork/exec stays native | Reject job if exact runner assignment/proof cannot bind before an authority-bearing effect |
+| Job container | Runtime creates a root with no native parent in runner tree | `CiJobContainerEntry` plus `coordinator_started_job` causal edge from runner job | Bind exact image, job, workspace, credential audiences, and policy before exec |
+| Script, JavaScript, or composite action | Usually native child/exec under the job | `PipelineStepIntent` authorizes a transition; composite substeps retain nested intent IDs | Same executable under another step keeps the other step's role |
+| Container action | Runtime creates a sibling/secondary container root | `CiContainerActionEntry` tied to exact action ref/digest and step nonce | No automatic inheritance from job container; only declared shared workspace/network effects |
+| Service container | Separate long-lived root overlapping job steps | `CiServiceEntry` with declared listener/client set and job lifetime | Service cannot read job credentials/workspace unless explicitly mounted and allowed |
+| GitLab helper, checkout, cache restore, artifact upload | Helper image or runner process outside user build root | Dedicated `ci-helper-*` entries/roles and typed artifact operations | User build cannot claim helper role; helper cannot execute workspace content unless declared |
+| Tekton step | New container root for each ordered step | One `CiStepContainerEntry` per TaskRun UID/step name/image digest | Sequential order does not fabricate native parentage; workspace handoff is an artifact edge |
+| Tekton/Jenkins/GitHub side service | Concurrent root or background native tree | Independent service entry/tree associated with job | Cleanup deadline does not grant unrestricted authority |
+| Matrix or parallel jobs | Separate jobs, often on different nodes | Sibling `PipelineJob` objects under one run with typed dependency edges | No cross-node native parents; each fan-out branch has independent coverage and response |
+| Reusable workflow/downstream pipeline | New jobs defined by another immutable workflow/config | `pipeline_called_pipeline` edge carrying caller/callee digests and effective permissions | Called workflow cannot gain authority absent explicit caller policy and provider proof |
+| Cache or artifact restore | Bytes cross time, jobs, and possibly trust levels | `ArtifactInstance` plus `published`, `restored`, `verified`, and `executed` edges | Restore may be allowed as data; execution or privileged consumption requires digest/provenance policy |
+| OIDC/cloud login step | Native CLI/library call obtains remote authority | `AuthorityLeaseIntent` and resulting `CredentialLease` bound to job/step lineage | Job-level token alone cannot authorize every step; exact requested audience/role/project is checked |
+| Deploy step (`kubectl`, Helm, Terraform, cloud CLI) | Native process plus encrypted provider operations; may create remote roots | Local step role plus provider audit and cross-node resource/controller/runtime edges | Allow only declared operations; reject through semantic gate when available, otherwise alert/respond to audit deviation |
+| Post/finally/cleanup step | Runs after success, failure, cancellation, or abort | Separate `ci-post-cleanup` intent and role under terminal job lifecycle | Cleanup has only exact cleanup effects and remains restricted during containment |
+| Interactive debug/web terminal | External administrator request creates shell/root | `CiAdministrativeEntry` with actor, approval, TTL, recording/coverage proof | Default reject on protected runners; never reuse build/test role |
+| Docker socket or Docker-in-Docker | Job can ask another runtime/daemon to create descendants | Device/socket effect plus subordinate runtime entry graph | Untrusted role denies daemon socket; allowed builders must bind every created root or lose full coverage claim |
+
+### Coordinator-to-task binding algorithm
+
+```text
+on_ci_job_assigned(signed_job_proof):
+    verify coordinator issuer and immutable pipeline definition
+    verify repository/project, ref/SHA, trigger actor/trust, run attempt
+    verify exact runner/node assignment and requested executor shape
+    create PipelineRun/PipelineJob if absent; stage one-use job intent
+
+on_ci_step_started(signed_step_proof):
+    verify job is live and proof belongs to current run attempt
+    resolve immutable action/script/image and input artifact digests
+    compute requested role and authority leases from signed policy
+
+    if expected shape is native_transition:
+        stage TransitionIntent for exact labeled runner/job lineage
+    else:
+        stage EntryIntent for exact runtime container/service root
+
+    reject proof reuse, wrong parent job, mutable action tag without resolved
+           digest, wrong artifact, wrong image, wrong node, or expired deadline
+
+on_task_or_root_claim(intent, live_task):
+    re-resolve task/cgroup/container/image and existing native label
+    require claim type to match physical shape
+    install role before first protected effect
+    emit exact coordinator-to-entry/transition edge
+```
+
+A runner-side producer can use a local authenticated socket to send these
+small assertions. On GitHub self-hosted Linux runners, container customization
+hooks expose prepare/job/container-step/script-step/cleanup lifecycle points,
+but that interface is preview and does not by itself provide a cryptographic
+step identity. A production adapter therefore signs records with a runner
+identity, includes the service-issued job identity, and resolves immutable
+workflow/action digests. For other coordinators, Mithril uses their supported
+runner plugin, task admission, webhook, or controller API. None becomes a
+second node gatherer.
+
+### Practical untrusted-PR and artifact example
+
+A trusted `pull_request_target` workflow can accidentally download or check out
+untrusted pull-request code and then execute it with a write-capable token.
+GitHub documents this class and also warns that artifacts from an untrusted
+workflow must be treated as untrusted. Mithril models trust as data provenance,
+not as the workflow file's display name:
+
+1. The coordinator proof says the workflow definition comes from the trusted
+   base branch, but the trigger is an untrusted fork pull request.
+2. Checkout or artifact download creates an `ArtifactInstance` labeled with
+   source repository, source SHA/run, producer trust, digest, and verifier
+   result.
+3. The checkout helper may write those bytes to the workspace. That does not
+   authorize execution.
+4. `make test`, `npm install`, `cargo test`, Python import, shell sourcing, or
+   loading a plugin from that tree causes an exec/file/mmap transition whose
+   input provenance is `untrusted_change`.
+5. Policy assigns `ci-untrusted-build`, which denies repository writes,
+   workflow mutation, cloud OIDC audiences, runner-control sockets, host
+   credentials, deployment APIs, and protected environment secrets.
+6. A later publish/deploy job can consume only an exact artifact digest with
+   the configured producer run, review/attestation proof, and promotion edge.
+   A mutable filename or “successful build” string is insufficient.
+
+This catches indirect execution too. The process does not need to run
+`./malware`; a package install script, `build.rs`, test discovery, compiler
+plugin, Makefile, or container build can execute attacker-controlled code.
+Mithril follows the file/artifact provenance into the resulting role and
+physical effects.
+
+### Practical CI policy
+
+```yaml
+coordinators:
+  github-actions-prod:
+    issuer: https://token.actions.githubusercontent.com
+    requiredAudience: mithril-ci-intent
+    trustedRunnerGroup: prod-runners
+    requireClaims:
+      - repository_id
+      - workflow_ref
+      - workflow_sha
+      - run_id
+      - run_attempt
+      - actor_id
+      - runner_environment
+    runnerStepChannel: required
+
+ciRules:
+  - id: untrusted-pr-build
+    match:
+      coordinator: github-actions-prod
+      triggerTrustClass: untrusted_change
+    role: ci-untrusted-build
+    dispositionOnMissingIntent: reject
+    authorityLeases: []
+    effects:
+      repositoryWrite: deny
+      cloudIdentityEndpoints: deny
+      kubernetesApi: deny
+      runnerControlSocket: deny
+      serviceContainers: declared-only
+      publicDependencyFetch: alert
+
+  - id: reviewed-main-publish
+    match:
+      coordinator: github-actions-prod
+      workflowRef: org/repo/.github/workflows/release.yml@refs/heads/main
+      workflowDigest: sha256:reviewed-workflow
+      triggerTrustClass: trusted_ref
+      stepId: publish-image
+    role: ci-publish
+    requireArtifacts:
+      - digestFromStep: build
+        producerRole: ci-trusted-build
+        attestation: verified
+    authorityLeases:
+      - provider: registry
+        audience: prod-registry
+        operations: [push-image, write-attestation]
+        ttl: 10m
+    dispositions:
+      undeclaredArtifact: reject
+      credentialAudienceMismatch: reject
+      unexpectedProviderOperation: alert
+
+  - id: production-deploy
+    match:
+      environment: production
+      stepId: deploy
+    requireApproval:
+      source: coordinator-environment-protection
+      preventSelfApproval: true
+    role: ci-deploy
+    authorityLeases:
+      - provider: kubernetes
+        cluster: production
+        operations: [get, patch-deployment]
+        resourceSelectors: [namespace=serving, deployment=model-api]
+        ttl: 5m
+    dispositions:
+      missingApproval: reject
+      unknownArtifactDigest: reject
+      providerDeviation: alert
+
+  - id: cleanup
+    match:
+      lifecycle: [failed, cancelled, post, cleanup]
+    role: ci-post-cleanup
+    effects:
+      artifactUpload: declared-only
+      deleteOwnTemporaryResources: allow
+      newCloudLease: deny
+      repositoryWrite: deny
+```
+
+GitHub environment protection can provide a required-reviewer or custom
+deployment-rule proof, but the effective cloud/Kubernetes operation still
+uses the authority behavior rule. The coordinator approval proves “this
+deployment job may start”; it does not prove every command the job executes is
+safe.
+
+### CI acceptance cases
+
+| Test | Adversarial setup | Required result |
+| --- | --- | --- |
+| `CI-NATIVE-001` | Two steps execute identical `/usr/bin/curl`; only one has a signed publish intent | Each native exec retains its step role; the unapproved step cannot borrow publish authority |
+| `CI-CONTAINER-001` | Job container, service container, and container action share network/workspace | Three independent entries and effect budgets; no fabricated parent or role inheritance |
+| `CI-PR-001` | Trusted workflow downloads untrusted PR artifact and runs a build script | Resulting execution is `ci-untrusted-build`; credential/API effects deny even though workflow definition is trusted |
+| `CI-CACHE-001` | Untrusted job poisons a cache key consumed by trusted job | Exact producer/digest/provenance edge is visible; privileged consumption rejects or remains untrusted according to policy |
+| `CI-OIDC-001` | Unapproved step reuses the job-level OIDC request variables | Job OIDC claims alone do not grant step authority; missing step/lease intent denies identity endpoint or rejects exchange |
+| `CI-DIND-001` | Build talks to Docker socket and creates nested containers | Every root is bound to the job/step; if subordinate runtime visibility is absent, strict build denies the daemon effect |
+| `CI-POST-001` | Job is cancelled during containment and cleanup attempts new egress | Cleanup gets its narrow post role; containment and response-root restrictions still win |
+| `CI-FANOUT-001` | Matrix jobs run on three nodes and one publishes an artifact | Typed coordinator/artifact edges connect node-local trees; no cross-node Linux parent edge is invented |
+| `CI-RETRY-001` | Run attempt 2 reuses attempt 1 nonce, artifact, or credential lease | Replay is rejected; new attempt identity and explicitly reusable artifacts are required |
+| `CI-DEBUG-001` | Administrator opens a web terminal using the same shell command as a build step | Separate administrative entry with actor/approval/TTL; never build-step authority |
+
+## Hugging Face Incident: Configured Algorithm Walkthrough
+
+The earlier per-incident section explains each control in depth. This section
+adds the missing operator view: which configuration rule fires, which
+algorithm evaluates it, whether the action is allowed, alerted, denied, or
+rejected, and what Mithril can physically prove.
+
+It is grounded in the
+[detailed implementation analysis](../../research/hugging-face-agent-intrusion-analysis.md)
+and the
+[source-faithful live action stream](../../research/hugging-face-agent-intrusion-live-action-stream.md).
+The public live stream has 21 representative entries; it is not the complete
+17,613-action record. The more granular lateral actions published in the
+technical timeline are mapped separately below.
+
+### Algorithm names used in the walkthrough
+
+| Name | Owning mechanism | Decides or proves |
+| --- | --- | --- |
+| `ALG-INTENT` | General intent-proof verification and one-use claim | Whether a trusted coordinator authorized an entry, transition, authority lease, or artifact handoff |
+| `ALG-ENTRY` | Runtime-entry classifier plus pending-intent claim | Whether a runtime-created root starts and which role it receives |
+| `ALG-LINEAGE` | Native task inheritance and exec transition | Exact task/process/exec identity and role before a child effect |
+| `ALG-FILE` | Generic pre-effect algorithm plus mount-aware file/object classifier | Open/read/write/map of dataset, proc, token, secret, host, code, and credential objects |
+| `ALG-NET` | Socket creator/current-role state, destination classifier, connect/send/packet hooks | Local destination/channel effects without claiming encrypted API verbs |
+| `ALG-DEVICE` | Device major/minor, ioctl, capability, namespace, mount, BPF, perf, and ptrace policies | Kernel/host escape and special-device effects |
+| `ALG-AUTHORITY` | `AuthorityBehaviorRule` over Kubernetes/cloud/mesh/connector/source-control/database audit | Principal, operation, resource, result, and provider-side deviation |
+| `ALG-ARTIFACT` | Immutable artifact identity and publication/consumption edges | Who produced, published, restored, loaded, or executed exact bytes/revisions |
+| `ALG-XNODE` | Typed multi-node causal graph | API/controller/binding/runtime/provider paths between independent native trees |
+| `ALG-RESPONSE` | Exact target re-resolution, authorized actuator, postcondition, and watch | Whether containment physically happened and remained effective |
+
+The sample disposition below is a recommended strict profile, not a hidden
+constant. An operator can configure a different valid disposition. The result
+column states what that change would mean physically.
+
+### Every representative live-stream action
+
+| Event | Concrete action and observation point | Strict sample configuration | Algorithm and practical result |
+| --- | --- | --- | --- |
+| `HF-001` | Root shell in an external evaluation sandbox | Hugging Face estate: no local disposition is possible; record `outside_authority` and optionally `alert` when external evidence arrives. If that sandbox is separately protected: reject unapproved job/root or deny the shell exec. | `ALG-ENTRY`/`ALG-LINEAGE` can prevent only where Mithril is installed. The Hugging Face deployment records an external subject and never claims it blocked another operator's sandbox. |
+| `HF-002` | `id`, environment, mount, cgroup, filesystem, and process reconnaissance | Protected sandbox role: `deny` unapproved diagnostic exec and protected proc/host file reads; otherwise `alert` the sequence. | `ALG-LINEAGE` denies helper exec; `ALG-FILE` denies `/proc/*`, mount, host, or credential objects. Reading an already inherited environment in-process has no new file effect, so later write/send is the enforceable point. |
+| `HF-003` | Use bundled debug `curl`, `nc`, `ip`, or fallback tooling | `deny` executable objects absent from the role's transition graph; `alert` allowed diagnostic tooling with restricted effects. | `ALG-LINEAGE` uses immutable executable identity, not `$PATH`. Copying or renaming the binary does not grant its role; `ALG-NET` still constrains its sockets. |
+| `HF-004` | Send environment/secrets to a public capture endpoint | `deny` connect/send to unapproved public destinations and page; if the channel must be allowed, `alert` sensitive-state egress. | `ALG-NET` returns an errno before connection/send when distinguishable. `ALG-FILE` can set sensitive-read state first. Allowed shared TLS yields `semantic_effect_completed`, not a false prevention claim. |
+| `HF-005` | Execute staged Python disguised as a source file | `deny` unapproved code-object read/map and unexpected interpreter/code transition. | `ALG-FILE` classifies `/tmp/submitted_code.c` as an untrusted executable-code input even though Python is the executable; `ALG-LINEAGE` denies a new helper image. Filename extension is irrelevant. |
+| `HF-006` | gzip/base64/chunk payloads in memory | Pure computation: `allow` because there is no distinguishable protected effect; `deny` the first prohibited code load, file write, exec, or send. | No algorithm invents a “packing” syscall. `ALG-FILE`, `ALG-LINEAGE`, `ALG-NET`, or `ALG-ARTIFACT` acts when packed bytes cross a real boundary. An alert-only heuristic may raise priority but cannot claim prevention. |
+| `HF-007` | Search public code/platform APIs for infrastructure names | External estate: contextual `alert` from provider/API evidence; managed task with undeclared destination: `deny` connect. | `ALG-NET` can block the destination, while `ALG-AUTHORITY` can flag semantic searches when the service exposes authoritative audit. Similar query text alone does not establish causal identity. |
+| `HF-008` | Malicious HDF5 external storage makes the worker open a local object | Baseline: `deny` worker reads outside `dataset-input`; optional upload scanner: `reject` the dataset before scheduling. | `ALG-FILE` resolves the actual mount/inode/proc target and returns `EACCES` before bytes enter HDF5. `reject` is valid only with the optional artifact admission boundary. |
+| `HF-009` | Retrieve worker environment, secrets, source, and context through the dataset result/API | `deny` observable proc/secret/source reads; `deny` undeclared result publication or egress; `alert` an indistinguishable allowed publication. | `ALG-FILE` prevents `/proc/self/environ`, token, and non-dataset objects when opened. Already resident `os.environ` is not re-read from the kernel; `ALG-NET`/`ALG-ARTIFACT` governs the next publication. |
+| `HF-010` | Jinja expression executes Python inside the existing conversion interpreter | Do not configure “deny Jinja execution” at the kernel. Configure `deny` for every unneeded exec/file/network/device/security effect of `conversion-worker-root`. | `ALG-LINEAGE` sees no new task for the initial Python execution. The existing task label reaches `ALG-FILE`, `ALG-NET`, and `ALG-DEVICE`; the first prohibited physical effect is denied. Pure arithmetic remains intentionally unclassified. |
+| `HF-011` | Open projected ServiceAccount token and namespace files | Worker does not need token: `deny` and page. Legitimate controller role: `allow` or `alert` the read and set sensitive state. | `ALG-FILE` binds rotating projected-volume inodes to the semantic token object and exact task role. Token bytes never enter evidence. A credential already in memory shifts enforcement to network/provider behavior. |
+| `HF-012` | Probe in-cluster/public Kubernetes API, DNS, EKS endpoints, and cloud IMDS, including hard-coded IPs | Worker role: `deny` connect/send to every API/IMDS destination class. Legitimate controller: `allow` channel and `alert`/respond on forbidden audit verb. | `ALG-NET` uses actual address/network namespace, so DNS monkey-patching does not bypass it. `ALG-AUTHORITY` evaluates Kubernetes/AWS operations over allowed TLS. |
+| `HF-013` | Clone a dataset with a leaked write token and publish gzipped blobs as a dead-drop | Distinct write endpoint/lease: `deny` or semantic `reject`. Same endpoint, credential, and TLS channel as required reads: `alert` provider-confirmed write and quarantine exact revision. | `ALG-NET` cannot distinguish clone from push over identical TLS. `ALG-AUTHORITY` proves repository operation/result; `ALG-ARTIFACT` connects immutable revision/digest to consumers. |
+| `HF-014` | Reach mesh control and establish mesh capability from a compromised node | `deny` unapproved mesh exec, control destination, TUN/device/ioctl, or required capability; alert provider operation if locally allowed. | `ALG-LINEAGE`, `ALG-NET`, and `ALG-DEVICE` are independent gates. Userspace-networking mesh mode may avoid TUN, but it still needs code execution and control/data sockets. |
+| `HF-015` | Enroll external sandbox devices into the corporate mesh with a stolen key | With mesh pre-admission: `reject` unapproved enrollment. Audit-only: `alert`, revoke enrollment key, remove each existing device, and verify both. | `ALG-AUTHORITY` creates exact external device/key subjects. `ALG-RESPONSE` distinguishes preventing future joins from removing 181 already enrolled devices. Local BPF cannot stop an external host. |
+| `HF-016` | Use mesh/cluster reachability to retrieve connector catalog and cluster connection context | Managed client with no need: `deny` destination. Typed connector gate: `reject` catalog request. Audit-only: `alert` exact request and restrict source session/device. | `ALG-NET` blocks the channel when possible. `ALG-AUTHORITY` requires connector source/destination request IDs; `ALG-XNODE` connects only proven forwarded requests. |
+| `HF-017` | Replay harvested AWS credentials externally, enumerate cloud resources, validate identity, and exfiltrate result | Earlier local acquisition/exfil: `deny`. External use: `alert` exact AWS session/access key deviation and invoke approved session/key response. | `ALG-AUTHORITY` joins CloudTrail access-key/session/source-identity evidence; `ALG-RESPONSE` targets only a resolvable session/key. Same IAM role name is insufficient. |
+| `HF-018` | Through connector/GitHub, mint write-capable App installation tokens, enumerate repos, and attempt a CI-triggering pull request | Typed connector/provider gate: `reject` token mint or disallowed PR/workflow operation. Audit-only: `alert`, revoke known token or suspend installation with approval, and verify repo/CI state. | `ALG-AUTHORITY` sees the semantic GitHub operation without TLS interception. `ALG-ARTIFACT` tracks commits/workflow/image digests. CI rules keep untrusted code in `ci-untrusted-build` even if a PR is accepted. |
+| `HF-019` | Fresh external sandboxes re-fetch and execute a remote loader | Managed sandbox: `deny` loader destination, code-object load, exec, memfd/deleted image, or anonymous executable map. Outside estate: `alert` shared artifact/provider evidence only. | `ALG-NET`, `ALG-FILE`, and `ALG-LINEAGE` provide independent managed-node gates; `ALG-ARTIFACT` joins renamed copies by digest. |
+| `HF-020` | Inspect staged binary, hostname, process, filesystem, and host state | `deny` undeclared proc/sys/debugfs/host reads, ptrace/perf/BPF/device/mount/namespace actions, and unapproved staged code; alert allowed diagnostic sequence. | `ALG-FILE` and `ALG-DEVICE` decide each effect on the exact lineage. Process names such as `readelf` are explanation, not authority. |
+| `HF-021` | Access is cut and recovered activity stops | Apply configured `ALG-RESPONSE` actions; do not map silence to `allow` or “contained.” Alert unresolved branches and coverage gaps. | Exact local/provider actuators are re-resolved, replacement controllers are watched, and every postcondition must hold for the watch interval before result `verified`. |
+
+The `HF-009` source-read example is role- and object-specific. A conversion
+worker may legitimately need its own application source or package metadata;
+that object must remain allowed and cannot be called malicious merely because
+the compromised interpreter read it. The preventable distinctions are reads
+of undeclared proc/credential/host/source objects, writes into the declared
+dataset result that violate the result-object contract, and publication over
+an undeclared channel. If the exact same allowed source bytes and result API
+are necessary for normal conversion, Mithril alerts the behavioral sequence
+and governs the later distinguishable effect rather than breaking the worker
+or pretending it denied the in-process disclosure.
+
+### Granular lateral actions published outside the 21-entry stream
+
+The technical timeline describes important actions that the representative
+stream groups into broader entries. An implementation and test suite must not
+lose them.
+
+| Published action | Practical configuration | Algorithm, proof, and outcome |
+| --- | --- | --- |
+| Read EC2 node-role credentials from IMDS | `conversion-worker-root -> cloud-imds connect: deny`; legitimate node agent uses a separate role and `allow` plus lease evidence | `ALG-NET` prevents the worker's metadata call. If credentials were already obtained, `ALG-AUTHORITY` identifies their later access-key/role session and cannot claim the earlier read was stopped. |
+| Build a presigned STS caller-identity URL and use it as `k8s-aws-v1` node authentication | Worker STS/Kubernetes destinations: `deny`; node-principal Kubernetes behavior outside expected source/operation: `alert` | `ALG-NET` can stop local calls. Kubernetes audit plus AWS session/source evidence lets `ALG-AUTHORITY` join the forged node-auth request; token bytes are never required in evidence. |
+| Call TokenRequest for CSI service accounts | If a synchronous Kubernetes authorization integration exists: `reject`; audit-only baseline: `alert` successful `create serviceaccounts/token`, restrict source, and enumerate minted leases | `ALG-AUTHORITY` matches exact caller, namespace, ServiceAccount UID, audience, expiry, request UID, and result. It cannot deny a completed TokenRequest from audit alone. |
+| Run `SelfSubjectRulesReview` and enumerate RBAC | Unexpected authority operation: `alert`; optionally reject through a semantic API gate | `ALG-AUTHORITY` records principal and review scope. The result is reconnaissance evidence; it is not a native process transition and does not become permission by observation. |
+| Create privileged hostPath Pod | Kubernetes admission integration: `reject` exact Pod request; audit-only: `alert`, add object UID/owner edge, restrict source, and delete/fence only under response approval | `ALG-AUTHORITY` proves request/result. `ALG-XNODE` follows Pod UID to scheduler/binding/node/runtime root. If creation succeeded, “deny” is no longer honest; response is a separate action. |
+| Create self-respawning Pods across eleven nodes | `alert` controller/workload creation; `reject` replacements at admission when configured; contain current Pods and owning controller | `ALG-XNODE` represents every node-local tree plus owner/controller edges. `ALG-RESPONSE` watches reconciliation, so deleting current Pods cannot produce a false containment result. |
+| Reach node root through a privileged Pod and host mount | Cluster hard-floor profile: deny mount/namespace/device/host-object effects where the protected node can mediate; alert any root with incomplete binding | `ALG-ENTRY` must bind the new Pod root rapidly or pre-exec. `ALG-DEVICE`/`ALG-FILE` deny host effects. A node whose kernel/runtime is already controlled is a lost enforcement trust boundary, not a normal denied effect. |
+| Authenticate to internal MongoDB with static environment password | Deny initial environment/credential read and undeclared database destination; if DB access is legitimate, alert database-audit operation deviation | `ALG-FILE` and `ALG-NET` provide earlier gates. `ALG-AUTHORITY` uses database principal/session/query audit where available. Encrypted MongoDB operations are not inferred from packets. |
+| Issue 84 credential-store/cluster-key operations that the store denied | `alert` high-rate forbidden operations even though provider result is denied | `ALG-AUTHORITY` records exact provider-side denial and raises sequence priority. It must not say Mithril's kernel denied operations the store itself rejected. |
+| Read a Kubernetes Secret containing 136 keys | Semantic API gate: `reject get secret`; audit-only: `alert`, immediately restrict source and enumerate every exposed credential object | `ALG-AUTHORITY` matches principal, verb, Secret UID/resource version, response result, and request UID. One successful Secret read expands the graph to many candidate credential branches; each later use needs exact identity proof. |
+| Use a mesh key tagged for CI automation and enroll 181 devices | Provider admission: reject wrong workload/device posture; otherwise alert exact key/tag/device use, revoke key, remove devices | `ALG-AUTHORITY` does not treat the tag name as proof of CI. Signed CI intent plus exact lease is required. `ALG-RESPONSE` separately verifies key revocation and device removal. |
+| Run mesh in userspace networking with SOCKS5 and in-memory state | Deny unapproved mesh executable/code, control/data destinations, and local proxy listener even when no TUN device exists | `ALG-DEVICE` alone would miss this path. `ALG-LINEAGE` and `ALG-NET` keep the policy complete; `--state=mem:` only removes a disk artifact. |
+| Retrieve a connector catalog through a shared multi-cluster credential | Reject through typed connector policy if available; otherwise alert, disable only proven session/grant where possible, and disclose shared blast radius | `ALG-AUTHORITY` needs source device/principal, connector ID, catalog resource, forwarded request IDs, and result. A shared credential can force broader response but never stronger attribution. |
+| Use harvested AWS keys for MongoDB IAM auth and `GetCallerIdentity` | Deny local credential-object read or destination; external calls alert exact AWS session behavior; approved response revokes resolvable lease/session | `ALG-AUTHORITY` uses access-key/session/CloudTrail identity. Network timeout to MongoDB is recorded as failed service access, not prevention by Mithril. |
+| Obtain registry token and enumerate VPC/EKS/transit/secrets with cloud role | Alert operations/resources outside authority rule; semantic cloud broker may reject; response scopes to session and changed resources | `ALG-AUTHORITY` distinguishes read, dry-run, denied, and successful calls from provider result. Enumeration is not mislabeled as mutation. |
+| Read EdDSA signing key and forge valid identity tokens | Deny signing-key file/Secret object read. Token construction in memory has no kernel semantic hook; alert later token issuance/use deviation and rotate exact key under approval | `ALG-FILE` prevents observable acquisition. `ALG-AUTHORITY` detects a valid but behaviorally unexpected token principal/operation. Cryptographic validity does not equal authorized provenance. |
+| Mint GitHub App tokens with write permissions | Typed connector request: reject; GitHub audit only: alert and revoke known token or suspend installation | `ALG-AUTHORITY` matches App, installation, repository set, permissions, actor/request, and result. Direct TLS network policy cannot tell mint from clone. |
+| Open a pull request intended to compromise CI and read CI credentials | Source-control rule alerts/rejects unexpected PR/workflow write when semantic gate exists; CI coordinator marks artifact/ref `untrusted_change`; CI runtime denies credential/OIDC/deploy effects | `ALG-ARTIFACT` carries commit/ref provenance into `ci-untrusted-build`; `ALG-INTENT` denies a privileged lease to the unapproved step. Even if CI executes a malicious `build.rs`, its physical credential read/API effects remain denied. |
+| Rewrite `/etc/resolv.conf`, append `/etc/hosts`, and pin CDN/API IPs | Deny worker writes to resolver/hosts objects; destination policy still classifies actual IP and service class | `ALG-FILE` stops configuration mutation. `ALG-NET` does not rely on DNS names, so hard-coded IP or monkey-patched resolution does not bypass destination policy. |
+| Route a binary through a public CORS proxy or platform Space | Deny unapproved proxy/destination or untrusted code-object load; alert allowed relay use and track downloaded digest | `ALG-NET` sees relay channel; `ALG-ARTIFACT` identifies bytes independently of URL; `ALG-FILE`/`ALG-LINEAGE` prevents execution on managed nodes. |
+| Stage an RSA private key and keep dumping process environments | Deny private-key writes outside approved key-management role and cross-process/proc environment reads; restrict lineage and preserve non-secret metadata | `ALG-FILE` records object class, inode/mount identity, and denial without key contents. Already resident environment values remain governed at publication/use. |
+
+### End-to-end configured resolution of the production branch
+
+The following walk-through shows how several valid configurations change the
+same incident path without changing the underlying attribution facts.
+
+1. The runtime admits the reviewed conversion image as
+   `conversion-worker-root`. `ALG-ENTRY` and `ALG-LINEAGE` install exact task
+   identity before the interpreter runs.
+2. HDF5 resolves an external raw-data path to `/proc/self/environ`.
+   - With `disposition: deny`, `ALG-FILE` returns `EACCES`; the incident branch
+     stops before `HF-009` and the finding says `prevented`.
+   - With `disposition: alert`, the read succeeds, a sensitive-state bit is
+     set, and the finding says `semantic_effect_completed`; later publication
+     still receives a separate decision.
+3. Jinja executes inside Python. No new entry, fork, or exec is invented. When
+   Python opens the projected token, `ALG-FILE` evaluates the same exact task.
+   A strict token rule denies it. If a deployment has configured that worker
+   to read the token, the read is allowed or alerted and creates a credential
+   acquisition edge; this does not authorize arbitrary Kubernetes behavior.
+4. Python connects to Kubernetes/IMDS.
+   - A worker with no declared need is denied locally by `ALG-NET`.
+   - A controller role with legitimate channel access proceeds; provider audit
+     reaches `ALG-AUTHORITY`, which can alert an unexpected TokenRequest,
+     Secret read, or privileged-Pod creation.
+5. If a Kubernetes semantic admission integration is configured, the
+   privileged-Pod request is `reject`ed before persistence. If only audit is
+   configured and the API reports success, Mithril alerts, restricts the
+   source, builds the object/controller/binding/runtime graph, and contains
+   the created branch. It never rewrites that result as a deny.
+6. Every new Pod root on another node is separately bound by `ALG-ENTRY`.
+   `ALG-XNODE` connects it through request UID, Pod UID, owner, scheduling,
+   binding, and runtime evidence, never through a cross-node parent PID.
+7. Mesh, AWS, connector, and GitHub uses that occur externally are evaluated
+   from exact provider identities by `ALG-AUTHORITY`. A configured provider
+   pre-admission path can reject a future operation; audit-only paths alert and
+   invoke authorized `ALG-RESPONSE` actions after completion.
+8. A malicious source-control change entering CI retains its commit/artifact
+   trust. The CI coordinator and node enforce `ci-untrusted-build`; the build
+   may compile and test, while mounted credentials, OIDC audiences, runner
+   control, deployment API, and repository write effects deny or reject as
+   configured.
+9. Containment remains `partial` until local lineages, controllers,
+   credentials, mesh devices, connector sessions, repositories/artifacts, and
+   provider watch coverage each satisfy their physical postcondition.
+
+This is the central configuration rule: the operator may choose to observe,
+alert, prevent, or reject where the mechanism supports it, but configuration
+cannot change task identity, evidence quality, authority boundary, or whether
+the effect had already happened.
+
 ## Kubernetes External-Entry Acceptance Matrix
 
 The following tests are mandatory before a runtime/kernel combination can
@@ -2463,6 +3520,19 @@ Phase 0 sets numerical budgets for:
 - runtime admission latency for container start and repeated exec probes; and
 - baseline application success, probe timing, Pod startup, and shutdown.
 
+The intent and CI extensions add budgets for:
+
+- signature verification, replay lookup, and staging latency for runtime,
+  lifecycle, CI-step, approval, and authority-lease proofs;
+- maximum pending-proof count per node, issuer, workload, CI run, and policy
+  generation, including deterministic expiry and overload behavior;
+- maximum concurrently claimable identical operations without ambiguous
+  cross-claiming;
+- CI matrix/fan-out graph, artifact/cache handoff, and provider-audit event
+  throughput; and
+- coordinator or identity-provider outage behavior without silently converting
+  a missing proof into an allow.
+
 No phase can solve a performance failure by removing a required identity,
 effect, evidence, or postcondition guarantee. It must optimize the mechanism,
 reduce advertised scope, or propose a reviewed design change.
@@ -2483,6 +3553,9 @@ cohesive:
 | Control graph owner | immutable observations, typed causal edges, versioned lineage | native parent fabrication or live PID actuation |
 | Detection-package owner | deterministic package state, lateness, findings | arbitrary response commands |
 | Response coordinator | authorization, target re-resolution, typed execution, postconditions | raw shell or stale graph target |
+| Intent-proof/coordinator adapter owner | authenticate issuer assertions, normalize kubelet/CI/deployment intent, stage bounded one-use proofs | load BPF, infer a task from argv/timing, label tasks directly, or maintain another process graph |
+| Authority-lease owner | bind an approved credential request and provider-issued lease to the exact task/job proof and later audit identity | store secret material, treat an `aws`/`gcloud`/`gsutil` executable as intent, or invent provider success |
+| Disposition compiler owner | validate `allow`/`alert`/`deny`/`reject` against the available decision point and compile notification/response bindings | promise synchronous prevention from audit-only evidence or bypass hard enforcement invariants |
 
 The same node gatherer can expose a cgroup-scoped read-only observation stream
 to Erebor Runtime. Runtime cannot install overlapping BPF links/maps, assign
@@ -2505,6 +3578,22 @@ Mithril roles, or invoke Mithril response through that subscription.
 | mesh/AWS/connector/artifact/GitHub packages and typed recovery | Phase 10 |
 | runtime-specific full entry admission, packaging, scale, upgrades, complete conformance | Phase 11, with earlier prototypes in Phases 0-4 |
 | optional upstream/EDR evidence adapters | Phase 12 |
+
+The new configuration and intent objects are allocated across those phases,
+not assigned to a parallel product track:
+
+| Added architecture object | Phase allocation and exit condition |
+| --- | --- |
+| `IntentProofEnvelope`, issuer trust, nonce/replay ABI, and physical-disposition vocabulary | Phase 0 specifies and adversarially tests the contract; no provider-specific CLI or entry kind is introduced |
+| Runtime-entry and native-transition proof claim | Phases 1-2 establish authenticated transport and exact kernel task binding; Phase 4 makes missing or mismatched proof enforceable |
+| `DetectionDispositionRule` and `CompiledActionPlan` | Phase 0 fixes semantics; Phase 4 proves local `deny`/entry `reject`; Phase 7 proves alert routing and deterministic finding behavior; Phase 9 proves response bindings and postconditions |
+| `AuthorityLeaseIntent` and `CredentialLease` | Phase 7 establishes authority behavior and exact/local evidence quality; Phase 10 qualifies each provider issuance/audit join |
+| Authenticated kubelet reason proof | Prototyped in Phases 0-4, completed and runtime-version-qualified in Phase 11; without a carried nonce or held task, unequal-budget exact probe classification remains unsupported |
+| CI run/job/step intent and artifact handoff | Reuses Phases 2-6 for node enforcement and coverage; the generic model is fixed here, while named coordinator adapters and their conformance suites are Phase 12 unless a separate approved master-plan change promotes them |
+
+An adapter's milestone is not complete when it merely receives an event. It
+must prove issuer authentication, replay resistance, exact target binding,
+failure behavior, and the physical effect of every advertised disposition.
 
 Runtime-created entry handling crosses phases and cannot be postponed as a
 late integration detail:
@@ -2531,6 +3620,10 @@ late integration detail:
 | Multi-job process | exact native process scope; logical job remains unknown absent platform proof | Application instrumentation may add optional job identity but cannot become baseline |
 | Policy learning | observation creates review-only candidates | Auto-authorizing observed behavior is rejected because compromise can train the allowlist |
 | Upstream code | study/adapt mechanisms after Phase 0 license gate; own architecture and Rust userspace | Forking a daemon would add another chassis/owner and must replace, not duplicate, the single-gatherer design |
+| Intent transport | one authenticated envelope format consumed by the existing gatherer, with issuer-specific adapters | A coordinator callback may remain audit context, but it cannot authorize an entry or transition unless it is authenticated, replay-resistant, target-bound, and claimed by the live task |
+| Cloud CLI interpretation | `aws`, `gcloud`, and `gsutil` retain native process lineage; provider login is a separate authority-lease proof | Creating CLI-specific entry kinds would confuse an executable name with intent and is rejected |
+| Disposition vocabulary | separate physical `allow`/`deny`/`reject` from `alert`, notification, and response | A single generic action enum is acceptable only if compilation still rejects impossible boundaries and preserves these exact semantics |
+| CI identity | model multiple physical roots, native children, job/step transitions, and artifact/cache/deployment edges | Treating a workflow or Pod as one process tree loses container actions, service containers, remote jobs, and cross-node artifact causality |
 
 ## Completion Standard For This Architecture
 
@@ -2553,6 +3646,15 @@ advertised full-support kernel/runtime combination:
    postconditions through a healthy watch interval.
 8. A missing hook, admission, map, event, WAL interval, audit source, or
    provider proof narrows the result mechanically.
+9. Every source disposition compiles only to a boundary capable of producing
+   that physical result, and observe-mode evidence says `would_deny` or
+   `would_reject` without claiming the effect occurred.
+10. Every supported intent issuer proves authentication, nonce/sequence replay
+    resistance, immutable target binding, expiry, mismatch behavior, and exact
+    live-task claim; cloud CLI names never substitute for that proof.
+11. Every advertised CI integration passes native-step, container-action,
+    service/helper, matrix/fan-out, artifact/cache handoff, OIDC/authority,
+    deployment approval, cleanup, cancellation, retry, and runner-reuse cases.
 
 Until then, the phase result must state which invariant, event stage, runtime
 entry class, effect family, or response postcondition remains unproved.
@@ -2586,5 +3688,28 @@ Kernel and platform contracts:
 - [Kubernetes ephemeral containers](https://kubernetes.io/docs/concepts/workloads/pods/ephemeral-containers/)
 - [Kubernetes auditing](https://kubernetes.io/docs/tasks/debug/debug-cluster/audit/)
 - [CRI runtime API](https://github.com/kubernetes/cri-api/blob/master/pkg/apis/runtime/v1/api.proto)
+
+CI/CD coordinator and workload-identity contracts:
+
+- [GitHub Actions workflow, job, and step model](https://docs.github.com/en/actions/get-started/understand-github-actions)
+- [GitHub Actions job and sibling-container behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-where-workflows-run/run-jobs-in-a-container)
+- [GitHub Actions OpenID Connect claims](https://docs.github.com/en/actions/reference/security/oidc)
+- [GitHub Actions job-scoped `GITHUB_TOKEN`](https://docs.github.com/en/actions/concepts/security/github_token)
+- [GitHub Actions secure use of `pull_request_target`](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target)
+- [GitHub Actions deployment environments and protection rules](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
+- [GitHub Actions artifact attestations](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations)
+- [GitLab Docker executor workflow](https://docs.gitlab.com/runner/executors/docker/)
+- [GitLab Kubernetes executor Pod layout](https://docs.gitlab.com/runner/executors/kubernetes/)
+- [GitLab CI/CD OIDC ID-token claims](https://docs.gitlab.com/ci/secrets/id_token_authentication/)
+- [Tekton Task, step-container, sidecar, workspace, and result model](https://tekton.dev/docs/pipelines/tasks/)
+- [Jenkins Pipeline agent, stage, matrix, parallel, and post semantics](https://www.jenkins.io/doc/book/pipeline/syntax/)
+- [Google Workload Identity Federation for deployment pipelines](https://cloud.google.com/iam/docs/workload-identity-federation-with-deployment-pipelines)
+- [AWS IAM source identity and session tags](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html)
+
+Incident sources used by the executable control map:
+
+- [Hugging Face technical timeline](https://huggingface.co/blog/agent-intrusion-technical-timeline)
+- [Local detailed incident analysis](../../research/hugging-face-agent-intrusion-analysis.md)
+- [Local normalized live-action stream](../../research/hugging-face-agent-intrusion-live-action-stream.md)
 
 <!-- Extend this architecture additively; preserve the decisions and examples above. -->
