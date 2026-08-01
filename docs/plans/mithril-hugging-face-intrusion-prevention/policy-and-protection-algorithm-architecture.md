@@ -121,6 +121,159 @@ document authorizes copying source.
 | [`nriHandler.go`](../../../KubeArmor/KubeArmor/core/nriHandler.go) explicitly records that `StartContainer` occurs after start, namespace IDs can be reused, and enforcement is removed before shutdown | Runtime callback timing and teardown order are security properties | Full protection requires a pre-exec gate, exact lifetime identity, and policy retained through `preStop` and termination | Post-start binding cannot be advertised as enforce-from-first-exec; stop notification cannot remove policy before the last task exits |
 | [`processTree.go`](../../../KubeArmor/KubeArmor/monitor/processTree.go) enriches a userspace PID tree and falls back to procfs | Procfs recovery is useful for explicit bootstrap and display | Reconstruct existing tasks as `bootstrapped` and retain the gap | A userspace PID cache is not race-free lineage or actuator identity |
 
+#### Practical KubeArmor lesson examples
+
+The table above is intentionally compact. The following examples make each
+lesson concrete and state why Mithril adopts one part of the mechanism without
+inheriting the weaker identity or failure behavior around it.
+
+##### 1. Put the decision at the semantic LSM effect hook
+
+**Example.** A dataset-conversion Python process tries to open the projected
+service-account token at
+`/var/run/secrets/kubernetes.io/serviceaccount/token`. An exec-only sensor sees
+no new command because Python calls `open(2)` in-process. A BPF LSM
+`file_open`/`inode_permission` decision can reject that operation with
+`EACCES` before any token byte reaches Python. The same principle applies when
+the process calls `connect(2)` or requests a capability: decide at the hook
+that mediates the real effect, not by guessing from a preceding command.
+
+**Mithril adoption.** Implement owned, small CO-RE BPF LSM programs for file,
+exec, socket, and capability effect families. Resolve the already-attached
+task role and immutable policy generation, calculate the decision, preserve a
+prior denial, and only then attempt to emit evidence.
+
+**What not to inherit.** A lookup failure must not mean “unprotected” merely
+because a task-to-container map, scratch map, path buffer, or classifier entry
+is missing. For a task already proven to be in a protected cgroup, such a miss
+is an identity or coverage failure and follows the profile's fail-closed rule.
+
+**Why.** Otherwise an attacker does not need to evade the policy. It only
+needs to create map pressure, hit an unhandled path shape, or race startup so
+that the enforcement program returns allow.
+
+##### 2. Compile rich policy in userspace and keep kernel decisions finite
+
+**Example.** A policy author writes: “the `conversion-worker` role may read
+the checked-out dataset and write `/work/output`, but it may not read projected
+credentials.” The Rust compiler can resolve mount-aware object identities,
+conflicts, and defaults once, then lower the result to bounded keys such as
+`(profile_generation, role_id, effect_class, object_class) -> decision`.
+The BPF program does not need to parse YAML, traverse an arbitrary rule list,
+or resolve precedence on every `open(2)`.
+
+**Mithril adoption.** Use the KubeArmor pattern of userspace compilation and
+compact kernel maps, but make the Rust compiler produce a validated,
+immutable, signed generation with deterministic conflict resolution and a
+reviewable compiled manifest.
+
+**What not to inherit.** Do not make `/usr/bin/curl`, `python`, a process name,
+or “started from this path” the durable role. An approved updater and a
+compromised dataset worker may both execute the same `/usr/bin/curl`; the
+attacker can also copy or rename a binary.
+
+**Why.** A path identifies an object in a particular mount view. It does not
+prove why the process exists, which admitted entry created it, or which
+authority it should have.
+
+##### 3. Use map indirection for atomic generations, not namespace identity
+
+**Example.** Profile generation 12 is active while a reviewed generation 13
+is loaded. Mithril populates generation 13 completely, verifies it, and then
+atomically changes one binding pointer. A new decision sees either all of 12
+or all of 13; it never sees a half-populated mixture. Generation 12 remains
+resident while an existing task or socket still references it.
+
+**Mithril adoption.** Use a map-of-maps or equivalent BPF map indirection to
+bind a live cgroup interval and execution set to one immutable policy
+generation, with explicit reference retirement.
+
+**What not to inherit.** Do not key durable workload authority by PID
+namespace, mount namespace, or an unqualified cgroup number. Container A can
+exit and container B can later receive a reused numeric namespace or cgroup
+identifier.
+
+**Why.** Without a live interval, full container identity, and generation,
+container B could inherit container A's permissions or containment state even
+though the number happens to match.
+
+##### 4. A full evidence channel must not cancel a denial
+
+**Example.** Compromised code generates 100,000 forbidden exec attempts and
+fills the ring buffer. The 100,001st attempt still returns `-EACCES`. Mithril
+increments a per-CPU loss counter and later reports that evidence was dropped,
+but the attempted shell does not start.
+
+**Mithril adoption.** Follow the main KubeArmor exec enforcer's useful
+ordering: calculate and commit the enforcement return value before reserving
+or constructing an event.
+
+**What not to inherit.** Do not copy preset paths that return allow when a
+ring-buffer reservation fails.
+
+**Why.** Alert transport is attacker-influenceable load. If event allocation
+controls authorization, flooding telemetry becomes a deterministic policy
+bypass.
+
+##### 5. Treat presets as effect classifiers, not universal container rules
+
+**Example.** Reading another process's `/proc/<pid>/environ` is expected for a
+narrow diagnostic role but suspicious for a dataset converter. Anonymous
+executable memory may be expected for an approved JIT runtime but forbidden
+for an image-conversion worker. The kernel hook and object classification are
+useful in both cases; the correct answer depends on the task's admitted role.
+
+**Mithril adoption.** Reuse the underlying ideas—fileless execution,
+executable anonymous mappings, environment inspection, and process
+inspection—as explicit effect classes in the normal role/effect policy model.
+
+**What not to inherit.** Do not turn them into global “container on/off”
+presets keyed only by namespace or workload membership.
+
+**Why.** A Pod can contain application, sidecar, probe, lifecycle, and
+administrative execution roots with deliberately different budgets. A single
+container-wide answer either blocks legitimate operation or gives the
+compromised role excessive authority.
+
+##### 6. Runtime timing must protect the first instruction through the last
+
+**Example.** If enforcement is installed only after `StartContainer`, the
+entrypoint can read a token and send it before the callback arrives. At the
+other end, if policy is removed when `StopContainer` begins, a malicious
+`PreStop` command can exfiltrate during the termination grace period.
+
+**Mithril adoption.** Require a pre-exec admission handshake for strict
+profiles, bind the exact root before its user image runs, and keep the binding
+and referenced policy generations until the last protected task and socket
+have exited or been explicitly invalidated.
+
+**What not to inherit.** Do not advertise post-start discovery as protection
+from first exec, and do not use a stop notification as proof that no protected
+task remains.
+
+**Why.** Startup and shutdown are attacker-usable execution windows, not
+administrative bookkeeping outside the security boundary.
+
+##### 7. Procfs recovery is evidence of a gap, not reconstructed certainty
+
+**Example.** `mithril-node` restarts and discovers PID 4242 in a protected
+cgroup through procfs. It can record executable, cgroup, namespace, and current
+parent coordinates, but it cannot prove that no missed fork, exec, or
+reparenting transition occurred while the sensor was unavailable. Later, PID
+4242 can exit and the kernel can reuse the number.
+
+**Mithril adoption.** Create an explicit `bootstrapped` observation with its
+known coordinates, unknown interval, source quality, and conservative role so
+operators can see and contain the affected execution set.
+
+**What not to inherit.** Do not promote the reconstructed userspace PID tree
+to exact birth lineage, use its cached PID as a later kill handle, or silently
+close the missing interval.
+
+**Why.** Procfs is a current snapshot. It cannot retrospectively prove event
+order, and a PID is reusable. Exact response requires live re-resolution such
+as pidfd plus start-time and cgroup validation.
+
 One additional stacking rule is mandatory. BPF LSM programs receive the return
 value from an earlier LSM/BPF program. Mithril never turns an earlier denial
 back into success:
@@ -134,6 +287,16 @@ if prior_ret != 0:
 Mithril's policy can make a result stricter. It cannot weaken SELinux,
 AppArmor, Landlock, another BPF LSM program, or an earlier Mithril program.
 
+#### Practical LSM-stacking example
+
+SELinux denies a write to `/etc/shadow` and passes a nonzero `prior_ret` into
+Mithril's BPF LSM program. Even if Mithril's own profile would otherwise allow
+the role to write the classified object—or Mithril cannot find its policy
+map—the only correct return is that original nonzero value. Returning `0`
+would not mean “Mithril has no opinion”; it would erase another active
+security module's denial. This is why every Mithril LSM path checks and
+preserves `prior_ret` before considering its own allow result.
+
 ### What to learn from Tetragon
 
 | Source mechanism | Useful lesson | Mithril adaptation | What Mithril must not inherit |
@@ -146,11 +309,209 @@ AppArmor, Landlock, another BPF LSM program, or an earlier Mithril program.
 | [`cache.go`](../../../tetragon/pkg/process/cache.go) handles out-of-order events and garbage collection | The central graph must accept replay, duplicates, and late events | Immutable observations build versioned views; local WAL sequence exposes gaps | A userspace LRU record cannot authorize a syscall or irreversible response |
 | [`fork_test.go`](../../../tetragon/pkg/sensors/exec/fork_test.go) exercises fork-without-exec | Kernel edge cases deserve real executable fixtures | Carry these cases into Phase 2 and the standing incident suite | A happy-path `fork -> exec -> exit` test is not sufficient identity proof |
 
+#### Practical Tetragon lesson examples
+
+##### 1. Label a child before fork-without-exec can perform an effect
+
+**Example.** A Python conversion worker uses `multiprocessing` with `fork`.
+The child does not call exec; its first action is to open the projected
+service-account token. An exec-only process model never sees a new executable,
+but the child is still a new task that needs inherited, restrictive authority
+before it can run that `open(2)`.
+
+**Mithril adoption.** Learn from Tetragon's early fork observation and parent
+state inheritance. Allocate the child task identity and attach its inherited
+role at a target-kernel-proven creation point before a protected effect can be
+accepted.
+
+**What not to inherit.** If the expected parent state is absent, do not skip
+the child and continue. Attach `fail_closed_unknown` when possible, deny its
+first protected effect, and open a coverage defect for the execution set.
+
+**Why.** A missing parent can mean attach-after-start, event loss, unsupported
+kernel behavior, or tampering. Treating every such child as invisible turns a
+sensor gap into an attack path.
+
+##### 2. Separate durable identity from PID and thread coordinates
+
+**Example.** Thread TID 8102 in process TGID 8100 performs exec. Linux
+de-threading can make the surviving task take different visible TID/TGID
+coordinates. Later, an unrelated process may reuse PID 8102. An event or
+response addressed only to `8102` can therefore attach to or kill the wrong
+process.
+
+**Mithril adoption.** Retain TID, TGID, start boottime, clone flags, and parent
+keys as valuable coordinates and evidence, while assigning non-reused
+`task_cookie`, `process_lineage_id`, and `execution_id` values for the node
+boot and label epoch.
+
+**What not to inherit.** Do not make a TGID-keyed map the sole owner of
+per-thread role, non-leader exec state, or actuator authority.
+
+**Why.** Linux exposes several identities whose relationships change across
+clone and exec. Durable authorization needs a Mithril identity whose
+continuity is explicit while native coordinates are revalidated at use time.
+
+##### 3. Stage rich exec evidence without putting it on the deny path
+
+**Example.** A worker attempts `/bin/sh -c 'curl ...'`. The pre-effect hook
+needs only the exact task label, candidate executable object, interpreter
+chain, and compiled edge to deny `/bin/sh` immediately. Full argv, cwd,
+namespaces, hashes, and display strings are useful evidence, but collecting or
+emitting them can fail or exceed verifier/tail-call budgets.
+
+**Mithril adoption.** Use a small verifier-bounded pre-decision record and
+stage richer post-decision observation across suitable hooks, as Tetragon
+demonstrates for exec collection.
+
+**What not to inherit.** Do not make successful tail calls, path rendering,
+argument copying, or event reservation a prerequisite for the physical deny.
+
+**Why.** Detailed telemetry improves investigation. It must not increase the
+number of dependencies that an attacker can fail to obtain execution.
+
+##### 4. Resolve Kubernetes selection to an exact live cgroup binding
+
+**Example.** A policy selects Pods labeled `job=dataset-conversion`. Pod A
+matches, exits, and is replaced by Pod B with the same name and labels. A
+numeric cgroup identifier can also be reused after deletion. Pod B must receive
+a new binding containing its exact Pod UID, full container ID, image digest,
+cgroup live interval, and approved profile generation.
+
+**Mithril adoption.** Learn from Tetragon's userspace selection and kernel
+cgroup filtering, then install the resolved, exact binding in one atomic
+generation.
+
+**What not to inherit.** Do not let a label selector, image tag, Pod name, or
+bare cgroup ID act as durable runtime authority.
+
+**Why.** Selectors answer which current workloads should be considered.
+They do not prove that a later task belongs to the same admitted workload or
+policy lifetime.
+
+##### 5. Runtime metadata admits an entry; it does not replace later entries
+
+**Example.** An OCI hook supplies Pod UID, image digest, mounts, and cgroup for
+the initial container process. Ten minutes later kubelet starts an exec probe,
+or an administrator uses `kubectl exec`. Those are new runtime-created roots;
+the original create-container hook does not run again and cannot explain why
+either new process exists.
+
+**Mithril adoption.** Use an authenticated runtime handoff to create the
+initial execution set and `ContainerStartEntry`, then use separate one-use
+`RuntimeEntryIntent` admissions for each later runtime exec.
+
+**What not to inherit.** Do not treat membership in the original cgroup or
+knowledge of the container-create event as authority for every later root.
+
+**Why.** The same container can legitimately host roots with very different
+purposes and budgets: application, probe, lifecycle, and administrator.
+
+##### 6. Let the central graph repair evidence, never retroactively authorize
+
+**Example.** Node events are delivered out of order: a socket connect
+observation reaches the graph before the exec observation that explains the
+new execution image. The graph may later recompute its versioned causal view
+and attach the evidence correctly. The connect's local allow/deny decision,
+however, was already made from kernel-resident task state and cannot depend on
+that later cache repair.
+
+**Mithril adoption.** Accept replay, duplicates, late events, loss markers,
+and versioned recomputation in the userspace graph, following the operational
+lesson in Tetragon's cache.
+
+**What not to inherit.** Do not use an evictable userspace cache entry as a
+syscall authorization record or issue `kill(pid)` from a stale graph node.
+
+**Why.** Distributed evidence is eventually ordered; kernel effects are not.
+Irreversible response must re-resolve and prove the current target.
+
+##### 7. Turn fork edge cases into permanent executable acceptance tests
+
+**Example.** A fixture forks a child that never execs, synchronizes so the
+child attempts a protected token read immediately, and asserts that the child
+already carries the expected restrictive role and receives `EACCES`. Related
+fixtures cover `CLONE_THREAD`, `vfork`, non-leader exec, rapid exit, and PID
+reuse.
+
+**Mithril adoption.** Carry the fork-without-exec testing lesson into Phase 2
+and keep the hostile identity matrix in every release gate.
+
+**What not to inherit.** Do not accept only `fork -> exec -> exit` tests or
+tests that verify an event appeared after the protected effect completed.
+
+**Why.** The security claim is about identity being installed before the
+child can act. A plausible event stream after the fact does not prove that
+ordering.
+
 The intended synthesis is narrow: KubeArmor demonstrates useful BPF LSM
 decision points and policy lowering; Tetragon demonstrates useful kernel
 lineage, cgroup filtering, lifecycle metadata, miss flags, and test patterns.
 Mithril replaces their container/path/PID authority with its own exact task,
 entry, role, coverage, and response contracts.
+
+### Combined KubeArmor And Tetragon Lessons: One Mithril Pipeline
+
+The mechanisms become useful together when they are arranged around one
+Mithril-owned decision path rather than exposed as two independent policy
+systems:
+
+| Pipeline step | Mechanism learned from | Mithril's combined behavior | Concrete proof |
+| --- | --- | --- | --- |
+| Admit a workload root | Tetragon runtime metadata and cgroup binding | An authenticated runtime intent binds exact Pod, container, image, cgroup live interval, entry kind, role, and policy generation before execution | An unacknowledged initial root cannot execute under a strict profile |
+| Preserve native lineage | Tetragon fork/exec state and miss flags | Kernel task state assigns a non-reused identity and restrictive role before each child can act; an exec transitions the existing lineage | A fork-without-exec child is denied the token read on its first operation |
+| Decide the real effect | KubeArmor's semantic BPF LSM hook selection | File, exec, socket, and capability programs evaluate exact task role plus classified object before the effect | In-process Python `open(2)` is denied without needing a shell or exec event |
+| Lower and update policy | KubeArmor's compact rule maps and map indirection | Rust compiles one reviewed immutable generation and atomically switches the exact workload binding | Concurrent decisions see all of generation 12 or all of 13, never a mixture |
+| Preserve enforcement under telemetry failure | KubeArmor's useful deny-before-event ordering plus Tetragon's explicit miss evidence | Local denial survives ring/WAL/control-plane failure while loss counters narrow later claims | Filling the ring buffer loses evidence but never starts the forbidden command |
+| Build explainable history | Tetragon's rich observations and out-of-order cache handling | Versioned local and multi-node graphs repair late evidence without becoming the syscall or response authority | A late exec event can repair causality but cannot retroactively justify an allowed connect |
+
+#### Combined example A: compromised conversion code acts without a new command
+
+1. The runtime admits the container root as entry `E1`, assigns the
+   `conversion-worker` role, and binds policy generation 42 to its exact cgroup
+   live interval.
+2. A malicious dataset template executes inside the existing Python process.
+   There is no new Linux process event, so lineage monitoring alone has
+   nothing new to report.
+3. Python opens the projected service-account token. The file LSM hook reads
+   Python's exact task label inherited from `E1`, classifies the credential
+   object, and generation 42 returns deny before bytes are read.
+4. Python forks a child without exec. The Tetragon-derived lineage mechanism
+   attaches a restrictive child role before the child runs. Its immediate
+   token open is denied by the same KubeArmor-derived semantic hook.
+5. The child tries to exec `/bin/sh`. The exec LSM hook denies the role
+   transition. If the evidence ring is full, the deny still stands and a loss
+   counter records reduced observability.
+
+This is why an effect-only design and a lineage-only design are each
+incomplete. Container-wide effect rules cannot distinguish the compromised
+worker from a legitimate diagnostic root, while perfect lineage telemetry
+without a semantic pre-effect enforcer only explains the intrusion after the
+token or connection was already obtained.
+
+#### Combined example B: a probe and an attacker run the same executable
+
+Assume the PodSpec declares an exec readiness probe `/app/healthcheck`.
+
+1. Before kubelet's probe reaches the runtime execution point, a one-use
+   intent tied to the reviewed PodSpec digest admits its root as
+   `KubeletExecProbeEntry` and assigns `kubelet-exec-probe`.
+2. If the application forks and execs that exact same `/app/healthcheck`, the
+   new execution remains a native descendant of `application-root`. Matching
+   the filename does not let it claim probe authority.
+3. If an attacker with `pods/exec` permission requests the same command, the
+   streaming exec is admitted, if policy permits it at all, as
+   `AdministrativeExecEntry`; it does not receive the probe role.
+4. File and network LSM decisions can therefore give the real probe only its
+   small health-check budget while denying the application descendant and the
+   administrative root from reading credentials or opening unrelated
+   connections.
+
+Tetragon's runtime/cgroup/lineage lessons establish *which execution this is*.
+KubeArmor's LSM/policy-lowering lessons establish *whether this execution may
+perform this effect*. Mithril needs both answers in the same task label and
+generation; running two disconnected agents or reconciling two policy engines
+afterward would reintroduce races and disagreement.
 
 ## Protection Invariants
 
@@ -172,6 +533,34 @@ These invariants apply across all phases once the owning capability is enabled:
 | `INV-GRAPH-001` | Native parent edges never cross a node. Remote expansion uses typed causal edges with named proof. |
 | `INV-RESPONSE-001` | A response re-resolves the live kernel/provider target and verifies a physical postcondition; a stale graph identifier is never an actuator handle. |
 | `INV-COVERAGE-001` | A missing hook, sequence gap, bootstrap edge, ambiguous entry, or unavailable provider feed narrows the claim instead of being interpreted as benign. |
+
+### Practical Protection-Invariant Examples
+
+Each invariant is a release property, not an aspirational alert rule. These
+examples state an action that a hostile acceptance fixture can perform and the
+result an implementation must prove.
+
+| Invariant | Practical example | Required result and why |
+| --- | --- | --- |
+| `INV-ENTRY-001` | The labeled conversion worker forks a child, while `kubectl exec` separately creates a root in the same container. | The forked child has a kernel-proven parent label before it runs. The administrative root has a one-use, audited external-entry admission. Neither is accepted merely because both are in the container cgroup. |
+| `INV-ENTRY-002` | A host process uses `nsenter`, or a runtime task is moved directly into the protected cgroup, with no pending runtime intent. Its first action is to read the service-account token. | The file hook denies the read and records `unknown-external-entry`. Cgroup membership proves where the task is now, not why it was created or what authority it has. |
+| `INV-ENTRY-003` | Container A exits; container B later receives the same PID, namespace number, or numeric cgroup ID. | Container B cannot resolve A's label, policy generation, or containment state because every lookup also verifies the live interval, full container identity, boot/label epoch, and non-reused task identity. |
+| `INV-ROLE-001` | An approved update root and a compromised conversion worker both execute `/usr/bin/curl`. | The updater receives only the role admitted for its signed entry and transition. The worker remains a worker or receives a denied exec transition. Identical executable paths do not create identical authority. |
+| `INV-ROLE-002` | Python forks a child that immediately reads a credential without exec; another thread later execs a new image. | The forked child already has the restrictive inherited child role. Exec retains the process lineage but creates a new execution identity and applies the reviewed role transition, including during non-leader de-threading. |
+| `INV-EFFECT-001` | A permitted output path is changed into a symlink to the projected token, or the mount-aware object classifier cannot determine the target inode. | The credential read or unresolved classification is denied. A textual path match cannot override a more specific deny, and a required classifier miss cannot become allow. |
+| `INV-EFFECT-002` | The attacker floods exec and file attempts until the ring buffer is full while the central service and local WAL are under pressure. | Every already-computed denial remains a denial. Mithril exposes loss and pressure counters, but telemetry backpressure never opens the protected effect. |
+| `INV-POLICY-001` | Learning mode observes a compromised worker successfully calling the Kubernetes API with its mounted token. | The observation becomes a review candidate and evidence; it never writes an allow entry. Only a signed policy, validated and compiled by the Rust owner, can authorize that role/effect tuple. |
+| `INV-POLICY-002` | Generation 42 allows an established approved socket while generation 43 denies new sockets to that destination. The update occurs while tasks and the old socket are live. | One atomic pointer activates generation 43 for new decisions. References that require generation 42 keep it resident until their explicit lifetime policy completes; no decision reads a half-loaded mixture or a freed map. |
+| `INV-K8S-001` | The declared readiness probe, an application child, and `kubectl exec` each run the identical `/app/healthcheck` bytes. | They receive `kubelet-exec-probe`, application-descendant, and `administrative-exec` entry/role identities respectively. The executable object is evidence for command matching, not proof of Kubernetes intent. |
+| `INV-K8S-002` | During termination, a malicious or compromised `PreStop` command tries to read a Secret and send it externally. | The policy remains installed and the narrow `kubelet-prestop` budget still applies until all tasks and relevant sockets are gone. “Terminating” never means unrestricted. |
+| `INV-GRAPH-001` | A process on node A uses the Kubernetes API to create a Pod whose root later starts on node B. | Node A's task is not recorded as the Linux parent of node B's root. The graph adds a typed causal chain—API request, audit object, controller/scheduler decision, Pod UID, runtime admission—with the strength and gaps of each proof. |
+| `INV-RESPONSE-001` | The graph says PID 7312 was malicious, but it exited and the kernel reused 7312 before containment arrives. | The actuator rejects the stale target after pidfd/start-time/cgroup/task-cookie re-resolution. It acts only on the current verified process, cgroup, credential, or provider object and then verifies the requested postcondition. |
+| `INV-COVERAGE-001` | The node sensor missed sequence 900–915, attached after the worker started, or lost the provider audit feed that distinguishes a GitHub read from a write. | The affected task, interval, and claim are marked incomplete. Mithril may conservatively deny or contain according to policy, but it cannot report “no malicious action occurred” from absent evidence. |
+
+For example, passing `INV-K8S-001` is not proven by an event that prints
+`/app/healthcheck`. The test must create all three roots above, demonstrate
+three different admitted identities, and show that each receives its own
+file, network, exec, and response budget before it can perform those effects.
 
 ## Identity And Execution Model
 
@@ -206,6 +595,133 @@ ContainerExecutionSet
 The edge from an entry to its root process is `entry_started_execution`, not a
 fabricated Linux parent edge. Ordinary fork/clone/exec edges below each root
 remain native.
+
+### Does the attacker also go through kubelet exec?
+
+Sometimes, but not necessarily. More importantly, **“created through kubelet”
+is provenance, not trust**. Kubelet may be carrying out a legitimate probe, a
+legitimate administrator request, an attacker-controlled `pods/exec` request,
+or a maliciously changed PodSpec. Those executions must not receive the same
+role merely because kubelet initiated the runtime call.
+
+The earlier entry diagram must not be read as assuming a kubelet-created task
+is safe. That assumption would be wrong. The correct rule is:
+
+```text
+runtime and kubelet provenance select a candidate entry class
++ authenticated intent and reviewed workload state prove its purpose
++ compiled policy assigns or denies its role
+```
+
+Four practical paths must be distinguished.
+
+#### Path 1: compromise inside the existing worker does not use kubelet exec
+
+In the published Hugging Face chain, the data-derived Jinja expression caused
+Python execution inside the existing conversion worker. That action did not
+need `kubectl exec`, kubelet `ExecSync`, or a new process. If the compromised
+Python process reads a token or opens a socket itself, its existing
+`conversion-worker` task label reaches the file or socket hook. If it forks or
+execs a shell, native inheritance and exec-transition policy continue from
+that same admitted root.
+
+```text
+admitted ContainerStartEntry
+  -> existing Python worker
+       -> in-process Jinja/Python payload      # no kubelet and no new task
+       -> forked child                         # native child, not external root
+       -> exec /bin/sh                         # native exec transition
+```
+
+The protection must therefore work even when no kubelet or exec audit event
+exists. This is precisely why task roles plus semantic file/socket/capability
+hooks are required.
+
+#### Path 2: an attacker using `pods/exec` normally does go through kubelet
+
+If an attacker has Kubernetes `pods/exec` authority, a normal `kubectl exec`
+path goes through the API/streaming control path to kubelet, which asks the
+container runtime to create an exec process. Mithril classifies that process as
+`AdministrativeExecEntry`, correlates the Kubernetes audit principal and
+request when available, and applies default-deny or an explicitly approved
+break-glass role.
+
+For example, an attacker cannot obtain probe authority by running the probe's
+exact command:
+
+```text
+declared readiness probe -> /app/healthcheck -> kubelet-exec-probe role
+kubectl exec by attacker  -> /app/healthcheck -> administrative-exec role
+```
+
+The binary, argv, cgroup, and namespaces can all match. The request transport,
+authenticated intent, API audit principal, one-use nonce, and entry kind do
+not. If the audit proof or admission is missing, the protected root is
+ambiguous or unknown, not a probe.
+
+#### Path 3: an attacker can make kubelet execute a malicious declared hook
+
+An attacker able to change a controller's Pod template, submit a replacement
+Pod, or influence the manifest before admission could change a readiness probe
+or `PreStop` command to `/bin/sh -c ...`. Most fields of an already-running
+Pod are not freely mutable; in the common controller case the change creates a
+replacement Pod. Kubelet later issuing the command does not cleanse that
+attacker-controlled intent. Mithril binds approved entry rules to the reviewed
+Pod UID, resource version, PodSpec digest, command digest, lifecycle state,
+and policy generation. The replacement Pod or changed reviewed specification
+creates a new deployment/profile generation; it cannot reuse an entry rule
+compiled for the previous digest.
+
+The deployment-preserving default is to report and deny or hold the unmatched
+hook according to the protected profile, not to rewrite the manifest and not
+to learn the new command as legitimate. If an installation initially chooses
+observation-only compatibility, Mithril must say that this entry is unapproved
+and that prevention coverage is absent; it must not label the command trusted.
+
+#### Path 4: node or runtime access can bypass kubelet
+
+An attacker with node access can call the CRI/runtime directly, use a tool such
+as `crictl exec`, or manipulate a shim. That root may never pass through the
+Kubernetes API or kubelet request path. Mithril requires a separately
+authenticated `HostAdministrativeExecEntry` with runtime peer evidence and
+denies it by default for protected workloads. Merely appearing in the target
+cgroup is insufficient and triggers `INV-ENTRY-002`.
+
+If the attacker controls kernel/root authority strongly enough to unload or
+replace BPF programs, rewrite protected maps, forge the runtime trust channel,
+or subvert kubelet and the runtime together, the node enforcement trust
+boundary is lost. Mithril must detect and report attachment/map/measurement
+failure from an external trust anchor where available; it cannot claim that a
+compromised kernel enforces policy against itself.
+
+#### What stock CRI can and cannot tell Mithril
+
+Streaming `Exec` and synchronous `ExecSync` are separate CRI operations, so
+the transport can help distinguish an interactive or administrative exec from
+the synchronous mechanism kubelet commonly uses for exec probes and exec
+lifecycle handlers. That still does not fully solve intent classification.
+Stock `ExecSyncRequest` carries the container ID, command, and timeout, but not
+“readiness probe,” “liveness probe,” `PostStart`, or `PreStop` as an
+authenticated reason.
+
+Therefore:
+
+- a streaming exec cannot claim a probe/lifecycle role merely because its
+  command matches the PodSpec;
+- an `ExecSync` command is matched against the exact reviewed PodSpec and
+  current lifecycle state, never against command text alone;
+- when probe and lifecycle declarations are indistinguishable at the runtime
+  boundary, Mithril uses a conservative shared budget or denies the ambiguous
+  entry; and
+- exact distinct roles require an authenticated kubelet-side reason/nonce or
+  another pre-exec proof. Observation after the process starts cannot
+  retroactively authorize it.
+
+This answers the apparent contradiction: yes, one attacker path can traverse
+kubelet exec, but kubelet transport does not make an execution legitimate.
+Mithril protects both attacker paths—the in-process/native-descendant path and
+the external runtime-root path—using different identity proofs that converge
+on the same role/effect enforcement model.
 
 ### Durable identity objects
 
@@ -2071,3 +2587,4 @@ Kernel and platform contracts:
 - [Kubernetes auditing](https://kubernetes.io/docs/tasks/debug/debug-cluster/audit/)
 - [CRI runtime API](https://github.com/kubernetes/cri-api/blob/master/pkg/apis/runtime/v1/api.proto)
 
+<!-- Extend this architecture additively; preserve the decisions and examples above. -->
