@@ -662,6 +662,218 @@ API request and principal. Mithril calls it an exact administrative entry only
 when a configured existing interface provides a unique request-to-task join;
 otherwise the join stays conservative or contextual.
 
+###### Approved administrative exec: from the browser to one Linux task
+
+The restricted external-root rule is the safe baseline. A configured cluster
+may offer a stronger administrative-exec role, but only through the complete
+flow below. Installing only the client plugin or only the admission webhook is
+not enough.
+
+The administrator runs one command:
+
+```text
+$ kubectl mithril exec -it -n production api-7d9c -c api -- bash
+
+Approval required for:
+  cluster:   production
+  pod:       production/api-7d9c
+  container: api
+  command:   bash
+  tty:       yes
+
+Opening https://mithril.example/activate
+Code: JQTM-HVPK
+
+Waiting for approval...
+Approved by alice@example.com
+Connecting...
+```
+
+The `kubectl-mithril` process waits while the browser interaction happens. It
+does **not** send `pods/exec` and make a Kubernetes webhook wait for a human.
+Admission webhooks have short bounded timeouts. After approval, the plugin
+sends one ordinary Kubernetes `CONNECT pods/exec` request and attaches the
+terminal streams. Stock kubectl plugins cannot replace the built-in
+`kubectl exec`, so the explicit command is `kubectl mithril exec`.
+
+The browser uses the organization's normal identity provider and displays the
+exact cluster, Pod UID, container, argv, TTY/stdin settings, requested Mithril
+role, expiry, and approver. A workstation may use browser OIDC with PKCE. A
+headless or SSH client may show a short device code and poll. Entering a code
+identifies the pending request; it does not itself approve the request. Policy
+decides whether the requester may self-approve or needs a second person.
+
+The resulting authorization is exact and one use:
+
+```text
+ApprovedAdministrativeExecV1 {
+  approval_id
+  authenticated_requester
+  authenticated_approver
+  cluster_id
+  namespace
+  pod_uid
+  full_container_id
+  container_generation
+  canonical_argv_digest
+  stdin_stdout_stderr_tty_flags
+  approved_role_id
+  policy_generation
+  target_node_id
+  issued_at
+  expires_at
+  one_use = true
+}
+```
+
+This is a Mithril authorization, not a statement supposedly signed by kubelet.
+The plugin receives a short-lived, memory-only Kubernetes exec credential. A
+configured stock Kubernetes authentication integration validates it and places
+the non-secret approval ID in `AdmissionReview.userInfo.extra`. The credential
+uses a dedicated identity or group that has authority only for the protected
+`pods/exec` path; it must not reproduce the requester's general Kubernetes
+permissions. The validating admission webhook remains the enforcement
+boundary, so ordinary `kubectl exec`, curl, a modified plugin, and replay all
+fail without a live approval.
+
+The validating admission webhook then performs this transaction:
+
+```text
+receive CONNECT pods/exec
+  -> authenticate approval ID from userInfo.extra
+  -> parse the real PodExecOptions
+  -> resolve Pod name to current Pod UID, container ID, and node
+  -> verify requester, argv, streams, role, policy generation, and expiry
+  -> ask the target mithril-node to prepare one BPF admission slot
+  -> require successful map/link health and slot readback
+  -> atomically commit the approval to that slot
+  -> return allowed=true
+```
+
+If the target node is offline, the container changed, the node cannot install
+the slot, or any value differs, the webhook rejects the API request. The human
+wait occurred before this transaction, so this node round trip must fit the
+ordinary short webhook deadline.
+
+`mithril-node` is still the only node gatherer, BPF loader, and kernel-policy
+owner. The central control service routes the prepare request over the node's
+existing authenticated control stream; this does not add a sidecar or a second
+node daemon. Control's `AdministrativeApprovalOwner` owns the browser challenge
+and human decision. The target node's `AuthorizationProofOwner` validates and
+consumes the signed node authorization. Its `WorkloadBindingOwner` owns the BPF
+slot and exact task-role assignment. The node then installs a bounded one-use
+value such as:
+
+```text
+ApprovedExecSlotV1 {
+  approval_id
+  pod_uid
+  full_container_id
+  container_generation
+  cgroup_binding_id
+  expected_argv_digest
+  expected_stream_flags
+  approved_role_id
+  policy_generation
+  required_source = KUBELET_CRI_STREAMING_EXEC
+  monotonic_deadline
+  state = ARMED
+}
+```
+
+BPF does not parse OAuth, JWT, CBOR, Kubernetes objects, or signatures. Rust
+does that work and writes the already verified bounded slot. BPF performs only
+kernel identity checks, bounded map lookups, and an atomic one-use transition.
+
+There is still one missing link: stock Kubernetes does not carry the admission
+approval ID into the Linux task. Mithril therefore needs one qualified
+runtime-specific join adapter inside `mithril-node` for every runtime/version
+that advertises the stronger role.
+
+For containerd, the adapter connects these existing facts:
+
+```text
+approved Kubernetes CONNECT pods/exec
+  -> measured kubelet sends CRI Exec, not ExecSync
+  -> containerd creates an internal runtime exec ID
+  -> containerd sends the shim Exec/Start operations
+  -> the shim/runtime creates one Linux task
+  -> that task receives the approval slot before its first program is allowed
+```
+
+CRI `Exec` prepares a streaming command; `ExecSync` is the separate synchronous
+method used by exec probes and lifecycle commands. Containerd's Runtime v2
+protocol carries a container ID and runtime exec ID between containerd and its
+shim and reports exec lifecycle events. Events after process start are useful
+evidence but are too late to grant pre-effect authority by themselves.
+
+The containerd adapter therefore combines the stock runtime stream/events with
+version-qualified BPF tracing at the containerd/shim pre-start and task-create
+path. It carries the runtime exec ID to the exact new task through BPF task
+state. Go function offsets and argument layouts are accepted only for measured
+containerd/shim build IDs that passed the hostile qualification suite. A
+missing symbol, unexpected layout, lost correlation, or unsupported runtime
+does not fall back to timing or argv matching.
+
+At task creation and `bprm_check_security`, the BPF program applies this rule:
+
+```text
+if task already has a Mithril identity:
+  use its existing native lineage policy
+  never let it inspect or consume an administrative-exec slot
+
+else if exact runtime join identifies one ARMED slot:
+  verify cgroup, container generation, runtime source, executable/argv,
+         role, policy generation, and deadline
+  atomically change ARMED -> CONSUMED
+  install APPROVED_ADMINISTRATIVE_EXEC in BPF task storage
+  evaluate the initial executable under that role
+
+else:
+  assign RUNTIME_EXTERNAL_RESTRICTED or deny, as configured
+```
+
+Descendants of the approved task inherit that bounded administrative lineage.
+Every later exec, file, mapping, socket, device, process-control, and privilege
+effect still passes the normal policy. Approval does not disable Mithril. A
+typical diagnostic role may allow a shell, logs, and named internal health
+endpoints while still denying ServiceAccount-token reads, runtime sockets,
+mount, BPF, ptrace, host devices, persistence, and arbitrary Internet egress.
+
+Approval theft is prevented as follows:
+
+- an application process already has identity and cannot consume a slot;
+- readiness and lifecycle exec use `ExecSync`, not the required streaming
+  `Exec` path;
+- BPF protects the runtime socket so an unapproved `crictl exec` caller cannot
+  consume a kubelet-only slot; if an installation deliberately permits other
+  callers to use that socket, it cannot advertise this exact join;
+- the admission service serializes indistinguishable starts for one container
+  only until the first task is bound, then concurrent sessions may continue;
+- Pod replacement, container restart, node restart, expiry, map loss, or sensor
+  loss invalidates the slot; and
+- a second use of the approval or slot fails the atomic state transition.
+
+The durable evidence chain is:
+
+```text
+requester and approver
+  -> one-use approval ID
+  -> Kubernetes AdmissionReview UID and PodExecOptions
+  -> Pod UID, container generation, and target node
+  -> node BPF slot
+  -> containerd runtime exec ID
+  -> Linux task/process/lineage identity
+  -> every governed effect and final result
+```
+
+`ADMIN-EXEC-APPROVAL-001` races an application child, readiness `ExecSync`,
+direct runtime caller, two identical approved sessions, Pod replacement, node
+restart, and an expired approval. Only the task with the complete runtime join
+may consume the slot. If the runtime adapter cannot prove that join, the API
+request is rejected when it requested the stronger role; an explicitly
+configured restricted external session may still use the baseline role.
+
 ##### Node/runtime bypass
 
 `crictl exec`, direct runtime APIs, shim manipulation, `nsenter`, or moving a
@@ -681,7 +893,7 @@ root, not permission.
 | HTTP lifecycle hook | Connection made by kubelet | No workload root; record node flow and declared-hook context |
 | HTTP, TCP, or gRPC probe | Connection made by kubelet | No workload root; application receiver thread does not become a probe process |
 | Sleep lifecycle hook | Sleep inside kubelet | No workload task |
-| `kubectl exec` | Runtime-created root and Kubernetes stream/audit | Restricted external root; audit may prove the request but not necessarily its exact Linux task |
+| `kubectl exec` | Runtime-created root and Kubernetes stream/audit | Restricted external root by default. A stronger approved role requires `kubectl-mithril`, validating admission, node slot preparation, and a qualified runtime-exec-ID-to-task join. |
 | `kubectl cp` | Usually exec of archive tooling | Restricted external root; `tar` is not proof of benign use; stream/file effects need explicit permission |
 | Direct runtime exec | Runtime-created root without Kubernetes user audit | Restricted external root; default deny for protected effects outside its common budget |
 | Restore/migration | May recreate tasks, memory, fds, sockets, mappings, devices, and namespaces without normal exec | Reject through an existing qualified authorization hook, otherwise restrictive BPF treatment plus `UNSUPPORTED` for exact restore history |
@@ -981,8 +1193,10 @@ The implementation performs these steps:
    authority merely because it enters the container cgroup. It is an initial
    root, external runtime root, unresolved protected task, or outside task.
 5. The known initial root receives the configured container-entry role. A
-   later independent root receives `RUNTIME_EXTERNAL_RESTRICTED`. An unresolved
-   protected task receives the local fail-closed floor.
+   later independent root receives `RUNTIME_EXTERNAL_RESTRICTED` unless it
+   atomically consumes the complete approved-administrative-exec slot from
+   Chapter 6 through a qualified runtime-task join. An unresolved protected
+   task receives the local fail-closed floor.
 6. Every file, exec, socket, device, privilege, and process-control hook reads
    the task result before making its decision. Event delivery is not on this
    decision path.
@@ -1039,8 +1253,10 @@ permission from stock CRI evidence. The operator has three honest choices:
    root and see the larger risk in policy review; or
 3. deny all such external roots.
 
-A configured official integration may assign separate roles only when it
-already supplies an authoritative purpose and a unique task/request join. A
+A configured qualified integration may assign separate roles only when it
+supplies an authoritative purpose and a unique task/request join. The approved
+administrative path in Chapter 6 does this by combining Kubernetes admission
+with node-side runtime-exec-ID and BPF task binding. A
 local Mithril signature over an observation proves that Mithril recorded the
 observation; it does not turn missing kubelet purpose into fact.
 
@@ -1063,8 +1279,10 @@ Kubernetes streaming exec has a prepare request and a later stream connection.
 Stock interfaces may expose an audit request without exposing a unique
 request-to-task identifier all the way into the created Linux process.
 Mithril therefore treats the resulting independent task as
-`RUNTIME_EXTERNAL_RESTRICTED`; it does not insert a stream proxy or replace the
-runtime URL.
+`RUNTIME_EXTERNAL_RESTRICTED` by default; it does not insert a stream proxy or
+replace the runtime URL. The configured approved-administrative-exec path in
+Chapter 6 may assign a stronger role only after its plugin, admission, node
+slot, runtime exec ID, and exact BPF task join all succeed.
 
 `attach` and `port-forward` do not create a workload process. Kubernetes audit
 and network evidence may record and correlate them. A configured Kubernetes
@@ -1669,6 +1887,12 @@ budget can read the health file, update the declared cleanup file, and contact
 only the drain endpoint; it cannot read the mounted token or use the public
 Internet. An attacker who enters through `kubectl exec` receives those same
 limited permissions, not application authority.
+
+This example deliberately does not enable the approved administrative-exec
+feature. A deployment that enables it adds the explicit approved role and the
+plugin, admission, node-slot, runtime-join, and failure settings from Chapter
+6. Merely adding a wider role to this YAML cannot make stock `kubectl exec`
+eligible for it.
 
 If the drain permission is too broad, the operator may remove it and accept
 that `PreStop` fails, or deny external roots entirely. Giving only `PreStop`
@@ -4084,10 +4308,11 @@ effect and cannot prevent it.
    task A has no labeled application creator, so it is an external root.
 4. Stock CRI does not expose the readiness reason. A receives the restricted
    external-root role, not a made-up probe role.
-5. An attacker then uses `kubectl exec` with the same argv. Task C is also a
-   restricted external root. Kubernetes audit may identify the API actor, but
-   command equality, cgroup equality, timing, and TTY state never grant C more
-   permission.
+5. An attacker then uses ordinary unapproved `kubectl exec` with the same argv.
+   Admission rejects it when the approved-exec feature is enabled. In baseline
+   mode, task C is a restricted external root. Kubernetes audit may identify
+   the API actor, but command equality, cgroup equality, timing, and TTY state
+   never grant C more permission.
 
 #### Release-gating implementation cards
 
@@ -4118,7 +4343,7 @@ object, or verified response result, not an alert string.
 | `ENTRY-PROBE-002` | Application child runs identical probe binary/argv/cadence | Native lineage remains; no probe role. |
 | `ENTRY-NETPROBE-001` | HTTP, TCP, and gRPC probes | No fake in-container process root; host flow and application receive are scoped separately. |
 | `ENTRY-SLEEP-001` | Lifecycle `sleep` action | Kubelet lifecycle evidence only; no invented task. |
-| `ENTRY-EXEC-001` | `kubectl exec`, TTY/non-TTY, and `kubectl cp` | Restricted external roots plus separate Kubernetes audit facts; exact request-to-task join only if the stock interface proves it. |
+| `ENTRY-EXEC-001` | `kubectl exec`, TTY/non-TTY, and `kubectl cp` | Restricted external roots plus separate Kubernetes audit facts. The configured approved path must also pass `ADMIN-EXEC-APPROVAL-001` before assigning a stronger task role. |
 | `ENTRY-EXEC-002` | `crictl exec` runs same command as probe | Restricted external root, never a kubelet-probe role. |
 | `ENTRY-EPHEMERAL-001` | Add ephemeral container sharing target PID namespace | Independent container execution set and profile; shared PID namespace does not merge trees. |
 | `ENTRY-CONTAINERS-001` | Init, native sidecar, and app containers share Pod network/volume | Independent roots plus exact shared-resource edges. |
@@ -4354,6 +4579,7 @@ and no competing daemon that can assign security identity.
 | Durable owner | Runs in | It alone may change | It must not do |
 | --- | --- | --- | --- |
 | `TrustBundleOwner` | Control, verified cache on node | Issuer keys, trust generation, rotation/revocation, anti-rollback floor | Stage a task claim |
+| `AdministrativeApprovalOwner` | Control | Browser/device challenge, authenticated human decision, one-use Kubernetes exec credential, and signed node authorization | Assign a Linux task role or treat approval as a runtime-task join |
 | `AuthorizationProofOwner` | `mithril-node` | Validate real Mithril/operator/provider authorizations, replay protection, and target scope | Invent kubelet/runner purpose, infer intent from argv/timing, or let an adapter grant a role |
 | `WorkloadBindingOwner` | `mithril-node` | Container execution sets, cgroup lifetime/storage, initial/native/external classification, node-floor binding | Create namespaces, perform the OCI runtime's normal job, or claim a hook field that stock runtime did not send |
 | `NativeSecurityStateOwner` | `mithril-node` plus owned BPF transitions | Task/process/domain/mm/publication state, inherited restrictions, joins, local response refs | Build provider graph conclusions |
@@ -4418,7 +4644,7 @@ listed proof.
 | Fixture/family/claim/qualification schemas | 0 / 11 | `mithril-e2e::qualification_schema` and `QualificationOwner` | `FIXTURE-REGISTRY-COMPLETE-001`; digest splice, missing negative control, degraded-PASS, and wrong platform all reject. |
 | Task/process/exec identity and native inheritance | 0 / 2 | `mithril-node::identity::NativeSecurityStateOwner`; owned `lifecycle.bpf.c`, `exec.bpf.c` | Fork-without-exec label before token open; moved-task/non-leader exec/PID reuse/ref cleanup pass. |
 | Process/domain/set/mm/publication state | 0 / 2-4 | Same `NativeSecurityStateOwner`; kernel maps hold semantic state, while `KernelHostOwner` only owns their lifecycle | Thread races cannot recover authority; map N+1 fails closed; Rust/BPF decision bytes agree; partial VMA snapshot never relaxes. |
-| Runtime roots and cgroup binding | 0 / 1-4; platform claim 11 | `mithril-node::identity::WorkloadBindingOwner`; configured stock adapter only forwards documented facts | Identical application-child/probe/admin/direct-runtime commands: native child keeps lineage; indistinguishable external roots get the same restricted role; unresolved protected effects deny. No ticket or command-based purpose. |
+| Runtime roots and cgroup binding | 0 / 1-4; platform claim 11 | `mithril-node::identity::WorkloadBindingOwner`; configured stock adapter only forwards documented facts | Identical application-child/probe/admin/direct-runtime commands: native child keeps lineage; indistinguishable external roots get the same restricted role. The approved administrative path is stronger only after its exact runtime-task join passes. Unresolved protected effects deny. No command-based purpose. |
 | File, descriptor, mapping, IPC, process-control and persistent object classification | 0 / observe 3, deny 4 | `mithril-node::effect`; domain transition requested from `NativeSecurityStateOwner` | Symlink/bind/proc-fd/rotation/mmap/fd-pass/io_uring/persistent volume either deny, pre-use join, or return exact unsupported. |
 | Socket identity, local-inet domain join, destination, packet fence | 0 / observe 3, deny 5 | `mithril-node::effect::network` | Broad-created socket passed to narrow actor cannot restore egress; loopback/Pod-IP channels join before delivery; established-flow oracle states blast radius. |
 | Source sequence, coverage, WAL, restart reconstruction | 0 / 6 | `mithril-node::evidence::{CoverageHealthOwner,LocalEvidenceOwner}`; control `mithril-control::intake` | Ring pressure preserves deny but gaps absence claim; restart changes epoch and reconciles live tasks/sockets/claims before admission. |
@@ -4485,7 +4711,7 @@ amendment.
 | Initial start | Prepare binding through a configured stock start hook when its ordering is qualified; otherwise protected effects deny until binding and the start gap is explicit | Never require a patched runtime or claim first-instruction control from a later callback. |
 | Later exec | Restricted external root unless an existing qualified interface proves more | Application authority inheritance and command-based purpose are rejected. |
 | ExecSync reason | Unknown on stock CRI; use one permission intersection for indistinguishable external roots or deny them | Timing/argv classification and Mithril-created kubelet intent are rejected. |
-| Administrative exec | Default deny or approval on protected workload | Always allow only through separately bounded admin role. |
+| Administrative exec | Default deny or the complete plugin + admission + node-slot + qualified runtime-task-join approval path | Always allow, approval without an exact task join, and a broadly reusable admin role are rejected. |
 | `PreStop` during containment | Containment wins unless exact safe cleanup role is approved | Universal bypass is rejected; disable all cleanup with availability cost. |
 | Missing protected identity | Fail closed at first protected effect | Fail open is observation-only. |
 | Executable identity | Immutable object/image identity | Path-only is a reduced integrity tier. |
@@ -9567,6 +9793,7 @@ requirement.
 ### C.1 Exact fixture set for this architecture revision
 
 ```text
+ADMIN-EXEC-APPROVAL-001
 BOOT-ADMISSION-001
 CFG-ROLLBACK-GOLDEN-002
 CFG-V1-GOLDEN-002
@@ -9725,6 +9952,7 @@ claim.
 | 1 | `ALWAYS` | `BOOT-ADMISSION-001` |
 | 1 | `WHEN_CLAIM_VECTOR_REFERENCES` | `NODE-FLOOR-EXCEPTION-002`, `XNODE-PRIVILEGED-POD-001` |
 | 2 | `ALWAYS` | `ENTRY-BINDING-GAP-001`, `ENTRY-CONTAINERS-001`, `ENTRY-EPHEMERAL-001`, `ENTRY-EXEC-001`, `ENTRY-EXEC-002`, `ENTRY-EXTERNAL-AMBIGUITY-001`, `ENTRY-LOSS-001`, `ENTRY-MIGRATE-001`, `ENTRY-NETPROBE-001`, `ENTRY-POSTSTART-001`, `ENTRY-POSTSTART-002`, `ENTRY-PRESTOP-001`, `ENTRY-PROBE-001`, `ENTRY-PROBE-002`, `ENTRY-PROBE-IMPERSONATION-003`, `ENTRY-RESTART-001`, `ENTRY-REUSE-001`, `ENTRY-SLEEP-001`, `ENTRY-START-001`, `ENTRY-STOCK-HOOK-FAILURE-002` |
+| 2 | `WHEN_CLAIM_VECTOR_REFERENCES` | `ADMIN-EXEC-APPROVAL-001` |
 | 2 | `WHEN_SURFACE_ALLOCATED_AND_ADVERTISED` | `CHECKPOINT-CREATE-001`, `ENTRY-RESTORE-001`, `ENTRY-STREAM-001` |
 | 3 | `ALWAYS` | `DOMAIN-JOIN-CRASH-002`, `DOMAIN-REF-LIFETIME-001`, `EXEC-COMMIT-STATE-001`, `EXEC-CONCURRENT-002`, `ID-CGROUP-ESCAPE-001`, `ID-CLONE-CGROUP-002`, `ID-CLONE-CGROUP-FAIL-003`, `ID-CREATOR-PARENT-007`, `ID-MOVED-PARENT-FORK-004`, `ID-MOVED-TASK-EXEC-005`, `ID-TASK-COORD-FINALIZE-006`, `STATE-CROSS-ENTRY-003`, `STATE-CROSS-ENTRY-PREPOSSESSED-005`, `STATE-CROSS-ENTRY-RACE-004`, `STATE-CROSS-EXECSET-PERSIST-006`, `STATE-FORK-IPC-002`, `STATE-THREAD-RACE-001` |
 | 4 | `ALWAYS` | `DEVICE-DERIVED-001`, `FILE-CONTENT-RACE-002`, `FILE-IDENTITY-001`, `FILE-MMAP-001`, `FILE-NAMESPACE-001`, `FILE-SA-TOKEN-OPEN-001`, `FILE-VMA-SNAPSHOT-001`, `HF-LOCAL-001`, `HF-NET-001`, `MEM-EXEC-001`, `MEM-KERNEL-MAP-002`, `MOUNT-ATTR-001`, `MOUNT-CAS-002`, `MOUNT-PROPAGATION-003`, `MOUNT-SNAPSHOT-004`, `NET-ACCEPT-PASS-001`, `NET-DNS-EXFIL-001`, `NET-NS-PASS-001`, `NET-RECV-001`, `NET-REWRITE-001`, `NET-SOCKCTL-001`, `NET-SOCKET-LIFE-001`, `SECCOMP-QUAL-001`, `STATE-LOCAL-INET-LAUNDER-008`, `STATE-MMAP-PUBLICATION-011`, `STATE-PERSISTENT-FILE-LIFETIME-007`, `STATE-PROCESS-CHANNEL-009`, `STATE-PUBLICATION-LEASE-010` |
@@ -9896,8 +10124,14 @@ hostile fixture.
 - [Kubernetes sidecars](https://kubernetes.io/docs/concepts/workloads/pods/sidecar-containers/)
 - [Kubernetes ephemeral containers](https://kubernetes.io/docs/concepts/workloads/pods/ephemeral-containers/)
 - [Kubernetes auditing](https://kubernetes.io/docs/tasks/debug/debug-cluster/audit/)
+- [Kubernetes admission webhooks](https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/)
+- [Kubernetes authentication webhooks and `UserInfo.extra`](https://kubernetes.io/docs/reference/access-authn-authz/authentication/)
+- [Kubernetes `pods/exec` `CONNECT` admission example](https://kubernetes.io/blog/2021/12/21/admission-controllers-for-container-drift/)
+- [Kubectl plugin contract and limitations](https://kubernetes.io/docs/tasks/extend-kubectl/kubectl-plugins/)
 - [Kubelet Checkpoint API](https://kubernetes.io/docs/reference/node/kubelet-checkpoint-api/)
 - [CRI runtime API](https://github.com/kubernetes/cri-api/blob/master/pkg/apis/runtime/v1/api.proto)
+- [Containerd Runtime v2 exec IDs and lifecycle events](https://github.com/containerd/containerd/blob/main/docs/runtime-v2.md)
+- [OAuth 2.0 Device Authorization Grant](https://www.rfc-editor.org/rfc/rfc8628.html)
 
 ### D.3 CI, identity, and provider contracts
 
