@@ -2697,10 +2697,12 @@ harmless or omnipotent without measuring actual lockdown/capability/integrity.
 
 Prevention is not enough. An action may have been allowed, predate attachment,
 use an existing encrypted channel, happen at a provider, or start outside the
-node. Mithril normalizes every source into one versioned envelope:
+node. Mithril normalizes every source into one versioned envelope. This is the
+readable field guide; Appendix A.15.1 is the one authoritative
+`ObservationEnvelopeV1` definition:
 
 ```text
-ObservationEnvelopeV1 {
+readable observation envelope {
   tenant and deterministic observation ID
   source ID, epoch, sequence, and stable provider event ID if available
   optional node boot/CPU
@@ -2764,7 +2766,7 @@ returns `COVERAGE_INSUFFICIENT`, not “no credential access.”
 #### Proof quality has independent axes
 
 ```text
-ProofQualityV1 {
+readable proof-quality axes {       // exact ProofQualityV1: Appendix A.15.2
   source_authority:
     KERNEL_DECISION | SIGNED_COORDINATOR | AUTHORITATIVE_PROVIDER |
     AUTHENTICATED_MEASUREMENT | UNAUTHENTICATED
@@ -2801,10 +2803,11 @@ Events can arrive in any order. Source watermarks use projected-time
 uncertainty and maximum lateness; time never creates an exact edge. Package
 state is keyed by canonical subjects. Duplicate observations are idempotent.
 
-Findings are immutable revisions:
+Findings are immutable revisions. This is the readable lifecycle view;
+Appendix A.15.2 defines exact `FindingV1` fields:
 
 ```text
-FindingV1 {
+readable finding revision {
   deterministic finding ID(package, version, subject, window)
   revision
   PROVISIONAL | CONFIRMED | SUPERSEDED | RETRACTED |
@@ -3209,6 +3212,129 @@ status and disable that product claim.
 9. The incident is partial until every local lineage, controller/replacement,
    credential, device, connector, repository/artifact, and provider branch has
    a verified postcondition under healthy watch coverage.
+
+#### Exact incident action-card contract
+
+The human tables above explain the incident. They do not by themselves tell a
+test runner which source fields, lookup key, degraded result, or oracle to use.
+Every branch is also stored as this closed record:
+
+```text
+HfRepresentativeActionCaseV1 {
+  event_id: HF-001 .. HF-021
+  case_id: bounded unique ID inside the event
+  published_fact_ref: exact live-stream or technical-timeline anchor
+  fixture_id: exact member of NormativeFixtureSetV1
+  authority_scope: MANAGED_EXACT | EXTERNAL_EXACT |
+                   OUTSIDE_AUTHORITY | LOCATION_UNRESOLVED
+  required_capability_ids[]
+  required_observations[] {
+    source_id
+    payload_schema_id
+    exact_required_fields[]
+    coverage_interval_id
+    minimum_proof: ProofQualityV1
+  }
+  ordered_lookup_plan[]: LookupStepV1
+  compiled_control {
+    profile_generation_ref_id
+    evaluation_stage
+    exact_key_type
+    exact_key_fields
+    expected_disposition
+    expected_errno?
+    expected_finding_reason?
+    response_binding_ids[]
+  }
+  expected_result {
+    physical_result
+    oracle
+    expected_proof: ProofQualityV1
+  }
+  degraded_cases[] {
+    missing_capability_or_proof
+    result
+    prohibited_claim
+  }
+  legitimate_control_case
+  upstream_source_evidence_ids[]
+}
+
+HfGranularAcceptanceV1 {
+  test_id
+  published_fact_ref
+  upstream_source_evidence_ids[]
+  fixture_topology_and_starting_authority
+  input_observation_ids_and_exact_fields
+  required_coverage_intervals
+  minimum_proof_vector: ProofQualityV1
+  algorithm_and_policy_generation
+  compiled_decision_key_or_package_key
+  expected_decision_stage
+  expected_disposition
+  physical_or_provider_oracle
+  legitimate_negative_control
+  degraded_or_unsupported_result
+  expected_finding_reason_and_proof_vector
+}
+```
+
+The branch set is fixed even when several branches share one event:
+
+| Event | Required branches that must not be collapsed |
+| --- | --- |
+| `HF-001` | External root; separately protected managed replay |
+| `HF-002` | External reconnaissance; managed helper; already resident environment |
+| `HF-003` | External tools; managed copied/renamed executable |
+| `HF-004` | External publication; managed connect; allowed send result; provider-confirmed publication |
+| `HF-005` | External staged file; managed object with trusted provenance; ordinary source file |
+| `HF-006` | Pure in-memory packing; later boundary-crossing effect |
+| `HF-007` | External search; managed destination; documented service-semantic query |
+| `HF-008` | Worker-local forbidden object; optional synchronous upload gate |
+| `HF-009` | Protected read; resident environment; result publication; same allowed TLS channel |
+| `HF-010` | Pure in-process expression; later helper or physical effect |
+| `HF-011` | Open attempt; positive-byte read; inherited/passed fd; already resident memory |
+| `HF-012` | New connection; destination rewrite; existing socket; allowed controller verb |
+| `HF-013` | Distinct channel; broker/read-only capability; same-TLS write |
+| `HF-014` | Intact managed enforcement; tampered/unknown enforcement; independent mesh/provider source |
+| `HF-015` | Synchronous mesh admission; audit-only removal of already enrolled devices |
+| `HF-016` | Direct worker-to-connector; catalog-to-cluster operation; shared-credential ambiguity |
+| `HF-017` | External AWS use; same-worker AWS use; credential acquisition-to-use join |
+| `HF-018` | Broker mint; standard audit capability; repository/PR operation; revocation or broader response |
+| `HF-019` | External loader; managed generic exec/map/connect; trusted same-digest correlation |
+| `HF-020` | Managed exact; external exact; location unresolved |
+| `HF-021` | Verified physical response; silence-only non-proof |
+
+**Complete `HF-008` example.** The published fact is the hostile HDF5
+external-file reference. The managed case requires the exact existing worker
+task/process/domain, current mount view, final resolved mount/filesystem/object
+generation, healthy file-open hook and identity coverage, and the compiled
+worker role. Its local lookup is the ordinary task-first `LOCAL_EFFECT_V1`
+sequence for `FILE/OPEN_READ`. The expected result is `DENY/EACCES`; the
+syscall obtains no fd, no protected byte reaches HDF5, and no marker appears in
+the conversion result. The legitimate control is a declared dataset chunk in
+the admitted read-only dataset view. Missing mount-generation or exact-object
+classification produces classifier-unknown denial or an explicit unsupported
+claim—not a basename/path guess.
+
+The optional upload-scanner case is a different card at
+`REMOTE_PRE_ADMISSION`. It may reject before scheduling only when an actual
+synchronous gate capability is installed. Its absence does not weaken the
+worker-local file denial, and a later scanner/audit event must not be reported
+as local prevention.
+
+For `LOCAL_PRE_EFFECT`, `ordered_lookup_plan` expands to the exact sequence in
+Appendix A.12. For remote admission, it names the authenticated gate and typed
+request. For post-effect provider evidence, it names the documented request,
+result, resource revision, and coverage but never a retrospective rejection.
+For outside-authority cases, local task/cgroup/map fields must be absent rather
+than zero-filled.
+
+Every card stores the syscall/provider result, relevant before/after object or
+buffer state, packet/drop evidence where applicable, provider resource state,
+coverage interval, policy generation, graph/finding digest, and negative-
+control result. An alert screenshot, command text, or final quiet period is not
+an oracle.
 
 ### 26. CI/CD Uses The Same Identity And Authority Model
 
@@ -4309,13 +4435,6 @@ PortableProfileGenerationV1 {
   compiled_artifact_digest: DigestV1
 }
 
-ProfileGenerationRefV1 {
-  node_boot_id: Id128
-  label_epoch: u64
-  generation_ref_id: nonzero u64
-  portable_generation_digest: DigestV1
-}
-
 ExactObjectGenerationV1 {
   object_kind: REGULAR_FILE | DIRECTORY | PIPE | UNIX_SOCKET |
                INET_SOCKET | MEMFD | SHARED_MEMORY | DEVICE |
@@ -4330,23 +4449,25 @@ ExactObjectGenerationV1 {
 ```
 
 The portable profile identifies a signed artifact across nodes. The node-local
-reference is the bounded hot-path handle. Two profiles whose human versions
-are both `42` never share a node-local handle.
+`ProfileGenerationRefV1` is defined once in Appendix A.12.1. It binds the
+portable profile ID, owner generation, and compiled digest to node boot, label
+epoch, and one non-reused local handle. Two profiles whose human versions are
+both `42` never share a node-local handle.
 
 ### A.2 Contract index
 
 | Contract family | Defined behavior and fields |
 | --- | --- |
 | `KernelCapabilityRecordV1` | Chapter 5: active LSM order, exact hooks/helpers/map types, runtime gate, BTF, program/map/link digests, controlled probe results |
-| `ContainerExecutionSet`, `EntrySecurityStateV1`, `TaskLabelV1`, `TaskInstanceV1`, `ProcessSecurityStateV1`, `ProcessInstanceV1`, `AuthorityDomainStateV1`, `ImageProvenance`, `ProcessExecutionInstance` | Chapter 6: exact identity, references, state ownership, live intervals, native relationships |
-| `BarrierEvidenceV1`, `RuntimeSetupBudgetV1`, binding/topology snapshot | Chapter 7: exact hold variant, setup sequence, rootfs-ready barrier, object readback |
-| `IntentProofEnvelopeV1`, signed body union, trust generation, pending/claim/tombstone records | Chapter 8: canonical signed bytes, target, expiry, sequence/nonce, one-use slot, issuer-independent failure behavior |
+| `ContainerExecutionSet`, `EntrySecurityStateV1`, `TaskLabelV1`, `TaskInstanceV1`, `ProcessSecurityStateV1`, `ProcessInstanceV1`, `AuthorityDomainStateV1`, `ImageProvenance`, `ProcessExecutionInstance` | Chapter 6 explains the model; Appendix A.9 fixes identity, reference, coordinate, fork, exec, and lifetime fields |
+| `BarrierEvidenceV1`, `RuntimeSetupBudgetV1`, binding/topology snapshot | Chapter 7 explains the barriers; Appendix A.9.7-A.9.8 fixes the hold, release, failure, and test contract |
+| `IntentProofEnvelopeV1`, signed body union, trust generation, pending/claim/tombstone records | Chapter 8 explains intent; Appendix A.10 defines canonical CBOR, tags, bounds, trust, replay, and claim journal |
 | `InvariantQualificationV1` | Chapter 10: one invariant, capability/source proof, stimulus, decision point, physical result, coverage, artifacts, status |
-| `PolicyDocumentV1`, signed compiled profile, rollback authorization, `EffectDecisionKeyV1`, generation descriptors | Chapters 11-13: closed source, deterministic compilation, exact conflict rule, activation and retirement |
-| Mount/file/VMA/socket/device/publication/process-control records | Chapters 15-21: exact object generation, topology, lifetime, current actor, domain state, begin/end reservations, derived capabilities |
-| `ObservationEnvelopeV1`, `CoverageIntervalV1`, `ProofQualityV1`, `FindingV1`, graph nodes/edges | Chapters 22-23: immutable source evidence, gaps, proof axes, finding revisions, causal strength |
-| Response plan/target/application/postcondition records | Chapter 24: approval, re-resolution, actuator, readback, watch interval, partial/widened result |
-| CI run/job/step/artifact/lease/attestation records | Chapter 26: assurance tier, physical root, trusted materialization seam, typed handoff, exact consumer |
+| `PolicyDocumentV1`, signed compiled profile, rollback authorization, `EffectDecisionKeyV1`, generation descriptors | Chapters 11-13 explain behavior; Appendices A.11-A.12 fix parser/signature/activation and Rust/BPF map semantics |
+| Mount/file/VMA/socket/device/publication/process-control records | Chapters 15-21 explain behavior; Appendices A.13-A.14 fix object, hook-family, lifetime, domain, join, and publication contracts |
+| `ObservationEnvelopeV1`, `CoverageIntervalV1`, `ProofQualityV1`, `FindingV1`, graph nodes/edges | Chapters 22-23 explain proof; Appendix A.15 fixes fields, intervals, direct-edge requirements, and determinism |
+| Response plan/target/application/postcondition records | Chapter 24 explains response; Appendix A.15.4-A.15.6 fixes authorization, re-resolution, state, readback, and watch |
+| CI run/job/step/artifact/lease/attestation records | Chapter 26 explains shapes and limits; Appendices A.10 and A.16 fix intent, job/step launch, artifacts, credential delivery, and cleanup |
 
 All implementers must use this index. A field needed for a security decision
 but absent from the closed record is a schema change, not an undocumented
@@ -4774,10 +4895,10 @@ reject an implementation that silently drops the information.
 | `BindingRetainedGenerationKeyV1` / `BindingRetainedGenerationValueV1` | Binding + generation-class counter and state |
 | `GenerationMembershipKeyV1` / `GenerationMembershipValueV1` | Exact object belongs to one installed generation descriptor |
 | `GenerationSetDescriptorV1` | Bounds/digest/membership for installed generation set |
-| `DecisionSetDescriptorV1` | Bounds/digest/default/capability data for one exact decision set |
+| `DecisionSetDescriptorV1` | **Rejected as Version 1 authority** with the final-decision cache; authoritative base/restriction/response rows use their active generation/set descriptors in Appendix A.12 |
 | `RestrictionSetDescriptorV1` | Bounds/digest for a negative restriction set |
 | `ResponseSetDescriptorV1` | Bounds/digest for effective response restrictions |
-| `SetKindV1` | Closed decision/restriction/response/generation set family |
+| `SetKindV1` | Closed restriction/response/retained-generation family; base authority belongs to the immutable profile generation, not a mutable decision-set cache |
 | `SetRefV1` | Typed nonzero installed set handle plus generation/epoch |
 | `SetReferenceClassV1` / `SetReferenceTombstoneV1` | Typed exactly-once holder and release proof for a set |
 | `RestrictionDefaultKeyV1` | Explicit default cell for one restriction family |
@@ -4796,7 +4917,7 @@ reject an implementation that silently drops the information.
 | `LookupStepV1` | Closed ordered lookup description used by Rust/BPF golden tests |
 | `PhysicalDecisionV1` | Allow, audit-allow, or exact errno with stage and state transition |
 | `EffectDecisionKeyV1` | Role/effect/operation/composite object/process-domain-lifecycle exact key |
-| `MonotonicSetTransitionKeyV1` / `MonotonicSetTransitionValueV1` | Precompiled atomic old-set -> stricter-new-set transition |
+| `MonotonicSetTransitionKeyV1` / `MonotonicSetTransitionValueV1` | **Superseded collapsed names**; Appendix A.12.5 separates process transitions from authority-domain sensitive transitions because one BPF hook cannot atomically mutate both map values |
 | `DomainSensitiveTransitionKeyV1` / `DomainSensitiveTransitionValueV1` | Atomic old-domain-sensitive state -> stricter state transition |
 
 #### A.8.4 Mounts, files, memory, publication, and shared authority
@@ -4938,6 +5059,4044 @@ Types such as `RuntimeEntryIntentV1`, `DeploymentAdmissionIntentV1`, and
 `ArtifactHandoffIntentV1` remain only to document old names; the wire uses the
 single signed intent envelope and a closed body union.
 
+### A.9 Exact Actor, Entry, And Runtime-Admission Contract
+
+This section makes Chapters 6-9 implementable. It deliberately starts with a
+real action rather than a struct.
+
+**Problem.** The conversion worker's Python process may fork a child, kubelet
+may start a readiness probe, an administrator may use `kubectl exec`, and the
+runtime may restore a checkpoint. All four processes can live in the same Pod
+and cgroup. They are not the same actor and they must not receive the same
+authority merely because Kubernetes placed them together.
+
+**Required result.** Before any protected effect, Mithril can answer:
+
+```text
+which exact Linux task is acting?
+which process and entry does it belong to?
+why does that entry exist?
+which executable image and role are current now?
+which immutable policy generation does it retain?
+which shared restriction and response state applies?
+is it still in the cgroup binding to which it was admitted?
+```
+
+The answer comes from one immutable task label followed by mutable state owned
+by the process, entry, binding, and authority domain. A task label is never a
+cached final decision.
+
+#### A.9.1 Exact identity records
+
+```text
+ContainerExecutionSet {
+  execution_set_id: Id128
+  tenant_id: Id128
+  cluster_uid: Id128
+  node_boot_id: Id128
+  pod_uid: bounded bytes
+  pod_resource_version_digest: DigestV1
+  sandbox_id: bounded bytes
+  full_container_id: bounded bytes
+  container_kind: INIT | SIDECAR | APPLICATION | EPHEMERAL
+  image_digest: DigestV1
+  cgroup_binding_id: Id128
+  cgroup_live_interval_id: Id128
+  profile_id: Id128
+  active_profile_generation_ref_id: nonzero u64
+  lifecycle_generation: nonzero u64
+}
+
+TaskLabelV1 {                       // immutable after successful installation
+  node_boot_id: Id128
+  label_epoch: u64
+  task_cookie: nonzero u64
+  process_lineage_id: Id128
+  process_instance_id: Id128
+  process_state_id: Id128
+  entry_instance_id: Id128
+  execution_set_id: Id128
+  birth_profile_generation_ref_id: nonzero u64
+  birth_execution_id: Id128
+  birth_authority_domain_id: Id128
+  lineage_depth: u16
+  ancestor_process_lineage_ids[MAX_DEPTH]: Id128
+  task_placement_expectation: TaskPlacementExpectationV1
+}
+
+ProcessSecurityStateV1 {            // sole current process authority
+  process_state_id: Id128
+  node_boot_id: Id128
+  label_epoch: u64
+  process_lock: bpf_spin_lock
+  process_lineage_id: Id128
+  process_instance_id: Id128
+  entry_instance_id: Id128
+  entry_root_process_state_id: Id128
+  active_execution_id: Id128
+  active_role_id: u32
+  active_profile_generation_ref_id: nonzero u64
+  authority_domain_id: Id128
+  process_state_vector_id: nonzero u32
+  effective_response_set_ref_id: nonzero u64
+  exec_guard_state: NONE | EXEC_PREPARING | EXEC_COMMIT_PENDING |
+                    EXEC_OUTCOME_UNKNOWN
+  pending_exec_id?: Id128
+  pending_target_execution_id?: Id128
+  pending_target_role_id?: u32
+  pending_exec_response_set_ref_id?: nonzero u64
+  transition_version: u64
+  live_thread_refs: u64
+  state: ALLOCATING | ACTIVE | EXITING | RECLAIMABLE |
+         FAIL_CLOSED_OVERFLOW | CORRUPT
+}
+
+ProcessStateVectorV1 {
+  process_state_vector_id: nonzero u32
+  node_boot_id: Id128
+  label_epoch: u64
+  state_bits: u64
+  profile_generation_ref_id: nonzero u64
+  state: PREPARING | ACTIVE | RETIRING
+}
+
+EntrySecurityStateV1 {
+  entry_instance_id: Id128
+  node_boot_id: Id128
+  label_epoch: u64
+  entry_lock: bpf_spin_lock
+  execution_set_id: Id128
+  entry_kind: EntryKindV1
+  claim_slot_id: Id128
+  root_task_cookie: nonzero u64
+  root_process_state_id: Id128
+  committed_execution_id: Id128
+  live_task_refs: u64
+  admission_state: PREPARING | CLAIM_BOUND_PROVISIONAL | COMMITTED |
+                   TERMINAL_FAILED
+  lifetime_state: OPEN | DRAINING | COMPLETE
+  transition_version: u64
+}
+
+ImageProvenance {
+  image_provenance_id:Id128
+  executable_object:ExactObjectGenerationV1
+  script_or_binfmt_chain[]:ExactObjectGenerationV1
+  elf_loader_objects[]:ExactObjectGenerationV1
+  source_exec_event_id:DigestV1
+}
+
+ProcessExecutionInstance {
+  process_execution_instance_id, process_lineage_id,
+    image_provenance_id:Id128
+  started_by:PROCESS_BIRTH | EXEC_COMMIT
+  start_boottime_ns:u64
+  end_boottime_ns?:u64
+}
+```
+
+Fork creates a new per-process execution instance that points to the same
+immutable image provenance. Exec creates another execution instance and new
+image provenance in the same process lineage. A thread shares both. This is why
+one child exit must not close the parent's image/execution record.
+
+The process lock protects every mutable authority field in the process record.
+BPF resolves the prospective next values before taking the lock, takes no map
+lookup or helper call while holding it, verifies the old tuple and transition
+version, writes the entire next tuple, increments the version, and unlocks.
+Readers copy one complete tuple under the lock and revalidate it before use.
+
+`TaskLabelV1.birth_*` fields explain origin. They do not select current policy,
+role, execution, or domain. Every decision follows:
+
+```text
+TaskLabelV1
+  -> ProcessSecurityStateV1
+  -> current AuthorityDomainStateV1
+  -> EntrySecurityStateV1 and ExecutionSetBindingStateV1
+  -> retained policy, response, object, and channel state
+```
+
+Going directly from the task label to the birth domain, role, or generation is
+an implementation error.
+
+#### A.9.2 Task and process coordinates
+
+Mithril IDs remain stable while Linux coordinates can change or be reused.
+
+```text
+ProcessInstanceV1 {
+  process_instance_id, process_lineage_id, process_state_id: Id128
+  state: ALLOCATING | COORDINATES_FINALIZED | RUNNABLE |
+         EXITED | FAILED | FAIL_CLOSED_UNKNOWN
+  host_tgid?: u64
+  host_leader_tid?: u64
+  pid_namespace_inode_and_generation?: Id128
+  namespace_pid_chain[]: bounded u64
+  start_boottime_ns?: u64
+  pidfd_identity?: bounded bytes
+  coordinate_finalization_hook_id?: u32
+  owned_reference_bits: u64
+}
+
+TaskInstanceV1 {
+  task_cookie: nonzero u64
+  process_instance_id, process_state_id: Id128
+  state: ALLOCATING | COORDINATES_FINALIZED | RUNNABLE |
+         EXITED | FAILED | FAIL_CLOSED_UNKNOWN
+  host_tid?: u64
+  pid_namespace_inode_and_generation?: Id128
+  namespace_tid_chain[]: bounded u64
+  task_start_boottime_ns?: u64
+  finalized_boottime_ns?: u64
+  exited_boottime_ns?: u64
+  thread_pidfd_identity?: bounded bytes
+  coordinate_finalization_hook_id?: u32
+  owned_reference_bits: u64
+  coordinate_history_head_id?: Id128
+}
+
+TaskCoordinateHistoryV1 {
+  history_id: Id128
+  task_cookie: nonzero u64
+  transition: BIRTH_FINALIZED | NONLEADER_EXEC_DETHREAD |
+              LEADER_EXITED | PID_NAMESPACE_CHANGE_OBSERVED | EXIT
+  old_and_new_tid_tgid_coordinates
+  process_instance_id: Id128
+  source_hook_id: u32
+  boottime_ns: u64
+}
+```
+
+`task_alloc` may allocate opaque IDs and fixed state, but PID, TGID, start time,
+and pidfd do not yet exist there. A qualified pre-wake hook fills the already
+allocated coordinate slots after PID assignment. It performs no allocation and
+grants no authority. Rust may add a pidfd only after the task becomes visible.
+
+If coordinate finalization fails, the installed label still points to
+`FAIL_CLOSED_UNKNOWN`. The task cannot read, execute, connect, use a device, or
+change privilege merely because its PID details are incomplete.
+
+#### A.9.3 Who created whom
+
+Linux's reported parent can change. Authority inheritance uses the task that
+actually requested creation.
+
+```text
+CreatedByEdgeV1 {
+  child_task_cookie, creator_task_cookie: u64
+  child_process_lineage_id, creator_process_lineage_id: Id128
+  clone_attempt_id: Id128
+  clone_flags_digest: DigestV1
+  task_alloc_hook_id: u32
+}
+
+KernelRealParentIntervalV1 {
+  child_task_cookie: u64
+  real_parent_task_cookie_or_coordinates
+  interval_start_boottime_ns: u64
+  interval_end_boottime_ns?: u64
+  change_reason: BIRTH | CLONE_PARENT | PARENT_EXIT | SUBREAPER |
+                 NAMESPACE_INIT_REPARENT | PTRACE_REPARENT | UNKNOWN
+  proof_quality: ProofQualityV1
+}
+```
+
+Double fork, daemonization, subreapers, namespace init, ptrace reparenting, and
+PID reuse may change `KernelRealParentIntervalV1`. None changes the immutable
+`CreatedByEdgeV1` or the child's inherited restriction.
+
+#### A.9.4 References and entry lifetime
+
+An entry is complete when its last task is gone and a complete task iterator
+agrees. A denied effect is an observation; it does not end the entry.
+
+```text
+Entry admission:
+  PENDING -> CLAIMING -> COMMITTED
+  PENDING | CLAIMING -> REJECTED | EXPIRED | CANCELLED | CLAIM_FAILED
+
+Entry lifetime:
+  INACTIVE -> ACTIVE -> DRAINING -> COMPLETE
+
+COMPLETE requires:
+  admission == COMMITTED
+  live_task_refs == 0
+  complete task iterator finds no live TaskLabelV1 for the entry
+```
+
+One task reference is counted for every Linux task, including threads.
+Authority-domain `live_process_refs` counts processes, not threads.
+
+```text
+TaskLifetimeOwnershipV1 {
+  task_cookie: u64
+  birth_transaction_id: Id128
+  birth_transition_version: u64
+  entry_instance_id, process_state_id, authority_domain_id: Id128
+  profile_generation_ref_id: u64
+  owns_entry_task_ref: bool
+  owns_process_thread_ref: bool
+  owns_profile_generation_task_ref: bool
+  state: PREPARING | OWNED | RELEASED | RECONCILIATION_REQUIRED
+}
+
+ProcessLifetimeOwnershipV1 {
+  process_state_id, authority_domain_id: Id128
+  authority_domain_ref_owned: bool
+  acquisition_transition_version: u64
+  release_transition_version?: u64
+  state: OWNED | DOMAIN_JOIN_PREPARING | RELEASED |
+         RECONCILIATION_REQUIRED
+}
+
+TaskReferenceTombstoneV1 {
+  task_cookie: u64
+  birth_transaction_id: Id128
+  birth_transition_version: u64
+  entry_instance_id, process_state_id, authority_domain_id_at_birth: Id128
+  profile_generation_ref_id: u64
+  acquired_bits, released_bits: u64
+  task_free_observed, wal_acknowledged: bool
+  transition_version: u64
+  state: PREPARING | OWNED | RELEASED | RECLAIMABLE
+}
+```
+
+Birth creates and reads back the tombstone, acquires each typed reference, sets
+its owned bit, and changes the task owner to `OWNED` before the child can run.
+`task_free` changes each bit from owned to released before decrementing exactly
+one counter. Duplicate cleanup sees the released bit and does nothing. A crash
+or map error may leak a restriction until reconciliation; it may not guess that
+a reference was absent.
+
+#### A.9.5 Native fork and thread algorithm
+
+```text
+1. Read the creator's TaskLabelV1 first.
+2. If it exists, load current process and expected binding.
+3. Reject a stale binding or moved task; never reclassify it as a host task.
+4. If no label exists, completely resolve protected-root membership.
+5. Protected but unlabeled means identity failure; unknown placement follows
+   the signed fail-closed posture; only proved outside placement uses host policy.
+6. Allocate child IDs, fixed state, tombstone, and rollback bits.
+7. For CLONE_THREAD, point the child to the same process state and increment
+   entry task refs plus process thread refs. Do not add a domain process ref.
+8. For a new process, create an ALLOCATING process state, apply the one compiled
+   FORK_WITHOUT_EXEC transition, and add exactly one domain process ref.
+9. Install and read back the child label and every owned reference before run.
+```
+
+If a returning `task_alloc` hook is unavailable, a pre-wake path qualifies only
+when tests prove it labels every child before execution, including
+`clone3(CLONE_INTO_CGROUP)`, and an independent floor handles allocation
+failure. Otherwise Mithril may claim first-protected-effect prevention, not
+child-creation denial.
+
+#### A.9.6 Exact exec transaction
+
+Exec can involve a script, a `binfmt_misc` handler, the chosen executable, and
+an ELF dynamic loader. They are one attempt.
+
+```text
+PendingExecV1 {
+  pending_exec_id: Id128
+  task_cookie: u64
+  process_state_id: Id128
+  exec_attempt_sequence: u64
+  syscall_entry_coordinate
+  state: PREPARING | COMMIT_PENDING | PRE_PONR_FAILED |
+         POST_PONR_FATAL | SUCCESS | OUTCOME_UNKNOWN
+  ordered_candidate_object_digests[MAX_BPRM_CHAIN]: DigestV1
+  source_execution_id: Id128
+  source_role_id: u32
+  source_profile_generation_ref_id: u64
+  pending_exec_response_set_ref_id: u64
+  final_chain_digest?: DigestV1
+}
+```
+
+The process CASes its exec guard from `NONE` to `EXEC_PREPARING`. A concurrent
+exec or task creation loses and is denied. Every `bprm_check_security` pass
+adds one bounded candidate and can only make the pending budget stricter. The
+ELF `PT_INTERP` loader is recorded through its file/mapping allowance; it is
+not assumed to cause another bprm pass.
+
+Before Linux crosses the point where the old image cannot return, Mithril
+prepares the target IDs and installs `EXEC_COMMIT_PENDING`. While any exec
+guard exists, only the exact loader budget is usable; ordinary file, network,
+device, IPC, privilege, and task-creation effects deny.
+
+At a qualified successful-exec point before user mode, BPF performs an
+in-place non-allocating switch to the target execution and role. A proven
+failure before the point of no return restores the old execution. A later
+fatal failure never restores old authority. If the platform cannot distinguish
+those outcomes, the process remains `EXEC_OUTCOME_UNKNOWN` and fail-closed
+until exit or reconciliation.
+
+The valid guard pairs are closed:
+
+| Process guard | Pending state | Usable authority |
+| --- | --- | --- |
+| `NONE` | no live pending attempt | Normal decision path |
+| `EXEC_PREPARING` | `PREPARING` | Loader budget only |
+| `EXEC_COMMIT_PENDING` | `COMMIT_PENDING` | Loader budget only |
+| `EXEC_OUTCOME_UNKNOWN` | `COMMIT_PENDING`, `POST_PONR_FATAL`, or `OUTCOME_UNKNOWN` | Pending fail-closed floor only |
+
+Any other pair denies as state corruption. `execveat(AT_EXECVE_CHECK)` checks
+permission but does not consume an entry claim or change the active image.
+
+#### A.9.7 Runtime-created roots and the two barriers
+
+The OCI runtime still creates namespaces, cgroups, mounts, and the setup task.
+Mithril does not replace that work. It prevents the runtime from releasing a
+user process until identity and security state are installed.
+
+```text
+RuntimeSetupBudgetV1 {
+  budget_id
+  runtime_binary_measurement
+  runtime_name_version_config_digest
+  kernel_capability_manifest_digest
+  ordered_variants[] {
+    variant_id
+    steps[] {
+      step_id
+      permitted_predecessor_step_mask
+      decision_point: exact LSM/fentry/seccomp hook ID
+      syscall_or_kernel_operation_variant
+      object_selector_or_namespace_type
+      argument_mask_and_required_values
+      minimum_count
+      maximum_count
+      result_requirement
+    }
+  }
+  final_uid_gid_groups_capabilities_securebits
+  final_namespace_and_rootfs_identity
+  final_seccomp_proof_requirement?
+}
+
+BarrierEvidenceV1 =
+  PTRACE_STOPPED {
+    held_pidfd_identity, task_cookie, start_boottime_ns,
+    waitid_p_pidfd_result_digest, wstopped_observed: true,
+    exclusive_tracer_process_identity, ptrace_relationship_digest,
+    stop_boottime_ns
+  }
+  | PRIVATE_BOOTSTRAP_BLOCKED {
+      held_pidfd_identity, task_cookie, start_boottime_ns,
+      measured_bootstrap_digest, ready_transcript_digest,
+      private_release_handle_identity, release_nonce,
+      ack_mac_key_id, expected_ack_payload_digest,
+      wstopped_observed: false
+    }
+  | CGROUP_FROZEN {
+      cgroup_fd_identity, cgroup_binding_nonce,
+      cgroup_events_frozen_value: 1,
+      exact_member_task_set_digest, member_count,
+      freeze_generation, readback_boottime_ns
+    }
+```
+
+A pidfd identifies the task. It does not stop the task. `PTRACE_STOPPED` is
+valid only after `waitid(P_PIDFD)` reports the stop and Mithril verifies the
+exclusive tracer. A private bootstrap is running but blocked, so it must say
+`wstopped_observed=false`. A cgroup hold is valid only when `cgroup.events`
+reads `frozen=1` and the complete member set equals the proposed setup set.
+`SIGSTOP` without observed ownership, a pidfd by itself, a leaked release fd,
+or an OCI hook that runs after setup is not a barrier.
+
+The release acknowledgement covers the barrier variant, exact held target or
+set, one-use setup ticket, every installed-state readback digest, and the
+release nonce. It is accepted once. Hostile `SIGCONT`, `SIGKILL`, ptrace
+attach, spurious wakeups, parent death, and a replayed acknowledgement must not
+advance the held task.
+
+Barrier 1 holds the measured setup task and gives it only the setup budget.
+After the runtime constructs the final rootfs and namespaces, Barrier 2 binds
+the final mount topology, projected credentials, inherited descriptors,
+network namespace, devices, executable chain, cgroup nonce, policy generation,
+entry, process, and domain state. Every required map/link/value is read back.
+Only then may the runtime resume the target.
+
+The setup budget is not general runtime trust. For example, a step may permit
+mounting the PodSpec-declared projected credential volume as an opaque mount
+object. It does not permit opening or reading the `token` file. Every operation,
+object, flag, result, count, and predecessor step must match one signed ordered
+variant. An extra mount, an early credential read, a repeated step beyond its
+maximum, or the right step in the wrong order fails setup.
+
+The two barriers have distinct jobs:
+
+```text
+held setup task
+  -> SETUP_LABELED
+  -> SETUP_RUNNING_UNDER_BUDGET
+  -> ROOTFS_READY_HELD
+  -> TOPOLOGY_RECONCILED
+  -> OBJECT_TABLES_INSTALLED_AND_READ_BACK
+  -> ONE_USE_FINAL_EXEC_ARMED
+  -> USER_EXEC_COMMIT
+```
+
+Barrier 1 prevents unlabeled setup work. Barrier 2 prevents the final user
+image from racing the mount and object classifier. At Barrier 2 the trusted
+runtime supplies `RootfsReadyV1`: held task identity, mount-namespace fd and
+generation, cgroup binding and nonce, rootfs/overlay identity, OCI and image
+digests, declared mounts/devices/projected volumes, and final
+argv/environment metadata digest. Mithril holds the namespace fd, resolves all
+objects, installs the inactive tables, reads them back, and arms one final-exec
+claim. A topology change marks the namespace `DIRTY`; final exec denies until
+another complete reconciliation succeeds.
+
+For streaming exec, preparation and the later stream/task are different
+events. `RuntimeStreamTicket` is opaque, one-use, peer-bound, target-bound,
+expiring, and consumed only by the held task. Preparing an exec URL does not
+identify a Linux task.
+
+Kubelet purpose needs a carried ticket as well. Stock `ExecSyncRequest` does
+not say whether the command is readiness, liveness, startup, `PostStart`, or
+`PreStop`. The exact optional integration sends this record before kubelet
+calls the runtime:
+
+```text
+KubeletExecutionRequestV1 {
+  kubelet_instance_id
+  kubelet_build_and_config_digest
+  pod_uid
+  pod_resource_version
+  full_container_id
+  container_spec_digest
+  lifecycle_generation
+  reason: STARTUP_PROBE | READINESS_PROBE | LIVENESS_PROBE |
+          POST_START_EXEC | PRE_STOP_EXEC
+  podspec_field_path
+  canonical_argv_digest
+  timeout_ns
+  kubelet_monotonic_sequence
+}
+```
+
+Mithril authenticates the local kubelet peer, re-resolves the Pod/container,
+and returns a signed one-use ticket. A ticket-aware runtime carries the ticket
+to the exact child-creation seam and holds that child until label readback.
+Two identical commands running concurrently are separated by ticket and held
+task identity—not by timestamps. Without the carried ticket, Mithril may use
+one same-budget class for every ambiguous command or reject; it must not claim
+an exact probe/hook reason. A direct `crictl ExecSync` has no kubelet ticket and
+is an administrative entry or is rejected.
+
+The pending-claim fallback is allowed only for a qualified runtime that cannot
+provide a held task. Userspace prebuilds the whole claim, not just a role:
+
+```text
+PreparedExternalRootStateV1 {
+  claim_slot_id
+  immutable_task_label_template
+  process_state_id                 // PREPARING; provisional deny set
+  authority_domain_id              // already ACTIVE
+  entry_instance_id
+  active_profile_generation_ref_id
+  generation_ref_slot
+  entry_task_ref_slot
+  domain_pending_ref_slot
+  kernel_claim_tombstone_slot
+  expected_binding/candidate/attempt digests
+  prepared_immutable_fields_digest
+  expected_claim_bound_state_digest
+  state: PREPARING | EXPOSED | CLAIMING | CLAIM_BOUND_PROVISIONAL |
+         EXEC_COMMITTED | TERMINAL_FAILED | RECONCILING
+}
+```
+
+At `bprm_check_security`, one unlabeled sole-task stub can atomically claim the
+slot. The hook validates the binding and candidate, wins `PENDING -> CLAIMING`,
+installs `ENTRY_PROVISIONAL`, writes the kernel tombstone, acquires each
+preallocated typed reference, activates the provisional process state, reads
+everything back, and only then permits bounded loader/interpreter work. The
+successful exec observer commits the final role. Failure after any step denies
+and terminalizes the slot. The provisional role cannot read ordinary files,
+use the network, create children, or obtain privilege. Multi-threaded or
+unqualified runtime stubs require the held-task path.
+
+#### A.9.8 Admission failures and required tests
+
+| Failure | Required physical result |
+| --- | --- |
+| Protected parent or root has no label | Deny creation/admission when the returning boundary can; otherwise install fail-closed state and deny first protected effect |
+| Task, process, claim, or tombstone map is full | Reject or return the configured errno; never create an unlabeled protected actor |
+| PID-coordinate finalization fails | Keep `FAIL_CLOSED_UNKNOWN`; no protected effect succeeds |
+| Rootfs/mount/object binding is incomplete | Keep the task held and reject setup |
+| Runtime/shim authentication fails | Reject; metadata alone is not intent |
+| Concurrent exec loses the guard CAS | Deny that attempt before staging |
+| Exec success observer cannot update | Retain the already installed pending deny floor |
+| `task_free` update fails | Leak the restriction and require reconciliation; never decrement by guess |
+| Daemon restarts with held or labeled tasks | Keep admission closed; reconcile pinned labels, tombstones, refs, and WAL before reopening |
+
+Mandatory tests include leader-exits-first threads, failed fork rollback,
+double cleanup, PID/TID reuse, moved labeled parent, moved exec task,
+`CLONE_INTO_CGROUP` with allocation failure, concurrent exec, non-leader exec,
+shebang, `binfmt_misc`, approved and substituted ELF loaders, pre/post-point-of-
+no-return failure, direct `crictl` exec, identical probe/hook commands, runtime
+restart, and barrier failure after every setup step.
+
+#### A.9.9 Checkpoint, attach, port-forward, and node-floor contracts
+
+These are exact architecture contracts even though their implementation phases
+remain unallocated.
+
+```text
+CheckpointRestoreIntentV1 {
+  restore_intent_id, proof_id, claim_slot_id: Id128
+  node_boot_id, execution_set_id, cgroup_binding_id,
+    cgroup_binding_nonce: Id128
+  checkpoint_artifact_digest, checkpoint_manifest_digest: DigestV1
+  source_node_boot_id?: Id128
+  source_profile_portable_generation: PortableProfileGenerationV1
+  target_profile_generation_ref_id: u64
+  expected_task_count: u32
+  expected_process_count: u32
+  target_role_and_domain_manifest_digest: DigestV1
+  held_helper_execution_set_id: Id128
+  deadline_boottime_ns: u64
+  state: PREPARING | HELPER_HELD | RESTORING | TARGETS_BOUND |
+         VERIFIED | REJECTED | FAILED_CLOSED
+}
+
+RestoreTargetBirthSlotV1 {
+  slot_id, restore_intent_id: Id128
+  checkpoint_task_identity_digest: DigestV1
+  expected_process_and_thread_relation_digest: DigestV1
+  prepared_task_cookie: u64
+  prepared_process_state_id, prepared_entry_instance_id: Id128
+  state: PENDING | CLAIMING | LABELED_HELD | VERIFIED |
+         RELEASED | FAILED_CLOSED
+}
+
+CheckpointCreationRequestV1 {
+  request_id: Id128
+  exact_target_execution_set_and_task_set_digest: DigestV1
+  target_profile_generation_refs[]: u64
+  target_authority_domain_ids[]: Id128
+  included_memory_file_socket_device_state_digest: DigestV1
+  encrypted_storage_sink: ResourceSelectorV1
+  export_authority_id: Id128
+  maximum_bytes: u64
+  deadline_boottime_ns: u64
+  result: PENDING | DENIED | EXPORTED | FAILED | UNKNOWN
+}
+
+StreamAuthorityV1 {
+  stream_authority_id, proof_id, claim_slot_id: Id128
+  kind: ATTACH | PORT_FORWARD
+  peer_identity_digest: DigestV1
+  target_execution_set_id, target_process_or_entry_id: Id128
+  permitted_ports[]: u16
+  permitted_directions
+  byte_and_time_budget
+  meter_and_fence_capability_ids[]
+  deadline_boottime_ns: u64
+  state: PENDING | ACTIVE | FENCED | COMPLETE | FAILED | EXPIRED
+}
+```
+
+Restore uses a separate held helper execution set; freezing the helper's own
+cgroup may deadlock CRIU and does not prove future restored tasks. Each target
+is intercepted before runnable, consumes one prepared slot, receives complete
+task/process/entry/domain/generation state, and remains held until a complete
+iterator equals the signed manifest. Memory, inherited fds, sockets, mappings,
+credential possession, and sensitive/domain state restore with the target; a
+checkpoint cannot erase them.
+
+Checkpoint creation is a memory/file/socket/device export effect. It needs
+complete target enumeration, shared-state preservation, encrypted sink, exact
+byte/result oracle, and denial of an unapproved export. Attach and port-forward
+are stream authority, not process identity. Attach does not create a child;
+port-forward does not become ordinary process egress. Peer, target, direction,
+port, byte/time limits, existing stream state, and fence result remain explicit.
+
+The node hard floor protects unchanged deployments before setup:
+
+```text
+NodeAdmissionRequestV1 {
+  request_id: Id128
+  node_boot_id: Id128
+  effective_podspec_and_cri_security_digest: DigestV1
+  image_digest, canonical_argv_digest: DigestV1
+  working_directory_bytes: bounded bytes
+  environment_config_secret_mount_device_security_manifests[]: DigestV1
+  pod_uid?, controller_uid?: Id128
+  immutable_controller_revision_digest?: DigestV1
+  runtime_normalization_digest: DigestV1
+}
+
+NodeHardFloorDecisionV1 {
+  request_id: Id128
+  matched_baseline_or_exception_id?: Id128
+  result: ALLOW_SETUP_HELD | REJECT_UNMATCHED | REJECT_HARD_FLOOR |
+          ADMIT_UNKNOWN_RESTRICTED_AND_ALERT
+  exact_rejected_field_ids[]
+  required_setup_budget_id?: Id128
+  required_profile_generation_ref_id?: u64
+  decision_digest: DigestV1
+}
+```
+
+The floor can reject a never-seen privileged/hostPID/host-root/capability
+workload before its mount or user marker. A privileged CSI/node agent requires
+an exact signed, expiring exception naming immutable image, controller, fields,
+scope, approver, and maximum instances. Kubernetes labels alone do not
+authenticate it.
+
+Qualification must cover complete restore, partial target set, helper/target
+mix-up, changed profile, inherited sensitive memory/fds, task-count mismatch,
+restore crash after every slot transition, checkpoint export denial, attach
+peer swap, port-forward existing stream/fence, unmatched privileged Pod, and
+valid narrow node-agent exception. Until allocated phases implement these
+records and tests, claims remain `UNSUPPORTED`, not approximated by ordinary
+container-start or socket observation.
+
+Mithril must never claim that a Pod, cgroup, command string, TTY, PID, runtime
+callback, or post-run event alone proves why a process exists.
+
+### A.10 Exact Signed-Intent, Trust, And Replay Contract
+
+Chapter 8 explains why intent is separate from process identity. This section
+defines the bytes every issuer and consumer must agree on.
+
+**Example.** Kubelet asks for three identical readiness probes. The proof has
+three different slot IDs. Each held task consumes one slot. A fourth identical
+task has no authority. Restarting the daemon does not make a consumed slot new.
+
+#### A.10.1 Signed envelope and common payload
+
+Version 1 uses deterministic CBOR and integer map keys. `Id128` is exactly 16
+bytes. `DigestV1` is `{0: 1, 1: <32 SHA-256 bytes>}`. Unknown, duplicate, or
+non-canonical fields reject the whole object.
+
+```text
+SignedIntentV1 = {
+  0: 1,                       // wire version
+  1: bstr(1..128),            // key ID
+  2: 1,                       // Ed25519
+  3: bstr(1..32768),          // exact canonical IntentPayloadV1 bytes
+  4: bstr(64)                 // signature
+}
+
+signature_input =
+  ASCII("MITHRIL-INTENT-V1") || 0x00 || SHA-256(canonical_payload)
+
+IntentPayloadV1 = {
+  0: 1,                       // payload version
+  1: IntentKindV1,
+  2: Id128 proof_id,
+  3: Id128 tenant_id,
+  4: Id128 trust_domain_id,
+  5: Id128 issuer_id,
+  6: nonzero u64 sequence_epoch,
+  7: nonzero u64 sequence,
+  8: i64 issued_at_utc_ns,
+  9: i64 not_before_utc_ns,
+  10: i64 expires_at_utc_ns,
+  11: [Id128; 1..64] sorted unique claim_slot_ids,
+  12: IntentBodyV1,
+  13?: Id128 parent_proof_id,
+  14?: [Id128; 1..16] sorted unique trigger_proof_ids
+}
+
+IntentKindV1 =
+  1 RUNTIME_ENTRY | 2 NATIVE_TRANSITION | 3 AUTHORITY_LEASE |
+  4 ARTIFACT_HANDOFF | 5 PROVIDER_OPERATION | 6 DEPLOYMENT_ADMISSION |
+  7 CI_STEP
+```
+
+The issuer does not choose mismatch, expiry, or fail-open behavior. Those
+fields are absent. Local signed policy owns the result. Multiplicity is the
+explicit slot array, never a reusable count.
+
+#### A.10.2 Closed body variants
+
+```text
+RuntimeEntryBodyV1 = {
+  0: Id128 cluster_uid,
+  1: Id128 node_boot_id,
+  2: bstr(1..64) pod_uid,
+  3: bstr(32..128) full_container_id,
+  4: Id128 execution_set_id,
+  5: Id128 cgroup_binding_id,
+  6: Id128 cgroup_binding_nonce,
+  7: nonzero u64 lifecycle_generation,
+  8: RuntimeOperationV1,
+  9: EntryKindV1,
+  10: DigestV1 immutable_definition_or_podspec_digest,
+  11?: DigestV1 canonical_command_digest,
+  12: Id128 target_role_id,
+  13: DigestV1 runtime_request_digest,
+  14?: DigestV1 held_task_or_stream_binding_digest
+}
+
+NativeTransitionBodyV1 = {
+  0: Id128 node_boot_id,
+  1: Id128 execution_set_id,
+  2: Id128 process_lineage_id,
+  3: Id128 source_execution_id,
+  4: NativeOperationV1,
+  5: DigestV1 candidate_executable_or_action_digest,
+  6: Id128 source_role_id,
+  7: Id128 target_role_id
+}
+
+AuthorityLeaseBodyV1 = {
+  0: LocalAuthoritySubjectV1,
+  1: ProviderV1,
+  2: bstr(1..256) provider_account_or_project,
+  3: bstr(1..512) audience,
+  4: [u32; 1..128] requested_permission_ids,
+  5: [ResourceSelectorV1; 1..128] requested_resources,
+  6: u64 maximum_ttl_ns,
+  7: bstr(1..256) issuer_subject,
+  8: Id128 provider_request_nonce
+}
+
+ArtifactHandoffBodyV1 = {
+  0: CausalSubjectV1 producer,
+  1: CausalSubjectV1 consumer,
+  2: ArtifactKindV1,
+  3: DigestV1 immutable_artifact_digest,
+  4: ProducerTrustClassV1,
+  5: ArtifactOperationV1,
+  6: [DigestV1; 0..32] required_attestation_digests
+}
+
+ProviderOperationBodyV1 = {
+  0: ProviderV1,
+  1: bstr(1..256) provider_account_or_tenant,
+  2: ProviderPrincipalV1,
+  3: u32 canonical_operation_id,
+  4: [ResourceSelectorV1; 1..128] resources,
+  5: Id128 request_nonce,
+  6: ProviderResultBoundaryV1,
+  7: u64 maximum_ttl_ns
+}
+
+DeploymentAdmissionBodyV1 = {
+  0: Id128 approver_principal_id,
+  1: DigestV1 effective_podspec_and_cri_security_digest,
+  2: DigestV1 image_digest,
+  3: DigestV1 canonical_argv_digest,
+  4: bstr(0..4096) working_directory_bytes,
+  5: DigestV1 environment_reference_manifest_digest,
+  6: DigestV1 config_reference_manifest_digest,
+  7: DigestV1 secret_reference_manifest_digest,
+  8: DigestV1 mount_manifest_digest,
+  9: DigestV1 device_manifest_digest,
+  10: DigestV1 security_field_manifest_digest,
+  11: Id128 controller_uid,
+  12: DigestV1 immutable_controller_revision_digest,
+  13: [Id128; 1..256] permitted_namespace_uids,
+  14: [Id128; 1..4096] permitted_node_uids,
+  15: u32 maximum_instance_count,
+  16: [u32; 0..128] runtime_normalization_rule_ids,
+  17: bool require_instance_binding,
+  18?: Id128 admission_issued_pod_uid_nonce,
+  19: u64 target_profile_generation
+}
+```
+
+CI has three physical bindings rather than dummy zero fields:
+
+```text
+CiExecutionBindingV1 =
+  {0: 1, 1: Id128 node_boot_id, 2: Id128 execution_set_id,
+   3: Id128 cgroup_binding_id, 4: Id128 cgroup_binding_nonce,
+   5: DigestV1 held_pidfd_task_binding_digest}                 // local native
+  | {0: 2, 1: Id128 node_boot_id, 2: Id128 execution_set_id,
+     3: Id128 cgroup_binding_id, 4: Id128 cgroup_binding_nonce,
+     5: DigestV1 held_runtime_request_binding_digest}          // runtime root
+  | {0: 3, 1: Id128 provider_operation_request_id}             // no local task
+
+CiStepIntentBodyV1 = {
+  0: CiCoordinatorV1,
+  1: bstr(1..256) tenant_id,
+  2: bstr(1..256) repository_or_project_id,
+  3: bstr(1..256) pipeline_run_id,
+  4: bstr(1..256) pipeline_job_id,
+  5: bstr(1..256) pipeline_step_id,
+  6: nonzero u32 run_attempt,
+  7: DigestV1 immutable_pipeline_definition_digest,
+  8: DigestV1 step_definition_identity_digest,
+  9: DigestV1 materialized_step_invocation_digest,
+  10: CiTriggerTrustClassV1,
+  11: CiExecutionShapeV1,
+  12: bstr(1..256) exact_runner_assignment_id,
+  13: CiExecutionBindingV1,
+  14: Id128 requested_role_id,
+  15: [DigestV1; 0..128] input_artifact_digests,
+  16: [Id128; 0..32] requested_authority_lease_proof_ids,
+  17?: Id128 parent_step_proof_id,
+  18: DigestV1 provider_job_assignment_evidence_digest,
+  19?: DigestV1 trusted_runner_step_launch_attestation_digest
+}
+```
+
+Shape `COORDINATOR_BUILTIN_NO_LOCAL_TASK` must use the coordinator-only
+binding. Local shapes must use the matching held local binding. Missing,
+extra, zero-filled, or wrong-shape fields are parser errors.
+
+The closed base registries are:
+
+```text
+RuntimeOperationV1 = 1 CONTAINER_START | 2 EXEC_SYNC |
+  3 STREAMING_EXEC | 4 LIFECYCLE_EXEC | 5 EPHEMERAL_CONTAINER |
+  6 CHECKPOINT_RESTORE
+
+NativeOperationV1 = 1 FORK | 2 EXEC | 3 PRIVILEGE_TRANSITION
+
+ArtifactOperationV1 = 1 READ_AS_DATA | 2 VERIFY | 3 LOAD |
+  4 EXECUTE | 5 DEPLOY
+
+ProviderV1 = 1 KUBERNETES | 2 AWS | 3 GCP | 4 GITHUB |
+  5 INTERNAL_CONNECTOR | 6 OCI_REGISTRY
+
+EntryKindV1 = 1 CONTAINER_START | 2 EXEC_PROBE |
+  3 LIFECYCLE_POSTSTART | 4 LIFECYCLE_PRESTOP |
+  5 ADMINISTRATIVE_EXEC | 6 EPHEMERAL_CONTAINER |
+  7 CI_CONTAINER_ACTION | 8 CHECKPOINT_RESTORE | 9 UNKNOWN_EXTERNAL
+
+ArtifactKindV1 = 1 FILE | 2 DIRECTORY_TREE | 3 OCI_IMAGE |
+  4 CI_ARTIFACT | 5 CACHE_ENTRY | 6 QUEUE_MESSAGE |
+  7 DEPLOYMENT_MANIFEST
+
+ProducerTrustClassV1 = 1 UNTRUSTED_INPUT | 2 PROTECTED_BUILD |
+  3 APPROVED_RELEASE | 4 EXTERNAL_UNVERIFIED
+
+ProviderResultBoundaryV1 = 1 SYNCHRONOUS_GATE_RESULT |
+  2 AUTHORITATIVE_API_RESULT
+
+LocalAuthoritySubjectV1 =
+  {0:1, 1:Id128 node_boot_id, 2:Id128 execution_set_id,
+   3:Id128 process_lineage_id}
+  | {0:2, 1:ProviderV1 coordinator, 2:bstr(1..256) run_id,
+     3:bstr(1..256) job_id, 4?:bstr(1..256) step_id}
+
+CausalSubjectV1 =
+  {0:1, 1:Id128 node_boot_id, 2:Id128 process_lineage_id,
+   3?:Id128 execution_id}
+  | {0:2, 1:ProviderV1 coordinator, 2:bstr(1..256) run_id,
+     3:bstr(1..256) job_id}
+  | {0:3, 1:ProviderV1, 2:bstr(1..512) stable_subject_id}
+
+ResourceSelectorV1 = {
+  0:u16 resource_kind_id,
+  1:bstr(1..1024) provider_canonical_resource_bytes,
+  2?:DigestV1 immutable_revision_digest
+}
+
+ProviderPrincipalV1 = {
+  0:u16 principal_kind_id,
+  1:bstr(1..512) provider_stable_principal_id,
+  2?:bstr(1..512) public_session_or_lease_id
+}
+```
+
+Provider-specific operation, permission, principal, and resource IDs live in a
+signed versioned registry. An unregistered number rejects. Display strings do
+not replace numeric authority.
+
+#### A.10.3 Bounds, trust, and replay
+
+Before signature verification may allocate body state, the decoder enforces:
+
+```text
+payload <= 32 KiB
+aggregate byte strings <= 24 KiB
+nesting depth <= 8
+aggregate array members <= 512
+claim slots <= 64
+trigger IDs <= 16
+exactly one body variant
+definite CBOR lengths and shortest integer forms
+bytewise sorting and uniqueness where required
+expiry no more than 24 hours after issue, with a smaller local limit allowed
+```
+
+```text
+TrustBundle {
+  trust_domain_id: Id128
+  bundle_generation: u64
+  issuers[] {
+    issuer_id: Id128
+    issuer_kind
+    key_id: bounded bytes
+    public_key: 32 bytes
+    allowed_algorithm: ED25519
+    sequence_epoch: u64
+    valid_from_utc_ns, valid_until_utc_ns: i64
+    revoked_at_utc_ns?: i64
+    allowed_intent_kinds[]
+    allowed_subject_scopes[]
+  }
+  maximum_clock_skew: 0s..5m
+  replay_window_size: exactly 4096
+}
+```
+
+The receiver checks wall-clock validity including measured uncertainty, then
+derives a boot-time deadline. Clock adjustment cannot revive a proof. Replay
+state is keyed by trust domain, issuer, key, and sequence epoch and keeps the
+highest sequence, a 4,096-bit out-of-order window, and proof/slot tombstones.
+
+Acceptance order is fixed:
+
+```text
+parse bounded canonical bytes
+verify signature, issuer scope, target, time, and local policy subset
+prove sequence, proof ID, and every slot are unused
+append acceptance durably to the WAL
+only then expose prepared slots to runtime/kernel
+record later claim transitions in pinned state and WAL
+```
+
+Key rotation needs an authorized new sequence epoch; changing only `key_id`
+does not reset replay state. Admission remains closed during restart replay and
+pinned-map reconciliation.
+
+#### A.10.4 Claim journal and consumption
+
+```text
+KernelClaimTombstoneV1 {
+  node_boot_id: Id128
+  label_epoch: u64
+  claim_slot_id, proof_id: Id128
+  task_cookie: u64
+  process_state_id, entry_instance_id, exec_attempt_id: Id128
+  claimed_boottime_ns: u64
+  transition_sequence: u64
+  state: CLAIMING | CLAIM_BOUND_PROVISIONAL | EXEC_COMMITTED |
+         EXEC_FAILED | EXPIRED | CANCELLED | TASK_EXITED
+  owned_ref_bits: u64
+  wal_acknowledged_through_sequence: u64
+}
+```
+
+The kernel claim transition updates this preallocated pinned record before
+installing provisional authority. Capacity failure denies. Event delivery is
+best effort. Recovery releases only references whose owned bits say they were
+acquired. The tombstone remains at least through replay expiry and entry
+lifetime completion.
+
+Four separate objects consume intent:
+
+| Action | Object | State progression |
+| --- | --- | --- |
+| Runtime-created root | Entry and claim slot | pending -> provisional -> exec committed or terminal failure |
+| Native fork/exec/privilege transition | `TransitionIntentV1` | pending -> claiming -> committed/denied/expired/cancelled |
+| Credential acquisition | `AuthorityLeaseIntentV1`, then `CredentialLeaseV1` | request becomes issued only after compatible provider result |
+| Artifact transfer | `ArtifactInstanceV1` plus one `ArtifactConsumerSlotV1` per consumer | published -> independently claimed -> verified/rejected/expired |
+
+The native transition object is:
+
+```text
+TransitionIntentV1 {
+  transition_intent_id, proof_id, claim_slot_id:Id128
+  node_boot_id, execution_set_id:Id128
+  source_process_lineage_id, source_execution_id:Id128
+  operation:FORK | EXEC | PRIVILEGE_TRANSITION
+  candidate_executable_object?:ExactObjectGenerationV1
+  canonical_argv_digest?:DigestV1
+  requested_target_role:Id128
+  deadline_boottime_ns:u64
+  state:PENDING | CLAIMING | COMMITTED | DENIED | EXPIRED | CANCELLED
+}
+```
+
+Fork, exec, and privilege transition consume different intent kinds. An exec
+intent cannot authorize a fork, a successful first claim cannot be replayed,
+and an expired transition cannot be revived by daemon restart. The kernel
+transition still needs the exact current process state and object; the signed
+intent is additional purpose, not a replacement for actor identity.
+
+A provider response with a different account, audience, role, scope, nonce, or
+TTL does not create a credential lease. A `READ_AS_DATA` artifact slot does not
+authorize `LOAD`, `EXECUTE`, or `DEPLOY`.
+
+Bearer credentials never enter observations, graphs, logs, or the WAL. When a
+provider requires possession for narrow self-revocation, a separate vault may
+retain a short-lived `ProtectedCredentialHandleV1` authorized only for
+`REVOKE_SELF`. Its opaque ID may appear in evidence; the secret cannot.
+
+#### A.10.5 Conformance tests and forbidden claims
+
+Phase 0 checks in canonical payload, signature input, signature, envelope, and
+negative vectors. Rust must encode and decode the exact same bytes. Tests alter
+one integer tag, duplicate a field, use an indefinite array, reorder a
+supposedly sorted ID list, cross body variants, exceed every bound, replay a
+slot across restart, rotate a key without an epoch, race four tasks for three
+slots, and kill the daemon between the kernel CAS, event delivery, and WAL
+acknowledgment.
+
+Mithril must never call JSON/YAML bytes the signed wire, let an issuer select
+fail-open, accept a reusable count instead of slots, infer a slot from time and
+argv, store provider secrets as evidence, or call provider audit a synchronous
+pre-effect intent proof.
+
+### A.11 Exact Policy, Parser, Signature, And Activation Contract
+
+Chapters 11-12 describe one policy model. This section closes the places where
+two implementations might otherwise make different choices.
+
+**Problem.** An operator writes one rule denying the conversion worker access
+to a projected ServiceAccount token. Rust, BPF, the policy-review UI, and the
+qualification runner must all agree on the same actor, object, operation,
+failure result, and bytes. YAML order or a library's permissive defaults cannot
+change that decision.
+
+#### A.11.1 Source-file rules
+
+The source is UTF-8 YAML 1.2 restricted to the JSON data model. The decoder
+rejects duplicate keys, anchors, aliases, merge keys, custom tags, non-string
+map keys, implicit timestamps, NaN/infinity, integers outside the declared
+type, unknown fields, unknown enums, and input beyond the signed size, depth,
+and count limits. Enum source values are uppercase ASCII. Durations match
+`^[0-9]+(ns|us|ms|s|m|h)$`; zero is legal only where the field says so.
+
+Comments and YAML key order carry no authority. After parsing closed types,
+the document is encoded as deterministic CBOR. Version 1 has no generic
+extension or metadata bag.
+
+```text
+PolicyDocumentV1 {
+  api_version: exactly "mithril.erebor.dev/v1"
+  kind: exactly "ProtectionPolicy"
+  metadata {
+    profile_id: Id128
+    profile_version: nonzero u64
+    trust_domain_id: Id128
+    valid_from_utc: RFC3339 UTC normalized to i64 nanoseconds
+    valid_until_utc?: RFC3339 UTC normalized to i64 nanoseconds
+  }
+  required_capability_ids[]
+  protected_universe {
+    workload_selector_ids[]
+    protected_scope_ids[]
+    execution_set_ids[]
+    role_ids[]
+    entry_kind_ids[]
+    object_class_ids[]
+    provider_account_ids[]
+  }
+  workload_selectors[]: WorkloadSelectorV1
+  classifier_bindings[]: ObjectClassifierBindingV1
+  roles[]: RoleDefinitionV1
+  entry_role_assignments[]: EntryRoleAssignmentV1
+  native_transition_rules[]: NativeRoleTransitionRuleV1
+  process_state_definitions[]: ProcessStateDefinitionV1
+  domain_sensitive_state_rules[]: DomainSensitiveStateRuleV1
+  effect_family_defaults[]: EffectFamilyDefaultV1
+  authority_behavior_rules[]: AuthorityBehaviorRuleV1
+  correlation_package_bindings[]: CorrelationPackageBindingV1
+  default_postures: DefaultPosturesV1
+  notification_routes[]: NotificationRouteV1
+  response_bindings[]: ResponseBindingV1
+  exceptions[]: ExceptionV1
+  rules[]: DetectionDispositionRuleV1
+  source_coverage_health_rules[]: SourceCoverageHealthRuleV1
+  rollout: RolloutV1
+}
+
+PolicyLocalIdV1 = UTF-8 matching ^[a-z][a-z0-9.-]{0,127}$
+RegistrySymbolV1 = ASCII matching ^[A-Z][A-Z0-9_]{0,127}$
+PackageIdV1 = ASCII matching ^[A-Z][A-Z0-9-]{0,126}[0-9]$
+```
+
+#### A.11.2 Selectors classify candidates; bindings create authority
+
+```text
+ReasonCodeIdV1 = RegistrySymbolV1
+ObjectClassIdV1 = RegistrySymbolV1
+ResultCodeIdV1 = RegistrySymbolV1
+
+LabelRequirementV1 {
+  key:UTF-8 Kubernetes qualified name, 1..253 bytes
+  operator:IN | NOT_IN | EXISTS | DOES_NOT_EXIST
+  values[0..64]:UTF-8 Kubernetes label values, sorted unique
+}
+
+WorkloadSelectorV1 {
+  workload_selector_id: PolicyLocalIdV1
+  cluster_uids[1..16]: Id128
+  namespace_uids[1..64]: Id128
+  controller_uids[0..256]: Id128
+  service_account_uids[0..64]: Id128
+  pod_label_requirements[0..64]: LabelRequirementV1
+  container_names[0..64]: bounded UTF-8
+  container_kinds[1..4]: INIT | SIDECAR | APPLICATION | EPHEMERAL
+  image_digests[0..256]: DigestV1
+}
+
+ObjectClassifierBindingV1 {
+  classifier_binding_id: PolicyLocalIdV1
+  object_class_id: ObjectClassIdV1
+  selector: PROJECTED_SERVICE_ACCOUNT_TOKEN | FILESYSTEM_OBJECT |
+            IMMUTABLE_ARTIFACT | DESTINATION | DEVICE |
+            KERNEL_SECURITY_OBJECT
+  required_capability_ids[1..64]
+  unknown_result: DENY | ALERT
+}
+
+ResolvedObjectClassBindingV1 {
+  classifier_binding_id, object_class_id: PolicyLocalIdV1
+  exact_object: ExactObjectGenerationV1
+  classifier_axis_id: u16
+  classifier_axis_value_id: u32
+  source_object_revision_digest: DigestV1
+}
+
+WorkloadBindingArtifactV1 {          // immutable signed payload
+  binding_generation_id: Id128
+  policy_document_digest, selector_registry_digest,
+    classifier_registry_digest: DigestV1
+  cluster_uid, node_boot_id: Id128
+  workload_selector_id: PolicyLocalIdV1
+  pod_uid: Id128
+  pod_resource_version_digest, full_container_id_digest,
+    image_digest: DigestV1
+  execution_set_id, protected_scope_id: Id128
+  cgroup_binding_identity_digest: DigestV1
+  resolved_object_class_bindings[]: sorted unique
+  binding_generation: nonzero u64
+  valid_from_boottime_ns: u64
+  canonical_payload_digest: DigestV1
+  signer_key_id
+  signature
+}
+
+WorkloadBindingActivationStateV1 {   // mutable node-local state
+  binding_generation_id: Id128
+  artifact_digest: DigestV1
+  state: PREPARING | ACTIVE | RETIRING | TOMBSTONED
+  transition_version: u64
+  last_complete_readback_digest: DigestV1
+}
+```
+
+The immutable signed artifact never contains a mutable `ACTIVE` byte. The
+node-local activation record changes only after every installed row and object
+binding reads back. A new Pod or rotated projected token creates new exact
+bindings; a hook never lazily chooses the first matching selector.
+
+The classifier registry is also closed and signed:
+
+```text
+DestinationPolicyRecordV1 {
+  destination_policy_id: PolicyLocalIdV1
+  protocols[1..3]: TCP | UDP | SCTP
+  ipv4_prefixes[0..256], ipv6_prefixes[0..256]: canonical CIDR
+  port_ranges[1..64] { first:u16, last:u16 >= first }
+  required_network_namespace_ids[0..64]: Id128
+  service_identities[0..64] {
+    provider: KUBERNETES | AWS | GITHUB | MESH | CONNECTOR | OTHER
+    stable_service_id: PolicyLocalIdV1
+    endpoint_registry_generation: nonzero u64
+  }
+  final_address_required: bool
+}
+
+DeviceClassRecordV1 {
+  device_class_id: PolicyLocalIdV1
+  device_type: CHAR | BLOCK
+  major_ranges[1..64], minor_ranges[1..64] { first:u32, last:u32 }
+  driver_name_digests[0..64]: DigestV1
+  allowed_ioctl_command_ids[0..256]: u32
+}
+
+SecurityObjectRecordV1 {
+  security_object_id: PolicyLocalIdV1
+  family: PTRACE | PROCESS_VM | PIDFD | BPF | PERF | KEYRING |
+          CAPABILITY | NAMESPACE | MOUNT | MODULE | IO_URING_CONTROL
+  operation_ids[1..256]: RegistrySymbolV1
+  target_selector_ids[0..64]: PolicyLocalIdV1
+}
+
+MountSourceClassRecordV1 {
+  mount_source_class_id: PolicyLocalIdV1
+  source_kind: ROOTFS | BIND | TMPFS | PROJECTED | SECRET |
+               CONFIGMAP | EMPTYDIR | HOSTPATH | CSI | NFS | FUSE | OTHER
+  filesystem_type_ids[1..64]: PolicyLocalIdV1
+  backing_object_or_volume_ids[0..64]: Id128
+  required_mount_flags[0..32]: READ_ONLY | NOSUID | NODEV | NOEXEC
+}
+
+ObjectClassifierRegistryV1 {
+  registry_version: nonzero u64
+  destination_policies[]: DestinationPolicyRecordV1
+  device_classes[]: DeviceClassRecordV1
+  security_objects[]: SecurityObjectRecordV1
+  mount_source_classes[]: MountSourceClassRecordV1
+  filesystem_types[] { id, numeric_magic:u64, bounded_name }
+  canonical_payload_digest: DigestV1
+}
+```
+
+Overlapping registry entries that assign different classes, a missing required
+axis, stale endpoint generation, unknown filesystem/device/security type, or a
+registry digest mismatch keeps the binding `PREPARING` and prevents activation.
+
+#### A.11.3 Roles, entries, transitions, and effects
+
+```text
+ProcessStateDefinitionV1 {
+  process_state_id:PolicyLocalIdV1
+  state_bits[0..64]:sorted unique closed ProcessStateBitV1
+}
+
+DomainSensitiveStateRuleV1 {
+  state_rule_id:PolicyLocalIdV1
+  triggering_object_class_ids[1..256]:ObjectClassIdV1
+  triggering_operations[1..64]:RegistrySymbolV1
+  set_sensitive_bits[1..64]:closed DomainSensitiveBitV1
+  resulting_restriction_semantic_ids[1..64]:PolicyLocalIdV1
+  monotonic:exactly true
+}
+
+RoleDefinitionV1 {
+  role_id: PolicyLocalIdV1
+  maximum_native_depth: u16
+  default_process_state_id: PolicyLocalIdV1
+  permitted_entry_kinds[1..16]: EntryKindV1
+  description_artifact_digest?: DigestV1
+}
+
+EntryRoleAssignmentV1 {
+  assignment_id: PolicyLocalIdV1
+  workload_selector_ids[1..32]
+  entry_kinds[1..16]: EntryKindV1
+  container_kinds[1..4]
+  immutable_definition_digests[0..64]: DigestV1
+  accepted_classifications[1..2]: EXACT_TARGET | SAME_BUDGET_AMBIGUOUS
+  resulting_role_id: PolicyLocalIdV1
+  claim_ttl: duration
+  on_missing_or_unequal_ambiguity: REJECT |
+    ADMIT_UNKNOWN_RESTRICTED_AND_ALERT
+  unknown_restricted_role_id?: PolicyLocalIdV1
+}
+
+NativeRoleTransitionRuleV1 {
+  transition_rule_id: PolicyLocalIdV1
+  source_role_ids[1..32]
+  operation: FORK | THREAD_CREATE | EXEC | PRIVILEGE_TRANSITION
+  executable_object_ids[0..256]
+  required_process_state_ids[1..64]
+  resulting_role_id, resulting_process_state_id: PolicyLocalIdV1
+  requested_disposition: ALLOW | ALERT | DENY
+  errno?: EACCES | EPERM | EAGAIN
+}
+
+EffectFamilyDefaultV1 {
+  role_ids[1..32]
+  effect_family: EXEC | FILE | NETWORK | DEVICE | PRIVILEGE | IPC | MOUNT
+  operations[1..256]
+  requested_disposition: ALLOW | ALERT | DENY
+  errno?: EACCES | EPERM | EAGAIN | ECONNREFUSED
+  finding?: FindingSpecV1
+}
+```
+
+An authority rule is one of two distinct stages:
+
+```text
+AuthorityBehaviorRuleV1 =
+  REMOTE_ADMISSION {
+    rule_id, gate_capability_id, provider, provider_accounts,
+    principal_or_lease_selectors, operations, resources,
+    required_proof, requested_disposition: ALLOW | ALERT | REJECT,
+    finding?, responses[], budgets
+  }
+  | POST_EFFECT_RESULT {
+      rule_id, provider, provider_accounts, principal_or_lease_selectors,
+      operations, resources, authoritative_results,
+      required_proof, requested_disposition: ALLOW | ALERT,
+      finding?, responses[], budgets
+    }
+```
+
+A completed provider result can alert or propose response. It cannot reject an
+operation that already happened. A synchronous semantic gate may reject before
+the provider operation. Free-form provider verbs are invalid; the adapter's
+signed vocabulary owns numeric operation and resource IDs.
+
+```text
+CorrelationPackageBindingV1 {
+  binding_id: PolicyLocalIdV1
+  package_id: PackageIdV1
+  package_version: nonzero u32
+  required_source_ids[1..64]: PolicyLocalIdV1
+  parameter_digest: DigestV1
+  finding: FindingSpecV1
+}
+
+FindingSpecV1 {
+  reason_code: ReasonCodeIdV1
+  severity: INFO | LOW | MEDIUM | HIGH | CRITICAL
+  route_ids[0..32]: PolicyLocalIdV1
+  evidence_level: MINIMAL | STANDARD | FORENSIC
+  title_template_id?: PolicyLocalIdV1
+}
+
+SignedCorrelationPackageRegistryV1 {
+  registry_version: nonzero u64
+  packages[] {
+    package_id: PackageIdV1
+    package_version: nonzero u32
+    implementation_digest, parameter_schema_digest: DigestV1
+    required_source_schema_ids[1..64]: PolicyLocalIdV1
+  }
+  canonical_payload_digest: DigestV1
+  signer_key_id
+  signature
+}
+```
+
+Package code and parameter schema are immutable inputs to deterministic replay.
+A finding title is display only; reason code, subjects, proof, coverage, and
+package version own machine behavior.
+
+#### A.11.4 One disposition rule and legal stages
+
+```text
+DetectionDispositionRuleV1 {
+  schema_version: exactly 1
+  rule_id: PolicyLocalIdV1
+  enabled: bool
+  priority: i32                 // display order only
+  evaluation_stage: ENTRY_ADMISSION | NATIVE_TRANSITION |
+                    LOCAL_PRE_EFFECT | REMOTE_PRE_ADMISSION | POST_EFFECT
+  match: EntryAdmissionMatchV1 | NativeTransitionMatchV1 |
+         LocalEffectMatchV1 | RemoteAdmissionMatchV1 | PostEffectMatchV1
+  requested_disposition: ALLOW | ALERT | DENY | REJECT
+  errno?: EACCES | EPERM | EAGAIN | ECONNREFUSED
+  finding?: FindingSpecV1
+  response_binding_ids[]
+  fallback_by_condition[]: FallbackV1
+  budgets: BudgetSetV1
+  overrides_rule_ids[]
+  exception_ids[]
+  valid_from_utc_ns?: i64
+  valid_until_utc_ns?: i64
+}
+```
+
+| Stage | Legal physical dispositions |
+| --- | --- |
+| `ENTRY_ADMISSION` | allow, alert-admit, reject |
+| `NATIVE_TRANSITION` | allow, alert-allow, deny with errno |
+| `LOCAL_PRE_EFFECT` | allow, alert-allow, deny with errno |
+| `REMOTE_PRE_ADMISSION` | allow-forward, alert-forward, reject |
+| `POST_EFFECT` | record or alert; never retrospective deny/reject |
+
+```text
+BudgetSetV1 {
+  rate_limits:exactly []
+  concurrency_limits:exactly []
+  maximum_lifetime:absent
+  automatic_response_limit:absent
+}
+```
+
+`BudgetSetV1` is empty in the approved Version 1 phases. Rate, concurrency,
+lifetime, and automatic-response budgets remain unallocated until they have
+exact counter keys, clocks, restart behavior, release tombstones, and expiry
+actions. A nonempty draft returns `CFG_BUDGET_EXECUTION_UNALLOCATED`; it never
+becomes an approximate limit.
+
+Default posture is closed:
+
+```text
+DefaultPosturesV1 {
+  missing_task_identity: DefaultPostureActionV1
+  required_classifier_unknown: DefaultPostureActionV1
+  missing_entry_intent: DefaultPostureActionV1
+}
+
+DefaultPostureActionV1 {
+  requested_disposition: ALERT | DENY | REJECT
+  finding: FindingSpecV1
+  unknown_restricted_role_id?: PolicyLocalIdV1
+}
+```
+
+An alert for missing identity/classification is legal only when an already
+installed unknown-restricted role or exact safe floor prevents accidental
+authority. An alert is not a hidden allow.
+
+##### A.11.4.1 Exact match inputs
+
+The rule above refers to five match types. Their fields are closed here so an
+implementation cannot silently use process names, timestamps, or unspecified
+metadata.
+
+**Example.** A rule for “the converter reads the projected token” matches a
+committed converter process, `LOCAL_PRE_EFFECT`, `FILE`, `OPEN_READ`, and the
+exact projected-token object class. It does not match every Python process or
+every file named `token`.
+
+```text
+CommonSubjectMatchV1 {
+  workload_selector_ids[0..32]: PolicyLocalIdV1
+  protected_scope_ids[0..32]: Id128
+  execution_set_ids[0..32]: Id128
+  entry_kind_ids[0..16]: EntryKindV1
+  role_ids[0..32]: PolicyLocalIdV1
+  required_process_state_ids[0..32]: PolicyLocalIdV1
+  forbidden_process_state_ids[0..32]: PolicyLocalIdV1
+}
+
+EntryAdmissionMatchV1 {
+  kind: exactly ENTRY_ADMISSION
+  subject: CommonSubjectMatchV1
+  runtime_operations[1..16]
+  intent_classifications[0..4]: EXACT_TARGET | SAME_BUDGET_AMBIGUOUS |
+                                CONTEXTUAL | MISSING
+  intent_statuses[0..8]
+  immutable_definition_digests[0..64]: DigestV1
+}
+
+NativeTransitionMatchV1 {
+  kind: exactly NATIVE_TRANSITION
+  subject: CommonSubjectMatchV1
+  operations[1..4]: FORK | THREAD_CREATE | EXEC | PRIVILEGE_TRANSITION
+  executable_object_ids[0..256]: nonzero u64
+  source_role_ids[0..32], target_role_ids[0..32]: PolicyLocalIdV1
+}
+
+LocalEffectMatchV1 {
+  kind: exactly LOCAL_PRE_EFFECT
+  subject: CommonSubjectMatchV1
+  effect_families[1..8]: EXEC | FILE | NETWORK | DEVICE |
+                         PRIVILEGE | IPC | MOUNT
+  operation_ids[1..256]: RegistrySymbolV1
+  object: LocalObjectSelectorV1
+  binding_lifecycle_states[0..5]
+  required_proof: ProofQualityPredicateV1
+}
+
+LocalObjectSelectorV1 =
+  EXACT_OBJECT_KEYS { exact_object_key_ids[1..256]: nonzero u64 }
+  | OBJECT_CLASSES { object_class_ids[1..256]: ObjectClassIdV1 }
+  | DESTINATIONS { destination_policy_ids[1..64]: PolicyLocalIdV1 }
+  | DEVICES { device_class_ids[1..64]: PolicyLocalIdV1,
+              ioctl_command_ids[0..256]: u32 }
+  | SECURITY_OBJECTS { security_object_ids[1..64]: PolicyLocalIdV1,
+                       target_selector_ids[0..64]: PolicyLocalIdV1 }
+
+RemoteAdmissionMatchV1 {
+  kind: exactly REMOTE_PRE_ADMISSION
+  subject: CommonSubjectMatchV1
+  gate_capability_ids[1..32]: PolicyLocalIdV1
+  providers[1..16]: ProviderV1
+  provider_account_ids[0..64]: bounded bytes
+  operation_ids[1..256]: u32
+  resources[0..256]: ResourceSelectorV1
+  required_lease_permission_ids[0..256]: u32
+  required_proof: ProofQualityPredicateV1
+}
+
+PostEffectMatchV1 =
+  LOCAL_COMPLETION {
+    subject: CommonSubjectMatchV1,
+    effect_families[1..8], operation_ids[1..256],
+    authoritative_results[1..8], required_proof
+  }
+  | PROVIDER_RESULT {
+      providers[1..16], provider_account_ids[0..64],
+      operation_ids[1..256], resources[0..256],
+      authoritative_results[1..8], required_proof
+    }
+  | CORRELATION_FINDING {
+      package_ids[1..64], reason_codes[0..64], finding_states[1..6],
+      required_proof
+    }
+```
+
+`ProofQualityPredicateV1` supplies a minimum or exact accepted set on all six
+proof axes from A.15.2: source authority, local subject binding, remote subject
+binding, operation result authority, temporal coverage, and integrity. An
+omitted axis accepts the whole finite signed axis. An unknown enum never
+passes.
+
+```text
+ProofQualityPredicateV1 {
+  source_authority[]:values from ProofQualityV1.source_authority
+  local_subject_binding[]:values from ProofQualityV1.local_subject_binding
+  remote_subject_binding[]:values from ProofQualityV1.remote_subject_binding
+  operation_result_authority[]:
+    values from ProofQualityV1.operation_result_authority
+  temporal_coverage[]:COMPLETE | GAPPED | UNKNOWN
+  integrity[]:SIGNED | AUTHENTICATED_CHANNEL | LOCAL_ATTESTED | UNVERIFIED
+}
+```
+
+Fallback is also explicit:
+
+```text
+FallbackV1 {
+  condition: SOURCE_GAPPED | CLASSIFIER_UNKNOWN | INTENT_MISSING |
+             INTENT_AMBIGUOUS | PROOF_BELOW_REQUIRED | MAP_CAPACITY |
+             ADAPTER_UNAVAILABLE | RESPONSE_UNVERIFIED
+  requested_disposition: ALERT | DENY | REJECT
+  errno?: EACCES | EPERM | EAGAIN | ECONNREFUSED
+  finding: FindingSpecV1
+  unknown_restricted_role_id?: PolicyLocalIdV1
+}
+```
+
+The compiler rejects a fallback that is impossible at its stage—for example,
+`REJECT` after an operation completed—or one that asks to alert-and-continue
+without a preinstalled safe floor. Tests build one positive and one near-miss
+vector for every field: wrong Pod UID, wrong role, wrong operation, same path
+but wrong object generation, contextual instead of exact proof, and provider
+result arriving after the pre-admission deadline.
+
+#### A.11.5 Exact conflict and expansion rule
+
+The compiler expands every wildcard against the finite signed universe. An
+omitted optional selector dimension means the whole finite dimension. A
+present empty required selector is an error; it never means `*`.
+
+```text
+NormalizedDecisionCellV1 {
+  cell_id: PolicyLocalIdV1
+  exact_compiled_key
+  physical_result
+  complete_transition_descriptor?
+  finding_specs[]
+  response_binding_ids[]
+  budget_semantics
+  source_rule_ids[]
+}
+```
+
+Two cells merge only when the physical result, errno, complete transition,
+findings, responses, and budget semantics are identical. Different results
+need an explicit signed override or exception naming the exact replaced rule
+and authority delta. Otherwise compilation fails. Priority, YAML order,
+wildcard count, severity, “more specific,” and “deny wins” never select
+authority.
+
+Each operation becomes its own compiled key. `OPEN_READ` and later `READ` are
+not one bit of authority. A file-open capability cannot satisfy a claim that
+passed or inherited descriptors are controlled at use time.
+
+##### A.11.5.1 Exceptions, notifications, responses, coverage, and rollout
+
+An exception is a signed bounded authority change, not a free-form annotation:
+
+```text
+ExceptionV1 {
+  exception_id: PolicyLocalIdV1
+  changed_rule_ids[1..64]: PolicyLocalIdV1
+  exact_subject: ExactExceptionSubjectSelectorV1
+  authority_delta: PermittedAuthorityDeltaV1
+  approver_principal_id: Id128
+  approval_proof_digest: DigestV1
+  closed_reason_code: u32
+  valid_from_utc_ns, valid_until_utc_ns: i64
+  maximum_uses: nonzero u32
+  maximum_lifetime_ns: nonzero u64
+}
+
+ExactExceptionSubjectSelectorV1 {
+  protected_scope_ids[1..64]: Id128
+  execution_set_ids[0..256]: Id128
+  entry_kind_ids[0..16]: EntryKindV1
+  role_ids[0..64]: PolicyLocalIdV1
+  immutable_definition_digests[0..64]: DigestV1
+  exact_compiled_key_digests[1..256]: DigestV1
+}
+
+PermittedAuthorityDeltaV1 {
+  from_physical_result
+  to_physical_result
+  added_or_removed_operation_cells[]: DigestV1
+  added_or_removed_transition_cells[]: DigestV1
+  maximum_blast_radius: BlastRadiusLimitV1
+}
+```
+
+Wildcards, no expiry, missing approver, unlimited use, and hard-invariant
+changes reject. The compiler shows the exact broadened/narrowed cells in the
+activation explanation and claim exclusions.
+
+```text
+NotificationRouteV1 {
+  route_id: PolicyLocalIdV1
+  sink: PAGER | CHAT | EMAIL | SIEM | WEBHOOK | TICKET
+  sink_binding_id: PolicyLocalIdV1
+  minimum_severity: INFO | LOW | MEDIUM | HIGH | CRITICAL
+  grouping_fields[1..16]: FindingGroupingFieldV1
+  dedupe_window: duration
+  allowed_evidence_fields[1..64]: EvidenceFieldV1
+  maximum_sensitivity: PUBLIC | INTERNAL | SENSITIVE_IDENTIFIER
+  delivery_failure_action: RECORD_ROUTE_FAILURE | ALERT_LOCAL_ONLY
+}
+
+ProvisionedNotificationSinkBindingV1 {
+  sink_binding_id: PolicyLocalIdV1
+  sink_kind
+  endpoint_or_tenant_digest: DigestV1
+  protected_credential_handle_id: Id128
+  delivery_capability_id: PolicyLocalIdV1
+  allowed_maximum_sensitivity
+  health_record_id: Id128
+  config_generation: u64
+  canonical_payload_digest: DigestV1
+  signer_key_id
+  signature
+}
+```
+
+Secret fields are never routable. Route delivery failure cannot change a deny,
+finding revision, or response authorization.
+
+```text
+ResponseBindingV1 {
+  binding_id: PolicyLocalIdV1
+  action_spec: ResponseActionSpecV1
+  approval: AUTOMATIC | PREAPPROVED | HUMAN
+  required_proof: ProofQualityPredicateV1
+  maximum_blast_radius: BlastRadiusLimitV1
+  target_revalidation: TargetRevalidationV1
+  physical_postcondition: PhysicalPostconditionV1
+  watch_interval: duration
+}
+
+ResponseActionSpecV1 =
+  LOCAL { RESTRICT_LINEAGE | FENCE_SOCKETS | FREEZE_CGROUP }
+  | KUBERNETES { REJECT_REPLACEMENT, admission_capability_id }
+  | CREDENTIAL { REVOKE_CREDENTIAL, provider, credential_kind,
+                 actuator_capability_id, typed_request_schema_digest }
+  | MESH { DISABLE_MESH_DEVICE, provider, actuator_capability_id,
+           typed_request_schema_digest }
+  | ARTIFACT { QUARANTINE_ARTIFACT, store_capability_id,
+               typed_request_schema_digest }
+  | SOURCE_CONTROL { SUSPEND_INSTALLATION, provider,
+                     actuator_capability_id, typed_request_schema_digest }
+  | PROVIDER_SPECIFIC { provider, canonical_action_id,
+                        actuator_capability_id, typed_request_schema_digest }
+```
+
+The compiler uses a closed compatibility table between action, target
+revalidation, postcondition, proof, and blast-radius variant. A GitHub audit
+fingerprint cannot select a possessed-token revoke action; a process target
+cannot use a Kubernetes-object postcondition.
+
+```text
+SourceCoverageHealthRuleV1 {
+  health_rule_id: PolicyLocalIdV1
+  required_source_id: PolicyLocalIdV1
+  protected_scope_ids[1..64]: Id128
+  maximum_gap: duration
+  on_gap: ALERT | REJECT_NEW_ADMISSION | INSTALL_INDEPENDENT_FENCE
+  finding: FindingSpecV1
+  independent_admission_gate_binding_id?: PolicyLocalIdV1
+  independent_admission_capability_id?: PolicyLocalIdV1
+  independent_response_binding_ids[]: PolicyLocalIdV1
+}
+```
+
+The fallback must be independent from the missing source. Loss of Kubernetes
+audit may cause a separately healthy runtime gate to reject new privileged
+roots. It cannot reconstruct the missing audit event. The compiler rejects an
+“independent” response whose actuator or verification source depends on the
+failed feed.
+
+```text
+RolloutV1 {
+  rollout_generation: nonzero u64
+  desired_profile_mode: OBSERVE | PROTECT
+  cohort_selection: ALL_BOUND_EXECUTION_SETS |
+                    EXPLICIT_EXECUTION_SETS |
+                    HASHED_EXECUTION_SET_BINDING
+  explicit_execution_set_ids[]: Id128
+  selector_hash_modulus: nonzero u32
+  selected_bucket_ids[]: sorted unique u32 < modulus
+}
+```
+
+The rollout population is immutable for one generation. Health metrics name
+their exact numerator and denominator population. Selector drift cannot
+silently change authority or make a failed cohort look healthy.
+
+#### A.11.6 Signed profile and rollback wire
+
+```text
+ProfileSignatureHeaderV1 = {
+  0: 1,
+  1: Id128 issuer_id,
+  2: nonzero u64 sequence_epoch,
+  3: nonzero u64 issuer_sequence,
+  4: Id128 trust_domain_id,
+  5: Id128 profile_id,
+  6: nonzero u64 profile_version,
+  7: i64 valid_from_utc_ns,
+  8?: i64 valid_until_utc_ns,
+  9?: Id128 rollback_authorization_id,
+  10: DigestV1 policy_document_digest,
+  11: DigestV1 provider_numeric_registry_bundle_digest,
+  12: DigestV1 required_capability_schema_digest,
+  13: DigestV1 source_selector_registry_digest,
+  14: DigestV1 object_classifier_registry_digest,
+  15: DigestV1 reason_code_registry_digest,
+  16: DigestV1 correlation_package_registry_digest,
+  17: DigestV1 provider_vocabulary_registry_digest
+}
+
+SignedWorkloadProtectionProfileV1 = {
+  0: 1,
+  1: bstr(1..128) key_id,
+  2: 1,                       // Ed25519
+  3: bstr(1..4096) canonical header,
+  4: bstr(1..1048576) canonical PolicyDocumentV1,
+  5: bstr(64) signature
+}
+
+profile_signature_input =
+  ASCII("MITHRIL-PROFILE-V1") || 0x00 ||
+  SHA-256(canonical_header) || SHA-256(canonical_policy)
+
+RollbackAuthorizationPayloadV1 = {
+  0: 1,
+  1: Id128 authorization_id,
+  2: Id128 trust_domain_id,
+  3: Id128 issuer_id,
+  4: Id128 approver_principal_id,
+  5: nonzero u64 sequence_epoch,
+  6: nonzero u64 issuer_sequence,
+  7: Id128 profile_id,
+  8: DigestV1 current_digest,
+  9: nonzero u64 current_version,
+  10: DigestV1 exact_older_target_digest,
+  11: nonzero u64 exact_older_target_version,
+  12: u32 closed_reason_code,
+  13?: DigestV1 human_reason_artifact_digest,
+  14: DigestV1 exact_platform_scope_digest,
+  15: i64 issued_at_utc_ns,
+  16: i64 expires_at_utc_ns
+}
+```
+
+Rollback uses its own Ed25519 envelope and domain separator
+`MITHRIL-ROLLBACK-V1`. It is one-use and must name the exact current digest,
+exact older target, platform, approver, and expiry. Re-signing an older version
+is not rollback authority.
+
+The activation owner durably records the greatest accepted issuer sequence and
+profile version before publishing a generation. Lower signed values reject
+unless the exact rollback authorization is valid and unused.
+
+#### A.11.7 Build, read back, probe, activate, and retire
+
+```text
+parse and validate closed source
+verify signature, registries, validity, replay, and anti-rollback
+resolve selectors into immutable workload/object snapshots
+validate the role/transition graph and required capabilities
+expand every exact decision cell and reject conflicts/capacity overflow
+simulate against a recorded legitimate-workload baseline
+obtain human approval
+build a completely inactive generation
+read back every descriptor, row, default, membership, and digest
+run isolated allow and deny probes
+publish one active-generation handle for new admissions
+```
+
+Expansion happens in two immutable stages:
+
+```text
+StaticExpandedProfileV1 {
+  profile_id:Id128
+  profile_version:u64
+  source_policy_digest:DigestV1
+  statically_expanded_workload_selector_ids[]:PolicyLocalIdV1
+  statically_expanded_protected_scope_ids[]:Id128
+  statically_expanded_role_ids[]:PolicyLocalIdV1
+  statically_expanded_entry_kind_ids[]:EntryKindV1
+  statically_expanded_object_class_ids[]:ObjectClassIdV1
+  statically_expanded_provider_account_ids[]:bounded bytes
+  unresolved_binding_selectors[]     // only live scope/execution-set selectors
+  compiled_rule_cell_digests[]:DigestV1
+  rollout:RolloutV1
+}
+
+NodeBoundProfileGenerationV1 {
+  static_profile_digest:DigestV1
+  signed_workload_binding_generation:DigestV1
+  node_boot_id:Id128
+  label_epoch:u64
+  exact_protected_scope_ids[], exact_execution_set_ids[]:Id128
+  exact_rollout_membership[]
+  exact_compiled_kernel_cell_digests[]:DigestV1
+  node_binding_digest:DigestV1
+  state:PREPARING | READ_BACK | ACTIVE | REJECTED
+}
+```
+
+The static compiler expands only against the signed finite universe. Live Pod
+and execution-set IDs may not exist yet, so the node binder resolves only
+those selectors against one signed workload-binding generation. A later Pod
+creates a new node-bound generation; it never edits the active key set in
+place. Hashed rollout uses the exact profile ID/version, rollout generation,
+execution-set ID, and workload-binding digest. Tests publish two otherwise
+identical Pods with different UIDs and prove that one Pod's node-bound rows
+cannot authorize the other.
+
+Existing tasks, sockets, files, mappings, domains, pending entries, and
+responses retain typed references to their old immutable generation. New roots
+use the active generation. Version 1 does not migrate live processes. A
+retiring generation is deleted only after every typed reference is zero,
+iterator/WAL reconciliation agrees, and the BPF grace period passes.
+
+#### A.11.8 Required goldens and stable failures
+
+`CFG-V1-GOLDEN-002` must be generated from one complete checked-in source after
+the final schema exists. It includes restricted YAML, deterministic policy
+CBOR, every registry payload/digest, header, signature, envelope, compiler
+cells, and round trip. Prose substitutions and the retained stale
+`CFG-V1-GOLDEN-001` bytes are not conformance data.
+
+`CFG-ROLLBACK-GOLDEN-002` covers exact current-to-older success and wrong
+current, wrong target, wrong platform, expired, replayed, and signed-without-
+authorization failures.
+
+Stable parser/compiler failures include duplicate key, unknown field, forbidden
+YAML feature, unknown enum, missing required field, stage/disposition mismatch,
+circular admission dependency, unsupported source/capability, exact-key
+conflict, invalid exception, forbidden notification field, unsafe alert default,
+unallocated budget, and map-capacity overflow. Every failure asserts that no
+generation, entry slot, response binding, or partial map becomes active.
+
+Mithril must never call the design-level YAML in Chapter 11 a valid wire file,
+interpret an empty selector as wildcard, combine several operations into one
+authority key, activate a partial map, let a finding decide the entry that must
+exist before the finding, or claim rollback from a signature alone.
+
+### A.12 Exact Kernel Decision ABI And Lookup
+
+Chapter 13 explains the one local decision. This section fixes the map keys,
+value meanings, lookup order, and failure behavior.
+
+**Example.** Python opens the projected token. The role's base table denies it.
+Even if the base table allowed it, an authority-domain restriction, active
+response, terminating binding, stale object generation, or earlier LSM denial
+could still deny. None of those negative layers can grant a base permission.
+
+#### A.12.1 Non-reused handles and retained state
+
+Every node-local handle is a nonzero `u64`, allocated monotonically within
+`(node_boot_id, label_epoch)` and never reused. Losing the allocator epoch while
+protected holders survive is fatal; the node does not wrap.
+
+```text
+ProfileGenerationRefV1 {
+  profile_generation_ref_id: nonzero u64
+  node_boot_id: Id128
+  label_epoch: u64
+  profile_id: Id128
+  owner_generation: nonzero u64
+  compiled_artifact_digest_id: nonzero u64
+  state: PREPARING | ACTIVE | RETIRING
+}
+
+SetKindV1 = RESTRICTION | RESPONSE | RETAINED_GENERATION
+
+SetRefV1 {
+  set_lock: bpf_spin_lock
+  set_ref_id: nonzero u64
+  node_boot_id: Id128
+  label_epoch: u64
+  set_kind: SetKindV1
+  owner_set_epoch: u64
+  artifact_digest_id: nonzero u64
+  refs_by_class[SetReferenceClassV1]: u64
+  state: PREPARING | ACTIVE | RETIRING
+  transition_version: u64
+}
+```
+
+`ACTIVE` accepts existing and new holders. `RETIRING` serves only already
+proved holders; it creates no new reference. `PREPARING`, missing, unknown, or
+wrong-epoch state denies. Deletion needs zero counters, no owned tombstone,
+complete iterator/WAL reconciliation, and a grace period.
+
+Every labeled task and socket also pins where it is allowed to live:
+
+```text
+TaskPlacementExpectationV1 {
+  protected_root_binding_id: Id128
+  protected_root_binding_nonce: Id128
+  allowed_descendant_policy_id: u32
+}
+```
+
+The hook resolves the current live protected cgroup root, then requires its
+`BPF_MAP_TYPE_CGRP_STORAGE` value to match this binding and nonce. A task moved
+to another cgroup, a cgroup recreated at the same path, a stale descendant
+index, or a socket left after binding tombstone cannot inherit the old allow.
+The fallback identity is `(node_boot_id, full_u64_cgroup_id, live_interval)`;
+a path or bare cgroup number is never enough.
+
+Generation ownership is typed rather than one unexplainable object counter:
+
+```text
+BindingGenerationStateV1 {
+  active_profile_generation_ref_id: u64
+  retained[] {
+    profile_generation_ref_id: u64
+    task_refs, socket_refs, file_and_shared_object_refs: u64
+    authority_domain_refs, derived_kernel_capability_refs: u64
+    vma_and_publication_refs, checkpoint_restore_refs: u64
+    pending_entry_and_exec_refs, response_plan_refs: u64
+    state: ACTIVE | RETIRING
+  }
+}
+
+GenerationReferenceClassV1 = TASK | SOCKET | FILE_OR_SHARED_OBJECT |
+  AUTHORITY_DOMAIN | DERIVED_KERNEL_CAPABILITY | VMA_OR_PUBLICATION |
+  CHECKPOINT_RESTORE | PENDING_ENTRY_OR_EXEC | RESPONSE_PLAN
+
+GenerationReferenceTombstoneV1 {
+  reference_owner_id: Id128
+  reference_owner_generation: u64
+  profile_generation_ref_id: u64
+  reference_class: GenerationReferenceClassV1
+  owned: bool
+  acquisition_transition_version: u64
+  release_transition_version?: u64
+}
+```
+
+An owner acquires its typed reference before publication or use and releases
+it once through `owned=true -> false`. Retirement requires every class counter
+to be zero, no owned tombstone in the complete iterator/WAL reconciliation,
+and the grace period. Existing processes do not migrate in Version 1: a new
+root takes the active generation; an old root, its forks and execs keep the
+generation they already own.
+
+#### A.12.2 Binding and composite object identity
+
+```text
+ExecutionSetBindingStateV1 {
+  binding_lock: bpf_spin_lock
+  binding_id, binding_nonce, node_boot_id, execution_set_id,
+    protected_scope_id, profile_id: Id128
+  label_epoch: u64
+  active_profile_generation_ref_id: u64
+  root_cgroup_id: u64
+  root_cgroup_live_interval_id: Id128
+  mount_view_generation_id: Id128
+  network_namespace_generation_id: Id128
+  lifecycle_state: PREPARING | ACTIVE | DRAINING | TERMINATING | TOMBSTONED
+  lifecycle_generation: u64
+  mode: OBSERVE | PROTECT
+  transition_version: u64
+}
+
+BindingRetainedGenerationKeyV1 {
+  binding_id: Id128
+  profile_generation_ref_id: u64
+}
+
+BindingRetainedGenerationValueV1 {
+  binding_nonce: Id128
+  lifecycle_generation: u64
+  membership_state: ACTIVE | RETIRING
+}
+
+ClassifierAxisValueV1 { axis_id: u16, value_id: u32 }
+
+CompositeDecisionAtomV1 {
+  atom_id: nonzero u64
+  effect_family: u16
+  sorted_unique_axis_values[1..MAX_CLASSIFIER_AXES]
+  canonical_axis_digest_id: nonzero u64
+}
+```
+
+The token example is one composite atom such as credential=service-account,
+backing=projected-volume, mutability=provider-rotated, and persistence=Pod-
+lifetime. Selecting only “file” or only “token” is invalid. Missing/duplicate/
+unknown required axes deny.
+
+#### A.12.3 Base, restriction, response, and default keys
+
+```text
+EffectDecisionKeyV1 {
+  profile_generation_ref_id: u64
+  active_role_id: u32
+  entry_kind: u16
+  effect_family: u16
+  operation: u16
+  composite_atom_id: u64
+  exact_object_key_id: nonzero u64
+  process_state_vector_id: u32
+  binding_lifecycle_state: u8
+}
+
+EffectDefaultKeyV1 {
+  profile_generation_ref_id: u64
+  active_role_id: u32
+  entry_kind: u16
+  effect_family: u16
+  operation: u16
+  composite_atom_id: u64
+  process_state_vector_id: u32
+  binding_lifecycle_state: u8
+}
+
+PhysicalDecisionV1 {
+  decision: ALLOW | AUDIT_ALLOW | DENY
+  errno: i16
+  evidence_class_id: u32
+  transition_id: u32              // zero means no state change
+}
+
+RestrictionDecisionKeyV1 {
+  restriction_set_ref_id, profile_generation_ref_id: u64
+  effect_family, operation: u16
+  composite_atom_id, exact_object_key_id: u64
+}
+
+RestrictionDefaultKeyV1 {
+  restriction_set_ref_id, profile_generation_ref_id: u64
+  effect_family, operation: u16
+  composite_atom_id: u64
+}
+
+RestrictionDecisionV1 {
+  result: NO_ADDITIONAL_RESTRICTION | DENY
+  errno: i16
+  restriction_reason_bits: u64
+}
+
+ResponseDecisionKeyV1 {
+  response_set_ref_id, profile_generation_ref_id: u64
+  effect_family, operation: u16
+  composite_atom_id, exact_object_key_id: u64
+}
+
+ResponseDefaultKeyV1 {
+  response_set_ref_id, profile_generation_ref_id: u64
+  effect_family, operation: u16
+  composite_atom_id: u64
+}
+
+ResponseDecisionV1 {
+  result: NO_ADDITIONAL_RESTRICTION | AUDIT_ALLOW | DENY
+  errno: i16
+  response_plan_set_digest_id: u64
+}
+```
+
+Every negative set and retained-generation set has an active descriptor. A
+table row without its descriptor has no meaning.
+
+```text
+RestrictionSetDescriptorV1 {
+  restriction_set_ref_id, set_epoch, covered_generation_set_ref_id: u64
+  row_count: u32
+  table_digest_id, declared_default_digest_id: u64
+  state: PREPARING | ACTIVE | RETIRING
+}
+
+ResponseSetDescriptorV1 {
+  response_set_ref_id, set_epoch, covered_generation_set_ref_id: u64
+  row_count: u32
+  table_digest_id, declared_default_digest_id: u64
+  response_plan_set_digest_id: u64
+  state: PREPARING | ACTIVE | RETIRING
+}
+
+GenerationSetDescriptorV1 {
+  retained_generation_set_ref_id: u64
+  membership_count: u32
+  membership_digest_id: u64
+  state: PREPARING | ACTIVE | RETIRING
+}
+
+GenerationMembershipKeyV1 {
+  retained_generation_set_ref_id, profile_generation_ref_id: u64
+}
+
+GenerationMembershipValueV1 {
+  state: ACTIVE | RETIRING
+  generation_artifact_digest_id: u64
+}
+```
+
+Rust populates descriptor, membership, rows, and defaults under `PREPARING`,
+reads back their counts and digests, then activates them. The BPF hook checks
+identity, epoch, state, and exact generation membership; it does not calculate
+a digest in the hot path. Missing descriptor or membership denies even if a
+stale row remains in a map.
+
+Activation installs exactly one default for every reachable non-exact key.
+Missing exact rows may use only that fully initialized default. Missing
+default, descriptor, atom, or generation membership denies. Zero never means
+an object wildcard.
+
+#### A.12.4 Exact lifetime floors
+
+Static policy cannot enumerate future sockets, pipes, accepted connections,
+created files, or received descriptors. The compiler emits either an explicit
+neutral floor or a required dynamic template for each reachable cell.
+
+```text
+FloorRequirementKeyV1 {
+  profile_generation_ref_id: u64
+  active_role_id: u32
+  entry_kind, effect_family, operation: u16
+  composite_atom_id: u64
+  process_state_vector_id: u32
+  binding_lifecycle_state: u8
+}
+
+DynamicFloorTemplateV1 {
+  template_id, profile_generation_ref_id: u64
+  owner_lifetime_kind: SOCKET | CHANNEL | FILE | VMA | DERIVED_CAPABILITY |
+                       PENDING_EXEC | BINDING
+  required_provenance_bits, required_reference_classes: u64
+  initial_floor: RestrictionFloorV1
+  permitted_narrowing_transition_ids[]: u32
+  artifact_digest_id: u64
+  state: PREPARING | ACTIVE | RETIRING
+}
+
+RestrictionFloorV1 {
+  result: NO_ADDITIONAL_RESTRICTION | DENY
+  errno: i16
+  reason_bits: u64
+}
+
+FloorRequirementValueV1 =
+  EXPLICIT_NEUTRAL
+  | DYNAMIC_REQUIRED {
+      template_id: u64,
+      required_provenance_bits: u64,
+      required_reference_classes: u64
+    }
+
+DynamicFloorStateV1 {
+  exact_lifetime_identity_digest: DigestV1
+  source_template_id, source_profile_generation_ref_id: u64
+  restriction_set_ref_id?: u64
+  generation_reference_owned, set_reference_owned: bool
+  floor: RestrictionFloorV1
+  state: PREPARING | ACTIVE | TOMBSTONED | RECONCILIATION_REQUIRED
+  transition_version: u64
+}
+
+ExactObjectFloorKeyV1 {
+  exact_object_key_id, exact_object_generation: u64
+  effect_family, operation: u16
+}
+
+ExactSocketOrChannelFloorKeyV1 {
+  exact_socket_or_channel_key_id, exact_socket_or_channel_generation: u64
+  current_actor_authority_domain_id: Id128
+  effect_family, operation: u16
+}
+
+BindingLifetimeFloorKeyV1 {
+  binding_id, binding_nonce: Id128
+  lifecycle_state: u8
+  effect_family, operation: u16
+}
+```
+
+Creation/acquisition installs and reads back a dynamic floor before the object
+or channel becomes usable. First use before `ACTIVE`, capacity N+1, object
+reuse, missing provenance, or an unclassified received fd denies.
+
+#### A.12.5 Atomic transitions
+
+```text
+TransitionDescriptorV1 {
+  transition_id: u32
+  node_boot_id: Id128
+  label_epoch: u64
+  transition_kind: NONE | PROCESS_ONLY | DOMAIN_SENSITIVE_ONLY
+  profile_generation_ref_id: u64
+  transition_artifact_digest_id: u64
+  state: PREPARING | ACTIVE | RETIRING
+}
+
+ProcessTransitionKeyV1 {
+  profile_generation_ref_id: u64
+  transition_id, current_role_id, current_process_state_vector_id: u32
+  current_process_response_set_ref_id: u64
+}
+
+ProcessTransitionValueV1 {
+  next_role_id, next_process_state_vector_id: u32
+  next_process_response_set_ref_id: u64
+}
+
+DomainSensitiveTransitionKeyV1 {
+  profile_generation_ref_id: u64
+  transition_id: u32
+  current_potential_sensitive_bits, current_observed_sensitive_bits: u64
+  current_restriction_set_ref_id, current_domain_response_set_ref_id: u64
+}
+
+DomainSensitiveTransitionValueV1 {
+  next_potential_sensitive_bits, next_observed_sensitive_bits: u64
+  next_restriction_set_ref_id, next_domain_response_set_ref_id: u64
+}
+```
+
+BPF resolves the descriptor and prospective row before locking the owning
+state. Under the one lock it rechecks the complete old tuple/version and writes
+the complete next tuple. Version 1 rejects a rule that requires one syscall to
+atomically mutate both process and domain map values. A publication-sensitive
+read uses the domain transition as its authority.
+
+#### A.12.6 Canonical lookup order
+
+```text
+1. If an earlier stacked LSM result is nonzero, preserve it and return it.
+2. Read TaskLabelV1. If absent, completely resolve protected placement:
+   proved outside -> explicit host policy;
+   protected or unknown -> deny missing protected identity.
+3. Validate expected live cgroup object, binding ID, nonce, live interval,
+   descendant rule, lifecycle generation, and current placement.
+4. Copy process, authority domain, entry, and binding tuples under their own
+   locks. Never nest locks. Revalidate each version; retry one complete snapshot
+   once, then deny on continuing contention.
+5. Require committed/open entry, active process, compatible epochs, exact
+   identity links, retained profile generation, binding membership, and domain
+   generation membership.
+6. Classify every required object axis and exact live object/channel generation.
+7. Load exact base row or its exact default.
+8. Load domain restriction, process response, and domain response rows/defaults.
+9. Load required exact object, socket/channel, pending-exec, and binding floors.
+10. Validate every SetRef kind, epoch, state, and existing-holder reference.
+11. Intersect all results. Any deny wins; otherwise any audit requirement gives
+    AUDIT_ALLOW; otherwise ALLOW.
+12. Commit the one declared monotonic transition before returning allow.
+13. Fix the physical return value, then best-effort emit bounded evidence.
+```
+
+An absent negative row is neutral only after its active descriptor and explicit
+default have been found. Negative restriction/response sets can narrow a base
+allow but cannot turn a base deny into allow.
+
+In `OBSERVE`, only a row explicitly marked as a simulatable policy denial may
+return allow plus `WOULD_DENY`. Earlier LSM denial, missing identity, stale
+binding, corrupt state, terminating lifetime floor, and installed emergency
+response remain hard denies in every mode.
+
+Decision caching is disabled in Version 1. No task/process/domain value may
+store a cached final allow. A loaded authority cache or nonzero cache ID makes
+strict activation fail as `DECISION_CACHE_UNQUALIFIED`.
+
+#### A.12.7 Golden and hostile cases
+
+`DECISION-SET-GOLDEN-001` must compare Rust and BPF bytes, field offsets, enum
+values, default rows, map key construction, lookup trace, transition result,
+and physical errno. It includes two profiles whose owner generation is both
+42 but whose node refs differ, a multi-axis projected-token atom, both process
+and domain response sets, active/retiring holders, and exact object/channel
+floors.
+
+Hostile cases remove or corrupt each lookup in turn, exhaust every map at N+1,
+move a labeled task, reuse cgroup/object/socket coordinates, retire a still-
+referenced generation, race process/domain/binding transitions, lose evidence,
+and inject an earlier LSM denial. Every missing authority state denies; event
+loss cannot change the already fixed physical result.
+
+Mithril must never use cgroup-first lookup for a labeled task, bare generation
+42, digest-only defaults, zero as wildcard, mutable active rows, a cached final
+allow, `CLEANUP_ONLY` as a kernel result, or telemetry success as proof of
+enforcement.
+
+### A.13 Exact Linux Effect-Surface Contract
+
+Chapters 14-21 explain why Mithril combines several Linux mechanisms. This
+section says what “complete coverage” means for each surface.
+
+**Problem.** Blocking `/bin/curl` is not network control: Python can open a
+socket directly. Blocking `open("token")` is not file-use control: the process
+may inherit an already open descriptor. Blocking a TUN device is not complete
+network containment: userspace TCP or an existing socket may remain. A product
+claim therefore names an operation and its exact decision point, not a tool
+name.
+
+#### A.13.1 Mount topology and file identity
+
+```text
+MountViewIdentityV1 {
+  node_boot_id:Id128
+  mount_namespace_inum:u64
+  mount_namespace_binding_nonce:Id128
+  mount_namespace_live_interval:Id128
+  topology_epoch:u64
+}
+
+LiveMountObjectV1 {
+  mount_view_identity:MountViewIdentityV1
+  unique_mount_id_when_qualified:u64
+  legacy_mount_id?:u64
+  superblock_and_filesystem_identity:Id128
+  mount_live_interval:Id128
+}
+
+NetworkNamespaceIdentityV1 {
+  node_boot_id:Id128
+  netns_cookie:u64
+  netns_live_interval:Id128
+  capture_mechanism:u32
+}
+
+MountNamespaceStateV1 {
+  mount_namespace_id: Id128
+  node_boot_id: Id128
+  namespace_inode: u64
+  namespace_generation: u64
+  topology_generation: u64
+  root_mount_id: u64
+  snapshot_digest: DigestV1
+  state: CLEAN | DIRTY_RECONCILING | FAIL_CLOSED_UNKNOWN | TOMBSTONED
+  live_interval_id: Id128
+  transition_version: u64
+}
+
+MountSecurityViewV1 {
+  mount_namespace_id: Id128
+  topology_generation: u64
+  task_root_identity: ExactObjectGenerationV1
+  visible_mount_snapshot_digest: DigestV1
+  propagation_and_peer_group_digest: DigestV1
+  read_only_noexec_nosuid_nodev_digest: DigestV1
+  state: ACTIVE | STALE | RETIRING
+}
+
+FileObjectIdentityV1 {
+  mount_namespace_id: Id128
+  mount_topology_generation: u64
+  mount_id: u64
+  filesystem_instance_id: Id128
+  inode_number: u64
+  inode_generation_or_version: u64
+  exact_live_object_id: Id128
+  object_kind: REGULAR_FILE | DIRECTORY | SYMLINK | DEVICE |
+               PROC_OBJECT | OTHER_QUALIFIED
+  backing_object_or_volume_identity: Id128
+  live_interval_id: Id128
+}
+
+FileInstanceProvenanceV1 {
+  file_instance_id: Id128
+  exact_file_object: FileObjectIdentityV1
+  opener_task_cookie: u64
+  opener_process_state_id, opener_authority_domain_id: Id128
+  profile_generation_ref_id: u64
+  open_flags_and_mode: u64
+  source_mount_view_digest: DigestV1
+  acquisition_operation
+  inherited_or_transferred_from?: Id128
+  dynamic_floor_state_id: Id128
+  state: PREPARING | ACTIVE | TOMBSTONED | RECONCILIATION_REQUIRED
+}
+```
+
+Paths are display and policy-authoring inputs. The physical decision uses the
+resolved mount, filesystem, object, and generation. Rename and bind aliases do
+not change object authority. Inode-number reuse creates a new generation.
+
+Mount, unmount, move, propagation, pivot-root, chroot, automount, overlay copy-
+up, and network-filesystem referral synchronously mark the affected namespace
+`DIRTY_RECONCILING` before exposing the new topology. Rust builds a new bounded
+snapshot, reads it back, then atomically advances the topology generation. A
+file decision during a required dirty interval denies or uses an explicitly
+compiled safe floor; it never resolves against the old snapshot.
+
+#### A.13.2 File-operation coverage
+
+| Operation family | Exact object that must be known before allow | Required decision/result distinction |
+| --- | --- | --- |
+| Open/read acquisition | Final resolved object after namespace lookup | attempted open, returned fd, later positive bytes, mmap, and provider use are different results |
+| Existing/passed/inherited fd use | `FileInstanceProvenanceV1` plus current actor | current actor policy intersects immutable acquisition floor; opener authority does not transfer |
+| Create/mkdir/mknod/symlink | parent directory object, new name bytes, mount generation, proposed object kind | reserve/classify before visibility; attach new-object floor before first use |
+| Rename/link | exact source object plus old/new parent objects and names | both sides must be checked; paired hooks cannot lose an earlier LSM denial |
+| Unlink/rmdir | exact object and parent/name relation | namespace removal does not erase open/VMA/persistent state |
+| chmod/chown/truncate/setattr | exact object, requested attributes, current file provenance | mutation uses a dedicated key; open permission is insufficient |
+| read/write/splice/sendfile/copy-file-range | current actor, exact source and sink, offsets/lengths, async request identity | admission and positive completed bytes are recorded separately |
+| mmap/mprotect/pkey_mprotect | exact mm, VMA range, backing object, old/new permissions and write/execute history | executable or writable-shared capability exists for VMA lifetime, not syscall lifetime |
+| io_uring/AIO | submitting actor/domain, ring generation, registered files/buffers, opcode, later executor/completion | SQPOLL never borrows the kernel thread's role; unsupported opcode/setup denies full claim |
+
+Projected ServiceAccount token rotation must install the new exact object
+binding before AtomicWriter publishes the new revision. An asynchronous
+userspace inode update after visibility is too late. If the platform cannot
+hold publication, the strict role denies the projected mount or reports that
+rotation-safe classification is unsupported.
+
+`/proc/<pid>` and `/sys` objects are classified by the resolved target process
+or kernel object, not path text. `/proc/self`, `/proc/<pid>/fd`, bind mounts,
+hardlinks, symlinks, and namespace aliases cannot turn a protected target into
+an ordinary file.
+
+#### A.13.3 Executable images and memory
+
+The executable object is the immutable file/object generation plus ordered
+script or `binfmt_misc` chain and ELF loader objects. Basename, `$PATH`, argv,
+file extension, and a copied filename are not authority.
+
+The complete executable-memory family includes:
+
+```text
+execve and execveat image install
+shebang and binfmt interpreter passes
+ELF PT_INTERP loader open/map
+memfd and deleted executable images
+anonymous PROT_EXEC mapping
+writable then executable file/VMA transition
+mprotect and pkey_mprotect adding execute
+executable stack requested by ELF metadata
+personality/READ_IMPLIES_EXEC changes
+JIT profiles with exact mm/VMA/write-seal discipline
+```
+
+```text
+MmSnapshotIdentityV1 {
+  node_boot_id: Id128
+  label_epoch: u64
+  mm_cookie: nonzero u64
+  mm_generation: u64
+  snapshot_version: u64
+  expected_sharer_count: u32
+}
+
+VmaIteratorSessionV1 {
+  session_identity: VmaIteratorSessionIdentityV1
+  expected_mm_snapshot: MmSnapshotIdentityV1
+  state: PREPARING | BEGUN | RECORDING | ENDED_COMPLETE |
+         ENDED_PARTIAL | FAILED
+  first_sequence, last_sequence: u64
+  expected_records, observed_records, gap_count: u64
+  canonical_snapshot_digest?: DigestV1
+}
+```
+
+An `mm_struct *` pointer is not durable identity. BPF/Rust use a non-reused mm
+cookie, generation, live interval, expected sharers, and begin/record/end
+iterator protocol. An incomplete snapshot is typed partial and cannot prove
+that no executable or writable-shared mapping exists.
+
+In-process Python/Jinja interpretation may create no exec or executable-memory
+transition. Mithril controls its next file, socket, device, privilege, or
+publication effect and must not report “Python execution denied” when only a
+later effect was denied.
+
+#### A.13.4 Network and socket lifetime
+
+```text
+NetworkEffectKeyV1 {
+  current_process_state_id, current_authority_domain_id: Id128
+  current_profile_generation_ref_id: u64
+  operation: SOCKET_CREATE | BIND | LISTEN | ACCEPT | CONNECT |
+             SEND | RECEIVE | SHUTDOWN | SETSOCKOPT | GETSOCKOPT
+  socket_key_id, socket_generation: u64
+  network_namespace_generation_id: Id128
+  protocol: u16
+  final_destination_policy_id: u64
+  final_address_and_port_digest: DigestV1
+}
+
+SocketProvenanceV1 {
+  socket_key_id, socket_generation: u64
+  backing_identity: ExactObjectGenerationV1
+  creator_task_cookie: u64
+  creator_process_state_id, creator_authority_domain_id: Id128
+  creator_profile_generation_ref_id: u64
+  network_namespace_generation_id: Id128
+  bind_connect_accept_history_digest: DigestV1
+  current_flow_generation: u64
+  dynamic_floor_state_id: Id128
+  state: PREPARING | ACTIVE | SHUTTING_DOWN | TOMBSTONED |
+         RECONCILIATION_REQUIRED
+}
+```
+
+Every use intersects current actor/domain policy with immutable socket
+provenance and the exact live socket floor. A passed, inherited, accepted, or
+preexisting socket does not transfer its creator's positive allow. Shared use
+may force a common authority domain or separately authorized whole-socket
+fence; the response reports that blast radius.
+
+Coverage is path-specific:
+
+| Path | Required control |
+| --- | --- |
+| New TCP | final destination after route/rewrite plus connect result and packet floor |
+| Established TCP | send/write/sendmsg/splice/sendfile/io_uring path plus packet or flow floor; connect-only is insufficient |
+| UDP | per-message `msg_name` final destination, connected and unconnected forms, IPv4 and IPv6 |
+| Accept | listener identity plus new accepted-socket generation and peer; floor installed before release |
+| Receive | admission and positive bytes/queued-data provenance are separate; already queued data may survive a later peer fence |
+| Local channels | loopback, Pod IP, wildcard listener, reuseport, UDP, Unix socket, NAT/hairpin, and BPF redirect are shared channels, not automatically safe |
+| Namespace transfer | current network namespace and socket's namespace provenance both remain part of the key |
+
+Destination classification uses the final address after service resolution,
+NAT, transparent proxying, cgroup/socket rewrite, and routing. A pre-rewrite
+allow cannot authorize a different final endpoint. Missing rewrite or final-
+address coverage denies under a full claim.
+
+DNS names are context, not a bypass around destination control. Full DNS
+claims separately qualify UDP/TCP framing, every iovec, `msg_name`, malformed
+and compressed names, size bounds, multi-question behavior, non-53 resolvers,
+literal IP, DoT, and DoH. Unknown/malformed/encrypted DNS follows the IP and
+destination floor. Mithril never infers an HTTP, Git, Kubernetes, or cloud verb
+from same-destination TLS.
+
+#### A.13.5 Devices and derived kernel authority
+
+```text
+DeviceFileEffectKeyV1 {
+  current_process_state_id, current_authority_domain_id: Id128
+  device_file_instance_id: Id128
+  exact_device_generation: u64
+  operation: OPEN | READ | WRITE | MMAP | IOCTL | POLL | ASYNC_SUBMIT
+  ioctl_command_id?: u32
+  argument_shape_id?: u32
+}
+
+DerivedKernelCapabilityObjectV1 {
+  capability_object_id: Id128
+  kind: TUN_TAP | IO_URING | BPF_MAP | BPF_PROGRAM | BPF_LINK |
+        PERF_EVENT | KVM_CONTEXT | GPU_CONTEXT | KEYRING |
+        PIDFD | NAMESPACE_FD | MOUNT_FD | OTHER_REGISTERED
+  exact_backing_object: ExactObjectGenerationV1
+  creator_process_state_id, creator_authority_domain_id: Id128
+  profile_generation_ref_id: u64
+  creation_operation_and_parameters_digest: DigestV1
+  dynamic_floor_state_id: Id128
+  state: PREPARING | ACTIVE | REVOKING | TOMBSTONED |
+         RECONCILIATION_REQUIRED
+}
+```
+
+Device authority is path-independent: type, major/minor generation, driver
+identity where available, operation, ioctl command, argument shape, current
+actor, and file provenance. Opening `/dev/net/tun` is only one stage; later
+ioctls and derived TUN/network state remain controlled. The same applies to
+BPF, perf, io_uring, KVM, GPU, pidfds, keyrings, namespace fds, and mount fds.
+
+#### A.13.6 Privilege, process control, Seccomp, and Landlock
+
+The privilege family includes credential changes, setuid/setgid/capset,
+`no_new_privs`, namespace creation/join, mounts and pivot-root, ptrace,
+process-vm, pidfd operations, signal/control, BPF, perf, modules, keyrings,
+proc/sysctl security objects, io_uring setup, and device-derived authority.
+Each needs a named target and operation; a generic “capability event” is not
+complete coverage.
+
+```text
+SeccompFloorProofV1 {
+  proof_id: Id128
+  task_or_process_state_id: Id128
+  filter_program_digest: DigestV1
+  installed_before_user_mode: bool
+  no_new_privs_state: bool
+  tsync_requested_and_result
+  listener_or_supervisor_identity?: Id128
+  listener_policy_digest?: DigestV1
+  readback_method_and_result
+  permitted_syscall_argument_constraints_digest: DigestV1
+  state: VERIFIED | PARTIAL | FAILED | UNKNOWN
+}
+```
+
+Seccomp filters only become stricter; there is no syscall that removes an
+installed filter. Mithril therefore proves the required floor was installed
+before user mode, all threads received it where required, a user-notification
+listener cannot widen authority, and ptrace/supervisor relationships are safe.
+Seccomp can match syscall numbers and scalar arguments. It cannot authenticate
+the pathname behind a userspace pointer, so it cannot by itself authorize
+`/proc/<target>/mem`.
+
+Landlock is an additional process-installed floor. Its available rights depend
+on the running ABI and may include filesystem, TCP port, and scoped signal/
+abstract-Unix-socket controls. It is useful defense in depth for a process that
+can install it before untrusted code. It does not replace centrally dynamic
+Mithril policy, task identity, shared-domain propagation, devices, arbitrary
+network destination identity, provider semantics, or response.
+
+For a defender's approved memory read, the trusted owner opens the exact target
+while held, passes only that read-only target fd and one evidence-sink fd to a
+short-lived measured inspector, installs/readbacks a seccomp fd/syscall floor,
+and checks the exact case, target, byte budget, deadline, and sink again in BPF
+LSM. Memory write, ptrace control, fd extraction, signal, and general network
+remain forbidden.
+
+#### A.13.7 Surface qualification
+
+Every advertised operation has:
+
+```text
+exact hook/program and signature
+whether it can deny before effect
+prior-LSM result behavior
+actor/object/channel fields available there
+creation/acquisition and final-lifetime paths
+missing-state and capacity result
+completion oracle when completion is claimed
+negative control and bypass fixture
+platform capability record and unsupported result
+```
+
+Mandatory bypass cases include deep/long paths, bind/hardlink/symlink aliases,
+projected-token rotation, inherited/passed fd, mmap and preexisting mappings,
+`mprotect`, memfd/deleted exec, dynamic loader substitution, every namespace
+mutation, IPv4/IPv6, established TCP, per-message UDP, local laundering,
+rewrite, DNS framing variants, shared sockets, device fd pass, ioctl families,
+io_uring/SQPOLL, ptrace/process-vm/pidfd, BPF/perf/module/keyring, and prior-LSM
+denial on each enabled program.
+
+Mithril must never promote a pathname, PID, namespace number, socket owner,
+DNS string, device path, event after completion, or one successful hook probe
+into a broader physical claim.
+
+### A.14 Exact Shared-Authority And Publication Contract
+
+Chapter 18 explains the race: one process can obtain sensitive authority while
+another process publishes through a shared file, mapping, pipe, socket, or
+userspace buffer. This section fixes the shared state and transaction.
+
+**Example.** The converter and uploader sidecar share `/work`. The converter
+reads a token while the uploader already has a blocked send using a mutable
+buffer. Marking the file or process sensitive after the read is too late. The
+send reservation and sensitive transition must serialize on the same domain
+state before either effect is allowed.
+
+#### A.14.1 Authority domain and durable resources
+
+```text
+AuthorityDomainStateV1 {
+  authority_domain_id, node_boot_id: Id128
+  label_epoch, domain_epoch: u64
+  domain_lock: bpf_spin_lock
+  execution_set_binding_refs: u64
+  live_process_refs: u64
+  live_channel_and_shared_object_refs: u64
+  pending_entry_and_join_refs: u64
+  response_plan_refs: u64
+  reconciliation_hold_refs: u64
+  publication_reservation_and_capability_refs: u64
+  shared_resource_kind_bits: u64
+  potential_sensitive_bits, observed_sensitive_bits: u64
+  effective_restriction_set_ref_id: u64
+  effective_response_set_ref_id: u64
+  retained_generation_set_ref_id: u64
+  publication: AuthorityDomainPublicationStateV1
+  transition_version: u64
+  state: PREPARING | ACTIVE | DRAINING | RECLAIMABLE |
+         FAIL_CLOSED_OVERFLOW | CORRUPT
+}
+
+SharedResourceStateV1 {
+  shared_resource_state_id: Id128
+  exact_live_object_identity_and_generation: ExactObjectGenerationV1
+  authority_domain_id: Id128
+  reference_owned: bool
+  participant_topology_plan_digest: DigestV1
+  potential_sensitive_bits, observed_sensitive_bits: u64
+  effective_response_set_ref_id: u64
+  transition_version: u64
+  state: PREPARING | ACTIVE | DRAINING | TOMBSTONED | CORRUPT
+}
+
+PersistentFileSecurityStateV1 {
+  persistent_state_id: Id128
+  backing_volume_live_identity, filesystem_instance_identity: Id128
+  stable_filesystem_object_identity_and_generation: Id128
+  known_namespace_alias_digest: DigestV1
+  link_count_observation: u64
+  open_file_refs, vma_refs, async_io_and_writeback_refs: u64
+  authority_domain_id: Id128
+  potential_sensitive_bits, observed_sensitive_bits: u64
+  transition_version: u64
+  state: PREPARING | ACTIVE | UNLINKED_REFERENCED | RETIRING |
+         TOMBSTONED | CORRUPT
+}
+```
+
+Threads share one process and domain. Ordinary fork descendants remain in the
+same monotonic domain because they inherit memory and descriptors even without
+explicit `CLONE_VM|CLONE_FILES|CLONE_FS`. Independent roots join before using
+a shared mount, memory area, pipe, Unix/loopback socket, passed fd, or other
+declared channel.
+
+Positive role grants never merge. The domain carries only common negative
+restrictions, sensitive bits, response floors, and retained generations. A
+converter never gains the uploader's destination allow.
+
+A domain cannot be reclaimed merely because the last process exits. Bindings,
+objects, sockets, mappings, pending entries/joins, response plans, publication
+slots, persistent files/volumes, and recovery holds can keep it alive. All
+typed refs, iterator state, publication state, WAL, and grace period must agree.
+
+#### A.14.2 Prevention modes for a shared channel
+
+| Mode | Meaning |
+| --- | --- |
+| `DENY` | The channel cannot be created, opened, connected, attached, or first used by these participants. |
+| `PRE_USE_CONSERVATIVE_DOMAIN_MERGE` | Participants receive the common negative domain before either may use the channel. This is the unchanged-deployment baseline. |
+| `SERIALIZED_TRANSFER_GATE` | A separately qualified boundary owns every enqueue/dequeue and updates the receiver before bytes or capability become usable. |
+| Observation-only taint | May explain completed flow or trigger later restriction; never claims first-transfer prevention. |
+
+The configured record keeps prevention and observation separate:
+
+```text
+CrossEntryTransferControlV1 {
+  prevention_mode:DENY | PRE_USE_CONSERVATIVE_DOMAIN_MERGE |
+                  SERIALIZED_TRANSFER_GATE
+  observation_mode:NONE | OBJECT_TAINT_BEST_EFFORT |
+                   COMPLETE_POST_TRANSFER_TAINT
+}
+
+LocalInetChannelIdentityV1 {
+  network_namespace_identity:NetworkNamespaceIdentityV1
+  family:AF_INET | AF_INET6
+  transport:TCP | UDP
+  local_address_and_port
+  peer_address_and_port
+  socket_cookie_and_birth_generation
+  listener_socket_cookie_and_generation?
+  accepted_child_socket_cookie_and_generation?
+  endpoint_selection:EXACT_ONE | EXACT_REUSEPORT_SET |
+                     WILDCARD_LISTENER_SET | UNKNOWN
+  participant_authority_domain_ids[]:Id128
+  topology_version:u64
+}
+```
+
+“Local” is resolved in the exact live network namespace. It includes loopback,
+Pod IP, wildcard listeners, local redirection, and qualified hairpin delivery;
+it is not determined by the spelling of an address. `UNKNOWN` cannot establish
+a safe receiver and follows the configured deny or conservative merge.
+
+A clean receiver may already be blocked in `read` before a sensitive writer
+updates an object. Therefore object-taint-after-write is not the baseline.
+Local IPv4/IPv6, wildcard/reuseport listeners, shared Pod networking, pipes,
+shared memory, regular files, `emptyDir`, passed fds, and process-memory access
+all follow the same rule.
+
+#### A.14.3 Domain join transaction
+
+BPF cannot atomically rewrite several maps and objects. The triggering channel
+operation first denies and leaves a persistent gate in `DENYING`. Rust then
+runs a crash-recoverable join.
+
+```text
+AuthorityDomainJoinTransactionV1 {
+  join_transaction_id: Id128
+  source_domain_ids[2..MAX_JOIN_DOMAINS]: Id128
+  target_domain_id: Id128
+  expected_source_transition_versions[]: u64
+  unioned_negative_state_digest: DigestV1
+  root_progress_ids[], target_progress_ids[]: Id128
+  quiescence_proof_id: Id128
+  gate_state: DENYING | RETRY_ALLOWED
+  state: PREPARING | QUIESCING | REDIRECTING | VERIFYING |
+         COMMITTED | DRAINING_OLD | COMPLETE |
+         RECOVERY_REQUIRED | FAILED_CLOSED
+}
+
+DomainJoinRootProgressV1 {
+  old_domain_id: Id128
+  expected_transition_version: u64
+  restrictive_floor_installed: bool
+  members_enumerated: bool
+  pointers_redirected: u64
+  references_transferred: u64
+  readback_digest: DigestV1
+  state: PENDING | IN_PROGRESS | VERIFIED | DRAINING | COMPLETE
+}
+
+DomainJoinTargetProgressV1 {
+  target_domain_id: Id128
+  unioned_state_and_set_digest: DigestV1
+  acquired_reference_counts_by_class[]
+  installed_and_readback: bool
+  state: PREPARING | ACTIVE | CORRUPT
+}
+
+DomainJoinQuiescenceV1 {
+  new_channel_and_entry_gate: CLOSED
+  new_async_submission_gate: CLOSED
+  io_uring_instances[]: CANCELLED | DRAINED | UNRESOLVED
+  sqpoll_workers[]: STOPPED_AND_DRAINED | UNRESOLVED
+  registered_file_and_buffer_sets[]: SNAPSHOTTED | UNRESOLVED
+  aio_and_kernel_worker_requests[]: CANCELLED | DRAINED | UNRESOLVED
+  inflight_publications: exactly 0
+  persistent_publication_present: exactly false
+  frozen_process_set_digest: DigestV1
+  task_object_socket_iterator_digests[]: DigestV1
+  state: NOT_STARTED | GATED | DRAINED | FROZEN | VERIFIED | INCOMPLETE
+}
+```
+
+Join order is fixed:
+
+```text
+deny the triggering operation and all new participant/publication paths
+build a PREPARING target containing the union of negative state
+freeze/hold the complete target set and drain async publication work
+for every process/object/socket/binding/pending entry/response/persistent item:
+  acquire target reference
+  CAS the owner pointer
+  release the source reference using an owned bit
+read back every root, target, pointer, and reference
+activate target and change the gate to RETRY_ALLOWED
+retry the original operation from a fresh lookup
+drain old domains only after zero references and reconciliation
+```
+
+A crash may leave some actors stricter than others. The gate stays denied and
+recovery resumes exact progress rows. It never reopens old broad authority.
+
+#### A.14.4 Publication reservation
+
+```text
+AuthorityDomainPublicationStateV1 {
+  publication_epoch: u64
+  inflight_publications: u32
+  persistent_publication_present: bool
+  state: ACTIVE | CAPACITY_FAIL_CLOSED | STUCK_FAIL_CLOSED |
+         RECONCILIATION_REQUIRED
+  slots[MAX_DOMAIN_PUBLICATIONS]: PublicationSlotV1
+}
+
+PublicationSlotV1 {
+  publication_instance_id: Id128      // zero only when FREE
+  descriptor_id: nonzero u64
+  release_epoch: u64                  // zero before domain-side release
+  state: FREE | INFLIGHT | COMPLETING | RELEASED_PENDING_ACK
+}
+
+PublicationDescriptorV1 {
+  descriptor_id: nonzero u64
+  publication_instance_id: Id128
+  actor_task_cookie: u64
+  actor_process_state_id, actor_authority_domain_id: Id128
+  profile_generation_ref_id: u64
+  operation
+  exact_request_identity: ExactRequestIdentityV1
+  transfer_plan: PublicationTransferPlanV1
+  source_mutability_proof_ids[]: Id128
+  completion_kind
+  maximum_bytes: u64
+  descriptor_digest: DigestV1
+  state: PREPARING | ACTIVE | COMPLETING | TOMBSTONED
+}
+```
+
+The types referenced by that descriptor are exact. They are placed here,
+after the algorithm, so the reader sees the race before the wire shapes.
+
+```text
+UserBufferSegmentV1 { address:u64, length:u64 > 0 }
+
+PublicationPayloadSourceV1 =
+  USER_BUFFER { segment:UserBufferSegmentV1 }
+  | FILE_RANGE {
+      object:ExactObjectGenerationV1, offset:u64, length:u64 > 0
+    }
+  | PIPE_BUFFER {
+      pipe:ExactObjectGenerationV1, pipe_generation:u64, length:u64 > 0
+    }
+  | SOCKET_RECEIVE_QUEUE {
+      socket:ExactObjectGenerationV1, receive_generation:u64, length:u64 > 0
+    }
+
+ExactPublicationSinkV1 =
+  FILE_OBJECT { object:ExactObjectGenerationV1, offset:u64, length:u64 }
+  | NETWORK_FLOW {
+      socket:ExactObjectGenerationV1, flow_generation:u64,
+      final_destination_identity_digest:DigestV1
+    }
+  | PIPE_OR_IPC {
+      object:ExactObjectGenerationV1, queue_generation:u64
+    }
+
+PublicationTransferPlanV1 =
+  SINGLE {
+    source:PublicationPayloadSourceV1, sink:ExactPublicationSinkV1
+  }
+  | USER_IOVEC {
+      segments[1..MAX_IOV]:UserBufferSegmentV1,
+      sink:ExactPublicationSinkV1
+    }
+  | MESSAGE_BATCH {
+      messages[1..MAX_MMSG] {
+        message_index:u32,
+        segments[0..MAX_IOV]:UserBufferSegmentV1,
+        sink:ExactPublicationSinkV1,
+        capability_transfer_ids[0..MAX_SCM_TRANSFERS]:Id128
+      }
+    }
+
+IpcCapabilityTransferV1 {
+  transfer_id:Id128
+  kind:SCM_RIGHTS | SCM_CREDENTIALS
+  exact_transferred_object?:ExactObjectGenerationV1
+  sender_task_cookie:u64
+  sender_authority_domain_id:Id128
+  receiver_channel:ExactObjectGenerationV1
+  required_result:DENY | PRE_USE_DOMAIN_JOIN | DECLARED_SAME_DOMAIN
+}
+
+SourceMutabilityProofV1 {
+  proof_id:Id128
+  proof_generation:u64 > 0
+  covered_source_identity_digest:DigestV1
+  proof:SAME_AUTHORITY_DOMAIN { authority_domain_id:Id128 }
+      | PREMERGED_AUTHORITY_DOMAIN { join_transaction_id:Id128 }
+      | SEALED_MEMFD {
+          object:ExactObjectGenerationV1,
+          required_seals:F_SEAL_WRITE|F_SEAL_SEAL,
+          no_preexisting_writable_mapping_proof_id:Id128
+        }
+      | IMMUTABLE_CAS_OR_IMAGE_OBJECT {
+          object:ExactObjectGenerationV1, content_digest:DigestV1,
+          read_only_backing_proof_id:Id128
+        }
+      | HELD_WRITER_RECONCILIATION {
+          object:ExactObjectGenerationV1, reconciliation_id:Id128,
+          writer_and_vma_snapshot_id:Id128
+        }
+  valid_from_transition_version:u64
+  state:ACTIVE | INVALIDATED | CONSUMED
+}
+
+ExactRequestIdentityV1 =
+  SYNC_SYSCALL {
+    task_cookie:u64, process_state_id:Id128,
+    syscall_entry_sequence:u64, effect_attempt_sequence:u64,
+    effect_family:u16, operation:u16
+  }
+  | AIO_REQUEST {
+      aio_context_id:Id128, request_id:Id128, submission_sequence:u64
+    }
+  | IO_URING_REQUEST {
+      ring_id:Id128, ring_generation:u64, submission_sequence:u64,
+      sqe_index:u32, user_data:u64, opcode:u16
+    }
+  | MMAP_ATTEMPT {
+      task_cookie:u64, process_state_id:Id128,
+      authority_domain_id:Id128, attempt_sequence:u64
+    }
+
+ExactCompletionIdentityV1 =
+  SYNC_RETURN {
+    task_cookie:u64, syscall_entry_sequence:u64,
+    effect_attempt_sequence:u64
+  }
+  | AIO_COMPLETION { aio_context_id:Id128, request_id:Id128 }
+  | IO_URING_CQE {
+      ring_id:Id128, ring_generation:u64, submission_sequence:u64,
+      user_data:u64
+    }
+  | ZEROCOPY_NOTIFICATION {
+      socket:ExactObjectGenerationV1, notification_generation:u64,
+      first_id:u32, last_id:u32
+    }
+  | HELD_WRITEBACK_RECONCILIATION { reconciliation_id:Id128 }
+```
+
+The source proof answers “can some actor change these bytes after admission?”
+The request identity answers “which one syscall or asynchronous request owns
+this reservation?” The completion identity answers “which exact completion may
+release it?” A digest, address, fd, `user_data`, or time alone answers none of
+those questions.
+
+Task-local nesting and descriptor lifetime prevent an inner LSM pass or a
+duplicate completion from releasing the wrong reservation:
+
+```text
+TaskEffectAttemptStateV1 {
+  task_cookie, syscall_entry_sequence, next_effect_attempt_sequence:u64
+  frames[MAX_NESTED_EFFECT_ATTEMPTS] {
+    effect_attempt_sequence:u64
+    effect_family, operation, hook_discriminator, repeated_lsm_pass_count:u16
+    publication_instance_id?:Id128
+    state:ACTIVE | RETURNED | CANCELLED
+  }
+  depth:u16
+  state:ACTIVE | OVERFLOW_FAIL_CLOSED | TASK_EXITED
+}
+
+PublicationDescriptorLifetimeV1 {
+  descriptor_id:u64
+  publication_instance_id, authority_domain_id:Id128
+  slot_reference_owned:bool
+  prepared_boottime_ns:u64
+  completion_identity_digest?:DigestV1
+  completion_boottime_ns?, domain_release_epoch?:u64
+  transition_version:u64
+  state:PREPARED | OWNED | COMPLETING | COMPLETED | CANCELLED |
+        RECLAIMABLE | CORRUPT
+}
+
+PublicationIdAllocatorV1 {
+  allocator_lock:bpf_spin_lock
+  node_boot_id:Id128
+  label_epoch:u64
+  next_instance_counter, next_descriptor_counter:u64  // start at 1
+  state:ACTIVE | EXHAUSTED | LOST_EPOCH_FAIL_CLOSED
+}
+```
+
+The deciding BPF program allocates non-reused IDs, inserts the immutable
+descriptor and lifetime with `BPF_NOEXIST`, reads them back, and only then takes
+the domain lock to reserve a slot. Counter wrap, allocator loss, map-full,
+unexpected existing key, nested-frame overflow, or descriptor mutation holds
+the domain fail-closed. The IDs are never recycled.
+
+Transfer sources are closed: user buffer/iovec/message batch, exact file range,
+pipe generation, or socket receive queue. Sinks are exact file range, network
+flow/final destination, or IPC queue. `SCM_RIGHTS` and credentials are
+capability transfers, not payload bytes. AIO and io_uring requests include
+their ring/context generation, submission sequence, opcode, and completion
+identity.
+
+The linearization is:
+
+```text
+publication begin:
+  build and read back immutable descriptor
+  lock domain
+  require no publication-denying sensitive state and a free slot
+  reserve slot and increment inflight/ref/epoch
+  unlock and read back ownership
+  allow the effect
+
+sensitive authority begin:
+  lock the same domain value
+  require inflight == 0 and no persistent writable publication capability
+  install sensitive bits and stricter set in the same locked transition
+  otherwise deny with the configured EAGAIN/EACCES
+
+publication completion:
+  match the exact syscall/AIO/io_uring/zero-copy completion
+  move INFLIGHT -> COMPLETING -> RELEASED_PENDING_ACK
+  decrement once using owned state
+  acknowledge external lifetime, then free slot
+```
+
+Pointer/length overflow, N+1 iovec/message, mutable writer outside the domain,
+missing source, incompatible completion, unknown zero-copy lifetime, or slot
+capacity denies. A missing completion safely leaves the restriction stuck; it
+does not guess that publication ended.
+
+`MAP_SHARED` to a writable output or shared/remote/host volume creates a
+`PersistentPublicationCapabilityV1` before mmap returns:
+
+```text
+PersistentPublicationCapabilityV1 {
+  capability_id, authority_domain_id:Id128
+  origin_task_cookie:u64
+  origin_process_state_id:Id128
+  mapping_attempt_identity:ExactRequestIdentityV1::MMAP_ATTEMPT
+  reconciled_mm_snapshot_id?:Id128
+  exact_sink_object_id_and_generation:ExactObjectGenerationV1
+  requested_mapping {
+    file_offset:u64, length:u64,
+    prot_bits:READ | WRITE | EXEC,
+    map_flags:SHARED | SHARED_VALIDATE,
+    unknown_flag_bits:exactly 0
+  }
+  reservation_epoch:u64
+  domain_reference_owned:bool
+  transition_version:u64
+  state:RESERVED | MAPPING_OBSERVED | RECONCILIATION_REQUIRED |
+        RELEASED | RECLAIMABLE
+}
+```
+
+It remains until a
+held full-domain VMA/object/writeback reconciliation proves every mapping,
+forked holder, fault, writeback, and async request is gone. `munmap`, `msync`,
+exec, process exit, or origin-task death alone cannot clear it.
+
+#### A.14.5 Persistent and cross-node volumes
+
+Rename and hardlink preserve persistent file state. Overlay copy-up, reflink,
+copy, snapshot, clone, backup, and restore must attach source authority to the
+new object before it becomes visible or deny the operation. Unlink releases
+only after link count is zero and no fd, VMA, async I/O, or writeback remains.
+
+RWX storage needs a signed centrally committed
+`PersistentVolumeAuthorityV1`: volume/storage generation, portable restriction,
+participant set, access mode, and commit index. Every node holds mount/root
+release until it fetches a non-rollback record, lowers it into a fresh local
+set, joins the execution set, and reads back the result. Reactive node-local
+taint is insufficient because one node may crash before another publishes.
+
+```text
+PersistentVolumeAuthorityV1 {
+  persistent_volume_authority_id, cluster_uid:Id128
+  csi_driver_canonical_name
+  provider_or_csi_volume_handle_digest:DigestV1
+  provisioned_volume_uid:Id128
+  provisioned_storage_generation:u64
+  access_mode:RWO | ROX | RWX | RWOP | UNKNOWN
+  potential_sensitive_bits:u64
+  semantic_restriction_artifact_digest:DigestV1
+  permitted_execution_set_ids[]:Id128
+  record_generation, control_commit_index:u64
+  policy_artifact_digest:DigestV1
+  state:PREPARING | ACTIVE | RETIRING | REVOKED | CORRUPT
+  signer_key_id
+  signature
+}
+
+VolumeMountBarrierV1 {
+  barrier_id, node_boot_id, execution_set_id,
+    persistent_volume_authority_id:Id128
+  exact_live_mount_identity
+  observed_record_generation, observed_control_commit_index:u64
+  installed_local_restriction_set_ref_id:u64
+  installed_semantic_restriction_artifact_digest:DigestV1
+  installed_domain_and_restriction_digest:DigestV1
+  state:HELD | READ_BACK | RELEASED | DENIED
+}
+```
+
+The central record carries portable restriction meaning, never a node-local
+map handle. A node compiles that meaning to a fresh local set and reads it back
+before releasing the mount or workload root. Stale commit index, rollback,
+unknown storage generation, bad signature, or unavailable control leaves the
+barrier held. This is intentionally volume-wide in Version 1: safe per-file
+cross-node identity is unsupported until the storage backend proves stable
+non-reused identity and every link/copy/snapshot/restore transition.
+
+If a backend lacks stable non-reused object identity or qualified
+link/copy-up/remount lifecycle, the honest options are a volume-wide common
+domain, denial of the writable surface, or an unsupported per-file claim.
+
+#### A.14.6 Failure and race tests
+
+Mandatory tests pause or crash after every reservation, sensitive transition,
+join pointer/ref write, completion, rename/link/unlink, overlay copy-up,
+VMA/writeback transition, and volume commit. They cover blocked reader before
+writer, mutable send buffer after admission, regular file, pipe, Unix stream
+and datagram, shared memory, loopback/Pod IP, passed/duplicated fd, splice,
+sendfile, copy-file-range, AIO, every relevant io_uring opcode, registered
+files/buffers, SQPOLL, `MAP_SHARED`, multiple readers, sidecar restart, zero-
+process gaps, node crash, and RWX cross-node publication.
+
+The oracle is physical: no marker reaches the sink on denied branches; clean
+declared data still succeeds; counters/refs never underflow; a crash never
+restores broader authority; unsupported paths are named.
+
+Mithril must never claim that process-local taint, object taint after transfer,
+last-process exit, admission alone, `munmap`, path/inode identity, or a node-
+local event makes shared publication safe.
+
+### A.15 Exact Evidence, Graph, And Response Contract
+
+Chapters 22-24 explain proof and response. This section defines the records
+that make those explanations deterministic.
+
+**Problem.** A local socket event, Kubernetes audit event, and AWS operation
+may all occur close together. Time and a shared credential can suggest a path,
+but they do not prove one Linux process caused the remote action. Likewise,
+killing a process does not prove its controller, sockets, credentials, or
+remote branches were contained.
+
+#### A.15.1 Observation and coverage records
+
+```text
+EvidenceFieldV1 = FINDING_ID | REASON_CODE | DECISION | ERRNO |
+  TASK_COOKIE | PROCESS_LINEAGE_ID | AUTHORITY_DOMAIN_ID |
+  EXECUTION_SET_ID | EXACT_OBJECT_ID | OBJECT_CLASS_ID |
+  DESTINATION_ID | PROVIDER_REQUEST_ID | PROVIDER_RESULT |
+  COVERAGE_INTERVAL_IDS | POLICY_RULE_IDS | RESPONSE_RESULT
+
+FindingGroupingFieldV1 = FINDING_ID | REASON_CODE | PROCESS_LINEAGE_ID |
+  AUTHORITY_DOMAIN_ID | EXECUTION_SET_ID | EXACT_OBJECT_ID |
+  PROVIDER_PRINCIPAL_ID | PROVIDER_RESOURCE_ID
+
+ObservationEnvelopeV1 {
+  schema_version: u32
+  tenant_id: Id128
+  observation_id: DigestV1
+  source_id: Id128
+  source_epoch, source_sequence: u64
+  stable_provider_event_id?: bounded bytes
+  node_boot_id?: Id128
+  cpu_id?: u32
+  hook_or_adapter_id: u32
+  payload_schema_id: u32
+  abi_or_api_version: u32
+  profile_generation_ref_id?: u64
+  boottime_ns?: u64
+  projected_utc_ns?: i64
+  time_uncertainty_ns: u64
+  ingested_utc_ns: i64
+  payload_fields[]: bounded typed EvidenceFieldV1
+  proof_quality: ProofQualityV1
+  coverage_interval_id: Id128
+  transport_integrity_digest: DigestV1
+  signature_or_batch_digest?: DigestV1
+}
+
+CoverageIntervalV1 {
+  coverage_interval_id, source_id: Id128
+  source_epoch: u64
+  first_sequence, last_contiguous_sequence: u64
+  start_boottime_ns, end_boottime_ns?: u64
+  state: HEALTHY | GAPPED | UNKNOWN | CLOSED
+  attempted, suppressed, requested, emitted, lost,
+    classifier_miss_count: u64
+  required_link_map_reader_digests[]: DigestV1
+  gap_reason_code?: u32
+  recovery_probe_artifact_id?: Id128
+}
+```
+
+For kernel sources, `attempted = suppressed + requested` and
+`requested = emitted + lost`. Suppression is intentional policy sampling;
+loss is not. First loss, detach, reader failure, epoch change, counter
+inconsistency, clock reset, or unknown map/link health closes the healthy
+interval. Recovery opens a new interval; history is never rewritten.
+
+The WAL truncates only through a durable contiguous acknowledgement. A restart
+that cannot prove sequence continuity creates a new epoch and explicit gap.
+Enforcement health, identity coverage, event coverage, semantic admission,
+correlation feeds, and response verification remain separate axes.
+
+#### A.15.2 Proof quality and findings
+
+```text
+ProofQualityV1 {
+  source_authority: KERNEL_DECISION | SIGNED_COORDINATOR |
+                    AUTHORITATIVE_PROVIDER | AUTHENTICATED_MEASUREMENT |
+                    UNAUTHENTICATED
+  local_subject_binding: EXACT_TASK | EXACT_PROCESS | EXACT_EXECUTION_SET |
+                         CONTEXTUAL | NONE
+  remote_subject_binding: EXACT_REQUEST | EXACT_SESSION | EXACT_OBJECT |
+                          PRINCIPAL_ONLY | CONTEXTUAL | NONE
+  operation_result_authority: PRE_EFFECT_DECISION |
+                              AUTHORITATIVE_SUCCEEDED |
+                              AUTHORITATIVE_DENIED | OBSERVED_ATTEMPT |
+                              CONTEXTUAL | UNKNOWN
+  temporal_coverage: COMPLETE | GAPPED | UNKNOWN
+  integrity: SIGNED | AUTHENTICATED_CHANNEL | LOCAL_ATTESTED | UNVERIFIED
+}
+
+FindingV1 {
+  finding_id: DigestV1
+  package_id, package_version
+  subject_id: DigestV1
+  window_start_utc_ns, window_end_utc_ns: i64
+  revision: u64
+  state: PROVISIONAL | CONFIRMED | SUPERSEDED | RETRACTED |
+         COVERAGE_INSUFFICIENT
+  graph_version_id: DigestV1
+  sorted_evidence_ids[], required_coverage_interval_ids[]: DigestV1
+  superseded_revision?: u64
+  closed_reason_code?: u32
+}
+```
+
+Packages declare sources, coverage, maximum lateness, time uncertainty,
+retention, exact/contextual join fields, and late-event behavior. Delivery
+order and duplicate redelivery cannot change the terminal finding bytes. Time
+never upgrades an edge to exact.
+
+#### A.15.3 Multi-node graph
+
+```text
+GraphSubjectV1 {
+  subject_id: DigestV1
+  tenant_id: Id128
+  subject_kind: TASK | PROCESS | EXECUTION_SET | SOCKET | REQUEST |
+                CREDENTIAL_LEASE | KUBERNETES_OBJECT | PROVIDER_OBJECT |
+                ARTIFACT | CI_RUN | CI_JOB | CI_STEP | EXTERNAL
+  owning_authority_id: Id128
+  immutable_identity_fields[]
+  identity_state: EXACT | CONTEXTUAL | CONTRADICTED | SUPERSEDED
+  first_seen_utc_ns, last_seen_utc_ns: i64
+}
+
+GraphEdgeV1 {
+  edge_id: DigestV1
+  from_subject_id, to_subject_id: DigestV1
+  edge_type_id: u32
+  package_id, package_version
+  sorted_evidence_ids[], required_coverage_ids[]: DigestV1
+  proof_quality: ProofQualityV1
+  cause_strength: DIRECT | CONTEXTUAL | CONTRADICTED | SUPERSEDED
+  valid_time_interval_and_uncertainty
+  supersedes_edge_id?: DigestV1
+}
+
+GraphVersionV1 {
+  graph_version_id: DigestV1
+  parent_graph_version_id?: DigestV1
+  input_source_watermarks[]
+  package_versions[]
+  sorted_subject_ids[], sorted_edge_ids[]: DigestV1
+  canonical_graph_digest: DigestV1
+}
+```
+
+`ProviderEdgeContractV1` registers the only fields that can make a particular
+pair of endpoint kinds direct:
+
+```text
+GraphSubjectKindV1 = TASK | PROCESS | EXECUTION_SET | SOCKET | REQUEST |
+  CREDENTIAL_LEASE | KUBERNETES_OBJECT | PROVIDER_OBJECT | ARTIFACT |
+  CI_RUN | CI_JOB | CI_STEP | EXTERNAL
+
+SourceKindV1 = RegistrySymbolV1
+EvidenceFieldIdV1 = RegistrySymbolV1
+FixtureIdV1 = ASCII matching ^[A-Z][A-Z0-9_-]{2,127}$
+
+ProviderEdgeContractV1 {
+  edge_type_id:u32
+  from_subject_kind, to_subject_kind:GraphSubjectKindV1
+  authoritative_source_kind:SourceKindV1
+  direction:FROM_CAUSED_TO | TO_DERIVED_FROM
+  required_equal_fields[1..32]:EvidenceFieldIdV1
+  identifier_uniqueness_scope:bounded closed value
+  required_request_fields[0..32]:EvidenceFieldIdV1
+  required_result_fields[0..32]:EvidenceFieldIdV1
+  required_coverage[1..16]:SourceKindV1
+  minimum_proof_vector:ProofQualityV1
+  time_rule:CAUSAL_ORDER_REQUIRED | PROVIDER_ORDER_REQUIRED |
+            TIME_NOT_USED_FOR_EXACTNESS
+  missing_field_result:CONTEXTUAL_EDGE | NO_EDGE | COVERAGE_UNKNOWN
+  legitimate_shared_identity_negative_test_id:FixtureIdV1
+}
+```
+
+The registry fixes source/target kinds, direction, equality fields,
+uniqueness/cardinality scope, authoritative request/result fields, coverage,
+proof predicate, time rule, missing-field result, and a concurrent
+shared-identity negative fixture. Adapters cannot emit a generic direct edge
+outside this registry.
+
+Examples:
+
+```text
+local task -> Kubernetes request: direct only with carried request/lease proof
+Kubernetes request -> object revision: API request/audit/object IDs and result
+object revision -> controller -> Pod -> node-B root: UIDs, owner/scheduler,
+  Pod UID, full container ID, and node admission
+AWS lease -> operation: provider account/session/access-key fields and result;
+  still not one Linux task when the lease was shared
+artifact -> consumer: immutable provider version/digest plus one-use slot
+connector -> provider request: connector invocation ID forwarded and confirmed
+```
+
+Remote tasks are never Linux children of local tasks. A missing carried proof
+keeps the edge contextual even when account, IP, user agent, and time match.
+Every branch independently records open, terminal verified, contextual only,
+outside authority, or coverage unknown.
+
+#### A.15.4 Response authorization and state
+
+```text
+ResponsePlanV1 {
+  plan_id: Id128
+  revision: u64
+  frozen_graph_version: DigestV1
+  frozen_branch_ids[]: DigestV1
+  requested_actions[]: ResponseActionSpecV1
+  authorization_id: Id128
+  authorization_expires_utc_ns: i64
+  node_deadline_boottime_ns?: u64
+  idempotency_key_per_action[]: Id128
+  state: PROPOSED | AUTHORIZED | REVALIDATING | APPLYING |
+         VERIFYING | WATCHING | VERIFIED | PARTIAL | FAILED |
+         UNKNOWN | EXPIRED | CANCELLED
+  action_results[]
+  required_watch_interval_ns: u64
+  required_coverage_ids[]: Id128
+}
+
+EffectiveResponseSet {
+  set_ref_id: nonzero u64
+  response_restriction_ids[MAX_RESPONSE_REFS]: Id128
+  combined_deny_effect_families: u64
+  combined_socket_fence
+  earliest_expiry_boottime_ns: u64
+}
+```
+
+The policy types referenced by a response binding are closed. The authoritative
+`ResponseActionSpecV1` definition is in Appendix A.11.5.1; the variants are
+repeated here as a response-engine reading aid:
+
+```text
+response action variants =
+  LOCAL { action:RESTRICT_LINEAGE | FENCE_SOCKETS | FREEZE_CGROUP }
+  | KUBERNETES {
+      action:REJECT_REPLACEMENT, admission_capability_id:PolicyLocalIdV1
+    }
+  | CREDENTIAL {
+      action:REVOKE_CREDENTIAL, provider:ProviderV1, credential_kind,
+      actuator_capability_id:PolicyLocalIdV1,
+      typed_request_schema_digest:DigestV1
+    }
+  | MESH {
+      action:DISABLE_MESH_DEVICE, provider:ProviderV1,
+      actuator_capability_id:PolicyLocalIdV1,
+      typed_request_schema_digest:DigestV1
+    }
+  | ARTIFACT {
+      action:QUARANTINE_ARTIFACT, store_capability_id:PolicyLocalIdV1,
+      typed_request_schema_digest:DigestV1
+    }
+  | SOURCE_CONTROL {
+      action:SUSPEND_INSTALLATION, provider:ProviderV1,
+      actuator_capability_id:PolicyLocalIdV1,
+      typed_request_schema_digest:DigestV1
+    }
+  | PROVIDER_SPECIFIC {
+      provider:ProviderV1, canonical_action_id:PolicyLocalIdV1,
+      actuator_capability_id:PolicyLocalIdV1,
+      typed_request_schema_digest:DigestV1
+    }
+
+BlastRadiusLimitV1 =
+  LOCAL {
+    permitted_target_selector_ids[1..64], process_count:u32,
+    execution_set_count:u32, socket_count:u32, node_count:u32
+  }
+  | KUBERNETES {
+      permitted_namespace_uids[1..64]:Id128,
+      object_count:u32, controller_count:u32, node_count:u32
+    }
+  | CREDENTIAL {
+      permitted_provider_account_ids[1..64], session_count:u32,
+      principal_count:u32, role_count:u32, account_count:u32
+    }
+  | MESH {
+      permitted_tailnet_or_tenant_ids[1..64], device_count:u32,
+      route_count:u32, auth_key_count:u32
+    }
+  | SOURCE_CONTROL {
+      permitted_organization_ids[1..64], installation_count:u32,
+      repository_count:u32, ref_or_pr_count:u32
+    }
+  | ARTIFACT {
+      permitted_store_ids[1..64], artifact_count:u32, consumer_count:u32
+    }
+  | PROVIDER_RESOURCES {
+      permitted_provider_account_ids[1..64],
+      permitted_resource_selector_ids[1..64], resource_count:u32,
+      principal_count:u32
+    }
+
+TargetRevalidationV1 =
+  PROCESS_PIDFD_TASK_COOKIE_STARTTIME_CGROUP_BINDING
+  | LINEAGE_ROOT_AND_COMPLETE_EFFECTIVE_RESPONSE_SET
+  | SOCKET_COOKIE_PROVENANCE_AND_LIVE_BINDING
+  | CGROUP_FD_NONCE_AND_MEMBER_SET
+  | KUBERNETES_UID_RESOURCE_VERSION
+  | PROVIDER_STABLE_ID_REVISION_AND_AUTHORITY
+  | ARTIFACT_IMMUTABLE_DIGEST_AND_STORE_REVISION
+
+PhysicalPostconditionV1 =
+  RESPONSE_SET_INSTALLED_AND_DESCENDANTS_RECONCILED
+  | PROCESS_STOPPED_VIA_PIDFD
+  | SOCKET_SET_FENCED_AND_EXISTING_FLOW_ORACLE_PASSED
+  | CGROUP_FROZEN_AND_PACKET_FENCE_ACTIVE
+  | REPLACEMENT_REJECTED_THROUGH_WATCH_WATERMARK
+  | PROVIDER_CREDENTIAL_ACTION_READ_BACK
+  | MESH_DEVICE_DISABLED_AND_HANDSHAKE_REJECTED
+  | ARTIFACT_QUARANTINED_AND_CONSUMER_LOAD_REJECTED
+  | PROVIDER_OPERATION_SPECIFIC_POSTCONDITION
+```
+
+The compiler accepts only compatible combinations. For example, a GitHub
+audit fingerprint cannot select a revoke-secret action, and a process target
+cannot use a Kubernetes-object postcondition. Zero in a blast-radius field
+means no targets are authorized, not unlimited targets.
+
+Provider adapters lower those generic actions to typed capabilities. The
+initial required GitHub and AWS shapes are:
+
+```text
+ConnectorTokenMintObservation {
+  broker_request_id, app_id, installation_id
+  repositories[], permissions[], result
+  credential_lease_id
+  protected_token_handle?:ProtectedCredentialHandleV1
+}
+
+GithubDocumentedAuditObservation {
+  documented_event_schema_id
+  installation_id, actor_id
+  repository_or_organization_id
+  operation_id, request_or_delivery_id, authoritative_result
+}
+
+GithubRevokePossessedInstallationToken {
+  credential_lease_id:Id128
+  protected_token_handle:ProtectedCredentialHandleV1
+}
+
+GithubSuspendInstallation { installation_id:bounded bytes }
+GithubRemoveRepositoryAccess {
+  installation_id, repository_id:bounded bytes
+}
+WaitForExpiryAndWatch {
+  token_fingerprint:bounded bytes
+  expires_at_utc_ns:i64
+}
+
+AwsDenyAssumedRoleSession {
+  principal_id, role_session_name, policy_change_target:bounded bytes
+}
+
+AwsRevokeRoleSessionsBefore {
+  role_arn:bounded bytes
+  cutoff_utc_ns:i64
+}
+
+AwsIdentityCenterRevokeUserSession {
+  user_id, permission_set_or_application:bounded bytes
+}
+```
+
+GitHub's revoke-installation-token API revokes the token used to authenticate
+that revoke request. An audit hash, installation ID, or guessed token ID is
+not the bearer secret. With no protected handle, the eligible choices are a
+broader repository/installation action or expiry/watch, and the plan must show
+that blast radius. Standard audit-only mode reports token mint detection as
+unsupported unless the configured documented schema actually supplies that
+event; downstream repository/workflow events remain usable.
+
+AWS capabilities also have different physical scopes. Denying one named role
+session, applying a role-wide “issued before” cutoff, and revoking an Identity
+Center user session are not interchangeable. Each adapter records required IAM
+authority, affected credential type and estimated session set, propagation
+window, reversibility, and readback/canary procedure. If a cutoff disables two
+sessions, Mithril must not label the result “exact session revoked.”
+
+Every transition is a durable compare-and-swap recording actor, previous
+revision, UTC, node time where relevant, reason, and idempotency key. A new
+replacement or late branch creates a new plan revision; it cannot be ignored
+because an older scope already verified.
+
+Before actuation, response freezes the graph version and branches, checks
+authorization and blast-radius limits, and re-resolves the target at its owning
+authority:
+
+```text
+process: node boot + label epoch + task cookie + pidfd/start + cgroup binding
+lineage: root plus complete inherited effective-response reconciliation
+socket: cookie/generation/provenance/live binding
+cgroup: opened fd + nonce + complete members
+Kubernetes: UID + resourceVersion
+provider: stable ID + revision + actuator authority
+artifact: immutable digest + exact store revision
+```
+
+Future children inherit the effective response set at task creation in O(1).
+Ancestor vectors help find existing descendants but are not the only future-
+child control. Capacity overflow denies new protected effects/forks; Mithril
+never drops the oldest response.
+
+#### A.15.5 Physical response verification
+
+| Action | Verification required in production |
+| --- | --- |
+| Process/lineage restriction | Exact response map/set readback; target points to it; every existing descendant reconciled or separately authorized broader fence; hooks/maps healthy |
+| Existing socket/packet fence | Exact socket/cgroup keys, program generation and attachment readback; preexisting flows enumerated; tied drop/destroy counters |
+| Cgroup freeze | Exact live cgroup reads `frozen=1` and task membership reconciles |
+| Kill/signal | pidfd target revalidated and exact process exit confirmed; replacement branches stay open |
+| Kubernetes action | exact UID/revision readback and replacement watch through healthy watermark |
+| Credential/provider/mesh/source-control action | typed provider request/result plus authoritative postcondition readback; audit silence alone is insufficient |
+| Artifact quarantine | exact store revision quarantined and every required consumer load/deploy path rejects |
+
+Hostile probes run only in isolated qualification fixtures. Production
+verification uses non-invasive readback and passive healthy watch. A real later
+attempt may add errno or drop evidence, but absence of an attempt cannot make
+installation unverified if readback is complete—and silence alone can never
+substitute for readback.
+
+`VERIFIED` means every action in that exact revision passed its postcondition
+and all required sources remained healthy throughout the watch. `PARTIAL`
+means a mixture of verified and failed/outside/unverifiable branches. `FAILED`
+requires authoritative proof that none achieved the intended result.
+`UNKNOWN` means proof is insufficient. `EXPIRED` and `CANCELLED` stop future
+steps but never erase already applied actions.
+
+Blast radius is part of approval. A common authority-domain restriction, shared
+socket fence, cgroup freeze, or credential revocation must enumerate every
+known participant and lost capability. If that scope is not authorized,
+Mithril applies a separately proved narrower action or reports partial; it does
+not silently widen response.
+
+#### A.15.6 Determinism and failure tests
+
+Tests deliver the same observations in every order, duplicate them, delay them
+past watermarks, inject gaps, contradict a contextual edge, reuse a shared
+credential concurrently, take a node offline, add a late Pod, overflow
+response references, crash after every response transition, replay the same
+idempotency key, fail every actuator/readback source, and keep one external
+branch outside authority.
+
+Expected graph/finding/plan bytes are deterministic after declared time/ID
+normalization. Exact edges appear only for the client with unique carried
+proof. A quiet but unverified actuator remains unknown. A verified old scope
+plus an open new branch makes the incident partial/watching.
+
+Mithril must never infer exact cause from time/IP/user-agent/shared credential,
+equate graph identity with an actuator handle, inject attack probes into a
+compromised production process, call process kill distributed containment, or
+call missing events proof of success.
+
+### A.16 Exact CI, Artifact, And Provider-Authority Contract
+
+Chapter 26 explains CI with the same actor model as Kubernetes. This section
+closes the records that distinguish job identity, step identity, executed
+bytes, artifact trust, and credential authority.
+
+**Problem.** GitHub says a job is running step `build`, but the runner may
+materialize that step as a temporary shell script, a local action, a container,
+or a JavaScript process that downloads more code. The coordinator's display
+name or workflow digest does not prove which bytes a held Linux child will
+execute.
+
+#### A.16.1 Provider job assignment and exact step launch
+
+```text
+CiProviderJobAssignmentEvidenceV1 {
+  coordinator: CiCoordinatorV1
+  tenant_id, repository_or_project_id: bounded bytes
+  pipeline_run_id, pipeline_job_id: bounded bytes
+  run_attempt: nonzero u32
+  immutable_pipeline_definition_digest: DigestV1
+  trigger_trust_class: CiTriggerTrustClassV1
+  exact_runner_assignment_id: bounded bytes
+  runner_group_or_pool_id?: bounded bytes
+  assigned_node_or_runner_identity: bounded bytes
+  issued_at_utc_ns, expires_at_utc_ns: i64
+  provider_event_or_request_id: bounded bytes
+  provider_signature_or_authenticated_record_digest: DigestV1
+  proof_quality: ProofQualityV1
+}
+
+StepDefinitionIdentityV1 {
+  coordinator: CiCoordinatorV1
+  pipeline_run_id, pipeline_job_id, pipeline_step_id: bounded bytes
+  step_definition_kind: RUN | ACTION | CONTAINER_ACTION | SERVICE |
+                        REUSABLE_WORKFLOW | DEPLOY | POST | DEBUG
+  immutable_workflow_revision_digest: DigestV1
+  referenced_action_or_image_revision_digest?: DigestV1
+  declared_inputs_digest: DigestV1
+  declared_environment_reference_digest: DigestV1
+  declared_working_directory_bytes: bounded bytes
+}
+
+MaterializedStepInvocationV1 {
+  materialization_id: Id128
+  step_definition_identity_digest: DigestV1
+  interpreter_or_image_digest: DigestV1
+  sealed_script_or_entrypoint_digest: DigestV1
+  canonical_argv_digest: DigestV1
+  working_directory_bytes: bounded bytes
+  public_environment_digest: DigestV1
+  secret_reference_manifest_digest: DigestV1
+  input_artifact_digests[]: DigestV1
+  local_action_and_dependency_digests[]: DigestV1
+  held_task_or_runtime_request_binding_digest: DigestV1
+  state: PREPARING | SEALED_AND_HELD | CONSUMED | FAILED
+}
+
+CiTrustedRunnerStepLaunchAttestationV1 {
+  attestation_id: Id128
+  node_boot_id, execution_set_id: Id128
+  runner_control_process_lineage_id: Id128
+  provider_assignment_evidence_digest: DigestV1
+  materialized_step_invocation_digest: DigestV1
+  held_task_or_root_binding_digest: DigestV1
+  requested_role_id: Id128
+  issued_at_boottime_ns, expires_at_boottime_ns: u64
+  one_use_slot_id: Id128
+  trusted_runner_control_measurement_digest: DigestV1
+  signature
+}
+
+CiStepAdmissionJoinV1 {
+  join_id: Id128
+  provider_job_assignment_evidence_id: Id128
+  runner_step_launch_attestation_id: Id128
+  ci_step_intent_proof_id, claim_slot_id: Id128
+  exact_task_cookie_or_runtime_root_digest: DigestV1
+  resulting_role_id: Id128
+  proof_quality: ProofQualityV1
+  result: EXACT_STEP_AND_TASK | EXACT_JOB_ONLY |
+          SAME_BUDGET_AMBIGUOUS | REJECTED | UNSUPPORTED
+}
+```
+
+The coordinator proves the job assignment. Trusted runner control proves what
+it actually materialized and which exact child/root it holds. Mithril joins
+both before release. A callback signature from untrusted job code is not
+sufficient, even when its fields look correct.
+
+If a provider/runner cannot provide the trusted child-creation seam, the honest
+tier is job-level identity. Mithril may still protect the whole job but cannot
+claim one shell step caused one action.
+
+#### A.16.2 Job lifetime and cross-step state
+
+```text
+JobExecutionEpochV1 {
+  job_execution_epoch_id: Id128
+  coordinator: CiCoordinatorV1
+  pipeline_run_id, pipeline_job_id: bounded bytes
+  run_attempt: nonzero u32
+  exact_runner_assignment_id: bounded bytes
+  node_boot_id, execution_set_id: Id128
+  workspace_generation, credential_generation: u64
+  started_boottime_ns: u64
+  ended_boottime_ns?: u64
+  cleanup_tombstone_digest?: DigestV1
+  state: PREPARING | ACTIVE | CLEANING | COMPLETE |
+         RECONCILIATION_REQUIRED
+}
+
+CiStateArtifactV1 {
+  state_artifact_id: Id128
+  job_execution_epoch_id: Id128
+  kind: GITHUB_ENV | GITHUB_PATH | STEP_OUTPUT | WORKSPACE_FILE |
+        CACHE_ENTRY | ARTIFACT | UNIX_SOCKET | BACKGROUND_PROCESS |
+        SHELL_STARTUP_FILE | OTHER_REGISTERED
+  exact_producer_subject_id: DigestV1
+  producer_trust_class: ProducerTrustClassV1
+  exact_object_or_provider_version: bounded bytes
+  immutable_digest?: DigestV1
+  permitted_consumer_operations[]: ArtifactOperationV1
+  consumer_scope
+  created_boottime_ns: u64
+  expires_or_cleanup_deadline_boottime_ns: u64
+  state: ACTIVE | QUARANTINED | CLEANED | UNKNOWN
+}
+```
+
+Step completion does not erase background processes, sockets, workspace files,
+environment/path files, caches, or credentials. The next step consumes typed
+state with producer trust. Runner reuse opens a new `JobExecutionEpochV1` only
+after complete process/socket/mount/workspace/credential cleanup and readback.
+Cleanup failure rejects privileged reuse or assigns a restricted unknown tier.
+
+An untrusted PR may produce an artifact, but the artifact keeps
+`UNTRUSTED_INPUT` provenance through cache, upload, download, image build, and
+deployment. A later trusted workflow name does not upgrade the bytes. Load,
+execute, and deploy each need their own consumer authorization and
+attestation-policy match.
+
+#### A.16.3 Credential issuance and use
+
+```text
+TokenIssuanceLedgerV1 {
+  issuance_id: Id128
+  authority_intent_id: Id128
+  provider: ProviderV1
+  provider_account_or_tenant: bounded bytes
+  provider_principal: ProviderPrincipalV1
+  public_credential_or_session_fingerprint: bounded bytes
+  protected_credential_handle_id?: Id128
+  permission_ids[]: u32
+  resource_selectors[]: ResourceSelectorV1
+  audience: bounded bytes
+  issued_at_utc_ns, expires_at_utc_ns: i64
+  provider_request_id, provider_result_id: bounded bytes
+  state: ACTIVE | EXPIRED | REVOKE_REQUESTED | REVOKED | UNKNOWN
+}
+
+TokenConsumptionObservationV1 {
+  consumption_id: DigestV1
+  issuance_id_or_public_fingerprint?: bounded bytes
+  local_or_ci_subject_id?: DigestV1
+  provider: ProviderV1
+  provider_principal: ProviderPrincipalV1
+  operation_id: u32
+  resources[]: ResourceSelectorV1
+  provider_request_and_result
+  proof_quality: ProofQualityV1
+  coverage_interval_id: Id128
+}
+```
+
+Credential delivery determines the earliest honest control:
+
+| Delivery | Earliest control |
+| --- | --- |
+| Already in process environment/memory | No later file-read denial; control new lease, provider operation, destination, and response |
+| Unopened projected/mounted file | Exact file-object open/use denial when qualified |
+| Inherited or passed fd | Transfer/use/current-actor policy; open-only claim is insufficient |
+| Brokered step lease | Reject issuance or use before provider exchange; bind result to exact step/task when proof exists |
+| Provider read-only token | Provider prevents write even on the same TLS endpoint; readback effective permission |
+| Shared write token on required same-TLS channel | Kernel cannot separate clone from push; use semantic gate/audit or deny the whole channel |
+
+Mithril cannot derive a read token from an arbitrary installed write bearer
+token unless the provider offers an exchange/delegation API and authorizes it.
+When a GitHub App installation or equivalent broker can mint a separately
+scoped short-lived token, Mithril records the request/result and exposes only
+that new capability to the approved subject.
+
+##### A.16.3.1 Consumed authority and artifact objects
+
+The signed body says what was approved. These durable objects say whether the
+approval was claimed and whether a provider actually issued matching
+authority.
+
+```text
+AuthorityLeaseIntentV1 {
+  authority_intent_id, proof_id, claim_slot_id:Id128
+  local_owner:exact process lineage or exact CI job/step subject
+  provider:ProviderV1
+  provider_account_or_project, issuer_subject, audience:bounded bytes
+  requested_permission_set:u32[]
+  requested_resource_scope:ResourceSelectorV1[]
+  maximum_ttl_ns:u64
+  provider_request_nonce:Id128
+  state:PENDING | REQUESTING | ISSUED | DENIED | FAILED |
+        EXPIRED | CANCELLED
+}
+
+CredentialLeaseV1 {
+  credential_lease_id, authority_intent_id:Id128
+  provider:ProviderV1
+  provider_credential_type
+  public_session_or_access_key_identifier:bounded bytes
+  exact_provider_principal:ProviderPrincipalV1
+  exact_resource_and_permission_scope_when_proven
+  issued_at_utc_ns, expires_at_utc_ns:i64
+  local_owner_binding_quality:ProofQualityV1
+  provider_request_and_result_evidence_ids[]:DigestV1
+  secret_material:exactly NEVER_STORED
+  state:ACTIVE | EXPIRED | REVOKE_REQUESTED | REVOKED | UNKNOWN
+}
+
+ProtectedCredentialHandleV1 {
+  handle_id, credential_lease_id:Id128
+  encrypted_or_nonexportable_provider_secret_reference
+  permitted_operations:[REVOKE_SELF]
+  expires_at_utc_ns:i64
+  never_serialized_to_evidence:exactly true
+}
+```
+
+A provider result creates a lease only when provider, account, principal,
+audience, nonce, permission/resource scope, and TTL are compatible with the
+pending intent. If STS returns the wrong role, the intent becomes `FAILED`; the
+response is evidence but no lease is invented. Secret bytes never enter
+observations, graph, findings, or central WAL. An optional opaque protected
+handle lives only at the broker/actuator boundary and authorizes its one typed
+operation. A public token fingerprint is not such a handle.
+
+Artifacts use immutable instances and independent consumer slots:
+
+```text
+ArtifactInstanceV1 {
+  artifact_instance_id:Id128
+  provider_artifact_id_and_version:bounded bytes
+  producer_subject_id:DigestV1
+  producer_trust_class:ProducerTrustClassV1
+  immutable_digest:DigestV1
+  byte_length:u64
+  media_type:bounded bytes
+  source_material_ids[], storage_observation_ids[],
+    attestation_verification_ids[]:DigestV1
+  state:PUBLISHED | QUARANTINED | EXPIRED
+}
+
+ArtifactConsumerSlotV1 {
+  slot_id, artifact_instance_id:Id128
+  exact_consumer_subject_id:DigestV1
+  permitted_operation:READ_AS_DATA | VERIFY | LOAD | EXECUTE | DEPLOY
+  deadline_utc_ns:i64
+  state:PENDING | CLAIMED | COMPLETED | REJECTED | EXPIRED
+}
+
+AttestationVerificationV1 {
+  attestation_digest:DigestV1
+  predicate_type_and_version:bounded bytes
+  signer_identity_and_trust_root:bounded bytes
+  builder_identity:bounded bytes
+  subject_digests[], material_digests[]:DigestV1
+  source_repository_and_revision?:bounded bytes
+  verifier_policy_digest:DigestV1
+  result:VALID_AND_POLICY_MATCHED | VALID_BUT_POLICY_MISMATCH |
+         INVALID | UNKNOWN
+}
+```
+
+One artifact may fan out to many consumers, but each consumer claims its own
+one-use slot. `READ_AS_DATA` does not authorize `LOAD`, `EXECUTE`, or `DEPLOY`.
+A valid attestation signature proves that the signer made the statement; it
+does not by itself make the builder, source, materials, policy, or bytes
+trusted. From verification through use, Mithril holds the exact object/fd or
+requires qualified immutable storage such as a sealed object, fs-verity, or
+IMA. A cache key, artifact name, mutable tag, or digest checked before later
+mutation is not byte continuity.
+
+#### A.16.4 Physical CI shapes
+
+Every adapter maps its real execution to one of these shapes:
+
+```text
+native shell/JavaScript child of a labeled runner
+job container root
+action/step container root
+service or sidecar root
+matrix/parallel job on another runner
+reusable/remote workflow with a new coordinator boundary
+deployment/provider operation with no local task
+post/cleanup action after main failure
+interactive debug/admin entry
+Docker-in-Docker or nested runtime root
+```
+
+Native children use the ordinary fork/exec algorithm. Container/service/DinD
+roots need runtime entry admission. Cross-runner work uses provider/artifact
+edges, never native parenthood. Coordinator-only provider actions have no
+dummy Linux task. Post/debug actions are distinct entries or transitions with
+their own purpose and budgets.
+
+#### A.16.5 CI failures, tests, and honest limits
+
+Tests cover GitHub/GitLab/Tekton/Jenkins job/container/service shapes,
+concurrent matrix jobs, local and remote actions, generated temporary scripts,
+mutable local action, dependency download after workflow approval, untrusted
+PR and `pull_request_target`-like privilege split, cache poisoning, artifact
+mutation after verification, background process/socket, environment/path file,
+runner reuse, cleanup crash, environment/file/fd/broker/read-only credential
+delivery, OIDC audience mismatch, same-TLS clone/push, deploy admission,
+post-failure cleanup, debug entry, and DinD child containers.
+
+The oracle checks held-task/root binding, materialized bytes, role, credential
+scope, artifact trust, physical errno/provider result, cleanup state, and
+coverage. A signed callback, workflow hash, display step, job token, boolean
+`attestation: verified`, or shared runner path cannot substitute.
+
+Named coordinator adapters and a source `CiPolicyV1` remain unallocated until
+their phase approves the exact transport, trust root, records, and fixtures.
+The generic architecture is complete, but the Version 1 parser must reject
+unallocated `coordinators` or `ciRules` fields rather than silently accepting
+design-level YAML.
+
 ## Appendix B — Rejected Designs And Their Replacements
 
 The original architecture kept its mistakes visible. This rewrite does the
@@ -5073,6 +9232,53 @@ The supersession row connects both statement IDs, gives the reason, names the
 controlling invariant and fixtures, and fails lint if either statement moves
 without its marker. In this example, the controlling rule is task-first
 identity; the cgroup-first text remains only as an abandoned cost sketch.
+
+The exact registry is:
+
+```text
+SupersessionRegistryV1 {
+  architecture_revision_digest: DigestV1
+  records[] {
+    supersession_id
+    retained_statement_ids[]
+    controlling_statement_ids[]
+    replacement_contract_ids[]
+    affected_card_ids[]
+    forbidden_contract_ids[]
+    upstream_source_evidence_ids[]
+  }
+}
+
+ImplementationCardV1 {
+  card_id
+  governing_statement_ids[]
+  supersession_dependency_ids[]
+  implementation_owner
+  fixture_ids[]
+}
+```
+
+Lint performs only checks a program can decide reliably:
+
+```text
+every statement/supersession marker has valid unique grammar
+every referenced marker, contract, card, fixture, and source ID exists
+every supersession has at least one retained statement, controlling statement,
+  and replacement contract
+every affected card declares the supersession dependency
+no card declares a forbidden contract ID
+the sorted document marker set equals the registry marker set
+the registry and generated heading/statement set share the architecture digest
+no explicit correction/abandoned marker is left unregistered
+```
+
+Lint does not pretend to solve natural-language equivalence. Human/security
+review decides whether new prose repeats an old design and assigns it a
+statement/contract ID. Precedence is: hard invariant first; then the exact
+registered controlling contract for the named retained statement; then the
+local rejected-design rule; then explanatory examples. Two controlling
+records that require different physical results for the same exact key are a
+document error, not an implementer choice.
 
 `CFG-V1-GOLDEN-001` is likewise retained only as the stale standalone policy
 golden vector. It predates required selectors, classifier bindings, roles,
@@ -5329,6 +9535,82 @@ The review crosswalk is:
 | Tetragon node/process IDs, cache, event schema and loss: `node.go`, `process_id_linux.go`, `process.go`, `cache.go`, `events.proto`, observer/metrics | `TG-CODE-002`, `005`, `008`, `018` |
 | Tetragon one-process sensor/runtime chassis: node `main.go`, hook `runner.go`/`args.go`/server/protobuf/OCI hook | `TG-CODE-005`, `009`, `012`, `017`, `021`, `023` |
 
+#### D.1.1 Atomic checked-code claims
+
+The crosswalk above is for navigation. The rows below are the atomic claims an
+implementation card may cite. Each claim says what the pinned code actually
+does and the precise lesson Mithril takes from it. A row is not a statement
+about every upstream release or the maintainers' intent.
+
+KubeArmor claims:
+
+| ID | Pinned observation | Mithril consequence |
+| --- | --- | --- |
+| `KA-CODE-001` | `BPF/enforcer.bpf.c:10-68` returns allow on several missing container, scratch, or path lookups. | A required protected lookup miss denies; it cannot mean “not protected.” |
+| `KA-CODE-002` | Main exec enforcement at `enforcer.bpf.c:346-412` keeps its decision when ring reservation fails. | Fix the physical result before best-effort evidence. |
+| `KA-CODE-003` | `protectenv.bpf.c:78-81`, `filelessexec.bpf.c:91-95`, `anonmapexec.bpf.c:97-100`, `protectproc.bpf.c:86-89`, and `exec.bpf.c:117-120` allow when event allocation fails. | Every claimed deny path must survive event-allocation failure; these branches become hostile fixtures. |
+| `KA-CODE-004` | `core/nriHandler.go:120-240` binds after start and removes enforcement during stop handling. | This callback alone cannot prove first-exec-through-last-task coverage. |
+| `KA-CODE-005` | `system_monitor.c:1362-1376` attempts fork-time parent `exec_id` propagation; `processTree.go:133-428` remains PID/procfs assisted. | Learn early correlation, but do not call it synchronous per-task role authority. |
+| `KA-CODE-006` | LSM network code at `enforcer.bpf.c:415-648` mainly matches socket type/protocol; CIDR/port rules and NFLOG attribution are separate userspace/nftables paths. | Mithril joins exact current role/domain to socket provenance and final destination itself. |
+| `KA-CODE-007` | `shared.h:250-259`, `mapHelpers.go:47-73`, and `rulesHandling.go:414-638` use a per-container inner map mutated row by row. | Map indirection is useful, but immutable full generations and one active switch are Mithril-owned. |
+| `KA-CODE-008` | `exec.bpf.c:22-53` uses namespace, TTY, and exec-map context and permits the non-TTY/missing branch. | TTY and inherited observation context are not authenticated probe/admin intent. |
+| `KA-CODE-009` | `kubeUpdate.go:1405-1414` recognizes action words while `types.go:640-656` declares an unconstrained string. | Reuse readable allow/audit/block vocabulary only behind a closed validated enum and legal-stage compiler. |
+| `KA-CODE-010` | Fork-map value is `u64` at `system_monitor.c:319-328`, but fork code uses `u32` at `:1368-1373`; consumers read `u64` in `shared.h:564-570` and `exec.bpf.c:50-53`. | Do not copy the width mismatch; test full-width propagation behavior. |
+| `KA-CODE-011` | File/socket programs omit a trailing BPF-LSM `ret`; capable receives it but returns zero on several paths (`enforcer.bpf.c:650-808`). | Preserve an earlier denial per exact hook and branch; one exec result cannot qualify all programs. |
+| `KA-CODE-012` | DNS LSM path at `enforcer.bpf.c:889-1075` is port-53/first-buffer/bounded and has allow-on-miss paths. | DNS parsing is optional context; literal IP, malformed/large traffic, TCP, non-53, DoT/DoH remain under destination/packet policy. |
+| `KA-CODE-013` | `networkPolicyEnforcer.go:209-303` builds NFLOG userspace logs from Pod IP and records the first endpoint container; it is not the enforcement key. | Never describe that range as exact per-container or per-process enforcement attribution. |
+| `KA-CODE-014` | `kubeUpdate.go:1405-1414` canonicalizes lowercase known values and empty only; unknown strings pass the switch. | Mithril rejects unknown action values rather than inheriting open strings. |
+| `KA-CODE-015` | DNS code reads socket destination rather than per-message `msg_name`, only the first iovec, and assumes QNAME at byte 12 (`enforcer.bpf.c:1025-1075`, `shared.h:1221-1263`). | Qualify unconnected UDP, split iovecs, DNS-over-TCP framing, and every parser bound explicitly. |
+| `KA-CODE-016` | `enforcer.bpf.c:672-690` enforces reads at `file_open`; `file_permission` returns unless write/append. | File-open coverage does not prove later inherited/passed-fd read-use denial. |
+| `KA-CODE-017` | `nriHandler.go:181-214` removes policy in `StopContainer` before the runtime sends its termination signal. | Test shutdown retention separately; the code does not prove Kubernetes PreStop ordering. |
+| `KA-CODE-018` | Presets cover selected memfd/shm paths, anonymous `mmap(PROT_EXEC)`, and procfs path opens, not all later `mprotect`, ptrace, process-vm, or perf effects. | Presets seed classifiers and fixtures; they are not complete effect families. |
+| `KA-CODE-019` | `mapHelpers.go:59-73` and `rulesHandling.go:466-626` can mutate userspace state and log a failed BPF publish/delete. | Activation is build, exact readback, then publish-or-reject; log-and-continue never activates authority. |
+| `KA-CODE-020` | Core attach failures error, while several path-program failures warn and continue (`enforcer.go:133-272`). | A full claim requires every declared link/program ID and behavior read back; reduced coverage is a named tier. |
+| `KA-CODE-021` | `enforcer_path.bpf.c:7-73` has separate source/destination link/rename programs, omits trailing ret, and comments out chown. | Qualify each path program, paired order, stacking, and missing operation independently. |
+| `KA-CODE-022` | DNS and preset LSM signatures omit trailing BPF-LSM ret. | Run stacking fixtures for main, DNS, path, and every enabled preset; a normal nonmatch may not erase an earlier deny. |
+| `KA-CODE-023` | `systemMonitor.go:587-663` may continue after individual probe/reader failure. | Daemon liveness is not coverage truth; every source has an epoch, health state, and gap interval. |
+| `KA-CODE-024` | `shared.h:315-395,809-922` bounds dentry walking, rule-key bytes, and prefix scans. | Bounded path text is evidence only; live mount/filesystem/object generation owns authority. |
+| `KA-CODE-025` | `shared.h:1221-1263` does not check one user-read result, assumes simple framing, and emits a bounded name; caller does not use parser return. | Parser unknown/failure uses the destination floor or deny, never semantic allow. |
+| `KA-CODE-026` | `kubearmor_exec_pids` is a 10,240-entry LRU map; exec preset allows on missing context (`system_monitor.c:261-328`, `exec.bpf.c:35-53`). | LRU is acceptable for hints, never authoritative task/process/role state. |
+| `KA-CODE-027` | Outer and inner policy maps are fixed at 256 entries; host policy conditionally consumes an outer slot (`enforcer.go:81-98,283-285`, `mapHelpers.go:128-148`). | Preflight expanded map cardinality and test N/N+1; an over-capacity generation never becomes active. |
+| `KA-CODE-028` | `systemMonitor.go:761-789` logs read errors/lost samples, exits on closed or nil reader; enforcement and preset reserve failures have different results. | Record per-source coverage and the actual physical result; never use one generic “sensor loss” statement. |
+
+Tetragon claims:
+
+| ID | Pinned observation | Mithril consequence |
+| --- | --- | --- |
+| `TG-CODE-001` | `bpf_fork.c:24-104` skips child state when parent state is absent. | Useful observation behavior; protected-child authorization instead needs preallocated fail-closed state or denial. |
+| `TG-CODE-002` | Exec code/tests handle non-leader exec and de-threading; userspace deliberately does not cache TID identities (`bpf_execve_event.c`, `process.h`, `exit_test.go`, `process.go`). | Preserve the non-leader lesson while adding per-task synchronous authorization. |
+| `TG-CODE-003` | `policy_filter.h:27-95` resolves cgroup membership; userspace can retain conflicting container/cgroup memberships (`state.go:126-153`). | Use cgroup selection as live placement context plus an authenticated binding nonce; reject/quarantine conflicts. |
+| `TG-CODE-004` | OCI `createRuntime` can fail creation, while hook/map failures can log and continue (`oci-hook/main.go:443-459`, `rthooks.go:30-110`, `state.go`). | Use the pre-exec opportunity but require held-task install/readback before acknowledgment. |
+| `TG-CODE-005` | `exec_id` and node/cache state are cluster/host derived and tolerate LRU, out-of-order, and GC behavior. | Add attested node-boot identity, typed provider edges, and explicit coverage intervals; do not call cache identity global authority. |
+| `TG-CODE-006` | `fork_test.go:25-66` plus `exec_test.go:81-103` provides fork-without-exec coverage. | Adopt the fixture shape and add first-effect/label-order physical oracles. |
+| `TG-CODE-007` | Generic LSM supports signal/Override; a separate enforcer and metrics also exist. | Tetragon is not observation-only. Qualify each mechanism separately and add durable causal/response state. |
+| `TG-CODE-008` | Observer loss is counted, but event schema lacks Mithril source epoch/sequence/gap interval. | Add WAL-backed ordered coverage truth before negative conclusions. |
+| `TG-CODE-009` | Runtime-hook API exposes initial `CreateContainer`, not one-use later-entry tickets. | Initial metadata does not authenticate probes, lifecycle hooks, streaming exec, or later admin entries. |
+| `TG-CODE-010` | Generic LSM supports only argument indexes 0..4 and can return zero on output-state miss; a five-semantic-argument hook places chained ret outside that model. | Qualify hook signatures and prior-return behavior individually, including `path_rename`. |
+| `TG-CODE-011` | Generic LSM override staging defaults to a one-entry map; insertion failure is ignored and missing state allows. | Saturate concurrency state and make authoritative insertion failure deny. |
+| `TG-CODE-012` | One Tetragon binary owns many sensors and streams. | One node gatherer can own many BPF objects/readers; “one gatherer” does not mean one program. |
+| `TG-CODE-013` | Generic calls separate monitor/enforce and expose Post/NoPost/Signal/Override actions. | Keep requested disposition separate from physical stage/result; add entry rejection and provider response. |
+| `TG-CODE-014` | `bpf_execve_map_update.c` clears match-binary state; the actual cross-hook exec collection uses commit/event/process helpers. | Cite and test the real exec-staging path, not the similarly named cleanup program. |
+| `TG-CODE-015` | The socket-block example is a kprobe policy, not a Generic-LSM `lsmHooks` example. | Do not infer Generic-LSM socket-hook coverage from that example. |
+| `TG-CODE-016` | A fresh forward inner map is filled before outer publish; later forward/reverse membership changes are row-by-row. | Adopt fresh-map publication only; immutable full replacement and transactional reverse state remain Mithril work. |
+| `TG-CODE-017` | Fork code propagates init-tree observation state and protobuf exposes it. | Treat init-tree/TTY/runtime context as evidence, not authenticated entry purpose. |
+| `TG-CODE-018` | Fork/exec state is TGID-oriented and userspace omits TIDs. | Process observation is not an authoritative label for every task/thread. |
+| `TG-CODE-019` | Generic-LSM actions and staged kprobe/fmod_ret enforcer are separate mechanisms. | Never combine their guarantees or qualification results into one path. |
+| `TG-CODE-020` | `bpf_fork.c` is the implementation; `fork_test.go` is the executable fork-without-exec fixture. | Cite program placement and test proof separately. |
+| `TG-CODE-021` | OCI `createContainer` case is a no-op; `createRuntime` sends the request, and configured `checkFail` may still allow after error. | Runtime hook is a conditional opportunity, not strict fail-closed admission by default. |
+| `TG-CODE-022` | Fresh forward map publishes before reverse mappings, and a later failure does not roll the first publication back. | Do not inherit a claim of atomic bidirectional state. |
+| `TG-CODE-023` | OCI hook transports metadata over an insecure gRPC channel or mode-0660 Unix socket and has no signer, nonce, expiry, slot, or held task. | This is useful local metadata plumbing, not a vulnerability claim or cryptographic one-use intent proof. |
+| `TG-CODE-024` | Bounded exec state can miss insertion, yet a kill-policy test proves enforcement with process marked unknown. | Preserve generic enforcement on unknown observation, but never invent a protected role; use fail-closed preallocated identity or deny. |
+
+`SOURCE-BOUNDARY-001` applies to every row: generic Linux LSM/socket/packet
+evidence cannot distinguish Git clone from push or a Kubernetes/cloud verb in
+same-destination encrypted TLS, and Linux cannot revoke an already issued
+remote session. A separately qualified plaintext instrument may observe more,
+but authenticated provider semantics and response still require their real
+authority boundary.
+
 Phase 0 verifies every recorded line range and blob digest against the pinned
 commits. Moving a clone or finding the same filename at a new commit does not
 refresh an evidence claim. A human reviews the changed mechanism and its
@@ -5415,9 +9697,9 @@ be updated before this rewrite may still call itself complete.
 | Why a container has several roots | Chapter 6 |
 | Existing-process, kubelet exec, malicious hook, and node/runtime bypass paths | Chapter 6 |
 | Stock CRI facts and limits | Chapters 6-7 |
-| Durable identity objects and concrete field contract | Chapter 6; Appendix A.1-A.2 |
-| Task/process/thread/entry/exec distinctions and state machines | Chapter 6 |
-| Entry lifetimes and reference accounting | Chapters 6 and 9 |
+| Durable identity objects and concrete field contract | Chapter 6; Appendix A.9.1-A.9.4 |
+| Task/process/thread/entry/exec distinctions and state machines | Chapter 6; Appendix A.9.1-A.9.6 |
+| Entry lifetimes and reference accounting | Chapters 6 and 9; Appendix A.9.4 |
 | Creator parent versus changing kernel parent | Chapter 6 |
 | Native fork/thread/vfork inheritance | Chapter 6 |
 | Hook selection, PID finalization, clone-into-cgroup failures | Chapter 6 |
@@ -5427,10 +9709,10 @@ be updated before this rewrite may still call itself complete.
 | Attach and port-forward authority | Chapter 7; unallocated status §35.1 |
 | Node-wide floor for attacker-created workloads and exceptions | Chapters 5 and 7; §35.1 |
 | One-gatherer runtime integration and cold-boot circularity | Chapters 5 and 7 |
-| Runtime setup hold and rootfs-ready barrier | Chapter 7 |
-| Streaming exec two-stage model | Chapter 7 |
-| Runtime intent, signed wire, trust, replay, failure posture | Chapter 8; Appendix A.2 |
-| Claim consumption variants and state machines | Chapters 8-9 |
+| Runtime setup hold and rootfs-ready barrier | Chapter 7; Appendix A.9.7 |
+| Streaming exec two-stage model | Chapter 7; Appendix A.9.7 |
+| Runtime intent, signed wire, trust, replay, failure posture | Chapter 8; Appendix A.10 |
+| Claim consumption variants and state machines | Chapters 8-9; Appendices A.9.6-A.9.7 and A.10.4 |
 | Credential bytes versus protected actuator handle | Chapter 8 |
 | Proof vector and use matrix | Chapters 8 and 23 |
 | Kubelet-to-task proof and selected probe design | Chapters 8-9; §30 Example B |
@@ -5442,15 +9724,15 @@ be updated before this rewrite may still call itself complete.
 
 | Original topic | New location |
 | --- | --- |
-| Source policy and signed anti-rollback profile | Chapters 11-12 |
+| Source policy and signed anti-rollback profile | Chapters 11-12; Appendix A.11 |
 | Entry rules | Chapter 11 |
 | Roles and one transition authority | Chapters 11-12 |
 | Effect rules and authority-behavior rules | Chapter 11 |
-| Compiler pipeline, conflicts, and precedence | Chapter 12 |
-| Compiled map/decision ABI and lookup semantics | Chapters 12-13; Appendix A.1-A.2 |
-| Generation activation, retention, retirement, rollback | Chapter 12 |
-| Cgroup binding identity/reuse and task placement | Chapters 5-7, 13 |
-| Generic pre-effect order and stacked LSM semantics | Chapter 13 |
+| Compiler pipeline, conflicts, and precedence | Chapter 12; Appendix A.11.5-A.11.8 |
+| Compiled map/decision ABI and lookup semantics | Chapters 12-13; Appendix A.12 |
+| Generation activation, retention, retirement, rollback | Chapter 12; Appendices A.11.6-A.11.7 and A.12.1 |
+| Cgroup binding identity/reuse and task placement | Chapters 5-7, 13; Appendix A.12.1-A.12.2 |
+| Generic pre-effect order and stacked LSM semantics | Chapter 13; Appendix A.12.6 |
 | Mount and network-namespace identity | Chapter 15 |
 | Synchronous topology invalidation, CAS reconciliation, propagation/automount/referrals | Chapter 15 |
 | Executable images, scripts, ELF loader, memfd/anonymous memory, `mprotect`, executable stack/personality | Chapter 16 |
@@ -5458,7 +9740,7 @@ be updated before this rewrite may still call itself complete.
 | Open-fd provenance and delegated filesystem/local-proxy egress | Chapter 17 |
 | Process-shared security state and exact current role | Chapter 18 |
 | Threads/forks/cross-entry shared channels and bounded authority domains | Chapter 18 |
-| Shared memory/files/IPC/local-inet/process control and persistent resources | Chapter 18 |
+| Shared memory/files/IPC/local-inet/process control and persistent resources | Chapter 18; Appendix A.14 |
 | Attempted versus permitted versus completed byte access/publication | Chapters 17-18 |
 | Network actor/socket namespace, socket lifetime, shared-socket blast radius, receive queue | Chapter 19 |
 | Destination rewriting, DNS, final packet floor, TLS limitation | Chapter 19 |
@@ -5471,13 +9753,13 @@ be updated before this rewrite may still call itself complete.
 
 | Original topic | New location |
 | --- | --- |
-| Observation and coverage records | Chapter 22; Appendix A.2 |
-| Proof quality vector | Chapters 22-23 |
+| Observation and coverage records | Chapter 22; Appendix A.15.1 |
+| Proof quality vector | Chapters 22-23; Appendix A.15.2 |
 | Package windows, watermarks, finding lifecycle | Chapter 22 |
 | `HF-PROC-001`, `HF-DW-001`, `HF-XNODE-001` | Chapter 23 |
-| Canonical multi-node graph and provider expansion contracts | Chapter 23 |
-| Local lineage restriction and target re-resolution | Chapter 24 |
-| Response application, physical verification, durable result vocabulary | Chapter 24 |
+| Canonical multi-node graph and provider expansion contracts | Chapter 23; Appendix A.15.3 |
+| Local lineage restriction and target re-resolution | Chapter 24; Appendix A.15.4 |
+| Response application, physical verification, durable result vocabulary | Chapter 24; Appendix A.15.4-A.15.5 |
 | Cgroup/workload, shared-domain, and distributed response | Chapter 24 |
 | `HF-001` through `HF-021` control design | Chapter 25 |
 | Situation-to-control summary and full configured walkthrough | Chapter 25 |
@@ -5488,12 +9770,12 @@ be updated before this rewrite may still call itself complete.
 | CI execution practices and assurance tiers | Chapter 26 |
 | No Git/TLS termination and GitHub token limit | Chapters 19 and 26 |
 | GitHub/GitLab/Tekton/Jenkins physical seams and support matrix | Chapter 26 |
-| CI identity, intent body, coordinator-to-task binding | Chapter 26 |
+| CI identity, intent body, coordinator-to-task binding | Chapter 26; Appendices A.10.2 and A.16.1 |
 | Native/container/service/matrix/reusable/artifact/OIDC/deploy/post/debug/DinD shapes | Chapter 26 |
 | Untrusted PR, artifact/cache trust, indirect execution | Chapter 26 |
-| Cross-step state and runner reuse | Chapter 26 |
-| CI semantic lowering, credential-delivery boundaries, fixtures | Chapter 26 and Appendix C |
-| Detailed representative and granular Hugging Face action acceptance | Chapter 25 and Appendix C |
+| Cross-step state and runner reuse | Chapter 26; Appendix A.16.2 |
+| CI semantic lowering, credential-delivery boundaries, fixtures | Chapter 26; Appendix A.16; Appendix C |
+| Detailed representative and granular Hugging Face action acceptance | Chapter 25; Appendix C; §25 exact action-card contract |
 
 ### E.5 Original qualification, ownership, delivery, and approval
 
