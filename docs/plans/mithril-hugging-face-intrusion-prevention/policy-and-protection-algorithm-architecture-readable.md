@@ -658,11 +658,13 @@ pass an exec transition before the new image receives user time.
 
 A normal `kubectl exec` uses Kubernetes, kubelet, and the runtime. The Linux
 task is a restricted external root. Kubernetes audit separately records the
-API request and principal. Mithril calls it an exact administrative entry only
-when a configured existing interface provides a unique request-to-task join;
-otherwise the join stays conservative or contextual.
+API request and principal. A cluster may deliberately allow a stronger
+administrative role through Mithril's short-lived, one-use next-match rule.
+That rule does not prove an exact request-to-task join. The approving
+administrator explicitly accepts the rare risk that another otherwise
+identical runtime-created root could win the short race and consume the slot.
 
-###### Approved administrative exec: from the browser to one Linux task
+###### Approved administrative exec: from the browser to the next exact matching Linux entry
 
 The restricted external-root rule is the safe baseline. A configured cluster
 may offer a stronger administrative-exec role, but only through the complete
@@ -703,7 +705,9 @@ headless or SSH client may show a short device code and poll. Entering a code
 identifies the pending request; it does not itself approve the request. Policy
 decides whether the requester may self-approve or needs a second person.
 
-The resulting authorization is exact and one use:
+The requested operation is exact and one use. Its later Linux-task binding is
+intentionally a bounded next-match association rather than an exact propagated
+request ID:
 
 ```text
 ApprovedAdministrativeExecV1 {
@@ -723,6 +727,8 @@ ApprovedAdministrativeExecV1 {
   issued_at
   expires_at
   one_use = true
+  task_binding = NEXT_MATCHING_RUNTIME_EXTERNAL_ROOT
+  requester_accepted_rare_binding_race = true
 }
 ```
 
@@ -775,8 +781,9 @@ ApprovedExecSlotV1 {
   expected_stream_flags
   approved_role_id
   policy_generation
-  required_source = KUBELET_CRI_STREAMING_EXEC
+  expected_entry_class = RUNTIME_EXTERNAL_ROOT
   monotonic_deadline
+  accepted_binding_risk = NEXT_EXACT_MATCH_MAY_RACE
   state = ARMED
 }
 ```
@@ -785,35 +792,28 @@ BPF does not parse OAuth, JWT, CBOR, Kubernetes objects, or signatures. Rust
 does that work and writes the already verified bounded slot. BPF performs only
 kernel identity checks, bounded map lookups, and an atomic one-use transition.
 
-There is still one missing link: stock Kubernetes does not carry the admission
-approval ID into the Linux task. Mithril therefore needs one qualified
-runtime-specific join adapter inside `mithril-node` for every runtime/version
-that advertises the stronger role.
+Stock Kubernetes does not carry the admission approval ID into the Linux task.
+Mithril deliberately accepts that limitation for this administrator-approved
+feature. Immediately before the webhook returns `allowed=true`, the node arms
+one short-lived slot. The next previously unlabeled runtime-created external
+root that matches the exact Pod UID, full container ID and generation, cgroup
+binding, argv digest, stream flags, policy generation, and deadline may consume
+it. The operation is an atomic `ARMED -> CONSUMED` transition, so at most one
+task receives the role.
 
-For containerd, the adapter connects these existing facts:
+This is not command recognition. An application child already carries Mithril
+task identity and is ineligible before argv is considered. A different Pod,
+container generation, cgroup, command, or stream shape cannot match. The
+remaining risk is narrow but real: two new runtime-created external roots with
+the same complete match can race, and the first one reaching the BPF decision
+wins. The approval screen states this risk, cluster configuration must enable
+it, and the administrator accepts it for that invocation.
 
-```text
-approved Kubernetes CONNECT pods/exec
-  -> measured kubelet sends CRI Exec, not ExecSync
-  -> containerd creates an internal runtime exec ID
-  -> containerd sends the shim Exec/Start operations
-  -> the shim/runtime creates one Linux task
-  -> that task receives the approval slot before its first program is allowed
-```
-
-CRI `Exec` prepares a streaming command; `ExecSync` is the separate synchronous
-method used by exec probes and lifecycle commands. Containerd's Runtime v2
-protocol carries a container ID and runtime exec ID between containerd and its
-shim and reports exec lifecycle events. Events after process start are useful
-evidence but are too late to grant pre-effect authority by themselves.
-
-The containerd adapter therefore combines the stock runtime stream/events with
-version-qualified BPF tracing at the containerd/shim pre-start and task-create
-path. It carries the runtime exec ID to the exact new task through BPF task
-state. Go function offsets and argument layouts are accepted only for measured
-containerd/shim build IDs that passed the hostile qualification suite. A
-missing symbol, unexpected layout, lost correlation, or unsupported runtime
-does not fall back to timing or argv matching.
+Containerd runtime exec IDs and lifecycle events remain useful evidence. A
+qualified runtime-specific adapter may correlate them and make the association
+stronger, but the approved feature does not require unstable tracing of Go
+function offsets or argument layouts. An adapter failure never broadens which
+task can match the bounded slot.
 
 At task creation and `bprm_check_security`, the BPF program applies this rule:
 
@@ -822,9 +822,10 @@ if task already has a Mithril identity:
   use its existing native lineage policy
   never let it inspect or consume an administrative-exec slot
 
-else if exact runtime join identifies one ARMED slot:
-  verify cgroup, container generation, runtime source, executable/argv,
-         role, policy generation, and deadline
+else if one ARMED administrative slot exactly matches this new
+        runtime-created external root:
+  verify Pod UID, full container ID, cgroup, container generation,
+         executable/argv, stream flags, role, policy generation, and deadline
   atomically change ARMED -> CONSUMED
   install APPROVED_ADMINISTRATIVE_EXEC in BPF task storage
   evaluate the initial executable under that role
@@ -840,16 +841,20 @@ typical diagnostic role may allow a shell, logs, and named internal health
 endpoints while still denying ServiceAccount-token reads, runtime sockets,
 mount, BPF, ptrace, host devices, persistence, and arbitrary Internet egress.
 
-Approval theft is prevented as follows:
+The accepted race is bounded as follows:
 
 - an application process already has identity and cannot consume a slot;
-- readiness and lifecycle exec use `ExecSync`, not the required streaming
-  `Exec` path;
-- BPF protects the runtime socket so an unapproved `crictl exec` caller cannot
-  consume a kubelet-only slot; if an installation deliberately permits other
-  callers to use that socket, it cannot advertise this exact join;
-- the admission service serializes indistinguishable starts for one container
-  only until the first task is bound, then concurrent sessions may continue;
+- the slot exists only after admission approval and for a short configured
+  monotonic-time window;
+- Pod UID, full container ID and generation, cgroup binding, argv, streams,
+  role, and policy generation must all match;
+- only one matching slot may be armed for a container, and its state change is
+  atomic;
+- BPF protects the runtime socket from ordinary workloads, reducing who can
+  deliberately create a competing runtime root;
+- a probe, lifecycle hook, direct runtime caller, or second approved session
+  with the same complete match can still win the race; this is the precise
+  residual risk accepted by cluster policy and the approving administrator;
 - Pod replacement, container restart, node restart, expiry, map loss, or sensor
   loss invalidates the slot; and
 - a second use of the approval or slot fails the atomic state transition.
@@ -862,17 +867,21 @@ requester and approver
   -> Kubernetes AdmissionReview UID and PodExecOptions
   -> Pod UID, container generation, and target node
   -> node BPF slot
-  -> containerd runtime exec ID
-  -> Linux task/process/lineage identity
+  -> recorded next-match rule and accepted race
+  -> consuming Linux task/process/lineage identity
+  -> optional containerd runtime exec ID correlation
   -> every governed effect and final result
 ```
 
 `ADMIN-EXEC-APPROVAL-001` races an application child, readiness `ExecSync`,
 direct runtime caller, two identical approved sessions, Pod replacement, node
-restart, and an expired approval. Only the task with the complete runtime join
-may consume the slot. If the runtime adapter cannot prove that join, the API
-request is rejected when it requested the stronger role; an explicitly
-configured restricted external session may still use the baseline role.
+restart, and an expired approval. The application child can never consume the
+slot. At most one complete matching external root may consume it. The test
+records whether a deliberately injected identical runtime root won the race;
+that outcome is an accepted-risk result, not a false claim of exact binding.
+Every non-winner receives the restricted external role. If the cluster or
+administrator has not accepted this binding mode, the stronger role is
+unavailable and the restricted external role remains the baseline.
 
 ##### Node/runtime bypass
 
@@ -893,7 +902,7 @@ root, not permission.
 | HTTP lifecycle hook | Connection made by kubelet | No workload root; record node flow and declared-hook context |
 | HTTP, TCP, or gRPC probe | Connection made by kubelet | No workload root; application receiver thread does not become a probe process |
 | Sleep lifecycle hook | Sleep inside kubelet | No workload task |
-| `kubectl exec` | Runtime-created root and Kubernetes stream/audit | Restricted external root by default. A stronger approved role requires `kubectl-mithril`, validating admission, node slot preparation, and a qualified runtime-exec-ID-to-task join. |
+| `kubectl exec` | Runtime-created root and Kubernetes stream/audit | Restricted external root by default. A stronger approved role requires `kubectl-mithril`, validating admission, node slot preparation, explicit acceptance of the rare race, and atomic consumption by the next complete matching runtime-created external root. |
 | `kubectl cp` | Usually exec of archive tooling | Restricted external root; `tar` is not proof of benign use; stream/file effects need explicit permission |
 | Direct runtime exec | Runtime-created root without Kubernetes user audit | Restricted external root; default deny for protected effects outside its common budget |
 | Restore/migration | May recreate tasks, memory, fds, sockets, mappings, devices, and namespaces without normal exec | Reject through an existing qualified authorization hook, otherwise restrictive BPF treatment plus `UNSUPPORTED` for exact restore history |
@@ -1195,8 +1204,9 @@ The implementation performs these steps:
 5. The known initial root receives the configured container-entry role. A
    later independent root receives `RUNTIME_EXTERNAL_RESTRICTED` unless it
    atomically consumes the complete approved-administrative-exec slot from
-   Chapter 6 through a qualified runtime-task join. An unresolved protected
-   task receives the local fail-closed floor.
+   Chapter 6 as the next complete matching runtime-created external root. This
+   exception carries the recorded administrator-accepted race. An unresolved
+   protected task receives the local fail-closed floor.
 6. Every file, exec, socket, device, privilege, and process-control hook reads
    the task result before making its decision. Event delivery is not on this
    decision path.
@@ -1253,12 +1263,14 @@ permission from stock CRI evidence. The operator has three honest choices:
    root and see the larger risk in policy review; or
 3. deny all such external roots.
 
-A configured qualified integration may assign separate roles only when it
-supplies an authoritative purpose and a unique task/request join. The approved
-administrative path in Chapter 6 does this by combining Kubernetes admission
-with node-side runtime-exec-ID and BPF task binding. A
-local Mithril signature over an observation proves that Mithril recorded the
-observation; it does not turn missing kubelet purpose into fact.
+A configured qualified integration may assign separate roles when it supplies
+an authoritative purpose and a unique task/request join. The approved
+administrative path in Chapter 6 is the deliberately narrower exception: the
+plugin and admission webhook authorize one operation, then a BPF slot grants
+the role to the next complete matching runtime-created external root. The
+administrator accepts the rare ambiguous-match race. A local Mithril signature
+over an observation proves that Mithril recorded the observation; it does not
+turn missing kubelet purpose into a general fact.
 
 #### Initial processes and processes already present on the node
 
@@ -1282,7 +1294,8 @@ Mithril therefore treats the resulting independent task as
 `RUNTIME_EXTERNAL_RESTRICTED` by default; it does not insert a stream proxy or
 replace the runtime URL. The configured approved-administrative-exec path in
 Chapter 6 may assign a stronger role only after its plugin, admission, node
-slot, runtime exec ID, and exact BPF task join all succeed.
+slot, exact match, and atomic one-use BPF consumption succeed. Runtime exec ID
+correlation is optional evidence, not a prerequisite or an exactness claim.
 
 `attach` and `port-forward` do not create a workload process. Kubernetes audit
 and network evidence may record and correlate them. A configured Kubernetes
@@ -4644,7 +4657,7 @@ listed proof.
 | Fixture/family/claim/qualification schemas | 0 / 11 | `mithril-e2e::qualification_schema` and `QualificationOwner` | `FIXTURE-REGISTRY-COMPLETE-001`; digest splice, missing negative control, degraded-PASS, and wrong platform all reject. |
 | Task/process/exec identity and native inheritance | 0 / 2 | `mithril-node::identity::NativeSecurityStateOwner`; owned `lifecycle.bpf.c`, `exec.bpf.c` | Fork-without-exec label before token open; moved-task/non-leader exec/PID reuse/ref cleanup pass. |
 | Process/domain/set/mm/publication state | 0 / 2-4 | Same `NativeSecurityStateOwner`; kernel maps hold semantic state, while `KernelHostOwner` only owns their lifecycle | Thread races cannot recover authority; map N+1 fails closed; Rust/BPF decision bytes agree; partial VMA snapshot never relaxes. |
-| Runtime roots and cgroup binding | 0 / 1-4; platform claim 11 | `mithril-node::identity::WorkloadBindingOwner`; configured stock adapter only forwards documented facts | Identical application-child/probe/admin/direct-runtime commands: native child keeps lineage; indistinguishable external roots get the same restricted role. The approved administrative path is stronger only after its exact runtime-task join passes. Unresolved protected effects deny. No command-based purpose. |
+| Runtime roots and cgroup binding | 0 / 1-4; platform claim 11 | `mithril-node::identity::WorkloadBindingOwner`; configured stock adapter only forwards documented facts | Identical application-child/probe/admin/direct-runtime commands: native child keeps lineage; indistinguishable external roots get the same restricted role. The approved administrative exception is stronger only through the configured short-lived one-use next-match slot, with the rare race explicitly accepted. Unresolved protected effects deny. No general command-based purpose. |
 | File, descriptor, mapping, IPC, process-control and persistent object classification | 0 / observe 3, deny 4 | `mithril-node::effect`; domain transition requested from `NativeSecurityStateOwner` | Symlink/bind/proc-fd/rotation/mmap/fd-pass/io_uring/persistent volume either deny, pre-use join, or return exact unsupported. |
 | Socket identity, local-inet domain join, destination, packet fence | 0 / observe 3, deny 5 | `mithril-node::effect::network` | Broad-created socket passed to narrow actor cannot restore egress; loopback/Pod-IP channels join before delivery; established-flow oracle states blast radius. |
 | Source sequence, coverage, WAL, restart reconstruction | 0 / 6 | `mithril-node::evidence::{CoverageHealthOwner,LocalEvidenceOwner}`; control `mithril-control::intake` | Ring pressure preserves deny but gaps absence claim; restart changes epoch and reconciles live tasks/sockets/claims before admission. |
@@ -4711,7 +4724,7 @@ amendment.
 | Initial start | Prepare binding through a configured stock start hook when its ordering is qualified; otherwise protected effects deny until binding and the start gap is explicit | Never require a patched runtime or claim first-instruction control from a later callback. |
 | Later exec | Restricted external root unless an existing qualified interface proves more | Application authority inheritance and command-based purpose are rejected. |
 | ExecSync reason | Unknown on stock CRI; use one permission intersection for indistinguishable external roots or deny them | Timing/argv classification and Mithril-created kubelet intent are rejected. |
-| Administrative exec | Default deny or the complete plugin + admission + node-slot + qualified runtime-task-join approval path | Always allow, approval without an exact task join, and a broadly reusable admin role are rejected. |
+| Administrative exec | Default deny or the complete plugin + admission + node-slot path. The next complete matching runtime-created external root may atomically consume the short-lived slot only after cluster policy and the administrator accept the rare race. | Always allow, reusable slots, application descendants consuming slots, hidden race acceptance, and a broadly reusable admin role are rejected. |
 | `PreStop` during containment | Containment wins unless exact safe cleanup role is approved | Universal bypass is rejected; disable all cleanup with availability cost. |
 | Missing protected identity | Fail closed at first protected effect | Fail open is observation-only. |
 | Executable identity | Immutable object/image identity | Path-only is a reduced integrity tier. |
@@ -5286,7 +5299,8 @@ reject an implementation that silently drops the information.
 | `MountNamespaceStateV1` | Mount namespace identity, topology generation, CLEAN/DIRTY state, snapshot digest, live interval |
 | `MountSecurityViewV1` | Actor-visible mount/root/propagation/read-only/security view used for object resolution |
 | `MountSourceClassRecordV1` | Exact declared/image/projected/host/device/remote mount source classification |
-| `VolumeMountBarrierV1` | **Rejected no-patch design.** Current baseline observes the runtime-created mount view and applies unresolved/object floors; it does not hold the OCI task. |
+| `VolumeMountBarrierV1` | **Rejected design.** Mithril never owns, holds, or releases a mount or root filesystem. |
+| `VolumeAccessReadinessV1` | Active per-node record proving that the current persistent-volume authority was installed and read back before BPF allows a covered file effect. This is an access gate, not a mount or task hold. |
 | `FileObjectIdentityV1` | Mount namespace generation + mount/fs/inode/version/live identity and object kind |
 | `FileInstanceProvenanceV1` | Open-time file identity, source object, opener, generation, fd transfer/mapping provenance |
 | `CreateKeyV1`, `SetattrKeyV1`, `RenameKeyV1`, `LinkKeyV1`, `UnlinkKeyV1` | Exact filesystem namespace mutation keys; no path-only authority |
@@ -5833,7 +5847,10 @@ ExternalRootClassificationV1 {
 interface supplies both the purpose and a unique request-to-task join. Stock
 CRI probe/hook exec uses `purpose=UNKNOWN`. The BPF path never uses command,
 arguments, timing, TTY, PodSpec resemblance, or a locally signed observation
-to upgrade that value.
+to upgrade that value. Approved administrative exec is one explicit exception:
+it uses `QUALIFIED_ADMINISTRATIVE_EXEC` plus a separate risk-accepted,
+short-lived, one-use next-match slot. It must not be represented as a unique
+request-to-task proof.
 
 The active transaction is:
 
@@ -5857,8 +5874,10 @@ non-normative and must not be implemented: it requires runtime/kubelet behavior
 that stock interfaces do not provide and violates the no-patch product rule.
 
 The OCI runtime still creates namespaces, cgroups, mounts, and the setup task.
-Mithril does not replace that work. It prevents the runtime from releasing a
-user process until identity and security state are installed.
+The rejected design assumed that Mithril could prevent the runtime from
+releasing the user process until identity and security state were installed.
+Stock interfaces do not provide that general hold. This assumption is one
+reason the design below is non-normative.
 
 ```text
 RuntimeSetupBudgetV1 {
@@ -8716,10 +8735,15 @@ only after link count is zero and no fd, VMA, async I/O, or writeback remains.
 
 RWX storage needs a signed centrally committed
 `PersistentVolumeAuthorityV1`: volume/storage generation, portable restriction,
-participant set, access mode, and commit index. Every node holds mount/root
-release until it fetches a non-rollback record, lowers it into a fresh local
-set, joins the execution set, and reads back the result. Reactive node-local
-taint is insufficient because one node may crash before another publishes.
+participant set, access mode, and commit index. Every node denies covered file
+effects through BPF until it fetches a non-rollback record, lowers it into a
+fresh local set, installs it, and reads back the result. The mount may already
+exist and the workload may already be running; Mithril neither holds nor
+releases either one. When a qualified OCI/NRI/runtime start callback exists,
+Mithril may delay returning from that callback until the same access state is
+ready, but the callback remains a runtime-start gate rather than a mount gate.
+Reactive node-local taint is insufficient because one node may crash before
+another publishes.
 
 ```text
 PersistentVolumeAuthorityV1 {
@@ -8739,25 +8763,29 @@ PersistentVolumeAuthorityV1 {
   signature
 }
 
-VolumeMountBarrierV1 {
-  barrier_id, node_boot_id, execution_set_id,
+VolumeAccessReadinessV1 {
+  readiness_id, node_boot_id, execution_set_id,
     persistent_volume_authority_id:Id128
   exact_live_mount_identity
   observed_record_generation, observed_control_commit_index:u64
   installed_local_restriction_set_ref_id:u64
   installed_semantic_restriction_artifact_digest:DigestV1
   installed_domain_and_restriction_digest:DigestV1
-  state:HELD | READ_BACK | RELEASED | DENIED
+  optional_runtime_start_callback_identity?:Id128
+  state:PREPARING | READ_BACK | ACTIVE | DENIED
 }
 ```
 
 The central record carries portable restriction meaning, never a node-local
 map handle. A node compiles that meaning to a fresh local set and reads it back
-before releasing the mount or workload root. Stale commit index, rollback,
-unknown storage generation, bad signature, or unavailable control leaves the
-barrier held. This is intentionally volume-wide in Version 1: safe per-file
-cross-node identity is unsupported until the storage backend proves stable
-non-reused identity and every link/copy/snapshot/restore transition.
+before marking covered volume access `ACTIVE`. Until then, the BPF access gate
+denies covered effects. If a qualified runtime-start callback is waiting,
+Mithril returns success only after `ACTIVE`; otherwise the task may run but its
+covered accesses still deny. Stale commit index, rollback, unknown storage
+generation, bad signature, or unavailable control leaves access denied. This
+is intentionally volume-wide in Version 1: safe per-file cross-node identity
+is unsupported until the storage backend proves stable non-reused identity and
+every link/copy/snapshot/restore transition.
 
 If a backend lacks stable non-reused object identity or qualified
 link/copy-up/remount lifecycle, the honest options are a volume-wide common
@@ -9598,7 +9626,7 @@ same in one index so an implementer does not accidentally revive them.
 | Rejected or corrected idea | Why it is wrong | Replacement |
 | --- | --- | --- |
 | Active authority lives in immutable `TaskLabelV1` | Role, exec, domain restrictions, and response change; cached allow goes stale | Label points to authoritative process/domain state (§6) |
-| Every runtime root uses a `PENDING -> CLAIMED` ticket | Stock kubelet/CRI does not provide the required purpose or request-to-task token | Kernel creator + container binding classifies initial/native/external/unresolved; unknown external roots receive one restricted budget (§6-8) |
+| Every runtime root uses a `PENDING -> CLAIMED` ticket | Stock kubelet/CRI does not provide the required purpose or request-to-task token | Kernel creator + container binding classifies initial/native/external/unresolved; unknown external roots receive one restricted budget. The only deliberate exception is administrator-approved exec, where cluster policy and the administrator accept a short-lived next-exact-match race (§6-8). |
 | `parent.thread_child_role` or separate thread-child role | Threads share a process, memory, often files; sibling role can launder authority | Threads share one process state; transitions are process-owned (§6) |
 | Classify creator/exec actor by current cgroup before task label | A protected labeled task can be moved to host cgroup | Task storage first; cgroup verifies expected placement (§6, §13, §33) |
 | Wake-path labeling without cross-cgroup failure proof | Child may run or land elsewhere before label; allocation may fail | Returning pre-effect creation hook or proved pre-wake finalizer plus fail-closed first effect (§6) |
@@ -9607,14 +9635,14 @@ same in one index so an implementer does not accidentally revive them.
 | Transparently hold and reconstruct every CRIU-restored task without runtime support | Stock restore interfaces may not expose a pre-run complete task/object barrier | Reject through an existing qualified hook, otherwise restrictive BPF treatment and honest `UNSUPPORTED` for complete restored history (§7) |
 | Kubernetes metadata alone authenticates privileged exception | Metadata can be stale, reused, spoofed by another path, or lack human approval | Signed target-bound one-use exception plus node pre-setup enforcement (§7-9, §35.1) |
 | Generic OCI pre-start hook proves a held task and exact setup | Hook timing and fields vary; an external hook is not automatically target-context execution or a hold | Qualify each stock hook's actual fields, ordering, and failure result; use BPF unresolved floor for missing identity (§5, §7, §29.4) |
-| Insert a Mithril proxy/ticket into streaming `Exec` | This changes the runtime request path and still requires exact stream-to-task support | Treat the Linux task as a restricted external root; use existing Kubernetes audit/authorization APIs at their real stage (§7-8) |
+| Insert a Mithril proxy or token into the runtime streaming protocol | This changes the runtime request path and still does not create a stock request-to-task field | Keep the ordinary Kubernetes/runtime path. The plugin and admission webhook may arm a BPF-map slot for the next complete matching external root, with explicit acceptance of the rare race; otherwise use the restricted external role (§7-8). |
 | BPF hook performs synchronous disk I/O | BPF cannot write WAL and must remain bounded | Kernel decisions use prebuilt/pinned state; Rust persists and reconciles outside the hook (§8, §13) |
 | Issuer chooses fail-open or emits reusable claims | Compromised issuer could widen local safety and replay authority | Local signed profile chooses failure; every claim is one-use (§8) |
 | `Strong` is one scalar proof class | Signature, target, time, replay, task binding, and coverage can differ independently | Proof-quality vector (§8, §23) |
-| Signed side-channel timing or Mithril-signed observation proves kubelet intent | Another identical task can race, and stock CRI omits the reason | Keep purpose `UNKNOWN`; apply the common external-root intersection unless an existing interface supplies authoritative purpose and a unique join (§7-8) |
+| Signed side-channel timing or Mithril-signed observation proves general kubelet intent | Another identical task can race, and stock CRI omits the reason | Keep probe/lifecycle/direct-runtime purpose `UNKNOWN`; apply the common external-root intersection unless an existing interface supplies a unique join. Administrator-approved exec may use the separately named, explicitly risk-accepted next-match exception (§7-8). |
 | Google audit always contains original OIDC `jti` | Provider fields vary and may not preserve source claim | Explicit lease join fields; otherwise contextual edge (§8, §23) |
 | Union of unequal candidate budgets is conservative | Union grants each candidate the other's authority | Exact proof, identical budget intersection, or reject (§6, §9) |
-| Identical pending key proves an external root's purpose | Concurrent identical commands are indistinguishable and attacker-copyable | Never use a pending argv/cgroup claim for purpose; classify the root and preserve ambiguity (§7-8) |
+| Identical pending key proves an external root's purpose | Concurrent identical commands are indistinguishable and attacker-copyable | Never use a pending argv/cgroup claim for general purpose. The administrator-approved exception grants one bounded role to the first complete matching runtime external root and records that the association is raceable, not exact (§7-8). |
 
 ### B.3 Policy, identity lookup, objects, and shared authority
 
