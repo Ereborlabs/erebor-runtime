@@ -4349,7 +4349,8 @@ OperationPerformanceRecordV1 {
   cpu_time_ns, peak_resident_bytes: u64
   requested_events, emitted_events, lost_events: u64
   threshold_record_id
-  result: PASS | FAIL | INSUFFICIENT_SAMPLES
+  result: WITHIN_DECLARED_BUDGET | OUTSIDE_DECLARED_BUDGET |
+          INSUFFICIENT_SAMPLES
 }
 
 CapacityPerformanceRecordV1 {
@@ -4361,7 +4362,8 @@ CapacityPerformanceRecordV1 {
   expected_exhaustion_result
   observed_exhaustion_result
   health_transition_result
-  result: PASS | FAIL | INSUFFICIENT_SAMPLES
+  result: WITHIN_DECLARED_BUDGET | OUTSIDE_DECLARED_BUDGET |
+          INSUFFICIENT_SAMPLES
 }
 
 PerformanceQualificationRecordV1 {
@@ -4374,7 +4376,7 @@ PerformanceQualificationRecordV1 {
   signed_threshold_set_digest, raw_sample_bundle_digest: DigestV1
   operation_records[]
   capacity_records[]
-  aggregate_result: PASS | FAIL | INSUFFICIENT_SAMPLES
+  aggregate_result: QUALIFIED | NOT_QUALIFIED | INSUFFICIENT_SAMPLES
 }
 
 PerformanceQualificationBundleV1 {
@@ -4390,8 +4392,10 @@ PerformanceQualificationBundleV1 {
 
 Capability probes use `CapabilityRecordV1` and `CapabilityBundleV1` from
 Appendix A. Both capability and performance bundles use deterministic CBOR,
-SHA-256, and Ed25519 with distinct domain strings. `PASS` requires every
-mandatory row, threshold, digest, build, and platform to agree.
+SHA-256, and Ed25519 with distinct domain strings. `QUALIFIED` requires every
+mandatory row, threshold, digest, build, and platform to agree. The operation
+and capacity results state only whether the measured record was within its
+declared budget; they are not functional-test or authorization verdicts.
 
 **Concrete benchmark.** Measure one million protected and unprotected opens
 after 100,000 warmups at concurrency 1 and 32. Record the full distributions.
@@ -5139,6 +5143,9 @@ The remaining intentionally non-struct names have explicit status:
 | `StaticExpandedProfileV1` | Fully expanded finite policy before kernel lowering |
 | `NormalizedDecisionCellV1` | One exact conflict-checked stage/actor/effect/object/state result |
 | `CompiledActionPlanV1` | Legal physical decision plus evidence, finding, notification, response, and degradation |
+| `GenerationLocalRoleHandleV1` | One profile-generation-scoped lowering from a reusable role name to a nonzero BPF role handle |
+| `GenerationLocalDestinationPolicyHandleV1` | One profile-generation-scoped lowering from a reusable destination-policy name to a nonzero BPF destination handle |
+| `GenerationLocalPolicyIdMapV1` | Immutable, read-back-verified role and destination handle tables for one node-local profile generation |
 | `SignedWorkloadProtectionProfileV1` | Canonical profile bytes, registry/header digests, issuer sequence, signature |
 | `ProfileSignatureHeaderV1` | Domain/version/algorithm and all registry digests bound by profile signature |
 | `RollbackAuthorizationPayloadV1` | Current and target profile digests/versions, platform, reason, expiry, nonce |
@@ -7563,11 +7570,37 @@ NodeBoundProfileGenerationV1 {
   signed_workload_binding_generation:DigestV1
   node_boot_id:Id128
   label_epoch:u64
+  policy_id_map:GenerationLocalPolicyIdMapV1
   exact_protected_scope_ids[], exact_execution_set_ids[]:Id128
   exact_rollout_membership[]
   exact_compiled_kernel_cell_digests[]:DigestV1
   node_binding_digest:DigestV1
   state:PREPARING | READ_BACK | ACTIVE | REJECTED
+}
+
+GenerationLocalRoleHandleV1 {
+  role_id: PolicyLocalIdV1
+  numeric_handle: nonzero u32
+}
+
+GenerationLocalDestinationPolicyHandleV1 {
+  destination_policy_id: PolicyLocalIdV1
+  numeric_handle: nonzero u64
+}
+
+GenerationLocalPolicyIdMapV1 {
+  profile_id: Id128
+  profile_version: nonzero u64
+  node_boot_id: Id128
+  label_epoch: u64
+  profile_generation_ref_id: nonzero u64
+  role_handles[1..4096]: GenerationLocalRoleHandleV1,
+    sorted unique by role_id and independently unique by numeric_handle
+  destination_policy_handles[0..4096]:
+    GenerationLocalDestinationPolicyHandleV1,
+    sorted unique by destination_policy_id and independently unique by
+    numeric_handle
+  state: PREPARING | READ_BACK | ACTIVE | TOMBSTONED
 }
 ```
 
@@ -7579,6 +7612,17 @@ place. Hashed rollout uses the exact profile ID/version, rollout generation,
 execution-set ID, and workload-binding digest. Tests publish two otherwise
 identical Pods with different UIDs and prove that one Pod's node-bound rows
 cannot authorize the other.
+
+`PolicyLocalIdV1` names are reusable across profile generations. Lowering does
+not assign a permanent global number. It assigns node-local handles inside one
+immutable `GenerationLocalPolicyIdMapV1`; BPF role and destination-policy keys
+are interpreted only together with that map's `profile_generation_ref_id`.
+The same name may have different meaning in a later generation, but an active
+generation never changes its mapping. Numeric handles remain non-reused within
+the node boot and label epoch as required by Appendix A.12.1.
+Activation reads back the complete tables before publishing the generation.
+Evidence converts a handle back to the local name and portable profile
+generation; a bare name or bare numeric handle is never durable identity.
 
 Existing tasks, sockets, files, mappings, domains, pending entries, and
 responses retain typed references to their old immutable generation. New roots
