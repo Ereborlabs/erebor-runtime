@@ -4331,6 +4331,21 @@ baseline and protected trials. Averages alone do not pass.
 The release records use closed types:
 
 ```text
+enum PerformanceOperationV1 {
+  Fork, Exec, Open, Connect, UdpSend, EstablishedTcpSend, PacketFence,
+  EntryAdmission, IntentVerify,
+  OtherRegistered { operation_registry_id: RegistrySymbolV1 },
+}
+
+enum PerformanceStateTransitionModeV1 {
+  ReadOnly, MonotonicTransition, ContendedCas,
+}
+
+enum CapacityResourceKindV1 {
+  BpfMap, Ring, Wal, PendingIntent, AuthorityDomain, IpcChannel, AsyncObject,
+  OtherRegistered { resource_registry_id: RegistrySymbolV1 },
+}
+
 LatencyDistributionV1 {
   unit: NANOSECONDS
   sample_count: u64
@@ -4339,51 +4354,45 @@ LatencyDistributionV1 {
 }
 
 OperationPerformanceRecordV1 {
-  operation_id: FORK | EXEC | OPEN | CONNECT | UDP_SEND |
-                ESTABLISHED_TCP_SEND | PACKET_FENCE | ENTRY_ADMISSION |
-                INTENT_VERIFY | OTHER_REGISTERED
-  operation_registry_id?: u32
+  operation_id: PerformanceOperationV1
   concurrency: nonzero u32
-  evidence_mode_id
-  state_transition_mode: READ_ONLY | MONOTONIC_TRANSITION | CONTENDED_CAS
+  evidence_mode_id: RegistrySymbolV1
+  state_transition_mode: PerformanceStateTransitionModeV1
   warmup_iterations, measured_iterations: u64
   baseline, protected, added: LatencyDistributionV1
   cpu_time_ns, peak_resident_bytes: u64
   requested_events, emitted_events, lost_events: u64
-  threshold_record_id
+  threshold_record_id: RegistrySymbolV1
 }
 
 CapacityPerformanceRecordV1 {
-  resource_kind: BPF_MAP | RING | WAL | PENDING_INTENT |
-                 AUTHORITY_DOMAIN | IPC_CHANNEL | ASYNC_OBJECT | OTHER_REGISTERED
-  resource_registry_id?: u32
+  resource_kind: CapacityResourceKindV1
   configured_capacity, largest_successful_cardinality,
     first_failed_cardinality, peak_bytes: u64
-  expected_exhaustion_result
-  observed_exhaustion_result
-  health_transition_result
+  expected_exhaustion_result: ResultCodeIdV1
+  observed_exhaustion_result: ResultCodeIdV1
+  health_transition_result: ResultCodeIdV1
 }
 
 PerformanceQualificationRecordV1 {
-  qualification_record_id
+  qualification_record_id: QualificationRecordIdV1
   platform_support_manifest_digest, product_build_digest: DigestV1
   cpu_microcode_memory_numa_digest: DigestV1
   kernel_btf_boot_lsm_digest: DigestV1
   runtime_kubernetes_digest, bpf_object_set_digest: DigestV1
   workload_fixture_digest, policy_fixture_digest: DigestV1
   signed_threshold_set_digest, raw_sample_bundle_digest: DigestV1
-  operation_records[]
-  capacity_records[]
+  operation_records[1..128]: sorted unique OperationPerformanceRecordV1
+  capacity_records[1..128]: sorted unique CapacityPerformanceRecordV1
 }
 
 PerformanceQualificationBundleV1 {
   bundle_version: exactly 1
   architecture_revision_digest, product_build_digest: DigestV1
   platform_support_manifest_digest: DigestV1
-  records[]: sorted unique PerformanceQualificationRecordV1
-  canonical_payload_digest: DigestV1
-  signer_key_id
-  signature
+  records[1..256]: sorted unique PerformanceQualificationRecordV1
+  canonical_payload_digest: ArtifactContentIdV1
+  seal: SignedArtifactSealV1
 }
 ```
 
@@ -4619,10 +4628,67 @@ tooling from silently choosing different meanings.
 | Node time | Unsigned 64-bit monotonic boottime nanoseconds |
 | Remote time | Signed UTC nanoseconds plus uncertainty and source clock information |
 | Optional ID | Explicit presence plus value; all-zero bytes never mean absent |
-| Enum | Fixed integer width, `UNKNOWN=0`; decoder retains unknown numeric value but enforcement rejects it |
+| Enum | A named Rust enum or tagged union owns the logical variants. A fixed integer width and unknown-value rule are required only at a shared BPF ABI or explicitly allocated wire schema. |
 | Collections | Declared maximum, unique/sorted when order is not semantic, rejected on duplicate/overflow |
 | Serialization | Restricted duplicate-free source YAML; deterministic CBOR for signed or hashed records |
 | Digest/signature | SHA-256 and Ed25519 in Version 1; each signed record family has a distinct ASCII domain separator |
+
+### A.1.1 Exact foundation, not exhaustive modeling
+
+This document deliberately closes the durable security foundation, not every
+convenience, display, or in-memory helper type. A type must have an exact
+schema before it can cross a security, persistence, or interoperability
+boundary: a policy decision, BPF ABI, signed or hashed artifact, wire/disk
+record, recovery state, release claim, or evidence field used for grouping,
+deduplication, or authorization. A descriptive type may remain readable prose
+until an implementation needs it, but it cannot silently cross one of those
+boundaries. The catalog marks that distinction explicitly in A.8.
+
+The shared foundation is deliberately small. These are Rust type families,
+not a new numeric wire registry: an enclosing wire or BPF contract allocates a
+representation only when it actually crosses that boundary.
+
+```rust
+type NodeIdentityV1 = Id128; // stable Node UID/enrollment identity, never node_boot_id
+type ExceptionInstanceIdV1 = Id128;
+type ExceptionNumericHandleV1 = NonZeroU32;
+type ExceptionUseCountV1 = NonZeroU32;
+type SigningKeyIdV1 = BoundedBytes<1, 128>;
+type Ed25519SignatureV1 = [u8; 64];
+type ArtifactContentIdV1 = DigestV1;
+
+struct SignedArtifactSealV1 {
+    signer_key_id: SigningKeyIdV1,
+    signature: Ed25519SignatureV1,
+}
+
+enum ExceptionUseIdentityV1 {
+    ClaimSlot { claim_slot_id: Id128 },
+    KernelEffectAttempt { request_identity: ExactRequestIdentityV1 },
+}
+
+enum ExceptionBindingStateV1 { Preparing, Active, Retiring }
+enum ExceptionStateV1 {
+    Preparing, Active, Exhausted, Expired, Tombstoned, ReconciliationRequired,
+}
+enum ExceptionReceiptStateV1 {
+    Claiming, Consumed, DeniedExhausted, DeniedExpired, DeniedCorrupt,
+    ReconciliationRequired,
+}
+```
+
+The remaining shared references are scalar aliases, not new record families:
+`PolicyLocalIdV1` is the existing bounded policy-local name,
+`RegistrySymbolV1` the existing bounded registry symbol, `CapabilityIdV1`,
+`OracleValidatorIdV1`, and `OracleSchemaIdV1` are registry symbols,
+`CapabilityRecordIdV1` and `QualificationRecordIdV1` are `Id128`, and
+`FixtureIdV1`/`FixtureCaseIdV1` are the existing bounded logical fixture names.
+
+`ArtifactContentIdV1` is SHA-256 of the deterministic canonical unsigned
+record. It appears only when another record must refer to that artifact
+independently. Every `SignedArtifactSealV1` is outside the unsigned record;
+the enclosing record family owns its fixed ASCII domain separator, so using
+the common seal never permits one family to verify as another.
 
 Digest use is deliberately narrow. Ordinary in-memory records do not acquire a
 digest merely because they are named types. Node-local runtime identities
@@ -4763,14 +4829,17 @@ and referenced by fixtures and release evidence.
 ### A.4 Capability and performance bundles
 
 ```text
+enum CapabilityStateV1 { Supported, Unsupported, Degraded, Unhealthy }
+
 CapabilityRecordV1 {
-  capability_id
-  capability_schema_version: u32
+  capability_record_id: CapabilityRecordIdV1
+  capability_id: CapabilityIdV1
+  capability_schema_version: nonzero u32
   platform_support_manifest_digest, product_build_digest: DigestV1
-  node_or_fixture_platform_id
+  node_or_fixture_platform_id: Id128
   probe_input_digest, observed_kernel_runtime_result_digest: DigestV1
-  state: SUPPORTED | UNSUPPORTED | DEGRADED | UNHEALTHY
-  reason_code
+  state: CapabilityStateV1
+  reason_code: ReasonCodeIdV1
   measured_at_utc_ns: i64
 }
 
@@ -4778,10 +4847,9 @@ CapabilityBundleV1 {
   bundle_version: exactly 1
   architecture_revision_digest, product_build_digest: DigestV1
   platform_support_manifest_digest: DigestV1
-  capability_records[]: sorted unique by capability_id
-  canonical_payload_digest: DigestV1
-  signer_key_id
-  signature
+  capability_records[1..4096]: sorted unique by capability_record_id
+  canonical_payload_digest: ArtifactContentIdV1
+  seal: SignedArtifactSealV1
 }
 ```
 
@@ -4794,8 +4862,9 @@ SHA-256(canonical_unsigned_bundle)
 ```
 
 The capability bundle uses `MITHRIL-CAPABILITY-BUNDLE-V1`. The unsigned view
-omits payload digest, key ID, and signature; the stored digest is recomputed.
-Unknown operation/resource IDs require a checked-in registry update.
+omits its `seal`; its content ID is recomputed from that canonical unsigned
+view. The `OtherRegistered` enum variants carry their required registry ID;
+unknown operation/resource IDs require a checked-in registry update.
 
 ### A.5 Closed platform assurance and exact claims
 
@@ -4803,42 +4872,36 @@ Every field below exists even when unsupported. An implementation cannot hide
 a family by omitting it.
 
 ```text
-AssuranceAxesV1 {
-  boot_and_admission_availability
-  initial_runtime_entry
-  later_runtime_entry_and_streaming
-  checkpoint_restore_and_attach
-  native_task_process_exec_identity
-  policy_generation_and_cgroup_binding
-  mount_topology_and_namespace
-  file_object_namespace_and_io
-  vma_and_executable_memory
-  process_and_authority_domain_state
-  ipc_relationship_and_descriptor_passing
-  socket_network_and_dns
-  device_and_derived_kernel_objects
-  privilege_kernel_escape_and_self_protection
-  seccomp_floor
-  landlock_floor
-  local_evidence_and_coverage_truth
-  multi_node_and_provider_graph
-  kubernetes_and_provider_semantic_authority
-  artifact_provenance_and_trust
-  local_and_distributed_response
-  ci_execution_and_artifact_identity
-  performance_and_capacity
+enum AssuranceAxisV1 {
+  BootAndAdmissionAvailability, InitialRuntimeEntry,
+  LaterRuntimeEntryAndStreaming, CheckpointRestoreAndAttach,
+  NativeTaskProcessExecIdentity, PolicyGenerationAndCgroupBinding,
+  MountTopologyAndNamespace, FileObjectNamespaceAndIo,
+  VmaAndExecutableMemory, ProcessAndAuthorityDomainState,
+  IpcRelationshipAndDescriptorPassing, SocketNetworkAndDns,
+  DeviceAndDerivedKernelObjects, PrivilegeKernelEscapeAndSelfProtection,
+  SeccompFloor, LandlockFloor, LocalEvidenceAndCoverageTruth,
+  MultiNodeAndProviderGraph, KubernetesAndProviderSemanticAuthority,
+  ArtifactProvenanceAndTrust, LocalAndDistributedResponse,
+  CiExecutionAndArtifactIdentity, PerformanceAndCapacity,
+}
+
+enum EvaluationStageV1 {
+  EntryAdmission, NativeTransition, LocalPreEffect, RemotePreAdmission,
+  PostEffect, Response,
 }
 
 AssuranceAxisRecordV1 {
-  capability_record_ids[]
-  supported_stages: subset of ENTRY_ADMISSION | NATIVE_TRANSITION |
-                    LOCAL_PRE_EFFECT | REMOTE_PRE_ADMISSION |
-                    POST_EFFECT | RESPONSE
-  claim_vector_ids[]
-  required_fixture_ids[]
-  passed_result_ids[]
-  unsupported_or_degraded_paths[]
+  axis: AssuranceAxisV1
+  capability_record_ids[0..256]: CapabilityRecordIdV1
+  supported_stages[0..6]: sorted unique EvaluationStageV1
+  claim_vector_ids[0..256]: Id128
+  required_fixture_ids[0..256]: FixtureIdV1
+  passed_result_ids[0..256]: Id128
+  unsupported_or_degraded_paths[0..256]: UnsupportedPathV1
 }
+
+AssuranceAxesV1 = sorted unique array[1..23] of AssuranceAxisRecordV1 by axis
 
 PlatformSupportManifestV1 {
   schema_version: exactly 1
@@ -4847,43 +4910,42 @@ PlatformSupportManifestV1 {
   architecture: X86_64 | AARCH64
   kernel_release_build_id_and_btf_digest: DigestV1
   boot_config_and_lsm_order_digest: DigestV1
-  landlock_capability_record_id?: Id128
-  seccomp_capability_record_id?: Id128
+  landlock_capability_record_id?: CapabilityRecordIdV1
+  seccomp_capability_record_id?: CapabilityRecordIdV1
   container_runtime_name_version_config_digest: DigestV1
   kubernetes_version_and_streaming_shape_digest?: DigestV1
   bpf_program_link_map_manifest_digest, capability_bundle_digest: DigestV1
   assurance_axes: AssuranceAxesV1
-  unsupported_paths[]: sorted unique UnsupportedPathV1
-  claim_vector_ids[]: sorted unique Id128
-  performance_qualification_record_ids[]: sorted unique Id128
-  canonical_payload_digest: DigestV1
-  signer_key_id
-  signature
+  unsupported_paths[0..256]: sorted unique UnsupportedPathV1
+  claim_vector_ids[0..1024]: sorted unique Id128
+  performance_qualification_record_ids[0..256]: sorted unique QualificationRecordIdV1
+  canonical_payload_digest: ArtifactContentIdV1
+  seal: SignedArtifactSealV1
 }
 
 ClaimVectorV1 {
-  claim_vector_id
-  assurance_axis: closed member of AssuranceAxesV1
-  object_family
-  operation
-  evaluation_stage
-  authority_boundary
+  claim_vector_id: Id128
+  assurance_axis: AssuranceAxisV1
+  object_family, operation, authority_boundary: RegistrySymbolV1
+  evaluation_stage: EvaluationStageV1
   result: CONTEXTUAL_OBSERVATION | EXACT_OBSERVATION | PRE_EFFECT_DENIAL |
           SEMANTIC_REJECTION | VERIFIED_RESPONSE | UNSUPPORTED
   proof_quality: ProofQualityV1
-  capability_record_ids[]
-  required_fixture_ids[]
-  passed_fixture_result_ids[]
-  required_coverage_predicates[]
+  capability_record_ids[0..256]: CapabilityRecordIdV1
+  required_fixture_ids[0..256]: FixtureIdV1
+  passed_fixture_result_ids[0..256]: Id128
+  required_coverage_predicates[0..64]: RegistrySymbolV1
   unsupported_path?: UnsupportedPathV1
-  performance_qualification_id?
+  performance_qualification_id?: QualificationRecordIdV1
 }
 
 UnsupportedPathV1 {
-  object_family, operation, stage
-  missing_capability_or_evidence
-  degraded_result
-  prohibited_product_statements[]
+  object_family, operation: RegistrySymbolV1
+  stage: EvaluationStageV1
+  missing_capability_or_evidence: ReasonCodeIdV1
+  degraded_result: UNSUPPORTED | INSUFFICIENT_COVERAGE |
+                   OBSERVATION_ONLY | NOT_APPLICABLE
+  prohibited_product_statements[1..64]: bounded UTF-8 1..1024 bytes
 }
 ```
 
@@ -4898,71 +4960,80 @@ One fixture may have several branches. Each branch owns its own stimulus,
 stage, result, coverage, and oracle.
 
 ```text
+FixtureIdV1 = ASCII matching ^[A-Z][A-Z0-9_-]{2,127}$
+FixtureCaseIdV1 = lowercase ASCII 1..128 bytes
+
 FixtureAllocationConditionV1: u8 =
   0 UNKNOWN | 1 ALWAYS | 2 WHEN_CLAIM_VECTOR_REFERENCES |
   3 WHEN_SURFACE_ALLOCATED_AND_ADVERTISED
 
+enum FixtureDispositionV1 {
+  Admit, AuditAdmit, RejectRequest, AllowEffect, AuditAllowEffect, DenyErrno,
+  RecordOnly, Finding, ResponseProposal, VerifiedResponse, Unsupported,
+}
+
+enum QualificationResultV1 { Pass, Fail, Unsupported, InsufficientCoverage }
+
 FixtureCaseV1 {
-  case_id: stable unique lowercase ASCII within fixture
+  case_id: FixtureCaseIdV1
   allocation_condition: FixtureAllocationConditionV1
   topology_digest, starting_state_digest, stimulus_digest: DigestV1
-  expected_stage: ENTRY_ADMISSION | NATIVE_TRANSITION | LOCAL_PRE_EFFECT |
-                  REMOTE_PRE_ADMISSION | POST_EFFECT | RESPONSE
-  expected_disposition: ADMIT | AUDIT_ADMIT | REJECT_REQUEST |
-                        ALLOW_EFFECT | AUDIT_ALLOW_EFFECT | DENY_ERRNO |
-                        RECORD_ONLY | FINDING | RESPONSE_PROPOSAL |
-                        VERIFIED_RESPONSE | UNSUPPORTED
-  expected_result: closed result enum or registered result ID
-  required_coverage_predicates[]
-  oracle_schema
-  oracle_validator_id
+  expected_stage: EvaluationStageV1
+  expected_disposition: FixtureDispositionV1
+  expected_result: ResultCodeIdV1
+  required_coverage_predicates[0..64]: RegistrySymbolV1
+  oracle_schema: OracleSchemaIdV1
+  oracle_validator_id: OracleValidatorIdV1
   oracle_artifact_expectation_digest: DigestV1
-  negative_control_case_ids[]
+  negative_control_case_ids[0..64]: FixtureCaseIdV1
   degraded_result: UNSUPPORTED | INSUFFICIENT_COVERAGE |
                    OBSERVATION_ONLY | NOT_APPLICABLE
 }
 
 NormativeFixtureRegistryV1 {
   architecture_revision_digest: DigestV1
-  fixtures[] {
-    fixture_id
+  fixtures[1..4096] {
+    fixture_id: FixtureIdV1
     id_kind: FIXTURE | META_TEST
-    source_section_id
-    owning_phase_and_crate
-    criterion_numbers[]
-    assurance_axes[]
-    prerequisite_capability_ids[]
-    upstream_source_evidence_ids[]
+    source_section_id: ASCII 1..128 bytes
+    owning_phase_and_crate: ASCII 1..256 bytes
+    criterion_numbers[1..11]: sorted unique u8 in 1..11
+    assurance_axes[1..23]: sorted unique AssuranceAxisV1
+    prerequisite_capability_ids[0..256]: CapabilityIdV1
+    upstream_source_evidence_ids[0..256]: Id128
     cases[1..256]: FixtureCaseV1
   }
 }
 
 FixtureCaseResultV1 {
-  fixture_id, case_id
+  fixture_case_result_id: Id128
+  fixture_id: FixtureIdV1
+  case_id: FixtureCaseIdV1
   starting_state_digest, stimulus_digest: DigestV1
-  observed_stage, observed_disposition, observed_result
-  observed_coverage_interval_ids[]: sorted unique Id128
-  oracle_artifact_ids[]
+  observed_stage: EvaluationStageV1
+  observed_disposition: FixtureDispositionV1
+  observed_result: ResultCodeIdV1
+  observed_coverage_interval_ids[0..64]: sorted unique Id128
+  oracle_artifact_ids[0..16]: ArtifactContentIdV1
   canonical_oracle_digest: DigestV1
-  negative_control_case_result_ids[]
-  result: PASS | FAIL | UNSUPPORTED | INSUFFICIENT_COVERAGE
+  negative_control_case_result_ids[0..64]: Id128
+  result: QualificationResultV1
 }
 
 FixtureAggregateResultV1 {
-  fixture_id
-  active_case_ids[], dormant_case_ids[]
-  case_results[]: FixtureCaseResultV1
-  aggregate_result: PASS | FAIL | UNSUPPORTED | INSUFFICIENT_COVERAGE
+  fixture_id: FixtureIdV1
+  active_case_ids[0..256], dormant_case_ids[0..256]: FixtureCaseIdV1
+  case_results[1..256]: sorted unique FixtureCaseResultV1 by case_id
+  aggregate_result: QualificationResultV1
 }
 
 FixtureResultBundleV1 {
-  result_bundle_id
+  result_bundle_id: Id128
   product_build_digest, platform_support_manifest_digest: DigestV1
   fixture_registry_digest: DigestV1
-  fixture_results[]: sorted unique by fixture_id
-  canonical_payload_digest: DigestV1
-  signer_key_id
-  signature
+  fixture_results[1..4096]: sorted unique FixtureAggregateResultV1 by fixture_id
+  canonical_payload_digest: ArtifactContentIdV1
+  seal: SignedArtifactSealV1
 }
 ```
 
@@ -4996,44 +5067,43 @@ CanonicalOracleComparatorV1 {
 }
 
 CompletionLedgerV1 {
-  ledger_id
+  ledger_id: Id128
   architecture_revision_digest, product_build_digest: DigestV1
   platform_support_manifest_digest, capability_bundle_digest: DigestV1
   exact_type_closure_bundle_digest: DigestV1
   fixture_registry_digest, fixture_result_bundle_digest: DigestV1
   performance_qualification_bundle_digest: DigestV1
-  criteria[] {
+  criteria[1..11]: sorted unique by criterion_number {
     criterion_number: 1..11
-    claim_vector_ids[]
-    prerequisite_capability_ids[]
-    acceptance_fixture_ids[]
-    accepted_result: PASS
-    result_artifact_ids[]
-    status: PASS | FAIL | UNSUPPORTED | INSUFFICIENT_COVERAGE
+    claim_vector_ids[0..256]: Id128
+    prerequisite_capability_ids[0..256]: CapabilityIdV1
+    acceptance_fixture_ids[0..256]: FixtureIdV1
+    accepted_result: exactly QualificationResultV1::Pass
+    result_artifact_ids[0..256]: ArtifactContentIdV1
+    status: QualificationResultV1
   }
 }
 
 QualificationEnvelopeV1 {
-  qualification_id
+  qualification_id: Id128
   architecture_revision_digest, product_build_digest: DigestV1
   platform_support_manifest_digest, capability_bundle_digest: DigestV1
   exact_type_closure_bundle_digest: DigestV1
   fixture_registry_digest, fixture_result_bundle_digest: DigestV1
   completion_ledger_digest, performance_qualification_bundle_digest: DigestV1
-  generated_at_utc
-  release_qualifier_identity
-  signature_key_id
-  canonical_payload_digest: DigestV1
-  signature
+  generated_at_utc_ns: i64
+  release_qualifier_identity: Id128
+  canonical_payload_digest: ArtifactContentIdV1
+  seal: SignedArtifactSealV1
 }
 
 ReleaseClaimV1 {
-  claim_id
+  claim_id: Id128
   qualification_envelope_digest: DigestV1
-  claim_vector_ids[]
-  human_statement
+  claim_vector_ids[1..256]: Id128
+  human_statement: bounded UTF-8 1..4096 bytes
   valid_for_exact_platform_manifest_digest: DigestV1
-  signature
+  seal: SignedArtifactSealV1
 }
 ```
 
@@ -5045,18 +5115,19 @@ ineligible.
 
 ### A.8 Complete Version 1 type-ownership catalog
 
-This catalog owns every active Version 1 type and retains only enough rejected
-or unallocated names to prevent their accidental reintroduction. It does not
-require one Rust struct per row. Closed enum bodies and generated ABI views may
-share an implementation, but no required information may disappear.
+This catalog owns every Version 1 type that crosses the exact foundation and
+retains only enough descriptive, rejected, or unallocated names to prevent
+accidental promotion. It does not require one Rust struct per row. Closed enum
+bodies and generated ABI views may share an implementation, but no required
+information may disappear.
 
-The catalog is not itself a field definition. Every name receives one of four
+The catalog is not itself a field definition. Every name receives one of five
 machine-checked states before any Version 1 freeze:
 
 ```text
 ExactTypeClosureRecordV1 {
   type_name: ASCII matching ^[A-Z][A-Za-z0-9]{0,127}V1$
-  status: EXACT_SCHEMA | EXACT_ALIAS | UNALLOCATED | REJECTED
+  status: EXACT_SCHEMA | EXACT_ALIAS | DESCRIPTIVE | UNALLOCATED | REJECTED
   controlling_section_id: ASCII 1..128 bytes
   alias_target_type_name?: ASCII 1..128 bytes
   used_by_rust: bool
@@ -5068,20 +5139,25 @@ ExactTypeClosureBundleV1 {
   architecture_revision_digest: DigestV1
   records[1..4096]: sorted unique by type_name
   active_type_name_set_digest: DigestV1
-  canonical_payload_digest: DigestV1
+  canonical_payload_digest: ArtifactContentIdV1
   result: PASS | FAIL
 }
 ```
 
 `EXACT_SCHEMA` defines fields, bounds, enum values, encoding, transitions, and
 failures. `EXACT_ALIAS` names one exact target and may only narrow it.
+`DESCRIPTIVE` is allowed only in explanation or non-durable local display and
+planning code; it cannot appear in a policy decision, BPF ABI, signed/hashed
+or wire/disk record, recovery state, release claim, or grouping/deduplication
+key. Promotion across any such boundary is a schema change.
 `UNALLOCATED` cannot appear in accepted policy or release claims. `REJECTED`
 cannot appear in production code or active fixtures.
 
-The Phase 0 checker extracts every active `*V1` name. A name defined only in
-this catalog fails the build. So do duplicate owners, missing sections, alias
-cycles, BPF types without Rust/C layout checks, and signed types without
-canonical bytes. This prevents names such as `LookupStepV1`,
+The Phase 0 checker extracts every active `*V1` name. An `EXACT_SCHEMA` name
+defined only in this catalog fails the build; a `DESCRIPTIVE` name fails if it
+is used across an exact-foundation boundary. So do duplicate owners, missing
+exact sections, alias cycles, BPF types without Rust/C layout checks, and
+signed types without canonical bytes. This prevents names such as `LookupStepV1`,
 `SetReferenceClassV1`, and `VmaIteratorSessionIdentityV1` from having a stated
 job but no exact shape.
 
@@ -5098,6 +5174,21 @@ The remaining intentionally non-struct names have explicit status:
 | `DomainSensitiveStateRuleV1`, `DomainSensitiveTransitionKeyV1`, `DomainSensitiveTransitionValueV1` | `REJECTED` old names: `NativeAuthorityStateRuleV1` and `NativeAuthorityTransition*V1` are controlling and never join independent domains. |
 | `NetworkEffectKeyV1` | `REJECTED`: it required current actor and final rewritten destination at one hook; the two-stage actor/flow contracts in A.13.4 are controlling. |
 | `PersistentVolumeAuthorityV1` | `REJECTED` old owner: `PersistentVolumePolicyV1` plus `VolumeAccessReadinessV1` are controlling. |
+
+#### A.8.0 Shared scalar, enum, and artifact foundation
+
+| Types | One job |
+| --- | --- |
+| `SigningKeyIdV1`, `Ed25519SignatureV1`, `SignedArtifactSealV1` | One reusable Rust signature shape; each enclosing family retains its own domain separator and wire representation. |
+| `ArtifactContentIdV1` | Canonical unsigned content identity for an independently referenced artifact. |
+| `NodeIdentityV1` | Stable node identity distinct from the node-boot epoch. |
+| `CapabilityIdV1`, `OracleValidatorIdV1`, `OracleSchemaIdV1` | Typed registry-backed scalar IDs; unregistered values reject. |
+| `CapabilityRecordIdV1`, `QualificationRecordIdV1`, `FixtureIdV1`, `FixtureCaseIdV1` | Opaque or bounded logical identifiers used in release and fixture joins. |
+| `EvaluationStageV1`, `FixtureDispositionV1`, `QualificationResultV1`, `CapabilityStateV1` | Shared Rust enums where one concept is used by several records. |
+| `PerformanceOperationV1`, `PerformanceStateTransitionModeV1`, `CapacityResourceKindV1` | Closed benchmark operation/resource/state vocabulary, with registered extensions only where declared. |
+| `AssuranceAxisV1`, `AssuranceAxisRecordV1`, `AssuranceAxesV1` | One bounded platform-assurance axis and its exact capability/fixture/claim allocation. |
+| `ExceptionInstanceIdV1`, `ExceptionNumericHandleV1`, `ExceptionUseCountV1` | Stable instance identity, generation-local handle, and bounded use-count scalar. |
+| `ExceptionBindingStateV1`, `ExceptionStateV1`, `ExceptionReceiptStateV1`, `ExceptionUseIdentityV1` | One exception state machine and its typed, idempotent-use variants. |
 
 #### A.8.1 Policy source, registries, and compilation
 
@@ -5984,7 +6075,8 @@ ApprovedExecSlotV1 {
   resolved_executable_object_generation: nonzero u64
   approved_role_numeric_id: nonzero u32
   profile_generation_ref_id: nonzero u64
-  exception_numeric_handle: u32       // zero means no ExceptionV1 consumption
+  exception_numeric_handle: 0 | ExceptionNumericHandleV1
+    // zero means no ExceptionV1 consumption
   expected_root_class: u8, exactly EXTERNAL_RUNTIME_ROOT
   deadline_boottime_ns: u64
   state: atomic u32, 1 ARMED | 2 CONSUMED | 3 EXPIRED |
@@ -6018,6 +6110,15 @@ container names, people, stream flags, tokens, signatures, and free text. It
 keeps only bounded raw argv for comparison. Rust has bound the other facts to
 the cgroup ID, nonce, and container generation. BPF reads the current task's
 binding and compares the fixed fields above.
+
+An administrative-exec body deliberately does **not** carry an exception ID:
+the body proves who approved this exact exec, while the signed profile owns
+which exact compiled cell can widen authority. A nonzero slot handle is valid
+only when one selected `CompiledActionPlanV1.consuming_exception_id` resolves
+through that profile generation to one `ExceptionInstanceIdV1`. No matching
+plan, more than one candidate, a mismatched subject, or a profile-generation
+mismatch denies before the slot is armed. This leaves one exception owner and
+does not create a second signed exception selector in the exec protocol.
 
 The signed approval contains the raw arguments exactly as Kubernetes decoded
 them. Rust lowers them into this fixed-size BPF value; it does not hash them:
@@ -6190,7 +6291,8 @@ NodeAdmissionRequestV1 {
   requested_field_entries[0..512]: NodeAdmissionFieldV1,
     sorted by (field_key, canonical_value), no duplicates
   selected_profile?: PortableProfileGenerationV1
-  signed_exception_id, one_use_exception_slot_id?: Id128
+  signed_exception_instance_id?: ExceptionInstanceIdV1
+  one_use_exception_claim_slot_id?: Id128
   cgroup_binding_id_and_nonce?: { binding_id, binding_nonce: Id128 }
   deadline_boottime_ns: u64
 }
@@ -6211,6 +6313,13 @@ Unknown fields cannot be omitted from a full-floor request. A Kubernetes
 admission request never claims that runtime
 setup was prevented, and a runtime request never claims Kubernetes API
 rejection; the selected interface kind controls the honest physical result.
+
+`signed_exception_instance_id` identifies the same `ExceptionV1` instance
+that later BPF consumers may charge. `one_use_exception_claim_slot_id` is a
+separate signed-intent replay slot: it proves one admission request but never
+creates, refunds, or substitutes for `ExceptionV1.maximum_uses`. A V1
+admission decision records exception context only; it may claim a use only at
+the separately qualified consumer that owns the applicable exception receipt.
 
 Admission can reject an unmatched privileged, hostPID, host-root, or broad-
 capability workload. A runtime extension may claim start rejection only when
@@ -6243,10 +6352,10 @@ non-canonical fields reject the whole object.
 ```text
 SignedIntentV1 = {
   0: 1,                       // wire version
-  1: bstr(1..128),            // key ID
+  1: SigningKeyIdV1,
   2: 1,                       // Ed25519
   3: bstr(1..32768),          // exact canonical IntentPayloadV1 bytes
-  4: bstr(64)                 // signature
+  4: Ed25519SignatureV1
 }
 
 signature_input =
@@ -6392,7 +6501,7 @@ AdministrativeExecBodyV1 = {
   9: u8 stream_flags,
   10: PolicyLocalIdV1 approved_role_id,
   11: PortableProfileGenerationV1,
-  12: Id128 target_node_id,
+  12: NodeIdentityV1 target_node_id,
   13: 1,                         // NEXT_MATCHING_RUNTIME_EXTERNAL_ROOT
   14: true,                      // requester accepted the documented race
   15: ResolvedAdministrativeExecutableV1
@@ -6755,6 +6864,14 @@ PolicyDocumentV1 {
 PolicyLocalIdV1 = UTF-8 matching ^[a-z][a-z0-9.-]{0,127}$
 RegistrySymbolV1 = ASCII matching ^[A-Z][A-Z0-9_]{0,127}$
 PackageIdV1 = ASCII matching ^[A-Z][A-Z0-9-]{0,126}[0-9]$
+CapabilityIdV1 = RegistrySymbolV1
+OracleValidatorIdV1 = RegistrySymbolV1
+OracleSchemaIdV1 = RegistrySymbolV1
+ReasonCodeIdV1 = RegistrySymbolV1
+ObjectClassIdV1 = RegistrySymbolV1
+ResultCodeIdV1 = RegistrySymbolV1
+CapabilityRecordIdV1 = Id128
+QualificationRecordIdV1 = Id128
 
 CanonicalArgvV1 =
   u32_be(argument_count) ||
@@ -6770,10 +6887,6 @@ when a containing signed or content-addressed contract needs the argv identity.
 #### A.11.2 Selectors classify candidates; bindings create authority
 
 ```text
-ReasonCodeIdV1 = RegistrySymbolV1
-ObjectClassIdV1 = RegistrySymbolV1
-ResultCodeIdV1 = RegistrySymbolV1
-
 LabelRequirementV1 {
   key:UTF-8 Kubernetes qualified name, 1..253 bytes
   operator:IN | NOT_IN | EXISTS | DOES_NOT_EXIST
@@ -6841,9 +6954,8 @@ WorkloadBindingArtifactV1 {          // immutable signed payload
   resolved_object_class_bindings[]: sorted unique
   binding_generation: nonzero u64
   valid_from_boottime_ns: u64
-  canonical_payload_digest: DigestV1
-  signer_key_id
-  signature
+  canonical_payload_digest: ArtifactContentIdV1
+  seal: SignedArtifactSealV1
 }
 
 WorkloadBindingActivationStateV1 {   // mutable node-local state
@@ -6909,7 +7021,7 @@ ObjectClassifierRegistryV1 {
   security_objects[]: SecurityObjectRecordV1
   mount_source_classes[]: MountSourceClassRecordV1
   filesystem_types[] { id, numeric_magic:u64, bounded_name }
-  canonical_payload_digest: DigestV1
+  canonical_payload_digest: ArtifactContentIdV1
 }
 ```
 
@@ -7049,9 +7161,8 @@ SignedCorrelationPackageRegistryV1 {
     implementation_digest, parameter_schema_digest: DigestV1
     required_source_schema_ids[1..64]: PolicyLocalIdV1
   }
-  canonical_payload_digest: DigestV1
-  signer_key_id
-  signature
+  canonical_payload_digest: ArtifactContentIdV1
+  seal: SignedArtifactSealV1
 }
 ```
 
@@ -7329,16 +7440,16 @@ An exception is a signed bounded authority change, not a free-form annotation:
 ```text
 ExceptionV1 {
   exception_id: PolicyLocalIdV1
-  exception_instance_id: Id128
+  exception_instance_id: ExceptionInstanceIdV1
   changed_rule_ids[1..64]: PolicyLocalIdV1
   exact_subject: ExactExceptionSubjectSelectorV1
   authority_delta: PermittedAuthorityDeltaV1
   approver_principal_id: Id128
   approval_proof_digest: DigestV1
-  closed_reason_code: u32
+  closed_reason_code: ReasonCodeIdV1
   valid_from_utc_ns, valid_until_utc_ns: i64
   consumption_scope: exactly PER_TARGET_NODE
-  maximum_uses: nonzero u32
+  maximum_uses: ExceptionUseCountV1
   maximum_lifetime_ns: nonzero u64
 }
 
@@ -7352,44 +7463,37 @@ ExactExceptionSubjectSelectorV1 {
 }
 
 PermittedAuthorityDeltaV1 {
-  from_physical_result
-  to_physical_result
-  added_or_removed_operation_cells[]: DigestV1
-  added_or_removed_transition_cells[]: DigestV1
+  from_physical_result, to_physical_result: ResultCodeIdV1
+  added_or_removed_operation_cells[0..256]: DigestV1
+  added_or_removed_transition_cells[0..256]: DigestV1
   maximum_blast_radius: BlastRadiusLimitV1
 }
 
-ExceptionUseIdentityV1: u8 =
-  0 UNKNOWN
-  | 1 CLAIM_SLOT { claim_slot_id: Id128 }
-  | 2 KERNEL_EFFECT_ATTEMPT { request_identity: ExactRequestIdentityV1 }
-
 ExceptionRuntimeStateKeyV1 {
-  node_id: Id128
-  exception_instance_id: Id128
+  node_id: NodeIdentityV1
+  exception_instance_id: ExceptionInstanceIdV1
 }
 
 ExceptionHandleBindingKeyV1 {
   profile_generation_ref_id: nonzero u64
-  exception_numeric_handle: nonzero u32
+  exception_numeric_handle: ExceptionNumericHandleV1
 }
 
 ExceptionHandleBindingV1 {
   runtime_state_key: ExceptionRuntimeStateKeyV1
-  state: PREPARING | ACTIVE | RETIRING
+  state: ExceptionBindingStateV1
 }
 
 ExceptionRuntimeStateV1 {
   exception_lock: bpf_spin_lock
   exception_id_for_readback: PolicyLocalIdV1
   exception_definition_digest: DigestV1
-  maximum_uses: nonzero u32
+  maximum_uses: ExceptionUseCountV1
   consumed_uses: u32, 0..maximum_uses
   bound_profile_generation_refs: u32
   deadline_boottime_ns: u64
   transition_version: nonzero u64
-  state: PREPARING | ACTIVE | EXHAUSTED | EXPIRED | TOMBSTONED |
-         RECONCILIATION_REQUIRED
+  state: ExceptionStateV1
 }
 
 ExceptionUseReceiptKeyV1 {
@@ -7398,11 +7502,10 @@ ExceptionUseReceiptKeyV1 {
 }
 
 ExceptionUseReceiptV1 {
-  consumed_ordinal?: nonzero u32
+  consumed_ordinal?: ExceptionUseCountV1
   claimed_boottime_ns: u64
   transition_version: nonzero u64
-  state: CLAIMING | CONSUMED | DENIED_EXHAUSTED | DENIED_EXPIRED |
-         DENIED_CORRUPT | RECONCILIATION_REQUIRED
+  state: ExceptionReceiptStateV1
 }
 ```
 
@@ -7416,6 +7519,11 @@ per-target-node, as the signed `consumption_scope` states; Version 1 makes no
 cluster-global count claim from node-local BPF state. Rule, transition, and
 program maps carry only a generation-local numeric handle; they never keep
 independent counters.
+
+The state key uses the stable `NodeIdentityV1`, while `node_boot_id` remains a
+separate reboot epoch. An administrative approval's `target_node_id` must
+equal that stable identity before lowering; reboot restores the same node's
+WAL-backed count and receipts rather than creating a new per-node budget.
 
 Node lowering installs one `ExceptionHandleBindingV1` from that handle to the
 stable runtime-state key. Carrying the same exception instance into a later
@@ -7487,9 +7595,8 @@ ProvisionedNotificationSinkBindingV1 {
   allowed_maximum_sensitivity
   health_record_id: Id128
   config_generation: u64
-  canonical_payload_digest: DigestV1
-  signer_key_id
-  signature
+  canonical_payload_digest: ArtifactContentIdV1
+  seal: SignedArtifactSealV1
 }
 ```
 
@@ -7592,11 +7699,11 @@ ProfileSignatureHeaderV1 = {
 
 SignedWorkloadProtectionProfileV1 = {
   0: 1,
-  1: bstr(1..128) key_id,
+  1: SigningKeyIdV1,
   2: 1,                       // Ed25519
   3: bstr(1..4096) canonical header,
   4: bstr(1..1048576) canonical PolicyDocumentV1,
-  5: bstr(64) signature
+  5: Ed25519SignatureV1
 }
 
 profile_signature_input =
@@ -7625,10 +7732,10 @@ RollbackAuthorizationPayloadV1 = {
 
 SignedRollbackAuthorizationV1 = {
   0: 1,
-  1: bstr(1..128) key_id,
+  1: SigningKeyIdV1,
   2: 1,                       // Ed25519
   3: bstr(1..16384) canonical RollbackAuthorizationPayloadV1,
-  4: bstr(64) signature
+  4: Ed25519SignatureV1
 }
 
 rollback_signature_input =
@@ -7708,8 +7815,8 @@ GenerationLocalDestinationPolicyHandleV1 {
 
 GenerationLocalExceptionHandleV1 {
   exception_id: PolicyLocalIdV1
-  exception_instance_id: Id128
-  numeric_handle: nonzero u32
+  exception_instance_id: ExceptionInstanceIdV1
+  numeric_handle: ExceptionNumericHandleV1
 }
 
 GenerationLocalPolicyIdMapV1 {
@@ -7981,7 +8088,8 @@ PhysicalDecisionV1 {
   errno: i16
   evidence_class_id: u32
   transition_id: u32              // zero means no state change
-  exception_numeric_handle: u32   // zero means no ExceptionV1 consumption
+  exception_numeric_handle: 0 | ExceptionNumericHandleV1
+    // zero means no ExceptionV1 consumption
 }
 
 RestrictionDecisionKeyV1 {
@@ -8153,7 +8261,8 @@ TransitionDescriptorV1 {
   label_epoch: u64
   transition_kind: TransitionKindV1
   profile_generation_ref_id: u64
-  exception_numeric_handle: u32   // zero means no ExceptionV1 consumption
+  exception_numeric_handle: 0 | ExceptionNumericHandleV1
+    // zero means no ExceptionV1 consumption
   transition_artifact_digest_id: u64
   state: PREPARING | ACTIVE | RETIRING
 }
@@ -9174,8 +9283,7 @@ PersistentVolumePolicyV1 {
   record_generation, control_commit_index:u64
   policy_artifact_digest:DigestV1
   state:PREPARING | ACTIVE | RETIRING | REVOKED | CORRUPT
-  signer_key_id
-  signature
+  seal: SignedArtifactSealV1
 }
 
 VolumeAccessReadinessV1 {
@@ -9257,7 +9365,8 @@ EvidenceFieldKeyV1: u16 =
   5 TASK_COOKIE | 6 PROCESS_LINEAGE_ID | 7 AUTHORITY_DOMAIN_ID |
   8 EXECUTION_SET_ID | 9 EXACT_OBJECT_ID | 10 OBJECT_CLASS_ID |
   11 DESTINATION_ID | 12 PROVIDER_REQUEST_ID | 13 PROVIDER_RESULT |
-  14 COVERAGE_INTERVAL_IDS | 15 POLICY_RULE_IDS | 16 RESPONSE_RESULT
+  14 COVERAGE_INTERVAL_IDS | 15 POLICY_RULE_IDS | 16 RESPONSE_RESULT |
+  17 PROVIDER_PRINCIPAL_ID | 18 PROVIDER_RESOURCE_ID
 
 EvidenceFieldV1 =
   FINDING_ID { value: DigestV1, sensitivity, provenance_observation_ids[], proof_quality }
@@ -9273,6 +9382,8 @@ EvidenceFieldV1 =
   | DESTINATION_ID { value: nonzero u64, sensitivity, provenance_observation_ids[], proof_quality }
   | PROVIDER_REQUEST_ID { value: Id128, sensitivity, provenance_observation_ids[], proof_quality }
   | PROVIDER_RESULT { value: ProviderResultBoundaryV1, sensitivity, provenance_observation_ids[], proof_quality }
+  | PROVIDER_PRINCIPAL_ID { value: ProviderPrincipalV1, sensitivity, provenance_observation_ids[], proof_quality }
+  | PROVIDER_RESOURCE_ID { value: ResourceSelectorV1, sensitivity, provenance_observation_ids[], proof_quality }
   | COVERAGE_INTERVAL_IDS { value[1..64]: Id128, sensitivity, provenance_observation_ids[], proof_quality }
   | POLICY_RULE_IDS { value[1..64]: PolicyLocalIdV1, sensitivity, provenance_observation_ids[], proof_quality }
   | RESPONSE_RESULT { value: ResultCodeIdV1, sensitivity, provenance_observation_ids[], proof_quality }
@@ -9387,6 +9498,11 @@ FindingV1 {
 }
 ```
 
+A route may group on a field only when that exact field is present in the
+payload and admitted by its evidence allowlist. Provider principal and resource
+values retain their typed canonical forms for equality; a sink receives them
+only after the normal sensitivity and route allowlist checks.
+
 Packages declare sources, coverage, maximum lateness, time uncertainty,
 retention, exact/contextual join fields, and late-event behavior. Delivery
 order and duplicate redelivery cannot change the terminal finding bytes. Time
@@ -9398,9 +9514,7 @@ never upgrades an edge to exact.
 GraphSubjectV1 {
   subject_id: DigestV1
   tenant_id: Id128
-  subject_kind: TASK | PROCESS | EXECUTION_SET | SOCKET | REQUEST |
-                CREDENTIAL_LEASE | KUBERNETES_OBJECT | PROVIDER_OBJECT |
-                ARTIFACT | CI_RUN | CI_JOB | CI_STEP | EXTERNAL
+  subject_kind: GraphSubjectKindV1
   owning_authority_id: Id128
   immutable_identity_fields[]
   identity_state: EXACT | CONTEXTUAL | CONTRADICTED | SUPERSEDED
@@ -9442,7 +9556,6 @@ GraphSubjectKindV1: u8 =
 
 SourceKindV1 = RegistrySymbolV1
 EvidenceFieldIdV1 = RegistrySymbolV1
-FixtureIdV1 = ASCII matching ^[A-Z][A-Z0-9_-]{2,127}$
 
 ProviderEdgeContractV1 {
   edge_type_id:u32
