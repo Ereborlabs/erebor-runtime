@@ -1437,7 +1437,9 @@ errors for a real `SignedIntentV1`.
 
 The issuer cannot select fail-open behavior. The signed payload does not carry
 `disposition_on_mismatch` or `disposition_on_expiry`; locally signed policy
-does. It also cannot send a reusable count. It sends explicit one-use slots.
+does. It also cannot send a reusable intent count. It sends explicit one-use
+slots. The separate locally signed `ExceptionV1.maximum_uses` is enforced by
+the generation-local BPF owner in Appendix A.11.5.1.
 
 **Example.** An operator approves one Mithril response that revokes cloud
 session S. The signed record contains one use slot. A second use is rejected
@@ -4349,8 +4351,6 @@ OperationPerformanceRecordV1 {
   cpu_time_ns, peak_resident_bytes: u64
   requested_events, emitted_events, lost_events: u64
   threshold_record_id
-  result: WITHIN_DECLARED_BUDGET | OUTSIDE_DECLARED_BUDGET |
-          INSUFFICIENT_SAMPLES
 }
 
 CapacityPerformanceRecordV1 {
@@ -4362,8 +4362,6 @@ CapacityPerformanceRecordV1 {
   expected_exhaustion_result
   observed_exhaustion_result
   health_transition_result
-  result: WITHIN_DECLARED_BUDGET | OUTSIDE_DECLARED_BUDGET |
-          INSUFFICIENT_SAMPLES
 }
 
 PerformanceQualificationRecordV1 {
@@ -4376,7 +4374,6 @@ PerformanceQualificationRecordV1 {
   signed_threshold_set_digest, raw_sample_bundle_digest: DigestV1
   operation_records[]
   capacity_records[]
-  aggregate_result: QUALIFIED | NOT_QUALIFIED | INSUFFICIENT_SAMPLES
 }
 
 PerformanceQualificationBundleV1 {
@@ -4392,10 +4389,12 @@ PerformanceQualificationBundleV1 {
 
 Capability probes use `CapabilityRecordV1` and `CapabilityBundleV1` from
 Appendix A. Both capability and performance bundles use deterministic CBOR,
-SHA-256, and Ed25519 with distinct domain strings. `QUALIFIED` requires every
-mandatory row, threshold, digest, build, and platform to agree. The operation
-and capacity results state only whether the measured record was within its
-declared budget; they are not functional-test or authorization verdicts.
+SHA-256, and Ed25519 with distinct domain strings. Performance records contain
+measurements and the signed threshold-set identity, not stored pass/fail
+verdicts. Release qualification derives its gate result by requiring every
+mandatory row, threshold, digest, build, platform, and minimum-sample rule to
+agree. That derived release gate is not a functional-test or authorization
+result.
 
 **Concrete benchmark.** Measure one million protected and unprotected opens
 after 100,000 warmups at concurrency 1 and 32. Record the full distributions.
@@ -4899,9 +4898,9 @@ One fixture may have several branches. Each branch owns its own stimulus,
 stage, result, coverage, and oracle.
 
 ```text
-FixtureAllocationConditionV1 =
-  ALWAYS | WHEN_CLAIM_VECTOR_REFERENCES |
-  WHEN_SURFACE_ALLOCATED_AND_ADVERTISED
+FixtureAllocationConditionV1: u8 =
+  0 UNKNOWN | 1 ALWAYS | 2 WHEN_CLAIM_VECTOR_REFERENCES |
+  3 WHEN_SURFACE_ALLOCATED_AND_ADVERTISED
 
 FixtureCaseV1 {
   case_id: stable unique lowercase ASCII within fixture
@@ -5133,6 +5132,10 @@ The remaining intentionally non-struct names have explicit status:
 | `ExceptionV1` | Signed, expiring, scoped authority delta with uses and approver |
 | `ExactExceptionSubjectSelectorV1` | Immutable exact workload/entry/role/key subject of an exception; no `*` |
 | `PermittedAuthorityDeltaV1` | Machine-readable permission widening or narrowing that an exception requests |
+| `ExceptionUseIdentityV1` | Exact claim-slot or kernel-effect-attempt identity that makes exception consumption idempotent across programs |
+| `ExceptionHandleBindingKeyV1` / `ExceptionHandleBindingV1` | Generation-local numeric exception handle resolved to one stable exception instance on this node |
+| `ExceptionRuntimeStateKeyV1` / `ExceptionRuntimeStateV1` | One pinned per-node BPF owner for a stable exception instance's maximum and consumed-use count across profile generations |
+| `ExceptionUseReceiptKeyV1` / `ExceptionUseReceiptV1` | One durable per-logical-use claim preventing several rules or programs from charging the same exception twice |
 | `RolloutV1` | Immutable rollout population, time window, stop conditions, and health denominator |
 | `NotificationRouteV1` | Approved sink, sensitivity allowlist, dedupe/retry, and failure posture |
 | `ProvisionedNotificationSinkBindingV1` | Exact live sink instance and secret-free delivery handle |
@@ -5145,7 +5148,8 @@ The remaining intentionally non-struct names have explicit status:
 | `CompiledActionPlanV1` | Legal physical decision plus evidence, finding, notification, response, and degradation |
 | `GenerationLocalRoleHandleV1` | One profile-generation-scoped lowering from a reusable role name to a nonzero BPF role handle |
 | `GenerationLocalDestinationPolicyHandleV1` | One profile-generation-scoped lowering from a reusable destination-policy name to a nonzero BPF destination handle |
-| `GenerationLocalPolicyIdMapV1` | Immutable, read-back-verified role and destination handle tables for one node-local profile generation |
+| `GenerationLocalExceptionHandleV1` | One profile-generation-scoped lowering from a reusable exception name to a nonzero BPF exception handle |
+| `GenerationLocalPolicyIdMapV1` | Immutable, read-back-verified role, destination, and exception handle tables for one node-local profile generation |
 | `SignedWorkloadProtectionProfileV1` | Canonical profile bytes, registry/header digests, issuer sequence, signature |
 | `ProfileSignatureHeaderV1` | Domain/version/algorithm and all registry digests bound by profile signature |
 | `RollbackAuthorizationPayloadV1` | Current and target profile digests/versions, platform, reason, expiry, nonce |
@@ -5247,7 +5251,7 @@ The remaining intentionally non-struct names have explicit status:
 | `CachedDecisionKeyV1` | **Rejected as authority**; may cache explanation only, never final allow |
 | `LabelRequirementV1` | Required task/process/domain/binding state for a decision cell |
 | `LookupStepV1` | Closed ordered lookup description used by Rust/BPF golden tests |
-| `PhysicalDecisionV1` | Allow, audit-allow, or exact errno with stage and state transition |
+| `PhysicalDecisionV1` | Allow, audit-allow, or exact errno with state transition and optional shared exception-consumption handle |
 | `EffectDecisionKeyV1` | Role/effect/operation/composite object/process-domain-lifecycle exact key |
 | `MonotonicSetTransitionKeyV1` / `MonotonicSetTransitionValueV1` | `REJECTED` collapsed names; Appendix A.12.5 separates process transitions from native-authority transitions because one BPF hook cannot atomically mutate both map values |
 | `NativeAuthorityTransitionKeyV1` / `NativeAuthorityTransitionValueV1` | Atomic old native-family restriction state -> stricter state transition |
@@ -5980,6 +5984,7 @@ ApprovedExecSlotV1 {
   resolved_executable_object_generation: nonzero u64
   approved_role_numeric_id: nonzero u32
   profile_generation_ref_id: nonzero u64
+  exception_numeric_handle: u32       // zero means no ExceptionV1 consumption
   expected_root_class: u8, exactly EXTERNAL_RUNTIME_ROOT
   deadline_boottime_ns: u64
   state: atomic u32, 1 ARMED | 2 CONSUMED | 3 EXPIRED |
@@ -6265,8 +6270,8 @@ IntentPayloadV1 = {
   14?: [Id128; 1..16] sorted unique trigger_proof_ids
 }
 
-IntentKindV1 =
-  1 RUNTIME_ENTRY | 2 NATIVE_TRANSITION | 3 AUTHORITY_LEASE |
+IntentKindV1: u8 =
+  0 UNKNOWN | 1 RUNTIME_ENTRY | 2 NATIVE_TRANSITION | 3 AUTHORITY_LEASE |
   4 ARTIFACT_HANDOFF | 5 PROVIDER_OPERATION | 6 DEPLOYMENT_ADMISSION |
   7 CI_STEP | 8 ADMINISTRATIVE_EXEC
 ```
@@ -6282,8 +6287,9 @@ explicit `NEXT_MATCHING_RUNTIME_EXTERNAL_ROOT` risk acceptance. It is not a
 `RUNTIME_ENTRY` proof and must not populate an exact request-to-task join.
 
 The issuer does not choose mismatch, expiry, or fail-open behavior. Those
-fields are absent. Local signed policy owns the result. Multiplicity is the
-explicit slot array, never a reusable count.
+fields are absent. Local signed policy owns the result. Within `SignedIntentV1`,
+multiplicity is the explicit slot array, never a reusable count. This does not
+replace the separately compiled and BPF-consumed `ExceptionV1.maximum_uses`.
 
 #### A.10.2 Closed body variants
 
@@ -6462,13 +6468,14 @@ records is not an official step-to-task join.
 The closed base registries are:
 
 ```text
-RuntimeOperationV1 = 1 CONTAINER_START | 2 EXEC_SYNC |
+RuntimeOperationV1: u8 = 0 UNKNOWN | 1 CONTAINER_START | 2 EXEC_SYNC |
   3 STREAMING_EXEC | 4 LIFECYCLE_EXEC | 5 EPHEMERAL_CONTAINER |
   6 CHECKPOINT_RESTORE
 
-NativeOperationV1 = 1 FORK | 2 EXEC | 3 PRIVILEGE_TRANSITION
+NativeOperationV1: u8 =
+  0 UNKNOWN | 1 FORK | 2 EXEC | 3 PRIVILEGE_TRANSITION
 
-ArtifactOperationV1 = 1 READ_AS_DATA | 2 VERIFY | 3 LOAD |
+ArtifactOperationV1: u8 = 0 UNKNOWN | 1 READ_AS_DATA | 2 VERIFY | 3 LOAD |
   4 EXECUTE | 5 DEPLOY
 
 CiCoordinatorV1: u8 =
@@ -6483,23 +6490,25 @@ CiExecutionShapeV1: u8 =
   3 RUNTIME_ACTION_CONTAINER_ROOT | 4 SERVICE_ROOT |
   5 COORDINATOR_BUILTIN_NO_LOCAL_TASK
 
-ProviderV1 = 1 KUBERNETES | 2 AWS | 3 GCP | 4 GITHUB |
-  5 INTERNAL_CONNECTOR | 6 OCI_REGISTRY
+ProviderV1: u8 = 0 UNKNOWN | 1 KUBERNETES | 2 AWS | 3 GCP |
+  4 GITHUB | 5 INTERNAL_CONNECTOR | 6 OCI_REGISTRY
 
-EntryKindV1 = 1 CONTAINER_START | 2 QUALIFIED_EXEC_PROBE |
+EntryKindV1: u8 = 0 UNKNOWN | 1 CONTAINER_START | 2 QUALIFIED_EXEC_PROBE |
   3 QUALIFIED_LIFECYCLE_POSTSTART | 4 QUALIFIED_LIFECYCLE_PRESTOP |
   5 APPROVED_ADMINISTRATIVE_EXEC_NEXT_MATCH | 6 EPHEMERAL_CONTAINER |
   7 QUALIFIED_CI_CONTAINER_ACTION | 8 CHECKPOINT_RESTORE_UNKNOWN |
   9 UNKNOWN_EXTERNAL
 
-ArtifactKindV1 = 1 FILE | 2 DIRECTORY_TREE | 3 OCI_IMAGE |
+ArtifactKindV1: u8 = 0 UNKNOWN | 1 FILE | 2 DIRECTORY_TREE | 3 OCI_IMAGE |
   4 CI_ARTIFACT | 5 CACHE_ENTRY | 6 QUEUE_MESSAGE |
   7 DEPLOYMENT_MANIFEST
 
-ProducerTrustClassV1 = 1 UNTRUSTED_INPUT | 2 PROTECTED_BUILD |
+ProducerTrustClassV1: u8 =
+  0 UNKNOWN | 1 UNTRUSTED_INPUT | 2 PROTECTED_BUILD |
   3 APPROVED_RELEASE | 4 EXTERNAL_UNVERIFIED
 
-ProviderResultBoundaryV1 = 1 SYNCHRONOUS_GATE_RESULT |
+ProviderResultBoundaryV1: u8 =
+  0 UNKNOWN | 1 SYNCHRONOUS_GATE_RESULT |
   2 AUTHORITATIVE_API_RESULT
 
 LocalAuthoritySubjectV1 =
@@ -6669,7 +6678,8 @@ consumers for three slots, and kill the daemon between owner-state CAS, event
 delivery, and WAL acknowledgment.
 
 Mithril must never call JSON/YAML bytes the signed wire, let an issuer select
-fail-open, accept a reusable count instead of slots, infer a slot from time and
+fail-open, accept a reusable count inside a signed intent instead of slots,
+infer a slot from time and
 argv, store provider secrets as evidence, or call provider audit a synchronous
 pre-effect intent proof. It must also never treat stock kubelet/CRI, runtime,
 or runner observations as signed intent merely because Mithril normalized and
@@ -7262,6 +7272,7 @@ NormalizedDecisionCellV1 {
   finding_specs[]
   response_binding_ids[]
   budget_semantics
+  consuming_exception_id?: PolicyLocalIdV1
   source_rule_ids[]
 }
 
@@ -7286,11 +7297,15 @@ CompiledActionPlanV1 {
   required_proof: ProofQualityPredicateV1
   fallback_plan_by_failure_condition[0..16]: FallbackV1,
     sorted unique by condition
+  consuming_exception_id?: PolicyLocalIdV1
   source_rule_ids[1..64]: sorted unique PolicyLocalIdV1
 }
 ```
 
-`errno` is present exactly for `DENY_ERRNO`. `FINDING` requires a nonempty
+`errno` is present exactly for `DENY_ERRNO`. `consuming_exception_id` is
+present exactly when this plan obtains authority from one `ExceptionV1` and
+must consume that exception before returning the broadened result. `FINDING`
+requires a nonempty
 finding set; otherwise the finding set is empty. A notification or response
 requires a finding. The compiled plan is a child of the immutable signed
 profile generation, so it has no redundant child digest. An independently
@@ -7314,6 +7329,7 @@ An exception is a signed bounded authority change, not a free-form annotation:
 ```text
 ExceptionV1 {
   exception_id: PolicyLocalIdV1
+  exception_instance_id: Id128
   changed_rule_ids[1..64]: PolicyLocalIdV1
   exact_subject: ExactExceptionSubjectSelectorV1
   authority_delta: PermittedAuthorityDeltaV1
@@ -7321,6 +7337,7 @@ ExceptionV1 {
   approval_proof_digest: DigestV1
   closed_reason_code: u32
   valid_from_utc_ns, valid_until_utc_ns: i64
+  consumption_scope: exactly PER_TARGET_NODE
   maximum_uses: nonzero u32
   maximum_lifetime_ns: nonzero u64
 }
@@ -7341,11 +7358,112 @@ PermittedAuthorityDeltaV1 {
   added_or_removed_transition_cells[]: DigestV1
   maximum_blast_radius: BlastRadiusLimitV1
 }
+
+ExceptionUseIdentityV1: u8 =
+  0 UNKNOWN
+  | 1 CLAIM_SLOT { claim_slot_id: Id128 }
+  | 2 KERNEL_EFFECT_ATTEMPT { request_identity: ExactRequestIdentityV1 }
+
+ExceptionRuntimeStateKeyV1 {
+  node_id: Id128
+  exception_instance_id: Id128
+}
+
+ExceptionHandleBindingKeyV1 {
+  profile_generation_ref_id: nonzero u64
+  exception_numeric_handle: nonzero u32
+}
+
+ExceptionHandleBindingV1 {
+  runtime_state_key: ExceptionRuntimeStateKeyV1
+  state: PREPARING | ACTIVE | RETIRING
+}
+
+ExceptionRuntimeStateV1 {
+  exception_lock: bpf_spin_lock
+  exception_id_for_readback: PolicyLocalIdV1
+  exception_definition_digest: DigestV1
+  maximum_uses: nonzero u32
+  consumed_uses: u32, 0..maximum_uses
+  bound_profile_generation_refs: u32
+  deadline_boottime_ns: u64
+  transition_version: nonzero u64
+  state: PREPARING | ACTIVE | EXHAUSTED | EXPIRED | TOMBSTONED |
+         RECONCILIATION_REQUIRED
+}
+
+ExceptionUseReceiptKeyV1 {
+  runtime_state_key: ExceptionRuntimeStateKeyV1
+  use_identity: ExceptionUseIdentityV1
+}
+
+ExceptionUseReceiptV1 {
+  consumed_ordinal?: nonzero u32
+  claimed_boottime_ns: u64
+  transition_version: nonzero u64
+  state: CLAIMING | CONSUMED | DENIED_EXHAUSTED | DENIED_EXPIRED |
+         DENIED_CORRUPT | RECONCILIATION_REQUIRED
+}
 ```
 
 Wildcards, no expiry, missing approver, unlimited use, and hard-invariant
 changes reject. The compiler shows the exact broadened/narrowed cells in the
 activation explanation and claim exclusions.
+
+One pinned `ExceptionRuntimeStateV1` entry owns the count for one
+`exception_instance_id` on one target node. `maximum_uses` is therefore
+per-target-node, as the signed `consumption_scope` states; Version 1 makes no
+cluster-global count claim from node-local BPF state. Rule, transition, and
+program maps carry only a generation-local numeric handle; they never keep
+independent counters.
+
+Node lowering installs one `ExceptionHandleBindingV1` from that handle to the
+stable runtime-state key. Carrying the same exception instance into a later
+profile generation requires the same canonical exception-definition digest,
+increments `bound_profile_generation_refs`, and preserves `consumed_uses`.
+Changing any definition field under the same instance ID rejects. A later
+exception may reuse the human `exception_id` only with a new non-reused
+`exception_instance_id` and new approval. Before first activation on a node,
+the owner either restores the instance's count and receipts from the WAL or
+initializes and reads back `maximum_uses`, `consumed_uses=0`, and the monotonic
+deadline.
+
+Node lowering resolves `CompiledActionPlanV1.consuming_exception_id` through
+`GenerationLocalPolicyIdMapV1` and writes that one handle into the applicable
+`PhysicalDecisionV1`, `TransitionDescriptorV1`, or approved-exec slot.
+
+Every possible consumer derives the same exact `ExceptionUseIdentityV1`.
+Claim-backed administrative execution uses its existing `claim_slot_id`; a
+kernel effect uses the `ExactRequestIdentityV1` already shared by every hook
+for that attempt. The decisive BPF owner inserts one `CLAIMING` receipt with
+`BPF_NOEXIST`. An existing `CONSUMED` receipt means another rule or program
+already charged this same logical use, so the count is not charged again. An
+existing `CLAIMING` or reconciliation receipt fails closed.
+
+A receipt is idempotency state, not positive authority. Every participating
+program still revalidates the same live actor, generation, compiled cell,
+object, and floors. `consumed_ordinal` is present exactly for `CONSUMED`, equals
+the post-increment `consumed_uses`, and is absent for every denial state.
+
+The winning owner locks the one runtime-state value, rechecks the active handle
+binding, deadline, and state, and increments `consumed_uses` only when it is below
+`maximum_uses`. Reaching the maximum changes the state to `EXHAUSTED`. It then
+marks the receipt `CONSUMED` before returning the exception-broadened result.
+The count is consumed immediately before that result is returned, after all
+other Mithril restriction and response floors have passed. A later kernel LSM
+denial or failed physical operation does not refund it because safe rollback
+cannot prove that no effect occurred.
+
+For an approved administrative exec, only the winner of the existing
+`ApprovedExecSlotV1` `ARMED -> CONSUMED` transition may claim the exception
+receipt. If the exception is then expired or exhausted, the exec remains
+denied and the administrative slot remains consumed. Any map-capacity,
+lookup, lock, receipt-finalization, or readback failure denies and sets
+reconciliation-required state; it never grants an extra use. Pinned state and
+receipts are authoritative across daemon restart. The WAL restores them before
+activation after node restart. The owner retains them until the exception has
+expired, every bound profile-generation reference is released, and receipt
+retention/reconciliation is complete.
 
 ```text
 NotificationRouteV1 {
@@ -7588,6 +7706,12 @@ GenerationLocalDestinationPolicyHandleV1 {
   numeric_handle: nonzero u64
 }
 
+GenerationLocalExceptionHandleV1 {
+  exception_id: PolicyLocalIdV1
+  exception_instance_id: Id128
+  numeric_handle: nonzero u32
+}
+
 GenerationLocalPolicyIdMapV1 {
   profile_id: Id128
   profile_version: nonzero u64
@@ -7600,6 +7724,8 @@ GenerationLocalPolicyIdMapV1 {
     GenerationLocalDestinationPolicyHandleV1,
     sorted unique by destination_policy_id and independently unique by
     numeric_handle
+  exception_handles[0..4096]: GenerationLocalExceptionHandleV1,
+    sorted unique by exception_id and independently unique by numeric_handle
   state: PREPARING | READ_BACK | ACTIVE | TOMBSTONED
 }
 ```
@@ -7616,7 +7742,8 @@ cannot authorize the other.
 `PolicyLocalIdV1` names are reusable across profile generations. Lowering does
 not assign a permanent global number. It assigns node-local handles inside one
 immutable `GenerationLocalPolicyIdMapV1`; BPF role and destination-policy keys
-are interpreted only together with that map's `profile_generation_ref_id`.
+and exception-use keys are interpreted only together with that map's
+`profile_generation_ref_id`.
 The same name may have different meaning in a later generation, but an active
 generation never changes its mapping. Numeric handles remain non-reused within
 the node boot and label epoch as required by Appendix A.12.1.
@@ -7681,10 +7808,11 @@ ProfileGenerationRefV1 {
   state: PREPARING | ACTIVE | RETIRING
 }
 
-SetKindV1 = RESTRICTION | RESPONSE | RETAINED_GENERATION
+SetKindV1: u8 =
+  0 UNKNOWN | 1 RESTRICTION | 2 RESPONSE | 3 RETAINED_GENERATION
 
-SetReferenceClassV1 =
-  1 TASK | 2 PROCESS | 3 NATIVE_AUTHORITY_DOMAIN | 4 SOCKET |
+SetReferenceClassV1: u8 =
+  0 UNKNOWN | 1 TASK | 2 PROCESS | 3 NATIVE_AUTHORITY_DOMAIN | 4 SOCKET |
   5 FILE_OR_SHARED_OBJECT | 6 PENDING_CLAIM | 7 RESPONSE_PLAN |
   8 RECONCILIATION | 9 WAL_RETENTION
 
@@ -7749,9 +7877,11 @@ BindingGenerationStateV1 {
   }
 }
 
-GenerationReferenceClassV1 = TASK | SOCKET | FILE_OR_SHARED_OBJECT |
-  AUTHORITY_DOMAIN | DERIVED_KERNEL_CAPABILITY | VMA_OR_ASYNC_OBJECT |
-  CHECKPOINT_RESTORE | PENDING_ENTRY_OR_EXEC | RESPONSE_PLAN
+GenerationReferenceClassV1: u8 =
+  0 UNKNOWN | 1 TASK | 2 SOCKET | 3 FILE_OR_SHARED_OBJECT |
+  4 AUTHORITY_DOMAIN | 5 DERIVED_KERNEL_CAPABILITY |
+  6 VMA_OR_ASYNC_OBJECT | 7 CHECKPOINT_RESTORE |
+  8 PENDING_ENTRY_OR_EXEC | 9 RESPONSE_PLAN
 
 GenerationReferenceTombstoneV1 {
   reference_owner_id: Id128
@@ -7851,6 +7981,7 @@ PhysicalDecisionV1 {
   errno: i16
   evidence_class_id: u32
   transition_id: u32              // zero means no state change
+  exception_numeric_handle: u32   // zero means no ExceptionV1 consumption
 }
 
 RestrictionDecisionKeyV1 {
@@ -8022,6 +8153,7 @@ TransitionDescriptorV1 {
   label_epoch: u64
   transition_kind: TransitionKindV1
   profile_generation_ref_id: u64
+  exception_numeric_handle: u32   // zero means no ExceptionV1 consumption
   transition_artifact_digest_id: u64
   state: PREPARING | ACTIVE | RETIRING
 }
@@ -8270,20 +8402,21 @@ SetattrKeyV1 = {
   bounded_new_value_class: RegistrySymbolV1
 }
 
-ExactRequestIdentityV1 =
-  SYNC_SYSCALL {
+ExactRequestIdentityV1: u8 =
+  0 UNKNOWN
+  | 1 SYNC_SYSCALL {
     task_cookie: nonzero u64, process_state_id: Id128,
     syscall_entry_sequence, effect_attempt_sequence: nonzero u64,
     effect_family, operation: u16
   }
-  | AIO_REQUEST {
+  | 2 AIO_REQUEST {
       aio_context_id, request_id: Id128, submission_sequence: nonzero u64
     }
-  | IO_URING_REQUEST {
+  | 3 IO_URING_REQUEST {
       ring_id: Id128, ring_generation, submission_sequence: nonzero u64,
       sqe_index: u32, user_data: u64, opcode: u16
     }
-  | MMAP_ATTEMPT {
+  | 4 MMAP_ATTEMPT {
       task_cookie: nonzero u64, process_state_id, authority_domain_id: Id128,
       attempt_sequence: nonzero u64
     }
@@ -9154,9 +9287,10 @@ EvidencePayloadV1 {
   fields[1..64]: EvidenceFieldV1, sorted unique by EvidenceFieldKeyV1
 }
 
-FindingGroupingFieldV1 = FINDING_ID | REASON_CODE | PROCESS_LINEAGE_ID |
-  AUTHORITY_DOMAIN_ID | EXECUTION_SET_ID | EXACT_OBJECT_ID |
-  PROVIDER_PRINCIPAL_ID | PROVIDER_RESOURCE_ID
+FindingGroupingFieldV1: u8 =
+  0 UNKNOWN | 1 FINDING_ID | 2 REASON_CODE | 3 PROCESS_LINEAGE_ID |
+  4 AUTHORITY_DOMAIN_ID | 5 EXECUTION_SET_ID | 6 EXACT_OBJECT_ID |
+  7 PROVIDER_PRINCIPAL_ID | 8 PROVIDER_RESOURCE_ID
 
 ObservationEnvelopeV1 {
   schema_version: u32
@@ -9300,9 +9434,11 @@ GraphVersionV1 {
 pair of endpoint kinds direct:
 
 ```text
-GraphSubjectKindV1 = TASK | PROCESS | EXECUTION_SET | SOCKET | REQUEST |
-  CREDENTIAL_LEASE | KUBERNETES_OBJECT | PROVIDER_OBJECT | ARTIFACT |
-  CI_RUN | CI_JOB | CI_STEP | EXTERNAL
+GraphSubjectKindV1: u8 =
+  0 UNKNOWN | 1 TASK | 2 PROCESS | 3 EXECUTION_SET | 4 SOCKET |
+  5 REQUEST | 6 CREDENTIAL_LEASE | 7 KUBERNETES_OBJECT |
+  8 PROVIDER_OBJECT | 9 ARTIFACT | 10 CI_RUN | 11 CI_JOB |
+  12 CI_STEP | 13 EXTERNAL
 
 SourceKindV1 = RegistrySymbolV1
 EvidenceFieldIdV1 = RegistrySymbolV1
@@ -9445,25 +9581,27 @@ BlastRadiusLimitV1 =
       principal_count:u32
     }
 
-TargetRevalidationV1 =
-  PROCESS_PIDFD_TASK_COOKIE_STARTTIME_CGROUP_BINDING
-  | LINEAGE_ROOT_AND_COMPLETE_EFFECTIVE_RESPONSE_SET
-  | SOCKET_COOKIE_PROVENANCE_AND_LIVE_BINDING
-  | CGROUP_FD_NONCE_AND_MEMBER_SET
-  | KUBERNETES_UID_RESOURCE_VERSION
-  | PROVIDER_STABLE_ID_REVISION_AND_AUTHORITY
-  | ARTIFACT_IMMUTABLE_DIGEST_AND_STORE_REVISION
+TargetRevalidationV1: u8 =
+  0 UNKNOWN
+  | 1 PROCESS_PIDFD_TASK_COOKIE_STARTTIME_CGROUP_BINDING
+  | 2 LINEAGE_ROOT_AND_COMPLETE_EFFECTIVE_RESPONSE_SET
+  | 3 SOCKET_COOKIE_PROVENANCE_AND_LIVE_BINDING
+  | 4 CGROUP_FD_NONCE_AND_MEMBER_SET
+  | 5 KUBERNETES_UID_RESOURCE_VERSION
+  | 6 PROVIDER_STABLE_ID_REVISION_AND_AUTHORITY
+  | 7 ARTIFACT_IMMUTABLE_DIGEST_AND_STORE_REVISION
 
-PhysicalPostconditionV1 =
-  RESPONSE_SET_INSTALLED_AND_DESCENDANTS_RECONCILED
-  | PROCESS_STOPPED_VIA_PIDFD
-  | SOCKET_SET_FENCED_AND_EXISTING_FLOW_ORACLE_PASSED
-  | CGROUP_FROZEN_AND_PACKET_FENCE_ACTIVE
-  | REPLACEMENT_REJECTED_THROUGH_WATCH_WATERMARK
-  | PROVIDER_CREDENTIAL_ACTION_READ_BACK
-  | MESH_DEVICE_DISABLED_AND_HANDSHAKE_REJECTED
-  | ARTIFACT_QUARANTINED_AND_CONSUMER_LOAD_REJECTED
-  | PROVIDER_OPERATION_SPECIFIC_POSTCONDITION
+PhysicalPostconditionV1: u8 =
+  0 UNKNOWN
+  | 1 RESPONSE_SET_INSTALLED_AND_DESCENDANTS_RECONCILED
+  | 2 PROCESS_STOPPED_VIA_PIDFD
+  | 3 SOCKET_SET_FENCED_AND_EXISTING_FLOW_ORACLE_PASSED
+  | 4 CGROUP_FROZEN_AND_PACKET_FENCE_ACTIVE
+  | 5 REPLACEMENT_REJECTED_THROUGH_WATCH_WATERMARK
+  | 6 PROVIDER_CREDENTIAL_ACTION_READ_BACK
+  | 7 MESH_DEVICE_DISABLED_AND_HANDSHAKE_REJECTED
+  | 8 ARTIFACT_QUARANTINED_AND_CONSUMER_LOAD_REJECTED
+  | 9 PROVIDER_OPERATION_SPECIFIC_POSTCONDITION
 ```
 
 The compiler accepts only compatible combinations. For example, a GitHub
