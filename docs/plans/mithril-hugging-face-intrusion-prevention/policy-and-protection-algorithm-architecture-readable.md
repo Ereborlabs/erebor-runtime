@@ -4,12 +4,10 @@ Status: proposed architecture. This document does not authorize an
 implementation phase. The
 [master plan](./README.md) controls what may be built.
 
-This is a complete, plain-language rewrite of the
-[original architecture](./policy-and-protection-algorithm-architecture.md).
-The original remains unchanged and is used as a completeness checklist. This
-file reorganizes the same design around the product, the exact Linux actor,
-the physical effect, and the proof of the result. It does not preserve the
-original section order.
+This is the standalone architecture and implementation contract. It uses a
+product-first order: actor, permission, physical effect, and proof. Historical
+designs may be consulted during review, but they are not normative and are not
+required to implement this document.
 
 The acceptance documents are:
 
@@ -23,36 +21,15 @@ The incident facts come from:
 
 ## How this document is organized
 
-The topics in this architecture overlap in the real system. The organization
-below deliberately combines them instead of repeating them:
+Parts I-II define the product, trust boundaries, actors, and runtime admission.
+Parts III-IV define policy and Linux enforcement. Parts V-VI cover evidence,
+response, the Hugging Face incident, and CI/CD. Parts VII-VIII cover checked
+upstream lessons, qualification, ownership, and delivery. The appendices hold
+exact contracts, rejected designs, fixtures, and sources.
 
-- Part I defines Mithril, the missing security contract, and the trust
-  boundaries of the complete system.
-- Part II follows one Linux actor from runtime admission through fork, thread,
-  exec, exit, and response.
-- Part III defines one source policy, its compiler, immutable activation, and
-  the kernel decision record used by every effect.
-- Part IV explains how that one decision model controls each physical Linux
-  surface, including shared objects and ways one process can lend authority to
-  another.
-- Part V defines evidence, local and multi-node causality, authorized response,
-  and physical verification.
-- Part VI applies the design to every published Hugging Face incident action
-  and to normal CI/CD execution.
-- Part VII records lessons from checked KubeArmor and Tetragon source, then
-  defines acceptance, failure, recovery, performance, and boundedness.
-- Part VIII assigns each state change to one durable owner, allocates delivery
-  phases, identifies unallocated work, records approval choices, and defines
-  completion.
-- The appendices hold exact schemas, rejected designs, fixture IDs, and sources
-  after the behavior has been explained.
-
-A reader should be able to implement an allocated contract without guessing
-what words such as “actor,” “deny,” “exact,” or “verified” mean. A catalog name
-or prose shape is not automatically an exact contract: Appendix A.8 requires
-every active type to resolve to an exact schema or exact alias before Phase 0
-may freeze it. When the design still depends on that closure, a product
-decision, or an unallocated phase, the text says so.
+An allocated contract must define every security term and active type. A name
+alone is not a contract. Appendix A.8 requires an exact schema or alias before
+Phase 0 freezes a type. Unresolved decisions and unallocated work stay explicit.
 
 ## Part I — Product, Gap, And Trust Boundaries
 
@@ -62,10 +39,9 @@ Mithril is a Linux-native system that prevents, proves, connects, and responds
 to harmful actions made by workloads that an organization already chose to
 run.
 
-It is designed for the hard case: attacker-controlled code is running inside a
-legitimate process, with the same Pod, image, Unix user, cgroup, mounted
-credentials, and network namespace as legitimate code. Mithril does not assume
-that a new shell, a new container, or an obviously malicious binary appears.
+It handles the hard case: attacker code runs inside a legitimate process. It
+has the same Pod, image, Unix user, cgroup, credentials, and network namespace
+as legitimate code. No new shell, container, or suspicious binary need appear.
 
 For every protected Linux effect, Mithril answers four questions:
 
@@ -140,21 +116,15 @@ One process can read a token and place it in a shared file, shared memory,
 inherited file descriptor, Unix socket, loopback service, or environment for
 another process. The second process can then make the network request.
 
-Mithril does not merge the two processes. For a socket or local network
-channel, it checks the current process, live channel, operation, and peer when
-Linux exposes one. A pipe does not expose the exact process that will read a
-particular write, so Mithril checks the current process, the live pipe, and the
-read or write operation. It may record other processes observed using the same
-pipe, but that is evidence rather than a complete holder list or an exact peer.
-For a shared file or memory object, it checks the current actor and exact object
-when Linux exposes the open, read/write, mapping, permission-change, or
-attachment operation; it does not invent a future reader or a per-load/store
-hook.
+Mithril keeps the processes separate. For sockets, it checks the current
+process, live channel, operation, and peer. A pipe has no exact peer for one
+write, so the check uses the current process, pipe, and read/write operation.
+Other observed pipe users are evidence only.
 
-Mithril controls and records communication between the two processes. It may
-separately record that descriptor passing occurred. It does not inspect
-ordinary bytes, determine their meaning, or require detailed tracking of the
-object represented by the descriptor.
+Shared files and memory use object rules, not invented process pairs. Mithril
+checks the operations Linux exposes, such as open, read, write, map, permission
+change, and attach. It does not inspect ordinary message bytes. Descriptor
+passing may be recorded without tracking the represented object.
 
 #### 2.4 One attack crosses nodes and external systems
 
@@ -206,11 +176,8 @@ nothing useful.
 | Seccomp, AppArmor, SELinux, or Landlock alone | Mature local isolation at their supported hooks and policy units. | No one mechanism supplies runtime intent, per-entry identity, object and socket provenance, provider edges, multi-node causality, or verified response. Mithril may compile part of a policy into them where they provide the best physical boundary. |
 | Kubernetes admission or network policy alone | Rejects dangerous workload specifications or blocks workload-level flows. | It does not see hostile code already running inside a legitimate process, distinguish same-Pod actors, or govern local files, memory sharing, device ioctls, and inherited descriptors. |
 
-This table states an architectural boundary, not a marketing insult. The later
-source-review chapter names the exact checked KubeArmor and Tetragon paths,
-what Mithril adopts, and what the tests show is missing for Mithril's stronger
-claim. Features added upstream after the pinned revisions require a new source
-review.
+Chapters 28-29 tie these boundaries to checked KubeArmor and Tetragon source.
+Later upstream changes require a new review.
 
 #### Practical comparison: hostile Python in a conversion worker
 
@@ -250,35 +217,26 @@ later barriers even when the earliest one is expected to succeed.
 
 ### 4. Mithril's Unique Contract
 
-The product is the following chain of guarantees. Removing one item changes
-the claim, even if installation becomes simpler.
+These guarantees form one product contract. Removing one weakens the claim.
 
-1. **No changes to workloads or platform source code.** Installing Mithril
-   adds one `mithril-node` owner per node and the Mithril control service.
-   Operators may configure documented extension points that already exist,
-   such as OCI hooks, NRI, runtime plugins, Kubernetes audit/API integrations,
-   CI provider integrations, and hook verification. Mithril does not patch,
-   fork, rebuild, or replace kubelet, containerd, runc, CNI, or a CI runner.
-   It does not change Pod manifests, images, application code, process layout,
-   probes, lifecycle hooks, workload credentials, traffic paths, TLS, or the
-   agent harness.
+1. **No workload or platform source changes.** Mithril installs its node and
+   control components and may configure existing documented extension points.
+   It does not patch platform binaries or change manifests, images, application
+   code, process layout, credentials, traffic, TLS, or the agent harness.
 2. **One node gatherer.** One Rust process owns all Mithril BPF programs,
    runtime admission, local evidence, and local response. Several BPF programs
    are implementation details of that one owner.
 3. **Exact actor before effect.** Every protected task has immutable task
    identity that resolves to mutable process and native-lineage restriction
    state before it can perform a protected effect.
-4. **Independent roots never inherit application authority.** Mithril learns
-   native parent/child relationships from the kernel. A task created outside
-   the application tree but placed in the same container is a separate
-   external root. Stock Linux and CRI often cannot prove whether that root is
-   a probe, hook, administrator, or attacker, so the baseline gives it one
-   conservative external-root policy or denies it. It never guesses purpose
-   from command text or timing.
-5. **One readable source policy.** Operators describe entries, roles,
-   transitions, effects, communication relationships, dispositions, responses,
-   and exceptions in one signed package. A compiler rejects ambiguity and lowers
-   it into bounded local records.
+4. **Independent roots never inherit application authority.** A task created
+   outside the application tree is an external root, even inside the same
+   container. If stock Linux and CRI cannot prove its purpose, Mithril gives it
+   the conservative external policy or denies it. Command text and timing do
+   not create authority.
+5. **One readable source policy.** One signed package defines entries, roles,
+   transitions, effects, communication, decisions, responses, and exceptions.
+   The compiler rejects ambiguity and creates bounded local records.
 6. **Local decisions stay local.** A qualified BPF LSM or cgroup BPF hook
    denies the physical effect synchronously. Central services and existing
    runtime components never sit in a syscall path.
@@ -286,22 +244,17 @@ the claim, even if installation becomes simpler.
    they began under. Their fork/exec/privilege changes follow transitions
    already compiled into that signed policy generation. A partially written
    generation never becomes active.
-8. **No invented byte meaning.** Mithril controls and records covered
-   communication. It may separately record that descriptor passing occurred,
-   but it does not need to identify the object represented by each descriptor.
-   It does not understand ordinary application bytes. If policy allows a narrow
-   actor to send bytes to a broader actor, Mithril cannot promise that the
-   broader actor will not act as a confused deputy. That protocol-level risk is
-   shown in policy review and the authority graph; it is not mislabeled as a
-   Linux enforcement guarantee.
+8. **No invented byte meaning.** Mithril controls covered communication and may
+   record descriptor passing. It does not interpret ordinary bytes or promise
+   that an allowed peer will not misuse its own authority.
 9. **Typed causality across boundaries.** There is no invented remote process
    parent. Kubernetes, mesh, connector, cloud, repository, and CI edges use
    the stable identifiers owned by those systems and carry proof quality.
 10. **Coverage truth.** Enforcement, identity, observation, admission,
     correlation, and response health are separate time intervals.
-11. **Narrowly authorized response.** The response engine re-resolves a live
-    target, refuses stale or ambiguous identity, reports the actuator's actual
-    blast radius, and checks physical postconditions.
+11. **Narrowly authorized response.** The response engine finds the live target
+    again, refuses stale or unclear identity, states the real blast radius, and
+    checks the physical result.
 12. **Claim by fixture, not intention.** Every advertised kernel, Kubernetes,
     and provider combination is backed by a named fixture and
     failure, bypass, event-loss, race, and performance evidence.
@@ -408,17 +361,6 @@ not allowed:
   traffic redirection, DNS replacement, TLS interception, or a mandatory
     provider proxy
 ```
-
-In particular, the baseline does not require:
-
-- one job per Pod or one job per process;
-- application instrumentation or an application event for every job;
-- a sidecar;
-- a different ServiceAccount;
-- narrower RBAC or IAM;
-- a TLS proxy;
-- a changed agent harness; or
-- removal of legitimate mounted credentials.
 
 Mithril may read APIs and files the existing system already exposes. It may
 also be registered through an official hook or plugin interface. That
@@ -676,13 +618,11 @@ pass an exec transition before the new image receives user time.
 
 ##### Kubernetes exec
 
-A normal `kubectl exec` uses Kubernetes, kubelet, and the runtime. The Linux
-task is a restricted external root. Kubernetes audit separately records the
-API request and principal. A cluster may deliberately allow a stronger
-administrative role through Mithril's short-lived, one-use next-match rule.
-That rule does not prove an exact request-to-task join. The approving
-administrator explicitly accepts the rare risk that another otherwise
-identical runtime-created root could win the short race and consume the slot.
+A normal `kubectl exec` uses Kubernetes, kubelet, and the runtime. Its Linux
+task starts as a restricted external root. Kubernetes audit records the API
+request separately. A cluster may approve a stronger role through a short-lived,
+one-use match. This is not an exact request-to-task join. The administrator
+accepts the small risk that an identical runtime-created root wins the race.
 
 ###### Approved administrative exec: from the browser to the next exact matching Linux entry
 
@@ -711,19 +651,17 @@ Approved by alice@example.com
 Connecting...
 ```
 
-The `kubectl-mithril` process waits while the browser interaction happens. It
-does **not** send `pods/exec` and make a Kubernetes webhook wait for a human.
-Admission webhooks have short bounded timeouts. After approval, the plugin
-sends one ordinary Kubernetes `CONNECT pods/exec` request and attaches the
-terminal streams. Stock kubectl plugins cannot replace the built-in
-`kubectl exec`, so the explicit command is `kubectl mithril exec`.
+`kubectl-mithril` waits for browser approval before it sends `pods/exec`.
+The webhook never waits for a person. After approval, the plugin sends one
+ordinary Kubernetes `CONNECT pods/exec` request and attaches the terminal.
+Because plugins cannot replace built-in `kubectl exec`, the command is
+`kubectl mithril exec`.
 
-The browser uses the organization's normal identity provider and displays the
-exact cluster, Pod UID, container, argv, TTY/stdin settings, requested Mithril
-role, expiry, and approver. A workstation may use browser OIDC with PKCE. A
-headless or SSH client may show a short device code and poll. Entering a code
-identifies the pending request; it does not itself approve the request. Policy
-decides whether the requester may self-approve or needs a second person.
+The browser uses the organization's identity provider. It shows the cluster,
+Pod UID, container, argv, stream settings, requested role, expiry, and
+approver. A workstation may use OIDC with PKCE. A headless client may use a
+device code. The code finds the pending request; policy still decides whether
+self-approval or a second person is required.
 
 The requested operation is exact and one use. Its later Linux-task binding is
 intentionally a bounded next-match association rather than an exact propagated
@@ -751,15 +689,13 @@ readable approved-administrative-exec view:
   requester_accepted_rare_binding_race = true
 ```
 
-This is a Mithril authorization, not a statement supposedly signed by kubelet.
-The plugin receives a short-lived, memory-only Kubernetes exec credential. A
-configured stock Kubernetes authentication integration validates it and places
-the non-secret approval ID in `AdmissionReview.userInfo.extra`. The credential
-uses a dedicated identity or group that has authority only for the protected
-`pods/exec` path; it must not reproduce the requester's general Kubernetes
-permissions. The validating admission webhook remains the enforcement
-boundary, so ordinary `kubectl exec`, curl, a modified plugin, and replay all
-fail without a live approval.
+Mithril issues this authorization; kubelet does not. The plugin receives a
+short-lived, memory-only exec credential. A stock Kubernetes authentication
+integration validates it and puts the non-secret approval ID in
+`AdmissionReview.userInfo.extra`. Its identity can use only the protected
+`pods/exec` path, not the requester's general permissions. The validating
+webhook rejects ordinary `kubectl exec`, curl, modified clients, and replay
+without a live approval.
 
 The validating admission webhook then performs this transaction:
 
@@ -775,113 +711,43 @@ receive CONNECT pods/exec
   -> return allowed=true
 ```
 
-If the target node is offline, the container changed, the node cannot install
-the slot, or any value differs, the webhook rejects the API request. The human
-wait occurred before this transaction, so this node round trip must fit the
-ordinary short webhook deadline.
+The webhook rejects if the node is offline, the container changed, slot
+installation fails, or any value differs. Human approval already finished, so
+only the short node round trip must fit the webhook deadline.
 
-`mithril-node` is still the only node gatherer, BPF loader, and kernel-policy
-owner. The central control service routes the prepare request over the node's
-existing authenticated control stream; this does not add a sidecar or a second
-node daemon. Control's `AdministrativeApprovalOwner` owns the browser challenge
-and human decision. The target node's `AuthorizationProofOwner` validates and
-consumes the signed node authorization. Its `WorkloadBindingOwner` owns the BPF
-slot and exact task-role assignment. The node then installs a bounded one-use
-value such as:
+`mithril-node` remains the only node gatherer and BPF owner. Control sends the
+approved request over the node's authenticated control stream. The node
+verifies the Pod UID, full container ID, container generation, cgroup binding,
+policy generation, and deadline before arming one short-lived slot.
 
-```text
-readable BPF slot key:
-  node_boot_id
-  cgroup_binding_id
+Every runtime-created root is restricted before it can act. At `execve` or
+`execveat`, only such a root may inspect the slot. The approval preserves the
+raw argv the administrator entered, including a command such as `bash`. Before
+approval, the node resolves that command in the target container's mount view,
+working directory, and effective `PATH`; the browser displays the resolved
+path and executable identity. BPF compares raw argv plus that exact executable
+object. The total argv limit is 4096 bytes. Missing, truncated, changed, or
+over-limit input does not match. There is no argv or executable-content hash.
 
-readable BPF slot value:
-  proof_id = approval_id
-  claim_slot_id
-  cgroup_binding_nonce
-  container_generation
-  expected_argv
-  approved_role_numeric_id
-  profile_generation_ref_id
-  expected_root_class = EXTERNAL_RUNTIME_ROOT
-  deadline_boottime_ns
-  state = ARMED
-  transition_version
-```
-
-BPF does not parse OAuth, JWT, CBOR, Kubernetes objects, or signatures. Rust
-does that work and writes the already verified bounded slot. At `execve` or
-`execveat` entry, BPF reads the bounded raw argument strings and compares
-their count, order, length, and bytes with the slot. At the executable check it
-also verifies the live container binding and applies normal executable-file
-policy to the actual file. The first approved argument must be an absolute
-executable path and must match both the exec filename and `argv[0]`. Missing,
-truncated, or over-limit arguments do not match. The remaining work is bounded
-map lookups and an atomic one-use transition; there is no argv or executable
-content hash.
-
-Existing Linux sensors already capture bounded exec arguments, and Tetragon
-also performs bounded argument filtering in BPF. Mithril combines those proven
-techniques with its short-lived one-use approval slot. This document does not
-claim that Tetragon, Falco, or KubeArmor provides that approval-to-task binding,
-and it does not turn argv into a cryptographic identity.
-
-Stock Kubernetes does not carry the admission approval ID or the requested
-TTY/stdin/stdout/stderr flags into the Linux task. Mithril deliberately accepts
-that limitation for this administrator-approved feature. The webhook checks
-the stream flags while it still has the real `PodExecOptions`; those flags are
-not a BPF task-match field.
-
-Before arming the slot, Rust verifies the Pod UID, full container ID, container
-generation, and policy, then binds those facts to one live cgroup binding ID
-and nonce. Immediately before the webhook returns `allowed=true`, the node
-arms one short-lived slot. Runtime-created roots are already labeled with the
-restricted external-root role before they can act. The next such eligible root
-that matches the live cgroup binding, container generation, complete bounded
-argv, policy generation, and deadline may consume the slot during exec. The
-operation is an atomic `ARMED -> CONSUMED` transition, so at most one task
-receives the approved role.
-
-This is an exact comparison with the command the administrator approved; it
-does not infer why that command is running. An application child has native
-application lineage and is ineligible. An eligible candidate is specifically a
-root already classified as `EXTERNAL_RUNTIME_ROOT` with the
-`RUNTIME_EXTERNAL_RESTRICTED` role. A different live cgroup binding, container
-generation, requested executable path, argument list, or policy cannot match.
-The remaining risk is narrow but real: another eligible external root in the
-same container with the same requested executable path and arguments can race
-for the slot, regardless of its stream shape. Without argv matching, any
-eligible external root using the same executable path could race; the raw argv
-comparison makes the match narrower but does not make it a cryptographic
-request-to-task binding. The first exact match reaching the BPF decision wins.
-The approval screen states this risk, cluster configuration must enable it, and
-the administrator accepts it for that invocation.
-
-Containerd runtime exec IDs and lifecycle events remain useful evidence. A
-qualified runtime-specific adapter may correlate them and make the association
-stronger, but the approved feature does not require unstable tracing of Go
-function offsets or argument layouts. An adapter failure never broadens which
-task can match the bounded slot.
-
-At exec syscall entry and `bprm_check_security`, the BPF programs apply this
-rule:
+The webhook checks TTY and stream flags, because stock Kubernetes does not
+carry them into the Linux task. They are not BPF match fields. Therefore
+another eligible root in the same container with the same executable object
+and arguments can win the slot race even with different streams. The approving
+administrator accepts this limit. Containerd exec IDs may improve later
+evidence, but they are not required for the match.
 
 ```text
-if task is not an already-labeled RUNTIME_EXTERNAL_RESTRICTED root:
-  use its existing native lineage policy
-  never let it inspect or consume an administrative-exec slot
+non-external or application task:
+  keep existing lineage; never inspect the slot
 
-else if one ARMED administrative slot exactly matches this new
-        runtime-created external root during exec:
-  verify live cgroup binding ID and nonce, container generation,
-         executable, raw argv bytes, role, policy generation, and deadline
-  atomically change ARMED -> CONSUMED
-  put APPROVED_ADMINISTRATIVE_EXEC_NEXT_MATCH in the pending exec transaction
-  keep the active RUNTIME_EXTERNAL_RESTRICTED role until exec commits
-  evaluate every executable/interpreter candidate under the pending intersection
-  switch to the approved role only at the qualified successful-exec point
+restricted external root with exact live match:
+  ARMED -> CONSUMED
+  keep the restricted role while exec is pending
+  check every script/interpreter/executable candidate
+  switch to the approved role only after successful exec
 
-else:
-  keep RUNTIME_EXTERNAL_RESTRICTED or deny this exec, as configured
+no match:
+  keep the restricted role or deny the exec
 ```
 
 Descendants of the approved task inherit that bounded administrative lineage.
@@ -893,24 +759,14 @@ mount, BPF, ptrace, host devices, persistence, and arbitrary Internet egress.
 
 The accepted race is bounded as follows:
 
-- an application process already has identity and cannot consume a slot;
-- the slot exists only after admission approval and for a short configured
-  monotonic-time window;
-- Rust verifies Pod UID and full container ID when it creates the live cgroup
-  binding; BPF matches that binding and nonce, container generation, argv,
-  role, and policy generation;
-- only one matching slot may be armed for a container, and its state change is
-  atomic;
-- BPF protects the runtime socket from ordinary workloads, reducing who can
-  deliberately create a competing runtime root;
-- a probe, lifecycle hook, direct runtime caller, or second approved session
-  with the same complete match can still win the race; this is the precise
-  residual risk accepted by cluster policy and the approving administrator;
-- Pod replacement, container restart, node restart, expiry, map loss, or sensor
-  loss invalidates the slot; and
-- a second use of the approval or slot fails the atomic state transition.
+- Application descendants cannot consume the slot.
+- The slot exists only after approval, for one container generation and a short
+  deadline.
+- One exact matching external root atomically consumes it.
+- An identical probe, hook, runtime exec, or approved session may win first.
+- Replacement, restart, expiry, map/sensor loss, or replay invalidates it.
 
-The durable evidence chain is:
+The evidence chain is:
 
 ```text
 requester and approver
@@ -926,19 +782,17 @@ requester and approver
 
 `ADMIN-EXEC-APPROVAL-001` races an application child, readiness `ExecSync`,
 direct runtime caller, two identical approved sessions, different stream
-shapes, Pod replacement, node restart, and an expired approval. Admission must
-reject a request whose stream flags differ from the approved request. After
-admission, the Linux-task test must show that stream flags are not part of BPF
-matching. The application child can never consume the slot. The same executable
-path with different raw arguments does not match; a missing, truncated, or
-over-limit argument list makes the approved feature unavailable. At most one
-external root with the same executable path and arguments may consume the
-slot. The test records whether a deliberately injected identical runtime root
-won the race; that outcome is an accepted-risk result, not a false claim of
-exact binding. A failed exec consumes the slot but never installs the approved
-role. Every non-winner receives the restricted external role. If the cluster
-or administrator has not accepted this binding mode, the stronger role is
-unavailable and the restricted external role remains the baseline.
+shapes, replacement, restart, and expiry. It proves:
+
+- admission checks stream flags, but BPF does not;
+- application children never consume a slot;
+- different, missing, truncated, or over-limit argv never matches;
+- at most one identical external root wins the accepted race;
+- failed exec consumes the slot without granting the role; and
+- every non-winner stays restricted.
+
+Without explicit cluster and administrator acceptance, the stronger role is
+unavailable.
 
 ##### Node/runtime bypass
 
@@ -1435,7 +1289,7 @@ host `/` mounted at `/host`, `CAP_SYS_ADMIN`, and a command reading
 A reviewed CSI DaemonSet with an exact non-expired exception remains the
 legitimate control.
 
-The full original plan currently marks this floor
+This architecture marks the full node floor
 `UNALLOCATED_REQUIRED_FOR_FULL_HF_CLAIM`. It must be assigned to approved
 phases before a release claims prevention of the privileged-Pod branch.
 
@@ -2602,28 +2456,17 @@ Chapter 6. A sidecar, init container, ephemeral container, `kubectl exec`, or
 other runtime-created root remains independent, even when it shares the Pod's
 network, files, or IPC namespace.
 
-Policy controls communication between independent roots. For a Unix socket or
-local network channel, one relationship names two endpoints, the channel, and
-the result. A pipe uses the same readable relationship, but Linux does not tell
-Mithril which reader will consume a particular write. Mithril therefore checks
-the current process, the live pipe, and the read or write operation. Other
-processes observed using that pipe are evidence, not an atomically complete
-holder list. Mithril never reports an exact pipe peer. The relationship result
-applies in both directions. Communication that matches no relationship uses
-`unmatched`. Process control is not bidirectional communication: ptrace,
-signal, process-vm, pidfd, and `/proc/<pid>` operations use an exact controller,
-target, and operation rule.
+One relationship controls both directions of a Unix socket or local network
+channel. A pipe has no exact peer for one write, so its decision uses the
+current process, pipe, and read/write operation. Other observed pipe users are
+evidence only. Unmatched communication uses the configured `unmatched` result.
+Process control is separate and directional: controller, target, and operation.
 
-Shared files and shared memory are different. They are not pairwise channels:
-a file writer does not reveal which process may read the file later, and a CPU
-load from an existing shared mapping does not cross an LSM hook. Mithril
-therefore governs the exact object operations that Linux can stop: file open,
-read, write, mapping creation or permission change, shared-memory attachment,
-and other qualified acquisition operations. Once a shared mapping has been
-admitted, ordinary loads and stores through it are outside Mithril's per-access
-enforcement. A strict policy must deny that mapping up front or contain its
-holders by freezing or terminating them; it cannot pretend to revoke individual
-memory accesses later.
+Shared files and memory use object rules, not process pairs. Mithril governs
+open, read, write, map, permission change, and attachment where Linux exposes a
+hook. After a shared mapping is admitted, ordinary CPU loads and stores have no
+per-access hook. Strict policy must deny the mapping or later freeze/terminate
+its holders.
 
 ```yaml
 ipc:
@@ -2639,20 +2482,14 @@ ipc:
       disposition: allow
 ```
 
-Here the converter and uploader may use the named Unix socket. Either process
-trying the containerd socket follows a different rule or `unmatched: alert`.
-On a qualified observation path, Mithril may separately record that descriptor
-passing occurred. It does not need to identify or track the object represented
-by the descriptor. The relationship's `alert` result allows communication and
-records a finding; `deny` returns an error for the communication operation as a
-whole.
+The converter and uploader may use this socket. The containerd socket follows
+another rule or `unmatched`. `alert` allows and records; `deny` returns an
+error. Mithril may record descriptor passing without tracking the represented
+object.
 
-This allow rule does not authorize the meaning of the bytes. For example, the
-converter could send `upload /var/run/secrets/...` to a badly designed uploader.
-Mithril can prove that the configured socket edge was used and that no fd was
-passed. Without application- or provider-level authorization, it cannot prove
-that the uploader interpreted the request safely. Calling that guarantee “no
-authority laundering” would be false.
+The rule does not interpret bytes. A converter may still ask a vulnerable
+uploader to misuse its authority. Preventing that needs application or provider
+authorization.
 
 A shared output file uses ordinary object rules instead of the relationship
 above. A converter may receive `WRITE` on the exact output object while an
@@ -2661,15 +2498,10 @@ map the same writable object, admitting those mappings admits an ongoing shared
 memory capability; there is no later pairwise read/write decision for each CPU
 instruction.
 
-At the kernel hook, Mithril replaces readable selectors such as the socket path
-with live identity. For a socket or local network relationship, it checks the
-current process, actual peer, namespace, channel generation, operation, and
-active policy generation. A reused path or PID therefore does not reuse an old
-decision. An unknown or ambiguous peer follows `unmatched`. For a pipe, it
-checks the current process, live pipe generation, and operation. The current
-process must match one endpoint selector; no decision depends on guessing the
-other process. Shared objects instead use the file/mapping or shared-memory
-acquisition decision for the current actor and exact object.
+Readable paths become live kernel identity before enforcement. Socket rules use
+the current process, peer, namespace, channel generation, operation, and policy
+generation. Unknown peers use `unmatched`. Pipe rules use the current process,
+pipe generation, and operation. Shared objects use the current actor and object.
 
 | Channel | What Mithril resolves |
 | --- | --- |
@@ -2693,18 +2525,13 @@ A return hook cannot undo bytes already read or memory/registers already
 changed. If the target cannot be pinned through the exact pre-effect operation,
 strict policy denies or reports unsupported.
 
-A defender memory-read exception is a signed
-`DEFENDER_READ_DECLASSIFICATION`: exact target, case/finding, read-only
-operations, evidence sink, approver, expiry, and an optional inspector byte
-limit. A short-lived Mithril inspector whose binary and configuration were
-verified receives only an owner-opened target fd and one fixed evidence-sink
-fd. Mithril does not own or replace workload syscalls. The inspector is
-different: it is Mithril's own small program. If the authorization includes a
-byte limit, the inspector counts its successful reads and stops at that limit.
-BPF LSM checks that this inspector may read this target for this case before
-expiry; Seccomp prevents it from using unrelated syscalls or fds. Version 1
-does not claim that BPF LSM meters bytes. No memory write, ptrace control,
-signal, fd extraction, general socket, or arbitrary output is allowed.
+A signed `DEFENDER_READ_DECLASSIFICATION` names the target, case, read-only
+operations, evidence sink, approver, expiry, and optional byte limit. The
+verified Mithril inspector receives only the target fd and evidence fd. BPF LSM
+checks target access; Seccomp limits syscalls and fds. If configured, the
+inspector counts successful bytes itself. BPF LSM does not meter bytes. Writes,
+ptrace control, signals, fd extraction, general sockets, and other output stay
+forbidden.
 
 #### Sensitive state and descriptor passing
 
@@ -2720,14 +2547,9 @@ scan memory and pretend it discovered the secret. If the deployment cannot say
 whether the input exists, policy either applies that conservative state or
 reports the output-prevention claim unsupported.
 
-Mithril does not infer the origin or meaning of ordinary bytes. It can deny a
-restricted actor's send or write, but receiving bytes does not change the
-receiver. Mithril controls and records communication between the two
-processes. It may separately record that descriptor passing occurred. It does
-not inspect ordinary bytes, determine their meaning, or require detailed
-tracking of the object represented by the descriptor. A later use of a file,
-device, socket, or other object is checked at that object's normal enforcement
-hook for the current process.
+Receiving bytes does not change a process role. A received descriptor also
+does not transfer permission: later use is checked against the current process
+at the normal file, device, socket, or other object hook.
 
 Asynchronous and zero-copy operations are supported only when the qualified
 hook controls the actual effect. Otherwise a strict profile denies the setup or
@@ -2750,12 +2572,9 @@ transfer inferred byte meaning between processes or nodes.
 
 #### Abandoned live-merge design
 
-The previous design tried to merge live process domains and drain all in-flight
-work before communication. Linux cannot provide that transaction. The design
-is rejected. Mithril decides each covered socket, pipe, process-control,
-descriptor-passing, object-acquisition, file, and mapping operation. It does
-not claim a decision point for ordinary loads or stores through a mapping that
-Linux has already admitted.
+Linux cannot atomically merge live process domains or drain every in-flight
+operation. Mithril therefore governs each exposed operation and never claims
+per-access control of an already admitted mapping.
 
 ### 19. Network, Sockets, DNS, And Encrypted Protocols
 
@@ -2801,22 +2620,19 @@ Connect hooks do not fence an established flow. Cgroup UDP send hooks are not a
 general TCP-send hook. Packet hooks may not have a meaningful current task and
 therefore use socket/cgroup response state installed earlier.
 
-`socket_create` can decide family/type/protocol before the socket exists but
-cannot label the completed object. A qualified post-create/first-object hook
-must install socket storage before bind/connect/send. Accept needs a
-protocol-specific post-clone/graft label before the accepted child can be used;
-pre-return `security_socket_accept` alone is insufficient. Socketpair labels
-both ends. Missing identity denies first protected use.
+`socket_create` can check family, type, and protocol, but the socket does not
+exist yet. A later qualified hook must label it before bind, connect, or send.
+An accepted socket also needs a label before use; the pre-return accept hook is
+not enough. A socket pair labels both ends. Missing identity denies first use.
 
 Socket controls such as `SO_MARK`, `SO_BINDTODEVICE`, transparent/freebind,
-attached BPF, reuseport/fanout, MPTCP/TCP ULP, routing netlink, ioctl, and
-compat variants are separate effects. Pointer-valued options are not
-dereferenced from mutable userspace for authorization; fixed semantic value
-classes need target-specific post-copy hooks, otherwise deny the option.
+attached BPF, reuseport, MPTCP, routing netlink, and ioctl are separate effects.
+Do not authorize from a pointer into changeable userspace memory. A fixed value
+needs a qualified hook after the kernel copies it; otherwise deny the option.
 
-Full “no undeclared egress” support denies every unneeded family at create or
-qualifies its entire path, including subflows/multihoming, tunnels, redirection,
-io_uring and SQPOLL. One TCP connect and UDP send test is not full coverage.
+“No undeclared egress” means denying unused families and testing every allowed
+path, including subflows, tunnels, redirects, io_uring, and SQPOLL. One TCP and
+one UDP test do not prove it.
 
 #### Shared socket response
 
@@ -2908,12 +2724,11 @@ io_uring/SQPOLL, and descriptor receipt are separate coverage rows. If poll
 lacks a physical decision point, strict policy must deny fd acquisition or the
 syscall via a launcher floor, or report use coverage unsupported.
 
-Some ioctls mint new anonymous capability fds: KVM VM/vCPU, DRM/GPU contexts,
-perf, io_uring, FUSE, and similar. A target-qualified post-return/driver point
-must label the returned object before another task can use it, recording parent
-device/capability, creator role/generation, command/result, class, live
-interval, retained generation, and response state. Otherwise Mithril may allow
-or deny minting as a whole but cannot claim granular post-mint control.
+Some ioctls return a new authority-bearing fd, such as a KVM VM, GPU context,
+perf event, io_uring, or FUSE object. A qualified hook must label that object
+before use. The label records its source, creator, operation, class, lifetime,
+policy generation, and response state. Without that hook, Mithril can allow or
+deny creation as a whole but cannot control the returned object separately.
 
 **Examples.** Denying `/dev/net/tun` open or its TUN command prevents an
 unapproved mesh interface even if the binary is present. A GPU sidecar passing
@@ -3005,7 +2820,7 @@ same-container role differences, cross-process domains, dynamic response,
 exact cgroup/runtime identity, devices/privilege families outside its ABI, and
 correlated evidence.
 
-The installation rule is explicit:
+Installation depends on what an existing launcher or runtime can do:
 
 | Process situation | Seccomp result | Landlock result |
 | --- | --- | --- |
@@ -3014,28 +2829,15 @@ The installation rule is explicit:
 | Existing supported launcher/runtime interface offers target-context pre-user-code execution | Mithril may install Seccomp there or use the runtime's normal OCI Seccomp installation. | Mithril installs Landlock there, records the measured ABI and exact syscall inputs/result, and qualifies the ordering with positive and negative probes. Landlock does not expose a general exact-policy readback for an arbitrary target. |
 | Callback supplies metadata only and offers neither Seccomp-spec adjustment nor target-context execution | Absent. | Absent. |
 
-The Seccomp distinction is verified by the actual NRI API, not inferred from the
-word “hook”: current NRI exposes `LinuxContainerAdjustment.seccomp_policy` and
-`SetLinuxSeccompPolicy`. Landlock must be invoked from the target's own
-execution context, with optional supported thread-group synchronization, so the
-same NRI metadata/configuration path cannot install it.
+Verify the real interface; the word “hook” proves nothing. NRI can supply a
+Seccomp policy that the normal runtime installs. It cannot install Landlock.
+Landlock must run in the target's own setup path. If no supported interface
+offers that path, the Landlock layer is absent.
 
-“Cannot install on an already-running process” means the node daemon cannot
-attach either floor to an arbitrary process from outside. It does not mean the
-process must not exist yet.
-
-- For Seccomp, NRI can adjust the existing OCI settings and the normal runtime
-  installs the filter before application code. The application is unchanged.
-- Landlock must run in the target's execution path. Mithril uses it only when
-  an existing supported runtime interface provides that path. Otherwise it is
-  absent; Mithril does not add an image wrapper or change the entrypoint.
-- If the target already has several threads, the install must successfully
-  cover them: Seccomp uses `TSYNC`; Landlock requires its ABI 8 `TSYNC` support.
-- Neither mechanism is retrofitted into a worker already executing hostile
-  Python. BPF LSM can still govern that worker's next covered operation.
-
-Mithril may configure a supported runtime interface. It does not require a
-change to a Kubernetes object, CI job, application, image, or process model.
+The node daemon cannot attach either floor from outside to an arbitrary live
+task. BPF LSM can still control that task's next covered action. None of these
+paths changes a Kubernetes object, CI job, application, image, entrypoint, or
+process model. Appendix A.13.6 defines thread coverage and installation proof.
 
 #### Self-protection and root compromise
 
@@ -3469,7 +3271,7 @@ result word of another.
 
 #### `HF-012` through `HF-018`: remote authority stays separate
 
-For every remote action, record:
+Record four things for a remote action:
 
 ```text
 local Linux action if one exists
@@ -3478,11 +3280,10 @@ join proof between them
 coverage for both sides
 ```
 
-A local socket deny can prevent a Kubernetes or IMDS request. An allowed TLS
-connection cannot prove its verb. Provider audit can prove a successful verb
-but may not name the local task. Only a unique ID already carried and exposed
-by the existing systems, a unique provider lease, or another registered edge
-makes that join direct.
+A socket deny can prevent a Kubernetes or IMDS request. An allowed TLS
+connection does not reveal its verb. Provider audit may prove the verb but not
+the local task. A direct join needs an ID or lease that both existing systems
+expose. Otherwise the relation stays contextual.
 
 The connector branch is specifically:
 
@@ -3498,22 +3299,19 @@ It is not:
 worker -> mesh device -> connector
 ```
 
-unless mesh/connector request evidence proves that separate branch. Catalog
-exposure, credential validity, credential use, and local-request cause are four
-different edges. With no forwarded ID, cluster actions remain authoritative
-but local cause is `CONTEXTUAL_SHARED_AUTHORITY`.
+unless evidence proves that route. Catalog exposure, credential validity,
+credential use, and local cause are separate facts. Without a shared ID, the
+cluster action is exact but its local cause is `CONTEXTUAL_SHARED_AUTHORITY`.
 
-For AWS, external replay and worker-local STS/database/raw exfil are also two
-branches. A `DryRun=True` response is
-`ATTEMPTED_AUTHORIZATION_CHECK`, not completed mutation. Exact final provider
-resource state is the oracle.
+AWS replay from outside and AWS use by the worker are separate branches.
+`DryRun=True` proves `ATTEMPTED_AUTHORIZATION_CHECK`, not a mutation. The final
+AWS resource state proves whether a change occurred.
 
-For GitHub, an existing connector/provider issuance record may include App,
-installation, repositories,
-permissions, result, lease, and protected token handle. Standard audit-only
-mode marks mint detection unsupported unless the configured schema documents
-it. A token hash cannot call “revoke current token”; the raw protected handle
-can. Installation suspension is wider and must say so.
+For GitHub, use existing issuance evidence when it exposes the App,
+installation, repositories, permissions, result, lease, and protected token
+handle. If normal audit does not record minting, that claim is unsupported. A
+hash cannot revoke its token. A protected raw handle can. Suspending an entire
+installation is wider and must be described that way.
 
 #### Granular hostile acceptance fixtures
 
@@ -3541,11 +3339,10 @@ summary events. These are mandatory cards, not optional examples:
 | `HF-GRAN-OUTSIDE-001` | `HF-001`–`HF-007` preparation outside estate | External subjects only; no local task, errno, or response target invented. Managed replay tests the first real local hook. |
 | `HF-GRAN-HOST-LOC-001` | Same host-inspection text from managed, external, and unresolved sources | Only managed exact branch gets local deny/response; external is outside authority; missing location stays unresolved. |
 
-Every card stores syscall result, buffer/file before/after state, packet
-capture/drop counter, provider request/result and resource state, coverage
-intervals, generation, and graph/finding digest. An alert screenshot is not a
-fixture result. Missing required hook/adapter must produce the card's degraded
-status and disable that product claim.
+Every card stores the syscall result, relevant before/after state, network
+proof, provider result, resource state, coverage, generation, and graph digest.
+An alert screenshot is not a test result. A missing hook or adapter must select
+the card's degraded result and disable the claim.
 
 #### End-to-end production branch
 
@@ -3579,9 +3376,8 @@ status and disable that product claim.
 
 #### Exact incident action-card contract
 
-The human tables above explain the incident. They do not by themselves tell a
-test runner which source fields, lookup key, degraded result, or oracle to use.
-Every branch is also stored as this closed record:
+The tables explain the incident. The records below give the test runner exact
+fields, lookups, degraded results, and oracles:
 
 ```text
 LookupStepV1 {
@@ -3701,18 +3497,15 @@ synchronous gate capability is installed. Its absence does not weaken the
 worker-local file denial, and a later scanner/audit event must not be reported
 as local prevention.
 
-For `LOCAL_PRE_EFFECT`, `ordered_lookup_plan` expands to the exact sequence in
-Appendix A.12. For remote admission, it names the authenticated gate and typed
-request. For post-effect provider evidence, it names the documented request,
-result, resource revision, and coverage but never a retrospective rejection.
-For outside-authority cases, local task/cgroup/map fields must be absent rather
-than zero-filled.
+For `LOCAL_PRE_EFFECT`, the lookup plan uses Appendix A.12. Remote admission
+names the authenticated gate and request. Provider evidence names the request,
+result, resource revision, and coverage; it never claims a later audit event
+rejected an earlier action. Outside-authority cases omit local task, cgroup,
+and map fields instead of filling them with zero.
 
-Every card stores the syscall/provider result, relevant before/after object or
-buffer state, packet/drop evidence where applicable, provider resource state,
-coverage interval, policy generation, graph/finding digest, and negative-
-control result. An alert screenshot, command text, or final quiet period is not
-an oracle.
+Each card stores its physical or provider result, required state and network
+proof, coverage, generation, graph digest, and negative control. Screenshots,
+command text, and a quiet period are not oracles.
 
 ### 26. CI/CD Uses The Same Identity And Authority Model
 
@@ -4009,11 +3802,10 @@ complete negative history.
 
 #### 28.3 Compile outside the kernel, then publish one immutable generation
 
-KubeArmor demonstrates useful userspace lowering into compact maps. In the
-checked code, individual entries of per-container inner maps are mutated over
-time (`KA-CODE-007` and `KA-CODE-019`; `shared.h:250-259`,
-`mapHelpers.go:47-73`, `rulesHandling.go:414-638`). A logged update error can
-therefore leave an installed map different from the desired policy.
+KubeArmor compiles policy into compact maps. Its checked code changes entries
+in live per-container maps (`KA-CODE-007` and `KA-CODE-019`;
+`shared.h:250-259`, `mapHelpers.go:47-73`, `rulesHandling.go:414-638`). If one
+update fails, the installed map can differ from the requested policy.
 
 Mithril hardens this into a transaction:
 
@@ -4030,16 +3822,15 @@ profile and rules 317 through 400 from the old one.
 
 #### 28.4 Bind before first user effect, not after the container is already running
 
-The checked NRI path associates policy after start and removes association at
-stop (`KA-CODE-004` and `KA-CODE-017`, `core/nriHandler.go:120-240`). This
-proves a useful runtime integration point, but it does not prove a first-exec
-barrier or the exact ordering of every Kubernetes `PreStop` action.
+The checked NRI path adds policy after start and removes it at stop
+(`KA-CODE-004` and `KA-CODE-017`, `core/nriHandler.go:120-240`). It is a useful
+integration point. It does not prove control before first exec or the ordering
+of every Kubernetes `PreStop` action.
 
-Mithril does not replace that gap with a made-up two-barrier runtime protocol.
-It prebuilds the container/cgroup binding through a configured stock hook when
-that hook runs early enough, and applies the fail-closed BPF floor to unresolved
-protected tasks. A validating-admission or stock runtime hook may reject the
-start only when its documented contract provides that control.
+Mithril prebuilds the container/cgroup binding when a stock hook runs early
+enough. Unresolved protected tasks receive the fail-closed BPF floor. Mithril
+claims start rejection only when a validating-admission or runtime hook really
+provides it.
 
 **Example.** A new privileged Pod contains a malicious entrypoint that reads a
 hostPath token immediately. A configured Kubernetes validating-admission
@@ -4063,12 +3854,12 @@ alignment, or endianness differs.
 
 #### 28.6 Keep network-family hooks, but do not call protocol or endpoint context process authority
 
-The checked KubeArmor BPF network rules mainly decide socket type and protocol
+The checked KubeArmor BPF rules mainly decide socket type and protocol
 (`KA-CODE-006` and `KA-CODE-013`, `enforcer.bpf.c:415-648`). Its NFLOG path
-adds endpoint/container context in userspace
-(`networkPolicyEnforcer.go:267-303,733-824`; `types.go:722-767`). This is useful
-network evidence. It is not a current task role, immutable socket provenance,
-or same-process TLS verb decision.
+adds endpoint and container context in userspace
+(`networkPolicyEnforcer.go:267-303,733-824`; `types.go:722-767`). That evidence
+does not identify the current process role, preserve socket provenance, or
+reveal a TLS verb.
 
 **Example.** A broad uploader opens a TCP socket and passes it to a restricted
 converter. Endpoint-only attribution could still call the flow “the Pod's
@@ -4124,22 +3915,19 @@ the file boundary honestly if byte completion is not observable.
 
 #### 28.11 Turn presets into classifier seeds, not complete security families
 
-KubeArmor's checked environment, fileless-exec, anonymous-map-exec, and proc
-presets are narrow and useful (`KA-CODE-018`). Its checked exec context also
-carries namespace, TTY, and inherited context (`KA-CODE-008`,
-`KubeArmor/BPF/exec.bpf.c:22-53`). Mithril uses these ideas to seed tests for
-environment access, memfd execution, executable anonymous memory, proc
-inspection, and contextual evidence. A TTY is never authenticated
-administrative intent. Each preset expands into the full object, operation,
-bypass, and physical-oracle matrix in Chapters 16, 17, and 21.
+KubeArmor has useful presets for environment access, fileless exec, anonymous
+executable mappings, and proc access (`KA-CODE-018`). Its exec context includes
+namespace, TTY, and inherited context (`KA-CODE-008`,
+`KubeArmor/BPF/exec.bpf.c:22-53`). Mithril uses these as test seeds, not full
+policy families. A TTY is context, not administrative approval. Chapters 16,
+17, and 21 define the full operations, bypasses, and physical checks.
 
 #### 28.12 Measure every reader, map, and bound
 
-The checked monitor and preset readers can warn, continue, stop, or discard
-lost samples depending on the path (`KA-CODE-023` and `KA-CODE-028`). Paths and
-event fields are bounded (`KA-CODE-024`). Exec context and policy state use
-bounded or LRU maps (`KA-CODE-026` and `KA-CODE-027`). Mithril keeps those
-constraints visible:
+The checked readers handle lost samples differently (`KA-CODE-023` and
+`KA-CODE-028`). Paths and events are bounded (`KA-CODE-024`). Exec and policy
+state use bounded or LRU maps (`KA-CODE-026` and `KA-CODE-027`). Mithril makes
+these limits explicit:
 
 - readiness means every required program, link, map, reader, sequence, WAL,
   and controlled probe is healthy;
@@ -4172,13 +3960,11 @@ does not wait for an exec event that may never happen.
 
 #### 29.2 Preserve Tetragon's non-leader-exec lesson
 
-The checked Tetragon source and tests explicitly handle exec by a non-leader
-thread (`TG-CODE-002`, `bpf_execve_event.c`, `process.h`, and
-`pkg/sensors/exec/exit_test.go`). Saying it simply misses this case would be
-wrong. The checked staging spans commit-credentials, map-update, and event
-programs rather than one magical hook (`TG-CODE-014`). Mithril adopts the case
-as a permanent fixture and extends it with native-family authority state and
-generation references.
+Tetragon explicitly handles exec by a non-leader thread (`TG-CODE-002`,
+`bpf_execve_event.c`, `process.h`, and `pkg/sensors/exec/exit_test.go`). Its
+staging spans credential, map-update, and event programs (`TG-CODE-014`).
+Mithril keeps this case as a permanent fixture and adds native-family authority
+and policy-generation references.
 
 **Example.** Thread 7 of a Python process calls `execve`. Linux removes the
 other threads and changes the task-group shape. Mithril commits one new
@@ -4200,11 +3986,11 @@ intersections, never logged ambiguity.
 
 #### 29.4 Use a stock runtime creation hook for what it really proves
 
-The checked OCI path has a `createRuntime` opportunity that can fail before
-user code, while another create path is a no-op; policy-map failures can log
-and continue (`TG-CODE-004` and `TG-CODE-021`). This teaches where an existing
-integration can report metadata or reject a create request. It does not prove
-a held task, later exec purpose, or first-user-instruction barrier.
+One checked OCI `createRuntime` path can fail before user code. Another create
+path is a no-op, and policy-map failures can log and continue (`TG-CODE-004`
+and `TG-CODE-021`). The hook can report metadata or reject that create request.
+It does not hold a task, explain a later exec, or prove control before the
+first user instruction.
 
 **Example.** The OCI hook reports Pod metadata, but kernel/runtime readback
 finds a different full container ID or cgroup lifetime. Mithril rejects the
@@ -4229,12 +4015,11 @@ fixture separately.
 
 #### 29.7 Distinguish Generic LSM actions from the separate enforcer
 
-Tetragon is not observation-only. Its checked Generic LSM path supports
-override/signal actions, and its staged `bpf_enforcer` is another mechanism
-(`TG-CODE-007` and `TG-CODE-019`). Its checked action vocabulary and mode split
-are also useful patterns (`TG-CODE-013`). Mithril adopts the separation between
-a hook-local result and event output. It does not flatten every Tetragon action
-into the same assurance claim.
+Tetragon is not observation-only. Generic LSM supports override and signal;
+the staged `bpf_enforcer` is separate (`TG-CODE-007` and `TG-CODE-019`). Its
+action vocabulary and mode split are useful (`TG-CODE-013`). Mithril likewise
+keeps the physical hook result separate from event delivery and does not give
+all actions the same assurance claim.
 
 The exact hook signature, selector argument limits, process-state miss
 behavior, and previous-return position must be qualified per program
@@ -4268,10 +4053,10 @@ test.
 
 #### 29.11 Use one binary and fresh inner maps, then make reverse state transactional
 
-Tetragon demonstrates one node binary with many sensors (`TG-CODE-012`) and a
-useful fresh-inner-map publication pattern (`TG-CODE-016` and `TG-CODE-022`).
-Mithril adopts both. Reverse-index and generation-retention updates become one
-recoverable transaction; an update cannot publish only half of the relation.
+Tetragon shows one node binary owning many sensors (`TG-CODE-012`) and fresh
+inner-map publication (`TG-CODE-016` and `TG-CODE-022`). Mithril uses both.
+Reverse indexes and generation retention update in one recoverable transaction,
+so half a relation cannot become active.
 
 #### 29.12 Keep runtime and TTY context as evidence, not authenticated intent
 
@@ -4827,14 +4612,22 @@ tooling from silently choosing different meanings.
 | Durable Mithril ID | Opaque 128 bits; equality only; never reused within its declared tenant/node-boot/label-epoch scope |
 | Kernel coordinate | Unsigned 64-bit value plus namespace, boot, and live interval; never durable alone |
 | Generation/counter | Nonzero unsigned 64-bit value; owner allocates monotonically; overflow opens a new epoch and coverage break |
-| Digest | Closed algorithm enum plus fixed-length bytes; no free-form kernel string |
+| Digest | Closed algorithm enum plus fixed-length bytes; used only for immutable signed content, independently stored/transferred content, or content-addressed identity |
 | Node time | Unsigned 64-bit monotonic boottime nanoseconds |
 | Remote time | Signed UTC nanoseconds plus uncertainty and source clock information |
 | Optional ID | Explicit presence plus value; all-zero bytes never mean absent |
 | Enum | Fixed integer width, `UNKNOWN=0`; decoder retains unknown numeric value but enforcement rejects it |
 | Collections | Declared maximum, unique/sorted when order is not semantic, rejected on duplicate/overflow |
 | Serialization | Restricted duplicate-free source YAML; deterministic CBOR for signed or hashed records |
-| Digest/signature | SHA-256 and Ed25519 in Version 1; each record family has a distinct ASCII domain separator |
+| Digest/signature | SHA-256 and Ed25519 in Version 1; each signed record family has a distinct ASCII domain separator |
+
+Digest use is deliberately narrow. Ordinary in-memory records do not acquire a
+digest merely because they are named types. Node-local runtime identities
+normally use `Id128` or a non-reused epoch-scoped numeric handle. One signature
+and digest over a complete immutable parent policy generation covers its
+canonical child records; those children do not repeat their own digest. A child
+has a digest only when it is independently stored, transferred, signed,
+content-addressed, or must retain immutable identity outside its parent.
 
 Phase 0 generates Rust and C layout assertions for every shared BPF ABI type:
 size, alignment, field offset, integer width, byte order, enum value, maximum,
@@ -4842,6 +4635,12 @@ and golden bytes. Logical records in this document are not permission to
 choose separate convenient layouts.
 
 ```text
+ExactObjectKindV1: u8 =
+  0 UNKNOWN | 1 REGULAR_FILE | 2 DIRECTORY | 3 SYMLINK | 4 PIPE |
+  5 UNIX_SOCKET | 6 INET_SOCKET | 7 MEMFD | 8 SHARED_MEMORY |
+  9 DEVICE | 10 PROC_OBJECT | 11 KERNEL_SECURITY_OBJECT |
+  12 OTHER_QUALIFIED
+
 PortableProfileGenerationV1 {
   profile_id: Id128
   owner_generation: nonzero u64
@@ -4849,9 +4648,7 @@ PortableProfileGenerationV1 {
 }
 
 ExactObjectGenerationV1 {
-  object_kind: REGULAR_FILE | DIRECTORY | PIPE | UNIX_SOCKET |
-               INET_SOCKET | MEMFD | SHARED_MEMORY | DEVICE |
-               KERNEL_SECURITY_OBJECT | OTHER_QUALIFIED
+  object_kind: ExactObjectKindV1
   authority_scope_id: Id128
   live_object_id: Id128
   object_generation: nonzero u64
@@ -4874,7 +4671,7 @@ both `42` never share a node-local handle.
 | `KernelCapabilityRecordV1` | Chapter 5: active LSM order, exact hooks/helpers/map types, configured stock runtime/admission integrations, BTF, program/map/link digests, controlled probe results |
 | `ContainerExecutionSet`, `EntrySecurityStateV1`, `TaskLabelV1`, `TaskInstanceV1`, `ProcessSecurityStateV1`, `ProcessInstanceV1`, `AuthorityDomainStateV1`, `ImageProvenance`, `ProcessExecutionInstance` | Chapter 6 explains the model; Appendix A.9 fixes identity, reference, coordinate, fork, exec, and lifetime fields |
 | Root classification, runtime/container facts, binding/topology snapshot, approved administrative-exec slot | Chapters 6-7 define the stock-system and risk-accepted administrative algorithms; Appendix A.9 fixes task/container identity and the exact BPF slot. Historical held-task records in A.9.7 are rejected, not implementation requirements. |
-| `IntentProofEnvelopeV1`, signed body union, administrative-exec approval, trust generation, replay records | Chapter 8 limits these records to real Mithril/operator/provider authorization; Appendix A.10 defines canonical CBOR, tags, bounds, trust, and replay. It never requires kubelet or a CI runner to sign. |
+| `SignedIntentV1`, signed body union, administrative-exec approval, trust generation, replay records | Chapter 8 limits these records to real Mithril/operator/provider authorization; Appendix A.10 defines canonical CBOR, tags, bounds, trust, and replay. It never requires kubelet or a CI runner to sign. |
 | `InvariantQualificationV1` | Chapter 10: one invariant, capability/source proof, stimulus, decision point, physical result, coverage, artifacts, status |
 | `PolicyDocumentV1`, signed compiled profile, rollback authorization, `EffectDecisionKeyV1`, generation descriptors | Chapters 11-13 explain behavior; Appendices A.11-A.12 fix parser/signature/activation and Rust/BPF map semantics |
 | Mount/file/VMA/socket/device/IPC/process-control records | Chapters 15-21 explain behavior; Appendices A.13-A.14 fix object, hook-family, lifetime, native-state, peer-relationship, and descriptor-passing contracts. Historical join/publication schemas are rejected. |
@@ -4886,25 +4683,67 @@ All implementers must use this index. A field needed for a security decision
 but absent from the closed record is a schema change, not an undocumented
 side map or display annotation.
 
+Documentation supersession is also machine-readable so rejected architecture
+cannot become active because an implementer followed an older paragraph:
+
+```text
+SupersessionRegistryV1 {
+  records[1..4096] {
+    supersession_id: ASCII 1..128 bytes
+    retained_statement_ids[1..64]: sorted unique ASCII 1..128 bytes
+    controlling_statement_ids[1..64]: sorted unique ASCII 1..128 bytes
+    replacement_contract_ids[1..64]: sorted unique ASCII 1..128 bytes
+    affected_card_ids[0..256]: sorted unique registered card IDs
+    forbidden_contract_ids[0..64]: sorted unique ASCII 1..128 bytes
+    reason_code: RegistrySymbolV1
+    proof_source_evidence_ids[0..64]: sorted unique Id128
+  }
+}
+
+SupersessionHeadingSetV1 = sorted unique array[0..4096] of the
+  retained/controlling statement IDs extracted from marked correction and
+  rejected-design headings.
+```
+
+The registry and extracted set must agree. Neither needs a per-record digest;
+the independently stored qualification/release parent binds the complete
+canonical registry when it is used for a release.
+
 ### A.3 Source evidence
 
 ```text
-SourceEvidenceClaimV1 {
-  evidence_id
-  project: KUBEARMOR | TETRAGON | LINUX | OCI | KUBERNETES | PROVIDER
-  repository_url
-  commit_or_version
-  path
-  first_line, last_line: nonzero u32
+EvidenceBoundaryNatureV1: u8 =
+  0 UNKNOWN | 1 IMPLEMENTATION_CHOICE | 2 PLATFORM_CONTRACT |
+  3 PROTOCOL_BOUNDARY | 4 CONFIGURATION_BOUNDARY
+
+EvidenceAssertionModeV1: u8 =
+  0 UNKNOWN | 1 SOURCE_PROVES | 2 SOURCE_SUPPORTS | 3 INFERENCE |
+  4 HOSTILE_HYPOTHESIS
+
+EvidenceRelationshipV1: u8 =
+  0 UNKNOWN | 1 ADOPT | 2 HARDEN | 3 HOSTILE_TEST | 4 DO_NOT_INHERIT |
+  5 CONTEXT_ONLY
+
+SourceRangeV1 {
+  repository_url: canonical HTTPS URL
+  commit_or_version: bounded ASCII 1..128 bytes
+  path: normalized repository-relative UTF-8 path, 1..4096 bytes, no `..`
+  first_line, last_line: nonzero u32, last_line >= first_line
   blob_digest: DigestV1
-  observation
-  boundary_nature: IMPLEMENTATION_CHOICE | PLATFORM_CONTRACT |
-                   PROTOCOL_BOUNDARY | CONFIGURATION_BOUNDARY
-  assertion_mode: SOURCE_PROVES | SOURCE_SUPPORTS | INFERENCE | HOSTILE_HYPOTHESIS
-  relationship: ADOPT | HARDEN | HOSTILE_TEST | DO_NOT_INHERIT | CONTEXT_ONLY
-  dependent_fixture_ids[]
-  reviewed_by
-  reviewed_at_utc_ns
+}
+
+SourceEvidenceClaimV1 {
+  evidence_id: Id128
+  atomic_claim_id: nonzero u16
+  project: KUBEARMOR | TETRAGON | LINUX | OCI | KUBERNETES | PROVIDER
+  ranges[1..16]: SourceRangeV1
+  observation: bounded UTF-8 text with LF line endings
+  boundary_nature: EvidenceBoundaryNatureV1
+  assertion_mode: EvidenceAssertionModeV1
+  relationship: EvidenceRelationshipV1
+  dependent_fixture_ids[]: sorted unique registered fixture IDs
+  reviewed_by: Id128
+  reviewed_at_utc_ns: i64
   claim_digest: DigestV1
 }
 ```
@@ -4912,7 +4751,11 @@ SourceEvidenceClaimV1 {
 `boundary_nature` and `relationship` are separate. For example, a mutable map
 update is an implementation choice and `HARDEN`; TLS payload opacity is a
 protocol boundary and may be `CONTEXT_ONLY` plus a provider-gate requirement.
-The display table cannot infer either field from a generic “kind.”
+The display table cannot infer either field from a generic “kind.” One
+`SourceEvidenceClaimV1` is atomic: a row that makes independently supportable
+claims becomes multiple records rather than one prose digest over several
+claims. Its digest is retained because source claims are independently stored
+and referenced by fixtures and release evidence.
 
 ### A.4 Capability and performance bundles
 
@@ -5095,7 +4938,7 @@ FixtureCaseResultV1 {
   fixture_id, case_id
   starting_state_digest, stimulus_digest: DigestV1
   observed_stage, observed_disposition, observed_result
-  observed_coverage_interval_ids[]
+  observed_coverage_interval_ids[]: sorted unique Id128
   oracle_artifact_ids[]
   canonical_oracle_digest: DigestV1
   negative_control_case_result_ids[]
@@ -5199,11 +5042,10 @@ ineligible.
 
 ### A.8 Complete Version 1 type-ownership catalog
 
-The original architecture named every type below. This catalog retains those
-names, gives each one a single job, and connects it to the simpler chapter
-model. It is not permission to implement one Rust struct per row when several
-are naturally a closed enum body or generated ABI view. It is permission to
-reject an implementation that silently drops the information.
+This catalog owns every active Version 1 type and retains only enough rejected
+or unallocated names to prevent their accidental reintroduction. It does not
+require one Rust struct per row. Closed enum bodies and generated ABI views may
+share an implementation, but no required information may disappear.
 
 The catalog is not itself a field definition. Every name receives one of four
 machine-checked states before any Version 1 freeze:
@@ -5213,7 +5055,6 @@ ExactTypeClosureRecordV1 {
   type_name: ASCII matching ^[A-Z][A-Za-z0-9]{0,127}V1$
   status: EXACT_SCHEMA | EXACT_ALIAS | UNALLOCATED | REJECTED
   controlling_section_id: ASCII 1..128 bytes
-  exact_schema_digest?: DigestV1
   alias_target_type_name?: ASCII 1..128 bytes
   used_by_rust: bool
   used_by_bpf: bool
@@ -5229,20 +5070,17 @@ ExactTypeClosureBundleV1 {
 }
 ```
 
-`EXACT_SCHEMA` requires field types, bounds, enum values, serialization, state
-transitions, and failure behavior in the controlling section. `EXACT_ALIAS`
-requires one exact target and may add only a stated closed restriction.
-`UNALLOCATED` cannot appear in accepted policy or a release claim. `REJECTED`
+`EXACT_SCHEMA` defines fields, bounds, enum values, encoding, transitions, and
+failures. `EXACT_ALIAS` names one exact target and may only narrow it.
+`UNALLOCATED` cannot appear in accepted policy or release claims. `REJECTED`
 cannot appear in production code or active fixtures.
 
-The Phase 0 docs/schema checker extracts every `*V1` name from active prose,
-policy, map ABI, wire, WAL, fixture, and response contracts. A name referenced
-by an active contract but present only in this ownership catalog fails the
-build. Duplicate owners, a missing controlling section, an alias cycle, a BPF
-type without generated Rust/C layout assertions, or a signed type without
-canonical bytes also fails. This rule closes the earlier gap where names such
-as `LookupStepV1`, `SetReferenceClassV1`, and
-`VmaIteratorSessionIdentityV1` had jobs but no exact shape.
+The Phase 0 checker extracts every active `*V1` name. A name defined only in
+this catalog fails the build. So do duplicate owners, missing sections, alias
+cycles, BPF types without Rust/C layout checks, and signed types without
+canonical bytes. This prevents names such as `LookupStepV1`,
+`SetReferenceClassV1`, and `VmaIteratorSessionIdentityV1` from having a stated
+job but no exact shape.
 
 The remaining intentionally non-struct names have explicit status:
 
@@ -5251,14 +5089,20 @@ The remaining intentionally non-struct names have explicit status:
 | `DigestV1` | `EXACT_ALIAS`: Appendix A.10.1 fixes algorithm tag `1` and exactly 32 SHA-256 bytes. |
 | `NormativeFixtureSetV1` | `EXACT_ALIAS`: exactly the sorted unique fixture IDs in Appendix C.1. |
 | `RuntimeEntryIntentV1`, `DeploymentAdmissionIntentV1`, `ArtifactHandoffIntentV1` | `REJECTED`: old wrapper names; the signed body union is controlling. |
-| `CiCoordinatorV1`, `CiExecutionShapeV1`, `CiTriggerTrustClassV1`, `CiPolicyV1` | `UNALLOCATED`: their dormant body cannot be accepted until the CI adapter/schema phase gives each an exact definition. |
+| `CiPolicyV1` | `UNALLOCATED`: the source policy surface cannot be accepted until the CI adapter/schema phase gives it an exact definition. The generic coordinator, trust, and execution-shape enums remain active for evidence. |
+| `BarrierEvidenceV1`, `RuntimeSetupBudgetV1`, `RestoreTargetBirthSlotV1` | `REJECTED`: depended on a held stock-runtime/rootfs/task barrier that Mithril does not own. |
+| `CheckpointRestoreIntentV1` | `UNALLOCATED`: restore remains restricted/unknown without a qualified existing authorization and birth join. |
+| `DomainSensitiveStateRuleV1`, `DomainSensitiveTransitionKeyV1`, `DomainSensitiveTransitionValueV1` | `REJECTED` old names: `NativeAuthorityStateRuleV1` and `NativeAuthorityTransition*V1` are controlling and never join independent domains. |
+| `NetworkEffectKeyV1` | `REJECTED`: it required current actor and final rewritten destination at one hook; the two-stage actor/flow contracts in A.13.4 are controlling. |
+| `PersistentVolumeAuthorityV1` | `REJECTED` old owner: `PersistentVolumePolicyV1` plus `VolumeAccessReadinessV1` are controlling. |
 
 #### A.8.1 Policy source, registries, and compilation
 
 | Type | One job |
 | --- | --- |
+| `PolicyDocumentV1` | Closed source-policy root whose canonical bytes are signed and compiled |
 | `PolicyLocalIdV1` | Bounded ID that is meaningful only inside one signed profile; never a global object identity |
-| `RegistrySymbolV1` | Numeric registry ID plus digest-bound human symbol for explanation |
+| `RegistrySymbolV1` | Bounded symbolic atom resolved inside one signed registry generation; it is not a durable numeric identity |
 | `ObjectClassIdV1` | Closed composite object-class atom selected by the compiler |
 | `ReasonCodeIdV1` | Closed machine reason; free-form text cannot drive authority |
 | `ResultCodeIdV1` | Closed physical/semantic result identity |
@@ -5307,15 +5151,26 @@ The remaining intentionally non-struct names have explicit status:
 
 | Type | One job |
 | --- | --- |
+| `TaskLabelV1` | Immutable task-to-process/entry/binding birth identity; never cached final authority |
+| `TaskInstanceV1` / `ProcessInstanceV1` | Live kernel coordinates and finalization state for one task/process instance |
+| `ProcessSecurityStateV1` | Sole mutable current role, execution, profile, domain, response, and exec-guard owner for one process |
+| `EntrySecurityStateV1` | Optional claim, admission outcome, root process, reference count, and lifetime for one entry |
+| `AuthorityDomainStateV1` | Native-family monotonic restriction and response state; it never joins independent roots |
+| `PendingExecV1` | One bounded script/binfmt/ELF-loader exec attempt through commit or failure |
+| `ExternalRootClassificationV1` | Exact conservative result for an independent protected root and any qualified purpose evidence |
+| `AdministrativeArgvV1` / `BoundedAdministrativeArgvV1` | Rust and fixed BPF views of exact approved raw arguments |
+| `PendingAdministrativeMatchV1` | Task/exec-attempt-local proof that one administrative slot matched and was consumed |
+| `SignedIntentV1` | Canonical signed authorization envelope for a capability-gated intent body |
 | `EntryKindV1` | Closed root class: initial, native, external-unknown, restore-unknown, and qualified registered purpose. Probe/lifecycle/admin is legal only when an existing interface proves it. |
 | `EntryClassificationV1` | Exact or conservative classification, candidate set, proof, and ambiguity result |
 | `EntryRoleAssignmentV1` | Proven root classification -> initial process role and retained profile generation |
 | `EntryAdmissionMatchV1` | Bound policy predicate for an initial, external, or unresolved root; never an argv ticket match |
 | `PreparedExternalRootStateV1` | **Rejected no-patch design.** It described a held runtime root that stock interfaces do not provide. |
 | `ExecutionSetBindingStateV1` | Container execution-set lifecycle and exact cgroup binding |
-| `BindingLifecycleStateV1` | PREPARING/BOUND/TERMINATING/TOMBSTONED floor applied to task/object decisions |
+| `BindingLifecycleStateV1` | PREPARING/ACTIVE/DRAINING/TERMINATING/TOMBSTONED floor applied to task/object decisions |
 | `WorkloadBindingActivationStateV1` | Node transaction from prepared binding through active/terminating/tombstoned |
 | `WorkloadBindingArtifactV1` | Signed/hashed Pod-container-image-cgroup-profile binding proof |
+| `NodeAdmissionRequestV1` | Bounded authenticated Kubernetes/runtime request presented to an allocated admission interface |
 | `NodeAdmissionFieldKeyV1` / `NodeAdmissionFieldV1` | Closed node-floor request field and typed value |
 | `NodeHardFloorDecisionV1` | Pre-setup allow/reject for unmatched workload plus exact exception proof |
 | `TaskPlacementExpectationV1` | Expected protected-root binding nonce and allowed placement during a transition |
@@ -5328,9 +5183,11 @@ The remaining intentionally non-struct names have explicit status:
 | `TaskEffectAttemptStateV1` | Bounded in-flight state for clone/exec/effect commit and failure cleanup |
 | `ProcessStateVectorV1` | Current role, exec state, sensitive bits, response set, domain, generation refs |
 | `ProcessStateBitV1` | One registered monotonic process restriction/state bit |
+| `StateBitDefinitionV1` | Source-policy definition for one process or native-authority state bit and its legal transitions |
 | `ProcessStateDefinitionV1` | Allowed state-vector shape and transitions for one profile |
 | `RoleDefinitionV1` | Entry origins, base effects, budgets, transitions, and authority behavior for one role |
-| `TransitionKindV1` / `NativeOperationV1` | Closed fork/thread/vfork/exec/credential native operation |
+| `TransitionKindV1` | Closed owner of one atomic transition: none, process, or native authority |
+| `NativeOperationV1` | Closed fork/thread/vfork/exec/credential native operation |
 | `RuntimeOperationV1` | Closed operation name used only for facts or controls a qualified stock runtime integration actually exposes |
 | `NativeRoleTransitionRuleV1` | Source role + native operation + target -> one target role/restriction |
 | `NativeTransitionMatchV1` | Exact current state and operation selector |
@@ -5342,6 +5199,7 @@ The remaining intentionally non-struct names have explicit status:
 | `IntentBodyV1` / `IntentPayloadV1` | Canonical target-bound signed body union and common claims |
 | `RuntimeEntryBodyV1` | Optional body for a qualified existing integration that supplies a real authorization and unique request/task identity; unused for ordinary stock roots |
 | `AdministrativeExecBodyV1` / `ApprovedAdministrativeExecV1` | Exact Mithril-issued approval checked at Kubernetes admission; stream flags remain admission facts and are not a Linux-task match |
+| `ResolvedAdministrativeExecutableV1` | User-approved command name plus the exact executable object resolved in the target container view |
 | `ApprovedExecSlotKeyV1` / `ApprovedExecSlotV1` | Fixed one-use node/BPF slot keyed by live cgroup binding; it records the explicitly accepted next-match race |
 | `KubeletExecutionRequestV1` | **Rejected no-patch design.** Stock kubelet/CRI supplies no such signed probe/lifecycle request. |
 | `ExactRequestIdentityV1` | Stable request/attempt/issuer identity used for replay and graph joins |
@@ -5353,6 +5211,8 @@ The remaining intentionally non-struct names have explicit status:
 
 | Type | One job |
 | --- | --- |
+| `PortableProfileGenerationV1` | Cross-node profile/generation identity for one immutable compiled artifact |
+| `ProfileGenerationRefV1` | Non-reused node-local handle binding a portable generation to boot and label epoch |
 | `NodeBoundProfileGenerationV1` | Portable signed generation bound to one node-local nonreused handle |
 | `BindingGenerationStateV1` | Active/retiring generation and typed holder counts for one workload binding |
 | `GenerationReferenceClassV1` | Closed holder type: task, socket, domain, pending claim, response, and registered object |
@@ -5382,13 +5242,16 @@ The remaining intentionally non-struct names have explicit status:
 | `LookupStepV1` | Closed ordered lookup description used by Rust/BPF golden tests |
 | `PhysicalDecisionV1` | Allow, audit-allow, or exact errno with stage and state transition |
 | `EffectDecisionKeyV1` | Role/effect/operation/composite object/process-domain-lifecycle exact key |
-| `MonotonicSetTransitionKeyV1` / `MonotonicSetTransitionValueV1` | **Superseded collapsed names**; Appendix A.12.5 separates process transitions from native-authority transitions because one BPF hook cannot atomically mutate both map values |
+| `MonotonicSetTransitionKeyV1` / `MonotonicSetTransitionValueV1` | `REJECTED` collapsed names; Appendix A.12.5 separates process transitions from native-authority transitions because one BPF hook cannot atomically mutate both map values |
 | `NativeAuthorityTransitionKeyV1` / `NativeAuthorityTransitionValueV1` | Atomic old native-family restriction state -> stricter state transition |
 
 #### A.8.4 Mounts, files, memory, native authority, and IPC
 
 | Type | One job |
 | --- | --- |
+| `ExactObjectGenerationV1` | Common non-reused live object generation used by file, socket, memory, device, and kernel-object contracts |
+| `MountViewIdentityV1` / `LiveMountObjectV1` | Exact mount namespace/topology and live mount identity used during resolution |
+| `NetworkNamespaceIdentityV1` | Exact netns cookie/live interval plus qualified capture mechanism |
 | `MountNamespaceStateV1` | Mount namespace identity, topology generation, CLEAN/DIRTY state, snapshot digest, live interval |
 | `MountSecurityViewV1` | Actor-visible mount/root/propagation/read-only/security view used for object resolution |
 | `MountSourceClassRecordV1` | Exact declared/image/projected/host/device/remote mount source classification |
@@ -5397,8 +5260,9 @@ The remaining intentionally non-struct names have explicit status:
 | `VolumeAccessReadinessV1` | Active per-node record proving that the current persistent-volume policy was installed and read back before BPF allows a covered file effect. This is an access gate, not a mount or task hold. |
 | `FileObjectIdentityV1` | Mount namespace generation + mount/fs/inode/version/live identity and object kind |
 | `FileInstanceProvenanceV1` | Open-time file identity, source object, opener, generation, and current file-policy floor; descriptor-transfer history is not required |
+| `DelegatedIoEdgeV1` | Typed causal edge from a file/local-channel effect through the real kernel/process/service delegate to remote IO |
 | `CreateKeyV1`, `SetattrKeyV1`, `RenameKeyV1`, `LinkKeyV1`, `UnlinkKeyV1` | Exact filesystem namespace mutation keys; no path-only authority |
-| `SourceMutabilityProofV1` | Seals/verity/IMA/content lease and time at which source bytes were immutable |
+| `SourceMutabilityProofV1` | Sealed-memfd, immutable content/image, or held-writer reconciliation proof for the interval in which source bytes were immutable |
 | `KernelExecutableMappingClassV1` | File/anonymous/memfd/JIT mapping, write/execute history, loader purpose |
 | `MmSnapshotIdentityV1` | Exact mm cookie, sharing generation, snapshot version, begin/end state |
 | `VmaIteratorSessionIdentityV1` | Node/boot/mm/snapshot/session identity for one iterator run |
@@ -5408,7 +5272,7 @@ The remaining intentionally non-struct names have explicit status:
 | `CommunicationAuthorityDomainV1` | **Rejected.** Independent roots do not become one domain because they communicate. |
 | `DomainSensitiveBitV1` | Monotonic restriction shared only by a native process family. |
 | `SharedResourceStateV1` | **Rejected as byte-taint authority.** Exact objects still retain identity, policy floors, and response state. |
-| `CrossEntryTransferControlV1` | **Replaced** by `IpcRelationshipRuleV1` and the configured unmatched-IPC result. |
+| `CrossEntryTransferControlV1` | `REJECTED`; replaced by `IpcRelationshipRuleV1` and the configured unmatched-IPC result. |
 | `IpcEndpointSelectorV1` / `IpcChannelSelectorV1` | Readable endpoint pair and connection-oriented channel selector compiled to exact runtime identity; shared objects and directional process control are excluded. |
 | `IpcRelationshipRuleV1` | One bidirectional communication disposition; it does not interpret bytes or descriptors. |
 | `IpcChannelStateV1` | Exact live channel, resolved socket peers or observed pipe users, matched relationship, and applied disposition. |
@@ -5424,6 +5288,7 @@ The remaining intentionally non-struct names have explicit status:
 | `PublicationDescriptorV1`, `PublicationDescriptorLifetimeV1`, `PublicationTransferPlanV1` | **Rejected historical byte-publication design.** |
 | `PublicationPayloadSourceV1`, `UserBufferSegmentV1`, `PublicationInstanceV1` | **Rejected as byte-provenance authority.** Physical syscall/packet/provider results remain ordinary evidence. |
 | `AuthorityDomainPublicationStateV1`, `PersistentPublicationCapabilityV1`, `PersistentFileSecurityStateV1` | **Rejected.** Mithril does not propagate inferred byte sensitivity or serialize global publication. |
+| `RejectedSharedResourceTaintStateV1`, `RejectedPersistentFileTaintStateV1` | **Rejected retained schemas.** Present only to make byte-taint implementations fail closure review. |
 | `ExactPublicationSinkV1` | **Rejected byte-publication name.** Exact destinations use the normal file/socket/provider records. |
 | `LocalObjectSelectorV1` | Compiler-owned exact local object selection input; paths remain explanation |
 
@@ -5431,7 +5296,9 @@ The remaining intentionally non-struct names have explicit status:
 
 | Type | One job |
 | --- | --- |
-| `NetworkEffectKeyV1` | Current actor/domain + socket/netns + operation + final destination/protocol exact key |
+| `ActorSocketDecisionKeyV1` | Sender-stage current actor/domain + socket/netns + operation + requested peer key |
+| `SocketFlowAuthorizationV1` | Actor-stage result installed on one socket/flow generation for later final-destination enforcement |
+| `FinalFlowDecisionKeyV1` | Packet/flow-stage socket generation + final post-rewrite destination key; it never requires a fictional current task |
 | `SocketProvenanceV1` | Immutable creator identity/domain/generation and later owner/pass/accept history |
 | `ResolvedSocketOrChannelGenerationV1` | Exact socket/channel lifetime after bind/connect/accept/redirect resolution |
 | `SocketControlEffectKeyV1` | `setsockopt`, bind/listen/accept/shutdown and other socket-control operation key |
@@ -5448,11 +5315,20 @@ The remaining intentionally non-struct names have explicit status:
 
 | Type | One job |
 | --- | --- |
+| `ObservationEnvelopeV1` | Source sequence, time, typed payload, proof vector, coverage interval, and transport integrity for one observation |
+| `CoverageIntervalV1` | Healthy/gapped source interval and exact loss/suppression accounting under one source epoch |
+| `ProofQualityV1` | Orthogonal source, subject, result, temporal, and integrity proof axes |
+| `FindingV1` | Deterministic revision over evidence, coverage, subject, package, and window |
+| `GraphSubjectKindV1` / `SourceKindV1` / `EvidenceFieldIdV1` | Closed graph/provider-edge registry atoms |
+| `ProviderEdgeContractV1` | Exact fields, coverage, proof, direction, and negative control required for one direct provider edge |
 | `EvidenceBoundaryNatureV1` | Implementation, platform, protocol, or configuration boundary |
+| `SourceEvidenceClaimV1` | One atomic pinned source claim, its ranges, proof mode, relationship, review, and dependent fixtures |
 | `EvidenceAssertionModeV1` | Source proves/supports, inference, or hostile hypothesis |
 | `EvidenceRelationshipV1` | Adopt, harden, hostile-test, do-not-inherit, or context-only |
 | `SourceRangeV1` | Repository/commit/path/line/blob identity for one atomic source claim |
-| `EvidenceFieldV1` | Typed canonical observation field with sensitivity, presence, provenance, and proof |
+| `EvidenceFieldKeyV1` | Closed field selector used by notification and redaction policy |
+| `EvidenceFieldV1` | Typed canonical observation field value with sensitivity, presence, provenance, and proof |
+| `EvidencePayloadV1` | Bounded unique set of typed evidence fields carried by one observation |
 | `SourceCoverageHealthRuleV1` | Links source capabilities/gaps to allowed negative and result claims |
 | `ProofQualityPredicateV1` | Per-axis minimum and missing-axis behavior for a package/claim |
 | `ProviderResultBoundaryV1` | Request accepted/rejected/succeeded/failed/unknown and whether pre- or post-effect |
@@ -5477,6 +5353,9 @@ The remaining intentionally non-struct names have explicit status:
 
 | Type | One job |
 | --- | --- |
+| `AuthorityLeaseIntentV1` | One capability-gated provider lease request bound to an exact local/job subject, scope, nonce, and deadline |
+| `CredentialLeaseV1` | Authoritative issued provider credential/lease identity, scope, expiry, and revocation state without secret bytes |
+| `ProtectedCredentialHandleV1` | Nonexportable provider-secret reference usable only by a narrowly authorized self-revocation operation |
 | `AuthorityLeaseBodyV1` | Signed request for a narrowly scoped provider lease tied to exact task/job and TTL |
 | `TokenIssuanceLedgerV1` | Provider issuance result, handle/fingerprint, scope, subject, expiry, revocation capability |
 | `ProviderOperationBodyV1` | Closed provider vocabulary operation/resource/principal/result body |
@@ -5501,16 +5380,28 @@ The remaining intentionally non-struct names have explicit status:
 | `CiTrustedRunnerStepLaunchAttestationV1` | **Rejected no-patch design.** It required trusted runner-control code to hold and attest a child. |
 | `CiStepIntentBodyV1` | Optional body only when an existing official CI interface supplies a real signed/authorized immutable step assignment |
 | `CiStepAdmissionJoinV1` | Optional join of provider job/step evidence to a Linux task when the existing interface supplies a unique join; otherwise job and process remain separate facts |
+| `CiOfficialStepTaskJoinEvidenceV1` | Authenticated evidence from an allocated official interface that carries one unique step-to-task join |
 | `CiExecutionBindingV1` | Active step/job role, cgroup/root/native tree, policy, workspace, credential audiences |
 | `JobExecutionEpochV1` | Nonreused run/job/attempt/runner reuse boundary and cleanup tombstone |
 | `CiStateArtifactV1` | `GITHUB_ENV`, PATH, outputs, workspace, cache, socket, background process, or startup-file handoff with producer trust |
-| `CiCoordinatorV1` | Registered coordinator adapter trust/version/capabilities; remains unallocated for named products |
+| `CiCoordinatorV1` | Closed generic coordinator vocabulary used by evidence; each named adapter transport and trust contract remains separately unallocated |
 | `CiPolicyV1` | Closed future CI policy surface; parser rejects it until allocated |
 
 #### A.8.8 Qualification-only and deprecated record names
 
 | Type | Status and meaning |
 | --- | --- |
+| `KernelCapabilityRecordV1`, `CapabilityRecordV1`, `CapabilityBundleV1` | Exact measured kernel/platform capability result and signed bundle |
+| `AssuranceAxesV1`, `AssuranceAxisRecordV1`, `ClaimVectorV1` | Closed support axes and exact claim-to-capability/fixture/coverage allocation |
+| `PlatformSupportManifestV1`, `UnsupportedPathV1` | Exact supported platform identity and explicitly unsupported/degraded paths |
+| `InvariantQualificationV1` | One invariant's capability, stimulus, boundary, physical result, evidence, oracle, and status |
+| `FixtureIdV1`, `FixtureAllocationConditionV1`, `FixtureCaseV1` | Closed fixture identity, allocation condition, and one executable stimulus/oracle case |
+| `NormativeFixtureRegistryV1` | Closed source-of-truth registry of fixture cases, criteria, capabilities, and owners |
+| `FixtureCaseResultV1`, `FixtureAggregateResultV1`, `FixtureResultBundleV1` | Case, fixture, and signed bundle qualification results |
+| `LatencyDistributionV1`, `OperationPerformanceRecordV1`, `CapacityPerformanceRecordV1` | Recorded operation latency/resource distributions and bounded-capacity outcomes |
+| `PerformanceQualificationRecordV1`, `PerformanceQualificationBundleV1` | Platform/build-bound performance records and their signed release bundle |
+| `CanonicalOracleComparatorV1` | Declared normalization and exact comparison rules for physical/provider oracles |
+| `CompletionLedgerV1`, `QualificationEnvelopeV1`, `ReleaseClaimV1` | Criterion ledger, signed artifact envelope, and exact-platform release claim |
 | `ImplementationCardV1` | Human implementation card that must map to a distinct executable fixture ID |
 | `FixtureFamilyV1` | Explicit nonempty sorted fixture membership; wildcards forbidden |
 | `NormativeFixtureSetV1` | Exact fixture-ID set printed in Appendix C.1 |
@@ -5518,7 +5409,7 @@ The remaining intentionally non-struct names have explicit status:
 | `ExactCompletionIdentityV1` | Exact architecture/build/platform/registry/result/performance digest tuple under qualification |
 | `ExactTypeClosureRecordV1` | Exact-schema/alias/unallocated/rejected status and controlling section for every Version 1 name |
 | `ExactTypeClosureBundleV1` | Complete sorted active-name set and closure result bound to the architecture revision |
-| `PerformanceQualificationV1` | **Abandoned untyped sketch** replaced by the typed Chapter 33 records |
+| `PerformanceQualificationV1` | `REJECTED` untyped sketch replaced by the typed Chapter 33 records |
 
 Types such as `LocalEffectMatchV1`, `DeviceFileEffectKeyV1`,
 `SocketControlEffectKeyV1`, and `EntryAdmissionMatchV1` are compiler inputs to
@@ -5526,6 +5417,58 @@ one normalized decision cell. They do not create parallel policy engines.
 Types such as `RuntimeEntryIntentV1`, `DeploymentAdmissionIntentV1`, and
 `ArtifactHandoffIntentV1` remain only to document old names; the wire uses the
 single signed intent envelope and a closed body union.
+
+#### A.8.9 Qualification and documentation records
+
+These records organize implementation and qualification. They do not enter a
+kernel authorization lookup.
+
+```text
+ImplementationCardV1 {
+  card_id: registered card ID
+  real_world_stimulus: UTF-8 1..4096 bytes
+  starting_task_entry_role_and_authority: UTF-8 1..4096 bytes
+  authoritative_inputs[1..64]: UTF-8 1..4096 bytes
+  exact_decision_boundary: UTF-8 1..4096 bytes
+  ordered_map_and_state_reads[1..64]: UTF-8 1..4096 bytes
+  compiled_policy_key: bstr(1..4096)
+  physical_disposition: ResultCodeIdV1
+  evidence_emitted[0..64]: EvidenceFieldKeyV1
+  degraded_or_unsupported_result: ResultCodeIdV1
+  legitimate_negative_control_fixture_ids[1..64]: sorted unique fixture IDs
+  hostile_fixture_ids[1..64]: sorted unique fixture IDs
+  physical_or_provider_oracle: UTF-8 1..4096 bytes
+  upstream_source_evidence_ids[0..64]: sorted unique Id128
+  governing_statement_ids[1..64]: sorted unique ASCII 1..128 bytes
+  supersession_dependency_ids[0..64]: sorted unique ASCII 1..128 bytes
+}
+
+FixtureFamilyV1 {
+  family_id: registered fixture-family ID
+  member_fixture_ids[1..4096]: sorted unique registered fixture IDs
+}
+
+CriterionFixtureRequirementV1 {
+  criterion_number: u8 in 1..11
+  requirement_condition: ALWAYS | WHEN_CLAIM_VECTOR_REFERENCES |
+                         WHEN_SURFACE_ALLOCATED_AND_ADVERTISED
+  exact_fixture_ids[1..4096]: sorted unique registered fixture IDs
+}
+
+ExactCompletionIdentityV1 {
+  architecture_revision_digest, product_build_digest: DigestV1
+  platform_support_manifest_digest, capability_bundle_digest: DigestV1
+  exact_type_closure_bundle_digest: DigestV1
+  fixture_registry_digest, fixture_result_bundle_digest: DigestV1
+  performance_qualification_bundle_digest: DigestV1
+  completion_ledger_digest: DigestV1
+}
+```
+
+`NormativeFixtureSetV1` is exactly the sorted unique fixture-ID set in Appendix
+C.1. Qualification records use digests because their job is to bind separately
+stored release artifacts; this is not a reason to add digests to their
+ordinary child fields.
 
 ### A.9 Exact Actor, Entry, And Runtime-Admission Contract
 
@@ -5557,6 +5500,9 @@ cached final decision.
 #### A.9.1 Exact identity records
 
 ```text
+EntryClassificationV1: u8 =
+  0 UNKNOWN | 1 EXACT_TARGET | 2 SAME_BUDGET_AMBIGUOUS | 3 AMBIGUOUS
+
 ContainerExecutionSet {
   execution_set_id: Id128
   tenant_id: Id128
@@ -5635,14 +5581,14 @@ EntrySecurityStateV1 {
   entry_lock: bpf_spin_lock
   execution_set_id: Id128
   entry_kind: EntryKindV1
-  claim_slot_id: Id128
+  claim_slot_id?: Id128
   root_task_cookie: nonzero u64
   root_process_state_id: Id128
   committed_execution_id: Id128
   live_task_refs: u64
-  admission_state: PREPARING | CLAIM_BOUND_PROVISIONAL | COMMITTED |
-                   TERMINAL_FAILED
-  lifetime_state: OPEN | DRAINING | COMPLETE
+  admission_state: PENDING | CLAIMING | COMMITTED | TERMINAL
+  terminal_reason?: REJECTED | EXPIRED | CANCELLED | CLAIM_FAILED
+  lifetime_state: INACTIVE | ACTIVE | DRAINING | COMPLETE
   transition_version: u64
 }
 
@@ -5662,6 +5608,12 @@ ProcessExecutionInstance {
   end_boottime_ns?:u64
 }
 ```
+
+An ordinary stock-runtime root has no claim slot. A qualified claim-backed or
+approved administrative root retains `Some(claim_slot_id)` for evidence after
+consumption. `terminal_reason` is present exactly when
+`admission_state=TERMINAL`. A committed entry has no terminal reason. Zero is
+never used as an absent claim ID.
 
 Fork creates a new per-process execution instance that points to the same
 immutable image provenance. Exec creates another execution instance and new
@@ -5814,8 +5766,7 @@ ProcessLifetimeOwnershipV1 {
   authority_domain_ref_owned: bool
   acquisition_transition_version: u64
   release_transition_version?: u64
-  state: OWNED | DOMAIN_JOIN_PREPARING | RELEASED |
-         RECONCILIATION_REQUIRED
+  state: OWNED | RELEASED | RECONCILIATION_REQUIRED
 }
 
 TaskReferenceTombstoneV1 {
@@ -5949,21 +5900,18 @@ ExternalRootClassificationV1 {
 }
 ```
 
-`QUALIFIED_JOINED_PURPOSE` is legal only when an existing supported
-interface supplies both the purpose and a unique request-to-task join. Stock
-CRI probe/hook exec uses `purpose=UNKNOWN`. The BPF path never uses command,
-arguments, timing, TTY, PodSpec resemblance, or a locally signed observation
-to upgrade that value. Approved administrative exec is one explicit exception.
-It uses `APPROVED_ADMINISTRATIVE_NEXT_MATCH` plus a separate risk-accepted,
-short-lived, one-use next-match slot. It is not a unique request-to-task proof,
-so `purpose_to_task_join_proof` must be absent for this variant.
+`QUALIFIED_JOINED_PURPOSE` requires an existing interface that proves both
+purpose and a unique request-to-task join. Stock CRI probe and hook exec uses
+`purpose=UNKNOWN`. Command, arguments, timing, TTY, PodSpec similarity, and a
+local observation cannot upgrade it. Approved administrative exec instead uses
+`APPROVED_ADMINISTRATIVE_NEXT_MATCH`: a short-lived, one-use match with an
+accepted race. It is not a unique join, so it has no
+`purpose_to_task_join_proof`.
 
-`UNKNOWN` forbids all four optional purpose/approval fields.
-`QUALIFIED_JOINED_PURPOSE` requires `purpose_source_id` and
-`purpose_to_task_join_proof` and forbids the administrative fields.
-`APPROVED_ADMINISTRATIVE_NEXT_MATCH` requires the approval proof and claim-slot
-IDs and forbids `purpose_to_task_join_proof`. Any other field combination is a
-decode or state-corruption error, not an implementer choice.
+`UNKNOWN` forbids every optional purpose and approval field.
+`QUALIFIED_JOINED_PURPOSE` requires its source and join proof and forbids the
+administrative fields. `APPROVED_ADMINISTRATIVE_NEXT_MATCH` requires approval
+and slot IDs and forbids a join proof. Every other combination is invalid.
 
 The active transaction is:
 
@@ -5989,12 +5937,13 @@ a kubelet signature, a new CRI method, or a command-based pending claim.
 
 ##### A.9.7.1 Exact approved administrative-exec contract
 
-The concrete case is `kubectl mithril exec conversion-worker -- /bin/sh`.
-Kubernetes admission sees the Pod, container, argv, and stream flags. The later
-Linux task does not contain the admission ID or original stream flags. Rust
-therefore checks all Kubernetes fields before arming the node, while BPF checks
-only facts available from the live task and its already verified cgroup
-binding.
+Consider `kubectl mithril exec conversion-worker -- bash`. Admission sees
+the Pod, container, argv, and stream flags. The later Linux task has neither
+the admission ID nor the original stream flags. Rust checks those Kubernetes
+facts and resolves `bash` in the target container before arming the node. The
+approval UI displays `bash -> <resolved path>` and the exact executable object.
+BPF later checks only the live task, its verified cgroup binding, raw argv, and
+that resolved executable identity.
 
 `ApprovedAdministrativeExecV1` is not a second wire format. Its exact alias is:
 
@@ -6020,6 +5969,8 @@ ApprovedExecSlotV1 {
   cgroup_binding_nonce: Id128
   container_generation: nonzero u64
   expected_argv: BoundedAdministrativeArgvV1
+  resolved_executable_object_key_id: nonzero u64
+  resolved_executable_object_generation: nonzero u64
   approved_role_numeric_id: nonzero u32
   profile_generation_ref_id: nonzero u64
   expected_root_class: u8, exactly EXTERNAL_RUNTIME_ROOT
@@ -6027,6 +5978,18 @@ ApprovedExecSlotV1 {
   state: atomic u32, 1 ARMED | 2 CONSUMED | 3 EXPIRED |
                      4 CANCELLED | 5 CORRUPT
   transition_version: nonzero u64
+}
+
+ResolvedAdministrativeExecutableV1 {
+  requested_name_bytes: bstr(1..4096), no embedded NUL
+  resolution_mode: ABSOLUTE | CONTAINER_CWD_RELATIVE | CONTAINER_PATH_SEARCH
+  resolved_display_path_bytes: bstr(1..4096), absolute, no embedded NUL
+  container_working_directory_bytes: bstr(1..4096), absolute
+  effective_path_entries[0..64]: bstr(1..4096), absolute,
+    in resolution order with duplicates preserved
+  target_mount_namespace_id: Id128
+  target_mount_topology_generation: nonzero u64
+  executable_object: FileObjectIdentityV1
 }
 
 PendingAdministrativeMatchV1 {
@@ -6038,13 +6001,11 @@ PendingAdministrativeMatchV1 {
 }
 ```
 
-There is at most one `ARMED` slot for a cgroup binding. The BPF value contains
-no Pod name, container string, requester identity, approver identity, stream
-flag, JWT, signature, or free-form text other than the bounded raw argv needed
-for the direct comparison. Rust has already verified the other facts and bound
-them to `cgroup_binding_id`, `cgroup_binding_nonce`, and
-`container_generation`. BPF obtains the live binding from the current task's
-cgroup and compares only the fixed fields above.
+One cgroup binding has at most one `ARMED` slot. The BPF value omits Pod and
+container names, people, stream flags, tokens, signatures, and free text. It
+keeps only bounded raw argv for comparison. Rust has bound the other facts to
+the cgroup ID, nonce, and container generation. BPF reads the current task's
+binding and compares the fixed fields above.
 
 The signed approval contains the raw arguments exactly as Kubernetes decoded
 them. Rust lowers them into this fixed-size BPF value; it does not hash them:
@@ -6063,39 +6024,36 @@ BoundedAdministrativeArgvV1 {
 }
 ```
 
-`argument_bytes` contains the arguments in order, with each exact length in
-`argument_lengths`; unused lengths and bytes are zero. At `execve` or
-`execveat` entry, BPF reads the raw user argument strings and compares count,
-order, length, and bytes directly with the slot. It stores only the small
-per-task fact that this slot matched; it does not copy the whole command into a
-second map. For this feature, the first approved argument must be an absolute
-executable path. BPF compares the exec syscall's filename and `argv[0]` with
-that same approved path; the executable check then applies normal executable
-policy to the actual live file before consuming the slot. This prevents a
-different requested executable path from matching merely by choosing the
-approved text as its `argv[0]`. It deliberately does not bind the approval to a
-content hash. Kubernetes strings are their UTF-8 bytes after API decoding. An
-embedded NUL, relative executable, too many arguments, an argument over 4096
-bytes, a total over 4096 bytes, an unsupported exec syscall, or incomplete
-capture makes the feature unavailable for that request. It never falls back to
-a prefix or truncated match.
+`argument_bytes` stores arguments in order; `argument_lengths` stores their
+exact lengths. Unused space is zero. At `execve` or `execveat`, BPF compares
+count, order, length, and bytes with the slot. It records only that the task
+matched; it does not copy the command into another map.
 
-Raw argv can contain secrets. It is shown to the approver and kept only in the
-short-lived authorization and BPF slot needed for matching. It is not emitted
-as normal telemetry. After consumption is durably recorded, or after
-cancellation or expiry, the node scrubs or removes the raw slot value. The node
-WAL stores the proof ID, slot ID, state, and recovery fields, not another copy
-of argv.
+The first argument is the exact nonempty command name entered by the requester;
+it may be `bash`, a relative path, or an absolute path. Before approval, the
+node resolves it using the declared mode in the target container view and
+returns `ResolvedAdministrativeExecutableV1` for display and signature. Slot
+installation repeats the resolution and requires the same exact live object.
+At exec, raw `argv[0]` must equal the approved first argument while the actual
+executable object must equal the resolved object generation. The syscall
+filename and `argv[0]` need not be equal. Normal executable policy still checks
+the live file before slot consumption. Embedded NUL, ambiguous or changed
+resolution, unsupported syscall, incomplete capture, or any count or size
+limit makes the request unavailable. Prefix and truncated matches are
+forbidden.
 
-The small `PendingAdministrativeMatchV1` record is created only after the full
-direct comparison succeeds. It is tied to the task's current exec-attempt
-sequence. A failed syscall, task exit, changed attempt sequence, missing record,
+Raw argv can contain secrets. Show it only to the approver and keep it only in
+the short-lived authorization and BPF slot. Do not emit it as normal telemetry
+or copy it into the WAL. Remove it after durable consumption, cancellation, or
+expiry.
+
+Create `PendingAdministrativeMatchV1` only after a full match. Bind it to the
+current exec attempt. Failure, task exit, a changed attempt, a missing record,
 or mismatch removes or rejects it. It never arms or restores a slot.
 
-The ordinary runtime exec stub must be a single task while its arguments are
-compared. If another task shares writable memory with that candidate, Mithril
-does not use the administrative match. This prevents another task from changing
-the argument memory between capture and the kernel's exec processing.
+The exec stub must be single-threaded while BPF compares its arguments. If
+another task shares writable memory with it, the match is unavailable. This
+prevents another task from changing argv during the check.
 
 The one-use transition is intentionally simple:
 
@@ -6112,229 +6070,23 @@ webhook checks approval and PodExecOptions
   -> every later effect still uses normal role policy
 ```
 
-If the exec fails, or if the successful-exec switch fails after slot
-consumption, the task never receives the approved role and the slot remains
-consumed. It is never returned to `ARMED`. On daemon restart, admission remains
-closed until pinned slots and the WAL agree. A future, unexpired `ARMED` slot
-may remain armed only on the same node boot with the same binding nonce and
-matching WAL record. Any missing record, changed boot, changed binding, expiry,
-impossible transition version, or `CONSUMED` state cancels or preserves
-consumption; it never creates a new use.
+If exec or the role switch fails, the task gets no approved role and the slot
+stays consumed. It never returns to `ARMED`. After restart, admission stays
+closed until pinned slots match the WAL. An unexpired slot survives only on the
+same boot, binding nonce, and WAL record. Any mismatch cancels it or preserves
+consumption; it never creates another use.
 
-The exact accepted limitation is now visible in the ABI: stream flags are
-checked by admission but are absent from `ApprovedExecSlotV1`. A competing
-runtime-created external root in the same live container can consume the slot
-only if it has the same requested executable path and arguments, even when its
-stream arrangement differs. That is the bounded race accepted by cluster
-policy and the approving administrator.
+The accepted limit is visible in the ABI: admission checks stream flags, but
+the BPF slot does not contain them. Another external root in the same live
+container can win only with the same executable object and arguments. Its stream
+shape may differ. Cluster policy and the administrator accept this bounded
+race.
 
-**Rejected historical design begins here.** The remainder of this subsection
-is retained so reviewers can see exactly what was abandoned. It is
-non-normative and must not be implemented: it requires runtime/kubelet behavior
-that stock interfaces do not provide and violates the no-patch product rule.
-
-The OCI runtime still creates namespaces, cgroups, mounts, and the setup task.
-The rejected design assumed that Mithril could prevent the runtime from
-releasing the user process until identity and security state were installed.
-Stock interfaces do not provide that general hold. This assumption is one
-reason the design below is non-normative.
-
-```text
-RuntimeSetupBudgetV1 {
-  budget_id
-  runtime_binary_measurement
-  runtime_name_version_config_digest
-  kernel_capability_manifest_digest
-  ordered_variants[] {
-    variant_id
-    steps[] {
-      step_id
-      permitted_predecessor_step_mask
-      decision_point: exact LSM/fentry/seccomp hook ID
-      syscall_or_kernel_operation_variant
-      object_selector_or_namespace_type
-      argument_mask_and_required_values
-      minimum_count
-      maximum_count
-      result_requirement
-    }
-  }
-  final_uid_gid_groups_capabilities_securebits
-  final_namespace_and_rootfs_identity
-  final_seccomp_proof_requirement?
-}
-
-BarrierEvidenceV1 =
-  PTRACE_STOPPED {
-    held_pidfd_identity, task_cookie, start_boottime_ns,
-    waitid_p_pidfd_result_digest, wstopped_observed: true,
-    exclusive_tracer_process_identity, ptrace_relationship_digest,
-    stop_boottime_ns
-  }
-  | PRIVATE_BOOTSTRAP_BLOCKED {
-      held_pidfd_identity, task_cookie, start_boottime_ns,
-      measured_bootstrap_digest, ready_transcript_digest,
-      private_release_handle_identity, release_nonce,
-      ack_mac_key_id, expected_ack_payload_digest,
-      wstopped_observed: false
-    }
-  | CGROUP_FROZEN {
-      cgroup_fd_identity, cgroup_binding_nonce,
-      cgroup_events_frozen_value: 1,
-      exact_member_task_set_digest, member_count,
-      freeze_generation, readback_boottime_ns
-    }
-```
-
-A pidfd identifies the task. It does not stop the task. `PTRACE_STOPPED` is
-valid only after `waitid(P_PIDFD)` reports the stop and Mithril verifies the
-exclusive tracer. A private bootstrap is running but blocked, so it must say
-`wstopped_observed=false`. A cgroup hold is valid only when `cgroup.events`
-reads `frozen=1` and the complete member set equals the proposed setup set.
-`SIGSTOP` without observed ownership, a pidfd by itself, a leaked release fd,
-or an OCI hook that runs after setup is not a barrier.
-
-The release acknowledgement covers the barrier variant, exact held target or
-set, one-use setup ticket, every installed-state readback digest, and the
-release nonce. It is accepted once. Hostile `SIGCONT`, `SIGKILL`, ptrace
-attach, spurious wakeups, parent death, and a replayed acknowledgement must not
-advance the held task.
-
-Barrier 1 holds the measured setup task and gives it only the setup budget.
-After the runtime constructs the final rootfs and namespaces, Barrier 2 binds
-the final mount topology, projected credentials, inherited descriptors,
-network namespace, devices, executable chain, cgroup nonce, policy generation,
-entry, process, and domain state. Every required map/link/value is read back.
-Only then may the runtime resume the target.
-
-The setup budget is not general runtime trust. For example, a step may permit
-mounting the PodSpec-declared projected credential volume as an opaque mount
-object. It does not permit opening or reading the `token` file. Every operation,
-object, flag, result, count, and predecessor step must match one signed ordered
-variant. An extra mount, an early credential read, a repeated step beyond its
-maximum, or the right step in the wrong order fails setup.
-
-The two barriers have distinct jobs:
-
-```text
-held setup task
-  -> SETUP_LABELED
-  -> SETUP_RUNNING_UNDER_BUDGET
-  -> ROOTFS_READY_HELD
-  -> TOPOLOGY_RECONCILED
-  -> OBJECT_TABLES_INSTALLED_AND_READ_BACK
-  -> ONE_USE_FINAL_EXEC_ARMED
-  -> USER_EXEC_COMMIT
-```
-
-Barrier 1 prevents unlabeled setup work. Barrier 2 prevents the final user
-image from racing the mount and object classifier. At Barrier 2 the trusted
-runtime supplies `RootfsReadyV1`: held task identity, mount-namespace fd and
-generation, cgroup binding and nonce, rootfs/overlay identity, OCI and image
-digests, declared mounts/devices/projected volumes, and final
-argv/environment metadata digest. Mithril holds the namespace fd, resolves all
-objects, installs the inactive tables, reads them back, and arms one final-exec
-claim. A topology change marks the namespace `DIRTY`; final exec denies until
-another complete reconciliation succeeds.
-
-For streaming exec, preparation and the later stream/task are different
-events. `RuntimeStreamTicket` is opaque, one-use, peer-bound, target-bound,
-and expiring. The workload never receives it. `mithril-node` consumes it only
-after the authenticated runtime binds it to the exact later held task and the
-required state reads back. Preparing an exec URL does not identify a Linux
-task.
-
-External-entry ticket lookup is never available to an already labeled task:
-
-```text
-if current task has TaskLabelV1:
-  evaluate only the native fork/exec/privilege-transition path
-  do not inspect or claim runtime/kubelet external-entry tickets
-
-else if placement resolves to a protected binding or remains unknown:
-  require an exact held-task claim
-  or the separately qualified fail-closed pending-claim fallback
-
-else:
-  evaluate explicit host policy
-```
-
-`execve()` does not remove BPF task storage. The application entrypoint and
-all of its labeled forks therefore cannot steal a probe or lifecycle ticket by
-executing the same command while that ticket is pending.
-
-Kubelet purpose needs a carried ticket as well. Stock `ExecSyncRequest` does
-not say whether the command is readiness, liveness, startup, `PostStart`, or
-`PreStop`. The exact optional integration sends this record before kubelet
-calls the runtime:
-
-```text
-KubeletExecutionRequestV1 {
-  kubelet_instance_id
-  kubelet_build_and_config_digest
-  pod_uid
-  pod_resource_version
-  full_container_id
-  container_spec_digest
-  lifecycle_generation
-  reason: STARTUP_PROBE | READINESS_PROBE | LIVENESS_PROBE |
-          POST_START_EXEC | PRE_STOP_EXEC
-  podspec_field_path
-  canonical_argv_digest
-  timeout_ns
-  kubelet_monotonic_sequence
-}
-```
-
-Mithril authenticates the local kubelet peer, re-resolves the Pod/container,
-and returns a signed one-use ticket. A ticket-aware runtime carries the ticket
-to one exact child-creation request, holds that child, and gives `mithril-node`
-the ticket plus the child's pidfd/task, container, binding, lifecycle, and
-runtime-request identity. `mithril-node` binds the ticket to that child,
-installs and reads back its provisional entry/process state, atomically marks
-the ticket consumed, and only then acknowledges release. The child does not
-present the ticket from inside the workload.
-
-Two identical commands running concurrently are separated by ticket and held
-task identity—not by timestamps. An existing labeled application task always
-takes the native-exec path, so it is not one of the ticket candidates. Without
-the carried ticket and exact held-task binding, Mithril may use one same-budget
-class for every ambiguous external root or reject; it must not claim an exact
-probe/hook reason. A direct `crictl ExecSync` has no kubelet ticket and is an
-administrative entry or is rejected.
-
-The pending-claim fallback is allowed only for a qualified runtime that cannot
-provide a held task. Userspace prebuilds the whole claim, not just a role:
-
-```text
-PreparedExternalRootStateV1 {
-  claim_slot_id
-  immutable_task_label_template
-  process_state_id                 // PREPARING; provisional deny set
-  authority_domain_id              // already ACTIVE
-  entry_instance_id
-  active_profile_generation_ref_id
-  generation_ref_slot
-  entry_task_ref_slot
-  domain_pending_ref_slot
-  kernel_claim_tombstone_slot
-  expected_binding/candidate/attempt digests
-  prepared_immutable_fields_digest
-  expected_claim_bound_state_digest
-  state: PREPARING | EXPOSED | CLAIMING | CLAIM_BOUND_PROVISIONAL |
-         EXEC_COMMITTED | TERMINAL_FAILED | RECONCILING
-}
-```
-
-At `bprm_check_security`, one unlabeled sole-task stub can atomically claim the
-slot. The hook validates the binding and candidate, wins `PENDING -> CLAIMING`,
-installs `ENTRY_PROVISIONAL`, writes the kernel tombstone, acquires each
-preallocated typed reference, activates the provisional process state, reads
-everything back, and only then permits bounded loader/interpreter work. The
-successful exec observer commits the final role. Failure after any step denies
-and terminalizes the slot. The provisional role cannot read ordinary files,
-use the network, create children, or obtain privilege. Multi-threaded or
-unqualified runtime stubs require the held-task path.
+**Rejected design summary.** The discarded design required held setup tasks,
+root-filesystem barriers, ticket-aware kubelet/runtime changes, or a pending
+claim for an unlabeled task. Stock interfaces do not provide those guarantees,
+and requiring them would violate the no-patch rule. The active contract is
+above; Appendix B.2 keeps the rejection and its reason.
 
 #### A.9.8 Current root-classification failures and required tests
 
@@ -6358,101 +6110,77 @@ no-return failure, direct `crictl` exec, identical probe/hook/admin commands,
 runtime restart, discovery delay, missing hook fields, forged hook metadata,
 and every supported stock hook failure/timeout result.
 
-#### A.9.9 Checkpoint, attach, port-forward, and node-floor contracts
+#### A.9.9 Checkpoint, attach, port-forward, and node-floor limits
 
-Checkpoint restore and stream records below are retained historical design
-inputs, not active no-patch contracts. The active product may reject through a
-configured existing authorization hook or apply restrictive BPF treatment and
-report `UNSUPPORTED`. It may not add held-task support to CRIU/runtime or
-insert a stream proxy. The node-floor request/decision remains active only at
-a configured stock Kubernetes admission or runtime extension point.
+Checkpoint restore is not an active no-patch contract. Mithril may reject it
+through an existing authorization hook or restrict later effects with BPF, but
+it does not patch CRIU/runtime to hold restored tasks. Checkpoint export is a
+sensitive memory/file/socket/device export and remains `UNSUPPORTED` until its
+own phase proves complete target enumeration, state preservation, an encrypted
+sink, and the physical result.
 
-```text
-CheckpointRestoreIntentV1 {
-  restore_intent_id, proof_id, claim_slot_id: Id128
-  node_boot_id, execution_set_id, cgroup_binding_id,
-    cgroup_binding_nonce: Id128
-  checkpoint_artifact_digest, checkpoint_manifest_digest: DigestV1
-  source_node_boot_id?: Id128
-  source_profile_portable_generation: PortableProfileGenerationV1
-  target_profile_generation_ref_id: u64
-  expected_task_count: u32
-  expected_process_count: u32
-  target_role_and_domain_manifest_digest: DigestV1
-  held_helper_execution_set_id: Id128
-  deadline_boottime_ns: u64
-  state: PREPARING | HELPER_HELD | RESTORING | TARGETS_BOUND |
-         VERIFIED | REJECTED | FAILED_CLOSED
-}
+Attach creates no process. Port-forward is not process egress. Mithril records
+the existing Kubernetes actor, request UID, target, channel or ports, result,
+and proof quality. It does not insert a stream proxy.
 
-RestoreTargetBirthSlotV1 {
-  slot_id, restore_intent_id: Id128
-  checkpoint_task_identity_digest: DigestV1
-  expected_process_and_thread_relation_digest: DigestV1
-  prepared_task_cookie: u64
-  prepared_process_state_id, prepared_entry_instance_id: Id128
-  state: PENDING | CLAIMING | LABELED_HELD | VERIFIED |
-         RELEASED | FAILED_CLOSED
-}
-
-CheckpointCreationRequestV1 {
-  request_id: Id128
-  exact_target_execution_set_and_task_set_digest: DigestV1
-  target_profile_generation_refs[]: u64
-  target_authority_domain_ids[]: Id128
-  included_memory_file_socket_device_state_digest: DigestV1
-  encrypted_storage_sink: ResourceSelectorV1
-  export_authority_id: Id128
-  maximum_bytes: u64
-  deadline_boottime_ns: u64
-  result: PENDING | DENIED | EXPORTED | FAILED | UNKNOWN
-}
-
-StreamAuthorityV1 {
-  stream_authority_id, proof_id, claim_slot_id: Id128
-  kind: ATTACH | PORT_FORWARD
-  peer_identity_digest: DigestV1
-  target_execution_set_id, target_process_or_entry_id: Id128
-  permitted_ports[]: u16
-  permitted_directions
-  byte_and_time_budget
-  meter_and_fence_capability_ids[]
-  deadline_boottime_ns: u64
-  state: PENDING | ACTIVE | FENCED | COMPLETE | FAILED | EXPIRED
-}
-```
-
-**Rejected restore detail.** The earlier design uses a separate held helper
-execution set; freezing the helper's own
-cgroup may deadlock CRIU and does not prove future restored tasks. Each target
-is intercepted before runnable, consumes one prepared slot, receives complete
-task/process/entry/domain/generation state, and remains held until a complete
-iterator equals the signed manifest. Memory, inherited fds, sockets, mappings,
-credential possession, and sensitive/domain state restore with the target; a
-checkpoint cannot erase them.
-
-Checkpoint creation is a memory/file/socket/device export effect. It needs
-complete target enumeration, shared-state preservation, encrypted sink, exact
-byte/result oracle, and denial of an unapproved export. Attach and port-forward
-are not process identity. Attach does not create a child; port-forward does not
-become ordinary process egress. The active baseline records actor, request UID,
-target, ports/channels, result, and proof quality from existing Kubernetes
-APIs. Metering fields above stay inactive unless a future existing supported
-interface supplies them without a proxy.
-
-The node hard floor protects unchanged deployments before setup:
+A configured stock Kubernetes admission or runtime extension may apply this
+node hard-floor decision:
 
 ```text
+NodeAdmissionFieldKeyV1: u16 =
+  0 UNKNOWN | 1 PRIVILEGED | 2 ALLOW_PRIVILEGE_ESCALATION |
+  3 HOST_PID | 4 HOST_IPC | 5 HOST_NETWORK |
+  6 ADDED_CAPABILITY | 7 DROPPED_CAPABILITY |
+  8 SECCOMP_PROFILE_KIND_AND_DIGEST |
+  9 APPARMOR_PROFILE_KIND_AND_DIGEST | 10 SELINUX_OPTIONS |
+  11 HOST_PATH_SOURCE_AND_FLAGS |
+  12 HOST_DEVICE_SOURCE_AND_PERMISSIONS |
+  13 PROC_MOUNT_MASKS | 14 PROC_MOUNT_TYPE | 15 RUNTIME_CLASS |
+  16 USER_NAMESPACE_MODE | 17 PID_IPC_NETWORK_NAMESPACE_TARGET |
+  18 SYSCTL_NAME_AND_VALUE | 19 MOUNT_PROPAGATION |
+  20 ROOTFS_READ_ONLY | 21 RUN_AS_UID_GID_GROUPS |
+  22 NO_NEW_PRIVILEGES | 23 MASKED_PATH | 24 READONLY_PATH |
+  25 SECUREBITS | 26 LINUX_PERSONALITY
+
+NodeAdmissionFieldV1 {
+  field_key: NodeAdmissionFieldKeyV1
+  canonical_value:
+    BOOL { value: bool }
+    | SIGNED { value: i64 }
+    | UNSIGNED { value: u64 }
+    | BYTES { value: bstr(0..1024) }
+    | DIGEST { value: DigestV1 }
+    | SORTED_VALUES {
+        values[1..64]:
+          BOOL { value: bool } | SIGNED { value: i64 } |
+          UNSIGNED { value: u64 } | BYTES { value: bstr(0..1024) } |
+          DIGEST { value: DigestV1 }
+      }
+  source_path_id: nonzero u32
+}
+
 NodeAdmissionRequestV1 {
-  request_id: Id128
-  node_boot_id: Id128
-  effective_podspec_and_cri_security_digest: DigestV1
-  image_digest, canonical_argv_digest: DigestV1
-  working_directory_bytes: bounded bytes
-  environment_config_secret_mount_device_security_manifests[]: DigestV1
-  pod_uid?, controller_uid?: Id128
-  immutable_controller_revision_digest?: DigestV1
-  runtime_normalization_digest: DigestV1
+  request_id, node_boot_id, authenticated_peer_id: Id128
+  interface_kind: KUBERNETES_VALIDATING_ADMISSION |
+                  QUALIFIED_NRI_OR_RUNTIME_ADMISSION
+  interface_capability_id: Id128
+  runtime_or_apiserver_version_config_digest: DigestV1
+  operation: CREATE_POD | RUN_POD_SANDBOX | CREATE_CONTAINER |
+             START_CONTAINER | EXEC_SYNC | STREAMING_EXEC | RESTORE
+  cluster_uid?: Id128
+  pod_uid?: bstr(1..64)
+  namespace_uid?: Id128
+  service_account_uid?: Id128
+  controller_uid?: Id128
+  full_container_id?: bstr(32..128)
+  image_digest: DigestV1
+  effective_request_digest: DigestV1
+  requested_field_entries[0..512]: NodeAdmissionFieldV1,
+    sorted by (field_key, canonical_value), no duplicates
+  selected_profile?: PortableProfileGenerationV1
+  signed_exception_id, one_use_exception_slot_id?: Id128
+  cgroup_binding_id_and_nonce?: { binding_id, binding_nonce: Id128 }
+  deadline_boottime_ns: u64
 }
 
 NodeHardFloorDecisionV1 {
@@ -6460,32 +6188,27 @@ NodeHardFloorDecisionV1 {
   matched_baseline_or_exception_id?: Id128
   result: ALLOW_MATCHED | REJECT_UNMATCHED | REJECT_HARD_FLOOR |
           ADMIT_UNKNOWN_RESTRICTED_AND_ALERT
-  exact_rejected_field_ids[]
+  exact_rejected_field_ids[]: sorted unique NodeAdmissionFieldKeyV1
   required_profile_generation_ref_id?: u64
   decision_interface_capability_id: Id128
   decision_digest: DigestV1
 }
 ```
 
-The floor can reject a never-seen privileged/hostPID/host-root/capability
-workload before scheduling when a stock Kubernetes validating-admission
-integration is configured. A stock runtime extension may reject before setup
-only when its qualified ordering proves that result. Otherwise the BPF hard
-floor controls later covered effects and must not claim the mount setup was
-prevented. A privileged CSI/node agent requires an exact signed, expiring
-exception naming immutable image, controller, fields, scope, approver, and
-maximum instances. Kubernetes labels alone do not authenticate it.
+Unknown fields cannot be omitted from a full-floor request. A Kubernetes
+admission request never claims that runtime
+setup was prevented, and a runtime request never claims Kubernetes API
+rejection; the selected interface kind controls the honest physical result.
 
-Qualification must cover complete restore, partial target set, helper/target
-mix-up, changed profile, inherited sensitive memory/fds, task-count mismatch,
-restore crash after every slot transition, checkpoint export denial, attach
-peer swap, port-forward existing stream/fence, unmatched privileged Pod, and
-valid narrow node-agent exception. Until allocated phases implement these
-records and tests, claims remain `UNSUPPORTED`, not approximated by ordinary
-container-start or socket observation.
+Admission can reject an unmatched privileged, hostPID, host-root, or broad-
+capability workload. A runtime extension may claim start rejection only when
+its tested ordering proves it. Otherwise BPF controls later covered effects.
+A privileged CSI or node agent needs a signed, expiring exception naming its
+immutable image, controller, dangerous fields, scope, approver, and maximum
+instances. Kubernetes labels alone are not authentication.
 
-Mithril must never claim that a Pod, cgroup, command string, TTY, PID, runtime
-callback, or post-run event alone proves why a process exists.
+Chapter 7 states the active behavior. Chapter 35.1 keeps the unallocated work,
+and Appendix B.2 records the rejected held-task and stream-proxy designs.
 
 ### A.10 Exact Signed-Intent, Trust, And Replay Contract
 
@@ -6658,7 +6381,8 @@ AdministrativeExecBodyV1 = {
   11: PortableProfileGenerationV1,
   12: Id128 target_node_id,
   13: 1,                         // NEXT_MATCHING_RUNTIME_EXTERNAL_ROOT
-  14: true                       // requester accepted the documented race
+  14: true,                      // requester accepted the documented race
+  15: ResolvedAdministrativeExecutableV1
 }
 
 stream_flags bits =
@@ -6667,8 +6391,11 @@ stream_flags bits =
 ```
 
 For `AdministrativeExecBodyV1`, the sum of the argument byte lengths is
-`1..4096`, element 0 is a non-empty absolute executable path, and embedded NUL
-is forbidden. These are signed parser rules, not display normalization.
+`1..4096`, element 0 is a nonempty command name, and embedded NUL is forbidden.
+The resolved executable's `requested_name_bytes` must equal element 0. Its
+object, target mount view, resolution mode, working directory, and applicable
+`PATH` entries are part of the signed parent body; the child does not need a
+separate digest. These are signed parser rules, not display normalization.
 
 CI has three evidence bindings rather than dummy zero fields. The first two
 are legal only when an existing official interface supplies a unique join;
@@ -6736,6 +6463,18 @@ NativeOperationV1 = 1 FORK | 2 EXEC | 3 PRIVILEGE_TRANSITION
 
 ArtifactOperationV1 = 1 READ_AS_DATA | 2 VERIFY | 3 LOAD |
   4 EXECUTE | 5 DEPLOY
+
+CiCoordinatorV1: u8 =
+  0 UNKNOWN | 1 GITHUB_ACTIONS | 2 GITLAB_CI | 3 JENKINS | 4 TEKTON
+
+CiTriggerTrustClassV1: u8 =
+  0 UNKNOWN | 1 TRUSTED_REF | 2 UNTRUSTED_CHANGE | 3 SCHEDULED |
+  4 MANUAL_APPROVED | 5 POLICY_GENERATED
+
+CiExecutionShapeV1: u8 =
+  0 UNKNOWN | 1 NATIVE_TRANSITION | 2 RUNTIME_JOB_CONTAINER_ROOT |
+  3 RUNTIME_ACTION_CONTAINER_ROOT | 4 SERVICE_ROOT |
+  5 COORDINATOR_BUILTIN_NO_LOCAL_TASK
 
 ProviderV1 = 1 KUBERNETES | 2 AWS | 3 GCP | 4 GITHUB |
   5 INTERNAL_CONNECTOR | 6 OCI_REGISTRY
@@ -6999,7 +6738,17 @@ PolicyDocumentV1 {
 PolicyLocalIdV1 = UTF-8 matching ^[a-z][a-z0-9.-]{0,127}$
 RegistrySymbolV1 = ASCII matching ^[A-Z][A-Z0-9_]{0,127}$
 PackageIdV1 = ASCII matching ^[A-Z][A-Z0-9-]{0,126}[0-9]$
+
+CanonicalArgvV1 =
+  u32_be(argument_count) ||
+  for each argument in order: u32_be(byte_length) || raw argument bytes
 ```
+
+`CanonicalArgvV1` contains `1..256` arguments and at most 4096 aggregate
+argument bytes. Embedded NUL is rejected where Linux/Kubernetes cannot
+represent it. There is no shell parsing, `PATH` resolution, Unicode folding,
+or whitespace normalization in this encoding. A digest is calculated only
+when a containing signed or content-addressed contract needs the argv identity.
 
 #### A.11.2 Selectors classify candidates; bindings create authority
 
@@ -7026,12 +6775,29 @@ WorkloadSelectorV1 {
   image_digests[0..256]: DigestV1
 }
 
+ObjectClassifierSelectorV1 =
+  PROJECTED_SERVICE_ACCOUNT_TOKEN {
+    workload_selector_ids[1..32]: PolicyLocalIdV1
+    service_account_uids[1..64]: Id128
+    required_projected_source: KUBERNETES_SERVICEACCOUNT_TOKEN
+    required_mount_read_only: bool
+  }
+  | FILESYSTEM_OBJECT {
+      workload_selector_ids[1..32]: PolicyLocalIdV1
+      mount_source_class_ids[1..64]: PolicyLocalIdV1
+      relative_component_bytes[0..64]: bstr(1..255)
+      filesystem_type_ids[0..64]: PolicyLocalIdV1
+      required_object_type: REGULAR_FILE | DIRECTORY
+    }
+  | IMMUTABLE_ARTIFACT { artifact_digests[1..256]: DigestV1 }
+  | DESTINATION { destination_policy_ids[1..256]: PolicyLocalIdV1 }
+  | DEVICE { device_class_ids[1..256]: PolicyLocalIdV1 }
+  | KERNEL_SECURITY_OBJECT { security_object_ids[1..256]: PolicyLocalIdV1 }
+
 ObjectClassifierBindingV1 {
   classifier_binding_id: PolicyLocalIdV1
   object_class_id: ObjectClassIdV1
-  selector: PROJECTED_SERVICE_ACCOUNT_TOKEN | FILESYSTEM_OBJECT |
-            IMMUTABLE_ARTIFACT | DESTINATION | DEVICE |
-            KERNEL_SECURITY_OBJECT
+  selector: ObjectClassifierSelectorV1
   required_capability_ids[1..64]
   unknown_result: DENY | ALERT
 }
@@ -7491,7 +7257,37 @@ NormalizedDecisionCellV1 {
   budget_semantics
   source_rule_ids[]
 }
+
+CompiledActionPlanV1 {
+  evaluation_stage: ENTRY_ADMISSION | NATIVE_TRANSITION |
+                    LOCAL_PRE_EFFECT | REMOTE_PRE_ADMISSION | POST_EFFECT
+  physical_result: ADMIT | AUDIT_ADMIT | REJECT_REQUEST |
+                   ALLOW_EFFECT | AUDIT_ALLOW_EFFECT | DENY_ERRNO |
+                   RECORD_COMPLETION | NOT_APPLICABLE
+  errno?: EACCES | EPERM | EAGAIN | ECONNREFUSED
+  post_effect_actions[1..3]: sorted unique
+    RECORD | FINDING | RESPONSE_PROPOSAL
+  expected_observed_result:
+    ADMISSION_NOT_ATTEMPTED | ADMITTED | REJECTED_BY_MITHRIL |
+    EFFECT_NOT_ATTEMPTED | ALLOWED_BY_MITHRIL | DENIED_BY_MITHRIL |
+    PROVIDER_SUCCEEDED | PROVIDER_DENIED_BY_AUTHORITY |
+    PROVIDER_FAILED | PROVIDER_RESULT_UNKNOWN
+  finding_specs[0..16]: FindingSpecV1
+  evidence_field_allowlist[0..64]: EvidenceFieldKeyV1
+  notification_route_ids[0..64]: sorted unique PolicyLocalIdV1
+  response_binding_ids[0..64]: sorted unique PolicyLocalIdV1
+  required_proof: ProofQualityPredicateV1
+  fallback_plan_by_failure_condition[0..16]: FallbackV1,
+    sorted unique by condition
+  source_rule_ids[1..64]: sorted unique PolicyLocalIdV1
+}
 ```
+
+`errno` is present exactly for `DENY_ERRNO`. `FINDING` requires a nonempty
+finding set; otherwise the finding set is empty. A notification or response
+requires a finding. The compiled plan is a child of the immutable signed
+profile generation, so it has no redundant child digest. An independently
+exported explanation references the parent profile and cell ID instead.
 
 Two cells merge only when the physical result, errno, complete transition,
 findings, responses, and budget semantics are identical. Different results
@@ -7552,7 +7348,7 @@ NotificationRouteV1 {
   minimum_severity: INFO | LOW | MEDIUM | HIGH | CRITICAL
   grouping_fields[1..16]: FindingGroupingFieldV1
   dedupe_window: duration
-  allowed_evidence_fields[1..64]: EvidenceFieldV1
+  allowed_evidence_fields[1..64]: EvidenceFieldKeyV1
   maximum_sensitivity: PUBLIC | INTERNAL | SENSITIVE_IDENTIFIER
   delivery_failure_action: RECORD_ROUTE_FAILURE | ALERT_LOCAL_ONLY
 }
@@ -7701,10 +7497,26 @@ RollbackAuthorizationPayloadV1 = {
   15: i64 issued_at_utc_ns,
   16: i64 expires_at_utc_ns
 }
+
+SignedRollbackAuthorizationV1 = {
+  0: 1,
+  1: bstr(1..128) key_id,
+  2: 1,                       // Ed25519
+  3: bstr(1..16384) canonical RollbackAuthorizationPayloadV1,
+  4: bstr(64) signature
+}
+
+rollback_signature_input =
+  ASCII("MITHRIL-ROLLBACK-V1") || 0x00 ||
+  SHA-256(canonical_rollback_payload)
+
+RollbackAuthorizationV1 = verified SignedRollbackAuthorizationV1 where
+  signature, issuer scope, exact current/target profile, platform, approver,
+  time, sequence, and one-use replay state all pass and remain unconsumed.
 ```
 
-Rollback uses its own Ed25519 envelope and domain separator
-`MITHRIL-ROLLBACK-V1`. It is one-use and must name the exact current digest,
+Rollback uses this separate Ed25519 envelope and domain separator. It is
+one-use and must name the exact current digest,
 exact older target, platform, approver, and expiry. Re-signing an older version
 is not rollback authority.
 
@@ -7844,6 +7656,16 @@ SetRefV1 {
   state: PREPARING | ACTIVE | RETIRING
   transition_version: u64
 }
+
+SetReferenceTombstoneV1 {
+  reference_owner_id: Id128
+  reference_owner_generation: nonzero u64
+  set_ref_id: nonzero u64
+  reference_class: SetReferenceClassV1
+  owned: bool
+  acquisition_transition_version: nonzero u64
+  release_transition_version?: nonzero u64
+}
 ```
 
 `ACTIVE` accepts existing and new holders. `RETIRING` serves only already
@@ -7908,6 +7730,10 @@ generation they already own.
 #### A.12.2 Binding and composite object identity
 
 ```text
+BindingLifecycleStateV1: u8 =
+  0 UNKNOWN | 1 PREPARING | 2 ACTIVE | 3 DRAINING |
+  4 TERMINATING | 5 TOMBSTONED
+
 ExecutionSetBindingStateV1 {
   binding_lock: bpf_spin_lock
   binding_id, binding_nonce, node_boot_id, execution_set_id,
@@ -7918,7 +7744,7 @@ ExecutionSetBindingStateV1 {
   root_cgroup_live_interval_id: Id128
   mount_view_generation_id: Id128
   network_namespace_generation_id: Id128
-  lifecycle_state: PREPARING | ACTIVE | DRAINING | TERMINATING | TOMBSTONED
+  lifecycle_state: BindingLifecycleStateV1
   lifecycle_generation: u64
   mode: OBSERVE | PROTECT
   transition_version: u64
@@ -7962,7 +7788,7 @@ EffectDecisionKeyV1 {
   composite_atom_id: u64
   exact_object_key_id: nonzero u64
   process_state_vector_id: u32
-  binding_lifecycle_state: u8
+  binding_lifecycle_state: BindingLifecycleStateV1
 }
 
 EffectDefaultKeyV1 {
@@ -7973,7 +7799,7 @@ EffectDefaultKeyV1 {
   operation: u16
   composite_atom_id: u64
   process_state_vector_id: u32
-  binding_lifecycle_state: u8
+  binding_lifecycle_state: BindingLifecycleStateV1
 }
 
 PhysicalDecisionV1 {
@@ -8080,7 +7906,7 @@ FloorRequirementKeyV1 {
   entry_kind, effect_family, operation: u16
   composite_atom_id: u64
   process_state_vector_id: u32
-  binding_lifecycle_state: u8
+  binding_lifecycle_state: BindingLifecycleStateV1
 }
 
 DynamicFloorTemplateV1 {
@@ -8131,7 +7957,7 @@ ExactSocketOrChannelFloorKeyV1 {
 
 BindingLifetimeFloorKeyV1 {
   binding_id, binding_nonce: Id128
-  lifecycle_state: u8
+  lifecycle_state: BindingLifecycleStateV1
   effect_family, operation: u16
 }
 ```
@@ -8143,11 +7969,14 @@ reuse, missing provenance, or an unclassified received fd denies.
 #### A.12.5 Atomic transitions
 
 ```text
+TransitionKindV1: u8 =
+  0 UNKNOWN | 1 NONE | 2 PROCESS_ONLY | 3 NATIVE_AUTHORITY_ONLY
+
 TransitionDescriptorV1 {
   transition_id: u32
   node_boot_id: Id128
   label_epoch: u64
-  transition_kind: NONE | PROCESS_ONLY | NATIVE_AUTHORITY_ONLY
+  transition_kind: TransitionKindV1
   profile_generation_ref_id: u64
   transition_artifact_digest_id: u64
   state: PREPARING | ACTIVE | RETIRING
@@ -8195,7 +8024,7 @@ uses the native-domain transition as its authority.
 4. Copy process, native-family state, entry, and binding tuples under their own
    locks. Never nest locks. Revalidate each version; retry one complete snapshot
    once, then deny on continuing contention.
-5. Require committed/open entry, active process, compatible epochs, exact
+5. Require committed/active entry, active process, compatible epochs, exact
    identity links, retained profile generation, binding membership, and domain
    generation membership.
 6. Classify every required object axis and exact live object/channel generation.
@@ -8311,8 +8140,7 @@ FileObjectIdentityV1 {
   inode_number: u64
   inode_generation_or_version: u64
   exact_live_object_id: Id128
-  object_kind: REGULAR_FILE | DIRECTORY | SYMLINK | DEVICE |
-               PROC_OBJECT | OTHER_QUALIFIED
+  object_kind: ExactObjectKindV1
   backing_object_or_volume_identity: Id128
   live_interval_id: Id128
 }
@@ -8356,6 +8184,103 @@ compiled safe floor; it never resolves against the old snapshot.
 | mmap/mprotect/pkey_mprotect | exact mm, VMA range, backing object, old/new permissions and write/execute history | executable or writable-shared capability exists for VMA lifetime, not syscall lifetime |
 | io_uring/AIO | submitting actor/native state, ring generation, registered files/buffers, opcode, later executor/completion | SQPOLL never borrows the kernel thread's role; unsupported opcode/setup denies full claim |
 
+Filesystem namespace mutation uses operation-specific keys rather than one
+underspecified file key:
+
+```text
+CreateKeyV1 = {
+  actor_process_state_id, actor_authority_domain_id: Id128
+  mount_view: MountSecurityViewV1
+  parent_directory: FileObjectIdentityV1
+  name_bytes: bstr(1..255)
+  object_kind: ExactObjectKindV1
+  mode, create_and_resolve_flags: u64
+}
+
+LinkKeyV1 = {
+  actor_process_state_id, actor_authority_domain_id: Id128
+  source_object: FileObjectIdentityV1
+  destination_parent: FileObjectIdentityV1
+  destination_name_bytes: bstr(1..255)
+  flags: u64
+}
+
+RenameKeyV1 = {
+  actor_process_state_id, actor_authority_domain_id: Id128
+  source_parent, source_object, destination_parent: FileObjectIdentityV1
+  destination_existing_object?: FileObjectIdentityV1
+  destination_name_bytes: bstr(1..255)
+  operation: ORDINARY | NOREPLACE | EXCHANGE | WHITEOUT
+}
+
+UnlinkKeyV1 = {
+  actor_process_state_id, actor_authority_domain_id: Id128
+  parent_directory, victim_object: FileObjectIdentityV1
+  victim_kind: FILE | DIRECTORY
+}
+
+SetattrKeyV1 = {
+  actor_process_state_id, actor_authority_domain_id: Id128
+  object: FileObjectIdentityV1
+  operation: TRUNCATE | MODE | UID | GID | XATTR | FILE_CAPABILITY
+  bounded_new_value_class: RegistrySymbolV1
+}
+
+ExactRequestIdentityV1 =
+  SYNC_SYSCALL {
+    task_cookie: nonzero u64, process_state_id: Id128,
+    syscall_entry_sequence, effect_attempt_sequence: nonzero u64,
+    effect_family, operation: u16
+  }
+  | AIO_REQUEST {
+      aio_context_id, request_id: Id128, submission_sequence: nonzero u64
+    }
+  | IO_URING_REQUEST {
+      ring_id: Id128, ring_generation, submission_sequence: nonzero u64,
+      sqe_index: u32, user_data: u64, opcode: u16
+    }
+  | MMAP_ATTEMPT {
+      task_cookie: nonzero u64, process_state_id, authority_domain_id: Id128,
+      attempt_sequence: nonzero u64
+    }
+
+MAX_NESTED_EFFECT_ATTEMPTS = 4
+
+TaskEffectAttemptStateV1 {
+  task_cookie: nonzero u64
+  syscall_entry_sequence, next_effect_attempt_sequence: nonzero u64
+  frames[MAX_NESTED_EFFECT_ATTEMPTS] {
+    effect_attempt_sequence: nonzero u64
+    effect_family, operation, hook_discriminator: u16
+    repeated_lsm_pass_count: u16
+    request_identity: ExactRequestIdentityV1
+    state: PREPARING | DECIDED | RETURNED | CANCELLED
+  }
+  depth: u16 in 0..MAX_NESTED_EFFECT_ATTEMPTS
+  state: ACTIVE | OVERFLOW_FAIL_CLOSED | TASK_EXITED
+}
+
+DelegatedIoEdgeV1 {
+  edge_id: DigestV1
+  initiating_effect_observation_id: DigestV1
+  worker_task_cookie: nonzero u64
+  worker_process_state_id: Id128
+  initiating_object: ExactObjectGenerationV1
+  delegate_kind: KERNEL_FS | FUSE_DAEMON | CSI_SIDECAR |
+                 LOCAL_PROXY | OTHER_QUALIFIED
+  backing_mount_or_service_identity: Id128
+  delegate_process_or_socket_subject_id?: DigestV1
+  backing_remote_flow_or_provider_subject_id?: DigestV1
+  proof_quality: ProofQualityV1
+}
+```
+
+The request identity prevents a completion or repeated LSM pass from being
+joined to a different syscall, ring, or mapping attempt. Frame overflow denies
+the effect and opens an identity/coverage failure; it never overwrites an outer
+attempt. A delegated edge is evidence about the real IO chain, not authority to
+attribute the delegate's packet directly to the worker.
+
 Projected ServiceAccount token rotation must install the new exact object
 binding before AtomicWriter makes the new revision visible. An asynchronous
 userspace inode update after visibility is too late. If the platform cannot
@@ -8389,6 +8314,40 @@ JIT profiles with exact mm/VMA/write-seal discipline
 ```
 
 ```text
+SourceMutabilityProofV1 {
+  proof_id: Id128
+  proof_generation: nonzero u64
+  covered_source: ExactObjectGenerationV1
+  proof:
+    SEALED_MEMFD {
+      required_seals: F_SEAL_WRITE | F_SEAL_SEAL
+      no_preexisting_writable_mapping_proof_id: Id128
+    }
+    | IMMUTABLE_CAS_OR_IMAGE_OBJECT {
+        content_digest: DigestV1
+        read_only_backing_proof_id: Id128
+      }
+    | HELD_WRITER_RECONCILIATION {
+        reconciliation_id: Id128
+        writer_and_vma_snapshot_id: Id128
+      }
+  valid_from_transition_version: nonzero u64
+  state: ACTIVE | INVALIDATED | TOMBSTONED
+}
+
+KernelExecutableMappingClassV1 {
+  mapping_class: FILE_BACKED | MEMFD | ANONYMOUS_JIT |
+                 ANONYMOUS_OTHER | SPECIAL_KERNEL_MAPPING
+  backing_object?: ExactObjectGenerationV1
+  source_mutability_proof_id?: Id128
+  initial_permissions, requested_permissions: READ | WRITE | EXEC
+  write_history: NEVER_WRITABLE | WRITABLE_BEFORE_EXEC |
+                 WRITABLE_AND_EXECUTABLE | UNKNOWN
+  loader_purpose: PROCESS_IMAGE | ELF_INTERPRETER | BINFMT_INTERPRETER |
+                  JIT_CODE | SHARED_LIBRARY | OTHER_QUALIFIED
+  state: PREPARING | ACTIVE | INVALIDATED | TOMBSTONED
+}
+
 MmSnapshotIdentityV1 {
   node_boot_id: Id128
   label_epoch: u64
@@ -8416,12 +8375,59 @@ VmaIteratorSessionV1 {
   expected_records, observed_records, gap_count: u64
   canonical_snapshot_digest?: DigestV1
 }
+
+VmaIteratorFrameV1 =
+  BEGIN {
+    wire_version: exactly 1
+    session_identity: VmaIteratorSessionIdentityV1
+    expected_mm_snapshot: MmSnapshotIdentityV1
+    expected_sharer_count: u32
+    first_sequence: exactly 1
+  }
+  | RECORD {
+      sequence: nonzero u64
+      session_identity: VmaIteratorSessionIdentityV1
+      task_cookie: nonzero u64
+      process_state_id: Id128
+      range_start, range_end: u64, range_end > range_start
+      vm_flags: u64
+      effective_permissions: READ | WRITE | EXEC
+      mapping_class: KernelExecutableMappingClassV1
+      backing_identity_quality: EXACT_LIVE_FILE_OBJECT |
+                                ANONYMOUS_CLASSIFIED |
+                                REDUCED_INODE_ONLY | UNKNOWN
+      backing_file_object?: FileObjectIdentityV1
+    }
+  | END {
+      final_sequence, record_count, sharer_count: u64
+      status: COMPLETE | ITERATOR_ERROR
+    }
+
+VmaSnapshotV1 {
+  snapshot_id: Id128
+  identity: MmSnapshotIdentityV1
+  iterator_session: VmaIteratorSessionIdentityV1
+  sharer_task_cookies[1..4096]: sorted unique nonzero u64
+  records[0..1048576]: VmaIteratorFrameV1::RECORD,
+    sorted by (range_start, range_end)
+  completeness: COMPLETE | PARTIAL_GAP | PARTIAL_UNKNOWN_CLASS |
+                REVALIDATION_FAILED
+  committed_boottime_ns?: u64
+}
 ```
 
 An `mm_struct *` pointer is not durable identity. BPF/Rust use a non-reused mm
 cookie, generation, live interval, expected sharers, and begin/record/end
 iterator protocol. An incomplete snapshot is typed partial and cannot prove
 that no executable or writable-shared mapping exists.
+
+The source mutability proof intentionally has no same-domain or domain-join
+variant: communication and shared ancestry do not make bytes immutable. A VMA
+snapshot is `COMPLETE` only after one BEGIN, contiguous RECORD frames, one
+successful END, EOF, and unchanged sharer/mm revalidation. The END frame does
+not require BPF to compute a cryptographic stream digest; the committed
+snapshot digest is a userspace content identity only when another signed or
+stored artifact references the completed snapshot.
 
 In-process Python/Jinja interpretation may create no exec or executable-memory
 transition. Mithril controls its next file, socket, device, privilege, write,
@@ -8431,20 +8437,62 @@ only a later effect was denied.
 #### A.13.4 Network and socket lifetime
 
 ```text
-NetworkEffectKeyV1 {
+ActorSocketDecisionKeyV1 {
   current_process_state_id, current_authority_domain_id: Id128
   current_profile_generation_ref_id: u64
   operation: SOCKET_CREATE | BIND | LISTEN | ACCEPT | CONNECT |
              SEND | RECEIVE | SHUTDOWN | SETSOCKOPT | GETSOCKOPT
-  socket_key_id, socket_generation: u64
-  network_namespace_generation_id: Id128
+  socket_key_id?, socket_generation?: u64
+  current_actor_network_namespace_generation_id: Id128
+  socket_network_namespace_generation_id?: Id128
   protocol: u16
-  final_destination_policy_id: u64
-  final_address_and_port_digest: DigestV1
+  requested_peer?: {
+    address_family: IPV4 | IPV6 | UNIX | OTHER_QUALIFIED
+    address_bytes: bstr(0..108)
+    port: u16
+  }
+  dynamic_response_floor_id: Id128
 }
 
-SocketControlEffectKeyV1 = NetworkEffectKeyV1 where operation is one of
+SocketControlEffectKeyV1 = ActorSocketDecisionKeyV1 where operation is one of
   SOCKET_CREATE | BIND | LISTEN | ACCEPT | SHUTDOWN | SETSOCKOPT | GETSOCKOPT
+
+SocketFlowAuthorizationV1 {
+  flow_authorization_id: Id128
+  socket_key_id, socket_generation, flow_generation: nonzero u64
+  authorizing_process_state_id, authorizing_authority_domain_id: Id128
+  authorizing_profile_generation_ref_id: nonzero u64
+  socket_network_namespace_generation_id: Id128
+  protocol: u16
+  requested_peer?: {
+    address_family: IPV4 | IPV6 | UNIX | OTHER_QUALIFIED
+    address_bytes: bstr(0..108)
+    port: u16
+  }
+  allowed_final_destination_policy_ids[1..64]: nonzero u64
+  dynamic_floor_state_id: Id128
+  state: PREPARING | ACTIVE | FENCED | TOMBSTONED |
+         RECONCILIATION_REQUIRED
+  transition_version: nonzero u64
+}
+
+FinalFlowDecisionKeyV1 {
+  flow_authorization_id: Id128
+  socket_key_id, socket_generation, flow_generation: nonzero u64
+  socket_network_namespace_generation_id: Id128
+  protocol: u16
+  final_destination_policy_id: nonzero u64
+  final_address_bytes: bstr(4..16)
+  final_port: u16
+  rewrite_chain_generation: nonzero u64
+  dynamic_response_floor_id: Id128
+}
+
+ResolvedSocketOrChannelGenerationV1 {
+  exact_socket_or_channel_key_id: nonzero u64
+  exact_socket_or_channel_generation: nonzero u64
+  backing_identity: ExactObjectGenerationV1
+}
 
 SocketProvenanceV1 {
   socket_key_id, socket_generation: u64
@@ -8455,11 +8503,36 @@ SocketProvenanceV1 {
   network_namespace_generation_id: Id128
   bind_connect_accept_history_digest: DigestV1
   current_flow_generation: u64
+  active_flow_authorization_id?: Id128
   dynamic_floor_state_id: Id128
   state: PREPARING | ACTIVE | SHUTTING_DOWN | TOMBSTONED |
          RECONCILIATION_REQUIRED
 }
 ```
+
+The sender-stage decision and the final-flow decision are deliberately
+separate. At `connect`, `send`, or `sendmsg`, the first key has a meaningful
+current actor and can deny the syscall before the requested operation. An
+allow installs or selects `SocketFlowAuthorizationV1`. A later ordered
+cgroup/TC/packet boundary uses `FinalFlowDecisionKeyV1` after routing, NAT,
+mesh, or socket rewrite. That boundary relies on the socket/flow authorization
+and does not pretend that packet-hook `current` identifies the sender.
+
+The socket identity is absent exactly for `SOCKET_CREATE`, before the socket
+exists, and required for every later operation. `requested_peer` is required
+when the operation exposes one and absent when Linux supplies none. A final
+flow key is valid only for qualified IP packet paths: IPv4 uses exactly four
+address bytes and IPv6 exactly sixteen. Unix/local channels remain under the
+sender/channel relationship contract rather than fabricating a packet
+destination.
+
+If the sender stage allows but the final stage drops a rewritten packet,
+evidence reports `PACKET_DROPPED_AFTER_REWRITE`; it does not report
+`SEND_SYSCALL_DENIED`. Retransmissions and already queued bytes remain attached
+to the socket/flow floor, not retroactively to one process. Each new shared-
+socket use still checks its actual current actor at the sender stage. When
+different actors cannot share one safe final flow floor, policy denies the use
+or fences the whole socket and reports that blast radius.
 
 Every use intersects current actor/domain policy with immutable socket
 provenance and the exact live socket floor. A passed, inherited, accepted, or
@@ -8882,359 +8955,19 @@ Regular files, `emptyDir`, memfd mappings, and shared memory instead use the
 exact object-acquisition contract above. Process control uses the directional
 controller-target key in Appendix A.13.6.
 
-<details>
-<summary>Rejected live-merge and byte-publication schemas</summary>
+#### A.14.3 Rejected live merge and byte tracking
 
-#### A.14.3 Rejected historical domain-join transaction
+Mithril does not merge independent process domains after IPC. Linux cannot
+atomically stop every task, drain every asynchronous operation, rewrite all
+references, and resume them as one domain.
 
-Everything in this subsection is non-normative. Mithril does not implement a
-live domain join, quiescence proof, reference redirection, or retry gate. The
-records are retained only to identify the abandoned design.
+Mithril also does not reserve every byte publication or infer which input bytes
+caused an output. It governs the current actor's socket, pipe, file, mapping,
+and provider effects. Descriptor passing may be separate evidence, but no
+represented-object or byte-provenance graph becomes authority. Appendix B.3
+keeps the rejected designs and their replacements.
 
-BPF cannot atomically rewrite several maps and objects. The triggering channel
-operation first denies and leaves a persistent gate in `DENYING`. Rust then
-runs a crash-recoverable join.
-
-```text
-AuthorityDomainJoinTransactionV1 {
-  join_transaction_id: Id128
-  source_domain_ids[2..MAX_JOIN_DOMAINS]: Id128
-  target_domain_id: Id128
-  expected_source_transition_versions[]: u64
-  unioned_negative_state_digest: DigestV1
-  root_progress_ids[], target_progress_ids[]: Id128
-  quiescence_proof_id: Id128
-  gate_state: DENYING | RETRY_ALLOWED
-  state: PREPARING | QUIESCING | REDIRECTING | VERIFYING |
-         COMMITTED | DRAINING_OLD | COMPLETE |
-         RECOVERY_REQUIRED | FAILED_CLOSED
-}
-
-DomainJoinRootProgressV1 {
-  old_domain_id: Id128
-  expected_transition_version: u64
-  restrictive_floor_installed: bool
-  members_enumerated: bool
-  pointers_redirected: u64
-  references_transferred: u64
-  readback_digest: DigestV1
-  state: PENDING | IN_PROGRESS | VERIFIED | DRAINING | COMPLETE
-}
-
-DomainJoinTargetProgressV1 {
-  target_domain_id: Id128
-  unioned_state_and_set_digest: DigestV1
-  acquired_reference_counts_by_class[]
-  installed_and_readback: bool
-  state: PREPARING | ACTIVE | CORRUPT
-}
-
-DomainJoinQuiescenceV1 {
-  new_channel_and_entry_gate: CLOSED
-  new_async_submission_gate: CLOSED
-  io_uring_instances[]: CANCELLED | DRAINED | UNRESOLVED
-  sqpoll_workers[]: STOPPED_AND_DRAINED | UNRESOLVED
-  registered_file_and_buffer_sets[]: SNAPSHOTTED | UNRESOLVED
-  aio_and_kernel_worker_requests[]: CANCELLED | DRAINED | UNRESOLVED
-  inflight_publications: exactly 0
-  persistent_publication_present: exactly false
-  frozen_process_set_digest: DigestV1
-  task_object_socket_iterator_digests[]: DigestV1
-  state: NOT_STARTED | GATED | DRAINED | FROZEN | VERIFIED | INCOMPLETE
-}
-```
-
-Join order is fixed:
-
-```text
-deny the triggering operation and all new participant/publication paths
-build a PREPARING target containing the union of negative state
-freeze/hold the complete target set and drain async publication work
-for every process/object/socket/binding/pending entry/response/persistent item:
-  acquire target reference
-  CAS the owner pointer
-  release the source reference using an owned bit
-read back every root, target, pointer, and reference
-activate target and change the gate to RETRY_ALLOWED
-retry the original operation from a fresh lookup
-drain old domains only after zero references and reconciliation
-```
-
-A crash may leave some actors stricter than others. The gate stays denied and
-recovery resumes exact progress rows. It never reopens old broad authority.
-
-#### A.14.4 Rejected historical byte-publication reservation
-
-Everything in this subsection is non-normative. Mithril does not claim
-byte-level taint, mutable-buffer provenance, global publication serialization,
-or cancellation/draining of arbitrary async work. The records are retained
-only to identify the abandoned design.
-
-```text
-AuthorityDomainPublicationStateV1 {
-  publication_epoch: u64
-  inflight_publications: u32
-  persistent_publication_present: bool
-  state: ACTIVE | CAPACITY_FAIL_CLOSED | STUCK_FAIL_CLOSED |
-         RECONCILIATION_REQUIRED
-  slots[MAX_DOMAIN_PUBLICATIONS]: PublicationSlotV1
-}
-
-PublicationSlotV1 {
-  publication_instance_id: Id128      // zero only when FREE
-  descriptor_id: nonzero u64
-  release_epoch: u64                  // zero before domain-side release
-  state: FREE | INFLIGHT | COMPLETING | RELEASED_PENDING_ACK
-}
-
-PublicationDescriptorV1 {
-  descriptor_id: nonzero u64
-  publication_instance_id: Id128
-  actor_task_cookie: u64
-  actor_process_state_id, actor_authority_domain_id: Id128
-  profile_generation_ref_id: u64
-  operation
-  exact_request_identity: ExactRequestIdentityV1
-  transfer_plan: PublicationTransferPlanV1
-  source_mutability_proof_ids[]: Id128
-  completion_kind
-  maximum_bytes: u64
-  descriptor_digest: DigestV1
-  state: PREPARING | ACTIVE | COMPLETING | TOMBSTONED
-}
-```
-
-The types referenced by that descriptor are exact. They are placed here,
-after the algorithm, so the reader sees the race before the wire shapes.
-
-```text
-UserBufferSegmentV1 { address:u64, length:u64 > 0 }
-
-PublicationPayloadSourceV1 =
-  USER_BUFFER { segment:UserBufferSegmentV1 }
-  | FILE_RANGE {
-      object:ExactObjectGenerationV1, offset:u64, length:u64 > 0
-    }
-  | PIPE_BUFFER {
-      pipe:ExactObjectGenerationV1, pipe_generation:u64, length:u64 > 0
-    }
-  | SOCKET_RECEIVE_QUEUE {
-      socket:ExactObjectGenerationV1, receive_generation:u64, length:u64 > 0
-    }
-
-ExactPublicationSinkV1 =
-  FILE_OBJECT { object:ExactObjectGenerationV1, offset:u64, length:u64 }
-  | NETWORK_FLOW {
-      socket:ExactObjectGenerationV1, flow_generation:u64,
-      final_destination_identity_digest:DigestV1
-    }
-  | PIPE_OR_IPC {
-      object:ExactObjectGenerationV1, queue_generation:u64
-    }
-
-PublicationTransferPlanV1 =
-  SINGLE {
-    source:PublicationPayloadSourceV1, sink:ExactPublicationSinkV1
-  }
-  | USER_IOVEC {
-      segments[1..MAX_IOV]:UserBufferSegmentV1,
-      sink:ExactPublicationSinkV1
-    }
-  | MESSAGE_BATCH {
-      messages[1..MAX_MMSG] {
-        message_index:u32,
-        segments[0..MAX_IOV]:UserBufferSegmentV1,
-        sink:ExactPublicationSinkV1,
-        capability_transfer_ids[0..MAX_SCM_TRANSFERS]:Id128
-      }
-    }
-
-RejectedIpcCapabilityTransferV1 {
-  transfer_id:Id128
-  kind:SCM_RIGHTS | SCM_CREDENTIALS
-  exact_transferred_object?:ExactObjectGenerationV1
-  sender_task_cookie:u64
-  sender_authority_domain_id:Id128
-  receiver_channel:ExactObjectGenerationV1
-  required_result:DENY | PRE_USE_DOMAIN_JOIN | DECLARED_SAME_DOMAIN
-}
-
-SourceMutabilityProofV1 {
-  proof_id:Id128
-  proof_generation:u64 > 0
-  covered_source_identity_digest:DigestV1
-  proof:SAME_AUTHORITY_DOMAIN { authority_domain_id:Id128 }
-      | PREMERGED_AUTHORITY_DOMAIN { join_transaction_id:Id128 }
-      | SEALED_MEMFD {
-          object:ExactObjectGenerationV1,
-          required_seals:F_SEAL_WRITE|F_SEAL_SEAL,
-          no_preexisting_writable_mapping_proof_id:Id128
-        }
-      | IMMUTABLE_CAS_OR_IMAGE_OBJECT {
-          object:ExactObjectGenerationV1, content_digest:DigestV1,
-          read_only_backing_proof_id:Id128
-        }
-      | HELD_WRITER_RECONCILIATION {
-          object:ExactObjectGenerationV1, reconciliation_id:Id128,
-          writer_and_vma_snapshot_id:Id128
-        }
-  valid_from_transition_version:u64
-  state:ACTIVE | INVALIDATED | CONSUMED
-}
-
-ExactRequestIdentityV1 =
-  SYNC_SYSCALL {
-    task_cookie:u64, process_state_id:Id128,
-    syscall_entry_sequence:u64, effect_attempt_sequence:u64,
-    effect_family:u16, operation:u16
-  }
-  | AIO_REQUEST {
-      aio_context_id:Id128, request_id:Id128, submission_sequence:u64
-    }
-  | IO_URING_REQUEST {
-      ring_id:Id128, ring_generation:u64, submission_sequence:u64,
-      sqe_index:u32, user_data:u64, opcode:u16
-    }
-  | MMAP_ATTEMPT {
-      task_cookie:u64, process_state_id:Id128,
-      authority_domain_id:Id128, attempt_sequence:u64
-    }
-
-ExactCompletionIdentityV1 =
-  SYNC_RETURN {
-    task_cookie:u64, syscall_entry_sequence:u64,
-    effect_attempt_sequence:u64
-  }
-  | AIO_COMPLETION { aio_context_id:Id128, request_id:Id128 }
-  | IO_URING_CQE {
-      ring_id:Id128, ring_generation:u64, submission_sequence:u64,
-      user_data:u64
-    }
-  | ZEROCOPY_NOTIFICATION {
-      socket:ExactObjectGenerationV1, notification_generation:u64,
-      first_id:u32, last_id:u32
-    }
-  | HELD_WRITEBACK_RECONCILIATION { reconciliation_id:Id128 }
-```
-
-The source proof answers “can some actor change these bytes after admission?”
-The request identity answers “which one syscall or asynchronous request owns
-this reservation?” The completion identity answers “which exact completion may
-release it?” A digest, address, fd, `user_data`, or time alone answers none of
-those questions.
-
-Task-local nesting and descriptor lifetime prevent an inner LSM pass or a
-duplicate completion from releasing the wrong reservation:
-
-```text
-TaskEffectAttemptStateV1 {
-  task_cookie, syscall_entry_sequence, next_effect_attempt_sequence:u64
-  frames[MAX_NESTED_EFFECT_ATTEMPTS] {
-    effect_attempt_sequence:u64
-    effect_family, operation, hook_discriminator, repeated_lsm_pass_count:u16
-    publication_instance_id?:Id128
-    state:ACTIVE | RETURNED | CANCELLED
-  }
-  depth:u16
-  state:ACTIVE | OVERFLOW_FAIL_CLOSED | TASK_EXITED
-}
-
-PublicationDescriptorLifetimeV1 {
-  descriptor_id:u64
-  publication_instance_id, authority_domain_id:Id128
-  slot_reference_owned:bool
-  prepared_boottime_ns:u64
-  completion_identity_digest?:DigestV1
-  completion_boottime_ns?, domain_release_epoch?:u64
-  transition_version:u64
-  state:PREPARED | OWNED | COMPLETING | COMPLETED | CANCELLED |
-        RECLAIMABLE | CORRUPT
-}
-
-PublicationIdAllocatorV1 {
-  allocator_lock:bpf_spin_lock
-  node_boot_id:Id128
-  label_epoch:u64
-  next_instance_counter, next_descriptor_counter:u64  // start at 1
-  state:ACTIVE | EXHAUSTED | LOST_EPOCH_FAIL_CLOSED
-}
-```
-
-The deciding BPF program allocates non-reused IDs, inserts the immutable
-descriptor and lifetime with `BPF_NOEXIST`, reads them back, and only then takes
-the domain lock to reserve a slot. Counter wrap, allocator loss, map-full,
-unexpected existing key, nested-frame overflow, or descriptor mutation holds
-the domain fail-closed. The IDs are never recycled.
-
-Transfer sources are closed: user buffer/iovec/message batch, exact file range,
-pipe generation, or socket receive queue. Sinks are exact file range, network
-flow/final destination, or IPC queue. `SCM_RIGHTS` and credentials are
-capability transfers, not payload bytes. AIO and io_uring requests include
-their ring/context generation, submission sequence, opcode, and completion
-identity.
-
-The linearization is:
-
-```text
-publication begin:
-  build and read back immutable descriptor
-  lock domain
-  require no publication-denying sensitive state and a free slot
-  reserve slot and increment inflight/ref/epoch
-  unlock and read back ownership
-  allow the effect
-
-sensitive authority begin:
-  lock the same domain value
-  require inflight == 0 and no persistent writable publication capability
-  install sensitive bits and stricter set in the same locked transition
-  otherwise deny with the configured EAGAIN/EACCES
-
-publication completion:
-  match the exact syscall/AIO/io_uring/zero-copy completion
-  move INFLIGHT -> COMPLETING -> RELEASED_PENDING_ACK
-  decrement once using owned state
-  acknowledge external lifetime, then free slot
-```
-
-Pointer/length overflow, N+1 iovec/message, mutable writer outside the domain,
-missing source, incompatible completion, unknown zero-copy lifetime, or slot
-capacity denies. A missing completion safely leaves the restriction stuck; it
-does not guess that publication ended.
-
-`MAP_SHARED` to a writable output or shared/remote/host volume creates a
-`PersistentPublicationCapabilityV1` before mmap returns:
-
-```text
-PersistentPublicationCapabilityV1 {
-  capability_id, authority_domain_id:Id128
-  origin_task_cookie:u64
-  origin_process_state_id:Id128
-  mapping_attempt_identity:ExactRequestIdentityV1::MMAP_ATTEMPT
-  reconciled_mm_snapshot_id?:Id128
-  exact_sink_object_id_and_generation:ExactObjectGenerationV1
-  requested_mapping {
-    file_offset:u64, length:u64,
-    prot_bits:READ | WRITE | EXEC,
-    map_flags:SHARED | SHARED_VALIDATE,
-    unknown_flag_bits:exactly 0
-  }
-  reservation_epoch:u64
-  domain_reference_owned:bool
-  transition_version:u64
-  state:RESERVED | MAPPING_OBSERVED | RECONCILIATION_REQUIRED |
-        RELEASED | RECLAIMABLE
-}
-```
-
-It remains until a
-held full-domain VMA/object/writeback reconciliation proves every mapping,
-forked holder, fault, writeback, and async request is gone. `munmap`, `msync`,
-exec, process exit, or origin-task death alone cannot clear it.
-
-</details>
-
-#### A.14.5 Persistent and cross-node volumes
+#### A.14.4 Persistent and cross-node volumes
 
 Rename and hardlink preserve object identity. Overlay copy-up, reflink, copy,
 snapshot, clone, backup, and restore create a new object identity. Policy must
@@ -9295,7 +9028,7 @@ link/copy-up/remount lifecycle, the honest options are a volume-wide common
 access policy, denial of the writable surface, or an unsupported per-file
 claim. None propagates inferred byte sensitivity.
 
-#### A.14.6 Failure and race tests
+#### A.14.5 Failure and race tests
 
 Tests cover allowed and unmatched Unix stream/datagram, pipe, loopback, Pod-IP,
 across containers, Pods, and host services. Separate process-control tests cover
@@ -9342,11 +9075,40 @@ remote branches were contained.
 #### A.15.1 Observation and coverage records
 
 ```text
-EvidenceFieldV1 = FINDING_ID | REASON_CODE | DECISION | ERRNO |
-  TASK_COOKIE | PROCESS_LINEAGE_ID | AUTHORITY_DOMAIN_ID |
-  EXECUTION_SET_ID | EXACT_OBJECT_ID | OBJECT_CLASS_ID |
-  DESTINATION_ID | PROVIDER_REQUEST_ID | PROVIDER_RESULT |
-  COVERAGE_INTERVAL_IDS | POLICY_RULE_IDS | RESPONSE_RESULT
+EvidenceFieldKeyV1: u16 =
+  0 UNKNOWN | 1 FINDING_ID | 2 REASON_CODE | 3 DECISION | 4 ERRNO |
+  5 TASK_COOKIE | 6 PROCESS_LINEAGE_ID | 7 AUTHORITY_DOMAIN_ID |
+  8 EXECUTION_SET_ID | 9 EXACT_OBJECT_ID | 10 OBJECT_CLASS_ID |
+  11 DESTINATION_ID | 12 PROVIDER_REQUEST_ID | 13 PROVIDER_RESULT |
+  14 COVERAGE_INTERVAL_IDS | 15 POLICY_RULE_IDS | 16 RESPONSE_RESULT
+
+EvidenceFieldV1 =
+  FINDING_ID { value: DigestV1, sensitivity, provenance_observation_ids[], proof_quality }
+  | REASON_CODE { value: ReasonCodeIdV1, sensitivity, provenance_observation_ids[], proof_quality }
+  | DECISION { value: ResultCodeIdV1, sensitivity, provenance_observation_ids[], proof_quality }
+  | ERRNO { value: i16, sensitivity, provenance_observation_ids[], proof_quality }
+  | TASK_COOKIE { value: nonzero u64, sensitivity, provenance_observation_ids[], proof_quality }
+  | PROCESS_LINEAGE_ID { value: Id128, sensitivity, provenance_observation_ids[], proof_quality }
+  | AUTHORITY_DOMAIN_ID { value: Id128, sensitivity, provenance_observation_ids[], proof_quality }
+  | EXECUTION_SET_ID { value: Id128, sensitivity, provenance_observation_ids[], proof_quality }
+  | EXACT_OBJECT_ID { value: Id128, sensitivity, provenance_observation_ids[], proof_quality }
+  | OBJECT_CLASS_ID { value: ObjectClassIdV1, sensitivity, provenance_observation_ids[], proof_quality }
+  | DESTINATION_ID { value: nonzero u64, sensitivity, provenance_observation_ids[], proof_quality }
+  | PROVIDER_REQUEST_ID { value: Id128, sensitivity, provenance_observation_ids[], proof_quality }
+  | PROVIDER_RESULT { value: ProviderResultBoundaryV1, sensitivity, provenance_observation_ids[], proof_quality }
+  | COVERAGE_INTERVAL_IDS { value[1..64]: Id128, sensitivity, provenance_observation_ids[], proof_quality }
+  | POLICY_RULE_IDS { value[1..64]: PolicyLocalIdV1, sensitivity, provenance_observation_ids[], proof_quality }
+  | RESPONSE_RESULT { value: ResultCodeIdV1, sensitivity, provenance_observation_ids[], proof_quality }
+  | REDACTED { key: EvidenceFieldKeyV1, sensitivity, provenance_observation_ids[], proof_quality }
+  | UNKNOWN { key: EvidenceFieldKeyV1, sensitivity, provenance_observation_ids[], proof_quality }
+
+where sensitivity = PUBLIC | INTERNAL | SENSITIVE_IDENTIFIER
+and provenance_observation_ids[0..16] are sorted unique DigestV1 values
+and proof_quality is ProofQualityV1. Every array-valued field is sorted unique.
+
+EvidencePayloadV1 {
+  fields[1..64]: EvidenceFieldV1, sorted unique by EvidenceFieldKeyV1
+}
 
 FindingGroupingFieldV1 = FINDING_ID | REASON_CODE | PROCESS_LINEAGE_ID |
   AUTHORITY_DOMAIN_ID | EXECUTION_SET_ID | EXACT_OBJECT_ID |
@@ -9369,7 +9131,7 @@ ObservationEnvelopeV1 {
   projected_utc_ns?: i64
   time_uncertainty_ns: u64
   ingested_utc_ns: i64
-  payload_fields[]: bounded typed EvidenceFieldV1
+  payload: EvidencePayloadV1
   proof_quality: ProofQualityV1
   coverage_interval_id: Id128
   transport_integrity_digest: DigestV1
@@ -9389,6 +9151,17 @@ CoverageIntervalV1 {
   recovery_probe_artifact_id?: Id128
 }
 ```
+
+The field variant determines its key and value type; a decoder rejects a
+duplicate key or a value encoded under the wrong variant. `REDACTED` means the
+source proved the field existed but policy removed its value. `UNKNOWN` means
+the source could not establish the value. Raw source observations normally
+have no provenance observation IDs; derived observations list only their
+direct inputs. The envelope's proof vector is the overall source result while
+a field may carry a weaker field-specific vector. Coverage interval IDs are
+opaque `Id128` values everywhere; evidence integrity comes from the containing
+observation/batch rather than from turning the interval identifier into a
+digest.
 
 For kernel sources, `attempted = suppressed + requested` and
 `requested = emitted + lost`. Suppression is intentional policy sampling;
@@ -9429,7 +9202,8 @@ FindingV1 {
   state: PROVISIONAL | CONFIRMED | SUPERSEDED | RETRACTED |
          COVERAGE_INSUFFICIENT
   graph_version_id: DigestV1
-  sorted_evidence_ids[], required_coverage_interval_ids[]: DigestV1
+  sorted_evidence_ids[]: DigestV1
+  required_coverage_interval_ids[]: Id128
   superseded_revision?: u64
   closed_reason_code?: u32
 }
@@ -9460,7 +9234,8 @@ GraphEdgeV1 {
   from_subject_id, to_subject_id: DigestV1
   edge_type_id: u32
   package_id, package_version
-  sorted_evidence_ids[], required_coverage_ids[]: DigestV1
+  sorted_evidence_ids[]: DigestV1
+  required_coverage_ids[]: Id128
   proof_quality: ProofQualityV1
   cause_strength: DIRECT | CONTEXTUAL | CONTRADICTED | SUPERSEDED
   valid_time_interval_and_uncertainty
@@ -9834,7 +9609,7 @@ MaterializedStepInvocationV1 {
   step_definition_identity_digest?: DigestV1
   interpreter_or_image_digest: DigestV1
   observed_script_or_entrypoint_digest: DigestV1
-  source_mutability_proof: SourceMutabilityProofV1
+  source_mutability_proof_id: Id128
   canonical_argv_digest: DigestV1
   working_directory_bytes: bounded bytes
   public_environment_digest: DigestV1
@@ -10125,8 +9900,8 @@ design-level YAML.
 
 ## Appendix B — Rejected Designs And Their Replacements
 
-The original architecture kept its mistakes visible. This rewrite does the
-same in one index so an implementer does not accidentally revive them.
+Rejected designs remain visible in one index so a later edit does not
+accidentally revive them. They are history, not a second normative contract.
 
 ### B.1 Product, evidence, and upstream lessons
 
@@ -10135,6 +9910,7 @@ same in one index so an implementer does not accidentally revive them.
 | Put every local decision in BPF | Policy compilation, signatures, provider meaning, graph correlation, and approval do not belong in a bounded hook | Rust/control prepares authority; BPF makes only bounded local pre-effect decisions (Chapters 5, 12-13) |
 | Exact attribution implies narrow actuation | A precise task may share a socket/domain/cgroup with others | Response reports and verifies actual blast radius (Chapters 18-19, 24) |
 | Infer machine evidence behavior from a display `Kind` | Boundary nature and Mithril relationship are independent fields | `SourceEvidenceClaimV1` stores both (Appendix A.3) |
+| One network key requires both current actor and final post-rewrite destination | Sender hooks know the actor; final packet hooks may know the rewritten destination but have no meaningful current task | `ActorSocketDecisionKeyV1` installs `SocketFlowAuthorizationV1`; `FinalFlowDecisionKeyV1` enforces the final destination (Appendix A.13.4) |
 | KubeArmor map-of-maps already equals immutable policy generations | Checked updates mutate rows over time and may partially diverge | Build/readback/probe a fresh generation, then one pointer CAS (Chapter 12, §28.3) |
 | Treat a static LSM denial as a BPF `prior_ret` value | Hook signatures and LSM stacking differ; some programs never run after another LSM denies | Qualify exact hook order/signature/result composition per platform (§13, §28.8) |
 | Express `INV-EFFECT-001` with prose specificity | “More specific” is not a deterministic authority order | Closed exact decision keys and explicit override edges (Chapters 10-13) |
@@ -10242,85 +10018,20 @@ same in one index so an implementer does not accidentally revive them.
 | Two unbound qualification artifacts | Results from different build/platform can be spliced | Digest-bound manifest/bundles/ledger/envelope/claim (Appendix A.7) |
 | Wildcard criterion expansion | `ENTRY-*` cannot prove registry membership; optional surfaces wrongly block core | Exact fixture IDs plus allocation condition (Appendix C) |
 
-### B.6 Exact supersession records retained from the original
+### B.6 Supersession and source boundaries
 
-The original used explicit statement markers so a retained teaching sketch
-could not override its later correction. That mechanism remains a Phase 0
-docs-lint requirement:
+When a teaching example conflicts with a later correction, the correction must
+name the retained statement, controlling contract, affected implementation
+cards, fixtures, and forbidden contract IDs. Phase 0 lint checks that every
+reference exists, every card declares its dependency, and no two controlling
+records require different results for the same key. Human review decides when
+two prose statements mean the same thing.
 
-```html
-<!-- mithril-statement-v1: STMT-CGROUP-FIRST-RETAINED-001 RETAINED -->
-<!-- mithril-statement-v1: STMT-CGROUP-FIRST-CONTROL-002 CONTROLLING -->
-<!-- mithril-supersession-v1: SUP-TASK-CGROUP-FIRST-001 -->
-```
-
-The supersession row connects both statement IDs, gives the reason, names the
-controlling invariant and fixtures, and fails lint if either statement moves
-without its marker. In this example, the controlling rule is task-first
-identity; the cgroup-first text remains only as an abandoned cost sketch.
-
-The exact registry is:
-
-```text
-SupersessionRegistryV1 {
-  architecture_revision_digest: DigestV1
-  records[] {
-    supersession_id
-    retained_statement_ids[]
-    controlling_statement_ids[]
-    replacement_contract_ids[]
-    affected_card_ids[]
-    forbidden_contract_ids[]
-    upstream_source_evidence_ids[]
-  }
-}
-
-ImplementationCardV1 {
-  card_id
-  governing_statement_ids[]
-  supersession_dependency_ids[]
-  implementation_owner
-  fixture_ids[]
-}
-```
-
-Lint performs only checks a program can decide reliably:
-
-```text
-every statement/supersession marker has valid unique grammar
-every referenced marker, contract, card, fixture, and source ID exists
-every supersession has at least one retained statement, controlling statement,
-  and replacement contract
-every affected card declares the supersession dependency
-no card declares a forbidden contract ID
-the sorted document marker set equals the registry marker set
-the registry and generated heading/statement set share the architecture digest
-no explicit correction/abandoned marker is left unregistered
-```
-
-Lint does not pretend to solve natural-language equivalence. Human/security
-review decides whether new prose repeats an old design and assigns it a
-statement/contract ID. Precedence is: hard invariant first; then the exact
-registered controlling contract for the named retained statement; then the
-local rejected-design rule; then explanatory examples. Two controlling
-records that require different physical results for the same exact key are a
-document error, not an implementer choice.
-
-`CFG-V1-GOLDEN-001` is likewise retained only as the stale standalone policy
-golden vector. It predates required selectors, classifier bindings, roles,
-entries, process states, defaults, authority/correlation/coverage lists, and
-structured records. `CFG-V1-GOLDEN-002` replaces it. Phase 0 generates the new
-restricted-YAML, deterministic-CBOR, header, digest, signature, compiler, and
-round-trip vectors from one checked source; prose substitutions never produce
-golden bytes.
-
-`SOURCE-BOUNDARY-001` is the shared non-implementation boundary: ordinary
-Linux LSM/socket/packet evidence cannot distinguish Git clone from push or a
-specific Kubernetes/cloud verb inside encrypted same-destination TLS, and a
-Linux hook cannot revoke an already issued remote IAM session. Target-specific
-uprobes or instrumentation may add observation when explicitly qualified, but
-the baseline solutions remain an existing provider permission/authorization
-API, provider audit and response, or denial of the entire channel.
+`CFG-V1-GOLDEN-002` replaces stale vector `CFG-V1-GOLDEN-001` and is generated
+from one checked source. `SOURCE-BOUNDARY-001` remains the shared limit: Linux
+cannot distinguish Git clone from push or provider verbs inside encrypted
+same-destination TLS, and cannot revoke an already issued remote IAM session.
+Use provider authorization/audit/response or deny the whole channel.
 
 ## Appendix C — Closed Fixture Registry And Completion Mapping
 
@@ -10709,163 +10420,3 @@ hostile fixture.
 - [Hugging Face technical timeline](https://huggingface.co/blog/agent-intrusion-technical-timeline)
 - [Detailed local analysis](../../research/hugging-face-agent-intrusion-analysis.md)
 - [Normalized live action stream](../../research/hugging-face-agent-intrusion-live-action-stream.md)
-
-## Appendix E — Completeness Map From The Original Architecture
-
-This table is the review trail for the rewrite. It maps every original topic
-family to its new home. Appendix B separately maps every original abandoned or
-corrected design. Appendix C carries the exact fixture set. If a future edit
-adds a normative topic to the original, this map and the fixture registry must
-be updated before this rewrite may still call itself complete.
-
-### E.1 Original navigation, scope, and design basis
-
-| Original topic | New location |
-| --- | --- |
-| Document navigation, dependency hierarchy, implementer path, question/route index, heading semantics | Opening organization, Chapters 1-5, and this appendix |
-| Security/execution terms; evidence/result terms; IDs/time/units | Chapters 1, 4, 6, 22-24; Appendix A.1 |
-| Normative/supersession ownership and marker correction | Appendices B, C, and E; Phase 0 registry/lint in Chapter 35 |
-| Decision summary and corrected local-kernel reading | Chapters 1, 4-5, 13-14 |
-| Claim boundary, containment correction, platform eligibility | Chapters 4-5, 24, 31-33; Appendix A.5 |
-| Pinned source baseline, evidence vocabulary, machine evidence ledger | Chapters 27-30; Appendix A.3; Appendix D.1 |
-| Scenario boundary index | Chapters 2-4, 27-30 |
-| KubeArmor lessons and practical examples | Chapter 28 |
-| Tetragon lessons and practical examples | Chapter 29 |
-| Combined upstream pipeline and source-to-implementation traceability | Chapter 30, §31.3, Appendix A.3 |
-| Combined compromised-converter and identical-probe examples | §30 Example A/B |
-| Release implementation cards | §30 release-gating cards |
-| Protection invariants, examples, executable invariant record | Chapter 10 and `InvariantQualificationV1` in Chapter 10/Appendix A.2 |
-
-### E.2 Original identity and runtime admission
-
-| Original topic | New location |
-| --- | --- |
-| Why a container has several roots | Chapter 6 |
-| Existing-process, kubelet exec, malicious hook, and node/runtime bypass paths | Chapter 6 |
-| Stock CRI facts and limits | Chapters 6-7 |
-| Durable identity objects and concrete field contract | Chapter 6; Appendix A.9.1-A.9.4 |
-| Task/process/thread/entry/exec distinctions and state machines | Chapter 6; Appendix A.9.1-A.9.6 |
-| Entry lifetimes and reference accounting | Chapters 6 and 9; Appendix A.9.4 |
-| Creator parent versus changing kernel parent | Chapter 6 |
-| Native fork/thread/vfork inheritance | Chapter 6 |
-| Hook selection, PID finalization, clone-into-cgroup failures | Chapter 6 |
-| Exec staging, interpreter/loader chain, non-leader exec, failed exec | Chapter 6 |
-| Kubernetes external-entry facts and matrix | Chapters 6-7; §31.1 |
-| Checkpoint creation/restore and the rejected full task-set hold | Current no-patch limit in Chapter 7 and §35.1; rejected history in Appendix A.9.9/B.2 |
-| Attach and port-forward authority | Chapter 7; unallocated status §35.1 |
-| Node-wide floor for attacker-created workloads and exceptions | Chapters 5 and 7; §35.1 |
-| One-gatherer runtime integration and cold-boot circularity | Chapters 5 and 7 |
-| Rejected runtime setup hold and rootfs-ready barrier | Rejection and active root-classification replacement in Chapter 7, Appendix A.9.7, and Appendix B.2 |
-| Streaming exec two-stage fact and rejected stream proxy/ticket | Chapter 7; rejected history in Appendix A.9.7/B.2 |
-| Real authorization signed wire, trust, replay, and failure posture | Chapter 8; Appendix A.10; explicitly not stock kubelet/runner intent |
-| Authorization consumption variants and state machines | Chapter 8 and Appendix A.10.4; stock roots use classification rather than claims |
-| Credential bytes versus protected actuator handle | Chapter 8 |
-| Proof vector and use matrix | Chapters 8 and 23 |
-| Stock kubelet purpose limitation and identical-command external-root design | Chapters 7-8; §30 Example B; rejected ticket history in Appendix A.9.7/B.2 |
-| AWS and Google authority-lease proof, audit limitation | Chapter 8; Chapters 23, 25-26 |
-| ExecSync external-root classification and rejected pending-claim algorithm | Chapters 7-8; Appendix A.9.7/B.2 |
-| Restricted external/unresolved roots, shutdown, and containment | Chapters 7 and 9 |
-
-### E.3 Original policy, compiled state, and local Linux effects
-
-| Original topic | New location |
-| --- | --- |
-| Source policy and signed anti-rollback profile | Chapters 11-12; Appendix A.11 |
-| Entry rules | Chapter 11 |
-| Roles and one transition authority | Chapters 11-12 |
-| Effect rules and authority-behavior rules | Chapter 11 |
-| Compiler pipeline, conflicts, and precedence | Chapter 12; Appendix A.11.5-A.11.8 |
-| Compiled map/decision ABI and lookup semantics | Chapters 12-13; Appendix A.12 |
-| Generation activation, retention, retirement, rollback | Chapter 12; Appendices A.11.6-A.11.7 and A.12.1 |
-| Cgroup binding identity/reuse and task placement | Chapters 5-7, 13; Appendix A.12.1-A.12.2 |
-| Generic pre-effect order and stacked LSM semantics | Chapter 13; Appendix A.12.6 |
-| Mount and network-namespace identity | Chapter 15 |
-| Synchronous topology invalidation, CAS reconciliation, propagation/automount/referrals | Chapter 15 |
-| Executable images, scripts, ELF loader, memfd/anonymous memory, `mprotect`, executable stack/personality | Chapter 16 |
-| File and credential objects, namespace mutation, mmap/preexisting mapping, projected-token rotation | Chapter 17 |
-| Open-fd provenance and delegated filesystem/local-proxy egress | Chapter 17 |
-| Process-shared security state and exact current role | Chapter 18 |
-| Threads/forks, native authority state, and IPC relationships | Chapter 18 |
-| Shared memory/files/IPC/local-inet/process control and persistent resources | Chapter 18; Appendix A.14 |
-| Attempted versus permitted versus completed file/socket/provider effects | Chapters 17-19 |
-| Network actor/socket namespace, socket lifetime, shared-socket blast radius, receive queue | Chapter 19 |
-| Destination rewriting, DNS, final packet floor, TLS limitation | Chapter 19 |
-| Device open/ioctl/fd lifetime and derived capabilities | Chapter 20 |
-| Credential, proc/sysctl, BPF/perf/module/keyring/namespace/mount privilege effects | Chapter 21 |
-| Seccomp floor proof and Landlock scope | Chapters 14 and 21 |
-| Self-protection | Chapters 5 and 21; `SELF-PROTECT-001` in Appendix C |
-
-### E.4 Original evidence, graph, response, incident, and CI
-
-| Original topic | New location |
-| --- | --- |
-| Observation and coverage records | Chapter 22; Appendix A.15.1 |
-| Proof quality vector | Chapters 22-23; Appendix A.15.2 |
-| Package windows, watermarks, finding lifecycle | Chapter 22 |
-| `HF-PROC-001`, `HF-DW-001`, `HF-XNODE-001` | Chapter 23 |
-| Canonical multi-node graph and provider expansion contracts | Chapter 23; Appendix A.15.3 |
-| Local lineage restriction and target re-resolution | Chapter 24; Appendix A.15.4 |
-| Response application, physical verification, durable result vocabulary | Chapter 24; Appendix A.15.4-A.15.5 |
-| Cgroup/workload, socket, and distributed response | Chapter 24 |
-| `HF-001` through `HF-021` control design | Chapter 25 |
-| Situation-to-control summary and full configured walkthrough | Chapter 25 |
-| File/open/read/write-send/provider-result corrections | Chapters 17-19 and 25 |
-| Worked policy, exact dispositions, legal stages, configuration objects | Chapter 11 and Chapter 25 configuration references |
-| Impossible configuration, precedence, exact conflicts | Chapters 11-12 |
-| Rollout, exceptions, metric denominators | Chapters 11-12 |
-| CI execution practices and assurance tiers | Chapter 26 |
-| No Git/TLS termination and GitHub token limit | Chapters 19 and 26 |
-| GitHub/GitLab/Tekton/Jenkins physical seams and support matrix | Chapter 26 |
-| CI identity, intent body, coordinator-to-task binding | Chapter 26; Appendices A.10.2 and A.16.1 |
-| Native/container/service/matrix/reusable/artifact/OIDC/deploy/post/debug/DinD shapes | Chapter 26 |
-| Untrusted PR, artifact/cache trust, indirect execution | Chapter 26 |
-| Cross-step state and runner reuse | Chapter 26; Appendix A.16.2 |
-| CI semantic lowering, credential-delivery boundaries, fixtures | Chapter 26; Appendix A.16; Appendix C |
-| Detailed representative and granular Hugging Face action acceptance | Chapter 25; Appendix C; §25 exact action-card contract |
-
-### E.5 Original qualification, ownership, delivery, and approval
-
-| Original topic | New location |
-| --- | --- |
-| Kubernetes external-entry acceptance | §31.1 |
-| Effect/bypass acceptance | §31.2 |
-| Pinned-source qualification consequences | §31.3 |
-| Failure-state matrix and independent link/map/pin/ring/daemon faults | Chapter 32 |
-| Sole-gatherer death correction | Chapter 32 |
-| Task-first fast path and bounded cost model | Chapter 33 |
-| Performance budgets, methodology, typed artifacts, N/N+1 | Chapter 33; Appendix A.4 |
-| Cohesive owner table and durable-owner correction | Chapter 34 |
-| Runtime read-only sharing with Erebor Runtime | Chapter 34 |
-| Phase allocation and contract-to-code route | Chapter 35 |
-| Unallocated checkpoint, stream, CI adapters, node floor | §35.1 |
-| Phase state versus product claim | Chapter 35 |
-| Approval choices and honest alternatives | Chapter 36 |
-| Closed assurance axes and exact claim vectors | Appendix A.5 |
-| Multi-case fixture registry and result bundle | Appendix A.6; Appendix C |
-| Canonical oracle, ledger, envelope, release claim | Appendix A.7 |
-| Exact completion criteria and fixture allocation | Chapter 37; Appendix C.2 |
-| Primary technical and incident references | Appendix D |
-
-### E.6 Final review question
-
-For every product claim, the reviewer must be able to follow this chain without
-an implied step:
-
-```text
-human source rule
-  -> closed signed policy bytes
-  -> exact compiled decision or provider contract
-  -> exact live actor and object/channel identity
-  -> qualified decision point
-  -> physical or semantic result
-  -> coverage and proof vector
-  -> immutable observation/finding revision
-  -> authorized response target and postcondition, if any
-  -> fixture case and oracle
-  -> exact claim vector in one signed platform qualification
-```
-
-If any arrow is missing, Mithril may still report the facts it has, but it must
-lower the claim. It may not fill the gap with a Pod label, command name,
-timestamp, shared credential, model inference, alert text, or product phase
-number.
