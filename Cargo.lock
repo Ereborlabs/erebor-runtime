@@ -484,6 +484,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "erebor-interceptor-abi"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "erebor-runtime-approvals"
 version = "0.1.0"
 dependencies = [
@@ -541,7 +548,6 @@ dependencies = [
  "erebor-runtime-core",
  "erebor-runtime-error",
  "erebor-runtime-events",
- "erebor-runtime-filesystem",
  "erebor-runtime-ipc",
  "erebor-runtime-session",
  "erebor-runtime-telemetry",
@@ -584,6 +590,7 @@ dependencies = [
 name = "erebor-runtime-core"
 version = "0.1.0"
 dependencies = [
+ "erebor-interceptor-abi",
  "erebor-runtime-context",
  "erebor-runtime-error",
  "erebor-runtime-events",
@@ -604,11 +611,13 @@ name = "erebor-runtime-daemon"
 version = "0.1.0"
 dependencies = [
  "erebor-runtime-approvals",
+ "erebor-runtime-audit",
  "erebor-runtime-client",
  "erebor-runtime-context",
  "erebor-runtime-core",
  "erebor-runtime-error",
  "erebor-runtime-events",
+ "erebor-runtime-filesystem",
  "erebor-runtime-ipc",
  "erebor-runtime-packages",
  "erebor-runtime-policy",
@@ -623,6 +632,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "users",
  "uuid",
 ]
 
@@ -736,6 +746,7 @@ dependencies = [
  "snafu",
  "tempfile",
  "tokio",
+ "users",
  "uuid",
 ]
 
@@ -1818,6 +1829,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mithril-e2e"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "erebor-interceptor-abi",
+ "erebor-runtime-error",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "snafu",
+ "tempfile",
+]
+
+[[package]]
 name = "multimap"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2660,6 +2685,16 @@ name = "unicode-width"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+
+[[package]]
+name = "users"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa4227e95324a443c9fcb06e03d4d85e91aabe9a5a02aa818688b6918b6af486"
+dependencies = [
+ "libc",
+ "log",
+]
 
 [[package]]
 name = "utf-8"

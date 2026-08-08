@@ -1,6 +1,6 @@
 # How To Manually Accept Phase 0
 
-Status: Proposed runbook; no Phase 0 implementation or test has been run.
+Status: Implemented companion runner; privileged physical acceptance remains pending an active BPF LSM boot.
 
 Phase: [Substrate, License, ABI, And Incident Baseline](../phase-0-substrate-license-abi-and-incident-baseline.md)  
 Setup: [`KERNEL-LAB`](./environment-setup.md)
@@ -12,10 +12,23 @@ stock mechanism before its ABI freezes, or marks the surface unsupported.
 
 ## Automated Companion
 
-```text
-IMPLEMENTATION COMMAND REQUIRED: run Phase 0 schema/golden/fixture-registry,
-source-regression, hook-feasibility, verifier, capacity, and benchmark suites.
+```bash
+cargo test -p erebor-interceptor-abi -p mithril-e2e --all-targets --all-features
+cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . source-check
+cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . verify \
+  --output /tmp/mithril-phase0/verification.json
+cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . probe \
+  --output-directory /tmp/mithril-phase0/probe
+cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . benchmark \
+  --target crates/mithril-e2e/fixtures/hugging-face/protected/image-digest.txt \
+  --mode baseline --output /tmp/mithril-phase0/open-baseline.json
 ```
+
+The benchmark command defaults to 100,000 warmups and 1,000,000 measured
+opens at both concurrency 1 and 32. Run it once before attachment and once with
+`--mode protected` after the qualified object set is attached. The runner
+retains every raw sample and its SHA-256 digest; the mode is an operator-declared
+measurement condition, not an inferred pass result.
 
 The manual run reviews the exact automated artifacts and independently repeats
 representative physical probes. It does not replace verifier, concurrency, or

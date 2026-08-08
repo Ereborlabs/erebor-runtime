@@ -152,16 +152,17 @@ response actuator, or optional Phase 12 surface ships here.
 ## Phase Result
 
 ```text
-State: Not done.
-Validated architecture revision/digest: not recorded.
-Completed deliverable IDs: none.
-Files and durable owners changed: none.
-Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: not run.
-Commands and exact source state covered: none; this is a plan-only rewrite.
-Platform/kernel/runtime manifests: none.
-Performance/capacity results: none.
-Unsupported/degraded paths: not yet measured.
-Remaining work in this phase: all deliverables.
+State: Blocked.
+Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md at SHA-256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
+Completed deliverable IDs: D0.1, D0.2, D0.3, D0.6, D0.7. D0.4 has compile-time and hostile-model evidence only. D0.5 has a candidate generated decision ABI only and is deliberately not frozen. D0.8 records this blocked boundary.
+Files and durable owners changed: erebor-interceptor-abi owns the portable interception types and one generated Rust/C candidate decision ABI; erebor-runtime-core::interception is its compatibility re-export; mithril-e2e owns Phase 0 closure, provenance, source-regression, fixture, capability, and benchmark runners; bpf/erebor-interceptor/phase0 owns the disposable feasibility object; spec/qualification/v1 and spec/provenance/v1 own the checked registries; phase-0-artifacts/interceptor-ownership.md and security-bootstrap-decision.md record the two decisions. No product loader or daemon was added.
+Upstream-adoption dossier IDs used: UPSTREAM-ADOPTION-V1 with META-MOUNT-ROOT-001, META-OLDEST-MOUNT-002, META-COMPONENT-GRAPH-003, META-MUTATION-DIRTY-004, META-VERIFIER-BUDGET-005, BJ-TASK-STORAGE-001, BJ-REJECTED-ENROLLMENT-002, KA-LSM-DECISION-001, KA-POLICY-PUBLICATION-002, KA-PATH-MOUNT-003, KA-DNS-BOUNDS-004, KA-READER-CAPACITY-005, TG-FORK-EXEC-001, TG-RUNTIME-CGROUP-JOIN-002, TG-GENERIC-LSM-003, TG-FRESH-MAPS-004, and TG-CONCURRENCY-LOSS-005. All pinned repository, commit, license, and primary-source digests pass source-check.
+Fixture cases and exact physical results: DECISION-SET-GOLDEN-001 and FIXTURE-REGISTRY-COMPLETE-001 pass. The eight SOURCE-* hostile models pass, and the owned object compiles twice to identical bytes against live BTF. No privileged load, attach, or physical effect result has been recorded because the active LSM order is lockdown,capability,landlock,yama,apparmor and does not contain bpf. CFG-V1-GOLDEN-002 and CFG-ROLLBACK-GOLDEN-002 remain intentionally unimplemented until D0.4 passes.
+Commands and exact source state covered: cargo test -p erebor-interceptor-abi -p mithril-e2e --all-targets --all-features passed; cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . source-check passed; the verify, probe, and reduced-count benchmark smoke commands passed; cargo clippy for mithril-e2e, erebor-interceptor-abi, and erebor-runtime-core with all targets/features and -D warnings passed; cargo check --workspace passed. Core compatibility ran 82/82 tests. One representative Session broker compatibility test passed outside the sandbox; the sandboxed full Session batch reached 126 passes and 28 common EPERM failures at runtime_interception_broker/platform.rs:194. These results cover the dirty working tree, not a commit.
+Platform/kernel/runtime manifests: current node is x86_64 Linux 6.8.0-136-generic; BTF SHA-256 9aa9eb9e8108bff44e685830315fb7a442bafd99778314cdd6de0fb72868829f; cgroup v2 present; active BPF LSM absent; deterministic candidate BPF object SHA-256 be0335ee152e7f4995ec7ff1ca1a5d659c1477dcfe1f24cd54e8af00dc268349. The checked two-node manifests remain MEASURE_AT_RUNTIME templates until the live lab run.
+Performance/capacity results: the benchmark smoke runner retained 1,000 raw open samples after 100 warmups at concurrency 1 and 32; this is runner validation, not the required qualification distribution. AuthoritativeMap N/N+1 denies without corrupting N, AtomicGeneration rejects partial publication, TaskStorage fails closed at capacity/missing parent, and reader loss preserves installed denial in code-backed hostile tests. The required 100,000-warmup/1,000,000-sample baseline/protected trials and live kernel map/verifier limits have not run.
+Candidate bundle digests: closure/ABI/provenance/fixture candidate contract 9f7fbe1840dbc2d750e5b7e1c4e1d82608352a06f2460f5d7655defa97290869; unchanged protected fixture 741a9fd0857e360a8b3096924f52dd59695d9f6440aa6610370e4e092b23b1dc.
+Unsupported/degraded paths: every physical BPF hook/helper/map/link, prior-result, saturation, evidence-loss, and effect-family claim remains unsupported pending the active-BPF-LSM privileged run. No unsupported surface is represented as frozen or released.
+Remaining work in this phase: boot with bpf in the active LSM order; run privileged verifier/load/attach and physical allow/deny/failure probes; record exact bounds and two platform manifests; run full baseline/protected distributions; then and only then implement/freeze the complete source-policy, compiled profile/signature/rollback, evidence, capability/performance/result schemas and CFG goldens; rerun the repository CI procedure after the final edit.
 Next phase not authorized: yes.
 ```

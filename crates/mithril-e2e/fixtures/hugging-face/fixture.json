@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "safe_fixture": true,
+  "production_authority": false,
+  "stages": [
+    {"incident_event_id":"HF-008","safe_action":"submit an inert revision with a fixed test digest","decision_or_evidence_point":"authenticated revision context","required_postcondition":"no process edge exists without scheduler evidence"},
+    {"incident_event_id":"HF-009","safe_action":"read a sentinel proc object and an ordinary input","decision_or_evidence_point":"BPF LSM file decision","required_postcondition":"sentinel is denied and ordinary input remains readable"},
+    {"incident_event_id":"HF-010","safe_action":"invoke the inert driver in the existing interpreter","decision_or_evidence_point":"first external effect","required_postcondition":"no fabricated exec edge is recorded"},
+    {"incident_event_id":"HF-011","safe_action":"worker and controller read the same synthetic projected token","decision_or_evidence_point":"task role plus file object decision","required_postcondition":"controller succeeds and worker receives EACCES"},
+    {"incident_event_id":"HF-012","safe_action":"attempt fixture API and metadata TCP and UDP routes","decision_or_evidence_point":"connect send and server audit","required_postcondition":"prohibited traffic does not arrive and controller traffic succeeds"},
+    {"incident_event_id":"HF-013","safe_action":"call a mock repository API","decision_or_evidence_point":"flow plus repository audit","required_postcondition":"only immutable provider identity supports quarantine"},
+    {"incident_event_id":"HF-014","safe_action":"create a synthetic mesh enrollment","decision_or_evidence_point":"mesh audit","required_postcondition":"the exact test enrollment is disabled"},
+    {"incident_event_id":"HF-015","safe_action":"forward through a synthetic connector","decision_or_evidence_point":"connector audit","required_postcondition":"the exact test route is disabled"},
+    {"incident_event_id":"HF-016","safe_action":"exercise a shared mock broker","decision_or_evidence_point":"typed forwarding edge","required_postcondition":"shared blast radius is disclosed"},
+    {"incident_event_id":"HF-017","safe_action":"use a sandbox cloud session","decision_or_evidence_point":"CloudTrail-compatible audit","required_postcondition":"the exact test source is fenced"},
+    {"incident_event_id":"HF-018","safe_action":"mint and use a test repository token","decision_or_evidence_point":"provider token audit","required_postcondition":"token revocation and installation suspension remain distinct"},
+    {"incident_event_id":"HF-019","safe_action":"load a harmless fixed-digest artifact","decision_or_evidence_point":"exec mmap and artifact digest joins","required_postcondition":"unapproved load is denied without blocking the approved control"},
+    {"incident_event_id":"HF-020","safe_action":"emit a late synthetic branch","decision_or_evidence_point":"versioned lineage and watch window","required_postcondition":"closure waits for the required branch"},
+    {"incident_event_id":"HF-021","safe_action":"replace the synthetic controller during watch","decision_or_evidence_point":"response coordinator and node postconditions","required_postcondition":"closure requires healthy coverage through watch_until"}
+  ]
+}

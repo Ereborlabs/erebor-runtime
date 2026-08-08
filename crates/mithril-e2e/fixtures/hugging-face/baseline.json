@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "digest_algorithm": "SHA-256",
+  "inputs": [
+    "protected/image-digest.txt",
+    "protected/network.json",
+    "protected/rbac.yaml",
+    "protected/topology.json",
+    "protected/workload.yaml"
+  ],
+  "expected_digest": "741a9fd0857e360a8b3096924f52dd59695d9f6440aa6610370e4e092b23b1dc"
+}

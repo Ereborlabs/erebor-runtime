@@ -1,0 +1,12 @@
+[package]
+name = "erebor-interceptor-abi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[lints]
+workspace = true

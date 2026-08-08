@@ -1,14 +1,6 @@
-mod decision;
-mod file;
-mod process;
-mod socket;
-
-pub use decision::{
-    SessionInterceptionDecision, SurfaceInterceptionDecision, SurfaceMediationDecision,
-};
-pub use file::{
+pub use erebor_interceptor_abi::{
     FileInterceptionOperationKind, FileInterceptionRequest, FileOperationSurfaceHandler,
-    FileResolvedIdentity,
+    FileResolvedIdentity, ProcessExecInterceptionRequest, ProcessExecSurfaceHandler,
+    SessionInterceptionDecision, SocketConnectInterceptionRequest, SocketConnectSurfaceHandler,
+    SurfaceInterceptionDecision, SurfaceMediationDecision,
 };
-pub use process::{ProcessExecInterceptionRequest, ProcessExecSurfaceHandler};
-pub use socket::{SocketConnectInterceptionRequest, SocketConnectSurfaceHandler};

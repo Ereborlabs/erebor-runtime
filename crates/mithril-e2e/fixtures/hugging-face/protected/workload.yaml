@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: safe-conversion-worker
+spec:
+  serviceAccountName: safe-worker
+  containers:
+    - name: worker
+      image: fixture.invalid/conversion@sha256:7ae8b5f0d85b7a8efb33aac3e4fbfe08cf7353c53f7b23f147eebd4d11fa4dc1
+      env:
+        - name: FIXTURE_MODE
+          value: synthetic-only

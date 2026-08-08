@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/erebor-interceptor-abi",
     "crates/erebor-runtime-audit",
     "crates/erebor-runtime-approvals",
     "crates/erebor-runtime-cdp",
@@ -18,6 +19,7 @@ members = [
     "crates/erebor-runtime-packages",
     "crates/erebor-runtime-session",
     "crates/erebor-runtime-terminal",
+    "crates/mithril-e2e",
 ]
 resolver = "2"
 

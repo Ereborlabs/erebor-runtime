@@ -1,0 +1,1 @@
+{"logical_job_concurrency":2,"worker_processes":1,"optional_child_process":true,"credential_inventory":["synthetic-projected-token","synthetic-cloud-key-id"]}

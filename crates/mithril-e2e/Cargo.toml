@@ -1,0 +1,26 @@
+[package]
+name = "mithril-e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+clap.workspace = true
+erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
+erebor-runtime-error = { path = "../erebor-runtime-error" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+snafu.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23.0"
+
+[[bin]]
+name = "mithril-phase0"
+path = "src/bin/mithril_phase0.rs"
+
+[lints]
+workspace = true
