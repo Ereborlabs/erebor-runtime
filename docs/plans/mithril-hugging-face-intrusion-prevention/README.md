@@ -1,288 +1,219 @@
 # Mithril Hugging Face Intrusion Prevention Master Plan
 
-Status: Proposed. No implementation phase is authorized until the user
-approves that phase by name.
+Status: Rewritten from the validated architecture on 2026-08-08. Proposed;
+this document does not authorize implementation until the user approves one
+phase by name.
 
-Parent plan: none. This is a new product implementation master plan.
+Design authority:
 
-Design authorities:
+- [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
+- [Hugging Face adversarial acceptance](./hugging-face-adversarial-acceptance.md)
+- [Live two-node lifecycle probe](./live-two-node-lifecycle-probe.md)
 
-- [Policy And Protection Algorithm Architecture](./policy-and-protection-algorithm-architecture.md)
-- [Mithril Single-Gatherer Architecture and Upstream Adoption Plan](../../research/erebor-warden-single-gatherer-architecture-plan.md)
-- [Erebor Defender: Linux Enforcement, Correlation, and Response Engineering](../../research/erebor-defender-learning-from-tetragon-and-falco.md)
-- [Hugging Face Agent Intrusion: Erebor Defender Implementation Analysis](../../research/hugging-face-agent-intrusion-analysis.md)
-- [Hugging Face Agent Intrusion: Published Live Action Stream](../../research/hugging-face-agent-intrusion-live-action-stream.md)
-- [Linux Kernel-Native Effect Enforcement Master Plan](../linux-kernel-native-enforcement/README.md)
+The [previous architecture](./policy-and-protection-algorithm-architecture.md)
+is a superseded historical record. It may explain rejected ideas but cannot
+define implementation behavior.
 
-The older filenames and the words Defender/Warden remain in research links for
-history. The product name in this implementation plan is **Mithril**.
+## Goal And Release Boundary
 
-## Goal
+Build Mithril as an owned Linux/Kubernetes prevention, evidence, causality,
+and verified-response product for the Hugging Face incident chain. On a
+qualified platform it must deny the first distinguishable prohibited physical
+effect, attribute it to an exact actor and object, preserve loss-aware evidence,
+follow proven cross-node/provider branches, and execute only authorized typed
+response operations whose physical postconditions are checked.
 
-Build a production Mithril product that can protect an unchanged Linux and
-Kubernetes deployment from the Hugging Face-side chain represented by
-`HF-008` through `HF-021`.
+The baseline protects unchanged workloads. It does not claim to understand
+arbitrary in-process intent, encrypted application verbs, or incident stages
+outside its deployed authority. Every release claim uses the exact result and
+proof vocabulary in architecture Chapters 4, 22-25, 31, and 37.
 
-On a fully supported node, Mithril must synchronously deny the first
-out-of-profile physical effect after hostile input obtains in-process execution:
-an executable transition, protected file or credential access, socket effect,
-device effect, privilege transition, or kernel escape operation. It must then
-attribute the attempt to the exact native process lineage, retain durable
-evidence and coverage, follow any authoritative causal expansion across nodes
-and providers, and execute the smallest authorized containment action with a
-verified physical postcondition.
+## Implementation Rules
 
-The target is not “detect a command resembling the published incident.” The
-target is:
+- One approved phase at a time. Completing one phase does not authorize the
+  next.
+- Every phase has named deliverables, design-section bindings, real code-backed
+  tests, exact fixtures, and a `Done`, `Not done`, or `Blocked` result.
+- A phase cannot weaken or silently reinterpret the validated architecture. A
+  conflict stops implementation and requires an architecture amendment.
+- The protected application, image, command, Pod/process topology, credentials,
+  RBAC/IAM, CNI, and provider principals remain unchanged for the baseline.
+- Rust owns product userspace. Owned C CO-RE programs are the kernel payload.
+- Tetragon, KubeArmor, Meta BpfJailer, and the independent Jailer are pinned
+  learning/source inputs, not hidden product daemons or automatic dependencies.
+- Direct TLS remains direct. Optional L7 mediation is separately allocated.
+- Seccomp is not a Version-1 dependency. It is evaluated only in Phase 12 and
+  is added only after its compatibility and performance gate passes.
+- Every unsupported hook, identity, source gap, overflow, or unverified result
+  mechanically narrows the advertised claim.
 
-```text
-hostile input reaches an unchanged worker
-  → first distinguishable prohibited effect is denied before completion
-  → exact task/process/effect evidence is durable
-  → any already-completed or deliberately allowed branch is correlated
-  → every proven local and remote branch is narrowly contained
-  → physical postconditions and remaining uncertainty are reported
-```
+## Current Repository Baseline
 
-## Meaning Of “Prevent The Hugging Face Intrusion”
+At this rewrite the workspace has eighteen `erebor-runtime-*` crates and no
+Mithril, BPF interceptor, or Mithril Control crate. Existing reusable work is:
 
-The release claim is conditional and mechanically testable:
+- `crates/erebor-runtime-core/src/interception.rs` and its module family:
+  portable process/file/socket request and decision concepts;
+- `crates/erebor-runtime-session/src/runtime_interception_broker.rs` and its
+  module family: the Session-owned broker/client/handler implementation;
+- `crates/erebor-runtime-session/src/interception_backend.rs`: the current
+  Linux ptrace backend owner; and
+- `crates/erebor-runtime-e2e/`: existing cross-crate Runtime acceptance.
 
-1. `HF-001` through `HF-007` occurred in an external evaluation environment
-   outside the Hugging Face-owned boundary. Mithril deployed on the protected
-   estate must not claim authority over those events.
-2. Mithril does not claim that it rejects the hostile HDF5 structure at
-   `HF-008` or prevents the in-process Jinja evaluation at `HF-010` without an
-   optional application-owned remediation. The deployment-preserving product
-   assumes hostile code can already run inside the existing interpreter.
-3. If the signed worker role does not need the attempted effect, Mithril must
-   deny the first covered effect from `HF-009` onward before it completes.
-   Representative gates are environment/credential object access, an
-   unapproved `python → sh/curl/tailscale` edge, API/IMDS egress, executable
-   memory/code loading, device use, or privilege/namespace escape.
-4. If malicious code uses the same legitimate process, credential, destination,
-   and existing TLS connection as ordinary controller behavior, Linux cannot
-   distinguish intent. Mithril must preserve the allowed operation, detect the
-   first semantic deviation from Kubernetes or provider audit, fence the exact
-   proven source, and report whether the semantic effect had already completed.
-5. Provider-side prevention such as Kubernetes admission, RBAC/IAM narrowing,
-   or operation-specific capabilities is optional operator hardening. It may
-   strengthen the result after separate approval, but it is not silently made a
-   prerequisite for the baseline product.
-6. A run passes the incident prevention gate only if the protected fixture
-   proves that no prohibited branch reaches a later incident stage after the
-   expected denial or containment point. An alert, signal, map write, HTTP
-   success, or process exit is not sufficient proof.
+Those types are useful inputs, not the Mithril kernel ABI. Phase 0 must decide
+which portable concepts move into the shared Interceptor family, which remain
+Session-specific, and how compatibility is migrated without two policy owners.
+The existing
+[Linux kernel-native enforcement plan](../linux-kernel-native-enforcement/README.md)
+must consume the same Interceptor owner before either plan implements an
+overlapping loader.
 
-This definition prevents a marketing claim from outrunning the available
-kernel or provider information.
+## Target Components And Ownership
 
-## Non-Negotiables
-
-- Protect the deployment that exists. Baseline installation cannot require
-  changes to application code, agent harness, controller/Pod/process/job
-  topology, mounted credentials, ServiceAccounts, RBAC, IAM, routes, CNI, or
-  provider principal design.
-- One `mithril-node` DaemonSet Pod runs one container containing one privileged
-  Rust `mithril-node` process per protected Linux node. This is one component,
-  not a Pod plus a second daemon.
-- One active host owner owns overlapping BPF links, maps, pin root, sequence
-  space, and raw event stream. A co-resident Erebor Runtime subscribes to
-  scoped observation and cannot load enforcement or invoke response.
-- Rust owns the loader and all product userspace. Owned C CO-RE programs are
-  the kernel payload. No Tetragon, KubeArmor, Falco, Cilium, or upstream daemon
-  becomes the hidden product chassis.
-- Upstream behavior may be studied or selectively adapted only after the Phase
-  0 per-file and transitive-license gate. No research checkout is a build
-  dependency by accident.
-- Native task/process lineage never crosses a node. Cross-node propagation is
-  represented only by typed causal edges backed by authoritative identifiers.
-- A task cookie, label epoch, process-lineage ID, node boot ID, full container
-  ID, Pod UID, cgroup identity, and live revalidation replace PID-only
-  attribution and response.
-- Allowed controller credential and API use must continue to work. An
-  unexpected child role and an unexpected same-process server operation are
-  different cases with different decision points.
-- Direct TLS is not intercepted. Kernel/network evidence must not claim it can
-  distinguish clone, push, email, token minting, or API verbs inside the same
-  encrypted channel.
-- Observation, prevention, detection, containment, and verified recovery are
-  separate result types. Killing a process after an effect is not prevention.
-- Source health, drops, sequence gaps, policy generations, connector delay, and
-  unsupported hooks are evidence. Negative conclusions are forbidden when
-  required coverage is absent.
-- Response APIs are typed, scoped, expiring, idempotent, approval-aware
-  physical operations. They never expose an arbitrary shell to a human or
-  defensive agent.
-- Every phase adds code-backed tests. The standing incident fixture grows with
-  the product; it is not postponed until the last phase.
-- Implement one approved phase at a time. Stop after its checkpoint and wait
-  for approval before starting the next phase.
-
-## Existing Repository Baseline
-
-At plan creation:
-
-- the current Cargo workspace contains eighteen `erebor-runtime-*` crates;
-- no `mithril-*` crate exists;
-- no shared `erebor-linux-sensor-*` Rust crate exists;
-- no owned `bpf/erebor-linux-sensor/` source tree exists;
-- no `mithril-node` image, DaemonSet, Helm release, or Mithril Control service
-  exists;
-- the existing Runtime Linux process guard is ptrace-based and belongs to
-  Runtime, not to Mithril;
-- the research trees for Tetragon, KubeArmor, Falco, and other products are
-  reference material only; and
-- the future repository rename from `erebor-runtime` to `erebor` has not
-  occurred.
-
-No phase may claim a Mithril capability merely because a checked-out upstream
-project contains similar code.
-
-## Current-Code Boundary And Existing Runtime Plan
-
-The current Runtime implementation remains grounded in:
-
-- `Cargo.toml` for workspace membership;
-- `crates/erebor-runtime-core/src/config/session/interception.rs` for the
-  current interception backend selection;
-- `crates/erebor-runtime-session/src/os/linux/process_guard.rs` and its
-  `process_guard/` module family for the ptrace-based Runtime owner; and
-- `crates/erebor-runtime-e2e/` for current cross-crate Runtime acceptance.
-
-Those files do not implement Mithril and are not silently repurposed by the
-early phases. The existing
-[Linux Kernel-Native Effect Enforcement Master Plan](../linux-kernel-native-enforcement/README.md)
-is Runtime Session-oriented, while this plan introduces the node-wide shared
-sensor and Mithril authority.
-
-Phase 0 must record one explicit overlap decision before either plan implements
-a BPF loader:
-
-- the shared ABI/host owner in this plan becomes the only common loader and the
-  Runtime plan retains only Runtime-specific Session admission, lowering, and
-  evidence work; or
-- a different single-owner boundary is approved with equivalent one-loader,
-  watch-only Runtime, identity, recovery, and coverage proof.
-
-Two independently implemented overlapping loaders are not an acceptable
-resolution. The current ptrace path remains honestly available until a
-separately approved Runtime integration phase changes it.
-
-## Proposed Current-Repository Target
-
-Phase 0 must approve or replace these exact names before Phase 1. Until then
-they are the plan's proposed current-repository paths:
+Phase 0 may refine names, but these ownership boundaries are fixed:
 
 ```text
-bpf/
-└── erebor-linux-sensor/
-    ├── include/
-    ├── lifecycle.bpf.c
-    ├── exec.bpf.c
-    ├── file.bpf.c
-    ├── socket.bpf.c
-    ├── device.bpf.c
-    ├── security.bpf.c
-    └── response.bpf.c
+bpf/erebor-interceptor/          owned CO-RE lifecycle/effect programs
 
-crates/
-├── erebor-linux-sensor-abi/       versioned raw kernel/userspace ABI
-├── erebor-linux-sensor-host/      Rust/libbpf loader and one-owner boundary
-├── mithril-node/                  one node binary and local owners
-├── mithril-control/               central intake, graph, detection, connectors
-└── mithril-e2e/                   cross-crate and live incident fixtures
-
-packaging/
-└── mithril/
-    ├── image/
-    └── helm/mithril/
+crates/erebor-interceptor-abi/   portable surface + exact Rust/C ABI contracts
+crates/erebor-interceptor/       one loader/link/map/pin owner and local clients
+crates/mithril-node/             identity, policy activation, effects, WAL,
+                                 local response; embeds Interceptor owner
+crates/mithril-control/          policy compile/sign, secure node control,
+                                 graph, findings, approvals, connectors
+crates/mithril-e2e/              fixture, qualification, and release proofs
+packaging/mithril/               image, Helm, and platform manifests
 ```
 
-The first implementation keeps ownership cohesive. A crate is split only when
-Phase 0 or a later approved phase proves a real dependency/lifecycle boundary;
-line count alone is not permission to fragment an owner.
+The shared **Interceptor** is a component family, not another daemon:
 
-## Target Deployment And Authority
+- `erebor-interceptor-abi` owns portable requests/results and exact BPF map/event
+  layouts shared by Runtime adapters, Mithril, fixtures, and generated C.
+- `erebor-interceptor` owns Linux preflight, BPF load/attach, links, maps,
+  pin-root lease, capability readback, and scoped local subscriptions.
+- In Mithril mode, `mithril-node` embeds and owns that component. A co-resident
+  Runtime uses an authenticated, cgroup-scoped client and cannot assign Mithril
+  roles, activate policy, or invoke response.
+- In a later Runtime-only deployment, the Runtime daemon may embed the same
+  component only after acquiring the same exclusive pin-root lease. There is
+  never a Runtime loader and Mithril loader at the same time.
+- Mithril-specific actor state, signed policy generations, evidence semantics,
+  detection, and response do not move into the generic Interceptor.
 
-```text
-protected Linux node
-┌─────────────────────────────────────────────────────────────────┐
-│ one DaemonSet Pod                                               │
-│   one container                                                 │
-│     one mithril-node Rust process                               │
-│       ├─ shared Rust/libbpf host owner + owned C CO-RE programs │
-│       ├─ native identity and effect owners                      │
-│       ├─ signed local policy + response owners                  │
-│       └─ local spool, coverage, mTLS, optional Runtime watcher  │
-└──────────────────────────────┬──────────────────────────────────┘
-                               │ one authenticated outbound stream
-                               ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Mithril Control                                                 │
-│ raw intake → coverage → node graph → distributed causal graph  │
-│            → findings → authorization → typed connectors       │
-└─────────────────────────────────────────────────────────────────┘
-```
+`mithril-control` is required, not postponed to the detection phase. Phase 1
+creates its service chassis and mutually authenticated gRPC node channel.
+Later phases add only the messages needed for policy delivery, evidence,
+findings, and response. This plan does not require a public API contract yet.
 
-Mithril Control may be SaaS or self-hosted. It is not a second privileged node
-gatherer. Kubernetes, cloud, mesh, connector, and source-control adapters live
-at the control/service boundary or consume existing audit sources.
+## Phase Dependency And Deliverable Summary
 
-## Durable Owners
-
-| Contract | Owner | Forbidden substitute |
-| --- | --- | --- |
-| BPF objects, links, maps, verifier/capability probes, pin-root lease, raw sequence | `erebor-linux-sensor-host` inside the active `mithril-node` process | a second Tetragon/Falco/KubeArmor/Runtime loader |
-| task/thread, process, execution, role inheritance, bootstrap and PID-reuse truth | `mithril-node` native identity owner | userspace PID cache or Pod name |
-| exec/file/socket/device/security effect normalization and decision evidence | `mithril-node` effect owner | syscall text or alert strings |
-| signed profile compile, map generation, atomic activation and rollback | `mithril-node` policy owner | raw model-authored BPF maps or third-party YAML |
-| local WAL, loss, acknowledgement and coverage intervals | `mithril-node` evidence owner | logs without sequence/gap semantics |
-| immutable source envelopes, normalized observations and deterministic replay | `mithril-control` intake/evidence owners | mutable case notes |
-| node-local graph and typed distributed causal edges | `mithril-control` graph owner | cross-node process-parent edges or time-only joins |
-| finding packages `HF-PROC-001`, `HF-DW-001`, `HF-XNODE-001` | `mithril-control` detection owner | a model conclusion or Falco severity |
-| response authorization, simulation, per-target execution and postconditions | `mithril-control` response owner plus authenticated node/provider actuator | arbitrary remote shell |
-| Runtime agent observation | Runtime consumer over a cgroup-scoped read-only subscription | Mithril policy/session identity or a second raw sensor |
-
-## Standing Hugging Face Test Contract
-
-[Hugging Face Adversarial Acceptance](./hugging-face-adversarial-acceptance.md)
-is normative for every phase. It defines:
-
-- the unchanged multi-job worker and legitimate-controller controls;
-- the non-weaponized post-compromise behavior driver;
-- exact local, cross-node, provider, failure, bypass, and response scenarios;
-- the expected decision point and physical postcondition for every incident
-  stage;
-- the coverage prerequisites for every conclusion; and
-- the release claim allowed at each completed phase.
-
-[Live Two-Node Lifecycle Probe](./live-two-node-lifecycle-probe.md) is required
-for phases that touch kernel loading, native identity, pre-effect enforcement,
-container admission, Kubernetes correlation, distributed response, packaging,
-or upgrade/recovery. Unit tests and replay fixtures do not replace it.
-
-## Phase Baseline Summary
-
-The plan uses the architecture research's twelve build stages and adds a
-dedicated provider/recovery stage. The attack fixture is introduced in Phase 0,
-not after implementation:
-
-| Phase | Product increment | Incident proof added |
+| Phase | Required deliverable | Validated design coverage |
 | ---: | --- | --- |
-| 0 | kernel, license, ABI, path, testbed, and performance contract | safe fixture and exact stage/postcondition matrix compile and run |
-| 1 | one Rust node binary and shared watch-only substrate | unchanged worker lifecycle is observed by one gatherer |
-| 2 | exact native task/process/execution identity | hostile and benign branches cannot merge across PID reuse or concurrency |
-| 3 | physical effect observation and signed profile simulation | `HF-009`–`HF-012` effects are attributed without changing behavior |
-| 4 | signed local pre-effect enforcement | first prohibited exec/file/code/device/privilege effect returns denial |
-| 5 | process-aware network decision and packet fence | API/IMDS/C2 egress is denied or honestly classified as ambiguous |
-| 6 | durable evidence, coverage, and recovery | loss/outage cannot become false “safe” or false “prevented” claims |
-| 7 | Mithril Control and deterministic detection packages | local credential/authority pivot replays to stable findings |
-| 8 | Kubernetes audit/object/CRI correlation | exact multi-node causal path and controller fan-out are reconstructed |
-| 9 | local and distributed physical response | seed, sockets, remote branches, and reconciler are contained and verified |
-| 10 | AWS, mesh, connector, artifact, and GitHub adapters | `HF-013`–`HF-019` provider expansion is correlated and narrowly recovered |
-| 11 | production installation, upgrades, scale, security, and final conformance | complete `HF-008`–`HF-021` prevention/containment matrix passes |
-| 12 | optional ecosystem compatibility | Falco/Tetragon/Hubble/EDR inputs add evidence without changing guarantees |
+| 0 | Feasibility/source dossier, shared-Interceptor ownership decision, proven hook prototypes, closed ABI/schema/goldens, fixture/performance baseline | Ch. 1-5, 10-13, 27-30, 33-36; A.1-A.13; B-D |
+| 1 | One shared Interceptor owner, one `mithril-node`, one `mithril-control`, secure gRPC, capability/readiness, Runtime coexistence proof | Ch. 5, 14, 27-30, 32, 34; A.3-A.7, A.12-A.13 |
+| 2 | Exact task/process/exec/native-family and runtime-root identity with restart/reuse truth | Ch. 6-9; A.8-A.10, A.12, A.14 |
+| 3 | Policy compiler/signature/atomic candidate generation plus observe-only coverage for every allocated local effect and canonical path matcher | Ch. 10-21, 28-30; A.11-A.14 |
+| 4 | Signed pre-effect exec/file/memory/IPC/device/privilege enforcement and bounded exceptions | Ch. 10-18, 20-21; A.11-A.14 |
+| 5 | Process-aware socket/network/DNS/final-flow enforcement and packet response floor | Ch. 18-19; A.13.4, A.14 |
+| 6 | Durable evidence, coverage intervals, WAL, generation/restart recovery, loss and owner-health truth | Ch. 9, 22, 31-33; A.3-A.7, A.15.1-A.15.2 |
+| 7 | Mithril Control evidence intake, deterministic graph/finding packages, notifications, and provider-neutral authority leases | Ch. 8, 22-25, 30, 34; A.10, A.15 |
+| 8 | Kubernetes/runtime/audit multi-node causality and conservative purpose classification | Ch. 7-8, 23, 25, 30-31; A.9-A.10, A.15.3 |
+| 9 | Authorized local and distributed response with blast-radius disclosure and verified postconditions | Ch. 24-25, 32, 34; A.15.4-A.15.6 |
+| 10 | Qualified AWS/Google/GitHub/mesh/connector/artifact evidence, leases, and typed provider actuators | Ch. 23-26; A.10, A.15-A.16 |
+| 11 | Packaging, upgrade, platform qualification, performance, complete HF conformance, and signed release claims | Ch. 25, 30-33, 37; A.4-A.7; C |
+| 12 | Independent decisions/prototypes for deferred surfaces and optional upstream evidence adapters | Ch. 5, 7, 14, 21, 26, 35.1; A.13.6, A.16 |
+
+Phase order is strict through Phase 11. Phase 12 is independent after Phase 0
+and cannot satisfy a Phase 11 core gate.
+
+## Complete Design-To-Phase Coverage Ledger
+
+This ledger is the master completeness check. A design row is covered only when
+the named phase file contains a matching deliverable and proof.
+
+| Architecture section or feature | Implementing phase(s) | Completion evidence |
+| --- | --- | --- |
+| Ch. 1-4 product, gap, claim/result vocabulary | 0, 11 | checked claim registry; release claims limited to proven boundaries |
+| Ch. 5 node/trust architecture, one owner, unchanged workloads, secure control | 0, 1, 11 | exclusive pin lease; unchanged fixture; mTLS gRPC; root-compromise limits |
+| Ch. 6 actor/task/process/thread/exec/native identity | 2 | fork/thread/vfork/non-leader-exec/PID-reuse fixtures |
+| Ch. 7 runtime-created roots, probes, lifecycle, admin exec, unmatched workloads | 2, 4, 8, 11 | stock-runtime matrix; restricted external role; one-use admin exception |
+| Ch. 8 authorization proof, intent, trust/time/replay | 0, 2, 7, 10 | signed-envelope goldens; replay/mismatch/restart tests |
+| Ch. 9 exit, shutdown, reference retention | 2, 6 | exact cleanup/tombstone/reconciliation tests |
+| Ch. 10 invariants | 0 and every phase | invariant-to-test ledger cannot lose a row |
+| Ch. 11 readable policy, roles, effects, dispositions, exceptions | 0, 3, 4 | parser/compiler goldens; bounded-use exception consumption |
+| Ch. 12 compiler, signatures, activation, rollback | 0, 3, 4, 6 | deterministic bytes; inactive readback; one CAS; retirement recovery |
+| Ch. 13 one local decision and atomic state | 0, 2-5 | Rust/BPF lookup golden; task-first and contention tests |
+| Ch. 14 mechanism boundaries and deferred Seccomp | 0, 1, 3-5, 12 | hook/capability matrix; Seccomp remains absent unless Phase 12 gate passes |
+| Ch. 15 mounts, canonical oldest-mount path, exact objects | 0, 3, 4 | Meta bind-alias fixture; DIRTY topology races; object revalidation |
+| Ch. 16 exec images and executable memory | 0, 3, 4 | exec chain, loader, memfd, mmap/mprotect, immutable-image fixtures |
+| Ch. 17 files, credentials, delegated I/O | 0, 3, 4, 5 | token rotation, proc-fd, fd pass, remote delegate fixtures |
+| Ch. 18 IPC, native authority, persistent objects | 2-5 | directional relationship, shared mapping, async unsupported tests |
+| Ch. 19 network/DNS/TLS limits | 3, 5, 7, 10 | socket lifetime, rewrite, DNS exfiltration, same-TLS honest-result tests |
+| Ch. 20 devices and derived authority | 0, 3, 4 | device/ioctl/derived-fd fixtures |
+| Ch. 21 privilege, self-protection, Landlock, deferred Seccomp | 0, 3, 4, 11, 12 | escape matrix; self-protection oracle; optional-layer records |
+| Ch. 22 evidence, coverage, proof quality, findings | 0, 6, 7 | source epoch/gap tests and deterministic replay |
+| Ch. 23 cross-node/provider causality | 7, 8, 10 | registered edge contracts; fan-out/contradiction/shared-principal tests |
+| Ch. 24 response transaction and blast radius | 9, 10 | authorization, simulation, exact re-resolution, physical readback |
+| Ch. 25 complete HF proof package | 0, 3-11 | standing incident fixture grows in every phase; complete Phase 11 matrix |
+| Ch. 26 CI/CD model and honest tiers | 10, 12 | provider/artifact foundations in 10; named CI adapters remain Phase 12 allocations |
+| Ch. 27-29 Jailer/Meta/KubeArmor/Tetragon lessons | 0, 1-6 | pinned source dossier plus adopted-code provenance/test IDs |
+| Ch. 30 combined pipeline | 1-10 | end-to-end native and identical-probe examples |
+| Ch. 31 acceptance | every phase, final 11 | exact fixture cases and physical oracles |
+| Ch. 32 failure/recovery | 1, 2, 6, 9, 11 | daemon/reader/control/link/map/restart fault matrix |
+| Ch. 33 boundedness/performance | 0, 1-6, 11 | per-hook distributions, N/N+1 maps, evidence-preserving benchmarks |
+| Ch. 34 durable owners | 0, 1, 7, 9, 10 | one writer per state family; no duplicate daemon/loader |
+| Ch. 35 delivery/unallocated surfaces | this master, 12 | coverage linter and deferred-surface ledger |
+| Ch. 36 approval defaults | 0, owning phase | recorded decisions before ABI/policy changes |
+| Ch. 37 completion | 11 | digest-bound qualification bundle and signed limited claim |
+| A.1-A.7 foundations/qualification records | 0, 6, 11 | closure, bundles, result records, release envelope |
+| A.8-A.12 identity/policy/kernel ABI | 0, 2-4 | generated types, goldens, lifecycle and lookup fixtures |
+| A.13 Linux effects | 0, 3-5, 11, optional 12 | hook matrix and per-effect physical oracle |
+| A.14 native authority/IPC | 2-4 | exact state and relationship fixtures |
+| A.15 evidence/graph/response | 6-10 | deterministic artifacts and physical response results |
+| A.16 CI/artifact/provider authority | 10, optional 12 | provider/artifact contracts; separately allocated CI adapters |
+| Appendix B rejected designs | 0 and review in every phase | forbidden-contract lint and no historical authority |
+| Appendix C fixtures/completion | every phase, final 11 | exact registry equality and criterion mapping |
+| Appendix D sources | 0 | pinned digest/license/provenance/source-evidence registry |
+
+## Upstream Learning And Selective Adoption Gate
+
+Phase 0 produces an `UPSTREAM-ADOPTION-V1` dossier before product code is
+copied or derived. It must separately cover:
+
+| Source | Required lesson/prototype | Explicit rejection or limit |
+| --- | --- | --- |
+| Meta BpfJailer deck | component state graph, wildcard matching, mount-root map, lowest `mnt_id_unique` canonicalization, mount/rename/link protection, verifier/code-size budget | presentation is design evidence, not source-code provenance |
+| Independent Jailer | task-storage declaration, parent-to-child copy in `task_alloc`, bounded BPF map/state patterns | never use pending-PID delayed enrollment; its dentry-only walk/inode cache is not the path authority |
+| KubeArmor | BPF LSM pre-effect patterns, policy lowering, map publication, DNS/parser bounds, reader/loss behavior, mount traversal | missing identity cannot allow; action words/events do not prove physical results; no KubeArmor daemon |
+| Tetragon | early fork identity, non-leader exec, cgroup resolution, NRI facts, loss accounting, fresh maps, generic LSM lessons | process cache is not Mithril authority; runtime metadata does not invent purpose; no Tetragon daemon |
+
+Each adopted unit receives source path/commit/digest, license decision, local
+owner, changed behavior, hostile fixture, and a `copied`, `derived`, or
+`reimplemented` classification. Later implementation phases must cite the
+approved dossier entry; “inspired by upstream” is not enough.
+
+## Fixture Allocation
+
+The exact registry is architecture Appendix C. Phase ownership is:
+
+| Fixture family | Owning phase |
+| --- | --- |
+| schema, config, closure, source-evidence, hook feasibility | 0 |
+| boot, loader ownership, capability/readiness | 1 |
+| `ENTRY-*`, `ID-*`, task/process/exec/native-state lifecycle | 2 |
+| observe-side effect attribution and policy simulation | 3 |
+| `FILE-*`, `MEM-*`, `MOUNT-*`, `DEVICE-*`, local `IPC-*`, privilege denials | 4 |
+| `NET-*`, DNS, rewrite, socket lifetime and flow fence | 5 |
+| loss, coverage, WAL, restart, map/link/reader health | 6 |
+| `HF-LOCAL-*`, local findings, notification and authority-neutral replay | 7 |
+| `EDGE-K8S-*`, `XNODE-*`, Kubernetes fan-out and contradiction | 8 |
+| `HF-RESP-*`, local/distributed response and blast radius | 9 |
+| AWS/GitHub/connector/artifact/provider-granularity fixtures | 10 |
+| complete registry, criterion mapping, performance and release envelope | 11 |
+| `SECCOMP-QUAL-001`, checkpoint/stream/CI/L7/host-agent and optional-source fixtures only when separately allocated | 12 |
+
+No phase may rename, add, or remove a fixture without updating Appendix C,
+the registry artifact, criterion mapping, and owning phase in one review.
 
 ## Phase Index
 
@@ -300,65 +231,38 @@ not after implementation:
 - [Phase 11: Production Installation And Final Conformance](./phase-11-production-installation-and-final-conformance.md)
 - [Phase 12: Optional Ecosystem Compatibility](./phase-12-optional-ecosystem-compatibility.md)
 
-## Approval And Stop Workflow
+## Required Shape Of Every Phase Result
 
-1. The user approves one phase by name.
-2. The implementation follows only that phase's scope.
-3. The implementer updates that phase's `Phase Result` with exact files,
-   commands, kernels/runtimes, fixture IDs, results, gaps, and a
-   `Done`/`Not done`/`Blocked` state.
-4. Every code phase runs the repository Rust CI procedure after the final
-   relevant edit and the phase-specific BPF/kernel/cluster tests.
-5. Applicable phases run the live two-node lifecycle probe.
-6. The implementer stops and waits for explicit approval of the next phase.
+Each phase ends with this checked-in block:
 
-Phase completion never authorizes the next phase automatically.
-
-## Common Verification Gates
-
-Commands are future implementation requirements and are not claimed as run by
-this documentation change:
-
-```sh
-cargo fmt --all -- --check
-cargo check --workspace
-cargo test --workspace --all-targets --all-features
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-bash .github/scripts/verify-rust-ci.sh
-git diff --check
+```text
+State: Done | Not done | Blocked
+Validated architecture revision/digest:
+Completed deliverable IDs:
+Files and durable owners changed:
+Upstream-adoption dossier IDs used:
+Fixture cases and exact physical results:
+Commands and exact source state covered:
+Platform/kernel/runtime manifests:
+Performance/capacity results:
+Unsupported/degraded paths:
+Remaining work in this phase:
+Next phase not authorized:
 ```
 
-Phase 0 defines reproducible commands for:
+The result must be backed by committed Rust tests. Shell/live probes are
+additional evidence. After final Rust edits the repository CI procedure must
+pass; applicable phases also run the live two-node lifecycle probe.
 
-- C CO-RE compilation and skeleton generation;
-- per-kernel verifier/capability probes;
-- BPF unit and kernel selftests;
-- containerd and CRI-O root-admission tests;
-- the isolated two-node Kubernetes testbed;
-- packet, provider, restart, loss, and upgrade fault injection; and
-- performance comparison against the approved baseline.
+## Approval And Stop Points
 
-## Final Product Gate
+Stop after every phase. Also stop immediately before:
 
-Mithril is not ready merely because all phase files contain code. Phase 11 must
-prove, on every advertised full-support platform:
+- changing the validated architecture, signed policy/wire, or a durable owner;
+- adding a second node process or BPF loader;
+- weakening a deny, identity, evidence, coverage, or response invariant;
+- terminating workload TLS or inserting a proxy;
+- implementing any Phase 12 surface beyond its approved evaluation scope; or
+- widening a typed response actuator.
 
-1. one installation produces exactly one active node gatherer per node;
-2. the unchanged legitimate multi-job worker and controller remain functional;
-3. the safe incident driver reaches in-process execution but its first
-   prohibited physical effect is denied synchronously;
-4. no denied branch reaches the next incident stage;
-5. the same-process ambiguity case is detected from authoritative audit without
-   false TLS/kernel semantics and is contained within its declared bound;
-6. native and distributed identities remain exact across node, restart, PID,
-   object-name, IP, and cgroup reuse;
-7. cross-node fan-out, controller replacement, provider use, and late branches
-   remain visible and independently targetable;
-8. every response reports `verified`, `partial`, `failed`, or `unknown` from
-   physical postconditions and healthy required coverage;
-9. Runtime-only, Mithril-only, and co-resident modes preserve the one-owner and
-   watch-only authority boundaries; and
-10. mixed or unsupported kernels receive truthful reduced/observe/unsupported
-    status rather than an equivalent prevention claim.
-
-Phase 12 is optional and cannot be used to satisfy this gate.
+Only the user can approve those changes and the next phase.

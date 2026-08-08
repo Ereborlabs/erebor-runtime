@@ -1,5 +1,10 @@
 # Mithril: Linux-Native Prevention, Evidence, And Verified Response
 
+**Status: VALIDATED DESIGN AUTHORITY — 2026-08-08.** This is the sole normative
+Mithril architecture for implementation planning. Implementation still requires
+allocation and approval through the master plan and one named phase. Historical
+architecture text may explain rejected designs, but cannot override this file.
+
 Status: proposed architecture. This document does not authorize an
 implementation phase. The
 [master plan](./README.md) controls what may be built.

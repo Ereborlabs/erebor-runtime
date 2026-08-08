@@ -1,221 +1,93 @@
 # Phase 10: Provider Connectors And Recovery
 
-Status: Not started.
+Status: Proposed; depends on Phase 9 `Done`.
 
-Master plan: [Mithril Hugging Face Intrusion Prevention](./README.md)
+Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
+Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 
 ## Purpose
 
-Correlate and recover the post-Kubernetes incident expansion through provider,
-mesh, connector, queue/artifact, cloud, and source-control authorities using
-their real operation and revocation semantics.
+Add separately qualified provider, mesh, connector, and artifact evidence/
+authority modules and one narrow typed actuator per approved capability.
 
-## Depends On
+## Design Coverage
 
-Phase 9 must be `Done`. Each adapter is a separately approved sub-checkpoint.
-Approval to read provider audit is not approval to mutate provider state.
+Chapters 23-26; Appendices A.10, A.15, and A.16.
 
-## Phase Scope
+## Deliverables
 
-### Connector Framework
+### D10.1 — Connector framework without generic authority
 
-Create provider modules under:
+Implement authenticated source health, cursor/checkpoint, schema/version,
+rate/backoff, replay/dedupe, coverage, proof quality, secret redaction, and
+registered edge contracts. A generic connector cannot issue arbitrary provider
+requests or claim an operation succeeded.
 
-```text
-crates/mithril-control/src/connectors/
-  mod.rs
-  health.rs
-  cursor.rs
-  aws.rs
-  mesh.rs
-  internal_connector.rs
-  source_control.rs
-  artifact.rs
-  queue.rs
-```
+### D10.2 — AWS and Google authority/evidence modules
 
-Each adapter defines:
+Bind login/issuance/session/audit identities, account/project/principal,
+request/source evidence, expiry/revocation limits, and exact provider result.
+Shared access-key or principal evidence stays shared unless stronger lease/
+session/request proof exists. Secrets never enter evidence.
 
-- authenticated tenant/account/authority binding;
-- raw source schema, cursor, delay, retry, dedupe, and coverage;
-- immutable provider request/event/resource IDs;
-- secret/body redaction;
-- normalized observation/action/result vocabulary;
-- direct and contextual join keys;
-- read credential separate from response credential;
-- narrow typed response classes;
-- approval/blast-radius policy;
-- idempotency and expiry;
-- physical postconditions; and
-- sandbox/live conformance tests.
+### D10.3 — GitHub/source-control module
 
-Connectors run in Mithril Control's operational boundary or consume an existing
-audit feed. They are not additional privileged Linux node gatherers.
+Implement exact installation/repository/workflow/artifact/audit identities and
+the provider-supported permission boundary. Direct TLS cannot distinguish
+clone/push or arbitrary verbs; prevention uses provider capability or whole-
+channel policy, otherwise audit is post-effect.
 
-### Cross-Boundary Edge Types
+### D10.4 — Mesh, connector, and artifact modules
 
-Add only provider-backed edges:
+Represent mesh/network device identity, connector delegation, immutable
+artifact handoff, attestation predicates, generated/executed bytes, and
+alternate causal branches. A connector or artifact edge never becomes process
+parentage or execution permission by itself.
 
-```text
-credential_obtained_by
-credential_used_for_request
-connector_forwarded_request
-remote_command_started_execution
-message_published
-message_consumed
-artifact_produced
-artifact_loaded
-network_communication
-```
+### D10.5 — Typed provider actuators
 
-Direct edges require exact lease/access-key, source/destination request,
-message/offset, immutable artifact, and receiver execution identifiers as
-applicable. Principal names, repository names, tags, filenames, IPs, and time
-remain contextual.
+For each advertised capability, implement one operation-specific request,
+authorization, dry-run/simulation if real, idempotency, exact handle
+re-resolution, provider response, authoritative readback, expiry, and recovery.
+An audit token/hash is not assumed to be a revocation handle.
 
-### AWS
+### D10.6 — Provider graph and HF expansion
 
-Ingest CloudTrail-compatible:
+Complete the `HF-013` through `HF-020` branches with exact, shared-principal,
+contextual, or contradiction edges as supported. Prove granular AWS/GitHub/
+mesh/connector/artifact actions and recovery without merging uncertain paths.
 
-- account/region/event ID/time;
-- access-key ID, principal ARN, role session;
-- source address;
-- event source/name/resources/result; and
-- delivery/cursor coverage.
+### D10.7 — CI/artifact foundation only
 
-Implement only approved actions. If the available recovery is
-role-session revocation before a cutoff, show every expected impacted principal
-and require high-blast-radius approval. Do not call it exact token revocation.
-Isolate the workload first so it cannot immediately obtain new credentials.
+Implement reusable provider job/artifact/credential records required by
+Appendix A.16 where they are already supplied by Phase 10 providers. Do not
+claim named GitHub Actions/GitLab/Jenkins/Tekton step enforcement; those
+adapters remain a Phase 12 allocation decision.
 
-### Mesh
+## Required Tests And Fixtures
 
-Retain tailnet/tenant, auth-key identity when available, device ID, node key,
-tags, source, and created time.
-
-Separate:
-
-- auth-key deletion, which prevents new enrollment; and
-- exact device deletion, which removes an already enrolled device.
-
-Verification must prove both where both are requested.
-
-### Internal Connector
-
-A direct forwarding edge requires authenticated source and destination request
-IDs. A shared principal plus timing remains contextual.
-
-If the deployed connector has one broad `system:masters`-like credential, the
-only physical action may be disabling/rotating the shared broker. Simulate and
-disclose its full blast radius; do not describe it as narrow.
-
-### Queue And Artifact
-
-- Queue joins require a broker message ID or stable partition/offset plus
-  authenticated producer and consumer evidence.
-- Artifact joins require an immutable digest/revision at production and load.
-- Queue name, repository name, package name, mutable tag, or filename is not a
-  direct causal identity.
-- Remote execution requires receiver-side request/execution evidence in
-  addition to network communication.
-
-### GitHub/Source Control
-
-Retain enterprise/org, App ID, installation ID, token fingerprint when safely
-available, actor, repository ID, audit event ID, operation, resource, and
-result.
-
-Provider audit, not direct TLS, distinguishes clone, push, token mint,
-workflow, release, package, or repository mutation.
-
-Implement separate response classes:
-
-- revoke a known installation token through its provider-supported exact
-  mechanism when the secret is safely available; and
-- suspend/uninstall the wider App installation with explicit approval.
-
-Verification searches for later unauthorized commits, branches, workflows,
-releases, packages, and image digests.
-
-## Hugging Face Test Increment
-
-Implement `HF-PROV-001` and map:
-
-- `HF-013` repository dead-drop;
-- `HF-014`–`HF-016` mesh and connector discovery/use;
-- `HF-017` AWS credential validation/use;
-- `HF-018` installation-token mint and source-control/CI attempt;
-- `HF-019` request/message/artifact remote-loader propagation; and
-- `HF-020`–`HF-021` late provider branches during the response watch.
-
-Use dedicated sandbox tenants/accounts/repositories or schema-valid simulators.
-No production provider authority is permitted.
-
-## Code-Backed Tests
-
-For every adapter:
-
-- source authentication, schema, redaction, cursor, gap, replay, dedupe, delay,
-  and clock-skew tests;
-- tenant/account/resource binding and forged payload rejection;
-- direct/contextual/contradicted join tests;
-- two concurrent principals/resources with equal display names;
-- missing exact key degrades response eligibility;
-- read credential cannot invoke response;
-- response credential is limited to allowlisted action/resource;
-- simulation, approval, idempotency, expiry, provider error, postcondition, and
-  rollback where possible;
-- flow-only evidence cannot identify provider operation;
-- late/contradictory event creates a new graph/finding version;
-- connector removal leaves local Mithril guarantees intact; and
-- `HF-PROV-001` live/sandbox tests.
-
-Provider-specific tests additionally prove:
-
-- AWS exact identity versus role-wide cutoff;
-- mesh auth key versus enrolled device;
-- connector end-to-end request IDs versus shared-principal timing;
-- queue message and artifact digest joins;
-- GitHub known-token revocation versus installation suspension; and
-- later source-control effects are enumerated after response.
-
-## Live Probe
-
-Run Probe F separately for every approved adapter, then run the combined
-provider branches of Probe E with one delayed and one unavailable provider.
-
-## Checkpoint
-
-For each adapter, run the common repository gates, source/cursor/join/security
-suite, provider-specific action/postcondition suite, isolated live Probe F, and
-combined delayed/unavailable-provider response. Approve adapters separately;
-one passing adapter cannot mask another.
+Applicable `EDGE-AWS-*`, `EDGE-GITHUB-*`, `EDGE-CONNECTOR-*`,
+`EDGE-ARTIFACT-*`, provider `HF-GRAN-*`, issuance/replay/dry-run/readback,
+shared-principal, late/duplicate/cursor-gap, and provider-outage fixtures.
 
 ## Acceptance
 
-- every provider fact retains authoritative IDs, raw provenance, and source
-  coverage;
-- display names/time/flow alone never create direct provider causality;
-- direct TLS never supplies operation semantics;
-- each connector uses separate read and response authority;
-- each response class matches the provider's real granularity;
-- shared credentials/connectors disclose broad blast radius;
-- provider response results require physical postconditions;
-- delayed/unavailable/outside-authority branches force versioning,
-  `partial`, or `unknown`;
-- the `HF-013`–`HF-019` fixture branches correlate and recover at their
-  declared strength; and
-- removing a provider adapter does not weaken local node prevention.
+- Every connector authenticates its real source and publishes exact coverage.
+- Every direct edge follows a registered provider contract; weaker facts remain
+  weaker branches.
+- Every actuator is capability-specific, idempotent, and physically verified.
+- Same-TLS semantic limits remain explicit.
+- Provider outage or ambiguity cannot widen local authority or produce a false
+  verified recovery.
 
-## Explicit Stop Point
+## Excluded
 
-Stop after each individually approved provider adapter passes. Phase 11 is the
-only phase allowed to make the complete production conformance claim.
+Named CI runner adapters, arbitrary provider actions, TLS interception, and
+Phase 12 optional surfaces.
 
 ## Phase Result
 
-State: Not started.
-
-Record each adapter's source/action credentials, schemas, provider semantics,
-test tenants, join/postcondition results, unavailable branches, performance,
-and final state.
+State: Not done.  
+Completed deliverables: none.  
+Verification: not run; this is a plan rewrite.  
+Next phase: not authorized.

@@ -1,4 +1,10 @@
-# Mithril Policy And Protection Algorithm Architecture
+# Mithril Policy And Protection Algorithm Architecture — Superseded
+
+**Status: SUPERSEDED HISTORICAL RECORD — 2026-08-08.** This earlier architecture
+is retained only for design history and rejected alternatives. It is not an
+implementation authority and must not be used to fill gaps in the validated
+[readable architecture](./policy-and-protection-algorithm-architecture-readable.md).
+When the files disagree, the readable architecture controls.
 
 Status: Proposed architecture companion. This document does not authorize an
 implementation phase. An approved phase may implement only the part assigned

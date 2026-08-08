@@ -1,260 +1,144 @@
 # Phase 0: Substrate, License, ABI, And Incident Baseline
 
-Status: Not started.
+Status: Proposed. This phase is not authorized until approved by name.
 
-Master plan: [Mithril Hugging Face Intrusion Prevention](./README.md)
+Master: [Mithril Hugging Face Intrusion Prevention](./README.md)  
+Design authority: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 
 ## Purpose
 
-Freeze the buildable kernel/userspace substrate, current-repository module
-tree, upstream adoption boundary, supported-platform tiers, incident fixture,
-and quantitative budgets before production Mithril code is created.
+Prove the selected stock kernel/runtime mechanisms before freezing contracts.
+Close the Version-1 types, shared Interceptor boundary, source provenance,
+fixtures, and performance budgets needed by all later phases.
 
-This phase answers whether Rust plus upstream libbpf can own the complete loader
-and whether the selected Linux hooks can prove Mithril's claims. It does not
-select a third-party daemon because it is already available in the workspace.
+## Design Coverage
 
-## Current Baseline
+- Chapters 1-5: product/claim/trust boundaries.
+- Chapters 10-14: invariants, policy, decision and mechanism feasibility.
+- Chapters 15-21: prototype every allocated Linux effect family.
+- Chapters 27-30 and Appendix D: upstream learning and checked evidence.
+- Chapters 31, 33-36 and Appendices A.1-A.13, B, C: qualification,
+  ownership, exact types, rejected contracts, fixtures, and delivery gates.
 
-- The workspace has no Mithril or shared Linux-sensor crates.
-- The repository has no owned BPF source tree.
-- Runtime's current Linux process guard uses ptrace and is a separate product
-  path.
-- The architecture research proposes Rust/libbpf userspace, owned C CO-RE BPF,
-  one node gatherer, BPF LSM/cgroup enforcement, exact native identity, and
-  Mithril Control.
-- Local Tetragon, KubeArmor, Falco, Linux-tooling, and other checkouts are
-  research inputs only.
-- The incident analysis defines 68 acceptance requirements and three core
-  detection packages, but no executable Mithril fixture exists.
+## Deliverables
 
-## Phase Scope
+### D0.1 — Architecture closure and traceability
 
-### Freeze The Proposed Tree And Dependencies
+Produce a machine-checked ledger containing every Chapter 1-37 section,
+Appendix A.1-A.16 contract family, invariant, fixture ID, durable owner, and
+owning phase. Reject unknown references, duplicate fixture IDs, active rejected
+contract names, and a phase without a physical oracle.
 
-Approve or replace the exact proposed paths in the master README:
+### D0.2 — Shared Interceptor ownership decision
 
-```text
-bpf/erebor-linux-sensor/
-crates/erebor-linux-sensor-abi/
-crates/erebor-linux-sensor-host/
-crates/mithril-node/
-crates/mithril-control/
-crates/mithril-e2e/
-packaging/mithril/
-```
+Approve the exact crate/module names for the shared Interceptor family. The
+decision must:
 
-Record the dependency direction:
+- inventory `erebor-runtime-core::interception`, the Session interception
+  broker/backend, and the Linux kernel-native enforcement plan;
+- identify portable concepts to move, Session-only concepts to retain, and
+  compatibility adapters to test;
+- assign one exclusive loader/link/map/pin-root owner in Runtime-only,
+  Mithril-only, and co-resident modes; and
+- prohibit an independent Runtime BPF loader after the shared owner exists.
 
-```text
-erebor-linux-sensor-abi
-          ▲
-          │
-erebor-linux-sensor-host
-          ▲
-          │
-      mithril-node ─────────────► mithril-control wire contracts
+The expected boundary is `erebor-interceptor-abi` plus
+`erebor-interceptor`, embedded by `mithril-node`; Phase 0 may rename it without
+changing the one-owner result.
 
-mithril-e2e may depend on product crates; no production crate depends on e2e.
-Runtime may consume ABI/host observation APIs but no Mithril node/control crate.
-```
+### D0.3 — Pinned upstream adoption dossier
 
-The phase must explicitly resolve the architecture research's open question
-about exact crate/module names. Later phase plans are updated if different names
-are approved.
+Create one record per copied, derived, or reimplemented unit from:
 
-### Select And Pin The Toolchain
+- Meta BpfJailer: mount-root index, lowest-`mnt_id_unique`
+  canonicalization, state-graph wildcard matching, mutation protection, and
+  verifier/code-size limits;
+- independent Jailer: task storage and parent-to-child `task_alloc` copying;
+- KubeArmor: BPF LSM decisions, policy lowering/publication, path/mount/DNS
+  mechanics, prior denial, bounds, readers, and loss; and
+- Tetragon: early fork context, non-leader exec, cgroup/runtime joins, fresh
+  maps, generic LSM behavior, concurrency, and loss.
 
-Record exact versions and reproducible installation/build inputs for:
+Every record includes repository/commit/file/lines or PDF digest/slides,
+license, transitive dependencies, local owner, semantic differences, and
+hostile fixture. Explicitly reject Jailer's pending-PID enrollment and
+dentry-only inode-cache authority, and reject upstream daemons as product
+chassis.
 
-- `libbpf-rs`;
-- `libbpf-cargo`;
-- upstream libbpf and the selected license option;
-- Clang/LLVM;
-- bpftool, if retained;
-- Rust toolchain and supported targets;
-- BTF generation/source policy;
-- C compiler flags and BPF target architectures; and
-- generated-skeleton/object provenance.
+### D0.4 — Hostile feasibility prototypes before ABI freeze
 
-Build an owned vertical spike through the proposed Rust host crate. It must
-compile, load, attach, receive one ring-buffer lifecycle event, run one LSM
-allow/deny probe, run one cgroup socket probe, detach, restart, and reconcile
-pinned state without an upstream Go or C daemon.
+On each candidate platform, compile, load, and physically probe:
 
-### Freeze The Raw ABI
+1. BPF LSM activation/order, BTF/CO-RE, helpers, task storage, cgroup hooks,
+   attach/link/map limits, prior-result behavior, and failure results;
+2. `task_alloc`, fork/thread/vfork, non-leader exec, success/failure/PONR, and
+   first-protected-effect identity availability;
+3. Meta's bounded component graph plus mount-root-to-oldest-mount traversal,
+   including the `/var/run/secrets/service` to `/work/input/job-42` bind-alias
+   fixture and an ordinary-subdirectory limitation;
+4. pre-effect DIRTY ordering for mount/move/unmount/pivot/namespace/rename/link
+   mutations and complete snapshot reconciliation;
+5. file, exec, mmap/mprotect, IPC, socket, final-flow, DNS, device/ioctl,
+   process-control, privilege, and self-protection decision points; and
+6. verifier, stack, instruction, map, component-depth, latency, throughput,
+   saturation, N/N+1, and evidence-loss behavior.
 
-Create a versioned ABI design before proliferating events:
+A failing surface remains unsupported and is absent from the frozen claim.
 
-```text
-AbiHeader {
-  magic
-  abi_major
-  abi_minor
-  record_kind
-  record_size
-  source_cpu
-  node_boot_hash_or_runtime_binding
-  label_epoch
-  source_sequence
-  monotonic_time_ns
-  program_generation
-  policy_generation
-  flags
-}
-```
+### D0.5 — Closed types, schemas, ABI, and goldens
 
-Define:
+Only after D0.4 passes, implement the Appendix A foundation and type-closure
+records, generated Rust/C layouts, closed enums/unions, source policy schema,
+compiled generation/signature/rollback schema, kernel decision ABI, evidence
+envelope, capability/performance/result bundles, fixture registry, and golden
+bytes. Rust and C must consume generated definitions from one authority.
 
-- fixed-width C/Rust layout and endianness;
-- alignment, size and compile-time assertions;
-- additive compatibility and major-version rejection;
-- redaction rules;
-- bounded variable payload rules;
-- sequence/loss accounting;
-- unknown-record handling;
-- skeleton/object-to-ABI digest binding; and
-- fuzz inputs for malformed and future records.
+### D0.6 — Reproducible testbed and incident baseline
 
-No public Mithril product API exposes raw BPF structs.
+Create the safe Hugging Face fixture skeleton, exact stage/postcondition map,
+two-node platform manifests, deterministic replay inputs, capability probe
+runner, benchmark runner, and fixture-registry equality test. Record the
+unchanged workload digest before any enforcement.
 
-### Complete The License And Provenance Gate
+### D0.7 — Mithril Control/node security bootstrap decision
 
-Inventory every candidate implementation reference from the exact local
-revisions already recorded in the architecture research. For each candidate
-mechanism classify:
+Specify only what Phase 1 needs: node identity issuance, trust roots, mutual
+TLS, outbound gRPC connection, version negotiation, replay/sequence handling,
+and failure posture. Do not freeze a public API or provider connector surface.
 
-```text
-study behavior | reimplement | adapt selected source | reject
-```
+### D0.8 — Phase result and implementation authorization boundary
 
-For every adapted file record:
+Publish all supported/unsupported prototype results, approved upstream dossier
+IDs, closed-contract digest, platform budgets, and the exact Phase 1 scope.
 
-- repository and immutable revision;
-- path, copyright and SPDX;
-- complete transitive include closure;
-- modification record;
-- selected license option;
-- notices/source-distribution obligations;
-- generated-object provenance; and
-- upstream security-update owner.
+## Required Tests And Fixtures
 
-The default is owned reimplementation. In particular,
-`tetragon/bpf/lib` is not treated as libbpf, and repository-level license labels
-are not accepted as a per-file result.
-
-### Build The Kernel And Platform Matrix
-
-Probe, do not infer from kernel version:
-
-- active `bpf` LSM and `CONFIG_BPF_LSM`;
-- BTF/CO-RE viability;
-- selected LSM hooks and denial return behavior;
-- task and socket local storage;
-- iterators and required helpers/kfuncs;
-- ring buffer and per-CPU loss accounting;
-- cgroup v2 connect/send/packet/device attachments;
-- TC fallback where proposed;
-- pidfd and cgroup freezer behavior;
-- bpffs/link/map pinning and lockdown;
-- containerd and CRI-O create/start integration points; and
-- coexistence with baseline Cilium, Calico, and another supported CNI.
-
-Assign `full`, `enforce-reduced`, `observe`, or `unsupported` from measured
-capabilities. A nominal Linux version is not a support result.
-
-### Establish Performance And Recovery Budgets
-
-Set absolute Phase 0 budgets for:
-
-- allowed and denied fork/exec;
-- allowed and denied file open/read/write/mmap;
-- TCP/UDP connect/send;
-- ring-buffer saturation and loss;
-- node CPU/memory;
-- local spool;
-- profile swap;
-- root-admission latency;
-- restart/reconcile time;
-- control disconnection; and
-- `runtime-observe`, `mithril-observe`, and `mithril-protect`.
-
-Use Runtime's current ptrace behavior only as a comparison. “Faster than
-ptrace” is not an acceptance budget.
-
-### Create The Standing Incident Fixture
-
-Create the safe skeleton specified in
-[Hugging Face Adversarial Acceptance](./hugging-face-adversarial-acceptance.md):
-
-```text
-crates/mithril-e2e/
-├── fixtures/hugging-face/
-│   ├── manifests/
-│   ├── worker/
-│   ├── controller/
-│   ├── provider-simulators/
-│   └── source-records/
-├── src/fixture/
-│   ├── manifest.rs
-│   ├── coverage.rs
-│   └── result.rs
-└── tests/
-    ├── hugging_face_baseline.rs
-    └── substrate_capabilities.rs
-```
-
-The worker supports concurrent logical jobs in one interpreter and a safe
-in-process effect driver. It contains no original exploit payload, production
-credential, or external exfiltration destination.
-
-## Code-Backed Tests
-
-- C/Rust ABI layout equivalence on every target architecture.
-- Rust decoder property/fuzz tests for length, version, kind, alignment, and
-  unknown fields.
-- Object digest and source/toolchain provenance reproducibility.
-- One-owner pin-root lease: first owner succeeds, overlapping second owner
-  refuses and creates coverage evidence.
-- Mode authority tests: `runtime-observe` cannot load denial/response programs
-  or obtain writable map handles.
-- Capability probes fail with named classifications for every intentionally
-  removed feature.
-- Vertical allow/deny probes prove return behavior rather than event receipt.
-- `HF-BASE-001` fixture starts and completes concurrent legitimate work without
-  requiring a job event.
-- Performance harness produces machine-readable baseline output.
-
-## Checkpoint
-
-Run the repository documentation/Rust gates plus Phase 0's recorded BPF build,
-ABI, capability, fixture, and benchmark commands. Preserve the exact kernel,
-toolchain, object digests, and output artifacts.
+- `CFG-V1-GOLDEN-002`, `CFG-ROLLBACK-GOLDEN-002`,
+  `DECISION-SET-GOLDEN-001`, `FIXTURE-REGISTRY-COMPLETE-001`.
+- `SOURCE-KA-PARTIAL-ATTACH-001`, `SOURCE-KA-STACK-PER-HOOK-002`,
+  `SOURCE-KA-READER-LOSS-003`, `SOURCE-KA-BOUNDS-004`,
+  `SOURCE-KA-CAPACITY-005`, `SOURCE-TG-RUNTIME-JOIN-006`,
+  `SOURCE-TG-EXEC-MAP-007`, `SOURCE-TG-PATH-RENAME-008`.
+- Feasibility instances of the owning later-phase fixtures; these prove hooks
+  and bounds but do not complete the later product capability.
 
 ## Acceptance
 
-- exact crate/module/path names and dependency direction are approved;
-- the Rust/libbpf spike owns load/attach/maps/links/events/recovery;
-- no upstream daemon is required;
-- every adapted source file has an approved provenance disposition;
-- every required guarantee maps to a tested hook or a named missing capability;
-- full/reduced/observe/unsupported tiers are produced from probes;
-- the raw ABI is versioned and cross-language layout-tested;
-- the safe incident fixture runs the unchanged multi-job control;
-- one active owner and the Runtime watch-only boundary are physically tested;
-- absolute performance/recovery budgets are recorded; and
-- no production capability is credited to an unverified upstream assumption.
+- Every allocated surface has a passing physical prototype and exact bound, or
+  is explicitly unsupported.
+- No ABI/type was frozen before its mechanism proof.
+- One shared Interceptor owner is approved across both master plans.
+- Every adopted upstream unit has a license/provenance record and hostile test.
+- The fixture/coverage ledger accounts for the entire validated architecture.
 
-## Explicit Stop Point
+## Excluded
 
-Stop after presenting the substrate, license, ABI, capability, fixture, and
-performance results. The user must approve Phase 1 and the final Phase 0 path
-decisions before the production node chassis is created.
+No product daemon, production policy enforcement, provider connector,
+response actuator, or optional Phase 12 surface ships here.
 
 ## Phase Result
 
-State: Not started.
-
-When complete, record exact files, selected versions, copied/adapted source
-dispositions, testbed kernels/runtimes, commands, results, budgets, gaps, and
-`Done`, `Not done`, or `Blocked`.
+State: Not done.  
+Completed deliverables: none.  
+Verification: not run; this is a plan rewrite.  
+Next phase: not authorized.

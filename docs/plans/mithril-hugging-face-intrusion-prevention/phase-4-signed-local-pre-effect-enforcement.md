@@ -1,163 +1,109 @@
 # Phase 4: Signed Local Pre-Effect Enforcement
 
-Status: Not started.
+Status: Proposed; depends on Phase 3 `Done`.
 
-Master plan: [Mithril Hugging Face Intrusion Prevention](./README.md)
+Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
+Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 
 ## Purpose
 
-Turn the reviewed Phase 3 profile into local synchronous exec, file/code,
-device, privilege, process-control, namespace, and kernel-surface decisions.
+Activate signed immutable policy for every qualified non-network local effect
+and prove the forbidden physical effect does not occur.
 
-This phase proves that the effect itself is denied before completion. It does
-not yet claim complete network prevention or multi-node response.
+## Design Coverage
 
-## Depends On
+Chapters 10-18 and 20-21; Appendices A.11-A.14.
 
-Phase 3 must be `Done`, and the user must approve the exact signed profile,
-effect classes, kernel tiers, fail behavior, and canary scope.
+## Deliverables
 
-## Phase Scope
+### D4.1 — Atomic policy activation and lookup
 
-### Enforcement Programs
+Stage a complete generation, validate signature/rollback, read back every set
+and bound, run allow/deny probes, and switch one active pointer with CAS.
+Implement the Appendix A.12 task-first lookup: base authority intersected with
+restriction, response, lifetime, and exact-object floors. Missing required
+state denies; cached explanations never authorize.
 
-Add the Phase 0-approved BPF LSM, cgroup-device, and related pre-effect paths:
+### D4.2 — Exec and executable-memory enforcement
 
-- `bprm_check_security` and required script/interpreter/code-loading checks;
-- file open/permission, mmap, inode/path, descriptor-receive/use, and ioctl
-  hooks required by the declared matrix;
-- device read/write/`mknod` and ioctl decisions;
-- capability, credential, ptrace/process-control, namespace, mount, BPF, perf,
-  keyring, and module decisions; and
-- missing-label and emergency response-root checks at every protected hook.
+Deny forbidden `execve`, `execveat`, `fexecve`, script/interpreter,
+`binfmt_misc`, loader, memfd/deleted-file, non-leader exec, executable mmap,
+and mprotect/pkey transitions. Authorization binds immutable image/object and
+current exec/native state, not a command string or path alone.
 
-Preserve a prior LSM denial. Return the selected denial from the authoritative
-hook. Evidence reservation failure increments loss/coverage state but does not
-turn a denial into allow.
+### D4.3 — File, credential, and mount enforcement
 
-Each program decision is a bounded lookup over validated numeric keys:
+Enforce exact open/read/write/create/setattr/rename/link/unlink/mmap decisions,
+projected-token rotation, proc aliases, inherited/passed fds, overlay copy-up,
+persistent objects, and delegated-I/O acquisition. Mount/topology mutations
+are denied where undeclared; any allowed change enters DIRTY before effect and
+blocks strict file/exec decisions until complete reconciliation. Canonical path
+matching remains only an exact-object candidate.
 
-```text
-protected workload/cgroup
-  + current TaskLabel/profile generation/role
-  + immutable object/effect key
-  + response-root state
-  → allow or hook-specific denial
-```
+### D4.4 — IPC and process-control enforcement
 
-No normal allowed decision calls userspace.
+Enforce directional Unix/local-channel relationships and process-control
+operations using current actor, exact peer/target, channel/object generation,
+and operation. Independent roots never join native authority. Pipes and shared
+memory retain their honest peer/per-access limits; unsupported async paths are
+denied or explicitly unsupported.
 
-### Signed Generation Lifecycle
+### D4.5 — Devices, derived authority, privilege, and self-protection
 
-The `mithril-node` policy owner must:
+Enforce device access/ioctls/derived fds, credential/capability changes,
+namespace/mount/pivot, ptrace/process-vm/pidfd, BPF/perf/module/keyring,
+proc/sysctl, io_uring, and protection of Mithril links/maps/config/binary. Each
+advertised operation has a qualified pre-effect hook and physical oracle.
 
-1. authenticate and validate the profile artifact;
-2. reject stale, expired, wrong-image, wrong-capability, or unrepresentable
-   content;
-3. compile a complete inactive map generation;
-4. load/read back maps and links;
-5. run generation-specific allow/deny probes;
-6. atomically activate the generation;
-7. retain the prior verified generation while referenced; and
-8. roll back or preserve prior enforcement on failure/restart.
+### D4.6 — Bounded exceptions and administrative exec
 
-An incomplete new generation never partially overlays the old one.
+Implement exact, signed, expiring exceptions with `maximum_uses`. Consumption
+is atomic in the matching BPF rule/map entry; a nonmatching rule/program cannot
+consume or reuse it. Implement the approved one-use administrative exec path,
+including resolved executable object, full argv match, deadline, slot
+consumption, normal exec-chain policy, and accepted next-match race disclosure.
+`claim_slot_id` remains optional outside that path.
 
-### Decision And Postcondition Evidence
+### D4.7 — Optional qualified Landlock floor
 
-Every denied effect includes:
+If the Phase 0 platform/start path qualified Landlock target-context install,
+install and prove the monotonic floor before untrusted code. Otherwise record
+Landlock absent. Local BPF enforcement and this phase's release result cannot
+depend on an unavailable Landlock path.
 
-- native and workload identity;
-- exact role and profile/program/policy generations;
-- object/effect key;
-- requested access/transition;
-- matched or missing rule;
-- hook and returned errno;
-- source sequence and coverage; and
-- a testable effect-specific postcondition.
+### D4.8 — HF local prevention increment
 
-Signal delivery is recorded separately and never upgrades a denial claim.
+For each allocated local `HF-009` through `HF-012` branch, identify and deny
+the first distinguishable forbidden effect, prove it did not complete, and
+prove the legitimate same-deployment control still succeeds.
 
-### Emergency Local Restriction Primitive
+## Required Tests And Fixtures
 
-Implement the in-kernel `response_roots` check and generation update needed for
-later Phase 9 response, but expose it only to an internal Phase 4 controlled
-probe. Full authorization, pidfd stopping, socket fencing, cgroup widening, and
-distributed response remain out of scope.
-
-## Hugging Face Test Increment
-
-Promote these scenarios from simulation to physical denial:
-
-- `HF-LOCAL-001`: the same interpreter cannot read the protected
-  environment/token object when its role does not need it;
-- `HF-LOCAL-002`: unapproved `python → sh/curl/tailscale`, changed binary, and
-  alternate exec forms never install an execution image;
-- `HF-LOCAL-003`: device, process-memory, namespace, mount, privilege, BPF,
-  perf, keyring, and module effects fail for the fixture role; and
-- the `HF-010` driver remains the same `ExecutionInstance`, proving Mithril
-  denied its first prohibited external effect rather than claiming to detect
-  Python computation.
-
-Every scenario asserts that its forbidden later stage did not execute. The
-legitimate worker/controller controls must continue to pass.
-
-## Code-Backed Tests
-
-- allow, deny, missing-label, prior-LSM-denial, and event-reservation-loss paths
-  for every advertised hook;
-- child-before-first-effect and fork-bomb race tests;
-- already-open descriptor, passed descriptor, mmap/shared-memory, and alias
-  cases against the exact claimed coverage;
-- exec/interpreter/`memfd`/content-mutation bypass matrix;
-- device/ioctl and privilege/escape matrix;
-- unsigned, stale, expired, wrong-image, partial, and incompatible profile
-  rejection;
-- atomic generation activation, concurrent tasks on old/new generations,
-  failed swap, rollback, and loader restart;
-- response-root controlled restriction probe;
-- physical postcondition checks for bytes, file metadata/content, execution
-  image, device state, capability/namespace state, and kernel object state; and
-- legitimate unchanged fixture plus performance budgets.
-
-## Live Probe
-
-Run Probes A and B for every enabled local effect family, plus relevant Probe G
-restart, loss, profile-swap, and rollback cases.
-
-## Checkpoint
-
-Run the common repository gates, per-hook allow/deny and bypass matrices,
-generation/recovery tests, every physical postcondition probe, and the live
-canary. Record the exact approved profile/program generations and prove the
-protected deployment digest did not change.
+All applicable `FILE-*`, `MEM-*`, `MOUNT-*`, `DEVICE-*`, local `IPC-*`,
+`STATE-PERSISTENT-FILE-LIFETIME-007`, `IPC-ASYNC-UNSUPPORTED-010`,
+`ADMIN-EXEC-APPROVAL-001`, `NODE-FLOOR-EXCEPTION-002`, `SELF-PROTECT-001`,
+`HF-LOCAL-001`, and exact effect golden cases in Appendix C.
 
 ## Acceptance
 
-- a prohibited executable image never runs;
-- a prohibited file read returns no bytes and a prohibited mutation leaves
-  content/metadata unchanged;
-- prohibited code loading, device, privilege, process-control, namespace,
-  mount, and kernel-surface effects fail before completion;
-- a missing task label fails closed only inside the explicitly protected scope;
-- expected legitimate effects remain functional;
-- profile generations are signed, complete, atomic, recoverable, and
-  rollback-capable;
-- enforcement continuity and evidence continuity remain separate;
-- the local incident scenarios stop before their next forbidden stage;
-- signal-only results are not called prevention; and
-- latency/CPU/memory remain within the approved budgets.
+- Every advertised denial returns before the named effect and has a physical
+  negative oracle.
+- Signed generation/rollback/conflict/default behavior is deterministic and
+  atomically active.
+- Mount, alias, identity, fd, mmap, async, and object-reuse bypasses do not
+  widen authority.
+- Exceptions cannot exceed `maximum_uses` or be consumed by unrelated entries.
+- Normal worker, controller, probes, lifecycle, and approved admin controls
+  remain functional.
 
-## Explicit Stop Point
+## Excluded
 
-Stop after approved local effect classes pass canary and incident tests. Do not
-claim complete `HF-012` or established-flow prevention until the user approves
-the Phase 5 network plane.
+Destination-aware network enforcement, durable distributed evidence, graph
+correlation, and response coordination.
 
 ## Phase Result
 
-State: Not started.
-
-Record exact programs/hooks/maps, profile generation, denial/postcondition
-results, bypass matrix, kernels, live artifacts, performance, gaps, and final
-state.
+State: Not done.  
+Completed deliverables: none.  
+Verification: not run; this is a plan rewrite.  
+Next phase: not authorized.

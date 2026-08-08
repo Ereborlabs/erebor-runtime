@@ -1,190 +1,87 @@
 # Phase 6: Durable Evidence, Coverage, And Recovery
 
-Status: Not started.
+Status: Proposed; depends on Phase 5 `Done`.
 
-Master plan: [Mithril Hugging Face Intrusion Prevention](./README.md)
+Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
+Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 
 ## Purpose
 
-Make source quality, local durability, acknowledgement, recovery, and
-enforcement continuity first-class security state before central correlation is
-allowed to make multi-source conclusions.
+Make local observations durable and loss-aware without coupling the already
+decided physical deny to userspace delivery. Prove truthful restart and
+generation recovery.
 
-## Depends On
+## Design Coverage
 
-Phase 5 must be `Done`, with the local task/effect/network decision path and
-program generations fully tested.
+Chapters 9, 22, 31-33; Appendices A.3-A.7 and A.15.1-A.15.2.
 
-## Phase Scope
+## Deliverables
 
-### One Node Event Pipeline
+### D6.1 — Canonical local observations
 
-The `mithril-node` evidence owner is the only normalized userspace path for
-owned kernel events:
+Normalize every node source into `ObservationEnvelopeV1` with deterministic
+ID, source epoch/sequence, task/object/policy coordinates, result stage, proof
+quality, coverage interval, and bounded typed payload. Secret bytes and raw
+administrative argv never enter normal telemetry.
 
-```text
-per-CPU ABI records
-  → ABI validation and source sequence merge
-  → identity/effect normalization
-  → append-only local WAL commit
-  → outbound batch with contiguous acknowledgement
-  → segment retention/compaction
-```
+### D6.2 — WAL and upload protocol
 
-Preserve the raw ABI envelope or an exact hash-addressed representation needed
-for replay. Normalization cannot erase the source record, program/profile
-generation, loss state, or coverage reference.
+Implement ordered local WAL segments, integrity digests, fsync/batching bounds,
+retention, acknowledgement cursors, replay, corruption handling, and secure
+gRPC upload to Control. Ring reservation occurs only after a decision is fixed;
+delivery failure cannot restore an allow or rewrite a deny.
 
-### Local WAL
+### D6.3 — Coverage health owner
 
-Implement:
+Implement source epochs, healthy/gapped intervals, exact loss/suppression
+counters, reader/control delay, closure rules, and negative-claim eligibility.
+Ring/map/WAL exhaustion or sole-reader death produces explicit degraded/gapped
+coverage and the configured admission/effect safety result.
 
-- append-before-acknowledge;
-- checksummed framed records;
-- segment identity, sequence bounds, and boot/label epoch;
-- atomic segment rotation;
-- acknowledgement of highest contiguous durable sequence;
-- replay after disconnect/restart;
-- duplicate and reorder handling;
-- bounded disk policy;
-- corruption isolation;
-- retention and secure deletion policy; and
-- diagnostics that do not expose credential contents.
+### D6.4 — Generation and object recovery
 
-Phase 0 must approve the exact storage implementation. A log line or stdout is
-not the WAL.
+Recover immutable policy generations, retained references, task/native/object/
+socket state, mount topology, pending exception consumption, response floors,
+and active pointer truth across node/daemon/runtime restart. Never reconstruct
+authority from a PID, name, stale userspace cache, or partial WAL.
 
-### Coverage Intervals
+### D6.5 — Interceptor and sole-owner health
 
-Create an explicit coverage owner:
+Continuously read back program/link/map/pin manifests, exclusive owner lease,
+capacity, boot/label epochs, and capability state. Missing/tampered kernel state
+closes the affected claim before later evidence uses it.
 
-```text
-CoverageInterval {
-  source_id
-  node_or_authority_scope
-  start
-  end
-  state
-  capability_generation
-  program_generation
-  policy_generation
-  label_epoch
-  first_sequence
-  last_sequence
-  dropped_or_missing_count
-  reason
-}
-```
+### D6.6 — Deterministic local finding windows
 
-Supported states:
+Produce the coverage-qualified local input windows required by Phase 7 without
+building distributed/provider conclusions. Late, duplicate, reordered, or
+contradictory observations retain stable revisions.
 
-- `observing`;
-- `enforcing_without_observation`;
-- `degraded`; and
-- `uncovered`.
+## Required Tests And Fixtures
 
-Inputs include:
-
-- kernel reservation/per-CPU sequence loss;
-- ABI rejection;
-- identity/enrichment failure;
-- userspace queue overflow;
-- WAL failure/full/corruption;
-- outbound sequence discontinuity/backlog;
-- BPF link/map/program/profile mismatch;
-- capability transition;
-- root-admission/CRI loss;
-- clock error; and
-- source restart.
-
-### Restart And Generation Reconciliation
-
-On startup:
-
-1. acquire/revalidate the one-owner lease;
-2. inventory pinned programs, links, maps, ABI, label epoch, counters, profiles,
-   response roots, and socket fences;
-3. compare them with the durable node state;
-4. reuse only compatible verified generations;
-5. preserve working enforcement while observation recovers;
-6. iterate/revalidate live tasks and cgroups;
-7. explicitly close/open coverage intervals; and
-8. refuse policy work until reconciliation is complete.
-
-An incompatible or corrupt state follows the Phase 0 fail behavior and cannot
-silently reset identity or remove denial.
-
-### Negative-Conclusion Gate
-
-Provide an API that requires named coverage classes for a conclusion. If any
-required interval is degraded/uncovered, the result is `unknown` or carries the
-declared reduced confidence. Callers cannot bypass this check by reading a
-boolean “no finding.”
-
-## Hugging Face Test Increment
-
-Implement `HF-EVID-001` across the local incident path:
-
-- force loss before, during, and after the `HF-LOCAL`/`HF-NET` denial;
-- prove the physical denial remains active when evidence delivery is lost;
-- prohibit a complete incident-history claim for that interval;
-- disconnect Mithril Control, fill/replay the WAL, and deduplicate;
-- restart the node with live fixture tasks and pinned enforcement;
-- corrupt one segment and isolate it without inventing continuity; and
-- prove no missing incident observation becomes “benign.”
-
-## Code-Backed Tests
-
-- WAL framing/checksum/rotation/crash/replay/corruption/full/retention tests;
-- ring loss, ABI rejection, userspace overflow, mTLS disconnect, duplicate,
-  reorder, gap, and clock-skew tests;
-- coverage interval non-overlap and state-transition property tests;
-- enforcement-without-observation and observation-without-enforcement tests;
-- negative-conclusion prerequisite tests;
-- restart with compatible/incompatible pinned generations;
-- lost label epoch/counter with live tasks;
-- partial policy swap and response-map reconciliation;
-- central acknowledgement rollback and replay;
-- diagnostics secret-redaction tests; and
-- `HF-EVID-001` integration plus performance/disk budgets.
-
-## Live Probe
-
-Run Probes A and B under every applicable fault in Probe G. Retain the complete
-coverage and recovery timeline.
-
-## Checkpoint
-
-Run the common repository gates, WAL and coverage property/fault tests, pinned
-state reconciliation, incident denial under evidence loss, and the full
-applicable Probe G matrix. Rebuild the accepted local stream from retained
-records and compare its identity/effect digest.
+- Reader/ring/map/WAL saturation and corruption, source sequence gaps,
+  upload outage/replay, restart/reuse, policy retirement, stale pin/link/map,
+  and sole-gatherer death.
+- `LSM-DENY-SATURATION-001`, source-loss/capacity fixtures, all lifecycle
+  recovery cases, and applicable standing HF/live two-node cases.
 
 ## Acceptance
 
-- every accepted node observation is locally durable before acknowledgement;
-- retries do not duplicate normalized effects;
-- every loss/failure creates a bounded coverage transition;
-- pinned enforcement continuity is distinguishable from evidence continuity;
-- central outage replays without identity/sequence reset;
-- spool exhaustion follows the approved fail behavior;
-- corruption is detected and isolated;
-- restart reconciles programs/maps/profiles/identity/live tasks before new
-  policy work;
-- negative conclusions are unavailable without required healthy coverage;
-- incident denials remain physically effective during injected evidence loss;
-  and
-- CPU/memory/disk/replay performance meets budget.
+- Physical decisions remain correct while evidence health changes; the release
+  claim changes with coverage.
+- No gap can support a negative conclusion or be repaired by guess.
+- Restart preserves restrictions and consumption while refusing stale
+  authority.
+- Control receives exactly replayable, integrity-checked observations.
+- Every capacity and latency bound is measured with evidence enabled.
 
-## Explicit Stop Point
+## Excluded
 
-Stop after node evidence and coverage truth pass. Do not implement multi-source
-correlation before the user approves the Phase 7 central storage, replay,
-authorization, and graph boundaries.
+Distributed graph joins, notifications, provider connectors, and response.
 
 ## Phase Result
 
-State: Not started.
-
-Record storage selection, schemas, failure policy, fault matrix, coverage
-timelines, recovery artifacts, incident results, performance, and final state.
+State: Not done.  
+Completed deliverables: none.  
+Verification: not run; this is a plan rewrite.  
+Next phase: not authorized.

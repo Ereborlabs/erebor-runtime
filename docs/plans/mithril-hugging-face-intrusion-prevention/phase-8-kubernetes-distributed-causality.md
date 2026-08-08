@@ -1,204 +1,90 @@
 # Phase 8: Kubernetes Distributed Causality
 
-Status: Not started.
+Status: Proposed; depends on Phase 7 `Done`.
 
-Master plan: [Mithril Hugging Face Intrusion Prevention](./README.md)
+Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
+Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 
 ## Purpose
 
-Connect independently proven node-local process trees through authoritative
-Kubernetes request, object, controller, scheduler, and CRI identities without
-fabricating remote process parentage.
+Join authenticated Kubernetes/runtime facts to node evidence, represent
+cross-node causality without fake process ancestry, and close the attacker-
+created privileged workload branch required for the full HF claim.
 
-## Depends On
+## Design Coverage
 
-Phase 7 must be `Done`. Kubernetes audit and object-history read permissions,
-source deployment, tenant/cluster binding, retention, and Secret-body exclusion
-must receive explicit approval.
+Chapters 7-8, 23, 25, and 30-31; Appendices A.9-A.10 and A.15.3.
 
-## Phase Scope
+## Deliverables
 
-### Kubernetes Sources
+### D8.1 — Kubernetes source adapters and coverage
 
-Implement connectors under the Phase 0-approved Mithril Control tree:
+Ingest authenticated audit, object history/watch, scheduler binding, admission,
+runtime/CRI, and node-binding facts with source-specific IDs, actors, resource
+UID/resourceVersion, request/result, timestamps, gaps, and proof quality. Do not
+invent probe/lifecycle purpose missing from stock CRI.
 
-```text
-src/connectors/kubernetes/
-  mod.rs
-  audit.rs
-  object_history.rs
-  rbac_inventory.rs
-  source_coverage.rs
-  redaction.rs
-```
+### D8.2 — Kubernetes graph contracts
 
-Support explicit audit deployment paths:
+Implement registered edges for API request to object revision, controller/
+owner reference, scheduler binding, Pod/container/cgroup/runtime root, and node
+observation. Preserve fan-out, retries, replacement controllers, deletion,
+name reuse, late events, and contradictions as explicit branches.
 
-- managed-cluster audit from provider logging;
-- API-server audit webhook; and
-- self-managed audit files collected by the same `mithril-node` on relevant
-  control-plane nodes.
+### D8.3 — Cross-node causal package
 
-A normal Kubernetes watch is not called audit.
+Complete the cross-node HF package from a credential/API action on node A to a
+workload root/effect on node B. Shared ServiceAccount or timing remains
+shared-principal/context unless exact request/object/binding identifiers close
+the join.
 
-The audit connector preserves:
+### D8.4 — Unmatched-workload and privileged-root floor
 
-- cluster/authority identity;
-- audit ID, stage, user/groups, source addresses;
-- verb, URI, API group/resource/subresource;
-- namespace/name plus exact object UID when available;
-- result code/status;
-- request/response object metadata needed for UID/resourceVersion joins; and
-- source cursor/delivery/coverage.
+Implement the architecture-approved Kubernetes validating-admission and node
+hard-floor contracts for privileged mode, host namespaces, dangerous
+capabilities, hostPath/devices, unsafe security settings, and unresolved roots.
+Normal OCI setup remains runtime-owned. Exceptions are signed, exact,
+expiring, bounded-use, physically consumed, and separately audited.
 
-It never retains Secret or TokenRequest response bodies.
+### D8.5 — Root-purpose truth matrix
 
-The object-history connector records UID/resourceVersion live intervals,
-owner-reference UIDs, controller state, scheduler binding/node assignment, Pod
-UID, and watch/relist coverage. It does not collect Secret/ConfigMap bodies for
-lineage.
+Qualify initial containers, init/native sidecars, probes, lifecycle, ordinary
+and approved admin exec, `crictl exec`, ephemeral containers, moved/unmatched
+tasks, and direct runtime roots with identical commands. Kubernetes audit
+identifies API actors where available but never retroactively grants a task
+role.
 
-### Effective Authority Inventory
+### D8.6 — HF multi-node proof
 
-Use authorized `SubjectAccessReview`/`SelfSubjectAccessReview` and binding
-inventory to create `ExistingAuthorityExposure` facts for the current worker,
-controller, CSI, and node principals:
+Prove the node-A-to-node-B privileged Pod/fan-out branch is rejected at an
+advertised admission/node floor or reported with the exact weaker result. A
+denial must have API/runtime/physical workload-absence or restricted-root
+oracle, not only an audit event.
 
-- privileged/host-mounted workload writes;
-- ServiceAccount token minting;
-- Secret get/list/watch;
-- exec/attach/ephemeral container;
-- RBAC bind/escalate/impersonate;
-- admission/webhook, CSR, node proxy, and workload identity; and
-- review error/coverage.
+## Required Tests And Fixtures
 
-This is deployment truth, not a claim Mithril removed permission.
-
-### Typed Distributed Graph
-
-Implement immutable:
-
-- `SubjectRef`;
-- `CausalEdge`;
-- `DistributedLineageView`; and
-- graph version/open-branch/contradiction state.
-
-At minimum support:
-
-```text
-process_issued_api_request
-api_request_created_or_mutated_resource
-object_triggered_controller_reconcile
-controller_reconcile_changed_resource
-controller_owns_resource
-pod_bound_to_node
-container_started_for_pod
-```
-
-The direct Kubernetes path is:
-
-```text
-node 1 Linux process/socket
-  → Kubernetes audit request ID
-  → exact object UID
-  → controller/reconcile or owner UID evidence
-  → exact Pod UID and object version
-  → scheduler binding
-  → full CRI container ID
-  → node 2 independently observed root process
-```
-
-Each arrow retains joining fields, raw observation IDs, proof class, time
-interval, source coverage, and missing proof. Names, labels, selectors, source
-IP, ServiceAccount name, and timestamps alone remain contextual.
-
-### Deterministic Expansion
-
-Implement `HF-XNODE-001` as bounded package state, not a universal recursive
-graph query:
-
-- tenant/authority/depth/edge/time bounds;
-- one branch per exact object/Pod/native subject;
-- idempotent retries/duplicates;
-- fan-out and controller replacement;
-- late/contradictory evidence creating new versions;
-- outside-authority subjects; and
-- response eligibility only for direct, revalidatable subjects.
-
-The distributed lineage ID is a correlation handle, never a BPF target.
-
-## Hugging Face Test Increment
-
-Implement:
-
-- the full `HF-XNODE-001` two-node path;
-- dangerous workload and Secret API audit with actual result;
-- controller/CSI/node authority exposure inventory;
-- Deployment, DaemonSet, Job, and custom-controller fan-out;
-- same-name deletion/recreation;
-- ReplicaSet acquisition remaining contextual without stronger proof;
-- concurrent same-ServiceAccount/source-IP workloads;
-- each bridge source removed one at a time;
-- audit delivered late and out of order; and
-- unrelated OpenAI/external and Hugging Face authority domains never merging.
-
-No response executes in this phase.
-
-## Code-Backed Tests
-
-- Kubernetes audit schema/stage/redaction/cursor and source-coverage tests;
-- object watch, resourceVersion, relist/compaction, UID reuse, owner reference,
-  binding, deletion/recreation, and fan-out tests;
-- RBAC review allowed/denied/evaluation-error and aggregated-role changes;
-- every typed edge direct/derived/contextual/contradicted rule;
-- rejection of cross-node/cross-Pod `parent_process`;
-- graph edge dedupe, late version, merge, split, contradiction, open branch,
-  and outside-authority behavior;
-- missing audit/object/owner/binding/CRI/root negative matrix;
-- exact two-node live path and fixture replay;
-- tenant/cluster identity collision and forged payload binding;
-- response eligibility excludes contextual/ambiguous subjects; and
-- scale budgets for audit rate, controller fan-out, graph expansion, and late
-  recomputation.
-
-## Live Probe
-
-Run Probe D in full and with each bridge removed. Probe C must use real
-Kubernetes audit. Retain raw source, coverage, edge, and lineage-version
-artifacts.
-
-## Checkpoint
-
-Run the common repository gates, Kubernetes source/redaction/coverage tests,
-typed-edge and graph-version property tests, every missing-bridge negative
-case, and the live two-node Probe D. Compare replay and live lineage results.
+`XNODE-PRIVILEGED-POD-001`, `NODE-FLOOR-EXCEPTION-002`, relevant
+`ENTRY-*`, `EDGE-K8S-SHARED-002`, `EDGE-MESSAGE-CONSUMER-006`, Kubernetes
+fan-out/reuse/contradiction variants, and the live two-node lifecycle probe.
 
 ## Acceptance
 
-- Kubernetes audit and object history are authenticated, durable, redacted, and
-  coverage-aware;
-- existing effective authority is reported without mutation;
-- no remote Linux process is represented as a native child;
-- every direct cross-node edge has an authoritative stable identifier;
-- names/labels/IP/time remain contextual;
-- fan-out produces one exact branch per object/Pod/native subject;
-- late/contradictory evidence creates immutable new versions;
-- a missing bridge produces a named open branch and removes direct response
-  eligibility;
-- the live two-node fixture reconstructs every supported bridge;
-- unrelated authority domains never merge; and
-- graph latency/scale remain within approved budgets.
+- Cross-node edges use authoritative object/request/binding facts, never
+  process parentage or time alone.
+- Stock CRI ambiguity remains conservative under identical commands.
+- Privileged/unmatched branches receive a physical rejection/restriction or an
+  explicit unsupported result.
+- Controller replacement and object/name/IP reuse cannot hide or retarget a
+  branch.
+- Legitimate controllers and ordinary workload scheduling still work.
 
-## Explicit Stop Point
+## Excluded
 
-Stop after distributed correlation passes. Do not terminate processes, fence
-remote nodes, mutate controllers, or call provider APIs until the user approves
-Phase 9's typed response classes, credentials, blast-radius rules, and
-postconditions.
+Provider-specific audit semantics and response actuation.
 
 ## Phase Result
 
-State: Not started.
-
-Record source deployment/RBAC, schemas, redaction, exact graph packages, live
-edge evidence, missing-source matrix, scale results, gaps, and final state.
+State: Not done.  
+Completed deliverables: none.  
+Verification: not run; this is a plan rewrite.  
+Next phase: not authorized.
