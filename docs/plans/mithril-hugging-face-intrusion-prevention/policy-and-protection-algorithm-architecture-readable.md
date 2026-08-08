@@ -176,8 +176,10 @@ nothing useful.
 | Seccomp, AppArmor, SELinux, or Landlock alone | Mature local isolation at their supported hooks and policy units. | No one mechanism supplies runtime intent, per-entry identity, object and socket provenance, provider edges, multi-node causality, or verified response. Mithril may compile part of a policy into them where they provide the best physical boundary. |
 | Kubernetes admission or network policy alone | Rejects dangerous workload specifications or blocks workload-level flows. | It does not see hostile code already running inside a legitimate process, distinguish same-Pod actors, or govern local files, memory sharing, device ioctls, and inherited descriptors. |
 
-Chapters 28-29 tie these boundaries to checked KubeArmor and Tetragon source.
-Later upstream changes require a new review.
+Chapters 15 and 27-29 tie these boundaries to checked KubeArmor and Tetragon
+source, the independent Jailer source where exact code exists, and Meta's
+separately pinned presentation-level path-matching design.  Later upstream
+changes require a new review.
 
 #### Practical comparison: hostile Python in a conversion worker
 
@@ -353,7 +355,7 @@ allowed additions:
     response credentials
   Mithril BPF programs, maps, links, local WAL, and control connection
 
-not allowed:
+not allowed in the no-change baseline:
   patches, forks, or rebuilt kubelet, containerd, runc, CRI, CNI, or CI runner
   replacement of those components with a Mithril-specific build
   changes to applications, PodSpecs, images, process layout, probes,
@@ -440,6 +442,26 @@ Consequences:
   inserts a broker or connector into the workload's request path.
 - Otherwise policy may deny the whole destination/channel or allow it and
   detect the provider operation later. Mithril must show that trade-off.
+
+#### Optional operator-owned L7 mediation
+
+This is deliberately outside the no-change baseline and is
+`UNALLOCATED_OPTIONAL`. If a threat requires synchronous semantic prevention
+inside an encrypted channel--for example, allowing a source fetch but denying
+a source push on the same TLS destination--an operator may explicitly deploy
+and own a qualified mediation boundary.
+
+Mithril must never silently inject a proxy, change DNS, install a CA, redirect
+traffic, or make a workload trust a new TLS peer. The amendment instead names
+the already operator-owned proxy or gateway, its authenticated client and
+upstream identities, the exact plaintext semantic it can enforce, its failure
+posture, and the physical result of a rejected request. Mithril may consume its
+authenticated decision/result evidence and coordinate an authorized response;
+the mediation owner remains the only synchronous L7 enforcement owner.
+
+The baseline remains direct TLS, destination/channel control, provider-issued
+least authority where available, and post-effect provider evidence. A product
+claim may not describe optional mediation as if every workload were behind it.
 
 GitHub does not generally turn an arbitrary existing write-capable bearer token
 into a new read-only token. A GitHub App can request an installation token with
@@ -1651,7 +1673,7 @@ coverage, and one of four results: `PASS`, `FAIL`, `UNSUPPORTED`, or
 | `INV-ENTRY-003` | Reparenting and PID, namespace, cgroup, runtime, or kubelet reuse cannot change birth lineage. | A replacement process with the same visible PID/path cannot resolve the old task cookie, live interval, nonce, boot epoch, or entry. |
 | `INV-ROLE-001` | Only an admitted entry or approved transition assigns a role. A path/name never assigns authority. | Approved updater and compromised worker both execute `curl`; each keeps the authority of its own entry/transition. |
 | `INV-ROLE-002` | Fork without exec is restricted immediately; exec keeps lineage but creates a new execution and reviewed role transition. | A forked Python child cannot read a credential before exec; non-leader exec cannot escape during de-threading. |
-| `INV-EFFECT-001` | Rules are expanded to exact keys; different physical results need a signed override or compilation fails. Missing required identity, generation, classifier, table, or response state denies. | An output path symlinked to a token resolves to the token object; conflicting allow/deny does not depend on “specificity” or file order. |
+| `INV-EFFECT-001` | Rules are reduced to exact final decision keys. The bounded path graph in Chapter 15 may first produce a candidate selector, but exact mount/object revalidation produces the final key. Different physical results need a signed override or compilation fails. Missing required identity, generation, classifier, table, or response state denies. | An output path symlinked to a token resolves to the token object; conflicting allow/deny does not depend on “specificity” or file order. |
 | `INV-EFFECT-002` | Telemetry, WAL, ring, rate-limit, or central-service pressure cannot turn a computed local denial into allow. | Fill the event ring while repeating token reads; every read still fails and loss counters increase. |
 | `INV-POLICY-001` | Only a signed, validated, compiled, read-back generation can authorize. Learning never self-authorizes. | Observed malicious Kubernetes API use becomes a review candidate, not a new allow row. |
 | `INV-POLICY-002` | Activation is atomic; old generations stay until every typed holder has ended. | Generation 42 tasks and sockets remain valid under 42 while new entry N receives 43; 42 is removed only after task/socket/object/response refs reach verified zero. |
@@ -1664,8 +1686,9 @@ coverage, and one of four results: `PASS`, `FAIL`, `UNSUPPORTED`, or
 
 The original phrase “most specific deny wins” is an abandoned design. There is
 no total order between, for example, a role-exact/object-wildcard allow and a
-role-wildcard/token-exact deny. Both expand to the same exact decision cell;
-without a signed override edge, the compiler rejects the profile.
+role-wildcard/token-exact deny. Both reduce to the same exact final decision
+cell; without a signed override edge, the compiler rejects the profile. The
+same rule applies to overlapping hierarchical path terminals in Chapter 15.
 
 Each release record is executable:
 
@@ -1686,11 +1709,12 @@ InvariantQualificationV1 {
 }
 ```
 
-“First protected hook” is not “first instruction.” CPU-only code may run before
+"First protected hook" is not "first instruction." CPU-only code may run before
 a file, socket, exec, device, or privilege hook. Preventing process creation or
-CPU use requires a qualified task-creation hook, a Seccomp floor that Mithril
-successfully installed on that process at start, a supported runtime admission
-hook, `pids.max`, or a CPU controller. A file hook cannot claim that result.
+CPU use requires a qualified task-creation hook, a Seccomp floor *if the later
+Seccomp surface is adopted and installed at process start*, a supported runtime
+admission hook, `pids.max`, or a CPU controller. A file hook cannot claim that
+result.
 
 ### 11. The Operator Writes One Policy Model
 
@@ -1973,7 +1997,9 @@ signed source
   -> bounded schema/signature/anti-rollback validation
   -> selectors resolved to immutable workload snapshots
   -> entries, roles, states, transitions, and effects checked for reachability
-  -> all selectors expanded to a finite exact decision universe
+  -> non-path selectors expanded to a finite exact decision universe;
+     hierarchical path components compiled to the bounded resolver in Chapter 15
+     and then reduced to an exact final object decision key
   -> conflicts require signed override/exception edges
   -> objects, composite atoms, responses, coverage, and provider vocabularies lowered
   -> simulate against a recorded legitimate-workload baseline
@@ -1995,10 +2021,13 @@ requires review, simulation, signature, probes, and rollout health.
 
 #### Exact conflict rule
 
-Rules are first separated by physical stage. Wildcards are expanded against
-the closed generation universe. Identical physical decisions for one exact key
-may merge compatible evidence and routing. Different physical results need a
-signed `overrides` or exception edge naming the other rule and exact key delta.
+Rules are first separated by physical stage. Wildcards outside a hierarchical
+path selector are expanded against the closed generation universe.
+Hierarchical path components compile to the bounded resolver in Chapter 15;
+its output must pass exact mount/object revalidation before it becomes a final
+decision key. Identical physical decisions for one exact key may merge
+compatible evidence and routing. Different physical results need a signed
+`overrides` or exception edge naming the other rule and exact key delta.
 Without that edge, compilation fails.
 
 Priority controls display/notification order only. YAML order, wildcard count,
@@ -2176,42 +2205,46 @@ policy into the mechanisms that own each physical boundary.
 | --- | --- | --- |
 | Existing mount namespace | The workload's existing namespace changes the filesystem view: host paths may be absent and mounts may already carry `ro`, `noexec`, `nosuid`, and `nodev`. Mithril measures that view and uses it when identifying objects. | Mithril does not change the Pod manifest or rebuild the mount view. Any object still visible needs another control. A mount namespace does not distinguish a native child from an external root or govern network/provider actions. |
 | Landlock | When a supported start path lets Mithril install it in a new process, Landlock adds a monotonic restriction inherited by descendants. Available filesystem, network, Unix-socket, signal, and device-ioctl rights depend on the measured ABI. | Landlock is a start-time floor. It cannot be centrally loosened or dynamically rewritten, and it does not supply Kubernetes purpose, multi-node causality, or response orchestration. |
-| Seccomp | When a supported start path lets Mithril supply a qualified OCI Seccomp adjustment or perform target-context setup, the ordinary runtime or Mithril installs the filter before user code. Seccomp cheaply removes whole syscall classes or scalar-argument shapes a role never needs. Installed filters are inherited and can only become stricter. | Seccomp is a start-time floor. It cannot safely resolve pathname pointers, file objects, target PIDs, Kubernetes roles, or TLS/provider semantics. |
+| Seccomp (deferred candidate) | A later stage may evaluate a qualified OCI Seccomp adjustment or target-context installer. Only if it meets the declared compatibility and performance budget may it install a filter before user code, removing whole syscall classes or scalar-argument shapes a role never needs. Installed filters are inherited and can only become stricter. | It is not a current Mithril enforcement dependency or product promise. If adopted, it remains a start-time floor and cannot safely resolve pathname pointers, file objects, target PIDs, Kubernetes roles, or TLS/provider semantics. |
 | BPF LSM | Makes dynamic task-aware decisions at Linux security hooks for files, exec, sockets, process control, devices, capabilities, mount, BPF, perf, and other qualified operations. It can use Mithril's task, process, and native-family state before the effect. | It must be built and active as an LSM; helper/hook support varies by exact kernel. It cannot parse arbitrary TLS application intent or wait for a central service. GPL-compatible license is required for BPF LSM object programs that use the kernel's GPL-only interface. This does not automatically relicense the separate Rust program. |
 | Cgroup BPF | Enforces workload/device floors, connect/send address policy, packet fences, and some socket operations at cgroup boundaries. | Cgroup membership alone is not per-process intent. Packet hooks may lack a meaningful current task. |
 | TC/XDP/cgroup-skb | Drops actual packets, including established flows, after a response or final destination rewrite. | A packet does not reliably identify which of several sharing processes queued the bytes. Whole-socket/cgroup blast radius may be necessary. |
 | Traditional SELinux/AppArmor | Adds mature distribution-owned mandatory policy and stacking defense. | Mithril cannot assume its hook observes every earlier denial; ordering and audit coverage are measured. |
-| Supported runtime/admission extension | Lets Mithril prepare identity or reject a start at the exact point the stock interface documents. A qualified NRI integration may adjust the OCI Seccomp policy so the ordinary runtime installs it in the target. A separate target-context launcher integration may install Landlock. | Changing an OCI Seccomp field is not target-context execution and does not install Landlock. A callback cannot claim fields, ordering, or rejection behavior that its interface does not provide. It does not control hostile code already executing inside an admitted process. |
+| Supported runtime/admission extension | Lets Mithril prepare identity or reject a start at the exact point the stock interface documents. A later Seccomp evaluation may test whether a qualified NRI integration can adjust the OCI policy so the ordinary runtime installs it in the target. A separate target-context launcher integration may install Landlock. | Changing an OCI Seccomp field is not target-context execution and does not install Landlock. A callback cannot claim fields, ordering, or rejection behavior that its interface does not provide. It does not control hostile code already executing inside an admitted process. |
 
-Where the existing mount view and supported start path permit it, the
-strongest ordinary worker can therefore receive all four local floors without
-changing its manifest, image, code, or command:
+Where the existing mount view and supported start path permit it, a worker can
+receive the three currently designed local layers without changing its
+manifest, image, code, or command. A fourth Seccomp floor is a later evaluated
+addition, not a baseline promise:
 
 ```text
 existing mount namespace: host files absent; exact mounts and immutable flags
 Landlock installed by Mithril at supported start: monotonic local floor
-Seccomp installed by Mithril at supported start: unused syscall families removed
 BPF LSM/cgroup: exact current task, runtime entry, object, domain state,
                 dynamic response, device/network/privilege enforcement
+later Seccomp candidate: unused syscall families removed only after a qualified
+                         compatibility and performance decision
 ```
 
 This is a capability combination, not a claim that current containerd NRI
-provides all four. On a qualified current NRI path, an unchanged Kubernetes
-worker can receive its existing mount view, an adjusted Seccomp policy, and
-Mithril BPF enforcement. Landlock is present only if another configured stock
-integration proves target-context execution before user code. Otherwise the
-support record says `Landlock=ABSENT` and makes no Landlock-floor claim.
+provides all four. In the current scope, an unchanged Kubernetes worker can
+receive its existing mount view and Mithril BPF enforcement. Landlock is
+present only if another configured stock integration proves target-context
+execution before user code. A later Seccomp decision may qualify an NRI policy
+adjustment; until then `seccomp_capability_record_id` is absent and no
+Seccomp-floor claim is made. Otherwise the support record says
+`Landlock=ABSENT` and makes no Landlock-floor claim.
 
 These layers intersect. None can turn another layer's denial into allow.
-Seccomp is used when Mithril can supply a qualified OCI policy adjustment, such
-as a supported containerd NRI adjustment, or install it in a process Mithril
-launches. Landlock is used only when a qualified integration runs the Landlock
-operation in the new target's process context before user code. Otherwise
-Mithril relies on BPF for the effects BPF can cover. Missing a required BPF LSM
-hook makes that particular claim unsupported even when the namespace still
-hides many objects.
+Seccomp is considered only in a later stage, after a qualified OCI adjustment
+or target-context installer has passed its compatibility and performance gate.
+Landlock is used only when a qualified integration runs the Landlock operation
+in the new target's process context before user code. Otherwise Mithril relies
+on BPF for the effects BPF can cover. Missing a required BPF LSM hook makes
+that particular claim unsupported even when the namespace still hides many
+objects.
 
-#### Pairwise examples: what each two-layer combination adds
+#### Pairwise examples: what each combination could add
 
 Use one unchanged conversion worker as the example. It needs
 `/dataset/input`, `/work/output`, its Python runtime, DNS, and one result
@@ -2221,18 +2254,18 @@ TUN device, or reach Kubernetes.
 | Pair | Concrete result | What is still missing |
 | --- | --- | --- |
 | Mount namespace + Landlock | Host `/etc`, `/proc`, runtime sockets, and devices are not mounted into the worker; Landlock still denies undeclared opens under the visible dataset/work tree if a bind/symlink/layout mistake exposes them. | Both are installed before run and mostly monotonic. They do not know that a new probe root and the application root need different authority, or dynamically fence an already-running compromised lineage. |
-| Mount namespace + seccomp | Host objects are structurally absent; `mount`, `ptrace`, `bpf`, `perf_event_open`, module, keyring, and unused namespace/syscall families can be removed cheaply. | A visible token and an allowed `connect` syscall still need object/destination/actor policy. Seccomp cannot follow a pathname or distinguish two roles that need the same syscall. |
-| Mount namespace + BPF LSM | Namespace removes whole host regions; BPF LSM distinguishes the converter's native lineage from later external roots on every remaining exact file/exec/device/privilege object and can add a response restriction at runtime. | Stock CRI still does not distinguish probe, lifecycle, and admin purpose among identical external roots. Whole unused syscall classes may still reach deeper kernel parsing unless Seccomp removes them. |
-| Landlock + seccomp | Landlock limits visible filesystem/network/IPC rights inherited by descendants; seccomp removes syscall families that should never be attempted. This is a useful defense if the node BPF component is unavailable. | It needs a trustworthy pre-run installer. It does not authenticate later runtime roots, express Mithril's changing process/native state, correlate multi-node actions, or centrally update response. The host view remains present even when access is denied. |
-| Landlock + BPF LSM | Landlock supplies a monotonic least-authority floor that a later BPF policy bug cannot loosen; BPF LSM supplies exact task/entry/domain identity, dynamic object policy, and response. | The worker still sees every mounted pathname and may learn metadata through allowed operations. Unused syscall families still need seccomp, and host objects should still be removed by the namespace. |
-| Seccomp + BPF LSM | Seccomp cheaply deletes broad attack surfaces; BPF LSM resolves the allowed syscall's real task, target object, and current restrictions. For example, seccomp permits `openat` generally while BPF LSM denies the token object only for the converter. | The filesystem view remains broad without the mount namespace; there is no independent monotonic pathname/network floor without Landlock. |
+| Mount namespace + future Seccomp | If the later Seccomp gate passes, host objects are structurally absent and `mount`, `ptrace`, `bpf`, `perf_event_open`, module, keyring, and unused namespace/syscall families can be removed. | A visible token and an allowed `connect` syscall still need object/destination/actor policy. Seccomp cannot follow a pathname or distinguish two roles that need the same syscall. |
+| Mount namespace + BPF LSM | Namespace removes whole host regions; BPF LSM distinguishes the converter's native lineage from later external roots on every remaining exact file/exec/device/privilege object and can add a response restriction at runtime. | Stock CRI still does not distinguish probe, lifecycle, and admin purpose among identical external roots. Whole unused syscall classes remain outside the baseline scope unless the later Seccomp surface is adopted. |
+| Landlock + future Seccomp | If the later Seccomp gate passes, Landlock limits visible filesystem/network/IPC rights inherited by descendants and Seccomp removes syscall families that should never be attempted. | It needs a trustworthy pre-run installer. It does not authenticate later runtime roots, express Mithril's changing process/native state, correlate multi-node actions, or centrally update response. The host view remains present even when access is denied. |
+| Landlock + BPF LSM | Landlock supplies a monotonic least-authority floor that a later BPF policy bug cannot loosen; BPF LSM supplies exact task/entry/domain identity, dynamic object policy, and response. | The worker still sees every mounted pathname and may learn metadata through allowed operations. Host objects should still be removed by the namespace; a future Seccomp layer may remove unused syscall families. |
+| Future Seccomp + BPF LSM | If the later Seccomp gate passes, Seccomp deletes broad attack surfaces while BPF LSM resolves the allowed syscall's real task, target object, and current restrictions. For example, Seccomp permits `openat` generally while BPF LSM denies the token object only for the converter. | The filesystem view remains broad without the mount namespace; there is no independent monotonic pathname/network floor without Landlock. |
 
-With all four, a runtime mistake must cross several different facts: the host
-object first has to be visible, the syscall family has to exist, the monotonic
-Landlock floor must permit it, and Mithril's current task/object/domain decision
-must permit it. This is defense in depth, not four copies of the same rule.
-Mithril still needs cgroup/packet controls for established traffic and provider
-controls for TLS-hidden operations.
+If the future Seccomp gate passes, all four add another independent fact: the
+host object first has to be visible, the syscall family has to exist, the
+monotonic Landlock floor must permit it, and Mithril's current
+task/object/domain decision must permit it. This is defense in depth, not four
+copies of the same rule. Mithril still needs cgroup/packet controls for
+established traffic and provider controls for TLS-hidden operations.
 
 ### 15. Mount Views And Exact Object Identity
 
@@ -2304,6 +2337,160 @@ different object over an allowed path while the worker loops on open. Opens
 before DIRTY see the old exact object; every open after DIRTY denies until the
 new snapshot commits. The fixture repeats with two concurrent changes, failed
 mount, propagation, overlay copy-up, and a process dying during snapshot.
+
+#### Path selector resolution and exact object authority
+
+Paths remain policy-authoring inputs, never the final file authority. Mithril
+resolves them with Meta's bounded canonical-path algorithm: reconstruct the
+path through a verified mount tree, canonicalizing a repeated mount-root dentry
+to its oldest mount before matching components with a compiled graph/state
+machine. This is deliberately different from merely reconstructing the path
+string through which the caller reached the file: a later bind-mount alias must
+not choose the path that policy matches. Mithril adds the clean-topology,
+identity, and exact-object conditions that make the canonical path candidate
+safe to use as a file decision. The public Meta BpfJailer LPC 2025 presentation
+supplies the mount-crossing traversal and graph-matching approach. The
+presentation is design evidence, not public implementation source; its slides
+16-21 are bound here to the supplied PDF SHA-256
+`81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6`.
+
+| Design part | Meta presentation contributes | Mithril retains or adds | Combined result |
+| --- | --- | --- | --- |
+| Canonical path reconstruction | Enumerate one root mount namespace, index `mount-root dentry -> mounts`, select the oldest (`lowest mnt_id_unique`) mount for that dentry, then cross through that selected mount's parent mountpoint | A verified `MountSecurityViewV1` is the selected root domain; its complete clean snapshot supplies the mount index, unique IDs, parent, and mountpoint | A later bind alias cannot select its own target spelling when the same root dentry already belongs to an older tracked mount. |
+| Large rule matching | Bounded component graph/state machine with exact and wildcard transitions | Compile-time bounds, terminal-overlap rejection or signed exact override, no priority-by-specificity | Large hierarchical policies evaluate without linear rule scans or an unbounded string map. |
+| Cache correctness | Cache/invalidate path work around rename and mount changes | Cache key includes policy generation, actor mount view, topology snapshot, live mount, and exact object; DIRTY stops decisions before topology change | A cache cannot grant access through an old bind alias, reused inode, overlay copy-up, or remount. |
+| Authorization result | A matched path rule | Revalidate live object/integrity and all task, policy, response, and generation state | A path match is only a candidate; the final physical decision remains exact and fail closed. |
+
+Mithril's compiler and hot path therefore use this single bounded algorithm:
+
+1. Compile the finite set of path patterns, wildcard components, and terminal
+   dispositions into one bounded component-state graph. It is not a sequence
+   of unbounded string comparisons or a whole-path hash table.
+2. From the target dentry, extract a bounded leaf-to-root vector of component
+   byte views. The Meta design budgets up to 255 components of up to 255 bytes;
+   Mithril's supported platform profile fixes and measures its own lower or
+   equal bounds before a profile can activate. The vector is derived from
+   kernel objects, never from a caller-supplied path string.
+3. At every mount-root dentry `D`, use the current clean mount-topology
+   snapshot as Meta does: look up every mount whose root is `D`, select the
+   oldest mount by `mnt_id_unique`, and continue from *that selected mount's*
+   parent mount and mountpoint. Do not continue through the mount by which the
+   caller happened to enter `D`. Meta repeats this to the root dentry of PID
+   1's mount namespace. Mithril applies the same selection in the verified
+   `MountSecurityViewV1` chosen for the actor; all candidate mounts, unique
+   IDs, parent links, mountpoints, and the final root must belong to its clean
+   snapshot. A path that cannot reach the required root is unresolved, not an
+   alternate spelling that grants authority.
+4. Reverse the resulting components and run them through the compiled graph.
+   A transition can consume one exact component or the explicitly compiled
+   wildcard component; only one non-conflicting terminal rule selects a
+   candidate disposition. The compiler rejects overlapping terminal patterns
+   with different physical results unless a signed override names the exact
+   selector delta; YAML order, wildcard count, and “more specific” never
+   choose authority.
+5. Revalidate the task mount view, topology generation, selected canonical
+   mount chain, exact file object, and retained policy generation before
+   returning the candidate physical decision. A selector match never
+   authorizes a later bind alias, inode generation, overlay object, or a
+   different selected root.
+
+**Canonical bind-mount example.** The first defense is before this resolver:
+an untrusted worker is denied `mount --bind`, `move_mount`, `umount`,
+`pivot_root`, namespace changes, directory rename, and hard-link changes that
+could create or alter a protected alias. Therefore its attempted bind mount is
+denied before a new mount exists. The following fixture explains the Meta
+canonicalization rule against an already represented later alias; it is not an
+allow path for that alias.
+
+```text
+M0: verified root mount in the selected MountSecurityViewV1
+
+M5: original tracked secret mount
+  mount root dentry = D
+  attachment in M0 = /var/run/secrets/service
+  mnt_id_unique = 41
+
+M9: later bind mount of the same root dentry D
+  attachment in M0 = /work/input/job-42
+  mnt_id_unique = 92
+
+opened file: config.json below D through M9
+policy allow pattern: /work/input/*/config.json
+```
+
+The dentry walk first collects `config.json` and reaches mount-root dentry
+`D`. The resolver then performs the critical Meta lookup:
+
+```text
+D -> [ M5 (41), M9 (92) ]
+select lowest mnt_id_unique -> M5
+```
+
+It does **not** cross `M9` at `/work/input/job-42`. It crosses the selected
+older mount `M5` at its attachment, then walks its parent mount:
+
+```text
+config.json
+-> D                         (root dentry shared by M5 and M9)
+-> service                   (M5 mountpoint in M0)
+-> secrets
+-> run
+-> /
+```
+
+Reversing the components yields:
+
+```text
+/var/run/secrets/service/config.json
+```
+
+The `/work/input/*/config.json` rule therefore does not match. If a mount-root
+dentry has no older tracked mount, the Meta selection cannot invent one; the
+pre-effect mount/topology fence is what prevents an untrusted task from
+creating that first alias. A newly observed or ambiguous alias is unresolved
+under strict policy until the complete topology is reconciled and admitted.
+
+#### eBPF implementation envelope
+
+The Meta presentation makes clear that this is not a small `d_parent` loop.
+Its implementation first extracts a vector of `d_name` string views and then
+matches the vector; Meta reports roughly 2,000 lines of eBPF, substantial
+verifier work, and pressure from BPF stack and instruction limits. The
+component graph is specifically a hash-map/array-map representation, rather
+than one whole-path hash, so a corpus of thousands of patterns remains bounded
+in CPU and memory.
+
+Mithril therefore treats path resolution as a separately qualified BPF hot
+path. The target platform profile fixes the maximum component count, component
+bytes, graph states/transitions, scratch-map memory, instructions, stack use,
+and hook latency. It proves verifier acceptance and measures deny/allow
+latency and I/O-heavy throughput at those bounds before activating a profile.
+The extractor and matcher may be structured into verifier-safe bounded pieces,
+but no implementation may silently truncate a name, depth, graph walk, or
+mount traversal and then allow. Each such bound or verifier/map failure returns
+the strict unresolved-object result.
+
+The deck reports that Meta observed no measurable regression across its own
+I/O-heavy workloads, while also describing path matching as materially slower
+than other LSM operations. That is useful feasibility evidence, not a Mithril
+performance claim: Mithril qualifies its own kernels, hardware, policies, and
+workloads under the capability/performance contract in Appendix A.4.
+
+The matcher may cache a resolved candidate only under the role, selector graph
+generation, actor mount-view snapshot/topology generation, and exact live
+object identity. Bare inode caches are insufficient: bind aliases, inode reuse,
+overlay copy-up, remount, and different actor roots can change the answer. The
+existing pre-effect DIRTY transition invalidates the candidate before any
+mount, unmount, move, propagation, pivot-root, or relevant rename/link change
+can expose a new topology. A cache miss, truncation, topology ambiguity, or
+state-graph bound failure follows the configured strict unresolved-object
+result; it never falls through to allow.
+
+This combined resolver does not copy the independent open-source `jailer`
+matcher. That implementation is a useful task-storage example, but its bounded
+dentry walk and global inode-cache invalidation do not implement the
+presentation's mount-tree reconstruction or Mithril's actor-view/object
+revalidation contract. Section 27 records the exact distinction.
 
 ### 16. Commands, Executable Images, And Executable Memory
 
@@ -2530,8 +2717,9 @@ strict policy denies or reports unsupported.
 A signed `DEFENDER_READ_DECLASSIFICATION` names the target, case, read-only
 operations, evidence sink, approver, expiry, and optional byte limit. The
 verified Mithril inspector receives only the target fd and evidence fd. BPF LSM
-checks target access; Seccomp limits syscalls and fds. If configured, the
-inspector counts successful bytes itself. BPF LSM does not meter bytes. Writes,
+checks target access. If the later Seccomp surface is adopted, its measured
+inspector profile may additionally limit syscalls and fds. The inspector counts
+successful bytes itself when configured; BPF LSM does not meter bytes. Writes,
 ptrace control, signals, fd extraction, general sockets, and other output stay
 forbidden.
 
@@ -2762,9 +2950,11 @@ physical fixture per operation family:
 - replacement/mount-over of `mithril-node`, runtime/shim, config, unit,
   admission socket, BPF links/maps, and bpffs roots.
 
-Each row names all syscall/API/compat variants, a qualified pre-effect hook or
-seccomp/capability/lockdown floor, and a physical oracle. A new or unmapped
-variant is denied/unsupported, never assumed covered by a similar older call.
+Each row names all syscall/API/compat variants, a qualified pre-effect BPF hook
+or capability/lockdown floor, and a physical oracle. A later Seccomp profile
+may supply an additional floor only after its separate evaluation gate passes.
+A new or unmapped variant is denied/unsupported, never assumed covered by a
+similar older call.
 
 The OCI runtime remains responsible for normal setup such as namespaces,
 mounts, UID/GID, capabilities, securebits, and `no_new_privs`. Mithril does not
@@ -2773,13 +2963,22 @@ the requested security settings and reject them only if its documented timing
 and return contract permit that result. BPF separately controls the later
 covered operations performed by runtime helpers and workload tasks.
 
-#### Seccomp facts
+#### Deferred Seccomp evaluation contract
+
+Seccomp is not a Version-1 enforcement dependency or release promise. A later
+stage may add it only after one bounded profile has demonstrated: exact
+installer/runtime compatibility, installation before target user code, correct
+denial behavior, and no regression beyond the declared workload latency and
+throughput budget. Until that decision, no Seccomp capability record is
+installed, `SECCOMP-QUAL-001` is not a core release gate, and no Mithril
+Seccomp-floor claim is made. The contracts below define what must be true if
+that future surface is approved; they do not authorize building it now.
 
 Ordinary installed seccomp cannot be weakened or detached by the task; the old
-idea “detect a task weakening its filter” is factually wrong and abandoned.
-Mithril instead verifies installation when a supported start path installs the
-filter, and governs dangerous new user-notification or ptrace/TRACE supervisor
-relationships.
+idea “detect a task weakening its filter” is factually wrong and abandoned. If
+the later surface is approved, Mithril verifies its installation through a
+supported start path and governs dangerous new user-notification or
+ptrace/TRACE supervisor relationships.
 
 `/proc/<pid>/status` shows mode/count, not arbitrary filter bytecode. Proof is:
 
@@ -2803,9 +3002,9 @@ containerd NRI `seccomp_policy` adjustment is a separately tested configuration
 path, not mere metadata.
 
 Seccomp cannot authorize `/proc/<target>/mem` by pathname: it cannot safely
-dereference and authenticate the userspace pointer. The defender inspector
-uses an owner-opened fd plus seccomp fd/syscall confinement and BPF exact target
-checks as described above.
+dereference and authenticate the userspace pointer. The defender inspector uses
+an owner-opened fd and BPF exact-target checks; a later approved Seccomp profile
+may add fd/syscall confinement as described above.
 
 #### Landlock facts
 
@@ -2824,17 +3023,18 @@ correlated evidence.
 
 Installation depends on what an existing launcher or runtime can do:
 
-| Process situation | Seccomp result | Landlock result |
+| Process situation | Future Seccomp result | Landlock result |
 | --- | --- | --- |
-| Mithril directly launches the process, such as an Erebor-governed agent/tool process | Mithril's child setup installs the compiled filter before the final program. | The same target-context child setup installs the ruleset before the final program. |
-| Qualified containerd NRI adjustment is allowed by the exact runtime version and validator configuration | Mithril supplies `LinuxContainerAdjustment.seccomp_policy`; containerd lowers it into the OCI spec and the ordinary runtime installs it in the target. The capability probe must reject versions or validator settings that refuse the adjustment. | Absent. NRI Seccomp-policy adjustment does not call `landlock_restrict_self()` in the target. |
-| Existing supported launcher/runtime interface offers target-context pre-user-code execution | Mithril may install Seccomp there or use the runtime's normal OCI Seccomp installation. | Mithril installs Landlock there, records the measured ABI and exact syscall inputs/result, and qualifies the ordering with positive and negative probes. Landlock does not expose a general exact-policy readback for an arbitrary target. |
+| Mithril directly launches the process, such as an Erebor-governed agent/tool process | Candidate only: its child setup may install the compiled filter before the final program if the later gate qualifies it. | The same target-context child setup installs the ruleset before the final program. |
+| Qualified containerd NRI adjustment is allowed by the exact runtime version and validator configuration | Candidate only: Mithril may supply `LinuxContainerAdjustment.seccomp_policy`; containerd would lower it into the OCI spec and the ordinary runtime would install it in the target. The later capability probe must reject versions or validator settings that refuse the adjustment. | Absent. NRI Seccomp-policy adjustment does not call `landlock_restrict_self()` in the target. |
+| Existing supported launcher/runtime interface offers target-context pre-user-code execution | Candidate only: Mithril may install Seccomp there or use the runtime's normal OCI Seccomp installation if the later gate qualifies it. | Mithril installs Landlock there, records the measured ABI and exact syscall inputs/result, and qualifies the ordering with positive and negative probes. Landlock does not expose a general exact-policy readback for an arbitrary target. |
 | Callback supplies metadata only and offers neither Seccomp-spec adjustment nor target-context execution | Absent. | Absent. |
 
 Verify the real interface; the word “hook” proves nothing. NRI can supply a
-Seccomp policy that the normal runtime installs. It cannot install Landlock.
-Landlock must run in the target's own setup path. If no supported interface
-offers that path, the Landlock layer is absent.
+Seccomp policy that the normal runtime installs, which is a candidate for the
+later gate; it cannot install Landlock. Landlock must run in the target's own
+setup path. If no supported interface offers that path, the Landlock layer is
+absent.
 
 The node daemon cannot attach either floor from outside to an arbitrary live
 task. BPF LSM can still control that task's next covered action. None of these
@@ -3700,16 +3900,26 @@ keys until that schema is allocated.
 
 ### 27. How To Read The Upstream Source Evidence
 
-Mithril does not run KubeArmor, Tetragon, Falco, or Cilium beside its own node
-agent. It also does not copy one of those products and add a second policy
-engine. It studies the mechanisms that their source proves, keeps the useful
-ideas, and builds one Mithril-owned implementation around Mithril's identity,
-policy, evidence, and response contracts.
+Mithril does not run KubeArmor, Tetragon, the independent open-source Jailer,
+Falco, or Cilium beside its own node agent. It also does not copy one of those
+products and add a second policy engine. It studies the mechanisms that their
+source proves, keeps the useful ideas, and builds one Mithril-owned
+implementation around Mithril's identity, policy, evidence, and response
+contracts.
 
 The checked baselines are:
 
 - KubeArmor commit `e46f112e8bd4d3c8c8a73c23bfe438ff40eeea1a`;
-- Tetragon commit `dbb59576f9ce504c044f8d9a0cd7a0f91c71ae2c`.
+- Tetragon commit `dbb59576f9ce504c044f8d9a0cd7a0f91c71ae2c`; and
+- independent Jailer commit `3ffc155512b8be4296842c2f0c2c47f8d3407694`.
+
+The independent Jailer repository explicitly says it is not Meta's BpfJailer;
+it is a separate implementation inspired by that work. Meta's supplied LPC
+2025 PDF is a presentation, not a source repository. Its SHA-256 is
+`81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6`.
+It grounds the mount-aware traversal portion of the combined path resolver in
+Chapter 15, but it cannot prove unpublished implementation details or enter a
+code-line `SourceEvidenceClaimV1` until an exact public code snapshot exists.
 
 Every statement in this part is about those exact snapshots. It is not a claim
 about the maintainers' intent, every release, or every possible configuration.
@@ -3730,13 +3940,18 @@ Each source observation has two separate labels:
 The future machine record is `SourceEvidenceClaimV1`. It stores repository,
 commit, path, exact line range, blob digest, observation, boundary kind,
 relationship to Mithril, reviewer, and the fixture IDs that depend on it. A
-display table is never the source of truth.
+presentation without a public code range remains a separately pinned
+context-only review input. A display table is never the source of truth.
 
 #### Code reuse and license gate
 
 “Learn from” and “copy code” are different decisions.
 
 - Both checked repositories have an Apache-2.0 top-level `LICENSE`.
+- Independent Jailer also has an Apache-2.0 top-level `LICENSE`, but its
+  `bpfjailer-bpf/src/main.bpf.c` has no SPDX header and declares a GPL kernel
+  license section. Do not infer one file's redistribution terms from another
+  project's top-level license or from a BPF `license` section.
 - The checked KubeArmor `KubeArmor/BPF/enforcer.bpf.c` has an
   `SPDX-License-Identifier: GPL-2.0` header. The BPF file's own SPDX notice is
   more specific than assuming every file has the repository-level license.
@@ -4195,19 +4410,20 @@ syscall or runtime outcome; and coverage/loss state.
 | Evidence | ring pressure, reader death, source gap, WAL full, generation switch, link/pin/map loss, control outage | Physical deny is independent from transport where mechanism is live; negative claims stop across gaps. |
 
 The old phrase “seccomp weakening hook” is not a valid Linux test. Seccomp
-filters are monotonic once installed. When a supported start path advertises
-Mithril-installed Seccomp, the real tests prove that the floor existed before
-that target's user code and could not be silently omitted. Mithril makes no
-Seccomp claim for a process where it did not install that floor. Unapproved
-ptrace or Seccomp user-notification supervisors are separate controls.
+filters are monotonic once installed. If the deferred Seccomp surface is later
+approved, the real tests must prove that its floor existed before target user
+code and could not be silently omitted. Mithril makes no Seccomp claim for a
+process where it did not install that floor. Unapproved ptrace or Seccomp
+user-notification supervisors are separate controls.
 
-`SECCOMP-QUAL-001` runs both supported installation forms separately. The
-direct-launch case proves target-context installation. The containerd case
-uses NRI `seccomp_policy`, proves the exact OCI policy digest reached the
-runtime, and exercises validator allow, validator reject, missing NRI plugin,
-plugin timeout, runtime install failure, correct forbidden-syscall denial, and
-an allowed control. Passing the direct-launch case does not qualify NRI, and
-passing NRI does not make a Landlock claim.
+If the later Seccomp stage is allocated, `SECCOMP-QUAL-001` runs both candidate
+installation forms separately. The direct-launch case proves target-context
+installation. The containerd case uses NRI `seccomp_policy`, proves the exact
+OCI policy digest reached the runtime, and exercises validator allow, validator
+reject, missing NRI plugin, plugin timeout, runtime install failure, correct
+forbidden-syscall denial, an allowed control, and the declared performance
+budget. Passing the direct-launch case does not qualify NRI, and passing NRI
+does not make a Landlock claim.
 
 #### 31.3 Pinned-source tests that cannot be waived
 
@@ -4539,6 +4755,8 @@ combine those facts into “fully protected from first exec.”
 | Checkpoint create/restore | `UNALLOCATED_OPTIONAL` | `UNSUPPORTED`; dormant fixtures do not block unrelated core release | Add checkpoint owner and stock authorization/runtime-hook matrix, store actuator, `CHECKPOINT-CREATE-001`, `ENTRY-RESTORE-001`; no patched runtime. |
 | Attach/port-forward stream | `UNALLOCATED_OPTIONAL` | Audit/API evidence only at the configured tier; no proxy/metering claim | Add Kubernetes audit/authorization API owner, proof-quality rules, and `ENTRY-STREAM-001`; do not insert a stream gate. |
 | Named GitHub/GitLab/Jenkins/Tekton adapters and compilable CI policy | `UNALLOCATED_OPTIONAL` | CI contracts remain dormant; no named tier claim | Add provider API roots, official supported plugin fields where available, closed schema, adapter suite, and exact `CI-*` subset; no runner patch or held-task transport. |
+| Operator-owned L7 mediation | `UNALLOCATED_OPTIONAL` | Direct TLS remains the baseline; no semantic request prevention claim | Add a distinct mediation owner and deployment profile, authenticated client/upstream/result contracts, semantic failure posture, and fixtures. Mithril must not silently inject a proxy, redirect traffic, replace DNS, or install a workload CA. |
+| Host daemons, developer machines, and non-Kubernetes agents | `UNALLOCATED_OPTIONAL` | Kubernetes/runtime bindings are the only allocated entry bindings; this is not needed for the current Kubernetes/Hugging Face scope and makes no host-daemon or developer-agent enrollment claim | Add exact existing system-manager/cgroup/executable-integrity source contracts, a pre-first-protected-effect installation proof, non-Kubernetes policy selectors, and PID-reuse/exec/fork fixtures. A userspace PID map populated after the task runs is never authority admission. |
 | Unmatched-workload hard floor and privileged exceptions | `UNALLOCATED_REQUIRED_FOR_FULL_HF_CLAIM` | Full prevention of attacker-created privileged Pod and full HF claim are blocked | Amend Phase 0, Kubernetes validating-admission integration, chosen stock runtime hook if used, BPF node-floor schema, and `XNODE-PRIVILEGED-POD-001`/`NODE-FLOOR-EXCEPTION-002`; no component rebuild. |
 
 Runtime-root handling cannot be postponed to a late integration task. Phase 0
@@ -4804,7 +5022,8 @@ SourceRangeV1 {
 SourceEvidenceClaimV1 {
   evidence_id: Id128
   atomic_claim_id: nonzero u16
-  project: KUBEARMOR | TETRAGON | LINUX | OCI | KUBERNETES | PROVIDER
+  project: KUBEARMOR | TETRAGON | BPFJAILER | LINUX | OCI | KUBERNETES |
+           PROVIDER
   ranges[1..16]: SourceRangeV1
   observation: bounded UTF-8 text with LF line endings
   boundary_nature: EvidenceBoundaryNatureV1
@@ -5053,18 +5272,67 @@ them.
 Random IDs, boot IDs, timestamps, and delivery order prevent raw byte-for-byte
 comparison. The comparator normalizes only declared display variability:
 
-```text
+```rust
+type CanonicalFieldPathV1 = RegistrySymbolV1;
+type FixtureLogicalSlotIdV1 = RegistrySymbolV1;
+
+enum CanonicalAliasActualIdV1 {
+    RuntimeId(Id128),
+    ContentId(DigestV1),
+}
+
+struct FixtureAliasBindingV1 {
+    actual_id: CanonicalAliasActualIdV1,
+    logical_slot_id: FixtureLogicalSlotIdV1,
+}
+
+enum CanonicalFieldRuleV1 {
+    Exact { field: CanonicalFieldPathV1 },
+    IgnoreDisplay { field: CanonicalFieldPathV1 },
+    TimeOffsetFromStimulus { field: CanonicalFieldPathV1 },
+    OrderedList { field: CanonicalFieldPathV1 },
+    KeySortedSet {
+        field: CanonicalFieldPathV1,
+        key_fields: BoundedVec<CanonicalFieldPathV1, 1, 16>,
+    },
+    CountedMultiset {
+        field: CanonicalFieldPathV1,
+        key_fields: BoundedVec<CanonicalFieldPathV1, 1, 16>,
+    },
+}
+
+enum CanonicalIntervalPredicateV1 {
+    TimeOffsetWithin {
+        field: CanonicalFieldPathV1,
+        earliest_offset_ns: i64,
+        latest_offset_ns: i64,
+    },
+    IntegerWithin {
+        field: CanonicalFieldPathV1,
+        minimum: i64,
+        maximum: i64,
+    },
+}
+
 CanonicalOracleComparatorV1 {
   schema_version: exactly 1
-  fixture_alias_bindings: authoritative actual IDs -> fixture logical slots
-  time_normalization: absolute time -> signed offset/interval from stimulus
-  sequence_normalization: preserve per-source order and explicit gaps
-  collection_rules: ordered_list | key_sorted_set | counted_multiset
-  ignored_display_fields[]: closed registry; never proof/result/security fields
-  exact_fields[]
-  interval_predicates[]
+  fixture_alias_bindings[0..256]: sorted unique FixtureAliasBindingV1 by actual_id
+  field_rules[1..256]: sorted unique CanonicalFieldRuleV1 by field
+  interval_predicates[0..64]: sorted unique CanonicalIntervalPredicateV1 by field
   expected_canonical_digest: DigestV1
 }
+```
+
+The rules define the complete comparator projection. Every selected field has
+exactly one field rule; an unknown selected field, duplicate rule, unresolved
+alias, invalid collection key, or interval with `earliest > latest` fails the
+fixture. `IgnoreDisplay` is allowed only for a field that cannot affect proof,
+result, authorization, coverage, grouping, or a security decision. Time rules
+replace absolute time with the signed offset from the fixture stimulus. The
+expected digest is calculated over the resulting deterministic projection,
+including explicit source-order gaps where an `OrderedList` selects them.
+
+```text
 
 CompletionLedgerV1 {
   ledger_id: Id128
@@ -5410,7 +5678,7 @@ The remaining intentionally non-struct names have explicit status:
 | `DerivedKernelCapabilityObjectV1` | TUN, io_uring, BPF link/map, perf, KVM/GPU context, keyring, pidfd, or similar authority-bearing object |
 | `SecurityObjectRecordV1` | Exact process/kernel security target for ptrace, credentials, namespaces, module, BPF, perf, keyring, proc/sysctl |
 | `ProcessControlEffectKeyV1` | Directional controller + exact live target task + exact ptrace/process-vm/proc/pidfd/signal operation key |
-| `SeccompFloorProofV1` | Exact filter proof when Mithril installed it through a qualified new-process start path, or measured proof level for a filter that already existed; never a retroactive arbitrary-PID claim |
+| `SeccompFloorProofV1` | **Deferred surface.** Future exact filter proof only after the Seccomp evaluation gate approves a qualified new-process start path; never a retroactive arbitrary-PID claim |
 | `LandlockFloorProofV1` | Target-context installer proof: measured ABI, exact ruleset and flags, syscall result, thread scope, ordering, and qualification result; never an external arbitrary-PID attachment claim |
 
 #### A.8.6 Evidence, graph, findings, and response
@@ -5444,6 +5712,7 @@ The remaining intentionally non-struct names have explicit status:
 | `HfRepresentativeActionCaseV1` | One of the 21 normalized incident actions, branches, controls, result, proof |
 | `HfGranularAcceptanceV1` | Smaller published incident action branch with exact fixture/oracle/source links |
 | `ResponseActionSpecV1` | Typed local/provider action, required approval, blast radius, target, postcondition |
+| `ResponseActionRequestV1` / `ResponseActionResultV1` | One action identity, idempotency key, and typed terminal result inside a response plan |
 | `ResponseBindingV1` | Finding/package/result -> allowed response spec and policy version |
 | `ResponsePlanV1` | Authorized immutable set of actions, target revisions, ordering, rollback/expiry |
 | `ResponseDecisionKeyV1` / `ResponseDecisionV1` | Exact local response restriction lookup and result |
@@ -5502,7 +5771,7 @@ The remaining intentionally non-struct names have explicit status:
 | `FixtureCaseResultV1`, `FixtureAggregateResultV1`, `FixtureResultBundleV1` | Case, fixture, and signed bundle qualification results |
 | `LatencyDistributionV1`, `OperationPerformanceRecordV1`, `CapacityPerformanceRecordV1` | Recorded operation latency/resource distributions and bounded-capacity outcomes |
 | `PerformanceQualificationRecordV1`, `PerformanceQualificationBundleV1` | Platform/build-bound performance records and their signed release bundle |
-| `CanonicalOracleComparatorV1` | Declared normalization and exact comparison rules for physical/provider oracles |
+| `CanonicalFieldPathV1`, `FixtureLogicalSlotIdV1`, `CanonicalAliasActualIdV1`, `FixtureAliasBindingV1`, `CanonicalFieldRuleV1`, `CanonicalIntervalPredicateV1`, `CanonicalOracleComparatorV1` | One complete typed normalization recipe and expected digest for a fixture oracle |
 | `CompletionLedgerV1`, `QualificationEnvelopeV1`, `ReleaseClaimV1` | Criterion ledger, signed artifact envelope, and exact-platform release claim |
 | `ImplementationCardV1` | Human implementation card that must map to a distinct executable fixture ID |
 | `FixtureFamilyV1` | Explicit nonempty sorted fixture membership; wildcards forbidden |
@@ -7370,9 +7639,12 @@ result arriving after the pre-admission deadline.
 
 #### A.11.5 Exact conflict and expansion rule
 
-The compiler expands every wildcard against the finite signed universe. An
-omitted optional selector dimension means the whole finite dimension. A
-present empty required selector is an error; it never means `*`.
+The compiler expands every wildcard except a hierarchical path component
+against the finite signed universe. A hierarchical path component is compiled
+into the bounded actor-view resolver in Chapter 15; its one terminal candidate
+is revalidated to an exact mount/object decision key before physical authority
+is selected. An omitted optional selector dimension means the whole finite
+dimension. A present empty required selector is an error; it never means `*`.
 
 ```text
 NormalizedDecisionCellV1 {
@@ -7425,9 +7697,10 @@ exported explanation references the parent profile and cell ID instead.
 Two cells merge only when the physical result, errno, complete transition,
 findings, responses, and budget semantics are identical. Different results
 need an explicit signed override or exception naming the exact replaced rule
-and authority delta. Otherwise compilation fails. Priority, YAML order,
-wildcard count, severity, “more specific,” and “deny wins” never select
-authority.
+and authority delta. The path-graph compiler applies the same condition to
+overlapping terminal patterns before an object decision is emitted. Otherwise
+compilation fails. Priority, YAML order, wildcard count, severity, “more
+specific,” and “deny wins” never select authority.
 
 Each operation becomes its own compiled key. `OPEN_READ` and later `READ` are
 not one bit of authority. A file-open capability cannot satisfy a claim that
@@ -7615,25 +7888,67 @@ ResponseBindingV1 {
   watch_interval: duration
 }
 
-ResponseActionSpecV1 =
-  LOCAL { RESTRICT_LINEAGE | FENCE_SOCKETS | FREEZE_CGROUP }
-  | KUBERNETES { REJECT_REPLACEMENT, admission_capability_id }
-  | CREDENTIAL { REVOKE_CREDENTIAL, provider, credential_kind,
-                 actuator_capability_id, typed_request_schema_digest }
-  | MESH { DISABLE_MESH_DEVICE, provider, actuator_capability_id,
-           typed_request_schema_digest }
-  | ARTIFACT { QUARANTINE_ARTIFACT, store_capability_id,
-               typed_request_schema_digest }
-  | SOURCE_CONTROL { SUSPEND_INSTALLATION, provider,
-                     actuator_capability_id, typed_request_schema_digest }
-  | PROVIDER_SPECIFIC { provider, canonical_action_id,
-                        actuator_capability_id, typed_request_schema_digest }
+enum ResponseActionSpecV1 {
+  RestrictLineage,
+  FenceSockets,
+  FreezeCgroup,
+  // Sends SIGKILL only after pidfd/task-cookie/start-time/cgroup revalidation.
+  TerminateProcessPidfd,
+  RejectKubernetesReplacement { admission_capability_id: PolicyLocalIdV1 },
+  RevokeCredential {
+    provider: ProviderV1,
+    credential_kind: RegistrySymbolV1,
+    actuator_capability_id: PolicyLocalIdV1,
+    typed_request_schema_digest: DigestV1,
+  },
+  DisableMeshDevice {
+    provider: ProviderV1,
+    actuator_capability_id: PolicyLocalIdV1,
+    typed_request_schema_digest: DigestV1,
+  },
+  QuarantineArtifact {
+    store_capability_id: PolicyLocalIdV1,
+    typed_request_schema_digest: DigestV1,
+  },
+  SuspendInstallation {
+    provider: ProviderV1,
+    actuator_capability_id: PolicyLocalIdV1,
+    typed_request_schema_digest: DigestV1,
+  },
+  ProviderSpecific {
+    provider: ProviderV1,
+    canonical_action_id: PolicyLocalIdV1,
+    actuator_capability_id: PolicyLocalIdV1,
+    typed_request_schema_digest: DigestV1,
+  },
+}
+
+struct ResponseActionRequestV1 {
+  action_id: Id128,
+  action: ResponseActionSpecV1,
+  idempotency_key: Id128,
+}
+
+enum ResponseActionResultV1 {
+  Verified { action_id: Id128, postcondition: PhysicalPostconditionV1 },
+  AlreadySatisfied { action_id: Id128, postcondition: PhysicalPostconditionV1 },
+  TargetNoLongerMatches { action_id: Id128 },
+  ActuatorRejected { action_id: Id128, reason_code: ReasonCodeIdV1 },
+  Failed { action_id: Id128, reason_code: ReasonCodeIdV1 },
+  Expired { action_id: Id128 },
+  Cancelled { action_id: Id128 },
+}
 ```
 
 The compiler uses a closed compatibility table between action, target
 revalidation, postcondition, proof, and blast-radius variant. A GitHub audit
 fingerprint cannot select a possessed-token revoke action; a process target
-cannot use a Kubernetes-object postcondition.
+cannot use a Kubernetes-object postcondition. `TerminateProcessPidfd` is
+compatible only with `PROCESS_PIDFD_TASK_COOKIE_STARTTIME_CGROUP_BINDING` and
+`PROCESS_STOPPED_VIA_PIDFD`. The response owner sends `SIGKILL` through the
+revalidated pidfd, then verifies the original process exit with `waitid` on
+that pidfd. A target mismatch never signals; an `ESRCH` result succeeds only
+when that same pidfd proves the target already exited.
 
 ```text
 SourceCoverageHealthRuleV1 {
@@ -8952,6 +9267,11 @@ LandlockFloorProofV1 {
 }
 ```
 
+`SeccompFloorProofV1` is reserved for the deferred Seccomp surface. It is not
+emitted, required, or used to support a Version-1 enforcement claim. A later
+approved stage may activate it only with the evaluation contract in Chapter 21
+and the conditional `SECCOMP-QUAL-001` fixture.
+
 This key is directional. The current task supplies the controller fields. The
 kernel target task must resolve to the listed task cookie, process instance,
 and process state in the current node boot and label epoch. A numeric PID is
@@ -8988,16 +9308,16 @@ full-process `VERIFIED` requires
 ruleset bytes and syscall result; it does not claim that Linux later returned
 the exact ruleset from an arbitrary target.
 
-Seccomp filters only become stricter; there is no syscall that removes an
-installed filter. For a new process on a qualified start path, Mithril proves
-that it installed the required floor before that target's user code and that
-all required threads received it. Mithril makes no Seccomp-floor claim when it
-did not perform that installation. A Mithril-owned launcher may install the
-floor later but before it runs untrusted code; that is still a qualified target
-path, not external retrofit. A user-notification listener cannot widen
-authority, and ptrace/supervisor relationships need separate control.
-Seccomp can match syscall numbers and scalar arguments. It cannot authenticate
-the pathname behind a userspace pointer, so it cannot by itself authorize
+If the deferred Seccomp surface is later approved, filters only become
+stricter; there is no syscall that removes an installed filter. For a new
+process on a qualified start path, Mithril must prove that it installed the
+required floor before that target's user code and that all required threads
+received it. A Mithril-owned launcher may install the floor later but before it
+runs untrusted code; that is still a qualified target path, not external
+retrofit. A user-notification listener cannot widen authority, and
+ptrace/supervisor relationships need separate control. Seccomp can match
+syscall numbers and scalar arguments. It cannot authenticate the pathname
+behind a userspace pointer, so it cannot by itself authorize
 `/proc/<target>/mem`.
 
 Landlock is an additional target-installed floor. Its available rights depend
@@ -9012,13 +9332,13 @@ provider semantics, or response.
 
 For a defender's approved memory read, the trusted owner opens the exact target
 while held, passes only that read-only target fd and one evidence-sink fd to a
-short-lived measured inspector, installs/readbacks a seccomp fd/syscall floor,
-and checks the exact inspector, case, target, deadline, and allowed access in
-BPF LSM. If the authorization includes a byte limit, the Mithril-owned
-inspector enforces it by counting its successful reads and stopping at the
-approved maximum. BPF LSM does not expose a reliable byte counter for this
-purpose. Memory write, ptrace control, fd extraction, signal, and general
-network remain forbidden.
+short-lived measured inspector, and checks the exact inspector, case, target,
+deadline, and allowed access in BPF LSM. A later approved Seccomp profile may
+add an fd/syscall floor. If the authorization includes a byte limit, the
+Mithril-owned inspector enforces it by counting its successful reads and
+stopping at the approved maximum. BPF LSM does not expose a reliable byte
+counter for this purpose. Memory write, ptrace control, fd extraction, signal,
+and general network remain forbidden.
 
 #### A.13.7 Surface qualification
 
@@ -9606,18 +9926,17 @@ ResponsePlanV1 {
   plan_id: Id128
   revision: u64
   frozen_graph_version: DigestV1
-  frozen_branch_ids[]: DigestV1
-  requested_actions[]: ResponseActionSpecV1
+  frozen_branch_ids[1..256]: DigestV1
+  actions[1..64]: sorted unique ResponseActionRequestV1 by action_id
   authorization_id: Id128
   authorization_expires_utc_ns: i64
   node_deadline_boottime_ns?: u64
-  idempotency_key_per_action[]: Id128
   state: PROPOSED | AUTHORIZED | REVALIDATING | APPLYING |
          VERIFYING | WATCHING | VERIFIED | PARTIAL | FAILED |
          UNKNOWN | EXPIRED | CANCELLED
-  action_results[]
+  action_results[0..64]: sorted unique ResponseActionResultV1 by action_id
   required_watch_interval_ns: u64
-  required_coverage_ids[]: Id128
+  required_coverage_ids[0..64]: Id128
 }
 
 EffectiveResponseSet {
@@ -9629,41 +9948,12 @@ EffectiveResponseSet {
 }
 ```
 
-The policy types referenced by a response binding are closed. The authoritative
-`ResponseActionSpecV1` definition is in Appendix A.11.5.1; the variants are
-repeated here as a response-engine reading aid:
+The policy types referenced by a response binding are closed. The
+authoritative Rust enum for `ResponseActionSpecV1` and the action request/result
+types are in Appendix A.11.5.1. This section defines only the response-engine
+types that compose with it:
 
 ```text
-response action variants =
-  LOCAL { action:RESTRICT_LINEAGE | FENCE_SOCKETS | FREEZE_CGROUP }
-  | KUBERNETES {
-      action:REJECT_REPLACEMENT, admission_capability_id:PolicyLocalIdV1
-    }
-  | CREDENTIAL {
-      action:REVOKE_CREDENTIAL, provider:ProviderV1, credential_kind,
-      actuator_capability_id:PolicyLocalIdV1,
-      typed_request_schema_digest:DigestV1
-    }
-  | MESH {
-      action:DISABLE_MESH_DEVICE, provider:ProviderV1,
-      actuator_capability_id:PolicyLocalIdV1,
-      typed_request_schema_digest:DigestV1
-    }
-  | ARTIFACT {
-      action:QUARANTINE_ARTIFACT, store_capability_id:PolicyLocalIdV1,
-      typed_request_schema_digest:DigestV1
-    }
-  | SOURCE_CONTROL {
-      action:SUSPEND_INSTALLATION, provider:ProviderV1,
-      actuator_capability_id:PolicyLocalIdV1,
-      typed_request_schema_digest:DigestV1
-    }
-  | PROVIDER_SPECIFIC {
-      provider:ProviderV1, canonical_action_id:PolicyLocalIdV1,
-      actuator_capability_id:PolicyLocalIdV1,
-      typed_request_schema_digest:DigestV1
-    }
-
 BlastRadiusLimitV1 =
   LOCAL {
     permitted_target_selector_ids[1..64], process_count:u32,
@@ -10257,14 +10547,14 @@ accidentally revive them. They are history, not a second normative contract.
 | Object taint proves arbitrary byte flow | Another task may read or write concurrently, and the kernel does not know message meaning | Keep object identity and direct effect evidence; deny the shared-object acquisition or connection-oriented relationship, or report byte provenance unsupported (§18) |
 | Pre-resolve every listener before application code | Dynamic bind/reuse/redirect makes startup inventory incomplete | Resolve listener/recipient at connect/accept/delivery; deny unknown strict channel (§18-19) |
 | Returning hook can undo process-memory effects | `process_vm_writev`, ptrace, or kernel copy may have occurred before a late return point | Use proven pre-copy hook or deny earlier actuator acquisition; otherwise observation only (§18, §21) |
-| Seccomp authorizes `/proc/<target>/mem` by pathname | Seccomp does not resolve filesystem target identity | BPF/traditional LSM exact file/target plus seccomp syscall floor (§17, §21) |
+| Seccomp authorizes `/proc/<target>/mem` by pathname | Seccomp does not resolve filesystem target identity | BPF/traditional LSM exact file/target; a future approved Seccomp syscall floor may add confinement (§17, §21) |
 | Reuse a native authority domain for cross-entry IPC | It would silently merge unrelated processes and overstate what Linux can enforce | Keep domains separate; use `IpcRelationshipRuleV1` and exact channel state (§18) |
 | Reclaim a socket/file merely because its creator exited | Kernel objects may survive through other references | Keep exact object/socket lifetime state independently of the native domain (§18-19) |
 | Freeze, drain, and redirect live domains before IPC | Linux has no general atomic drain/merge transaction | This design is abandoned; apply the relationship decision at the actual operation (§18, Appendix A.14.3) |
 | Merge positive or negative policy across IPC peers | Communication does not make two actors one security principal | Keep each actor's role and native restrictions; evaluate both endpoint identities through one relationship (§18) |
 | `OBJECT_TAINT` after writing prevents `emptyDir` laundering | Inode state does not prove which bytes a reader consumed | Govern file access and communication; record descriptor passing separately without claiming byte or represented-object provenance (§18) |
 | An allowed send proves bytes were delivered or identifies their origin | Admission, completion, packet delivery, and provider result are different facts | Record each physical result separately without a byte-provenance claim (§18, §25) |
-| Detect a task weakening its installed Seccomp floor | Installed Seccomp filters are monotonic; there is no removal syscall | For a qualified new-process start, prove Mithril installed the floor before target user code; otherwise make no Seccomp-floor claim (§21, §31) |
+| Detect a task weakening its installed Seccomp floor | Installed Seccomp filters are monotonic; there is no removal syscall | If the future surface is approved, prove installation before target user code; otherwise make no Seccomp-floor claim (§21, §31) |
 
 ### B.4 Evidence, graph, response, and incident statements
 
@@ -10497,7 +10787,9 @@ runner contract.
 `ALWAYS` means core qualification. `WHEN_CLAIM_VECTOR_REFERENCES` activates
 only when a release claims that surface. `WHEN_SURFACE_ALLOCATED_AND_ADVERTISED`
 activates only after the optional surface has an approved phase and product
-claim.
+claim. `WHEN_SECCOMP_SURFACE_ALLOCATED_AND_ADVERTISED` additionally requires
+the deferred Seccomp compatibility and performance gate in Chapter 21 to pass;
+it is false for Version 1.
 
 | Criterion | Condition | Exact fixture IDs |
 | ---: | --- | --- |
@@ -10507,7 +10799,8 @@ claim.
 | 2 | `WHEN_CLAIM_VECTOR_REFERENCES` | `ADMIN-EXEC-APPROVAL-001` |
 | 2 | `WHEN_SURFACE_ALLOCATED_AND_ADVERTISED` | `CHECKPOINT-CREATE-001`, `ENTRY-RESTORE-001`, `ENTRY-STREAM-001` |
 | 3 | `ALWAYS` | `EXEC-COMMIT-STATE-001`, `EXEC-CONCURRENT-002`, `ID-CGROUP-ESCAPE-001`, `ID-CLONE-CGROUP-002`, `ID-CLONE-CGROUP-FAIL-003`, `ID-CREATOR-PARENT-007`, `ID-MOVED-PARENT-FORK-004`, `ID-MOVED-TASK-EXEC-005`, `ID-TASK-COORD-FINALIZE-006`, `IPC-ENDPOINT-RESTART-006`, `IPC-PEER-RACE-004`, `IPC-RELATIONSHIP-ALLOW-003`, `IPC-RELATIONSHIP-LOSS-002`, `IPC-RELATIONSHIP-UNMATCHED-005`, `NATIVE-STATE-REF-LIFETIME-001`, `STATE-FORK-IPC-002`, `STATE-THREAD-RACE-001` |
-| 4 | `ALWAYS` | `DEVICE-DERIVED-001`, `FILE-CONTENT-RACE-002`, `FILE-IDENTITY-001`, `FILE-MMAP-001`, `FILE-MMAP-SHARED-011`, `FILE-NAMESPACE-001`, `FILE-SA-TOKEN-OPEN-001`, `FILE-VMA-SNAPSHOT-001`, `HF-LOCAL-001`, `HF-NET-001`, `IPC-ASYNC-UNSUPPORTED-010`, `IPC-LOCAL-INET-008`, `IPC-PROCESS-CHANNEL-009`, `MEM-EXEC-001`, `MEM-KERNEL-MAP-002`, `MOUNT-ATTR-001`, `MOUNT-CAS-002`, `MOUNT-PROPAGATION-003`, `MOUNT-SNAPSHOT-004`, `NET-ACCEPT-PASS-001`, `NET-DNS-EXFIL-001`, `NET-NS-PASS-001`, `NET-RECV-001`, `NET-REWRITE-001`, `NET-SOCKCTL-001`, `NET-SOCKET-LIFE-001`, `SECCOMP-QUAL-001`, `STATE-PERSISTENT-FILE-LIFETIME-007` |
+| 4 | `ALWAYS` | `DEVICE-DERIVED-001`, `FILE-CONTENT-RACE-002`, `FILE-IDENTITY-001`, `FILE-MMAP-001`, `FILE-MMAP-SHARED-011`, `FILE-NAMESPACE-001`, `FILE-SA-TOKEN-OPEN-001`, `FILE-VMA-SNAPSHOT-001`, `HF-LOCAL-001`, `HF-NET-001`, `IPC-ASYNC-UNSUPPORTED-010`, `IPC-LOCAL-INET-008`, `IPC-PROCESS-CHANNEL-009`, `MEM-EXEC-001`, `MEM-KERNEL-MAP-002`, `MOUNT-ATTR-001`, `MOUNT-CAS-002`, `MOUNT-PROPAGATION-003`, `MOUNT-SNAPSHOT-004`, `NET-ACCEPT-PASS-001`, `NET-DNS-EXFIL-001`, `NET-NS-PASS-001`, `NET-RECV-001`, `NET-REWRITE-001`, `NET-SOCKCTL-001`, `NET-SOCKET-LIFE-001`, `STATE-PERSISTENT-FILE-LIFETIME-007` |
+| 4 | `WHEN_SECCOMP_SURFACE_ALLOCATED_AND_ADVERTISED` | `SECCOMP-QUAL-001` |
 | 4 | `WHEN_CLAIM_VECTOR_REFERENCES` | `HF-GRAN-CONNECTOR-DIRECT-001`, `HF-GRAN-DEAD-DROP-001`, `HF-GRAN-HOSTPATH-001`, `HF-GRAN-MESH-ROOT-001` |
 | 5 | `ALWAYS` | `FILE-DELEGATED-EGRESS-001`, `FILE-FD-PASS-001`, `HF-004-RESULT-001`, `HF-011-READ-RESULT-001`, `NET-SHARED-RESPONSE-002` |
 | 5 | `WHEN_CLAIM_VECTOR_REFERENCES` | `HF-GRAN-CI-BUILDRS-001`, `HF-GRAN-HOST-LOC-001`, `HF-GRAN-OUTSIDE-001` |
@@ -10559,6 +10852,18 @@ Tetragon:
 - [process cache](../../../tetragon/pkg/process/cache.go)
 - [observer/loss path](../../../tetragon/pkg/observer/observer_linux.go)
 
+Independent Jailer (not Meta BpfJailer):
+
+- [top-level license](../../../jailer/LICENSE)
+- [task-local storage, pending enrollment, and task allocation](../../../jailer/bpfjailer-bpf/src/main.bpf.c)
+- [dentry path-state matcher and cache invalidation](../../../jailer/bpfjailer-bpf/src/main.bpf.c)
+
+Meta BpfJailer presentation only:
+
+- [LPC 2025 deck](../../../BpfJailer%20LPC%202025.pdf) -- slides 16-21 are
+  design evidence for the mount-aware component matcher in Chapter 15. This is
+  not public source code and therefore is not a `SourceEvidenceClaimV1` range.
+
 The review crosswalk is:
 
 | Source family | Checked evidence IDs |
@@ -10574,6 +10879,7 @@ The review crosswalk is:
 | Tetragon cgroup filter and runtime metadata: `policy_filter.h`, policy-filter map/state, runtime hooks/args/server/protobuf, node main, OCI hook | `TG-CODE-003`, `004`, `009`, `016`, `021`, `022`, `023` |
 | Tetragon node/process IDs, cache, event schema and loss: `node.go`, `process_id_linux.go`, `process.go`, `cache.go`, `events.proto`, observer/metrics | `TG-CODE-002`, `005`, `008`, `018` |
 | Tetragon one-process sensor/runtime chassis: node `main.go`, hook `runner.go`/`args.go`/server/protobuf/OCI hook | `TG-CODE-005`, `009`, `012`, `017`, `021`, `023` |
+| Independent Jailer task storage, delayed PID enrollment, and task-allocation inheritance: `bpfjailer-bpf/src/main.bpf.c` | `BJ-CODE-001`, `002` |
 
 #### D.1.1 Atomic checked-code claims
 
@@ -10643,6 +10949,13 @@ Tetragon claims:
 | `TG-CODE-022` | Fresh forward map publishes before reverse mappings, and a later failure does not roll the first publication back. | Do not inherit a claim of atomic bidirectional state. |
 | `TG-CODE-023` | OCI hook transports metadata over an insecure gRPC channel or mode-0660 Unix socket and has no signer, nonce, expiry, slot, or held task. | This is useful local metadata plumbing. Authenticate the local source as installation requires, but never turn it into missing kubelet purpose or a held-task claim. |
 | `TG-CODE-024` | Bounded exec state can miss insertion, yet a kill-policy test proves enforcement with process marked unknown. | Preserve generic enforcement on unknown observation, but never invent a protected role; use fail-closed preallocated identity or deny. |
+
+Independent Jailer claims:
+
+| ID | Pinned observation | Mithril consequence |
+| --- | --- | --- |
+| `BJ-CODE-001` | `bpfjailer-bpf/src/main.bpf.c:23-31` declares `BPF_MAP_TYPE_TASK_STORAGE`; `:486-510` allocates child storage at `task_alloc` and copies the parent's process information. In the checked KubeArmor snapshot, no task-storage use occurs. In the checked Tetragon snapshot, the name occurs only in generated BTF, reader, or vendored ABI material--not in a live enforcement-program map declaration or task-storage helper call. This comparison is limited to these pinned snapshots. | Adopt task-local storage as the early task identity anchor. Mithril's label still requires its own `TaskLabelV1` lifecycle, identity, and fail-closed contracts; do not claim that no KubeArmor or Tetragon version can use task storage. |
+| `BJ-CODE-002` | `main.bpf.c:58-64,466-483,515-526` accepts a userspace pending-enrollment record keyed by PID, then migrates it only when a later governed file hook executes. `task_alloc` returns allow when storage allocation fails (`:486-490`). | Do not use PID-delayed enrollment. A protected Mithril task receives its opaque task state at the early lifecycle boundary, and any protected-identity state failure follows the configured deny/unknown-floor contract. |
 
 `SOURCE-BOUNDARY-001` applies to every row: generic Linux LSM/socket/packet
 evidence cannot distinguish Git clone from push or a Kubernetes/cloud verb in
