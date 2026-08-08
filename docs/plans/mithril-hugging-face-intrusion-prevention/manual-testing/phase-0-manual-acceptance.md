@@ -1,6 +1,6 @@
 # How To Manually Accept Phase 0
 
-Status: The companion runner uses direct `libbpf-rs` loading and explicit BPF-LSM links. BPF LSM is active on the current host, but privileged allow/deny acceptance remains pending host sudo authority.
+Status: The companion runner uses direct `libbpf-rs` loading and explicit BPF-LSM links. The privileged x86 qualifier attached all 21 LSM programs and passed its file-open allow -> deny -> allow probe. Every other effect family remains pending its own physical acceptance.
 
 Phase: [Substrate, License, ABI, And Incident Baseline](../phase-0-substrate-license-abi-and-incident-baseline.md)  
 Setup: [`KERNEL-LAB`](./environment-setup.md)
