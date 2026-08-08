@@ -77,6 +77,42 @@ pub struct BpfPrototypeCompiler {
     repo_root: PathBuf,
 }
 
+#[derive(Clone, Copy)]
+enum BpfTargetArchitecture {
+    X86,
+    Arm64,
+    Arm,
+    Riscv,
+}
+
+impl BpfTargetArchitecture {
+    #[cfg(test)]
+    const ALL: [Self; 4] = [Self::X86, Self::Arm64, Self::Arm, Self::Riscv];
+
+    fn for_host() -> Result<Self> {
+        match std::env::consts::ARCH {
+            "x86_64" => Ok(Self::X86),
+            "aarch64" => Ok(Self::Arm64),
+            "arm" => Ok(Self::Arm),
+            "riscv64" => Ok(Self::Riscv),
+            other => CommandSnafu {
+                program: "clang".to_owned(),
+                reason: format!("no checked-in vmlinux header for `{other}`"),
+            }
+            .fail(),
+        }
+    }
+
+    const fn clang_define(self) -> &'static str {
+        match self {
+            Self::X86 => "-D__TARGET_ARCH_x86",
+            Self::Arm64 => "-D__TARGET_ARCH_arm64",
+            Self::Arm => "-D__TARGET_ARCH_arm",
+            Self::Riscv => "-D__TARGET_ARCH_riscv",
+        }
+    }
+}
+
 impl BpfPrototypeCompiler {
     #[must_use]
     pub fn new(repo_root: impl Into<PathBuf>) -> Self {
@@ -86,6 +122,14 @@ impl BpfPrototypeCompiler {
     }
 
     pub fn compile(&self, output_directory: &Path) -> Result<CompileRecordV1> {
+        self.compile_for(output_directory, BpfTargetArchitecture::for_host()?)
+    }
+
+    fn compile_for(
+        &self,
+        output_directory: &Path,
+        target: BpfTargetArchitecture,
+    ) -> Result<CompileRecordV1> {
         fs::create_dir_all(output_directory).context(IoSnafu {
             path: output_directory.to_path_buf(),
         })?;
@@ -105,20 +149,8 @@ impl BpfPrototypeCompiler {
             "/lib/modules/{kernel_release}/build/tools/bpf/resolve_btfids/libbpf/include"
         ));
         let object = output_directory.join("phase0-feasibility.bpf.o");
-        let target_define = match std::env::consts::ARCH {
-            "x86_64" => "-D__TARGET_ARCH_x86",
-            other => {
-                return CommandSnafu {
-                    program: "clang".to_owned(),
-                    reason: format!(
-                        "Phase 0 has a checked-in vmlinux header only for x86, not `{other}`"
-                    ),
-                }
-                .fail();
-            }
-        };
         let compile_output = Command::new("clang")
-            .args(["-g", "-O2", "-target", "bpfel", target_define, "-I"])
+            .args(["-g", "-O2", "-target", "bpfel", target.clang_define(), "-I"])
             .arg(&interceptor_headers)
             .arg(format!("-fdebug-prefix-map={}=/src", repo_root.display()))
             .arg(format!(
@@ -174,7 +206,7 @@ mod tests {
 
     use snafu::ResultExt as _;
 
-    use super::{BpfPrototypeCompiler, PlatformProbe};
+    use super::{BpfPrototypeCompiler, BpfTargetArchitecture, PlatformProbe};
     use crate::error::IoSnafu;
 
     #[test]
@@ -198,6 +230,22 @@ mod tests {
             .exists());
         assert_eq!(first.source_sha256.len(), 64);
         assert_eq!(first.object_sha256, second.object_sha256);
+        Ok(())
+    }
+
+    #[test]
+    fn every_checked_in_vmlinux_header_compiles_the_feasibility_object() -> crate::Result<()> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let compiler = BpfPrototypeCompiler::new(root);
+        for target in BpfTargetArchitecture::ALL {
+            let output = tempfile::tempdir().context(IoSnafu {
+                path: PathBuf::from("temporary cross-architecture BPF build directory"),
+            })?;
+            assert!(compiler
+                .compile_for(output.path(), target)?
+                .object_path
+                .is_file());
+        }
         Ok(())
     }
 

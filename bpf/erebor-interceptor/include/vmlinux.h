@@ -10,8 +10,14 @@
 
 #if defined(__TARGET_ARCH_x86)
 #include "vmlinux_generated_x86.h"
+#elif defined(__TARGET_ARCH_arm64)
+#include "vmlinux_generated_arm64.h"
+#elif defined(__TARGET_ARCH_arm)
+#include "vmlinux_generated_arm.h"
+#elif defined(__TARGET_ARCH_riscv)
+#include "vmlinux_generated_riscv.h"
 #else
-#error "Phase 0 has a checked-in vmlinux header only for x86"
+#error "unsupported BPF target architecture"
 #endif
 
 #endif /* EREBOR_VMLINUX_H */

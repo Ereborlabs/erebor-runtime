@@ -282,8 +282,8 @@ mod tests {
     fn dossier_closes_sources_licenses_owners_and_hostile_fixtures() -> crate::Result<()> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let dossier = ProvenanceVerifier::new(root).load_and_verify()?;
-        assert_eq!(dossier.records.len(), 18);
-        assert_eq!(dossier.snapshots.len(), 3);
+        assert_eq!(dossier.records.len(), 21);
+        assert_eq!(dossier.snapshots.len(), 4);
         Ok(())
     }
 }
