@@ -9,6 +9,8 @@ Design authority:
 - [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 - [Hugging Face adversarial acceptance](./hugging-face-adversarial-acceptance.md)
 - [Live two-node lifecycle probe](./live-two-node-lifecycle-probe.md)
+- [Manual acceptance index](./manual-testing/README.md)
+- [Shared manual-test environment setup](./manual-testing/environment-setup.md)
 
 The [previous architecture](./policy-and-protection-algorithm-architecture.md)
 is a superseded historical record. It may explain rejected ideas but cannot

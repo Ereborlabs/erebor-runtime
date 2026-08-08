@@ -4,6 +4,8 @@ Status: Proposed; depends on Phase 5 `Done`.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
+Manual acceptance: [Phase 6 runbook](./manual-testing/phase-6-manual-acceptance.md)  
+Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 ## Purpose
 

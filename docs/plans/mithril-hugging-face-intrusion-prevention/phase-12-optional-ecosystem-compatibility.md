@@ -6,6 +6,8 @@ approval. Nothing here can satisfy Phase 11.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
+Manual evaluation: [Phase 12 runbook](./manual-testing/phase-12-manual-acceptance.md)  
+Environment setup: [shared setup guide](./manual-testing/environment-setup.md)
 
 ## Purpose
 
