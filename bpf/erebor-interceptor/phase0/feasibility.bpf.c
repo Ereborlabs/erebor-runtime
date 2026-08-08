@@ -2,7 +2,6 @@
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-#include "erebor_interceptor_abi_v1.h"
 
 struct task_label_candidate {
     __u64 label;
@@ -30,13 +29,6 @@ struct {
     __type(key, __u32);
     __type(value, struct file_probe_target);
 } file_probe_targets SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 8);
-    __type(key, EffectDecisionKeyV1);
-    __type(value, PhysicalDecisionV1);
-} candidate_decisions SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);

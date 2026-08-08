@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use erebor_interceptor_abi::C_HEADER_V1;
 use serde::Serialize;
 use snafu::ResultExt as _;
 
@@ -77,7 +76,6 @@ impl Phase0Runner {
         let mut contract_bytes = Vec::new();
         contract_bytes.extend_from_slice(&closure_bytes);
         contract_bytes.extend_from_slice(&provenance);
-        contract_bytes.extend_from_slice(C_HEADER_V1.as_bytes());
         contract_bytes.extend_from_slice(fixture.protected_deployment_digest.as_bytes());
         Ok(Phase0VerificationBundleV1 {
             schema_version: 1,
@@ -85,7 +83,7 @@ impl Phase0Runner {
             fixture_baseline: fixture,
             provenance_dossier_sha256: DigestV1::of(provenance).to_hex(),
             candidate_contract_digest: DigestV1::of(contract_bytes).to_hex(),
-            abi_state: "CANDIDATE_UNTIL_PHYSICAL_PROBES_PASS",
+            abi_state: "DEFERRED_UNTIL_PHYSICAL_PROBES_PASS",
         })
     }
 
@@ -156,7 +154,7 @@ mod tests {
         let bundle = Phase0Runner::new(root).verify()?;
         assert_eq!(bundle.schema_version, 1);
         assert_eq!(bundle.architecture_closure.fixtures.len(), 134);
-        assert_eq!(bundle.abi_state, "CANDIDATE_UNTIL_PHYSICAL_PROBES_PASS");
+        assert_eq!(bundle.abi_state, "DEFERRED_UNTIL_PHYSICAL_PROBES_PASS");
         assert_eq!(bundle.candidate_contract_digest.len(), 64);
         Ok(())
     }

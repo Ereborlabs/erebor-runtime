@@ -2,7 +2,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use erebor_interceptor_abi::C_HEADER_V1;
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
 
@@ -100,48 +99,27 @@ impl BpfPrototypeCompiler {
         let source_bytes = fs::read(&source).context(IoSnafu {
             path: source.clone(),
         })?;
-        let vmlinux = output_directory.join("vmlinux.h");
-        let btf_output = Command::new("bpftool")
-            .args([
-                "btf",
-                "dump",
-                "file",
-                "/sys/kernel/btf/vmlinux",
-                "format",
-                "c",
-            ])
-            .output()
-            .context(IoSnafu {
-                path: PathBuf::from("bpftool"),
-            })?;
-        ensure_success("bpftool btf dump", &btf_output)?;
-        fs::write(&vmlinux, btf_output.stdout).context(IoSnafu {
-            path: vmlinux.clone(),
-        })?;
-        let abi_header = output_directory.join("erebor_interceptor_abi_v1.h");
-        fs::write(&abi_header, C_HEADER_V1).context(IoSnafu {
-            path: abi_header.clone(),
-        })?;
-
         let kernel_release = command_text(Command::new("uname").arg("-r"), "uname")?;
+        let interceptor_headers = repo_root.join("bpf/erebor-interceptor/include");
         let bpf_headers = PathBuf::from(format!(
             "/lib/modules/{kernel_release}/build/tools/bpf/resolve_btfids/libbpf/include"
         ));
         let object = output_directory.join("phase0-feasibility.bpf.o");
         let target_define = match std::env::consts::ARCH {
             "x86_64" => "-D__TARGET_ARCH_x86",
-            "aarch64" => "-D__TARGET_ARCH_arm64",
             other => {
                 return CommandSnafu {
                     program: "clang".to_owned(),
-                    reason: format!("unsupported BPF target architecture `{other}`"),
+                    reason: format!(
+                        "Phase 0 has a checked-in vmlinux header only for x86, not `{other}`"
+                    ),
                 }
                 .fail();
             }
         };
         let compile_output = Command::new("clang")
             .args(["-g", "-O2", "-target", "bpfel", target_define, "-I"])
-            .arg(&output_directory)
+            .arg(&interceptor_headers)
             .arg(format!("-fdebug-prefix-map={}=/src", repo_root.display()))
             .arg(format!(
                 "-fdebug-prefix-map={}=/build",
@@ -200,7 +178,8 @@ mod tests {
     use crate::error::IoSnafu;
 
     #[test]
-    fn phase0_owned_core_object_compiles_against_the_live_btf() -> crate::Result<()> {
+    fn phase0_owned_core_object_compiles_against_the_checked_in_vmlinux_header() -> crate::Result<()>
+    {
         let first_output = tempfile::tempdir().context(IoSnafu {
             path: PathBuf::from("temporary BPF build directory"),
         })?;
@@ -212,6 +191,11 @@ mod tests {
         let first = compiler.compile(first_output.path())?;
         let second = compiler.compile(second_output.path())?;
         assert!(first.object_path.is_file());
+        assert!(!first_output.path().join("vmlinux.h").exists());
+        assert!(!first_output
+            .path()
+            .join("erebor_interceptor_abi_v1.h")
+            .exists());
         assert_eq!(first.source_sha256.len(), 64);
         assert_eq!(first.object_sha256, second.object_sha256);
         Ok(())
