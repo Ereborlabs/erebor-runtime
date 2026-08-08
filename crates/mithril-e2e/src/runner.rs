@@ -6,9 +6,9 @@ use snafu::ResultExt as _;
 
 use crate::error::{IoSnafu, JsonSnafu};
 use crate::{
-    ArchitectureClosure, BpfPrototypeCompiler, ClosureLedgerV1, CompileRecordV1, DigestV1,
-    FixtureBaselineRecordV1, HuggingFaceFixture, OpenBenchmark, OpenBenchmarkRecordV1,
-    PlatformProbe, PlatformProbeV1, ProvenanceVerifier, Result,
+    ArchitectureClosure, BpfPhase0Loader, BpfPrototypeCompiler, ClosureLedgerV1, CompileRecordV1,
+    DigestV1, FixtureBaselineRecordV1, HuggingFaceFixture, OpenBenchmark, OpenBenchmarkRecordV1,
+    PhysicalFileOpenProbeV1, PlatformProbe, PlatformProbeV1, ProvenanceVerifier, Result,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -34,6 +34,14 @@ pub struct CapabilityProbeBundleV1 {
     pub platform: PlatformProbeV1,
     pub compile: CompileRecordV1,
     pub physical_probe_state: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct PhysicalCapabilityProbeBundleV1 {
+    pub schema_version: u32,
+    pub platform: PlatformProbeV1,
+    pub compile: CompileRecordV1,
+    pub file_open: PhysicalFileOpenProbeV1,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -95,6 +103,22 @@ impl Phase0Runner {
             platform,
             compile,
             physical_probe_state: "REQUIRES_PRIVILEGED_RUNNER_AND_ACTIVE_BPF_LSM",
+        })
+    }
+
+    pub fn physical_file_open_probe(
+        &self,
+        output_directory: &Path,
+    ) -> Result<PhysicalCapabilityProbeBundleV1> {
+        let platform = PlatformProbe::inspect()?;
+        let compile = BpfPrototypeCompiler::new(&self.repo_root).compile(output_directory)?;
+        let file_open =
+            BpfPhase0Loader::new(&compile.object_path).run_file_open_probe(output_directory)?;
+        Ok(PhysicalCapabilityProbeBundleV1 {
+            schema_version: 1,
+            platform,
+            compile,
+            file_open,
         })
     }
 

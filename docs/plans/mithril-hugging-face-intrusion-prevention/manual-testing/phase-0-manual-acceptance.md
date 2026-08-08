@@ -1,6 +1,6 @@
 # How To Manually Accept Phase 0
 
-Status: Implemented companion runner; privileged physical acceptance remains pending an active BPF LSM boot.
+Status: The companion runner uses direct `libbpf-rs` loading and explicit BPF-LSM links. BPF LSM is active on the current host, but privileged allow/deny acceptance remains pending host sudo authority.
 
 Phase: [Substrate, License, ABI, And Incident Baseline](../phase-0-substrate-license-abi-and-incident-baseline.md)  
 Setup: [`KERNEL-LAB`](./environment-setup.md)
@@ -19,6 +19,9 @@ cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . verify \
   --output /tmp/mithril-phase0/verification.json
 cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . probe \
   --output-directory /tmp/mithril-phase0/probe
+cargo build -p mithril-e2e --bin mithril-phase0
+sudo target/debug/mithril-phase0 --repo-root . physical-probe \
+  --output-directory /tmp/mithril-phase0/physical
 cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . benchmark \
   --target crates/mithril-e2e/fixtures/hugging-face/protected/image-digest.txt \
   --mode baseline --output /tmp/mithril-phase0/open-baseline.json
@@ -34,13 +37,24 @@ The manual run reviews the exact automated artifacts and independently repeats
 representative physical probes. It does not replace verifier, concurrency, or
 N/N+1 automation.
 
+The fully vendored libbpf-rs build requires GNU `gawk` on the build host.
+`physical-probe` compiles the disposable object, opens it through `libbpf-rs`
+against `/sys/kernel/btf/vmlinux`, explicitly attaches each LSM program, reads
+back every link ID, and proves file-open allow → `EACCES` deny → allow after
+clearing the direct map target. The links are owned by the probe process and
+detach on exit; this is a qualification loader, not a product daemon or a
+persistent pin-root installation.
+
 ## Procedure
 
 1. Create one `KERNEL-LAB` manifest per candidate platform.
 2. Pin the Meta deck and every adopted source snapshot by digest, commit, file,
    lines, and license.
-3. Run every proposed hook/helper/map/task-storage/path prototype before
-   accepting generated Rust/C or wire bytes.
+3. Compile every proposed hook/helper/map/task-storage/path prototype against
+   the checked-in x86, arm64, arm, and riscv headers under
+   `bpf/erebor-interceptor/include/` before accepting generated Rust/C or wire
+   bytes. A successful cross-architecture compile is not a physical support
+   claim; each architecture still requires its own BPF-LSM load/attach probe.
 4. Repeat one allow, deny, missing-state, saturation, and prior-LSM-denial
    physical probe per effect family.
 5. Review Rust/C layouts, deterministic bytes, fixture equality, and rejected
@@ -78,8 +92,8 @@ N/N+1 automation.
 
 ## Required Artifacts And Pass Rule
 
-Retain source/provenance dossier, verifier logs, capability manifests, ABI
-goldens, fixture equality report, raw benchmark distributions, capacity
+Retain source/provenance dossier, verifier logs, capability manifests, deferred
+ABI-golden plan, fixture equality report, raw benchmark distributions, capacity
 records, protected-workload baseline digest, and the closure ledger. Phase 0
 passes only when every allocated surface has a physical prototype and exact
 bound or is removed from the supported claim.

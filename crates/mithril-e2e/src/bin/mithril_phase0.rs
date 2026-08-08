@@ -23,6 +23,10 @@ enum Command {
         #[arg(long)]
         output_directory: PathBuf,
     },
+    PhysicalProbe {
+        #[arg(long)]
+        output_directory: PathBuf,
+    },
     Benchmark {
         #[arg(long)]
         target: PathBuf,
@@ -62,6 +66,13 @@ fn run() -> Result<()> {
         Command::Probe { output_directory } => {
             let bundle = runner.probe(&output_directory)?;
             runner.write_json(&output_directory.join("capability-probe.json"), &bundle)
+        }
+        Command::PhysicalProbe { output_directory } => {
+            let bundle = runner.physical_file_open_probe(&output_directory)?;
+            runner.write_json(
+                &output_directory.join("physical-file-open-probe.json"),
+                &bundle,
+            )
         }
         Command::Benchmark {
             target,

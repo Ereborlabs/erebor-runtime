@@ -35,6 +35,14 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Phase 0 libbpf `{action}` failed for `{path:?}`: {source}"))]
+    Libbpf {
+        action: String,
+        path: PathBuf,
+        source: libbpf_rs::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -43,16 +51,17 @@ impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::InvalidInput { .. } | Self::Json { .. } => StatusCode::InvalidArguments,
-            Self::Io { .. } | Self::Command { .. } => StatusCode::External,
+            Self::Io { .. } | Self::Command { .. } | Self::Libbpf { .. } => StatusCode::External,
         }
     }
 
     fn retry_hint(&self) -> RetryHint {
         match self {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
-            Self::InvalidInput { .. } | Self::Json { .. } | Self::Command { .. } => {
-                RetryHint::NonRetryable
-            }
+            Self::InvalidInput { .. }
+            | Self::Json { .. }
+            | Self::Command { .. }
+            | Self::Libbpf { .. } => RetryHint::NonRetryable,
         }
     }
 
