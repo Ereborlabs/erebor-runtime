@@ -11,7 +11,7 @@ Make local observations durable and loss-aware without coupling the already
 decided physical deny to userspace delivery. Prove truthful restart and
 generation recovery.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 9, 22, 31-33; Appendices A.3-A.7 and A.15.1-A.15.2.
 
@@ -57,13 +57,22 @@ Produce the coverage-qualified local input windows required by Phase 7 without
 building distributed/provider conclusions. Late, duplicate, reordered, or
 contradictory observations retain stable revisions.
 
+## Checkpoint
+
+The node can restart and replay an integrity-checked WAL to Control while
+preserving installed restrictions and exposing every gap, loss, stale owner,
+and unreconciled object. A negative conclusion cannot cross a bad interval.
+
 ## Required Tests And Fixtures
 
+- `IPC-ENDPOINT-RESTART-006` and `IPC-RELATIONSHIP-LOSS-002`; rerun
+  `LSM-DENY-SATURATION-001` through the completed WAL/coverage owner.
+- Rerun `SOURCE-KA-READER-LOSS-003`, `SOURCE-KA-CAPACITY-005`, and
+  `SOURCE-KA-PARTIAL-ATTACH-001` against the product owner rather than only
+  the Phase 0 source/prototype boundary.
 - Reader/ring/map/WAL saturation and corruption, source sequence gaps,
   upload outage/replay, restart/reuse, policy retirement, stale pin/link/map,
-  and sole-gatherer death.
-- `LSM-DENY-SATURATION-001`, source-loss/capacity fixtures, all lifecycle
-  recovery cases, and applicable standing HF/live two-node cases.
+  sole-gatherer death, and applicable standing HF/live two-node cases.
 
 ## Acceptance
 
@@ -81,7 +90,17 @@ Distributed graph joins, notifications, provider connectors, and response.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: not yet measured.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```

@@ -11,7 +11,7 @@ Implement the complete source-policy compiler and observe-only local effect
 model. Prove that every future deny is paired with the real actor, object,
 hook, state, and physical result before enabling policy enforcement.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 10-21 and 28-31; Appendices A.11-A.14.
 
@@ -39,7 +39,11 @@ mount-root index, lowest-`mnt_id_unique` selection, selected parent/mountpoint
 walk, actor `MountSecurityViewV1`, topology snapshot, DIRTY state, and strict
 unresolved result. The bind-alias fixture must resolve the original tracked
 `/var/run/secrets/service/config.json`, not the later
-`/work/input/job-42/config.json` target.
+`/work/input/job-42/config.json` target. Version 1 does not cache final
+decisions. It also leaves resolved path-candidate caching disabled unless a
+separate hostile alias-equivalence proof shows that every cache key preserves
+the exact component/mount-chain match; a bare exact-file-object cache is not
+sufficient for pre-existing hard-link aliases.
 
 ### D3.4 — Observe-only effect families
 
@@ -66,16 +70,42 @@ retain their hard-safety result.
 ### D3.7 — Standing incident observe increment
 
 Run the unchanged HF worker and legitimate controls. Produce stable simulated
-decisions for all allocated local `HF-009` through `HF-012` effects without
-changing application behavior or claiming prevention.
+decisions for the managed/local branches of `HF-002` through `HF-012`, with
+special focus on the earliest complete `HF-008` file-object block, without
+changing application behavior or claiming prevention. Pure in-memory and
+outside-authority branches retain their honest non-prevention result.
+
+## Checkpoint
+
+One deterministic signed candidate generation simulates every Phase 4/5
+fixture with exact actor/object/stage/result, and the bounded canonical path
+matcher passes its hostile corpus. Policy denial remains physically disabled.
 
 ## Required Tests And Fixtures
 
 - Policy/config/generation goldens and exact-conflict/exception tests.
-- Observe instances of all Phase 4/5 effect fixtures in Appendix C.
-- `MOUNT-SNAPSHOT-004`, path bind/rename/link/mount ambiguity variants,
-  `FILE-IDENTITY-001`, `MEM-EXEC-001`, `DEVICE-DERIVED-001`, and network
-  attribution controls.
+- Observe/simulate the exact Phase 4 first-owned IDs:
+  `ADMIN-EXEC-APPROVAL-001`, `DEVICE-DERIVED-001`,
+  `FILE-CONTENT-RACE-002`, `FILE-FD-PASS-001`, `FILE-IDENTITY-001`,
+  `FILE-MMAP-001`, `FILE-MMAP-SHARED-011`, `FILE-NAMESPACE-001`,
+  `FILE-SA-TOKEN-OPEN-001`, `FILE-VMA-SNAPSHOT-001`, `HF-LOCAL-001`,
+  `IPC-ASYNC-UNSUPPORTED-010`, `IPC-PEER-RACE-004`,
+  `IPC-PROCESS-CHANNEL-009`, `IPC-RELATIONSHIP-ALLOW-003`,
+  `IPC-RELATIONSHIP-UNMATCHED-005`, `LSM-DENY-SATURATION-001`,
+  `MEM-EXEC-001`,
+  `MEM-KERNEL-MAP-002`, `MOUNT-ATTR-001`, `MOUNT-CAS-002`,
+  `MOUNT-PROPAGATION-003`, `MOUNT-SNAPSHOT-004`, `SELF-PROTECT-001`, and
+  `STATE-PERSISTENT-FILE-LIFETIME-007`.
+- Observe/simulate the exact Phase 5 first-owned IDs:
+  `FILE-DELEGATED-EGRESS-001`, `HF-004-RESULT-001`,
+  `HF-011-READ-RESULT-001`, `HF-NET-001`, `IPC-LOCAL-INET-008`,
+  `NET-ACCEPT-PASS-001`, `NET-DNS-EXFIL-001`, `NET-NS-PASS-001`,
+  `NET-RECV-001`, `NET-REWRITE-001`, `NET-SHARED-RESPONSE-002`,
+  `NET-SOCKCTL-001`, and `NET-SOCKET-LIFE-001`.
+- Path bind/rename/link/mount ambiguity, pre-existing hard-link alias cache
+  equivalence, ordinary-subdirectory limits, and oldest-mount controls must
+  accompany `MOUNT-SNAPSHOT-004`, `FILE-IDENTITY-001`, and
+  `MOUNT-PROPAGATION-003`.
 - Upstream-dossier regression tests for every adopted path/task/map pattern.
 
 ## Acceptance
@@ -95,7 +125,17 @@ distributed graphing, and response.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: not yet measured.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```

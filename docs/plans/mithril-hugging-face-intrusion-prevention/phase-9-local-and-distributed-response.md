@@ -11,7 +11,7 @@ Turn a finding into an authenticated, scoped, expiring physical response
 transaction that re-resolves every target, discloses blast radius, and verifies
 postconditions.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 24-25, 32, and 34; Appendices A.15.4-A.15.6.
 
@@ -29,7 +29,12 @@ physical postconditions. Simulation re-resolves targets and cannot actuate.
 Implement only approved typed operations: restrict a process/native family,
 freeze/kill an exact cgroup lineage, fence/destroy exact sockets/flows, apply an
 emergency policy floor, and the approved read-only defender inspection path.
-No arbitrary command or PID-only endpoint exists.
+No arbitrary command or PID-only endpoint exists. `TerminateProcessPidfd`
+requires the exact pidfd/task-cookie/start-time/cgroup binding, sends `SIGKILL`
+through the revalidated pidfd, and returns `PROCESS_STOPPED_VIA_PIDFD` only
+after `waitid` confirms that exact process exited. `ESRCH` is success only when
+the same pidfd proves the target was already gone; replacement branches remain
+open.
 
 ### D9.3 — Distributed/Kubernetes actuators
 
@@ -59,16 +64,24 @@ remaining branches.
 
 ### D9.7 — HF response increment
 
-Contain the local seed, established flows, distributed child workloads, and
-replacement-controller behavior under stale/reused/late/duplicate/failure
-variants without damaging unrelated controls.
+Implement the local and Kubernetes portions of `HF-021`: contain the local
+seed, established flows, distributed child workloads, and replacement-
+controller behavior under stale/reused/late/duplicate/failure variants without
+damaging unrelated controls. Provider-specific completion remains Phase 10.
+
+## Checkpoint
+
+An authorized finding drives only typed, exactly re-resolved local/Kubernetes
+actions; every terminal result includes blast-radius approval and authoritative
+postcondition plus healthy-watch evidence. Provider actuation remains absent.
 
 ## Required Tests And Fixtures
 
-`HF-RESP-002`, `HF-RESP-BLAST-RADIUS-003`, response-root inheritance,
-stale PID/UID/generation, shared socket/cgroup, controller replacement,
-actuator timeout/retry/restart, readback contradiction, and applicable live
-two-node response cases.
+`HF-GRAN-CAPTURE-001`, `HF-GRAN-RESPAWN-001`, `HF-RESP-002`, and
+`HF-RESP-BLAST-RADIUS-003`; response-root inheritance, stale PID/pidfd/task
+cookie/start-time/cgroup and UID/generation, shared socket/cgroup, controller
+replacement, actuator timeout/retry/restart, readback contradiction, and
+applicable live two-node response cases.
 
 ## Acceptance
 
@@ -85,7 +98,17 @@ AWS/GitHub/mesh/connector-specific actuators, delivered in Phase 10.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: provider-specific response remains Phase 10.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```

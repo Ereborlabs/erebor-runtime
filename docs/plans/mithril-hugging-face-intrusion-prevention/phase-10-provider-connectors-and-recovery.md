@@ -10,7 +10,7 @@ Design: [Validated readable architecture](./policy-and-protection-algorithm-arch
 Add separately qualified provider, mesh, connector, and artifact evidence/
 authority modules and one narrow typed actuator per approved capability.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 23-26; Appendices A.10, A.15, and A.16.
 
@@ -53,9 +53,10 @@ An audit token/hash is not assumed to be a revocation handle.
 
 ### D10.6 — Provider graph and HF expansion
 
-Complete the `HF-013` through `HF-020` branches with exact, shared-principal,
-contextual, or contradiction edges as supported. Prove granular AWS/GitHub/
-mesh/connector/artifact actions and recovery without merging uncertain paths.
+Complete the `HF-013` through `HF-020` branches and the provider portions of
+`HF-021` with exact, shared-principal, contextual, or contradiction edges as
+supported. Prove granular AWS/GitHub/mesh/connector/artifact actions and
+recovery without merging uncertain paths.
 
 ### D10.7 — CI/artifact foundation only
 
@@ -64,11 +65,29 @@ Appendix A.16 where they are already supplied by Phase 10 providers. Do not
 claim named GitHub Actions/GitLab/Jenkins/Tekton step enforcement; those
 adapters remain a Phase 12 allocation decision.
 
+## Checkpoint
+
+Every advertised provider/mesh/connector/message/artifact source has exact
+coverage and graph limits, and every advertised provider response has one
+typed actuator with authoritative readback. Named CI enforcement remains
+unallocated.
+
 ## Required Tests And Fixtures
 
-Applicable `EDGE-AWS-*`, `EDGE-GITHUB-*`, `EDGE-CONNECTOR-*`,
-`EDGE-ARTIFACT-*`, provider `HF-GRAN-*`, issuance/replay/dry-run/readback,
-shared-principal, late/duplicate/cursor-gap, and provider-outage fixtures.
+- `EDGE-ARTIFACT-CONSUMER-005`, `EDGE-AWS-SHARED-001`,
+  `EDGE-CONNECTOR-FORWARD-004`, `EDGE-GITHUB-SHARED-003`, and
+  `EDGE-MESSAGE-CONSUMER-006`.
+- `HF-GRAN-AWS-DRYRUN-001`, `HF-GRAN-AWS-SPLIT-001`,
+  `HF-GRAN-CONNECTOR-DIRECT-001`, `HF-GRAN-DEAD-DROP-001`,
+  `HF-GRAN-GITHUB-MINT-001`, `HF-GRAN-GITHUB-REARM-001`,
+  `HF-GRAN-GITHUB-REVOKE-001`, `HF-GRAN-GITHUB-TREE-PR-001`, and
+  `HF-GRAN-HOST-LOC-001`.
+- `HF-GRAN-MESH-ENUM-001`, `HF-GRAN-MESH-ROOT-001`,
+  `HF-GRAN-MESH-SOCKS-001`, `HF-GRAN-OUTSIDE-001`, and
+  `HF-GRAN-TOKEN-FORGE-001`.
+- Issuance/replay/dry-run/readback, shared-principal, late/duplicate/cursor-gap,
+  source-authentication, and provider-outage controls for every advertised
+  AWS, Google, GitHub, mesh, connector, message, and artifact contract.
 
 ## Acceptance
 
@@ -87,7 +106,17 @@ Phase 12 optional surfaces.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: not yet measured.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```

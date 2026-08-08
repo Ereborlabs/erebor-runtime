@@ -11,7 +11,7 @@ Ship the shared Interceptor owner, one `mithril-node` process, one
 `mithril-control` service, and their secure control channel without claiming
 effect prevention yet.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 5, 14, 27-30, 32, and 34; Appendices A.3-A.7 and A.12-A.13.
 
@@ -47,6 +47,10 @@ Create the control service and the minimum node-control gRPC needed for:
 - monotonic stream sequence, keepalive, reconnect, and backoff; and
 - fail-closed admission when required control/trust state is unavailable.
 
+An outage never adds a per-effect Control round trip and never invalidates a
+still-valid installed local generation. It blocks only new work requiring
+missing, expired, or unverified Control-owned state.
+
 No public control API contract is required in this phase.
 
 ### D1.5 — Runtime coexistence client
@@ -58,10 +62,17 @@ policy, consume exceptions, or invoke response.
 
 ### D1.6 — Packaging and lifecycle fixture
 
-Add development image/DaemonSet/Helm skeletons with the exact required host
-mounts/capabilities and one container. Run the worker unchanged through
-startup, restart, shutdown, control outage, node reconnect, and second-owner
-attempts.
+Add reproducible development binaries, image, DaemonSet, and Helm skeletons
+with the exact required host mounts/capabilities and one node container. The
+CI build produces the supported development-architecture artifacts consumed
+by the lifecycle fixture. Run the worker unchanged through startup, restart,
+shutdown, control outage, node reconnect, and second-owner attempts.
+
+## Checkpoint
+
+The unchanged worker boots under exactly one Interceptor owner, node and
+Control mutually authenticate and reconnect, and readiness reports only
+measured chassis capability. No effect-prevention claim is enabled.
 
 ## Required Tests And Fixtures
 
@@ -88,7 +99,17 @@ durable evidence, graphing, and response.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: not yet measured.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```

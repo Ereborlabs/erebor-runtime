@@ -10,7 +10,7 @@ Design: [Validated readable architecture](./policy-and-protection-algorithm-arch
 Activate signed immutable policy for every qualified non-network local effect
 and prove the forbidden physical effect does not occur.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 10-18 and 20-21; Appendices A.11-A.14.
 
@@ -62,7 +62,11 @@ is atomic in the matching BPF rule/map entry; a nonmatching rule/program cannot
 consume or reuse it. Implement the approved one-use administrative exec path,
 including resolved executable object, full argv match, deadline, slot
 consumption, normal exec-chain policy, and accepted next-match race disclosure.
-`claim_slot_id` remains optional outside that path.
+`claim_slot_id` remains optional outside that path. Mithril Control's
+`AdministrativeApprovalOwner` owns authenticated human approval, the explicit
+next-matching-root risk acceptance, Kubernetes admission credential, and
+signed node authorization; it cannot assign a Linux role or assert an exact
+request-to-task join.
 
 ### D4.7 — Optional qualified Landlock floor
 
@@ -73,16 +77,35 @@ depend on an unavailable Landlock path.
 
 ### D4.8 — HF local prevention increment
 
-For each allocated local `HF-009` through `HF-012` branch, identify and deny
-the first distinguishable forbidden effect, prove it did not complete, and
-prove the legitimate same-deployment control still succeeds.
+For each managed/local non-network branch of `HF-002` through `HF-012`,
+identify and deny the first distinguishable forbidden effect, prove it did not
+complete, and prove the legitimate same-deployment control still succeeds.
+`HF-008` is the mandatory earliest complete block: the hostile HDF5 reference
+must receive no forbidden fd or bytes. Pure in-memory and outside-authority
+branches retain their honest result rather than a fabricated denial.
+
+## Checkpoint
+
+Every qualified non-network local effect has a signed task-first decision and
+physical positive/negative oracle, including bounded exception consumption and
+the complete `HF-008` block. Network destinations and distributed conclusions
+remain outside the checkpoint.
 
 ## Required Tests And Fixtures
 
-All applicable `FILE-*`, `MEM-*`, `MOUNT-*`, `DEVICE-*`, local `IPC-*`,
-`STATE-PERSISTENT-FILE-LIFETIME-007`, `IPC-ASYNC-UNSUPPORTED-010`,
-`ADMIN-EXEC-APPROVAL-001`, `NODE-FLOOR-EXCEPTION-002`, `SELF-PROTECT-001`,
-`HF-LOCAL-001`, and exact effect golden cases in Appendix C.
+- `ADMIN-EXEC-APPROVAL-001`, `DEVICE-DERIVED-001`,
+  `FILE-CONTENT-RACE-002`, `FILE-FD-PASS-001`, `FILE-IDENTITY-001`,
+  `FILE-MMAP-001`, `FILE-MMAP-SHARED-011`, `FILE-NAMESPACE-001`,
+  `FILE-SA-TOKEN-OPEN-001`, and `FILE-VMA-SNAPSHOT-001`.
+- `MEM-EXEC-001`, `MEM-KERNEL-MAP-002`, `MOUNT-ATTR-001`,
+  `MOUNT-CAS-002`, `MOUNT-PROPAGATION-003`, and `MOUNT-SNAPSHOT-004`.
+- `IPC-ASYNC-UNSUPPORTED-010`, `IPC-PEER-RACE-004`,
+  `IPC-PROCESS-CHANNEL-009`, `IPC-RELATIONSHIP-ALLOW-003`,
+  `IPC-RELATIONSHIP-UNMATCHED-005`, and
+  `STATE-PERSISTENT-FILE-LIFETIME-007`.
+- `HF-LOCAL-001`, `LSM-DENY-SATURATION-001`, `SELF-PROTECT-001`, and exact
+  policy/decision goldens from Phase 0. `NODE-FLOOR-EXCEPTION-002` is not owned
+  here; Phase 8 owns its Kubernetes admission/node-floor result.
 
 ## Acceptance
 
@@ -103,7 +126,17 @@ correlation, and response coordination.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: not yet measured.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```

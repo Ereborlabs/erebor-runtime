@@ -11,7 +11,7 @@ Package, qualify, upgrade, scale, and sign the exact limited product claim for
 each supported platform. This phase integrates existing capabilities; it does
 not hide missing work behind installation.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 25, 30-33, and 37; Appendices A.4-A.7 and C.
 
@@ -22,7 +22,9 @@ Chapters 25, 30-33, and 37; Appendices A.4-A.7 and C.
 Finalize reproducible `mithril-node` image, one-container DaemonSet/Helm,
 `mithril-control` deployment, ServiceAccounts/RBAC, trust/bootstrap, host
 mounts/capabilities, network policy, storage, config validation, and uninstall.
-No upstream daemon or second loader is installed.
+Produce and verify the advertised multi-architecture OCI artifacts and Helm
+package with immutable digests, signatures, SBOM, provenance, and install/
+upgrade inputs. No upstream daemon or second loader is installed.
 
 ### D11.2 — Exact platform qualification
 
@@ -66,11 +68,21 @@ registry, case results, performance bundle, completion ledger, qualification
 envelope, SBOM/provenance, and exact signed release claims bound by digest.
 Any missing/degraded required record blocks that claim.
 
+## Checkpoint
+
+For each advertised platform, one signed qualification envelope binds all
+eleven Chapter 37 results, exact active fixture equality, raw performance and
+capacity evidence, install/upgrade proofs, and the limited release claim.
+
 ## Required Tests And Fixtures
 
-Every active Appendix C fixture and criterion, the full HF acceptance document,
-the full live two-node probe, upgrade/rollback/scale/security matrices, and the
-repository CI procedure after the final source state.
+`FIXTURE-REGISTRY-COMPLETE-001` must prove exact equality among Appendix C,
+documentation markers, `fixtures.yaml`, executable tests, criterion mapping,
+case results, and the master allocation. Then run every Appendix C fixture
+whose criterion is active for the candidate claim, the full HF acceptance
+document, the full live two-node probe, upgrade/rollback/scale/security
+matrices, artifact-signature/install/uninstall tests, and the repository CI
+procedure after the final source state.
 
 ## Acceptance
 
@@ -86,7 +98,17 @@ approved and completed later.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: not yet measured.
+Remaining work in this phase: all deliverables and all eleven Chapter 37 results.
+Next phase not authorized: yes.
+```

@@ -10,7 +10,7 @@ Design: [Validated readable architecture](./policy-and-protection-algorithm-arch
 Establish exact task, process, execution, native-family, entry, container, and
 runtime-root identity before any later phase uses identity for authority.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 6-9 and 13; Appendices A.8-A.10, A.12, and A.14.
 
@@ -58,12 +58,33 @@ Reconcile live tasks/cgroups/containers after daemon/runtime/kubelet restart;
 prove PID/TID, cgroup, namespace, Pod/container name, and object reuse do not
 inherit authority. Lost cleanup leaks restriction and requires reconciliation.
 
+## Checkpoint
+
+Every protected task in the entry/identity matrix has exact or conservative
+kernel state before its first protected effect, and restart/reuse cannot
+recover authority. No effect permission table is active.
+
 ## Required Tests And Fixtures
 
-All applicable `ENTRY-*`, `ID-*`, `EXEC-*`, `STATE-*`,
-`NATIVE-STATE-REF-LIFETIME-001`, `AUTHORIZATION-REPLAY-004`, and
-`ADMIN-EXEC-APPROVAL-001` cases in Appendix C, including identical native
-child/probe/admin commands and non-leader exec.
+- Entry: `ENTRY-BINDING-GAP-001`, `ENTRY-CONTAINERS-001`,
+  `ENTRY-EPHEMERAL-001`, `ENTRY-EXEC-001`, `ENTRY-EXEC-002`,
+  `ENTRY-EXTERNAL-AMBIGUITY-001`, `ENTRY-LOSS-001`, `ENTRY-MIGRATE-001`,
+  `ENTRY-NETPROBE-001`, `ENTRY-POSTSTART-001`, `ENTRY-POSTSTART-002`,
+  `ENTRY-PRESTOP-001`, `ENTRY-PROBE-001`, `ENTRY-PROBE-002`,
+  `ENTRY-PROBE-IMPERSONATION-003`, `ENTRY-RESTART-001`, `ENTRY-REUSE-001`,
+  `ENTRY-SLEEP-001`, `ENTRY-START-001`, and
+  `ENTRY-STOCK-HOOK-FAILURE-002`.
+- Native identity: `EXEC-COMMIT-STATE-001`, `EXEC-CONCURRENT-002`,
+  `ID-CGROUP-ESCAPE-001`, `ID-CLONE-CGROUP-002`,
+  `ID-CLONE-CGROUP-FAIL-003`, `ID-CREATOR-PARENT-007`,
+  `ID-MOVED-PARENT-FORK-004`, `ID-MOVED-TASK-EXEC-005`,
+  `ID-TASK-COORD-FINALIZE-006`, `NATIVE-STATE-REF-LIFETIME-001`,
+  `STATE-FORK-IPC-002`, and `STATE-THREAD-RACE-001`.
+- Authorization: `AUTHORIZATION-REPLAY-004`; the identity half of
+  `ADMIN-EXEC-APPROVAL-001` is exercised here and the complete physical result
+  is owned by Phase 4.
+- Identical native-child/probe/admin commands and non-leader exec are required
+  controls, not additional role-classification signals.
 
 ## Acceptance
 
@@ -82,7 +103,17 @@ Policy matching, effect allow/deny tables, graph conclusions, and response.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: not yet measured.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```

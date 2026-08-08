@@ -10,7 +10,7 @@ Design: [Validated readable architecture](./policy-and-protection-algorithm-arch
 Enforce current-actor and socket-provenance policy for local channels, network
 destinations, DNS, rewritten flows, established traffic, and response fences.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 18-19 and 30-31; Appendices A.13.4 and A.14.
 
@@ -58,11 +58,21 @@ connect/send/packet stage, while the allowed result service and legitimate
 controller path remain functional. Same-endpoint/same-credential TLS cases
 receive the honest allowed/contextual result for later Control correlation.
 
+## Checkpoint
+
+Every advertised socket/message/final-flow/DNS path proves its exact physical
+result under actor, namespace, rewrite, passed-socket, and established-flow
+variants without claiming TLS semantics.
+
 ## Required Tests And Fixtures
 
-All `NET-*` fixtures, `HF-NET-001`, local network `IPC-*`,
-`FILE-DELEGATED-EGRESS-001`, shared-socket response cases, and network portions
-of the live two-node lifecycle probe.
+- `FILE-DELEGATED-EGRESS-001`, `HF-004-RESULT-001`,
+  `HF-011-READ-RESULT-001`, `HF-NET-001`, and `IPC-LOCAL-INET-008`.
+- `NET-ACCEPT-PASS-001`, `NET-DNS-EXFIL-001`, `NET-NS-PASS-001`,
+  `NET-RECV-001`, `NET-REWRITE-001`, `NET-SHARED-RESPONSE-002`,
+  `NET-SOCKCTL-001`, and `NET-SOCKET-LIFE-001`.
+- Shared-socket response controls and the network portions of the live
+  two-node lifecycle probe.
 
 ## Acceptance
 
@@ -80,7 +90,17 @@ distributed response authorization.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: not yet measured.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```

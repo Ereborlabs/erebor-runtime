@@ -11,7 +11,7 @@ Join authenticated Kubernetes/runtime facts to node evidence, represent
 cross-node causality without fake process ancestry, and close the attacker-
 created privileged workload branch required for the full HF claim.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 7-8, 23, 25, and 30-31; Appendices A.9-A.10 and A.15.3.
 
@@ -33,10 +33,9 @@ name reuse, late events, and contradictions as explicit branches.
 
 ### D8.3 — Cross-node causal package
 
-Complete the cross-node HF package from a credential/API action on node A to a
-workload root/effect on node B. Shared ServiceAccount or timing remains
-shared-principal/context unless exact request/object/binding identifiers close
-the join.
+Complete `HF-XNODE-001` from a credential/API action on node A to a workload
+root/effect on node B. Shared ServiceAccount or timing remains shared-principal/
+context unless exact request/object/binding identifiers close the join.
 
 ### D8.4 — Unmatched-workload and privileged-root floor
 
@@ -61,11 +60,29 @@ advertised admission/node floor or reported with the exact weaker result. A
 denial must have API/runtime/physical workload-absence or restricted-root
 oracle, not only an audit event.
 
+## Checkpoint
+
+`HF-XNODE-001` replays byte-identically from authenticated Kubernetes/runtime
+facts, and the privileged/unmatched workload branch has a measured physical
+admission or node-floor result on the two-node fixture.
+
 ## Required Tests And Fixtures
 
-`XNODE-PRIVILEGED-POD-001`, `NODE-FLOOR-EXCEPTION-002`, relevant
-`ENTRY-*`, `EDGE-K8S-SHARED-002`, `EDGE-MESSAGE-CONSUMER-006`, Kubernetes
-fan-out/reuse/contradiction variants, and the live two-node lifecycle probe.
+- `EDGE-K8S-SHARED-002`, `HF-GRAN-CLUSTER-SHARED-001`,
+  `HF-GRAN-HOSTPATH-001`, `NODE-FLOOR-EXCEPTION-002`, and
+  `XNODE-PRIVILEGED-POD-001`.
+- Rerun the exact Phase 2 entry matrix: `ENTRY-BINDING-GAP-001`,
+  `ENTRY-CONTAINERS-001`, `ENTRY-EPHEMERAL-001`, `ENTRY-EXEC-001`,
+  `ENTRY-EXEC-002`, `ENTRY-EXTERNAL-AMBIGUITY-001`, `ENTRY-LOSS-001`,
+  `ENTRY-MIGRATE-001`, `ENTRY-NETPROBE-001`, `ENTRY-POSTSTART-001`,
+  `ENTRY-POSTSTART-002`, `ENTRY-PRESTOP-001`, `ENTRY-PROBE-001`,
+  `ENTRY-PROBE-002`, `ENTRY-PROBE-IMPERSONATION-003`, `ENTRY-RESTART-001`,
+  `ENTRY-REUSE-001`, `ENTRY-SLEEP-001`, `ENTRY-START-001`, and
+  `ENTRY-STOCK-HOOK-FAILURE-002`; also rerun
+  `ADMIN-EXEC-APPROVAL-001` for the approved administrative path.
+- Kubernetes fan-out/reuse/contradiction variants and the complete live
+  two-node lifecycle probe. `EDGE-MESSAGE-CONSUMER-006` is owned by Phase 10,
+  not silently treated as Kubernetes evidence.
 
 ## Acceptance
 
@@ -84,7 +101,17 @@ Provider-specific audit semantics and response actuation.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: not yet measured.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```

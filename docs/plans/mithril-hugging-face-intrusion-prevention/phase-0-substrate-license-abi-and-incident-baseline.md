@@ -11,7 +11,7 @@ Prove the selected stock kernel/runtime mechanisms before freezing contracts.
 Close the Version-1 types, shared Interceptor boundary, source provenance,
 fixtures, and performance budgets needed by all later phases.
 
-## Design Coverage
+## Scope And Design Coverage
 
 - Chapters 1-5: product/claim/trust boundaries.
 - Chapters 10-14: invariants, policy, decision and mechanism feasibility.
@@ -85,13 +85,18 @@ On each candidate platform, compile, load, and physically probe:
 
 A failing surface remains unsupported and is absent from the frozen claim.
 
-### D0.5 — Closed types, schemas, ABI, and goldens
+### D0.5 — Authority-bearing types, schemas, ABI, and goldens
 
 Only after D0.4 passes, implement the Appendix A foundation and type-closure
 records, generated Rust/C layouts, closed enums/unions, source policy schema,
 compiled generation/signature/rollback schema, kernel decision ABI, evidence
 envelope, capability/performance/result bundles, fixture registry, and golden
-bytes. Rust and C must consume generated definitions from one authority.
+bytes. Close every authority-bearing type that crosses the Rust/C ABI or is
+independently persisted, transferred, signed, compared, or released. Ordinary
+internal in-memory helpers need not be cataloged, wire-closed, or individually
+digested. Child records already covered by canonical signed parent bytes do
+not receive redundant digests. Rust and C consume generated ABI definitions
+from one authority.
 
 ### D0.6 — Reproducible testbed and incident baseline
 
@@ -110,6 +115,12 @@ and failure posture. Do not freeze a public API or provider connector surface.
 
 Publish all supported/unsupported prototype results, approved upstream dossier
 IDs, closed-contract digest, platform budgets, and the exact Phase 1 scope.
+
+## Checkpoint
+
+One digest-bound feasibility/closure bundle proves every Version-1 surface or
+marks it unsupported, accounts for every design/owner/fixture row, and records
+the only contracts Phase 1 may implement. No product daemon is the checkpoint.
 
 ## Required Tests And Fixtures
 
@@ -138,7 +149,17 @@ response actuator, or optional Phase 12 surface ships here.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: not yet measured.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```

@@ -11,7 +11,7 @@ Turn the Phase 1 Control chassis into the durable policy/evidence/graph service
 and produce deterministic local incident findings, notifications, and
 provider-neutral authority records.
 
-## Design Coverage
+## Scope And Design Coverage
 
 Chapters 8, 22-25, 30, and 34; Appendices A.10 and A.15.
 
@@ -33,10 +33,11 @@ creates an exact edge.
 
 ### D7.3 — Core detection packages
 
-Implement the architecture's three core packages, including
-`HF-PROC-001`, `HF-DW-001`, and the cross-node-ready package contract. Each
-package declares exact inputs, coverage predicate, window, state machine,
-finding result, replay ID, and no invented provider semantics.
+Implement `HF-PROC-001` and `HF-DW-001`, plus the schema, state machine, and
+replay contract of `HF-XNODE-001`. Phase 8 completes `HF-XNODE-001` with its
+Kubernetes sources and physical multi-node proof. Each package declares exact
+inputs, coverage predicate, window, state machine, finding result, replay ID,
+and no invented provider semantics.
 
 ### D7.4 — Notification router
 
@@ -59,15 +60,27 @@ inventory over secure gRPC. Control never writes node BPF maps directly.
 ### D7.7 — Local HF package proof
 
 Replay local credential, executable, file, network, and authority-pivot events
-under loss/late/duplicate/contradiction variants. Findings and uncertainty must
-be stable and explain the exact prevented/allowed stage.
+for `HF-001` through `HF-012` under loss/late/duplicate/contradiction variants.
+Findings and uncertainty must be stable and explain the exact prevented,
+allowed, payload-unobservable, contextual, or outside-authority stage.
+
+## Checkpoint
+
+Mithril Control deterministically replays the complete local package inputs to
+identical graph/finding revisions, distributes policy over secure gRPC, and
+delivers notifications without granting physical authority. Cross-node and
+provider packages remain explicitly incomplete.
 
 ## Required Tests And Fixtures
 
-`HF-LOCAL-001`, local `HF-GRAN-*` cases allocated by the claim,
-authorization replay, edge determinism, source gap, notification secret/retry/
-dedupe, and graph replay fixtures. Provider and cross-node fixtures remain
-incomplete until their phases.
+- Rerun `AUTHORIZATION-REPLAY-004`, `HF-LOCAL-001`,
+  `HF-004-RESULT-001`, and `HF-011-READ-RESULT-001` through deterministic
+  package replay under complete and gapped coverage.
+- Byte-order/delivery-order graph determinism, contradiction, source-gap,
+  notification secret/retry/dedupe, and authority-record restart tests.
+- Phase 7 owns no new Appendix C fixture ID. Provider and cross-node fixture
+  results remain incomplete until Phases 8 and 10; the Phase 7 result must say
+  so rather than counting their schema-only package contracts as complete.
 
 ## Acceptance
 
@@ -84,7 +97,17 @@ Kubernetes cross-node joins, named provider connectors, and response actuation.
 
 ## Phase Result
 
-State: Not done.  
-Completed deliverables: none.  
-Verification: not run; this is a plan rewrite.  
-Next phase: not authorized.
+```text
+State: Not done.
+Validated architecture revision/digest: not recorded.
+Completed deliverable IDs: none.
+Files and durable owners changed: none.
+Upstream-adoption dossier IDs used: none.
+Fixture cases and exact physical results: not run.
+Commands and exact source state covered: none; this is a plan-only rewrite.
+Platform/kernel/runtime manifests: none.
+Performance/capacity results: none.
+Unsupported/degraded paths: provider and cross-node packages incomplete.
+Remaining work in this phase: all deliverables.
+Next phase not authorized: yes.
+```
