@@ -1,16 +1,24 @@
 mod replay;
 
+use std::collections::BTreeSet;
+use std::mem::{offset_of, size_of};
 use std::path::Path;
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use erebor_interceptor_abi::Id128V1;
+use erebor_interceptor::KernelHost;
+use erebor_interceptor_abi::{
+    ApprovedExecSlotKeyV1, ApprovedExecSlotStateV1, ApprovedExecSlotV1,
+    BoundedAdministrativeArgvV1, ExternalRootClassV1, Id128V1,
+};
 use minicbor::data::Token;
 use minicbor::{Decoder, Encoder};
 use sha2::{Digest as _, Sha256};
-use snafu::ensure;
+use snafu::{ensure, ResultExt as _};
 
 use self::replay::{AcceptedProof, ReplayKey, ReplayLedger};
-use crate::error::AuthorizationSnafu;
+use zerocopy::IntoBytes as _;
+
+use crate::error::{AuthorizationSnafu, InterceptorSnafu};
 use crate::Result;
 
 const ADMINISTRATIVE_EXEC_KIND: u8 = 8;
@@ -38,6 +46,22 @@ struct IntentPayloadV1 {
     pub body_cbor: Vec<u8>,
     pub parent_proof_id: Option<Id128V1>,
     pub trigger_proof_ids: Vec<Id128V1>,
+    pub administrative_exec: AdministrativeExecIdentityV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct AdministrativeExecIdentityV1 {
+    container_generation: u64,
+    approved_argv: BoundedAdministrativeArgvV1,
+    resolved_mount_id: u64,
+    resolved_inode: u64,
+    resolved_inode_generation: u64,
+}
+
+struct ResolvedExecutableObjectV1 {
+    mount_id: u64,
+    inode: u64,
+    inode_generation: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -71,7 +95,7 @@ pub struct AuthorizationTargetV1 {
     pub body_sha256: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PreparedAuthorizationProofV1 {
     pub proof_id: Id128V1,
     pub claim_slot_id: Id128V1,
@@ -79,6 +103,7 @@ pub struct PreparedAuthorizationProofV1 {
     pub sequence: u64,
     pub body_sha256: [u8; 32],
     pub deadline_boottime_ns: u64,
+    administrative_exec: AdministrativeExecIdentityV1,
 }
 
 pub struct AuthorizationProofOwner {
@@ -126,6 +151,7 @@ impl AuthorizationProofOwner {
         let deadline_boottime_ns = now_boottime_ns
             .checked_add(remaining_ns)
             .ok_or_else(|| authorization_error("boot-time deadline overflow"))?;
+        let body_sha256 = Sha256::digest(&payload.body_cbor).into();
         self.replay.accept(AcceptedProof {
             key: ReplayKey {
                 trust_domain_id: payload.trust_domain_id,
@@ -137,20 +163,202 @@ impl AuthorizationProofOwner {
             proof_id: payload.proof_id,
             claim_slot_ids: &payload.claim_slot_ids,
             expires_at_utc_ns: payload.expires_at_utc_ns,
+            body_sha256,
         })?;
         Ok(PreparedAuthorizationProofV1 {
             proof_id: payload.proof_id,
             claim_slot_id: payload.claim_slot_ids[0],
             sequence_epoch: payload.sequence_epoch,
             sequence: payload.sequence,
-            body_sha256: Sha256::digest(&payload.body_cbor).into(),
+            body_sha256,
             deadline_boottime_ns,
+            administrative_exec: payload.administrative_exec,
         })
     }
 
     pub fn consume(&mut self, proof_id: Id128V1, claim_slot_id: Id128V1) -> Result<()> {
         self.replay.consume(proof_id, claim_slot_id)
     }
+
+    pub fn arm_administrative_slot(
+        &mut self,
+        host: &KernelHost,
+        key: ApprovedExecSlotKeyV1,
+        mut slot: ApprovedExecSlotV1,
+        proof: PreparedAuthorizationProofV1,
+    ) -> Result<()> {
+        slot.proof_id = proof.proof_id;
+        slot.claim_slot_id = proof.claim_slot_id;
+        slot.authorization_body_sha256 = proof.body_sha256;
+        slot.deadline_boottime_ns = proof.deadline_boottime_ns;
+        slot.state = ApprovedExecSlotStateV1::Armed;
+        slot.transition_version = 1;
+        ensure!(
+            !key.node_boot_id.is_zero()
+                && !key.cgroup_binding_id.is_zero()
+                && !slot.cgroup_binding_nonce.is_zero()
+                && slot.container_generation > 0
+                && slot.container_generation == proof.administrative_exec.container_generation
+                && slot.expected_argv.is_valid()
+                && slot.expected_argv == proof.administrative_exec.approved_argv
+                && slot.resolved_executable.mount_namespace_inode > 0
+                && slot.resolved_executable.mount_id > 0
+                && slot.resolved_executable.mount_id == proof.administrative_exec.resolved_mount_id
+                && slot.resolved_executable.filesystem_device > 0
+                && slot.resolved_executable.inode > 0
+                && slot.resolved_executable.inode == proof.administrative_exec.resolved_inode
+                && slot.resolved_executable.inode_generation > 0
+                && slot.resolved_executable.inode_generation
+                    == proof.administrative_exec.resolved_inode_generation
+                && slot.approved_role_numeric_id > 0
+                && slot.profile_generation_ref_id > 0
+                && slot.expected_root_class == ExternalRootClassV1::ExternalRuntimeRoot,
+            AuthorizationSnafu {
+                reason: "administrative slot is not an exact bounded external-root match",
+            }
+        );
+        let intent_sha256 = administrative_slot_intent_sha256(&key, &slot);
+        let existing = host
+            .lookup_map("approved_exec_slots", key.as_bytes())
+            .context(InterceptorSnafu)?;
+        ensure!(
+            existing
+                .as_deref()
+                .is_none_or(|value| value == slot.as_bytes()),
+            AuthorizationSnafu {
+                reason: "live cgroup binding already has a different administrative slot",
+            }
+        );
+        self.replay.arm(
+            proof.proof_id,
+            proof.claim_slot_id,
+            proof.body_sha256,
+            intent_sha256,
+        )?;
+        if existing.is_none() {
+            host.update_map("approved_exec_slots", key.as_bytes(), slot.as_bytes())
+                .context(InterceptorSnafu)?;
+        }
+        ensure!(
+            host.lookup_map("approved_exec_slots", key.as_bytes())
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some(slot.as_bytes()),
+            AuthorizationSnafu {
+                reason: "administrative slot failed kernel readback",
+            }
+        );
+        Ok(())
+    }
+
+    pub fn reconcile_administrative_slots(&mut self, host: &KernelHost) -> Result<()> {
+        let mut live_slots = BTreeSet::new();
+        for key in host
+            .map_keys("approved_exec_slots")
+            .context(InterceptorSnafu)?
+        {
+            ensure!(
+                key.len() == size_of::<ApprovedExecSlotKeyV1>(),
+                AuthorizationSnafu {
+                    reason: "administrative slot map returned a malformed key",
+                }
+            );
+            let Some(mut value) = host
+                .lookup_map("approved_exec_slots", &key)
+                .context(InterceptorSnafu)?
+            else {
+                continue;
+            };
+            ensure!(
+                value.len() == size_of::<ApprovedExecSlotV1>(),
+                AuthorizationSnafu {
+                    reason: "administrative slot map returned a malformed value",
+                }
+            );
+            let state = read_slot_u64(&value, offset_of!(ApprovedExecSlotV1, state))?;
+            let proof_id = read_slot_id(&value, offset_of!(ApprovedExecSlotV1, proof_id))?;
+            let claim_slot_id =
+                read_slot_id(&value, offset_of!(ApprovedExecSlotV1, claim_slot_id))?;
+            live_slots.insert(claim_slot_id);
+            value[offset_of!(ApprovedExecSlotV1, state)
+                ..offset_of!(ApprovedExecSlotV1, state) + size_of::<u64>()]
+                .copy_from_slice(&(ApprovedExecSlotStateV1::Armed as u64).to_ne_bytes());
+            value[offset_of!(ApprovedExecSlotV1, transition_version)
+                ..offset_of!(ApprovedExecSlotV1, transition_version) + size_of::<u64>()]
+                .copy_from_slice(&1_u64.to_ne_bytes());
+            let intent_sha256 = administrative_slot_intent_sha256_bytes(&key, &value);
+            match state {
+                value if value == ApprovedExecSlotStateV1::Armed as u64 => ensure!(
+                    self.replay.armed_intent(claim_slot_id) == Some(intent_sha256),
+                    AuthorizationSnafu {
+                        reason: "armed kernel slot differs from its durable intent",
+                    }
+                ),
+                value if value == ApprovedExecSlotStateV1::Consumed as u64 => {
+                    self.replay
+                        .reconcile_consumed(proof_id, claim_slot_id, intent_sha256)?;
+                    host.delete_map_entry("approved_exec_slots", &key)
+                        .context(InterceptorSnafu)?;
+                }
+                value
+                    if value == ApprovedExecSlotStateV1::Expired as u64
+                        || value == ApprovedExecSlotStateV1::Cancelled as u64
+                        || value == ApprovedExecSlotStateV1::Corrupt as u64 =>
+                {
+                    self.replay.close(proof_id, claim_slot_id, intent_sha256)?;
+                    host.delete_map_entry("approved_exec_slots", &key)
+                        .context(InterceptorSnafu)?;
+                }
+                _ => {
+                    return AuthorizationSnafu {
+                        reason: "administrative slot is neither armed nor durably consumable"
+                            .to_owned(),
+                    }
+                    .fail()
+                }
+            }
+        }
+        ensure!(
+            self.replay
+                .armed_slots()
+                .into_iter()
+                .all(|slot_id| live_slots.contains(&slot_id)),
+            AuthorizationSnafu {
+                reason: "durably armed administrative slot is missing from the kernel",
+            }
+        );
+        Ok(())
+    }
+}
+
+fn administrative_slot_intent_sha256(
+    key: &ApprovedExecSlotKeyV1,
+    slot: &ApprovedExecSlotV1,
+) -> [u8; 32] {
+    administrative_slot_intent_sha256_bytes(key.as_bytes(), slot.as_bytes())
+}
+
+fn administrative_slot_intent_sha256_bytes(key: &[u8], slot: &[u8]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"MITHRIL-ADMINISTRATIVE-SLOT-V1\0");
+    digest.update(key);
+    digest.update(slot);
+    digest.finalize().into()
+}
+
+fn read_slot_u64(value: &[u8], offset: usize) -> Result<u64> {
+    let bytes = value
+        .get(offset..offset + size_of::<u64>())
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| authorization_error("administrative slot is truncated"))?;
+    Ok(u64::from_ne_bytes(bytes))
+}
+
+fn read_slot_id(value: &[u8], offset: usize) -> Result<Id128V1> {
+    Ok(Id128V1::new(
+        read_slot_u64(value, offset)?,
+        read_slot_u64(value, offset + size_of::<u64>())?,
+    ))
 }
 
 impl TrustBundleV1 {
@@ -376,7 +584,7 @@ impl IntentPayloadV1 {
         let body_start = decoder.position();
         decoder.skip().map_err(cbor_error)?;
         let body_cbor = bytes[body_start..decoder.position()].to_vec();
-        validate_administrative_body(kind, &body_cbor, &claim_slot_ids)?;
+        let administrative_exec = validate_administrative_body(kind, &body_cbor, &claim_slot_ids)?;
         let mut parent_proof_id = None;
         let mut trigger_proof_ids = Vec::new();
         if fields >= 14 {
@@ -408,11 +616,16 @@ impl IntentPayloadV1 {
             body_cbor,
             parent_proof_id,
             trigger_proof_ids,
+            administrative_exec,
         })
     }
 }
 
-fn validate_administrative_body(kind: u8, body: &[u8], claim_slot_ids: &[Id128V1]) -> Result<()> {
+fn validate_administrative_body(
+    kind: u8,
+    body: &[u8],
+    claim_slot_ids: &[Id128V1],
+) -> Result<AdministrativeExecIdentityV1> {
     ensure!(
         kind == ADMINISTRATIVE_EXEC_KIND && claim_slot_ids.len() == 1,
         AuthorizationSnafu {
@@ -455,8 +668,9 @@ fn validate_administrative_body(kind: u8, body: &[u8], claim_slot_ids: &[Id128V1
     expect_key(&mut decoder, 6)?;
     let _container_id = decode_bytes(&mut decoder, 32, 128, true, "container ID")?;
     expect_key(&mut decoder, 7)?;
+    let container_generation = decode_u64(&mut decoder)?;
     ensure!(
-        decode_u64(&mut decoder)? > 0,
+        container_generation > 0,
         AuthorizationSnafu {
             reason: "container generation must be nonzero",
         }
@@ -464,7 +678,7 @@ fn validate_administrative_body(kind: u8, body: &[u8], claim_slot_ids: &[Id128V1
     expect_key(&mut decoder, 8)?;
     let argument_count = expect_array(&mut decoder, 1, 256, "approved argv")?;
     let mut total_argument_bytes = 0_usize;
-    let mut command = None;
+    let mut arguments = Vec::with_capacity(argument_count as usize);
     for index in 0..argument_count {
         let argument = decode_bytes(&mut decoder, 0, 4096, true, "approved argument")?;
         total_argument_bytes = total_argument_bytes
@@ -477,8 +691,8 @@ fn validate_administrative_body(kind: u8, body: &[u8], claim_slot_ids: &[Id128V1
                     reason: "approved command name is empty",
                 }
             );
-            command = Some(argument.to_vec());
         }
+        arguments.push(argument);
     }
     ensure!(
         (1..=4096).contains(&total_argument_bytes),
@@ -520,14 +734,23 @@ fn validate_administrative_body(kind: u8, body: &[u8], claim_slot_ids: &[Id128V1
         }
     );
     expect_key(&mut decoder, 15)?;
-    validate_resolved_executable(&mut decoder, command.as_deref().unwrap_or_default())?;
+    let approved_argv = BoundedAdministrativeArgvV1::from_arguments(&arguments)
+        .ok_or_else(|| authorization_error("approved argv cannot be lowered to the BPF ABI"))?;
+    let resolved =
+        validate_resolved_executable(&mut decoder, arguments.first().copied().unwrap_or_default())?;
     ensure!(
         decoder.position() == body.len(),
         AuthorizationSnafu {
             reason: "administrative body has trailing bytes",
         }
     );
-    Ok(())
+    Ok(AdministrativeExecIdentityV1 {
+        container_generation,
+        approved_argv,
+        resolved_mount_id: resolved.mount_id,
+        resolved_inode: resolved.inode,
+        resolved_inode_generation: resolved.inode_generation,
+    })
 }
 
 fn validate_portable_profile_generation(decoder: &mut Decoder<'_>) -> Result<()> {
@@ -545,7 +768,10 @@ fn validate_portable_profile_generation(decoder: &mut Decoder<'_>) -> Result<()>
     validate_digest(decoder, "compiled profile artifact digest")
 }
 
-fn validate_resolved_executable(decoder: &mut Decoder<'_>, command: &[u8]) -> Result<()> {
+fn validate_resolved_executable(
+    decoder: &mut Decoder<'_>,
+    command: &[u8],
+) -> Result<ResolvedExecutableObjectV1> {
     expect_map(decoder, 8, "resolved administrative executable")?;
     expect_key(decoder, 0)?;
     let requested_name = decode_bytes(decoder, 1, 4096, true, "requested executable name")?;
@@ -607,7 +833,7 @@ fn validate_file_object(
     decoder: &mut Decoder<'_>,
     expected_mount_namespace: Id128V1,
     expected_mount_topology_generation: u64,
-) -> Result<()> {
+) -> Result<ResolvedExecutableObjectV1> {
     expect_map(decoder, 10, "file-object identity")?;
     expect_key(decoder, 0)?;
     let mount_namespace = decode_id(decoder, "file-object mount namespace ID")?;
@@ -621,13 +847,19 @@ fn validate_file_object(
         }
     );
     expect_key(decoder, 2)?;
-    let _mount_id = decode_u64(decoder)?;
+    let mount_id = decode_u64(decoder)?;
     expect_key(decoder, 3)?;
     let _filesystem_instance_id = decode_id(decoder, "filesystem instance ID")?;
     expect_key(decoder, 4)?;
-    let _inode_number = decode_u64(decoder)?;
+    let inode = decode_u64(decoder)?;
     expect_key(decoder, 5)?;
-    let _inode_generation = decode_u64(decoder)?;
+    let inode_generation = decode_u64(decoder)?;
+    ensure!(
+        mount_id > 0 && inode > 0 && inode_generation > 0,
+        AuthorizationSnafu {
+            reason: "executable object has a zero mount, inode, or generation identity",
+        }
+    );
     expect_key(decoder, 6)?;
     let _exact_live_object_id = decode_id(decoder, "exact live object ID")?;
     expect_key(decoder, 7)?;
@@ -641,7 +873,11 @@ fn validate_file_object(
     let _backing_identity = decode_id(decoder, "backing object or volume identity")?;
     expect_key(decoder, 9)?;
     let _live_interval_id = decode_id(decoder, "file-object live interval ID")?;
-    Ok(())
+    Ok(ResolvedExecutableObjectV1 {
+        mount_id,
+        inode,
+        inode_generation,
+    })
 }
 
 fn validate_digest(decoder: &mut Decoder<'_>, name: &str) -> Result<()> {
@@ -1256,6 +1492,19 @@ mod tests {
     }
 
     #[test]
+    fn administrative_exec_lowers_signed_match_fields_exactly() -> crate::Result<()> {
+        let body = administrative_body(b"bash")?;
+        let decoded = validate_administrative_body(ADMINISTRATIVE_EXEC_KIND, &body, &[id(1)])?;
+        assert_eq!(decoded.container_generation, 1);
+        assert_eq!(decoded.approved_argv.argument_count, 1);
+        assert_eq!(&decoded.approved_argv.argument_bytes[..4], b"bash");
+        assert_eq!(decoded.resolved_mount_id, 42);
+        assert_eq!(decoded.resolved_inode, 100);
+        assert_eq!(decoded.resolved_inode_generation, 2);
+        Ok(())
+    }
+
+    #[test]
     fn signing_key_change_without_a_new_sequence_epoch_is_rejected() {
         let now = 10;
         let issuer = |key_id: &[u8], public_key: [u8; 32]| IssuerTrustV1 {
@@ -1290,6 +1539,8 @@ mod tests {
         let now = 1_000_000_000_000_i64;
         let signing_key = SigningKey::from_bytes(&[7; 32]);
         let body = administrative_body(b"bash")?;
+        let administrative_exec =
+            validate_administrative_body(ADMINISTRATIVE_EXEC_KIND, &body, &[id(7)])?;
         let payload = IntentPayloadV1 {
             kind: ADMINISTRATIVE_EXEC_KIND,
             proof_id: id(1),
@@ -1305,6 +1556,7 @@ mod tests {
             body_cbor: body.clone(),
             parent_proof_id: None,
             trigger_proof_ids: Vec::new(),
+            administrative_exec,
         };
         let payload_bytes = encode_payload(&payload)?;
         let envelope = signed_envelope(&signing_key, b"operator-key", &payload_bytes)?;
@@ -1338,6 +1590,12 @@ mod tests {
         let mut owner = AuthorizationProofOwner::load(state.path(), trust.clone())?;
         let prepared = owner.verify_and_accept(&envelope, target, now, 100)?;
         assert_eq!(prepared.claim_slot_id, id(7));
+        owner.replay.arm(
+            prepared.proof_id,
+            prepared.claim_slot_id,
+            prepared.body_sha256,
+            [8; 32],
+        )?;
         owner.consume(id(1), id(7))?;
         assert!(owner.consume(id(1), id(7)).is_err());
         let mut restarted = AuthorizationProofOwner::load(state.path(), trust)?;
@@ -1350,6 +1608,8 @@ mod tests {
     #[test]
     fn command_similarity_cannot_replace_signature_or_exact_target() -> crate::Result<()> {
         let body = administrative_body(b"bash")?;
+        let administrative_exec =
+            validate_administrative_body(ADMINISTRATIVE_EXEC_KIND, &body, &[id(15)])?;
         let payload = IntentPayloadV1 {
             kind: ADMINISTRATIVE_EXEC_KIND,
             proof_id: id(11),
@@ -1365,6 +1625,7 @@ mod tests {
             body_cbor: body,
             parent_proof_id: None,
             trigger_proof_ids: Vec::new(),
+            administrative_exec,
         };
         let signing_key = SigningKey::from_bytes(&[8; 32]);
         let encoded = encode_payload(&payload)?;

@@ -32,10 +32,12 @@ The physical runner refuses a pre-existing pin root or occupied cgroup, has a
 five-second bound on every asynchronous observation, and owns every process it
 creates. It proves external-root classification on cgroup movement, native
 creator identity, pre-wake coordinates, exec commit, typed reference release,
-and exact pinned-map reuse after restart. Identity pins deliberately survive
-the runner so the retained manifest can be inspected. The broader matrix below
-still supplies the required concurrency, failure-injection, runtime, and
-Kubernetes cases before the phase may be marked Done.
+and exact pinned-map reuse after restart. Descendant placement is resolved by a
+bounded walk of the live kernel cgroup ancestry; there is no userspace-scanned
+descendant index to synchronize. Identity pins deliberately survive the runner
+so the retained manifest can be inspected. The broader matrix below still
+supplies the required concurrency, failure-injection, runtime, and Kubernetes
+cases before the phase may be marked Done.
 
 ## Procedure
 

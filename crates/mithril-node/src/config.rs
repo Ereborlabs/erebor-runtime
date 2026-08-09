@@ -40,11 +40,33 @@ pub struct RuntimeObservationConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ContainerRuntimeConfig {
+    pub socket_path: PathBuf,
+    #[serde(default = "default_runtime_reconciliation_ms")]
+    pub reconciliation_interval_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerKindV1 {
+    Init,
+    Sidecar,
+    Application,
+    Ephemeral,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorkloadBindingConfig {
     pub binding_id: String,
     pub execution_set_id: String,
     pub profile_id: String,
     pub container_id: String,
+    pub pod_uid: String,
+    pub sandbox_id: String,
+    pub container_name: String,
+    pub image_digest: String,
+    pub container_kind: ContainerKindV1,
     pub container_generation: u64,
     pub root_cgroup_path: PathBuf,
     pub lifecycle_generation: u64,
@@ -64,6 +86,8 @@ pub struct NodeConfig {
     pub control: NodeControlConfig,
     #[serde(default)]
     pub runtime_observation: Option<RuntimeObservationConfig>,
+    #[serde(default)]
+    pub container_runtime: Option<ContainerRuntimeConfig>,
     #[serde(default)]
     pub workload_bindings: Vec<WorkloadBindingConfig>,
 }
@@ -105,9 +129,28 @@ impl NodeConfig {
                 }
             );
         }
+        if let Some(runtime) = &self.container_runtime {
+            ensure!(
+                runtime.socket_path.is_absolute()
+                    && runtime.reconciliation_interval_ms > 0,
+                InvalidConfigurationSnafu {
+                    reason: "container runtime requires an absolute socket path and a nonzero reconciliation interval",
+                }
+            );
+        }
+        ensure!(
+            self.workload_bindings.is_empty() || self.container_runtime.is_some(),
+            InvalidConfigurationSnafu {
+                reason: "workload bindings require a CRI v1 container_runtime",
+            }
+        );
         for binding in &self.workload_bindings {
             ensure!(
-                !binding.container_id.is_empty()
+                (32..=128).contains(&binding.container_id.len())
+                    && (1..=64).contains(&binding.pod_uid.len())
+                    && (1..=128).contains(&binding.sandbox_id.len())
+                    && (1..=253).contains(&binding.container_name.len())
+                    && !binding.image_digest.is_empty()
                     && binding.container_generation > 0
                     && binding.lifecycle_generation > 0
                     && binding.active_profile_generation_ref_id > 0
@@ -140,4 +183,8 @@ const fn default_reconnect_minimum_ms() -> u64 {
 
 const fn default_reconnect_maximum_ms() -> u64 {
     5_000
+}
+
+const fn default_runtime_reconciliation_ms() -> u64 {
+    2_000
 }

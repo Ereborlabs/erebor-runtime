@@ -20,16 +20,24 @@ struct cgroup___new {
     struct cgroup *ancestors[];
 } __attribute__((preserve_access_index));
 
+#define MAX_CGROUP_ANCESTOR_STEPS_V1 64
+
 struct identity_scratch_v1 {
     task_label_v1 label;
     task_coordinate_v1 coordinate;
+    kernel_real_parent_interval_v1 real_parent;
     created_by_edge_v1 created_by;
     process_security_state_v1 process;
+    process_state_vector_v1 process_vector;
     entry_security_state_v1 entry;
     authority_domain_state_v1 domain;
     task_reference_tombstone_v1 tombstone;
     external_root_classification_v1 classification;
     pending_exec_v1 pending_exec;
+    image_provenance_v1 image;
+    process_execution_instance_v1 execution;
+    pending_administrative_match_v1 administrative_match;
+    __u8 administrative_argument[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 + 1];
 };
 
 struct {
@@ -69,6 +77,13 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 131072);
+    __type(key, kernel_real_parent_interval_key_v1);
+    __type(value, kernel_real_parent_interval_v1);
+} kernel_real_parent_intervals SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65536);
     __type(key, __u64);
     __type(value, created_by_edge_v1);
@@ -80,6 +95,13 @@ struct {
     __type(key, id128_v1);
     __type(value, process_security_state_v1);
 } process_states SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 32768);
+    __type(key, id128_v1);
+    __type(value, process_state_vector_v1);
+} process_state_vectors SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -111,13 +133,6 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 32768);
-    __type(key, __u64);
-    __type(value, __u64);
-} cgroup_binding_roots SEC(".maps");
-
-struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65536);
     __type(key, __u64);
     __type(value, external_root_classification_v1);
@@ -129,6 +144,34 @@ struct {
     __type(key, __u64);
     __type(value, pending_exec_v1);
 } pending_execs SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, id128_v1);
+    __type(value, image_provenance_v1);
+} image_provenance SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, id128_v1);
+    __type(value, process_execution_instance_v1);
+} process_execution_instances SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, approved_exec_slot_key_v1);
+    __type(value, approved_exec_slot_v1);
+} approved_exec_slots SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 32768);
+    __type(key, __u64);
+    __type(value, pending_administrative_match_v1);
+} pending_administrative_matches SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -185,29 +228,19 @@ static __always_inline int allocate_id(identity_runtime_config_v1 *config,
     return -EACCES;
 }
 
-static __always_inline __u64 task_cgroup_id(struct task_struct *task)
+static __always_inline int task_cgroup(struct task_struct *task,
+                                       struct cgroup **result)
 {
     struct css_set *cgroups = NULL;
-    struct cgroup *cgroup = NULL;
-    struct kernfs_node *kn = NULL;
-    __u64 id = 0;
 
+    *result = NULL;
     if (!task)
-        return 0;
+        return -EACCES;
     if (BPF_CORE_READ_INTO(&cgroups, task, cgroups) || !cgroups)
-        return 0;
-    if (BPF_CORE_READ_INTO(&cgroup, cgroups, dfl_cgrp) || !cgroup)
-        return 0;
-    if (BPF_CORE_READ_INTO(&kn, cgroup, kn) || !kn)
-        return 0;
-    if (bpf_core_field_exists(((struct kernfs_node___old *)0)->id.id)) {
-        struct kernfs_node___old *old_kn = (void *)kn;
-        if (BPF_CORE_READ_INTO(&id, old_kn, id.id))
-            return 0;
-    } else if (BPF_CORE_READ_INTO(&id, kn, id)) {
-        return 0;
-    }
-    return id;
+        return -EACCES;
+    if (BPF_CORE_READ_INTO(result, cgroups, dfl_cgrp) || !*result)
+        return -EACCES;
+    return 0;
 }
 
 static __always_inline __u64 cgroup_id(struct cgroup *cgroup)
@@ -227,40 +260,62 @@ static __always_inline __u64 cgroup_id(struct cgroup *cgroup)
     return id;
 }
 
-static __always_inline __u64 cgroup_parent_id(struct cgroup *cgroup)
+static __always_inline int cgroup_parent(struct cgroup *cgroup,
+                                         struct cgroup **result)
 {
     struct cgroup___new *new_cgroup = (void *)cgroup;
     struct cgroup_subsys_state *parent_css = NULL;
-    struct cgroup *parent = NULL;
     int level = 0;
 
+    *result = NULL;
+    if (!cgroup)
+        return -EACCES;
     if (bpf_core_field_exists(new_cgroup->ancestors)) {
-        BPF_CORE_READ_INTO(&level, new_cgroup, level);
-        if (level <= 0)
+        if (BPF_CORE_READ_INTO(&level, new_cgroup, level) || level < 0 ||
+            level > MAX_CGROUP_ANCESTOR_STEPS_V1)
+            return -EACCES;
+        if (level == 0)
             return 0;
-        BPF_CORE_READ_INTO(&parent, new_cgroup, ancestors[level - 1]);
-        return cgroup_id(parent);
+        if (BPF_CORE_READ_INTO(result, new_cgroup, ancestors[level - 1]) ||
+            !*result)
+            return -EACCES;
+        return 0;
     }
-    BPF_CORE_READ_INTO(&parent_css, cgroup, self.parent);
+    if (BPF_CORE_READ_INTO(&parent_css, cgroup, self.parent))
+        return -EACCES;
     if (!parent_css)
         return 0;
-    parent = container_of(parent_css, struct cgroup, self);
-    return cgroup_id(parent);
+    *result = container_of(parent_css, struct cgroup, self);
+    return 0;
 }
 
 static __always_inline execution_set_binding_state_v1 *binding_for_cgroup(
-    __u64 cgroup_id_value)
+    struct cgroup *cgroup, int *lookup_result)
 {
     execution_set_binding_state_v1 *binding;
-    __u64 *root;
+    struct cgroup *parent;
+    __u64 id;
 
-    binding = bpf_map_lookup_elem(&execution_set_bindings, &cgroup_id_value);
-    if (binding)
-        return binding;
-    root = bpf_map_lookup_elem(&cgroup_binding_roots, &cgroup_id_value);
-    if (!root)
-        return NULL;
-    return bpf_map_lookup_elem(&execution_set_bindings, root);
+    *lookup_result = -EACCES;
+#pragma clang loop unroll(disable)
+    for (int depth = 0; depth < MAX_CGROUP_ANCESTOR_STEPS_V1; depth++) {
+        id = cgroup_id(cgroup);
+        if (!id)
+            return NULL;
+        binding = bpf_map_lookup_elem(&execution_set_bindings, &id);
+        if (binding) {
+            *lookup_result = 0;
+            return binding;
+        }
+        if (cgroup_parent(cgroup, &parent))
+            return NULL;
+        if (!parent) {
+            *lookup_result = 0;
+            return NULL;
+        }
+        cgroup = parent;
+    }
+    return NULL;
 }
 
 static __always_inline int identity_deny(identity_runtime_config_v1 *config)
@@ -286,6 +341,44 @@ static __always_inline bool binding_matches_label(
            id128_equal(&binding->binding_nonce,
                        &label->placement.protected_root_binding_nonce) &&
            binding->lifecycle_state == binding_lifecycle_state_v1_active;
+}
+
+static __always_inline bool consume_initial_root(
+    execution_set_binding_state_v1 *binding)
+{
+    __u64 previous = __sync_val_compare_and_swap(
+        &binding->initial_root_state, initial_root_state_v1_available,
+        initial_root_state_v1_consumed);
+
+    if (previous != initial_root_state_v1_available)
+        return false;
+    __sync_fetch_and_add(&binding->transition_version, 1);
+    return true;
+}
+
+static __always_inline int snapshot_process_state(
+    const process_security_state_v1 *source,
+    process_security_state_v1 *snapshot)
+{
+    __u64 version;
+
+    if (!source || !snapshot ||
+        __sync_fetch_and_add((__u64 *)&source->transition_guard, 0))
+        return -EACCES;
+    version = __sync_fetch_and_add((__u64 *)&source->transition_version, 0);
+    __asm__ volatile("" ::: "memory");
+    *snapshot = *source;
+    __asm__ volatile("" ::: "memory");
+    if (__sync_fetch_and_add((__u64 *)&source->transition_guard, 0) ||
+        version !=
+            __sync_fetch_and_add((__u64 *)&source->transition_version, 0))
+        return -EACCES;
+    return 0;
+}
+
+static __always_inline void release_transition_guard(__u64 *guard)
+{
+    __sync_val_compare_and_swap(guard, 1, 0);
 }
 
 static __always_inline void zero_id(id128_v1 *id)
@@ -322,6 +415,7 @@ static __always_inline void prepare_coordinate(
     coordinate->pid_namespace_inode = 0;
     coordinate->task_start_boottime_ns = 0;
     coordinate->finalized_boottime_ns = 0;
+    coordinate->real_parent_interval_sequence = 1;
     coordinate->transition_version = 1;
     coordinate->state = task_coordinate_state_v1_allocating;
 #pragma unroll

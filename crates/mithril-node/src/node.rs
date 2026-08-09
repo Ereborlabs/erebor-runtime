@@ -40,13 +40,12 @@ pub struct NodeChassis {
     registration: NodeRegistration,
     local_server: Option<crate::RuntimeObservationServer>,
     trust: TrustCache,
-    _identity: NativeSecurityStateOwner,
-    _bindings: WorkloadBindingOwner,
+    bindings: WorkloadBindingOwner,
     readiness: watch::Sender<NodeReadinessV1>,
 }
 
 impl NodeChassis {
-    pub fn start(config: NodeConfig) -> Result<Self> {
+    pub async fn start(config: NodeConfig) -> Result<Self> {
         config.validate()?;
         let boot_id = NodeEpochs::boot_id()?;
         let node_boot_id = id_from_uuid_bytes(boot_id);
@@ -65,8 +64,14 @@ impl NodeChassis {
             label_epoch,
         ));
         let mut host = owner.start().context(InterceptorSnafu)?;
-        let mut bindings = WorkloadBindingOwner::system(node_boot_id, label_epoch)?;
-        bindings.publish_all(&host, &config.workload_bindings)?;
+        let mut bindings = if let Some(runtime) = config.container_runtime.as_ref() {
+            WorkloadBindingOwner::system_with_runtime(node_boot_id, label_epoch, runtime).await?
+        } else {
+            WorkloadBindingOwner::system(node_boot_id, label_epoch)?
+        };
+        bindings
+            .publish_runtime_bindings(&host, &config.workload_bindings)
+            .await?;
         let identity = NativeSecurityStateOwner::new(node_boot_id, label_epoch);
         let reconciliation = identity.activate(&mut host)?;
         let manifest = host.manifest();
@@ -122,8 +127,7 @@ impl NodeChassis {
             registration,
             local_server,
             trust,
-            _identity: identity,
-            _bindings: bindings,
+            bindings,
             readiness,
         })
     }
@@ -139,7 +143,15 @@ impl NodeChassis {
             tokio::spawn(server.serve(local_shutdown))
         });
         let mut backoff = self.config.control.reconnect_minimum();
-        loop {
+        let mut identity_healthy = true;
+        let mut runtime_reconciliation = self.config.container_runtime.as_ref().map(|runtime| {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(
+                runtime.reconciliation_interval_ms,
+            ));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval
+        });
+        'running: loop {
             if *shutdown.borrow() {
                 break;
             }
@@ -151,19 +163,34 @@ impl NodeChassis {
                 Ok(mut connection) => {
                     self.readiness.send_replace(NodeReadinessV1 {
                         kernel_ready: true,
-                        identity_ready: true,
+                        identity_ready: identity_healthy,
                         control_ready: true,
-                        admission_ready: true,
+                        admission_ready: identity_healthy,
                         effect_prevention_claims_enabled: false,
                     });
                     backoff = self.config.control.reconnect_minimum();
-                    tokio::select! {
-                        result = connection.wait_for_disconnect() => {
-                            let _error = result.err();
-                        }
-                        changed = shutdown.changed() => {
-                            let _result = changed;
-                            break;
+                    loop {
+                        tokio::select! {
+                            result = connection.wait_for_disconnect() => {
+                                let _error = result.err();
+                                break;
+                            }
+                            changed = shutdown.changed() => {
+                                let _result = changed;
+                                break 'running;
+                            }
+                            () = next_reconciliation_tick(&mut runtime_reconciliation) => {
+                                if !self.reconcile_bindings().await {
+                                    identity_healthy = false;
+                                    self.readiness.send_replace(NodeReadinessV1 {
+                                        kernel_ready: true,
+                                        identity_ready: false,
+                                        control_ready: true,
+                                        admission_ready: false,
+                                        effect_prevention_claims_enabled: false,
+                                    });
+                                }
+                            }
                         }
                     }
                 }
@@ -171,16 +198,25 @@ impl NodeChassis {
             }
             self.readiness.send_replace(NodeReadinessV1 {
                 kernel_ready: true,
-                identity_ready: true,
+                identity_ready: identity_healthy,
                 control_ready: false,
                 admission_ready: false,
                 effect_prevention_claims_enabled: false,
             });
-            tokio::select! {
-                () = tokio::time::sleep(backoff) => {}
-                changed = shutdown.changed() => {
-                    let _result = changed;
-                    break;
+            let reconnect = tokio::time::sleep(backoff);
+            tokio::pin!(reconnect);
+            loop {
+                tokio::select! {
+                    () = &mut reconnect => break,
+                    changed = shutdown.changed() => {
+                        let _result = changed;
+                        break 'running;
+                    }
+                    () = next_reconciliation_tick(&mut runtime_reconciliation) => {
+                        if !self.reconcile_bindings().await {
+                            identity_healthy = false;
+                        }
+                    }
                 }
             }
             backoff = cmp::min(
@@ -195,6 +231,22 @@ impl NodeChassis {
             task.await.context(LocalTaskSnafu)??;
         }
         Ok(())
+    }
+
+    async fn reconcile_bindings(&mut self) -> bool {
+        match self.host.as_ref() {
+            Some(host) => self.bindings.reconcile(host).await.is_ok(),
+            None => false,
+        }
+    }
+}
+
+async fn next_reconciliation_tick(interval: &mut Option<tokio::time::Interval>) {
+    match interval {
+        Some(interval) => {
+            interval.tick().await;
+        }
+        None => std::future::pending().await,
     }
 }
 

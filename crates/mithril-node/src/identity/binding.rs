@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File};
 use std::mem::{offset_of, size_of};
 use std::os::unix::fs::MetadataExt as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use erebor_interceptor::KernelHost;
 use erebor_interceptor_abi::{
@@ -14,13 +14,18 @@ use uuid::Uuid;
 use zerocopy::IntoBytes as _;
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu};
-use crate::{Result, WorkloadBindingConfig};
+use crate::{ContainerRuntimeConfig, Result, WorkloadBindingConfig};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+use super::runtime::{ContainerRuntimeInventory, RuntimeContainerIdentity};
+
+#[derive(Debug)]
 struct PublishedBinding {
     root_cgroup_id: u64,
-    descendants: Vec<u64>,
+    root_cgroup_path: PathBuf,
     state: ExecutionSetBindingStateV1,
+    root_handle: File,
+    spec: WorkloadBindingConfig,
+    runtime_identity: Option<RuntimeContainerIdentity>,
 }
 
 pub struct WorkloadBindingOwner {
@@ -29,11 +34,24 @@ pub struct WorkloadBindingOwner {
     label_epoch: u64,
     bindings: BTreeMap<u64, PublishedBinding>,
     profile_handles: BTreeMap<u64, Id128V1>,
+    runtime: Option<ContainerRuntimeInventory>,
 }
 
 impl WorkloadBindingOwner {
     pub fn system(node_boot_id: Id128V1, label_epoch: u64) -> Result<Self> {
         Self::at("/sys/fs/cgroup", node_boot_id, label_epoch)
+    }
+
+    pub async fn system_with_runtime(
+        node_boot_id: Id128V1,
+        label_epoch: u64,
+        runtime: &ContainerRuntimeConfig,
+    ) -> Result<Self> {
+        let mut owner = Self::system(node_boot_id, label_epoch)?;
+        owner.runtime = Some(
+            ContainerRuntimeInventory::connect(&runtime.socket_path, &owner.cgroup_root).await?,
+        );
+        Ok(owner)
     }
 
     fn at(
@@ -49,7 +67,59 @@ impl WorkloadBindingOwner {
             label_epoch,
             bindings: BTreeMap::new(),
             profile_handles: BTreeMap::new(),
+            runtime: None,
         })
+    }
+
+    pub async fn publish_runtime_bindings(
+        &mut self,
+        host: &KernelHost,
+        configured: &[WorkloadBindingConfig],
+    ) -> Result<()> {
+        ensure!(
+            configured.is_empty() || self.runtime.is_some(),
+            IdentityStateSnafu {
+                reason: "configured workload bindings have no CRI inventory owner",
+            }
+        );
+        let mut identities = Vec::with_capacity(configured.len());
+        if let Some(runtime) = self.runtime.as_mut() {
+            for spec in configured {
+                let identity = runtime.validate(spec).await?;
+                ensure!(
+                    fs::canonicalize(&identity.cgroup_path).context(IoSnafu {
+                        path: &identity.cgroup_path,
+                    })? == fs::canonicalize(&spec.root_cgroup_path).context(IoSnafu {
+                        path: &spec.root_cgroup_path,
+                    })?,
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "CRI cgroup for `{}` differs from configured expected path",
+                            spec.container_id
+                        ),
+                    }
+                );
+                identities.push(identity);
+            }
+        }
+        self.publish_all(host, configured)?;
+        for identity in identities {
+            let binding = self
+                .bindings
+                .values_mut()
+                .find(|binding| binding.spec.container_id == identity.full_container_id)
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "published binding lost container `{}`",
+                            identity.full_container_id
+                        ),
+                    }
+                    .build()
+                })?;
+            binding.runtime_identity = Some(identity);
+        }
+        self.retain_only_configured(host)
     }
 
     pub fn publish_all(
@@ -63,8 +133,12 @@ impl WorkloadBindingOwner {
                 !self.bindings.contains_key(&binding.root_cgroup_id)
                     && !self.bindings.values().any(|installed| {
                         installed.state.binding_id == binding.state.binding_id
-                            || installed.descendants.contains(&binding.root_cgroup_id)
-                            || binding.descendants.contains(&installed.root_cgroup_id)
+                            || binding
+                                .root_cgroup_path
+                                .starts_with(&installed.root_cgroup_path)
+                            || installed
+                                .root_cgroup_path
+                                .starts_with(&binding.root_cgroup_path)
                     }),
                 IdentityStateSnafu {
                     reason: format!(
@@ -88,6 +162,7 @@ impl WorkloadBindingOwner {
             let existing = host
                 .lookup_map("execution_set_bindings", &key)
                 .context(InterceptorSnafu)?;
+            let mut resume_preparing = false;
             if let Some(existing) = existing.as_deref() {
                 ensure!(
                     existing.len() == size_of::<ExecutionSetBindingStateV1>(),
@@ -99,6 +174,16 @@ impl WorkloadBindingOwner {
                     existing,
                     offset_of!(ExecutionSetBindingStateV1, initial_root_state),
                 )?;
+                binding.state.binding_nonce = read_id(
+                    existing,
+                    offset_of!(ExecutionSetBindingStateV1, binding_nonce),
+                )?;
+                ensure!(
+                    !binding.state.binding_nonce.is_zero(),
+                    IdentityStateSnafu {
+                        reason: "recovered binding has a zero nonce",
+                    }
+                );
                 binding.state.initial_root_state = InitialRootStateV1::from_raw(initial_root_state)
                     .context(IdentityStateSnafu {
                         reason: "recovered binding has an invalid initial-root state",
@@ -107,6 +192,25 @@ impl WorkloadBindingOwner {
                     existing,
                     offset_of!(ExecutionSetBindingStateV1, transition_version),
                 )?;
+                binding.state.lifecycle_state =
+                    match existing[offset_of!(ExecutionSetBindingStateV1, lifecycle_state)] {
+                        value if value == BindingLifecycleStateV1::Preparing as u8 => {
+                            resume_preparing = true;
+                            BindingLifecycleStateV1::Preparing
+                        }
+                        value if value == BindingLifecycleStateV1::Active as u8 => {
+                            BindingLifecycleStateV1::Active
+                        }
+                        _ => {
+                            return IdentityStateSnafu {
+                                reason: format!(
+                                    "recovered binding `{}` is not preparing or active",
+                                    spec.binding_id
+                                ),
+                            }
+                            .fail()
+                        }
+                    };
                 ensure!(
                     existing == binding.state.as_bytes(),
                     IdentityStateSnafu {
@@ -126,7 +230,7 @@ impl WorkloadBindingOwner {
                 .lookup_map("profile_generation_task_refs", &profile_key)
                 .context(InterceptorSnafu)?;
             ensure!(
-                existing.is_none() || profile_task_refs.is_some(),
+                existing.is_none() || resume_preparing || profile_task_refs.is_some(),
                 IdentityStateSnafu {
                     reason: "recovered binding lost its profile-generation references",
                 }
@@ -146,15 +250,7 @@ impl WorkloadBindingOwner {
                 )
                 .context(InterceptorSnafu)?;
             }
-            for descendant in &binding.descendants {
-                host.update_map(
-                    "cgroup_binding_roots",
-                    &descendant.to_ne_bytes(),
-                    &binding.root_cgroup_id.to_ne_bytes(),
-                )
-                .context(InterceptorSnafu)?;
-            }
-            if existing.is_none() {
+            if existing.is_none() || resume_preparing {
                 ensure!(
                     host.lookup_map("execution_set_bindings", &key)
                         .context(InterceptorSnafu)?
@@ -183,6 +279,70 @@ impl WorkloadBindingOwner {
                 binding.state.profile_id,
             );
             self.bindings.insert(binding.root_cgroup_id, binding);
+        }
+        Ok(())
+    }
+
+    pub async fn reconcile(&mut self, host: &KernelHost) -> Result<()> {
+        let specs: Vec<WorkloadBindingConfig> = self
+            .bindings
+            .values()
+            .filter(|binding| binding.runtime_identity.is_some())
+            .map(|binding| binding.spec.clone())
+            .collect();
+        for spec in specs {
+            let identity = match self.runtime.as_mut() {
+                Some(runtime) => runtime.validate(&spec).await,
+                None => IdentityStateSnafu {
+                    reason: "live workload binding lost its CRI inventory owner".to_owned(),
+                }
+                .fail(),
+            };
+            let identity = match identity {
+                Ok(identity) => identity,
+                Err(error) => {
+                    self.terminate_all(host)?;
+                    return Err(error);
+                }
+            };
+            let root_id = self
+                .bindings
+                .iter()
+                .find_map(|(root_id, binding)| {
+                    (binding.spec.container_id == spec.container_id).then_some(*root_id)
+                })
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: format!("binding for `{}` disappeared", spec.container_id),
+                    }
+                    .build()
+                })?;
+            let binding = self.bindings.get_mut(&root_id).ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: format!("binding root {root_id} disappeared"),
+                }
+                .build()
+            })?;
+            let handle_metadata = binding.root_handle.metadata().context(IoSnafu {
+                path: &identity.cgroup_path,
+            })?;
+            let path_metadata = fs::metadata(&identity.cgroup_path).context(IoSnafu {
+                path: &identity.cgroup_path,
+            })?;
+            if binding.runtime_identity.as_ref() != Some(&identity)
+                || handle_metadata.dev() != path_metadata.dev()
+                || handle_metadata.ino() != path_metadata.ino()
+                || path_metadata.ino() != binding.root_cgroup_id
+            {
+                self.terminate_all(host)?;
+                return IdentityStateSnafu {
+                    reason: format!(
+                        "live cgroup or CRI identity changed for `{}`",
+                        spec.container_id
+                    ),
+                }
+                .fail();
+            }
         }
         Ok(())
     }
@@ -243,21 +403,19 @@ impl WorkloadBindingOwner {
             root_cgroup_path.as_os_str().as_encoded_bytes(),
             &metadata.dev().to_le_bytes(),
             &metadata.ino().to_le_bytes(),
-            &metadata.ctime().to_le_bytes(),
-            &metadata.ctime_nsec().to_le_bytes(),
             spec.container_id.as_bytes(),
             &spec.container_generation.to_le_bytes(),
         ]);
-        let binding_nonce = derive_id(&[
-            self.node_boot_id.as_bytes(),
-            &self.label_epoch.to_le_bytes(),
-            binding_id.as_bytes(),
-            root_cgroup_live_interval_id.as_bytes(),
-        ]);
-        let descendants = descendant_cgroup_ids(&root_cgroup_path, metadata.ino())?;
+        let binding_nonce = id_from_uuid(Uuid::new_v4());
+        let root_handle = File::open(&root_cgroup_path).context(IoSnafu {
+            path: &root_cgroup_path,
+        })?;
         Ok(PublishedBinding {
             root_cgroup_id: metadata.ino(),
-            descendants,
+            root_cgroup_path,
+            root_handle,
+            spec: spec.clone(),
+            runtime_identity: None,
             state: ExecutionSetBindingStateV1 {
                 binding_id,
                 binding_nonce,
@@ -268,6 +426,7 @@ impl WorkloadBindingOwner {
                 active_profile_generation_ref_id: spec.active_profile_generation_ref_id,
                 root_cgroup_id: metadata.ino(),
                 root_cgroup_live_interval_id,
+                container_generation: spec.container_generation,
                 lifecycle_generation: spec.lifecycle_generation,
                 transition_version: 1,
                 initial_role_id: spec.initial_role_id,
@@ -282,6 +441,80 @@ impl WorkloadBindingOwner {
             },
         })
     }
+
+    fn terminate_all(&mut self, host: &KernelHost) -> Result<()> {
+        for binding in self.bindings.values_mut() {
+            if binding.state.lifecycle_state == BindingLifecycleStateV1::Active {
+                binding.state.lifecycle_state = BindingLifecycleStateV1::Terminating;
+                binding.state.initial_root_state = InitialRootStateV1::Consumed;
+                binding.state.transition_version += 1;
+                host.update_map(
+                    "execution_set_bindings",
+                    &binding.root_cgroup_id.to_ne_bytes(),
+                    binding.state.as_bytes(),
+                )
+                .context(InterceptorSnafu)?;
+                ensure!(
+                    host.lookup_map(
+                        "execution_set_bindings",
+                        &binding.root_cgroup_id.to_ne_bytes(),
+                    )
+                    .context(InterceptorSnafu)?
+                    .as_deref()
+                        == Some(binding.state.as_bytes()),
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "terminating binding `{}` failed kernel readback",
+                            binding.spec.binding_id
+                        ),
+                    }
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn retain_only_configured(&self, host: &KernelHost) -> Result<()> {
+        for key in host
+            .map_keys("execution_set_bindings")
+            .context(InterceptorSnafu)?
+        {
+            let root_id = read_u64(&key, 0)?;
+            if self.bindings.contains_key(&root_id) {
+                continue;
+            }
+            let Some(mut value) = host
+                .lookup_map("execution_set_bindings", &key)
+                .context(InterceptorSnafu)?
+            else {
+                continue;
+            };
+            ensure!(
+                value.len() == size_of::<ExecutionSetBindingStateV1>(),
+                IdentityStateSnafu {
+                    reason: "stale execution-set binding has the wrong ABI size",
+                }
+            );
+            value[offset_of!(ExecutionSetBindingStateV1, lifecycle_state)] =
+                BindingLifecycleStateV1::Terminating as u8;
+            value[offset_of!(ExecutionSetBindingStateV1, initial_root_state)
+                ..offset_of!(ExecutionSetBindingStateV1, initial_root_state) + 8]
+                .copy_from_slice(&(InitialRootStateV1::Consumed as u64).to_ne_bytes());
+            let version_offset = offset_of!(ExecutionSetBindingStateV1, transition_version);
+            let version = read_u64(&value, version_offset)?
+                .checked_add(1)
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "stale binding transition version overflowed".to_owned(),
+                    }
+                    .build()
+                })?;
+            value[version_offset..version_offset + 8].copy_from_slice(&version.to_ne_bytes());
+            host.update_map("execution_set_bindings", &key, &value)
+                .context(InterceptorSnafu)?;
+        }
+        Ok(())
+    }
 }
 
 fn parse_id(field: &str, value: &str) -> Result<Id128V1> {
@@ -291,8 +524,7 @@ fn parse_id(field: &str, value: &str) -> Result<Id128V1> {
         }
         .build()
     })?;
-    let value = uuid.as_u128();
-    let id = Id128V1::new((value >> 64) as u64, value as u64);
+    let id = id_from_uuid(uuid);
     ensure!(
         !id.is_zero(),
         IdentityStateSnafu {
@@ -300,6 +532,11 @@ fn parse_id(field: &str, value: &str) -> Result<Id128V1> {
         }
     );
     Ok(id)
+}
+
+fn id_from_uuid(uuid: Uuid) -> Id128V1 {
+    let value = uuid.as_u128();
+    Id128V1::new((value >> 64) as u64, value as u64)
 }
 
 fn derive_id(parts: &[&[u8]]) -> Id128V1 {
@@ -334,33 +571,11 @@ fn read_u64(value: &[u8], offset: usize) -> Result<u64> {
     Ok(u64::from_ne_bytes(bytes))
 }
 
-fn descendant_cgroup_ids(root: &Path, root_id: u64) -> Result<Vec<u64>> {
-    let mut pending = vec![root.to_path_buf()];
-    let mut descendants = Vec::new();
-    while let Some(directory) = pending.pop() {
-        for entry in fs::read_dir(&directory).context(IoSnafu { path: &directory })? {
-            let entry = entry.context(IoSnafu { path: &directory })?;
-            let file_type = entry.file_type().context(IoSnafu { path: entry.path() })?;
-            if !file_type.is_dir() {
-                continue;
-            }
-            let path = entry.path();
-            let id = entry.metadata().context(IoSnafu { path: &path })?.ino();
-            ensure!(
-                id != 0 && id != root_id && !descendants.contains(&id),
-                IdentityStateSnafu {
-                    reason: format!(
-                        "cgroup descendant `{}` has a reused or zero ID",
-                        path.display()
-                    ),
-                }
-            );
-            descendants.push(id);
-            pending.push(path);
-        }
-    }
-    descendants.sort_unstable();
-    Ok(descendants)
+fn read_id(value: &[u8], offset: usize) -> Result<Id128V1> {
+    Ok(Id128V1::new(
+        read_u64(value, offset)?,
+        read_u64(value, offset + size_of::<u64>())?,
+    ))
 }
 
 #[cfg(test)]
@@ -380,7 +595,12 @@ mod tests {
             binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
             execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
             profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
-            container_id: "container-generation-a".to_owned(),
+            container_id: "a".repeat(64),
+            pod_uid: "pod-uid-a".to_owned(),
+            sandbox_id: "sandbox-a".to_owned(),
+            container_name: "worker".to_owned(),
+            image_digest: "sha256:image-a".to_owned(),
+            container_kind: crate::ContainerKindV1::Application,
             container_generation: 1,
             root_cgroup_path: root.to_path_buf(),
             lifecycle_generation: 1,
@@ -392,22 +612,22 @@ mod tests {
     }
 
     #[test]
-    fn exact_empty_cgroup_arms_one_initial_root_and_tracks_descendants() -> crate::Result<()> {
+    fn exact_empty_cgroup_arms_one_initial_root() -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
             path: "temporary cgroup root",
         })?;
         let root = temporary.path().join("workload");
         fs::create_dir(&root).context(IoSnafu { path: &root })?;
         fs::write(root.join("cgroup.procs"), "").context(IoSnafu { path: &root })?;
-        fs::create_dir(root.join("child")).context(IoSnafu { path: &root })?;
         let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         let binding = owner.prepare(&spec(&root))?;
+        let second = owner.prepare(&spec(&root))?;
         assert_eq!(
             binding.state.initial_root_state,
             InitialRootStateV1::Available
         );
-        assert_eq!(binding.descendants.len(), 1);
         assert_eq!(binding.state.root_cgroup_id, binding.root_cgroup_id);
+        assert_ne!(binding.state.binding_nonce, second.state.binding_nonce);
         Ok(())
     }
 

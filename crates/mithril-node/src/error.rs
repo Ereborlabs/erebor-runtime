@@ -59,6 +59,19 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril node container-runtime transport failed: {source}"))]
+    ContainerRuntimeTransport {
+        source: tonic::transport::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Mithril node container-runtime RPC failed: {source}"))]
+    ContainerRuntimeRpc {
+        #[snafu(source(from(tonic::Status, Box::new)))]
+        source: Box<tonic::Status>,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril node control protocol failed: {reason}"))]
     ControlProtocol {
         reason: String,
@@ -94,6 +107,8 @@ impl ErrorExt for Error {
             Self::Io { .. }
             | Self::ControlTransport { .. }
             | Self::ControlRpc { .. }
+            | Self::ContainerRuntimeTransport { .. }
+            | Self::ContainerRuntimeRpc { .. }
             | Self::LocalTask { .. } => StatusCode::External,
         }
     }
@@ -103,9 +118,11 @@ impl ErrorExt for Error {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Interceptor { source, .. } => source.retry_hint(),
             Self::LocalIpc { source, .. } => source.retry_hint(),
-            Self::ControlTransport { .. } | Self::ControlRpc { .. } | Self::LocalTask { .. } => {
-                RetryHint::Retryable
-            }
+            Self::ControlTransport { .. }
+            | Self::ControlRpc { .. }
+            | Self::ContainerRuntimeTransport { .. }
+            | Self::ContainerRuntimeRpc { .. }
+            | Self::LocalTask { .. } => RetryHint::Retryable,
             Self::InvalidConfiguration { .. }
             | Self::IdentityState { .. }
             | Self::Authorization { .. }

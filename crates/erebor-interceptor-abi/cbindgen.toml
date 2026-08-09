@@ -28,6 +28,10 @@ rename_variants = "SnakeCase"
 [export]
 include = [
   "BindingLifecycleStateV1",
+  "ApprovedExecSlotKeyV1",
+  "ApprovedExecSlotStateV1",
+  "ApprovedExecSlotV1",
+  "BoundedAdministrativeArgvV1",
   "CreatedByEdgeV1",
   "AuthorityDomainStateKindV1",
   "AuthorityDomainStateV1",
@@ -37,6 +41,8 @@ include = [
   "EntryPurposeV1",
   "EntrySecurityStateV1",
   "ExactExecutableCandidateV1",
+  "ImageProvenanceStateV1",
+  "ImageProvenanceV1",
   "ExecGuardStateV1",
   "ExecutionSetBindingStateV1",
   "ExternalRootClassificationV1",
@@ -49,12 +55,22 @@ include = [
   "IdentityRuntimeConfigV1",
   "InstalledRoleClassV1",
   "InitialRootStateV1",
+  "KernelRealParentChangeReasonV1",
+  "KernelRealParentIntervalKeyV1",
+  "KernelRealParentIntervalV1",
   "PendingExecStateV1",
   "PendingExecV1",
+  "PendingAdministrativeMatchStateV1",
+  "PendingAdministrativeMatchV1",
   "PhysicalDecisionKindV1",
   "PhysicalDecisionV1",
   "ProcessSecurityStateKindV1",
   "ProcessSecurityStateV1",
+  "ProcessStateVectorStateV1",
+  "ProcessStateVectorV1",
+  "ProcessExecutionStartedByV1",
+  "ProcessExecutionStateV1",
+  "ProcessExecutionInstanceV1",
   "ReferenceTombstoneStateV1",
   "TaskCoordinateStateV1",
   "TaskCoordinateV1",
@@ -66,6 +82,10 @@ include = [
 
 [export.rename]
 "BindingLifecycleStateV1" = "binding_lifecycle_state_v1"
+"ApprovedExecSlotKeyV1" = "approved_exec_slot_key_v1"
+"ApprovedExecSlotStateV1" = "approved_exec_slot_state_v1"
+"ApprovedExecSlotV1" = "approved_exec_slot_v1"
+"BoundedAdministrativeArgvV1" = "bounded_administrative_argv_v1"
 "CreatedByEdgeV1" = "created_by_edge_v1"
 "AuthorityDomainStateKindV1" = "authority_domain_state_kind_v1"
 "AuthorityDomainStateV1" = "authority_domain_state_v1"
@@ -75,6 +95,8 @@ include = [
 "EntryPurposeV1" = "entry_purpose_v1"
 "EntrySecurityStateV1" = "entry_security_state_v1"
 "ExactExecutableCandidateV1" = "exact_executable_candidate_v1"
+"ImageProvenanceStateV1" = "image_provenance_state_v1"
+"ImageProvenanceV1" = "image_provenance_v1"
 "ExecGuardStateV1" = "exec_guard_state_v1"
 "ExecutionSetBindingStateV1" = "execution_set_binding_state_v1"
 "ExternalRootClassificationV1" = "external_root_classification_v1"
@@ -87,12 +109,22 @@ include = [
 "IdentityRuntimeConfigV1" = "identity_runtime_config_v1"
 "InstalledRoleClassV1" = "installed_role_class_v1"
 "InitialRootStateV1" = "initial_root_state_v1"
+"KernelRealParentChangeReasonV1" = "kernel_real_parent_change_reason_v1"
+"KernelRealParentIntervalKeyV1" = "kernel_real_parent_interval_key_v1"
+"KernelRealParentIntervalV1" = "kernel_real_parent_interval_v1"
 "PendingExecStateV1" = "pending_exec_state_v1"
 "PendingExecV1" = "pending_exec_v1"
+"PendingAdministrativeMatchStateV1" = "pending_administrative_match_state_v1"
+"PendingAdministrativeMatchV1" = "pending_administrative_match_v1"
 "PhysicalDecisionKindV1" = "physical_decision_kind_v1"
 "PhysicalDecisionV1" = "physical_decision_v1"
 "ProcessSecurityStateKindV1" = "process_security_state_kind_v1"
 "ProcessSecurityStateV1" = "process_security_state_v1"
+"ProcessStateVectorStateV1" = "process_state_vector_state_v1"
+"ProcessStateVectorV1" = "process_state_vector_v1"
+"ProcessExecutionStartedByV1" = "process_execution_started_by_v1"
+"ProcessExecutionStateV1" = "process_execution_state_v1"
+"ProcessExecutionInstanceV1" = "process_execution_instance_v1"
 "ReferenceTombstoneStateV1" = "reference_tombstone_state_v1"
 "TaskCoordinateStateV1" = "task_coordinate_state_v1"
 "TaskCoordinateV1" = "task_coordinate_v1"

@@ -57,6 +57,15 @@ impl Phase1Packaging {
             );
         }
         ensure!(
+            daemonset.contains("containerRuntimeSocket") && daemonset.contains("type: Socket"),
+            InvalidInputSnafu {
+                path: self
+                    .root
+                    .join("packaging/mithril/helm/templates/daemonset.yaml"),
+                reason: "DaemonSet is missing the read-only CRI socket mount",
+            }
+        );
+        ensure!(
             chart.contains("name: mithril"),
             InvalidInputSnafu {
                 path: self.root.join("packaging/mithril/helm/Chart.yaml"),

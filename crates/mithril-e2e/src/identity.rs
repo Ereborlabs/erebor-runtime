@@ -13,7 +13,9 @@ use erebor_interceptor::{
     KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
 use erebor_interceptor_abi::{
-    CreatedByEdgeV1, ExecGuardStateV1, Id128V1, ProcessSecurityStateV1, TaskCoordinateStateV1,
+    CreatedByEdgeV1, ExecGuardStateV1, Id128V1, ImageProvenanceV1, KernelRealParentIntervalKeyV1,
+    KernelRealParentIntervalV1, ProcessExecutionInstanceV1, ProcessExecutionStateV1,
+    ProcessSecurityStateV1, ProcessStateVectorStateV1, ProcessStateVectorV1, TaskCoordinateStateV1,
     TaskCoordinateV1, TaskLabelV1,
 };
 use mithril_node::{NativeSecurityStateOwner, WorkloadBindingConfig, WorkloadBindingOwner};
@@ -28,9 +30,9 @@ use crate::Result;
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 
-const REQUIRED_IDENTITY_MAPS: [&str; 15] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 20] = [
+    "approved_exec_slots",
     "authority_domains",
-    "cgroup_binding_roots",
     "created_by_edges",
     "entry_states",
     "execution_set_bindings",
@@ -38,7 +40,12 @@ const REQUIRED_IDENTITY_MAPS: [&str; 15] = [
     "identity_config",
     "identity_health",
     "identity_scratch",
+    "image_provenance",
+    "kernel_real_parent_intervals",
     "pending_execs",
+    "pending_administrative_matches",
+    "process_execution_instances",
+    "process_state_vectors",
     "process_states",
     "profile_generation_task_refs",
     "task_coordinates",
@@ -95,8 +102,15 @@ pub struct IdentityVerificationBundleV1 {
 pub struct NativeTaskSnapshotV1 {
     pub task_cookie: u64,
     pub creator_task_cookie: Option<u64>,
+    pub real_parent_task_cookie: u64,
+    pub real_parent_interval_sequence: u64,
     pub process_state_id: String,
     pub active_execution_id: String,
+    pub image_provenance_id: String,
+    pub image_candidate_count: u16,
+    pub process_execution_state: u8,
+    pub process_state_vector_state: u8,
+    pub process_state_bits: u64,
     pub active_role_id: u32,
     pub host_tid: u32,
     pub host_tgid: u32,
@@ -255,7 +269,13 @@ impl IdentityTestRunner {
         })?;
         ensure!(
             before_exec.creator_task_cookie == Some(external_root.task_cookie)
+                && before_exec.real_parent_task_cookie == external_root.task_cookie
                 && before_exec.task_cookie != external_root.task_cookie
+                && before_exec.image_provenance_id == external_root.image_provenance_id
+                && before_exec.image_candidate_count > 0
+                && before_exec.process_execution_state == ProcessExecutionStateV1::Active as u8
+                && before_exec.process_state_vector_state
+                    == ProcessStateVectorStateV1::Active as u8
                 && before_exec.coordinate_state == TaskCoordinateStateV1::Runnable as u8,
             InvalidInputSnafu {
                 path: &procs_path,
@@ -268,6 +288,9 @@ impl IdentityTestRunner {
             let snapshot = self.task_snapshot(&host, fixture.native_pidfd()?)?;
             Ok(snapshot.filter(|snapshot| {
                 snapshot.active_execution_id != before_exec.active_execution_id
+                    && snapshot.image_provenance_id != before_exec.image_provenance_id
+                    && snapshot.image_candidate_count > 0
+                    && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
                     && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
             }))
         })?;
@@ -359,11 +382,49 @@ impl IdentityTestRunner {
             .context(InterceptorSnafu)?
             .ok_or_else(|| invalid_state("process state is missing"))?;
         require_size::<ProcessSecurityStateV1>(&process, "process state")?;
+        let process_vector = host
+            .lookup_map("process_state_vectors", &id_key(process_state_id))
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| invalid_state("process state vector is missing"))?;
+        require_size::<ProcessStateVectorV1>(&process_vector, "process state vector")?;
+        let active_execution_id = read_id(
+            &process,
+            offset_of!(ProcessSecurityStateV1, active_execution_id),
+            "active execution ID",
+        )?;
+        let execution = host
+            .lookup_map("process_execution_instances", &id_key(active_execution_id))
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| invalid_state("process execution is missing"))?;
+        require_size::<ProcessExecutionInstanceV1>(&execution, "process execution")?;
+        let image_provenance_id = read_id(
+            &execution,
+            offset_of!(ProcessExecutionInstanceV1, image_provenance_id),
+            "image provenance ID",
+        )?;
+        let image = host
+            .lookup_map("image_provenance", &id_key(image_provenance_id))
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| invalid_state("image provenance is missing"))?;
+        require_size::<ImageProvenanceV1>(&image, "image provenance")?;
         let coordinate = host
             .lookup_map("task_coordinates", &task_cookie.to_ne_bytes())
             .context(InterceptorSnafu)?
             .ok_or_else(|| invalid_state("task coordinate is missing"))?;
         require_size::<TaskCoordinateV1>(&coordinate, "task coordinate")?;
+        let real_parent_interval_sequence = read_u64(
+            &coordinate,
+            offset_of!(TaskCoordinateV1, real_parent_interval_sequence),
+            "real-parent interval sequence",
+        )?;
+        let mut real_parent_key = [0_u8; size_of::<KernelRealParentIntervalKeyV1>()];
+        real_parent_key[..8].copy_from_slice(&task_cookie.to_ne_bytes());
+        real_parent_key[8..].copy_from_slice(&real_parent_interval_sequence.to_ne_bytes());
+        let real_parent = host
+            .lookup_map("kernel_real_parent_intervals", &real_parent_key)
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| invalid_state("kernel real-parent interval is missing"))?;
+        require_size::<KernelRealParentIntervalV1>(&real_parent, "kernel real-parent interval")?;
         let creator_task_cookie = host
             .lookup_map("created_by_edges", &task_cookie.to_ne_bytes())
             .context(InterceptorSnafu)?
@@ -379,12 +440,35 @@ impl IdentityTestRunner {
         Ok(Some(NativeTaskSnapshotV1 {
             task_cookie,
             creator_task_cookie,
+            real_parent_task_cookie: read_u64(
+                &real_parent,
+                offset_of!(KernelRealParentIntervalV1, real_parent_task_cookie),
+                "real-parent task cookie",
+            )?,
+            real_parent_interval_sequence,
             process_state_id: id_string(process_state_id),
-            active_execution_id: id_string(read_id(
-                &process,
-                offset_of!(ProcessSecurityStateV1, active_execution_id),
-                "active execution ID",
-            )?),
+            active_execution_id: id_string(active_execution_id),
+            image_provenance_id: id_string(image_provenance_id),
+            image_candidate_count: read_u16(
+                &image,
+                offset_of!(ImageProvenanceV1, candidate_count),
+                "image candidate count",
+            )?,
+            process_execution_state: read_u8(
+                &execution,
+                offset_of!(ProcessExecutionInstanceV1, state),
+                "process execution state",
+            )?,
+            process_state_vector_state: read_u8(
+                &process_vector,
+                offset_of!(ProcessStateVectorV1, state),
+                "process state vector state",
+            )?,
+            process_state_bits: read_u64(
+                &process_vector,
+                offset_of!(ProcessStateVectorV1, state_bits),
+                "process state bits",
+            )?,
             active_role_id: read_u32(
                 &process,
                 offset_of!(ProcessSecurityStateV1, active_role_id),
@@ -554,7 +638,12 @@ fn test_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
         binding_id: "4cd90188-e814-45ec-899f-4e3c9bca3801".to_owned(),
         execution_set_id: "4cd90188-e814-45ec-899f-4e3c9bca3802".to_owned(),
         profile_id: "4cd90188-e814-45ec-899f-4e3c9bca3803".to_owned(),
-        container_id: "phase2-identity-test-container-0001".to_owned(),
+        container_id: "b".repeat(64),
+        pod_uid: "phase2-pod-uid".to_owned(),
+        sandbox_id: "phase2-sandbox".to_owned(),
+        container_name: "worker".to_owned(),
+        image_digest: "sha256:phase2-image".to_owned(),
+        container_kind: mithril_node::ContainerKindV1::Application,
         container_generation: 1,
         root_cgroup_path: cgroup_path.to_path_buf(),
         lifecycle_generation: 1,
@@ -633,6 +722,14 @@ fn read_u32(bytes: &[u8], offset: usize, name: &str) -> Result<u32> {
         .and_then(|value| value.try_into().ok())
         .ok_or_else(|| invalid_state(format!("{name} is truncated")))?;
     Ok(u32::from_ne_bytes(value))
+}
+
+fn read_u16(bytes: &[u8], offset: usize, name: &str) -> Result<u16> {
+    let value = bytes
+        .get(offset..offset + size_of::<u16>())
+        .and_then(|value| value.try_into().ok())
+        .ok_or_else(|| invalid_state(format!("{name} is truncated")))?;
+    Ok(u16::from_ne_bytes(value))
 }
 
 fn read_u8(bytes: &[u8], offset: usize, name: &str) -> Result<u8> {

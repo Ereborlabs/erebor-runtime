@@ -12,6 +12,8 @@ erebor-interceptor = { path = "../erebor-interceptor" }
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
+hyper-util.workspace = true
+k8s-cri.workspace = true
 mithril-control = { path = "../mithril-control" }
 minicbor.workspace = true
 rustix = { version = "1.1.4", features = ["fs", "process"] }
@@ -22,6 +24,7 @@ snafu.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
+tower.workspace = true
 uuid.workspace = true
 zerocopy.workspace = true
 

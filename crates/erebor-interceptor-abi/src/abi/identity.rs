@@ -2,6 +2,8 @@ use zerocopy::{Immutable, IntoBytes, KnownLayout};
 
 pub const MAX_ANCESTOR_PROCESS_LINEAGES_V1: usize = 8;
 pub const MAX_EXEC_CANDIDATES_V1: usize = 8;
+pub const MAX_ADMINISTRATIVE_ARGUMENTS_V1: usize = 256;
+pub const MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1: usize = 4096;
 pub const TASK_REFERENCE_ENTRY_V1: u64 = 1 << 0;
 pub const TASK_REFERENCE_PROCESS_V1: u64 = 1 << 1;
 pub const TASK_REFERENCE_PROFILE_GENERATION_V1: u64 = 1 << 2;
@@ -59,6 +61,16 @@ pub enum TaskCoordinateStateV1 {
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub enum KernelRealParentChangeReasonV1 {
+    #[default]
+    Unknown = 0,
+    Birth = 1,
+    CloneParent = 2,
+    ParentExitOrReparent = 3,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
 pub enum ProcessSecurityStateKindV1 {
     #[default]
     Unknown = 0,
@@ -68,6 +80,16 @@ pub enum ProcessSecurityStateKindV1 {
     Reclaimable = 4,
     FailClosedOverflow = 5,
     Corrupt = 6,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub enum ProcessStateVectorStateV1 {
+    #[default]
+    Unknown = 0,
+    Preparing = 1,
+    Active = 2,
+    Retiring = 3,
 }
 
 #[repr(u8)]
@@ -91,6 +113,37 @@ pub enum PendingExecStateV1 {
     PostPonrFatal = 4,
     Success = 5,
     OutcomeUnknown = 6,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub enum ImageProvenanceStateV1 {
+    #[default]
+    Unknown = 0,
+    Preparing = 1,
+    Active = 2,
+    Complete = 3,
+    OutcomeUnknown = 4,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub enum ProcessExecutionStartedByV1 {
+    #[default]
+    Unknown = 0,
+    ProcessBirth = 1,
+    ExecCommit = 2,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub enum ProcessExecutionStateV1 {
+    #[default]
+    Unknown = 0,
+    Preparing = 1,
+    Active = 2,
+    Complete = 3,
+    OutcomeUnknown = 4,
 }
 
 #[repr(u8)]
@@ -194,6 +247,30 @@ pub enum InitialRootStateV1 {
     Consumed = 2,
 }
 
+// BPF compare-and-swap is 64-bit on every supported target. Keep the slot
+// state in that directly atomic representation instead of adding a second
+// lock owner around this one-use transition.
+#[repr(u64)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub enum ApprovedExecSlotStateV1 {
+    #[default]
+    Unknown = 0,
+    Armed = 1,
+    Consumed = 2,
+    Expired = 3,
+    Cancelled = 4,
+    Corrupt = 5,
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub enum PendingAdministrativeMatchStateV1 {
+    #[default]
+    Unknown = 0,
+    ArgumentsMatched = 1,
+    SlotConsumed = 2,
+}
+
 impl InitialRootStateV1 {
     #[must_use]
     pub const fn from_raw(value: u64) -> Option<Self> {
@@ -246,9 +323,34 @@ pub struct TaskCoordinateV1 {
     pub pid_namespace_inode: u64,
     pub task_start_boottime_ns: u64,
     pub finalized_boottime_ns: u64,
+    pub real_parent_interval_sequence: u64,
     pub transition_version: u64,
     pub state: TaskCoordinateStateV1,
     pub reserved: [u8; 7],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct KernelRealParentIntervalKeyV1 {
+    pub child_task_cookie: u64,
+    pub interval_sequence: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct KernelRealParentIntervalV1 {
+    pub child_task_cookie: u64,
+    pub real_parent_task_cookie: u64,
+    pub real_parent_host_tid: u32,
+    pub real_parent_host_tgid: u32,
+    pub real_parent_pid_namespace_inode: u64,
+    pub real_parent_start_boottime_ns: u64,
+    pub interval_start_boottime_ns: u64,
+    pub interval_end_boottime_ns: u64,
+    pub transition_version: u64,
+    pub change_reason: KernelRealParentChangeReasonV1,
+    pub kernel_direct_proof: u8,
+    pub reserved: [u8; 6],
 }
 
 #[repr(C)]
@@ -286,11 +388,25 @@ pub struct ProcessSecurityStateV1 {
     pub reserved_pending_role: u32,
     pub transition_guard: u64,
     pub pending_exec_response_set_ref_id: u64,
+    pub exec_check_task_cookie: u64,
     pub transition_version: u64,
     pub live_thread_refs: u64,
     pub exec_guard_state: ExecGuardStateV1,
     pub state: ProcessSecurityStateKindV1,
     pub reserved: [u8; 6],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct ProcessStateVectorV1 {
+    pub node_boot_id: Id128V1,
+    pub label_epoch: u64,
+    pub state_bits: u64,
+    pub profile_generation_ref_id: u64,
+    pub transition_version: u64,
+    pub process_state_vector_id: u32,
+    pub state: ProcessStateVectorStateV1,
+    pub reserved: [u8; 3],
 }
 
 #[repr(C)]
@@ -347,6 +463,7 @@ pub struct ExecutionSetBindingStateV1 {
     pub active_profile_generation_ref_id: u64,
     pub root_cgroup_id: u64,
     pub root_cgroup_live_interval_id: Id128V1,
+    pub container_generation: u64,
     pub lifecycle_generation: u64,
     pub transition_version: u64,
     pub initial_role_id: u32,
@@ -357,11 +474,187 @@ pub struct ExecutionSetBindingStateV1 {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct BoundedAdministrativeArgvV1 {
+    pub argument_count: u16,
+    pub total_argument_bytes: u16,
+    pub argument_lengths: [u16; MAX_ADMINISTRATIVE_ARGUMENTS_V1],
+    pub argument_bytes: [u8; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
+}
+
+impl Default for BoundedAdministrativeArgvV1 {
+    fn default() -> Self {
+        Self {
+            argument_count: 0,
+            total_argument_bytes: 0,
+            argument_lengths: [0; MAX_ADMINISTRATIVE_ARGUMENTS_V1],
+            argument_bytes: [0; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
+        }
+    }
+}
+
+impl BoundedAdministrativeArgvV1 {
+    #[must_use]
+    pub fn from_arguments<T: AsRef<[u8]>>(arguments: &[T]) -> Option<Self> {
+        if arguments.is_empty() || arguments.len() > MAX_ADMINISTRATIVE_ARGUMENTS_V1 {
+            return None;
+        }
+        let mut bounded = Self::default();
+        let mut offset = 0_usize;
+        for (index, argument) in arguments.iter().enumerate() {
+            let argument = argument.as_ref();
+            if (index == 0 && argument.is_empty())
+                || argument.len() > u16::MAX as usize
+                || argument.contains(&0)
+                || offset
+                    .checked_add(argument.len())
+                    .is_none_or(|end| end > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1)
+            {
+                return None;
+            }
+            let end = offset + argument.len();
+            bounded.argument_lengths[index] = argument.len() as u16;
+            bounded.argument_bytes[offset..end].copy_from_slice(argument);
+            offset = end;
+        }
+        if offset == 0 {
+            return None;
+        }
+        bounded.argument_count = arguments.len() as u16;
+        bounded.total_argument_bytes = offset as u16;
+        Some(bounded)
+    }
+
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        let count = usize::from(self.argument_count);
+        let total = usize::from(self.total_argument_bytes);
+        if !(1..=MAX_ADMINISTRATIVE_ARGUMENTS_V1).contains(&count)
+            || !(1..=MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1).contains(&total)
+            || self.argument_lengths[0] == 0
+            || self.argument_lengths[count..]
+                .iter()
+                .any(|length| *length != 0)
+            || self.argument_bytes[total..].iter().any(|byte| *byte != 0)
+        {
+            return false;
+        }
+        let mut offset = 0_usize;
+        for length in &self.argument_lengths[..count] {
+            let length = usize::from(*length);
+            let Some(end) = offset.checked_add(length) else {
+                return false;
+            };
+            if end > total || self.argument_bytes[offset..end].contains(&0) {
+                return false;
+            }
+            offset = end;
+        }
+        offset == total
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct ApprovedExecSlotKeyV1 {
+    pub node_boot_id: Id128V1,
+    pub cgroup_binding_id: Id128V1,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct ApprovedExecSlotV1 {
+    pub proof_id: Id128V1,
+    pub claim_slot_id: Id128V1,
+    pub authorization_body_sha256: [u8; 32],
+    pub cgroup_binding_nonce: Id128V1,
+    pub container_generation: u64,
+    pub expected_argv: BoundedAdministrativeArgvV1,
+    pub reserved_pre_executable: [u8; 4],
+    pub resolved_executable: ExactExecutableCandidateV1,
+    pub approved_role_numeric_id: u32,
+    pub expected_root_class: ExternalRootClassV1,
+    pub reserved_0: [u8; 3],
+    pub profile_generation_ref_id: u64,
+    pub exception_numeric_handle: u64,
+    pub deadline_boottime_ns: u64,
+    pub state: ApprovedExecSlotStateV1,
+    pub transition_version: u64,
+}
+
+impl Default for ApprovedExecSlotV1 {
+    fn default() -> Self {
+        Self {
+            proof_id: Id128V1::ZERO,
+            claim_slot_id: Id128V1::ZERO,
+            authorization_body_sha256: [0; 32],
+            cgroup_binding_nonce: Id128V1::ZERO,
+            container_generation: 0,
+            expected_argv: BoundedAdministrativeArgvV1::default(),
+            reserved_pre_executable: [0; 4],
+            resolved_executable: ExactExecutableCandidateV1::default(),
+            approved_role_numeric_id: 0,
+            expected_root_class: ExternalRootClassV1::Unknown,
+            reserved_0: [0; 3],
+            profile_generation_ref_id: 0,
+            exception_numeric_handle: 0,
+            deadline_boottime_ns: 0,
+            state: ApprovedExecSlotStateV1::Unknown,
+            transition_version: 0,
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct PendingAdministrativeMatchV1 {
+    pub task_cookie: u64,
+    pub exec_attempt_sequence: u64,
+    pub proof_id: Id128V1,
+    pub claim_slot_id: Id128V1,
+    pub approved_role_numeric_id: u32,
+    pub reserved_0: u32,
+    pub profile_generation_ref_id: u64,
+    pub resolved_executable: ExactExecutableCandidateV1,
+    pub transition_version: u64,
+    pub state: PendingAdministrativeMatchStateV1,
+    pub reserved_1: [u8; 7],
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
 pub struct ExactExecutableCandidateV1 {
+    pub mount_namespace_inode: u64,
     pub mount_id: u64,
+    pub filesystem_device: u64,
     pub inode: u64,
     pub inode_generation: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct ImageProvenanceV1 {
+    pub image_provenance_id: Id128V1,
+    pub candidate_count: u16,
+    pub reserved_0: [u8; 6],
+    pub ordered_candidates: [ExactExecutableCandidateV1; MAX_EXEC_CANDIDATES_V1],
+    pub transition_version: u64,
+    pub state: ImageProvenanceStateV1,
+    pub reserved_1: [u8; 7],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct ProcessExecutionInstanceV1 {
+    pub process_execution_instance_id: Id128V1,
+    pub process_lineage_id: Id128V1,
+    pub image_provenance_id: Id128V1,
+    pub start_boottime_ns: u64,
+    pub end_boottime_ns: u64,
+    pub transition_version: u64,
+    pub started_by: ProcessExecutionStartedByV1,
+    pub state: ProcessExecutionStateV1,
+    pub reserved: [u8; 6],
 }
 
 #[repr(C)]
@@ -378,6 +671,7 @@ pub struct PendingExecV1 {
     pub source_profile_generation_ref_id: u64,
     pub pending_exec_response_set_ref_id: u64,
     pub target_execution_id: Id128V1,
+    pub target_image_provenance_id: Id128V1,
     pub ordered_candidates: [ExactExecutableCandidateV1; MAX_EXEC_CANDIDATES_V1],
     pub transition_version: u64,
     pub state: PendingExecStateV1,
@@ -415,6 +709,8 @@ pub struct ExternalRootClassificationV1 {
     pub cgroup_binding_id: Id128V1,
     pub cgroup_lifetime_id: Id128V1,
     pub creator_task_cookie: u64,
+    pub administrative_approval_proof_id: Id128V1,
+    pub administrative_claim_slot_id: Id128V1,
     pub profile_generation_ref_id: u64,
     pub installed_role_numeric_id: u32,
     pub root_class: ExternalRootClassV1,
@@ -459,10 +755,16 @@ mod tests {
         assert_eq!(size_of::<TaskLabelV1>(), 328);
         assert_eq!(offset_of!(TaskLabelV1, process_state_id), 64);
         assert_eq!(offset_of!(TaskLabelV1, placement), 288);
-        assert_eq!(size_of::<TaskCoordinateV1>(), 88);
+        assert_eq!(size_of::<TaskCoordinateV1>(), 96);
         assert_eq!(size_of::<CreatedByEdgeV1>(), 80);
         assert_eq!(align_of::<ProcessSecurityStateV1>(), 8);
-        assert_eq!(size_of::<ExactExecutableCandidateV1>(), 24);
+        assert_eq!(size_of::<ProcessSecurityStateV1>(), 248);
+        assert_eq!(
+            offset_of!(ProcessSecurityStateV1, exec_check_task_cookie),
+            216
+        );
+        assert_eq!(size_of::<ExactExecutableCandidateV1>(), 40);
+        assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
         assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 40);
     }
 
@@ -477,5 +779,19 @@ mod tests {
         assert_eq!(InitialRootStateV1::Unarmed as u64, 0);
         assert_eq!(InitialRootStateV1::Consumed as u64, 2);
         assert_eq!(TASK_REFERENCE_ALL_V1, 0b111);
+    }
+
+    #[test]
+    fn administrative_argv_is_exact_and_zero_filled() {
+        let lowered = BoundedAdministrativeArgvV1::from_arguments(&[b"bash".as_slice(), b"-lc"]);
+        assert!(lowered.is_some());
+        let argv = lowered.unwrap_or_default();
+        assert!(argv.is_valid());
+        assert_eq!(argv.argument_count, 2);
+        assert_eq!(argv.total_argument_bytes, 7);
+        assert_eq!(&argv.argument_lengths[..2], &[4, 3]);
+        assert_eq!(&argv.argument_bytes[..7], b"bash-lc");
+        assert!(BoundedAdministrativeArgvV1::from_arguments(&[b"ba\0sh"]).is_none());
+        assert!(BoundedAdministrativeArgvV1::from_arguments::<&[u8]>(&[]).is_none());
     }
 }

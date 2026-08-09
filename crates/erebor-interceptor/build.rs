@@ -42,6 +42,8 @@ fn build_bpf() -> Result<(), Box<dyn std::error::Error>> {
 
     let clang_args = vec![
         OsString::from("-D__BPF__"),
+        OsString::from("-Wall"),
+        OsString::from("-Werror"),
         OsString::from("-I"),
         bpf_root.join("include").into_os_string(),
         OsString::from("-I"),

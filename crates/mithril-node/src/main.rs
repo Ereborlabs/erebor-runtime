@@ -21,7 +21,7 @@ async fn main() {
 
 async fn run() -> mithril_node::Result<()> {
     let config = NodeConfig::load(&Cli::parse().config)?;
-    let node = NodeChassis::start(config)?;
+    let node = NodeChassis::start(config).await?;
     let (shutdown, receiver) = watch::channel(false);
     tokio::spawn(async move {
         let _result = tokio::signal::ctrl_c().await;

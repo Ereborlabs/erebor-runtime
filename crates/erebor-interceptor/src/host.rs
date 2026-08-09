@@ -47,18 +47,37 @@ pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 21] = [
     "qualification_bpf",
 ];
 
-pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 13] = [
+pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 32] = [
     "erebor_task_alloc",
     "erebor_cgroup_attach_task",
-    "erebor_cgroup_mkdir",
     "erebor_cgroup_release",
     "erebor_wake_up_new_task",
+    "erebor_sys_enter_execve",
+    "erebor_sys_enter_execveat",
     "erebor_bprm_check_security",
     "erebor_bprm_committing_creds",
     "erebor_sys_exit_execve",
     "erebor_sys_exit_execveat",
     "erebor_sched_process_exec",
     "erebor_identity_file_open",
+    "erebor_identity_file_permission",
+    "erebor_identity_file_ioctl",
+    "erebor_identity_mmap_file",
+    "erebor_identity_file_mprotect",
+    "erebor_identity_ipc_permission",
+    "erebor_identity_socket_connect",
+    "erebor_identity_socket_sendmsg",
+    "erebor_identity_ptrace_access_check",
+    "erebor_identity_task_kill",
+    "erebor_identity_path_unlink",
+    "erebor_identity_path_link",
+    "erebor_identity_path_rename",
+    "erebor_identity_sb_mount",
+    "erebor_identity_sb_umount",
+    "erebor_identity_sb_pivotroot",
+    "erebor_identity_move_mount",
+    "erebor_identity_capable",
+    "erebor_identity_bpf",
     "erebor_sched_process_exit",
     "erebor_reconcile_tasks",
 ];
@@ -781,6 +800,39 @@ impl KernelHost {
                 path: Path::new(name),
             })
         }
+    }
+
+    pub fn delete_map_entry(&self, name: &str, key: &[u8]) -> Result<()> {
+        let map = self
+            .object
+            .maps()
+            .find(|map| map.name().to_string_lossy() == name)
+            .ok_or_else(|| {
+                ManifestMismatchSnafu {
+                    path: PathBuf::from(name),
+                    reason: "loaded object has no such map".to_owned(),
+                }
+                .build()
+            })?;
+        map.delete(key).context(LibbpfSnafu {
+            action: "delete BPF map entry",
+            path: Path::new(name),
+        })
+    }
+
+    pub fn map_keys(&self, name: &str) -> Result<Vec<Vec<u8>>> {
+        let map = self
+            .object
+            .maps()
+            .find(|map| map.name().to_string_lossy() == name)
+            .ok_or_else(|| {
+                ManifestMismatchSnafu {
+                    path: PathBuf::from(name),
+                    reason: "loaded object has no such map".to_owned(),
+                }
+                .build()
+            })?;
+        Ok(map.keys().collect())
     }
 
     pub fn reconcile_tasks(&mut self) -> Result<()> {

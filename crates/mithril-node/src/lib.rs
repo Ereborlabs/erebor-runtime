@@ -9,8 +9,8 @@ mod node;
 mod trust;
 
 pub use config::{
-    InterceptorConfig, NodeConfig, NodeControlConfig, RuntimeObservationConfig,
-    WorkloadBindingConfig,
+    ContainerKindV1, ContainerRuntimeConfig, InterceptorConfig, NodeConfig, NodeControlConfig,
+    RuntimeObservationConfig, WorkloadBindingConfig,
 };
 pub use control::{ControlConnection, NodeControlConnector};
 pub use error::{Error, Result};

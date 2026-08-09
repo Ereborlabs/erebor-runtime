@@ -19,6 +19,10 @@ typedef __s32 int32_t;
 
 #define MAX_EXEC_CANDIDATES_V1 8
 
+#define MAX_ADMINISTRATIVE_ARGUMENTS_V1 256
+
+#define MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 4096
+
 #define TASK_REFERENCE_ENTRY_V1 (1 << 0)
 
 #define TASK_REFERENCE_PROCESS_V1 (1 << 1)
@@ -47,6 +51,41 @@ enum binding_lifecycle_state_v1
 typedef enum binding_lifecycle_state_v1 binding_lifecycle_state_v1;
 #else
 typedef uint8_t binding_lifecycle_state_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum approved_exec_slot_state_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint64_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  approved_exec_slot_state_v1_unknown = 0,
+  approved_exec_slot_state_v1_armed = 1,
+  approved_exec_slot_state_v1_consumed = 2,
+  approved_exec_slot_state_v1_expired = 3,
+  approved_exec_slot_state_v1_cancelled = 4,
+  approved_exec_slot_state_v1_corrupt = 5,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum approved_exec_slot_state_v1 approved_exec_slot_state_v1;
+#else
+typedef uint64_t approved_exec_slot_state_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum external_root_class_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  external_root_class_v1_unknown = 0,
+  external_root_class_v1_initial_container_root = 1,
+  external_root_class_v1_external_runtime_root = 2,
+  external_root_class_v1_restored_or_unknown_root = 3,
+  external_root_class_v1_unresolved_protected = 4,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum external_root_class_v1 external_root_class_v1;
+#else
+typedef uint8_t external_root_class_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum authority_domain_state_kind_v1
@@ -137,6 +176,23 @@ typedef enum entry_purpose_v1 entry_purpose_v1;
 typedef uint8_t entry_purpose_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
+enum image_provenance_state_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  image_provenance_state_v1_unknown = 0,
+  image_provenance_state_v1_preparing = 1,
+  image_provenance_state_v1_active = 2,
+  image_provenance_state_v1_complete = 3,
+  image_provenance_state_v1_outcome_unknown = 4,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum image_provenance_state_v1 image_provenance_state_v1;
+#else
+typedef uint8_t image_provenance_state_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
 enum exec_guard_state_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
@@ -168,23 +224,6 @@ typedef enum initial_root_state_v1 initial_root_state_v1;
 typedef uint64_t initial_root_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
-enum external_root_class_v1
-#if __STDC_VERSION__ >= 202311L
-  : uint8_t
-#endif // __STDC_VERSION__ >= 202311L
- {
-  external_root_class_v1_unknown = 0,
-  external_root_class_v1_initial_container_root = 1,
-  external_root_class_v1_external_runtime_root = 2,
-  external_root_class_v1_restored_or_unknown_root = 3,
-  external_root_class_v1_unresolved_protected = 4,
-};
-#if __STDC_VERSION__ >= 202311L
-typedef enum external_root_class_v1 external_root_class_v1;
-#else
-typedef uint8_t external_root_class_v1;
-#endif // __STDC_VERSION__ >= 202311L
-
 enum installed_role_class_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
@@ -201,6 +240,22 @@ enum installed_role_class_v1
 typedef enum installed_role_class_v1 installed_role_class_v1;
 #else
 typedef uint8_t installed_role_class_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum kernel_real_parent_change_reason_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  kernel_real_parent_change_reason_v1_unknown = 0,
+  kernel_real_parent_change_reason_v1_birth = 1,
+  kernel_real_parent_change_reason_v1_clone_parent = 2,
+  kernel_real_parent_change_reason_v1_parent_exit_or_reparent = 3,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum kernel_real_parent_change_reason_v1 kernel_real_parent_change_reason_v1;
+#else
+typedef uint8_t kernel_real_parent_change_reason_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum pending_exec_state_v1
@@ -220,6 +275,21 @@ enum pending_exec_state_v1
 typedef enum pending_exec_state_v1 pending_exec_state_v1;
 #else
 typedef uint8_t pending_exec_state_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum pending_administrative_match_state_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  pending_administrative_match_state_v1_unknown = 0,
+  pending_administrative_match_state_v1_arguments_matched = 1,
+  pending_administrative_match_state_v1_slot_consumed = 2,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum pending_administrative_match_state_v1 pending_administrative_match_state_v1;
+#else
+typedef uint8_t pending_administrative_match_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum physical_decision_kind_v1
@@ -254,6 +324,54 @@ enum process_security_state_kind_v1
 typedef enum process_security_state_kind_v1 process_security_state_kind_v1;
 #else
 typedef uint8_t process_security_state_kind_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum process_state_vector_state_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  process_state_vector_state_v1_unknown = 0,
+  process_state_vector_state_v1_preparing = 1,
+  process_state_vector_state_v1_active = 2,
+  process_state_vector_state_v1_retiring = 3,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum process_state_vector_state_v1 process_state_vector_state_v1;
+#else
+typedef uint8_t process_state_vector_state_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum process_execution_started_by_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  process_execution_started_by_v1_unknown = 0,
+  process_execution_started_by_v1_process_birth = 1,
+  process_execution_started_by_v1_exec_commit = 2,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum process_execution_started_by_v1 process_execution_started_by_v1;
+#else
+typedef uint8_t process_execution_started_by_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum process_execution_state_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  process_execution_state_v1_unknown = 0,
+  process_execution_state_v1_preparing = 1,
+  process_execution_state_v1_active = 2,
+  process_execution_state_v1_complete = 3,
+  process_execution_state_v1_outcome_unknown = 4,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum process_execution_state_v1 process_execution_state_v1;
+#else
+typedef uint8_t process_execution_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum reference_tombstone_state_v1
@@ -297,6 +415,45 @@ typedef struct id128_v1 {
   uint64_t low;
 } id128_v1;
 #define id128_v1_ZERO (id128_v1){ .high = 0, .low = 0 }
+
+typedef struct approved_exec_slot_key_v1 {
+  struct id128_v1 node_boot_id;
+  struct id128_v1 cgroup_binding_id;
+} approved_exec_slot_key_v1;
+
+typedef struct bounded_administrative_argv_v1 {
+  uint16_t argument_count;
+  uint16_t total_argument_bytes;
+  uint16_t argument_lengths[MAX_ADMINISTRATIVE_ARGUMENTS_V1];
+  uint8_t argument_bytes[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
+} bounded_administrative_argv_v1;
+
+typedef struct exact_executable_candidate_v1 {
+  uint64_t mount_namespace_inode;
+  uint64_t mount_id;
+  uint64_t filesystem_device;
+  uint64_t inode;
+  uint64_t inode_generation;
+} exact_executable_candidate_v1;
+
+typedef struct approved_exec_slot_v1 {
+  struct id128_v1 proof_id;
+  struct id128_v1 claim_slot_id;
+  uint8_t authorization_body_sha256[32];
+  struct id128_v1 cgroup_binding_nonce;
+  uint64_t container_generation;
+  struct bounded_administrative_argv_v1 expected_argv;
+  uint8_t reserved_pre_executable[4];
+  struct exact_executable_candidate_v1 resolved_executable;
+  uint32_t approved_role_numeric_id;
+  external_root_class_v1 expected_root_class;
+  uint8_t reserved_0[3];
+  uint64_t profile_generation_ref_id;
+  uint64_t exception_numeric_handle;
+  uint64_t deadline_boottime_ns;
+  approved_exec_slot_state_v1 state;
+  uint64_t transition_version;
+} approved_exec_slot_v1;
 
 typedef struct created_by_edge_v1 {
   uint64_t child_task_cookie;
@@ -347,11 +504,15 @@ typedef struct entry_security_state_v1 {
   uint64_t transition_guard;
 } entry_security_state_v1;
 
-typedef struct exact_executable_candidate_v1 {
-  uint64_t mount_id;
-  uint64_t inode;
-  uint64_t inode_generation;
-} exact_executable_candidate_v1;
+typedef struct image_provenance_v1 {
+  struct id128_v1 image_provenance_id;
+  uint16_t candidate_count;
+  uint8_t reserved_0[6];
+  struct exact_executable_candidate_v1 ordered_candidates[MAX_EXEC_CANDIDATES_V1];
+  uint64_t transition_version;
+  image_provenance_state_v1 state;
+  uint8_t reserved_1[7];
+} image_provenance_v1;
 
 typedef struct execution_set_binding_state_v1 {
   struct id128_v1 binding_id;
@@ -363,6 +524,7 @@ typedef struct execution_set_binding_state_v1 {
   uint64_t active_profile_generation_ref_id;
   uint64_t root_cgroup_id;
   struct id128_v1 root_cgroup_live_interval_id;
+  uint64_t container_generation;
   uint64_t lifecycle_generation;
   uint64_t transition_version;
   uint32_t initial_role_id;
@@ -382,6 +544,8 @@ typedef struct external_root_classification_v1 {
   struct id128_v1 cgroup_binding_id;
   struct id128_v1 cgroup_lifetime_id;
   uint64_t creator_task_cookie;
+  struct id128_v1 administrative_approval_proof_id;
+  struct id128_v1 administrative_claim_slot_id;
   uint64_t profile_generation_ref_id;
   uint32_t installed_role_numeric_id;
   external_root_class_v1 root_class;
@@ -434,6 +598,26 @@ typedef struct identity_runtime_config_v1 {
   uint8_t reserved[3];
 } identity_runtime_config_v1;
 
+typedef struct kernel_real_parent_interval_key_v1 {
+  uint64_t child_task_cookie;
+  uint64_t interval_sequence;
+} kernel_real_parent_interval_key_v1;
+
+typedef struct kernel_real_parent_interval_v1 {
+  uint64_t child_task_cookie;
+  uint64_t real_parent_task_cookie;
+  uint32_t real_parent_host_tid;
+  uint32_t real_parent_host_tgid;
+  uint64_t real_parent_pid_namespace_inode;
+  uint64_t real_parent_start_boottime_ns;
+  uint64_t interval_start_boottime_ns;
+  uint64_t interval_end_boottime_ns;
+  uint64_t transition_version;
+  kernel_real_parent_change_reason_v1 change_reason;
+  uint8_t kernel_direct_proof;
+  uint8_t reserved[6];
+} kernel_real_parent_interval_v1;
+
 typedef struct pending_exec_v1 {
   struct id128_v1 pending_exec_id;
   uint64_t task_cookie;
@@ -446,11 +630,26 @@ typedef struct pending_exec_v1 {
   uint64_t source_profile_generation_ref_id;
   uint64_t pending_exec_response_set_ref_id;
   struct id128_v1 target_execution_id;
+  struct id128_v1 target_image_provenance_id;
   struct exact_executable_candidate_v1 ordered_candidates[MAX_EXEC_CANDIDATES_V1];
   uint64_t transition_version;
   pending_exec_state_v1 state;
   uint8_t reserved_1[7];
 } pending_exec_v1;
+
+typedef struct pending_administrative_match_v1 {
+  uint64_t task_cookie;
+  uint64_t exec_attempt_sequence;
+  struct id128_v1 proof_id;
+  struct id128_v1 claim_slot_id;
+  uint32_t approved_role_numeric_id;
+  uint32_t reserved_0;
+  uint64_t profile_generation_ref_id;
+  struct exact_executable_candidate_v1 resolved_executable;
+  uint64_t transition_version;
+  pending_administrative_match_state_v1 state;
+  uint8_t reserved_1[7];
+} pending_administrative_match_v1;
 
 typedef struct physical_decision_v1 {
   physical_decision_kind_v1 decision;
@@ -481,12 +680,36 @@ typedef struct process_security_state_v1 {
   uint32_t reserved_pending_role;
   uint64_t transition_guard;
   uint64_t pending_exec_response_set_ref_id;
+  uint64_t exec_check_task_cookie;
   uint64_t transition_version;
   uint64_t live_thread_refs;
   exec_guard_state_v1 exec_guard_state;
   process_security_state_kind_v1 state;
   uint8_t reserved[6];
 } process_security_state_v1;
+
+typedef struct process_state_vector_v1 {
+  struct id128_v1 node_boot_id;
+  uint64_t label_epoch;
+  uint64_t state_bits;
+  uint64_t profile_generation_ref_id;
+  uint64_t transition_version;
+  uint32_t process_state_vector_id;
+  process_state_vector_state_v1 state;
+  uint8_t reserved[3];
+} process_state_vector_v1;
+
+typedef struct process_execution_instance_v1 {
+  struct id128_v1 process_execution_instance_id;
+  struct id128_v1 process_lineage_id;
+  struct id128_v1 image_provenance_id;
+  uint64_t start_boottime_ns;
+  uint64_t end_boottime_ns;
+  uint64_t transition_version;
+  process_execution_started_by_v1 started_by;
+  process_execution_state_v1 state;
+  uint8_t reserved[6];
+} process_execution_instance_v1;
 
 typedef struct task_coordinate_v1 {
   uint64_t task_cookie;
@@ -497,6 +720,7 @@ typedef struct task_coordinate_v1 {
   uint64_t pid_namespace_inode;
   uint64_t task_start_boottime_ns;
   uint64_t finalized_boottime_ns;
+  uint64_t real_parent_interval_sequence;
   uint64_t transition_version;
   task_coordinate_state_v1 state;
   uint8_t reserved[7];
