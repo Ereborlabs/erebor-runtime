@@ -1,0 +1,52 @@
+{{- if .Values.control.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mithril-control
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mithril-control
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mithril-control
+    spec:
+      containers:
+        - name: mithril-control
+          image: {{ .Values.control.image | quote }}
+          args: ["--config", "/etc/mithril/control.json"]
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.control.port }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mithril
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ .Values.control.configSecretName | quote }}
+            defaultMode: 0400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mithril-control
+spec:
+  selector:
+    app.kubernetes.io/name: mithril-control
+  ports:
+    - name: grpc
+      port: {{ .Values.control.port }}
+      targetPort: grpc
+{{- end }}

@@ -1,0 +1,21 @@
+[Unit]
+Description=Erebor privileged daemon control plane
+After=local-fs.target
+
+[Service]
+Type=exec
+User=root
+Group=root
+ExecStart=/usr/lib/erebor/erebord
+Restart=on-failure
+RestartSec=2s
+KillMode=control-group
+Delegate=yes
+UMask=0027
+StateDirectory=erebor
+StateDirectoryMode=0700
+LogsDirectory=erebor
+LogsDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

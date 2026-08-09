@@ -7,10 +7,13 @@ repository.workspace = true
 
 [dependencies]
 clap.workspace = true
+ed25519-dalek.workspace = true
 erebor-interceptor = { path = "../erebor-interceptor" }
+erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 mithril-control = { path = "../mithril-control" }
+minicbor.workspace = true
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -20,6 +23,7 @@ tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
 uuid.workspace = true
+zerocopy.workspace = true
 
 [dev-dependencies]
 erebor-runtime-client = { path = "../erebor-runtime-client" }

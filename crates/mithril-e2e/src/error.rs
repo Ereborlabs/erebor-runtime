@@ -7,37 +7,44 @@ use snafu::{Location, Snafu};
 #[derive(Debug, Snafu)]
 #[snafu(visibility(pub(crate)))]
 pub enum Error {
-    #[snafu(display("Phase 0 input `{path:?}` is invalid: {reason}"))]
+    #[snafu(display("Mithril test input `{path:?}` is invalid: {reason}"))]
     InvalidInput {
         path: PathBuf,
         reason: String,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Phase 0 I/O failed for `{path:?}`: {source}"))]
+    #[snafu(display("Mithril test I/O failed for `{path:?}`: {source}"))]
     Io {
         path: PathBuf,
         source: std::io::Error,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Phase 0 JSON failed for `{path:?}`: {source}"))]
+    #[snafu(display("Mithril test JSON failed for `{path:?}`: {source}"))]
     Json {
         path: PathBuf,
         source: serde_json::Error,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Phase 0 command `{program}` failed: {reason}"))]
+    #[snafu(display("Mithril test command `{program}` failed: {reason}"))]
     Command {
         program: String,
         reason: String,
         #[snafu(implicit)]
         location: Location,
     },
-    #[snafu(display("Phase 0 Interceptor qualification failed: {source}"))]
+    #[snafu(display("Mithril Interceptor test failed: {source}"))]
     Interceptor {
         source: erebor_interceptor::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Mithril node identity test failed: {source}"))]
+    Node {
+        #[snafu(source(from(mithril_node::Error, Box::new)))]
+        source: Box<mithril_node::Error>,
         #[snafu(implicit)]
         location: Location,
     },
@@ -60,6 +67,7 @@ impl ErrorExt for Error {
             Self::InvalidInput { .. } | Self::Json { .. } => StatusCode::InvalidArguments,
             Self::Io { .. } | Self::Command { .. } => StatusCode::External,
             Self::Interceptor { source, .. } => source.status_code(),
+            Self::Node { source, .. } => source.status_code(),
         }
     }
 
@@ -70,6 +78,7 @@ impl ErrorExt for Error {
                 RetryHint::NonRetryable
             }
             Self::Interceptor { source, .. } => source.retry_hint(),
+            Self::Node { source, .. } => source.retry_hint(),
         }
     }
 

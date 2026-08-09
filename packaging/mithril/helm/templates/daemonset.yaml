@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: mithril-node
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mithril-node
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mithril-node
+    spec:
+      hostPID: true
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: mithril-node
+          image: {{ .Values.node.image | quote }}
+          args: ["--config", "/etc/mithril/node.json"]
+          securityContext:
+            privileged: true
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: config
+              mountPath: /etc/mithril
+              readOnly: true
+            - name: bpf
+              mountPath: /sys/fs/bpf
+              mountPropagation: Bidirectional
+            - name: btf
+              mountPath: /sys/kernel/btf
+              readOnly: true
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/mithril
+            - name: run
+              mountPath: /run/mithril
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ .Values.node.configSecretName | quote }}
+            defaultMode: 0400
+        - name: bpf
+          hostPath:
+            path: /sys/fs/bpf
+            type: Directory
+        - name: btf
+          hostPath:
+            path: /sys/kernel/btf
+            type: Directory
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: state
+          hostPath:
+            path: {{ .Values.node.stateHostPath | quote }}
+            type: DirectoryOrCreate
+        - name: run
+          hostPath:
+            path: {{ .Values.node.runHostPath | quote }}
+            type: DirectoryOrCreate

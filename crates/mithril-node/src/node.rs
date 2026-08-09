@@ -9,13 +9,14 @@ use tokio::sync::watch;
 use crate::epoch::NodeEpochs;
 use crate::error::{InterceptorSnafu, JsonSnafu, LocalTaskSnafu};
 use crate::{
-    NodeConfig, NodeControlConnector, Result, TrustCache, WorkloadInventory,
-    WorkloadInventoryRecordV1,
+    NativeSecurityStateOwner, NodeConfig, NodeControlConnector, Result, TrustCache,
+    WorkloadBindingOwner, WorkloadInventory, WorkloadInventoryRecordV1,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct NodeReadinessV1 {
     pub kernel_ready: bool,
+    pub identity_ready: bool,
     pub control_ready: bool,
     pub admission_ready: bool,
     pub effect_prevention_claims_enabled: bool,
@@ -25,6 +26,7 @@ impl NodeReadinessV1 {
     #[must_use]
     pub const fn admits_new_work(self) -> bool {
         self.kernel_ready
+            && self.identity_ready
             && self.control_ready
             && self.admission_ready
             && !self.effect_prevention_claims_enabled
@@ -38,6 +40,8 @@ pub struct NodeChassis {
     registration: NodeRegistration,
     local_server: Option<crate::RuntimeObservationServer>,
     trust: TrustCache,
+    _identity: NativeSecurityStateOwner,
+    _bindings: WorkloadBindingOwner,
     readiness: watch::Sender<NodeReadinessV1>,
 }
 
@@ -45,29 +49,41 @@ impl NodeChassis {
     pub fn start(config: NodeConfig) -> Result<Self> {
         config.validate()?;
         let boot_id = NodeEpochs::boot_id()?;
-        let label_epoch = NodeEpochs::next_label_epoch(&config.state_directory)?;
+        let node_boot_id = id_from_uuid_bytes(boot_id);
+        let recover_identity = config
+            .interceptor
+            .pin_root
+            .join("maps/identity_config")
+            .exists();
+        let label_epoch = NodeEpochs::label_epoch(&config.state_directory, recover_identity)?;
         let inventory = WorkloadInventory::system().scan()?;
-        let owner = KernelHostOwner::new(KernelHostConfig::new(
-            &config.interceptor.object_path,
-            &config.interceptor.object_sha256,
+        let owner = KernelHostOwner::new(KernelHostConfig::identity(
             &config.interceptor.runtime_btf_path,
             &config.interceptor.lease_path,
             Some(config.interceptor.pin_root.clone()),
             uuid::Uuid::from_bytes(boot_id).simple().to_string(),
             label_epoch,
         ));
-        let host = owner.start().context(InterceptorSnafu)?;
+        let mut host = owner.start().context(InterceptorSnafu)?;
+        let mut bindings = WorkloadBindingOwner::system(node_boot_id, label_epoch)?;
+        bindings.publish_all(&host, &config.workload_bindings)?;
+        let identity = NativeSecurityStateOwner::new(node_boot_id, label_epoch);
+        let reconciliation = identity.activate(&mut host)?;
         let manifest = host.manifest();
         let capabilities = vec![
             CapabilityRecord {
-                capability_id: "KERNEL_LSM_CHASSIS".to_owned(),
+                capability_id: "EXACT_NATIVE_IDENTITY".to_owned(),
                 state: "SUPPORTED".to_owned(),
-                reason_code: "EXACT_ATTACH_READBACK".to_owned(),
+                reason_code: if reconciliation == Default::default() {
+                    "EXACT_ATTACH_AND_RECONCILIATION".to_owned()
+                } else {
+                    "CONSERVATIVE_IDENTITY_RESTRICTIONS_RETAINED".to_owned()
+                },
             },
             CapabilityRecord {
                 capability_id: "LOCAL_EFFECT_PREVENTION".to_owned(),
                 state: "UNSUPPORTED".to_owned(),
-                reason_code: "PHASE_1_CHASSIS_ONLY".to_owned(),
+                reason_code: "IDENTITY_GATE_ONLY_NO_PERMISSION_TABLE".to_owned(),
             },
             CapabilityRecord {
                 capability_id: "RUNTIME_READ_ONLY_OBSERVATION".to_owned(),
@@ -94,6 +110,7 @@ impl NodeChassis {
             .transpose()?;
         let (readiness, _receiver) = watch::channel(NodeReadinessV1 {
             kernel_ready: true,
+            identity_ready: true,
             control_ready: false,
             admission_ready: false,
             effect_prevention_claims_enabled: false,
@@ -105,6 +122,8 @@ impl NodeChassis {
             registration,
             local_server,
             trust,
+            _identity: identity,
+            _bindings: bindings,
             readiness,
         })
     }
@@ -132,6 +151,7 @@ impl NodeChassis {
                 Ok(mut connection) => {
                     self.readiness.send_replace(NodeReadinessV1 {
                         kernel_ready: true,
+                        identity_ready: true,
                         control_ready: true,
                         admission_ready: true,
                         effect_prevention_claims_enabled: false,
@@ -151,6 +171,7 @@ impl NodeChassis {
             }
             self.readiness.send_replace(NodeReadinessV1 {
                 kernel_ready: true,
+                identity_ready: true,
                 control_ready: false,
                 admission_ready: false,
                 effect_prevention_claims_enabled: false,
@@ -175,6 +196,11 @@ impl NodeChassis {
         }
         Ok(())
     }
+}
+
+fn id_from_uuid_bytes(bytes: [u8; 16]) -> erebor_interceptor_abi::Id128V1 {
+    let value = u128::from_be_bytes(bytes);
+    erebor_interceptor_abi::Id128V1::new((value >> 64) as u64, value as u64)
 }
 
 fn registration(
@@ -207,6 +233,7 @@ mod tests {
         assert!(!NodeReadinessV1::default().admits_new_work());
         let ready = NodeReadinessV1 {
             kernel_ready: true,
+            identity_ready: true,
             control_ready: true,
             admission_ready: true,
             effect_prevention_claims_enabled: false,

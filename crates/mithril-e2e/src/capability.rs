@@ -118,7 +118,7 @@ impl BpfPrototypeCompiler {
         let output_directory = fs::canonicalize(output_directory).context(IoSnafu {
             path: output_directory.to_path_buf(),
         })?;
-        let source = repo_root.join("bpf/erebor-interceptor/phase0/feasibility.bpf.c");
+        let source = repo_root.join("bpf/erebor-interceptor/qualification/feasibility.bpf.c");
         let source_bytes = fs::read(&source).context(IoSnafu {
             path: source.clone(),
         })?;
@@ -133,7 +133,7 @@ impl BpfPrototypeCompiler {
         let bpf_headers = PathBuf::from(format!(
             "/lib/modules/{kernel_release}/build/tools/bpf/resolve_btfids/libbpf/include"
         ));
-        let object = output_directory.join("phase0-feasibility.bpf.o");
+        let object = output_directory.join("feasibility.bpf.o");
         let compile_output = Command::new("clang")
             .args(["-g", "-O2", "-target", "bpfel", target.clang_define(), "-I"])
             .arg(&interceptor_headers)
@@ -187,8 +187,7 @@ mod tests {
     use crate::error::IoSnafu;
 
     #[test]
-    fn phase0_owned_core_object_compiles_against_the_checked_in_vmlinux_header() -> crate::Result<()>
-    {
+    fn qualification_object_compiles_against_the_checked_in_vmlinux_header() -> crate::Result<()> {
         let first_output = tempfile::tempdir().context(IoSnafu {
             path: PathBuf::from("temporary BPF build directory"),
         })?;

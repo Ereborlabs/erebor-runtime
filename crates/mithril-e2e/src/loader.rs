@@ -162,7 +162,7 @@ impl BpfPhase0Loader {
             path: &self.object_path,
         })?;
         let digest = DigestV1::of(bytes).to_hex();
-        Ok(KernelHostOwner::new(KernelHostConfig::new(
+        Ok(KernelHostOwner::new(KernelHostConfig::qualification(
             &self.object_path,
             digest,
             RUNTIME_BTF,
@@ -191,10 +191,10 @@ impl BpfPhase0Loader {
             layout
                 .lsm_programs
                 .iter()
-                .any(|program| program == "phase0_file_open"),
+                .any(|program| program == "qualification_file_open"),
             InvalidInputSnafu {
                 path: object_path,
-                reason: "the feasibility object has no phase0_file_open LSM program",
+                reason: "the feasibility object has no qualification_file_open LSM program",
             }
         );
         Ok(())
@@ -243,7 +243,7 @@ mod tests {
         assert!(layout
             .lsm_programs
             .iter()
-            .any(|program| program == "phase0_file_open"));
+            .any(|program| program == "qualification_file_open"));
         assert!(layout.maps.iter().any(|map| {
             map.name == "file_probe_targets"
                 && map.map_type == "Array"
@@ -261,7 +261,7 @@ mod tests {
         })?;
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let object = BpfPrototypeCompiler::new(root).compile(output.path())?;
-        let wrong_digest = KernelHostOwner::new(KernelHostConfig::new(
+        let wrong_digest = KernelHostOwner::new(KernelHostConfig::qualification(
             &object.object_path,
             "0".repeat(64),
             RUNTIME_BTF,
@@ -282,7 +282,7 @@ mod tests {
         fs::write(pin_root.join("stale"), b"stale").context(IoSnafu {
             path: pin_root.clone(),
         })?;
-        let stale = KernelHostOwner::new(KernelHostConfig::new(
+        let stale = KernelHostOwner::new(KernelHostConfig::qualification(
             &object.object_path,
             &object.object_sha256,
             RUNTIME_BTF,

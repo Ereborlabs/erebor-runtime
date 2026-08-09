@@ -26,10 +26,12 @@ impl Phase1Packaging {
                 .contains("cargo build --locked --release -p mithril-node -p mithril-control")
                 && dockerfile.contains("gawk")
                 && dockerfile.contains("protobuf-compiler")
-                && dockerfile.contains("erebor-interceptor.bpf.o"),
+                && !dockerfile.contains("erebor-interceptor.bpf.o")
+                && !dockerfile.contains("feasibility.bpf.c")
+                && !dockerfile.contains("clang -g -O2 -target bpf"),
             InvalidInputSnafu {
                 path: self.root.join("packaging/mithril/Dockerfile"),
-                reason: "development image is missing a required binary, tool, or BPF object",
+                reason: "development image is missing a required binary/tool or duplicates the embedded BPF object",
             }
         );
         ensure!(

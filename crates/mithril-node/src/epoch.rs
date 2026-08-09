@@ -1,4 +1,6 @@
 use std::fs;
+use std::fs::File;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use snafu::{ensure, ResultExt as _};
@@ -23,7 +25,7 @@ impl NodeEpochs {
             })
     }
 
-    pub(crate) fn next_label_epoch(state_directory: &Path) -> Result<u64> {
+    pub(crate) fn label_epoch(state_directory: &Path, recover: bool) -> Result<u64> {
         fs::create_dir_all(state_directory).context(IoSnafu {
             path: state_directory,
         })?;
@@ -44,6 +46,15 @@ impl NodeEpochs {
                 })
             }
         };
+        if recover {
+            ensure!(
+                current > 0,
+                InvalidConfigurationSnafu {
+                    reason: "pinned identity state has no persisted label epoch",
+                }
+            );
+            return Ok(current);
+        }
         let next = current.checked_add(1).ok_or_else(|| {
             InvalidConfigurationSnafu {
                 reason: "label epoch exhausted".to_owned(),
@@ -57,8 +68,19 @@ impl NodeEpochs {
             }
         );
         let temporary = state_directory.join("label-epoch.next");
-        fs::write(&temporary, format!("{next}\n")).context(IoSnafu { path: &temporary })?;
+        let mut file = File::create(&temporary).context(IoSnafu { path: &temporary })?;
+        file.write_all(format!("{next}\n").as_bytes())
+            .context(IoSnafu { path: &temporary })?;
+        file.sync_all().context(IoSnafu { path: &temporary })?;
         fs::rename(&temporary, &path).context(IoSnafu { path: &path })?;
+        File::open(state_directory)
+            .context(IoSnafu {
+                path: state_directory,
+            })?
+            .sync_all()
+            .context(IoSnafu {
+                path: state_directory,
+            })?;
         Ok(next)
     }
 }
@@ -75,8 +97,9 @@ mod tests {
         let directory = tempfile::tempdir().context(IoSnafu {
             path: "temporary epoch directory",
         })?;
-        assert_eq!(NodeEpochs::next_label_epoch(directory.path())?, 1);
-        assert_eq!(NodeEpochs::next_label_epoch(directory.path())?, 2);
+        assert_eq!(NodeEpochs::label_epoch(directory.path(), false)?, 1);
+        assert_eq!(NodeEpochs::label_epoch(directory.path(), true)?, 1);
+        assert_eq!(NodeEpochs::label_epoch(directory.path(), false)?, 2);
         Ok(())
     }
 }

@@ -7,6 +7,7 @@ mod error;
 mod fixture;
 #[cfg(test)]
 mod golden;
+mod identity;
 mod loader;
 #[cfg(test)]
 mod packaging;
@@ -21,6 +22,10 @@ pub use closure::ClosureLedgerV1;
 pub use digest::DigestV1;
 pub use error::{Error, Result};
 pub use fixture::FixtureBaselineRecordV1;
+pub use identity::{
+    IdentityPhysicalProbeBundleV1, IdentityTestRunner, IdentityVerificationBundleV1,
+    NativeTaskSnapshotV1,
+};
 pub use loader::{BpfLinkRecordV1, BpfMapLayoutV1, BpfObjectLayoutV1, PhysicalFileOpenProbeV1};
 pub use runner::{
     BenchmarkModeV1, CapabilityProbeBundleV1, OpenBenchmarkBundleV1, Phase0Runner,

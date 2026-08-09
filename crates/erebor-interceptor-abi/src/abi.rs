@@ -1,6 +1,21 @@
+mod identity;
+
+pub use identity::*;
+
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
 pub enum BindingLifecycleStateV1 {
+    #[default]
     Unknown = 0,
     Preparing = 1,
     Active = 2,

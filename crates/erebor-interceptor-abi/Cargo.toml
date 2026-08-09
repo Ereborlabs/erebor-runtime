@@ -8,6 +8,7 @@ build = "build.rs"
 
 [dependencies]
 serde.workspace = true
+zerocopy.workspace = true
 
 [build-dependencies]
 cbindgen = "=0.29.4"

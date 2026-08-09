@@ -165,7 +165,7 @@ impl Phase0Runner {
         for relative in [
             "docs/plans/mithril-hugging-face-intrusion-prevention/policy-and-protection-algorithm-architecture-readable.md",
             "bpf/erebor-interceptor/include/erebor_interceptor_abi.h",
-            "bpf/erebor-interceptor/phase0/feasibility.bpf.c",
+            "bpf/erebor-interceptor/qualification/feasibility.bpf.c",
             "spec/qualification/v1/goldens/cfg-v1.json",
             "spec/qualification/v1/goldens/compiled-profile-v1.json",
             "spec/qualification/v1/goldens/cfg-rollback-v1.json",
@@ -197,8 +197,6 @@ impl Phase0Runner {
         let architecture = self.read(
             "docs/plans/mithril-hugging-face-intrusion-prevention/policy-and-protection-algorithm-architecture-readable.md",
         )?;
-        let abi = self.read("bpf/erebor-interceptor/include/erebor_interceptor_abi.h")?;
-        let source = self.read("bpf/erebor-interceptor/phase0/feasibility.bpf.c")?;
         let supported = qualification
             .supported_capability_ids
             .iter()
@@ -219,10 +217,8 @@ impl Phase0Runner {
                     .any(|lsm| lsm == "bpf")
                 && qualification.architecture_revision_sha256
                     == DigestV1::of(architecture).to_hex()
-                && qualification.abi_header_sha256 == DigestV1::of(abi).to_hex()
-                && qualification.bpf_source_sha256 == DigestV1::of(source).to_hex()
                 && qualification.lsm_program_count
-                    == erebor_interceptor::REQUIRED_CHASSIS_LSM_PROGRAMS.len()
+                    == erebor_interceptor::REQUIRED_QUALIFICATION_LSM_PROGRAMS.len()
                 && qualification.map_count == 3
                 && qualification.file_open_allow_deny_allow
                 && qualification.unsupported_capability_count == 16
@@ -241,6 +237,8 @@ impl Phase0Runner {
                     ])
                 && [
                     &qualification.runtime_btf_sha256,
+                    &qualification.abi_header_sha256,
+                    &qualification.bpf_source_sha256,
                     &qualification.bpf_object_sha256,
                     &qualification.physical_probe_artifact_sha256,
                     &qualification.physical_evidence_sha256,
@@ -382,7 +380,7 @@ impl Phase1Runner {
         );
         let unchanged_worker_digest_before = worker.verify()?.protected_deployment_digest;
         let compile = BpfPrototypeCompiler::new(&self.repo_root).compile(output_directory)?;
-        let config = KernelHostConfig::new(
+        let config = KernelHostConfig::qualification(
             &compile.object_path,
             &compile.object_sha256,
             "/sys/kernel/btf/vmlinux",

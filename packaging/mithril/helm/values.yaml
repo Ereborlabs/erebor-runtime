@@ -1,0 +1,11 @@
+node:
+  image: ereborlabs/mithril-node:dev
+  configSecretName: mithril-node-config
+  stateHostPath: /var/lib/mithril
+  runHostPath: /run/mithril
+
+control:
+  enabled: true
+  image: ereborlabs/mithril-control:dev
+  configSecretName: mithril-control-config
+  port: 8443

@@ -1,6 +1,6 @@
 # Phase 2: Exact Native Identity
 
-Status: Proposed; depends on Phase 1 `Done`.
+Status: Implementation complete; privileged physical acceptance blocked on an operator sudo run.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -112,16 +112,17 @@ Policy matching, effect allow/deny tables, graph conclusions, and response.
 ## Phase Result
 
 ```text
-State: Not done.
-Validated architecture revision/digest: not recorded.
-Completed deliverable IDs: none.
-Files and durable owners changed: none.
-Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: not run.
-Commands and exact source state covered: none; this is a plan-only rewrite.
-Platform/kernel/runtime manifests: none.
-Performance/capacity results: none.
-Unsupported/degraded paths: not yet measured.
-Remaining work in this phase: all deliverables.
+State: Blocked.
+Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md at SHA-256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
+Completed deliverable IDs: D2.1-D2.6 are implemented and code-backed; the phase cannot be marked Done until the privileged physical probe and applicable runtime/Kubernetes fixture matrix pass.
+Files and durable owners changed: erebor-interceptor-abi owns the generated snake_case Rust/C task, process, entry, authority, fork-edge, exec, binding, reference, and health layouts; bpf/erebor-interceptor/programs owns the production CO-RE identity program and direct libbpf maps; erebor-interceptor owns the fully vendored libbpf-rs load/attach/pin/reuse/readback lifecycle and embeds the single libbpf-cargo-built production object; mithril-node owns binding publication, boot/label epochs, task reconciliation, signed-intent verification, trust/time/replay state, and one-use authorization identity; mithril-e2e owns only the bounded acceptance runner.
+Build and simplicity result: libbpf-cargo 0.27.0 is the only production C-to-BPF build path. The resulting object is embedded in the node binary and opened from memory through fully vendored libbpf-rs 0.27.0; the former second configured object path/checksum and Docker build-directory copy were removed. cbindgen remains only the Rust-to-C ABI renderer and drift check. Standard Linux names CLONE_THREAD and EACCES are used through the minimal syscall-note UAPI header because the full kernel UAPI headers are not CO-RE translation-unit safe. Product-owned state constants are generated once from the shared ABI.
+Upstream-adoption dossier IDs used: BJ-TASK-STORAGE-001 and BJ-REJECTED-ENROLLMENT-002 for task-first allocation and rejection of delayed PID enrollment; KA-LSM-DECISION-001 and KA-PATH-MOUNT-003 for prior-result/fail-closed LSM behavior and live mount identity; TG-FORK-EXEC-001, TG-RUNTIME-CGROUP-JOIN-002, TG-FRESH-MAPS-004, TG-VMLINUX-HEADER-006, and TG-VMLINUX-ARM64-007 for fork/exec, cgroup binding, recoverable publication, and CO-RE headers; AS-VMLINUX-ARM-001 and AS-VMLINUX-RISCV-002 for checked compile headers. No upstream daemon, policy engine, loader, or delayed-enrollment model was copied.
+Fixture cases and exact physical results: AUTHORIZATION-REPLAY-004 has code-backed signature, exact-target, bounded deterministic-CBOR, trust/key/epoch, 4,096-bit replay, durable proof/slot, restart, and one-use consumption tests. Unit tests cover exact ABI layout, closed enum/state values, binding identity and initial-root admission, epoch recovery, reference parsing, object embedding, required program/map sets, packaging, and all 33 Phase 2 fixture allocations. The unprivileged identity verifier passed with production object SHA-256 949f89744abd628a3bf4d359bcadff34f9a74935b95e4f7d5078c4e8a29d7004 and report SHA-256 99991bd4adbfabf4059ebe0cb8c33f1a33f2eae62b2d5dcf5fd33bbc5ce2cca6. No privileged Phase 2 physical result is recorded yet.
+Commands and exact source state covered: targeted cargo tests passed 53 tests across erebor-interceptor-abi, erebor-interceptor, mithril-node, and mithril-e2e; focused all-target/all-feature clippy passed with -D warnings; mithril-identity-test verify passed and wrote /tmp/mithril-identity-final/identity-verification.json. The final `bash .github/scripts/verify-rust-ci.sh` passed after the final Rust, Cargo, and BPF source changes, covering formatting, `cargo check --workspace`, workspace all-target/all-feature clippy with warnings denied, and the complete workspace test suite. The physical probe was not run: BPF LSM is active, but sudo could not create the dedicated cgroup because this noninteractive session cannot provide the operator password.
+Platform/kernel/runtime manifests: current host reports x86_64 with BPF in the active LSM order and runtime BTF present. The production program compiles through the checked x86, arm64, arm, and riscv vmlinux dispatch; only a successful privileged probe may establish physical support on a platform.
+Performance/capacity results: all authoritative maps are bounded and fail closed on missing/capacity state; no Phase 2 production latency or saturation claim is recorded until the privileged suite runs. Phase 0's feasibility benchmark is historical qualification evidence, not a Phase 2 production result.
+Unsupported/degraded paths: complete administrative-exec permission and physical denial remain Phase 4; policy/effect tables remain absent. Kubernetes/container-runtime-specific entry cases, non-leader/concurrent/failure-injected exec, map saturation, identifier reuse, and non-x86 platforms remain physically unqualified. A cleanup loss deliberately leaks restriction and raises reconciliation rather than recovering authority.
+Remaining work in this phase: run the documented privileged identity probe on a fresh dedicated cgroup/pin root, retain its JSON, then run the applicable runtime/Kubernetes and failure-injection matrix. Do not change the implementation result to Done without those physical artifacts.
 Next phase not authorized: yes.
 ```

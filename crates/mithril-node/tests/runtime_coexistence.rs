@@ -60,7 +60,7 @@ fn manifest() -> KernelObjectManifestV1 {
         object_sha256: "a".repeat(64),
         maps: Vec::new(),
         links: vec![KernelLinkManifestV1 {
-            program: "phase0_file_open".to_owned(),
+            program: "qualification_file_open".to_owned(),
             link_id: 1,
             program_id: 2,
             pin_path: None,

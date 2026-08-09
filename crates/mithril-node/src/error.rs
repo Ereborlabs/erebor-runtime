@@ -14,6 +14,18 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril native identity state is invalid: {reason}"))]
+    IdentityState {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Mithril authorization proof was rejected: {reason}"))]
+    Authorization {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril node failed to access `{}`: {source}", path.display()))]
     Io {
         path: PathBuf,
@@ -73,8 +85,10 @@ impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
             Self::InvalidConfiguration { .. }
+            | Self::IdentityState { .. }
             | Self::Json { .. }
             | Self::ControlProtocol { .. } => StatusCode::InvalidArguments,
+            Self::Authorization { .. } => StatusCode::PermissionDenied,
             Self::LocalIpc { source, .. } => source.status_code(),
             Self::Interceptor { source, .. } => source.status_code(),
             Self::Io { .. }
@@ -93,6 +107,8 @@ impl ErrorExt for Error {
                 RetryHint::Retryable
             }
             Self::InvalidConfiguration { .. }
+            | Self::IdentityState { .. }
+            | Self::Authorization { .. }
             | Self::Json { .. }
             | Self::ControlProtocol { .. } => RetryHint::NonRetryable,
         }

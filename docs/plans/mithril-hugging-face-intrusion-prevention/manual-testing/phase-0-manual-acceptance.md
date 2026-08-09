@@ -29,7 +29,7 @@ cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . benchmark \
 sudo target/debug/mithril-phase0 --repo-root . benchmark \
   --target crates/mithril-e2e/fixtures/hugging-face/protected/image-digest.txt \
   --mode protected \
-  --bpf-object /tmp/mithril-phase0-final/phase0-feasibility.bpf.o \
+  --bpf-object /tmp/mithril-phase0-final/feasibility.bpf.o \
   --output /tmp/mithril-phase0-open-protected.json
 ```
 

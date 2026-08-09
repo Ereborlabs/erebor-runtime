@@ -1,21 +1,22 @@
 #include "vmlinux.h"
 #include "erebor_interceptor_abi.h"
+#include "linux_uapi.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-_Static_assert(sizeof(TaskLabelCandidateV1) == 8, "task label ABI size");
-_Static_assert(sizeof(FileOpenTargetV1) == 8, "file target ABI size");
-_Static_assert(sizeof(FileOpenEventV1) == 16, "file event ABI size");
-_Static_assert(sizeof(EffectDecisionKeyV1) == 48, "decision key ABI size");
-_Static_assert(__builtin_offsetof(EffectDecisionKeyV1, composite_atom_id) == 24,
+_Static_assert(sizeof(task_label_candidate_v1) == 8, "task label ABI size");
+_Static_assert(sizeof(file_open_target_v1) == 8, "file target ABI size");
+_Static_assert(sizeof(file_open_event_v1) == 16, "file event ABI size");
+_Static_assert(sizeof(effect_decision_key_v1) == 48, "decision key ABI size");
+_Static_assert(__builtin_offsetof(effect_decision_key_v1, composite_atom_id) == 24,
                "decision atom ABI offset");
-_Static_assert(sizeof(PhysicalDecisionV1) == 16, "decision value ABI size");
+_Static_assert(sizeof(physical_decision_v1) == 16, "decision value ABI size");
 
 struct {
     __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
     __type(key, int);
-    __type(value, TaskLabelCandidateV1);
+    __type(value, task_label_candidate_v1);
     __uint(map_flags, BPF_F_NO_PREALLOC);
 } task_labels SEC(".maps");
 
@@ -23,7 +24,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 1);
     __type(key, __u32);
-    __type(value, FileOpenTargetV1);
+    __type(value, file_open_target_v1);
 } file_probe_targets SEC(".maps");
 
 struct {
@@ -32,12 +33,12 @@ struct {
 } probe_events SEC(".maps");
 
 SEC("lsm/task_alloc")
-int BPF_PROG(phase0_task_alloc, struct task_struct *task,
+int BPF_PROG(qualification_task_alloc, struct task_struct *task,
              unsigned long clone_flags, int ret)
 {
     struct task_struct *parent;
-    TaskLabelCandidateV1 *parent_label;
-    TaskLabelCandidateV1 *child_label;
+    task_label_candidate_v1 *parent_label;
+    task_label_candidate_v1 *child_label;
 
     if (ret != 0)
         return ret;
@@ -48,19 +49,19 @@ int BPF_PROG(phase0_task_alloc, struct task_struct *task,
     child_label = bpf_task_storage_get(&task_labels, task, 0,
                                        BPF_LOCAL_STORAGE_GET_F_CREATE);
     if (!child_label)
-        return -13;
+        return -EACCES;
     child_label->label = parent_label->label;
     return 0;
 }
 
 SEC("lsm/file_open")
-int BPF_PROG(phase0_file_open, struct file *file, int ret)
+int BPF_PROG(qualification_file_open, struct file *file, int ret)
 {
     __u32 key = 0;
     __u64 inode;
     int decision = 0;
-    FileOpenTargetV1 *target;
-    FileOpenEventV1 *event;
+    file_open_target_v1 *target;
+    file_open_event_v1 *event;
 
     if (ret != 0)
         return ret;
@@ -69,7 +70,7 @@ int BPF_PROG(phase0_file_open, struct file *file, int ret)
         return 0;
     inode = BPF_CORE_READ(file, f_inode, i_ino);
     if (inode == target->inode)
-        decision = -13;
+        decision = -EACCES;
     event = bpf_ringbuf_reserve(&probe_events, sizeof(*event), 0);
     if (event) {
         event->inode = inode;
@@ -82,7 +83,7 @@ int BPF_PROG(phase0_file_open, struct file *file, int ret)
 
 #define PRESERVE_ONE(NAME, TYPE, ARG)                                      \
     SEC("lsm/" #NAME)                                                     \
-    int BPF_PROG(phase0_##NAME, TYPE ARG, int ret)                         \
+int BPF_PROG(qualification_##NAME, TYPE ARG, int ret)                  \
     {                                                                      \
         return ret;                                                        \
     }
@@ -90,62 +91,62 @@ int BPF_PROG(phase0_file_open, struct file *file, int ret)
 PRESERVE_ONE(bprm_check_security, struct linux_binprm *, bprm)
 
 SEC("lsm/file_permission")
-int BPF_PROG(phase0_file_permission, struct file *file, int mask, int ret)
+int BPF_PROG(qualification_file_permission, struct file *file, int mask, int ret)
 {
     return ret;
 }
 
 SEC("lsm/file_ioctl")
-int BPF_PROG(phase0_file_ioctl, struct file *file, unsigned int cmd,
+int BPF_PROG(qualification_file_ioctl, struct file *file, unsigned int cmd,
              unsigned long arg, int ret)
 {
     return ret;
 }
 
 SEC("lsm/mmap_file")
-int BPF_PROG(phase0_mmap_file, struct file *file, unsigned long reqprot,
+int BPF_PROG(qualification_mmap_file, struct file *file, unsigned long reqprot,
              unsigned long prot, unsigned long flags, int ret)
 {
     return ret;
 }
 
 SEC("lsm/file_mprotect")
-int BPF_PROG(phase0_file_mprotect, struct vm_area_struct *vma,
+int BPF_PROG(qualification_file_mprotect, struct vm_area_struct *vma,
              unsigned long reqprot, unsigned long prot, int ret)
 {
     return ret;
 }
 
 SEC("lsm/ipc_permission")
-int BPF_PROG(phase0_ipc_permission, struct kern_ipc_perm *ipcp, short flag,
+int BPF_PROG(qualification_ipc_permission, struct kern_ipc_perm *ipcp, short flag,
              int ret)
 {
     return ret;
 }
 
 SEC("lsm/socket_connect")
-int BPF_PROG(phase0_socket_connect, struct socket *sock,
+int BPF_PROG(qualification_socket_connect, struct socket *sock,
              struct sockaddr *address, int addrlen, int ret)
 {
     return ret;
 }
 
 SEC("lsm/socket_sendmsg")
-int BPF_PROG(phase0_socket_sendmsg, struct socket *sock, struct msghdr *msg,
+int BPF_PROG(qualification_socket_sendmsg, struct socket *sock, struct msghdr *msg,
              int size, int ret)
 {
     return ret;
 }
 
 SEC("lsm/ptrace_access_check")
-int BPF_PROG(phase0_ptrace_access_check, struct task_struct *child,
+int BPF_PROG(qualification_ptrace_access_check, struct task_struct *child,
              unsigned int mode, int ret)
 {
     return ret;
 }
 
 SEC("lsm/task_kill")
-int BPF_PROG(phase0_task_kill, struct task_struct *task,
+int BPF_PROG(qualification_task_kill, struct task_struct *task,
              struct kernel_siginfo *info, int sig, const struct cred *cred,
              int ret)
 {
@@ -153,21 +154,21 @@ int BPF_PROG(phase0_task_kill, struct task_struct *task,
 }
 
 SEC("lsm/path_unlink")
-int BPF_PROG(phase0_path_unlink, const struct path *dir,
+int BPF_PROG(qualification_path_unlink, const struct path *dir,
              struct dentry *dentry, int ret)
 {
     return ret;
 }
 
 SEC("lsm/path_link")
-int BPF_PROG(phase0_path_link, struct dentry *old_dentry,
+int BPF_PROG(qualification_path_link, struct dentry *old_dentry,
              const struct path *new_dir, struct dentry *new_dentry, int ret)
 {
     return ret;
 }
 
 SEC("lsm/path_rename")
-int BPF_PROG(phase0_path_rename, const struct path *old_dir,
+int BPF_PROG(qualification_path_rename, const struct path *old_dir,
              struct dentry *old_dentry, const struct path *new_dir,
              struct dentry *new_dentry, unsigned int flags, int ret)
 {
@@ -175,41 +176,41 @@ int BPF_PROG(phase0_path_rename, const struct path *old_dir,
 }
 
 SEC("lsm/sb_mount")
-int BPF_PROG(phase0_sb_mount, const char *dev_name, const struct path *path,
+int BPF_PROG(qualification_sb_mount, const char *dev_name, const struct path *path,
              const char *type, unsigned long flags, void *data, int ret)
 {
     return ret;
 }
 
 SEC("lsm/sb_umount")
-int BPF_PROG(phase0_sb_umount, struct vfsmount *mnt, int flags, int ret)
+int BPF_PROG(qualification_sb_umount, struct vfsmount *mnt, int flags, int ret)
 {
     return ret;
 }
 
 SEC("lsm/sb_pivotroot")
-int BPF_PROG(phase0_sb_pivotroot, const struct path *old_path,
+int BPF_PROG(qualification_sb_pivotroot, const struct path *old_path,
              const struct path *new_path, int ret)
 {
     return ret;
 }
 
 SEC("lsm/move_mount")
-int BPF_PROG(phase0_move_mount, const struct path *from_path,
+int BPF_PROG(qualification_move_mount, const struct path *from_path,
              const struct path *to_path, int ret)
 {
     return ret;
 }
 
 SEC("lsm/capable")
-int BPF_PROG(phase0_capable, const struct cred *cred,
+int BPF_PROG(qualification_capable, const struct cred *cred,
              struct user_namespace *ns, int cap, unsigned int opts, int ret)
 {
     return ret;
 }
 
 SEC("lsm/bpf")
-int BPF_PROG(phase0_bpf, int cmd, union bpf_attr *attr, unsigned int size,
+int BPF_PROG(qualification_bpf, int cmd, union bpf_attr *attr, unsigned int size,
              int ret)
 {
     return ret;
@@ -218,7 +219,7 @@ int BPF_PROG(phase0_bpf, int cmd, union bpf_attr *attr, unsigned int size,
 char LICENSE[] SEC("license") = "GPL";
 
 SEC("cgroup_skb/egress")
-int phase0_final_flow(struct __sk_buff *skb)
+int qualification_final_flow(struct __sk_buff *skb)
 {
     return 1;
 }

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mithril
+description: Development Mithril node and private Control chassis
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

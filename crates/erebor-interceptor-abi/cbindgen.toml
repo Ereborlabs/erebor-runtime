@@ -23,14 +23,80 @@ no_includes = true
 
 [enum]
 prefix_with_name = true
+rename_variants = "SnakeCase"
 
 [export]
 include = [
   "BindingLifecycleStateV1",
+  "CreatedByEdgeV1",
+  "AuthorityDomainStateKindV1",
+  "AuthorityDomainStateV1",
+  "EntryAdmissionStateV1",
+  "EntryKindV1",
+  "EntryLifetimeStateV1",
+  "EntryPurposeV1",
+  "EntrySecurityStateV1",
+  "ExactExecutableCandidateV1",
+  "ExecGuardStateV1",
+  "ExecutionSetBindingStateV1",
+  "ExternalRootClassificationV1",
+  "ExternalRootClassV1",
   "EffectDecisionKeyV1",
   "FileOpenEventV1",
   "FileOpenTargetV1",
+  "Id128V1",
+  "IdentityHealthV1",
+  "IdentityRuntimeConfigV1",
+  "InstalledRoleClassV1",
+  "InitialRootStateV1",
+  "PendingExecStateV1",
+  "PendingExecV1",
   "PhysicalDecisionKindV1",
   "PhysicalDecisionV1",
+  "ProcessSecurityStateKindV1",
+  "ProcessSecurityStateV1",
+  "ReferenceTombstoneStateV1",
+  "TaskCoordinateStateV1",
+  "TaskCoordinateV1",
+  "TaskLabelV1",
   "TaskLabelCandidateV1",
+  "TaskPlacementExpectationV1",
+  "TaskReferenceTombstoneV1",
 ]
+
+[export.rename]
+"BindingLifecycleStateV1" = "binding_lifecycle_state_v1"
+"CreatedByEdgeV1" = "created_by_edge_v1"
+"AuthorityDomainStateKindV1" = "authority_domain_state_kind_v1"
+"AuthorityDomainStateV1" = "authority_domain_state_v1"
+"EntryAdmissionStateV1" = "entry_admission_state_v1"
+"EntryKindV1" = "entry_kind_v1"
+"EntryLifetimeStateV1" = "entry_lifetime_state_v1"
+"EntryPurposeV1" = "entry_purpose_v1"
+"EntrySecurityStateV1" = "entry_security_state_v1"
+"ExactExecutableCandidateV1" = "exact_executable_candidate_v1"
+"ExecGuardStateV1" = "exec_guard_state_v1"
+"ExecutionSetBindingStateV1" = "execution_set_binding_state_v1"
+"ExternalRootClassificationV1" = "external_root_classification_v1"
+"ExternalRootClassV1" = "external_root_class_v1"
+"EffectDecisionKeyV1" = "effect_decision_key_v1"
+"FileOpenEventV1" = "file_open_event_v1"
+"FileOpenTargetV1" = "file_open_target_v1"
+"Id128V1" = "id128_v1"
+"IdentityHealthV1" = "identity_health_v1"
+"IdentityRuntimeConfigV1" = "identity_runtime_config_v1"
+"InstalledRoleClassV1" = "installed_role_class_v1"
+"InitialRootStateV1" = "initial_root_state_v1"
+"PendingExecStateV1" = "pending_exec_state_v1"
+"PendingExecV1" = "pending_exec_v1"
+"PhysicalDecisionKindV1" = "physical_decision_kind_v1"
+"PhysicalDecisionV1" = "physical_decision_v1"
+"ProcessSecurityStateKindV1" = "process_security_state_kind_v1"
+"ProcessSecurityStateV1" = "process_security_state_v1"
+"ReferenceTombstoneStateV1" = "reference_tombstone_state_v1"
+"TaskCoordinateStateV1" = "task_coordinate_state_v1"
+"TaskCoordinateV1" = "task_coordinate_v1"
+"TaskLabelV1" = "task_label_v1"
+"TaskLabelCandidateV1" = "task_label_candidate_v1"
+"TaskPlacementExpectationV1" = "task_placement_expectation_v1"
+"TaskReferenceTombstoneV1" = "task_reference_tombstone_v1"

@@ -11,8 +11,6 @@ use crate::Result;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InterceptorConfig {
-    pub object_path: PathBuf,
-    pub object_sha256: String,
     pub runtime_btf_path: PathBuf,
     pub lease_path: PathBuf,
     pub pin_root: PathBuf,
@@ -42,6 +40,23 @@ pub struct RuntimeObservationConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct WorkloadBindingConfig {
+    pub binding_id: String,
+    pub execution_set_id: String,
+    pub profile_id: String,
+    pub container_id: String,
+    pub container_generation: u64,
+    pub root_cgroup_path: PathBuf,
+    pub lifecycle_generation: u64,
+    pub active_profile_generation_ref_id: u64,
+    pub initial_role_id: u32,
+    pub external_role_id: u32,
+    #[serde(default)]
+    pub arm_initial_root: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NodeConfig {
     pub node_id: String,
     pub state_directory: PathBuf,
@@ -49,6 +64,8 @@ pub struct NodeConfig {
     pub control: NodeControlConfig,
     #[serde(default)]
     pub runtime_observation: Option<RuntimeObservationConfig>,
+    #[serde(default)]
+    pub workload_bindings: Vec<WorkloadBindingConfig>,
 }
 
 impl NodeConfig {
@@ -64,12 +81,6 @@ impl NodeConfig {
             !self.node_id.is_empty() && !self.node_id.chars().any(char::is_whitespace),
             InvalidConfigurationSnafu {
                 reason: "node_id must be nonempty and contain no whitespace",
-            }
-        );
-        ensure!(
-            is_sha256_hex(&self.interceptor.object_sha256),
-            InvalidConfigurationSnafu {
-                reason: "interceptor object digest must be SHA-256 hex",
             }
         );
         ensure!(
@@ -94,15 +105,21 @@ impl NodeConfig {
                 }
             );
         }
+        for binding in &self.workload_bindings {
+            ensure!(
+                !binding.container_id.is_empty()
+                    && binding.container_generation > 0
+                    && binding.lifecycle_generation > 0
+                    && binding.active_profile_generation_ref_id > 0
+                    && binding.initial_role_id > 0
+                    && binding.external_role_id > 0,
+                InvalidConfigurationSnafu {
+                    reason: "Workload bindings require nonempty container identity and nonzero generations and roles",
+                }
+            );
+        }
         Ok(())
     }
-}
-
-fn is_sha256_hex(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 impl NodeControlConfig {

@@ -1,6 +1,6 @@
 # How To Manually Accept Phase 2
 
-Status: Proposed runbook; no Phase 2 implementation or test has been run.
+Status: Implemented companion; privileged physical acceptance has not yet run.
 
 Phase: [Exact Native Identity](../phase-2-exact-native-identity.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -13,14 +13,29 @@ restart, reparenting, movement, or identifier reuse.
 
 ## Automated Companion
 
-```text
-IMPLEMENTATION COMMAND REQUIRED: run Phase 2 task-storage, fork/clone/vfork,
-exec/PONR, runtime-entry, replay, reference, restart, reuse, race, and
-first-protected-effect suites.
+```bash
+cargo test -p erebor-interceptor-abi -p erebor-interceptor \
+  -p mithril-node -p mithril-e2e --all-targets --all-features
+cargo run -p mithril-e2e --bin mithril-identity-test -- \
+  --repo-root . --output-directory /tmp/mithril-identity-final verify
+cargo build -p mithril-e2e --bin mithril-identity-test
+sudo mkdir /sys/fs/cgroup/erebor-mithril-identity-test
+sudo target/debug/mithril-identity-test --repo-root . \
+  --output-directory /tmp/mithril-identity-physical \
+  physical-probe \
+  --cgroup-path /sys/fs/cgroup/erebor-mithril-identity-test \
+  --pin-root /sys/fs/bpf/erebor-mithril-identity-test \
+  --lease-path /tmp/mithril-identity-physical/owner.lock
 ```
 
-The harness must generate concurrency and pre-wake timing. The operator reviews
-the task/process/entry state transitions and physical first-effect result.
+The physical runner refuses a pre-existing pin root or occupied cgroup, has a
+five-second bound on every asynchronous observation, and owns every process it
+creates. It proves external-root classification on cgroup movement, native
+creator identity, pre-wake coordinates, exec commit, typed reference release,
+and exact pinned-map reuse after restart. Identity pins deliberately survive
+the runner so the retained manifest can be inspected. The broader matrix below
+still supplies the required concurrency, failure-injection, runtime, and
+Kubernetes cases before the phase may be marked Done.
 
 ## Procedure
 
