@@ -262,28 +262,7 @@ impl KernelHostOwner {
         self.validate_config()?;
         let mut builder = ObjectBuilder::default();
         let open = self.open_object(&mut builder, "inspect BPF object")?;
-        let mut maps = open
-            .maps()
-            .map(|map| KernelMapLayoutV1 {
-                name: map.name().to_string_lossy().into_owned(),
-                map_type: format!("{:?}", map.map_type()),
-                key_size: map.key_size(),
-                value_size: map.value_size(),
-                max_entries: map.max_entries(),
-            })
-            .collect::<Vec<_>>();
-        let mut programs = open
-            .progs()
-            .map(|program| KernelProgramLayoutV1 {
-                name: program.name().to_string_lossy().into_owned(),
-                section: program.section().to_string_lossy().into_owned(),
-                program_type: format!("{:?}", program.prog_type()),
-            })
-            .collect::<Vec<_>>();
-        maps.sort_by(|left, right| left.name.cmp(&right.name));
-        programs.sort_by(|left, right| left.name.cmp(&right.name));
-        self.validate_program_set(&programs)?;
-        Ok(KernelObjectLayoutV1 { maps, programs })
+        self.inspect_open_object(&open)
     }
 
     pub fn start(&self) -> Result<KernelHost> {
@@ -299,7 +278,15 @@ impl KernelHostOwner {
                 }
             );
         }
-        let layout = self.inspect()?;
+        let mut builder = ObjectBuilder::default();
+        builder
+            .btf_custom_path(&self.config.runtime_btf_path)
+            .context(LibbpfSnafu {
+                action: "set runtime BTF",
+                path: &self.config.runtime_btf_path,
+            })?;
+        let open = self.open_object(&mut builder, "open BPF object")?;
+        let layout = self.inspect_open_object(&open)?;
         let lease = PinRootLease::acquire(&self.config.lease_path)?;
         if let Some(pin_root) = &self.config.pin_root {
             if pin_root.exists()
@@ -315,24 +302,14 @@ impl KernelHostOwner {
                     self.config.object_kind == KernelObjectKind::Identity,
                     StalePinRootSnafu { path: pin_root }
                 );
-                return self.recover(pin_root, layout, lease, preflight, object_sha256);
+                return self.recover(pin_root, layout, lease, preflight, object_sha256, open);
             }
         }
 
-        let mut builder = ObjectBuilder::default();
-        builder
-            .btf_custom_path(&self.config.runtime_btf_path)
-            .context(LibbpfSnafu {
-                action: "set runtime BTF",
-                path: &self.config.runtime_btf_path,
-            })?;
-        let mut object = self
-            .open_object(&mut builder, "open BPF object")?
-            .load()
-            .context(LibbpfSnafu {
-                action: "load BPF object",
-                path: self.config.object_path(),
-            })?;
+        let mut object = open.load().context(LibbpfSnafu {
+            action: "load BPF object",
+            path: self.config.object_path(),
+        })?;
 
         let required_programs = self.config.object_kind.required_programs();
         let mut links = Vec::with_capacity(required_programs.len());
@@ -507,6 +484,7 @@ impl KernelHostOwner {
         lease: PinRootLease,
         preflight: KernelPreflightV1,
         object_sha256: String,
+        mut open: OpenObject,
     ) -> Result<KernelHost> {
         let maps_root = pin_root.join("maps");
         let links_root = pin_root.join("links");
@@ -530,14 +508,6 @@ impl KernelHostOwner {
             StalePinRootSnafu { path: pin_root }
         );
 
-        let mut builder = ObjectBuilder::default();
-        builder
-            .btf_custom_path(&self.config.runtime_btf_path)
-            .context(LibbpfSnafu {
-                action: "set runtime BTF",
-                path: &self.config.runtime_btf_path,
-            })?;
-        let mut open = self.open_object(&mut builder, "open BPF object for recovery")?;
         for mut map in open.maps_mut() {
             let path = maps_root.join(map.name());
             map.reuse_pinned_map(&path).context(LibbpfSnafu {
@@ -739,6 +709,31 @@ impl KernelHostOwner {
             action,
             path: self.config.object_path(),
         })
+    }
+
+    fn inspect_open_object(&self, open: &OpenObject) -> Result<KernelObjectLayoutV1> {
+        let mut maps = open
+            .maps()
+            .map(|map| KernelMapLayoutV1 {
+                name: map.name().to_string_lossy().into_owned(),
+                map_type: format!("{:?}", map.map_type()),
+                key_size: map.key_size(),
+                value_size: map.value_size(),
+                max_entries: map.max_entries(),
+            })
+            .collect::<Vec<_>>();
+        let mut programs = open
+            .progs()
+            .map(|program| KernelProgramLayoutV1 {
+                name: program.name().to_string_lossy().into_owned(),
+                section: program.section().to_string_lossy().into_owned(),
+                program_type: format!("{:?}", program.prog_type()),
+            })
+            .collect::<Vec<_>>();
+        maps.sort_by(|left, right| left.name.cmp(&right.name));
+        programs.sort_by(|left, right| left.name.cmp(&right.name));
+        self.validate_program_set(&programs)?;
+        Ok(KernelObjectLayoutV1 { maps, programs })
     }
 
     fn validate_program_set(&self, programs: &[KernelProgramLayoutV1]) -> Result<()> {
@@ -999,7 +994,7 @@ mod tests {
     use std::fs;
 
     use super::{
-        KernelHostConfig, KernelHostOwner, KernelProgramLayoutV1, PinRollback,
+        KernelHostConfig, KernelHostOwner, KernelObjectKind, KernelProgramLayoutV1, PinRollback,
         REQUIRED_QUALIFICATION_LSM_PROGRAMS,
     };
     use crate::error::IoSnafu;
@@ -1024,6 +1019,16 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(owner.validate_program_set(&programs).is_err());
+    }
+
+    #[test]
+    fn identity_program_selection_includes_lifecycle_hooks_but_not_the_iterator_link() {
+        let kind = KernelObjectKind::Identity;
+        assert!(kind.includes("erebor_cgroup_attach_task", "tp_btf/cgroup_attach_task"));
+        assert!(kind.attaches("erebor_cgroup_attach_task", "tp_btf/cgroup_attach_task"));
+        assert!(kind.includes("erebor_reconcile_tasks", "iter/task"));
+        assert!(!kind.attaches("erebor_reconcile_tasks", "iter/task"));
+        assert!(!kind.includes("unrelated", "tracepoint/sched/sched_process_exit"));
     }
 
     #[test]
