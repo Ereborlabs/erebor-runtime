@@ -7,6 +7,7 @@ fn main() -> Result<(), io::Error> {
         proto_directory.join("guard.proto"),
         proto_directory.join("hook.proto"),
         proto_directory.join("daemon.proto"),
+        proto_directory.join("mithril.proto"),
     ];
     for proto in &protos {
         println!("cargo:rerun-if-changed={}", proto.display());

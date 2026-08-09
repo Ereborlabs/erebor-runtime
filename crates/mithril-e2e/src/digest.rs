@@ -20,12 +20,7 @@ impl DigestV1 {
 
     #[must_use]
     pub fn to_hex(self) -> String {
-        let mut encoded = String::with_capacity(64);
-        for byte in self.0 {
-            use fmt::Write as _;
-            let _ = write!(encoded, "{byte:02x}");
-        }
-        encoded
+        hex::encode(self.0)
     }
 }
 

@@ -1,18 +1,18 @@
-use std::ffi::OsStr;
 use std::fs;
 use std::fs::File;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
-use libbpf_rs::{Link, MapCore as _, MapFlags, Object, ObjectBuilder, OpenObject, ProgramType};
+use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
 
-use crate::error::{InvalidInputSnafu, IoSnafu, LibbpfSnafu};
-use crate::Result;
+use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu};
+use crate::{DigestV1, Result};
 
 const FILE_PROBE_TARGETS: &str = "file_probe_targets";
 const RUNTIME_BTF: &str = "/sys/kernel/btf/vmlinux";
+const PHASE0_BOOT_ID: &str = "phase0-qualification-boot";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct BpfMapLayoutV1 {
@@ -53,10 +53,7 @@ pub struct BpfPhase0Loader {
 }
 
 pub struct BpfPhase0Attachment {
-    object_path: PathBuf,
-    object: Object,
-    links: Vec<Link>,
-    records: Vec<BpfLinkRecordV1>,
+    host: KernelHost,
 }
 
 impl BpfPhase0Loader {
@@ -68,99 +65,50 @@ impl BpfPhase0Loader {
     }
 
     pub fn inspect(&self) -> Result<BpfObjectLayoutV1> {
-        let open_object = self.open()?;
-        Self::describe_open_object(&self.object_path, &open_object)
+        let owner = self.owner()?;
+        let layout = owner.inspect().context(InterceptorSnafu)?;
+        let mut lsm_programs = Vec::new();
+        let mut other_programs = Vec::new();
+        for program in layout.programs {
+            if program.section.starts_with("lsm/") {
+                lsm_programs.push(program.name);
+            } else {
+                other_programs.push(program.name);
+            }
+        }
+        let layout = BpfObjectLayoutV1 {
+            maps: layout
+                .maps
+                .into_iter()
+                .map(|map| BpfMapLayoutV1 {
+                    name: map.name,
+                    map_type: map.map_type,
+                    key_size: map.key_size,
+                    value_size: map.value_size,
+                    max_entries: map.max_entries,
+                })
+                .collect(),
+            lsm_programs,
+            other_programs,
+        };
+        Self::validate_layout(&self.object_path, &layout)?;
+        Ok(layout)
     }
 
     pub fn attach(&self) -> Result<BpfPhase0Attachment> {
-        let runtime_btf = Path::new(RUNTIME_BTF);
-        ensure!(
-            runtime_btf.is_file(),
-            InvalidInputSnafu {
-                path: runtime_btf.to_path_buf(),
-                reason: "the running kernel does not expose vmlinux BTF".to_owned(),
-            }
-        );
-        let mut builder = ObjectBuilder::default();
-        builder.btf_custom_path(runtime_btf).context(LibbpfSnafu {
-            action: "set runtime BTF".to_owned(),
-            path: runtime_btf.to_path_buf(),
-        })?;
-        let open_object = builder.open_file(&self.object_path).context(LibbpfSnafu {
-            action: "open BPF object".to_owned(),
-            path: self.object_path.clone(),
-        })?;
-        let layout = Self::describe_open_object(&self.object_path, &open_object)?;
-        let object = open_object.load().context(LibbpfSnafu {
-            action: "load BPF object".to_owned(),
-            path: self.object_path.clone(),
-        })?;
-
-        let mut links = Vec::with_capacity(layout.lsm_programs.len());
-        let mut records = Vec::with_capacity(layout.lsm_programs.len());
-        for program in object.progs_mut() {
-            if !program.section().to_string_lossy().starts_with("lsm/") {
-                continue;
-            }
-            let program_name = program.name().to_string_lossy().into_owned();
-            ensure!(
-                program.prog_type() == ProgramType::Lsm,
-                InvalidInputSnafu {
-                    path: self.object_path.clone(),
-                    reason: format!(
-                        "`{program_name}` has an LSM section but not the LSM program type"
-                    ),
-                }
-            );
-            let link = program.attach_lsm().context(LibbpfSnafu {
-                action: format!("attach LSM program `{program_name}`"),
-                path: self.object_path.clone(),
-            })?;
-            let link_info = link.info().context(LibbpfSnafu {
-                action: format!("read back LSM link `{program_name}`"),
-                path: self.object_path.clone(),
-            })?;
-            ensure!(
-                link_info.id != 0 && link_info.prog_id != 0,
-                InvalidInputSnafu {
-                    path: self.object_path.clone(),
-                    reason: format!("`{program_name}` attached without a readable link/program ID"),
-                }
-            );
-            records.push(BpfLinkRecordV1 {
-                program: program_name,
-                link_id: link_info.id,
-                program_id: link_info.prog_id,
-            });
-            links.push(link);
-        }
-        ensure!(
-            !links.is_empty(),
-            InvalidInputSnafu {
-                path: self.object_path.clone(),
-                reason: "the BPF object has no attached LSM programs".to_owned(),
-            }
-        );
-        Ok(BpfPhase0Attachment {
-            object_path: self.object_path.clone(),
-            object,
-            links,
-            records,
-        })
+        let host = self.owner()?.start().context(InterceptorSnafu)?;
+        Ok(BpfPhase0Attachment { host })
     }
 
     pub fn run_file_open_probe(&self, output_directory: &Path) -> Result<PhysicalFileOpenProbeV1> {
         fs::create_dir_all(output_directory).context(IoSnafu {
-            path: output_directory.to_path_buf(),
+            path: output_directory,
         })?;
         let target = output_directory.join("phase0-file-open-deny-target");
-        fs::write(&target, b"phase 0 physical BPF LSM probe\n").context(IoSnafu {
-            path: target.clone(),
-        })?;
+        fs::write(&target, b"phase 0 physical BPF LSM probe\n")
+            .context(IoSnafu { path: &target })?;
         let target_inode = fs::metadata(&target)
-            .context(IoSnafu {
-                path: target.clone(),
-            })?
+            .context(IoSnafu { path: &target })?
             .ino();
         let object_layout = self.inspect()?;
         let attachment = self.attach()?;
@@ -168,9 +116,8 @@ impl BpfPhase0Loader {
         ensure!(
             allowed_before_target_install,
             InvalidInputSnafu {
-                path: target.clone(),
-                reason: "the file-open control failed before the deny target was installed"
-                    .to_owned(),
+                path: &target,
+                reason: "the file-open control failed before the deny target was installed",
             }
         );
         attachment.set_file_open_deny(target_inode)?;
@@ -181,9 +128,8 @@ impl BpfPhase0Loader {
         ensure!(
             denied_after_target_install,
             InvalidInputSnafu {
-                path: target.clone(),
-                reason: "the attached file_open hook did not return EACCES for its target"
-                    .to_owned(),
+                path: &target,
+                reason: "the attached file_open hook did not return EACCES for its target",
             }
         );
         attachment.clear_file_open_deny()?;
@@ -191,14 +137,24 @@ impl BpfPhase0Loader {
         ensure!(
             allowed_after_target_clear,
             InvalidInputSnafu {
-                path: target.clone(),
-                reason: "the file-open control did not recover after clearing the deny target"
-                    .to_owned(),
+                path: &target,
+                reason: "the file-open control did not recover after clearing the deny target",
             }
         );
+        let links = attachment
+            .host
+            .manifest()
+            .links
+            .iter()
+            .map(|link| BpfLinkRecordV1 {
+                program: link.program.clone(),
+                link_id: link.link_id,
+                program_id: link.program_id,
+            })
+            .collect();
         Ok(PhysicalFileOpenProbeV1 {
             object_layout,
-            links: attachment.records.clone(),
+            links,
             target,
             target_inode,
             allowed_before_target_install,
@@ -207,71 +163,34 @@ impl BpfPhase0Loader {
         })
     }
 
-    fn open(&self) -> Result<OpenObject> {
-        ObjectBuilder::default()
-            .open_file(&self.object_path)
-            .context(LibbpfSnafu {
-                action: "inspect BPF object".to_owned(),
-                path: self.object_path.clone(),
-            })
-    }
-
-    fn describe_open_object(object_path: &Path, object: &OpenObject) -> Result<BpfObjectLayoutV1> {
-        let maps = object
-            .maps()
-            .map(|map| BpfMapLayoutV1 {
-                name: map.name().to_string_lossy().into_owned(),
-                map_type: format!("{:?}", map.map_type()),
-                key_size: map.key_size(),
-                value_size: map.value_size(),
-                max_entries: map.max_entries(),
-            })
-            .collect::<Vec<_>>();
-        let mut lsm_programs = Vec::new();
-        let mut other_programs = Vec::new();
-        for program in object.progs() {
-            let name = program.name().to_string_lossy().into_owned();
-            if program.section().to_string_lossy().starts_with("lsm/") {
-                ensure!(
-                    program.prog_type() == ProgramType::Lsm,
-                    InvalidInputSnafu {
-                        path: object_path.to_path_buf(),
-                        reason: format!("`{name}` has an LSM section but not the LSM program type"),
-                    }
-                );
-                lsm_programs.push(name);
-            } else {
-                other_programs.push(name);
-            }
-        }
-        let layout = BpfObjectLayoutV1 {
-            maps,
-            lsm_programs,
-            other_programs,
-        };
-        Self::validate_layout(object_path, &layout)?;
-        Ok(layout)
+    fn owner(&self) -> Result<KernelHostOwner> {
+        let bytes = fs::read(&self.object_path).context(IoSnafu {
+            path: &self.object_path,
+        })?;
+        let digest = DigestV1::of(bytes).to_hex();
+        Ok(KernelHostOwner::new(KernelHostConfig::new(
+            &self.object_path,
+            digest,
+            RUNTIME_BTF,
+            self.object_path.with_extension("owner.lock"),
+            None,
+            PHASE0_BOOT_ID,
+            1,
+        )))
     }
 
     fn validate_layout(object_path: &Path, layout: &BpfObjectLayoutV1) -> Result<()> {
-        let file_targets = layout
-            .maps
-            .iter()
-            .find(|map| map.name == FILE_PROBE_TARGETS);
         ensure!(
-            matches!(
-                file_targets,
-                Some(BpfMapLayoutV1 {
-                    map_type,
-                    key_size: 4,
-                    value_size: 8,
-                    max_entries: 1,
-                    ..
-                }) if map_type == "Array"
-            ),
+            layout.maps.iter().any(|map| {
+                map.name == FILE_PROBE_TARGETS
+                    && map.map_type == "Array"
+                    && map.key_size == 4
+                    && map.value_size == 8
+                    && map.max_entries == 1
+            }),
             InvalidInputSnafu {
-                path: object_path.to_path_buf(),
-                reason: "file_probe_targets must remain a one-entry u32-to-u64 array".to_owned(),
+                path: object_path,
+                reason: "file_probe_targets must remain a one-entry u32-to-u64 array",
             }
         );
         ensure!(
@@ -280,8 +199,8 @@ impl BpfPhase0Loader {
                 .iter()
                 .any(|program| program == "phase0_file_open"),
             InvalidInputSnafu {
-                path: object_path.to_path_buf(),
-                reason: "the feasibility object has no phase0_file_open LSM program".to_owned(),
+                path: object_path,
+                reason: "the feasibility object has no phase0_file_open LSM program",
             }
         );
         Ok(())
@@ -298,52 +217,36 @@ impl BpfPhase0Attachment {
     }
 
     fn update_file_open_target(&self, inode: u64) -> Result<()> {
-        let map = self
-            .object
-            .maps()
-            .find(|map| map.name() == OsStr::new(FILE_PROBE_TARGETS))
-            .ok_or_else(|| {
-                InvalidInputSnafu {
-                    path: self.object_path.clone(),
-                    reason: "loaded object has no file_probe_targets map".to_owned(),
-                }
-                .build()
-            })?;
         let key = 0_u32.to_le_bytes();
         let value = inode.to_le_bytes();
-        map.update(&key, &value, MapFlags::ANY)
-            .context(LibbpfSnafu {
-                action: "update file-open probe target".to_owned(),
-                path: self.object_path.clone(),
-            })?;
-        let readback = map.lookup(&key, MapFlags::ANY).context(LibbpfSnafu {
-            action: "read back file-open probe target".to_owned(),
-            path: self.object_path.clone(),
-        })?;
+        self.host
+            .update_map(FILE_PROBE_TARGETS, &key, &value)
+            .context(InterceptorSnafu)?;
+        let readback = self
+            .host
+            .lookup_map(FILE_PROBE_TARGETS, &key)
+            .context(InterceptorSnafu)?;
         ensure!(
             readback.as_deref() == Some(value.as_slice()),
             InvalidInputSnafu {
-                path: self.object_path.clone(),
-                reason: "file-open probe target did not read back exactly".to_owned(),
+                path: PathBuf::from(FILE_PROBE_TARGETS),
+                reason: "file-open probe target did not read back exactly",
             }
         );
         Ok(())
     }
 }
 
-impl Drop for BpfPhase0Attachment {
-    fn drop(&mut self) {
-        self.links.clear();
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
     use snafu::ResultExt as _;
 
-    use super::BpfPhase0Loader;
+    use erebor_interceptor::{Error as InterceptorError, KernelHostConfig, KernelHostOwner};
+
+    use super::{BpfPhase0Loader, RUNTIME_BTF};
     use crate::error::IoSnafu;
     use crate::BpfPrototypeCompiler;
 
@@ -366,6 +269,50 @@ mod tests {
                 && map.value_size == 8
                 && map.max_entries == 1
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn changed_digest_and_stale_pin_root_fail_before_privileged_load() -> crate::Result<()> {
+        let output = tempfile::tempdir().context(IoSnafu {
+            path: PathBuf::from("temporary stale pin qualification directory"),
+        })?;
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let object = BpfPrototypeCompiler::new(root).compile(output.path())?;
+        let wrong_digest = KernelHostOwner::new(KernelHostConfig::new(
+            &object.object_path,
+            "0".repeat(64),
+            RUNTIME_BTF,
+            output.path().join("wrong-digest.lock"),
+            None,
+            "qualification-boot",
+            1,
+        ));
+        assert!(matches!(
+            wrong_digest.start(),
+            Err(InterceptorError::ManifestMismatch { .. })
+        ));
+
+        let pin_root = output.path().join("pins");
+        fs::create_dir(&pin_root).context(IoSnafu {
+            path: pin_root.clone(),
+        })?;
+        fs::write(pin_root.join("stale"), b"stale").context(IoSnafu {
+            path: pin_root.clone(),
+        })?;
+        let stale = KernelHostOwner::new(KernelHostConfig::new(
+            &object.object_path,
+            &object.object_sha256,
+            RUNTIME_BTF,
+            output.path().join("stale.lock"),
+            Some(pin_root),
+            "qualification-boot",
+            1,
+        ));
+        assert!(matches!(
+            stale.start(),
+            Err(InterceptorError::StalePinRoot { .. })
+        ));
         Ok(())
     }
 }

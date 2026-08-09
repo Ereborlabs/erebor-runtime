@@ -4,6 +4,7 @@ mod agent;
 mod approvals;
 mod error;
 mod filesystem;
+mod mithril;
 mod policy;
 mod runner;
 mod session;
@@ -36,6 +37,7 @@ pub use erebor_runtime_ipc::v1::{
 };
 use error::{ConnectSnafu, DaemonSnafu, IpcSnafu, ProtocolSnafu, TimedOutSnafu};
 pub use error::{DaemonClientError, Result};
+pub use mithril::MithrilObservationClient;
 pub use runner::RunnerCapability;
 pub use session::{SessionEventPage, SessionEvidencePage, SessionLogPage};
 

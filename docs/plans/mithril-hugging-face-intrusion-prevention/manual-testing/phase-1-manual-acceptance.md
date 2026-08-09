@@ -1,6 +1,6 @@
 # How To Manually Accept Phase 1
 
-Status: Proposed runbook; no Phase 1 implementation or test has been run.
+Status: Implemented companion checks; the privileged host lifecycle command must be run on each physically supported platform.
 
 Phase: [One-Binary Node Chassis](../phase-1-one-binary-node-chassis.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -13,11 +13,21 @@ an effect-prevention claim.
 
 ## Automated Companion
 
-```text
-IMPLEMENTATION COMMAND REQUIRED: run Phase 1 crate tests, exclusive-owner and
-partial-attach integration tests, mTLS/sequence/reconnect tests, packaging
-smoke, and applicable lifecycle probes.
+```bash
+cargo test -p erebor-interceptor -p erebor-runtime-ipc \
+  -p erebor-runtime-client -p mithril-control -p mithril-node -p mithril-e2e \
+  --all-targets --all-features
+cargo build -p mithril-e2e --bin mithril-phase1
+sudo target/debug/mithril-phase1 --repo-root . \
+  --output-directory /tmp/mithril-phase1-final \
+  --pin-root /sys/fs/bpf/erebor-mithril-phase1-final \
+  --lease-path /tmp/mithril-phase1-final/owner.lock
 ```
+
+The lifecycle runner uses the production `KernelHostOwner`. It refuses an
+existing pin root, pins and reopens every map/link, rejects a concurrent owner,
+shuts down, restarts once, shuts down again, and verifies the unchanged worker
+fixture digest. It removes only the dedicated pin root it created.
 
 ## Procedure
 

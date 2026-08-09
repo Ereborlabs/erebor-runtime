@@ -1,25 +1,21 @@
 #include "vmlinux.h"
+#include "erebor_interceptor_abi.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-struct task_label_candidate {
-    __u64 label;
-};
-
-struct file_probe_target {
-    __u64 inode;
-};
-
-struct file_probe_event {
-    __u64 inode;
-    __s32 result;
-};
+_Static_assert(sizeof(TaskLabelCandidateV1) == 8, "task label ABI size");
+_Static_assert(sizeof(FileOpenTargetV1) == 8, "file target ABI size");
+_Static_assert(sizeof(FileOpenEventV1) == 16, "file event ABI size");
+_Static_assert(sizeof(EffectDecisionKeyV1) == 48, "decision key ABI size");
+_Static_assert(__builtin_offsetof(EffectDecisionKeyV1, composite_atom_id) == 24,
+               "decision atom ABI offset");
+_Static_assert(sizeof(PhysicalDecisionV1) == 16, "decision value ABI size");
 
 struct {
     __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
     __type(key, int);
-    __type(value, struct task_label_candidate);
+    __type(value, TaskLabelCandidateV1);
     __uint(map_flags, BPF_F_NO_PREALLOC);
 } task_labels SEC(".maps");
 
@@ -27,7 +23,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 1);
     __type(key, __u32);
-    __type(value, struct file_probe_target);
+    __type(value, FileOpenTargetV1);
 } file_probe_targets SEC(".maps");
 
 struct {
@@ -40,8 +36,8 @@ int BPF_PROG(phase0_task_alloc, struct task_struct *task,
              unsigned long clone_flags, int ret)
 {
     struct task_struct *parent;
-    struct task_label_candidate *parent_label;
-    struct task_label_candidate *child_label;
+    TaskLabelCandidateV1 *parent_label;
+    TaskLabelCandidateV1 *child_label;
 
     if (ret != 0)
         return ret;
@@ -63,8 +59,8 @@ int BPF_PROG(phase0_file_open, struct file *file, int ret)
     __u32 key = 0;
     __u64 inode;
     int decision = 0;
-    struct file_probe_target *target;
-    struct file_probe_event *event;
+    FileOpenTargetV1 *target;
+    FileOpenEventV1 *event;
 
     if (ret != 0)
         return ret;
@@ -78,6 +74,7 @@ int BPF_PROG(phase0_file_open, struct file *file, int ret)
     if (event) {
         event->inode = inode;
         event->result = decision;
+        event->reserved = 0;
         bpf_ringbuf_submit(event, 0);
     }
     return decision;

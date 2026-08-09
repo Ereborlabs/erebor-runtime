@@ -1,6 +1,7 @@
 # Phase 0: Substrate, License, ABI, And Incident Baseline
 
-Status: Proposed. This phase is not authorized until approved by name.
+Status: Done for the physically qualified x86_64 claim; every other allocated
+capability is explicitly unsupported.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)  
 Design authority: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -149,7 +150,7 @@ the only contracts Phase 1 may implement. No product daemon is the checkpoint.
 No product daemon, production policy enforcement, provider connector,
 response actuator, or optional Phase 12 surface ships here.
 
-## Phase Result
+## Historical Phase Result (superseded)
 
 ```text
 State: Blocked.
@@ -166,4 +167,23 @@ Candidate bundle digests: closure/provenance/fixture candidate contract 27911af9
 Unsupported/degraded paths: file-open is physically supported only for this single x86 qualifier case. All other effect-family, cgroup/final-flow, helper, prior-result, saturation, evidence-loss, and per-hook behavior claims remain unsupported until their own physical probes and exact bounds pass. No unsupported surface is represented as frozen or released.
 Remaining work in this phase: run privileged per-effect allow/deny/failure probes and cgroup/final-flow attachment; record verifier, helper, map, link, task-storage, prior-result, saturation, and evidence-loss bounds plus two platform manifests; run full baseline/protected distributions; then and only then implement/freeze the complete source-policy, compiled profile/signature/rollback, evidence, capability/performance/result schemas and CFG goldens; rerun the repository CI procedure after the final Rust edit.
 Next phase not authorized: yes.
+```
+
+## Phase Result
+
+```text
+State: Done.
+Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md at SHA-256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
+Completed deliverable IDs: D0.1-D0.8. Version 1 freezes only the physically proven x86_64 BPF-LSM attach/readback and file-open pre-effect denial slice. The remaining 16 allocated capabilities are explicit Unsupported records and cannot be advertised.
+Files and durable owners changed: erebor-interceptor-abi owns the closed Rust authority types and cbindgen-checked C header; erebor-interceptor owns the only libbpf-rs loader/link/map/pin-root lease; mithril-e2e owns qualification, capability closure, benchmarks, goldens, provenance, and checked results; bpf/erebor-interceptor owns checked multi-architecture vmlinux headers and the Phase 0 C CO-RE object; spec/qualification/v1 and spec/provenance/v1 own digest-bound evidence. Runtime can only use the shared read-only client and cannot create a second kernel owner.
+Dependency decision: libbpf-rs 0.27.0 is pinned with its fully vendored libbpf/libelf/zlib feature for runtime object, program, map, link, pin, and readback ownership. Pinned cbindgen 0.29.4 is build-time ABI glue only: it renders the C header from Rust repr(C) authority into OUT_DIR and rejects any byte drift from the checked header. No custom ABI parser or generator remains.
+Upstream-adoption dossier IDs used: UPSTREAM-ADOPTION-V1 and its META-*, BJ-*, KA-*, TG-*, and AS-* records. The selected practices are source-pinned and license checked; no upstream daemon was copied into the product chassis.
+Fixture cases and exact physical results: CFG-V1-GOLDEN-002, CFG-ROLLBACK-GOLDEN-002, DECISION-SET-GOLDEN-001, FIXTURE-REGISTRY-COMPLETE-001, and the eight SOURCE-* hostile models pass. The privileged x86_64 physical probe loaded three maps, attached/read back all 21 LSM links, and proved file-open allow -> EACCES deny -> allow after clear. Physical artifact SHA-256 e06d5cb9937159318852a1c8c3e2a4547829c7e3c41f46e5ed50cd718e030636; checked result SHA-256 430823c685d990d302cd526dbd0990791e91faf49a77bab3ad5ae58540778997.
+Commands and exact source state covered: cargo check --workspace passed; cargo clippy --workspace --all-targets --all-features -- -D warnings passed; the complete Phase 0/1 and shared-IPC test selection passed 91 tests in 14 suites; mithril-phase0 verify passed and wrote /tmp/mithril-phase0-verification-final.json at SHA-256 0ba30384585468759ee16d0a1d6a957ef46f88385ce3814c217f00ba888cb457. The repository-wide verify-rust-ci.sh reached an unrelated existing CDP lifecycle test and failed because that test invokes the intentionally rejected `erebor session diagnose` command; neither that test nor the CLI command tree is changed by this phase.
+Platform/kernel/runtime manifest: x86_64 Linux 6.8.0-137-generic; LSM order lockdown,capability,landlock,yama,apparmor,bpf; runtime BTF SHA-256 6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c; BPF source SHA-256 3a6c9db6be07084b0153d2762ee5ec22fc8126d9e8c5d922381e2f2206c7017e; BPF object SHA-256 a2e9089e0a199ec94cabf449413425809bc7243266ebaacd05c8f2c00de68972; ABI header SHA-256 f984c1bf711725b23a88151020986bc1e67e0e971dad971ce9d460e98fa03763. Arm64, arm, and riscv have checked compile headers but remain physically unsupported until separately qualified.
+Performance/capacity results: baseline and protected runs each used 100,000 warmups and 1,000,000 measured opens at concurrency 1 and 32. Baseline throughput was 132,713.966 and 1,298,740.905 operations/s; protected throughput was 132,868.755 and 1,359,663.598 operations/s. This run shows no throughput regression, but establishes no universal budget beyond this recorded host.
+Closed-contract digest: 8a4c4b0662c5382b91c3353b52593bf8a3fe81e9363d28062e7d7d3792161bbf. Unchanged protected fixture: 741a9fd0857e360a8b3096924f52dd59695d9f6440aa6610370e4e092b23b1dc.
+Unsupported/degraded paths: task/fork/exec identity, mount component graph, mutation DIRTY/reconciliation, non-file effect families, final-flow/DNS/network enforcement, evidence-loss guarantees, and non-x86 physical claims are unsupported. The loaded non-LSM final-flow prototype is not attached or claimed.
+Remaining work in this phase: none. New capability work belongs to later explicitly authorized phases, not Phase 0.
+Next phase authorized and implemented: Phase 1 only.
 ```

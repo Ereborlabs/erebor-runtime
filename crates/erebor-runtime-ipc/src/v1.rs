@@ -23,6 +23,7 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// envelope protocol remains independent so guard and hook transports are not
 /// needlessly invalidated by a daemon-control-only change.
 pub const DAEMON_CONTROL_PROTOCOL_VERSION: u32 = 3;
+pub const MITHRIL_OBSERVATION_PROTOCOL_VERSION: u32 = 1;
 pub const KIND_GUARD_HELLO: &str = "erebor.runtime.ipc.v1.GuardHello";
 pub const KIND_GUARD_HELLO_ACK: &str = "erebor.runtime.ipc.v1.GuardHelloAck";
 pub const KIND_INTERCEPTION_REQUEST: &str = "erebor.runtime.ipc.v1.InterceptionRequest";
@@ -129,6 +130,13 @@ pub const KIND_ADMIN_SESSION_SET_RETENTION_HOLD_REQUEST: &str =
     "erebor.runtime.ipc.v1.AdminSessionSetRetentionHoldRequest";
 pub const KIND_DAEMON_COMMAND_RESULT: &str = "erebor.runtime.ipc.v1.DaemonCommandResult";
 pub const KIND_DAEMON_ERROR: &str = "erebor.runtime.ipc.v1.DaemonError";
+pub const KIND_MITHRIL_OBSERVATION_HELLO: &str = "erebor.runtime.ipc.v1.MithrilObservationHello";
+pub const KIND_MITHRIL_OBSERVATION_HELLO_ACK: &str =
+    "erebor.runtime.ipc.v1.MithrilObservationHelloAck";
+pub const KIND_MITHRIL_OBSERVATION_SNAPSHOT_REQUEST: &str =
+    "erebor.runtime.ipc.v1.MithrilObservationSnapshotRequest";
+pub const KIND_MITHRIL_OBSERVATION_SNAPSHOT: &str =
+    "erebor.runtime.ipc.v1.MithrilObservationSnapshot";
 pub const KIND_APPROVAL_LIST_REQUEST: &str = "erebor.runtime.ipc.v1.ApprovalListRequest";
 pub const KIND_APPROVAL_INSPECT_REQUEST: &str = "erebor.runtime.ipc.v1.ApprovalInspectRequest";
 pub const KIND_APPROVAL_APPROVE_REQUEST: &str = "erebor.runtime.ipc.v1.ApprovalApproveRequest";
@@ -173,6 +181,7 @@ pub enum EnvelopeServiceFamily {
     DaemonControl { mutating: bool },
     RuntimeGuard,
     Hook,
+    MithrilObservation,
 }
 
 impl HookHello {
@@ -318,6 +327,7 @@ fn header_is_allowed(key: &str, family: EnvelopeServiceFamily) -> bool {
         }
         EnvelopeServiceFamily::RuntimeGuard => key == INTERCEPTION_TOKEN_HEADER,
         EnvelopeServiceFamily::Hook => false,
+        EnvelopeServiceFamily::MithrilObservation => false,
     }
 }
 

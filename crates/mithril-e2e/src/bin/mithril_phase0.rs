@@ -34,6 +34,8 @@ enum Command {
         output: PathBuf,
         #[arg(long, value_enum)]
         mode: BenchmarkMode,
+        #[arg(long)]
+        bpf_object: Option<PathBuf>,
         #[arg(long, default_value_t = 100_000)]
         warmup_iterations: u64,
         #[arg(long, default_value_t = 1_000_000)]
@@ -80,13 +82,22 @@ fn run() -> Result<()> {
             mode,
             warmup_iterations,
             measured_iterations,
+            bpf_object,
         } => {
             let mode = match mode {
                 BenchmarkMode::Baseline => BenchmarkModeV1::Baseline,
                 BenchmarkMode::Protected => BenchmarkModeV1::Protected,
             };
-            let bundle = runner.benchmark(mode, &target, warmup_iterations, measured_iterations)?;
+            let bundle = runner.benchmark(
+                mode,
+                &target,
+                warmup_iterations,
+                measured_iterations,
+                bpf_object.as_deref(),
+            )?;
             runner.write_json(&output, &bundle)
         }
-    }
+    }?;
+    println!("Mithril Phase 0 command completed successfully");
+    Ok(())
 }

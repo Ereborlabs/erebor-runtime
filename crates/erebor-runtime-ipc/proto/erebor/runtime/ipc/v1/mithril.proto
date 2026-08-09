@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package erebor.runtime.ipc.v1;
+
+message MithrilObservationHello {
+  uint32 protocol_version = 1;
+  string cgroup_scope = 2;
+}
+
+message MithrilObservationHelloAck {
+  uint32 protocol_version = 1;
+  bool accepted = 2;
+  string reason = 3;
+}
+
+message MithrilObservationSnapshotRequest {}
+
+message MithrilObservationSnapshot {
+  string cgroup_scope = 1;
+  string node_boot_id = 2;
+  uint64 label_epoch = 3;
+  string program_digest = 4;
+  bool kernel_ready = 5;
+  repeated string capability_ids = 6;
+}

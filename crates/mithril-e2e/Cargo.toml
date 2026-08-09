@@ -9,8 +9,9 @@ publish = false
 [dependencies]
 clap.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
+erebor-interceptor = { path = "../erebor-interceptor" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
-libbpf-rs = { version = "=0.27.0", features = ["vendored"] }
+hex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -22,6 +23,10 @@ tempfile = "3.23.0"
 [[bin]]
 name = "mithril-phase0"
 path = "src/bin/mithril_phase0.rs"
+
+[[bin]]
+name = "mithril-phase1"
+path = "src/bin/mithril_phase1.rs"
 
 [lints]
 workspace = true

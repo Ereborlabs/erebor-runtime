@@ -1,6 +1,6 @@
 # How To Manually Accept Phase 0
 
-Status: The companion runner uses direct `libbpf-rs` loading and explicit BPF-LSM links. The privileged x86 qualifier attached all 21 LSM programs and passed its file-open allow -> deny -> allow probe. Every other effect family remains pending its own physical acceptance.
+Status: Implemented companion checks. The qualified x86 surface is BPF-LSM attach/readback plus file-open allow -> deny -> allow. Every other allocated surface is explicitly `UNSUPPORTED`, not pending or implied.
 
 Phase: [Substrate, License, ABI, And Incident Baseline](../phase-0-substrate-license-abi-and-incident-baseline.md)  
 Setup: [`KERNEL-LAB`](./environment-setup.md)
@@ -13,7 +13,8 @@ stock mechanism before its ABI freezes, or marks the surface unsupported.
 ## Automated Companion
 
 ```bash
-cargo test -p erebor-interceptor-abi -p mithril-e2e --all-targets --all-features
+cargo test -p erebor-interceptor-abi -p erebor-interceptor -p mithril-e2e \
+  --all-targets --all-features
 cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . source-check
 cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . verify \
   --output /tmp/mithril-phase0/verification.json
@@ -21,15 +22,20 @@ cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . probe \
   --output-directory /tmp/mithril-phase0/probe
 cargo build -p mithril-e2e --bin mithril-phase0
 sudo target/debug/mithril-phase0 --repo-root . physical-probe \
-  --output-directory /tmp/mithril-phase0/physical
+  --output-directory /tmp/mithril-phase0-final
 cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . benchmark \
   --target crates/mithril-e2e/fixtures/hugging-face/protected/image-digest.txt \
-  --mode baseline --output /tmp/mithril-phase0/open-baseline.json
+  --mode baseline --output /tmp/mithril-phase0-open-baseline.json
+sudo target/debug/mithril-phase0 --repo-root . benchmark \
+  --target crates/mithril-e2e/fixtures/hugging-face/protected/image-digest.txt \
+  --mode protected \
+  --bpf-object /tmp/mithril-phase0-final/phase0-feasibility.bpf.o \
+  --output /tmp/mithril-phase0-open-protected.json
 ```
 
 The benchmark command defaults to 100,000 warmups and 1,000,000 measured
-opens at both concurrency 1 and 32. Run it once before attachment and once with
-`--mode protected` after the qualified object set is attached. The runner
+opens at both concurrency 1 and 32. `--mode protected` loads and attaches the
+exact object for the duration of that benchmark through the shared owner. The runner
 retains every raw sample and its SHA-256 digest; the mode is an operator-declared
 measurement condition, not an inferred pass result.
 
@@ -38,6 +44,8 @@ representative physical probes. It does not replace verifier, concurrency, or
 N/N+1 automation.
 
 The fully vendored libbpf-rs build requires GNU `gawk` on the build host.
+Pinned `cbindgen` regenerates the ABI header in `OUT_DIR` and fails the build if
+it differs from the checked-in header; it does not generate `vmlinux.h`.
 `physical-probe` compiles the disposable object, opens it through `libbpf-rs`
 against `/sys/kernel/btf/vmlinux`, explicitly attaches each LSM program, reads
 back every link ID, and proves file-open allow → `EACCES` deny → allow after
@@ -55,8 +63,9 @@ persistent pin-root installation.
    `bpf/erebor-interceptor/include/` before accepting generated Rust/C or wire
    bytes. A successful cross-architecture compile is not a physical support
    claim; each architecture still requires its own BPF-LSM load/attach probe.
-4. Repeat one allow, deny, missing-state, saturation, and prior-LSM-denial
-   physical probe per effect family.
+4. Repeat one allow, deny, and clear physical probe for the supported file-open
+   slice. Confirm every unqualified effect family remains `UNSUPPORTED` in the
+   capability matrix.
 5. Review Rust/C layouts, deterministic bytes, fixture equality, and rejected
    identifier reports.
 6. Compare baseline/protected distributions and exact N/N+1 failure results.
@@ -92,8 +101,8 @@ persistent pin-root installation.
 
 ## Required Artifacts And Pass Rule
 
-Retain source/provenance dossier, verifier logs, capability manifests, deferred
-ABI-golden plan, fixture equality report, raw benchmark distributions, capacity
+Retain source/provenance dossier, verifier logs, capability manifests, frozen
+ABI goldens, fixture equality report, raw benchmark distributions, capacity
 records, protected-workload baseline digest, and the closure ledger. Phase 0
 passes only when every allocated surface has a physical prototype and exact
 bound or is removed from the supported claim.

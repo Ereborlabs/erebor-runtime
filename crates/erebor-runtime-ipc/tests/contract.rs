@@ -541,6 +541,7 @@ fn split_proto_contract_files_contain_the_v1_schema() {
         include_str!("../proto/erebor/runtime/ipc/v1/guard.proto"),
         include_str!("../proto/erebor/runtime/ipc/v1/hook.proto"),
         include_str!("../proto/erebor/runtime/ipc/v1/daemon.proto"),
+        include_str!("../proto/erebor/runtime/ipc/v1/mithril.proto"),
     );
 
     assert!(proto.contains("message Envelope"));
@@ -563,5 +564,7 @@ fn split_proto_contract_files_contain_the_v1_schema() {
     assert!(proto.contains("message SessionPruneRequest"));
     assert!(proto.contains("message AdminSessionStopRequest"));
     assert!(proto.contains("message AdminSessionSetRetentionHoldRequest"));
+    assert!(proto.contains("message MithrilObservationSnapshot"));
+    assert!(!proto.contains("MithrilObservationMutation"));
     assert!(!proto.contains("message Envelope {\n  uint32 protocol_version = 1;\n  uint64 message_id = 2;\n  uint64 correlation_id = 3;\n  string session_id"));
 }
