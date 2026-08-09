@@ -559,7 +559,7 @@ fn test_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
         image_digest: "sha256:phase2-image".to_owned(),
         container_kind: mithril_node::ContainerKindV1::Application,
         container_generation: 1,
-        root_cgroup_path: cgroup_path.to_path_buf(),
+        root_cgroup_path: Some(cgroup_path.to_path_buf()),
         lifecycle_generation: 1,
         active_profile_generation_ref_id: PROFILE_GENERATION_REF_ID,
         initial_role_id: 10,

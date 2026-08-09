@@ -23,7 +23,9 @@ Then run only the case being checked:
 Kubernetes is optional, not excluded: only `kubernetes-exec.sh` requires it.
 The Docker case derives a trusted test-only configured cgroup binding from
 `docker inspect`. CRI and Kubernetes cases require the full live container ID
-and its exact `workload_bindings` entry in the supplied node config.
+and its exact test profile assignment in `workload_bindings`; the temporary
+config deliberately removes `root_cgroup_path` so `mithril-node` must resolve,
+validate, and reconcile the live cgroup through CRI.
 
 Every executable starts the real `mithril-node`, performs one operator-driven
 case, and removes its test tasks, BPF pins, lease, temporary config, state, and

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -68,7 +69,8 @@ pub struct WorkloadBindingConfig {
     pub image_digest: String,
     pub container_kind: ContainerKindV1,
     pub container_generation: u64,
-    pub root_cgroup_path: PathBuf,
+    #[serde(default)]
+    pub root_cgroup_path: Option<PathBuf>,
     pub lifecycle_generation: u64,
     pub active_profile_generation_ref_id: u64,
     pub initial_role_id: u32,
@@ -138,6 +140,9 @@ impl NodeConfig {
                 }
             );
         }
+        let mut binding_ids = BTreeSet::new();
+        let mut execution_set_ids = BTreeSet::new();
+        let mut container_ids = BTreeSet::new();
         for binding in &self.workload_bindings {
             ensure!(
                 (32..=128).contains(&binding.container_id.len())
@@ -152,6 +157,21 @@ impl NodeConfig {
                     && binding.external_role_id > 0,
                 InvalidConfigurationSnafu {
                     reason: "Workload bindings require nonempty container identity and nonzero generations and roles",
+                }
+            );
+            ensure!(
+                self.container_runtime.is_some() || binding.root_cgroup_path.is_some(),
+                InvalidConfigurationSnafu {
+                    reason: "non-CRI workload bindings require root_cgroup_path",
+                }
+            );
+            ensure!(
+                binding_ids.insert(&binding.binding_id)
+                    && execution_set_ids.insert(&binding.execution_set_id)
+                    && container_ids.insert(&binding.container_id),
+                InvalidConfigurationSnafu {
+                    reason:
+                        "workload binding, execution-set, and container identities must be unique",
                 }
             );
         }
@@ -235,7 +255,7 @@ mod tests {
                 image_digest: "sha256:image".to_owned(),
                 container_kind: ContainerKindV1::Application,
                 container_generation: 1,
-                root_cgroup_path: PathBuf::from("/sys/fs/cgroup/test"),
+                root_cgroup_path: Some(PathBuf::from("/sys/fs/cgroup/test")),
                 lifecycle_generation: 1,
                 active_profile_generation_ref_id: 1,
                 initial_role_id: 1,
@@ -254,5 +274,23 @@ mod tests {
             Some(Duration::from_secs(2))
         );
         Ok(())
+    }
+
+    #[test]
+    fn cri_binding_resolves_its_cgroup_locally() -> crate::Result<()> {
+        let mut config = config();
+        config.container_runtime = Some(super::ContainerRuntimeConfig {
+            socket_path: PathBuf::from("/run/containerd/containerd.sock"),
+            reconciliation_interval_ms: 2_000,
+        });
+        config.workload_bindings[0].root_cgroup_path = None;
+        config.validate()
+    }
+
+    #[test]
+    fn non_cri_binding_requires_an_exact_cgroup() {
+        let mut config = config();
+        config.workload_bindings[0].root_cgroup_path = None;
+        assert!(config.validate().is_err());
     }
 }

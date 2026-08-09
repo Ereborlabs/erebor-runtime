@@ -53,6 +53,13 @@ phase may be marked Done.
 5. Attempt a harmless protected read from every incomplete/ambiguous task and
    inspect the fail-closed physical result.
 
+For CRI-backed cases, omit `root_cgroup_path` from the temporary binding and
+verify that the running node discovers and retires the exact container lifetime
+without restart. Observing an already-running container proves conservative
+external-root coverage, not pre-start initial-root admission; test the latter
+only from a Created container with an empty cgroup or a separately qualified
+start hook.
+
 ## Entry Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |

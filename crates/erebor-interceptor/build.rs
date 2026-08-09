@@ -29,6 +29,12 @@ fn build_bpf() -> Result<(), Box<dyn std::error::Error>> {
     for path in [
         &source,
         &bpf_root.join("programs/identity_maps.h"),
+        &bpf_root.join("programs/identity_task_helpers.h"),
+        &bpf_root.join("programs/identity_root_helpers.h"),
+        &bpf_root.join("programs/identity_lifecycle.bpf.h"),
+        &bpf_root.join("programs/identity_exec.bpf.h"),
+        &bpf_root.join("programs/identity_effects.bpf.h"),
+        &bpf_root.join("programs/identity_exit.bpf.h"),
         &bpf_root.join("include/erebor_interceptor_abi.h"),
         &bpf_root.join("include/linux_uapi.h"),
         &bpf_root.join("include/vmlinux.h"),

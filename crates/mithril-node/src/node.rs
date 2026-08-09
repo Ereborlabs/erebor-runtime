@@ -234,7 +234,11 @@ impl NodeChassis {
 
     async fn reconcile_bindings(&mut self) -> bool {
         match self.host.as_ref() {
-            Some(host) => self.bindings.reconcile(host).await.is_ok(),
+            Some(host) => self
+                .bindings
+                .reconcile(host, &self.config.workload_bindings)
+                .await
+                .is_ok(),
             None => false,
         }
     }

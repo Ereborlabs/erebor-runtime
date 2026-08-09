@@ -1,10 +1,9 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use hyper_util::rt::TokioIo;
 use k8s_cri::v1::runtime_service_client::RuntimeServiceClient;
-use k8s_cri::v1::{
-    ContainerFilter, ContainerState, ContainerStatusRequest, ListContainersRequest, VersionRequest,
-};
+use k8s_cri::v1::{ContainerState, ContainerStatusRequest, ListContainersRequest, VersionRequest};
 use snafu::{ensure, ResultExt as _};
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
@@ -16,6 +15,12 @@ use crate::{Result, WorkloadBindingConfig};
 const POD_UID_LABEL: &str = "io.kubernetes.pod.uid";
 const CONTAINER_NAME_LABEL: &str = "io.kubernetes.container.name";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RuntimeContainerState {
+    Created,
+    Running,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RuntimeContainerIdentity {
     pub full_container_id: String,
@@ -25,6 +30,27 @@ pub(super) struct RuntimeContainerIdentity {
     pub image_digest: String,
     pub generation: u64,
     pub cgroup_path: PathBuf,
+    pub state: RuntimeContainerState,
+}
+
+impl RuntimeContainerIdentity {
+    pub(super) fn resolve(&self, configured: &WorkloadBindingConfig) -> WorkloadBindingConfig {
+        let mut resolved = configured.clone();
+        resolved.root_cgroup_path = Some(self.cgroup_path.clone());
+        resolved.arm_initial_root =
+            configured.arm_initial_root && self.state == RuntimeContainerState::Created;
+        resolved
+    }
+
+    pub(super) fn same_lifetime_as(&self, other: &Self) -> bool {
+        self.full_container_id == other.full_container_id
+            && self.pod_uid == other.pod_uid
+            && self.sandbox_id == other.sandbox_id
+            && self.container_name == other.container_name
+            && self.image_digest == other.image_digest
+            && self.generation == other.generation
+            && self.cgroup_path == other.cgroup_path
+    }
 }
 
 pub(super) struct ContainerRuntimeInventory {
@@ -55,55 +81,61 @@ impl ContainerRuntimeInventory {
         })
     }
 
-    pub(super) async fn validate(
+    pub(super) async fn snapshot(
         &mut self,
-        expected: &WorkloadBindingConfig,
-    ) -> Result<RuntimeContainerIdentity> {
+        configured: &[WorkloadBindingConfig],
+    ) -> Result<Vec<RuntimeContainerIdentity>> {
+        let expected: BTreeMap<&str, &WorkloadBindingConfig> = configured
+            .iter()
+            .map(|binding| (binding.container_id.as_str(), binding))
+            .collect();
         let listed = self
             .client
-            .list_containers(ListContainersRequest {
-                filter: Some(ContainerFilter {
-                    id: expected.container_id.clone(),
-                    ..ContainerFilter::default()
-                }),
-            })
+            .list_containers(ListContainersRequest { filter: None })
             .await
             .context(ContainerRuntimeRpcSnafu)?
             .into_inner()
             .containers;
-        let mut exact = listed
-            .into_iter()
-            .filter(|container| container.id == expected.container_id);
-        let container = exact.next().ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: format!(
-                    "CRI has no exact live container `{}`",
-                    expected.container_id
-                ),
+        let mut seen = BTreeSet::new();
+        let mut identities = Vec::with_capacity(expected.len());
+        for container in listed {
+            let Some(expected) = expected.get(container.id.as_str()) else {
+                continue;
+            };
+            ensure!(
+                seen.insert(container.id.clone()),
+                IdentityStateSnafu {
+                    reason: format!("CRI returned duplicate container `{}`", container.id),
+                }
+            );
+            if runtime_state(container.state).is_none() {
+                continue;
             }
-            .build()
-        })?;
-        ensure!(
-            exact.next().is_none()
-                && container.state == ContainerState::ContainerRunning as i32
-                && container.pod_sandbox_id == expected.sandbox_id,
-            IdentityStateSnafu {
-                reason: format!(
-                    "CRI container `{}` is duplicated, stopped, or in another sandbox",
-                    expected.container_id
-                ),
+            if let Some(identity) = self.inspect(container, expected).await? {
+                identities.push(identity);
             }
-        );
+        }
+        identities.sort_by(|left, right| left.full_container_id.cmp(&right.full_container_id));
+        Ok(identities)
+    }
 
-        let response = self
+    async fn inspect(
+        &mut self,
+        container: k8s_cri::v1::Container,
+        expected: &WorkloadBindingConfig,
+    ) -> Result<Option<RuntimeContainerIdentity>> {
+        let response = match self
             .client
             .container_status(ContainerStatusRequest {
                 container_id: expected.container_id.clone(),
                 verbose: true,
             })
             .await
-            .context(ContainerRuntimeRpcSnafu)?
-            .into_inner();
+        {
+            Ok(response) => response.into_inner(),
+            Err(source) if source.code() == tonic::Code::NotFound => return Ok(None),
+            Err(source) => Err(source).context(ContainerRuntimeRpcSnafu)?,
+        };
         let status = response.status.ok_or_else(|| {
             IdentityStateSnafu {
                 reason: format!(
@@ -140,11 +172,14 @@ impl ContainerRuntimeInventory {
             }
             .build()
         })?;
+        let Some(status_state) = runtime_state(status.state) else {
+            return Ok(None);
+        };
         ensure!(
             status.id == expected.container_id
-                && status.state == ContainerState::ContainerRunning as i32
                 && generation == expected.container_generation
                 && pod_uid == &expected.pod_uid
+                && container.pod_sandbox_id == expected.sandbox_id
                 && container_name == &expected.container_name
                 && metadata.name == expected.container_name
                 && status.image_ref == expected.image_digest,
@@ -156,7 +191,7 @@ impl ContainerRuntimeInventory {
             }
         );
         let cgroup_path = cgroup_path_from_info(&response.info, &self.cgroup_root)?;
-        Ok(RuntimeContainerIdentity {
+        Ok(Some(RuntimeContainerIdentity {
             full_container_id: status.id,
             pod_uid: pod_uid.clone(),
             sandbox_id: container.pod_sandbox_id,
@@ -164,7 +199,18 @@ impl ContainerRuntimeInventory {
             image_digest: status.image_ref,
             generation,
             cgroup_path,
-        })
+            state: status_state,
+        }))
+    }
+}
+
+const fn runtime_state(raw: i32) -> Option<RuntimeContainerState> {
+    if raw == ContainerState::ContainerCreated as i32 {
+        Some(RuntimeContainerState::Created)
+    } else if raw == ContainerState::ContainerRunning as i32 {
+        Some(RuntimeContainerState::Running)
+    } else {
+        None
     }
 }
 
@@ -250,7 +296,12 @@ fn systemd_slice_path(slice: &str) -> Result<PathBuf> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::parse_cgroup_path;
+    use k8s_cri::v1::ContainerState;
+
+    use super::{
+        parse_cgroup_path, runtime_state, RuntimeContainerIdentity, RuntimeContainerState,
+    };
+    use crate::{ContainerKindV1, WorkloadBindingConfig};
 
     #[test]
     fn accepts_absolute_and_expands_systemd_cgroup_paths() -> crate::Result<()> {
@@ -266,5 +317,66 @@ mod tests {
         );
         assert!(parse_cgroup_path("relative/path").is_err());
         Ok(())
+    }
+
+    #[test]
+    fn inventory_accepts_only_created_or_running_containers() {
+        assert_eq!(
+            runtime_state(ContainerState::ContainerCreated as i32),
+            Some(RuntimeContainerState::Created)
+        );
+        assert_eq!(
+            runtime_state(ContainerState::ContainerRunning as i32),
+            Some(RuntimeContainerState::Running)
+        );
+        assert_eq!(runtime_state(ContainerState::ContainerExited as i32), None);
+        assert_eq!(runtime_state(ContainerState::ContainerUnknown as i32), None);
+    }
+
+    #[test]
+    fn running_container_resolves_local_cgroup_conservatively() {
+        let configured = WorkloadBindingConfig {
+            binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+            execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
+            profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
+            container_id: "a".repeat(64),
+            pod_uid: "pod-a".to_owned(),
+            sandbox_id: "sandbox-a".to_owned(),
+            container_name: "worker".to_owned(),
+            image_digest: "sha256:image-a".to_owned(),
+            container_kind: ContainerKindV1::Application,
+            container_generation: 7,
+            root_cgroup_path: None,
+            lifecycle_generation: 1,
+            active_profile_generation_ref_id: 1,
+            initial_role_id: 1,
+            external_role_id: 2,
+            arm_initial_root: true,
+        };
+        let identity = RuntimeContainerIdentity {
+            full_container_id: configured.container_id.clone(),
+            pod_uid: configured.pod_uid.clone(),
+            sandbox_id: configured.sandbox_id.clone(),
+            container_name: configured.container_name.clone(),
+            image_digest: configured.image_digest.clone(),
+            generation: configured.container_generation,
+            cgroup_path: PathBuf::from("/sys/fs/cgroup/workload"),
+            state: RuntimeContainerState::Running,
+        };
+
+        let resolved = identity.resolve(&configured);
+        assert_eq!(
+            resolved.root_cgroup_path.as_ref(),
+            Some(&identity.cgroup_path)
+        );
+        assert!(!resolved.arm_initial_root);
+
+        let mut created = identity;
+        created.state = RuntimeContainerState::Created;
+        assert!(created.resolve(&configured).arm_initial_root);
+        assert!(created.same_lifetime_as(&RuntimeContainerIdentity {
+            state: RuntimeContainerState::Running,
+            ..created.clone()
+        }));
     }
 }

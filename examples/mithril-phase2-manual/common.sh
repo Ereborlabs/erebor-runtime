@@ -44,6 +44,17 @@ phase2_begin() {
   phase2_lease=$phase2_work/owner.lock
 }
 
+phase2_cgroup_for_pid() {
+  local hierarchy controllers path
+  while IFS=: read -r hierarchy controllers path; do
+    if [[ $hierarchy == 0 && -z $controllers ]]; then
+      printf '/sys/fs/cgroup%s\n' "$path"
+      return
+    fi
+  done <"/proc/$1/cgroup"
+  return 1
+}
+
 phase2_on_exit() {
   local status=$?
   local cleanup_failed=0
@@ -79,17 +90,12 @@ phase2_prepare_docker() {
 
   phase2_container_id=$(docker inspect --format '{{.Id}}' "$phase2_container")
   phase2_init_pid=$(docker inspect --format '{{.State.Pid}}' "$phase2_container")
-  local container_name image_digest generation hierarchy controllers path
+  local container_name image_digest generation
   container_name=$(docker inspect --format '{{.Name}}' "$phase2_container")
   container_name=${container_name#/}
   image_digest=$(docker inspect --format '{{.Image}}' "$phase2_container")
   generation=$(stat -c %Y "/proc/$phase2_init_pid")
-  phase2_cgroup_path=
-  while IFS=: read -r hierarchy controllers path; do
-    if [[ $hierarchy == 0 && -z $controllers ]]; then
-      phase2_cgroup_path=/sys/fs/cgroup$path
-    fi
-  done <"/proc/$phase2_init_pid/cgroup"
+  phase2_cgroup_path=$(phase2_cgroup_for_pid "$phase2_init_pid")
   [[ -n $phase2_cgroup_path ]] || {
     echo "Docker container is not using cgroup v2" >&2
     exit 2
@@ -153,14 +159,15 @@ phase2_prepare_cri() {
      | .interceptor.lease_path = $lease
      | .runtime_observation = null
      | .workload_bindings = [.workload_bindings[] | select(.container_id == $id)]
-     | .workload_bindings[0].arm_initial_root = false' \
+     | .workload_bindings[0].arm_initial_root = false
+     | del(.workload_bindings[0].root_cgroup_path)' \
     "$phase2_source_config" >"$phase2_config"
 
   runtime_socket=$(jq -er '.container_runtime.socket_path' "$phase2_config")
   phase2_runtime_endpoint="unix://$runtime_socket"
   phase2_init_pid=$(crictl --runtime-endpoint "$phase2_runtime_endpoint" \
     inspect "$phase2_container_id" | jq -er '.info.pid')
-  phase2_cgroup_path=$(jq -er '.workload_bindings[0].root_cgroup_path' "$phase2_config")
+  phase2_cgroup_path=$(phase2_cgroup_for_pid "$phase2_init_pid")
 }
 
 phase2_prepare_auto() {
