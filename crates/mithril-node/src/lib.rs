@@ -3,7 +3,6 @@ mod control;
 mod epoch;
 mod error;
 mod identity;
-mod inventory;
 mod local;
 mod node;
 mod trust;
@@ -19,7 +18,6 @@ pub use identity::{
     NativeSecurityStateOwner, NativeTaskSnapshotV1, PreparedAuthorizationProofV1,
     ReconciliationReportV1, TrustBundleV1, WorkloadBindingOwner,
 };
-pub use inventory::{WorkloadInventory, WorkloadInventoryRecordV1};
 pub use local::RuntimeObservationServer;
 pub use node::{NodeChassis, NodeReadinessV1};
 pub use trust::{InstalledTrustGenerationV1, TrustCache};

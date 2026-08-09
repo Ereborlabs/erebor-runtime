@@ -10,7 +10,7 @@ use crate::epoch::NodeEpochs;
 use crate::error::{InterceptorSnafu, JsonSnafu, LocalTaskSnafu};
 use crate::{
     NativeSecurityStateOwner, NodeConfig, NodeControlConnector, Result, TrustCache,
-    WorkloadBindingOwner, WorkloadInventory, WorkloadInventoryRecordV1,
+    WorkloadBindingOwner,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -55,7 +55,6 @@ impl NodeChassis {
             .join("maps/identity_config")
             .exists();
         let label_epoch = NodeEpochs::label_epoch(&config.state_directory, recover_identity)?;
-        let inventory = WorkloadInventory::system().scan()?;
         let owner = KernelHostOwner::new(KernelHostConfig::identity(
             &config.interceptor.runtime_btf_path,
             &config.interceptor.lease_path,
@@ -104,7 +103,7 @@ impl NodeChassis {
                 },
             },
         ];
-        let registration = registration(manifest, label_epoch, &inventory, capabilities.clone())?;
+        let registration = registration(manifest, label_epoch, capabilities.clone())?;
         let connector =
             NodeControlConnector::new(config.control.clone(), config.node_id.clone(), boot_id);
         let trust = TrustCache::load(&config.state_directory)?;
@@ -268,7 +267,6 @@ fn id_from_uuid_bytes(bytes: [u8; 16]) -> erebor_interceptor_abi::Id128V1 {
 fn registration(
     manifest: &erebor_interceptor::KernelObjectManifestV1,
     label_epoch: u64,
-    inventory: &WorkloadInventoryRecordV1,
     capabilities: Vec<CapabilityRecord>,
 ) -> Result<NodeRegistration> {
     let manifest_bytes = serde_json::to_vec(manifest).context(JsonSnafu {
@@ -278,8 +276,6 @@ fn registration(
         platform_digest: format!("{:x}", Sha256::digest(&manifest_bytes)),
         program_digest: manifest.object_sha256.clone(),
         label_epoch,
-        inventory_process_count: inventory.process_count,
-        inventory_digest: inventory.cgroup_binding_digest.clone(),
         kernel_ready: manifest.ready,
         effect_prevention_claims_enabled: false,
         capabilities,

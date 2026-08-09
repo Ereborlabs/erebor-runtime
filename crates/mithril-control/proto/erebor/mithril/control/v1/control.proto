@@ -29,8 +29,6 @@ message NodeRegistration {
   string platform_digest = 1;
   string program_digest = 2;
   uint64 label_epoch = 3;
-  uint64 inventory_process_count = 4;
-  string inventory_digest = 5;
   bool kernel_ready = 6;
   bool effect_prevention_claims_enabled = 7;
   repeated CapabilityRecord capabilities = 8;

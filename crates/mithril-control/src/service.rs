@@ -252,7 +252,6 @@ fn valid_registration(registration: &crate::NodeRegistration) -> bool {
     registration.label_epoch > 0
         && is_sha256_hex(&registration.platform_digest)
         && is_sha256_hex(&registration.program_digest)
-        && is_sha256_hex(&registration.inventory_digest)
         && !registration.capabilities.is_empty()
         && registration.capabilities.iter().all(|capability| {
             !capability.capability_id.is_empty()

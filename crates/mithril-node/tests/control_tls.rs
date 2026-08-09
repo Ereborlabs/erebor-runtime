@@ -180,8 +180,6 @@ fn registration() -> NodeRegistration {
         platform_digest: "a".repeat(64),
         program_digest: "b".repeat(64),
         label_epoch: 1,
-        inventory_process_count: 1,
-        inventory_digest: "c".repeat(64),
         kernel_ready: true,
         effect_prevention_claims_enabled: false,
         capabilities: capabilities(),
