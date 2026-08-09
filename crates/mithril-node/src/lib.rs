@@ -15,8 +15,9 @@ pub use config::{
 pub use control::{ControlConnection, NodeControlConnector};
 pub use error::{Error, Result};
 pub use identity::{
-    AuthorizationProofOwner, AuthorizationTargetV1, IssuerTrustV1, NativeSecurityStateOwner,
-    PreparedAuthorizationProofV1, ReconciliationReportV1, TrustBundleV1, WorkloadBindingOwner,
+    AuthorizationProofOwner, AuthorizationTargetV1, IssuerTrustV1, NativeIdentityInspector,
+    NativeSecurityStateOwner, NativeTaskSnapshotV1, PreparedAuthorizationProofV1,
+    ReconciliationReportV1, TrustBundleV1, WorkloadBindingOwner,
 };
 pub use inventory::{WorkloadInventory, WorkloadInventoryRecordV1};
 pub use local::RuntimeObservationServer;

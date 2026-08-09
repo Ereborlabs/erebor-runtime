@@ -138,12 +138,6 @@ impl NodeConfig {
                 }
             );
         }
-        ensure!(
-            self.workload_bindings.is_empty() || self.container_runtime.is_some(),
-            InvalidConfigurationSnafu {
-                reason: "workload bindings require a CRI v1 container_runtime",
-            }
-        );
         for binding in &self.workload_bindings {
             ensure!(
                 (32..=128).contains(&binding.container_id.len())
@@ -162,6 +156,18 @@ impl NodeConfig {
             );
         }
         Ok(())
+    }
+
+    pub(crate) fn binding_reconciliation_interval(&self) -> Option<Duration> {
+        (!self.workload_bindings.is_empty()).then(|| {
+            Duration::from_millis(
+                self.container_runtime
+                    .as_ref()
+                    .map_or_else(default_runtime_reconciliation_ms, |runtime| {
+                        runtime.reconciliation_interval_ms
+                    }),
+            )
+        })
     }
 }
 
@@ -187,4 +193,66 @@ const fn default_reconnect_maximum_ms() -> u64 {
 
 const fn default_runtime_reconciliation_ms() -> u64 {
     2_000
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    use super::{
+        ContainerKindV1, InterceptorConfig, NodeConfig, NodeControlConfig, WorkloadBindingConfig,
+    };
+
+    fn config() -> NodeConfig {
+        NodeConfig {
+            node_id: "node-a".to_owned(),
+            state_directory: PathBuf::from("/tmp/mithril-node-test"),
+            interceptor: InterceptorConfig {
+                runtime_btf_path: PathBuf::from("/sys/kernel/btf/vmlinux"),
+                lease_path: PathBuf::from("/tmp/mithril-node-test/owner.lock"),
+                pin_root: PathBuf::from("/sys/fs/bpf/mithril-node-test"),
+            },
+            control: NodeControlConfig {
+                endpoint: "https://127.0.0.1:7443".to_owned(),
+                server_name: "mithril-control".to_owned(),
+                ca_path: PathBuf::from("/tmp/ca.pem"),
+                certificate_path: PathBuf::from("/tmp/node.pem"),
+                private_key_path: PathBuf::from("/tmp/node-key.pem"),
+                reconnect_minimum_ms: 100,
+                reconnect_maximum_ms: 5_000,
+            },
+            runtime_observation: None,
+            container_runtime: None,
+            workload_bindings: vec![WorkloadBindingConfig {
+                binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+                execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
+                profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
+                container_id: "a".repeat(64),
+                pod_uid: "configured-scope".to_owned(),
+                sandbox_id: "configured-scope".to_owned(),
+                container_name: "worker".to_owned(),
+                image_digest: "sha256:image".to_owned(),
+                container_kind: ContainerKindV1::Application,
+                container_generation: 1,
+                root_cgroup_path: PathBuf::from("/sys/fs/cgroup/test"),
+                lifecycle_generation: 1,
+                active_profile_generation_ref_id: 1,
+                initial_role_id: 1,
+                external_role_id: 2,
+                arm_initial_root: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn configured_cgroup_binding_does_not_require_cri() -> crate::Result<()> {
+        let config = config();
+        config.validate()?;
+        assert_eq!(
+            config.binding_reconciliation_interval(),
+            Some(Duration::from_secs(2))
+        );
+        Ok(())
+    }
 }

@@ -4,6 +4,7 @@ Status: Implemented companion; privileged physical acceptance has not yet run.
 
 Phase: [Exact Native Identity](../phase-2-exact-native-identity.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
+Implementation: [Phase 2 case shells and readable catalog](../../../../examples/mithril-phase2-manual/README.md)
 
 ## Outcome
 
@@ -19,7 +20,6 @@ cargo test -p erebor-interceptor-abi -p erebor-interceptor \
 cargo run -p mithril-e2e --bin mithril-identity-test -- \
   --repo-root . --output-directory /tmp/mithril-identity-final verify
 cargo build -p mithril-e2e --bin mithril-identity-test
-sudo mkdir /sys/fs/cgroup/erebor-mithril-identity-test
 sudo target/debug/mithril-identity-test --repo-root . \
   --output-directory /tmp/mithril-identity-physical \
   physical-probe \
@@ -34,15 +34,15 @@ creates. It proves external-root classification on cgroup movement, native
 creator identity, pre-wake coordinates, exec commit, typed reference release,
 and exact pinned-map reuse after restart. Descendant placement is resolved by a
 bounded walk of the live kernel cgroup ancestry; there is no userspace-scanned
-descendant index to synchronize. Identity pins deliberately survive the runner
-so the retained manifest can be inspected. The broader matrix below still
-supplies the required concurrency, failure-injection, runtime, and Kubernetes
-cases before the phase may be marked Done.
+descendant index to synchronize. The runner creates and removes its dedicated
+cgroup and pin tree; the broader matrix below still supplies the required
+concurrency, failure-injection, Docker/CRI, and Kubernetes cases before the
+phase may be marked Done.
 
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured
-   initial/init/sidecar roots.
+   Docker, CRI, or Kubernetes initial/init/sidecar roots that apply to the run.
 2. Create native children, threads, vfork children, external runtime roots,
    probes, lifecycle actions, and administrative-exec candidates with identical
    executable/argv variants.
@@ -61,10 +61,10 @@ cases before the phase may be marked Done.
 | `ENTRY-CONTAINERS-001` | run init, native sidecar, app, and shared-volume/network cases | independent execution sets remain distinct; declared sharing works through explicit relationships |
 | `ENTRY-EPHEMERAL-001` | add an ephemeral container sharing PID namespace | new independent root/profile; shared namespace does not merge lineage |
 | `ENTRY-EXEC-001` | run TTY/non-TTY `kubectl exec` and copy shape | restricted external root unless approved path completes; normal app child remains native |
-| `ENTRY-EXEC-002` | run `crictl exec` with probe-identical argv | restricted external root, never fabricated probe purpose |
+| `ENTRY-EXEC-002` | run direct `docker exec` or `crictl exec` with probe-identical argv | restricted external root, never fabricated probe purpose |
 | `ENTRY-EXTERNAL-AMBIGUITY-001` | create indistinguishable external purposes concurrently | same permission intersection/restricted class; no timing/argv split |
 | `ENTRY-LOSS-001` | drop runtime, audit, and entry evidence independently | protected unknown remains restricted and coverage reflects each loss |
-| `ENTRY-MIGRATE-001` | move unlabeled/labeled tasks across protected cgroups/namespaces | movement never grants or clears task-first authority; valid placement control remains allowed |
+| `ENTRY-MIGRATE-001` | use namespace-only `nsenter`, then move unlabeled/labeled tasks across protected cgroups/namespaces | namespace entry grants no workload identity; movement never grants or clears task-first authority; valid placement control remains allowed |
 | `ENTRY-NETPROBE-001` | run HTTP/TCP/gRPC probes | no fake in-container process root; application receive and host flow remain distinct |
 | `ENTRY-POSTSTART-001` | race `PostStart` and entrypoint in both orders | initial and external roots remain distinct |
 | `ENTRY-POSTSTART-002` | restart kubelet and repeat `PostStart` | fresh task/lifetime identity with same restricted budget; no stale reuse |
@@ -109,6 +109,9 @@ Retain per-task state traces, coordinate histories, entry/runtime facts,
 authorization verification, cgroup/runtime manifests, failure injection logs,
 and first-effect syscall results. Pass requires exact or conservative state
 before every protected effect and zero command/timing/TTY-based role grants.
+Each shell implementation removes every task, pin, lease, state, config, and
+log it creates. An operator who needs retained qualification evidence must copy
+or pipe selected output to an explicitly owned location outside the test paths.
 
 ## Troubleshooting
 

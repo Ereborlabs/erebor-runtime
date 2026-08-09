@@ -37,5 +37,9 @@ tempfile = "3.23.0"
 name = "mithril-node"
 path = "src/main.rs"
 
+[[bin]]
+name = "mithril-inspect"
+path = "src/bin/mithril_inspect.rs"
+
 [lints]
 workspace = true

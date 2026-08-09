@@ -82,6 +82,47 @@ pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 32] = [
     "erebor_reconcile_tasks",
 ];
 
+pub struct KernelStateReader {
+    maps_root: PathBuf,
+}
+
+impl KernelStateReader {
+    #[must_use]
+    pub fn new(pin_root: impl Into<PathBuf>) -> Self {
+        Self {
+            maps_root: pin_root.into().join("maps"),
+        }
+    }
+
+    pub fn lookup(&self, name: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        ensure!(
+            !name.is_empty() && !name.contains('/'),
+            InvalidConfigurationSnafu {
+                path: &self.maps_root,
+                reason: format!("invalid pinned map name `{name}`"),
+            }
+        );
+        let path = self.maps_root.join(name);
+        let map = MapHandle::from_pinned_path(&path).context(LibbpfSnafu {
+            action: "open pinned BPF map for read",
+            path: &path,
+        })?;
+        if map.map_type().is_percpu() {
+            map.lookup_percpu(key, MapFlags::ANY)
+                .map(|values| values.map(|values| values.concat()))
+                .context(LibbpfSnafu {
+                    action: "read pinned per-CPU BPF map",
+                    path: &path,
+                })
+        } else {
+            map.lookup(key, MapFlags::ANY).context(LibbpfSnafu {
+                action: "read pinned BPF map",
+                path: &path,
+            })
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelObjectKind {
     Qualification,

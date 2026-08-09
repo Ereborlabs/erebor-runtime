@@ -1,0 +1,1 @@
+{"rules":[{"id":"allow-codex-terminal-processes","match":{"surface":"terminal","action":"process_exec"},"decision":"allow"}]}

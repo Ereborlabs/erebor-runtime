@@ -70,7 +70,7 @@ impl NodeChassis {
             WorkloadBindingOwner::system(node_boot_id, label_epoch)?
         };
         bindings
-            .publish_runtime_bindings(&host, &config.workload_bindings)
+            .publish_configured(&host, &config.workload_bindings)
             .await?;
         let identity = NativeSecurityStateOwner::new(node_boot_id, label_epoch);
         let reconciliation = identity.activate(&mut host)?;
@@ -144,13 +144,12 @@ impl NodeChassis {
         });
         let mut backoff = self.config.control.reconnect_minimum();
         let mut identity_healthy = true;
-        let mut runtime_reconciliation = self.config.container_runtime.as_ref().map(|runtime| {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(
-                runtime.reconciliation_interval_ms,
-            ));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            interval
-        });
+        let mut binding_reconciliation =
+            self.config.binding_reconciliation_interval().map(|period| {
+                let mut interval = tokio::time::interval(period);
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                interval
+            });
         'running: loop {
             if *shutdown.borrow() {
                 break;
@@ -179,7 +178,7 @@ impl NodeChassis {
                                 let _result = changed;
                                 break 'running;
                             }
-                            () = next_reconciliation_tick(&mut runtime_reconciliation) => {
+                            () = next_reconciliation_tick(&mut binding_reconciliation) => {
                                 if !self.reconcile_bindings().await {
                                     identity_healthy = false;
                                     self.readiness.send_replace(NodeReadinessV1 {
@@ -212,7 +211,7 @@ impl NodeChassis {
                         let _result = changed;
                         break 'running;
                     }
-                    () = next_reconciliation_tick(&mut runtime_reconciliation) => {
+                    () = next_reconciliation_tick(&mut binding_reconciliation) => {
                         if !self.reconcile_bindings().await {
                             identity_healthy = false;
                         }

@@ -1,0 +1,60 @@
+{
+  "socket_group_gid": 1000,
+  "linux_runner": {
+    "containment": "direct",
+    "controller_path": "/var/lib/erebor/codex-real/bin/erebor-linux-session-controller",
+    "process_guard_path": "/var/lib/erebor/codex-real/bin/erebor-linux-process-guard",
+    "descriptor_broker_path": "/var/lib/erebor/codex-real/bin/erebor-path-broker",
+    "systemd_run_path": null
+  },
+  "root_curated_admissions": [],
+  "root_curated_codex_packages": [
+    {
+      "package": {
+        "format_version": 1,
+        "name": "codex-cli-0-145-0",
+        "adapter_id": "codex-v1",
+        "minimum_daemon_version": "0.1.0",
+        "entrypoint": ["codex", "codex-app-server"],
+        "adapter_digest": "c42ffce173c0d0c750ba36469dcf895f75c097903ab976810b5871dc0a21e98e",
+        "config_digest": "7ba2e1989ee50bdafcd6c8cd99acf8ed5e34628bcbfc5a6d1ada3b0ab409276c",
+        "support_layer_digests": [
+          "8d20b14131c929c75a924c471ca31a2eb16aecaf2c06642ea49d7f81bd96f88b",
+          "d78c176c6e328c1fb1143e737ce1fdcacae6a3c1f5fffafa8468a43042f15ca6",
+          "a8076d3d28d21e02012b20eaf7dbf75409a6277134439025f282e368e3305abf"
+        ]
+      },
+      "definition": {
+        "format_version": 1,
+        "release_id": "codex-cli-0-145-0",
+        "executable_sha256": "a2a05dafaa1acb002a45eaec0a462de5b13694fcfcd7bc43305f14781ce7be14",
+        "supported_platform": "linux_x86_64",
+        "entrypoints": [
+          {"name": "codex", "argv_suffix": [], "app_server_stdio": false},
+          {"name": "codex-app-server", "argv_suffix": ["app-server", "--stdio"], "app_server_stdio": true}
+        ],
+        "managed_artifacts": {
+          "requirements_source": {"path": "/var/lib/erebor/codex-real/trust/requirements.toml", "sha256": "8d20b14131c929c75a924c471ca31a2eb16aecaf2c06642ea49d7f81bd96f88b"},
+          "requirements_path": "/etc/codex/requirements.toml",
+          "managed_hook_source": {"path": "/var/lib/erebor/codex-real/trust/erebor-codex-hook", "sha256": "d78c176c6e328c1fb1143e737ce1fdcacae6a3c1f5fffafa8468a43042f15ca6"},
+          "managed_hook_path": "/usr/lib/erebor/codex-hooks/erebor-codex-hook",
+          "shell_startup_source": {"path": "/var/lib/erebor/codex-real/trust/shell-startup", "sha256": "a8076d3d28d21e02012b20eaf7dbf75409a6277134439025f282e368e3305abf"},
+          "shell_startup_path": "/usr/lib/erebor/codex-hooks/shell-startup",
+          "sandbox_launcher": null,
+          "sandbox_launcher_path": null
+        },
+        "hook_contract": {
+          "shell": "bash",
+          "exec_history": [
+            {"kind": "installed_executable"},
+            {"kind": "absolute_path", "path": "/usr/bin/bash"},
+            {"kind": "managed_hook"}
+          ],
+          "events": ["session_start", "user_prompt_submit", "pre_tool_use", "permission_request", "post_tool_use", "subagent_start", "subagent_stop", "stop"],
+          "command_dispatch": null
+        }
+      },
+      "trust_root": "/var/lib/erebor/codex-real/trust"
+    }
+  ]
+}

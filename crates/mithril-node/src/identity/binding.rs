@@ -28,6 +28,26 @@ struct PublishedBinding {
     runtime_identity: Option<RuntimeContainerIdentity>,
 }
 
+impl PublishedBinding {
+    fn validate_live_cgroup(&self) -> Result<()> {
+        let handle = self.root_handle.metadata().context(IoSnafu {
+            path: &self.root_cgroup_path,
+        })?;
+        let path = fs::metadata(&self.root_cgroup_path).context(IoSnafu {
+            path: &self.root_cgroup_path,
+        })?;
+        ensure!(
+            handle.dev() == path.dev()
+                && handle.ino() == path.ino()
+                && path.ino() == self.root_cgroup_id,
+            IdentityStateSnafu {
+                reason: format!("live cgroup changed for binding `{}`", self.spec.binding_id),
+            }
+        );
+        Ok(())
+    }
+}
+
 pub struct WorkloadBindingOwner {
     cgroup_root: PathBuf,
     node_boot_id: Id128V1,
@@ -71,17 +91,11 @@ impl WorkloadBindingOwner {
         })
     }
 
-    pub async fn publish_runtime_bindings(
+    pub async fn publish_configured(
         &mut self,
         host: &KernelHost,
         configured: &[WorkloadBindingConfig],
     ) -> Result<()> {
-        ensure!(
-            configured.is_empty() || self.runtime.is_some(),
-            IdentityStateSnafu {
-                reason: "configured workload bindings have no CRI inventory owner",
-            }
-        );
         let mut identities = Vec::with_capacity(configured.len());
         if let Some(runtime) = self.runtime.as_mut() {
             for spec in configured {
@@ -284,66 +298,56 @@ impl WorkloadBindingOwner {
     }
 
     pub async fn reconcile(&mut self, host: &KernelHost) -> Result<()> {
-        let specs: Vec<WorkloadBindingConfig> = self
-            .bindings
-            .values()
-            .filter(|binding| binding.runtime_identity.is_some())
-            .map(|binding| binding.spec.clone())
-            .collect();
-        for spec in specs {
-            let identity = match self.runtime.as_mut() {
-                Some(runtime) => runtime.validate(&spec).await,
-                None => IdentityStateSnafu {
-                    reason: "live workload binding lost its CRI inventory owner".to_owned(),
-                }
-                .fail(),
-            };
-            let identity = match identity {
-                Ok(identity) => identity,
-                Err(error) => {
-                    self.terminate_all(host)?;
-                    return Err(error);
-                }
-            };
-            let root_id = self
-                .bindings
-                .iter()
-                .find_map(|(root_id, binding)| {
-                    (binding.spec.container_id == spec.container_id).then_some(*root_id)
-                })
-                .ok_or_else(|| {
-                    IdentityStateSnafu {
-                        reason: format!("binding for `{}` disappeared", spec.container_id),
-                    }
-                    .build()
-                })?;
-            let binding = self.bindings.get_mut(&root_id).ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: format!("binding root {root_id} disappeared"),
-                }
-                .build()
-            })?;
-            let handle_metadata = binding.root_handle.metadata().context(IoSnafu {
-                path: &identity.cgroup_path,
-            })?;
-            let path_metadata = fs::metadata(&identity.cgroup_path).context(IoSnafu {
-                path: &identity.cgroup_path,
-            })?;
-            if binding.runtime_identity.as_ref() != Some(&identity)
-                || handle_metadata.dev() != path_metadata.dev()
-                || handle_metadata.ino() != path_metadata.ino()
-                || path_metadata.ino() != binding.root_cgroup_id
-            {
+        let root_ids: Vec<u64> = self.bindings.keys().copied().collect();
+        for root_id in root_ids {
+            if let Err(error) = self.validate_binding(root_id).await {
                 self.terminate_all(host)?;
-                return IdentityStateSnafu {
-                    reason: format!(
-                        "live cgroup or CRI identity changed for `{}`",
-                        spec.container_id
-                    ),
-                }
-                .fail();
+                return Err(error);
             }
         }
+        Ok(())
+    }
+
+    async fn validate_binding(&mut self, root_id: u64) -> Result<()> {
+        let binding = self.bindings.get(&root_id).ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: format!("binding root {root_id} disappeared"),
+            }
+            .build()
+        })?;
+        let spec = binding.spec.clone();
+        let expected_runtime_identity = binding.runtime_identity.clone();
+
+        let observed_runtime_identity = if expected_runtime_identity.is_some() {
+            Some(
+                self.runtime
+                    .as_mut()
+                    .context(IdentityStateSnafu {
+                        reason: "live workload binding lost its CRI inventory owner",
+                    })?
+                    .validate(&spec)
+                    .await?,
+            )
+        } else {
+            None
+        };
+
+        let binding = self.bindings.get(&root_id).ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: format!("binding root {root_id} disappeared"),
+            }
+            .build()
+        })?;
+        binding.validate_live_cgroup()?;
+        ensure!(
+            observed_runtime_identity == expected_runtime_identity,
+            IdentityStateSnafu {
+                reason: format!(
+                    "live CRI identity changed for `{}`",
+                    binding.spec.container_id
+                ),
+            }
+        );
         Ok(())
     }
 
@@ -641,6 +645,24 @@ mod tests {
         fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;
         let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         assert!(owner.prepare(&spec(&root)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn configured_binding_detects_cgroup_path_reuse() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary cgroup root",
+        })?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.procs"), "").context(IoSnafu { path: &root })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let binding = owner.prepare(&spec(&root))?;
+        binding.validate_live_cgroup()?;
+
+        fs::remove_dir_all(&root).context(IoSnafu { path: &root })?;
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        assert!(binding.validate_live_cgroup().is_err());
         Ok(())
     }
 }

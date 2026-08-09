@@ -24,9 +24,9 @@ pub use error::{Error, Result};
 pub use fixture::FixtureBaselineRecordV1;
 pub use identity::{
     IdentityPhysicalProbeBundleV1, IdentityTestRunner, IdentityVerificationBundleV1,
-    NativeTaskSnapshotV1,
 };
 pub use loader::{BpfLinkRecordV1, BpfMapLayoutV1, BpfObjectLayoutV1, PhysicalFileOpenProbeV1};
+pub use mithril_node::NativeTaskSnapshotV1;
 pub use runner::{
     BenchmarkModeV1, CapabilityProbeBundleV1, OpenBenchmarkBundleV1, Phase0Runner,
     Phase0VerificationBundleV1, Phase1HostLifecycleBundleV1, Phase1Runner,
