@@ -1,11 +1,10 @@
 use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
-use mithril_control::{CapabilityRecord, NodeCapabilityReport, NodeRegistration};
+use mithril_control::{CapabilityRecord, NodeRegistration};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use std::cmp;
-use std::sync::Arc;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::watch;
 
 use crate::epoch::NodeEpochs;
 use crate::error::{InterceptorSnafu, JsonSnafu, LocalTaskSnafu};
@@ -37,9 +36,8 @@ pub struct NodeChassis {
     host: Option<KernelHost>,
     connector: NodeControlConnector,
     registration: NodeRegistration,
-    capabilities: Vec<CapabilityRecord>,
     local_server: Option<crate::RuntimeObservationServer>,
-    trust: Arc<Mutex<TrustCache>>,
+    trust: TrustCache,
     readiness: watch::Sender<NodeReadinessV1>,
 }
 
@@ -105,9 +103,8 @@ impl NodeChassis {
             host: Some(host),
             connector,
             registration,
-            capabilities,
             local_server,
-            trust: Arc::new(Mutex::new(trust)),
+            trust,
             readiness,
         })
     }
@@ -127,18 +124,10 @@ impl NodeChassis {
             if *shutdown.borrow() {
                 break;
             }
-            let report = NodeCapabilityReport {
-                kernel_ready: true,
-                control_ready: true,
-                admission_ready: true,
-                capabilities: self.capabilities.clone(),
-            };
-            let connection = {
-                let mut trust = self.trust.lock().await;
-                self.connector
-                    .connect(self.registration.clone(), report, &mut trust)
-                    .await
-            };
+            let connection = self
+                .connector
+                .connect(self.registration.clone(), &mut self.trust)
+                .await;
             match connection {
                 Ok(mut connection) => {
                     self.readiness.send_replace(NodeReadinessV1 {

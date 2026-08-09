@@ -8,9 +8,18 @@ use erebor_runtime_e2e::{
     E2eError,
 };
 use serde_json::Value;
-use snafu::ResultExt;
+use snafu::{Location, ResultExt};
 
-use crate::cli::external_error;
+fn external_error(
+    operation: impl Into<String>,
+    source: impl std::error::Error + Send + Sync + 'static,
+) -> E2eError {
+    E2eError::External {
+        operation: operation.into(),
+        source: Box::new(source),
+        location: Location::default(),
+    }
+}
 
 pub struct SessionReviewConfig;
 
@@ -48,6 +57,7 @@ impl SessionReviewConfig {
                   "session": {{
                     "enabled": true,
                     "actor": {{ "id": "test-agent", "kind": "agent" }},
+                    "workspace": "{}",
                     {}
                     "runner": {{ "kind": "linux_host" }},
                     "interception": {{ "enabled": true }}
@@ -59,6 +69,7 @@ impl SessionReviewConfig {
                   }}
                 }}"#,
                 policy_path.display(),
+                test_dir.display(),
                 diagnostic_fragment
             ),
         )

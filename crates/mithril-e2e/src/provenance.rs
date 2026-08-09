@@ -6,8 +6,9 @@ use std::process::Command;
 use serde::Deserialize;
 use snafu::{ensure, ResultExt as _};
 
+use crate::closure::ArchitectureClosure;
 use crate::error::{CommandSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu};
-use crate::{ArchitectureClosure, DigestV1, Result};
+use crate::{DigestV1, Result};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

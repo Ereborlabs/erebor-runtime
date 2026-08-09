@@ -6,12 +6,17 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
+use crate::benchmark::OpenBenchmark;
+use crate::capability::BpfPrototypeCompiler;
+use crate::capability_matrix::Phase0CapabilityMatrix;
+use crate::closure::ArchitectureClosure;
 use crate::error::{InvalidInputSnafu, IoSnafu, JsonSnafu};
+use crate::fixture::HuggingFaceFixture;
+use crate::loader::BpfPhase0Loader;
+use crate::provenance::ProvenanceVerifier;
 use crate::{
-    ArchitectureClosure, BpfPhase0Loader, BpfPrototypeCompiler, ClosureLedgerV1, CompileRecordV1,
-    DigestV1, FixtureBaselineRecordV1, HuggingFaceFixture, OpenBenchmark, OpenBenchmarkRecordV1,
-    Phase0CapabilityMatrix, PhysicalFileOpenProbeV1, PlatformProbe, PlatformProbeV1,
-    ProvenanceVerifier, Result,
+    ClosureLedgerV1, CompileRecordV1, DigestV1, FixtureBaselineRecordV1, OpenBenchmarkRecordV1,
+    PhysicalFileOpenProbeV1, PlatformProbeV1, Result,
 };
 use erebor_interceptor::{KernelHostConfig, KernelHostOwner, KernelObjectManifestV1};
 use erebor_interceptor_abi::CapabilityRecordV1;
@@ -271,7 +276,7 @@ impl Phase0Runner {
     }
 
     pub fn probe(&self, output_directory: &Path) -> Result<CapabilityProbeBundleV1> {
-        let platform = PlatformProbe::inspect()?;
+        let platform = PlatformProbeV1::inspect()?;
         let compile = BpfPrototypeCompiler::new(&self.repo_root).compile(output_directory)?;
         Ok(CapabilityProbeBundleV1 {
             schema_version: 1,
@@ -285,7 +290,7 @@ impl Phase0Runner {
         &self,
         output_directory: &Path,
     ) -> Result<PhysicalCapabilityProbeBundleV1> {
-        let platform = PlatformProbe::inspect()?;
+        let platform = PlatformProbeV1::inspect()?;
         let compile = BpfPrototypeCompiler::new(&self.repo_root).compile(output_directory)?;
         let file_open =
             BpfPhase0Loader::new(&compile.object_path).run_file_open_probe(output_directory)?;

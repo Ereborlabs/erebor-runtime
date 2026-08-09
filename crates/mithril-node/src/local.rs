@@ -4,13 +4,13 @@ use std::path::Path;
 
 use erebor_interceptor::KernelObjectManifestV1;
 use erebor_runtime_ipc::v1::{
-    Envelope, EnvelopeServiceFamily, MithrilObservationHello, MithrilObservationHelloAck,
-    MithrilObservationSnapshot, MithrilObservationSnapshotRequest, KIND_MITHRIL_OBSERVATION_HELLO,
-    KIND_MITHRIL_OBSERVATION_HELLO_ACK, KIND_MITHRIL_OBSERVATION_SNAPSHOT,
-    KIND_MITHRIL_OBSERVATION_SNAPSHOT_REQUEST, MITHRIL_OBSERVATION_PROTOCOL_VERSION,
+    Envelope, EnvelopeServiceFamily, MithrilObservationSnapshot, MithrilObservationSnapshotRequest,
+    MithrilObservationSnapshotResponse, KIND_MITHRIL_OBSERVATION_SNAPSHOT_REQUEST,
+    KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
 };
 use erebor_runtime_ipc::AsyncFrameCodec;
 use mithril_control::CapabilityRecord;
+use rustix::{fs::chown, process::Uid};
 use snafu::ResultExt as _;
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
@@ -43,6 +43,15 @@ impl RuntimeObservationServer {
             .fail();
         }
         let listener = UnixListener::bind(&config.socket_path).context(IoSnafu {
+            path: &config.socket_path,
+        })?;
+        chown(
+            &config.socket_path,
+            Some(Uid::from_raw(config.allowed_uid)),
+            None,
+        )
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
             path: &config.socket_path,
         })?;
         fs::set_permissions(&config.socket_path, fs::Permissions::from_mode(0o600)).context(
@@ -107,46 +116,26 @@ async fn handle(
         path: Path::new("Runtime observation peer"),
     })?;
     let envelope = receive(&mut stream).await?;
-    let hello: MithrilObservationHello = envelope
-        .decode_typed_payload(KIND_MITHRIL_OBSERVATION_HELLO)
+    let request: MithrilObservationSnapshotRequest = envelope
+        .decode_typed_payload(KIND_MITHRIL_OBSERVATION_SNAPSHOT_REQUEST)
         .context(LocalIpcSnafu)?;
-    let accepted = peer.uid() == allowed_uid
-        && hello.protocol_version == MITHRIL_OBSERVATION_PROTOCOL_VERSION
-        && hello.cgroup_scope == allowed_scope;
+    let accepted = peer.uid() == allowed_uid && request.cgroup_scope == allowed_scope;
     let reason = if accepted {
         "accepted"
     } else {
-        "peer identity, protocol, or cgroup scope was rejected"
+        "peer identity or cgroup scope was rejected"
     };
     send(
         &mut stream,
         Envelope::wrap_message(
             2,
             envelope.message_id,
-            KIND_MITHRIL_OBSERVATION_HELLO_ACK,
-            &MithrilObservationHelloAck {
-                protocol_version: MITHRIL_OBSERVATION_PROTOCOL_VERSION,
+            KIND_MITHRIL_OBSERVATION_SNAPSHOT_RESPONSE,
+            &MithrilObservationSnapshotResponse {
                 accepted,
                 reason: reason.to_owned(),
+                snapshot: accepted.then_some(snapshot),
             },
-        )
-        .context(LocalIpcSnafu)?,
-    )
-    .await?;
-    if !accepted {
-        return Ok(());
-    }
-    let request = receive(&mut stream).await?;
-    let _request: MithrilObservationSnapshotRequest = request
-        .decode_typed_payload(KIND_MITHRIL_OBSERVATION_SNAPSHOT_REQUEST)
-        .context(LocalIpcSnafu)?;
-    send(
-        &mut stream,
-        Envelope::wrap_message(
-            3,
-            request.message_id,
-            KIND_MITHRIL_OBSERVATION_SNAPSHOT,
-            &snapshot,
         )
         .context(LocalIpcSnafu)?,
     )

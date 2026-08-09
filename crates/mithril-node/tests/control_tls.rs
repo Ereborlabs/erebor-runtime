@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mithril_control::{
-    serve, AllowedNodeIdentity, CapabilityRecord, ControlPlane, ControlServerTls,
-    NodeCapabilityReport, NodeRegistration, TrustGenerationV1,
+    serve, AllowedNodeIdentity, CapabilityRecord, ControlPlane, ControlServerTls, NodeRegistration,
+    TrustGenerationV1,
 };
 use mithril_node::{NodeControlConfig, NodeControlConnector, TrustCache};
 use rcgen::{
@@ -39,14 +39,10 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
-    let first = connector
-        .connect(registration(), report(), &mut trust)
-        .await?;
+    let first = connector.connect(registration(), &mut trust).await?;
     assert_eq!(trust.installed().generation, 4);
     drop(first);
-    let second = connector
-        .connect(registration(), report(), &mut trust)
-        .await?;
+    let second = connector.connect(registration(), &mut trust).await?;
     for _ in 0..20 {
         if control.registered_connection_count() == 2
             && control.acknowledged_trust("node-a").is_some()
@@ -101,10 +97,7 @@ async fn assert_wrong_ca_rejected() -> Result<(), Box<dyn StdError>> {
     config.ca_path = wrong_ca.ca;
     let connector = NodeControlConnector::new(config, "node-a".to_owned(), [9; 16]);
     let mut trust = TrustCache::load(directory.path())?;
-    assert!(connector
-        .connect(registration(), report(), &mut trust)
-        .await
-        .is_err());
+    assert!(connector.connect(registration(), &mut trust).await.is_err());
     let _result = shutdown.send(());
     server.await??;
     Ok(())
@@ -136,10 +129,7 @@ async fn assert_rejected_identity(
         [8; 16],
     );
     let mut trust = TrustCache::load(directory.path())?;
-    assert!(connector
-        .connect(registration(), report(), &mut trust)
-        .await
-        .is_err());
+    assert!(connector.connect(registration(), &mut trust).await.is_err());
     let _result = shutdown.send(());
     server.await??;
     Ok(())
@@ -154,15 +144,6 @@ fn registration() -> NodeRegistration {
         inventory_digest: "c".repeat(64),
         kernel_ready: true,
         effect_prevention_claims_enabled: false,
-        capabilities: capabilities(),
-    }
-}
-
-fn report() -> NodeCapabilityReport {
-    NodeCapabilityReport {
-        kernel_ready: true,
-        control_ready: true,
-        admission_ready: true,
         capabilities: capabilities(),
     }
 }

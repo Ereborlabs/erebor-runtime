@@ -12,7 +12,7 @@ use crate::error::{
 use crate::lease::PinRootLease;
 use crate::{
     KernelLinkManifestV1, KernelMapLayoutV1, KernelMapManifestV1, KernelObjectLayoutV1,
-    KernelObjectManifestV1, KernelPreflightV1, KernelProgramLayoutV1, Result,
+    KernelObjectManifestV1, KernelPlatformProbe, KernelPreflightV1, KernelProgramLayoutV1, Result,
 };
 
 pub const REQUIRED_CHASSIS_LSM_PROGRAMS: [&str; 21] = [
@@ -370,48 +370,35 @@ impl KernelHostOwner {
 
     pub fn preflight(&self) -> Result<KernelPreflightV1> {
         self.validate_config()?;
+        let platform = KernelPlatformProbe::inspect(&self.config.runtime_btf_path)?;
         let lsm_path = Path::new("/sys/kernel/security/lsm");
-        let active_lsm_order = fs::read_to_string(lsm_path).context(IoSnafu {
-            action: "read active Linux security modules",
-            path: lsm_path,
-        })?;
-        let active_lsm_order = active_lsm_order.trim().to_owned();
         ensure!(
-            active_lsm_order.split(',').any(|lsm| lsm == "bpf"),
+            platform.bpf_lsm_active,
             InvalidConfigurationSnafu {
                 path: lsm_path,
                 reason: "BPF LSM is not active".to_owned(),
             }
         );
         let mounts_path = Path::new("/proc/mounts");
-        let mounts = fs::read_to_string(mounts_path).context(IoSnafu {
-            action: "read mounted filesystems",
-            path: mounts_path,
-        })?;
-        let cgroup_v2 = mounts
-            .lines()
-            .any(|line| line.split_whitespace().nth(2) == Some("cgroup2"));
         ensure!(
-            cgroup_v2,
+            platform.cgroup_v2,
             InvalidConfigurationSnafu {
                 path: mounts_path,
                 reason: "cgroup v2 is not mounted".to_owned(),
             }
         );
-        let btf = fs::read(&self.config.runtime_btf_path).context(IoSnafu {
-            action: "read runtime BTF",
-            path: &self.config.runtime_btf_path,
-        })?;
-        let kernel_release_path = Path::new("/proc/sys/kernel/osrelease");
-        let kernel_release = fs::read_to_string(kernel_release_path).context(IoSnafu {
-            action: "read kernel release",
-            path: kernel_release_path,
+        let runtime_btf_sha256 = platform.runtime_btf_sha256.ok_or_else(|| {
+            InvalidConfigurationSnafu {
+                path: &self.config.runtime_btf_path,
+                reason: "runtime BTF is not available".to_owned(),
+            }
+            .build()
         })?;
         Ok(KernelPreflightV1 {
-            kernel_release: kernel_release.trim().to_owned(),
-            active_lsm_order,
-            runtime_btf_sha256: format!("{:x}", Sha256::digest(btf)),
-            cgroup_v2,
+            kernel_release: platform.kernel_release,
+            active_lsm_order: platform.active_lsm_order,
+            runtime_btf_sha256,
+            cgroup_v2: platform.cgroup_v2,
         })
     }
 

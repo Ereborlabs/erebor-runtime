@@ -3,6 +3,16 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct KernelPlatformProbeV1 {
+    pub kernel_release: String,
+    pub architecture: String,
+    pub active_lsm_order: String,
+    pub bpf_lsm_active: bool,
+    pub runtime_btf_sha256: Option<String>,
+    pub cgroup_v2: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KernelPreflightV1 {
     pub kernel_release: String,
     pub active_lsm_order: String,

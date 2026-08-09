@@ -11,7 +11,7 @@ erebor-interceptor = { path = "../erebor-interceptor" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 mithril-control = { path = "../mithril-control" }
-prost.workspace = true
+rustix = { version = "1.1.4", features = ["fs", "process"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -24,7 +24,6 @@ uuid.workspace = true
 [dev-dependencies]
 erebor-runtime-client = { path = "../erebor-runtime-client" }
 rcgen = "0.13.2"
-rustix = { version = "1.1.4", features = ["process"] }
 tempfile = "3.23.0"
 
 [[bin]]

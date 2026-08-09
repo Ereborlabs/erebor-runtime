@@ -30,19 +30,6 @@ impl fmt::Display for DigestV1 {
     }
 }
 
-pub trait Digestible {
-    fn digest(&self) -> DigestV1;
-}
-
-impl<T> Digestible for T
-where
-    T: AsRef<[u8]>,
-{
-    fn digest(&self) -> DigestV1 {
-        DigestV1::of(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::DigestV1;

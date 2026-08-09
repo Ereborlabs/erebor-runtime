@@ -52,10 +52,6 @@ pub struct BpfPhase0Loader {
     object_path: PathBuf,
 }
 
-pub struct BpfPhase0Attachment {
-    host: KernelHost,
-}
-
 impl BpfPhase0Loader {
     #[must_use]
     pub fn new(object_path: impl Into<PathBuf>) -> Self {
@@ -95,9 +91,8 @@ impl BpfPhase0Loader {
         Ok(layout)
     }
 
-    pub fn attach(&self) -> Result<BpfPhase0Attachment> {
-        let host = self.owner()?.start().context(InterceptorSnafu)?;
-        Ok(BpfPhase0Attachment { host })
+    pub fn attach(&self) -> Result<KernelHost> {
+        self.owner()?.start().context(InterceptorSnafu)
     }
 
     pub fn run_file_open_probe(&self, output_directory: &Path) -> Result<PhysicalFileOpenProbeV1> {
@@ -120,7 +115,7 @@ impl BpfPhase0Loader {
                 reason: "the file-open control failed before the deny target was installed",
             }
         );
-        attachment.set_file_open_deny(target_inode)?;
+        Self::update_file_open_target(&attachment, target_inode)?;
         let denied_after_target_install = matches!(
             File::open(&target),
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied
@@ -132,7 +127,7 @@ impl BpfPhase0Loader {
                 reason: "the attached file_open hook did not return EACCES for its target",
             }
         );
-        attachment.clear_file_open_deny()?;
+        Self::update_file_open_target(&attachment, 0)?;
         let allowed_after_target_clear = File::open(&target).is_ok();
         ensure!(
             allowed_after_target_clear,
@@ -142,7 +137,6 @@ impl BpfPhase0Loader {
             }
         );
         let links = attachment
-            .host
             .manifest()
             .links
             .iter()
@@ -205,25 +199,13 @@ impl BpfPhase0Loader {
         );
         Ok(())
     }
-}
 
-impl BpfPhase0Attachment {
-    fn set_file_open_deny(&self, inode: u64) -> Result<()> {
-        self.update_file_open_target(inode)
-    }
-
-    fn clear_file_open_deny(&self) -> Result<()> {
-        self.update_file_open_target(0)
-    }
-
-    fn update_file_open_target(&self, inode: u64) -> Result<()> {
+    fn update_file_open_target(host: &KernelHost, inode: u64) -> Result<()> {
         let key = 0_u32.to_le_bytes();
         let value = inode.to_le_bytes();
-        self.host
-            .update_map(FILE_PROBE_TARGETS, &key, &value)
+        host.update_map(FILE_PROBE_TARGETS, &key, &value)
             .context(InterceptorSnafu)?;
-        let readback = self
-            .host
+        let readback = host
             .lookup_map(FILE_PROBE_TARGETS, &key)
             .context(InterceptorSnafu)?;
         ensure!(
@@ -247,8 +229,8 @@ mod tests {
     use erebor_interceptor::{Error as InterceptorError, KernelHostConfig, KernelHostOwner};
 
     use super::{BpfPhase0Loader, RUNTIME_BTF};
+    use crate::capability::BpfPrototypeCompiler;
     use crate::error::IoSnafu;
-    use crate::BpfPrototypeCompiler;
 
     #[test]
     fn direct_libbpf_inspection_validates_the_owned_feasibility_object() -> crate::Result<()> {

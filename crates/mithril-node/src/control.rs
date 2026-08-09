@@ -5,8 +5,8 @@ use mithril_control::control_envelope::Payload as ControlPayload;
 use mithril_control::node_control_client::NodeControlClient as GrpcNodeControlClient;
 use mithril_control::node_envelope::Payload as NodePayload;
 use mithril_control::{
-    ControlEnvelope, NodeCapabilityReport, NodeEnvelope, NodeKeepalive, NodeRegistration,
-    TrustGenerationAck, CONTROL_PROTOCOL_VERSION,
+    ControlEnvelope, NodeEnvelope, NodeReadinessReport, NodeRegistration, TrustGenerationAck,
+    CONTROL_PROTOCOL_VERSION,
 };
 use snafu::ResultExt as _;
 use tokio::sync::mpsc;
@@ -25,10 +25,9 @@ pub struct NodeControlConnector {
 }
 
 pub struct ControlConnection {
-    output: mpsc::Sender<NodeEnvelope>,
+    _output: mpsc::Sender<NodeEnvelope>,
     input: Streaming<ControlEnvelope>,
     identity: ConnectionIdentity,
-    next_node_sequence: u64,
     next_control_sequence: u64,
 }
 
@@ -51,9 +50,9 @@ impl NodeControlConnector {
     pub async fn connect(
         &self,
         registration: NodeRegistration,
-        report: NodeCapabilityReport,
         trust_cache: &mut TrustCache,
     ) -> Result<ControlConnection> {
+        let kernel_ready = registration.kernel_ready;
         let ca = read(&self.config.ca_path)?;
         let certificate = read(&self.config.certificate_path)?;
         let private_key = read(&self.config.private_key_path)?;
@@ -131,7 +130,14 @@ impl NodeControlConnector {
                 .build()
             })?;
         output
-            .send(identity.envelope(3, NodePayload::CapabilityReport(report)))
+            .send(identity.envelope(
+                3,
+                NodePayload::ReadinessReport(NodeReadinessReport {
+                    kernel_ready,
+                    control_ready: true,
+                    admission_ready: true,
+                }),
+            ))
             .await
             .map_err(|_| {
                 ControlProtocolSnafu {
@@ -140,50 +146,27 @@ impl NodeControlConnector {
                 .build()
             })?;
         Ok(ControlConnection {
-            output,
+            _output: output,
             input,
             identity,
-            next_node_sequence: 4,
             next_control_sequence: 3,
         })
     }
 }
 
 impl ControlConnection {
-    pub async fn keepalive(&mut self) -> Result<()> {
-        self.output
-            .send(self.identity.envelope(
-                self.next_node_sequence,
-                NodePayload::Keepalive(NodeKeepalive {}),
-            ))
-            .await
-            .map_err(|_| {
-                ControlProtocolSnafu {
-                    reason: "Control stream is closed".to_owned(),
-                }
-                .build()
-            })?;
-        self.next_node_sequence += 1;
-        Ok(())
-    }
-
     pub async fn wait_for_disconnect(&mut self) -> Result<()> {
-        loop {
-            let Some(message) = self.input.message().await.context(ControlRpcSnafu)? else {
-                return ControlProtocolSnafu {
-                    reason: "Control closed the node stream".to_owned(),
-                }
-                .fail();
-            };
-            validate_control(&message, &self.identity, self.next_control_sequence)?;
-            self.next_control_sequence += 1;
-            if !matches!(message.payload, Some(ControlPayload::Keepalive(_))) {
-                return ControlProtocolSnafu {
-                    reason: "Control sent an unexpected post-registration message".to_owned(),
-                }
-                .fail();
+        let Some(message) = self.input.message().await.context(ControlRpcSnafu)? else {
+            return ControlProtocolSnafu {
+                reason: "Control closed the node stream".to_owned(),
             }
+            .fail();
+        };
+        validate_control(&message, &self.identity, self.next_control_sequence)?;
+        ControlProtocolSnafu {
+            reason: "Control sent an unexpected post-registration message".to_owned(),
         }
+        .fail()
     }
 }
 

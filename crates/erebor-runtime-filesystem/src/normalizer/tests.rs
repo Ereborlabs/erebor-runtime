@@ -2,11 +2,10 @@ use std::{
     fs::{self, File},
     os::unix::{fs::symlink, net::UnixListener},
     path::{Path, PathBuf},
-    process,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use rustix::fs::{lsetxattr, XattrFlags};
+use tempfile::TempDir;
 
 use crate::{
     manifest::{FilesystemLayerEntry, FilesystemLayerOperation},
@@ -174,7 +173,7 @@ fn active_writer_fd_refuses_exact_checkpoint() -> TestResult {
 
 struct Fixture {
     storage: crate::FilesystemSessionStorage,
-    root: PathBuf,
+    _root: TempDir,
     host_path: PathBuf,
     session_path: PathBuf,
 }
@@ -199,18 +198,11 @@ impl Fixture {
     }
 }
 
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _result = fs::remove_dir_all(&self.root);
-    }
-}
-
 fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
-    let root =
-        std::env::temp_dir().join(format!("efn-{}-{}", process::id(), nonce() % 1_000_000_000));
-    let session_dir = root.join("session");
-    let host_path = root.join("host/project");
-    let session_path = root.join("workspace/project");
+    let root = TempDir::new()?;
+    let session_dir = root.path().join("session");
+    let host_path = root.path().join("host/project");
+    let session_path = root.path().join("workspace/project");
     fs::create_dir_all(&host_path)?;
     fs::create_dir_all(&session_path)?;
     let request = FilesystemVolumeStorageRequest::new(
@@ -223,16 +215,10 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
         FilesystemStoragePreparer::new(&session_dir, vec![request]).prepare(|_| Ok(()))?;
     Ok(Fixture {
         storage,
-        root,
+        _root: root,
         host_path,
         session_path,
     })
-}
-
-fn nonce() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos())
 }
 
 fn set_marker(path: PathBuf, name: &str) -> TestResult {

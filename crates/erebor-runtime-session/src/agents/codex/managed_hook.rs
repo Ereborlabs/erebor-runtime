@@ -49,7 +49,10 @@ mod tests {
     fn managed_hook_requires_a_declared_native_event() -> Result<(), String> {
         assert!(CodexNativeHookEvent::parse(br#"{}"#).is_err());
         assert_eq!(
-            CodexNativeHookEvent::parse(br#"{"hook_event_name":"SessionStart"}"#)?.kind(),
+            CodexNativeHookEvent::parse(
+                br#"{"cwd":"/workspace","hook_event_name":"SessionStart","model":"gpt-5","permission_mode":"default","session_id":"session","source":"startup","transcript_path":null}"#,
+            )?
+            .kind(),
             erebor_runtime_ipc::v1::HookEventKind::SessionStart
         );
         Ok(())

@@ -142,6 +142,16 @@ impl ControlPlane {
             .insert(node_id.to_owned(), self.trust.clone());
         Ok(())
     }
+
+    #[allow(clippy::result_large_err)]
+    fn validate_readiness(&self, report: &crate::NodeReadinessReport) -> Result<(), Status> {
+        if !report.kernel_ready || !report.control_ready || !report.admission_ready {
+            return Err(Status::failed_precondition(
+                "node cannot advertise incomplete Phase 1 readiness",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[tonic::async_trait]
@@ -220,8 +230,9 @@ impl NodeControl for ControlPlane {
                             ack.generation,
                             &ack.bundle_digest,
                         ),
-                        Some(NodePayload::CapabilityReport(_))
-                        | Some(NodePayload::Keepalive(_)) => Ok(()),
+                        Some(NodePayload::ReadinessReport(report)) => {
+                            control.validate_readiness(&report)
+                        }
                         Some(NodePayload::Registration(_)) | None => Err(Status::invalid_argument(
                             "registration is allowed only as the first stream message",
                         )),

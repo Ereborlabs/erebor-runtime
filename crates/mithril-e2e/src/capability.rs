@@ -2,10 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use erebor_interceptor::KernelPlatformProbe;
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
 
-use crate::error::{CommandSnafu, IoSnafu};
+use crate::error::{CommandSnafu, InterceptorSnafu, IoSnafu};
 use crate::{DigestV1, Result};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -19,47 +20,25 @@ pub struct PlatformProbeV1 {
     pub prerequisite_result: String,
 }
 
-pub struct PlatformProbe;
-
-impl PlatformProbe {
+impl PlatformProbeV1 {
     pub fn inspect() -> Result<PlatformProbeV1> {
-        let kernel_release = command_text(Command::new("uname").arg("-r"), "uname")?;
-        let active_lsm_order = fs::read_to_string("/sys/kernel/security/lsm")
-            .context(IoSnafu {
-                path: PathBuf::from("/sys/kernel/security/lsm"),
-            })?
-            .trim()
-            .to_owned();
-        let btf_path = Path::new("/sys/kernel/btf/vmlinux");
-        let btf_sha256 = if btf_path.is_file() {
-            Some(
-                DigestV1::of(fs::read(btf_path).context(IoSnafu {
-                    path: btf_path.to_path_buf(),
-                })?)
-                .to_hex(),
-            )
-        } else {
-            None
-        };
-        let mounts = fs::read_to_string("/proc/mounts").context(IoSnafu {
-            path: PathBuf::from("/proc/mounts"),
-        })?;
-        let bpf_lsm_active = active_lsm_order.split(',').any(|lsm| lsm == "bpf");
-        let cgroup_v2 = mounts
-            .lines()
-            .any(|line| line.split_whitespace().nth(2) == Some("cgroup2"));
-        let prerequisite_result = if bpf_lsm_active && btf_sha256.is_some() && cgroup_v2 {
+        let platform = KernelPlatformProbe::inspect(Path::new("/sys/kernel/btf/vmlinux"))
+            .context(InterceptorSnafu)?;
+        let prerequisite_result = if platform.bpf_lsm_active
+            && platform.runtime_btf_sha256.is_some()
+            && platform.cgroup_v2
+        {
             "READY_FOR_PRIVILEGED_LOAD"
         } else {
             "MISSING_BPF_LSM_BTF_OR_CGROUP_V2"
         };
         Ok(PlatformProbeV1 {
-            kernel_release,
-            architecture: std::env::consts::ARCH.to_owned(),
-            active_lsm_order,
-            bpf_lsm_active,
-            btf_sha256,
-            cgroup_v2,
+            kernel_release: platform.kernel_release,
+            architecture: platform.architecture,
+            active_lsm_order: platform.active_lsm_order,
+            bpf_lsm_active: platform.bpf_lsm_active,
+            btf_sha256: platform.runtime_btf_sha256,
+            cgroup_v2: platform.cgroup_v2,
             prerequisite_result: prerequisite_result.to_owned(),
         })
     }
@@ -143,7 +122,13 @@ impl BpfPrototypeCompiler {
         let source_bytes = fs::read(&source).context(IoSnafu {
             path: source.clone(),
         })?;
-        let kernel_release = command_text(Command::new("uname").arg("-r"), "uname")?;
+        let kernel_release_path = Path::new("/proc/sys/kernel/osrelease");
+        let kernel_release = fs::read_to_string(kernel_release_path)
+            .context(IoSnafu {
+                path: kernel_release_path.to_path_buf(),
+            })?
+            .trim()
+            .to_owned();
         let interceptor_headers = repo_root.join("bpf/erebor-interceptor/include");
         let bpf_headers = PathBuf::from(format!(
             "/lib/modules/{kernel_release}/build/tools/bpf/resolve_btfids/libbpf/include"
@@ -181,14 +166,6 @@ impl BpfPrototypeCompiler {
     }
 }
 
-fn command_text(command: &mut Command, program: &str) -> Result<String> {
-    let output = command.output().context(IoSnafu {
-        path: PathBuf::from(program),
-    })?;
-    ensure_success(program, &output)?;
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
-}
-
 fn ensure_success(program: &str, output: &Output) -> Result<()> {
     ensure!(
         output.status.success(),
@@ -206,7 +183,7 @@ mod tests {
 
     use snafu::ResultExt as _;
 
-    use super::{BpfPrototypeCompiler, BpfTargetArchitecture, PlatformProbe};
+    use super::{BpfPrototypeCompiler, BpfTargetArchitecture, PlatformProbeV1};
     use crate::error::IoSnafu;
 
     #[test]
@@ -251,7 +228,7 @@ mod tests {
 
     #[test]
     fn platform_probe_reports_bpf_lsm_as_a_measured_prerequisite() -> crate::Result<()> {
-        let probe = PlatformProbe::inspect()?;
+        let probe = PlatformProbeV1::inspect()?;
         assert!(!probe.kernel_release.is_empty());
         assert!(probe.btf_sha256.is_some());
         assert!(probe.cgroup_v2);

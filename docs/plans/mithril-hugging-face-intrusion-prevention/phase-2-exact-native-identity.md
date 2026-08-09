@@ -24,6 +24,12 @@ Implement task storage labels, `TaskCoordinateV1`, process/execution/native
 state, entry security state, generation references, lifetimes, tombstones, and
 atomic transition maps under `NativeSecurityStateOwner` and
 `WorkloadBindingOwner`. `KernelHostOwner` owns map lifecycle, not semantics.
+Before adding these first production BPF programs, make upstream
+`libbpf-cargo` the single CI/build owner for C-to-BPF artifacts. It consumes
+the checked multi-architecture vmlinux headers and publishes the digest-pinned
+object used by packaging; remove the duplicated direct-Clang product build
+paths. `mithril-node` loads that prebuilt object through fully vendored
+`libbpf-rs` and never invokes a compiler at runtime.
 
 ### D2.2 — Native creation before first effect
 

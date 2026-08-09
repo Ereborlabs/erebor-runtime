@@ -14,9 +14,8 @@ message NodeEnvelope {
   uint64 sequence = 5;
   oneof payload {
     NodeRegistration registration = 10;
-    NodeCapabilityReport capability_report = 11;
+    NodeReadinessReport readiness_report = 11;
     TrustGenerationAck trust_ack = 12;
-    NodeKeepalive keepalive = 13;
   }
 }
 
@@ -37,19 +36,16 @@ message NodeRegistration {
   repeated CapabilityRecord capabilities = 8;
 }
 
-message NodeCapabilityReport {
-  bool kernel_ready = 1;
-  bool control_ready = 2;
-  bool admission_ready = 3;
-  repeated CapabilityRecord capabilities = 4;
-}
-
 message TrustGenerationAck {
   uint64 generation = 1;
   string bundle_digest = 2;
 }
 
-message NodeKeepalive {}
+message NodeReadinessReport {
+  bool kernel_ready = 1;
+  bool control_ready = 2;
+  bool admission_ready = 3;
+}
 
 message ControlEnvelope {
   uint32 protocol_version = 1;
@@ -60,7 +56,6 @@ message ControlEnvelope {
   oneof payload {
     RegistrationAccepted registration_accepted = 10;
     TrustGeneration trust_generation = 11;
-    ControlKeepalive keepalive = 12;
   }
 }
 
@@ -70,5 +65,3 @@ message TrustGeneration {
   uint64 generation = 1;
   string bundle_digest = 2;
 }
-
-message ControlKeepalive {}

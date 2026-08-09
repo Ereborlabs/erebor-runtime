@@ -2,18 +2,15 @@ syntax = "proto3";
 
 package erebor.runtime.ipc.v1;
 
-message MithrilObservationHello {
-  uint32 protocol_version = 1;
-  string cgroup_scope = 2;
+message MithrilObservationSnapshotRequest {
+  string cgroup_scope = 1;
 }
 
-message MithrilObservationHelloAck {
-  uint32 protocol_version = 1;
-  bool accepted = 2;
-  string reason = 3;
+message MithrilObservationSnapshotResponse {
+  bool accepted = 1;
+  string reason = 2;
+  MithrilObservationSnapshot snapshot = 3;
 }
-
-message MithrilObservationSnapshotRequest {}
 
 message MithrilObservationSnapshot {
   string cgroup_scope = 1;

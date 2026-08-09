@@ -14,7 +14,10 @@ mod linux_host {
         cli::{E2eWorkspace, EreborCliFixture},
     };
 
+    // TODO(mithril-interceptor): reimplement this E2E on the shared Interceptor after the
+    // Browser-CDP process-mediation path has migrated; do not restore `session diagnose`.
     #[test]
+    #[ignore = "legacy Browser-CDP process mediation is superseded by the shared Interceptor"]
     fn managed_browser_cdp_lifecycle_mediates_process_launch() -> Result<(), E2eError> {
         let Some(host) = BrowserCdpMediationHost::detect() else {
             eprintln!(

@@ -1,4 +1,4 @@
-use std::error::Error as StdError;
+use std::{error::Error as StdError, fs, os::unix::fs::MetadataExt as _};
 
 use erebor_interceptor::{KernelLinkManifestV1, KernelObjectManifestV1, KernelPreflightV1};
 use erebor_runtime_client::MithrilObservationClient;
@@ -25,6 +25,7 @@ async fn runtime_client_is_peer_authenticated_cgroup_scoped_and_read_only(
             reason_code: "EXACT_ATTACH_READBACK".to_owned(),
         }],
     )?;
+    assert_eq!(fs::metadata(&socket)?.uid(), geteuid().as_raw());
     let (shutdown, receiver) = watch::channel(false);
     let task = tokio::spawn(server.serve(receiver));
     let snapshot = MithrilObservationClient::new(socket.clone(), "/erebor/session-a".to_owned())

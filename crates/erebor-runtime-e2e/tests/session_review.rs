@@ -1,44 +1,43 @@
-#[path = "support/cli.rs"]
-mod cli;
 #[path = "support/session_review.rs"]
 mod review_support;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod linux_host {
-    use std::path::Path;
+    use std::{error::Error as StdError, fs, path::Path};
 
-    use erebor_runtime_e2e::{error::JsonSnafu, E2eError};
+    use erebor_runtime_audit::{SessionReviewOutputFormat, SessionReviewSource};
+    use erebor_runtime_core::{RuntimeConfig, SessionRunPlan, SessionRunnerKind};
+    use erebor_runtime_e2e::error::JsonSnafu;
+    use erebor_runtime_events::SessionId;
+    use erebor_runtime_session::{SessionExecutionError, SessionExecutionService};
     use serde_json::Value;
     use snafu::ResultExt;
 
-    use crate::cli::{E2eWorkspace, EreborCliFixture};
     use crate::review_support::{
         json_string, SessionRegistry, SessionReviewConfig, SessionReviewPolicy,
     };
 
     #[test]
-    fn session_review_commands_render_governed_process_audit() -> Result<(), E2eError> {
-        let erebor_runtime = EreborCliFixture::build()?;
-        let workspace = E2eWorkspace::create("session-review")?;
+    fn session_review_renders_governed_process_audit() -> Result<(), Box<dyn StdError>> {
+        let workspace = tempfile::tempdir()?;
         let test_dir = workspace.path();
         let policy_path = SessionReviewPolicy::write(test_dir)?;
         let config_path = SessionReviewConfig::write_diagnostic(test_dir, &policy_path)?;
-
-        let diagnostic = erebor_runtime.run_expect_failure_in(
-            test_dir,
-            [
-                "session",
-                "diagnose",
-                "--runner",
-                "linux-host",
-                "--config",
-                config_path.to_string_lossy().as_ref(),
-                "raw-cdp",
-            ],
+        let config = RuntimeConfig::from_json_str(&fs::read_to_string(&config_path)?)?;
+        let mut plan = SessionRunPlan::from_diagnostic(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-review-diagnostic"),
+            "raw-cdp",
         )?;
+        plan.set_config_path(&config_path);
+        let diagnostic = SessionExecutionService::run_diagnostic(&config, &plan);
         assert!(
-            diagnostic.contains("guarded session diagnostic failed"),
-            "expected governed diagnostic denial, got {diagnostic}"
+            matches!(
+                diagnostic,
+                Err(SessionExecutionError::DiagnosticFailed { .. })
+            ),
+            "expected governed diagnostic denial, got {diagnostic:?}"
         );
 
         let registry_record = SessionRegistry::new(test_dir).single_record()?;
@@ -47,20 +46,13 @@ mod linux_host {
         assert!(audit_path.exists());
         assert!(Path::new(json_string(&registry_record, "/policy_artifact_paths/0")?).exists());
         assert!(Path::new(json_string(&registry_record, "/config_artifact_path")?).exists());
-        let list = erebor_runtime.run_in(test_dir, ["session", "ls"])?;
-        let show = erebor_runtime.run_in(test_dir, ["session", "show", session_id.as_str()])?;
+        let reviews = SessionReviewSource::new(test_dir.join(".erebor/sessions"));
+        let list = reviews.render_list(SessionReviewOutputFormat::Text)?;
+        let show = reviews.render_show(session_id.as_str(), SessionReviewOutputFormat::Text)?;
         let describe =
-            erebor_runtime.run_in(test_dir, ["session", "describe", session_id.as_str()])?;
-        let describe_json = erebor_runtime.run_in(
-            test_dir,
-            [
-                "session",
-                "describe",
-                session_id.as_str(),
-                "--format",
-                "json",
-            ],
-        )?;
+            reviews.render_describe(session_id.as_str(), SessionReviewOutputFormat::Text)?;
+        let describe_json =
+            reviews.render_describe(session_id.as_str(), SessionReviewOutputFormat::Json)?;
         let review: Value = serde_json::from_str(&describe_json).context(JsonSnafu)?;
 
         assert!(list.contains(session_id.as_str()));
@@ -107,30 +99,20 @@ mod linux_host {
     }
 
     #[test]
-    fn session_run_creates_registry_and_review_commands_read_it() -> Result<(), E2eError> {
-        let erebor_runtime = EreborCliFixture::build()?;
-        let workspace = E2eWorkspace::create("session-registry")?;
+    fn session_run_creates_registry_and_review_source_reads_it() -> Result<(), Box<dyn StdError>> {
+        let workspace = tempfile::tempdir()?;
         let test_dir = workspace.path();
         let policy_path = SessionReviewPolicy::write(test_dir)?;
         let config_path = SessionReviewConfig::write_registry(test_dir, &policy_path)?;
-
-        let run = erebor_runtime.run_expect_failure_in(
-            test_dir,
-            [
-                "session",
-                "run",
-                "--runner",
-                "linux-host",
-                "--config",
-                config_path.to_string_lossy().as_ref(),
-                "sh",
-                "--remote-debugging-port=9222",
-            ],
+        let config = RuntimeConfig::from_json_str(&fs::read_to_string(&config_path)?)?;
+        let mut plan = SessionRunPlan::from_config(
+            &config,
+            SessionRunnerKind::LinuxHost,
+            SessionId::new("session-review-run"),
+            vec!["sh".to_owned(), "--remote-debugging-port=9222".to_owned()],
         )?;
-        assert!(
-            run.contains("session runner `linux-host` exited unsuccessfully"),
-            "expected governed run denial, got {run}"
-        );
+        plan.set_config_path(&config_path);
+        assert!(SessionExecutionService::run_plan(&config, &plan).is_err());
 
         let registry_record = SessionRegistry::new(test_dir).single_record()?;
         let session_id = json_string(&registry_record, "/session_id")?;
@@ -145,12 +127,10 @@ mod linux_host {
         assert!(Path::new(json_string(&registry_record, "/config_artifact_path")?).exists());
         assert!(Path::new(json_string(&registry_record, "/policy_artifact_paths/0")?).exists());
 
-        let list = erebor_runtime.run_in(test_dir, ["session", "ls"])?;
-        let show = erebor_runtime.run_in(test_dir, ["session", "show", session_id])?;
-        let describe_json = erebor_runtime.run_in(
-            test_dir,
-            ["session", "describe", session_id, "--format", "json"],
-        )?;
+        let reviews = SessionReviewSource::new(test_dir.join(".erebor/sessions"));
+        let list = reviews.render_list(SessionReviewOutputFormat::Text)?;
+        let show = reviews.render_show(session_id, SessionReviewOutputFormat::Text)?;
+        let describe_json = reviews.render_describe(session_id, SessionReviewOutputFormat::Json)?;
         let review: Value = serde_json::from_str(&describe_json).context(JsonSnafu)?;
 
         assert!(list.contains(session_id));
