@@ -1,7 +1,9 @@
 # Phase 0: Substrate, License, ABI, And Incident Baseline
 
-Status: Done for the physically qualified x86_64 claim; every other allocated
-capability is explicitly unsupported.
+Status: Done for the physically qualified x86_64 capability claim; every other
+allocated capability is explicitly unsupported. The historical throughput
+claim needs refresh after the 2026-08-09 benchmark timing correction described
+in the phase result.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)  
 Design authority: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -172,18 +174,18 @@ Next phase not authorized: yes.
 ## Phase Result
 
 ```text
-State: Done.
+State: Done for capability closure; historical performance evidence requires refresh.
 Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md at SHA-256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
 Completed deliverable IDs: D0.1-D0.8. Version 1 freezes only the physically proven x86_64 BPF-LSM attach/readback and file-open pre-effect denial slice. The remaining 16 allocated capabilities are explicit Unsupported records and cannot be advertised.
 Files and durable owners changed: erebor-interceptor-abi owns the closed Rust authority types and cbindgen-checked C header; erebor-interceptor owns the only libbpf-rs loader/link/map/pin-root lease; mithril-e2e owns qualification, capability closure, benchmarks, goldens, provenance, and checked results; bpf/erebor-interceptor owns checked multi-architecture vmlinux headers and the Phase 0 C CO-RE object; spec/qualification/v1 and spec/provenance/v1 own digest-bound evidence. Runtime can only use the shared read-only client and cannot create a second kernel owner.
 Dependency decision: libbpf-rs 0.27.0 is pinned with its fully vendored libbpf/libelf/zlib feature for runtime object, program, map, link, pin, and readback ownership. Pinned cbindgen 0.29.4 is build-time ABI glue only: it renders the C header from Rust repr(C) authority into OUT_DIR and rejects any byte drift from the checked header. No custom ABI parser or generator remains.
 Upstream-adoption dossier IDs used: UPSTREAM-ADOPTION-V1 and its META-*, BJ-*, KA-*, TG-*, and AS-* records. The selected practices are source-pinned and license checked; no upstream daemon was copied into the product chassis.
 Fixture cases and exact physical results: CFG-V1-GOLDEN-002, CFG-ROLLBACK-GOLDEN-002, DECISION-SET-GOLDEN-001, FIXTURE-REGISTRY-COMPLETE-001, and the eight SOURCE-* hostile models pass. The privileged x86_64 physical probe loaded three maps, attached/read back all 21 LSM links, and proved file-open allow -> EACCES deny -> allow after clear. Physical artifact SHA-256 e06d5cb9937159318852a1c8c3e2a4547829c7e3c41f46e5ed50cd718e030636; checked result SHA-256 430823c685d990d302cd526dbd0990791e91faf49a77bab3ad5ae58540778997.
-Commands and exact source state covered: cargo check --workspace passed; cargo clippy --workspace --all-targets --all-features -- -D warnings passed; the Phase 0 tests and the repository-wide bash .github/scripts/verify-rust-ci.sh procedure passed after the final Rust edit. mithril-phase0 verify wrote /tmp/mithril-phase0-verification-final.json at the unchanged SHA-256 0ba30384585468759ee16d0a1d6a957ef46f88385ce3814c217f00ba888cb457. The superseded Browser-CDP process-mediation E2E is explicitly ignored with a TODO to reimplement it on the shared Interceptor; no rejected CLI command was restored.
+Commands and exact source state covered: cargo check --workspace passed; cargo clippy --workspace --all-targets --all-features -- -D warnings passed; the Phase 0 tests and the repository-wide bash .github/scripts/verify-rust-ci.sh procedure passed after the final Rust edit. mithril-phase0 verify wrote /tmp/mithril-phase0-verification-final.json at the unchanged SHA-256 0ba30384585468759ee16d0a1d6a957ef46f88385ce3814c217f00ba888cb457. The 2026-08-09 maintenance pass removed an impossible protected-object fallback and moved warmup outside the benchmark wall interval; the authoritative CI procedure passed for that code, while the privileged protected benchmark was not rerun. The superseded Browser-CDP process-mediation E2E is explicitly ignored with a TODO to reimplement it on the shared Interceptor; no rejected CLI command was restored.
 Platform/kernel/runtime manifest: x86_64 Linux 6.8.0-137-generic; LSM order lockdown,capability,landlock,yama,apparmor,bpf; runtime BTF SHA-256 6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c; BPF source SHA-256 3a6c9db6be07084b0153d2762ee5ec22fc8126d9e8c5d922381e2f2206c7017e; BPF object SHA-256 a2e9089e0a199ec94cabf449413425809bc7243266ebaacd05c8f2c00de68972; ABI header SHA-256 f984c1bf711725b23a88151020986bc1e67e0e971dad971ce9d460e98fa03763. Arm64, arm, and riscv have checked compile headers but remain physically unsupported until separately qualified.
-Performance/capacity results: baseline and protected runs each used 100,000 warmups and 1,000,000 measured opens at concurrency 1 and 32. Baseline throughput was 132,713.966 and 1,298,740.905 operations/s; protected throughput was 132,868.755 and 1,359,663.598 operations/s. This run shows no throughput regression, but establishes no universal budget beyond this recorded host.
+Performance/capacity results: the historical baseline and protected artifacts each contain 100,000 warmups and 1,000,000 measured samples at concurrency 1 and 32, but their wall interval also included warmup while the throughput numerator did not. Their exact throughput and no-regression wording are therefore withdrawn. The runner now completes warmup before starting the measured wall interval. This correction does not change the physical attach/readback/file-denial evidence, but baseline and privileged protected trials must be rerun before making a Phase 0 performance claim.
 Closed-contract digest: 8a4c4b0662c5382b91c3353b52593bf8a3fe81e9363d28062e7d7d3792161bbf. Unchanged protected fixture: 741a9fd0857e360a8b3096924f52dd59695d9f6440aa6610370e4e092b23b1dc.
 Unsupported/degraded paths: task/fork/exec identity, mount component graph, mutation DIRTY/reconciliation, non-file effect families, final-flow/DNS/network enforcement, evidence-loss guarantees, and non-x86 physical claims are unsupported. The loaded non-LSM final-flow prototype is not attached or claimed.
-Remaining work in this phase: none. New capability work belongs to later explicitly authorized phases, not Phase 0.
+Remaining work in this phase: refresh the corrected baseline/protected performance artifacts before using a Phase 0 performance claim. New capability work belongs to later explicitly authorized phases, not Phase 0.
 Next phase authorized and implemented: Phase 1 only.
 ```

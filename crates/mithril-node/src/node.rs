@@ -154,10 +154,17 @@ impl NodeChassis {
             if *shutdown.borrow() {
                 break;
             }
-            let connection = self
-                .connector
-                .connect(self.registration.clone(), &mut self.trust)
-                .await;
+            let connection = tokio::select! {
+                result = self.connector.connect(
+                    self.registration.clone(),
+                    identity_healthy,
+                    &mut self.trust,
+                ) => result,
+                changed = shutdown.changed() => {
+                    let _result = changed;
+                    break;
+                }
+            };
             match connection {
                 Ok(mut connection) => {
                     self.readiness.send_replace(NodeReadinessV1 {

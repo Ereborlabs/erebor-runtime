@@ -45,7 +45,7 @@ impl RuntimeObservationServer {
         let listener = UnixListener::bind(&config.socket_path).context(IoSnafu {
             path: &config.socket_path,
         })?;
-        chown(
+        let configured = chown(
             &config.socket_path,
             Some(Uid::from_raw(config.allowed_uid)),
             None,
@@ -53,12 +53,18 @@ impl RuntimeObservationServer {
         .map_err(std::io::Error::from)
         .context(IoSnafu {
             path: &config.socket_path,
-        })?;
-        fs::set_permissions(&config.socket_path, fs::Permissions::from_mode(0o600)).context(
-            IoSnafu {
-                path: &config.socket_path,
-            },
-        )?;
+        })
+        .and_then(|()| {
+            fs::set_permissions(&config.socket_path, fs::Permissions::from_mode(0o600)).context(
+                IoSnafu {
+                    path: &config.socket_path,
+                },
+            )
+        });
+        if let Err(error) = configured {
+            let _result = fs::remove_file(&config.socket_path);
+            return Err(error);
+        }
         let snapshot = MithrilObservationSnapshot {
             cgroup_scope: config.cgroup_scope.clone(),
             node_boot_id: manifest.node_boot_id.clone(),

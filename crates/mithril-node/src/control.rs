@@ -18,6 +18,8 @@ use uuid::Uuid;
 use crate::error::{ControlProtocolSnafu, ControlRpcSnafu, ControlTransportSnafu, IoSnafu};
 use crate::{NodeControlConfig, Result, TrustCache};
 
+const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 pub struct NodeControlConnector {
     config: NodeControlConfig,
     node_id: String,
@@ -50,6 +52,7 @@ impl NodeControlConnector {
     pub async fn connect(
         &self,
         registration: NodeRegistration,
+        admission_ready: bool,
         trust_cache: &mut TrustCache,
     ) -> Result<ControlConnection> {
         let kernel_ready = registration.kernel_ready;
@@ -67,6 +70,7 @@ impl NodeControlConnector {
             .tcp_keepalive(Some(Duration::from_secs(30)))
             .http2_keep_alive_interval(Duration::from_secs(15))
             .keep_alive_while_idle(true)
+            .connect_timeout(CONTROL_CONNECT_TIMEOUT)
             .connect()
             .await
             .context(ControlTransportSnafu)?;
@@ -135,7 +139,7 @@ impl NodeControlConnector {
                 NodePayload::ReadinessReport(NodeReadinessReport {
                     kernel_ready,
                     control_ready: true,
-                    admission_ready: true,
+                    admission_ready,
                 }),
             ))
             .await

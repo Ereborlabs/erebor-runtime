@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
-use snafu::{ensure, ResultExt as _};
+use snafu::{ensure, OptionExt as _, ResultExt as _};
 
 use crate::benchmark::OpenBenchmark;
 use crate::capability::BpfPrototypeCompiler;
@@ -316,14 +316,11 @@ impl Phase0Runner {
         let _attachment = match mode {
             BenchmarkModeV1::Baseline => None,
             BenchmarkModeV1::Protected => {
-                ensure!(
-                    bpf_object.is_some(),
-                    InvalidInputSnafu {
-                        path: target,
-                        reason: "protected benchmark requires --bpf-object",
-                    }
-                );
-                Some(BpfPhase0Loader::new(bpf_object.unwrap_or(target)).attach()?)
+                let bpf_object = bpf_object.context(InvalidInputSnafu {
+                    path: target,
+                    reason: "protected benchmark requires --bpf-object",
+                })?;
+                Some(BpfPhase0Loader::new(bpf_object).attach()?)
             }
         };
         let records = [1, 32]

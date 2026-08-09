@@ -1,10 +1,11 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
-use crate::error::{ControlProtocolSnafu, IoSnafu, JsonSnafu};
+use crate::error::{ControlProtocolSnafu, IdentityStateSnafu, IoSnafu, JsonSnafu};
 use crate::Result;
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -25,7 +26,17 @@ impl TrustCache {
     pub fn load(state_directory: &Path) -> Result<Self> {
         let path = state_directory.join("control-trust.json");
         let installed = match fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?,
+            Ok(bytes) => {
+                let installed: InstalledTrustGenerationV1 =
+                    serde_json::from_slice(&bytes).context(JsonSnafu { path: &path })?;
+                ensure!(
+                    installed.is_valid(),
+                    IdentityStateSnafu {
+                        reason: "persisted Control trust cache is invalid",
+                    }
+                );
+                installed
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 InstalledTrustGenerationV1::default()
             }
@@ -95,10 +106,32 @@ impl TrustCache {
         let bytes =
             serde_json::to_vec_pretty(&installed).context(JsonSnafu { path: &self.path })?;
         let temporary = self.path.with_extension("json.next");
-        fs::write(&temporary, bytes).context(IoSnafu { path: &temporary })?;
+        let mut file = File::create(&temporary).context(IoSnafu { path: &temporary })?;
+        file.write_all(&bytes)
+            .context(IoSnafu { path: &temporary })?;
+        file.sync_all().context(IoSnafu { path: &temporary })?;
         fs::rename(&temporary, &self.path).context(IoSnafu { path: &self.path })?;
+        if let Some(parent) = self.path.parent() {
+            File::open(parent)
+                .context(IoSnafu { path: parent })?
+                .sync_all()
+                .context(IoSnafu { path: parent })?;
+        }
         self.installed = installed;
         Ok(())
+    }
+}
+
+impl InstalledTrustGenerationV1 {
+    fn is_valid(&self) -> bool {
+        self.generation > 0
+            && is_sha256_hex(&self.bundle_digest)
+            && self.control_connection_nonce.len() == 32
+            && self
+                .control_connection_nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            && self.control_sequence > 0
     }
 }
 
@@ -121,6 +154,8 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use snafu::ResultExt as _;
 
     use super::TrustCache;
@@ -146,6 +181,27 @@ mod tests {
                 .control_sequence,
             2
         );
+        Ok(())
+    }
+
+    #[test]
+    fn cache_rejects_structurally_invalid_persisted_state() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: "temporary trust directory",
+        })?;
+        fs::write(
+            directory.path().join("control-trust.json"),
+            br#"{
+                "generation": 0,
+                "bundle_digest": "",
+                "control_connection_nonce": "",
+                "control_sequence": 0
+            }"#,
+        )
+        .context(IoSnafu {
+            path: "invalid trust cache",
+        })?;
+        assert!(TrustCache::load(directory.path()).is_err());
         Ok(())
     }
 }

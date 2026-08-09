@@ -39,10 +39,10 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
     let connector =
         NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
     let mut trust = TrustCache::load(directory.path())?;
-    let first = connector.connect(registration(), &mut trust).await?;
+    let first = connector.connect(registration(), true, &mut trust).await?;
     assert_eq!(trust.installed().generation, 4);
     drop(first);
-    let second = connector.connect(registration(), &mut trust).await?;
+    let second = connector.connect(registration(), true, &mut trust).await?;
     for _ in 0..20 {
         if control.registered_connection_count() == 2
             && control.acknowledged_trust("node-a").is_some()
@@ -60,6 +60,40 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
         })
     );
     drop(second);
+    let _result = shutdown.send(());
+    server.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn mtls_rejects_incomplete_admission_readiness() -> Result<(), Box<dyn StdError>> {
+    let directory = tempfile::tempdir()?;
+    let certificates = Certificates::issue(false)?;
+    let files = certificates.write(directory.path())?;
+    let address = free_address()?;
+    let control = ControlPlane::new(
+        vec![AllowedNodeIdentity {
+            node_id: "node-a".to_owned(),
+            certificate_sha256: certificates.node_digest(),
+        }],
+        TrustGenerationV1 {
+            generation: 1,
+            bundle_digest: "d".repeat(64),
+        },
+    );
+    let (shutdown, server) = start_server(address, &files, control);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let connector =
+        NodeControlConnector::new(files.node_config(address), "node-a".to_owned(), [7; 16]);
+    let mut trust = TrustCache::load(directory.path())?;
+    let mut connection = connector.connect(registration(), false, &mut trust).await?;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), connection.wait_for_disconnect())
+            .await?
+            .is_err()
+    );
+
     let _result = shutdown.send(());
     server.await??;
     Ok(())
@@ -97,7 +131,10 @@ async fn assert_wrong_ca_rejected() -> Result<(), Box<dyn StdError>> {
     config.ca_path = wrong_ca.ca;
     let connector = NodeControlConnector::new(config, "node-a".to_owned(), [9; 16]);
     let mut trust = TrustCache::load(directory.path())?;
-    assert!(connector.connect(registration(), &mut trust).await.is_err());
+    assert!(connector
+        .connect(registration(), true, &mut trust)
+        .await
+        .is_err());
     let _result = shutdown.send(());
     server.await??;
     Ok(())
@@ -129,7 +166,10 @@ async fn assert_rejected_identity(
         [8; 16],
     );
     let mut trust = TrustCache::load(directory.path())?;
-    assert!(connector.connect(registration(), &mut trust).await.is_err());
+    assert!(connector
+        .connect(registration(), true, &mut trust)
+        .await
+        .is_err());
     let _result = shutdown.send(());
     server.await??;
     Ok(())

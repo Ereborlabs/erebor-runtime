@@ -240,11 +240,24 @@ fn cgroup_path_from_info(
             .build()
         })?;
     let relative = parse_cgroup_path(raw)?;
-    Ok(cgroup_root.join(relative.strip_prefix("/").unwrap_or(&relative)))
+    let relative = relative.strip_prefix("/").map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("CRI cgroup path `{raw}` is not absolute: {error}"),
+        }
+        .build()
+    })?;
+    ensure!(
+        !relative.as_os_str().is_empty(),
+        IdentityStateSnafu {
+            reason: "CRI container cgroup cannot be the cgroup root",
+        }
+    );
+    Ok(cgroup_root.join(relative))
 }
 
 fn parse_cgroup_path(raw: &str) -> Result<PathBuf> {
-    if raw.starts_with('/') && !raw.split('/').any(|part| part == "..") {
+    if raw.starts_with('/') && raw != "/" && !raw.split('/').any(|part| matches!(part, "." | ".."))
+    {
         return Ok(PathBuf::from(raw));
     }
     let parts: Vec<&str> = raw.split(':').collect();
@@ -316,6 +329,8 @@ mod tests {
             )
         );
         assert!(parse_cgroup_path("relative/path").is_err());
+        assert!(parse_cgroup_path("/").is_err());
+        assert!(parse_cgroup_path("/kubepods/../escape").is_err());
         Ok(())
     }
 

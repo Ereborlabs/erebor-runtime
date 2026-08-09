@@ -56,14 +56,18 @@ impl OpenBenchmark {
             }
         );
 
+        for _ in 0..warmup_iterations {
+            File::open(path).context(IoSnafu {
+                path: path.to_path_buf(),
+            })?;
+        }
         let started = Instant::now();
         let mut workers = Vec::with_capacity(concurrency as usize);
         for worker in 0..concurrency {
             let path = path.to_path_buf();
-            let worker_warmup = share(warmup_iterations, concurrency, worker);
             let worker_measured = share(measured_iterations, concurrency, worker);
             workers.push(thread::spawn(move || {
-                measure_worker(&path, worker_warmup, worker_measured)
+                measure_worker(&path, worker_measured)
             }));
         }
         let mut samples = Vec::with_capacity(measured_iterations as usize);
@@ -118,10 +122,7 @@ fn share(total: u64, workers: u32, worker: u32) -> u64 {
     total / u64::from(workers) + u64::from(worker < (total % u64::from(workers)) as u32)
 }
 
-fn measure_worker(path: &PathBuf, warmup: u64, measured: u64) -> Result<Vec<u64>> {
-    for _ in 0..warmup {
-        File::open(path).context(IoSnafu { path: path.clone() })?;
-    }
+fn measure_worker(path: &PathBuf, measured: u64) -> Result<Vec<u64>> {
     let mut samples = Vec::with_capacity(measured as usize);
     for _ in 0..measured {
         let started = Instant::now();

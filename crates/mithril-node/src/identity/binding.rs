@@ -110,6 +110,7 @@ impl WorkloadBindingOwner {
     ) -> Result<()> {
         for spec in configured {
             let mut binding = self.prepare(spec)?;
+            binding.validate_live_cgroup()?;
             ensure!(
                 !self.bindings.contains_key(&binding.root_cgroup_id)
                     && !self.bindings.values().any(|installed| {
@@ -400,23 +401,32 @@ impl WorkloadBindingOwner {
             path: configured_root,
         })?;
         ensure!(
-            root_cgroup_path.starts_with(&self.cgroup_root),
+            root_cgroup_path != self.cgroup_root && root_cgroup_path.starts_with(&self.cgroup_root),
             IdentityStateSnafu {
                 reason: format!(
-                    "cgroup `{}` is outside `{}`",
+                    "cgroup `{}` is the cgroup root or outside `{}`",
                     root_cgroup_path.display(),
                     self.cgroup_root.display()
                 ),
             }
         );
-        let metadata = fs::metadata(&root_cgroup_path).context(IoSnafu {
+        let root_handle = File::open(&root_cgroup_path).context(IoSnafu {
+            path: &root_cgroup_path,
+        })?;
+        let metadata = root_handle.metadata().context(IoSnafu {
+            path: &root_cgroup_path,
+        })?;
+        let path_metadata = fs::metadata(&root_cgroup_path).context(IoSnafu {
             path: &root_cgroup_path,
         })?;
         ensure!(
-            metadata.is_dir() && metadata.ino() != 0,
+            metadata.is_dir()
+                && metadata.ino() != 0
+                && metadata.dev() == path_metadata.dev()
+                && metadata.ino() == path_metadata.ino(),
             IdentityStateSnafu {
                 reason: format!(
-                    "cgroup `{}` has no stable kernel ID",
+                    "cgroup `{}` has no stable live kernel identity",
                     root_cgroup_path.display()
                 ),
             }
@@ -445,10 +455,7 @@ impl WorkloadBindingOwner {
             &spec.container_generation.to_le_bytes(),
         ]);
         let binding_nonce = id_from_uuid(Uuid::new_v4());
-        let root_handle = File::open(&root_cgroup_path).context(IoSnafu {
-            path: &root_cgroup_path,
-        })?;
-        Ok(PublishedBinding {
+        let binding = PublishedBinding {
             root_cgroup_id: metadata.ino(),
             root_cgroup_path,
             root_handle,
@@ -477,7 +484,9 @@ impl WorkloadBindingOwner {
                     InitialRootStateV1::Unarmed
                 },
             },
-        })
+        };
+        binding.validate_live_cgroup()?;
+        Ok(binding)
     }
 
     fn terminate_all(&mut self, host: &KernelHost) -> Result<()> {
@@ -712,6 +721,19 @@ mod tests {
         fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;
         let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
         assert!(owner.prepare(&spec(&root)).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn cgroup_root_cannot_become_a_workload_binding() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary cgroup root",
+        })?;
+        fs::write(temporary.path().join("cgroup.procs"), "").context(IoSnafu {
+            path: temporary.path(),
+        })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        assert!(owner.prepare(&spec(temporary.path())).is_err());
         Ok(())
     }
 
