@@ -30,6 +30,17 @@ struct mount_security_view_lock_v1 {
     struct bpf_spin_lock lock;
 };
 
+struct exception_runtime_state_bpf_v1 {
+    struct bpf_spin_lock lock;
+    __u32 maximum_uses;
+    __u32 consumed_uses;
+    __u32 exception_numeric_handle;
+    __u64 deadline_boottime_ns;
+    __u64 transition_version;
+    exception_runtime_state_kind_v1 state;
+    __u8 reserved[7];
+};
+
 #define MAX_CGROUP_ANCESTOR_STEPS_V1 64
 
 struct canonical_path_view_v1 {
@@ -241,7 +252,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
     __type(key, exception_runtime_state_key_v1);
-    __type(value, exception_runtime_state_v1);
+    __type(value, struct exception_runtime_state_bpf_v1);
 } exception_runtime_states SEC(".maps");
 
 struct {
@@ -489,7 +500,7 @@ static __always_inline int consume_bounded_exception(
         .profile_generation_ref_id = profile_generation_ref_id,
         .exception_numeric_handle = exception_numeric_handle,
     };
-    exception_runtime_state_v1 *exception;
+    struct exception_runtime_state_bpf_v1 *exception;
     __u64 now;
     int result = -EACCES;
 
@@ -499,7 +510,7 @@ static __always_inline int consume_bounded_exception(
     if (!exception)
         return -EACCES;
     now = bpf_ktime_get_ns();
-    bpf_spin_lock((struct bpf_spin_lock *)&exception->lock);
+    bpf_spin_lock(&exception->lock);
     if (exception->exception_numeric_handle != exception_numeric_handle ||
         !exception->maximum_uses ||
         exception->consumed_uses >= exception->maximum_uses ||
@@ -516,7 +527,7 @@ static __always_inline int consume_bounded_exception(
         exception->state = exception_runtime_state_kind_v1_exhausted;
     result = 0;
 unlock:
-    bpf_spin_unlock((struct bpf_spin_lock *)&exception->lock);
+    bpf_spin_unlock(&exception->lock);
     return result;
 }
 

@@ -1,6 +1,9 @@
 # Phase 4: Signed Local Pre-Effect Enforcement
 
-Status: Proposed; depends on Phase 3 `Done`.
+Status: Not done. The signed exact-file prevention increment and explicit
+hard-close floor for the currently unqualified local hooks are implemented;
+the complete policy-aware Phase 4 surface and privileged qualification are not
+complete.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -130,15 +133,15 @@ correlation, and response coordination.
 
 ```text
 State: Not done.
-Validated architecture revision/digest: not recorded.
-Completed deliverable IDs: none.
-Files and durable owners changed: none.
-Upstream-adoption dossier IDs used: none.
-Fixture cases and exact physical results: not run.
-Commands and exact source state covered: none; this is a plan-only rewrite.
-Platform/kernel/runtime manifests: none.
-Performance/capacity results: none.
-Unsupported/degraded paths: not yet measured.
-Remaining work in this phase: all deliverables.
+Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md sha256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
+Completed deliverable IDs: partial D4.1; the hard-close subset of D4.2, D4.4, and D4.5; the exact-file and file-mutation hard-close subset of D4.3; partial D4.6; and the exact-file portion of D4.8.
+Files and durable owners changed: mithril-control owns PROTECT compilation and exact exception binding; NodePolicyGenerationOwner owns PREPARING -> READ_BACK -> ACTIVE installation, anti-rollback, exact rows, and exception state; the production BPF effect gate owns pre-effect deny and atomic exception consumption; mithril-e2e owns the disposable physical oracle; examples/mithril-phase4-manual owns operator cases.
+Upstream-adoption dossier IDs used: existing Phase 0 libbpf-rs/libbpf-cargo and checked vmlinux-header decisions; no new runtime or BPF framework.
+Fixture cases and exact physical results: unprivileged compiler/ABI/interceptor/node/effect suites pass. The self-cleaning privileged PROTECT probe is implemented for exact open, inherited-fd read, file-backed mmap, a same-container exact benign read, concurrent exact N/N+1 exception consumption, monotonic expiry, exhausted-state loader restart, hard-link/bind aliases, denied protected mount races, external mount DIRTY/reconciliation races, unqualified exec and anonymous executable memory, create/chmod/truncate/unlink/link/rename, SysV IPC, ptrace, signal, namespace privilege, device ioctl, BPF map creation, pinned-link removal, saturation, latency, and cleanup. Each hard-close result also requires the expected effect family and operation in the kernel observation. The probe has not been run on the final source state.
+Commands and exact source state covered: `cargo check --workspace` and `bash .github/scripts/verify-rust-ci.sh` pass on the final implementation state, including all-target/all-feature clippy with warnings denied and loopback integration tests; production identity.bpf.c compiles with -Wall -Werror for x86_64, arm64, arm, and riscv checked-in vmlinux headers. Privileged BPF-LSM execution remains to be recorded.
+Platform/kernel/runtime manifests: no new Phase 4 physical result artifact recorded yet.
+Performance/capacity results: exception-state capacity is compiler-checked at 4,096; the physical saturation and latency result awaits the privileged probe.
+Unsupported/degraded paths: receipt-idempotent stable exception instances, policy-aware IPC, device/ioctl, credential, process-control, complete executable-memory/provenance, policy-aware self-protection, Landlock, mount propagation/fan-out, and the complete HF-002..HF-012 local matrix remain unqualified. Exceptions are therefore restricted to one exact file-open cell rather than being broadened unsafely across hooks. Typed unqualified hooks fail protected tasks closed where present and have physical-oracle coverage in the pending privileged probe; this is not a policy-aware support claim. Network remains Phase 5.
+Remaining work in this phase: qualify or implement D4.2-D4.5 and D4.7, implement stable receipt/WAL exception ownership, finish administrative approval-to-profile exception resolution and physical admin-exec proof, run the full required fixture matrix and legitimate controls, and record the final privileged result. Earlier Phase 2/3 Docker/CRI cases also remain unrecorded.
 Next phase not authorized: yes.
 ```

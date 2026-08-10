@@ -3,6 +3,8 @@
 # Shared policy setup for the small Phase 3 cases. Source this file.
 
 phase3_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+phase3_policy_mode=${phase3_policy_mode:-OBSERVE}
+phase3_policy_source=${phase3_policy_source:-$phase3_directory/policy-v1.yaml}
 # Reuse the established real-node lifecycle and complete cleanup owner.
 source "$phase3_directory/../mithril-phase2-manual/common.sh"
 
@@ -14,6 +16,9 @@ phase3_final_config=
 phase3_probe_ready=
 phase3_probe_pid=
 phase3_probe_host_pid=
+phase3_extra_exact_path=
+phase3_extra_exact_key=
+phase3_extra_exact_class=
 
 phase3_prepare_docker() {
   phase2_prepare_docker "$1" "$2"
@@ -50,8 +55,16 @@ phase3_configure_secret() {
       | .runtime_observation = null' \
     "$phase2_config" >"$phase3_identity_config"
   local artifact=$phase2_work/profile.json
+  local policy_source=$phase3_policy_source
+  if [[ $phase3_policy_mode == PROTECT \
+    && $policy_source == "$phase3_directory/policy-v1.yaml" ]]; then
+    policy_source=$phase2_work/protect-policy-v1.yaml
+    sed -e 's/desired_profile_mode: OBSERVE/desired_profile_mode: PROTECT/' \
+      -e 's/operation_ids: \[OPEN_READ\]/operation_ids: [OPEN_READ, READ, MMAP_READ]/' \
+      "$phase3_directory/policy-v1.yaml" >"$policy_source"
+  fi
   "$phase3_policy" compile \
-    --source "$phase3_directory/policy-v1.yaml" \
+    --source "$policy_source" \
     --seal-request "$phase3_directory/seal-request.json" \
     --signing-key "$phase3_directory/test-signing-key.hex" \
     --output "$artifact"
@@ -88,6 +101,33 @@ phase3_configure_secret() {
      | .exact_file_objects = $object
      | .runtime_observation = {socket_path: $socket, allowed_uid: 0, cgroup_scope: $scope}' \
     "$phase2_config" >"$phase3_final_config"
+  if [[ -n $phase3_extra_exact_path ]]; then
+    [[ $phase3_extra_exact_path == /* \
+      && $phase3_extra_exact_key =~ ^[1-9][0-9]*$ \
+      && -n $phase3_extra_exact_class \
+      && -f /proc/$phase2_init_pid/root$phase3_extra_exact_path ]] || {
+      echo "extra exact-file fixture is incomplete" >&2
+      exit 2
+    }
+    local extra_generation extra_object
+    extra_generation=$(lsattr -v "/proc/$phase2_init_pid/root$phase3_extra_exact_path" \
+      | awk 'NR == 1 {print $1}')
+    [[ $extra_generation =~ ^[1-9][0-9]*$ ]] || {
+      echo "extra exact file has no nonzero inode generation" >&2
+      exit 2
+    }
+    extra_object=$phase2_work/extra-exact-file-object.json
+    "$phase2_inspect" file-object \
+      --root-pid "$phase2_init_pid" \
+      --path "$phase3_extra_exact_path" \
+      --profile-generation 1 \
+      --exact-object-key "$phase3_extra_exact_key" \
+      --object-class "$phase3_extra_exact_class" \
+      --inode-generation "$extra_generation" >"$extra_object"
+    jq --slurpfile extra "$extra_object" '.exact_file_objects += $extra' \
+      "$phase3_final_config" >"$phase3_final_config.extra"
+    mv -- "$phase3_final_config.extra" "$phase3_final_config"
+  fi
   cp -- "$phase3_final_config" "$phase2_config"
   phase2_cleanup_functions+=(phase3_cleanup_probe_files)
 }
@@ -164,6 +204,10 @@ phase3_finish_preload() {
   phase2_stop_node
   cp -- "$phase3_final_config" "$phase2_config"
   phase2_start_node
+  phase3_wait_for_runtime_socket
+}
+
+phase3_wait_for_runtime_socket() {
   for ((attempt = 0; attempt < 100; attempt++)); do
     [[ -S $phase3_socket ]] && return 0
     if ! kill -0 "$phase2_node_pid" 2>/dev/null; then

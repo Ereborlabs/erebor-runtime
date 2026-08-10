@@ -37,6 +37,7 @@ pub use child::run_effect_child;
 pub(super) const PROFILE_GENERATION_REF_ID: u64 = 1;
 pub(super) const EXACT_OBJECT_KEY_ID: u64 = 7;
 pub(super) const BENIGN_OBJECT_KEY_ID: u64 = 8;
+pub(super) const EXEC_OBJECT_KEY_ID: u64 = 9;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct EffectHealthV1 {
@@ -129,18 +130,25 @@ fn require_hard_close(
         }
     );
     wait_for_reason(reader, observations, marker, expected_reason)?;
+    let recent = observations.recent();
+    let observed = recent.get(marker..).unwrap_or_default();
     ensure!(
-        observations
-            .recent()
-            .get(marker..)
-            .is_some_and(|events| events.iter().any(|event| {
-                event.reason == expected_reason
-                    && event.effect_family == u32::from(expected_effect.0 as u16)
-                    && event.operation == u32::from(expected_effect.1 as u16)
-            })),
+        observed.iter().any(|event| {
+            event.reason == expected_reason
+                && event.effect_family == u32::from(expected_effect.0 as u16)
+                && event.operation == u32::from(expected_effect.1 as u16)
+        }),
         InvalidInputSnafu {
             path: Path::new("effect_observations"),
-            reason: format!("{label} was denied by the wrong effect hook"),
+            reason: format!(
+                "{label} expected reason {expected_reason} at family {} operation {}; observed {:?}",
+                expected_effect.0 as u16,
+                expected_effect.1 as u16,
+                observed
+                    .iter()
+                    .map(|event| (&event.reason, event.effect_family, event.operation))
+                    .collect::<Vec<_>>()
+            ),
         }
     );
     Ok(())
@@ -253,7 +261,15 @@ impl EffectTestRunner {
         let link_target = paths.mutation_root.join("link-target");
         let rename_target = paths.mutation_root.join("rename-target");
         fixture.prepare_mount_race(&paths.source, &paths.mount_target, 8)?;
-        fixture.prepare_hard_closed(&truncate_target)?;
+        fixture.prepare_hard_closed(&truncate_target, &paths.exec_target)?;
+        let exec_inode_generation = inode_generation(fixture.pid(), &paths.exec_target)?;
+        ensure!(
+            fixture.hard_closed(HardClosedOperation::Exec)?.allowed,
+            InvalidInputSnafu {
+                path: &paths.exec_target,
+                reason: "executable control failed before effect policy activation",
+            }
+        );
         if protect {
             fixture.prepare_write_race(&paths.secret, 8)?;
         }
@@ -295,6 +311,15 @@ impl EffectTestRunner {
             benign_inode_generation,
         )
         .context(NodeSnafu)?;
+        let exec_object = ExactFileObjectResolver::resolve(
+            fixture.pid(),
+            &paths.exec_target,
+            PROFILE_GENERATION_REF_ID,
+            EXEC_OBJECT_KEY_ID,
+            "MANUAL_EXEC".to_owned(),
+            exec_inode_generation,
+        )
+        .context(NodeSnafu)?;
         let node_config = effect_node_config(
             &fixture_root,
             pin_root,
@@ -302,7 +327,7 @@ impl EffectTestRunner {
             &manual,
             artifact_path,
             binding.clone(),
-            vec![exact_object.clone(), benign_object],
+            vec![exact_object.clone(), benign_object, exec_object],
         );
 
         host.shutdown().context(InterceptorSnafu)?;
@@ -407,9 +432,6 @@ impl EffectTestRunner {
             host = KernelHostOwner::new(kernel_config.clone())
                 .start()
                 .context(InterceptorSnafu)?;
-            recovered_bindings
-                .publish_all(&host, std::slice::from_ref(&binding))
-                .context(NodeSnafu)?;
             policy =
                 NodePolicyGenerationOwner::load_and_install(&node_config, &host, node_boot_id, 1)
                     .context(NodeSnafu)?;
@@ -541,7 +563,7 @@ impl EffectTestRunner {
             &reader,
             &observations,
             HardClosedOperation::Exec,
-            "UNRESOLVED_OBJECT",
+            "EXACT_POLICY_DENY",
             (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
             "executable image",
         )?;

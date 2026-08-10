@@ -1,13 +1,13 @@
-# Mithril Phase 0–3 Implementation Review Guide
+# Mithril Phase 0–4 Implementation Review Guide
 
 Status: review/reference material for the current implementation through the
-Phase 3 compiler, Meta path/mount, exact-file observation, and honest
-simulation implementation. The production object/native-task privileged probe
-and the complete self-cleaning privileged Phase 3 effect probe passed on
-2026-08-10. The latter covers exact open, hard-link and bind aliases, concurrent
-protected mount denial, hostile external mount replacement and reconciliation,
-ring saturation, network hard safety, latency, and cleanup. Real Docker/CRI
-acceptance remains unrecorded.
+Phase 4 signed exact-file prevention increment. The Phase 3 observe probe
+passed on 2026-08-10. Phase 4 adds an `ACTIVE` PROTECT generation, physical
+exact open/read/mmap denial, an exact benign control, concurrent atomic
+bounded-exception consumption with expiry and loader-restart checks, and a
+physical hard-close matrix for the currently unqualified local hooks; its
+final privileged probe has not yet been run. Real Docker/CRI acceptance and
+the remaining policy-aware Phase 4 surfaces remain unrecorded.
 This is not a new implementation plan and does not widen the phase result.
 
 Companion documents:
@@ -17,6 +17,7 @@ Companion documents:
 - [Phase 1 result](./phase-1-one-binary-node-chassis.md)
 - [Phase 2 result](./phase-2-exact-native-identity.md)
 - [Phase 3 result](./phase-3-effect-observation-and-profile-simulation.md)
+- [Phase 4 result](./phase-4-signed-local-pre-effect-enforcement.md)
 - [Readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
 
 This guide answers six implementation-reading questions in source order:
@@ -25,9 +26,9 @@ This guide answers six implementation-reading questions in source order:
 2. What loads the BPF object, when, and who owns the links, pins, and maps?
 3. Which component writes each map, and which BPF path reads it?
 4. Exactly what does the `lsm/task_alloc` program do before a new task can run?
-5. How does a signed Phase 3 candidate reach inactive BPF map rows?
-6. Which effects are really classified and observed, and which remain hard-safe
-   unsupported?
+5. How does a signed candidate reach an atomically usable `ACTIVE` generation?
+6. Which effects are physically denied, which are observe-only, and which
+   remain hard-safe unsupported?
 
 The detailed walk-through deliberately covers the transitive helper closure of
 `erebor_task_alloc`: the helpers it calls, and the helpers needed by either
@@ -52,10 +53,10 @@ file.
 | 6 | BPF translation unit: combines ABI, maps, helpers, lifecycle, exec, effect, and exit hook families into one object. | [`identity.bpf.c`](../../../bpf/erebor-interceptor/programs/identity.bpf.c#L3-L27) | `identity_maps.h`, then `identity_lifecycle.bpf.h` |
 | 7 | Exact Rust/C identity contract: every map value and task record uses these `repr(C)` types. | [`TaskLabelV1` and adjacent models](../../../crates/erebor-interceptor-abi/src/abi/identity.rs#L286-L390) | The generated C ABI header and map declarations |
 | 8 | `PolicyCompiler` and `PolicyArtifactOwner`: parse the restricted source shape, lower finite cells, sign/verify the candidate, and simulate it in userspace. | [`PolicyCompiler::compile`](../../../crates/mithril-control/src/policy/compiler.rs#L66-L86) and [`PolicyArtifactOwner`](../../../crates/mithril-control/src/policy/artifact.rs#L15-L98) | Candidate artifact and anti-rollback store |
-| 9 | `NodePolicyGenerationOwner`: verifies candidates, derives node-local handles, and stages decisions, exact objects, the component graph, and mount-view snapshot rows under a `READ_BACK` descriptor. | [`NodePolicyGenerationOwner::load_and_install`](../../../crates/mithril-node/src/policy.rs#L22-L100) | `LoweredGeneration::install`, mount reconciliation, and candidate maps |
-| 10 | Phase 3 effect gate: validates current identity, reconstructs the bounded canonical path for file effects, resolves the exact object, simulates one decision, fixes the physical result, then emits best-effort evidence. | [`identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L162-L410) | `identity_path.bpf.h`, then explicit LSM wrappers |
+| 9 | `NodePolicyGenerationOwner`: verifies candidates, derives node-local handles, stages decisions, exact objects, exceptions, the component graph, and mount-view rows, reads them back, then publishes the descriptor `ACTIVE`. | [`NodePolicyGenerationOwner::load_and_install`](../../../crates/mithril-node/src/policy.rs#L22-L100) | `LoweredGeneration::install`, mount reconciliation, and generation maps |
+| 10 | Phase 3/4 effect gate: validates current identity, reconstructs the bounded canonical path, resolves the exact object and decision, returns either observe-only `WOULD_DENY` or PROTECT errno before effect, then emits best-effort evidence. | [`identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) | `identity_path.bpf.h`, bounded exception consumption, then explicit LSM wrappers |
 | 11 | Observation reader and store: libbpf-rs drains the one ring into a bounded in-process history exposed by the read-only Runtime socket. | [`KernelHost::effect_observation_reader`](../../../crates/erebor-interceptor/src/host.rs#L889-L914) and [`EffectObservationStore`](../../../crates/mithril-node/src/observation.rs#L15-L106) | `NodeChassis::run` and `RuntimeObservationServer` |
-| 12 | `EffectTestRunner`: assertion-bearing privileged oracle for the complete Phase 3 host path; it owns only disposable test state and uses the production loader, binding, and policy owners. | [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs) | [`effect/child.rs`](../../../crates/mithril-e2e/src/effect/child.rs) and [`effect/support.rs`](../../../crates/mithril-e2e/src/effect/support.rs) |
+| 12 | `EffectTestRunner`: assertion-bearing privileged oracle for the Phase 3 observe, Phase 4 exact-file PROTECT, bounded-exception, and unqualified hard-close paths; it owns only disposable test state and uses the production loader, binding, and policy owners. | [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs) | [`effect/child.rs`](../../../crates/mithril-e2e/src/effect/child.rs) and [`effect/support.rs`](../../../crates/mithril-e2e/src/effect/support.rs) |
 
 The shortest route to understand a new-task birth is therefore:
 
@@ -70,28 +71,30 @@ mithril-node main
   -> identity_lifecycle.bpf.h: erebor_task_alloc
 ```
 
-For the Phase 3 slice, continue from node startup as follows:
+For the Phase 3/4 exact-file slice, continue from node startup as follows:
 
 ```text
 signed candidate artifact
   -> NodePolicyGenerationOwner::load_and_install
   -> profile_generation_descriptors + decision/default/object rows
-  -> NativeSecurityStateOwner::activate_with_effect_observation
+  -> NativeSecurityStateOwner::activate_with_effect_policy
   -> identity_effect_gate
+  -> OBSERVE allow/WOULD_DENY or PROTECT pre-effect errno
   -> effect_observations ring
   -> libbpf-rs RingBufferBuilder
   -> EffectObservationStore
   -> RuntimeObservationServer snapshot
 ```
 
-## 1. Phase 0–3 implementation map
+## 1. Phase 0–4 implementation map
 
 | Phase | What was introduced | Start reading | Boundary of this phase |
 | --- | --- | --- | --- |
 | 0 | `mithril-e2e` qualification, source/ABI closure, hostile fixtures, and the disposable feasibility object | [`capability.rs`](../../../crates/mithril-e2e/src/capability.rs#L13-L137) and the [Phase 0 result](./phase-0-substrate-license-abi-and-incident-baseline.md) | The feasibility object is a test artifact, not the production identity object. |
 | 1 | `erebor-interceptor` load/link/map/pin owner; one `mithril-node`; one `mithril-control`; mTLS control stream; read-only Runtime observation | [`NodeChassis`](../../../crates/mithril-node/src/node.rs#L39-L195) and [`KernelHostOwner`](../../../crates/erebor-interceptor/src/host.rs#L235-L490) | Control does not decide a syscall and Runtime is not a second BPF owner. |
-| 2 | Production identity object, native task/process/exec state, runtime cgroup binding, replay foundations, and restart/reuse state | [`identity.bpf.c`](../../../bpf/erebor-interceptor/programs/identity.bpf.c#L3-L27), then [`identity_lifecycle.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L6-L78) | Phase 2 itself did not activate an effect policy; Phase 3 owns the later observe-candidate tables, and local effect prevention is still unsupported. |
-| 3 | Closed source-policy/compiler, signed inactive candidates, bounded Meta component graph and mount-view CAS, exact-file observe decisions, explicit hard-safety/non-prevention simulation, one ring reader, and bounded Runtime snapshots | [`mithril-control::policy`](../../../crates/mithril-control/src/policy/mod.rs), [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs#L22-L116), [`identity_path.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h), and [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) | No active policy-denial switch exists. File and mount-view state are code-backed; unqualified socket/channel/device/VMA/provenance families return explicit hard safety. Privileged verifier/runtime evidence is still pending. |
+| 2 | Production identity object, native task/process/exec state, runtime cgroup binding, replay foundations, and restart/reuse state | [`identity.bpf.c`](../../../bpf/erebor-interceptor/programs/identity.bpf.c#L3-L27), then [`identity_lifecycle.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L6-L78) | Phase 2 itself did not activate an effect policy; Phase 3/4 own the later permission tables. |
+| 3 | Closed source-policy/compiler, signed observe candidates, bounded Meta component graph and mount-view CAS, exact-file observation, explicit hard-safety simulation, one ring reader, and bounded Runtime snapshots | [`mithril-control::policy`](../../../crates/mithril-control/src/policy/mod.rs), [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs), [`identity_path.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h), and [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) | Observe policy denials remain physical allows. Unqualified object families return explicit hard safety. |
+| 4 | PROTECT lowering, `ACTIVE` generation publication, exact-file pre-effect errno, inherited-fd read and file-backed mmap denial, atomic expiring `maximum_uses` exception state, and explicit hard closure of attached but unqualified local hooks | [`PolicyCompiler`](../../../crates/mithril-control/src/policy/compiler.rs), [`NodePolicyGenerationOwner`](../../../crates/mithril-node/src/policy.rs), [`consume_bounded_exception`](../../../bpf/erebor-interceptor/programs/identity_maps.h), and the [Phase 4 examples](../../../examples/mithril-phase4-manual/README.md) | This is an exact-file and hard-safety increment, not complete D4.2-D4.8. IPC/device/credential/process-control/self-protection and several exec/mm/mount variants remain unqualified and fail closed rather than claiming policy-aware support. |
 
 ### Phase 0 qualification sequence
 
@@ -122,13 +125,15 @@ sequenceDiagram
 ```
 
 The production object contains effect hooks. Without a verified candidate they
-serve only as the Phase 2 identity/exec-safety gate. With a Phase 3 candidate,
+serve only as the Phase 2 identity/exec-safety gate. With an OBSERVE candidate,
 the exact-file path first validates a clean mount snapshot and runs the bounded
 canonical component graph, then simulates signed decisions and emits
-observation records. Simulated policy denial remains an allow; broken
-identity/generation/object state and unsupported protected objects remain hard
-denials. `mithril-node` still advertises `LOCAL_EFFECT_PREVENTION` as
-unsupported in [`node.rs`](../../../crates/mithril-node/src/node.rs#L125-L145).
+observation records. With a PROTECT candidate, the same exact lookup returns
+the configured errno before the effect. Broken identity/generation/object
+state and unsupported protected objects remain hard denials. A PROTECT
+generation currently advertises only the named signed exact-file slice. The
+other attached hooks have explicit physical hard-close oracles but are not
+promoted to policy-aware support.
 
 ## 2. Ownership: one durable writer per concern
 
@@ -141,13 +146,13 @@ unsupported in [`node.rs`](../../../crates/mithril-node/src/node.rs#L125-L145).
 | Cgroup-to-workload identity | `WorkloadBindingOwner` | Validates cgroup lifetime and publishes `execution_set_bindings` | [`publish_all`](../../../crates/mithril-node/src/identity/binding.rs#L106-L265) | Task labels or policy effect decisions |
 | Task/process identity | BPF program family plus `NativeSecurityStateOwner` activation | Allocates and checks BPF-native state; boot/epoch configuration; reconciliation health | [`activate`](../../../crates/mithril-node/src/identity/native.rs#L36-L85), then [`erebor_task_alloc`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L6-L78) | Container/runtime metadata discovery |
 | Source policy and signed candidate | `PolicyCompiler` plus `PolicyArtifactOwner` in `mithril-control` | Restricted parse/validation, deterministic finite-cell lowering, userspace simulation, Ed25519 artifact creation and verification | [`compiler.rs`](../../../crates/mithril-control/src/policy/compiler.rs#L64-L86) and [`artifact.rs`](../../../crates/mithril-control/src/policy/artifact.rs#L15-L98) | Node-local BPF handles, map installation, or activation |
-| Node-local candidate generation | `NodePolicyGenerationOwner` | Candidate verification/anti-rollback, deterministic handle lowering, inactive exact-file decision/default/object rows, descriptor readback | [`policy.rs`](../../../crates/mithril-node/src/policy.rs#L22-L374) | Source-policy authorship, active-generation CAS, or physical deny enablement |
+| Node-local policy generation | `NodePolicyGenerationOwner` | Candidate verification/anti-rollback, deterministic handle lowering, exact-file decision/default/object/exception rows, descriptor activation and readback | [`policy.rs`](../../../crates/mithril-node/src/policy.rs) | Source-policy authorship or a second BPF loader |
 | Local effect decision and telemetry production | BPF `identity_effect_gate` | Task-first safety validation, current decision lookup, fixed physical result, ring submission, per-CPU loss/unresolved counters | [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L19-L389) | Policy parsing, candidate installation, durable evidence, or unsupported-object classification |
 | Effect ring consumption and recent history | `EffectObservationReader` plus `EffectObservationStore` | One libbpf-rs ring manager, ABI decode, bounded 1,024-record in-process history, decoder/loss health aggregation | [`host.rs`](../../../crates/erebor-interceptor/src/host.rs#L889-L914) and [`observation.rs`](../../../crates/mithril-node/src/observation.rs#L15-L106) | A second loader, unbounded/durable audit history, or policy decisions |
 | Control trust persistence | `TrustCache` | Monotonic, replay-safe Control trust generation cache | [`trust.rs`](../../../crates/mithril-node/src/trust.rs#L20-L154) | BPF map or policy activation |
 | Control service | `mithril-control` | mTLS node registration, nonce/sequence checking, trust delivery/readiness acceptance | [`mithril-control::main`](../../../crates/mithril-control/src/main.rs#L14-L50) | Local BPF programs and maps |
 | Runtime observation | `RuntimeObservationServer` | One read-only Unix socket, a static capability/manifest snapshot, scoped recent effect copies, and health lookup | [`RuntimeObservationServer`](../../../crates/mithril-node/src/local.rs#L21-L163) | Policy, role assignment, map writes, or durable evidence; its present peer-PID/cgroup check has the limitation recorded in Section 15 |
-| Qualification and test evidence | `mithril-e2e` | Phase 0 compiler/probes, fixture/closure validation, native identity probe, and the self-cleaning Phase 3 effect runner | [`PlatformProbeV1` / `BpfPrototypeCompiler`](../../../crates/mithril-e2e/src/capability.rs#L13-L137) and [`EffectTestRunner`](../../../crates/mithril-e2e/src/effect.rs) | A second production loader or a container-specific BPF object |
+| Qualification and test evidence | `mithril-e2e` | Phase 0 compiler/probes, fixture/closure validation, native identity probe, and the self-cleaning Phase 3 OBSERVE / Phase 4 PROTECT effect runner | [`PlatformProbeV1` / `BpfPrototypeCompiler`](../../../crates/mithril-e2e/src/capability.rs#L13-L137) and [`EffectTestRunner`](../../../crates/mithril-e2e/src/effect.rs) | A second production loader or a container-specific BPF object |
 
 The central rule is visible in the master plan: `erebor-interceptor` is a
 component family embedded by `mithril-node`, not another daemon. The same node
@@ -228,9 +233,9 @@ sequenceDiagram
     K-->>H: manifest with map/link IDs
     N->>B: resolve configured/CRI cgroups
     B->>K: execution_set_bindings: PREPARING -> ACTIVE
-    opt signed Phase 3 candidate configured
+    opt signed candidate configured
         N->>P: verify, anti-rollback, lower candidate
-        P->>K: descriptor PREPARING; rows; descriptor READ_BACK
+        P->>K: descriptor PREPARING; rows; READ_BACK; ACTIVE
     end
     N->>I: install identity_config; run task iterator reconciliation
     I->>K: identity_config + health readback
@@ -249,8 +254,8 @@ The code order is intentional:
    values by readback.
 4. When candidates are configured, it verifies/anti-rolls them, lowers the
    current exact-file slice, writes candidate rows, and marks their descriptor
-   `READ_BACK` only after row readback.
-5. It enables the identity runtime config, enables effect observation only
+   `ACTIVE` only after row and descriptor readback.
+5. It enables the identity runtime config and effect policy only
    when a candidate was installed, and runs the task iterator to check existing
    tasks.
 6. It builds one libbpf-rs ring reader and the optional read-only Runtime
@@ -269,10 +274,10 @@ container. The temporary task iterator link is separately attached only while
 `NativeSecurityStateOwner::activate` runs reconciliation.
 
 The manual effect cases intentionally start their probe with identity enabled
-but effect observation disabled, then restart onto the same pinned state after
+but effect policy disabled, then restart onto the same pinned state after
 the signed candidate has been installed. Recovery preserves every boot, epoch,
 errno, enablement, and allocator field exactly and permits only the monotonic
-`effect_observation_enabled: 0 -> 1` transition. It cannot disable observation
+`effect_policy_enabled: 0 -> 1` transition. It cannot disable the gate
 or change enforcement configuration. The final observation socket is the
 readiness oracle before the paused probe is released.
 
@@ -373,7 +378,7 @@ remain `WorkloadBindingOwner` operations on the same cgroup-authority record.
 
 ## 4. BPF map ownership and update matrix
 
-The production object has 35 maps, declared together in
+The production object has 37 maps, declared together in
 [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h).
 `KernelHost` is the sole userspace mechanism that can mutate a loaded map, but
 the domain owners below decide *which* records it writes. `KernelStateReader`
@@ -401,14 +406,15 @@ and `NativeIdentityInspector` are read-only consumers of pinned maps.
 | `approved_exec_slots` (hash, 1,024) | `AuthorizationProofOwner` installs, expires, or retires exact one-use slots | Exec path atomically consumes/marks a matching slot | Phase-2 identity foundation for the later Phase-4 administrative flow. |
 | `pending_administrative_matches` (hash, 32,768) | none | Exec tracepoints create/delete a short-lived exact argv match | Bridges exact syscall argv matching to the BPRM transaction. |
 | `task_reference_tombstones` (hash, 65,536) | none | Birth creates; exit atomically records exactly-once releases | Prevents double-decrement and turns cleanup loss into reconciliation work. |
-| `profile_generation_descriptors` (hash, 4,096) | `NodePolicyGenerationOwner` writes `PREPARING`, then `READ_BACK` after row readback | none | Effect gate admits only the current boot/epoch/profile descriptor in `READ_BACK`; there is no active-generation pointer yet. |
+| `profile_generation_descriptors` (hash, 4,096) | `NodePolicyGenerationOwner` writes `PREPARING`, then `READ_BACK`, then `ACTIVE` after exact row readback | none | Effect gates admit only the current boot/epoch/profile descriptor in `ACTIVE`; mode selects OBSERVE or PROTECT behavior. |
+| `exception_runtime_states` (hash, 4,096) | `NodePolicyGenerationOwner` installs exact generation-local limits and preserves an existing counter/deadline during daemon restart | Matching LSM effect/admin-exec path locks one value, checks state/deadline/count, increments once, and marks the final use exhausted | Sole atomic `maximum_uses` owner for the currently implemented one-file-open-cell exception slice. A nonmatching decision has no handle and cannot consume it. |
 | `effect_decisions` (hash, 65,536) | `NodePolicyGenerationOwner` writes exact-object cells | none | Effect gate reads the full exact key first. |
 | `effect_defaults` (hash, 65,536) | `NodePolicyGenerationOwner` writes finite expanded class defaults | none | Effect gate falls back here only after exact-object lookup misses. |
 | `exact_file_objects` (hash, 65,536) | `NodePolicyGenerationOwner` writes configured identities | Effect gate may insert a bounded dynamic exact object after canonical path resolution | Maps mount namespace, unique mount ID, device, inode, and inode generation to signed object/class handles. Dynamic IDs use the reserved high-bit namespace. |
 | `mount_security_views` (hash, 4,096) | `NodePolicyGenerationOwner` installs one initial state keyed by mount-namespace inode | A covered mutation by any task already in that represented namespace marks DIRTY and advances pending/version; syscall exit publishes completion by decrementing pending last; the path gate commits one exact proposal | Namespace-global clean/dirty/topology/snapshot authority. It is not keyed through the mutating task's cgroup, so a privileged host task cannot bypass invalidation after joining the namespace. |
 | `mount_security_view_locks` (hash, 4,096) | `NodePolicyGenerationOwner` installs one zeroed lock row per represented mount namespace | Only LSM mount/file paths take the value's BPF spin lock; tracing programs cannot reference this map | Serializes the namespace-global LSM-side epoch/CAS transaction. Exit-side counters use BPF atomics because Linux rejects spin-lock maps from tracing program types. |
 | `mount_reconciliation_proposals` (hash, 4,096) | `NodePolicyGenerationOwner` writes one complete read-back proposal per mount namespace | The path gate validates and commits the exact proposal under the namespace-view lock | Userspace-to-BPF half of the `(epoch, pending=0, DIRTY) -> CLEAN` CAS. Reconciliation first proves the configured exact mount/device/inode/generation is unchanged. |
-| `mount_mutation_epochs` (hash, 4,096) | `NodePolicyGenerationOwner` installs the initial namespace epoch | Covered mount hooks increment it before the topology mutation can take effect | Defeats stale userspace proposals when another task or external namespace entrant races reconciliation. |
+| `mount_mutation_epochs` (hash, 4,096) | `NodePolicyGenerationOwner` installs the initial namespace epoch | After the pre-effect gate allows a covered mount hook, BPF increments it before the topology mutation can take effect | Defeats stale userspace proposals when another task or external namespace entrant races reconciliation. A denied mount does not dirty the view. |
 | `canonical_mount_roots` (hash, 65,536) | `NodePolicyGenerationOwner` installs and reconciles snapshot-derived roots | none | Maps a verified mount-root identity to the lowest-unique-ID canonical mount and the precomputed graph-prefix state. |
 | `path_graph_exact_transitions` (hash, 65,536) | `NodePolicyGenerationOwner` installs compiler output | none | Exact component transition for the deterministic bounded path graph. |
 | `path_graph_wildcard_transitions` (hash, 4,096) | `NodePolicyGenerationOwner` installs compiler output | none | Explicit wildcard fallback when the exact transition is absent. |
@@ -439,9 +445,9 @@ the effect gate.
 KubeArmor's checked `HASH_OF_MAPS` maps select per-container rule or visibility
 maps through PID/mount namespace keys. Mithril currently uses the architecture's
 equivalent flat indirection: immutable rows include the profile-generation key,
-the descriptor reaches `READ_BACK` only after exact row readback, and a binding
+the descriptor reaches `ACTIVE` only after exact row readback, and a binding
 selects one generation. This avoids an inner-map create, pin, publish, retire,
-and garbage-collection lifecycle for the current static Phase 3 activation.
+and garbage-collection lifecycle for the current static activation.
 Map-of-maps remains a valid later representation if live generation replacement
 needs a whole-inner-map swap or isolated per-tenant capacity; it is not needed
 to represent namespace-global mount mutation state.
@@ -824,7 +830,7 @@ role.
 | Identity effect hooks | Gate covered effects on current identity, placement, current process state, and exec safety | They read the label first. Missing identity in a protected binding denies instead of falling back to cgroup-only or host policy. |
 | `iter/task` | Startup/recovery reconciliation | Checks live labeled tasks against all required maps/binding/ref counts and turns inconsistency into fail-closed/reconciliation health. |
 
-## 13. Phase 3 signed-candidate sequence
+## 13. Phase 3/4 signed-generation sequence
 
 Phase 3 has two compilation stages with different owners. Control owns the
 portable, signed content. The node owns platform-local numeric handles and BPF
@@ -856,25 +862,27 @@ sequenceDiagram
     end
     N->>K: descriptor = READ_BACK
     N->>K: read back descriptor
+    N->>K: descriptor = ACTIVE with OBSERVE or PROTECT mode
+    N->>K: read back active descriptor
 ```
 
 Read the sequence in these source blocks:
 
 | Source | Responsibility and current limit |
 | --- | --- |
-| [`PolicyCompiler::compile`](../../../crates/mithril-control/src/policy/compiler.rs#L66-L86) | Validates and deterministically lowers the currently implemented restricted source shape into finite cells. It is only the partial D3.1 shape listed in the Phase 3 result, not complete Appendix A.11. |
+| [`PolicyCompiler::compile`](../../../crates/mithril-control/src/policy/compiler.rs#L66-L86) | Validates and deterministically lowers the currently implemented restricted source shape into finite cells. OBSERVE denial becomes simulatable; PROTECT denial becomes physical. Until receipt idempotency exists, an exception must bind one qualified file-open cell; its subject and authority-delta operation digest must both equal that cell. This is still not complete Appendix A.11. |
 | [`PolicyArtifactOwner`](../../../crates/mithril-control/src/policy/artifact.rs#L20-L98) | Owns compile/sign, load/verify, and userspace simulation file flows. It uses existing Ed25519/serde/CBOR crates rather than a custom cryptographic or serialization stack. |
 | [`AntiRollbackStore::accept`](../../../crates/mithril-control/src/policy/rollback.rs#L126-L195) | Persists issuer/profile high water and accepts identical content idempotently; an older target needs a separate exact one-use signed authorization. |
 | [`NodePolicyGenerationOwner::load_and_install`](../../../crates/mithril-node/src/policy.rs#L24-L87) | Joins verified artifacts to configured bindings, derives local handles, merges rows sharing one generation handle, and invokes installation. |
-| [`LoweredGeneration::for_binding`](../../../crates/mithril-node/src/policy.rs#L97-L307) | Builds exact decision/default/object bytes and a descriptor digest. Exact file identity is still operator/resolver supplied; there is no rotation-aware dynamic owner. |
-| [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L329-L374) | Writes `PREPARING`, reads back each row, then writes/reads back `READ_BACK`. Partial new content cannot be used by the BPF gate, but the reinstall/recovery defect in Section 15 means this is not yet the architecture's complete immutable-generation transaction. |
+| [`LoweredGeneration::for_binding`](../../../crates/mithril-node/src/policy.rs) | Builds exact decision/default/object/exception bytes and a descriptor digest. Exact file identity is still operator/resolver supplied; there is no rotation-aware dynamic owner. |
+| [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs) | Writes `PREPARING`, reads back immutable rows, writes/reads back `READ_BACK`, then writes/reads back `ACTIVE`. Recovery resumes any of those exact descriptor states and rejects changed content under the same handle. |
 
-There is deliberately no Phase 4 active-generation pointer or prevention
-switch. `READ_BACK` means that this observe candidate passed the current row
-copy check; it does **not** mean the complete architecture was probed or made
-authoritative for physical denial.
+`ACTIVE` makes only the installed generation eligible. It is not a claim that
+the complete architecture or every attached hook was qualified. OBSERVE and
+PROTECT are explicit descriptor modes, so a deny cell cannot silently change
+physical meaning without a different signed artifact and descriptor.
 
-## 14. Phase 3 effect-decision and observation sequence
+## 14. Phase 3/4 effect-decision and observation sequence
 
 The implemented hot path is task first, then current authority, then the
 actor's clean mount view and canonical component graph, then exact object and
@@ -899,7 +907,7 @@ sequenceDiagram
         G->>G: keep prior result unchanged
     else broken identity or generation
         G->>G: choose configured hard deny
-    else observation disabled
+    else effect policy disabled
         G->>L: return prior result
     else file-backed effect
         G->>M: require CLEAN view at current epoch and snapshot
@@ -907,8 +915,15 @@ sequenceDiagram
         G->>M: load oldest-mount graph prefix; exact/wildcard transitions
         G->>M: revalidate the same CLEAN snapshot
         G->>P: bind exact live object; read exact/default cell
-        alt signed candidate says deny
+        alt signed candidate says deny in OBSERVE
             G->>G: return 0; classify WOULD_DENY
+        else signed candidate says deny in PROTECT
+            G->>G: return configured errno; classify EXACT_POLICY_DENY
+        else allow cell consumes a bounded exception
+            G->>G: atomically check deadline/count and increment once
+            alt exception missing, expired, or exhausted
+                G->>G: hard deny; classify EXCEPTION_UNAVAILABLE
+            end
         else signed candidate says allow/audit-allow
             G->>G: return 0; classify exact allow/audit-allow
         end
@@ -922,11 +937,13 @@ sequenceDiagram
 ```
 
 Mount mutations use a separate pre-effect transaction. `sb_mount`,
-`sb_umount`, `sb_pivotroot`, and `move_mount` increment the view epoch and
-pending count and mark it DIRTY before the common policy gate. These maps are
-keyed by mount-namespace identity, not by the current task's cgroup, so the
-same ordering applies when a privileged external task first joins the
-represented namespace. The raw syscall
+`sb_umount`, `sb_pivotroot`, and `move_mount` first preserve a prior LSM denial
+and run the common task-first gate. A protected unsupported mutation returns
+its denial without dirtying a topology that cannot change. When the gate
+allows an external task in the represented namespace, the hook increments the
+view epoch and pending count and marks it DIRTY before returning success to
+Linux. The maps are keyed by mount-namespace identity, not by the current
+task's cgroup. The raw syscall
 exit path keeps the view DIRTY, atomically advances its version, and decrements
 the exact task-local attempt's pending count last. It cannot reference the BPF
 spin-lock map because Linux rejects that map/program-type combination.
@@ -948,11 +965,11 @@ sequenceDiagram
     participant F as Later file hook
 
     A->>H: protected or external mount/move/unmount attempt
-    H->>V: epoch++; pending++; state=DIRTY
     alt protected task and unsupported mount object
         H->>H: hard safety => EACCES/EPERM
         H-->>A: physical denial
     else external privileged namespace entrant
+        H->>V: epoch++; pending++; state=DIRTY
         H-->>A: prior LSM result; topology remains DIRTY
     end
     A->>X: syscall returns
@@ -969,26 +986,29 @@ sequenceDiagram
 | Source line(s) | Exact responsibility |
 | --- | --- |
 | [`identity_effects.bpf.h` 19-92](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L19-L92) | Obtains per-CPU health, initializes a fresh observation, fixes a caller-selected return value before best-effort ring reservation, counts loss, and preserves an earlier nonzero LSM result. |
-| [94-159](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L94-L159) | Copies the validated actor fields and constructs the complete exact decision key; only an exact-row miss falls back to the matching finite default key. |
-| [162-223](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L162-L223) | Loads config/scratch/current task, resolves its live cgroup binding, and distinguishes an unlabeled task outside protection from an unlabeled task in protected placement. |
-| [224-283](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L224-L283) | Revalidates boot/epoch, binding nonce/lifecycle, coordinate, real parent, process, entry, domain, execution, image, state vector, and retained profile reference before populating the actor. |
-| [284-323](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L284-L323) | Records binding/execution-set identity, preserves a prior LSM result, and applies the separate hard exec-transaction guard before observe policy is considered. |
-| [324-342](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L324-L342) | Returns without policy simulation when observation is disabled; otherwise requires the exact boot/epoch/profile generation in `READ_BACK` and hard-denies a missing classifier input. |
-| [343-396](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L343-L396) | Derives the live file tuple, requires a unique mount ID, runs `canonical_path_candidate`, creates/reads the exact live object binding, and constructs the exact/default decision key. Any dirty view, failed bound, missing graph edge, snapshot race, or unequal atom is hard unresolved. |
-| [397-421](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L397-L421) | Converts candidate `DENY` to observe-only `WOULD_DENY` with return zero, records allow/audit-allow, and treats an unknown decision enum as corrupt generation. |
-| [424-680](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L424-L680) | Keeps each Linux hook prototype explicit and stops a multi-operation wrapper after its first nonzero result. File-backed hooks pass a file; ioctl and remaining unqualified object families pass null and take hard-safe `UNSUPPORTED_OBJECT` for protected tasks. Mount hooks first invoke the DIRTY transaction. |
+| [94-180](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L94-L180) | Copies validated actor fields, constructs the complete exact/default decision keys, and creates a generation-scoped dynamic object binding only after a canonical path terminal exists. |
+| [186-255](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L186-L255) | Loads config/scratch/current task, resolves its live cgroup binding, and distinguishes an unlabeled task outside protection from an unlabeled task in protected placement. |
+| [256-306](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L256-L306) | Revalidates boot/epoch, binding nonce/lifecycle, coordinate, real parent, process, entry, domain, execution, image, state vector, and retained profile reference before populating the actor. |
+| [307-347](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L307-L347) | Records binding/execution-set identity, preserves a prior LSM result, and applies the separate hard exec-transaction guard before effect policy is considered. |
+| [348-366](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L348-L366) | Returns without policy when the effect gate is disabled; otherwise requires the exact boot/epoch/profile generation in `ACTIVE` and hard-denies a missing classifier input. |
+| [367-406](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L367-L406) | Derives the live file tuple, requires a unique mount ID, runs `canonical_path_candidate`, creates/reads the exact live object binding, and constructs the exact/default decision key. Any dirty view, failed bound, missing graph edge, snapshot race, or unequal atom is hard unresolved. |
+| [407-438](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L407-L438) | Converts `DENY` to OBSERVE `WOULD_DENY` with zero or PROTECT `EXACT_POLICY_DENY` with the bounded configured errno. Only a validated `ALLOW` branch can consume an exception; an audit/unknown row with a handle hard-denies without charging it. |
+| [440-700](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L440-L700) | Keeps each Linux hook prototype explicit and stops a multi-operation wrapper after its first nonzero result. Qualified file-backed hooks pass a file. Create/chmod/path-truncate/unlink/link/rename, ioctl, IPC, process-control, capability, BPF, and remaining unqualified object families pass null and take hard-safe `UNSUPPORTED_OBJECT` for protected tasks; inherited-fd truncate passes its file but remains unresolved without a signed cell. Mount hooks dirty only after the common gate permits the mutation. |
 
 ### 14.2 What is actually supported now
 
 “A program is attached” is not the same claim as “its object and operation are
 classified.” Review capability statements against this table.
 
-| Hook/effect surface | Current behavior | Honest Phase 3 claim |
+| Hook/effect surface | Current behavior | Honest current claim |
 | --- | --- | --- |
-| `file_open`, `file_permission`, file-backed `mmap_file`, file-backed `file_mprotect`, and exec file gate | Build the live file tuple, require a clean actor mount view, combine the userspace-resolved oldest-mount prefix with BPF-collected components, run exact/wildcard graph transitions, revalidate the snapshot, then resolve the exact/default cell. | Code-backed Meta/exact-file observation. Existing Phase 0 evidence covers x86 file-open; the new production path still needs the privileged Phase 3 verifier/runtime run. |
-| `file_ioctl` | Linux supplies `cmd` and `arg`, but the current ABI has no qualified command/argument-shape axis. The wrapper deliberately passes no file object. | Explicit hard-safe unsupported, not an exact device/ioctl simulation claim. |
-| Mount mutations | Covered mount hooks mark a represented mount namespace DIRTY before the common gate, including an external privileged task that joined it; task-local syscall completion and userspace proposal reconciliation implement the bounded epoch/version CAS. Reconciliation will not clean a replaced exact object. | The current protected mount object is unqualified and physically hard-denied. A pre-existing represented bind alias is canonicalized, but an ordinary signed file denial remains observe-only until Phase 4. Propagation/fan-out platforms still require privileged qualification. |
-| IPC, network, ptrace, signal, other path mutation, capability, and BPF hooks | Explicit typed programs are attached, but pass no qualified object to the common gate. A protected task receives hard-safe `UNSUPPORTED_OBJECT` when observation is enabled. | Exact actor/operation plus hard-safe unsupported handling only; no classified object-policy claim. |
+| `file_open`, `file_permission`, and file-backed `mmap_file` | Build the live file tuple, require a clean actor mount view, combine the userspace-resolved oldest-mount prefix with BPF-collected components, run exact/wildcard graph transitions, revalidate the snapshot, then resolve the exact/default cell. | OBSERVE is physically proven for the current host. PROTECT exact open/read/mmap is code-backed and automated but awaits the final privileged probe before qualification. |
+| File-backed `file_mprotect` and exec file gate | Use the same exact-file gate, but the full executable-memory/image/provenance matrix is not present. | Fail-closed code path only; not complete D4.2 qualification. |
+| File mutation hooks | Create, chmod, path truncate, unlink, link, and rename deliberately pass no object to the common gate; inherited-fd `file_truncate` supplies its file but has no signed setattr cell. | Each named mutation has an automated physical postcondition and separate manual shell. This is hard closure, not exact-object policy-aware mutation support. |
+| `file_ioctl` | Linux supplies `cmd` and `arg`, but the current ABI has no qualified command/argument-shape axis. The wrapper deliberately passes no file object. | Explicit hard-safe unsupported with a physical inherited-fd oracle, not an exact device/ioctl simulation claim. |
+| Mount mutations | Covered mount hooks deny a protected unsupported mutation without dirtying; an allowed external entrant marks the represented namespace DIRTY before Linux can mutate it. Task-local syscall completion and userspace proposal reconciliation implement the bounded epoch/version CAS. Reconciliation will not clean a replaced exact object. | Direct protected mutation and hostile external replacement are in the automated PROTECT probe. Propagation/fan-out remains unqualified. There is no declared allow-mutation policy yet. |
+| Bounded exception state | One exact file-open ALLOW cell carries a generation-local handle. Its BPF value owns lock, deadline, maximum, consumed count, and terminal state. | Concurrent N allows/N+1 denials, monotonic expiry without consumption, and exhausted-state loader restart are in the automated exact-file probe. Stable cross-generation instance receipts/WAL and complete administrative binding are not claimed. |
+| IPC, network, ptrace, signal, capability, and BPF hooks | Explicit typed programs are attached, but pass no qualified object to the common gate. A protected task receives hard-safe `UNSUPPORTED_OBJECT` when observation is enabled. | IPC, ptrace, signal, namespace capability, and BPF map creation have automated physical hard-close oracles; the manual suite covers all but raw BPF creation through separate real-node cases. No classified object-policy claim is made. Network policy remains Phase 5. |
 | `CanonicalPathGraphV1`, `ExactFileObjectResolver`, and BPF `canonical_path_candidate` | The compiler determinizes the finite component graph; the resolver snapshots the mount tree and chooses the lowest unique mount; BPF consumes the verified prefix plus live components under one clean snapshot. | D3.3 code path. No final decision cache exists, so a pre-existing hard-link alias cannot borrow a path candidate. |
 | Observation ring and recent Runtime history | Best-effort ring emission with per-CPU health; one libbpf-rs poller; newest 1,024 decoded records exposed from memory. | Bounded, non-durable diagnostic observation. Not a complete negative-history or WAL claim. |
 
@@ -998,10 +1018,11 @@ and libbpf-rs already supplies the ring manager. Scratch is never authority:
 the current invocation copies durable state into it, completes the lookup, and
 publishes an event before returning. No later invocation relies on its bytes.
 
-## 15. Phase 3 correctness and simplicity audit
+## 15. Phase 3/4 correctness and simplicity audit
 
 Audit snapshot: 2026-08-10. This is a review of the current code and documented
-contract; it does not mark Phase 3 done and does not silently fix the findings.
+contract; it does not mark Phase 4 done and does not silently close unqualified
+surfaces.
 
 ### 15.1 Confirmed correctness properties
 
@@ -1009,16 +1030,25 @@ contract; it does not mark Phase 3 done and does not silently fix the findings.
   state before policy, and broken protected state remains a hard denial.
 - One gate invocation preserves a prior nonzero LSM return exactly. The result
   is selected before ring reservation; ring failure only raises loss health.
-- A simulatable signed policy denial returns zero and records `WOULD_DENY`;
-  physical prevention is still explicitly unsupported.
+- A signed OBSERVE denial returns zero and records `WOULD_DENY`; the same exact
+  cell in PROTECT returns its verified negative errno and records
+  `EXACT_POLICY_DENY` before the effect.
 - Candidate rows cannot be consumed unless the matching boot/epoch/profile
-  descriptor is `READ_BACK`.
+  descriptor is `ACTIVE`; its explicit mode fixes physical meaning.
+- A bounded exception is currently compiler-bound to one qualified file-open
+  allow cell. Its subject digest and authority-delta operation digest must both
+  equal that cell, including its role, entry, scope, execution set, object, and
+  operation. Its fixed-capacity kernel state atomically checks the monotonic
+  deadline and increments at most to `maximum_uses`.
+- The physical exception runner checks concurrent N/N+1 consumption, an
+  exhausted state across loader restart, and expiry before first use. The
+  expiry transition must leave `consumed_uses` at zero and write `EXPIRED`.
 - Exact-file lookup includes mount namespace, unique mount identity, device,
   inode, and nonzero inode generation; a path string is not authority.
 - The canonical path graph is installed in BPF. A file decision requires one
-  clean mount snapshot before and after the bounded walk; a mount mutation
-  marks the view DIRTY before policy and a stale reconciliation proposal loses
-  the epoch/version CAS.
+  clean mount snapshot before and after the bounded walk. A denied mount does
+  not dirty the view; an allowed external mutation marks it DIRTY before the
+  effect, and a stale reconciliation proposal loses the epoch/version CAS.
 - Mount DIRTY state is namespace-global. A privileged external task that joins
   the protected namespace cannot evade invalidation by remaining outside the
   workload cgroup, and reconciliation cannot clean the view while a different
@@ -1036,6 +1066,10 @@ contract; it does not mark Phase 3 done and does not silently fix the findings.
   libbpf-cargo, and libbpf-rs facilities. Per-CPU scratch and one ring reader
   follow the checked-in Linux BPF implementations; there is no reason to add
   Aya, bpf2go, a custom ring implementation, or a per-container program.
+- All 37 programs required by the production identity loader must be present
+  in the libbpf-cargo ELF. The privileged runner additionally requires the
+  expected effect family and operation for every hard-close denial, so an
+  earlier or unrelated hook cannot accidentally satisfy the oracle.
 
 ### 15.2 Open correctness findings
 
@@ -1043,12 +1077,14 @@ contract; it does not mark Phase 3 done and does not silently fix the findings.
 | --- | --- | --- | --- |
 | Medium | [`RuntimeObservationServer::handle`](../../../crates/mithril-node/src/local.rs#L171-L227) | `SO_PEERCRED` supplies connection-time PID/UID, but cgroup scope is read later through `/proc/<pid>/cgroup`. PID reuse and passing an already-connected Unix socket can detach the request actor from that live `/proc` check. `PEER_CREDENTIAL_AND_CGROUP_SCOPED` is therefore stronger than the proof. | Pin/revalidate a non-reusable process identity for the request or downgrade the capability/reason to the exact UID/socket-permission guarantee. Keep Runtime read-only; it is not an enforcement boundary. |
 | High | [`begin_mount_mutation`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L21-L77) | Direct represented mount syscalls are ordered and fail closed, but propagation, automount, network-filesystem referral, and fan-out into another namespace have not been physically qualified on this host. | Keep the affected platform capability unsupported unless the privileged `MOUNT-PROPAGATION-003` run proves every affected view becomes DIRTY before a strict file decision. |
-| Medium | [`identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L162-L421) | Socket/channel/device/derived-capability and complete mm/VMA/provenance state models are explicit hard-safe unsupported results, not classified observe models. Post-placement anonymous mappings, including newly allocated thread stacks, therefore deny in Phase 3; the mount-race fixture creates parked workers before placement and executes only their mount syscalls after activation. | Return each family to physical/type qualification before replacing its unsupported result. Do not add inactive placeholder maps. |
+| High | [`identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h) | Socket/channel/device/derived-capability and complete credential/process-control/mm/VMA/provenance/self-protection models are explicit hard-safe unsupported results, not complete Phase 4 policy models. | Keep each capability unqualified until its exact object/state owner and positive/negative physical oracle exist. Do not add inactive placeholder maps. |
+| High | [`exception_runtime_states`](../../../bpf/erebor-interceptor/programs/identity_maps.h) | The implemented exact-file exception counter is atomic and restart-preserving while pins survive, but it does not implement the architecture's stable node/instance key, idempotent use receipts, cross-generation sharing, or WAL restore after node reboot. Administrative-exec consumption exists in BPF, but node arming does not yet prove that its chosen handle is the one exact compiled action plan. | Do not advertise complete D4.6. Add stable exception ownership/receipts and exact profile-plan resolution with the later durable owner; retain the current narrower N/N+1 claim. |
 
-These findings do not show a fail-open protected mount or exact-file safety
-path. They delimit claims: ordinary signed file denial is still observe-only,
-propagation is unqualified, and unsupported object families are not silently
-treated as observed allows.
+These findings do not show a fail-open protected mount or exact-file PROTECT
+path. They delimit claims: the final privileged PROTECT run is pending,
+propagation is unqualified, the current exception model is narrower than the
+full architecture, and unsupported object families are not mislabeled as
+policy-aware support.
 
 ### 15.3 Simplicity result
 
@@ -1058,7 +1094,7 @@ The current runtime layering is already close to the minimum useful split:
   gate, and `EffectObservationStore` each own a real trust/lifecycle boundary.
   Collapsing them would blur ownership without deleting a protocol or durable
   state model.
-- The 604-line effect header is cohesive: shared gate first, explicit typed
+- The effect header is cohesive: shared gate first, explicit typed
   Linux hook wrappers second. Splitting it solely to meet a line count or
   hiding hook prototypes behind macros would make verifier/kernel review
   harder, not simpler.
@@ -1095,8 +1131,9 @@ Use this order when reviewing a change to the implemented surfaces:
 8. Does rollback reverse only references acquired on that path, exactly once?
 9. Does an unsupported or incomplete physical test remain an honest
    `Unsupported`, `Blocked`, or start-gap result rather than a prevention claim?
-10. Does a Phase 3 candidate remain immutable and inactive until every row and
-    descriptor is read back, without downgrading an old complete generation?
+10. Does a candidate remain unusable until every row and the `ACTIVE`
+    descriptor are read back, without downgrading an old complete generation
+    or changing OBSERVE/PROTECT mode during a merge?
 11. Does every effect key include the operation-specific identity required by
     the architecture (for example ioctl command/shape), or take explicit
     hard-safe unsupported instead?
@@ -1105,13 +1142,18 @@ Use this order when reviewing a change to the implemented surfaces:
     denial?
 13. Is observation health truthful about ring loss, decoder errors, reader
     liveness, authentication scope, and the absence of durable coverage?
+14. Can an exception be consumed only by an exact signed allow cell, and do
+    expiry, exhaustion, missing state, restart, and concurrent N+1 all deny?
 
 ## 17. Verification evidence and remaining review limits
 
-The repository CI procedure passed after the final Phase 3 Rust source and test
-edits: formatting, workspace check, all-target/all-feature clippy with denied
-warnings, and full workspace tests. The unprivileged production identity
-verifier reports 33 programs and 35 maps.
+The repository's exact CI procedure passes on the final Phase 4 implementation
+state: workspace check, formatting, all-target/all-feature clippy with warnings
+denied, and the complete workspace test set including loopback integration.
+The production BPF source also compiles with warnings denied against all four
+checked x86_64, arm64, arm, and riscv `vmlinux.h` targets. The privileged
+PROTECT load/run is recorded only after it runs; an earlier Phase 3 result is
+not reused for this changed object.
 
 The first privileged load exposed and rejected a spin-lock map reference from
 `erebor_mount_mutation_sys_exit`, as required by the Linux tracing-program
@@ -1120,26 +1162,26 @@ zero-extension of its configured `i32` errno. The exit path now uses the
 existing BPF atomic counter pattern. The deny helper uses the established
 verifier-bounds pattern, explicitly sign-extends the configured errno, accepts
 only `[-MAX_ERRNO, -1]`, and otherwise returns `-EACCES`. Object regressions
-cover both rejected instruction shapes. The corrected object compiles against
-all four checked architectures. The complete self-cleaning privileged effect
-probe passed on 2026-08-10 after loading that production object.
+cover both rejected instruction shapes. The corrected Phase 3 object compiled
+against all four checked architectures. Its complete self-cleaning privileged
+observe probe passed on 2026-08-10 after loading that production object.
 
-As a focused post-review check,
-`cargo test -p mithril-control -p mithril-node -p erebor-interceptor` passed 52
-tests in 13 suites. The first sandboxed attempt blocked only the three local
-mTLS integration tests with `Operation not permitted`; rerunning the same
-command with local-socket permission passed all suites.
+For the Phase 4 increment, the full gate includes 13 policy tests, 9 ABI tests,
+14 interceptor tests, 41 node library tests, and all 39 mithril-e2e library
+tests. The assertion-bearing privileged command is documented in the Phase 4
+runbook and must still validate verifier load plus the physical negative
+oracles on the target BPF-LSM host.
 
 That does not replace the remaining runtime-integration operator evidence:
 
 - applicable Docker, CRI, Kubernetes, and `nsenter` manual case shells;
 - failure-injection/runtime-container matrix.
 
-The privileged raw-namespace BPF/hostile cases now pass; the real Docker/CRI
-transport cases remain unrun. The committed 50-case simulation matrix passes,
-but it cannot replace those runtime integrations. The open findings in Section
-15 prevent a complete physical correctness claim, so the authoritative Phase 3
-state remains `Blocked`.
+The Phase 3 privileged raw-namespace BPF/hostile cases pass; the real Docker/CRI
+transport cases remain unrun. The committed simulation matrix passes, but it
+cannot replace those runtime integrations. The open findings in Section 15 and
+the pending Phase 4 privileged run prevent a complete physical correctness
+claim. Phase 3 remains `Blocked`; Phase 4 remains `Not done`.
 
 Nor does this restore the withdrawn Phase-0 throughput comparison. Rerun the
 baseline/protected benchmark pair after the warmup timing correction before

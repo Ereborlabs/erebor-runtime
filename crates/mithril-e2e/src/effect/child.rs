@@ -61,6 +61,7 @@ enum ChildRequest {
     Connect,
     PrepareHardClosed {
         truncate_path: PathBuf,
+        exec_path: PathBuf,
     },
     HardClosed(HardClosedOperation),
     Exit,
@@ -103,6 +104,7 @@ pub(super) struct EffectPaths {
     pub(super) hard_link: PathBuf,
     pub(super) bind_alias: PathBuf,
     pub(super) benign: PathBuf,
+    pub(super) exec_target: PathBuf,
     pub(super) mount_target: PathBuf,
     pub(super) mutation_root: PathBuf,
 }
@@ -344,9 +346,14 @@ impl EffectProcessFixture {
         }
     }
 
-    pub(super) fn prepare_hard_closed(&mut self, truncate_path: &Path) -> Result<()> {
+    pub(super) fn prepare_hard_closed(
+        &mut self,
+        truncate_path: &Path,
+        exec_path: &Path,
+    ) -> Result<()> {
         match self.request(&ChildRequest::PrepareHardClosed {
             truncate_path: truncate_path.to_path_buf(),
+            exec_path: exec_path.to_path_buf(),
         })? {
             ChildResponse::Prepared => Ok(()),
             _ => Err(invalid_state(
@@ -550,15 +557,16 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                 ),
             },
             ChildRequest::Connect => (Ok(ChildResponse::Outcome(connect_outcome())), false),
-            ChildRequest::PrepareHardClosed { truncate_path } => {
-                match PreparedHardClosed::new(&truncate_path) {
-                    Ok(prepared) => {
-                        prepared_hard_closed = Some(prepared);
-                        (Ok(ChildResponse::Prepared), false)
-                    }
-                    Err(error) => (Err(error), false),
+            ChildRequest::PrepareHardClosed {
+                truncate_path,
+                exec_path,
+            } => match PreparedHardClosed::new(&truncate_path, &exec_path) {
+                Ok(prepared) => {
+                    prepared_hard_closed = Some(prepared);
+                    (Ok(ChildResponse::Prepared), false)
                 }
-            }
+                Err(error) => (Err(error), false),
+            },
             ChildRequest::HardClosed(operation) => (
                 prepared_hard_closed.as_mut().map_or_else(
                     || Err(invalid_state("hard-close resources were not prepared")),
@@ -588,6 +596,7 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     let bind_directory = root.join("bind-alias");
     let bind_alias = bind_directory.join("secret");
     let benign = root.join("benign");
+    let exec_target = root.join("exec-target");
     let mount_target = root.join("mount-target");
     let setattr_target = root.join("setattr-target");
     let truncate_target = root.join("truncate-target");
@@ -597,6 +606,9 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     fs::write(&secret, b"restricted\n").context(IoSnafu { path: &secret })?;
     fs::hard_link(&secret, &hard_link).context(IoSnafu { path: &hard_link })?;
     fs::write(&benign, b"benign\n").context(IoSnafu { path: &benign })?;
+    fs::copy("/bin/true", &exec_target).context(IoSnafu { path: &exec_target })?;
+    fs::set_permissions(&exec_target, fs::Permissions::from_mode(0o755))
+        .context(IoSnafu { path: &exec_target })?;
     fs::write(&setattr_target, b"mode\n").context(IoSnafu {
         path: &setattr_target,
     })?;
@@ -632,6 +644,7 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
         hard_link,
         bind_alias,
         benign,
+        exec_target,
         mount_target,
         mutation_root: root.to_path_buf(),
     })
@@ -897,6 +910,7 @@ impl PreparedMountRace {
 
 struct PreparedHardClosed {
     anonymous_exec: Option<memmap2::MmapMut>,
+    exec_file: fs::File,
     ioctl_file: fs::File,
     truncate_file: fs::File,
     target: Child,
@@ -907,7 +921,7 @@ struct PreparedHardClosed {
 
 #[allow(unsafe_code)]
 impl PreparedHardClosed {
-    fn new(truncate_path: &Path) -> Result<Self> {
+    fn new(truncate_path: &Path, exec_path: &Path) -> Result<Self> {
         let anonymous_exec =
             memmap2::MmapOptions::new()
                 .len(4096)
@@ -920,6 +934,7 @@ impl PreparedHardClosed {
         let ioctl_file = fs::File::open("/dev/null").context(IoSnafu {
             path: Path::new("/dev/null"),
         })?;
+        let exec_file = fs::File::open(exec_path).context(IoSnafu { path: exec_path })?;
         let truncate_file = fs::OpenOptions::new()
             .write(true)
             .open(truncate_path)
@@ -980,6 +995,7 @@ impl PreparedHardClosed {
 
         Ok(Self {
             anonymous_exec: Some(anonymous_exec),
+            exec_file,
             ioctl_file,
             truncate_file,
             target,
@@ -991,13 +1007,7 @@ impl PreparedHardClosed {
 
     fn run(&mut self, operation: HardClosedOperation) -> IoOutcome {
         match operation {
-            HardClosedOperation::Exec => match Command::new("/bin/true").status() {
-                Ok(status) => IoOutcome {
-                    allowed: status.success(),
-                    errno: None,
-                },
-                Err(error) => error_outcome(error),
-            },
+            HardClosedOperation::Exec => self.exec_preopened(),
             HardClosedOperation::AnonymousExec => {
                 self.anonymous_exec
                     .take()
@@ -1088,6 +1098,53 @@ impl PreparedHardClosed {
                 Ok(()) => allowed_outcome(),
                 Err(error) => error_outcome(error),
             },
+        }
+    }
+
+    fn exec_preopened(&self) -> IoOutcome {
+        const ARGUMENT: &[u8] = b"mithril-exec-probe\0";
+        let arguments = [ARGUMENT.as_ptr().cast::<libc::c_char>(), std::ptr::null()];
+        let environment = [std::ptr::null()];
+
+        // SAFETY: the child calls only async-signal-safe libc functions before
+        // either replacing itself or exiting; the parent waits for that child.
+        let child = unsafe { libc::fork() };
+        if child < 0 {
+            return error_outcome(std::io::Error::last_os_error());
+        }
+        if child == 0 {
+            // SAFETY: the retained file descriptor and null-terminated vectors
+            // remain valid across fork. A failed exec exits with its errno.
+            unsafe {
+                libc::fexecve(
+                    self.exec_file.as_raw_fd(),
+                    arguments.as_ptr(),
+                    environment.as_ptr(),
+                );
+                libc::_exit(*libc::__errno_location());
+            }
+        }
+        let mut status = 0;
+        // SAFETY: `child` is the positive PID returned by fork and `status` is
+        // valid writable storage for waitpid.
+        if unsafe { libc::waitpid(child, &mut status, 0) } < 0 {
+            return error_outcome(std::io::Error::last_os_error());
+        }
+        if libc::WIFEXITED(status) {
+            let code = libc::WEXITSTATUS(status);
+            if code == 0 {
+                allowed_outcome()
+            } else {
+                IoOutcome {
+                    allowed: false,
+                    errno: Some(code),
+                }
+            }
+        } else {
+            IoOutcome {
+                allowed: false,
+                errno: None,
+            }
         }
     }
 }
@@ -1261,7 +1318,8 @@ mod tests {
             source,
             location: snafu::location!(),
         })?;
-        let mut prepared = PreparedHardClosed::new(truncate.path())?;
+        let mut prepared =
+            PreparedHardClosed::new(truncate.path(), std::path::Path::new("/bin/true"))?;
 
         assert!(prepared.run(HardClosedOperation::Exec).allowed);
         assert!(prepared.run(HardClosedOperation::AnonymousExec).allowed);

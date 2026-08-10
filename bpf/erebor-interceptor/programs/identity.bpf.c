@@ -27,6 +27,23 @@ _Static_assert(sizeof(exception_runtime_state_key_v1) == 16,
                "exception runtime key ABI size");
 _Static_assert(sizeof(exception_runtime_state_v1) == 40,
                "exception runtime state ABI size");
+_Static_assert(sizeof(struct exception_runtime_state_bpf_v1) ==
+                   sizeof(exception_runtime_state_v1),
+               "exception runtime BPF state ABI size");
+#define ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET(field)                         \
+    _Static_assert(                                                          \
+        __builtin_offsetof(struct exception_runtime_state_bpf_v1, field) ==  \
+            __builtin_offsetof(exception_runtime_state_v1, field),           \
+        "exception runtime " #field " ABI offset")
+ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET(lock);
+ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET(maximum_uses);
+ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET(consumed_uses);
+ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET(exception_numeric_handle);
+ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET(deadline_boottime_ns);
+ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET(transition_version);
+ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET(state);
+ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET(reserved);
+#undef ASSERT_EXCEPTION_RUNTIME_FIELD_OFFSET
 _Static_assert(sizeof(exact_file_object_key_v1) == 40,
                "exact file object ABI size");
 _Static_assert(sizeof(exact_object_binding_v1) == 32,

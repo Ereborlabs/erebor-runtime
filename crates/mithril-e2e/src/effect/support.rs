@@ -7,7 +7,7 @@ use ed25519_dalek::SigningKey;
 use erebor_interceptor::{EffectObservationReader, KernelHost};
 use erebor_interceptor_abi::{MountSecurityViewStateV1, MountTopologyStateV1};
 use mithril_control::{
-    compiled_key_digest, BlastRadiusLimitV1, ExactExceptionSubjectSelectorV1,
+    compiled_key_digest, BlastRadiusLimitV1, EffectFamilyV1, ExactExceptionSubjectSelectorV1,
     ExceptionConsumptionScopeV1, ExceptionV1, LocalObjectSelectorV1, PermittedAuthorityDeltaV1,
     PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, ProfileCandidateArtifactV1,
     ProfileModeV1, ProfileSealRequestV1, RuleMatchV1,
@@ -64,6 +64,49 @@ pub(super) fn compile_phase4_artifact(
         object_class_ids: vec!["MANUAL_BENIGN".to_owned()],
     };
     document.rules.push(benign_allow);
+    document
+        .protected_universe
+        .object_class_ids
+        .push("MANUAL_EXEC".to_owned());
+    document.protected_universe.object_class_ids.sort();
+    let mut exec_classifier = document.classifier_bindings[0].clone();
+    exec_classifier.classifier_binding_id = "manual-exec".to_owned();
+    exec_classifier.object_class_id = "MANUAL_EXEC".to_owned();
+    document.classifier_bindings.push(exec_classifier);
+    let mut exec_read_allow = document.rules[0].clone();
+    exec_read_allow.rule_id = "allow-manual-exec-read".to_owned();
+    exec_read_allow.requested_disposition = PolicyDispositionV1::Allow;
+    exec_read_allow.errno = None;
+    exec_read_allow.finding = None;
+    exec_read_allow.exception_ids.clear();
+    let RuleMatchV1::LocalPreEffect(exec_read_effect) = &mut exec_read_allow.rule_match else {
+        return InvalidInputSnafu {
+            path: source_path,
+            reason: "Phase 4 executable read control is not a local pre-effect rule",
+        }
+        .fail();
+    };
+    exec_read_effect.operation_ids = ["OPEN_READ", "READ"].map(str::to_owned).to_vec();
+    exec_read_effect.object = LocalObjectSelectorV1::ObjectClasses {
+        object_class_ids: vec!["MANUAL_EXEC".to_owned()],
+    };
+    document.rules.push(exec_read_allow);
+    let mut exec_deny = document.rules[0].clone();
+    exec_deny.rule_id = "deny-manual-exec".to_owned();
+    exec_deny.exception_ids.clear();
+    let RuleMatchV1::LocalPreEffect(exec_effect) = &mut exec_deny.rule_match else {
+        return InvalidInputSnafu {
+            path: source_path,
+            reason: "Phase 4 executable denial is not a local pre-effect rule",
+        }
+        .fail();
+    };
+    exec_effect.effect_families = vec![EffectFamilyV1::Exec];
+    exec_effect.operation_ids = vec!["EXECUTE".to_owned()];
+    exec_effect.object = LocalObjectSelectorV1::ObjectClasses {
+        object_class_ids: vec!["MANUAL_EXEC".to_owned()],
+    };
+    document.rules.push(exec_deny);
     let mut bounded_allow = document.rules[0].clone();
     bounded_allow.rule_id = "allow-bounded-secret-write-open".to_owned();
     bounded_allow.requested_disposition = PolicyDispositionV1::Allow;
@@ -412,8 +455,8 @@ mod tests {
     use std::path::PathBuf;
 
     use mithril_control::{
-        compiled_key_digest, CompiledPhysicalResultV1, PolicyArtifactOwner, PolicyCompiler,
-        PolicyDocumentV1, ProfileModeV1,
+        compiled_key_digest, CompiledPhysicalResultV1, EffectFamilyV1, PolicyArtifactOwner,
+        PolicyCompiler, PolicyDocumentV1, ProfileModeV1,
     };
     use mithril_node::EffectObservationHealth;
 
@@ -456,15 +499,26 @@ mod tests {
             .load_verified(&artifact_path, &manual.join("test-public-key.hex"))?;
 
         assert_eq!(artifact.compiled_profile.mode, ProfileModeV1::Protect);
+        let cells = &artifact.compiled_profile.compiled_cells;
         assert_eq!(
-            artifact
-                .compiled_profile
-                .compiled_cells
+            cells
                 .iter()
                 .filter(|cell| cell.physical_result == CompiledPhysicalResultV1::DenyEffect)
                 .count(),
-            3
+            4
         );
+        assert!(cells.iter().any(|cell| {
+            cell.source_rule_ids == ["allow-manual-exec-read"]
+                && cell.key.effect_family == EffectFamilyV1::File
+                && cell.key.operation_id == "OPEN_READ"
+                && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
+        }));
+        assert!(cells.iter().any(|cell| {
+            cell.source_rule_ids == ["deny-manual-exec"]
+                && cell.key.effect_family == EffectFamilyV1::Exec
+                && cell.key.operation_id == "EXECUTE"
+                && cell.physical_result == CompiledPhysicalResultV1::DenyEffect
+        }));
         assert_eq!(
             artifact
                 .compiled_profile

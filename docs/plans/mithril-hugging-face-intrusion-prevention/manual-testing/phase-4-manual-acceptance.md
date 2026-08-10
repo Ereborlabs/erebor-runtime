@@ -1,6 +1,8 @@
 # How To Manually Accept Phase 4
 
-Status: Proposed runbook; no Phase 4 implementation or test has been run.
+Status: the exact-file prevention increment has runnable automated and manual
+cases. The complete catalog below is still the acceptance target, not a claim
+that every Phase 4 surface is implemented.
 
 Phase: [Signed Local Pre-Effect Enforcement](../phase-4-signed-local-pre-effect-enforcement.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -13,11 +15,40 @@ work continues.
 
 ## Automated Companion
 
-```text
-IMPLEMENTATION COMMAND REQUIRED: run Phase 4 policy activation, exact lookup,
-exec/file/mm/mount/IPC/device/privilege/self-protection, exception, admin-exec,
-saturation, bypass, and physical-oracle suites.
+```sh
+cargo build -p mithril-node --bins -p mithril-control --bin mithril-policy \
+  -p mithril-e2e --bin mithril-effect-test
+
+sudo target/debug/mithril-effect-test --repo-root . physical-probe \
+  --protect \
+  --output-directory /tmp/mithril-phase4-effect-final \
+  --pin-root /sys/fs/bpf/erebor-mithril-phase4-effect-final \
+  --lease-path /tmp/mithril-phase4-effect-final/owner.lock \
+  --cgroup-path /sys/fs/cgroup/erebor-mithril-phase4-effect-final
 ```
+
+The probe is assertion-bearing and self-cleaning. It uses the production
+libbpf-rs loader and BPF object, not a second test implementation. It retains
+only its JSON result under the requested output directory. Its current exact
+slice covers open/read/mmap denial, a same-container exact benign read,
+concurrent N/N+1 exception consumption, monotonic expiry, exhausted-state loader restart,
+hard-link/bind aliases, denied protected mounts, external mount replacement
+and reconciliation, hard-close physical oracles for unqualified exec,
+anonymous executable memory, create/chmod/truncate/unlink/link/rename, SysV IPC,
+ptrace/signal, namespace creation, device ioctl, BPF map creation, and pinned-link removal, plus
+ring saturation, latency, and cleanup.
+
+The real `mithril-node` Docker and raw-namespace cases live in
+[`examples/mithril-phase4-manual`](../../../../examples/mithril-phase4-manual/README.md).
+Run the individual shell for the behavior under review; each installs an EXIT
+trap before starting the node and removes pins, leases, cgroups, processes,
+mounts, sockets, and temporary state. The checked Phase 4 policy includes an
+exact benign control and a two-use exact write-open exception, so the manual
+cases test denial, allowed operation, and concurrent exception behavior against
+one signed generation. Separate scripts also exercise every hard-close family
+listed above except raw BPF map creation, whose portable test uses the vendored
+libbpf API in the automated probe rather than copying architecture-specific
+syscall numbers into shell/Python.
 
 ## Procedure
 

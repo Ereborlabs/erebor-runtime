@@ -81,6 +81,61 @@ mod tests {
     }
 
     #[test]
+    fn exception_runtime_map_has_a_kernel_typed_spin_lock() -> crate::Result<()> {
+        use std::ffi::OsStr;
+        use std::path::Path;
+
+        use libbpf_rs::btf::types::Struct;
+        use libbpf_rs::Btf;
+
+        let object_path = Path::new("embedded erebor-interceptor.bpf.o");
+        let source = include_str!("../../../bpf/erebor-interceptor/programs/identity_maps.h");
+        assert!(source.contains("__type(value, struct exception_runtime_state_bpf_v1);"));
+        let btf = Btf::from_raw("embedded erebor-interceptor.bpf.o", BUNDLED_BPF_OBJECT).map_err(
+            |source| crate::Error::Libbpf {
+                action: "inspect bundled BPF BTF",
+                path: object_path.to_path_buf(),
+                source,
+                location: snafu::Location::new(file!(), line!(), column!()),
+            },
+        )?;
+        let Some(btf) = btf else {
+            return crate::error::InvalidConfigurationSnafu {
+                path: object_path,
+                reason: "bundled BPF object has no BTF".to_owned(),
+            }
+            .fail();
+        };
+        let Some(state) = btf.type_by_name::<Struct<'_>>("exception_runtime_state_bpf_v1") else {
+            return crate::error::InvalidConfigurationSnafu {
+                path: object_path,
+                reason: "exception map value has no BPF-specific BTF struct".to_owned(),
+            }
+            .fail();
+        };
+        let Some(lock) = state
+            .iter()
+            .find(|member| member.name == Some(OsStr::new("lock")))
+        else {
+            return crate::error::InvalidConfigurationSnafu {
+                path: object_path,
+                reason: "exception map value has no lock field".to_owned(),
+            }
+            .fail();
+        };
+        let Some(lock) = btf.type_by_id::<Struct<'_>>(lock.ty) else {
+            return crate::error::InvalidConfigurationSnafu {
+                path: object_path,
+                reason: "exception lock field is not a struct".to_owned(),
+            }
+            .fail();
+        };
+
+        assert_eq!(lock.name(), Some(OsStr::new("bpf_spin_lock")));
+        Ok(())
+    }
+
+    #[test]
     fn syscall_exit_tracepoint_does_not_call_spin_lock() -> crate::Result<()> {
         const BPF_CALL: u8 = 0x85;
 
