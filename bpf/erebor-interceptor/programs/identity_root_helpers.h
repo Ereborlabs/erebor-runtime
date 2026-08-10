@@ -160,7 +160,7 @@ static __always_inline int create_root(
                            role_id))
         return identity_deny(config);
     if (read_real_parent_interval(
-            task, scratch->label.task_cookie,
+            task, scratch->label.task_cookie, 0,
             kernel_real_parent_change_reason_v1_birth,
             &scratch->real_parent))
         return identity_deny(config);

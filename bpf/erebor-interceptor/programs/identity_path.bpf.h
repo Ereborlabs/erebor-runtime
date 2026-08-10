@@ -61,12 +61,12 @@ static __always_inline int begin_mount_mutation(void)
         return -EACCES;
     bpf_spin_lock(&view_lock->lock);
     /* Linux cannot have enough live tasks to overflow this u64 counter. */
-    view->pending_mutations++;
+    __sync_fetch_and_add(&view->pending_mutations, 1);
     view->state = mount_topology_state_v1_dirty;
     (*mutation_epoch)++;
     next_epoch = *mutation_epoch;
-    view->transition_version++;
-    next_transition_version = view->transition_version;
+    next_transition_version =
+        __sync_fetch_and_add(&view->transition_version, 1) + 1;
     bpf_spin_unlock(&view_lock->lock);
     __builtin_memset(attempt, 0, sizeof(*attempt));
     attempt->view_key = view_key;
@@ -81,21 +81,16 @@ static __always_inline void finish_mount_mutation(void)
     struct task_struct *task = bpf_get_current_task_btf();
     mount_mutation_attempt_v1 *attempt;
     mount_security_view_state_v1 *view;
-    struct mount_security_view_lock_v1 *view_lock;
 
     attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0, 0);
     if (!attempt || !attempt->active)
         return;
     view = bpf_map_lookup_elem(&mount_security_views, &attempt->view_key);
-    view_lock = bpf_map_lookup_elem(&mount_security_view_locks,
-                                    &attempt->view_key);
-    if (view && view_lock) {
-        bpf_spin_lock(&view_lock->lock);
-        if (view->pending_mutations)
-            view->pending_mutations--;
+    if (view) {
         view->state = mount_topology_state_v1_dirty;
-        view->transition_version++;
-        bpf_spin_unlock(&view_lock->lock);
+        __sync_fetch_and_add(&view->transition_version, 1);
+        /* Publish completion last so reconciliation cannot observe partial state. */
+        __sync_fetch_and_sub(&view->pending_mutations, 1);
     }
     attempt->active = 0;
     attempt->transition_version++;

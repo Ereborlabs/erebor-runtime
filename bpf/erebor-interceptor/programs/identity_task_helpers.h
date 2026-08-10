@@ -115,22 +115,20 @@ static __always_inline int prepare_task_image(
 }
 
 static __always_inline int read_real_parent_interval(
-    struct task_struct *task, __u64 child_task_cookie, __u8 change_reason,
+    struct task_struct *task, __u64 child_task_cookie,
+    __u64 real_parent_task_cookie, __u8 change_reason,
     kernel_real_parent_interval_v1 *interval)
 {
     struct task_struct *parent = NULL;
     struct pid *thread_pid = NULL;
     struct pid_namespace *pid_namespace = NULL;
-    task_label_v1 *parent_label;
     __u32 level = 0;
 
     if (!task || !interval ||
         BPF_CORE_READ_INTO(&parent, task, real_parent) || !parent)
         return -EACCES;
     interval->child_task_cookie = child_task_cookie;
-    parent_label = bpf_task_storage_get(&task_labels, parent, 0, 0);
-    interval->real_parent_task_cookie =
-        parent_label ? parent_label->task_cookie : 0;
+    interval->real_parent_task_cookie = real_parent_task_cookie;
     BPF_CORE_READ_INTO(&interval->real_parent_host_tid, parent, pid);
     BPF_CORE_READ_INTO(&interval->real_parent_host_tgid, parent, tgid);
     BPF_CORE_READ_INTO(&thread_pid, parent, thread_pid);
@@ -165,12 +163,11 @@ static __always_inline int read_real_parent_interval(
     return 0;
 }
 
-static __always_inline bool real_parent_equal(
+static __always_inline bool real_parent_coordinates_equal(
     const kernel_real_parent_interval_v1 *left,
     const kernel_real_parent_interval_v1 *right)
 {
-    return left->real_parent_task_cookie == right->real_parent_task_cookie &&
-           left->real_parent_host_tid == right->real_parent_host_tid &&
+    return left->real_parent_host_tid == right->real_parent_host_tid &&
            left->real_parent_host_tgid == right->real_parent_host_tgid &&
            left->real_parent_pid_namespace_inode ==
                right->real_parent_pid_namespace_inode &&
@@ -192,11 +189,11 @@ static __always_inline int refresh_real_parent(
     current = bpf_map_lookup_elem(&kernel_real_parent_intervals, &key);
     if (!current ||
         read_real_parent_interval(
-            task, label->task_cookie,
+            task, label->task_cookie, 0,
             kernel_real_parent_change_reason_v1_parent_exit_or_reparent,
             &scratch->real_parent))
         return -EACCES;
-    if (real_parent_equal(current, &scratch->real_parent))
+    if (real_parent_coordinates_equal(current, &scratch->real_parent))
         return 0;
     next_sequence = coordinate->real_parent_interval_sequence + 1;
     if (!next_sequence)
@@ -425,6 +422,9 @@ static __always_inline int create_native_child(
                        &scratch->label.process_state_id);
     if (read_real_parent_interval(
             task, scratch->label.task_cookie,
+            clone_flags & (CLONE_PARENT | CLONE_THREAD)
+                ? 0
+                : parent_label->task_cookie,
             clone_flags & CLONE_PARENT
                 ? kernel_real_parent_change_reason_v1_clone_parent
                 : kernel_real_parent_change_reason_v1_birth,

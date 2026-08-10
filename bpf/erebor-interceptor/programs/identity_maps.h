@@ -444,9 +444,17 @@ static __always_inline execution_set_binding_state_v1 *binding_for_cgroup(
 
 static __always_inline int identity_deny(identity_runtime_config_v1 *config)
 {
-    if (config && config->first_effect_errno < 0)
-        return config->first_effect_errno;
-    return -EACCES;
+    __s64 error = config ? config->first_effect_errno : -EACCES;
+
+    /* Bound the LSM result for the verifier and preserve the configured s32. */
+    asm volatile("%0 <<= 32\n"
+                 "%0 s>>= 32\n"
+                 "if %0 s< %1 goto +1\n"
+                 "if %0 s< 0 goto +1\n"
+                 "%0 = %2\n"
+                 : "+r"(error)
+                 : "i"(-MAX_ERRNO), "i"(-EACCES));
+    return error;
 }
 
 static __always_inline bool label_matches_runtime(const task_label_v1 *label,

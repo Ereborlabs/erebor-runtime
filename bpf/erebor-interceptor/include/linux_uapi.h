@@ -8,6 +8,7 @@
  * make a target-specific build depend on the build host's asm headers.
  */
 #define EACCES 13
+#define MAX_ERRNO 4095
 #define CLONE_PARENT 0x00008000
 #define CLONE_THREAD 0x00010000
 #define AT_EXECVE_CHECK 0x10000
