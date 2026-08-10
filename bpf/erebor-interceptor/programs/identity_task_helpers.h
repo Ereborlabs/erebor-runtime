@@ -114,18 +114,16 @@ static __always_inline int prepare_task_image(
     return 0;
 }
 
-static __always_inline int read_real_parent_interval(
-    struct task_struct *task, __u64 child_task_cookie,
+static __always_inline int read_parent_interval(
+    struct task_struct *parent, __u64 child_task_cookie,
     __u64 real_parent_task_cookie, __u8 change_reason,
     kernel_real_parent_interval_v1 *interval)
 {
-    struct task_struct *parent = NULL;
     struct pid *thread_pid = NULL;
     struct pid_namespace *pid_namespace = NULL;
     __u32 level = 0;
 
-    if (!task || !interval ||
-        BPF_CORE_READ_INTO(&parent, task, real_parent) || !parent)
+    if (!parent || !interval)
         return -EACCES;
     interval->child_task_cookie = child_task_cookie;
     interval->real_parent_task_cookie = real_parent_task_cookie;
@@ -161,6 +159,20 @@ static __always_inline int read_real_parent_interval(
     for (int index = 0; index < 6; index++)
         interval->reserved[index] = 0;
     return 0;
+}
+
+static __always_inline int read_real_parent_interval(
+    struct task_struct *task, __u64 child_task_cookie,
+    __u64 real_parent_task_cookie, __u8 change_reason,
+    kernel_real_parent_interval_v1 *interval)
+{
+    struct task_struct *parent = NULL;
+
+    if (!task || BPF_CORE_READ_INTO(&parent, task, real_parent) || !parent)
+        return -EACCES;
+    return read_parent_interval(parent, child_task_cookie,
+                                real_parent_task_cookie, change_reason,
+                                interval);
 }
 
 static __always_inline bool real_parent_coordinates_equal(
@@ -341,11 +353,13 @@ static __always_inline void prepare_process_vector(
 }
 
 static __always_inline int create_native_child(
-    struct task_struct *task, unsigned long clone_flags,
+    struct task_struct *task, struct task_struct *creator,
+    unsigned long clone_flags,
     identity_runtime_config_v1 *config, const task_label_v1 *parent_label,
     execution_set_binding_state_v1 *binding, struct identity_scratch_v1 *scratch)
 {
     bool thread = (clone_flags & CLONE_THREAD) != 0;
+    struct task_struct *real_parent = creator;
     id128_v1 task_identity;
     process_security_state_v1 *parent_process;
     process_state_vector_v1 *parent_vector;
@@ -420,8 +434,12 @@ static __always_inline int create_native_child(
     prepare_coordinate(&scratch->coordinate, scratch->label.task_cookie,
                        &scratch->label.process_instance_id,
                        &scratch->label.process_state_id);
-    if (read_real_parent_interval(
-            task, scratch->label.task_cookie,
+    if ((clone_flags & (CLONE_PARENT | CLONE_THREAD)) &&
+        (BPF_CORE_READ_INTO(&real_parent, creator, real_parent) ||
+         !real_parent))
+        goto fail_locked;
+    if (read_parent_interval(
+            real_parent, scratch->label.task_cookie,
             clone_flags & (CLONE_PARENT | CLONE_THREAD)
                 ? 0
                 : parent_label->task_cookie,

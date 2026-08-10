@@ -7,7 +7,7 @@ use std::path::Path;
 use ed25519_dalek::{Signature, VerifyingKey};
 use erebor_interceptor::KernelHost;
 use erebor_interceptor_abi::{
-    ApprovedExecSlotKeyV1, ApprovedExecSlotStateV1, ApprovedExecSlotV1,
+    ApprovedExecArgumentKeyV1, ApprovedExecSlotKeyV1, ApprovedExecSlotStateV1, ApprovedExecSlotV1,
     BoundedAdministrativeArgvV1, ExternalRootClassV1, Id128V1,
 };
 use minicbor::data::Token;
@@ -218,6 +218,7 @@ impl AuthorizationProofOwner {
             }
         );
         let intent_sha256 = administrative_slot_intent_sha256(&key, &slot);
+        let argument_keys = administrative_argument_keys(slot.proof_id, &slot.expected_argv)?;
         let existing = host
             .lookup_map("approved_exec_slots", key.as_bytes())
             .context(InterceptorSnafu)?;
@@ -235,6 +236,19 @@ impl AuthorizationProofOwner {
             proof.body_sha256,
             intent_sha256,
         )?;
+        for argument_key in &argument_keys {
+            host.update_map("approved_exec_arguments", argument_key.as_bytes(), &[1])
+                .context(InterceptorSnafu)?;
+            ensure!(
+                host.lookup_map("approved_exec_arguments", argument_key.as_bytes())
+                    .context(InterceptorSnafu)?
+                    .as_deref()
+                    == Some([1_u8].as_slice()),
+                AuthorizationSnafu {
+                    reason: "administrative argument failed kernel readback",
+                }
+            );
+        }
         if existing.is_none() {
             host.update_map("approved_exec_slots", key.as_bytes(), slot.as_bytes())
                 .context(InterceptorSnafu)?;
@@ -253,6 +267,7 @@ impl AuthorizationProofOwner {
 
     pub fn reconcile_administrative_slots(&mut self, host: &KernelHost) -> Result<()> {
         let mut live_slots = BTreeSet::new();
+        let mut live_proofs = BTreeSet::new();
         for key in host
             .map_keys("approved_exec_slots")
             .context(InterceptorSnafu)?
@@ -279,7 +294,7 @@ impl AuthorizationProofOwner {
             let proof_id = read_slot_id(&value, offset_of!(ApprovedExecSlotV1, proof_id))?;
             let claim_slot_id =
                 read_slot_id(&value, offset_of!(ApprovedExecSlotV1, claim_slot_id))?;
-            live_slots.insert(claim_slot_id);
+            let argument_keys = administrative_argument_keys_from_slot_bytes(&value)?;
             value[offset_of!(ApprovedExecSlotV1, state)
                 ..offset_of!(ApprovedExecSlotV1, state) + size_of::<u64>()]
                 .copy_from_slice(&(ApprovedExecSlotStateV1::Armed as u64).to_ne_bytes());
@@ -288,15 +303,21 @@ impl AuthorizationProofOwner {
                 .copy_from_slice(&1_u64.to_ne_bytes());
             let intent_sha256 = administrative_slot_intent_sha256_bytes(&key, &value);
             match state {
-                value if value == ApprovedExecSlotStateV1::Armed as u64 => ensure!(
-                    self.replay.armed_intent(claim_slot_id) == Some(intent_sha256),
-                    AuthorizationSnafu {
-                        reason: "armed kernel slot differs from its durable intent",
-                    }
-                ),
+                value if value == ApprovedExecSlotStateV1::Armed as u64 => {
+                    ensure!(
+                        self.replay.armed_intent(claim_slot_id) == Some(intent_sha256),
+                        AuthorizationSnafu {
+                            reason: "armed kernel slot differs from its durable intent",
+                        }
+                    );
+                    ensure_administrative_arguments(host, &argument_keys)?;
+                    live_slots.insert(claim_slot_id);
+                    live_proofs.insert(proof_id);
+                }
                 value if value == ApprovedExecSlotStateV1::Consumed as u64 => {
                     self.replay
                         .reconcile_consumed(proof_id, claim_slot_id, intent_sha256)?;
+                    delete_administrative_arguments(host, &argument_keys)?;
                     host.delete_map_entry("approved_exec_slots", &key)
                         .context(InterceptorSnafu)?;
                 }
@@ -306,6 +327,7 @@ impl AuthorizationProofOwner {
                         || value == ApprovedExecSlotStateV1::Corrupt as u64 =>
                 {
                     self.replay.close(proof_id, claim_slot_id, intent_sha256)?;
+                    delete_administrative_arguments(host, &argument_keys)?;
                     host.delete_map_entry("approved_exec_slots", &key)
                         .context(InterceptorSnafu)?;
                 }
@@ -316,6 +338,21 @@ impl AuthorizationProofOwner {
                     }
                     .fail()
                 }
+            }
+        }
+        for key in host
+            .map_keys("approved_exec_arguments")
+            .context(InterceptorSnafu)?
+        {
+            ensure!(
+                key.len() == size_of::<ApprovedExecArgumentKeyV1>(),
+                AuthorizationSnafu {
+                    reason: "administrative argument map returned a malformed key",
+                }
+            );
+            if !live_proofs.contains(&read_slot_id(&key, 0)?) {
+                host.delete_map_entry("approved_exec_arguments", &key)
+                    .context(InterceptorSnafu)?;
             }
         }
         ensure!(
@@ -329,6 +366,99 @@ impl AuthorizationProofOwner {
         );
         Ok(())
     }
+}
+
+fn administrative_argument_keys(
+    proof_id: Id128V1,
+    argv: &BoundedAdministrativeArgvV1,
+) -> Result<Vec<ApprovedExecArgumentKeyV1>> {
+    ensure!(
+        argv.is_valid(),
+        AuthorizationSnafu {
+            reason: "administrative argv is not canonical",
+        }
+    );
+    let mut keys = Vec::with_capacity(usize::from(argv.argument_count));
+    let mut offset = 0_usize;
+    for (index, length) in argv.argument_lengths[..usize::from(argv.argument_count)]
+        .iter()
+        .enumerate()
+    {
+        let end = offset + usize::from(*length);
+        let key = ApprovedExecArgumentKeyV1::from_argument(
+            proof_id,
+            index,
+            &argv.argument_bytes[offset..end],
+        )
+        .ok_or_else(|| authorization_error("administrative argument key is invalid"))?;
+        keys.push(key);
+        offset = end;
+    }
+    Ok(keys)
+}
+
+fn administrative_argument_keys_from_slot_bytes(
+    slot: &[u8],
+) -> Result<Vec<ApprovedExecArgumentKeyV1>> {
+    ensure!(
+        slot.len() == size_of::<ApprovedExecSlotV1>(),
+        AuthorizationSnafu {
+            reason: "administrative slot is truncated",
+        }
+    );
+    let argv_offset = offset_of!(ApprovedExecSlotV1, expected_argv);
+    let mut argv = BoundedAdministrativeArgvV1::default();
+    argv.argument_count = read_slot_u16(slot, argv_offset)?;
+    argv.total_argument_bytes = read_slot_u16(slot, argv_offset + size_of::<u16>())?;
+    let lengths_offset = argv_offset + 2 * size_of::<u16>();
+    for (index, length) in argv.argument_lengths.iter_mut().enumerate() {
+        *length = read_slot_u16(slot, lengths_offset + index * size_of::<u16>())?;
+    }
+    let bytes_offset = lengths_offset + size_of::<[u16; 256]>();
+    let argument_bytes_len = argv.argument_bytes.len();
+    argv.argument_bytes.copy_from_slice(
+        slot.get(bytes_offset..bytes_offset + argument_bytes_len)
+            .ok_or_else(|| authorization_error("administrative argv bytes are truncated"))?,
+    );
+    administrative_argument_keys(
+        read_slot_id(slot, offset_of!(ApprovedExecSlotV1, proof_id))?,
+        &argv,
+    )
+}
+
+fn ensure_administrative_arguments(
+    host: &KernelHost,
+    keys: &[ApprovedExecArgumentKeyV1],
+) -> Result<()> {
+    for key in keys {
+        ensure!(
+            host.lookup_map("approved_exec_arguments", key.as_bytes())
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some([1_u8].as_slice()),
+            AuthorizationSnafu {
+                reason: "armed administrative argument is missing from the kernel",
+            }
+        );
+    }
+    Ok(())
+}
+
+fn delete_administrative_arguments(
+    host: &KernelHost,
+    keys: &[ApprovedExecArgumentKeyV1],
+) -> Result<()> {
+    for key in keys {
+        if host
+            .lookup_map("approved_exec_arguments", key.as_bytes())
+            .context(InterceptorSnafu)?
+            .is_some()
+        {
+            host.delete_map_entry("approved_exec_arguments", key.as_bytes())
+                .context(InterceptorSnafu)?;
+        }
+    }
+    Ok(())
 }
 
 fn administrative_slot_intent_sha256(
@@ -352,6 +482,14 @@ fn read_slot_u64(value: &[u8], offset: usize) -> Result<u64> {
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| authorization_error("administrative slot is truncated"))?;
     Ok(u64::from_ne_bytes(bytes))
+}
+
+fn read_slot_u16(value: &[u8], offset: usize) -> Result<u16> {
+    let bytes = value
+        .get(offset..offset + size_of::<u16>())
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| authorization_error("administrative slot is truncated"))?;
+    Ok(u16::from_ne_bytes(bytes))
 }
 
 fn read_slot_id(value: &[u8], offset: usize) -> Result<Id128V1> {
@@ -1173,11 +1311,13 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{
+        administrative_argument_keys, administrative_argument_keys_from_slot_bytes,
         authorization_error, cbor_error, validate_administrative_body, AuthorizationProofOwner,
         AuthorizationTargetV1, IntentPayloadV1, IssuerTrustV1, TrustBundleV1,
         ADMINISTRATIVE_EXEC_KIND, SIGNATURE_DOMAIN,
     };
-    use erebor_interceptor_abi::Id128V1;
+    use erebor_interceptor_abi::{ApprovedExecSlotV1, BoundedAdministrativeArgvV1, Id128V1};
+    use zerocopy::IntoBytes as _;
 
     fn id(value: u64) -> Id128V1 {
         Id128V1::new(1, value)
@@ -1501,6 +1641,37 @@ mod tests {
         assert_eq!(decoded.resolved_mount_id, 42);
         assert_eq!(decoded.resolved_inode, 100);
         assert_eq!(decoded.resolved_inode_generation, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn administrative_argument_map_keys_preserve_exact_order() -> crate::Result<()> {
+        let proof_id = id(41);
+        let argv = BoundedAdministrativeArgvV1::from_arguments(&[
+            b"bash".as_slice(),
+            b"-lc",
+            b"echo value",
+        ])
+        .ok_or_else(|| authorization_error("test argv is invalid"))?;
+        let keys = administrative_argument_keys(proof_id, &argv)?;
+        let slot = ApprovedExecSlotV1 {
+            proof_id,
+            expected_argv: argv,
+            ..ApprovedExecSlotV1::default()
+        };
+
+        assert_eq!(
+            keys,
+            administrative_argument_keys_from_slot_bytes(slot.as_bytes())?
+        );
+        assert_eq!(keys.len(), 3);
+        assert_eq!(keys[0].argument_index, 0);
+        assert_eq!(&keys[0].argument_bytes[..4], b"bash");
+        assert_eq!(keys[1].argument_index, 1);
+        assert_eq!(&keys[1].argument_bytes[..3], b"-lc");
+        assert_eq!(keys[2].argument_index, 2);
+        assert_eq!(&keys[2].argument_bytes[..10], b"echo value");
+        assert_ne!(keys[1].as_bytes(), keys[2].as_bytes());
         Ok(())
     }
 

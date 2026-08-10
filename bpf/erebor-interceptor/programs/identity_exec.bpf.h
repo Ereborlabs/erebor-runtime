@@ -53,18 +53,26 @@ static __always_inline int append_exec_candidate(
     pending_exec_v1 *pending,
     const exact_executable_candidate_v1 *candidate)
 {
+    __u32 candidate_count = pending->candidate_count;
+    __u64 candidate_index;
+
     if (!candidate->mount_id)
         return -EACCES;
 #pragma unroll
     for (int index = 0; index < MAX_EXEC_CANDIDATES_V1; index++) {
-        if (index < pending->candidate_count &&
+        if (index < candidate_count &&
             candidate_equal(&pending->ordered_candidates[index], candidate))
             return 0;
     }
-    if (pending->candidate_count >= MAX_EXEC_CANDIDATES_V1)
+    asm volatile("%[index] = %[count] ;\n"
+                 "%[index] &= %2 ;\n"
+                 : [index] "=&r"(candidate_index)
+                 : [count] "r"((__u64)candidate_count),
+                   "i"(MAX_EXEC_CANDIDATES_V1 - 1));
+    if (candidate_count >= MAX_EXEC_CANDIDATES_V1)
         return -EACCES;
-    pending->ordered_candidates[pending->candidate_count] = *candidate;
-    pending->candidate_count++;
+    pending->ordered_candidates[candidate_index] = *candidate;
+    pending->candidate_count = candidate_count + 1;
     pending->transition_version++;
     return 0;
 }
@@ -138,109 +146,57 @@ struct administrative_argument_match {
     const bounded_administrative_argv_v1 *expected;
     const char *const *argv;
     struct identity_scratch_v1 *scratch;
-    __u32 argument_index;
-    __u32 byte_index;
+    __u32 argument_count;
     __u32 aggregate;
     __u32 mismatch;
-    __u32 done;
 };
-
-#define ADMINISTRATIVE_ARGV_CHUNK_BYTES 8
-
-static __always_inline __u64 administrative_argument_chunk_difference(
-    const struct administrative_argument_match *match, __u32 byte_index)
-{
-    __u32 expected_index = match->aggregate + byte_index;
-
-    if (byte_index > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 -
-                         ADMINISTRATIVE_ARGV_CHUNK_BYTES ||
-        expected_index > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 -
-                             ADMINISTRATIVE_ARGV_CHUNK_BYTES)
-        return ~(__u64)0;
-    return *(__u64 *)&match->scratch->administrative_argument[byte_index] ^
-           *(__u64 *)&match->expected->argument_bytes[expected_index];
-}
-
-static __always_inline __u8 administrative_argument_byte_difference(
-    const struct administrative_argument_match *match, __u32 byte_index)
-{
-    __u32 expected_index = match->aggregate + byte_index;
-
-    if (byte_index >= MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 ||
-        expected_index >= MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1)
-        return 1;
-    return match->scratch->administrative_argument[byte_index] ^
-           match->expected->argument_bytes[expected_index];
-}
 
 static long administrative_argv_match_step(__u32 step, void *data)
 {
     struct administrative_argument_match *match = data;
-    __u32 argument_index = match->argument_index;
+    approved_exec_argument_key_v1 *key =
+        &match->scratch->administrative_argument_key;
+    __u8 *approved;
+    __u32 argument_index = step;
     __u32 expected_length;
-    __u32 byte_index;
-    __u32 remaining;
-    __u64 difference = 0;
+    __u32 argument_length;
     const char *argument = NULL;
     long length;
 
-    (void)step;
-    if (argument_index >= match->expected->argument_count) {
-        match->done = 1;
+    asm volatile("%[index] &= %1 ;\n"
+                 : [index] "+r"(argument_index)
+                 : "i"(MAX_ADMINISTRATIVE_ARGUMENTS_V1 - 1));
+    if (argument_index >= match->argument_count)
         return 1;
-    }
-    argument_index &= MAX_ADMINISTRATIVE_ARGUMENTS_V1 - 1;
     expected_length = match->expected->argument_lengths[argument_index];
-    byte_index = match->byte_index;
-    if (!byte_index) {
-        if (expected_length > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 ||
-            match->aggregate > match->expected->total_argument_bytes ||
-            expected_length >
-                match->expected->total_argument_bytes - match->aggregate ||
-            bpf_probe_read_user(&argument, sizeof(argument),
-                                &match->argv[argument_index]) ||
-            !argument)
-            goto mismatch;
-        length = bpf_probe_read_user_str(
-            match->scratch->administrative_argument,
-            sizeof(match->scratch->administrative_argument), argument);
-        if (length != expected_length + 1)
-            goto mismatch;
-        if (!expected_length)
-            goto argument_complete;
-    }
-    if (byte_index >= expected_length)
+    if (expected_length > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 ||
+        match->aggregate > match->expected->total_argument_bytes ||
+        expected_length >
+            match->expected->total_argument_bytes - match->aggregate ||
+        bpf_probe_read_user(&argument, sizeof(argument),
+                            &match->argv[argument_index]) ||
+        !argument)
         goto mismatch;
-    remaining = expected_length - byte_index;
-    if (remaining >= ADMINISTRATIVE_ARGV_CHUNK_BYTES) {
-        difference =
-            administrative_argument_chunk_difference(match, byte_index);
-        byte_index += ADMINISTRATIVE_ARGV_CHUNK_BYTES;
-    } else {
-#pragma unroll
-        for (int offset = 0; offset < ADMINISTRATIVE_ARGV_CHUNK_BYTES;
-             offset++) {
-            if ((__u32)offset < remaining)
-                difference |= administrative_argument_byte_difference(
-                    match, byte_index + offset);
-        }
-        byte_index += remaining;
-    }
-    if (difference)
+    length = bpf_probe_read_user_str(
+        match->scratch->administrative_argument,
+        sizeof(match->scratch->administrative_argument), argument);
+    if (length <= 0 || length > sizeof(match->scratch->administrative_argument))
         goto mismatch;
-    if (byte_index < expected_length) {
-        match->byte_index = byte_index;
-        return 0;
-    }
-
-argument_complete:
-    match->aggregate += expected_length;
-    match->argument_index++;
-    match->byte_index = 0;
-    if (match->argument_index >= match->expected->argument_count) {
-        match->done = 1;
-        return 1;
-    }
+    argument_length = (__u32)length - 1;
+    if (argument_length != expected_length ||
+        bpf_probe_read_kernel(key->argument_bytes,
+                              sizeof(key->argument_bytes),
+                              match->scratch->zero_bytes) ||
+        (argument_length &&
+         bpf_probe_read_kernel(key->argument_bytes, argument_length,
+                               match->scratch->administrative_argument)))
+        goto mismatch;
+    key->argument_index = argument_index;
+    key->argument_length = argument_length;
+    approved = bpf_map_lookup_elem(&approved_exec_arguments, key);
+    if (!approved || !*approved)
+        goto mismatch;
+    match->aggregate += argument_length;
     return 0;
 
 mismatch:
@@ -249,33 +205,40 @@ mismatch:
 }
 
 static __always_inline int administrative_argv_matches(
-    const bounded_administrative_argv_v1 *expected,
+    const approved_exec_slot_v1 *slot,
     const char *const *argv, struct identity_scratch_v1 *scratch)
 {
+    const bounded_administrative_argv_v1 *expected = &slot->expected_argv;
     const char *argument = NULL;
+    __u32 argument_count = expected->argument_count;
+    __u32 total_argument_bytes = expected->total_argument_bytes;
     long steps;
 
-    if (!argv || !expected->argument_count ||
-        expected->argument_count > MAX_ADMINISTRATIVE_ARGUMENTS_V1 ||
+    if (!argv || !argument_count ||
+        argument_count > MAX_ADMINISTRATIVE_ARGUMENTS_V1 ||
         !expected->argument_lengths[0] ||
-        !expected->total_argument_bytes ||
-        expected->total_argument_bytes >
-            MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1)
+        !total_argument_bytes ||
+        total_argument_bytes > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1)
         return -EACCES;
+    scratch->administrative_argument_key.proof_id = slot->proof_id;
+    scratch->administrative_argument_key.argument_index = 0;
+    scratch->administrative_argument_key.argument_length = 0;
+#pragma unroll
+    for (int index = 0; index < 4; index++)
+        scratch->administrative_argument_key.reserved[index] = 0;
     struct administrative_argument_match match = {
         .expected = expected,
         .argv = argv,
         .scratch = scratch,
+        .argument_count = argument_count,
     };
 
-    steps = bpf_loop(MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 /
-                             ADMINISTRATIVE_ARGV_CHUNK_BYTES +
-                         MAX_ADMINISTRATIVE_ARGUMENTS_V1,
+    steps = bpf_loop(MAX_ADMINISTRATIVE_ARGUMENTS_V1,
                      administrative_argv_match_step, &match, 0);
-    if (steps < 0 || match.mismatch || !match.done ||
-        match.aggregate != expected->total_argument_bytes ||
+    if (steps < 0 || match.mismatch ||
+        match.aggregate != total_argument_bytes ||
         bpf_probe_read_user(&argument, sizeof(argument),
-                            &argv[expected->argument_count]) ||
+                            &argv[argument_count]) ||
         argument)
         return -EACCES;
     return 0;
@@ -342,7 +305,7 @@ static __always_inline int prepare_administrative_match(
     slot = bpf_map_lookup_elem(&approved_exec_slots, &key);
     scratch = identity_scratch_record();
     if (!scratch || !administrative_slot_matches_binding(slot, binding) ||
-        administrative_argv_matches(&slot->expected_argv, argv, scratch))
+        administrative_argv_matches(slot, argv, scratch))
         return 0;
     scratch->administrative_match.task_cookie = label->task_cookie;
     scratch->administrative_match.exec_attempt_sequence =
@@ -446,8 +409,10 @@ reject:
                         &label->task_cookie);
 }
 
-SEC("lsm/bprm_check_security")
-int BPF_PROG(erebor_bprm_check_security, struct linux_binprm *bprm, int ret)
+#define BPRM_OBSERVE_EFFECT_V1 1
+
+static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
+                                               int ret)
 {
     identity_runtime_config_v1 *config;
     identity_health_v1 *health;
@@ -622,7 +587,7 @@ int BPF_PROG(erebor_bprm_check_security, struct linux_binprm *bprm, int ret)
         consume_administrative_match(config, label, binding, process,
                                      &scratch->pending_exec);
         release_transition_guard(&process->transition_guard);
-        return observe_bprm_effect(bprm);
+        return BPRM_OBSERVE_EFFECT_V1;
     }
     if (!id128_equal(&pending->process_state_id, &label->process_state_id) ||
         pending->state != pending_exec_state_v1_preparing ||
@@ -632,6 +597,16 @@ int BPF_PROG(erebor_bprm_check_security, struct linux_binprm *bprm, int ret)
     if (append_exec_candidate(pending,
                               &scratch->image.ordered_candidates[0]))
         return identity_deny(config);
+    return BPRM_OBSERVE_EFFECT_V1;
+}
+
+SEC("lsm/bprm_check_security")
+int BPF_PROG(erebor_bprm_check_security, struct linux_binprm *bprm, int ret)
+{
+    int result = identity_bprm_transition(bprm, ret);
+
+    if (result != BPRM_OBSERVE_EFFECT_V1)
+        return result;
     return observe_bprm_effect(bprm);
 }
 

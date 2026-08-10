@@ -128,22 +128,22 @@ static __always_inline int collect_mount_components(
         return -EACCES;
 #pragma clang loop unroll(disable)
     for (int depth = 0; depth < MAX_CANONICAL_PATH_COMPONENTS_V1; depth++) {
-        canonical_path_component_v1 *component;
+        struct canonical_path_view_v1 *component;
         struct dentry *parent = NULL;
         const unsigned char *name = NULL;
         __u32 length = 0;
 
         if (current == root)
             break;
-        component = &scratch->path_components[depth];
+        component = &scratch->path_component_views[depth];
         __builtin_memset(component, 0, sizeof(*component));
         if (BPF_CORE_READ_INTO(&parent, current, d_parent) || !parent ||
             parent == current ||
             BPF_CORE_READ_INTO(&length, current, d_name.len) || !length ||
             length > MAX_CANONICAL_COMPONENT_BYTES_V1 ||
-            BPF_CORE_READ_INTO(&name, current, d_name.name) || !name ||
-            bpf_probe_read_kernel(component->bytes, length, name))
+            BPF_CORE_READ_INTO(&name, current, d_name.name) || !name)
             return -EACCES;
+        component->name_address = (__u64)name;
         component->length = length;
         component_count++;
         current = parent;
@@ -201,6 +201,79 @@ static __always_inline int snapshot_mount_view(
     return result;
 }
 
+struct canonical_path_match {
+    struct identity_scratch_v1 *scratch;
+    __u64 profile_generation_ref_id;
+    __u32 component_count;
+    __u32 state_id;
+    __u32 unresolved;
+};
+
+static long canonical_path_match_step(__u32 offset, void *data)
+{
+    struct canonical_path_match *match = data;
+    path_graph_transition_v1 *transition;
+    struct canonical_path_view_v1 *view;
+    canonical_path_component_v1 *component;
+    __u32 raw_length;
+    __u64 copy_length;
+    __u32 raw_index;
+    __u64 index;
+
+    if (offset >= match->component_count)
+        return 1;
+    raw_index = match->component_count - offset - 1;
+    asm volatile("%[bounded] = %[raw] ;\n"
+                 "%[bounded] &= %2 ;\n"
+                 : [bounded] "=&r"(index)
+                 : [raw] "r"((__u64)raw_index),
+                   "i"(MAX_CANONICAL_PATH_COMPONENTS_V1 - 1));
+    view = &match->scratch->path_component_views[index];
+    raw_length = view->length;
+    if (!raw_length || raw_length > MAX_CANONICAL_COMPONENT_BYTES_V1 ||
+        !view->name_address)
+        goto unresolved;
+    component = &match->scratch->path_transition_key.component;
+    if (bpf_probe_read_kernel(component->bytes, sizeof(component->bytes),
+                              match->scratch->zero_bytes))
+        goto unresolved;
+    asm volatile("%[bounded] = %[raw] ;\n"
+                 "%[bounded] &= 0xff ;\n"
+                 : [bounded] "=&r"(copy_length)
+                 : [raw] "r"((__u64)raw_length));
+    if (bpf_probe_read_kernel(component->bytes, copy_length,
+                              (const void *)view->name_address))
+        goto unresolved;
+    match->scratch->path_transition_key.profile_generation_ref_id =
+        match->profile_generation_ref_id;
+    match->scratch->path_transition_key.current_state_id = match->state_id;
+    component->length = raw_length;
+    match->scratch->path_transition_key.reserved = 0;
+    transition = bpf_map_lookup_elem(
+        &path_graph_exact_transitions,
+        &match->scratch->path_transition_key);
+    if (!transition) {
+        __builtin_memset(&match->scratch->path_state_key, 0,
+                         sizeof(match->scratch->path_state_key));
+        match->scratch->path_state_key.profile_generation_ref_id =
+            match->profile_generation_ref_id;
+        match->scratch->path_state_key.state_id = match->state_id;
+        transition = bpf_map_lookup_elem(
+            &path_graph_wildcard_transitions,
+            &match->scratch->path_state_key);
+    }
+    if (!transition) {
+        match->unresolved = 1;
+        return 1;
+    }
+    match->state_id = transition->next_state_id;
+    return 0;
+
+unresolved:
+    match->unresolved = 1;
+    return 1;
+}
+
 /*
  * The userspace compiler determinizes exact+wildcard pattern subsets. That
  * keeps the kernel hot path to one bounded state instead of an NFA state set.
@@ -210,14 +283,13 @@ static __noinline int canonical_path_candidate(
     __u64 profile_generation_ref_id, struct identity_scratch_v1 *scratch)
 {
     canonical_mount_root_v1 *mount_root;
-    path_graph_transition_v1 *transition;
     path_graph_terminal_v1 *terminal;
     struct vfsmount *vfsmount = NULL;
     __u64 topology_generation;
     __u64 snapshot_digest_id;
     __u64 transition_version;
     __u32 component_count = 0;
-    __u32 state_id;
+    long steps;
 
     if (collect_mount_components(file, scratch, &component_count, &vfsmount))
         return -EACCES;
@@ -248,45 +320,22 @@ static __noinline int canonical_path_candidate(
     if (!mount_root || !mount_root->selected_mount_id_unique ||
         mount_root->snapshot_digest_id != snapshot_digest_id)
         return -EACCES;
-    state_id = mount_root->graph_prefix_state_id;
+    struct canonical_path_match match = {
+        .scratch = scratch,
+        .profile_generation_ref_id = profile_generation_ref_id,
+        .component_count = component_count,
+        .state_id = mount_root->graph_prefix_state_id,
+    };
 
-#pragma clang loop unroll(disable)
-    for (int offset = 0; offset < MAX_CANONICAL_PATH_COMPONENTS_V1;
-         offset++) {
-        __u32 index;
-
-        if ((__u32)offset >= component_count)
-            break;
-        index = component_count - (__u32)offset - 1;
-        __builtin_memset(&scratch->path_transition_key, 0,
-                         sizeof(scratch->path_transition_key));
-        scratch->path_transition_key.profile_generation_ref_id =
-            profile_generation_ref_id;
-        scratch->path_transition_key.current_state_id = state_id;
-        __builtin_memcpy(&scratch->path_transition_key.component,
-                         &scratch->path_components[index],
-                         sizeof(scratch->path_transition_key.component));
-        transition = bpf_map_lookup_elem(&path_graph_exact_transitions,
-                                         &scratch->path_transition_key);
-        if (!transition) {
-            __builtin_memset(&scratch->path_state_key, 0,
-                             sizeof(scratch->path_state_key));
-            scratch->path_state_key.profile_generation_ref_id =
-                profile_generation_ref_id;
-            scratch->path_state_key.state_id = state_id;
-            transition = bpf_map_lookup_elem(
-                &path_graph_wildcard_transitions,
-                &scratch->path_state_key);
-        }
-        if (!transition)
-            return -EACCES;
-        state_id = transition->next_state_id;
-    }
+    steps = bpf_loop(MAX_CANONICAL_PATH_COMPONENTS_V1,
+                     canonical_path_match_step, &match, 0);
+    if (steps < 0 || match.unresolved)
+        return -EACCES;
     __builtin_memset(&scratch->path_state_key, 0,
                      sizeof(scratch->path_state_key));
     scratch->path_state_key.profile_generation_ref_id =
         profile_generation_ref_id;
-    scratch->path_state_key.state_id = state_id;
+    scratch->path_state_key.state_id = match.state_id;
     terminal = bpf_map_lookup_elem(&path_graph_terminals,
                                    &scratch->path_state_key);
     if (!terminal || !terminal->composite_atom_id ||

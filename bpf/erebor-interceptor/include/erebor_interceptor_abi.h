@@ -582,6 +582,14 @@ typedef struct canonical_path_component_v1 {
   uint8_t bytes[CANONICAL_COMPONENT_STORAGE_BYTES_V1];
 } canonical_path_component_v1;
 
+typedef struct approved_exec_argument_key_v1 {
+  struct id128_v1 proof_id;
+  uint16_t argument_index;
+  uint16_t argument_length;
+  uint8_t argument_bytes[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
+  uint8_t reserved[4];
+} approved_exec_argument_key_v1;
+
 typedef struct approved_exec_slot_key_v1 {
   struct id128_v1 node_boot_id;
   struct id128_v1 cgroup_binding_id;

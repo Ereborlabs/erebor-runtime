@@ -32,6 +32,12 @@ struct mount_security_view_lock_v1 {
 
 #define MAX_CGROUP_ANCESTOR_STEPS_V1 64
 
+struct canonical_path_view_v1 {
+    __u64 name_address;
+    __u32 length;
+    __u32 reserved;
+};
+
 struct identity_scratch_v1 {
     task_label_v1 label;
     task_coordinate_v1 coordinate;
@@ -55,10 +61,12 @@ struct identity_scratch_v1 {
     path_graph_transition_key_v1 path_transition_key;
     path_graph_state_key_v1 path_state_key;
     path_graph_terminal_v1 path_terminal;
-    canonical_path_component_v1
-        path_components[MAX_CANONICAL_PATH_COMPONENTS_V1];
+    struct canonical_path_view_v1
+        path_component_views[MAX_CANONICAL_PATH_COMPONENTS_V1];
     effect_observation_v1 observation;
     __u8 administrative_argument[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 + 1];
+    approved_exec_argument_key_v1 administrative_argument_key;
+    __u8 zero_bytes[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1];
 };
 
 struct {
@@ -186,6 +194,14 @@ struct {
     __type(key, approved_exec_slot_key_v1);
     __type(value, approved_exec_slot_v1);
 } approved_exec_slots SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 262144);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, approved_exec_argument_key_v1);
+    __type(value, __u8);
+} approved_exec_arguments SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

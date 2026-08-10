@@ -159,4 +159,18 @@ mod tests {
         assert_eq!(size_of::<PathGraphTerminalV1>(), 16);
         assert_eq!(size_of::<MountMutationAttemptV1>(), 56);
     }
+
+    #[test]
+    fn canonical_path_component_preserves_the_platform_bound() {
+        let bytes = vec![b'x'; MAX_CANONICAL_COMPONENT_BYTES_V1];
+        let mut component = CanonicalPathComponentV1 {
+            length: bytes.len() as u16,
+            ..CanonicalPathComponentV1::default()
+        };
+        component.bytes[..bytes.len()].copy_from_slice(&bytes);
+
+        assert_eq!(usize::from(component.length), bytes.len());
+        assert_eq!(&component.bytes[..bytes.len()], bytes);
+        assert_eq!(component.bytes[bytes.len()], 0);
+    }
 }

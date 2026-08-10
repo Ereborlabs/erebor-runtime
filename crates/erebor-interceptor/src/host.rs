@@ -301,8 +301,9 @@ impl KernelHostOwner {
                 action: "set runtime BTF",
                 path: &self.config.runtime_btf_path,
             })?;
-        let open = self.open_object(&mut builder, "open BPF object")?;
+        let mut open = self.open_object(&mut builder, "open BPF object")?;
         let layout = self.inspect_open_object(&open)?;
+        self.configure_autoload(&mut open);
         let lease = PinRootLease::acquire(&self.config.lease_path)?;
         if let Some(pin_root) = &self.config.pin_root {
             if pin_root.exists()
@@ -752,6 +753,14 @@ impl KernelHostOwner {
         Ok(KernelObjectLayoutV1 { maps, programs })
     }
 
+    fn configure_autoload(&self, open: &mut OpenObject) {
+        for mut program in open.progs_mut() {
+            let name = program.name().to_string_lossy();
+            let section = program.section().to_string_lossy();
+            program.set_autoload(self.config.object_kind.includes(&name, &section));
+        }
+    }
+
     fn validate_program_set(&self, programs: &[KernelProgramLayoutV1]) -> Result<()> {
         let actual = programs
             .iter()
@@ -1041,6 +1050,7 @@ mod tests {
         REQUIRED_QUALIFICATION_LSM_PROGRAMS,
     };
     use crate::error::IoSnafu;
+    use crate::BUNDLED_BPF_OBJECT;
 
     #[test]
     fn missing_required_hook_cannot_validate() {
@@ -1069,9 +1079,44 @@ mod tests {
         let kind = KernelObjectKind::Identity;
         assert!(kind.includes("erebor_cgroup_attach_task", "tp_btf/cgroup_attach_task"));
         assert!(kind.attaches("erebor_cgroup_attach_task", "tp_btf/cgroup_attach_task"));
+        assert!(kind.includes(
+            "erebor_sys_enter_execve",
+            "tracepoint/syscalls/sys_enter_execve"
+        ));
+        assert!(kind.includes(
+            "erebor_sys_enter_execveat",
+            "tracepoint/syscalls/sys_enter_execveat"
+        ));
         assert!(kind.includes("erebor_reconcile_tasks", "iter/task"));
         assert!(!kind.attaches("erebor_reconcile_tasks", "iter/task"));
         assert!(!kind.includes("unrelated", "tracepoint/sched/sched_process_exit"));
+    }
+
+    #[test]
+    fn identity_autoloads_only_its_required_programs() -> crate::Result<()> {
+        let owner =
+            KernelHostOwner::new(KernelHostConfig::identity("btf", "lease", None, "boot", 1));
+        let mut object = libbpf_rs::ObjectBuilder::default()
+            .open_memory(BUNDLED_BPF_OBJECT)
+            .map_err(|source| crate::Error::Libbpf {
+                action: "inspect bundled BPF object",
+                path: "embedded erebor-interceptor.bpf.o".into(),
+                source,
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+
+        owner.configure_autoload(&mut object);
+
+        for program in object.progs() {
+            let name = program.name().to_string_lossy();
+            let section = program.section().to_string_lossy();
+            assert_eq!(
+                program.autoload(),
+                KernelObjectKind::Identity.includes(&name, &section),
+                "{name}"
+            );
+        }
+        Ok(())
     }
 
     #[test]

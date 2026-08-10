@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use erebor_interceptor_abi::{MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_PATH_COMPONENTS_V1};
 use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
@@ -234,7 +235,8 @@ impl NodeConfig {
                     && object.inode > 0
                     && object.inode_generation > 0
                     && !object.canonical_component_hex.is_empty()
-                    && object.canonical_component_hex.len() <= 64
+                    && object.canonical_component_hex.len()
+                        <= MAX_CANONICAL_PATH_COMPONENTS_V1
                     && usize::from(object.mount_relative_component_count)
                         <= object.canonical_component_hex.len()
                     && object.mount_root_inode > 0
@@ -245,7 +247,7 @@ impl NodeConfig {
                     && object.canonical_component_hex.iter().all(|component| {
                         hex::decode(component).is_ok_and(|bytes| {
                             !bytes.is_empty()
-                                && bytes.len() <= 255
+                                && bytes.len() <= MAX_CANONICAL_COMPONENT_BYTES_V1
                                 && !bytes.contains(&0)
                                 && bytes.as_slice() != b"."
                                 && bytes.as_slice() != b".."

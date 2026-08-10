@@ -48,8 +48,8 @@ int BPF_PROG(erebor_task_alloc, struct task_struct *task,
                 health->placement_mismatches++;
             return identity_deny(config);
         }
-        result = create_native_child(task, clone_flags, config, parent_label,
-                                     binding, scratch);
+        result = create_native_child(task, creator, clone_flags, config,
+                                     parent_label, binding, scratch);
     } else {
         if (task_cgroup(creator, &creator_cgroup)) {
             if (health)

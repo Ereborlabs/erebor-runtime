@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::mem::size_of;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,8 @@ use crate::Result;
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 
-const REQUIRED_IDENTITY_MAPS: [&str; 35] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 36] = [
+    "approved_exec_arguments",
     "approved_exec_slots",
     "authority_domains",
     "created_by_edges",
@@ -464,6 +465,7 @@ impl IdentityTestRunner {
 struct NativeProcessFixture {
     outer: Child,
     stdin: Option<ChildStdin>,
+    stderr: Option<ChildStderr>,
     native_pidfd: Option<OwnedFd>,
 }
 
@@ -472,11 +474,11 @@ impl NativeProcessFixture {
         let mut outer = Command::new("/bin/sh")
             .args([
                 "-c",
-                "read _; /bin/sh -c 'read _; exec /bin/sleep 30' & wait",
+                "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 30) & wait",
             ])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .context(IoSnafu {
                 path: Path::new("/bin/sh"),
@@ -485,9 +487,14 @@ impl NativeProcessFixture {
             .stdin
             .take()
             .ok_or_else(|| invalid_state("test shell has no stdin pipe"))?;
+        let stderr = outer
+            .stderr
+            .take()
+            .ok_or_else(|| invalid_state("test shell has no stderr pipe"))?;
         Ok(Self {
             outer,
             stdin: Some(stdin),
+            stderr: Some(stderr),
             native_pidfd: None,
         })
     }
@@ -506,7 +513,12 @@ impl NativeProcessFixture {
     }
 
     fn release_exec(&mut self) -> Result<()> {
-        self.write_stdin(b"exec\n")
+        let pidfd = self
+            .native_pidfd
+            .as_ref()
+            .ok_or_else(|| invalid_state("native child has no pidfd"))?;
+        pidfd_send_signal(pidfd, Signal::CONT)
+            .map_err(|error| invalid_state(format!("release native child exec: {error}")))
     }
 
     fn write_stdin(&mut self, bytes: &[u8]) -> Result<()> {
@@ -520,17 +532,19 @@ impl NativeProcessFixture {
     }
 
     fn native_child_pid(&mut self) -> Result<Option<u32>> {
-        if self
-            .outer
-            .try_wait()
-            .context(IoSnafu {
-                path: Path::new("identity test shell"),
-            })?
-            .is_some()
-        {
-            return Err(invalid_state(
-                "identity test shell exited before creating its child",
-            ));
+        if let Some(status) = self.outer.try_wait().context(IoSnafu {
+            path: Path::new("identity test shell"),
+        })? {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = self.stderr.take() {
+                pipe.read_to_string(&mut stderr).context(IoSnafu {
+                    path: Path::new("identity test shell stderr"),
+                })?;
+            }
+            return Err(invalid_state(format!(
+                "identity test shell exited before creating its child ({status}): {}",
+                stderr.trim()
+            )));
         }
         let pid = self.outer.id();
         let path = PathBuf::from(format!("/proc/{pid}/task/{pid}/children"));
@@ -642,9 +656,12 @@ fn invalid_state(reason: impl Into<String>) -> crate::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
-    use super::{IdentityTestRunner, PHASE2_FIXTURES, REQUIRED_IDENTITY_MAPS};
+    use super::{
+        IdentityTestRunner, NativeProcessFixture, PHASE2_FIXTURES, REQUIRED_IDENTITY_MAPS,
+    };
 
     #[test]
     fn production_object_and_phase2_fixture_allocation_are_exact() -> crate::Result<()> {
@@ -656,6 +673,35 @@ mod tests {
         assert_eq!(bundle.schema_version, 1);
         assert_eq!(bundle.layout.maps.len(), REQUIRED_IDENTITY_MAPS.len());
         assert_eq!(bundle.phase2_fixture_ids.len(), PHASE2_FIXTURES.len());
+        Ok(())
+    }
+
+    #[test]
+    fn native_process_fixture_pauses_its_child_before_exec() -> crate::Result<()> {
+        let runner = IdentityTestRunner::new(".");
+        let mut fixture = NativeProcessFixture::start()?;
+        fixture.release_root()?;
+        let children_path =
+            PathBuf::from(format!("/proc/{0}/task/{0}/children", fixture.outer_pid()));
+        let native_pid = runner.wait_for("native child creation", &children_path, || {
+            fixture.native_child_pid()
+        })?;
+        fixture.open_native_pidfd(native_pid)?;
+        let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
+        let status = fs::read_to_string(&status_path).map_err(|error| {
+            super::invalid_state(format!("read {}: {error}", status_path.display()))
+        })?;
+        assert!(status.lines().any(|line| line.starts_with("State:\tT")));
+
+        fixture.release_exec()?;
+        let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
+        runner.wait_for("native child exec", &comm_path, || {
+            fs::read_to_string(&comm_path)
+                .map(|name| (name.trim() == "sleep").then_some(()))
+                .map_err(|error| {
+                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
+                })
+        })?;
         Ok(())
     }
 }

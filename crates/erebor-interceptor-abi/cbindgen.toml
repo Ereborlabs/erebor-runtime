@@ -31,6 +31,7 @@ include = [
   "CanonicalMountRootKeyV1",
   "CanonicalMountRootV1",
   "CanonicalPathComponentV1",
+  "ApprovedExecArgumentKeyV1",
   "ApprovedExecSlotKeyV1",
   "ApprovedExecSlotStateV1",
   "ApprovedExecSlotV1",
@@ -109,6 +110,7 @@ include = [
 "CanonicalMountRootKeyV1" = "canonical_mount_root_key_v1"
 "CanonicalMountRootV1" = "canonical_mount_root_v1"
 "CanonicalPathComponentV1" = "canonical_path_component_v1"
+"ApprovedExecArgumentKeyV1" = "approved_exec_argument_key_v1"
 "ApprovedExecSlotKeyV1" = "approved_exec_slot_key_v1"
 "ApprovedExecSlotStateV1" = "approved_exec_slot_state_v1"
 "ApprovedExecSlotV1" = "approved_exec_slot_v1"

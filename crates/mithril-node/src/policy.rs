@@ -12,6 +12,7 @@ use erebor_interceptor_abi::{
     MountSecurityViewKeyV1, MountSecurityViewStateV1, MountTopologyStateV1, PathGraphStateKeyV1,
     PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1, PhysicalDecisionKindV1,
     PhysicalDecisionV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1,
+    MAX_CANONICAL_COMPONENT_BYTES_V1,
 };
 use mithril_control::{
     kernel_operation_id, AntiRollbackStore, CanonicalPathGraphV1, CompiledPhysicalResultV1,
@@ -1101,7 +1102,7 @@ fn lower_path_tables(
 
 fn path_component(bytes: &[u8]) -> Result<CanonicalPathComponentV1> {
     ensure!(
-        !bytes.is_empty() && bytes.len() <= 255 && !bytes.contains(&0),
+        !bytes.is_empty() && bytes.len() <= MAX_CANONICAL_COMPONENT_BYTES_V1 && !bytes.contains(&0),
         IdentityStateSnafu {
             reason: "canonical path component is invalid",
         }

@@ -1,12 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use erebor_interceptor_abi::{MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_PATH_COMPONENTS_V1};
 use serde::{Deserialize, Serialize};
 
 use crate::error::PolicyValidationSnafu;
 use crate::Result;
 
-pub const MAX_CANONICAL_COMPONENTS_V1: usize = 64;
-pub const MAX_COMPONENT_BYTES_V1: usize = 255;
 pub const MAX_PATH_GRAPH_STATES_V1: usize = 4096;
 
 pub type DentryIdV1 = u64;
@@ -74,7 +73,7 @@ impl MountSecurityViewV1 {
                 id,
                 *key == dentry.dentry_id
                     && !dentry.name.contains(&0)
-                    && dentry.name.len() <= MAX_COMPONENT_BYTES_V1
+                    && dentry.name.len() <= MAX_CANONICAL_COMPONENT_BYTES_V1
                     && (dentry.parent_dentry_id == dentry.dentry_id
                         || self.dentries.contains_key(&dentry.parent_dentry_id)),
                 "PATH_VIEW_DENTRY",
@@ -108,7 +107,7 @@ impl MountSecurityViewV1 {
         let mut current_mount = entered_mount_id_unique;
         let mut reversed = Vec::new();
         let mut visited = BTreeSet::new();
-        for _ in 0..=MAX_CANONICAL_COMPONENTS_V1 {
+        for _ in 0..=MAX_CANONICAL_PATH_COMPONENTS_V1 {
             if !visited.insert((current, current_mount)) {
                 return CanonicalPathResultV1::Unresolved {
                     reason: PathUnresolvedReasonV1::Cycle,
@@ -149,13 +148,13 @@ impl MountSecurityViewV1 {
                     reason: PathUnresolvedReasonV1::RequiredRootUnreachable,
                 };
             }
-            if dentry.name.is_empty() || dentry.name.len() > MAX_COMPONENT_BYTES_V1 {
+            if dentry.name.is_empty() || dentry.name.len() > MAX_CANONICAL_COMPONENT_BYTES_V1 {
                 return CanonicalPathResultV1::Unresolved {
                     reason: PathUnresolvedReasonV1::ComponentBound,
                 };
             }
             reversed.push(dentry.name.clone());
-            if reversed.len() > MAX_CANONICAL_COMPONENTS_V1 {
+            if reversed.len() > MAX_CANONICAL_PATH_COMPONENTS_V1 {
                 return CanonicalPathResultV1::Unresolved {
                     reason: PathUnresolvedReasonV1::DepthBound,
                 };
@@ -272,7 +271,7 @@ impl CanonicalPathGraphV1 {
             ensure_path(
                 policy_id,
                 !pattern.components.is_empty()
-                    && pattern.components.len() <= MAX_CANONICAL_COMPONENTS_V1,
+                    && pattern.components.len() <= MAX_CANONICAL_PATH_COMPONENTS_V1,
                 "PATH_PATTERN_DEPTH",
                 "path patterns must be nonempty and within the component bound",
             )?;
@@ -432,7 +431,7 @@ impl CanonicalPathGraphV1 {
                     ensure_path(
                         policy_id,
                         !bytes.is_empty()
-                            && bytes.len() <= MAX_COMPONENT_BYTES_V1
+                            && bytes.len() <= MAX_CANONICAL_COMPONENT_BYTES_V1
                             && !bytes.contains(&0)
                             && bytes.as_slice() != b"."
                             && bytes.as_slice() != b"..",

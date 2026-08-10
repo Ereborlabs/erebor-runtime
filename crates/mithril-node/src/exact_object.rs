@@ -5,6 +5,7 @@ use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
+use erebor_interceptor_abi::MAX_CANONICAL_COMPONENT_BYTES_V1;
 use rustix::fs::{statx, AtFlags, StatxFlags};
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
@@ -436,7 +437,9 @@ fn path_components(path: &Path) -> Result<Vec<Vec<u8>>> {
         .and_then(|components| {
             ensure!(
                 components.iter().all(|component| {
-                    !component.is_empty() && component.len() <= 255 && !component.contains(&0)
+                    !component.is_empty()
+                        && component.len() <= MAX_CANONICAL_COMPONENT_BYTES_V1
+                        && !component.contains(&0)
                 }),
                 IdentityStateSnafu {
                     reason: "path component is empty, too long, or contains NUL",

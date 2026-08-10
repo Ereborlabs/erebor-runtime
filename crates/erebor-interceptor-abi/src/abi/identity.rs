@@ -557,6 +557,53 @@ impl BoundedAdministrativeArgvV1 {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+pub struct ApprovedExecArgumentKeyV1 {
+    pub proof_id: Id128V1,
+    pub argument_index: u16,
+    pub argument_length: u16,
+    pub argument_bytes: [u8; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
+    pub reserved: [u8; 4],
+}
+
+impl Default for ApprovedExecArgumentKeyV1 {
+    fn default() -> Self {
+        Self {
+            proof_id: Id128V1::ZERO,
+            argument_index: 0,
+            argument_length: 0,
+            argument_bytes: [0; MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1],
+            reserved: [0; 4],
+        }
+    }
+}
+
+impl ApprovedExecArgumentKeyV1 {
+    #[must_use]
+    pub fn from_argument(
+        proof_id: Id128V1,
+        argument_index: usize,
+        argument: &[u8],
+    ) -> Option<Self> {
+        if proof_id.is_zero()
+            || argument_index >= MAX_ADMINISTRATIVE_ARGUMENTS_V1
+            || argument.len() > MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1
+            || argument.contains(&0)
+        {
+            return None;
+        }
+        let mut key = Self {
+            proof_id,
+            argument_index: u16::try_from(argument_index).ok()?,
+            argument_length: u16::try_from(argument.len()).ok()?,
+            ..Self::default()
+        };
+        key.argument_bytes[..argument.len()].copy_from_slice(argument);
+        Some(key)
+    }
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
 pub struct ApprovedExecSlotKeyV1 {
     pub node_boot_id: Id128V1,
@@ -769,6 +816,7 @@ mod tests {
         assert_eq!(size_of::<ExactExecutableCandidateV1>(), 40);
         assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
         assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 40);
+        assert_eq!(size_of::<ApprovedExecArgumentKeyV1>(), 4_120);
     }
 
     #[test]
@@ -796,5 +844,20 @@ mod tests {
         assert_eq!(&argv.argument_bytes[..7], b"bash-lc");
         assert!(BoundedAdministrativeArgvV1::from_arguments(&[b"ba\0sh"]).is_none());
         assert!(BoundedAdministrativeArgvV1::from_arguments::<&[u8]>(&[]).is_none());
+    }
+
+    #[test]
+    fn approved_exec_argument_key_is_exact_and_zero_padded() {
+        let proof_id = Id128V1::new(1, 2);
+        let key = ApprovedExecArgumentKeyV1::from_argument(proof_id, 3, b"--flag")
+            .expect("bounded argument key");
+
+        assert_eq!(key.proof_id, proof_id);
+        assert_eq!(key.argument_index, 3);
+        assert_eq!(key.argument_length, 6);
+        assert_eq!(&key.argument_bytes[..6], b"--flag");
+        assert!(key.argument_bytes[6..].iter().all(|byte| *byte == 0));
+        assert!(ApprovedExecArgumentKeyV1::from_argument(Id128V1::ZERO, 0, b"bash").is_none());
+        assert!(ApprovedExecArgumentKeyV1::from_argument(proof_id, 256, b"bash").is_none());
     }
 }
