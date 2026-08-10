@@ -65,6 +65,14 @@ pub struct ExactFileObjectConfig {
     pub filesystem_device: u64,
     pub inode: u64,
     pub inode_generation: u32,
+    pub canonical_component_hex: Vec<String>,
+    pub mount_relative_component_count: u16,
+    pub mount_root_filesystem_device: u64,
+    pub mount_root_inode: u64,
+    pub selected_mount_id_unique: u64,
+    pub mount_snapshot_digest_id: u64,
+    pub mount_topology_generation: u64,
+    pub mount_view_root_pid: u32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
@@ -219,11 +227,30 @@ impl NodeConfig {
             ensure!(
                 object.profile_generation_ref_id > 0
                     && object.exact_object_key_id > 0
+                    && object.exact_object_key_id < (1_u64 << 63)
                     && !object.object_class_id.is_empty()
                     && object.mount_namespace_inode > 0
                     && object.mount_id_unique > 0
                     && object.inode > 0
                     && object.inode_generation > 0
+                    && !object.canonical_component_hex.is_empty()
+                    && object.canonical_component_hex.len() <= 64
+                    && usize::from(object.mount_relative_component_count)
+                        <= object.canonical_component_hex.len()
+                    && object.mount_root_inode > 0
+                    && object.selected_mount_id_unique > 0
+                    && object.mount_snapshot_digest_id > 0
+                    && object.mount_topology_generation > 0
+                    && object.mount_view_root_pid > 0
+                    && object.canonical_component_hex.iter().all(|component| {
+                        hex::decode(component).is_ok_and(|bytes| {
+                            !bytes.is_empty()
+                                && bytes.len() <= 255
+                                && !bytes.contains(&0)
+                                && bytes.as_slice() != b"."
+                                && bytes.as_slice() != b".."
+                        })
+                    })
                     && exact_object_ids.insert((
                         object.profile_generation_ref_id,
                         object.exact_object_key_id,
@@ -385,6 +412,16 @@ mod tests {
             filesystem_device: 30,
             inode,
             inode_generation: 1,
+            canonical_component_hex: ["var", "run", "secret"]
+                .map(|component| hex::encode(component.as_bytes()))
+                .to_vec(),
+            mount_relative_component_count: 3,
+            mount_root_filesystem_device: 30,
+            mount_root_inode: 2,
+            selected_mount_id_unique: 20,
+            mount_snapshot_digest_id: 40,
+            mount_topology_generation: 1,
+            mount_view_root_pid: 1,
         }
     }
 }

@@ -60,7 +60,7 @@ fn encode_value(
         }
         serde_json::Value::Object(values) => {
             let mut fields = values.iter().collect::<Vec<_>>();
-            fields.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+            fields.sort_unstable_by_key(|(key, _)| *key);
             encoder.map(fields.len() as u64)?;
             for (key, value) in fields {
                 encoder.str(key)?;

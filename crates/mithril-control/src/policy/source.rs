@@ -9,6 +9,12 @@ use snafu::ResultExt as _;
 use crate::error::{PolicySourceSnafu, PolicyValidationSnafu};
 use crate::Result;
 
+use super::source_proof::{
+    AuthoritativeResultV1, FindingStateV1, ProofQualityPredicateV1, ProofQualityV1, ProviderV1,
+    ResourceSelectorV1, RuntimeOperationV1,
+};
+use super::source_response::{BlastRadiusLimitV1, NotificationRouteV1, ResponseBindingV1};
+
 pub const MAX_POLICY_SOURCE_BYTES: usize = 1_048_576;
 const MAX_POLICY_NODES: usize = 32_768;
 const MAX_POLICY_DEPTH: usize = 32;
@@ -313,13 +319,14 @@ pub struct EntryRoleAssignmentV1 {
     pub unknown_restricted_role_id: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RootClassificationV1 {
     ExactInitial,
     ConservativeExternalUnknown,
     QualifiedJoinedPurpose,
     ApprovedAdministrativeNextMatch,
+    UnresolvedProtected,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -531,8 +538,11 @@ pub enum EvaluationStageV1 {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RuleMatchV1 {
+    EntryAdmission(EntryAdmissionMatchV1),
     LocalPreEffect(LocalEffectMatchV1),
     NativeTransition(NativeTransitionMatchV1),
+    RemotePreAdmission(RemoteAdmissionMatchV1),
+    PostEffect(PostEffectMatchV1),
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -555,6 +565,18 @@ pub struct LocalEffectMatchV1 {
     pub operation_ids: Vec<String>,
     pub object: LocalObjectSelectorV1,
     pub binding_lifecycle_states: Vec<BindingLifecycleV1>,
+    pub required_proof: ProofQualityPredicateV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EntryAdmissionMatchV1 {
+    pub subject: CommonSubjectMatchV1,
+    pub runtime_operations: Vec<RuntimeOperationV1>,
+    pub root_classifications: Vec<RootClassificationV1>,
+    pub source_proof_qualities: Vec<ProofQualityV1>,
+    pub required_purpose_source_capability_ids: Vec<String>,
+    pub immutable_definition_digests: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -565,6 +587,45 @@ pub struct NativeTransitionMatchV1 {
     pub executable_object_ids: Vec<u64>,
     pub source_role_ids: Vec<String>,
     pub target_role_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteAdmissionMatchV1 {
+    pub subject: CommonSubjectMatchV1,
+    pub gate_capability_ids: Vec<String>,
+    pub providers: Vec<ProviderV1>,
+    pub provider_account_ids: Vec<String>,
+    pub operation_ids: Vec<u32>,
+    pub resources: Vec<ResourceSelectorV1>,
+    pub required_lease_permission_ids: Vec<u32>,
+    pub required_proof: ProofQualityPredicateV1,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PostEffectMatchV1 {
+    LocalCompletion {
+        subject: CommonSubjectMatchV1,
+        effect_families: Vec<EffectFamilyV1>,
+        operation_ids: Vec<String>,
+        authoritative_results: Vec<AuthoritativeResultV1>,
+        required_proof: ProofQualityPredicateV1,
+    },
+    ProviderResult {
+        providers: Vec<ProviderV1>,
+        provider_account_ids: Vec<String>,
+        operation_ids: Vec<u32>,
+        resources: Vec<ResourceSelectorV1>,
+        authoritative_results: Vec<AuthoritativeResultV1>,
+        required_proof: ProofQualityPredicateV1,
+    },
+    CorrelationFinding {
+        package_ids: Vec<String>,
+        reason_codes: Vec<String>,
+        finding_states: Vec<FindingStateV1>,
+        required_proof: ProofQualityPredicateV1,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -621,7 +682,7 @@ pub struct FallbackV1 {
     pub unknown_restricted_role_id: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FallbackConditionV1 {
     SourceGapped,
@@ -676,15 +737,41 @@ pub struct PermittedAuthorityDeltaV1 {
     pub to_physical_result: String,
     pub added_or_removed_operation_cells: Vec<String>,
     pub added_or_removed_transition_cells: Vec<String>,
-    pub maximum_blast_radius_digest: String,
+    pub maximum_blast_radius: BlastRadiusLimitV1,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct AuthorityBehaviorRuleV1 {
-    pub rule_id: String,
-    pub evaluation_stage: EvaluationStageV1,
-    pub requested_disposition: PolicyDispositionV1,
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AuthorityBehaviorRuleV1 {
+    RemoteAdmission {
+        rule_id: String,
+        authorization_interface_capability_id: String,
+        provider: ProviderV1,
+        provider_accounts: Vec<String>,
+        principal_or_lease_selectors: Vec<String>,
+        operations: Vec<u32>,
+        resources: Vec<ResourceSelectorV1>,
+        required_proof: ProofQualityPredicateV1,
+        requested_disposition: PolicyDispositionV1,
+        finding: Option<FindingSpecV1>,
+        response_binding_ids: Vec<String>,
+        budgets: BudgetSetV1,
+    },
+    PostEffectResult {
+        rule_id: String,
+        provider: ProviderV1,
+        provider_accounts: Vec<String>,
+        principal_or_lease_selectors: Vec<String>,
+        operations: Vec<u32>,
+        resources: Vec<ResourceSelectorV1>,
+        authoritative_results: Vec<AuthoritativeResultV1>,
+        required_proof: ProofQualityPredicateV1,
+        requested_disposition: PolicyDispositionV1,
+        finding: Option<FindingSpecV1>,
+        response_binding_ids: Vec<String>,
+        budgets: BudgetSetV1,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -700,21 +787,6 @@ pub struct CorrelationPackageBindingV1 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct NotificationRouteV1 {
-    pub route_id: String,
-    pub sink_binding_id: String,
-    pub minimum_severity: SeverityV1,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResponseBindingV1 {
-    pub binding_id: String,
-    pub action_id: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
 pub struct SourceCoverageHealthRuleV1 {
     pub health_rule_id: String,
     pub required_source_id: String,
@@ -722,6 +794,9 @@ pub struct SourceCoverageHealthRuleV1 {
     pub maximum_gap: String,
     pub on_gap: CoverageGapActionV1,
     pub finding: FindingSpecV1,
+    pub independent_admission_interface_binding_id: Option<String>,
+    pub independent_admission_capability_id: Option<String>,
+    pub independent_response_binding_ids: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

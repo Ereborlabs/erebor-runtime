@@ -10,7 +10,7 @@ use std::time::Duration;
 use tokio::sync::watch;
 
 use crate::epoch::NodeEpochs;
-use crate::error::{InterceptorSnafu, JsonSnafu, LocalTaskSnafu};
+use crate::error::{IdentityStateSnafu, InterceptorSnafu, JsonSnafu, LocalTaskSnafu};
 use crate::{
     NativeSecurityStateOwner, NodeConfig, NodeControlConnector, Result, TrustCache,
     WorkloadBindingOwner,
@@ -45,6 +45,7 @@ pub struct NodeChassis {
     local_server: Option<crate::RuntimeObservationServer>,
     trust: TrustCache,
     bindings: WorkloadBindingOwner,
+    policy: Option<crate::NodePolicyGenerationOwner>,
     readiness: watch::Sender<NodeReadinessV1>,
 }
 
@@ -86,18 +87,18 @@ impl NodeChassis {
                 .concat()
             )
         );
-        let policy_loaded = if config.policy_candidates.is_empty() {
-            false
+        let policy = if config.policy_candidates.is_empty() {
+            None
         } else {
-            crate::NodePolicyGenerationOwner::load_and_install(
+            Some(crate::NodePolicyGenerationOwner::load_and_install(
                 &config,
                 &host,
                 node_boot_id,
                 label_epoch,
                 &platform_scope_digest,
-            )?;
-            true
+            )?)
         };
+        let policy_loaded = policy.is_some();
         let identity = NativeSecurityStateOwner::new(node_boot_id, label_epoch);
         let reconciliation = identity.activate_with_effect_observation(&mut host, policy_loaded)?;
         let observations = crate::EffectObservationStore::default();
@@ -191,6 +192,7 @@ impl NodeChassis {
             local_server,
             trust,
             bindings,
+            policy,
             readiness,
         })
     }
@@ -202,7 +204,7 @@ impl NodeChassis {
 
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
         let effect_stop = Arc::new(AtomicBool::new(false));
-        let effect_task = self.effect_reader.take().map(|reader| {
+        let mut effect_task = self.effect_reader.take().map(|reader| {
             let stop = Arc::clone(&effect_stop);
             tokio::task::spawn_blocking(move || -> erebor_interceptor::Result<()> {
                 while !stop.load(Ordering::Acquire) {
@@ -211,12 +213,13 @@ impl NodeChassis {
                 Ok(())
             })
         });
-        let local_task = self.local_server.take().map(|server| {
+        let mut local_task = self.local_server.take().map(|server| {
             let local_shutdown = shutdown.clone();
             tokio::spawn(server.serve(local_shutdown))
         });
         let mut backoff = self.config.control.reconnect_minimum();
         let mut identity_healthy = true;
+        let mut run_error = None;
         let mut binding_reconciliation =
             self.config.binding_reconciliation_interval().map(|period| {
                 let mut interval = tokio::time::interval(period);
@@ -235,6 +238,11 @@ impl NodeChassis {
                 ) => result,
                 changed = shutdown.changed() => {
                     let _result = changed;
+                    break;
+                }
+                result = effect_reader_finished(&mut effect_task) => {
+                    run_error = result.err();
+                    effect_task = None;
                     break;
                 }
             };
@@ -256,6 +264,11 @@ impl NodeChassis {
                             }
                             changed = shutdown.changed() => {
                                 let _result = changed;
+                                break 'running;
+                            }
+                            result = effect_reader_finished(&mut effect_task) => {
+                                run_error = result.err();
+                                effect_task = None;
                                 break 'running;
                             }
                             () = next_reconciliation_tick(&mut binding_reconciliation) => {
@@ -291,6 +304,11 @@ impl NodeChassis {
                         let _result = changed;
                         break 'running;
                     }
+                    result = effect_reader_finished(&mut effect_task) => {
+                        run_error = result.err();
+                        effect_task = None;
+                        break 'running;
+                    }
                     () = next_reconciliation_tick(&mut binding_reconciliation) => {
                         if !self.reconcile_bindings().await {
                             identity_healthy = false;
@@ -312,22 +330,50 @@ impl NodeChassis {
         if let Some(host) = self.host.take() {
             host.shutdown().context(InterceptorSnafu)?;
         }
-        if let Some(task) = local_task {
+        if run_error.is_some() {
+            if let Some(task) = local_task.take() {
+                task.abort();
+                let _result = task.await;
+            }
+        } else if let Some(task) = local_task {
             task.await.context(LocalTaskSnafu)??;
+        }
+        if let Some(error) = run_error {
+            return Err(error);
         }
         Ok(())
     }
 
     async fn reconcile_bindings(&mut self) -> bool {
-        match self.host.as_ref() {
-            Some(host) => self
-                .bindings
-                .reconcile(host, &self.config.workload_bindings)
-                .await
-                .is_ok(),
-            None => false,
+        let Some(host) = self.host.as_ref() else {
+            return false;
+        };
+        if self
+            .bindings
+            .reconcile(host, &self.config.workload_bindings)
+            .await
+            .is_err()
+        {
+            return false;
         }
+        self.policy
+            .as_ref()
+            .is_none_or(|policy| policy.reconcile_mount_views(host).is_ok())
     }
+}
+
+async fn effect_reader_finished(
+    task: &mut Option<tokio::task::JoinHandle<std::result::Result<(), erebor_interceptor::Error>>>,
+) -> Result<()> {
+    let outcome = match task.as_mut() {
+        Some(task) => task.await.context(LocalTaskSnafu)?,
+        None => std::future::pending().await,
+    };
+    outcome.context(InterceptorSnafu)?;
+    IdentityStateSnafu {
+        reason: "effect observation reader stopped before node shutdown",
+    }
+    .fail()
 }
 
 async fn next_reconciliation_tick(interval: &mut Option<tokio::time::Interval>) {
@@ -364,7 +410,7 @@ fn registration(
 
 #[cfg(test)]
 mod tests {
-    use super::NodeReadinessV1;
+    use super::{effect_reader_finished, NodeReadinessV1};
 
     #[test]
     fn boot_admission_requires_complete_chassis_readiness_and_never_claims_prevention() {
@@ -384,5 +430,13 @@ mod tests {
             ..ready
         }
         .admits_new_work());
+    }
+
+    #[tokio::test]
+    async fn an_effect_reader_exit_is_a_node_failure() {
+        let mut task = Some(tokio::spawn(async { Ok(()) }));
+        assert!(effect_reader_finished(&mut task)
+            .await
+            .is_err_and(|error| error.to_string().contains("stopped before node shutdown")));
     }
 }

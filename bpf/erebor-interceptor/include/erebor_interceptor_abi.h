@@ -35,6 +35,12 @@ typedef __s32 int32_t;
 
 #define CONSERVATIVE_PROCESS_STATE_VECTOR_V1 1
 
+#define MAX_CANONICAL_PATH_COMPONENTS_V1 64
+
+#define MAX_CANONICAL_COMPONENT_BYTES_V1 255
+
+#define CANONICAL_COMPONENT_STORAGE_BYTES_V1 256
+
 enum binding_lifecycle_state_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
@@ -284,6 +290,7 @@ enum exact_object_binding_state_v1
  {
   exact_object_binding_state_v1_unknown = 0,
   exact_object_binding_state_v1_read_back = 1,
+  exact_object_binding_state_v1_active_dynamic = 2,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum exact_object_binding_state_v1 exact_object_binding_state_v1;
@@ -362,6 +369,21 @@ enum kernel_effect_operation_v1
 typedef enum kernel_effect_operation_v1 kernel_effect_operation_v1;
 #else
 typedef uint16_t kernel_effect_operation_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum mount_topology_state_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  mount_topology_state_v1_unknown = 0,
+  mount_topology_state_v1_dirty = 1,
+  mount_topology_state_v1_clean = 2,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum mount_topology_state_v1 mount_topology_state_v1;
+#else
+typedef uint8_t mount_topology_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum pending_exec_state_v1
@@ -538,6 +560,27 @@ typedef struct id128_v1 {
   uint64_t low;
 } id128_v1;
 #define id128_v1_ZERO (id128_v1){ .high = 0, .low = 0 }
+
+typedef struct canonical_mount_root_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint64_t mount_namespace_inode;
+  struct id128_v1 binding_id;
+  uint64_t topology_generation;
+  uint64_t filesystem_device;
+  uint64_t root_inode;
+} canonical_mount_root_key_v1;
+
+typedef struct canonical_mount_root_v1 {
+  uint64_t selected_mount_id_unique;
+  uint64_t snapshot_digest_id;
+  uint32_t graph_prefix_state_id;
+  uint32_t reserved;
+} canonical_mount_root_v1;
+
+typedef struct canonical_path_component_v1 {
+  uint16_t length;
+  uint8_t bytes[CANONICAL_COMPONENT_STORAGE_BYTES_V1];
+} canonical_path_component_v1;
 
 typedef struct approved_exec_slot_key_v1 {
   struct id128_v1 node_boot_id;
@@ -807,6 +850,36 @@ typedef struct kernel_real_parent_interval_v1 {
   uint8_t reserved[6];
 } kernel_real_parent_interval_v1;
 
+typedef struct mount_security_view_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint64_t mount_namespace_inode;
+  struct id128_v1 binding_id;
+} mount_security_view_key_v1;
+
+typedef struct mount_mutation_attempt_v1 {
+  struct mount_security_view_key_v1 view_key;
+  uint64_t topology_generation;
+  uint64_t transition_version;
+  uint8_t active;
+  uint8_t reserved[7];
+} mount_mutation_attempt_v1;
+
+typedef struct mount_reconciliation_proposal_v1 {
+  uint64_t topology_generation;
+  uint64_t snapshot_digest_id;
+  uint64_t expected_transition_version;
+  uint64_t transition_version;
+} mount_reconciliation_proposal_v1;
+
+typedef struct mount_security_view_state_v1 {
+  uint64_t topology_generation;
+  uint64_t snapshot_digest_id;
+  uint64_t pending_mutations;
+  mount_topology_state_v1 state;
+  uint8_t reserved[7];
+  uint64_t transition_version;
+} mount_security_view_state_v1;
+
 typedef struct pending_exec_v1 {
   struct id128_v1 pending_exec_id;
   uint64_t task_cookie;
@@ -848,6 +921,29 @@ typedef struct physical_decision_v1 {
   uint32_t transition_id;
   uint32_t exception_numeric_handle;
 } physical_decision_v1;
+
+typedef struct path_graph_state_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint32_t state_id;
+  uint32_t reserved;
+} path_graph_state_key_v1;
+
+typedef struct path_graph_terminal_v1 {
+  uint64_t composite_atom_id;
+  uint64_t rule_numeric_id;
+} path_graph_terminal_v1;
+
+typedef struct path_graph_transition_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint32_t current_state_id;
+  struct canonical_path_component_v1 component;
+  uint16_t reserved;
+} path_graph_transition_key_v1;
+
+typedef struct path_graph_transition_v1 {
+  uint32_t next_state_id;
+  uint32_t reserved;
+} path_graph_transition_v1;
 
 typedef struct profile_generation_descriptor_v1 {
   struct id128_v1 node_boot_id;

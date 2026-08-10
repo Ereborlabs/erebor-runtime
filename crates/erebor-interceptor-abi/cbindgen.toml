@@ -28,6 +28,9 @@ rename_variants = "SnakeCase"
 [export]
 include = [
   "BindingLifecycleStateV1",
+  "CanonicalMountRootKeyV1",
+  "CanonicalMountRootV1",
+  "CanonicalPathComponentV1",
   "ApprovedExecSlotKeyV1",
   "ApprovedExecSlotStateV1",
   "ApprovedExecSlotV1",
@@ -68,12 +71,21 @@ include = [
   "KernelRealParentIntervalV1",
   "KernelEffectFamilyV1",
   "KernelEffectOperationV1",
+  "MountMutationAttemptV1",
+  "MountReconciliationProposalV1",
+  "MountSecurityViewKeyV1",
+  "MountSecurityViewStateV1",
+  "MountTopologyStateV1",
   "PendingExecStateV1",
   "PendingExecV1",
   "PendingAdministrativeMatchStateV1",
   "PendingAdministrativeMatchV1",
   "PhysicalDecisionKindV1",
   "PhysicalDecisionV1",
+  "PathGraphStateKeyV1",
+  "PathGraphTerminalV1",
+  "PathGraphTransitionKeyV1",
+  "PathGraphTransitionV1",
   "PolicyGenerationStateV1",
   "ProfileGenerationDescriptorV1",
   "ProcessSecurityStateKindV1",
@@ -94,6 +106,9 @@ include = [
 
 [export.rename]
 "BindingLifecycleStateV1" = "binding_lifecycle_state_v1"
+"CanonicalMountRootKeyV1" = "canonical_mount_root_key_v1"
+"CanonicalMountRootV1" = "canonical_mount_root_v1"
+"CanonicalPathComponentV1" = "canonical_path_component_v1"
 "ApprovedExecSlotKeyV1" = "approved_exec_slot_key_v1"
 "ApprovedExecSlotStateV1" = "approved_exec_slot_state_v1"
 "ApprovedExecSlotV1" = "approved_exec_slot_v1"
@@ -134,12 +149,21 @@ include = [
 "KernelRealParentIntervalV1" = "kernel_real_parent_interval_v1"
 "KernelEffectFamilyV1" = "kernel_effect_family_v1"
 "KernelEffectOperationV1" = "kernel_effect_operation_v1"
+"MountMutationAttemptV1" = "mount_mutation_attempt_v1"
+"MountReconciliationProposalV1" = "mount_reconciliation_proposal_v1"
+"MountSecurityViewKeyV1" = "mount_security_view_key_v1"
+"MountSecurityViewStateV1" = "mount_security_view_state_v1"
+"MountTopologyStateV1" = "mount_topology_state_v1"
 "PendingExecStateV1" = "pending_exec_state_v1"
 "PendingExecV1" = "pending_exec_v1"
 "PendingAdministrativeMatchStateV1" = "pending_administrative_match_state_v1"
 "PendingAdministrativeMatchV1" = "pending_administrative_match_v1"
 "PhysicalDecisionKindV1" = "physical_decision_kind_v1"
 "PhysicalDecisionV1" = "physical_decision_v1"
+"PathGraphStateKeyV1" = "path_graph_state_key_v1"
+"PathGraphTerminalV1" = "path_graph_terminal_v1"
+"PathGraphTransitionKeyV1" = "path_graph_transition_key_v1"
+"PathGraphTransitionV1" = "path_graph_transition_v1"
 "PolicyGenerationStateV1" = "policy_generation_state_v1"
 "ProfileGenerationDescriptorV1" = "profile_generation_descriptor_v1"
 "ProcessSecurityStateKindV1" = "process_security_state_kind_v1"

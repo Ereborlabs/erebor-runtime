@@ -26,6 +26,10 @@ struct cgroup___new {
     struct cgroup *ancestors[];
 } __attribute__((preserve_access_index));
 
+struct mount_security_view_lock_v1 {
+    struct bpf_spin_lock lock;
+};
+
 #define MAX_CGROUP_ANCESTOR_STEPS_V1 64
 
 struct identity_scratch_v1 {
@@ -46,6 +50,13 @@ struct identity_scratch_v1 {
     effect_decision_key_v1 effect_key;
     effect_default_key_v1 effect_default;
     exact_file_object_key_v1 file_object;
+    mount_security_view_key_v1 mount_view_key;
+    canonical_mount_root_key_v1 mount_root_key;
+    path_graph_transition_key_v1 path_transition_key;
+    path_graph_state_key_v1 path_state_key;
+    path_graph_terminal_v1 path_terminal;
+    canonical_path_component_v1
+        path_components[MAX_CANONICAL_PATH_COMPONENTS_V1];
     effect_observation_v1 observation;
     __u8 administrative_argument[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 + 1];
 };
@@ -217,6 +228,69 @@ struct {
     __type(key, exact_file_object_key_v1);
     __type(value, exact_object_binding_v1);
 } exact_file_objects SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, mount_security_view_key_v1);
+    __type(value, mount_security_view_state_v1);
+} mount_security_views SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, mount_security_view_key_v1);
+    __type(value, struct mount_security_view_lock_v1);
+} mount_security_view_locks SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, mount_security_view_key_v1);
+    __type(value, mount_reconciliation_proposal_v1);
+} mount_reconciliation_proposals SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, mount_security_view_key_v1);
+    __type(value, __u64);
+} mount_mutation_epochs SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, canonical_mount_root_key_v1);
+    __type(value, canonical_mount_root_v1);
+} canonical_mount_roots SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, path_graph_transition_key_v1);
+    __type(value, path_graph_transition_v1);
+} path_graph_exact_transitions SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, path_graph_state_key_v1);
+    __type(value, path_graph_transition_v1);
+} path_graph_wildcard_transitions SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, path_graph_state_key_v1);
+    __type(value, path_graph_terminal_v1);
+} path_graph_terminals SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __type(key, int);
+    __type(value, mount_mutation_attempt_v1);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} mount_mutation_attempts SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);

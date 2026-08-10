@@ -6,6 +6,8 @@ mod rollback;
 mod signature;
 mod simulation;
 mod source;
+mod source_proof;
+mod source_response;
 
 pub use artifact::PolicyArtifactOwner;
 pub use compiler::{
@@ -22,7 +24,9 @@ pub use signature::{
     SignatureAlgorithmV1, SignedWorkloadProtectionProfileV1,
 };
 pub use simulation::{
-    EffectSimulationV1, HardSafetyConditionV1, PolicySimulator, SimulatedDispositionV1,
-    SimulatedPhysicalResultV1,
+    EffectSimulationV1, HardSafetyConditionV1, NonPreventionReasonV1, PolicySimulator,
+    SimulatedDispositionV1, SimulatedPhysicalResultV1,
 };
 pub use source::*;
+pub use source_proof::*;
+pub use source_response::*;

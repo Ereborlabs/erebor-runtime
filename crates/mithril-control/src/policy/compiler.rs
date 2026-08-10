@@ -11,8 +11,9 @@ use super::canonical::canonical_cbor;
 use super::source::{
     duplicate_ids, ordered_unique, BindingLifecycleV1, DetectionDispositionRuleV1, EffectFamilyV1,
     EntryKindV1, EvaluationStageV1, LocalObjectSelectorV1, PolicyDispositionV1, PolicyDocumentV1,
-    ProfileModeV1, RuleMatchV1, StateBitScopeV1,
+    PostEffectMatchV1, ProfileModeV1, RuleMatchV1, StateBitScopeV1,
 };
+use super::source_proof::ProofQualityPredicateV1;
 use crate::error::PolicyValidationSnafu;
 use crate::Result;
 
@@ -45,6 +46,7 @@ pub struct CompiledDecisionCellV1 {
     pub key: StaticDecisionKeyV1,
     pub physical_result: CompiledPhysicalResultV1,
     pub errno: Option<i16>,
+    pub action_plan_digest: String,
     pub source_rule_ids: Vec<String>,
 }
 
@@ -123,6 +125,7 @@ impl PolicyCompiler {
         validate_ids(document)?;
         validate_references(document)?;
         validate_states(document)?;
+        validate_supporting_definitions(document)?;
         validate_rules(document)?;
         validate_role_reachability(document)?;
         validate_rollout(document)?;
@@ -143,12 +146,14 @@ impl PolicyCompiler {
                 }
                 .build()
             })?;
+            let action_plan_digest = local_action_plan_digest(document.profile_id(), rule, effect)?;
             let dimensions = RuleDimensions::new(document, effect)?;
             for key in dimensions.keys(document.profile_id())? {
                 contributions.entry(key).or_default().push(RuleDecision {
                     rule,
                     physical_result,
                     errno: rule.errno.map(super::source::ErrnoV1::negative),
+                    action_plan_digest: action_plan_digest.clone(),
                 });
                 check(
                     document.profile_id(),
@@ -158,10 +163,58 @@ impl PolicyCompiler {
                 )?;
             }
         }
-        contributions
+        let mut cells = contributions
             .into_iter()
             .map(|(key, candidates)| resolve_cell(document.profile_id(), key, &candidates))
-            .collect()
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .map(|cell| (cell.key.clone(), cell))
+            .collect::<BTreeMap<_, _>>();
+        let mut default_cells = BTreeMap::<StaticDecisionKeyV1, CompiledDecisionCellV1>::new();
+        for default in &document.effect_family_defaults {
+            let physical_result =
+                disposition_result(default.requested_disposition).ok_or_else(|| {
+                    PolicyValidationSnafu {
+                        policy_id: document.profile_id(),
+                        code: "CFG_STAGE_DISPOSITION",
+                        reason: "an effect-family default cannot REJECT a local effect".to_owned(),
+                    }
+                    .build()
+                })?;
+            let action_plan_digest =
+                canonical_cbor(document.profile_id(), default).map(|bytes| digest(&bytes))?;
+            for key in default_keys(document, default)? {
+                let candidate = CompiledDecisionCellV1 {
+                    key: key.clone(),
+                    physical_result,
+                    errno: default.errno.map(super::source::ErrnoV1::negative),
+                    action_plan_digest: action_plan_digest.clone(),
+                    source_rule_ids: Vec::new(),
+                };
+                if let Some(existing) = default_cells.get(&key) {
+                    check(
+                        document.profile_id(),
+                        existing.physical_result == candidate.physical_result
+                            && existing.errno == candidate.errno
+                            && existing.action_plan_digest == candidate.action_plan_digest,
+                        "CFG_EXACT_KEY_CONFLICT",
+                        "unequal effect-family defaults overlap one exact compiled key",
+                    )?;
+                } else {
+                    default_cells.insert(key, candidate);
+                }
+            }
+        }
+        for (key, default) in default_cells {
+            cells.entry(key).or_insert(default);
+            check(
+                document.profile_id(),
+                cells.len() <= MAX_COMPILED_CELLS,
+                "CFG_MAP_CAPACITY",
+                "expanded decision cells exceed the verified map capacity",
+            )?;
+        }
+        Ok(cells.into_values().collect())
     }
 }
 
@@ -215,6 +268,7 @@ struct RuleDecision<'a> {
     rule: &'a DetectionDispositionRuleV1,
     physical_result: CompiledPhysicalResultV1,
     errno: Option<i16>,
+    action_plan_digest: String,
 }
 
 fn resolve_cell(
@@ -224,7 +278,9 @@ fn resolve_cell(
 ) -> Result<CompiledDecisionCellV1> {
     let first = &candidates[0];
     if candidates.iter().all(|candidate| {
-        candidate.physical_result == first.physical_result && candidate.errno == first.errno
+        candidate.physical_result == first.physical_result
+            && candidate.errno == first.errno
+            && candidate.action_plan_digest == first.action_plan_digest
     }) {
         let mut source_rule_ids = candidates
             .iter()
@@ -235,6 +291,7 @@ fn resolve_cell(
             key,
             physical_result: first.physical_result,
             errno: first.errno,
+            action_plan_digest: first.action_plan_digest.clone(),
             source_rule_ids,
         });
     }
@@ -261,17 +318,112 @@ fn resolve_cell(
         key,
         physical_result: winner.physical_result,
         errno: winner.errno,
+        action_plan_digest: winner.action_plan_digest.clone(),
         source_rule_ids: vec![winner.rule.rule_id.clone()],
     })
 }
 
+#[derive(Serialize)]
+struct LocalActionPlan<'a> {
+    evaluation_stage: EvaluationStageV1,
+    requested_disposition: PolicyDispositionV1,
+    errno: Option<super::source::ErrnoV1>,
+    finding: &'a Option<super::source::FindingSpecV1>,
+    response_binding_ids: &'a [String],
+    required_proof: &'a ProofQualityPredicateV1,
+    fallback_by_condition: &'a [super::source::FallbackV1],
+    budgets: &'a super::source::BudgetSetV1,
+    exception_ids: &'a [String],
+    valid_from_utc_ns: Option<i64>,
+    valid_until_utc_ns: Option<i64>,
+}
+
+fn local_action_plan_digest(
+    policy_id: &str,
+    rule: &DetectionDispositionRuleV1,
+    effect: &super::source::LocalEffectMatchV1,
+) -> Result<String> {
+    let plan = LocalActionPlan {
+        evaluation_stage: rule.evaluation_stage,
+        requested_disposition: rule.requested_disposition,
+        errno: rule.errno,
+        finding: &rule.finding,
+        response_binding_ids: &rule.response_binding_ids,
+        required_proof: &effect.required_proof,
+        fallback_by_condition: &rule.fallback_by_condition,
+        budgets: &rule.budgets,
+        exception_ids: &rule.exception_ids,
+        valid_from_utc_ns: rule.valid_from_utc_ns,
+        valid_until_utc_ns: rule.valid_until_utc_ns,
+    };
+    canonical_cbor(policy_id, &plan).map(|bytes| digest(&bytes))
+}
+
 fn physical_result(rule: &DetectionDispositionRuleV1) -> Option<CompiledPhysicalResultV1> {
-    match rule.requested_disposition {
+    disposition_result(rule.requested_disposition)
+}
+
+fn disposition_result(disposition: PolicyDispositionV1) -> Option<CompiledPhysicalResultV1> {
+    match disposition {
         PolicyDispositionV1::Allow => Some(CompiledPhysicalResultV1::AllowEffect),
         PolicyDispositionV1::Alert => Some(CompiledPhysicalResultV1::AuditAllowEffect),
         PolicyDispositionV1::Deny => Some(CompiledPhysicalResultV1::SimulatablePolicyDeny),
         PolicyDispositionV1::Reject => None,
     }
+}
+
+fn default_keys(
+    document: &PolicyDocumentV1,
+    default: &super::source::EffectFamilyDefaultV1,
+) -> Result<Vec<StaticDecisionKeyV1>> {
+    let whole = &document.protected_universe;
+    let mut keys = Vec::new();
+    for role_id in &default.role_ids {
+        let role = document
+            .roles
+            .iter()
+            .find(|role| role.role_id == *role_id)
+            .ok_or_else(|| {
+                PolicyValidationSnafu {
+                    policy_id: document.profile_id(),
+                    code: "CFG_ROLE_REFERENCE",
+                    reason: format!("effect-family default has unknown role `{role_id}`"),
+                }
+                .build()
+            })?;
+        let dimensions = RuleDimensions {
+            workload_selectors: whole
+                .workload_selector_ids
+                .iter()
+                .map(String::as_str)
+                .collect(),
+            protected_scopes: whole
+                .protected_scope_ids
+                .iter()
+                .map(String::as_str)
+                .collect(),
+            execution_sets: whole.execution_set_ids.iter().map(String::as_str).collect(),
+            entry_kinds: role.permitted_entry_kinds.clone(),
+            roles: vec![role_id],
+            process_states: vec![role.default_process_state_id.as_str()],
+            effect_families: vec![default.effect_family],
+            operations: default.operations.iter().map(String::as_str).collect(),
+            objects: whole
+                .object_class_ids
+                .iter()
+                .map(|id| format!("CLASS:{id}"))
+                .collect(),
+            lifecycles: vec![
+                BindingLifecycleV1::Preparing,
+                BindingLifecycleV1::Active,
+                BindingLifecycleV1::Draining,
+                BindingLifecycleV1::Terminating,
+                BindingLifecycleV1::Tombstoned,
+            ],
+        };
+        keys.extend(dimensions.keys(document.profile_id())?);
+    }
+    Ok(keys)
 }
 
 struct RuleDimensions<'a> {
@@ -310,6 +462,13 @@ impl<'a> RuleDimensions<'a> {
                     .process_state_definitions
                     .iter()
                     .map(|state| state.process_state_id.as_str())
+                    .filter(|state| {
+                        !effect
+                            .subject
+                            .forbidden_process_state_ids
+                            .iter()
+                            .any(|forbidden| forbidden.as_str() == *state)
+                    })
                     .collect()
             } else {
                 effect
@@ -349,6 +508,12 @@ impl<'a> RuleDimensions<'a> {
             self.objects.len(),
             self.lifecycles.len(),
         ];
+        check(
+            policy_id,
+            lengths.iter().all(|length| *length > 0),
+            "CFG_EMPTY_EXPANSION",
+            "a local rule selector expands to no signed decision cells",
+        )?;
         let count = lengths
             .into_iter()
             .try_fold(1_usize, usize::checked_mul)
@@ -540,7 +705,14 @@ fn validate_ids(document: &PolicyDocumentV1) -> Result<()> {
                 .iter()
                 .flat_map(|rule| match &rule.rule_match {
                     RuleMatchV1::LocalPreEffect(effect) => effect.operation_ids.iter(),
-                    RuleMatchV1::NativeTransition(_) => [].iter(),
+                    RuleMatchV1::PostEffect(PostEffectMatchV1::LocalCompletion {
+                        operation_ids,
+                        ..
+                    }) => operation_ids.iter(),
+                    RuleMatchV1::EntryAdmission(_)
+                    | RuleMatchV1::NativeTransition(_)
+                    | RuleMatchV1::RemotePreAdmission(_)
+                    | RuleMatchV1::PostEffect(_) => [].iter(),
                 }),
         )
     {
@@ -677,6 +849,714 @@ fn validate_states(document: &PolicyDocumentV1) -> Result<()> {
     Ok(())
 }
 
+fn validate_supporting_definitions(document: &PolicyDocumentV1) -> Result<()> {
+    let policy_id = document.profile_id();
+    let roles = document
+        .roles
+        .iter()
+        .map(|role| role.role_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let routes = document
+        .notification_routes
+        .iter()
+        .map(|route| route.route_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let responses = document
+        .response_bindings
+        .iter()
+        .map(|binding| binding.binding_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let exceptions = document
+        .exceptions
+        .iter()
+        .map(|exception| exception.exception_id.as_str())
+        .collect::<BTreeSet<_>>();
+    check_unique(
+        policy_id,
+        document
+            .notification_routes
+            .iter()
+            .map(|route| route.route_id.as_str()),
+        "notification route",
+    )?;
+    check_unique(
+        policy_id,
+        document
+            .response_bindings
+            .iter()
+            .map(|binding| binding.binding_id.as_str()),
+        "response binding",
+    )?;
+    check_unique(
+        policy_id,
+        document
+            .exceptions
+            .iter()
+            .map(|exception| exception.exception_id.as_str()),
+        "exception",
+    )?;
+    for route in &document.notification_routes {
+        check(
+            policy_id,
+            valid_local_id(&route.route_id)
+                && valid_local_id(&route.sink_binding_id)
+                && !route.grouping_fields.is_empty()
+                && ordered_unique(&route.grouping_fields)
+                && !route.allowed_evidence_fields.is_empty()
+                && ordered_unique(&route.allowed_evidence_fields)
+                && valid_duration(&route.dedupe_window, true),
+            "CFG_NOTIFICATION_ROUTE",
+            &format!("notification route `{}` is invalid", route.route_id),
+        )?;
+    }
+    for binding in &document.response_bindings {
+        check(
+            policy_id,
+            valid_local_id(&binding.binding_id)
+                && proof_predicate_is_ordered(&binding.required_proof)
+                && valid_duration(&binding.watch_interval, false)
+                && response_contract_is_compatible(binding),
+            "CFG_RESPONSE_BINDING",
+            &format!(
+                "response binding `{}` has an incompatible exact contract",
+                binding.binding_id
+            ),
+        )?;
+    }
+    for default in &document.effect_family_defaults {
+        check(
+            policy_id,
+            !default.role_ids.is_empty()
+                && ordered_unique(&default.role_ids)
+                && default
+                    .role_ids
+                    .iter()
+                    .all(|role| roles.contains(role.as_str()))
+                && !default.operations.is_empty()
+                && ordered_unique(&default.operations)
+                && default
+                    .operations
+                    .iter()
+                    .all(|operation| operation_belongs_to_family(default.effect_family, operation))
+                && matches!(
+                    default.requested_disposition,
+                    PolicyDispositionV1::Allow
+                        | PolicyDispositionV1::Alert
+                        | PolicyDispositionV1::Deny
+                )
+                && (default.requested_disposition == PolicyDispositionV1::Deny)
+                    == default.errno.is_some()
+                && (default.requested_disposition != PolicyDispositionV1::Alert
+                    || default.finding.is_some()),
+            "CFG_EFFECT_DEFAULT",
+            "effect-family defaults must be exact, ordered local decisions",
+        )?;
+        if let Some(finding) = &default.finding {
+            validate_finding(policy_id, finding, &routes)?;
+        }
+    }
+    for posture in [
+        &document.default_postures.missing_task_identity,
+        &document.default_postures.required_classifier_unknown,
+        &document.default_postures.unresolved_or_external_root,
+    ] {
+        check(
+            policy_id,
+            posture.requested_disposition != PolicyDispositionV1::Allow
+                && posture
+                    .unknown_restricted_role_id
+                    .as_ref()
+                    .is_none_or(|role| roles.contains(role.as_str()))
+                && (posture.requested_disposition != PolicyDispositionV1::Alert
+                    || posture.unknown_restricted_role_id.is_some()),
+            "CFG_DEFAULT_POSTURE",
+            "an alerting default posture needs an installed restricted role",
+        )?;
+        validate_finding(policy_id, &posture.finding, &routes)?;
+    }
+    for rule in &document.rules {
+        check(
+            policy_id,
+            ordered_unique(&rule.response_binding_ids)
+                && rule
+                    .response_binding_ids
+                    .iter()
+                    .all(|binding| responses.contains(binding.as_str()))
+                && ordered_unique(&rule.exception_ids)
+                && rule
+                    .exception_ids
+                    .iter()
+                    .all(|exception| exceptions.contains(exception.as_str()))
+                && rule.exception_ids.len() <= 1
+                && ordered_unique(&rule.overrides_rule_ids)
+                && budget_is_empty(&rule.budgets)
+                && (rule.finding.is_some()
+                    || (rule.response_binding_ids.is_empty()
+                        && rule.requested_disposition != PolicyDispositionV1::Alert))
+                && match (rule.valid_from_utc_ns, rule.valid_until_utc_ns) {
+                    (Some(from), Some(until)) => until > from,
+                    _ => true,
+                },
+            "CFG_RULE_ACTION",
+            &format!("rule `{}` has an invalid action plan", rule.rule_id),
+        )?;
+        if let Some(finding) = &rule.finding {
+            validate_finding(policy_id, finding, &routes)?;
+        }
+        check(
+            policy_id,
+            ordered_unique(
+                &rule
+                    .fallback_by_condition
+                    .iter()
+                    .map(|fallback| fallback.condition)
+                    .collect::<Vec<_>>(),
+            ),
+            "CFG_FALLBACK_ORDER",
+            &format!(
+                "rule `{}` fallbacks must be sorted and unique",
+                rule.rule_id
+            ),
+        )?;
+        for fallback in &rule.fallback_by_condition {
+            check(
+                policy_id,
+                fallback_legal(rule.evaluation_stage, fallback.requested_disposition)
+                    && (fallback.requested_disposition == PolicyDispositionV1::Deny)
+                        == fallback.errno.is_some()
+                    && fallback
+                        .unknown_restricted_role_id
+                        .as_ref()
+                        .is_none_or(|role| roles.contains(role.as_str()))
+                    && (fallback.requested_disposition != PolicyDispositionV1::Alert
+                        || fallback.unknown_restricted_role_id.is_some()),
+                "CFG_FALLBACK_STAGE",
+                &format!("rule `{}` has an unsafe fallback", rule.rule_id),
+            )?;
+            validate_finding(policy_id, &fallback.finding, &routes)?;
+        }
+    }
+    validate_exceptions(document, &roles)?;
+    validate_authority_rules(document, &routes, &responses)?;
+    validate_coverage_rules(document, &routes, &responses)?;
+    Ok(())
+}
+
+fn validate_finding(
+    policy_id: &str,
+    finding: &super::source::FindingSpecV1,
+    routes: &BTreeSet<&str>,
+) -> Result<()> {
+    check(
+        policy_id,
+        valid_registry_symbol(&finding.reason_code)
+            && ordered_unique(&finding.route_ids)
+            && finding
+                .route_ids
+                .iter()
+                .all(|route| routes.contains(route.as_str()))
+            && finding
+                .title_template_id
+                .as_ref()
+                .is_none_or(|id| valid_local_id(id)),
+        "CFG_FINDING",
+        "finding reason, routes, or title template is invalid",
+    )
+}
+
+fn budget_is_empty(budget: &super::source::BudgetSetV1) -> bool {
+    budget.rate_limits.is_empty()
+        && budget.concurrency_limits.is_empty()
+        && budget.maximum_lifetime.is_none()
+        && budget.automatic_response_limit.is_none()
+}
+
+fn fallback_legal(stage: EvaluationStageV1, disposition: PolicyDispositionV1) -> bool {
+    match stage {
+        EvaluationStageV1::EntryAdmission | EvaluationStageV1::RemotePreAdmission => matches!(
+            disposition,
+            PolicyDispositionV1::Alert | PolicyDispositionV1::Reject
+        ),
+        EvaluationStageV1::NativeTransition | EvaluationStageV1::LocalPreEffect => matches!(
+            disposition,
+            PolicyDispositionV1::Alert | PolicyDispositionV1::Deny
+        ),
+        EvaluationStageV1::PostEffect => disposition == PolicyDispositionV1::Alert,
+    }
+}
+
+fn response_contract_is_compatible(binding: &super::source_response::ResponseBindingV1) -> bool {
+    use super::source_response::{
+        BlastRadiusLimitV1 as Blast, PhysicalPostconditionV1 as Post,
+        ResponseActionSpecV1 as Action, TargetRevalidationV1 as Target,
+    };
+
+    matches!(
+        (
+            &binding.action_spec,
+            binding.target_revalidation,
+            binding.physical_postcondition,
+            &binding.maximum_blast_radius
+        ),
+        (
+            Action::RestrictLineage,
+            Target::LineageRootAndCompleteEffectiveResponseSet,
+            Post::ResponseSetInstalledAndDescendantsReconciled,
+            Blast::Local { .. }
+        ) | (
+            Action::FenceSockets,
+            Target::SocketCookieProvenanceAndLiveBinding,
+            Post::SocketSetFencedAndExistingFlowOraclePassed,
+            Blast::Local { .. }
+        ) | (
+            Action::FreezeCgroup,
+            Target::CgroupFdNonceAndMemberSet,
+            Post::CgroupFrozenAndPacketFenceActive,
+            Blast::Local { .. }
+        ) | (
+            Action::TerminateProcessPidfd,
+            Target::ProcessPidfdTaskCookieStarttimeCgroupBinding,
+            Post::ProcessStoppedViaPidfd,
+            Blast::Local { .. }
+        ) | (
+            Action::RejectKubernetesReplacement { .. },
+            Target::KubernetesUidResourceVersion,
+            Post::ReplacementRejectedThroughWatchWatermark,
+            Blast::Kubernetes { .. }
+        ) | (
+            Action::RevokeCredential { .. },
+            Target::ProviderStableIdRevisionAndAuthority,
+            Post::ProviderCredentialActionReadBack,
+            Blast::Credential { .. }
+        ) | (
+            Action::DisableMeshDevice { .. },
+            Target::ProviderStableIdRevisionAndAuthority,
+            Post::MeshDeviceDisabledAndHandshakeRejected,
+            Blast::Mesh { .. }
+        ) | (
+            Action::QuarantineArtifact { .. },
+            Target::ArtifactImmutableDigestAndStoreRevision,
+            Post::ArtifactQuarantinedAndConsumerLoadRejected,
+            Blast::Artifact { .. }
+        ) | (
+            Action::SuspendInstallation { .. },
+            Target::ProviderStableIdRevisionAndAuthority,
+            Post::ProviderOperationSpecificPostcondition,
+            Blast::SourceControl { .. }
+        ) | (
+            Action::ProviderSpecific { .. },
+            Target::ProviderStableIdRevisionAndAuthority,
+            Post::ProviderOperationSpecificPostcondition,
+            Blast::ProviderResources { .. }
+        )
+    ) && blast_radius_is_bounded(&binding.maximum_blast_radius)
+}
+
+fn blast_radius_is_bounded(limit: &super::source_response::BlastRadiusLimitV1) -> bool {
+    use super::source_response::BlastRadiusLimitV1 as Blast;
+    match limit {
+        Blast::Local {
+            permitted_target_selector_ids,
+            process_count,
+            execution_set_count,
+            socket_count,
+            node_count,
+        } => {
+            ordered_unique(permitted_target_selector_ids)
+                && [
+                    *process_count,
+                    *execution_set_count,
+                    *socket_count,
+                    *node_count,
+                ]
+                .into_iter()
+                .all(|count| count > 0)
+        }
+        Blast::Kubernetes {
+            permitted_namespace_uids,
+            object_count,
+            controller_count,
+            node_count,
+        } => {
+            ordered_unique(permitted_namespace_uids)
+                && [*object_count, *controller_count, *node_count]
+                    .into_iter()
+                    .all(|count| count > 0)
+        }
+        Blast::Credential {
+            permitted_provider_account_ids,
+            session_count,
+            principal_count,
+            role_count,
+            account_count,
+        } => {
+            ordered_unique(permitted_provider_account_ids)
+                && [
+                    *session_count,
+                    *principal_count,
+                    *role_count,
+                    *account_count,
+                ]
+                .into_iter()
+                .all(|count| count > 0)
+        }
+        Blast::Mesh {
+            permitted_tailnet_or_tenant_ids,
+            device_count,
+            route_count,
+            auth_key_count,
+        } => {
+            ordered_unique(permitted_tailnet_or_tenant_ids)
+                && [*device_count, *route_count, *auth_key_count]
+                    .into_iter()
+                    .all(|count| count > 0)
+        }
+        Blast::SourceControl {
+            permitted_organization_ids,
+            installation_count,
+            repository_count,
+            ref_or_pr_count,
+        } => {
+            ordered_unique(permitted_organization_ids)
+                && [*installation_count, *repository_count, *ref_or_pr_count]
+                    .into_iter()
+                    .all(|count| count > 0)
+        }
+        Blast::Artifact {
+            permitted_store_ids,
+            artifact_count,
+            consumer_count,
+        } => ordered_unique(permitted_store_ids) && *artifact_count > 0 && *consumer_count > 0,
+        Blast::ProviderResources {
+            permitted_provider_account_ids,
+            permitted_resource_selector_ids,
+            resource_count,
+            principal_count,
+        } => {
+            ordered_unique(permitted_provider_account_ids)
+                && ordered_unique(permitted_resource_selector_ids)
+                && *resource_count > 0
+                && *principal_count > 0
+        }
+    }
+}
+
+fn validate_exceptions(document: &PolicyDocumentV1, roles: &BTreeSet<&str>) -> Result<()> {
+    let policy_id = document.profile_id();
+    let rule_ids = document
+        .rules
+        .iter()
+        .map(|rule| rule.rule_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let scopes = document
+        .protected_universe
+        .protected_scope_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let execution_sets = document
+        .protected_universe
+        .execution_set_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for exception in &document.exceptions {
+        let subject = &exception.exact_subject;
+        check(
+            policy_id,
+            valid_local_id(&exception.exception_id)
+                && Uuid::parse_str(&exception.exception_instance_id).is_ok()
+                && Uuid::parse_str(&exception.approver_principal_id).is_ok()
+                && valid_digest(&exception.approval_proof_digest)
+                && valid_registry_symbol(&exception.closed_reason_code)
+                && exception.valid_until_utc_ns > exception.valid_from_utc_ns
+                && exception.maximum_uses > 0
+                && exception.maximum_lifetime_ns > 0
+                && !exception.changed_rule_ids.is_empty()
+                && ordered_unique(&exception.changed_rule_ids)
+                && exception
+                    .changed_rule_ids
+                    .iter()
+                    .all(|rule| rule_ids.contains(rule.as_str()))
+                && !subject.protected_scope_ids.is_empty()
+                && ordered_unique(&subject.protected_scope_ids)
+                && subject
+                    .protected_scope_ids
+                    .iter()
+                    .all(|scope| scopes.contains(scope.as_str()))
+                && ordered_unique(&subject.execution_set_ids)
+                && subject
+                    .execution_set_ids
+                    .iter()
+                    .all(|set| execution_sets.contains(set.as_str()))
+                && ordered_unique(&subject.entry_kind_ids)
+                && ordered_unique(&subject.role_ids)
+                && subject
+                    .role_ids
+                    .iter()
+                    .all(|role| roles.contains(role.as_str()))
+                && ordered_unique(&subject.immutable_definition_digests)
+                && subject
+                    .immutable_definition_digests
+                    .iter()
+                    .all(|digest| valid_digest(digest))
+                && !subject.exact_compiled_key_digests.is_empty()
+                && ordered_unique(&subject.exact_compiled_key_digests)
+                && subject
+                    .exact_compiled_key_digests
+                    .iter()
+                    .all(|digest| valid_digest(digest))
+                && valid_registry_symbol(&exception.authority_delta.from_physical_result)
+                && valid_registry_symbol(&exception.authority_delta.to_physical_result)
+                && exception.authority_delta.from_physical_result
+                    != exception.authority_delta.to_physical_result
+                && ordered_unique(&exception.authority_delta.added_or_removed_operation_cells)
+                && exception
+                    .authority_delta
+                    .added_or_removed_operation_cells
+                    .iter()
+                    .all(|digest| valid_digest(digest))
+                && ordered_unique(&exception.authority_delta.added_or_removed_transition_cells)
+                && exception
+                    .authority_delta
+                    .added_or_removed_transition_cells
+                    .iter()
+                    .all(|digest| valid_digest(digest))
+                && blast_radius_is_bounded(&exception.authority_delta.maximum_blast_radius),
+            "CFG_EXCEPTION",
+            &format!(
+                "exception `{}` is not a bounded exact authority delta",
+                exception.exception_id
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_authority_rules(
+    document: &PolicyDocumentV1,
+    routes: &BTreeSet<&str>,
+    responses: &BTreeSet<&str>,
+) -> Result<()> {
+    use super::source::AuthorityBehaviorRuleV1 as Rule;
+
+    let policy_id = document.profile_id();
+    let ids = document
+        .authority_behavior_rules
+        .iter()
+        .map(|rule| match rule {
+            Rule::RemoteAdmission { rule_id, .. } | Rule::PostEffectResult { rule_id, .. } => {
+                rule_id.as_str()
+            }
+        })
+        .collect::<Vec<_>>();
+    check_unique(policy_id, ids.iter().copied(), "authority behavior rule")?;
+    for rule in &document.authority_behavior_rules {
+        let (
+            rule_id,
+            accounts,
+            principals,
+            operations,
+            resources,
+            proof,
+            disposition,
+            finding,
+            response_ids,
+            budgets,
+            legal,
+        ) = match rule {
+            Rule::RemoteAdmission {
+                rule_id,
+                authorization_interface_capability_id,
+                provider_accounts,
+                principal_or_lease_selectors,
+                operations,
+                resources,
+                required_proof,
+                requested_disposition,
+                finding,
+                response_binding_ids,
+                budgets,
+                ..
+            } => (
+                rule_id,
+                provider_accounts,
+                principal_or_lease_selectors,
+                operations,
+                resources,
+                required_proof,
+                requested_disposition,
+                finding,
+                response_binding_ids,
+                budgets,
+                valid_local_id(authorization_interface_capability_id)
+                    && matches!(
+                        requested_disposition,
+                        PolicyDispositionV1::Allow
+                            | PolicyDispositionV1::Alert
+                            | PolicyDispositionV1::Reject
+                    ),
+            ),
+            Rule::PostEffectResult {
+                rule_id,
+                provider_accounts,
+                principal_or_lease_selectors,
+                operations,
+                resources,
+                authoritative_results,
+                required_proof,
+                requested_disposition,
+                finding,
+                response_binding_ids,
+                budgets,
+                ..
+            } => (
+                rule_id,
+                provider_accounts,
+                principal_or_lease_selectors,
+                operations,
+                resources,
+                required_proof,
+                requested_disposition,
+                finding,
+                response_binding_ids,
+                budgets,
+                !authoritative_results.is_empty()
+                    && ordered_unique(authoritative_results)
+                    && matches!(
+                        requested_disposition,
+                        PolicyDispositionV1::Allow | PolicyDispositionV1::Alert
+                    ),
+            ),
+        };
+        check(
+            policy_id,
+            valid_local_id(rule_id)
+                && legal
+                && ordered_unique(accounts)
+                && ordered_unique(principals)
+                && !operations.is_empty()
+                && ordered_unique(operations)
+                && ordered_unique(resources)
+                && proof_predicate_is_ordered(proof)
+                && ordered_unique(response_ids)
+                && response_ids
+                    .iter()
+                    .all(|id| responses.contains(id.as_str()))
+                && budget_is_empty(budgets)
+                && (finding.is_some()
+                    || (response_ids.is_empty() && *disposition != PolicyDispositionV1::Alert)),
+            "CFG_AUTHORITY_RULE",
+            &format!("authority behavior rule `{rule_id}` is invalid"),
+        )?;
+        if let Some(finding) = finding {
+            validate_finding(policy_id, finding, routes)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_coverage_rules(
+    document: &PolicyDocumentV1,
+    routes: &BTreeSet<&str>,
+    responses: &BTreeSet<&str>,
+) -> Result<()> {
+    use super::source::CoverageGapActionV1 as Action;
+
+    let policy_id = document.profile_id();
+    check_unique(
+        policy_id,
+        document
+            .source_coverage_health_rules
+            .iter()
+            .map(|rule| rule.health_rule_id.as_str()),
+        "source coverage health rule",
+    )?;
+    let scopes = document
+        .protected_universe
+        .protected_scope_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    for rule in &document.source_coverage_health_rules {
+        let independent = match rule.on_gap {
+            Action::Alert => {
+                rule.independent_admission_interface_binding_id.is_none()
+                    && rule.independent_admission_capability_id.is_none()
+                    && rule.independent_response_binding_ids.is_empty()
+            }
+            Action::RejectNewAdmission => {
+                rule.independent_admission_interface_binding_id.is_some()
+                    && rule.independent_admission_capability_id.is_some()
+            }
+            Action::InstallIndependentFence => !rule.independent_response_binding_ids.is_empty(),
+        };
+        check(
+            policy_id,
+            valid_local_id(&rule.health_rule_id)
+                && valid_local_id(&rule.required_source_id)
+                && !rule.protected_scope_ids.is_empty()
+                && ordered_unique(&rule.protected_scope_ids)
+                && rule
+                    .protected_scope_ids
+                    .iter()
+                    .all(|scope| scopes.contains(scope.as_str()))
+                && valid_duration(&rule.maximum_gap, false)
+                && rule
+                    .independent_admission_interface_binding_id
+                    .as_ref()
+                    .is_none_or(|id| valid_local_id(id))
+                && rule
+                    .independent_admission_capability_id
+                    .as_ref()
+                    .is_none_or(|id| valid_local_id(id))
+                && ordered_unique(&rule.independent_response_binding_ids)
+                && rule
+                    .independent_response_binding_ids
+                    .iter()
+                    .all(|id| responses.contains(id.as_str()))
+                && independent,
+            "CFG_COVERAGE_RULE",
+            &format!(
+                "coverage rule `{}` lacks an independent exact fallback",
+                rule.health_rule_id
+            ),
+        )?;
+        validate_finding(policy_id, &rule.finding, routes)?;
+    }
+    Ok(())
+}
+
+fn check_unique<'a>(policy_id: &str, ids: impl Iterator<Item = &'a str>, kind: &str) -> Result<()> {
+    let duplicates = duplicate_ids(ids);
+    check(
+        policy_id,
+        duplicates.is_empty(),
+        "CFG_DUPLICATE_ID",
+        &format!("duplicate {kind} IDs: {duplicates:?}"),
+    )
+}
+
+fn valid_duration(value: &str, zero_allowed: bool) -> bool {
+    let suffix_length = if value.ends_with("ns") || value.ends_with("us") || value.ends_with("ms") {
+        2
+    } else if value.ends_with('s') || value.ends_with('m') || value.ends_with('h') {
+        1
+    } else {
+        return false;
+    };
+    let digits = &value[..value.len() - suffix_length];
+    !digits.is_empty()
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && digits
+            .parse::<u64>()
+            .is_ok_and(|duration| zero_allowed || duration > 0)
+}
+
+fn valid_digest(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn validate_rules(document: &PolicyDocumentV1) -> Result<()> {
     let policy_id = document.profile_id();
     let rule_ids = document
@@ -699,8 +1579,11 @@ fn validate_rules(document: &PolicyDocumentV1) -> Result<()> {
             &format!("rule `{}` schema_version must be 1", rule.rule_id),
         )?;
         let match_stage = match rule.rule_match {
+            RuleMatchV1::EntryAdmission(_) => EvaluationStageV1::EntryAdmission,
             RuleMatchV1::LocalPreEffect(_) => EvaluationStageV1::LocalPreEffect,
             RuleMatchV1::NativeTransition(_) => EvaluationStageV1::NativeTransition,
+            RuleMatchV1::RemotePreAdmission(_) => EvaluationStageV1::RemotePreAdmission,
+            RuleMatchV1::PostEffect(_) => EvaluationStageV1::PostEffect,
         };
         check(
             policy_id,
@@ -762,7 +1645,8 @@ fn validate_rules(document: &PolicyDocumentV1) -> Result<()> {
                     && !object_cells(&effect.object).is_empty()
                     && ordered_unique(&effect.effect_families)
                     && ordered_unique(&effect.operation_ids)
-                    && ordered_unique(&effect.binding_lifecycle_states),
+                    && ordered_unique(&effect.binding_lifecycle_states)
+                    && proof_predicate_is_ordered(&effect.required_proof),
                 "CFG_EMPTY_REQUIRED_SELECTOR",
                 &format!(
                     "rule `{}` has an empty or unordered local selector",
@@ -829,9 +1713,119 @@ fn validate_rules(document: &PolicyDocumentV1) -> Result<()> {
                     rule.rule_id
                 ),
             )?;
+        } else if let RuleMatchV1::EntryAdmission(entry) = &rule.rule_match {
+            universe.validate_subject(policy_id, &rule.rule_id, &entry.subject)?;
+            check(
+                policy_id,
+                !entry.runtime_operations.is_empty()
+                    && !entry.root_classifications.is_empty()
+                    && ordered_unique(&entry.runtime_operations)
+                    && ordered_unique(&entry.root_classifications)
+                    && ordered_unique(&entry.source_proof_qualities)
+                    && ordered_unique(&entry.required_purpose_source_capability_ids)
+                    && ordered_unique(&entry.immutable_definition_digests),
+                "CFG_ENTRY_ADMISSION_MATCH",
+                &format!("rule `{}` has an invalid entry selector", rule.rule_id),
+            )?;
+        } else if let RuleMatchV1::RemotePreAdmission(remote) = &rule.rule_match {
+            universe.validate_subject(policy_id, &rule.rule_id, &remote.subject)?;
+            check(
+                policy_id,
+                !remote.gate_capability_ids.is_empty()
+                    && !remote.providers.is_empty()
+                    && !remote.operation_ids.is_empty()
+                    && ordered_unique(&remote.gate_capability_ids)
+                    && ordered_unique(&remote.providers)
+                    && ordered_unique(&remote.provider_account_ids)
+                    && ordered_unique(&remote.operation_ids)
+                    && ordered_unique(&remote.resources)
+                    && ordered_unique(&remote.required_lease_permission_ids)
+                    && proof_predicate_is_ordered(&remote.required_proof),
+                "CFG_REMOTE_ADMISSION_MATCH",
+                &format!("rule `{}` has an invalid remote selector", rule.rule_id),
+            )?;
+        } else if let RuleMatchV1::PostEffect(post) = &rule.rule_match {
+            validate_post_effect(policy_id, &rule.rule_id, post, &universe)?;
         }
     }
     Ok(())
+}
+
+fn validate_post_effect(
+    policy_id: &str,
+    rule_id: &str,
+    post: &PostEffectMatchV1,
+    universe: &RuleUniverse<'_>,
+) -> Result<()> {
+    let valid = match post {
+        PostEffectMatchV1::LocalCompletion {
+            subject,
+            effect_families,
+            operation_ids,
+            authoritative_results,
+            required_proof,
+        } => {
+            universe.validate_subject(policy_id, rule_id, subject)?;
+            !effect_families.is_empty()
+                && !operation_ids.is_empty()
+                && !authoritative_results.is_empty()
+                && ordered_unique(effect_families)
+                && ordered_unique(operation_ids)
+                && ordered_unique(authoritative_results)
+                && effect_families.iter().all(|family| {
+                    operation_ids
+                        .iter()
+                        .all(|operation| operation_belongs_to_family(*family, operation))
+                })
+                && proof_predicate_is_ordered(required_proof)
+        }
+        PostEffectMatchV1::ProviderResult {
+            providers,
+            provider_account_ids,
+            operation_ids,
+            resources,
+            authoritative_results,
+            required_proof,
+        } => {
+            !providers.is_empty()
+                && !operation_ids.is_empty()
+                && !authoritative_results.is_empty()
+                && ordered_unique(providers)
+                && ordered_unique(provider_account_ids)
+                && ordered_unique(operation_ids)
+                && ordered_unique(resources)
+                && ordered_unique(authoritative_results)
+                && proof_predicate_is_ordered(required_proof)
+        }
+        PostEffectMatchV1::CorrelationFinding {
+            package_ids,
+            reason_codes,
+            finding_states,
+            required_proof,
+        } => {
+            !package_ids.is_empty()
+                && !finding_states.is_empty()
+                && ordered_unique(package_ids)
+                && ordered_unique(reason_codes)
+                && ordered_unique(finding_states)
+                && proof_predicate_is_ordered(required_proof)
+        }
+    };
+    check(
+        policy_id,
+        valid,
+        "CFG_POST_EFFECT_MATCH",
+        &format!("rule `{rule_id}` has an invalid post-effect selector"),
+    )
+}
+
+fn proof_predicate_is_ordered(proof: &ProofQualityPredicateV1) -> bool {
+    ordered_unique(&proof.source_authority)
+        && ordered_unique(&proof.local_subject_binding)
+        && ordered_unique(&proof.remote_subject_binding)
+        && ordered_unique(&proof.operation_result_authority)
+        && ordered_unique(&proof.temporal_coverage)
+        && ordered_unique(&proof.integrity)
 }
 
 struct RuleUniverse<'a> {

@@ -214,6 +214,7 @@ impl NodeControl for ControlPlane {
         tokio::spawn(async move {
             let mut expected_sequence = 2;
             while let Some(message) = input.next().await {
+                #[allow(clippy::result_large_err)]
                 let result = message.and_then(|message| {
                     validate_header(&message, expected_sequence, Some(&identity))?;
                     control.record_node_sequence(

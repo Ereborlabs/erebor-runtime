@@ -17,6 +17,13 @@ pub enum HardSafetyConditionV1 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NonPreventionReasonV1 {
+    NoCoveredPhysicalEffect,
+    OutsideAuthority,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SimulatedDispositionV1 {
     Allow,
     AuditAllow,
@@ -85,6 +92,22 @@ impl<'a> PolicySimulator<'a> {
                 source_rule_ids: Vec::new(),
                 explanation_code: "NO_EXACT_COMPILED_CELL".to_owned(),
             },
+        }
+    }
+
+    #[must_use]
+    pub fn non_prevention(
+        key: StaticDecisionKeyV1,
+        reason: NonPreventionReasonV1,
+    ) -> EffectSimulationV1 {
+        EffectSimulationV1 {
+            actor_and_object: key,
+            evaluation_stage: "NO_LOCAL_DECISION_POINT".to_owned(),
+            disposition: SimulatedDispositionV1::Unresolved,
+            configured_errno: None,
+            physical_result: SimulatedPhysicalResultV1::Unknown,
+            source_rule_ids: Vec::new(),
+            explanation_code: format!("NON_PREVENTION_{reason:?}").to_uppercase(),
         }
     }
 }

@@ -1,6 +1,8 @@
 mod identity;
+mod path;
 
 pub use identity::*;
+pub use path::*;
 
 #[repr(u8)]
 #[derive(
@@ -285,6 +287,7 @@ pub enum ExactObjectBindingStateV1 {
     #[default]
     Unknown = 0,
     ReadBack = 1,
+    ActiveDynamic = 2,
 }
 
 #[repr(C)]

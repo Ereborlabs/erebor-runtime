@@ -31,7 +31,7 @@ use crate::Result;
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 
-const REQUIRED_IDENTITY_MAPS: [&str; 26] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 35] = [
     "approved_exec_slots",
     "authority_domains",
     "created_by_edges",
@@ -50,6 +50,15 @@ const REQUIRED_IDENTITY_MAPS: [&str; 26] = [
     "kernel_real_parent_intervals",
     "pending_execs",
     "pending_administrative_matches",
+    "mount_mutation_attempts",
+    "mount_mutation_epochs",
+    "mount_reconciliation_proposals",
+    "mount_security_view_locks",
+    "mount_security_views",
+    "canonical_mount_roots",
+    "path_graph_exact_transitions",
+    "path_graph_terminals",
+    "path_graph_wildcard_transitions",
     "process_execution_instances",
     "process_state_vectors",
     "process_states",

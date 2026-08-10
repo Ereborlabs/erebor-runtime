@@ -2,10 +2,10 @@ use std::path::Path;
 
 use ed25519_dalek::SigningKey;
 use mithril_control::{
-    AntiRollbackStore, CompiledPhysicalResultV1, HardSafetyConditionV1, PolicyCompiler,
-    PolicyDispositionV1, PolicyDocumentV1, PolicySimulator, ProfileCandidateArtifactV1,
-    ProfileSealRequestV1, RegistryDigestsV1, RollbackAuthorizationArtifactV1,
-    RollbackAuthorizationPayloadV1, SimulatedDispositionV1,
+    AntiRollbackStore, CompiledPhysicalResultV1, EffectFamilyDefaultV1, EffectFamilyV1, ErrnoV1,
+    HardSafetyConditionV1, PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, PolicySimulator,
+    ProfileCandidateArtifactV1, ProfileSealRequestV1, RegistryDigestsV1,
+    RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1, SimulatedDispositionV1,
 };
 
 const VALID_POLICY: &str = include_str!("fixtures/policy-v1.yaml");
@@ -107,6 +107,51 @@ fn unequal_exact_overlap_requires_one_explicit_override() -> mithril_control::Re
         compiled.compiled_cells[0].physical_result,
         CompiledPhysicalResultV1::AllowEffect
     );
+    Ok(())
+}
+
+#[test]
+fn equal_errno_with_unequal_actions_is_still_an_exact_conflict() -> mithril_control::Result<()> {
+    let mut document = parse(VALID_POLICY)?;
+    let mut unequal = document.rules[0].clone();
+    unequal.rule_id = "different-finding-same-denial".to_owned();
+    assert!(unequal.finding.is_some());
+    if let Some(finding) = unequal.finding.as_mut() {
+        finding.reason_code = "DIFFERENT_REASON".to_owned();
+    }
+    document.rules.push(unequal);
+    assert!(PolicyCompiler.compile(&document).is_err());
+
+    document.rules[1]
+        .overrides_rule_ids
+        .push("deny-projected-token-open".to_owned());
+    let compiled = PolicyCompiler.compile(&document)?;
+    assert_eq!(
+        compiled.compiled_cells[0].source_rule_ids,
+        ["different-finding-same-denial"]
+    );
+    Ok(())
+}
+
+#[test]
+fn effect_family_default_fills_only_unmatched_exact_cells() -> mithril_control::Result<()> {
+    let mut document = parse(VALID_POLICY)?;
+    document.rules[0].enabled = false;
+    document.effect_family_defaults = vec![EffectFamilyDefaultV1 {
+        role_ids: vec!["converter".to_owned()],
+        effect_family: EffectFamilyV1::File,
+        operations: vec!["OPEN_READ".to_owned()],
+        requested_disposition: PolicyDispositionV1::Deny,
+        errno: Some(ErrnoV1::Eacces),
+        finding: document.rules[0].finding.clone(),
+    }];
+    let compiled = PolicyCompiler.compile(&document)?;
+    assert_eq!(compiled.compiled_cells.len(), 5);
+    assert!(compiled
+        .compiled_cells
+        .iter()
+        .all(|cell| cell.source_rule_ids.is_empty()
+            && cell.physical_result == CompiledPhysicalResultV1::SimulatablePolicyDeny));
     Ok(())
 }
 

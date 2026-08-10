@@ -31,9 +31,16 @@ _Static_assert(sizeof(effect_observation_v1) == 208,
                "effect observation ABI size");
 _Static_assert(sizeof(effect_observation_health_v1) == 32,
                "effect observation health ABI size");
+_Static_assert(sizeof(canonical_path_component_v1) == 258,
+               "canonical component ABI size");
+_Static_assert(sizeof(path_graph_transition_key_v1) == 272,
+               "path transition key ABI size");
+_Static_assert(sizeof(mount_security_view_state_v1) == 40,
+               "mount view ABI size");
 
 #include "identity_task_helpers.h"
 #include "identity_root_helpers.h"
+#include "identity_path.bpf.h"
 
 #include "identity_lifecycle.bpf.h"
 static __noinline int identity_effect_gate(struct file *file,

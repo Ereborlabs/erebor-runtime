@@ -235,6 +235,34 @@ pub struct PathCandidateV1 {
     pub canonical_components: Vec<Vec<u8>>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeterministicPathGraphV1 {
+    pub state_count: u32,
+    pub exact_transitions: Vec<DeterministicPathTransitionV1>,
+    pub wildcard_transitions: Vec<DeterministicPathWildcardV1>,
+    pub terminals: Vec<DeterministicPathTerminalV1>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeterministicPathTransitionV1 {
+    pub current_state_id: u32,
+    pub component: Vec<u8>,
+    pub next_state_id: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeterministicPathWildcardV1 {
+    pub current_state_id: u32,
+    pub next_state_id: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeterministicPathTerminalV1 {
+    pub state_id: u32,
+    pub rule_id: String,
+    pub candidate_object_class_id: String,
+}
+
 impl CanonicalPathGraphV1 {
     pub fn compile(policy_id: &str, patterns: &[PathPatternV1]) -> Result<Self> {
         let mut graph = Self {
@@ -307,6 +335,95 @@ impl CanonicalPathGraphV1 {
         })
     }
 
+    pub fn determinize(&self, policy_id: &str) -> Result<DeterministicPathGraphV1> {
+        let start = BTreeSet::from([0_usize]);
+        let mut state_ids = BTreeMap::from([(start.clone(), 0_u32)]);
+        let mut pending = std::collections::VecDeque::from([start]);
+        let mut exact_transitions = Vec::new();
+        let mut wildcard_transitions = Vec::new();
+        let mut terminals = Vec::new();
+        while let Some(active) = pending.pop_front() {
+            let current_state_id = state_ids[&active];
+            if let Some(terminal) = self.terminal_for(&active) {
+                terminals.push(DeterministicPathTerminalV1 {
+                    state_id: current_state_id,
+                    rule_id: terminal.rule_id.clone(),
+                    candidate_object_class_id: terminal.candidate_object_class_id.clone(),
+                });
+            }
+            let exact_components = active
+                .iter()
+                .flat_map(|state_id| self.states[*state_id].exact.keys().cloned())
+                .collect::<BTreeSet<_>>();
+            let wildcard = self.transition_set(&active, None);
+            if !wildcard.is_empty() {
+                let next_state_id =
+                    deterministic_state_id(policy_id, wildcard, &mut state_ids, &mut pending)?;
+                wildcard_transitions.push(DeterministicPathWildcardV1 {
+                    current_state_id,
+                    next_state_id,
+                });
+            }
+            for component in exact_components {
+                let next = self.transition_set(&active, Some(&component));
+                let next_state_id =
+                    deterministic_state_id(policy_id, next, &mut state_ids, &mut pending)?;
+                exact_transitions.push(DeterministicPathTransitionV1 {
+                    current_state_id,
+                    component,
+                    next_state_id,
+                });
+            }
+        }
+        exact_transitions.sort_by(|left, right| {
+            (left.current_state_id, left.component.as_slice())
+                .cmp(&(right.current_state_id, right.component.as_slice()))
+        });
+        wildcard_transitions.sort_by_key(|transition| transition.current_state_id);
+        terminals.sort_by_key(|terminal| terminal.state_id);
+        Ok(DeterministicPathGraphV1 {
+            state_count: state_ids.len() as u32,
+            exact_transitions,
+            wildcard_transitions,
+            terminals,
+        })
+    }
+
+    fn transition_set(
+        &self,
+        active: &BTreeSet<usize>,
+        exact_component: Option<&[u8]>,
+    ) -> BTreeSet<usize> {
+        let mut next = BTreeSet::new();
+        for state_id in active {
+            let state = &self.states[*state_id];
+            if let Some(component) = exact_component {
+                if let Some(exact) = state.exact.get(component) {
+                    next.insert(*exact);
+                }
+            }
+            if let Some(wildcard) = state.wildcard {
+                next.insert(wildcard);
+            }
+        }
+        next
+    }
+
+    fn terminal_for(&self, active: &BTreeSet<usize>) -> Option<&PathTerminalV1> {
+        let terminals = active
+            .iter()
+            .filter_map(|state| self.states.get(*state)?.terminal.as_ref())
+            .collect::<Vec<_>>();
+        terminals.iter().copied().find(|candidate| {
+            terminals.iter().all(|other| {
+                candidate.rule_id == other.rule_id
+                    || (candidate.physical_result_id == other.physical_result_id
+                        && candidate.candidate_object_class_id == other.candidate_object_class_id)
+                    || candidate.overrides_rule_ids.contains(&other.rule_id)
+            })
+        })
+    }
+
     fn insert(&mut self, policy_id: &str, pattern: &PathPatternV1) -> Result<()> {
         let mut state_id = 0;
         for component in &pattern.components {
@@ -368,6 +485,51 @@ impl CanonicalPathGraphV1 {
         }
         Ok(())
     }
+}
+
+impl DeterministicPathGraphV1 {
+    #[must_use]
+    pub fn state_after(&self, components: &[Vec<u8>]) -> Option<u32> {
+        let mut state_id = 0;
+        for component in components {
+            state_id = self
+                .exact_transitions
+                .binary_search_by(|transition| {
+                    (transition.current_state_id, transition.component.as_slice())
+                        .cmp(&(state_id, component.as_slice()))
+                })
+                .ok()
+                .map(|index| self.exact_transitions[index].next_state_id)
+                .or_else(|| {
+                    self.wildcard_transitions
+                        .binary_search_by_key(&state_id, |transition| transition.current_state_id)
+                        .ok()
+                        .map(|index| self.wildcard_transitions[index].next_state_id)
+                })?;
+        }
+        Some(state_id)
+    }
+}
+
+fn deterministic_state_id(
+    policy_id: &str,
+    state: BTreeSet<usize>,
+    state_ids: &mut BTreeMap<BTreeSet<usize>, u32>,
+    pending: &mut std::collections::VecDeque<BTreeSet<usize>>,
+) -> Result<u32> {
+    if let Some(id) = state_ids.get(&state) {
+        return Ok(*id);
+    }
+    ensure_path(
+        policy_id,
+        state_ids.len() < MAX_PATH_GRAPH_STATES_V1,
+        "PATH_DFA_CAPACITY",
+        "determinized path graph exceeds the verified state capacity",
+    )?;
+    let id = state_ids.len() as u32;
+    state_ids.insert(state.clone(), id);
+    pending.push_back(state);
+    Ok(id)
 }
 
 fn patterns_overlap(left: &PathPatternV1, right: &PathPatternV1) -> bool {
@@ -519,6 +681,52 @@ mod tests {
             });
         };
         assert_eq!(graph.candidate(&components), None);
+        Ok(())
+    }
+
+    #[test]
+    fn determinized_graph_preserves_exact_and_wildcard_overlap() -> crate::Result<()> {
+        let patterns = [
+            PathPatternV1 {
+                rule_id: "wildcard".to_owned(),
+                components: vec![
+                    PathPatternComponentV1::Exact(b"work".to_vec()),
+                    PathPatternComponentV1::Wildcard,
+                ],
+                candidate_object_class_id: "DATA".to_owned(),
+                physical_result_id: "ALLOW_EFFECT".to_owned(),
+                overrides_rule_ids: Vec::new(),
+            },
+            PathPatternV1 {
+                rule_id: "exact".to_owned(),
+                components: vec![
+                    PathPatternComponentV1::Exact(b"work".to_vec()),
+                    PathPatternComponentV1::Exact(b"input".to_vec()),
+                ],
+                candidate_object_class_id: "DATA".to_owned(),
+                physical_result_id: "ALLOW_EFFECT".to_owned(),
+                overrides_rule_ids: Vec::new(),
+            },
+        ];
+        let graph = CanonicalPathGraphV1::compile("test", &patterns)?;
+        let deterministic = graph.determinize("test")?;
+        for components in [
+            vec![b"work".to_vec(), b"input".to_vec()],
+            vec![b"work".to_vec(), b"other".to_vec()],
+        ] {
+            let state = deterministic.state_after(&components).ok_or_else(|| {
+                crate::Error::PolicyValidation {
+                    policy_id: "test".to_owned(),
+                    code: "PATH_TEST",
+                    reason: "determinized graph did not match".to_owned(),
+                    location: snafu::Location::default(),
+                }
+            })?;
+            assert!(deterministic
+                .terminals
+                .binary_search_by_key(&state, |terminal| terminal.state_id)
+                .is_ok());
+        }
         Ok(())
     }
 }

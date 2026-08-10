@@ -25,6 +25,10 @@ fn generate_header() -> Result<(), Box<dyn std::error::Error>> {
         "cargo:rerun-if-changed={}",
         crate_dir.join("src/abi/identity.rs").display()
     );
+    println!(
+        "cargo:rerun-if-changed={}",
+        crate_dir.join("src/abi/path.rs").display()
+    );
     println!("cargo:rerun-if-env-changed=EREBOR_UPDATE_ABI");
 
     let config = cbindgen::Config::from_file(&config_path)?;

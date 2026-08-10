@@ -29,6 +29,7 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
     __u64 previous;
     bool released = true;
 
+    finish_mount_mutation();
     task = bpf_get_current_task_btf();
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
