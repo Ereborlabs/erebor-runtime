@@ -407,9 +407,11 @@ fn administrative_argument_keys_from_slot_bytes(
         }
     );
     let argv_offset = offset_of!(ApprovedExecSlotV1, expected_argv);
-    let mut argv = BoundedAdministrativeArgvV1::default();
-    argv.argument_count = read_slot_u16(slot, argv_offset)?;
-    argv.total_argument_bytes = read_slot_u16(slot, argv_offset + size_of::<u16>())?;
+    let mut argv = BoundedAdministrativeArgvV1 {
+        argument_count: read_slot_u16(slot, argv_offset)?,
+        total_argument_bytes: read_slot_u16(slot, argv_offset + size_of::<u16>())?,
+        ..BoundedAdministrativeArgvV1::default()
+    };
     let lengths_offset = argv_offset + 2 * size_of::<u16>();
     for (index, length) in argv.argument_lengths.iter_mut().enumerate() {
         *length = read_slot_u16(slot, lengths_offset + index * size_of::<u16>())?;

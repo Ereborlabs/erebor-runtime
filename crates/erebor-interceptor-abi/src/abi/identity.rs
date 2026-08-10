@@ -849,8 +849,9 @@ mod tests {
     #[test]
     fn approved_exec_argument_key_is_exact_and_zero_padded() {
         let proof_id = Id128V1::new(1, 2);
-        let key = ApprovedExecArgumentKeyV1::from_argument(proof_id, 3, b"--flag")
-            .expect("bounded argument key");
+        let key = ApprovedExecArgumentKeyV1::from_argument(proof_id, 3, b"--flag");
+        assert!(key.is_some());
+        let key = key.unwrap_or_default();
 
         assert_eq!(key.proof_id, proof_id);
         assert_eq!(key.argument_index, 3);

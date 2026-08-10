@@ -317,7 +317,7 @@ mod tests {
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
     #[test]
-    fn accepts_absolute_and_expands_systemd_cgroup_paths() -> crate::Result<()> {
+    fn cri_paths_accept_cgroupfs_and_expand_systemd_shapes() -> crate::Result<()> {
         assert_eq!(
             parse_cgroup_path("/kubepods/pod/container")?,
             PathBuf::from("/kubepods/pod/container")
@@ -335,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn inventory_accepts_only_created_or_running_containers() {
+    fn cri_inventory_accepts_only_created_or_running_containers() {
         assert_eq!(
             runtime_state(ContainerState::ContainerCreated as i32),
             Some(RuntimeContainerState::Created)
@@ -349,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn running_container_resolves_local_cgroup_conservatively() {
+    fn cri_running_container_resolves_local_cgroup_conservatively() {
         let configured = WorkloadBindingConfig {
             binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
             execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),

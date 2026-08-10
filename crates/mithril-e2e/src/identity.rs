@@ -13,8 +13,8 @@ use erebor_interceptor::{
     KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
 use erebor_interceptor_abi::{
-    ExecGuardStateV1, Id128V1, IdentityRuntimeConfigV1, ProcessExecutionStateV1,
-    ProcessStateVectorStateV1, TaskCoordinateStateV1,
+    ExecGuardStateV1, IdentityRuntimeConfigV1, ProcessExecutionStateV1, ProcessStateVectorStateV1,
+    TaskCoordinateStateV1,
 };
 use mithril_node::{
     NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1, WorkloadBindingConfig,
@@ -26,6 +26,7 @@ use snafu::{ensure, ResultExt as _};
 
 use crate::closure::ArchitectureClosure;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
+use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory};
 use crate::Result;
 
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
@@ -134,82 +135,6 @@ pub struct IdentityTestRunner {
     repo_root: PathBuf,
 }
 
-struct ProbePinRoot {
-    path: PathBuf,
-    cleaned: bool,
-}
-
-impl ProbePinRoot {
-    fn new(path: &Path) -> Self {
-        Self {
-            path: path.to_path_buf(),
-            cleaned: false,
-        }
-    }
-
-    fn cleanup(mut self) -> Result<()> {
-        match fs::remove_dir_all(&self.path) {
-            Ok(()) => Ok(()),
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(source).context(IoSnafu { path: &self.path }),
-        }
-        .inspect(|()| self.cleaned = true)
-    }
-}
-
-impl Drop for ProbePinRoot {
-    fn drop(&mut self) {
-        if !self.cleaned {
-            let _result = fs::remove_dir_all(&self.path);
-        }
-    }
-}
-
-struct ProbeCgroup {
-    path: PathBuf,
-    cleaned: bool,
-}
-
-impl ProbeCgroup {
-    fn create(path: &Path) -> Result<Self> {
-        ensure!(
-            !path.exists(),
-            InvalidInputSnafu {
-                path,
-                reason: "the dedicated identity-test cgroup must not already exist",
-            }
-        );
-        fs::create_dir(path).context(IoSnafu { path })?;
-        let path = fs::canonicalize(path).context(IoSnafu { path })?;
-        Ok(Self {
-            path,
-            cleaned: false,
-        })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn cleanup(mut self) -> Result<()> {
-        match fs::remove_dir(&self.path) {
-            Ok(()) => Ok(()),
-            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(source).context(IoSnafu { path: &self.path }),
-        }
-        .inspect(|()| self.cleaned = true)
-    }
-}
-
-impl Drop for ProbeCgroup {
-    fn drop(&mut self) {
-        if !self.cleaned {
-            let _result = fs::write(self.path.join("cgroup.kill"), b"1");
-            let _result = fs::remove_dir(&self.path);
-        }
-    }
-}
-
 impl IdentityTestRunner {
     #[must_use]
     pub fn new(repo_root: impl Into<PathBuf>) -> Self {
@@ -243,6 +168,24 @@ impl IdentityTestRunner {
                 reason: format!("identity object maps are {maps:?}"),
             }
         );
+        for name in [
+            "mount_security_views",
+            "mount_security_view_locks",
+            "mount_reconciliation_proposals",
+            "mount_mutation_epochs",
+        ] {
+            ensure!(
+                layout
+                    .maps
+                    .iter()
+                    .find(|map| map.name == name)
+                    .is_some_and(|map| map.key_size == size_of::<u64>() as u32),
+                InvalidInputSnafu {
+                    path: &object_path,
+                    reason: format!("{name} is not keyed by mount namespace identity"),
+                }
+            );
+        }
         let programs = layout
             .programs
             .iter()
@@ -292,7 +235,7 @@ impl IdentityTestRunner {
                 reason: "the dedicated identity-test pin root must not already exist",
             }
         );
-        let pin_cleanup = ProbePinRoot::new(pin_root);
+        let pin_cleanup = ProbeDirectory::new(pin_root);
         let cgroup_cleanup = ProbeCgroup::create(cgroup_path)?;
         let cgroup_path = cgroup_cleanup.path().to_path_buf();
         let procs_path = cgroup_path.join("cgroup.procs");
@@ -638,18 +581,6 @@ fn map_ids(manifest: &KernelObjectManifestV1) -> BTreeMap<&str, u32> {
         .iter()
         .map(|map| (map.name.as_str(), map.id))
         .collect()
-}
-
-fn boot_identity() -> Result<(String, Id128V1)> {
-    let path = Path::new("/proc/sys/kernel/random/boot_id");
-    let text = fs::read_to_string(path).context(IoSnafu { path })?;
-    let uuid = uuid::Uuid::parse_str(text.trim())
-        .map_err(|error| invalid_state(format!("kernel boot ID is invalid: {error}")))?;
-    let value = uuid.as_u128();
-    Ok((
-        uuid.simple().to_string(),
-        Id128V1::new((value >> 64) as u64, value as u64),
-    ))
 }
 
 fn open_pidfd(pid: u32) -> Result<OwnedFd> {

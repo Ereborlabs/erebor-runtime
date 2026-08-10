@@ -378,6 +378,8 @@ static __noinline int identity_effect_gate(struct file *file,
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_unresolved_object);
+    scratch->observation.composite_atom_id =
+        scratch->path_terminal.composite_atom_id;
     object_binding = file_object_binding(
         config, scratch, snapshot->active_profile_generation_ref_id);
     if (!object_binding ||
@@ -395,8 +397,6 @@ static __noinline int identity_effect_gate(struct file *file,
             effect_observation_reason_v1_unresolved_object);
     scratch->observation.exact_object_key_id =
         object_binding->exact_object_key_id;
-    scratch->observation.composite_atom_id =
-        object_binding->composite_atom_id;
     decision = effect_base_decision(scratch, snapshot, process_vector, entry,
                                     binding);
     if (!decision)

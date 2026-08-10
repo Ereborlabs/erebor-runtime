@@ -248,28 +248,28 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
-    __type(key, mount_security_view_key_v1);
+    __type(key, __u64);
     __type(value, mount_security_view_state_v1);
 } mount_security_views SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
-    __type(key, mount_security_view_key_v1);
+    __type(key, __u64);
     __type(value, struct mount_security_view_lock_v1);
 } mount_security_view_locks SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
-    __type(key, mount_security_view_key_v1);
+    __type(key, __u64);
     __type(value, mount_reconciliation_proposal_v1);
 } mount_reconciliation_proposals SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
-    __type(key, mount_security_view_key_v1);
+    __type(key, __u64);
     __type(value, __u64);
 } mount_mutation_epochs SEC(".maps");
 

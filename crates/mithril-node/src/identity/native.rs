@@ -71,15 +71,10 @@ impl NativeSecurityStateOwner {
             host.update_map("identity_config", &key, config.as_bytes())
                 .context(InterceptorSnafu)?;
         } else {
-            config.next_id = read_u64(&existing, offset_of!(IdentityRuntimeConfigV1, next_id))?;
-            ensure!(
-                config.next_id > 0 && existing == config.as_bytes(),
-                IdentityStateSnafu {
-                    reason:
-                        "recovered identity allocator has a different boot, epoch, or configuration"
-                            .to_owned(),
-                }
-            );
+            if recover_config(&existing, &mut config)? {
+                host.update_map("identity_config", &key, config.as_bytes())
+                    .context(InterceptorSnafu)?;
+            }
         }
         host.reconcile_tasks().context(InterceptorSnafu)?;
         let report = self.health(host)?;
@@ -123,6 +118,27 @@ impl NativeSecurityStateOwner {
     }
 }
 
+fn recover_config(existing: &[u8], desired: &mut IdentityRuntimeConfigV1) -> Result<bool> {
+    desired.next_id = read_u64(existing, offset_of!(IdentityRuntimeConfigV1, next_id))?;
+    let observation = offset_of!(IdentityRuntimeConfigV1, effect_observation_enabled);
+    let mut recovered = *desired;
+    recovered.effect_observation_enabled = existing.get(observation).copied().unwrap_or(u8::MAX);
+    let enables_observation =
+        recovered.effect_observation_enabled == 0 && desired.effect_observation_enabled == 1;
+    ensure!(
+        desired.next_id > 0
+            && recovered.effect_observation_enabled <= 1
+            && existing == recovered.as_bytes()
+            && (recovered.effect_observation_enabled == desired.effect_observation_enabled
+                || enables_observation),
+        IdentityStateSnafu {
+            reason: "recovered identity allocator has a different boot, epoch, or configuration"
+                .to_owned(),
+        }
+    );
+    Ok(enables_observation)
+}
+
 fn read_u64(value: &[u8], offset: usize) -> Result<u64> {
     let bytes = value
         .get(offset..offset + size_of::<u64>())
@@ -138,7 +154,10 @@ fn read_u64(value: &[u8], offset: usize) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::read_u64;
+    use erebor_interceptor_abi::IdentityRuntimeConfigV1;
+    use zerocopy::IntoBytes as _;
+
+    use super::{read_u64, recover_config};
 
     #[test]
     fn health_values_use_native_kernel_layout() -> crate::Result<()> {
@@ -146,5 +165,51 @@ mod tests {
         bytes[40..48].copy_from_slice(&9_u64.to_ne_bytes());
         assert_eq!(read_u64(&bytes, 40)?, 9);
         Ok(())
+    }
+
+    #[test]
+    fn recovery_may_enable_observation_without_resetting_the_allocator() -> crate::Result<()> {
+        let existing = IdentityRuntimeConfigV1 {
+            next_id: 19,
+            effect_observation_enabled: 0,
+            enabled: 1,
+            ..IdentityRuntimeConfigV1::default()
+        };
+        let mut desired = existing;
+        desired.effect_observation_enabled = 1;
+        desired.next_id = 1;
+
+        assert!(recover_config(existing.as_bytes(), &mut desired)?);
+        assert_eq!(desired.next_id, 19);
+        assert_eq!(desired.effect_observation_enabled, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_rejects_changes_to_enforcement_configuration() {
+        let existing = IdentityRuntimeConfigV1 {
+            next_id: 19,
+            first_effect_errno: -1,
+            enabled: 1,
+            ..IdentityRuntimeConfigV1::default()
+        };
+        let mut desired = existing;
+        desired.first_effect_errno = -13;
+
+        assert!(recover_config(existing.as_bytes(), &mut desired).is_err());
+    }
+
+    #[test]
+    fn recovery_cannot_disable_observation() {
+        let existing = IdentityRuntimeConfigV1 {
+            next_id: 19,
+            effect_observation_enabled: 1,
+            enabled: 1,
+            ..IdentityRuntimeConfigV1::default()
+        };
+        let mut desired = existing;
+        desired.effect_observation_enabled = 0;
+
+        assert!(recover_config(existing.as_bytes(), &mut desired).is_err());
     }
 }

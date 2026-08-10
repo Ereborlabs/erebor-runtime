@@ -8,7 +8,7 @@ static __always_inline __u64 current_mount_namespace_inode(void)
     struct task_struct *task = bpf_get_current_task_btf();
     struct nsproxy *nsproxy = NULL;
     struct mnt_namespace *mount_namespace = NULL;
-    __u64 inode = 0;
+    __u32 inode = 0;
 
     if (!task || BPF_CORE_READ_INTO(&nsproxy, task, nsproxy) || !nsproxy ||
         BPF_CORE_READ_INTO(&mount_namespace, nsproxy, mnt_ns) ||
@@ -20,41 +20,29 @@ static __always_inline __u64 current_mount_namespace_inode(void)
 
 static __always_inline int begin_mount_mutation(void)
 {
-    mount_security_view_key_v1 view_key = {};
     mount_security_view_state_v1 *view;
     struct mount_security_view_lock_v1 *view_lock;
     __u64 *mutation_epoch;
     mount_mutation_attempt_v1 *attempt;
     struct task_struct *task;
-    execution_set_binding_state_v1 *binding;
-    struct cgroup *cgroup = NULL;
     __u64 mount_namespace_inode;
     __u64 next_epoch;
     __u64 next_transition_version;
-    int binding_lookup;
 
     mount_namespace_inode = current_mount_namespace_inode();
     if (!mount_namespace_inode)
         return 0;
-    task = bpf_get_current_task_btf();
-    if (task_cgroup(task, &cgroup))
-        return -EACCES;
-    binding = binding_for_cgroup(cgroup, &binding_lookup);
-    if (binding_lookup)
-        return -EACCES;
-    if (!binding)
-        return 0;
-    view_key.profile_generation_ref_id =
-        binding->active_profile_generation_ref_id;
-    view_key.mount_namespace_inode = mount_namespace_inode;
-    view_key.binding_id = binding->binding_id;
-    view = bpf_map_lookup_elem(&mount_security_views, &view_key);
+    view = bpf_map_lookup_elem(&mount_security_views,
+                               &mount_namespace_inode);
     if (!view)
         return 0;
-    view_lock = bpf_map_lookup_elem(&mount_security_view_locks, &view_key);
-    mutation_epoch = bpf_map_lookup_elem(&mount_mutation_epochs, &view_key);
+    view_lock = bpf_map_lookup_elem(&mount_security_view_locks,
+                                    &mount_namespace_inode);
+    mutation_epoch = bpf_map_lookup_elem(&mount_mutation_epochs,
+                                         &mount_namespace_inode);
     if (!view_lock || !mutation_epoch)
         return -EACCES;
+    task = bpf_get_current_task_btf();
     attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0,
                                    BPF_LOCAL_STORAGE_GET_F_CREATE);
     if (!attempt || attempt->active)
@@ -69,7 +57,7 @@ static __always_inline int begin_mount_mutation(void)
         __sync_fetch_and_add(&view->transition_version, 1) + 1;
     bpf_spin_unlock(&view_lock->lock);
     __builtin_memset(attempt, 0, sizeof(*attempt));
-    attempt->view_key = view_key;
+    attempt->mount_namespace_inode = mount_namespace_inode;
     attempt->topology_generation = next_epoch;
     attempt->transition_version = next_transition_version;
     attempt->active = 1;
@@ -85,7 +73,8 @@ static __always_inline void finish_mount_mutation(void)
     attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0, 0);
     if (!attempt || !attempt->active)
         return;
-    view = bpf_map_lookup_elem(&mount_security_views, &attempt->view_key);
+    view = bpf_map_lookup_elem(&mount_security_views,
+                               &attempt->mount_namespace_inode);
     if (view) {
         view->state = mount_topology_state_v1_dirty;
         __sync_fetch_and_add(&view->transition_version, 1);
@@ -102,14 +91,16 @@ static __always_inline int read_mount_root_identity(
     struct dentry *root = NULL;
     struct inode *inode = NULL;
     struct super_block *superblock = NULL;
+    dev_t filesystem_device = 0;
 
     if (!vfsmount || BPF_CORE_READ_INTO(&root, vfsmount, mnt_root) || !root ||
         BPF_CORE_READ_INTO(&inode, root, d_inode) || !inode ||
         BPF_CORE_READ_INTO(&superblock, inode, i_sb) || !superblock ||
-        BPF_CORE_READ_INTO(&key->filesystem_device, superblock, s_dev) ||
+        BPF_CORE_READ_INTO(&filesystem_device, superblock, s_dev) ||
         BPF_CORE_READ_INTO(&key->root_inode, inode, i_ino) ||
         !key->root_inode)
         return -EACCES;
+    key->filesystem_device = encoded_filesystem_device(filesystem_device);
     return 0;
 }
 
@@ -162,13 +153,17 @@ static __always_inline int snapshot_mount_view(
     __u64 *transition_version_out)
 {
     mount_security_view_state_v1 *view =
-        bpf_map_lookup_elem(&mount_security_views, key);
+        bpf_map_lookup_elem(&mount_security_views,
+                            &key->mount_namespace_inode);
     struct mount_security_view_lock_v1 *view_lock =
-        bpf_map_lookup_elem(&mount_security_view_locks, key);
+        bpf_map_lookup_elem(&mount_security_view_locks,
+                            &key->mount_namespace_inode);
     __u64 *mutation_epoch =
-        bpf_map_lookup_elem(&mount_mutation_epochs, key);
+        bpf_map_lookup_elem(&mount_mutation_epochs,
+                            &key->mount_namespace_inode);
     mount_reconciliation_proposal_v1 *proposal = reconcile
-        ? bpf_map_lookup_elem(&mount_reconciliation_proposals, key)
+        ? bpf_map_lookup_elem(&mount_reconciliation_proposals,
+                              &key->mount_namespace_inode)
         : NULL;
     int result = -EACCES;
 

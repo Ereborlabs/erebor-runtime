@@ -76,17 +76,6 @@ impl NodeChassis {
         bindings
             .publish_configured(&host, &config.workload_bindings)
             .await?;
-        let platform_scope_digest = format!(
-            "{:x}",
-            Sha256::digest(
-                [
-                    host.manifest().preflight.kernel_release.as_bytes(),
-                    host.manifest().preflight.runtime_btf_sha256.as_bytes(),
-                    host.manifest().object_sha256.as_bytes(),
-                ]
-                .concat()
-            )
-        );
         let policy = if config.policy_candidates.is_empty() {
             None
         } else {
@@ -95,7 +84,6 @@ impl NodeChassis {
                 &host,
                 node_boot_id,
                 label_epoch,
-                &platform_scope_digest,
             )?)
         };
         let policy_loaded = policy.is_some();

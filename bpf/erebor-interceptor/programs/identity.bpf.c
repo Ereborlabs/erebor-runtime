@@ -37,6 +37,8 @@ _Static_assert(sizeof(path_graph_transition_key_v1) == 272,
                "path transition key ABI size");
 _Static_assert(sizeof(mount_security_view_state_v1) == 40,
                "mount view ABI size");
+_Static_assert(sizeof(mount_mutation_attempt_v1) == 32,
+               "mount mutation attempt ABI size");
 
 #include "identity_task_helpers.h"
 #include "identity_root_helpers.h"

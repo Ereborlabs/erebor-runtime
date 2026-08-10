@@ -141,7 +141,8 @@ impl MountInfoSnapshot {
                 }
                 .build()
             })?;
-        let mounts = entries
+        let relevant_entries = relevant_mount_entries(&entries, entered.mount_id)?;
+        let mounts = relevant_entries
             .iter()
             .map(|entry| live_mount(root_pid, entry))
             .collect::<Result<Vec<_>>>()?;
@@ -198,6 +199,49 @@ impl MountInfoSnapshot {
             snapshot_digest_id,
         })
     }
+}
+
+fn relevant_mount_entries(
+    entries: &[MountInfoEntry],
+    entered_mount_id: u64,
+) -> Result<Vec<&MountInfoEntry>> {
+    let by_id = entries
+        .iter()
+        .map(|entry| (entry.mount_id, entry))
+        .collect::<BTreeMap<_, _>>();
+    ensure!(
+        by_id.contains_key(&entered_mount_id),
+        IdentityStateSnafu {
+            reason: "entered mount is outside the mountinfo snapshot",
+        }
+    );
+
+    let mut pending = vec![entered_mount_id];
+    let mut processed = BTreeSet::new();
+    let mut relevant = BTreeSet::new();
+    while let Some(mount_id) = pending.pop() {
+        if !processed.insert(mount_id) {
+            continue;
+        }
+        let Some(current) = by_id.get(&mount_id) else {
+            continue;
+        };
+        for candidate in entries.iter().filter(|candidate| {
+            candidate.device == current.device && candidate.root == current.root
+        }) {
+            relevant.insert(candidate.mount_id);
+            if candidate.parent_mount_id != candidate.mount_id
+                && by_id.contains_key(&candidate.parent_mount_id)
+            {
+                pending.push(candidate.parent_mount_id);
+            }
+        }
+    }
+
+    Ok(entries
+        .iter()
+        .filter(|entry| relevant.contains(&entry.mount_id))
+        .collect())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -453,7 +497,10 @@ fn path_components(path: &Path) -> Result<Vec<Vec<u8>>> {
 mod tests {
     use std::path::PathBuf;
 
-    use super::{canonicalize_mount_path, parse_mountinfo, unescape_mountinfo, LiveMount};
+    use super::{
+        canonicalize_mount_path, parse_mountinfo, relevant_mount_entries, unescape_mountinfo,
+        LiveMount,
+    };
 
     #[test]
     fn mountinfo_parser_preserves_linux_path_bytes() -> crate::Result<()> {
@@ -506,6 +553,26 @@ mod tests {
                 .map(|component| component.as_bytes().to_vec())
         );
         assert_eq!(result.first_selected_mount_id_unique, 41);
+        Ok(())
+    }
+
+    #[test]
+    fn mount_walk_does_not_open_unrelated_mounts() -> crate::Result<()> {
+        let entries = parse_mountinfo(
+            b"1 1 0:1 / / rw - rootfs rootfs rw\n\
+              5 1 0:42 /secret /var/run/secrets/service rw - tmpfs tmpfs rw\n\
+              9 1 0:42 /secret /work/input/job-42 rw - tmpfs tmpfs rw\n\
+              335 1 0:65 / /run/user/1000/doc ro - fuse.portal portal rw\n",
+        )?;
+
+        let relevant = relevant_mount_entries(&entries, 9)?;
+        assert_eq!(
+            relevant
+                .iter()
+                .map(|entry| entry.mount_id)
+                .collect::<Vec<_>>(),
+            vec![1, 5, 9]
+        );
         Ok(())
     }
 }

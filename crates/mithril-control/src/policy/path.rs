@@ -684,6 +684,31 @@ mod tests {
     }
 
     #[test]
+    fn hard_link_spelling_does_not_inherit_the_original_path_candidate() -> crate::Result<()> {
+        let graph = CanonicalPathGraphV1::compile(
+            "test",
+            &[PathPatternV1 {
+                rule_id: "restricted-original".to_owned(),
+                components: ["restricted", "secret"]
+                    .map(|value| PathPatternComponentV1::Exact(value.as_bytes().to_vec()))
+                    .to_vec(),
+                candidate_object_class_id: "SECRET".to_owned(),
+                physical_result_id: "DENY_EFFECT".to_owned(),
+                overrides_rule_ids: Vec::new(),
+            }],
+        )?;
+
+        assert!(graph
+            .candidate(&[b"restricted".to_vec(), b"secret".to_vec()])
+            .is_some());
+        assert_eq!(
+            graph.candidate(&[b"apparently-safe".to_vec(), b"secret".to_vec()]),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
     fn determinized_graph_preserves_exact_and_wildcard_overlap() -> crate::Result<()> {
         let patterns = [
             PathPatternV1 {

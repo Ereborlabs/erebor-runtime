@@ -13,6 +13,10 @@ mod tests {
 
     use super::{bundled_bpf_sha256, BUNDLED_BPF_OBJECT};
 
+    fn bpf_immediate(instruction: &[u8]) -> Option<i32> {
+        Some(i32::from_le_bytes(instruction.get(4..8)?.try_into().ok()?))
+    }
+
     #[test]
     fn libbpf_cargo_built_object_is_embedded_and_parseable() -> crate::Result<()> {
         assert_eq!(bundled_bpf_sha256().len(), 64);
@@ -120,23 +124,28 @@ mod tests {
                 source,
                 location: snafu::Location::new(file!(), line!(), column!()),
             })?;
-        let program = object
+        let mut found = false;
+        for program in object
             .progs()
-            .find(|program| program.name().to_string_lossy() == "erebor_task_alloc")
-            .expect("bundled object must contain erebor_task_alloc");
-        let calls = program
-            .insns()
-            .iter()
-            .filter(|instruction| {
-                instruction.code == BPF_CALL
-                    && instruction.imm == libbpf_rs::libbpf_sys::BPF_FUNC_task_storage_get as i32
-            })
-            .count();
+            .filter(|program| program.name().to_string_lossy() == "erebor_task_alloc")
+        {
+            found = true;
+            let calls = program
+                .insns()
+                .iter()
+                .filter(|instruction| {
+                    instruction.code == BPF_CALL
+                        && instruction.imm
+                            == libbpf_rs::libbpf_sys::BPF_FUNC_task_storage_get as i32
+                })
+                .count();
 
-        // task_alloc inherits from the trusted current creator and installs the
-        // child. Independent roots are established after final placement by the
-        // cgroup-attach hook, not inferred from the half-built child task.
-        assert_eq!(calls, 2);
+            // task_alloc inherits from the trusted current creator and installs the
+            // child. Independent roots are established after final placement by the
+            // cgroup-attach hook, not inferred from the half-built child task.
+            assert_eq!(calls, 2);
+        }
+        assert!(found);
         Ok(())
     }
 
@@ -156,33 +165,37 @@ mod tests {
                 location: snafu::Location::new(file!(), line!(), column!()),
             })?;
         for program_name in ["erebor_sys_enter_execve", "erebor_sys_enter_execveat"] {
-            let program = object
+            let mut found = false;
+            for program in object
                 .progs()
-                .find(|program| program.name().to_string_lossy() == program_name)
-                .unwrap_or_else(|| panic!("bundled object must contain {program_name}"));
-            let instructions = program.insns();
-            let loop_calls = instructions
-                .iter()
-                .enumerate()
-                .filter(|instruction| {
-                    instruction.1.code == BPF_CALL
-                        && instruction.1.imm == libbpf_rs::libbpf_sys::BPF_FUNC_loop as i32
-                })
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-
-            assert_eq!(loop_calls.len(), 1, "{program_name}");
-            let loop_call = loop_calls[0];
-            assert!(
-                instructions[loop_call.saturating_sub(8)..loop_call]
+                .filter(|program| program.name().to_string_lossy() == program_name)
+            {
+                found = true;
+                let instructions = program.insns();
+                let loop_calls = instructions
                     .iter()
-                    .any(|instruction| {
-                        instruction.code == (BPF_ALU64 | BPF_MOV | BPF_K) as u8
-                            && instruction.dst_reg() == 1
-                            && instruction.imm == ARGV_LOOP_BUDGET
-                    }),
-                "{program_name} must cap exact argv capture at {ARGV_LOOP_BUDGET} callbacks"
-            );
+                    .enumerate()
+                    .filter(|instruction| {
+                        instruction.1.code == BPF_CALL
+                            && instruction.1.imm == libbpf_rs::libbpf_sys::BPF_FUNC_loop as i32
+                    })
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+
+                assert_eq!(loop_calls.len(), 1, "{program_name}");
+                let loop_call = loop_calls[0];
+                assert!(
+                    instructions[loop_call.saturating_sub(8)..loop_call]
+                        .iter()
+                        .any(|instruction| {
+                            instruction.code == (BPF_ALU64 | BPF_MOV | BPF_K) as u8
+                                && instruction.dst_reg() == 1
+                                && instruction.imm == ARGV_LOOP_BUDGET
+                        }),
+                    "{program_name} must cap exact argv capture at {ARGV_LOOP_BUDGET} callbacks"
+                );
+            }
+            assert!(found, "bundled object must contain {program_name}");
         }
         Ok(())
     }
@@ -194,10 +207,10 @@ mod tests {
         let instructions = BUNDLED_BPF_OBJECT.chunks_exact(8).collect::<Vec<_>>();
         assert!(instructions.windows(2).any(|pair| {
             pair[0][0] == (BPF_ALU64 | BPF_AND | BPF_K) as u8
-                && i32::from_le_bytes(pair[0][4..8].try_into().expect("BPF immediate")) == 7
+                && bpf_immediate(pair[0]) == Some(7)
                 && pair[1][0] == (BPF_ALU64 | BPF_MUL | BPF_K) as u8
                 && pair[1][1] & 0x0f == pair[0][1] & 0x0f
-                && i32::from_le_bytes(pair[1][4..8].try_into().expect("BPF immediate")) == 40
+                && bpf_immediate(pair[1]) == Some(40)
         }));
         Ok(())
     }
@@ -210,16 +223,13 @@ mod tests {
         let instructions = BUNDLED_BPF_OBJECT.chunks_exact(8).collect::<Vec<_>>();
         assert!(instructions.iter().enumerate().any(|(index, instruction)| {
             instruction[0] == 0x85
-                && i32::from_le_bytes(instruction[4..8].try_into().expect("BPF immediate"))
-                    == libbpf_rs::libbpf_sys::BPF_FUNC_loop as i32
+                && bpf_immediate(instruction) == Some(libbpf_rs::libbpf_sys::BPF_FUNC_loop as i32)
                 && instructions[index.saturating_sub(8)..index]
                     .iter()
                     .any(|candidate| {
                         candidate[0] == (BPF_ALU64 | BPF_MOV | BPF_K) as u8
                             && candidate[1] & 0x0f == 1
-                            && i32::from_le_bytes(
-                                candidate[4..8].try_into().expect("BPF immediate"),
-                            ) == PATH_COMPONENT_BUDGET
+                            && bpf_immediate(candidate) == Some(PATH_COMPONENT_BUDGET)
                     })
         }));
         Ok(())

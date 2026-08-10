@@ -858,14 +858,8 @@ typedef struct kernel_real_parent_interval_v1 {
   uint8_t reserved[6];
 } kernel_real_parent_interval_v1;
 
-typedef struct mount_security_view_key_v1 {
-  uint64_t profile_generation_ref_id;
-  uint64_t mount_namespace_inode;
-  struct id128_v1 binding_id;
-} mount_security_view_key_v1;
-
 typedef struct mount_mutation_attempt_v1 {
-  struct mount_security_view_key_v1 view_key;
+  uint64_t mount_namespace_inode;
   uint64_t topology_generation;
   uint64_t transition_version;
   uint8_t active;
@@ -878,6 +872,12 @@ typedef struct mount_reconciliation_proposal_v1 {
   uint64_t expected_transition_version;
   uint64_t transition_version;
 } mount_reconciliation_proposal_v1;
+
+typedef struct mount_security_view_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint64_t mount_namespace_inode;
+  struct id128_v1 binding_id;
+} mount_security_view_key_v1;
 
 typedef struct mount_security_view_state_v1 {
   uint64_t topology_generation;

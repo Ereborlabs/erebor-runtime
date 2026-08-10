@@ -696,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_empty_cgroup_arms_one_initial_root() -> crate::Result<()> {
+    fn docker_style_configured_cgroup_arms_one_initial_root() -> crate::Result<()> {
         let temporary = tempfile::tempdir().context(IoSnafu {
             path: "temporary cgroup root",
         })?;

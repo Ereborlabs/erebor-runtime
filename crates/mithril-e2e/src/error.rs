@@ -48,6 +48,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril policy test failed: {source}"))]
+    Policy {
+        source: mithril_control::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -68,6 +74,7 @@ impl ErrorExt for Error {
             Self::Io { .. } | Self::Command { .. } => StatusCode::External,
             Self::Interceptor { source, .. } => source.status_code(),
             Self::Node { source, .. } => source.status_code(),
+            Self::Policy { source, .. } => source.status_code(),
         }
     }
 
@@ -79,6 +86,7 @@ impl ErrorExt for Error {
             }
             Self::Interceptor { source, .. } => source.retry_hint(),
             Self::Node { source, .. } => source.retry_hint(),
+            Self::Policy { source, .. } => source.retry_hint(),
         }
     }
 

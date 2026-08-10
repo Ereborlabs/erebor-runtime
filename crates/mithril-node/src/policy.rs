@@ -37,8 +37,18 @@ impl NodePolicyGenerationOwner {
         host: &KernelHost,
         node_boot_id: Id128V1,
         label_epoch: u64,
-        platform_scope_digest: &str,
     ) -> Result<Self> {
+        let platform_scope_digest = format!(
+            "{:x}",
+            Sha256::digest(
+                [
+                    host.manifest().preflight.kernel_release.as_bytes(),
+                    host.manifest().preflight.runtime_btf_sha256.as_bytes(),
+                    host.manifest().object_sha256.as_bytes(),
+                ]
+                .concat()
+            )
+        );
         let artifact_owner = PolicyArtifactOwner::default();
         let mut artifacts = BTreeMap::new();
         let now_utc_ns = current_utc_ns()?;
@@ -74,7 +84,7 @@ impl NodePolicyGenerationOwner {
                 .build()
             })?;
             rollback
-                .accept(artifact, None, platform_scope_digest, now_utc_ns)
+                .accept(artifact, None, &platform_scope_digest, now_utc_ns)
                 .context(PolicySnafu)?;
             let lowered = LoweredGeneration::for_binding(
                 artifact,
@@ -101,10 +111,10 @@ impl NodePolicyGenerationOwner {
     }
 
     pub fn reconcile_mount_views(&self, host: &KernelHost) -> Result<()> {
-        let mut views = BTreeMap::<Vec<u8>, Vec<&MountRootReconciliation>>::new();
+        let mut views = BTreeMap::<u64, Vec<&MountRootReconciliation>>::new();
         for root in &self.mount_roots {
             views
-                .entry(root.view_key.as_bytes().to_vec())
+                .entry(root.view_key.mount_namespace_inode)
                 .or_default()
                 .push(root);
         }
@@ -125,9 +135,9 @@ impl NodePolicyGenerationOwner {
             }
             .build()
         })?;
-        let key = root.view_key.as_bytes();
-        let state = mount_view_state(host, key)?;
-        let epoch = mount_epoch(host, key)?;
+        let key = root.view_key.mount_namespace_inode.to_ne_bytes();
+        let state = mount_view_state(host, &key)?;
+        let epoch = mount_epoch(host, &key)?;
         if state.state == MountTopologyStateV1::Clean as u8
             && state.topology_generation == epoch
             && state.pending_mutations == 0
@@ -155,12 +165,12 @@ impl NodePolicyGenerationOwner {
                 configured.inode_generation,
             )?;
             ensure!(
-                resolved.mount_namespace_inode == configured.mount_namespace_inode
+                same_exact_file(configured, &resolved)
                     && resolved.canonical_component_hex == configured.canonical_component_hex
                     && resolved.mount_relative_component_count
                         == configured.mount_relative_component_count,
                 IdentityStateSnafu {
-                    reason: "mount reconciliation changed the actor view or canonical policy path",
+                    reason: "mount reconciliation changed the exact object, actor view, or canonical policy path",
                 }
             );
             if let Some(digest) = snapshot_digest_id {
@@ -203,8 +213,8 @@ impl NodePolicyGenerationOwner {
                 }
             );
         }
-        let current = mount_view_state(host, key)?;
-        if mount_epoch(host, key)? != epoch
+        let current = mount_view_state(host, &key)?;
+        if mount_epoch(host, &key)? != epoch
             || current.pending_mutations != 0
             || current.transition_version != state.transition_version
         {
@@ -226,10 +236,10 @@ impl NodePolicyGenerationOwner {
                 .build()
             })?,
         };
-        host.update_map("mount_reconciliation_proposals", key, proposal.as_bytes())
+        host.update_map("mount_reconciliation_proposals", &key, proposal.as_bytes())
             .context(InterceptorSnafu)?;
         ensure!(
-            host.lookup_map("mount_reconciliation_proposals", key)
+            host.lookup_map("mount_reconciliation_proposals", &key)
                 .context(InterceptorSnafu)?
                 .as_deref()
                 == Some(proposal.as_bytes()),
@@ -254,6 +264,14 @@ struct MountViewSnapshot {
     pending_mutations: u64,
     transition_version: u64,
     state: u8,
+}
+
+fn same_exact_file(left: &ExactFileObjectConfig, right: &ExactFileObjectConfig) -> bool {
+    left.mount_namespace_inode == right.mount_namespace_inode
+        && left.mount_id_unique == right.mount_id_unique
+        && left.filesystem_device == right.filesystem_device
+        && left.inode == right.inode
+        && left.inode_generation == right.inode_generation
 }
 
 struct LoweredGeneration {
@@ -1048,6 +1066,7 @@ fn lower_path_tables(
             mount_namespace_inode: object.mount_namespace_inode,
             binding_id,
         };
+        let view_map_key = object.mount_namespace_inode.to_ne_bytes();
         let view = MountSecurityViewStateV1 {
             topology_generation: object.mount_topology_generation,
             snapshot_digest_id: 0,
@@ -1056,21 +1075,13 @@ fn lower_path_tables(
             reserved: [0; 7],
             transition_version: 1,
         };
-        insert_exact(
-            &mut tables.mount_views,
-            view_key.as_bytes(),
-            view.as_bytes(),
-        )?;
+        insert_exact(&mut tables.mount_views, &view_map_key, view.as_bytes())?;
         insert_exact(
             &mut tables.mount_epochs,
-            view_key.as_bytes(),
+            &view_map_key,
             &object.mount_topology_generation.to_ne_bytes(),
         )?;
-        insert_exact(
-            &mut tables.mount_locks,
-            view_key.as_bytes(),
-            &0_u32.to_ne_bytes(),
-        )?;
+        insert_exact(&mut tables.mount_locks, &view_map_key, &0_u32.to_ne_bytes())?;
         let root_key = CanonicalMountRootKeyV1 {
             profile_generation_ref_id: binding.active_profile_generation_ref_id,
             mount_namespace_inode: object.mount_namespace_inode,
@@ -1219,7 +1230,7 @@ mod tests {
     };
     use zerocopy::IntoBytes as _;
 
-    use super::LoweredGeneration;
+    use super::{same_exact_file, LoweredGeneration};
     use crate::{ContainerKindV1, ExactFileObjectConfig, WorkloadBindingConfig};
 
     #[test]
@@ -1248,6 +1259,10 @@ mod tests {
         };
         let expected_bytes = expected.as_bytes().to_vec();
         assert_eq!(generation.decisions.keys().next(), Some(&expected_bytes));
+        assert_eq!(
+            generation.mount_views.keys().next(),
+            Some(&object.mount_namespace_inode.to_ne_bytes().to_vec())
+        );
 
         assert!(
             LoweredGeneration::for_binding(&artifact, &binding, &[], Id128V1::new(1, 2), 3,)
@@ -1266,6 +1281,38 @@ mod tests {
             3,
         )
         .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reconciliation_requires_the_same_exact_file() -> crate::Result<()> {
+        let (_, _, object) = exact_artifact()?;
+        assert!(same_exact_file(&object, &object));
+
+        for changed in [
+            ExactFileObjectConfig {
+                mount_namespace_inode: object.mount_namespace_inode + 1,
+                ..object.clone()
+            },
+            ExactFileObjectConfig {
+                mount_id_unique: object.mount_id_unique + 1,
+                ..object.clone()
+            },
+            ExactFileObjectConfig {
+                filesystem_device: object.filesystem_device + 1,
+                ..object.clone()
+            },
+            ExactFileObjectConfig {
+                inode: object.inode + 1,
+                ..object.clone()
+            },
+            ExactFileObjectConfig {
+                inode_generation: object.inode_generation + 1,
+                ..object.clone()
+            },
+        ] {
+            assert!(!same_exact_file(&object, &changed));
+        }
         Ok(())
     }
 

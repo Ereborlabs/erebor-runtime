@@ -131,7 +131,7 @@ pub struct PathGraphTerminalV1 {
     Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
 )]
 pub struct MountMutationAttemptV1 {
-    pub view_key: MountSecurityViewKeyV1,
+    pub mount_namespace_inode: u64,
     pub topology_generation: u64,
     pub transition_version: u64,
     pub active: u8,
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(size_of::<PathGraphStateKeyV1>(), 16);
         assert_eq!(size_of::<PathGraphTransitionV1>(), 8);
         assert_eq!(size_of::<PathGraphTerminalV1>(), 16);
-        assert_eq!(size_of::<MountMutationAttemptV1>(), 56);
+        assert_eq!(size_of::<MountMutationAttemptV1>(), 32);
     }
 
     #[test]

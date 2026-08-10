@@ -13,6 +13,15 @@ static __always_inline struct mount *mount_from_vfsmount(
     return EREBOR_CORE_CONTAINER_OF(vfsmount, struct mount, mnt);
 }
 
+/* Linux new_encode_dev(): expose the same device number as statx/makedev. */
+static __always_inline __u64 encoded_filesystem_device(dev_t device)
+{
+    __u32 major = device >> 20;
+    __u32 minor = device & ((1U << 20) - 1);
+
+    return (minor & 0xff) | (major << 8) | ((minor & ~0xff) << 12);
+}
+
 static __always_inline void exact_file_object_from_file(
     exact_file_object_key_v1 *object, struct file *file)
 {
@@ -22,6 +31,8 @@ static __always_inline void exact_file_object_from_file(
     struct mount *mount = NULL;
     struct mnt_namespace *mount_namespace = NULL;
     struct mount___unique *unique_mount;
+    __u32 mount_namespace_inode = 0;
+    dev_t filesystem_device = 0;
 
     __builtin_memset(object, 0, sizeof(*object));
     if (!file || BPF_CORE_READ_INTO(&inode, file, f_inode) || !inode ||
@@ -33,16 +44,20 @@ static __always_inline void exact_file_object_from_file(
     if (!bpf_core_field_exists(unique_mount->mnt_id_unique) ||
         BPF_CORE_READ_INTO(&mount_namespace, mount, mnt_ns) ||
         !mount_namespace ||
-        BPF_CORE_READ_INTO(&object->mount_namespace_inode, mount_namespace,
-                           ns.inum) ||
+        BPF_CORE_READ_INTO(&mount_namespace_inode, mount_namespace, ns.inum) ||
         BPF_CORE_READ_INTO(&object->mount_id_unique, unique_mount,
                            mnt_id_unique) ||
-        BPF_CORE_READ_INTO(&object->filesystem_device, superblock, s_dev) ||
+        BPF_CORE_READ_INTO(&filesystem_device, superblock, s_dev) ||
         BPF_CORE_READ_INTO(&object->inode, inode, i_ino) ||
         BPF_CORE_READ_INTO(&object->inode_generation, inode, i_generation) ||
-        !object->mount_namespace_inode || !object->mount_id_unique ||
+        !mount_namespace_inode || !object->mount_id_unique ||
         !object->inode || !object->inode_generation)
         __builtin_memset(object, 0, sizeof(*object));
+    else {
+        object->mount_namespace_inode = mount_namespace_inode;
+        object->filesystem_device =
+            encoded_filesystem_device(filesystem_device);
+    }
 }
 
 static __always_inline void candidate_from_file(
@@ -53,6 +68,9 @@ static __always_inline void candidate_from_file(
     struct vfsmount *vfsmount = NULL;
     struct mount *mount = NULL;
     struct mnt_namespace *mount_namespace = NULL;
+    __u32 mount_namespace_inode = 0;
+    __u32 inode_generation = 0;
+    dev_t filesystem_device = 0;
     int mount_id = 0;
 
     candidate->mount_namespace_inode = 0;
@@ -69,15 +87,18 @@ static __always_inline void candidate_from_file(
     if (BPF_CORE_READ_INTO(&mount_namespace, mount, mnt_ns) ||
         !mount_namespace ||
         BPF_CORE_READ_INTO(&mount_id, mount, mnt_id) || mount_id <= 0 ||
-        BPF_CORE_READ_INTO(&candidate->mount_namespace_inode, mount_namespace,
-                           ns.inum) ||
-        !candidate->mount_namespace_inode ||
-        BPF_CORE_READ_INTO(&candidate->filesystem_device, superblock, s_dev) ||
+        BPF_CORE_READ_INTO(&mount_namespace_inode, mount_namespace, ns.inum) ||
+        !mount_namespace_inode ||
+        BPF_CORE_READ_INTO(&filesystem_device, superblock, s_dev) ||
         BPF_CORE_READ_INTO(&candidate->inode, inode, i_ino) ||
         !candidate->inode ||
-        BPF_CORE_READ_INTO(&candidate->inode_generation, inode, i_generation))
+        BPF_CORE_READ_INTO(&inode_generation, inode, i_generation))
         return;
+    candidate->mount_namespace_inode = mount_namespace_inode;
     candidate->mount_id = mount_id;
+    candidate->filesystem_device =
+        encoded_filesystem_device(filesystem_device);
+    candidate->inode_generation = inode_generation;
 }
 
 static __always_inline int prepare_task_image(
@@ -121,6 +142,7 @@ static __always_inline int read_parent_interval(
 {
     struct pid *thread_pid = NULL;
     struct pid_namespace *pid_namespace = NULL;
+    __u32 pid_namespace_inode = 0;
     __u32 level = 0;
 
     if (!parent || !interval)
@@ -135,10 +157,8 @@ static __always_inline int read_parent_interval(
     if (thread_pid && level < 32)
         BPF_CORE_READ_INTO(&pid_namespace, thread_pid, numbers[level].ns);
     if (pid_namespace)
-        BPF_CORE_READ_INTO(&interval->real_parent_pid_namespace_inode,
-                           pid_namespace, ns.inum);
-    else
-        interval->real_parent_pid_namespace_inode = 0;
+        BPF_CORE_READ_INTO(&pid_namespace_inode, pid_namespace, ns.inum);
+    interval->real_parent_pid_namespace_inode = pid_namespace_inode;
     if (bpf_core_field_exists(parent->start_boottime))
         BPF_CORE_READ_INTO(&interval->real_parent_start_boottime_ns, parent,
                            start_boottime);
