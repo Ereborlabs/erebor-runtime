@@ -37,6 +37,9 @@ spec:
               mountPath: /var/lib/mithril
             - name: run
               mountPath: /run/mithril
+            - name: container-runtime
+              mountPath: {{ .Values.node.containerRuntimeSocket | quote }}
+              readOnly: true
       volumes:
         - name: config
           secret:
@@ -62,3 +65,7 @@ spec:
           hostPath:
             path: {{ .Values.node.runHostPath | quote }}
             type: DirectoryOrCreate
+        - name: container-runtime
+          hostPath:
+            path: {{ .Values.node.containerRuntimeSocket | quote }}
+            type: Socket

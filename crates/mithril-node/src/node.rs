@@ -1,9 +1,12 @@
-use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
+use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
 use mithril_control::{CapabilityRecord, NodeRegistration};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
 use std::cmp;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::watch;
 
 use crate::epoch::NodeEpochs;
@@ -35,6 +38,7 @@ impl NodeReadinessV1 {
 
 pub struct NodeChassis {
     config: NodeConfig,
+    effect_reader: Option<EffectObservationReader>,
     host: Option<KernelHost>,
     connector: NodeControlConnector,
     registration: NodeRegistration,
@@ -71,8 +75,42 @@ impl NodeChassis {
         bindings
             .publish_configured(&host, &config.workload_bindings)
             .await?;
+        let platform_scope_digest = format!(
+            "{:x}",
+            Sha256::digest(
+                [
+                    host.manifest().preflight.kernel_release.as_bytes(),
+                    host.manifest().preflight.runtime_btf_sha256.as_bytes(),
+                    host.manifest().object_sha256.as_bytes(),
+                ]
+                .concat()
+            )
+        );
+        let policy_loaded = if config.policy_candidates.is_empty() {
+            false
+        } else {
+            crate::NodePolicyGenerationOwner::load_and_install(
+                &config,
+                &host,
+                node_boot_id,
+                label_epoch,
+                &platform_scope_digest,
+            )?;
+            true
+        };
         let identity = NativeSecurityStateOwner::new(node_boot_id, label_epoch);
-        let reconciliation = identity.activate(&mut host)?;
+        let reconciliation = identity.activate_with_effect_observation(&mut host, policy_loaded)?;
+        let observations = crate::EffectObservationStore::default();
+        let effect_reader = policy_loaded
+            .then(|| {
+                let sink = observations.clone();
+                host.effect_observation_reader(move |bytes| {
+                    sink.record_bytes(bytes);
+                    0
+                })
+            })
+            .transpose()
+            .context(InterceptorSnafu)?;
         let manifest = host.manifest();
         let capabilities = vec![
             CapabilityRecord {
@@ -87,7 +125,24 @@ impl NodeChassis {
             CapabilityRecord {
                 capability_id: "LOCAL_EFFECT_PREVENTION".to_owned(),
                 state: "UNSUPPORTED".to_owned(),
-                reason_code: "IDENTITY_GATE_ONLY_NO_PERMISSION_TABLE".to_owned(),
+                reason_code: if policy_loaded {
+                    "OBSERVE_ONLY_CANDIDATE_NOT_ACTIVE".to_owned()
+                } else {
+                    "IDENTITY_GATE_ONLY_NO_PERMISSION_TABLE".to_owned()
+                },
+            },
+            CapabilityRecord {
+                capability_id: "LOCAL_EFFECT_OBSERVATION".to_owned(),
+                state: if policy_loaded {
+                    "DEGRADED".to_owned()
+                } else {
+                    "UNSUPPORTED".to_owned()
+                },
+                reason_code: if policy_loaded {
+                    "SIGNED_READ_BACK_EXACT_FILE_SLICE_ONLY".to_owned()
+                } else {
+                    "NO_POLICY_CANDIDATE".to_owned()
+                },
             },
             CapabilityRecord {
                 capability_id: "RUNTIME_READ_ONLY_OBSERVATION".to_owned(),
@@ -110,7 +165,15 @@ impl NodeChassis {
         let local_server = config
             .runtime_observation
             .clone()
-            .map(|runtime| crate::RuntimeObservationServer::bind(runtime, manifest, &capabilities))
+            .map(|runtime| {
+                crate::RuntimeObservationServer::bind_with_effects(
+                    runtime,
+                    manifest,
+                    &capabilities,
+                    observations,
+                    config.interceptor.pin_root.clone(),
+                )
+            })
             .transpose()?;
         let (readiness, _receiver) = watch::channel(NodeReadinessV1 {
             kernel_ready: true,
@@ -121,6 +184,7 @@ impl NodeChassis {
         });
         Ok(Self {
             config,
+            effect_reader,
             host: Some(host),
             connector,
             registration,
@@ -137,6 +201,16 @@ impl NodeChassis {
     }
 
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+        let effect_stop = Arc::new(AtomicBool::new(false));
+        let effect_task = self.effect_reader.take().map(|reader| {
+            let stop = Arc::clone(&effect_stop);
+            tokio::task::spawn_blocking(move || -> erebor_interceptor::Result<()> {
+                while !stop.load(Ordering::Acquire) {
+                    reader.poll(Duration::from_millis(100))?;
+                }
+                Ok(())
+            })
+        });
         let local_task = self.local_server.take().map(|server| {
             let local_shutdown = shutdown.clone();
             tokio::spawn(server.serve(local_shutdown))
@@ -228,6 +302,12 @@ impl NodeChassis {
                 backoff.saturating_mul(2),
                 self.config.control.reconnect_maximum(),
             );
+        }
+        effect_stop.store(true, Ordering::Release);
+        if let Some(task) = effect_task {
+            task.await
+                .context(LocalTaskSnafu)?
+                .context(InterceptorSnafu)?;
         }
         if let Some(host) = self.host.take() {
             host.shutdown().context(InterceptorSnafu)?;

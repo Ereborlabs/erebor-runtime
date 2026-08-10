@@ -3,6 +3,48 @@
 #ifndef EREBOR_IDENTITY_TASK_HELPERS_H
 #define EREBOR_IDENTITY_TASK_HELPERS_H
 
+struct mount___unique {
+    __u64 mnt_id_unique;
+} __attribute__((preserve_access_index));
+
+static __always_inline struct mount *mount_from_vfsmount(
+    struct vfsmount *vfsmount)
+{
+    return EREBOR_CORE_CONTAINER_OF(vfsmount, struct mount, mnt);
+}
+
+static __always_inline void exact_file_object_from_file(
+    exact_file_object_key_v1 *object, struct file *file)
+{
+    struct inode *inode = NULL;
+    struct super_block *superblock = NULL;
+    struct vfsmount *vfsmount = NULL;
+    struct mount *mount = NULL;
+    struct mnt_namespace *mount_namespace = NULL;
+    struct mount___unique *unique_mount;
+
+    __builtin_memset(object, 0, sizeof(*object));
+    if (!file || BPF_CORE_READ_INTO(&inode, file, f_inode) || !inode ||
+        BPF_CORE_READ_INTO(&superblock, inode, i_sb) || !superblock ||
+        BPF_CORE_READ_INTO(&vfsmount, file, f_path.mnt) || !vfsmount)
+        return;
+    mount = mount_from_vfsmount(vfsmount);
+    unique_mount = (void *)mount;
+    if (!bpf_core_field_exists(unique_mount->mnt_id_unique) ||
+        BPF_CORE_READ_INTO(&mount_namespace, mount, mnt_ns) ||
+        !mount_namespace ||
+        BPF_CORE_READ_INTO(&object->mount_namespace_inode, mount_namespace,
+                           ns.inum) ||
+        BPF_CORE_READ_INTO(&object->mount_id_unique, unique_mount,
+                           mnt_id_unique) ||
+        BPF_CORE_READ_INTO(&object->filesystem_device, superblock, s_dev) ||
+        BPF_CORE_READ_INTO(&object->inode, inode, i_ino) ||
+        BPF_CORE_READ_INTO(&object->inode_generation, inode, i_generation) ||
+        !object->mount_namespace_inode || !object->mount_id_unique ||
+        !object->inode || !object->inode_generation)
+        __builtin_memset(object, 0, sizeof(*object));
+}
+
 static __always_inline void candidate_from_file(
     exact_executable_candidate_v1 *candidate, struct file *file)
 {
@@ -23,7 +65,7 @@ static __always_inline void candidate_from_file(
         !superblock || BPF_CORE_READ_INTO(&vfsmount, file, f_path.mnt) ||
         !vfsmount)
         return;
-    mount = container_of(vfsmount, struct mount, mnt);
+    mount = mount_from_vfsmount(vfsmount);
     if (BPF_CORE_READ_INTO(&mount_namespace, mount, mnt_ns) ||
         !mount_namespace ||
         BPF_CORE_READ_INTO(&mount_id, mount, mnt_id) || mount_id <= 0 ||

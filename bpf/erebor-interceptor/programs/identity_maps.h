@@ -3,6 +3,12 @@
 #ifndef EREBOR_IDENTITY_MAPS_H
 #define EREBOR_IDENTITY_MAPS_H
 
+#define EREBOR_CORE_OFFSETOF(type, member)                                  \
+    ((__u64)((char *)__builtin_preserve_access_index(&((type *)0)->member) - \
+             (char *)0))
+#define EREBOR_CORE_CONTAINER_OF(pointer, type, member)                  \
+    ((type *)((char *)(pointer) - EREBOR_CORE_OFFSETOF(type, member)))
+
 union kernfs_node_id___old {
     struct {
         __u32 ino;
@@ -37,6 +43,10 @@ struct identity_scratch_v1 {
     image_provenance_v1 image;
     process_execution_instance_v1 execution;
     pending_administrative_match_v1 administrative_match;
+    effect_decision_key_v1 effect_key;
+    effect_default_key_v1 effect_default;
+    exact_file_object_key_v1 file_object;
+    effect_observation_v1 observation;
     __u8 administrative_argument[MAX_ADMINISTRATIVE_ARGUMENT_BYTES_V1 + 1];
 };
 
@@ -180,6 +190,46 @@ struct {
     __type(value, task_reference_tombstone_v1);
 } task_reference_tombstones SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u64);
+    __type(value, profile_generation_descriptor_v1);
+} profile_generation_descriptors SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, effect_decision_key_v1);
+    __type(value, physical_decision_v1);
+} effect_decisions SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, effect_default_key_v1);
+    __type(value, physical_decision_v1);
+} effect_defaults SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, exact_file_object_key_v1);
+    __type(value, exact_object_binding_v1);
+} exact_file_objects SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 1 << 22);
+} effect_observations SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, effect_observation_health_v1);
+} effect_observation_health SEC(".maps");
+
 static __always_inline identity_runtime_config_v1 *identity_runtime_config(void)
 {
     __u32 zero = 0;
@@ -285,7 +335,7 @@ static __always_inline int cgroup_parent(struct cgroup *cgroup,
         return -EACCES;
     if (!parent_css)
         return 0;
-    *result = container_of(parent_css, struct cgroup, self);
+    *result = EREBOR_CORE_CONTAINER_OF(parent_css, struct cgroup, self);
     return 0;
 }
 

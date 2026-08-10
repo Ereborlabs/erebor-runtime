@@ -3,6 +3,19 @@
 #ifndef EREBOR_IDENTITY_EXEC_BPF_H
 #define EREBOR_IDENTITY_EXEC_BPF_H
 
+static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
+{
+    identity_runtime_config_v1 *config = identity_runtime_config();
+    struct file *file = NULL;
+
+    if (!config || !config->effect_observation_enabled)
+        return 0;
+    if (BPF_CORE_READ_INTO(&file, bprm, file))
+        file = NULL;
+    return identity_effect_gate(file, kernel_effect_family_v1_exec,
+                                kernel_effect_operation_v1_execute, 0);
+}
+
 static __always_inline void candidate_from_bprm(
     exact_executable_candidate_v1 *candidate, struct linux_binprm *bprm)
 {
@@ -518,7 +531,7 @@ int BPF_PROG(erebor_bprm_check_security, struct linux_binprm *bprm, int ret)
         consume_administrative_match(config, label, binding, process,
                                      &scratch->pending_exec);
         release_transition_guard(&process->transition_guard);
-        return 0;
+        return observe_bprm_effect(bprm);
     }
     if (!id128_equal(&pending->process_state_id, &label->process_state_id) ||
         pending->state != pending_exec_state_v1_preparing ||
@@ -528,7 +541,7 @@ int BPF_PROG(erebor_bprm_check_security, struct linux_binprm *bprm, int ret)
     if (append_exec_candidate(pending,
                               &scratch->image.ordered_candidates[0]))
         return identity_deny(config);
-    return 0;
+    return observe_bprm_effect(bprm);
 }
 
 static __always_inline int prepare_exec_records(

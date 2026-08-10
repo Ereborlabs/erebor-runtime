@@ -3,10 +3,11 @@ use std::fs;
 use std::io;
 use std::os::fd::AsFd as _;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use libbpf_rs::{
     Iter, Link, MapCore as _, MapFlags, MapHandle, Object, ObjectBuilder, OpenObject, Program,
-    ProgramHandle, ProgramType,
+    ProgramHandle, ProgramType, RingBuffer, RingBufferBuilder,
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
@@ -22,6 +23,19 @@ use crate::{
 };
 
 const BUNDLED_OBJECT_NAME: &str = "embedded erebor-interceptor.bpf.o";
+
+pub struct EffectObservationReader {
+    ring: RingBuffer<'static>,
+}
+
+impl EffectObservationReader {
+    pub fn poll(&self, timeout: Duration) -> Result<()> {
+        self.ring.poll(timeout).context(LibbpfSnafu {
+            action: "poll effect observation ring",
+            path: Path::new("effect_observations"),
+        })
+    }
+}
 
 pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 21] = [
     "qualification_task_alloc",
@@ -82,6 +96,7 @@ pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 32] = [
     "erebor_reconcile_tasks",
 ];
 
+#[derive(Clone)]
 pub struct KernelStateReader {
     maps_root: PathBuf,
 }
@@ -869,6 +884,33 @@ impl KernelHost {
                 .build()
             })?;
         Ok(map.keys().collect())
+    }
+
+    pub fn effect_observation_reader<F>(&self, callback: F) -> Result<EffectObservationReader>
+    where
+        F: FnMut(&[u8]) -> i32 + 'static,
+    {
+        let map = self
+            .object
+            .maps()
+            .find(|map| map.name().to_string_lossy() == "effect_observations")
+            .ok_or_else(|| {
+                ManifestMismatchSnafu {
+                    path: PathBuf::from("effect_observations"),
+                    reason: "loaded object has no effect observation ring".to_owned(),
+                }
+                .build()
+            })?;
+        let mut builder = RingBufferBuilder::new();
+        builder.add(&map, callback).context(LibbpfSnafu {
+            action: "register effect observation callback",
+            path: Path::new("effect_observations"),
+        })?;
+        let ring = builder.build().context(LibbpfSnafu {
+            action: "build effect observation reader",
+            path: Path::new("effect_observations"),
+        })?;
+        Ok(EffectObservationReader { ring })
     }
 
     pub fn reconcile_tasks(&mut self) -> Result<()> {

@@ -1,0 +1,234 @@
+use std::collections::VecDeque;
+use std::mem;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use erebor_interceptor_abi::{
+    EffectObservationHealthV1, EffectObservationReasonV1, EffectObservationV1,
+    EffectPhysicalResultV1, Id128V1,
+};
+use erebor_runtime_ipc::v1::MithrilEffectObservation;
+use zerocopy::FromBytes as _;
+
+const DEFAULT_RECENT_EFFECT_CAPACITY: usize = 1_024;
+
+#[derive(Clone)]
+pub struct EffectObservationStore {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    recent: Mutex<VecDeque<MithrilEffectObservation>>,
+    capacity: usize,
+    decoder_errors: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct EffectObservationHealth {
+    pub attempted: u64,
+    pub emitted: u64,
+    pub lost: u64,
+    pub unresolved: u64,
+    pub decoder_errors: u64,
+}
+
+impl Default for EffectObservationStore {
+    fn default() -> Self {
+        Self::new(DEFAULT_RECENT_EFFECT_CAPACITY)
+    }
+}
+
+impl EffectObservationStore {
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                recent: Mutex::new(VecDeque::with_capacity(capacity)),
+                capacity,
+                decoder_errors: AtomicU64::new(0),
+            }),
+        }
+    }
+
+    pub fn record_bytes(&self, bytes: &[u8]) {
+        let Ok(event) = EffectObservationV1::read_from_bytes(bytes) else {
+            self.inner.decoder_errors.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        let mut recent = self.lock_recent();
+        if self.inner.capacity == 0 {
+            return;
+        }
+        if recent.len() == self.inner.capacity {
+            recent.pop_front();
+        }
+        recent.push_back(to_ipc(event));
+    }
+
+    #[must_use]
+    pub fn recent(&self) -> Vec<MithrilEffectObservation> {
+        self.lock_recent().iter().cloned().collect()
+    }
+
+    #[must_use]
+    pub fn health(&self, per_cpu_bytes: Option<&[u8]>) -> EffectObservationHealth {
+        let mut health = EffectObservationHealth {
+            decoder_errors: self.inner.decoder_errors.load(Ordering::Relaxed),
+            ..EffectObservationHealth::default()
+        };
+        let Some(bytes) = per_cpu_bytes else {
+            return health;
+        };
+        let width = mem::size_of::<EffectObservationHealthV1>();
+        if bytes.is_empty() || !bytes.len().is_multiple_of(width) {
+            health.decoder_errors = health.decoder_errors.saturating_add(1);
+            return health;
+        }
+        for chunk in bytes.chunks_exact(width) {
+            let Ok(cpu) = EffectObservationHealthV1::read_from_bytes(chunk) else {
+                health.decoder_errors = health.decoder_errors.saturating_add(1);
+                continue;
+            };
+            health.attempted = health.attempted.saturating_add(cpu.attempted);
+            health.emitted = health.emitted.saturating_add(cpu.emitted);
+            health.lost = health.lost.saturating_add(cpu.lost);
+            health.unresolved = health.unresolved.saturating_add(cpu.unresolved);
+        }
+        health
+    }
+
+    fn lock_recent(&self) -> MutexGuard<'_, VecDeque<MithrilEffectObservation>> {
+        self.inner
+            .recent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
+    MithrilEffectObservation {
+        observed_boottime_ns: event.observed_boottime_ns,
+        task_cookie: event.task_cookie,
+        profile_generation_ref_id: event.profile_generation_ref_id,
+        process_lineage_id: id_hex(event.process_lineage_id),
+        process_instance_id: id_hex(event.process_instance_id),
+        entry_instance_id: id_hex(event.entry_instance_id),
+        authority_domain_id: id_hex(event.authority_domain_id),
+        binding_id: id_hex(event.binding_id),
+        execution_set_id: id_hex(event.execution_set_id),
+        mount_namespace_inode: event.file_object.mount_namespace_inode,
+        mount_id_unique: event.file_object.mount_id_unique,
+        filesystem_device: event.file_object.filesystem_device,
+        inode: event.file_object.inode,
+        inode_generation: event.file_object.inode_generation,
+        exact_object_key_id: event.exact_object_key_id,
+        composite_atom_id: event.composite_atom_id,
+        active_role_id: event.active_role_id,
+        process_state_vector_id: event.process_state_vector_id,
+        entry_kind: u32::from(event.entry_kind),
+        effect_family: u32::from(event.effect_family),
+        operation: u32::from(event.operation),
+        configured_errno: i32::from(event.configured_errno),
+        kernel_result: event.kernel_result,
+        reason_code: u32::from(event.reason),
+        reason: reason_name(event.reason).to_owned(),
+        physical_result_code: u32::from(event.physical_result),
+        physical_result: physical_result_name(event.physical_result).to_owned(),
+        stage: "LOCAL_PRE_EFFECT_V1".to_owned(),
+    }
+}
+
+fn id_hex(id: Id128V1) -> String {
+    format!("{:016x}{:016x}", id.high, id.low)
+}
+
+const fn reason_name(reason: u8) -> &'static str {
+    match reason {
+        value if value == EffectObservationReasonV1::ExactPolicyAllow as u8 => "EXACT_POLICY_ALLOW",
+        value if value == EffectObservationReasonV1::ExactPolicyAuditAllow as u8 => {
+            "EXACT_POLICY_AUDIT_ALLOW"
+        }
+        value if value == EffectObservationReasonV1::WouldDeny as u8 => "WOULD_DENY",
+        value if value == EffectObservationReasonV1::PriorLsmDenial as u8 => "PRIOR_LSM_DENIAL",
+        value if value == EffectObservationReasonV1::MissingIdentity as u8 => "MISSING_IDENTITY",
+        value if value == EffectObservationReasonV1::CorruptIdentityOrGeneration as u8 => {
+            "CORRUPT_IDENTITY_OR_GENERATION"
+        }
+        value if value == EffectObservationReasonV1::UnresolvedObject as u8 => "UNRESOLVED_OBJECT",
+        value if value == EffectObservationReasonV1::UnsupportedObject as u8 => {
+            "UNSUPPORTED_OBJECT"
+        }
+        _ => "UNKNOWN",
+    }
+}
+
+const fn physical_result_name(result: u8) -> &'static str {
+    match result {
+        value if value == EffectPhysicalResultV1::UnknownAfterPreEffect as u8 => {
+            "UNKNOWN_AFTER_PRE_EFFECT"
+        }
+        value if value == EffectPhysicalResultV1::DeniedBeforeEffect as u8 => {
+            "DENIED_BEFORE_EFFECT"
+        }
+        _ => "UNKNOWN",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use erebor_interceptor_abi::{
+        EffectObservationHealthV1, EffectObservationReasonV1, EffectObservationV1,
+        EffectPhysicalResultV1, Id128V1,
+    };
+    use zerocopy::IntoBytes as _;
+
+    use super::EffectObservationStore;
+
+    #[test]
+    fn records_exact_events_and_bounds_recent_history() {
+        let store = EffectObservationStore::new(1);
+        for task_cookie in [7, 8] {
+            let event = EffectObservationV1 {
+                task_cookie,
+                process_lineage_id: Id128V1::new(1, 2),
+                reason: EffectObservationReasonV1::WouldDeny as u8,
+                physical_result: EffectPhysicalResultV1::UnknownAfterPreEffect as u8,
+                ..EffectObservationV1::default()
+            };
+            store.record_bytes(event.as_bytes());
+        }
+        let recent = store.recent();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].task_cookie, 8);
+        assert_eq!(
+            recent[0].process_lineage_id,
+            "00000000000000010000000000000002"
+        );
+        assert_eq!(recent[0].reason, "WOULD_DENY");
+    }
+
+    #[test]
+    fn sums_per_cpu_health_and_counts_decoder_errors() {
+        let store = EffectObservationStore::default();
+        store.record_bytes(&[1, 2, 3]);
+        let first = EffectObservationHealthV1 {
+            attempted: 4,
+            emitted: 3,
+            lost: 1,
+            unresolved: 2,
+        };
+        let second = EffectObservationHealthV1 {
+            attempted: 6,
+            emitted: 5,
+            lost: 1,
+            unresolved: 4,
+        };
+        let bytes = [first.as_bytes(), second.as_bytes()].concat();
+        let health = store.health(Some(&bytes));
+        assert_eq!(health.attempted, 10);
+        assert_eq!(health.emitted, 8);
+        assert_eq!(health.lost, 2);
+        assert_eq!(health.unresolved, 6);
+        assert_eq!(health.decoder_errors, 1);
+    }
+}

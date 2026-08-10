@@ -41,6 +41,36 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril policy source `{}` is invalid: {source}", path.display()))]
+    PolicySource {
+        path: PathBuf,
+        #[snafu(source(from(serde_saphyr::Error, Box::new)))]
+        source: Box<serde_saphyr::Error>,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Mithril policy `{policy_id}` failed {code}: {reason}"))]
+    PolicyValidation {
+        policy_id: String,
+        code: &'static str,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Mithril policy signature `{key_id}` is invalid: {reason}"))]
+    PolicySignature {
+        key_id: String,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
+    #[snafu(display("Mithril policy state `{}` is invalid: {reason}", path.display()))]
+    PolicyState {
+        path: PathBuf,
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -48,7 +78,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl ErrorExt for Error {
     fn status_code(&self) -> StatusCode {
         match self {
-            Self::InvalidConfiguration { .. } | Self::Json { .. } => StatusCode::InvalidArguments,
+            Self::InvalidConfiguration { .. }
+            | Self::Json { .. }
+            | Self::PolicySource { .. }
+            | Self::PolicyValidation { .. }
+            | Self::PolicySignature { .. }
+            | Self::PolicyState { .. } => StatusCode::InvalidArguments,
             Self::Io { .. } | Self::Tls { .. } | Self::Serve { .. } => StatusCode::External,
         }
     }
@@ -57,9 +92,13 @@ impl ErrorExt for Error {
         match self {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Serve { .. } => RetryHint::Retryable,
-            Self::InvalidConfiguration { .. } | Self::Json { .. } | Self::Tls { .. } => {
-                RetryHint::NonRetryable
-            }
+            Self::InvalidConfiguration { .. }
+            | Self::Json { .. }
+            | Self::Tls { .. }
+            | Self::PolicySource { .. }
+            | Self::PolicyValidation { .. }
+            | Self::PolicySignature { .. }
+            | Self::PolicyState { .. } => RetryHint::NonRetryable,
         }
     }
 

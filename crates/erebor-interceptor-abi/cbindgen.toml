@@ -48,6 +48,14 @@ include = [
   "ExternalRootClassificationV1",
   "ExternalRootClassV1",
   "EffectDecisionKeyV1",
+  "EffectDefaultKeyV1",
+  "EffectObservationHealthV1",
+  "EffectObservationReasonV1",
+  "EffectObservationV1",
+  "EffectPhysicalResultV1",
+  "ExactFileObjectKeyV1",
+  "ExactObjectBindingStateV1",
+  "ExactObjectBindingV1",
   "FileOpenEventV1",
   "FileOpenTargetV1",
   "Id128V1",
@@ -58,12 +66,16 @@ include = [
   "KernelRealParentChangeReasonV1",
   "KernelRealParentIntervalKeyV1",
   "KernelRealParentIntervalV1",
+  "KernelEffectFamilyV1",
+  "KernelEffectOperationV1",
   "PendingExecStateV1",
   "PendingExecV1",
   "PendingAdministrativeMatchStateV1",
   "PendingAdministrativeMatchV1",
   "PhysicalDecisionKindV1",
   "PhysicalDecisionV1",
+  "PolicyGenerationStateV1",
+  "ProfileGenerationDescriptorV1",
   "ProcessSecurityStateKindV1",
   "ProcessSecurityStateV1",
   "ProcessStateVectorStateV1",
@@ -102,6 +114,14 @@ include = [
 "ExternalRootClassificationV1" = "external_root_classification_v1"
 "ExternalRootClassV1" = "external_root_class_v1"
 "EffectDecisionKeyV1" = "effect_decision_key_v1"
+"EffectDefaultKeyV1" = "effect_default_key_v1"
+"EffectObservationHealthV1" = "effect_observation_health_v1"
+"EffectObservationReasonV1" = "effect_observation_reason_v1"
+"EffectObservationV1" = "effect_observation_v1"
+"EffectPhysicalResultV1" = "effect_physical_result_v1"
+"ExactFileObjectKeyV1" = "exact_file_object_key_v1"
+"ExactObjectBindingStateV1" = "exact_object_binding_state_v1"
+"ExactObjectBindingV1" = "exact_object_binding_v1"
 "FileOpenEventV1" = "file_open_event_v1"
 "FileOpenTargetV1" = "file_open_target_v1"
 "Id128V1" = "id128_v1"
@@ -112,12 +132,16 @@ include = [
 "KernelRealParentChangeReasonV1" = "kernel_real_parent_change_reason_v1"
 "KernelRealParentIntervalKeyV1" = "kernel_real_parent_interval_key_v1"
 "KernelRealParentIntervalV1" = "kernel_real_parent_interval_v1"
+"KernelEffectFamilyV1" = "kernel_effect_family_v1"
+"KernelEffectOperationV1" = "kernel_effect_operation_v1"
 "PendingExecStateV1" = "pending_exec_state_v1"
 "PendingExecV1" = "pending_exec_v1"
 "PendingAdministrativeMatchStateV1" = "pending_administrative_match_state_v1"
 "PendingAdministrativeMatchV1" = "pending_administrative_match_v1"
 "PhysicalDecisionKindV1" = "physical_decision_kind_v1"
 "PhysicalDecisionV1" = "physical_decision_v1"
+"PolicyGenerationStateV1" = "policy_generation_state_v1"
+"ProfileGenerationDescriptorV1" = "profile_generation_descriptor_v1"
 "ProcessSecurityStateKindV1" = "process_security_state_kind_v1"
 "ProcessSecurityStateV1" = "process_security_state_v1"
 "ProcessStateVectorStateV1" = "process_state_vector_state_v1"

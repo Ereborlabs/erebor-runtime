@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
@@ -47,6 +47,26 @@ pub struct ContainerRuntimeConfig {
     pub reconciliation_interval_ms: u64,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyCandidateConfig {
+    pub artifact_path: PathBuf,
+    pub public_key_path: PathBuf,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExactFileObjectConfig {
+    pub profile_generation_ref_id: u64,
+    pub exact_object_key_id: u64,
+    pub object_class_id: String,
+    pub mount_namespace_inode: u64,
+    pub mount_id_unique: u64,
+    pub filesystem_device: u64,
+    pub inode: u64,
+    pub inode_generation: u32,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ContainerKindV1 {
@@ -61,6 +81,8 @@ pub enum ContainerKindV1 {
 pub struct WorkloadBindingConfig {
     pub binding_id: String,
     pub execution_set_id: String,
+    pub protected_scope_id: String,
+    pub workload_selector_id: String,
     pub profile_id: String,
     pub container_id: String,
     pub pod_uid: String,
@@ -92,6 +114,10 @@ pub struct NodeConfig {
     pub container_runtime: Option<ContainerRuntimeConfig>,
     #[serde(default)]
     pub workload_bindings: Vec<WorkloadBindingConfig>,
+    #[serde(default)]
+    pub policy_candidates: Vec<PolicyCandidateConfig>,
+    #[serde(default)]
+    pub exact_file_objects: Vec<ExactFileObjectConfig>,
 }
 
 impl NodeConfig {
@@ -154,7 +180,8 @@ impl NodeConfig {
                     && binding.lifecycle_generation > 0
                     && binding.active_profile_generation_ref_id > 0
                     && binding.initial_role_id > 0
-                    && binding.external_role_id > 0,
+                    && binding.external_role_id > 0
+                    && !binding.workload_selector_id.is_empty(),
                 InvalidConfigurationSnafu {
                     reason: "Workload bindings require nonempty container identity and nonzero generations and roles",
                 }
@@ -172,6 +199,45 @@ impl NodeConfig {
                 InvalidConfigurationSnafu {
                     reason:
                         "workload binding, execution-set, and container identities must be unique",
+                }
+            );
+        }
+        let mut candidate_paths = BTreeSet::new();
+        for candidate in &self.policy_candidates {
+            ensure!(
+                candidate.artifact_path.is_absolute()
+                    && candidate.public_key_path.is_absolute()
+                    && candidate_paths.insert(&candidate.artifact_path),
+                InvalidConfigurationSnafu {
+                    reason: "policy candidates need unique absolute artifact and public-key paths",
+                }
+            );
+        }
+        let mut exact_object_ids = BTreeSet::new();
+        let mut exact_kernel_objects = BTreeSet::new();
+        for object in &self.exact_file_objects {
+            ensure!(
+                object.profile_generation_ref_id > 0
+                    && object.exact_object_key_id > 0
+                    && !object.object_class_id.is_empty()
+                    && object.mount_namespace_inode > 0
+                    && object.mount_id_unique > 0
+                    && object.inode > 0
+                    && object.inode_generation > 0
+                    && exact_object_ids.insert((
+                        object.profile_generation_ref_id,
+                        object.exact_object_key_id,
+                    ))
+                    && exact_kernel_objects.insert((
+                        object.profile_generation_ref_id,
+                        object.mount_namespace_inode,
+                        object.mount_id_unique,
+                        object.filesystem_device,
+                        object.inode,
+                        object.inode_generation,
+                    )),
+                InvalidConfigurationSnafu {
+                    reason: "exact file-object bindings need unique IDs and unique nonzero kernel identities",
                 }
             );
         }
@@ -221,7 +287,8 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        ContainerKindV1, InterceptorConfig, NodeConfig, NodeControlConfig, WorkloadBindingConfig,
+        ContainerKindV1, ExactFileObjectConfig, InterceptorConfig, NodeConfig, NodeControlConfig,
+        WorkloadBindingConfig,
     };
 
     fn config() -> NodeConfig {
@@ -247,6 +314,8 @@ mod tests {
             workload_bindings: vec![WorkloadBindingConfig {
                 binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
                 execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
+                protected_scope_id: "44444444-4444-4444-8444-444444444444".to_owned(),
+                workload_selector_id: "worker".to_owned(),
                 profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
                 container_id: "a".repeat(64),
                 pod_uid: "configured-scope".to_owned(),
@@ -262,6 +331,8 @@ mod tests {
                 external_role_id: 2,
                 arm_initial_root: false,
             }],
+            policy_candidates: Vec::new(),
+            exact_file_objects: Vec::new(),
         }
     }
 
@@ -292,5 +363,28 @@ mod tests {
         let mut config = config();
         config.workload_bindings[0].root_cgroup_path = None;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn exact_object_ids_and_kernel_identities_are_one_to_one() {
+        let mut config = config();
+        config.exact_file_objects = vec![exact_object(7, 11), exact_object(7, 12)];
+        assert!(config.validate().is_err());
+
+        config.exact_file_objects = vec![exact_object(7, 11), exact_object(8, 11)];
+        assert!(config.validate().is_err());
+    }
+
+    fn exact_object(exact_object_key_id: u64, inode: u64) -> ExactFileObjectConfig {
+        ExactFileObjectConfig {
+            profile_generation_ref_id: 1,
+            exact_object_key_id,
+            object_class_id: "DATASET_INPUT".to_owned(),
+            mount_namespace_inode: 10,
+            mount_id_unique: 20,
+            filesystem_device: 30,
+            inode,
+            inode_generation: 1,
+        }
     }
 }

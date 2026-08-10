@@ -242,6 +242,55 @@ typedef enum installed_role_class_v1 installed_role_class_v1;
 typedef uint8_t installed_role_class_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
+enum effect_observation_reason_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  effect_observation_reason_v1_unknown = 0,
+  effect_observation_reason_v1_exact_policy_allow = 1,
+  effect_observation_reason_v1_exact_policy_audit_allow = 2,
+  effect_observation_reason_v1_would_deny = 3,
+  effect_observation_reason_v1_prior_lsm_denial = 4,
+  effect_observation_reason_v1_missing_identity = 5,
+  effect_observation_reason_v1_corrupt_identity_or_generation = 6,
+  effect_observation_reason_v1_unresolved_object = 7,
+  effect_observation_reason_v1_unsupported_object = 8,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum effect_observation_reason_v1 effect_observation_reason_v1;
+#else
+typedef uint8_t effect_observation_reason_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum effect_physical_result_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  effect_physical_result_v1_unknown_after_pre_effect = 0,
+  effect_physical_result_v1_denied_before_effect = 1,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum effect_physical_result_v1 effect_physical_result_v1;
+#else
+typedef uint8_t effect_physical_result_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum exact_object_binding_state_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  exact_object_binding_state_v1_unknown = 0,
+  exact_object_binding_state_v1_read_back = 1,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum exact_object_binding_state_v1 exact_object_binding_state_v1;
+#else
+typedef uint8_t exact_object_binding_state_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
 enum kernel_real_parent_change_reason_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
@@ -256,6 +305,63 @@ enum kernel_real_parent_change_reason_v1
 typedef enum kernel_real_parent_change_reason_v1 kernel_real_parent_change_reason_v1;
 #else
 typedef uint8_t kernel_real_parent_change_reason_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum kernel_effect_family_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint16_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  kernel_effect_family_v1_unknown = 0,
+  kernel_effect_family_v1_exec = 1,
+  kernel_effect_family_v1_file = 2,
+  kernel_effect_family_v1_network = 3,
+  kernel_effect_family_v1_device = 4,
+  kernel_effect_family_v1_privilege = 5,
+  kernel_effect_family_v1_ipc = 6,
+  kernel_effect_family_v1_mount = 7,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum kernel_effect_family_v1 kernel_effect_family_v1;
+#else
+typedef uint16_t kernel_effect_family_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum kernel_effect_operation_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint16_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  kernel_effect_operation_v1_unknown = 0,
+  kernel_effect_operation_v1_execute = 1,
+  kernel_effect_operation_v1_open_read = 2,
+  kernel_effect_operation_v1_open_write = 3,
+  kernel_effect_operation_v1_read = 4,
+  kernel_effect_operation_v1_write = 5,
+  kernel_effect_operation_v1_ioctl = 6,
+  kernel_effect_operation_v1_mmap_read = 7,
+  kernel_effect_operation_v1_mmap_write = 8,
+  kernel_effect_operation_v1_mmap_exec = 9,
+  kernel_effect_operation_v1_mprotect = 10,
+  kernel_effect_operation_v1_ipc_access = 11,
+  kernel_effect_operation_v1_connect = 12,
+  kernel_effect_operation_v1_send = 13,
+  kernel_effect_operation_v1_ptrace = 14,
+  kernel_effect_operation_v1_signal = 15,
+  kernel_effect_operation_v1_unlink = 16,
+  kernel_effect_operation_v1_link = 17,
+  kernel_effect_operation_v1_rename = 18,
+  kernel_effect_operation_v1_mount = 19,
+  kernel_effect_operation_v1_unmount = 20,
+  kernel_effect_operation_v1_pivot_root = 21,
+  kernel_effect_operation_v1_move_mount = 22,
+  kernel_effect_operation_v1_capability = 23,
+  kernel_effect_operation_v1_bpf = 24,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum kernel_effect_operation_v1 kernel_effect_operation_v1;
+#else
+typedef uint16_t kernel_effect_operation_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum pending_exec_state_v1
@@ -305,6 +411,23 @@ enum physical_decision_kind_v1
 typedef enum physical_decision_kind_v1 physical_decision_kind_v1;
 #else
 typedef uint8_t physical_decision_kind_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum policy_generation_state_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  policy_generation_state_v1_unknown = 0,
+  policy_generation_state_v1_preparing = 1,
+  policy_generation_state_v1_read_back = 2,
+  policy_generation_state_v1_active = 3,
+  policy_generation_state_v1_rejected = 4,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum policy_generation_state_v1 policy_generation_state_v1;
+#else
+typedef uint8_t policy_generation_state_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum process_security_state_kind_v1
@@ -519,6 +642,7 @@ typedef struct execution_set_binding_state_v1 {
   struct id128_v1 binding_nonce;
   struct id128_v1 node_boot_id;
   struct id128_v1 execution_set_id;
+  struct id128_v1 protected_scope_id;
   struct id128_v1 profile_id;
   uint64_t label_epoch;
   uint64_t active_profile_generation_ref_id;
@@ -570,6 +694,70 @@ typedef struct effect_decision_key_v1 {
   uint8_t reserved_tail[3];
 } effect_decision_key_v1;
 
+typedef struct effect_default_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint32_t active_role_id;
+  uint16_t entry_kind;
+  uint16_t effect_family;
+  uint16_t operation;
+  uint16_t reserved;
+  uint8_t reserved_alignment[4];
+  uint64_t composite_atom_id;
+  uint32_t process_state_vector_id;
+  binding_lifecycle_state_v1 binding_lifecycle_state;
+  uint8_t reserved_tail[3];
+} effect_default_key_v1;
+
+typedef struct effect_observation_health_v1 {
+  uint64_t attempted;
+  uint64_t emitted;
+  uint64_t lost;
+  uint64_t unresolved;
+} effect_observation_health_v1;
+
+typedef struct exact_file_object_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint64_t mount_namespace_inode;
+  uint64_t mount_id_unique;
+  uint64_t filesystem_device;
+  uint64_t inode;
+  uint32_t inode_generation;
+  uint32_t reserved;
+} exact_file_object_key_v1;
+
+typedef struct effect_observation_v1 {
+  uint64_t observed_boottime_ns;
+  uint64_t task_cookie;
+  uint64_t profile_generation_ref_id;
+  struct id128_v1 process_lineage_id;
+  struct id128_v1 process_instance_id;
+  struct id128_v1 entry_instance_id;
+  struct id128_v1 authority_domain_id;
+  struct id128_v1 binding_id;
+  struct id128_v1 execution_set_id;
+  struct exact_file_object_key_v1 file_object;
+  uint64_t exact_object_key_id;
+  uint64_t composite_atom_id;
+  uint32_t active_role_id;
+  uint32_t process_state_vector_id;
+  uint16_t entry_kind;
+  uint16_t effect_family;
+  uint16_t operation;
+  int16_t configured_errno;
+  int32_t kernel_result;
+  uint8_t reason;
+  uint8_t physical_result;
+  uint8_t reserved[2];
+} effect_observation_v1;
+
+typedef struct exact_object_binding_v1 {
+  uint64_t profile_generation_ref_id;
+  uint64_t exact_object_key_id;
+  uint64_t composite_atom_id;
+  exact_object_binding_state_v1 state;
+  uint8_t reserved[7];
+} exact_object_binding_v1;
+
 typedef struct file_open_event_v1 {
   uint64_t inode;
   int32_t result;
@@ -595,7 +783,8 @@ typedef struct identity_runtime_config_v1 {
   uint64_t next_id;
   int32_t first_effect_errno;
   uint8_t enabled;
-  uint8_t reserved[3];
+  uint8_t effect_observation_enabled;
+  uint8_t reserved[2];
 } identity_runtime_config_v1;
 
 typedef struct kernel_real_parent_interval_key_v1 {
@@ -659,6 +848,20 @@ typedef struct physical_decision_v1 {
   uint32_t transition_id;
   uint32_t exception_numeric_handle;
 } physical_decision_v1;
+
+typedef struct profile_generation_descriptor_v1 {
+  struct id128_v1 node_boot_id;
+  struct id128_v1 profile_id;
+  uint64_t label_epoch;
+  uint64_t profile_generation_ref_id;
+  uint64_t owner_generation;
+  uint32_t row_count;
+  uint32_t default_count;
+  policy_generation_state_v1 state;
+  uint8_t reserved[7];
+  uint8_t table_digest[32];
+  uint64_t transition_version;
+} profile_generation_descriptor_v1;
 
 typedef struct process_security_state_v1 {
   struct id128_v1 process_state_id;

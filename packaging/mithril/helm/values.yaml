@@ -3,6 +3,7 @@ node:
   configSecretName: mithril-node-config
   stateHostPath: /var/lib/mithril
   runHostPath: /run/mithril
+  containerRuntimeSocket: /run/containerd/containerd.sock
 
 control:
   enabled: true

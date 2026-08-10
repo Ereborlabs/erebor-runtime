@@ -18,5 +18,49 @@ message MithrilObservationSnapshot {
   uint64 label_epoch = 3;
   string program_digest = 4;
   bool kernel_ready = 5;
-  repeated string capability_ids = 6;
+  repeated MithrilCapabilityRecord capabilities = 6;
+  repeated MithrilEffectObservation recent_effects = 7;
+  uint64 attempted_effects = 8;
+  uint64 emitted_effects = 9;
+  uint64 lost_effects = 10;
+  uint64 unresolved_effects = 11;
+  uint64 decoder_errors = 12;
+  bool effect_health_available = 13;
+}
+
+message MithrilCapabilityRecord {
+  string capability_id = 1;
+  string state = 2;
+  string reason_code = 3;
+}
+
+message MithrilEffectObservation {
+  uint64 observed_boottime_ns = 1;
+  uint64 task_cookie = 2;
+  uint64 profile_generation_ref_id = 3;
+  string process_lineage_id = 4;
+  string process_instance_id = 5;
+  string entry_instance_id = 6;
+  string authority_domain_id = 7;
+  string binding_id = 8;
+  string execution_set_id = 9;
+  uint64 mount_namespace_inode = 10;
+  uint64 mount_id_unique = 11;
+  uint64 filesystem_device = 12;
+  uint64 inode = 13;
+  uint32 inode_generation = 14;
+  uint64 exact_object_key_id = 15;
+  uint64 composite_atom_id = 16;
+  uint32 active_role_id = 17;
+  uint32 process_state_vector_id = 18;
+  uint32 entry_kind = 19;
+  uint32 effect_family = 20;
+  uint32 operation = 21;
+  sint32 configured_errno = 22;
+  sint32 kernel_result = 23;
+  uint32 reason_code = 24;
+  string reason = 25;
+  uint32 physical_result_code = 26;
+  string physical_result = 27;
+  string stage = 28;
 }

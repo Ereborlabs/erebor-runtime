@@ -1,4 +1,4 @@
-use zerocopy::{Immutable, IntoBytes, KnownLayout};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub const MAX_ANCESTOR_PROCESS_LINEAGES_V1: usize = 8;
 pub const MAX_EXEC_CANDIDATES_V1: usize = 8;
@@ -19,6 +19,7 @@ pub const CONSERVATIVE_PROCESS_STATE_VECTOR_V1: u32 = 1;
     Debug,
     Default,
     Eq,
+    FromBytes,
     Hash,
     Immutable,
     IntoBytes,
@@ -458,6 +459,7 @@ pub struct ExecutionSetBindingStateV1 {
     pub binding_nonce: Id128V1,
     pub node_boot_id: Id128V1,
     pub execution_set_id: Id128V1,
+    pub protected_scope_id: Id128V1,
     pub profile_id: Id128V1,
     pub label_epoch: u64,
     pub active_profile_generation_ref_id: u64,
@@ -728,7 +730,8 @@ pub struct IdentityRuntimeConfigV1 {
     pub next_id: u64,
     pub first_effect_errno: i32,
     pub enabled: u8,
-    pub reserved: [u8; 3],
+    pub effect_observation_enabled: u8,
+    pub reserved: [u8; 2],
 }
 
 #[repr(C)]

@@ -25,11 +25,87 @@ pub enum BindingLifecycleStateV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
 pub enum PhysicalDecisionKindV1 {
+    #[default]
     Allow = 0,
     AuditAllow = 1,
     Deny = 2,
+}
+
+#[repr(u16)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub enum KernelEffectFamilyV1 {
+    #[default]
+    Unknown = 0,
+    Exec = 1,
+    File = 2,
+    Network = 3,
+    Device = 4,
+    Privilege = 5,
+    Ipc = 6,
+    Mount = 7,
+}
+
+#[repr(u16)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub enum KernelEffectOperationV1 {
+    #[default]
+    Unknown = 0,
+    Execute = 1,
+    OpenRead = 2,
+    OpenWrite = 3,
+    Read = 4,
+    Write = 5,
+    Ioctl = 6,
+    MmapRead = 7,
+    MmapWrite = 8,
+    MmapExec = 9,
+    Mprotect = 10,
+    IpcAccess = 11,
+    Connect = 12,
+    Send = 13,
+    Ptrace = 14,
+    Signal = 15,
+    Unlink = 16,
+    Link = 17,
+    Rename = 18,
+    Mount = 19,
+    Unmount = 20,
+    PivotRoot = 21,
+    MoveMount = 22,
+    Capability = 23,
+    Bpf = 24,
 }
 
 #[repr(C)]
@@ -53,7 +129,16 @@ pub struct FileOpenEventV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
 pub struct EffectDecisionKeyV1 {
     pub profile_generation_ref_id: u64,
     pub active_role_id: u32,
@@ -70,7 +155,16 @@ pub struct EffectDecisionKeyV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
 pub struct PhysicalDecisionV1 {
     pub decision: PhysicalDecisionKindV1,
     pub reserved: u8,
@@ -78,6 +172,240 @@ pub struct PhysicalDecisionV1 {
     pub evidence_class_id: u32,
     pub transition_id: u32,
     pub exception_numeric_handle: u32,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub struct EffectDefaultKeyV1 {
+    pub profile_generation_ref_id: u64,
+    pub active_role_id: u32,
+    pub entry_kind: u16,
+    pub effect_family: u16,
+    pub operation: u16,
+    pub reserved: u16,
+    pub reserved_alignment: [u8; 4],
+    pub composite_atom_id: u64,
+    pub process_state_vector_id: u32,
+    pub binding_lifecycle_state: BindingLifecycleStateV1,
+    pub reserved_tail: [u8; 3],
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub enum PolicyGenerationStateV1 {
+    #[default]
+    Unknown = 0,
+    Preparing = 1,
+    ReadBack = 2,
+    Active = 3,
+    Rejected = 4,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub struct ProfileGenerationDescriptorV1 {
+    pub node_boot_id: Id128V1,
+    pub profile_id: Id128V1,
+    pub label_epoch: u64,
+    pub profile_generation_ref_id: u64,
+    pub owner_generation: u64,
+    pub row_count: u32,
+    pub default_count: u32,
+    pub state: PolicyGenerationStateV1,
+    pub reserved: [u8; 7],
+    pub table_digest: [u8; 32],
+    pub transition_version: u64,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::FromBytes,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub struct ExactFileObjectKeyV1 {
+    pub profile_generation_ref_id: u64,
+    pub mount_namespace_inode: u64,
+    pub mount_id_unique: u64,
+    pub filesystem_device: u64,
+    pub inode: u64,
+    pub inode_generation: u32,
+    pub reserved: u32,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub enum ExactObjectBindingStateV1 {
+    #[default]
+    Unknown = 0,
+    ReadBack = 1,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub struct ExactObjectBindingV1 {
+    pub profile_generation_ref_id: u64,
+    pub exact_object_key_id: u64,
+    pub composite_atom_id: u64,
+    pub state: ExactObjectBindingStateV1,
+    pub reserved: [u8; 7],
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub enum EffectObservationReasonV1 {
+    #[default]
+    Unknown = 0,
+    ExactPolicyAllow = 1,
+    ExactPolicyAuditAllow = 2,
+    WouldDeny = 3,
+    PriorLsmDenial = 4,
+    MissingIdentity = 5,
+    CorruptIdentityOrGeneration = 6,
+    UnresolvedObject = 7,
+    UnsupportedObject = 8,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub enum EffectPhysicalResultV1 {
+    #[default]
+    UnknownAfterPreEffect = 0,
+    DeniedBeforeEffect = 1,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::FromBytes,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub struct EffectObservationV1 {
+    pub observed_boottime_ns: u64,
+    pub task_cookie: u64,
+    pub profile_generation_ref_id: u64,
+    pub process_lineage_id: Id128V1,
+    pub process_instance_id: Id128V1,
+    pub entry_instance_id: Id128V1,
+    pub authority_domain_id: Id128V1,
+    pub binding_id: Id128V1,
+    pub execution_set_id: Id128V1,
+    pub file_object: ExactFileObjectKeyV1,
+    pub exact_object_key_id: u64,
+    pub composite_atom_id: u64,
+    pub active_role_id: u32,
+    pub process_state_vector_id: u32,
+    pub entry_kind: u16,
+    pub effect_family: u16,
+    pub operation: u16,
+    pub configured_errno: i16,
+    pub kernel_result: i32,
+    pub reason: u8,
+    pub physical_result: u8,
+    pub reserved: [u8; 2],
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::FromBytes,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub struct EffectObservationHealthV1 {
+    pub attempted: u64,
+    pub emitted: u64,
+    pub lost: u64,
+    pub unresolved: u64,
 }
 
 impl EffectDecisionKeyV1 {
@@ -119,8 +447,10 @@ mod tests {
     use std::mem::{align_of, offset_of, size_of};
 
     use super::{
-        BindingLifecycleStateV1, EffectDecisionKeyV1, FileOpenEventV1, FileOpenTargetV1,
-        PhysicalDecisionKindV1, PhysicalDecisionV1, TaskLabelCandidateV1,
+        BindingLifecycleStateV1, EffectDecisionKeyV1, EffectDefaultKeyV1,
+        EffectObservationHealthV1, EffectObservationV1, ExactFileObjectKeyV1, ExactObjectBindingV1,
+        FileOpenEventV1, FileOpenTargetV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+        ProfileGenerationDescriptorV1, TaskLabelCandidateV1,
     };
 
     #[test]
@@ -132,6 +462,14 @@ mod tests {
         assert_eq!(offset_of!(EffectDecisionKeyV1, binding_lifecycle_state), 44);
         assert_eq!(size_of::<PhysicalDecisionV1>(), 16);
         assert_eq!(align_of::<PhysicalDecisionV1>(), 4);
+        assert_eq!(size_of::<EffectDefaultKeyV1>(), 40);
+        assert_eq!(size_of::<ProfileGenerationDescriptorV1>(), 112);
+        assert_eq!(size_of::<ExactFileObjectKeyV1>(), 48);
+        assert_eq!(size_of::<ExactObjectBindingV1>(), 32);
+        assert_eq!(size_of::<EffectObservationV1>(), 208);
+        assert_eq!(size_of::<EffectObservationHealthV1>(), 32);
+        assert_eq!(offset_of!(EffectObservationV1, file_object), 120);
+        assert_eq!(offset_of!(EffectObservationV1, kernel_result), 200);
         assert_eq!(PhysicalDecisionKindV1::Allow as u8, 0);
         assert_eq!(PhysicalDecisionKindV1::AuditAllow as u8, 1);
         assert_eq!(PhysicalDecisionKindV1::Deny as u8, 2);

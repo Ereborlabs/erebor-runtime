@@ -31,13 +31,18 @@ use crate::Result;
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 
-const REQUIRED_IDENTITY_MAPS: [&str; 20] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 26] = [
     "approved_exec_slots",
     "authority_domains",
     "created_by_edges",
+    "effect_decisions",
+    "effect_defaults",
+    "effect_observation_health",
+    "effect_observations",
     "entry_states",
     "execution_set_bindings",
     "external_root_classifications",
+    "exact_file_objects",
     "identity_config",
     "identity_health",
     "identity_scratch",
@@ -48,6 +53,7 @@ const REQUIRED_IDENTITY_MAPS: [&str; 20] = [
     "process_execution_instances",
     "process_state_vectors",
     "process_states",
+    "profile_generation_descriptors",
     "profile_generation_task_refs",
     "task_coordinates",
     "task_labels",
@@ -551,6 +557,8 @@ fn test_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
     WorkloadBindingConfig {
         binding_id: "4cd90188-e814-45ec-899f-4e3c9bca3801".to_owned(),
         execution_set_id: "4cd90188-e814-45ec-899f-4e3c9bca3802".to_owned(),
+        protected_scope_id: "4cd90188-e814-45ec-899f-4e3c9bca3804".to_owned(),
+        workload_selector_id: "worker".to_owned(),
         profile_id: "4cd90188-e814-45ec-899f-4e3c9bca3803".to_owned(),
         container_id: "b".repeat(64),
         pod_uid: "phase2-pod-uid".to_owned(),

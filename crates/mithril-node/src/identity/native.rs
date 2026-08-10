@@ -34,13 +34,22 @@ impl NativeSecurityStateOwner {
     }
 
     pub fn activate(&self, host: &mut KernelHost) -> Result<ReconciliationReportV1> {
+        self.activate_with_effect_observation(host, false)
+    }
+
+    pub fn activate_with_effect_observation(
+        &self,
+        host: &mut KernelHost,
+        effect_observation_enabled: bool,
+    ) -> Result<ReconciliationReportV1> {
         let mut config = IdentityRuntimeConfigV1 {
             node_boot_id: self.node_boot_id,
             label_epoch: self.label_epoch,
             next_id: 1,
             first_effect_errno: -rustix::io::Errno::ACCESS.raw_os_error(),
             enabled: 1,
-            reserved: [0; 3],
+            effect_observation_enabled: u8::from(effect_observation_enabled),
+            reserved: [0; 2],
         };
         let key = 0_u32.to_ne_bytes();
         let existing = host

@@ -46,6 +46,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril node policy candidate failed: {source}"))]
+    Policy {
+        source: mithril_control::Error,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril node control transport failed: {source}"))]
     ControlTransport {
         source: tonic::transport::Error,
@@ -104,6 +110,7 @@ impl ErrorExt for Error {
             Self::Authorization { .. } => StatusCode::PermissionDenied,
             Self::LocalIpc { source, .. } => source.status_code(),
             Self::Interceptor { source, .. } => source.status_code(),
+            Self::Policy { source, .. } => source.status_code(),
             Self::Io { .. }
             | Self::ControlTransport { .. }
             | Self::ControlRpc { .. }
@@ -117,6 +124,7 @@ impl ErrorExt for Error {
         match self {
             Self::Io { source, .. } => RetryHint::from_io_error(source),
             Self::Interceptor { source, .. } => source.retry_hint(),
+            Self::Policy { source, .. } => source.retry_hint(),
             Self::LocalIpc { source, .. } => source.retry_hint(),
             Self::ControlTransport { .. }
             | Self::ControlRpc { .. }

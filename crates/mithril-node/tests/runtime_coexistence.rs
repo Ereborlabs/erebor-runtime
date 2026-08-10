@@ -12,11 +12,12 @@ async fn runtime_client_is_peer_authenticated_cgroup_scoped_and_read_only(
 ) -> Result<(), Box<dyn StdError>> {
     let directory = tempfile::tempdir()?;
     let socket = directory.path().join("mithril-observation.sock");
+    let cgroup_scope = current_cgroup_scope()?;
     let server = RuntimeObservationServer::bind(
         RuntimeObservationConfig {
             socket_path: socket.clone(),
             allowed_uid: geteuid().as_raw(),
-            cgroup_scope: "/erebor/session-a".to_owned(),
+            cgroup_scope: cgroup_scope.clone(),
         },
         &manifest(),
         &[CapabilityRecord {
@@ -28,15 +29,18 @@ async fn runtime_client_is_peer_authenticated_cgroup_scoped_and_read_only(
     assert_eq!(fs::metadata(&socket)?.uid(), geteuid().as_raw());
     let (shutdown, receiver) = watch::channel(false);
     let task = tokio::spawn(server.serve(receiver));
-    let snapshot = MithrilObservationClient::new(socket.clone(), "/erebor/session-a".to_owned())
+    let snapshot = MithrilObservationClient::new(socket.clone(), cgroup_scope.clone())
         .snapshot()
         .await?;
     assert!(snapshot.kernel_ready);
-    assert_eq!(snapshot.cgroup_scope, "/erebor/session-a");
+    assert_eq!(snapshot.cgroup_scope, cgroup_scope);
     assert_eq!(snapshot.program_digest, "a".repeat(64));
+    assert_eq!(snapshot.capabilities.len(), 1);
+    assert_eq!(snapshot.capabilities[0].capability_id, "KERNEL_LSM_CHASSIS");
+    assert_eq!(snapshot.capabilities[0].state, "SUPPORTED");
 
     assert!(
-        MithrilObservationClient::new(socket, "/erebor/session-b".to_owned())
+        MithrilObservationClient::new(socket, "/not-the-peer-cgroup".to_owned())
             .snapshot()
             .await
             .is_err()
@@ -44,6 +48,14 @@ async fn runtime_client_is_peer_authenticated_cgroup_scoped_and_read_only(
     shutdown.send_replace(true);
     task.await??;
     Ok(())
+}
+
+fn current_cgroup_scope() -> Result<String, Box<dyn StdError>> {
+    let cgroups = fs::read_to_string("/proc/self/cgroup")?;
+    cgroups
+        .lines()
+        .find_map(|line| line.strip_prefix("0::").map(str::to_owned))
+        .ok_or_else(|| "process has no unified cgroup".into())
 }
 
 fn manifest() -> KernelObjectManifestV1 {

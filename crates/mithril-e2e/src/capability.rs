@@ -109,6 +109,35 @@ impl BpfPrototypeCompiler {
         output_directory: &Path,
         target: BpfTargetArchitecture,
     ) -> Result<CompileRecordV1> {
+        self.compile_source_for(
+            output_directory,
+            target,
+            "qualification/feasibility.bpf.c",
+            "feasibility.bpf.o",
+        )
+    }
+
+    #[cfg(test)]
+    fn compile_identity_for(
+        &self,
+        output_directory: &Path,
+        target: BpfTargetArchitecture,
+    ) -> Result<CompileRecordV1> {
+        self.compile_source_for(
+            output_directory,
+            target,
+            "programs/identity.bpf.c",
+            "erebor-interceptor.bpf.o",
+        )
+    }
+
+    fn compile_source_for(
+        &self,
+        output_directory: &Path,
+        target: BpfTargetArchitecture,
+        relative_source: &str,
+        object_name: &str,
+    ) -> Result<CompileRecordV1> {
         fs::create_dir_all(output_directory).context(IoSnafu {
             path: output_directory.to_path_buf(),
         })?;
@@ -118,7 +147,8 @@ impl BpfPrototypeCompiler {
         let output_directory = fs::canonicalize(output_directory).context(IoSnafu {
             path: output_directory.to_path_buf(),
         })?;
-        let source = repo_root.join("bpf/erebor-interceptor/qualification/feasibility.bpf.c");
+        let bpf_root = repo_root.join("bpf/erebor-interceptor");
+        let source = bpf_root.join(relative_source);
         let source_bytes = fs::read(&source).context(IoSnafu {
             path: source.clone(),
         })?;
@@ -129,14 +159,27 @@ impl BpfPrototypeCompiler {
             })?
             .trim()
             .to_owned();
-        let interceptor_headers = repo_root.join("bpf/erebor-interceptor/include");
+        let interceptor_headers = bpf_root.join("include");
+        let interceptor_programs = bpf_root.join("programs");
         let bpf_headers = PathBuf::from(format!(
             "/lib/modules/{kernel_release}/build/tools/bpf/resolve_btfids/libbpf/include"
         ));
-        let object = output_directory.join("feasibility.bpf.o");
+        let object = output_directory.join(object_name);
         let compile_output = Command::new("clang")
-            .args(["-g", "-O2", "-target", "bpfel", target.clang_define(), "-I"])
+            .args([
+                "-g",
+                "-O2",
+                "-target",
+                "bpfel",
+                target.clang_define(),
+                "-D__BPF__",
+                "-Wall",
+                "-Werror",
+                "-I",
+            ])
             .arg(&interceptor_headers)
+            .arg("-I")
+            .arg(&interceptor_programs)
             .arg(format!("-fdebug-prefix-map={}=/src", repo_root.display()))
             .arg(format!(
                 "-fdebug-prefix-map={}=/build",
@@ -219,6 +262,23 @@ mod tests {
             })?;
             assert!(compiler
                 .compile_for(output.path(), target)?
+                .object_path
+                .is_file());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn every_checked_in_vmlinux_header_compiles_the_production_identity_object() -> crate::Result<()>
+    {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let compiler = BpfPrototypeCompiler::new(root);
+        for target in BpfTargetArchitecture::ALL {
+            let output = tempfile::tempdir().context(IoSnafu {
+                path: PathBuf::from("temporary production BPF build directory"),
+            })?;
+            assert!(compiler
+                .compile_identity_for(output.path(), target)?
                 .object_path
                 .is_file());
         }

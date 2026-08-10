@@ -446,6 +446,7 @@ impl WorkloadBindingOwner {
         }
         let binding_id = parse_id("binding_id", &spec.binding_id)?;
         let execution_set_id = parse_id("execution_set_id", &spec.execution_set_id)?;
+        let protected_scope_id = parse_id("protected_scope_id", &spec.protected_scope_id)?;
         let profile_id = parse_id("profile_id", &spec.profile_id)?;
         let root_cgroup_live_interval_id = derive_id(&[
             root_cgroup_path.as_os_str().as_encoded_bytes(),
@@ -466,6 +467,7 @@ impl WorkloadBindingOwner {
                 binding_nonce,
                 node_boot_id: self.node_boot_id,
                 execution_set_id,
+                protected_scope_id,
                 profile_id,
                 label_epoch: self.label_epoch,
                 active_profile_generation_ref_id: spec.active_profile_generation_ref_id,
@@ -674,6 +676,8 @@ mod tests {
         WorkloadBindingConfig {
             binding_id: "11111111-1111-4111-8111-111111111111".to_owned(),
             execution_set_id: "22222222-2222-4222-8222-222222222222".to_owned(),
+            protected_scope_id: "44444444-4444-4444-8444-444444444444".to_owned(),
+            workload_selector_id: "worker".to_owned(),
             profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
             container_id: "a".repeat(64),
             pod_uid: "pod-uid-a".to_owned(),

@@ -10,6 +10,7 @@ clap.workspace = true
 ed25519-dalek.workspace = true
 erebor-interceptor = { path = "../erebor-interceptor" }
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
+erebor-runtime-client = { path = "../erebor-runtime-client" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 hyper-util.workspace = true
@@ -29,7 +30,6 @@ uuid.workspace = true
 zerocopy.workspace = true
 
 [dev-dependencies]
-erebor-runtime-client = { path = "../erebor-runtime-client" }
 rcgen = "0.13.2"
 tempfile = "3.23.0"
 

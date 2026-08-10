@@ -8,15 +8,22 @@ build = "build.rs"
 
 [dependencies]
 clap.workspace = true
+ed25519-dalek.workspace = true
+erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+hex.workspace = true
+minicbor.workspace = true
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+serde-saphyr.workspace = true
 sha2.workspace = true
 snafu.workspace = true
+time.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
+uuid.workspace = true
 
 [build-dependencies]
 tonic-build.workspace = true
@@ -28,6 +35,10 @@ tempfile = "3.23.0"
 [[bin]]
 name = "mithril-control"
 path = "src/main.rs"
+
+[[bin]]
+name = "mithril-policy"
+path = "src/bin/mithril_policy.rs"
 
 [lints]
 workspace = true

@@ -1,0 +1,12 @@
+{
+  "workload_selector_id": "worker",
+  "protected_scope_id": "33333333-3333-4333-8333-333333333333",
+  "execution_set_id": "44444444-4444-4444-8444-444444444444",
+  "entry_kind": "EXTERNAL_RUNTIME_UNKNOWN",
+  "role_id": "runtime-external",
+  "process_state_id": "base",
+  "effect_family": "FILE",
+  "operation_id": "OPEN_READ",
+  "object_selector": "CLASS:MANUAL_SECRET",
+  "binding_lifecycle": "ACTIVE"
+}
