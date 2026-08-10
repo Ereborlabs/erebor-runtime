@@ -127,3 +127,13 @@ Unsupported/degraded paths: complete administrative-exec permission and physical
 Remaining work in this phase: run the documented privileged identity probe on a fresh dedicated cgroup/pin root, run the applicable Docker/CRI/Kubernetes/`nsenter` case shells, retain operator-selected external evidence, then run the remaining failure-injection matrix. Do not change the implementation result to Done without those physical artifacts.
 Next phase not authorized: yes.
 ```
+
+## Maintenance update — 2026-08-09
+
+`KernelHostOwner::start` now validates the program/map layout from the same
+opened libbpf object that it subsequently loads fresh or reuses for identity
+recovery. This removes the duplicate open/parse path while retaining the two
+separate checks: every required program must be present before load, and every
+non-iterator required program must attach after load. Focused
+`cargo test -p erebor-interceptor`, `cargo check --workspace`, and
+`bash .github/scripts/verify-rust-ci.sh` passed.

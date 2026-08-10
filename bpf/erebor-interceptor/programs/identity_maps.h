@@ -56,7 +56,6 @@ struct identity_scratch_v1 {
     effect_decision_key_v1 effect_key;
     effect_default_key_v1 effect_default;
     exact_file_object_key_v1 file_object;
-    mount_security_view_key_v1 mount_view_key;
     canonical_mount_root_key_v1 mount_root_key;
     path_graph_transition_key_v1 path_transition_key;
     path_graph_state_key_v1 path_state_key;
@@ -248,28 +247,28 @@ struct {
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
-    __type(key, __u64);
+    __type(key, __u32);
     __type(value, mount_security_view_state_v1);
 } mount_security_views SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
-    __type(key, __u64);
+    __type(key, __u32);
     __type(value, struct mount_security_view_lock_v1);
 } mount_security_view_locks SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
-    __type(key, __u64);
+    __type(key, __u32);
     __type(value, mount_reconciliation_proposal_v1);
 } mount_reconciliation_proposals SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
-    __type(key, __u64);
+    __type(key, __u32);
     __type(value, __u64);
 } mount_mutation_epochs SEC(".maps");
 
@@ -567,7 +566,7 @@ static __always_inline void prepare_coordinate(
     coordinate->transition_version = 1;
     coordinate->state = task_coordinate_state_v1_allocating;
 #pragma unroll
-    for (int index = 0; index < 7; index++)
+    for (int index = 0; index < 3; index++)
         coordinate->reserved[index] = 0;
 }
 

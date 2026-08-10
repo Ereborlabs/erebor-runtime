@@ -10,7 +10,7 @@
 #include "identity_maps.h"
 
 _Static_assert(sizeof(task_label_v1) == 328, "task label ABI size");
-_Static_assert(sizeof(task_coordinate_v1) == 96, "task coordinate ABI size");
+_Static_assert(sizeof(task_coordinate_v1) == 88, "task coordinate ABI size");
 _Static_assert(sizeof(identity_runtime_config_v1) == 40,
                "identity runtime config ABI size");
 _Static_assert(__builtin_offsetof(task_label_v1, process_state_id) == 64,
@@ -23,11 +23,11 @@ _Static_assert(sizeof(physical_decision_v1) == 16,
                "physical decision ABI size");
 _Static_assert(sizeof(profile_generation_descriptor_v1) == 112,
                "profile generation descriptor ABI size");
-_Static_assert(sizeof(exact_file_object_key_v1) == 48,
+_Static_assert(sizeof(exact_file_object_key_v1) == 40,
                "exact file object ABI size");
 _Static_assert(sizeof(exact_object_binding_v1) == 32,
                "exact object binding ABI size");
-_Static_assert(sizeof(effect_observation_v1) == 208,
+_Static_assert(sizeof(effect_observation_v1) == 200,
                "effect observation ABI size");
 _Static_assert(sizeof(effect_observation_health_v1) == 32,
                "effect observation health ABI size");
@@ -37,7 +37,7 @@ _Static_assert(sizeof(path_graph_transition_key_v1) == 272,
                "path transition key ABI size");
 _Static_assert(sizeof(mount_security_view_state_v1) == 40,
                "mount view ABI size");
-_Static_assert(sizeof(mount_mutation_attempt_v1) == 32,
+_Static_assert(sizeof(mount_mutation_attempt_v1) == 8,
                "mount mutation attempt ABI size");
 
 #include "identity_task_helpers.h"

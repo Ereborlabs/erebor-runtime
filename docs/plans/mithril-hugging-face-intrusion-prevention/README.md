@@ -11,6 +11,7 @@ Design authority:
 - [Live two-node lifecycle probe](./live-two-node-lifecycle-probe.md)
 - [Manual acceptance index](./manual-testing/README.md)
 - [Shared manual-test environment setup](./manual-testing/environment-setup.md)
+- [Implemented Phase 0–3 review guide](./implemented-phase-review.md)
 
 The [previous architecture](./policy-and-protection-algorithm-architecture.md)
 is a superseded historical record. It may explain rejected ideas but cannot

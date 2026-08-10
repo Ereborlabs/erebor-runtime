@@ -135,6 +135,13 @@ rules:
         kind: OBJECT_CLASSES
         object_class_ids: [MANUAL_SECRET]
       binding_lifecycle_states: [ACTIVE]
+      required_proof:
+        source_authority: [KERNEL_DECISION]
+        local_subject_binding: [EXACT_TASK]
+        remote_subject_binding: []
+        operation_result_authority: [PRE_EFFECT_DECISION]
+        temporal_coverage: [COMPLETE]
+        integrity: [LOCAL_ATTESTED]
     requested_disposition: DENY
     errno: EACCES
     finding:

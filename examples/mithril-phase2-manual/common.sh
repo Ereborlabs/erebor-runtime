@@ -7,6 +7,7 @@ phase2_node=target/debug/mithril-node
 phase2_inspect=target/debug/mithril-inspect
 phase2_node_pid=
 phase2_task_pids=()
+phase2_cleanup_functions=()
 phase2_success_message=
 phase2_work=
 phase2_pin_root=
@@ -64,6 +65,9 @@ phase2_on_exit() {
     kill -TERM "$pid" 2>/dev/null
   done
   phase2_stop_node
+  for cleanup in "${phase2_cleanup_functions[@]}"; do
+    "$cleanup" || cleanup_failed=1
+  done
   [[ -z $phase2_pin_root || ! -e $phase2_pin_root ]] || rm -r -- "$phase2_pin_root"
   [[ -z $phase2_work || ! -e $phase2_work ]] || rm -r -- "$phase2_work"
   [[ (-z $phase2_pin_root || ! -e $phase2_pin_root) \
@@ -203,9 +207,22 @@ phase2_start_node() {
 }
 
 phase2_stop_node() {
-  if [[ -n $phase2_node_pid ]] && kill -0 "$phase2_node_pid" 2>/dev/null; then
-    kill -INT "$phase2_node_pid"
-    wait "$phase2_node_pid"
+  local pid=$phase2_node_pid
+  if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then
+    kill -INT "$pid"
+    for ((attempt = 0; attempt < 50; attempt++)); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -TERM "$pid"
+      for ((attempt = 0; attempt < 20; attempt++)); do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
+    kill -0 "$pid" 2>/dev/null && kill -KILL "$pid"
+    wait "$pid" 2>/dev/null || true
   fi
   phase2_node_pid=
 }

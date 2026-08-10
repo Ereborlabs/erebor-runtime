@@ -14,7 +14,7 @@ static __always_inline struct mount *mount_from_vfsmount(
 }
 
 /* Linux new_encode_dev(): expose the same device number as statx/makedev. */
-static __always_inline __u64 encoded_filesystem_device(dev_t device)
+static __always_inline __u32 encoded_filesystem_device(dev_t device)
 {
     __u32 major = device >> 20;
     __u32 minor = device & ((1U << 20) - 1);
@@ -176,7 +176,7 @@ static __always_inline int read_parent_interval(
     interval->change_reason = change_reason;
     interval->kernel_direct_proof = 1;
 #pragma unroll
-    for (int index = 0; index < 6; index++)
+    for (int index = 0; index < 2; index++)
         interval->reserved[index] = 0;
     return 0;
 }

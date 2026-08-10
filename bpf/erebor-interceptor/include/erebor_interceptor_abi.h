@@ -563,11 +563,11 @@ typedef struct id128_v1 {
 
 typedef struct canonical_mount_root_key_v1 {
   uint64_t profile_generation_ref_id;
-  uint64_t mount_namespace_inode;
   struct id128_v1 binding_id;
   uint64_t topology_generation;
-  uint64_t filesystem_device;
   uint64_t root_inode;
+  uint32_t mount_namespace_inode;
+  uint32_t filesystem_device;
 } canonical_mount_root_key_v1;
 
 typedef struct canonical_mount_root_v1 {
@@ -603,11 +603,11 @@ typedef struct bounded_administrative_argv_v1 {
 } bounded_administrative_argv_v1;
 
 typedef struct exact_executable_candidate_v1 {
-  uint64_t mount_namespace_inode;
-  uint64_t mount_id;
-  uint64_t filesystem_device;
   uint64_t inode;
-  uint64_t inode_generation;
+  uint32_t mount_namespace_inode;
+  uint32_t mount_id;
+  uint32_t filesystem_device;
+  uint32_t inode_generation;
 } exact_executable_candidate_v1;
 
 typedef struct approved_exec_slot_v1 {
@@ -768,10 +768,10 @@ typedef struct effect_observation_health_v1 {
 
 typedef struct exact_file_object_key_v1 {
   uint64_t profile_generation_ref_id;
-  uint64_t mount_namespace_inode;
   uint64_t mount_id_unique;
-  uint64_t filesystem_device;
   uint64_t inode;
+  uint32_t mount_namespace_inode;
+  uint32_t filesystem_device;
   uint32_t inode_generation;
   uint32_t reserved;
 } exact_file_object_key_v1;
@@ -848,22 +848,20 @@ typedef struct kernel_real_parent_interval_v1 {
   uint64_t real_parent_task_cookie;
   uint32_t real_parent_host_tid;
   uint32_t real_parent_host_tgid;
-  uint64_t real_parent_pid_namespace_inode;
+  uint32_t real_parent_pid_namespace_inode;
+  kernel_real_parent_change_reason_v1 change_reason;
+  uint8_t kernel_direct_proof;
+  uint8_t reserved[2];
   uint64_t real_parent_start_boottime_ns;
   uint64_t interval_start_boottime_ns;
   uint64_t interval_end_boottime_ns;
   uint64_t transition_version;
-  kernel_real_parent_change_reason_v1 change_reason;
-  uint8_t kernel_direct_proof;
-  uint8_t reserved[6];
 } kernel_real_parent_interval_v1;
 
 typedef struct mount_mutation_attempt_v1 {
-  uint64_t mount_namespace_inode;
-  uint64_t topology_generation;
-  uint64_t transition_version;
+  uint32_t mount_namespace_inode;
   uint8_t active;
-  uint8_t reserved[7];
+  uint8_t reserved[3];
 } mount_mutation_attempt_v1;
 
 typedef struct mount_reconciliation_proposal_v1 {
@@ -872,12 +870,6 @@ typedef struct mount_reconciliation_proposal_v1 {
   uint64_t expected_transition_version;
   uint64_t transition_version;
 } mount_reconciliation_proposal_v1;
-
-typedef struct mount_security_view_key_v1 {
-  uint64_t profile_generation_ref_id;
-  uint64_t mount_namespace_inode;
-  struct id128_v1 binding_id;
-} mount_security_view_key_v1;
 
 typedef struct mount_security_view_state_v1 {
   uint64_t topology_generation;
@@ -1022,15 +1014,15 @@ typedef struct task_coordinate_v1 {
   uint64_t task_cookie;
   struct id128_v1 process_instance_id;
   struct id128_v1 process_state_id;
-  uint32_t host_tid;
-  uint32_t host_tgid;
-  uint64_t pid_namespace_inode;
   uint64_t task_start_boottime_ns;
   uint64_t finalized_boottime_ns;
   uint64_t real_parent_interval_sequence;
   uint64_t transition_version;
+  uint32_t host_tid;
+  uint32_t host_tgid;
+  uint32_t pid_namespace_inode;
   task_coordinate_state_v1 state;
-  uint8_t reserved[7];
+  uint8_t reserved[3];
 } task_coordinate_v1;
 
 typedef struct task_placement_expectation_v1 {

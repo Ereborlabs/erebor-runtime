@@ -3,7 +3,7 @@
 #ifndef EREBOR_IDENTITY_PATH_BPF_H
 #define EREBOR_IDENTITY_PATH_BPF_H
 
-static __always_inline __u64 current_mount_namespace_inode(void)
+static __always_inline __u32 current_mount_namespace_inode(void)
 {
     struct task_struct *task = bpf_get_current_task_btf();
     struct nsproxy *nsproxy = NULL;
@@ -25,9 +25,7 @@ static __always_inline int begin_mount_mutation(void)
     __u64 *mutation_epoch;
     mount_mutation_attempt_v1 *attempt;
     struct task_struct *task;
-    __u64 mount_namespace_inode;
-    __u64 next_epoch;
-    __u64 next_transition_version;
+    __u32 mount_namespace_inode;
 
     mount_namespace_inode = current_mount_namespace_inode();
     if (!mount_namespace_inode)
@@ -52,14 +50,10 @@ static __always_inline int begin_mount_mutation(void)
     __sync_fetch_and_add(&view->pending_mutations, 1);
     view->state = mount_topology_state_v1_dirty;
     (*mutation_epoch)++;
-    next_epoch = *mutation_epoch;
-    next_transition_version =
-        __sync_fetch_and_add(&view->transition_version, 1) + 1;
+    __sync_fetch_and_add(&view->transition_version, 1);
     bpf_spin_unlock(&view_lock->lock);
     __builtin_memset(attempt, 0, sizeof(*attempt));
     attempt->mount_namespace_inode = mount_namespace_inode;
-    attempt->topology_generation = next_epoch;
-    attempt->transition_version = next_transition_version;
     attempt->active = 1;
     return 0;
 }
@@ -82,7 +76,6 @@ static __always_inline void finish_mount_mutation(void)
         __sync_fetch_and_sub(&view->pending_mutations, 1);
     }
     attempt->active = 0;
-    attempt->transition_version++;
 }
 
 static __always_inline int read_mount_root_identity(
@@ -147,23 +140,21 @@ static __always_inline int collect_mount_components(
 }
 
 static __always_inline int snapshot_mount_view(
-    const mount_security_view_key_v1 *key, __u64 topology_generation,
+    __u32 mount_namespace_inode, __u64 topology_generation,
     __u64 snapshot_digest_id, __u64 transition_version, bool reconcile,
     __u64 *topology_generation_out, __u64 *snapshot_digest_id_out,
     __u64 *transition_version_out)
 {
     mount_security_view_state_v1 *view =
-        bpf_map_lookup_elem(&mount_security_views,
-                            &key->mount_namespace_inode);
+        bpf_map_lookup_elem(&mount_security_views, &mount_namespace_inode);
     struct mount_security_view_lock_v1 *view_lock =
         bpf_map_lookup_elem(&mount_security_view_locks,
-                            &key->mount_namespace_inode);
+                            &mount_namespace_inode);
     __u64 *mutation_epoch =
-        bpf_map_lookup_elem(&mount_mutation_epochs,
-                            &key->mount_namespace_inode);
+        bpf_map_lookup_elem(&mount_mutation_epochs, &mount_namespace_inode);
     mount_reconciliation_proposal_v1 *proposal = reconcile
         ? bpf_map_lookup_elem(&mount_reconciliation_proposals,
-                              &key->mount_namespace_inode)
+                              &mount_namespace_inode)
         : NULL;
     int result = -EACCES;
 
@@ -288,14 +279,8 @@ static __noinline int canonical_path_candidate(
 
     if (collect_mount_components(file, scratch, &component_count, &vfsmount))
         return -EACCES;
-    __builtin_memset(&scratch->mount_view_key, 0,
-                     sizeof(scratch->mount_view_key));
-    scratch->mount_view_key.profile_generation_ref_id =
-        profile_generation_ref_id;
-    scratch->mount_view_key.mount_namespace_inode =
-        scratch->file_object.mount_namespace_inode;
-    scratch->mount_view_key.binding_id = binding->binding_id;
-    if (snapshot_mount_view(&scratch->mount_view_key, 0, 0, 0, true,
+    if (snapshot_mount_view(scratch->file_object.mount_namespace_inode,
+                            0, 0, 0, true,
                             &topology_generation, &snapshot_digest_id,
                             &transition_version))
         return -EACCES;
@@ -336,7 +321,8 @@ static __noinline int canonical_path_candidate(
     if (!terminal || !terminal->composite_atom_id ||
         !terminal->rule_numeric_id)
         return -EACCES;
-    if (snapshot_mount_view(&scratch->mount_view_key, topology_generation,
+    if (snapshot_mount_view(scratch->file_object.mount_namespace_inode,
+                            topology_generation,
                             snapshot_digest_id, transition_version, false,
                             &topology_generation, &snapshot_digest_id,
                             &transition_version))

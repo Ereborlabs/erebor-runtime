@@ -36,7 +36,7 @@ previous complete generation or no advertised capability.
 ### D1.3 — `mithril-node` chassis
 
 Create one Rust binary that embeds the Interceptor and owns capability state,
-workload inventory, local config/trust cache, health, lifecycle, and shutdown.
+local config/trust cache, health, lifecycle, and shutdown.
 No second privileged helper or sidecar is introduced.
 
 ### D1.4 — `mithril-control` chassis and secure gRPC
@@ -105,7 +105,7 @@ durable evidence, graphing, and response.
 State: Done.
 Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md at SHA-256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
 Completed deliverable IDs: D1.1-D1.6.
-Files and durable owners changed: erebor-interceptor owns the single safe libbpf-rs lifecycle, lease, and reusable kernel platform probe; mithril-node embeds it and directly owns node state, inventory, trust cache, readiness, outbound Control stream, reconnect, local observation, and shutdown; mithril-control owns the private mTLS bidirectional gRPC stream and registration/trust state; erebor-runtime-client owns the bounded read-only Mithril observation client; Runtime IPC owns its immutable request/response envelope; mithril-e2e owns only qualification, lifecycle, and packaging acceptance helpers; packaging/mithril owns the development image, one-container privileged DaemonSet, Control deployment, and Helm skeleton.
+Files and durable owners changed: erebor-interceptor owns the single safe libbpf-rs lifecycle, lease, and reusable kernel platform probe; mithril-node embeds it and directly owns node state, trust cache, readiness, outbound Control stream, reconnect, local observation, and shutdown; mithril-control owns the private mTLS bidirectional gRPC stream and registration/trust state; erebor-runtime-client owns the bounded read-only Mithril observation client; Runtime IPC owns its immutable request/response envelope; mithril-e2e owns only qualification, lifecycle, and packaging acceptance helpers; packaging/mithril owns the development image, one-container privileged DaemonSet, Control deployment, and Helm skeleton.
 Dependency and upstream practice decision: use pinned fully vendored libbpf-rs 0.27.0 directly for safe object/load/attach/map/link/pin/readback/RAII ownership. The owner follows checked fresh-map, exact-ID readback, pin, lease, and rollback practices without copying an upstream daemon or adding a production BPF build abstraction before production programs exist. Tonic 0.12.3 and its standard TLS/HTTP2 keepalive own transport liveness; no duplicate application keepalive protocol remains.
 Protocol and ownership simplification: node registration is the sole capability report, followed by trust acknowledgement and a compact readiness report. Runtime observation is one authenticated, cgroup-scoped request/response rather than a second application handshake; the mode-0600 socket is owned by the configured Runtime UID and the accepted peer is independently checked with SO_PEERCRED. NodeChassis owns TrustCache directly because the run loop is its only owner. The 2026-08-09 correctness pass made the Control connection cancellable by shutdown, bounded connection establishment, reports local identity health instead of hard-coding admission readiness, validates persisted trust before use, fsyncs trust publication, and removes a newly bound observation socket if its ownership/mode setup fails. No new owner or protocol message was added. PlatformProbe moved to erebor-interceptor as KernelPlatformProbe; BpfPrototypeCompiler remains a private Phase 0 qualification helper because build-time compilation does not belong in the node or runtime loader.
 Fixture cases and exact physical results: the privileged lifecycle artifact starts ready with 3/3 maps and 21/21 links pinned and read back; rejects a competing owner; removes pins on clean shutdown; restarts ready with 3/3 maps and 21/21 links; removes pins again; and preserves worker digest 741a9fd0857e360a8b3096924f52dd59695d9f6440aa6610370e4e092b23b1dc. Raw artifact SHA-256 892d34285a709042489cdbcd35874d32ee343c80307a001fb9a2f5530e3fe0bd; checked result SHA-256 c5dc41cc9f9efd34b9be4597e9e9c31c5ffdf936385e1a29a72f50f787382936. BOOT-ADMISSION-001, same-lease Runtime/Mithril/co-resident ownership, partial-pin rollback, missing-hook rejection, mTLS CA/node binding, expired identity, registration replay, sequence gap, downgrade, control outage, reconnect, trust rollback/replay, scoped read-only Runtime observation, and packaging tests pass.
@@ -117,3 +117,10 @@ Production BPF build handoff: Phase 1's development image and qualification help
 Remaining work in this phase: none.
 Next phase not authorized: yes.
 ```
+
+Current maintenance note: the unused `/proc` `WorkloadInventory` startup scan
+and its `NodeRegistration` fields were removed. It was neither a runtime
+binding owner nor a Control authorization input. Phase 2's
+`WorkloadBindingOwner` remains the sole runtime cgroup-binding owner.
+Verification: `cargo fmt --all`, `cargo test -p mithril-node -p mithril-control`,
+`cargo check --workspace`, and `bash .github/scripts/verify-rust-ci.sh` passed.

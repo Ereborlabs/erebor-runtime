@@ -9,7 +9,7 @@ source "$directory/common.sh"
 }
 
 phase3_prepare_docker "$1" "$2" "$3"
-phase3_preload_probe python3 -c '
+phase3_preload_nsenter_probe python3 -c '
 import os, signal, sys
 ready, path = sys.argv[1:]
 signal.signal(signal.SIGUSR1, lambda _signum, _frame: None)
@@ -22,4 +22,4 @@ with open(path, "rb") as source:
 phase3_release_probe
 phase3_wait_for_observation 'reason=WOULD_DENY' "$phase2_work/effects.txt"
 grep -q 'result=UNKNOWN_AFTER_PRE_EFFECT' "$phase2_work/effects.txt"
-phase2_pass "PASS: file read completed and Mithril reported the exact observe-only WOULD_DENY."
+phase2_pass "PASS: a raw nsenter process was attributed after cgroup join and reported WOULD_DENY."

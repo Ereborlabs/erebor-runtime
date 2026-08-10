@@ -1,6 +1,10 @@
 # How To Manually Accept Phase 3
 
-Status: Proposed runbook; no Phase 3 implementation or test has been run.
+Status: Phase 3 compiler, Meta path/mount, exact-file observation, hard-safety,
+and simulation cases are implemented. The production object and native task
+lifecycle passed the operator's self-cleaning privileged identity probe on
+2026-08-10. The complete self-cleaning privileged Phase 3 effect probe also
+passed on 2026-08-10. Real Docker/CRI operator acceptance remains unrecorded.
 
 Phase: [Effect Observation And Profile Simulation](../phase-3-effect-observation-and-profile-simulation.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -13,11 +17,91 @@ physical completion result while policy denial remains disabled.
 
 ## Automated Companion
 
-```text
-IMPLEMENTATION COMMAND REQUIRED: run Phase 3 parser/compiler/signature,
-inactive-generation, Rust/BPF lookup, canonical-path, observe-effect, hostile
-alias, bound, and upstream-regression suites.
+```sh
+cargo test -p mithril-control --all-targets
+cargo test -p mithril-node --all-targets
+cargo test -p erebor-interceptor-abi --all-targets
+cargo test -p erebor-interceptor --all-targets
+cargo test -p mithril-e2e --all-targets --all-features
+bash .github/scripts/verify-rust-ci.sh
 ```
+
+The `mithril-control` suite includes the machine-readable 50-case simulation
+matrix: every Phase 4/5 fixture listed by the Phase 3 plan plus the managed,
+pure-memory, and outside-authority `HF-002` through `HF-012` branches. A case
+that lacks a qualified object model has an explicit hard-safety or
+non-prevention result; it is not relabeled as simulated support. These commands
+do not turn an unrun catalog row into a physical result.
+
+The privileged automated companion drives the production libbpf-rs owner and
+a real isolated mount namespace without requiring Docker or Kubernetes:
+
+```sh
+cargo build -p mithril-e2e --bin mithril-effect-test
+sudo target/debug/mithril-effect-test --repo-root . physical-probe \
+  --output-directory /tmp/mithril-phase3-effect-final \
+  --pin-root /sys/fs/bpf/erebor-mithril-phase3-effect-final \
+  --lease-path /tmp/mithril-phase3-effect-final/owner.lock \
+  --cgroup-path /sys/fs/cgroup/erebor-mithril-phase3-effect-final
+```
+
+It is an assertion-bearing Rust test runner, not a wrapper around the manual
+scripts. It also covers the stronger architecture race: an external privileged
+task enters the represented namespace and mounts another file over the exact
+path. The namespace must become DIRTY before the mutation, protected opens must
+fail closed, and userspace must refuse to clean the view while the exact
+mount/device/inode/generation differs. Docker direct-cgroup and CRI discovery
+logic remain ordinary Rust fixtures; the manual cases below validate their
+real-daemon transport integrations.
+
+## Implemented Manual Cases
+
+Build once, then run only the cases relevant to the available runtime. Every
+script installs an EXIT trap that stops the node and probe, removes its BPF
+pins, cgroup, lease, socket, temporary files, and any mount it created.
+
+```sh
+cargo build -p mithril-node --bins -p mithril-control --bin mithril-policy
+examples/mithril-phase3-manual/compile-and-simulate.sh
+
+sudo examples/mithril-phase3-manual/docker-file-observe.sh \
+  <phase2-node.json> <container> <secret-path>
+sudo examples/mithril-phase3-manual/cri-file-observe.sh \
+  <phase2-node.json> <full-container-id> <secret-path>
+sudo examples/mithril-phase3-manual/nsenter-file-observe.sh \
+  <phase2-node.json> <container> <secret-path>
+sudo examples/mithril-phase3-manual/docker-bind-alias.sh \
+  <phase2-node.json> <container> <mounted-secret-path> <alias-directory>
+sudo examples/mithril-phase3-manual/docker-hardlink-alias.sh \
+  <phase2-node.json> <container>
+sudo examples/mithril-phase3-manual/mount-attack-hard-deny.sh \
+  <phase2-node.json> <container> <secret-path>
+sudo examples/mithril-phase3-manual/unsupported-network-hard-deny.sh \
+  <phase2-node.json> <container> <secret-path>
+sudo examples/mithril-phase3-manual/docker-saturation-hard-safety.sh \
+  <phase2-node.json> <container> <secret-path>
+sudo examples/mithril-phase3-manual/docker-open-latency.sh \
+  <phase2-node.json> <container> <secret-path>
+```
+
+Each command is a separate operator case; there is deliberately no run-all
+wrapper. Kubernetes is optional and does not own a Mithril enforcement
+boundary.
+
+The bind-alias case deliberately creates the represented alias before policy
+activation. Its read remains physically allowed in Phase 3 but resolves to the
+original canonical class and reports `WOULD_DENY`. The mount-attack case is
+different: a protected task attempts a new, currently unqualified topology
+mutation after activation, so the mount itself must receive `EACCES`/`EPERM`,
+the view remains DIRTY until reconciliation, and strict file decisions cannot
+use stale topology. Phase 4, not Phase 3, activates ordinary signed policy
+denials.
+
+The saturation case validates only the Phase 3 contract: ring loss is explicit
+and cannot change a hard-safety result. `LSM-DENY-SATURATION-001` with an active
+signed policy denial belongs to Phase 4, and its durable reader/WAL/replay form
+belongs to Phase 6. The latency case is a bounded Phase 3 observation-path
+measurement; final platform/capacity qualification belongs to Phase 11.
 
 ## Procedure
 
