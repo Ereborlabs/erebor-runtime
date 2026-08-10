@@ -18,6 +18,7 @@ use crate::error::PolicyValidationSnafu;
 use crate::Result;
 
 const MAX_COMPILED_CELLS: usize = 65_536;
+const MAX_EXCEPTION_STATES: usize = 4_096;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct StaticDecisionKeyV1 {
@@ -39,6 +40,7 @@ pub enum CompiledPhysicalResultV1 {
     AllowEffect,
     AuditAllowEffect,
     SimulatablePolicyDeny,
+    DenyEffect,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -46,6 +48,7 @@ pub struct CompiledDecisionCellV1 {
     pub key: StaticDecisionKeyV1,
     pub physical_result: CompiledPhysicalResultV1,
     pub errno: Option<i16>,
+    pub consuming_exception_id: Option<String>,
     pub action_plan_digest: String,
     pub source_rule_ids: Vec<String>,
 }
@@ -71,6 +74,7 @@ impl PolicyCompiler {
         let canonical_policy = canonical_cbor(document.profile_id(), document)?;
         let source_policy_digest = digest(&canonical_policy);
         let cells = self.expand_rules(document)?;
+        validate_compiled_exceptions(document, &cells)?;
         let compiled_rule_cell_digests = cells
             .iter()
             .map(|cell| canonical_cbor(document.profile_id(), cell).map(|bytes| digest(&bytes)))
@@ -107,6 +111,19 @@ impl PolicyCompiler {
             "CFG_ZERO_GENERATION",
             "profile and rollout generations must be nonzero",
         )?;
+        check(
+            policy_id,
+            document.exceptions.len() <= MAX_EXCEPTION_STATES,
+            "CFG_MAP_CAPACITY",
+            "exception states exceed the verified kernel map capacity",
+        )?;
+        check(
+            policy_id,
+            document.exceptions.is_empty()
+                || document.rollout.desired_profile_mode == ProfileModeV1::Protect,
+            "CFG_EXCEPTION_MODE",
+            "bounded exceptions require PROTECT mode",
+        )?;
         let valid_from = parse_utc(policy_id, &document.metadata.valid_from_utc)?;
         if let Some(until) = &document.metadata.valid_until_utc {
             check(
@@ -116,12 +133,6 @@ impl PolicyCompiler {
                 "valid_until_utc must be after valid_from_utc",
             )?;
         }
-        check(
-            policy_id,
-            document.rollout.desired_profile_mode == ProfileModeV1::Observe,
-            "CFG_PHASE3_MODE",
-            "Phase 3 accepts OBSERVE candidates only",
-        )?;
         validate_ids(document)?;
         validate_references(document)?;
         validate_states(document)?;
@@ -138,14 +149,15 @@ impl PolicyCompiler {
             let RuleMatchV1::LocalPreEffect(effect) = &rule.rule_match else {
                 continue;
             };
-            let physical_result = physical_result(rule).ok_or_else(|| {
-                PolicyValidationSnafu {
-                    policy_id: document.profile_id(),
-                    code: "CFG_STAGE_DISPOSITION",
-                    reason: format!("rule `{}` cannot REJECT a local effect", rule.rule_id),
-                }
-                .build()
-            })?;
+            let physical_result = physical_result(rule, document.rollout.desired_profile_mode)
+                .ok_or_else(|| {
+                    PolicyValidationSnafu {
+                        policy_id: document.profile_id(),
+                        code: "CFG_STAGE_DISPOSITION",
+                        reason: format!("rule `{}` cannot REJECT a local effect", rule.rule_id),
+                    }
+                    .build()
+                })?;
             let action_plan_digest = local_action_plan_digest(document.profile_id(), rule, effect)?;
             let dimensions = RuleDimensions::new(document, effect)?;
             for key in dimensions.keys(document.profile_id())? {
@@ -172,15 +184,18 @@ impl PolicyCompiler {
             .collect::<BTreeMap<_, _>>();
         let mut default_cells = BTreeMap::<StaticDecisionKeyV1, CompiledDecisionCellV1>::new();
         for default in &document.effect_family_defaults {
-            let physical_result =
-                disposition_result(default.requested_disposition).ok_or_else(|| {
-                    PolicyValidationSnafu {
-                        policy_id: document.profile_id(),
-                        code: "CFG_STAGE_DISPOSITION",
-                        reason: "an effect-family default cannot REJECT a local effect".to_owned(),
-                    }
-                    .build()
-                })?;
+            let physical_result = disposition_result(
+                default.requested_disposition,
+                document.rollout.desired_profile_mode,
+            )
+            .ok_or_else(|| {
+                PolicyValidationSnafu {
+                    policy_id: document.profile_id(),
+                    code: "CFG_STAGE_DISPOSITION",
+                    reason: "an effect-family default cannot REJECT a local effect".to_owned(),
+                }
+                .build()
+            })?;
             let action_plan_digest =
                 canonical_cbor(document.profile_id(), default).map(|bytes| digest(&bytes))?;
             for key in default_keys(document, default)? {
@@ -188,6 +203,7 @@ impl PolicyCompiler {
                     key: key.clone(),
                     physical_result,
                     errno: default.errno.map(super::source::ErrnoV1::negative),
+                    consuming_exception_id: None,
                     action_plan_digest: action_plan_digest.clone(),
                     source_rule_ids: Vec::new(),
                 };
@@ -216,6 +232,98 @@ impl PolicyCompiler {
         }
         Ok(cells.into_values().collect())
     }
+}
+
+pub fn compiled_key_digest(policy_id: &str, key: &StaticDecisionKeyV1) -> Result<String> {
+    canonical_cbor(policy_id, key).map(|bytes| digest(&bytes))
+}
+
+fn validate_compiled_exceptions(
+    document: &PolicyDocumentV1,
+    cells: &[CompiledDecisionCellV1],
+) -> Result<()> {
+    for exception in &document.exceptions {
+        let exception_id = exception.exception_id.as_str();
+        let bound_cells = cells
+            .iter()
+            .filter(|cell| cell.consuming_exception_id.as_deref() == Some(exception_id))
+            .collect::<Vec<_>>();
+        let subject = &exception.exact_subject;
+        let compiled_key_digests = bound_cells
+            .iter()
+            .map(|cell| compiled_key_digest(document.profile_id(), &cell.key))
+            .collect::<Result<BTreeSet<_>>>()?;
+        let protected_scope_ids = bound_cells
+            .iter()
+            .map(|cell| cell.key.protected_scope_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let execution_set_ids = bound_cells
+            .iter()
+            .map(|cell| cell.key.execution_set_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let entry_kind_ids = bound_cells
+            .iter()
+            .map(|cell| cell.key.entry_kind)
+            .collect::<BTreeSet<_>>();
+        let role_ids = bound_cells
+            .iter()
+            .map(|cell| cell.key.role_id.as_str())
+            .collect::<BTreeSet<_>>();
+        let changed_rule_ids = bound_cells
+            .iter()
+            .flat_map(|cell| cell.source_rule_ids.iter().map(String::as_str))
+            .collect::<BTreeSet<_>>();
+        check(
+            document.profile_id(),
+            !bound_cells.is_empty()
+                && bound_cells.len() == 1
+                && matches!(
+                    bound_cells[0].key.operation_id.as_str(),
+                    "OPEN_READ" | "OPEN_WRITE"
+                )
+                && bound_cells
+                    .iter()
+                    .all(|cell| cell.physical_result == CompiledPhysicalResultV1::AllowEffect)
+                && protected_scope_ids
+                    == subject
+                        .protected_scope_ids
+                        .iter()
+                        .map(String::as_str)
+                        .collect()
+                && execution_set_ids
+                    == subject
+                        .execution_set_ids
+                        .iter()
+                        .map(String::as_str)
+                        .collect()
+                && entry_kind_ids == subject.entry_kind_ids.iter().copied().collect()
+                && role_ids == subject.role_ids.iter().map(String::as_str).collect()
+                && compiled_key_digests
+                    == subject.exact_compiled_key_digests.iter().cloned().collect()
+                && compiled_key_digests
+                    == exception
+                        .authority_delta
+                        .added_or_removed_operation_cells
+                        .iter()
+                        .cloned()
+                        .collect()
+                && exception
+                    .authority_delta
+                    .added_or_removed_transition_cells
+                    .is_empty()
+                && changed_rule_ids
+                    == exception
+                        .changed_rule_ids
+                        .iter()
+                        .map(String::as_str)
+                        .collect(),
+            "CFG_EXCEPTION_CELL",
+            &format!(
+                "exception `{exception_id}` does not exactly bind one qualified file-open allow cell"
+            ),
+        )?;
+    }
+    Ok(())
 }
 
 impl EffectFamilyV1 {
@@ -291,6 +399,7 @@ fn resolve_cell(
             key,
             physical_result: first.physical_result,
             errno: first.errno,
+            consuming_exception_id: first.rule.exception_ids.first().cloned(),
             action_plan_digest: first.action_plan_digest.clone(),
             source_rule_ids,
         });
@@ -318,6 +427,7 @@ fn resolve_cell(
         key,
         physical_result: winner.physical_result,
         errno: winner.errno,
+        consuming_exception_id: winner.rule.exception_ids.first().cloned(),
         action_plan_digest: winner.action_plan_digest.clone(),
         source_rule_ids: vec![winner.rule.rule_id.clone()],
     })
@@ -359,15 +469,24 @@ fn local_action_plan_digest(
     canonical_cbor(policy_id, &plan).map(|bytes| digest(&bytes))
 }
 
-fn physical_result(rule: &DetectionDispositionRuleV1) -> Option<CompiledPhysicalResultV1> {
-    disposition_result(rule.requested_disposition)
+fn physical_result(
+    rule: &DetectionDispositionRuleV1,
+    mode: ProfileModeV1,
+) -> Option<CompiledPhysicalResultV1> {
+    disposition_result(rule.requested_disposition, mode)
 }
 
-fn disposition_result(disposition: PolicyDispositionV1) -> Option<CompiledPhysicalResultV1> {
+fn disposition_result(
+    disposition: PolicyDispositionV1,
+    mode: ProfileModeV1,
+) -> Option<CompiledPhysicalResultV1> {
     match disposition {
         PolicyDispositionV1::Allow => Some(CompiledPhysicalResultV1::AllowEffect),
         PolicyDispositionV1::Alert => Some(CompiledPhysicalResultV1::AuditAllowEffect),
-        PolicyDispositionV1::Deny => Some(CompiledPhysicalResultV1::SimulatablePolicyDeny),
+        PolicyDispositionV1::Deny => Some(match mode {
+            ProfileModeV1::Observe => CompiledPhysicalResultV1::SimulatablePolicyDeny,
+            ProfileModeV1::Protect => CompiledPhysicalResultV1::DenyEffect,
+        }),
         PolicyDispositionV1::Reject => None,
     }
 }
@@ -988,6 +1107,9 @@ fn validate_supporting_definitions(document: &PolicyDocumentV1) -> Result<()> {
                     .iter()
                     .all(|exception| exceptions.contains(exception.as_str()))
                 && rule.exception_ids.len() <= 1
+                && (rule.exception_ids.is_empty()
+                    || (rule.evaluation_stage == EvaluationStageV1::LocalPreEffect
+                        && rule.requested_disposition == PolicyDispositionV1::Allow))
                 && ordered_unique(&rule.overrides_rule_ids)
                 && budget_is_empty(&rule.budgets)
                 && (rule.finding.is_some()
@@ -1284,12 +1406,15 @@ fn validate_exceptions(document: &PolicyDocumentV1, roles: &BTreeSet<&str>) -> R
                     .protected_scope_ids
                     .iter()
                     .all(|scope| scopes.contains(scope.as_str()))
+                && !subject.execution_set_ids.is_empty()
                 && ordered_unique(&subject.execution_set_ids)
                 && subject
                     .execution_set_ids
                     .iter()
                     .all(|set| execution_sets.contains(set.as_str()))
+                && !subject.entry_kind_ids.is_empty()
                 && ordered_unique(&subject.entry_kind_ids)
+                && !subject.role_ids.is_empty()
                 && ordered_unique(&subject.role_ids)
                 && subject
                     .role_ids
@@ -1306,10 +1431,8 @@ fn validate_exceptions(document: &PolicyDocumentV1, roles: &BTreeSet<&str>) -> R
                     .exact_compiled_key_digests
                     .iter()
                     .all(|digest| valid_digest(digest))
-                && valid_registry_symbol(&exception.authority_delta.from_physical_result)
-                && valid_registry_symbol(&exception.authority_delta.to_physical_result)
-                && exception.authority_delta.from_physical_result
-                    != exception.authority_delta.to_physical_result
+                && exception.authority_delta.from_physical_result == "DENY_ERRNO"
+                && exception.authority_delta.to_physical_result == "ALLOW_EFFECT"
                 && ordered_unique(&exception.authority_delta.added_or_removed_operation_cells)
                 && exception
                     .authority_delta

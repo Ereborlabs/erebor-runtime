@@ -8,16 +8,17 @@ use erebor_interceptor::KernelHost;
 use erebor_interceptor_abi::{
     BindingLifecycleStateV1, CanonicalMountRootKeyV1, CanonicalMountRootV1,
     CanonicalPathComponentV1, EffectDecisionKeyV1, EffectDefaultKeyV1, ExactFileObjectKeyV1,
-    ExactObjectBindingStateV1, ExactObjectBindingV1, Id128V1, MountReconciliationProposalV1,
-    MountSecurityViewKeyV1, MountSecurityViewStateV1, MountTopologyStateV1, PathGraphStateKeyV1,
-    PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1, PhysicalDecisionKindV1,
-    PhysicalDecisionV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1,
+    ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionRuntimeStateKeyV1,
+    ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, Id128V1, MountReconciliationProposalV1,
+    MountSecurityViewStateV1, MountTopologyStateV1, PathGraphStateKeyV1, PathGraphTerminalV1,
+    PathGraphTransitionKeyV1, PathGraphTransitionV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+    PolicyGenerationModeV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1,
     MAX_CANONICAL_COMPONENT_BYTES_V1,
 };
 use mithril_control::{
     kernel_operation_id, AntiRollbackStore, CanonicalPathGraphV1, CompiledPhysicalResultV1,
     ContainerKindV1 as PolicyContainerKindV1, EntryKindV1, PathPatternComponentV1, PathPatternV1,
-    PolicyArtifactOwner, ProfileCandidateArtifactV1, StaticDecisionKeyV1,
+    PolicyArtifactOwner, ProfileCandidateArtifactV1, ProfileModeV1, StaticDecisionKeyV1,
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
@@ -29,6 +30,7 @@ use crate::{ExactFileObjectConfig, NodeConfig, Result, WorkloadBindingConfig};
 
 pub struct NodePolicyGenerationOwner {
     mount_roots: Vec<MountRootReconciliation>,
+    prevention_enabled: bool,
 }
 
 impl NodePolicyGenerationOwner {
@@ -52,6 +54,7 @@ impl NodePolicyGenerationOwner {
         let artifact_owner = PolicyArtifactOwner::default();
         let mut artifacts = BTreeMap::new();
         let now_utc_ns = current_utc_ns()?;
+        let now_boottime_ns = current_boottime_ns()?;
         for candidate in &config.policy_candidates {
             let artifact = artifact_owner
                 .load_verified_at(
@@ -77,7 +80,7 @@ impl NodePolicyGenerationOwner {
             let artifact = artifacts.get(&binding.profile_id).ok_or_else(|| {
                 IdentityStateSnafu {
                     reason: format!(
-                        "binding `{}` has no verified observe candidate for profile `{}`",
+                        "binding `{}` has no verified candidate for profile `{}`",
                         binding.binding_id, binding.profile_id
                     ),
                 }
@@ -92,6 +95,8 @@ impl NodePolicyGenerationOwner {
                 &config.exact_file_objects,
                 node_boot_id,
                 label_epoch,
+                now_utc_ns,
+                now_boottime_ns,
             )?;
             match generations.get_mut(&binding.active_profile_generation_ref_id) {
                 Some(existing) => existing.merge(lowered)?,
@@ -105,16 +110,26 @@ impl NodePolicyGenerationOwner {
             generation.install(host)?;
             mount_roots.extend(generation.mount_reconciliation.iter().cloned());
         }
-        let owner = Self { mount_roots };
+        let owner = Self {
+            mount_roots,
+            prevention_enabled: generations
+                .values()
+                .any(|generation| generation.descriptor.mode == PolicyGenerationModeV1::Protect),
+        };
         owner.reconcile_mount_views(host)?;
         Ok(owner)
     }
 
+    #[must_use]
+    pub const fn prevention_enabled(&self) -> bool {
+        self.prevention_enabled
+    }
+
     pub fn reconcile_mount_views(&self, host: &KernelHost) -> Result<()> {
-        let mut views = BTreeMap::<u64, Vec<&MountRootReconciliation>>::new();
+        let mut views = BTreeMap::<u32, Vec<&MountRootReconciliation>>::new();
         for root in &self.mount_roots {
             views
-                .entry(root.view_key.mount_namespace_inode)
+                .entry(root.mount_namespace_inode)
                 .or_default()
                 .push(root);
         }
@@ -135,7 +150,7 @@ impl NodePolicyGenerationOwner {
             }
             .build()
         })?;
-        let key = root.view_key.mount_namespace_inode.to_ne_bytes();
+        let key = root.mount_namespace_inode.to_ne_bytes();
         let state = mount_view_state(host, &key)?;
         let epoch = mount_epoch(host, &key)?;
         if state.state == MountTopologyStateV1::Clean as u8
@@ -186,7 +201,7 @@ impl NodePolicyGenerationOwner {
             let root_key = CanonicalMountRootKeyV1 {
                 profile_generation_ref_id: configured.profile_generation_ref_id,
                 mount_namespace_inode: configured.mount_namespace_inode,
-                binding_id: planned.view_key.binding_id,
+                binding_id: planned.binding_id,
                 topology_generation: epoch,
                 filesystem_device: resolved.mount_root_filesystem_device,
                 root_inode: resolved.mount_root_inode,
@@ -253,7 +268,8 @@ impl NodePolicyGenerationOwner {
 
 #[derive(Clone)]
 struct MountRootReconciliation {
-    view_key: MountSecurityViewKeyV1,
+    mount_namespace_inode: u32,
+    binding_id: Id128V1,
     configured: ExactFileObjectConfig,
     canonical_path: PathBuf,
     graph_prefix_state_id: u32,
@@ -278,6 +294,7 @@ struct LoweredGeneration {
     descriptor: ProfileGenerationDescriptorV1,
     decisions: BTreeMap<Vec<u8>, Vec<u8>>,
     defaults: BTreeMap<Vec<u8>, Vec<u8>>,
+    exceptions: BTreeMap<Vec<u8>, Vec<u8>>,
     file_objects: BTreeMap<Vec<u8>, Vec<u8>>,
     mount_views: BTreeMap<Vec<u8>, Vec<u8>>,
     mount_epochs: BTreeMap<Vec<u8>, Vec<u8>>,
@@ -296,6 +313,8 @@ impl LoweredGeneration {
         configured_objects: &[ExactFileObjectConfig],
         node_boot_id: Id128V1,
         label_epoch: u64,
+        now_utc_ns: i64,
+        now_boottime_ns: u64,
     ) -> Result<Self> {
         ensure!(
             artifact.header.profile_id == binding.profile_id,
@@ -319,6 +338,13 @@ impl LoweredGeneration {
                 .map(|state| state.process_state_id.as_str()),
         );
         let composite_handles = composite_handles(artifact);
+        let exception_handles = handles(
+            artifact
+                .policy_document
+                .exceptions
+                .iter()
+                .map(|exception| exception.exception_id.as_str()),
+        );
         let generation_objects = configured_objects
             .iter()
             .filter(|object| {
@@ -381,7 +407,21 @@ impl LoweredGeneration {
                 }
                 .build()
             })? as u16;
-            let physical = physical_decision(cell.physical_result, cell.errno);
+            let exception_numeric_handle = cell
+                .consuming_exception_id
+                .as_ref()
+                .map(|exception_id| {
+                    exception_handles.get(exception_id).copied().ok_or_else(|| {
+                        IdentityStateSnafu {
+                            reason: format!("compiled cell has unknown exception `{exception_id}`"),
+                        }
+                        .build()
+                    })
+                })
+                .transpose()?
+                .unwrap_or_default();
+            let physical =
+                physical_decision(cell.physical_result, cell.errno, exception_numeric_handle);
             if let Some(exact_object_key_id) = cell.key.object_selector.strip_prefix("EXACT:") {
                 let exact_object_key_id = exact_object_key_id.parse::<u64>().map_err(|error| {
                     IdentityStateSnafu {
@@ -449,6 +489,58 @@ impl LoweredGeneration {
                 ),
             }
         );
+        let mut exceptions = BTreeMap::new();
+        for exception in &artifact.policy_document.exceptions {
+            let handle = exception_handles[&exception.exception_id];
+            if !artifact.compiled_profile.compiled_cells.iter().any(|cell| {
+                cell_matches_binding(&cell.key, binding)
+                    && cell.consuming_exception_id.as_deref()
+                        == Some(exception.exception_id.as_str())
+            }) {
+                continue;
+            }
+            ensure!(
+                exception.valid_from_utc_ns <= now_utc_ns
+                    && now_utc_ns < exception.valid_until_utc_ns,
+                IdentityStateSnafu {
+                    reason: format!(
+                        "exception `{}` is not valid at node activation",
+                        exception.exception_id
+                    ),
+                }
+            );
+            let remaining_ns =
+                u64::try_from(exception.valid_until_utc_ns - now_utc_ns).map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("exception UTC lifetime overflow: {error}"),
+                    }
+                    .build()
+                })?;
+            let deadline_boottime_ns = now_boottime_ns
+                .checked_add(remaining_ns.min(exception.maximum_lifetime_ns))
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "exception monotonic deadline overflow".to_owned(),
+                    }
+                    .build()
+                })?;
+            let key = ExceptionRuntimeStateKeyV1 {
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                exception_numeric_handle: handle,
+                reserved: 0,
+            };
+            let value = ExceptionRuntimeStateV1 {
+                lock: 0,
+                maximum_uses: exception.maximum_uses,
+                consumed_uses: 0,
+                exception_numeric_handle: handle,
+                deadline_boottime_ns,
+                transition_version: 1,
+                state: ExceptionRuntimeStateKindV1::Active,
+                reserved: [0; 7],
+            };
+            insert_exact(&mut exceptions, key.as_bytes(), value.as_bytes())?;
+        }
         let mut file_objects = BTreeMap::new();
         for object in &generation_objects {
             let key = ExactFileObjectKeyV1 {
@@ -499,7 +591,11 @@ impl LoweredGeneration {
                 .build()
             })?,
             state: PolicyGenerationStateV1::Preparing,
-            reserved: [0; 7],
+            mode: match artifact.compiled_profile.mode {
+                ProfileModeV1::Observe => PolicyGenerationModeV1::Observe,
+                ProfileModeV1::Protect => PolicyGenerationModeV1::Protect,
+            },
+            reserved: [0; 6],
             table_digest,
             transition_version: 1,
         };
@@ -507,6 +603,7 @@ impl LoweredGeneration {
             descriptor,
             decisions,
             defaults,
+            exceptions,
             file_objects,
             mount_views: path_tables.mount_views,
             mount_epochs: path_tables.mount_epochs,
@@ -524,13 +621,15 @@ impl LoweredGeneration {
             self.descriptor.node_boot_id == other.descriptor.node_boot_id
                 && self.descriptor.profile_id == other.descriptor.profile_id
                 && self.descriptor.label_epoch == other.descriptor.label_epoch
-                && self.descriptor.owner_generation == other.descriptor.owner_generation,
+                && self.descriptor.owner_generation == other.descriptor.owner_generation
+                && self.descriptor.mode == other.descriptor.mode,
             IdentityStateSnafu {
                 reason: "one generation handle cannot name different candidate artifacts",
             }
         );
         merge_rows(&mut self.decisions, other.decisions)?;
         merge_rows(&mut self.defaults, other.defaults)?;
+        merge_rows(&mut self.exceptions, other.exceptions)?;
         merge_rows(&mut self.file_objects, other.file_objects)?;
         merge_rows(&mut self.mount_views, other.mount_views)?;
         merge_rows(&mut self.mount_epochs, other.mount_epochs)?;
@@ -560,17 +659,19 @@ impl LoweredGeneration {
             .context(InterceptorSnafu)?;
         if let Some(existing) = existing.as_deref() {
             let preparing = self.descriptor.as_bytes();
-            let mut read_back = self.descriptor;
-            read_back.state = PolicyGenerationStateV1::ReadBack;
-            read_back.transition_version = 2;
+            let read_back = self.read_back_descriptor();
+            let active = self.active_descriptor();
             ensure!(
-                existing == preparing || existing == read_back.as_bytes(),
+                existing == preparing
+                    || existing == read_back.as_bytes()
+                    || existing == active.as_bytes(),
                 IdentityStateSnafu {
                     reason: "generation handle already belongs to different content",
                 }
             );
-            if existing == read_back.as_bytes() {
+            if existing == active.as_bytes() {
                 self.verify_immutable_rows(host)?;
+                install_exception_rows(host, &self.exceptions)?;
                 self.install_missing_mount_rows(host)?;
                 return Ok(());
             }
@@ -585,6 +686,7 @@ impl LoweredGeneration {
         }
         install_rows(host, "effect_decisions", &self.decisions)?;
         install_rows(host, "effect_defaults", &self.defaults)?;
+        install_exception_rows(host, &self.exceptions)?;
         install_rows(host, "exact_file_objects", &self.file_objects)?;
         install_rows(host, "mount_security_views", &self.mount_views)?;
         install_rows(host, "mount_mutation_epochs", &self.mount_epochs)?;
@@ -597,9 +699,8 @@ impl LoweredGeneration {
             &self.path_wildcards,
         )?;
         install_rows(host, "path_graph_terminals", &self.path_terminals)?;
-        let mut read_back = self.descriptor;
-        read_back.state = PolicyGenerationStateV1::ReadBack;
-        read_back.transition_version = 2;
+        self.verify_immutable_rows(host)?;
+        let read_back = self.read_back_descriptor();
         host.update_map(
             "profile_generation_descriptors",
             &descriptor_key,
@@ -615,7 +716,37 @@ impl LoweredGeneration {
                 reason: "candidate descriptor READ_BACK verification failed",
             }
         );
+        let active = self.active_descriptor();
+        host.update_map(
+            "profile_generation_descriptors",
+            &descriptor_key,
+            active.as_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+        ensure!(
+            host.lookup_map("profile_generation_descriptors", &descriptor_key)
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some(active.as_bytes()),
+            IdentityStateSnafu {
+                reason: "candidate descriptor ACTIVE publication readback failed",
+            }
+        );
         Ok(())
+    }
+
+    fn active_descriptor(&self) -> ProfileGenerationDescriptorV1 {
+        let mut active = self.descriptor;
+        active.state = PolicyGenerationStateV1::Active;
+        active.transition_version = 3;
+        active
+    }
+
+    fn read_back_descriptor(&self) -> ProfileGenerationDescriptorV1 {
+        let mut read_back = self.descriptor;
+        read_back.state = PolicyGenerationStateV1::ReadBack;
+        read_back.transition_version = 2;
+        read_back
     }
 
     fn verify_immutable_rows(&self, host: &KernelHost) -> Result<()> {
@@ -674,6 +805,69 @@ fn verify_rows(host: &KernelHost, map: &str, rows: &BTreeMap<Vec<u8>, Vec<u8>>) 
         );
     }
     Ok(())
+}
+
+fn install_exception_rows(host: &KernelHost, rows: &BTreeMap<Vec<u8>, Vec<u8>>) -> Result<()> {
+    for (key, desired) in rows {
+        let existing = host
+            .lookup_map("exception_runtime_states", key)
+            .context(InterceptorSnafu)?;
+        if let Some(existing) = existing {
+            let maximum_uses =
+                native_u32_at(&existing, offset_of!(ExceptionRuntimeStateV1, maximum_uses))?;
+            let consumed_uses = native_u32_at(
+                &existing,
+                offset_of!(ExceptionRuntimeStateV1, consumed_uses),
+            )?;
+            let state = existing
+                .get(offset_of!(ExceptionRuntimeStateV1, state))
+                .copied()
+                .unwrap_or_default();
+            ensure!(
+                existing.len() == size_of::<ExceptionRuntimeStateV1>()
+                    && maximum_uses
+                        == native_u32_at(desired, offset_of!(ExceptionRuntimeStateV1, maximum_uses))?
+                    && native_u32_at(
+                        &existing,
+                        offset_of!(ExceptionRuntimeStateV1, exception_numeric_handle),
+                    )? == native_u32_at(
+                        desired,
+                        offset_of!(ExceptionRuntimeStateV1, exception_numeric_handle),
+                    )?
+                    && exception_counter_is_consistent(maximum_uses, consumed_uses, state)
+                    && native_u64_at(&existing, offset_of!(ExceptionRuntimeStateV1, deadline_boottime_ns))?
+                        <= native_u64_at(desired, offset_of!(ExceptionRuntimeStateV1, deadline_boottime_ns))?
+                    && native_u64_at(&existing, offset_of!(ExceptionRuntimeStateV1, transition_version))?
+                        > 0
+                    ,
+                IdentityStateSnafu {
+                    reason: "existing exception runtime state is inconsistent with the signed generation",
+                }
+            );
+            continue;
+        }
+        host.update_map("exception_runtime_states", key, desired)
+            .context(InterceptorSnafu)?;
+        ensure!(
+            host.lookup_map("exception_runtime_states", key)
+                .context(InterceptorSnafu)?
+                .as_ref()
+                == Some(desired),
+            IdentityStateSnafu {
+                reason: "exception runtime state readback failed",
+            }
+        );
+    }
+    Ok(())
+}
+
+const fn exception_counter_is_consistent(maximum_uses: u32, consumed_uses: u32, state: u8) -> bool {
+    maximum_uses > 0
+        && consumed_uses <= maximum_uses
+        && ((state == ExceptionRuntimeStateKindV1::Active as u8 && consumed_uses < maximum_uses)
+            || (state == ExceptionRuntimeStateKindV1::Exhausted as u8
+                && consumed_uses == maximum_uses)
+            || state == ExceptionRuntimeStateKindV1::Expired as u8)
 }
 
 fn install_missing_rows(
@@ -750,6 +944,47 @@ fn native_u64(bytes: &[u8]) -> Result<u64> {
         }
         .build()
     })?))
+}
+
+fn native_u32_at(bytes: &[u8], offset: usize) -> Result<u32> {
+    let end = offset.checked_add(size_of::<u32>()).ok_or_else(|| {
+        IdentityStateSnafu {
+            reason: "native u32 offset overflow".to_owned(),
+        }
+        .build()
+    })?;
+    Ok(u32::from_ne_bytes(
+        bytes
+            .get(offset..end)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "native u32 map field is truncated".to_owned(),
+                }
+                .build()
+            })?
+            .try_into()
+            .map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("invalid native u32 map field: {error}"),
+                }
+                .build()
+            })?,
+    ))
+}
+
+fn native_u64_at(bytes: &[u8], offset: usize) -> Result<u64> {
+    let end = offset.checked_add(size_of::<u64>()).ok_or_else(|| {
+        IdentityStateSnafu {
+            reason: "native u64 offset overflow".to_owned(),
+        }
+        .build()
+    })?;
+    native_u64(bytes.get(offset..end).ok_or_else(|| {
+        IdentityStateSnafu {
+            reason: "native u64 map field is truncated".to_owned(),
+        }
+        .build()
+    })?)
 }
 
 fn cell_matches_binding(key: &StaticDecisionKeyV1, binding: &WorkloadBindingConfig) -> bool {
@@ -868,18 +1103,23 @@ fn handles<'a>(ids: impl Iterator<Item = &'a str>) -> BTreeMap<String, u32> {
         .collect()
 }
 
-fn physical_decision(result: CompiledPhysicalResultV1, errno: Option<i16>) -> PhysicalDecisionV1 {
+fn physical_decision(
+    result: CompiledPhysicalResultV1,
+    errno: Option<i16>,
+    exception_numeric_handle: u32,
+) -> PhysicalDecisionV1 {
     PhysicalDecisionV1 {
         decision: match result {
             CompiledPhysicalResultV1::AllowEffect => PhysicalDecisionKindV1::Allow,
             CompiledPhysicalResultV1::AuditAllowEffect => PhysicalDecisionKindV1::AuditAllow,
             CompiledPhysicalResultV1::SimulatablePolicyDeny => PhysicalDecisionKindV1::Deny,
+            CompiledPhysicalResultV1::DenyEffect => PhysicalDecisionKindV1::Deny,
         },
         reserved: 0,
         errno: errno.unwrap_or(0),
         evidence_class_id: 1,
         transition_id: 0,
-        exception_numeric_handle: 0,
+        exception_numeric_handle,
     }
 }
 
@@ -1061,11 +1301,6 @@ fn lower_path_tables(
                     }
                     .build()
                 })?;
-        let view_key = MountSecurityViewKeyV1 {
-            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-            mount_namespace_inode: object.mount_namespace_inode,
-            binding_id,
-        };
         let view_map_key = object.mount_namespace_inode.to_ne_bytes();
         let view = MountSecurityViewStateV1 {
             topology_generation: object.mount_topology_generation,
@@ -1102,7 +1337,8 @@ fn lower_path_tables(
             root.as_bytes(),
         )?;
         tables.reconciliation.push(MountRootReconciliation {
-            view_key,
+            mount_namespace_inode: object.mount_namespace_inode,
+            binding_id,
             configured: (*object).clone(),
             canonical_path: canonical_path(components),
             graph_prefix_state_id,
@@ -1215,6 +1451,20 @@ fn current_utc_ns() -> Result<i64> {
     })
 }
 
+fn current_boottime_ns() -> Result<u64> {
+    let value = rustix::time::clock_gettime(rustix::time::ClockId::Boottime);
+    u64::try_from(value.tv_sec)
+        .ok()
+        .and_then(|seconds| seconds.checked_mul(1_000_000_000))
+        .and_then(|seconds| seconds.checked_add(u64::try_from(value.tv_nsec).ok()?))
+        .ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "system boot clock exceeds the unsigned nanosecond range".to_owned(),
+            }
+            .build()
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
@@ -1222,26 +1472,29 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use erebor_interceptor_abi::{
         BindingLifecycleStateV1, EffectDecisionKeyV1, EntryKindV1 as AbiEntryKindV1, Id128V1,
-        KernelEffectFamilyV1, KernelEffectOperationV1,
+        KernelEffectFamilyV1, KernelEffectOperationV1, PhysicalDecisionKindV1,
+        PolicyGenerationModeV1,
     };
     use mithril_control::{
         LocalObjectSelectorV1, PolicyCompiler, PolicyDocumentV1, ProfileCandidateArtifactV1,
-        ProfileSealRequestV1, RegistryDigestsV1, RuleMatchV1,
+        ProfileModeV1, ProfileSealRequestV1, RegistryDigestsV1, RuleMatchV1,
     };
     use zerocopy::IntoBytes as _;
 
-    use super::{same_exact_file, LoweredGeneration};
+    use super::{exception_counter_is_consistent, same_exact_file, LoweredGeneration};
     use crate::{ContainerKindV1, ExactFileObjectConfig, WorkloadBindingConfig};
 
     #[test]
     fn exact_decision_key_contains_its_signed_composite_atom() -> crate::Result<()> {
-        let (artifact, binding, object) = exact_artifact()?;
+        let (artifact, binding, object) = exact_artifact(ProfileModeV1::Observe)?;
         let generation = LoweredGeneration::for_binding(
             &artifact,
             &binding,
             std::slice::from_ref(&object),
             Id128V1::new(1, 2),
             3,
+            1_800_000_000_000_000_000,
+            100,
         )?;
         let expected = EffectDecisionKeyV1 {
             profile_generation_ref_id: 1,
@@ -1264,10 +1517,16 @@ mod tests {
             Some(&object.mount_namespace_inode.to_ne_bytes().to_vec())
         );
 
-        assert!(
-            LoweredGeneration::for_binding(&artifact, &binding, &[], Id128V1::new(1, 2), 3,)
-                .is_err()
-        );
+        assert!(LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            &[],
+            Id128V1::new(1, 2),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )
+        .is_err());
         let mut swapped_roles = binding;
         std::mem::swap(
             &mut swapped_roles.initial_role_id,
@@ -1279,14 +1538,72 @@ mod tests {
             std::slice::from_ref(&object),
             Id128V1::new(1, 2),
             3,
+            1_800_000_000_000_000_000,
+            100,
         )
         .is_err());
         Ok(())
     }
 
     #[test]
+    fn protect_generation_lowers_to_an_active_physical_deny_table() -> crate::Result<()> {
+        let (artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        let generation = LoweredGeneration::for_binding(
+            &artifact,
+            &binding,
+            std::slice::from_ref(&object),
+            Id128V1::new(1, 2),
+            3,
+            1_800_000_000_000_000_000,
+            100,
+        )?;
+
+        assert_eq!(generation.descriptor.mode, PolicyGenerationModeV1::Protect);
+        assert_eq!(
+            generation.descriptor.state,
+            erebor_interceptor_abi::PolicyGenerationStateV1::Preparing
+        );
+        assert_eq!(
+            generation.read_back_descriptor().state,
+            erebor_interceptor_abi::PolicyGenerationStateV1::ReadBack
+        );
+        assert_eq!(generation.read_back_descriptor().transition_version, 2);
+        assert_eq!(
+            generation.active_descriptor().state,
+            erebor_interceptor_abi::PolicyGenerationStateV1::Active
+        );
+        assert_eq!(generation.active_descriptor().transition_version, 3);
+        assert_eq!(
+            generation.decisions.values().next().map(|value| value[0]),
+            Some(PhysicalDecisionKindV1::Deny as u8)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn exception_counter_recovery_never_revives_or_overruns_a_budget() {
+        use erebor_interceptor_abi::ExceptionRuntimeStateKindV1 as State;
+
+        assert!(exception_counter_is_consistent(2, 0, State::Active as u8));
+        assert!(exception_counter_is_consistent(2, 1, State::Active as u8));
+        assert!(exception_counter_is_consistent(
+            2,
+            2,
+            State::Exhausted as u8
+        ));
+        assert!(exception_counter_is_consistent(2, 1, State::Expired as u8));
+        assert!(!exception_counter_is_consistent(2, 2, State::Active as u8));
+        assert!(!exception_counter_is_consistent(
+            2,
+            1,
+            State::Exhausted as u8
+        ));
+        assert!(!exception_counter_is_consistent(2, 3, State::Expired as u8));
+    }
+
+    #[test]
     fn reconciliation_requires_the_same_exact_file() -> crate::Result<()> {
-        let (_, _, object) = exact_artifact()?;
+        let (_, _, object) = exact_artifact(ProfileModeV1::Observe)?;
         assert!(same_exact_file(&object, &object));
 
         for changed in [
@@ -1316,7 +1633,9 @@ mod tests {
         Ok(())
     }
 
-    fn exact_artifact() -> crate::Result<(
+    fn exact_artifact(
+        mode: ProfileModeV1,
+    ) -> crate::Result<(
         ProfileCandidateArtifactV1,
         WorkloadBindingConfig,
         ExactFileObjectConfig,
@@ -1335,6 +1654,7 @@ mod tests {
         effect.object = LocalObjectSelectorV1::ExactObjectKeys {
             exact_object_key_ids: vec![99],
         };
+        document.rollout.desired_profile_mode = mode;
         let compiled =
             PolicyCompiler
                 .compile(&document)

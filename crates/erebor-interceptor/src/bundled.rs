@@ -35,6 +35,52 @@ mod tests {
     }
 
     #[test]
+    fn phase4_local_hooks_and_bounded_exception_map_are_bundled() -> crate::Result<()> {
+        use std::collections::BTreeSet;
+        use std::mem::size_of;
+
+        use erebor_interceptor_abi::{ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateV1};
+
+        let object = ObjectBuilder::default()
+            .open_memory(BUNDLED_BPF_OBJECT)
+            .map_err(|source| crate::Error::Libbpf {
+                action: "inspect bundled BPF object",
+                path: "embedded erebor-interceptor.bpf.o".into(),
+                source,
+                location: snafu::Location::new(file!(), line!(), column!()),
+            })?;
+        let programs = object
+            .progs()
+            .map(|program| program.name().to_string_lossy().into_owned())
+            .collect::<BTreeSet<_>>();
+        for required in crate::host::REQUIRED_IDENTITY_PROGRAMS {
+            assert!(programs.contains(required), "missing {required}");
+        }
+        let exception_map = match object
+            .maps()
+            .find(|map| map.name().to_string_lossy() == "exception_runtime_states")
+        {
+            Some(map) => map,
+            None => {
+                return crate::error::InvalidConfigurationSnafu {
+                    path: std::path::Path::new("embedded erebor-interceptor.bpf.o"),
+                    reason: "bounded exception map is missing".to_owned(),
+                }
+                .fail()
+            }
+        };
+        assert_eq!(
+            exception_map.key_size() as usize,
+            size_of::<ExceptionRuntimeStateKeyV1>()
+        );
+        assert_eq!(
+            exception_map.value_size() as usize,
+            size_of::<ExceptionRuntimeStateV1>()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn syscall_exit_tracepoint_does_not_call_spin_lock() -> crate::Result<()> {
         const BPF_CALL: u8 = 0x85;
 
@@ -59,6 +105,22 @@ mod tests {
         }
         assert!(found);
         Ok(())
+    }
+
+    #[test]
+    fn mount_view_is_dirtied_only_after_the_pre_effect_gate_allows() {
+        let source =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h");
+        let helper = source
+            .split("static __always_inline int mount_mutation_effect")
+            .nth(1)
+            .and_then(|source| source.split("SEC(\"lsm/sb_mount\")").next())
+            .unwrap_or_default();
+        let gate = helper.find("identity_effect_gate").unwrap_or(usize::MAX);
+        let dirty = helper.find("begin_mount_mutation").unwrap_or_default();
+
+        assert!(gate < dirty);
+        assert_eq!(source.matches("begin_mount_mutation()").count(), 1);
     }
 
     #[test]
@@ -202,15 +264,19 @@ mod tests {
 
     #[test]
     fn bprm_candidate_store_uses_a_verifier_bounded_index() -> crate::Result<()> {
+        use std::mem::size_of;
+
+        use erebor_interceptor_abi::ExactExecutableCandidateV1;
         use libbpf_rs::libbpf_sys::{BPF_ALU64, BPF_AND, BPF_K, BPF_MUL};
 
+        let candidate_size = size_of::<ExactExecutableCandidateV1>() as i32;
         let instructions = BUNDLED_BPF_OBJECT.chunks_exact(8).collect::<Vec<_>>();
         assert!(instructions.windows(2).any(|pair| {
             pair[0][0] == (BPF_ALU64 | BPF_AND | BPF_K) as u8
                 && bpf_immediate(pair[0]) == Some(7)
                 && pair[1][0] == (BPF_ALU64 | BPF_MUL | BPF_K) as u8
                 && pair[1][1] & 0x0f == pair[0][1] & 0x0f
-                && bpf_immediate(pair[1]) == Some(40)
+                && bpf_immediate(pair[1]) == Some(candidate_size)
         }));
         Ok(())
     }

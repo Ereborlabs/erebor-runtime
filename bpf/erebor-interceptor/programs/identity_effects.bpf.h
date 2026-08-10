@@ -345,13 +345,13 @@ static __noinline int identity_effect_gate(struct file *file,
                 config, scratch,
                 effect_observation_reason_v1_corrupt_identity_or_generation);
     }
-    if (!config->effect_observation_enabled)
+    if (!config->effect_policy_enabled)
         return ret;
     generation = bpf_map_lookup_elem(
         &profile_generation_descriptors,
         &snapshot->active_profile_generation_ref_id);
     if (!generation ||
-        generation->state != policy_generation_state_v1_read_back ||
+        generation->state != policy_generation_state_v1_active ||
         generation->label_epoch != config->label_epoch ||
         generation->profile_generation_ref_id !=
             snapshot->active_profile_generation_ref_id ||
@@ -404,19 +404,34 @@ static __noinline int identity_effect_gate(struct file *file,
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
     scratch->observation.configured_errno = decision->errno;
-    if (decision->decision == physical_decision_kind_v1_deny)
+    if (decision->decision == physical_decision_kind_v1_deny &&
+        generation->mode == policy_generation_mode_v1_protect)
+        return emit_effect_observation(
+            scratch, identity_errno(decision->errno),
+            effect_observation_reason_v1_exact_policy_deny,
+            effect_physical_result_v1_denied_before_effect);
+    if (decision->decision == physical_decision_kind_v1_deny &&
+        generation->mode == policy_generation_mode_v1_observe)
         return emit_effect_observation(
             scratch, 0, effect_observation_reason_v1_would_deny,
             effect_physical_result_v1_unknown_after_pre_effect);
-    if (decision->decision == physical_decision_kind_v1_audit_allow)
+    if (decision->decision == physical_decision_kind_v1_audit_allow &&
+        !decision->exception_numeric_handle)
         return emit_effect_observation(
             scratch, 0,
             effect_observation_reason_v1_exact_policy_audit_allow,
             effect_physical_result_v1_unknown_after_pre_effect);
-    if (decision->decision == physical_decision_kind_v1_allow)
+    if (decision->decision == physical_decision_kind_v1_allow) {
+        if (consume_bounded_exception(
+                snapshot->active_profile_generation_ref_id,
+                decision->exception_numeric_handle))
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_exception_unavailable);
         return emit_effect_observation(
             scratch, 0, effect_observation_reason_v1_exact_policy_allow,
             effect_physical_result_v1_unknown_after_pre_effect);
+    }
     return hard_effect_result(
         config, scratch,
         effect_observation_reason_v1_corrupt_identity_or_generation);
@@ -582,6 +597,36 @@ int BPF_PROG(erebor_identity_path_unlink, const struct path *dir,
                                 kernel_effect_operation_v1_unlink, ret);
 }
 
+SEC("lsm/inode_create")
+int BPF_PROG(erebor_identity_inode_create, struct inode *dir,
+             struct dentry *dentry, umode_t mode, int ret)
+{
+    return identity_effect_gate(NULL, kernel_effect_family_v1_file,
+                                kernel_effect_operation_v1_create, ret);
+}
+
+SEC("lsm/path_chmod")
+int BPF_PROG(erebor_identity_path_chmod, const struct path *path, umode_t mode,
+             int ret)
+{
+    return identity_effect_gate(NULL, kernel_effect_family_v1_file,
+                                kernel_effect_operation_v1_setattr, ret);
+}
+
+SEC("lsm/path_truncate")
+int BPF_PROG(erebor_identity_path_truncate, const struct path *path, int ret)
+{
+    return identity_effect_gate(NULL, kernel_effect_family_v1_file,
+                                kernel_effect_operation_v1_setattr, ret);
+}
+
+SEC("lsm/file_truncate")
+int BPF_PROG(erebor_identity_file_truncate, struct file *file, int ret)
+{
+    return identity_effect_gate(file, kernel_effect_family_v1_file,
+                                kernel_effect_operation_v1_setattr, ret);
+}
+
 SEC("lsm/path_link")
 int BPF_PROG(erebor_identity_path_link, struct dentry *old_dentry,
              const struct path *new_dir, struct dentry *new_dentry, int ret)
@@ -599,57 +644,44 @@ int BPF_PROG(erebor_identity_path_rename, const struct path *old_dir,
                                 kernel_effect_operation_v1_rename, ret);
 }
 
+static __always_inline int mount_mutation_effect(__u16 operation, int ret)
+{
+    if (ret)
+        return ret;
+    ret = identity_effect_gate(NULL, kernel_effect_family_v1_mount, operation,
+                               0);
+    if (ret)
+        return ret;
+    return begin_mount_mutation();
+}
+
 SEC("lsm/sb_mount")
 int BPF_PROG(erebor_identity_sb_mount, const char *dev_name,
              const struct path *path, const char *type, unsigned long flags,
              void *data, int ret)
 {
-    int dirty = begin_mount_mutation();
-    if (ret)
-        return ret;
-    if (dirty)
-        return dirty;
-    return identity_effect_gate(NULL, kernel_effect_family_v1_mount,
-                                kernel_effect_operation_v1_mount, ret);
+    return mount_mutation_effect(kernel_effect_operation_v1_mount, ret);
 }
 
 SEC("lsm/sb_umount")
 int BPF_PROG(erebor_identity_sb_umount, struct vfsmount *mnt, int flags,
              int ret)
 {
-    int dirty = begin_mount_mutation();
-    if (ret)
-        return ret;
-    if (dirty)
-        return dirty;
-    return identity_effect_gate(NULL, kernel_effect_family_v1_mount,
-                                kernel_effect_operation_v1_unmount, ret);
+    return mount_mutation_effect(kernel_effect_operation_v1_unmount, ret);
 }
 
 SEC("lsm/sb_pivotroot")
 int BPF_PROG(erebor_identity_sb_pivotroot, const struct path *old_path,
              const struct path *new_path, int ret)
 {
-    int dirty = begin_mount_mutation();
-    if (ret)
-        return ret;
-    if (dirty)
-        return dirty;
-    return identity_effect_gate(NULL, kernel_effect_family_v1_mount,
-                                kernel_effect_operation_v1_pivot_root, ret);
+    return mount_mutation_effect(kernel_effect_operation_v1_pivot_root, ret);
 }
 
 SEC("lsm/move_mount")
 int BPF_PROG(erebor_identity_move_mount, const struct path *from_path,
              const struct path *to_path, int ret)
 {
-    int dirty = begin_mount_mutation();
-    if (ret)
-        return ret;
-    if (dirty)
-        return dirty;
-    return identity_effect_gate(NULL, kernel_effect_family_v1_mount,
-                                kernel_effect_operation_v1_move_mount, ret);
+    return mount_mutation_effect(kernel_effect_operation_v1_move_mount, ret);
 }
 
 SEC("lsm/capable")

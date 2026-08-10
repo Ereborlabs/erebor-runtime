@@ -28,6 +28,7 @@ pub enum SimulatedDispositionV1 {
     Allow,
     AuditAllow,
     WouldDeny,
+    Deny,
     HardDeny,
     Unresolved,
 }
@@ -128,6 +129,11 @@ fn decision(cell: &CompiledDecisionCellV1) -> EffectSimulationV1 {
             SimulatedDispositionV1::WouldDeny,
             SimulatedPhysicalResultV1::NotAttempted,
             "SIMULATABLE_POLICY_DENY_ALLOWED_IN_OBSERVE",
+        ),
+        CompiledPhysicalResultV1::DenyEffect => (
+            SimulatedDispositionV1::Deny,
+            SimulatedPhysicalResultV1::NotAttempted,
+            "POLICY_DENY_IN_PROTECT",
         ),
     };
     EffectSimulationV1 {

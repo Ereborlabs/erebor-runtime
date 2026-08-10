@@ -3,8 +3,15 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use ed25519_dalek::SigningKey;
 use erebor_interceptor::{EffectObservationReader, KernelHost};
 use erebor_interceptor_abi::{MountSecurityViewStateV1, MountTopologyStateV1};
+use mithril_control::{
+    compiled_key_digest, BlastRadiusLimitV1, ExactExceptionSubjectSelectorV1,
+    ExceptionConsumptionScopeV1, ExceptionV1, LocalObjectSelectorV1, PermittedAuthorityDeltaV1,
+    PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, ProfileCandidateArtifactV1,
+    ProfileModeV1, ProfileSealRequestV1, RuleMatchV1,
+};
 use mithril_node::{
     ContainerKindV1, EffectObservationHealth, EffectObservationStore, InterceptorConfig,
     NodeConfig, NodeControlConfig, PolicyCandidateConfig, WorkloadBindingConfig,
@@ -12,10 +19,163 @@ use mithril_node::{
 use snafu::{ensure, ResultExt as _};
 
 use super::PROFILE_GENERATION_REF_ID;
-use crate::error::{CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu};
+use crate::error::{
+    CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, PolicySnafu,
+};
 use crate::Result;
 
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
+
+pub(super) fn compile_phase4_artifact(
+    source_path: &Path,
+    seal_request_path: &Path,
+    signing_key_path: &Path,
+    output_path: &Path,
+) -> Result<()> {
+    let source = std::fs::read(source_path).context(IoSnafu { path: source_path })?;
+    let mut document = PolicyDocumentV1::parse(source_path, &source).context(PolicySnafu)?;
+    document.rollout.desired_profile_mode = ProfileModeV1::Protect;
+    document
+        .protected_universe
+        .object_class_ids
+        .push("MANUAL_BENIGN".to_owned());
+    document.protected_universe.object_class_ids.sort();
+    let mut benign_classifier = document.classifier_bindings[0].clone();
+    benign_classifier.classifier_binding_id = "manual-benign".to_owned();
+    benign_classifier.object_class_id = "MANUAL_BENIGN".to_owned();
+    document.classifier_bindings.push(benign_classifier);
+    let mut benign_allow = document.rules[0].clone();
+    benign_allow.rule_id = "allow-manual-benign-read".to_owned();
+    benign_allow.requested_disposition = PolicyDispositionV1::Allow;
+    benign_allow.errno = None;
+    benign_allow.finding = None;
+    benign_allow.exception_ids.clear();
+    let RuleMatchV1::LocalPreEffect(benign_effect) = &mut benign_allow.rule_match else {
+        return InvalidInputSnafu {
+            path: source_path,
+            reason: "Phase 4 benign control is not a local pre-effect rule",
+        }
+        .fail();
+    };
+    benign_effect.operation_ids = ["MMAP_READ", "OPEN_READ", "READ"]
+        .map(str::to_owned)
+        .to_vec();
+    benign_effect.object = LocalObjectSelectorV1::ObjectClasses {
+        object_class_ids: vec!["MANUAL_BENIGN".to_owned()],
+    };
+    document.rules.push(benign_allow);
+    let mut bounded_allow = document.rules[0].clone();
+    bounded_allow.rule_id = "allow-bounded-secret-write-open".to_owned();
+    bounded_allow.requested_disposition = PolicyDispositionV1::Allow;
+    bounded_allow.errno = None;
+    bounded_allow.finding = None;
+    bounded_allow.exception_ids.clear();
+    let RuleMatchV1::LocalPreEffect(deny_effect) = &mut document.rules[0].rule_match else {
+        return InvalidInputSnafu {
+            path: source_path,
+            reason: "Phase 4 fixture needs one local pre-effect rule",
+        }
+        .fail();
+    };
+    deny_effect.operation_ids = ["MMAP_READ", "OPEN_READ", "READ"]
+        .map(str::to_owned)
+        .to_vec();
+    let RuleMatchV1::LocalPreEffect(allow_effect) = &mut bounded_allow.rule_match else {
+        return InvalidInputSnafu {
+            path: source_path,
+            reason: "Phase 4 bounded allow is not a local pre-effect rule",
+        }
+        .fail();
+    };
+    allow_effect.operation_ids = vec!["OPEN_WRITE".to_owned()];
+    let bounded_rule_index = document.rules.len();
+    document.rules.push(bounded_allow);
+    let preliminary = PolicyCompiler.compile(&document).context(PolicySnafu)?;
+    let allow_cell = preliminary
+        .compiled_cells
+        .iter()
+        .find(|cell| {
+            cell.source_rule_ids == ["allow-bounded-secret-write-open"]
+                && cell.key.operation_id == "OPEN_WRITE"
+        })
+        .ok_or_else(|| {
+            InvalidInputSnafu {
+                path: source_path,
+                reason: "Phase 4 fixture did not compile its bounded write-open cell",
+            }
+            .build()
+        })?;
+    let exception_id = "bounded-secret-write-open";
+    let allow_cell_digest =
+        compiled_key_digest(document.profile_id(), &allow_cell.key).context(PolicySnafu)?;
+    document.exceptions.push(ExceptionV1 {
+        exception_id: exception_id.to_owned(),
+        exception_instance_id: "88888888-8888-4888-8888-888888888889".to_owned(),
+        changed_rule_ids: vec!["allow-bounded-secret-write-open".to_owned()],
+        exact_subject: ExactExceptionSubjectSelectorV1 {
+            protected_scope_ids: vec![allow_cell.key.protected_scope_id.clone()],
+            execution_set_ids: vec![allow_cell.key.execution_set_id.clone()],
+            entry_kind_ids: vec![allow_cell.key.entry_kind],
+            role_ids: vec![allow_cell.key.role_id.clone()],
+            immutable_definition_digests: vec![],
+            exact_compiled_key_digests: vec![allow_cell_digest.clone()],
+        },
+        authority_delta: PermittedAuthorityDeltaV1 {
+            from_physical_result: "DENY_ERRNO".to_owned(),
+            to_physical_result: "ALLOW_EFFECT".to_owned(),
+            added_or_removed_operation_cells: vec![allow_cell_digest],
+            added_or_removed_transition_cells: vec![],
+            maximum_blast_radius: BlastRadiusLimitV1::Local {
+                permitted_target_selector_ids: vec![],
+                process_count: 1,
+                execution_set_count: 1,
+                socket_count: 1,
+                node_count: 1,
+            },
+        },
+        approver_principal_id: "99999999-9999-4999-8999-999999999999".to_owned(),
+        approval_proof_digest: "a".repeat(64),
+        closed_reason_code: "BOUNDED_SECRET_WRITE_OPEN".to_owned(),
+        valid_from_utc_ns: 1,
+        valid_until_utc_ns: i64::MAX,
+        consumption_scope: ExceptionConsumptionScopeV1::PerTargetNode,
+        maximum_uses: 2,
+        maximum_lifetime_ns: 60 * 60 * 1_000_000_000,
+    });
+    document.rules[bounded_rule_index]
+        .exception_ids
+        .push(exception_id.to_owned());
+    let compiled = PolicyCompiler.compile(&document).context(PolicySnafu)?;
+    let request: ProfileSealRequestV1 =
+        serde_json::from_slice(&std::fs::read(seal_request_path).context(IoSnafu {
+            path: seal_request_path,
+        })?)
+        .context(JsonSnafu {
+            path: seal_request_path,
+        })?;
+    let key_text = std::fs::read_to_string(signing_key_path).context(IoSnafu {
+        path: signing_key_path,
+    })?;
+    let key_bytes: [u8; 32] = hex::decode(key_text.trim())
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| {
+            InvalidInputSnafu {
+                path: signing_key_path,
+                reason: "Phase 4 signing key must be exactly 32 lowercase-hex bytes",
+            }
+            .build()
+        })?;
+    let artifact = ProfileCandidateArtifactV1::sign(
+        &document,
+        compiled,
+        request,
+        &SigningKey::from_bytes(&key_bytes),
+    )
+    .context(PolicySnafu)?;
+    let bytes = serde_json::to_vec_pretty(&artifact).context(JsonSnafu { path: output_path })?;
+    std::fs::write(output_path, bytes).context(IoSnafu { path: output_path })
+}
 
 pub(super) fn effect_node_config(
     state_directory: &Path,
@@ -24,7 +184,7 @@ pub(super) fn effect_node_config(
     manual: &Path,
     artifact_path: PathBuf,
     binding: WorkloadBindingConfig,
-    exact_object: mithril_node::ExactFileObjectConfig,
+    exact_file_objects: Vec<mithril_node::ExactFileObjectConfig>,
 ) -> NodeConfig {
     NodeConfig {
         node_id: "mithril-effect-test".to_owned(),
@@ -50,7 +210,7 @@ pub(super) fn effect_node_config(
             artifact_path,
             public_key_path: manual.join("test-public-key.hex"),
         }],
-        exact_file_objects: vec![exact_object],
+        exact_file_objects,
     }
 }
 
@@ -100,7 +260,7 @@ pub(super) fn health_delta(
     }
 }
 
-pub(super) fn mount_view_is_dirty(host: &KernelHost, mount_namespace_inode: u64) -> Result<bool> {
+pub(super) fn mount_view_is_dirty(host: &KernelHost, mount_namespace_inode: u32) -> Result<bool> {
     let bytes = host
         .lookup_map("mount_security_views", &mount_namespace_inode.to_ne_bytes())
         .context(InterceptorSnafu)?
@@ -249,9 +409,15 @@ fn run_nsenter_mount(pid: u32, command: &[&str], source: &Path, target: &Path) -
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use mithril_control::{
+        compiled_key_digest, CompiledPhysicalResultV1, PolicyArtifactOwner, PolicyCompiler,
+        PolicyDocumentV1, ProfileModeV1,
+    };
     use mithril_node::EffectObservationHealth;
 
-    use super::health_delta;
+    use super::{compile_phase4_artifact, health_delta};
 
     #[test]
     fn health_delta_preserves_ring_accounting() {
@@ -272,5 +438,95 @@ mod tests {
         let delta = health_delta(after, before);
         assert_eq!(delta.attempted, delta.emitted + delta.lost);
         assert_eq!(delta.lost, 6);
+    }
+
+    #[test]
+    fn phase4_fixture_is_a_verified_protect_artifact() -> Result<(), Box<dyn std::error::Error>> {
+        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let manual = repository.join("examples/mithril-phase3-manual");
+        let directory = tempfile::tempdir()?;
+        let artifact_path = directory.path().join("phase4-profile.json");
+        compile_phase4_artifact(
+            &manual.join("policy-v1.yaml"),
+            &manual.join("seal-request.json"),
+            &manual.join("test-signing-key.hex"),
+            &artifact_path,
+        )?;
+        let artifact = PolicyArtifactOwner::default()
+            .load_verified(&artifact_path, &manual.join("test-public-key.hex"))?;
+
+        assert_eq!(artifact.compiled_profile.mode, ProfileModeV1::Protect);
+        assert_eq!(
+            artifact
+                .compiled_profile
+                .compiled_cells
+                .iter()
+                .filter(|cell| cell.physical_result == CompiledPhysicalResultV1::DenyEffect)
+                .count(),
+            3
+        );
+        assert_eq!(
+            artifact
+                .compiled_profile
+                .compiled_cells
+                .iter()
+                .filter(|cell| cell.consuming_exception_id.is_some())
+                .count(),
+            1
+        );
+        let exception_cell = artifact
+            .compiled_profile
+            .compiled_cells
+            .iter()
+            .find(|cell| cell.consuming_exception_id.is_some())
+            .ok_or("Phase 4 fixture has no exception cell")?;
+        assert_eq!(
+            compiled_key_digest(&artifact.compiled_profile.profile_id, &exception_cell.key)?,
+            "eb7614f22732c8edcac2e55060444472180eb11ab3e34a9ea10c3514d8d16fb3"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checked_in_phase4_manual_policy_matches_the_automated_fixture() -> crate::Result<()> {
+        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = repository.join("examples/mithril-phase4-manual/policy-v1.yaml");
+        let source = std::fs::read(&path).map_err(|source| crate::Error::Io {
+            path: path.clone(),
+            source,
+            location: snafu::location!(),
+        })?;
+        let document =
+            PolicyDocumentV1::parse(&path, &source).map_err(|source| crate::Error::Policy {
+                source,
+                location: snafu::location!(),
+            })?;
+        let compiled =
+            PolicyCompiler
+                .compile(&document)
+                .map_err(|source| crate::Error::Policy {
+                    source,
+                    location: snafu::location!(),
+                })?;
+
+        assert_eq!(compiled.mode, ProfileModeV1::Protect);
+        assert_eq!(compiled.compiled_cells.len(), 7);
+        assert_eq!(
+            compiled
+                .compiled_cells
+                .iter()
+                .filter(|cell| cell.physical_result == CompiledPhysicalResultV1::DenyEffect)
+                .count(),
+            3
+        );
+        assert_eq!(
+            compiled
+                .compiled_cells
+                .iter()
+                .filter(|cell| cell.consuming_exception_id.is_some())
+                .count(),
+            1
+        );
+        Ok(())
     }
 }

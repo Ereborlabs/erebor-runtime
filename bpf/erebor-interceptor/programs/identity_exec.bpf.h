@@ -8,7 +8,7 @@ static __always_inline int observe_bprm_effect(struct linux_binprm *bprm)
     identity_runtime_config_v1 *config = identity_runtime_config();
     struct file *file = NULL;
 
-    if (!config || !config->effect_observation_enabled)
+    if (!config || !config->effect_policy_enabled)
         return 0;
     if (BPF_CORE_READ_INTO(&file, bprm, file))
         file = NULL;
@@ -365,7 +365,7 @@ int erebor_sys_enter_execveat(struct trace_event_raw_sys_enter *context)
         (const char *const *)context->args[2]);
 }
 
-static __always_inline void consume_administrative_match(
+static __always_inline int consume_administrative_match(
     identity_runtime_config_v1 *config, const task_label_v1 *label,
     execution_set_binding_state_v1 *binding,
     process_security_state_v1 *process, const pending_exec_v1 *pending)
@@ -376,7 +376,7 @@ static __always_inline void consume_administrative_match(
     approved_exec_slot_v1 *slot;
 
     if (!match)
-        return;
+        return 0;
     if (match->state !=
             pending_administrative_match_state_v1_arguments_matched ||
         match->exec_attempt_sequence != pending->exec_attempt_sequence ||
@@ -401,12 +401,16 @@ static __always_inline void consume_administrative_match(
     slot->transition_version++;
     match->state = pending_administrative_match_state_v1_slot_consumed;
     match->transition_version++;
+    if (consume_bounded_exception(slot->profile_generation_ref_id,
+                                  slot->exception_numeric_handle))
+        return -EACCES;
     process->pending_target_role_id = match->approved_role_numeric_id;
-    return;
+    return 0;
 
 reject:
     bpf_map_delete_elem(&pending_administrative_matches,
                         &label->task_cookie);
+    return 0;
 }
 
 #define BPRM_OBSERVE_EFFECT_V1 1
@@ -584,9 +588,12 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             snapshot->effective_response_set_ref_id;
         process->exec_guard_state = exec_guard_state_v1_preparing;
         process->transition_version++;
-        consume_administrative_match(config, label, binding, process,
-                                     &scratch->pending_exec);
+        int administrative_result = consume_administrative_match(
+            config, label, binding, process, &scratch->pending_exec);
+
         release_transition_guard(&process->transition_guard);
+        if (administrative_result)
+            return identity_deny(config);
         return BPRM_OBSERVE_EFFECT_V1;
     }
     if (!id128_equal(&pending->process_state_id, &label->process_state_id) ||

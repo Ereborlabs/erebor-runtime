@@ -319,15 +319,15 @@ pub struct TaskCoordinateV1 {
     pub task_cookie: u64,
     pub process_instance_id: Id128V1,
     pub process_state_id: Id128V1,
-    pub host_tid: u32,
-    pub host_tgid: u32,
-    pub pid_namespace_inode: u64,
     pub task_start_boottime_ns: u64,
     pub finalized_boottime_ns: u64,
     pub real_parent_interval_sequence: u64,
     pub transition_version: u64,
+    pub host_tid: u32,
+    pub host_tgid: u32,
+    pub pid_namespace_inode: u32,
     pub state: TaskCoordinateStateV1,
-    pub reserved: [u8; 7],
+    pub reserved: [u8; 3],
 }
 
 #[repr(C)]
@@ -344,14 +344,14 @@ pub struct KernelRealParentIntervalV1 {
     pub real_parent_task_cookie: u64,
     pub real_parent_host_tid: u32,
     pub real_parent_host_tgid: u32,
-    pub real_parent_pid_namespace_inode: u64,
+    pub real_parent_pid_namespace_inode: u32,
+    pub change_reason: KernelRealParentChangeReasonV1,
+    pub kernel_direct_proof: u8,
+    pub reserved: [u8; 2],
     pub real_parent_start_boottime_ns: u64,
     pub interval_start_boottime_ns: u64,
     pub interval_end_boottime_ns: u64,
     pub transition_version: u64,
-    pub change_reason: KernelRealParentChangeReasonV1,
-    pub kernel_direct_proof: u8,
-    pub reserved: [u8; 6],
 }
 
 #[repr(C)]
@@ -625,7 +625,8 @@ pub struct ApprovedExecSlotV1 {
     pub expected_root_class: ExternalRootClassV1,
     pub reserved_0: [u8; 3],
     pub profile_generation_ref_id: u64,
-    pub exception_numeric_handle: u64,
+    pub exception_numeric_handle: u32,
+    pub reserved_after_exception: u32,
     pub deadline_boottime_ns: u64,
     pub state: ApprovedExecSlotStateV1,
     pub transition_version: u64,
@@ -647,6 +648,7 @@ impl Default for ApprovedExecSlotV1 {
             reserved_0: [0; 3],
             profile_generation_ref_id: 0,
             exception_numeric_handle: 0,
+            reserved_after_exception: 0,
             deadline_boottime_ns: 0,
             state: ApprovedExecSlotStateV1::Unknown,
             transition_version: 0,
@@ -673,11 +675,11 @@ pub struct PendingAdministrativeMatchV1 {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
 pub struct ExactExecutableCandidateV1 {
-    pub mount_namespace_inode: u64,
-    pub mount_id: u64,
-    pub filesystem_device: u64,
     pub inode: u64,
-    pub inode_generation: u64,
+    pub mount_namespace_inode: u32,
+    pub mount_id: u32,
+    pub filesystem_device: u32,
+    pub inode_generation: u32,
 }
 
 #[repr(C)]
@@ -777,7 +779,7 @@ pub struct IdentityRuntimeConfigV1 {
     pub next_id: u64,
     pub first_effect_errno: i32,
     pub enabled: u8,
-    pub effect_observation_enabled: u8,
+    pub effect_policy_enabled: u8,
     pub reserved: [u8; 2],
 }
 
@@ -805,7 +807,7 @@ mod tests {
         assert_eq!(size_of::<TaskLabelV1>(), 328);
         assert_eq!(offset_of!(TaskLabelV1, process_state_id), 64);
         assert_eq!(offset_of!(TaskLabelV1, placement), 288);
-        assert_eq!(size_of::<TaskCoordinateV1>(), 96);
+        assert_eq!(size_of::<TaskCoordinateV1>(), 88);
         assert_eq!(size_of::<CreatedByEdgeV1>(), 80);
         assert_eq!(align_of::<ProcessSecurityStateV1>(), 8);
         assert_eq!(size_of::<ProcessSecurityStateV1>(), 248);
@@ -813,10 +815,16 @@ mod tests {
             offset_of!(ProcessSecurityStateV1, exec_check_task_cookie),
             216
         );
-        assert_eq!(size_of::<ExactExecutableCandidateV1>(), 40);
+        assert_eq!(size_of::<ExactExecutableCandidateV1>(), 24);
         assert_eq!(size_of::<ProcessExecutionInstanceV1>(), 80);
         assert_eq!(size_of::<IdentityRuntimeConfigV1>(), 40);
         assert_eq!(size_of::<ApprovedExecArgumentKeyV1>(), 4_120);
+        assert_eq!(size_of::<ApprovedExecSlotV1>(), 4_776);
+        assert_eq!(
+            offset_of!(ApprovedExecSlotV1, exception_numeric_handle),
+            4_744
+        );
+        assert_eq!(offset_of!(ApprovedExecSlotV1, deadline_boottime_ns), 4_752);
     }
 
     #[test]

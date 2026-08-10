@@ -262,6 +262,8 @@ enum effect_observation_reason_v1
   effect_observation_reason_v1_corrupt_identity_or_generation = 6,
   effect_observation_reason_v1_unresolved_object = 7,
   effect_observation_reason_v1_unsupported_object = 8,
+  effect_observation_reason_v1_exact_policy_deny = 9,
+  effect_observation_reason_v1_exception_unavailable = 10,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum effect_observation_reason_v1 effect_observation_reason_v1;
@@ -296,6 +298,23 @@ enum exact_object_binding_state_v1
 typedef enum exact_object_binding_state_v1 exact_object_binding_state_v1;
 #else
 typedef uint8_t exact_object_binding_state_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum exception_runtime_state_kind_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  exception_runtime_state_kind_v1_unknown = 0,
+  exception_runtime_state_kind_v1_active = 1,
+  exception_runtime_state_kind_v1_exhausted = 2,
+  exception_runtime_state_kind_v1_expired = 3,
+  exception_runtime_state_kind_v1_reconciliation_required = 4,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum exception_runtime_state_kind_v1 exception_runtime_state_kind_v1;
+#else
+typedef uint8_t exception_runtime_state_kind_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum kernel_real_parent_change_reason_v1
@@ -364,6 +383,8 @@ enum kernel_effect_operation_v1
   kernel_effect_operation_v1_move_mount = 22,
   kernel_effect_operation_v1_capability = 23,
   kernel_effect_operation_v1_bpf = 24,
+  kernel_effect_operation_v1_create = 25,
+  kernel_effect_operation_v1_setattr = 26,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum kernel_effect_operation_v1 kernel_effect_operation_v1;
@@ -450,6 +471,21 @@ enum policy_generation_state_v1
 typedef enum policy_generation_state_v1 policy_generation_state_v1;
 #else
 typedef uint8_t policy_generation_state_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum policy_generation_mode_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  policy_generation_mode_v1_unknown = 0,
+  policy_generation_mode_v1_observe = 1,
+  policy_generation_mode_v1_protect = 2,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum policy_generation_mode_v1 policy_generation_mode_v1;
+#else
+typedef uint8_t policy_generation_mode_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
 enum process_security_state_kind_v1
@@ -623,7 +659,8 @@ typedef struct approved_exec_slot_v1 {
   external_root_class_v1 expected_root_class;
   uint8_t reserved_0[3];
   uint64_t profile_generation_ref_id;
-  uint64_t exception_numeric_handle;
+  uint32_t exception_numeric_handle;
+  uint32_t reserved_after_exception;
   uint64_t deadline_boottime_ns;
   approved_exec_slot_state_v1 state;
   uint64_t transition_version;
@@ -809,6 +846,23 @@ typedef struct exact_object_binding_v1 {
   uint8_t reserved[7];
 } exact_object_binding_v1;
 
+typedef struct exception_runtime_state_key_v1 {
+  uint64_t profile_generation_ref_id;
+  uint32_t exception_numeric_handle;
+  uint32_t reserved;
+} exception_runtime_state_key_v1;
+
+typedef struct exception_runtime_state_v1 {
+  uint32_t lock;
+  uint32_t maximum_uses;
+  uint32_t consumed_uses;
+  uint32_t exception_numeric_handle;
+  uint64_t deadline_boottime_ns;
+  uint64_t transition_version;
+  exception_runtime_state_kind_v1 state;
+  uint8_t reserved[7];
+} exception_runtime_state_v1;
+
 typedef struct file_open_event_v1 {
   uint64_t inode;
   int32_t result;
@@ -834,7 +888,7 @@ typedef struct identity_runtime_config_v1 {
   uint64_t next_id;
   int32_t first_effect_errno;
   uint8_t enabled;
-  uint8_t effect_observation_enabled;
+  uint8_t effect_policy_enabled;
   uint8_t reserved[2];
 } identity_runtime_config_v1;
 
@@ -954,7 +1008,8 @@ typedef struct profile_generation_descriptor_v1 {
   uint32_t row_count;
   uint32_t default_count;
   policy_generation_state_v1 state;
-  uint8_t reserved[7];
+  policy_generation_mode_v1 mode;
+  uint8_t reserved[6];
   uint8_t table_digest[32];
   uint64_t transition_version;
 } profile_generation_descriptor_v1;

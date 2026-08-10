@@ -53,15 +53,15 @@ struct IntentPayloadV1 {
 struct AdministrativeExecIdentityV1 {
     container_generation: u64,
     approved_argv: BoundedAdministrativeArgvV1,
-    resolved_mount_id: u64,
+    resolved_mount_id: u32,
     resolved_inode: u64,
-    resolved_inode_generation: u64,
+    resolved_inode_generation: u32,
 }
 
 struct ResolvedExecutableObjectV1 {
-    mount_id: u64,
+    mount_id: u32,
     inode: u64,
-    inode_generation: u64,
+    inode_generation: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -212,6 +212,7 @@ impl AuthorizationProofOwner {
                     == proof.administrative_exec.resolved_inode_generation
                 && slot.approved_role_numeric_id > 0
                 && slot.profile_generation_ref_id > 0
+                && slot.reserved_after_exception == 0
                 && slot.expected_root_class == ExternalRootClassV1::ExternalRuntimeRoot,
             AuthorizationSnafu {
                 reason: "administrative slot is not an exact bounded external-root match",
@@ -987,13 +988,21 @@ fn validate_file_object(
         }
     );
     expect_key(decoder, 2)?;
-    let mount_id = decode_u64(decoder)?;
+    let mount_id = decode_u64(decoder)?.try_into().map_err(|error| {
+        authorization_error(format!(
+            "executable mount ID exceeds its Linux u32 ABI: {error}"
+        ))
+    })?;
     expect_key(decoder, 3)?;
     let _filesystem_instance_id = decode_id(decoder, "filesystem instance ID")?;
     expect_key(decoder, 4)?;
     let inode = decode_u64(decoder)?;
     expect_key(decoder, 5)?;
-    let inode_generation = decode_u64(decoder)?;
+    let inode_generation = decode_u64(decoder)?.try_into().map_err(|error| {
+        authorization_error(format!(
+            "executable inode generation exceeds its Linux u32 ABI: {error}"
+        ))
+    })?;
     ensure!(
         mount_id > 0 && inode > 0 && inode_generation > 0,
         AuthorizationSnafu {

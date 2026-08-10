@@ -60,6 +60,9 @@ include = [
   "ExactFileObjectKeyV1",
   "ExactObjectBindingStateV1",
   "ExactObjectBindingV1",
+  "ExceptionRuntimeStateKeyV1",
+  "ExceptionRuntimeStateKindV1",
+  "ExceptionRuntimeStateV1",
   "FileOpenEventV1",
   "FileOpenTargetV1",
   "Id128V1",
@@ -74,7 +77,6 @@ include = [
   "KernelEffectOperationV1",
   "MountMutationAttemptV1",
   "MountReconciliationProposalV1",
-  "MountSecurityViewKeyV1",
   "MountSecurityViewStateV1",
   "MountTopologyStateV1",
   "PendingExecStateV1",
@@ -88,6 +90,7 @@ include = [
   "PathGraphTransitionKeyV1",
   "PathGraphTransitionV1",
   "PolicyGenerationStateV1",
+  "PolicyGenerationModeV1",
   "ProfileGenerationDescriptorV1",
   "ProcessSecurityStateKindV1",
   "ProcessSecurityStateV1",
@@ -139,6 +142,9 @@ include = [
 "ExactFileObjectKeyV1" = "exact_file_object_key_v1"
 "ExactObjectBindingStateV1" = "exact_object_binding_state_v1"
 "ExactObjectBindingV1" = "exact_object_binding_v1"
+"ExceptionRuntimeStateKeyV1" = "exception_runtime_state_key_v1"
+"ExceptionRuntimeStateKindV1" = "exception_runtime_state_kind_v1"
+"ExceptionRuntimeStateV1" = "exception_runtime_state_v1"
 "FileOpenEventV1" = "file_open_event_v1"
 "FileOpenTargetV1" = "file_open_target_v1"
 "Id128V1" = "id128_v1"
@@ -153,7 +159,6 @@ include = [
 "KernelEffectOperationV1" = "kernel_effect_operation_v1"
 "MountMutationAttemptV1" = "mount_mutation_attempt_v1"
 "MountReconciliationProposalV1" = "mount_reconciliation_proposal_v1"
-"MountSecurityViewKeyV1" = "mount_security_view_key_v1"
 "MountSecurityViewStateV1" = "mount_security_view_state_v1"
 "MountTopologyStateV1" = "mount_topology_state_v1"
 "PendingExecStateV1" = "pending_exec_state_v1"
@@ -167,6 +172,7 @@ include = [
 "PathGraphTransitionKeyV1" = "path_graph_transition_key_v1"
 "PathGraphTransitionV1" = "path_graph_transition_v1"
 "PolicyGenerationStateV1" = "policy_generation_state_v1"
+"PolicyGenerationModeV1" = "policy_generation_mode_v1"
 "ProfileGenerationDescriptorV1" = "profile_generation_descriptor_v1"
 "ProcessSecurityStateKindV1" = "process_security_state_kind_v1"
 "ProcessSecurityStateV1" = "process_security_state_v1"

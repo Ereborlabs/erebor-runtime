@@ -61,7 +61,7 @@ pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 21] = [
     "qualification_bpf",
 ];
 
-pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 33] = [
+pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 37] = [
     "erebor_task_alloc",
     "erebor_cgroup_attach_task",
     "erebor_cgroup_release",
@@ -85,6 +85,10 @@ pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 33] = [
     "erebor_identity_ptrace_access_check",
     "erebor_identity_task_kill",
     "erebor_identity_path_unlink",
+    "erebor_identity_inode_create",
+    "erebor_identity_path_chmod",
+    "erebor_identity_path_truncate",
+    "erebor_identity_file_truncate",
     "erebor_identity_path_link",
     "erebor_identity_path_rename",
     "erebor_identity_sb_mount",

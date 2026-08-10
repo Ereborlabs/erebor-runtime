@@ -158,6 +158,10 @@ const fn reason_name(reason: u8) -> &'static str {
         value if value == EffectObservationReasonV1::UnsupportedObject as u8 => {
             "UNSUPPORTED_OBJECT"
         }
+        value if value == EffectObservationReasonV1::ExactPolicyDeny as u8 => "EXACT_POLICY_DENY",
+        value if value == EffectObservationReasonV1::ExceptionUnavailable as u8 => {
+            "EXCEPTION_UNAVAILABLE"
+        }
         _ => "UNKNOWN",
     }
 }
@@ -182,7 +186,19 @@ mod tests {
     };
     use zerocopy::IntoBytes as _;
 
-    use super::EffectObservationStore;
+    use super::{reason_name, EffectObservationStore};
+
+    #[test]
+    fn phase4_denial_reasons_are_not_downgraded_to_unknown() {
+        assert_eq!(
+            reason_name(EffectObservationReasonV1::ExactPolicyDeny as u8),
+            "EXACT_POLICY_DENY"
+        );
+        assert_eq!(
+            reason_name(EffectObservationReasonV1::ExceptionUnavailable as u8),
+            "EXCEPTION_UNAVAILABLE"
+        );
+    }
 
     #[test]
     fn records_exact_events_and_bounds_recent_history() {

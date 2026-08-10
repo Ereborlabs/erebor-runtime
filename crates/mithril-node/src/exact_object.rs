@@ -38,7 +38,14 @@ impl ExactFileObjectResolver {
             .context(IoSnafu {
                 path: &namespace_path,
             })?
-            .ino();
+            .ino()
+            .try_into()
+            .map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("mount namespace inode exceeds its Linux u32 ABI: {error}"),
+                }
+                .build()
+            })?;
         let host_path = PathBuf::from(format!("/proc/{root_pid}/root")).join(
             path.strip_prefix("/").map_err(|error| {
                 IdentityStateSnafu {
@@ -78,7 +85,7 @@ impl ExactFileObjectResolver {
             object_class_id,
             mount_namespace_inode,
             mount_id_unique: status.stx_mnt_id,
-            filesystem_device: rustix::fs::makedev(status.stx_dev_major, status.stx_dev_minor),
+            filesystem_device: encoded_device(status.stx_dev_major, status.stx_dev_minor)?,
             inode: status.stx_ino,
             inode_generation,
             canonical_component_hex: mount_snapshot
@@ -108,7 +115,7 @@ impl ExactFileObjectResolver {
 struct MountInfoSnapshot {
     canonical_components: Vec<Vec<u8>>,
     relative_component_count: usize,
-    root_filesystem_device: u64,
+    root_filesystem_device: u32,
     root_inode: u64,
     selected_mount_id_unique: u64,
     snapshot_digest_id: u64,
@@ -116,8 +123,8 @@ struct MountInfoSnapshot {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct MountInfoEntry {
-    mount_id: u64,
-    parent_mount_id: u64,
+    mount_id: u32,
+    parent_mount_id: u32,
     root: PathBuf,
     mountpoint: PathBuf,
     device: String,
@@ -203,7 +210,7 @@ impl MountInfoSnapshot {
 
 fn relevant_mount_entries(
     entries: &[MountInfoEntry],
-    entered_mount_id: u64,
+    entered_mount_id: u32,
 ) -> Result<Vec<&MountInfoEntry>> {
     let by_id = entries
         .iter()
@@ -246,10 +253,10 @@ fn relevant_mount_entries(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LiveMount {
-    mount_id: u64,
-    parent_mount_id: u64,
+    mount_id: u32,
+    parent_mount_id: u32,
     mountpoint: PathBuf,
-    filesystem_device: u64,
+    filesystem_device: u32,
     inode: u64,
     mount_id_unique: u64,
 }
@@ -283,7 +290,7 @@ fn live_mount(root_pid: u32, entry: &MountInfoEntry) -> Result<LiveMount> {
         mount_id: entry.mount_id,
         parent_mount_id: entry.parent_mount_id,
         mountpoint: entry.mountpoint.clone(),
-        filesystem_device: rustix::fs::makedev(status.stx_dev_major, status.stx_dev_minor),
+        filesystem_device: encoded_device(status.stx_dev_major, status.stx_dev_minor)?,
         inode: status.stx_ino,
         mount_id_unique: status.stx_mnt_id,
     })
@@ -295,7 +302,7 @@ struct CanonicalMountPath {
 }
 
 fn canonicalize_mount_path(
-    entered_mount_id: u64,
+    entered_mount_id: u32,
     mut components: Vec<Vec<u8>>,
     mounts: &[LiveMount],
 ) -> Result<CanonicalMountPath> {
@@ -420,7 +427,7 @@ fn parse_mountinfo(source: &[u8]) -> Result<Vec<MountInfoEntry>> {
     Ok(entries)
 }
 
-fn parse_mount_id(value: &[u8]) -> Result<u64> {
+fn parse_mount_id(value: &[u8]) -> Result<u32> {
     let value = std::str::from_utf8(value).map_err(|error| {
         IdentityStateSnafu {
             reason: format!("mountinfo ID is not ASCII: {error}"),
@@ -433,6 +440,17 @@ fn parse_mount_id(value: &[u8]) -> Result<u64> {
         }
         .build()
     })
+}
+
+fn encoded_device(major: u32, minor: u32) -> Result<u32> {
+    rustix::fs::makedev(major, minor)
+        .try_into()
+        .map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("encoded filesystem device exceeds its Linux u32 ABI: {error}"),
+            }
+            .build()
+        })
 }
 
 fn unescape_mountinfo(value: &[u8]) -> Result<Vec<u8>> {

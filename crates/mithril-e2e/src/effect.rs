@@ -3,10 +3,15 @@ mod mailbox;
 mod support;
 
 use std::fs;
+use std::mem::{offset_of, size_of};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use erebor_interceptor::{KernelHostConfig, KernelHostOwner};
+use erebor_interceptor::{EffectObservationReader, KernelHostConfig, KernelHostOwner};
+use erebor_interceptor_abi::{
+    ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, KernelEffectFamilyV1,
+    KernelEffectOperationV1,
+};
 use mithril_control::PolicyArtifactOwner;
 use mithril_node::{
     EffectObservationHealth, EffectObservationStore, ExactFileObjectResolver,
@@ -15,10 +20,11 @@ use mithril_node::{
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
 
-use self::child::EffectProcessFixture;
+use self::child::{EffectProcessFixture, HardClosedOperation};
 use self::support::{
-    effect_binding, effect_node_config, external_bind_mount, external_unmount, health_delta,
-    inode_generation, mount_view_is_dirty, observation_health, wait_for_reason,
+    compile_phase4_artifact, effect_binding, effect_node_config, external_bind_mount,
+    external_unmount, health_delta, inode_generation, mount_view_is_dirty, observation_health,
+    wait_for_reason,
 };
 use crate::error::{
     InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
@@ -30,6 +36,7 @@ pub use child::run_effect_child;
 
 pub(super) const PROFILE_GENERATION_REF_ID: u64 = 1;
 pub(super) const EXACT_OBJECT_KEY_ID: u64 = 7;
+pub(super) const BENIGN_OBJECT_KEY_ID: u64 = 8;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct EffectHealthV1 {
@@ -55,7 +62,32 @@ impl From<EffectObservationHealth> for EffectHealthV1 {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct EffectPhysicalProbeBundleV1 {
     pub schema_version: u32,
+    pub protect_mode: bool,
     pub exact_open_observed: bool,
+    pub exact_open_denied_before_effect: bool,
+    pub inherited_fd_read_denied: bool,
+    pub file_mmap_denied: bool,
+    pub benign_read_allowed: bool,
+    pub exec_hard_closed: bool,
+    pub anonymous_exec_hard_closed: bool,
+    pub file_create_hard_closed: bool,
+    pub file_setattr_hard_closed: bool,
+    pub file_truncate_hard_closed: bool,
+    pub file_unlink_hard_closed: bool,
+    pub file_link_hard_closed: bool,
+    pub file_rename_hard_closed: bool,
+    pub ipc_hard_closed: bool,
+    pub ptrace_hard_closed: bool,
+    pub signal_hard_closed: bool,
+    pub namespace_privilege_hard_closed: bool,
+    pub device_ioctl_hard_closed: bool,
+    pub bpf_hard_closed: bool,
+    pub self_protection_hard_closed: bool,
+    pub bounded_exception_maximum_uses: u32,
+    pub bounded_exception_n_allows: bool,
+    pub bounded_exception_n_plus_one_denied: bool,
+    pub bounded_exception_expiry_denied: bool,
+    pub bounded_exception_restart_preserved: bool,
     pub hard_link_alias_denied: bool,
     pub bind_alias_canonicalized: bool,
     pub protected_mount_race_denied: bool,
@@ -68,6 +100,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub pre_saturation_health: EffectHealthV1,
     pub saturated_health: EffectHealthV1,
     pub saturation_preserved_network_denial: bool,
+    pub saturation_preserved_benign_allow: bool,
     pub pin_root_removed: bool,
     pub lease_removed: bool,
     pub cgroup_removed: bool,
@@ -76,6 +109,41 @@ pub struct EffectPhysicalProbeBundleV1 {
 
 pub struct EffectTestRunner {
     repo_root: PathBuf,
+}
+
+fn require_hard_close(
+    fixture: &mut EffectProcessFixture,
+    reader: &EffectObservationReader,
+    observations: &EffectObservationStore,
+    operation: HardClosedOperation,
+    expected_reason: &str,
+    expected_effect: (KernelEffectFamilyV1, KernelEffectOperationV1),
+    label: &str,
+) -> Result<()> {
+    let marker = observations.recent().len();
+    ensure!(
+        fixture.hard_closed(operation)?.denied(),
+        InvalidInputSnafu {
+            path: Path::new("live effect state"),
+            reason: format!("{label} was not physically hard-closed"),
+        }
+    );
+    wait_for_reason(reader, observations, marker, expected_reason)?;
+    ensure!(
+        observations
+            .recent()
+            .get(marker..)
+            .is_some_and(|events| events.iter().any(|event| {
+                event.reason == expected_reason
+                    && event.effect_family == u32::from(expected_effect.0 as u16)
+                    && event.operation == u32::from(expected_effect.1 as u16)
+            })),
+        InvalidInputSnafu {
+            path: Path::new("effect_observations"),
+            reason: format!("{label} was denied by the wrong effect hook"),
+        }
+    );
+    Ok(())
 }
 
 impl EffectTestRunner {
@@ -95,6 +163,7 @@ impl EffectTestRunner {
         cgroup_path: &Path,
         measured_opens: u32,
         saturation_opens: u32,
+        protect: bool,
     ) -> Result<EffectPhysicalProbeBundleV1> {
         ensure!(
             measured_opens > 0 && saturation_opens >= 30_000,
@@ -136,14 +205,23 @@ impl EffectTestRunner {
         })?;
         let manual = repo_root.join("examples/mithril-phase3-manual");
         let artifact_path = fixture_root.join("profile.json");
-        PolicyArtifactOwner::default()
-            .compile_and_sign(
+        if protect {
+            compile_phase4_artifact(
                 &manual.join("policy-v1.yaml"),
                 &manual.join("seal-request.json"),
                 &manual.join("test-signing-key.hex"),
                 &artifact_path,
-            )
-            .context(PolicySnafu)?;
+            )?;
+        } else {
+            PolicyArtifactOwner::default()
+                .compile_and_sign(
+                    &manual.join("policy-v1.yaml"),
+                    &manual.join("seal-request.json"),
+                    &manual.join("test-signing-key.hex"),
+                    &artifact_path,
+                )
+                .context(PolicySnafu)?;
+        }
 
         let (boot_id, node_boot_id) = boot_identity()?;
         let kernel_config = KernelHostConfig::identity(
@@ -166,12 +244,24 @@ impl EffectTestRunner {
             .context(NodeSnafu)?;
 
         let mut fixture = EffectProcessFixture::start(&fixture_root)?;
+        let paths = fixture.setup()?;
+        let create_target = paths.mutation_root.join("forbidden-create");
+        let setattr_target = paths.mutation_root.join("setattr-target");
+        let truncate_target = paths.mutation_root.join("truncate-target");
+        let unlink_target = paths.mutation_root.join("unlink-target");
+        let mutation_source = paths.mutation_root.join("mutation-source");
+        let link_target = paths.mutation_root.join("link-target");
+        let rename_target = paths.mutation_root.join("rename-target");
+        fixture.prepare_mount_race(&paths.source, &paths.mount_target, 8)?;
+        fixture.prepare_hard_closed(&truncate_target)?;
+        if protect {
+            fixture.prepare_write_race(&paths.secret, 8)?;
+        }
         fs::write(cgroup_path.join("cgroup.procs"), fixture.pid().to_string()).context(
             IoSnafu {
                 path: cgroup_path.join("cgroup.procs"),
             },
         )?;
-        let paths = fixture.setup()?;
         let baseline = fixture.open_many(&paths.secret, measured_opens)?;
         ensure!(
             baseline.denied == 0
@@ -182,16 +272,27 @@ impl EffectTestRunner {
                 reason: "baseline file opens failed before effect observation was enabled",
             }
         );
-        fixture.prepare_mount_race(&paths.source, &paths.mount_target, 8)?;
-
-        let inode_generation = inode_generation(fixture.pid(), &paths.secret)?;
+        if protect {
+            fixture.prepare_file(&paths.secret)?;
+        }
+        let secret_inode_generation = inode_generation(fixture.pid(), &paths.secret)?;
         let exact_object = ExactFileObjectResolver::resolve(
             fixture.pid(),
             &paths.secret,
             PROFILE_GENERATION_REF_ID,
             EXACT_OBJECT_KEY_ID,
             "MANUAL_SECRET".to_owned(),
-            inode_generation,
+            secret_inode_generation,
+        )
+        .context(NodeSnafu)?;
+        let benign_inode_generation = inode_generation(fixture.pid(), &paths.benign)?;
+        let benign_object = ExactFileObjectResolver::resolve(
+            fixture.pid(),
+            &paths.benign,
+            PROFILE_GENERATION_REF_ID,
+            BENIGN_OBJECT_KEY_ID,
+            "MANUAL_BENIGN".to_owned(),
+            benign_inode_generation,
         )
         .context(NodeSnafu)?;
         let node_config = effect_node_config(
@@ -201,11 +302,11 @@ impl EffectTestRunner {
             &manual,
             artifact_path,
             binding.clone(),
-            exact_object.clone(),
+            vec![exact_object.clone(), benign_object],
         );
 
         host.shutdown().context(InterceptorSnafu)?;
-        let mut host = KernelHostOwner::new(kernel_config)
+        let mut host = KernelHostOwner::new(kernel_config.clone())
             .start()
             .context(InterceptorSnafu)?;
         let mut recovered_bindings =
@@ -213,31 +314,468 @@ impl EffectTestRunner {
         recovered_bindings
             .publish_all(&host, std::slice::from_ref(&binding))
             .context(NodeSnafu)?;
-        let policy =
+        let mut policy =
             NodePolicyGenerationOwner::load_and_install(&node_config, &host, node_boot_id, 1)
                 .context(NodeSnafu)?;
         NativeSecurityStateOwner::new(node_boot_id, 1)
-            .activate_with_effect_observation(&mut host, true)
+            .activate_with_effect_policy(&mut host, true)
             .context(NodeSnafu)?;
         let observations = EffectObservationStore::default();
         let sink = observations.clone();
-        let reader = host
+        let mut reader = host
             .effect_observation_reader(move |bytes| {
                 sink.record_bytes(bytes);
                 0
             })
             .context(InterceptorSnafu)?;
 
+        if protect {
+            let exception_marker = observations.recent().len();
+            let exception_race = fixture.write_race(&paths.secret, 8)?;
+            ensure!(
+                exception_race.allowed == 2
+                    && exception_race.denied == 6
+                    && exception_race.other_errors == 0,
+                InvalidInputSnafu {
+                    path: &paths.secret,
+                    reason: format!(
+                        "concurrent bounded exception did not allow exactly N=2 uses: {exception_race:?}"
+                    ),
+                }
+            );
+            wait_for_reason(
+                &reader,
+                &observations,
+                exception_marker,
+                "EXACT_POLICY_ALLOW",
+            )?;
+            wait_for_reason(
+                &reader,
+                &observations,
+                exception_marker,
+                "EXCEPTION_UNAVAILABLE",
+            )?;
+            let exception_events = observations.recent();
+            let exception_events = exception_events.get(exception_marker..).unwrap_or_default();
+            ensure!(
+                exception_events
+                    .iter()
+                    .filter(|event| event.reason == "EXACT_POLICY_ALLOW")
+                    .count()
+                    == 2
+                    && exception_events
+                        .iter()
+                        .filter(|event| event.reason == "EXCEPTION_UNAVAILABLE")
+                        .count()
+                        == 6,
+                InvalidInputSnafu {
+                    path: Path::new("effect_observations"),
+                    reason: "concurrent bounded-exception evidence did not match N and N+1",
+                }
+            );
+            let mut key = [0_u8; 16];
+            key[..8].copy_from_slice(&PROFILE_GENERATION_REF_ID.to_ne_bytes());
+            key[8..12].copy_from_slice(&1_u32.to_ne_bytes());
+            let exception = host
+                .lookup_map("exception_runtime_states", &key)
+                .context(InterceptorSnafu)?
+                .ok_or_else(|| {
+                    InvalidInputSnafu {
+                        path: Path::new("exception_runtime_states"),
+                        reason: "bounded exception state disappeared after consumption",
+                    }
+                    .build()
+                })?;
+            ensure!(
+                exception.len() == size_of::<ExceptionRuntimeStateV1>()
+                    && u32::from_ne_bytes(
+                        exception[offset_of!(ExceptionRuntimeStateV1, consumed_uses)
+                            ..offset_of!(ExceptionRuntimeStateV1, consumed_uses) + 4]
+                            .try_into()
+                            .unwrap_or_default()
+                    ) == 2
+                    && exception[offset_of!(ExceptionRuntimeStateV1, state)]
+                        == ExceptionRuntimeStateKindV1::Exhausted as u8,
+                InvalidInputSnafu {
+                    path: Path::new("exception_runtime_states"),
+                    reason: "bounded exception did not finish in exact exhausted state",
+                }
+            );
+
+            drop(reader);
+            host.shutdown().context(InterceptorSnafu)?;
+            host = KernelHostOwner::new(kernel_config.clone())
+                .start()
+                .context(InterceptorSnafu)?;
+            recovered_bindings
+                .publish_all(&host, std::slice::from_ref(&binding))
+                .context(NodeSnafu)?;
+            policy =
+                NodePolicyGenerationOwner::load_and_install(&node_config, &host, node_boot_id, 1)
+                    .context(NodeSnafu)?;
+            NativeSecurityStateOwner::new(node_boot_id, 1)
+                .activate_with_effect_policy(&mut host, true)
+                .context(NodeSnafu)?;
+            let sink = observations.clone();
+            reader = host
+                .effect_observation_reader(move |bytes| {
+                    sink.record_bytes(bytes);
+                    0
+                })
+                .context(InterceptorSnafu)?;
+            ensure!(
+                host.lookup_map("exception_runtime_states", &key)
+                    .context(InterceptorSnafu)?
+                    .as_deref()
+                    == Some(exception.as_slice()),
+                InvalidInputSnafu {
+                    path: Path::new("exception_runtime_states"),
+                    reason: "loader restart changed the exhausted exception state",
+                }
+            );
+            let restart_marker = observations.recent().len();
+            ensure!(
+                fixture.open_write(&paths.secret)?.denied(),
+                InvalidInputSnafu {
+                    path: &paths.secret,
+                    reason: "loader restart revived an exhausted bounded exception",
+                }
+            );
+            wait_for_reason(
+                &reader,
+                &observations,
+                restart_marker,
+                "EXCEPTION_UNAVAILABLE",
+            )?;
+
+            let mut expired_fixture = exception.clone();
+            expired_fixture[offset_of!(ExceptionRuntimeStateV1, lock)
+                ..offset_of!(ExceptionRuntimeStateV1, lock) + 4]
+                .copy_from_slice(&0_u32.to_ne_bytes());
+            expired_fixture[offset_of!(ExceptionRuntimeStateV1, consumed_uses)
+                ..offset_of!(ExceptionRuntimeStateV1, consumed_uses) + 4]
+                .copy_from_slice(&0_u32.to_ne_bytes());
+            expired_fixture[offset_of!(ExceptionRuntimeStateV1, deadline_boottime_ns)
+                ..offset_of!(ExceptionRuntimeStateV1, deadline_boottime_ns) + 8]
+                .copy_from_slice(&0_u64.to_ne_bytes());
+            expired_fixture[offset_of!(ExceptionRuntimeStateV1, state)] =
+                ExceptionRuntimeStateKindV1::Active as u8;
+            host.update_map("exception_runtime_states", &key, &expired_fixture)
+                .context(InterceptorSnafu)?;
+            let expiry_marker = observations.recent().len();
+            ensure!(
+                fixture.open_write(&paths.secret)?.denied(),
+                InvalidInputSnafu {
+                    path: &paths.secret,
+                    reason: "an expired bounded exception allowed a write-open",
+                }
+            );
+            wait_for_reason(
+                &reader,
+                &observations,
+                expiry_marker,
+                "EXCEPTION_UNAVAILABLE",
+            )?;
+            let expired = host
+                .lookup_map("exception_runtime_states", &key)
+                .context(InterceptorSnafu)?
+                .ok_or_else(|| {
+                    InvalidInputSnafu {
+                        path: Path::new("exception_runtime_states"),
+                        reason: "expired exception state disappeared",
+                    }
+                    .build()
+                })?;
+            ensure!(
+                expired[offset_of!(ExceptionRuntimeStateV1, state)]
+                    == ExceptionRuntimeStateKindV1::Expired as u8
+                    && u32::from_ne_bytes(
+                        expired[offset_of!(ExceptionRuntimeStateV1, consumed_uses)
+                            ..offset_of!(ExceptionRuntimeStateV1, consumed_uses) + 4]
+                            .try_into()
+                            .unwrap_or_default()
+                    ) == 0,
+                InvalidInputSnafu {
+                    path: Path::new("exception_runtime_states"),
+                    reason: "expired exception was consumed or did not enter EXPIRED state",
+                }
+            );
+
+            let inherited_marker = observations.recent().len();
+            ensure!(
+                fixture.read_prepared()?.denied(),
+                InvalidInputSnafu {
+                    path: &paths.secret,
+                    reason: "a descriptor acquired before activation bypassed the read decision",
+                }
+            );
+            wait_for_reason(
+                &reader,
+                &observations,
+                inherited_marker,
+                "EXACT_POLICY_DENY",
+            )?;
+            let mmap_marker = observations.recent().len();
+            ensure!(
+                fixture.mmap_prepared()?.denied(),
+                InvalidInputSnafu {
+                    path: &paths.secret,
+                    reason: "a descriptor acquired before activation bypassed the mmap decision",
+                }
+            );
+            wait_for_reason(&reader, &observations, mmap_marker, "EXACT_POLICY_DENY")?;
+        }
+
+        let benign_marker = observations.recent().len();
+        ensure!(
+            fixture.read(&paths.benign)?.allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "the exact benign control did not remain readable",
+            }
+        );
+        wait_for_reason(&reader, &observations, benign_marker, "EXACT_POLICY_ALLOW")?;
+
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::Exec,
+            "UNRESOLVED_OBJECT",
+            (KernelEffectFamilyV1::Exec, KernelEffectOperationV1::Execute),
+            "executable image",
+        )?;
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::AnonymousExec,
+            "UNSUPPORTED_OBJECT",
+            (
+                KernelEffectFamilyV1::Exec,
+                KernelEffectOperationV1::Mprotect,
+            ),
+            "anonymous executable memory",
+        )?;
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::Create {
+                path: create_target.clone(),
+            },
+            "UNSUPPORTED_OBJECT",
+            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Create),
+            "file creation",
+        )?;
+        ensure!(
+            !create_target.exists(),
+            InvalidInputSnafu {
+                path: &create_target,
+                reason: "denied creation left a filesystem object behind",
+            }
+        );
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::Setattr {
+                path: setattr_target.clone(),
+            },
+            "UNSUPPORTED_OBJECT",
+            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Setattr),
+            "file attribute mutation",
+        )?;
+        ensure!(
+            std::os::unix::fs::PermissionsExt::mode(
+                &fs::metadata(&setattr_target)
+                    .context(IoSnafu {
+                        path: &setattr_target,
+                    })?
+                    .permissions()
+            ) & 0o777
+                == 0o600,
+            InvalidInputSnafu {
+                path: &setattr_target,
+                reason: "denied chmod changed the file mode",
+            }
+        );
+        let truncate_length = fs::metadata(&truncate_target)
+            .context(IoSnafu {
+                path: &truncate_target,
+            })?
+            .len();
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::Truncate,
+            "UNRESOLVED_OBJECT",
+            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Setattr),
+            "file truncation",
+        )?;
+        ensure!(
+            fs::metadata(&truncate_target)
+                .context(IoSnafu {
+                    path: &truncate_target,
+                })?
+                .len()
+                == truncate_length,
+            InvalidInputSnafu {
+                path: &truncate_target,
+                reason: "denied truncate changed the file length",
+            }
+        );
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::Unlink {
+                path: unlink_target.clone(),
+            },
+            "UNSUPPORTED_OBJECT",
+            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Unlink),
+            "file unlink",
+        )?;
+        ensure!(
+            unlink_target.exists(),
+            InvalidInputSnafu {
+                path: &unlink_target,
+                reason: "denied unlink removed its target",
+            }
+        );
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::Link {
+                source: mutation_source.clone(),
+                target: link_target.clone(),
+            },
+            "UNSUPPORTED_OBJECT",
+            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Link),
+            "hard-link creation",
+        )?;
+        ensure!(
+            !link_target.exists(),
+            InvalidInputSnafu {
+                path: &link_target,
+                reason: "denied link created its target",
+            }
+        );
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::Rename {
+                source: mutation_source.clone(),
+                target: rename_target.clone(),
+            },
+            "UNSUPPORTED_OBJECT",
+            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Rename),
+            "file rename",
+        )?;
+        ensure!(
+            mutation_source.exists() && !rename_target.exists(),
+            InvalidInputSnafu {
+                path: &rename_target,
+                reason: "denied rename changed the source or target",
+            }
+        );
+        for (operation, effect, label) in [
+            (
+                HardClosedOperation::Ipc,
+                (
+                    KernelEffectFamilyV1::Ipc,
+                    KernelEffectOperationV1::IpcAccess,
+                ),
+                "SysV IPC access",
+            ),
+            (
+                HardClosedOperation::Ptrace,
+                (
+                    KernelEffectFamilyV1::Privilege,
+                    KernelEffectOperationV1::Ptrace,
+                ),
+                "ptrace process control",
+            ),
+            (
+                HardClosedOperation::Signal,
+                (
+                    KernelEffectFamilyV1::Privilege,
+                    KernelEffectOperationV1::Signal,
+                ),
+                "signal process control",
+            ),
+            (
+                HardClosedOperation::Namespace,
+                (
+                    KernelEffectFamilyV1::Privilege,
+                    KernelEffectOperationV1::Capability,
+                ),
+                "namespace privilege",
+            ),
+            (
+                HardClosedOperation::Ioctl,
+                (KernelEffectFamilyV1::Device, KernelEffectOperationV1::Ioctl),
+                "device ioctl",
+            ),
+            (
+                HardClosedOperation::Bpf,
+                (
+                    KernelEffectFamilyV1::Privilege,
+                    KernelEffectOperationV1::Capability,
+                ),
+                "BPF map creation",
+            ),
+        ] {
+            require_hard_close(
+                &mut fixture,
+                &reader,
+                &observations,
+                operation,
+                "UNSUPPORTED_OBJECT",
+                effect,
+                label,
+            )?;
+        }
+        let protected_link = pin_root.join("links/erebor_identity_file_open");
+        ensure!(
+            protected_link.exists(),
+            InvalidInputSnafu {
+                path: &protected_link,
+                reason: "the self-protection fixture link is not pinned",
+            }
+        );
+        require_hard_close(
+            &mut fixture,
+            &reader,
+            &observations,
+            HardClosedOperation::SelfProtect {
+                path: protected_link.clone(),
+            },
+            "UNSUPPORTED_OBJECT",
+            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Unlink),
+            "Mithril BPF-link removal",
+        )?;
+        ensure!(
+            protected_link.exists(),
+            InvalidInputSnafu {
+                path: &protected_link,
+                reason: "denied self-protection attack removed the BPF link pin",
+            }
+        );
+
         let original_marker = observations.recent().len();
         let original = fixture.open(&paths.secret)?;
-        if !original.allowed {
+        if original.allowed == protect {
             reader
                 .poll(Duration::from_millis(100))
                 .context(InterceptorSnafu)?;
             return InvalidInputSnafu {
                 path: &paths.secret,
                 reason: format!(
-                    "observe-only exact file decision changed the physical result; observed {:?}; expected file (mount_namespace={},mount_id={},device={},inode={},generation={},object={}); mount view dirty={}",
+                    "exact file decision did not match protect={protect}; observed {:?}; expected file (mount_namespace={},mount_id={},device={},inode={},generation={},object={}); mount view dirty={}",
                     observations
                         .recent()
                         .get(original_marker..)
@@ -266,7 +804,16 @@ impl EffectTestRunner {
             }
             .fail();
         }
-        wait_for_reason(&reader, &observations, original_marker, "WOULD_DENY")?;
+        wait_for_reason(
+            &reader,
+            &observations,
+            original_marker,
+            if protect {
+                "EXACT_POLICY_DENY"
+            } else {
+                "WOULD_DENY"
+            },
+        )?;
 
         let hard_link_marker = observations.recent().len();
         let hard_link = fixture.open(&paths.hard_link)?;
@@ -286,13 +833,22 @@ impl EffectTestRunner {
 
         let bind_marker = observations.recent().len();
         ensure!(
-            fixture.open(&paths.bind_alias)?.allowed,
+            fixture.open(&paths.bind_alias)?.allowed != protect,
             InvalidInputSnafu {
                 path: &paths.bind_alias,
-                reason: "later bind alias did not preserve the observe-only physical result",
+                reason: "later bind alias did not preserve the exact policy result",
             }
         );
-        wait_for_reason(&reader, &observations, bind_marker, "WOULD_DENY")?;
+        wait_for_reason(
+            &reader,
+            &observations,
+            bind_marker,
+            if protect {
+                "EXACT_POLICY_DENY"
+            } else {
+                "WOULD_DENY"
+            },
+        )?;
 
         let mount_marker = observations.recent().len();
         let mount_race = fixture.mount_race(&paths.source, &paths.mount_target, 8)?;
@@ -307,13 +863,22 @@ impl EffectTestRunner {
         policy.reconcile_mount_views(&host).context(NodeSnafu)?;
         let reconciled_marker = observations.recent().len();
         ensure!(
-            fixture.open(&paths.secret)?.allowed,
+            fixture.open(&paths.secret)?.allowed != protect,
             InvalidInputSnafu {
                 path: &paths.secret,
                 reason: "failed protected mounts left the exact path permanently unavailable",
             }
         );
-        wait_for_reason(&reader, &observations, reconciled_marker, "WOULD_DENY")?;
+        wait_for_reason(
+            &reader,
+            &observations,
+            reconciled_marker,
+            if protect {
+                "EXACT_POLICY_DENY"
+            } else {
+                "WOULD_DENY"
+            },
+        )?;
 
         external_bind_mount(fixture.pid(), &paths.benign, &paths.secret)?;
         ensure!(
@@ -349,24 +914,36 @@ impl EffectTestRunner {
         policy.reconcile_mount_views(&host).context(NodeSnafu)?;
         let restored_marker = observations.recent().len();
         ensure!(
-            fixture.open(&paths.secret)?.allowed,
+            fixture.open(&paths.secret)?.allowed != protect,
             InvalidInputSnafu {
                 path: &paths.secret,
                 reason:
                     "the exact object did not recover after the hostile replacement was removed",
             }
         );
-        wait_for_reason(&reader, &observations, restored_marker, "WOULD_DENY")?;
+        wait_for_reason(
+            &reader,
+            &observations,
+            restored_marker,
+            if protect {
+                "EXACT_POLICY_DENY"
+            } else {
+                "WOULD_DENY"
+            },
+        )?;
 
         let before_latency = observation_health(&host, &observations)?;
         let observed = fixture.open_many(&paths.secret, measured_opens)?;
         ensure!(
-            observed.denied == 0
-                && observed.other_errors == 0
-                && observed.allowed == measured_opens,
+            observed.other_errors == 0
+                && if protect {
+                    observed.denied == measured_opens && observed.allowed == 0
+                } else {
+                    observed.denied == 0 && observed.allowed == measured_opens
+                },
             InvalidInputSnafu {
                 path: &paths.secret,
-                reason: "observe-only latency sample changed file-open results",
+                reason: "latency sample did not preserve the selected policy mode",
             }
         );
         reader
@@ -385,12 +962,15 @@ impl EffectTestRunner {
 
         let saturation = fixture.open_many(&paths.secret, saturation_opens)?;
         ensure!(
-            saturation.denied == 0
-                && saturation.other_errors == 0
-                && saturation.allowed == saturation_opens,
+            saturation.other_errors == 0
+                && if protect {
+                    saturation.denied == saturation_opens && saturation.allowed == 0
+                } else {
+                    saturation.denied == 0 && saturation.allowed == saturation_opens
+                },
             InvalidInputSnafu {
                 path: &paths.secret,
-                reason: "ring saturation changed observe-only file-open results",
+                reason: "ring saturation changed the selected policy result",
             }
         );
         let network = fixture.connect()?;
@@ -399,6 +979,14 @@ impl EffectTestRunner {
             InvalidInputSnafu {
                 path: Path::new("127.0.0.1:9"),
                 reason: "ring saturation changed the unsupported-network hard denial",
+            }
+        );
+        let benign_after_saturation = fixture.read(&paths.benign)?;
+        ensure!(
+            benign_after_saturation.allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "ring saturation changed the exact benign allow decision",
             }
         );
         let saturated = observation_health(&host, &observations)?;
@@ -434,7 +1022,32 @@ impl EffectTestRunner {
 
         Ok(EffectPhysicalProbeBundleV1 {
             schema_version: 1,
+            protect_mode: protect,
             exact_open_observed: true,
+            exact_open_denied_before_effect: protect,
+            inherited_fd_read_denied: protect,
+            file_mmap_denied: protect,
+            benign_read_allowed: true,
+            exec_hard_closed: true,
+            anonymous_exec_hard_closed: true,
+            file_create_hard_closed: true,
+            file_setattr_hard_closed: true,
+            file_truncate_hard_closed: true,
+            file_unlink_hard_closed: true,
+            file_link_hard_closed: true,
+            file_rename_hard_closed: true,
+            ipc_hard_closed: true,
+            ptrace_hard_closed: true,
+            signal_hard_closed: true,
+            namespace_privilege_hard_closed: true,
+            device_ioctl_hard_closed: true,
+            bpf_hard_closed: true,
+            self_protection_hard_closed: true,
+            bounded_exception_maximum_uses: if protect { 2 } else { 0 },
+            bounded_exception_n_allows: protect,
+            bounded_exception_n_plus_one_denied: protect,
+            bounded_exception_expiry_denied: protect,
+            bounded_exception_restart_preserved: protect,
             hard_link_alias_denied: true,
             bind_alias_canonicalized: true,
             protected_mount_race_denied: true,
@@ -447,6 +1060,7 @@ impl EffectTestRunner {
             pre_saturation_health: pre_saturation.into(),
             saturated_health: saturated.into(),
             saturation_preserved_network_denial: true,
+            saturation_preserved_benign_allow: true,
             pin_root_removed: true,
             lease_removed: true,
             cgroup_removed: true,

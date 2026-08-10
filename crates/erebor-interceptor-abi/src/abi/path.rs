@@ -16,16 +16,6 @@ pub enum MountTopologyStateV1 {
 }
 
 #[repr(C)]
-#[derive(
-    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
-)]
-pub struct MountSecurityViewKeyV1 {
-    pub profile_generation_ref_id: u64,
-    pub mount_namespace_inode: u64,
-    pub binding_id: Id128V1,
-}
-
-#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
 pub struct MountSecurityViewStateV1 {
     pub topology_generation: u64,
@@ -53,11 +43,11 @@ pub struct MountReconciliationProposalV1 {
 )]
 pub struct CanonicalMountRootKeyV1 {
     pub profile_generation_ref_id: u64,
-    pub mount_namespace_inode: u64,
     pub binding_id: Id128V1,
     pub topology_generation: u64,
-    pub filesystem_device: u64,
     pub root_inode: u64,
+    pub mount_namespace_inode: u32,
+    pub filesystem_device: u32,
 }
 
 #[repr(C)]
@@ -131,11 +121,9 @@ pub struct PathGraphTerminalV1 {
     Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
 )]
 pub struct MountMutationAttemptV1 {
-    pub mount_namespace_inode: u64,
-    pub topology_generation: u64,
-    pub transition_version: u64,
+    pub mount_namespace_inode: u32,
     pub active: u8,
-    pub reserved: [u8; 7],
+    pub reserved: [u8; 3],
 }
 
 #[cfg(test)]
@@ -149,15 +137,14 @@ mod tests {
         assert_eq!(size_of::<CanonicalPathComponentV1>(), 258);
         assert_eq!(size_of::<PathGraphTransitionKeyV1>(), 272);
         assert_eq!(align_of::<PathGraphTransitionKeyV1>(), 8);
-        assert_eq!(size_of::<MountSecurityViewKeyV1>(), 32);
         assert_eq!(size_of::<MountSecurityViewStateV1>(), 40);
         assert_eq!(size_of::<MountReconciliationProposalV1>(), 32);
-        assert_eq!(size_of::<CanonicalMountRootKeyV1>(), 56);
+        assert_eq!(size_of::<CanonicalMountRootKeyV1>(), 48);
         assert_eq!(size_of::<CanonicalMountRootV1>(), 24);
         assert_eq!(size_of::<PathGraphStateKeyV1>(), 16);
         assert_eq!(size_of::<PathGraphTransitionV1>(), 8);
         assert_eq!(size_of::<PathGraphTerminalV1>(), 16);
-        assert_eq!(size_of::<MountMutationAttemptV1>(), 32);
+        assert_eq!(size_of::<MountMutationAttemptV1>(), 8);
     }
 
     #[test]

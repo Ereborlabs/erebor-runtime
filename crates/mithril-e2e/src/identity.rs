@@ -32,7 +32,7 @@ use crate::Result;
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 
-const REQUIRED_IDENTITY_MAPS: [&str; 36] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 37] = [
     "approved_exec_arguments",
     "approved_exec_slots",
     "authority_domains",
@@ -45,6 +45,7 @@ const REQUIRED_IDENTITY_MAPS: [&str; 36] = [
     "execution_set_bindings",
     "external_root_classifications",
     "exact_file_objects",
+    "exception_runtime_states",
     "identity_config",
     "identity_health",
     "identity_scratch",
@@ -179,7 +180,7 @@ impl IdentityTestRunner {
                     .maps
                     .iter()
                     .find(|map| map.name == name)
-                    .is_some_and(|map| map.key_size == size_of::<u64>() as u32),
+                    .is_some_and(|map| map.key_size == size_of::<u32>() as u32),
                 InvalidInputSnafu {
                     path: &object_path,
                     reason: format!("{name} is not keyed by mount namespace identity"),

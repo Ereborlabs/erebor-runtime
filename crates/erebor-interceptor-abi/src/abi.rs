@@ -108,6 +108,8 @@ pub enum KernelEffectOperationV1 {
     MoveMount = 22,
     Capability = 23,
     Bpf = 24,
+    Create = 25,
+    Setattr = 26,
 }
 
 #[repr(C)]
@@ -181,6 +183,69 @@ pub struct PhysicalDecisionV1 {
     Clone,
     Copy,
     Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub struct ExceptionRuntimeStateKeyV1 {
+    pub profile_generation_ref_id: u64,
+    pub exception_numeric_handle: u32,
+    pub reserved: u32,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub enum ExceptionRuntimeStateKindV1 {
+    #[default]
+    Unknown = 0,
+    Active = 1,
+    Exhausted = 2,
+    Expired = 3,
+    ReconciliationRequired = 4,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub struct ExceptionRuntimeStateV1 {
+    /// Zero-initialized storage used as `struct bpf_spin_lock` by BPF.
+    pub lock: u32,
+    pub maximum_uses: u32,
+    pub consumed_uses: u32,
+    pub exception_numeric_handle: u32,
+    pub deadline_boottime_ns: u64,
+    pub transition_version: u64,
+    pub state: ExceptionRuntimeStateKindV1,
+    pub reserved: [u8; 7],
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
     Eq,
     PartialEq,
     zerocopy::Immutable,
@@ -222,6 +287,25 @@ pub enum PolicyGenerationStateV1 {
     Rejected = 4,
 }
 
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+)]
+pub enum PolicyGenerationModeV1 {
+    #[default]
+    Unknown = 0,
+    Observe = 1,
+    Protect = 2,
+}
+
 #[repr(C)]
 #[derive(
     Clone,
@@ -243,7 +327,8 @@ pub struct ProfileGenerationDescriptorV1 {
     pub row_count: u32,
     pub default_count: u32,
     pub state: PolicyGenerationStateV1,
-    pub reserved: [u8; 7],
+    pub mode: PolicyGenerationModeV1,
+    pub reserved: [u8; 6],
     pub table_digest: [u8; 32],
     pub transition_version: u64,
 }
@@ -263,10 +348,10 @@ pub struct ProfileGenerationDescriptorV1 {
 )]
 pub struct ExactFileObjectKeyV1 {
     pub profile_generation_ref_id: u64,
-    pub mount_namespace_inode: u64,
     pub mount_id_unique: u64,
-    pub filesystem_device: u64,
     pub inode: u64,
+    pub mount_namespace_inode: u32,
+    pub filesystem_device: u32,
     pub inode_generation: u32,
     pub reserved: u32,
 }
@@ -333,6 +418,8 @@ pub enum EffectObservationReasonV1 {
     CorruptIdentityOrGeneration = 6,
     UnresolvedObject = 7,
     UnsupportedObject = 8,
+    ExactPolicyDeny = 9,
+    ExceptionUnavailable = 10,
 }
 
 #[repr(u8)]
@@ -452,8 +539,9 @@ mod tests {
     use super::{
         BindingLifecycleStateV1, EffectDecisionKeyV1, EffectDefaultKeyV1,
         EffectObservationHealthV1, EffectObservationV1, ExactFileObjectKeyV1, ExactObjectBindingV1,
+        ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1,
         FileOpenEventV1, FileOpenTargetV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
-        ProfileGenerationDescriptorV1, TaskLabelCandidateV1,
+        PolicyGenerationModeV1, ProfileGenerationDescriptorV1, TaskLabelCandidateV1,
     };
 
     #[test]
@@ -467,12 +555,23 @@ mod tests {
         assert_eq!(align_of::<PhysicalDecisionV1>(), 4);
         assert_eq!(size_of::<EffectDefaultKeyV1>(), 40);
         assert_eq!(size_of::<ProfileGenerationDescriptorV1>(), 112);
-        assert_eq!(size_of::<ExactFileObjectKeyV1>(), 48);
+        assert_eq!(offset_of!(ProfileGenerationDescriptorV1, mode), 65);
+        assert_eq!(size_of::<ExceptionRuntimeStateKeyV1>(), 16);
+        assert_eq!(size_of::<ExceptionRuntimeStateV1>(), 40);
+        assert_eq!(
+            offset_of!(ExceptionRuntimeStateV1, deadline_boottime_ns),
+            16
+        );
+        assert_eq!(PolicyGenerationModeV1::Observe as u8, 1);
+        assert_eq!(PolicyGenerationModeV1::Protect as u8, 2);
+        assert_eq!(ExceptionRuntimeStateKindV1::Active as u8, 1);
+        assert_eq!(ExceptionRuntimeStateKindV1::ReconciliationRequired as u8, 4);
+        assert_eq!(size_of::<ExactFileObjectKeyV1>(), 40);
         assert_eq!(size_of::<ExactObjectBindingV1>(), 32);
-        assert_eq!(size_of::<EffectObservationV1>(), 208);
+        assert_eq!(size_of::<EffectObservationV1>(), 200);
         assert_eq!(size_of::<EffectObservationHealthV1>(), 32);
         assert_eq!(offset_of!(EffectObservationV1, file_object), 120);
-        assert_eq!(offset_of!(EffectObservationV1, kernel_result), 200);
+        assert_eq!(offset_of!(EffectObservationV1, kernel_result), 192);
         assert_eq!(PhysicalDecisionKindV1::Allow as u8, 0);
         assert_eq!(PhysicalDecisionKindV1::AuditAllow as u8, 1);
         assert_eq!(PhysicalDecisionKindV1::Deny as u8, 2);

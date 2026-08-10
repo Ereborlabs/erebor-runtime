@@ -44,9 +44,9 @@ message MithrilEffectObservation {
   string authority_domain_id = 7;
   string binding_id = 8;
   string execution_set_id = 9;
-  uint64 mount_namespace_inode = 10;
+  uint32 mount_namespace_inode = 10;
   uint64 mount_id_unique = 11;
-  uint64 filesystem_device = 12;
+  uint32 filesystem_device = 12;
   uint64 inode = 13;
   uint32 inode_generation = 14;
   uint64 exact_object_key_id = 15;

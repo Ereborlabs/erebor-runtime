@@ -28,11 +28,7 @@ pub struct NodeReadinessV1 {
 impl NodeReadinessV1 {
     #[must_use]
     pub const fn admits_new_work(self) -> bool {
-        self.kernel_ready
-            && self.identity_ready
-            && self.control_ready
-            && self.admission_ready
-            && !self.effect_prevention_claims_enabled
+        self.kernel_ready && self.identity_ready && self.control_ready && self.admission_ready
     }
 }
 
@@ -87,8 +83,11 @@ impl NodeChassis {
             )?)
         };
         let policy_loaded = policy.is_some();
+        let prevention_enabled = policy
+            .as_ref()
+            .is_some_and(crate::NodePolicyGenerationOwner::prevention_enabled);
         let identity = NativeSecurityStateOwner::new(node_boot_id, label_epoch);
-        let reconciliation = identity.activate_with_effect_observation(&mut host, policy_loaded)?;
+        let reconciliation = identity.activate_with_effect_policy(&mut host, policy_loaded)?;
         let observations = crate::EffectObservationStore::default();
         let effect_reader = policy_loaded
             .then(|| {
@@ -113,9 +112,15 @@ impl NodeChassis {
             },
             CapabilityRecord {
                 capability_id: "LOCAL_EFFECT_PREVENTION".to_owned(),
-                state: "UNSUPPORTED".to_owned(),
-                reason_code: if policy_loaded {
-                    "OBSERVE_ONLY_CANDIDATE_NOT_ACTIVE".to_owned()
+                state: if prevention_enabled {
+                    "SUPPORTED".to_owned()
+                } else {
+                    "UNSUPPORTED".to_owned()
+                },
+                reason_code: if prevention_enabled {
+                    "SIGNED_ACTIVE_EXACT_FILE_SLICE".to_owned()
+                } else if policy_loaded {
+                    "OBSERVE_ONLY_GENERATION".to_owned()
                 } else {
                     "IDENTITY_GATE_ONLY_NO_PERMISSION_TABLE".to_owned()
                 },
@@ -128,7 +133,7 @@ impl NodeChassis {
                     "UNSUPPORTED".to_owned()
                 },
                 reason_code: if policy_loaded {
-                    "SIGNED_READ_BACK_EXACT_FILE_SLICE_ONLY".to_owned()
+                    "SIGNED_ACTIVE_EXACT_FILE_SLICE_ONLY".to_owned()
                 } else {
                     "NO_POLICY_CANDIDATE".to_owned()
                 },
@@ -147,7 +152,12 @@ impl NodeChassis {
                 },
             },
         ];
-        let registration = registration(manifest, label_epoch, capabilities.clone())?;
+        let registration = registration(
+            manifest,
+            label_epoch,
+            prevention_enabled,
+            capabilities.clone(),
+        )?;
         let connector =
             NodeControlConnector::new(config.control.clone(), config.node_id.clone(), boot_id);
         let trust = TrustCache::load(&config.state_directory)?;
@@ -169,7 +179,7 @@ impl NodeChassis {
             identity_ready: true,
             control_ready: false,
             admission_ready: false,
-            effect_prevention_claims_enabled: false,
+            effect_prevention_claims_enabled: prevention_enabled,
         });
         Ok(Self {
             config,
@@ -191,6 +201,10 @@ impl NodeChassis {
     }
 
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
+        let prevention_enabled = self
+            .policy
+            .as_ref()
+            .is_some_and(crate::NodePolicyGenerationOwner::prevention_enabled);
         let effect_stop = Arc::new(AtomicBool::new(false));
         let mut effect_task = self.effect_reader.take().map(|reader| {
             let stop = Arc::clone(&effect_stop);
@@ -241,7 +255,7 @@ impl NodeChassis {
                         identity_ready: identity_healthy,
                         control_ready: true,
                         admission_ready: identity_healthy,
-                        effect_prevention_claims_enabled: false,
+                        effect_prevention_claims_enabled: prevention_enabled,
                     });
                     backoff = self.config.control.reconnect_minimum();
                     loop {
@@ -267,7 +281,7 @@ impl NodeChassis {
                                         identity_ready: false,
                                         control_ready: true,
                                         admission_ready: false,
-                                        effect_prevention_claims_enabled: false,
+                                        effect_prevention_claims_enabled: prevention_enabled,
                                     });
                                 }
                             }
@@ -281,7 +295,7 @@ impl NodeChassis {
                 identity_ready: identity_healthy,
                 control_ready: false,
                 admission_ready: false,
-                effect_prevention_claims_enabled: false,
+                effect_prevention_claims_enabled: prevention_enabled,
             });
             let reconnect = tokio::time::sleep(backoff);
             tokio::pin!(reconnect);
@@ -381,6 +395,7 @@ fn id_from_uuid_bytes(bytes: [u8; 16]) -> erebor_interceptor_abi::Id128V1 {
 fn registration(
     manifest: &erebor_interceptor::KernelObjectManifestV1,
     label_epoch: u64,
+    effect_prevention_claims_enabled: bool,
     capabilities: Vec<CapabilityRecord>,
 ) -> Result<NodeRegistration> {
     let manifest_bytes = serde_json::to_vec(manifest).context(JsonSnafu {
@@ -391,7 +406,7 @@ fn registration(
         program_digest: manifest.object_sha256.clone(),
         label_epoch,
         kernel_ready: manifest.ready,
-        effect_prevention_claims_enabled: false,
+        effect_prevention_claims_enabled,
         capabilities,
     })
 }
@@ -401,7 +416,7 @@ mod tests {
     use super::{effect_reader_finished, NodeReadinessV1};
 
     #[test]
-    fn boot_admission_requires_complete_chassis_readiness_and_never_claims_prevention() {
+    fn boot_admission_requires_complete_chassis_readiness_in_both_policy_modes() {
         assert!(!NodeReadinessV1::default().admits_new_work());
         let ready = NodeReadinessV1 {
             kernel_ready: true,
@@ -412,6 +427,11 @@ mod tests {
         };
         assert!(ready.admits_new_work());
         assert!(!ready.effect_prevention_claims_enabled);
+        assert!(NodeReadinessV1 {
+            effect_prevention_claims_enabled: true,
+            ..ready
+        }
+        .admits_new_work());
         assert!(!NodeReadinessV1 {
             control_ready: false,
             admission_ready: false,

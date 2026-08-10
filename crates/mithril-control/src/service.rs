@@ -178,9 +178,9 @@ impl NodeControl for ControlPlane {
                 "the first node message must be registration",
             ));
         };
-        if !registration.kernel_ready || registration.effect_prevention_claims_enabled {
+        if !registration.kernel_ready {
             return Err(Status::failed_precondition(
-                "Phase 1 registration requires kernel readiness and no prevention claim",
+                "node registration requires kernel readiness",
             ));
         }
         if !valid_registration(registration) {

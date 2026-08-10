@@ -2,8 +2,10 @@ use std::path::Path;
 
 use ed25519_dalek::SigningKey;
 use mithril_control::{
-    AntiRollbackStore, CompiledPhysicalResultV1, EffectFamilyDefaultV1, EffectFamilyV1, ErrnoV1,
-    HardSafetyConditionV1, PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, PolicySimulator,
+    compiled_key_digest, AntiRollbackStore, BlastRadiusLimitV1, CompiledPhysicalResultV1,
+    EffectFamilyDefaultV1, EffectFamilyV1, ErrnoV1, ExactExceptionSubjectSelectorV1,
+    ExceptionConsumptionScopeV1, ExceptionV1, HardSafetyConditionV1, PermittedAuthorityDeltaV1,
+    PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, PolicySimulator,
     ProfileCandidateArtifactV1, ProfileSealRequestV1, RegistryDigestsV1,
     RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1, SimulatedDispositionV1,
 };
@@ -21,6 +23,188 @@ fn checked_policy_is_closed_and_compiles_deterministically() -> mithril_control:
     let second = PolicyCompiler.compile(&document)?;
     assert_eq!(first, second);
     assert_eq!(first.compiled_cells.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn protect_mode_compiles_the_same_denial_as_a_physical_deny() -> mithril_control::Result<()> {
+    let source = VALID_POLICY.replacen(
+        "desired_profile_mode: OBSERVE",
+        "desired_profile_mode: PROTECT",
+        1,
+    );
+    let compiled = PolicyCompiler.compile(&parse(&source)?)?;
+    assert_eq!(
+        compiled.compiled_cells[0].physical_result,
+        CompiledPhysicalResultV1::DenyEffect
+    );
+    let outcome =
+        PolicySimulator::new(&compiled).simulate(compiled.compiled_cells[0].key.clone(), None);
+    assert_eq!(outcome.disposition, SimulatedDispositionV1::Deny);
+    assert_eq!(outcome.configured_errno, Some(-13));
+    Ok(())
+}
+
+#[test]
+fn protect_mode_closes_open_read_and_mmap_as_separate_cells() -> mithril_control::Result<()> {
+    let source = VALID_POLICY.replacen(
+        "desired_profile_mode: OBSERVE",
+        "desired_profile_mode: PROTECT",
+        1,
+    );
+    let mut document = parse(&source)?;
+    let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut document.rules[0].rule_match
+    else {
+        unreachable!("fixture has a local effect rule")
+    };
+    effect.operation_ids = ["MMAP_READ", "OPEN_READ", "READ"]
+        .map(str::to_owned)
+        .to_vec();
+    let compiled = PolicyCompiler.compile(&document)?;
+
+    assert_eq!(compiled.compiled_cells.len(), 3);
+    assert!(compiled
+        .compiled_cells
+        .iter()
+        .all(|cell| cell.physical_result == CompiledPhysicalResultV1::DenyEffect));
+    assert_eq!(
+        compiled
+            .compiled_cells
+            .iter()
+            .map(|cell| cell.key.operation_id.as_str())
+            .collect::<Vec<_>>(),
+        ["MMAP_READ", "OPEN_READ", "READ"]
+    );
+    Ok(())
+}
+
+#[test]
+fn bounded_exception_binds_one_exact_allow_cell() -> mithril_control::Result<()> {
+    let source = VALID_POLICY.replacen(
+        "desired_profile_mode: OBSERVE",
+        "desired_profile_mode: PROTECT",
+        1,
+    );
+    let mut document = parse(&source)?;
+    document.rules[0].requested_disposition = PolicyDispositionV1::Allow;
+    document.rules[0].errno = None;
+    document.rules[0].exception_ids.clear();
+    let cell = PolicyCompiler.compile(&document)?.compiled_cells.remove(0);
+    let mut write_document = document.clone();
+    let mithril_control::RuleMatchV1::LocalPreEffect(effect) =
+        &mut write_document.rules[0].rule_match
+    else {
+        unreachable!("fixture has a local effect rule")
+    };
+    effect.operation_ids = vec!["OPEN_WRITE".to_owned()];
+    let write_cell = PolicyCompiler.compile(&write_document)?;
+    assert_eq!(
+        compiled_key_digest(document.profile_id(), &write_cell.compiled_cells[0].key)?,
+        "5c0e91f06548ddcf908971608bf5e656c55c2be27c18249678b82a9811a5a72d"
+    );
+    document.exceptions.push(ExceptionV1 {
+        exception_id: "one-token-open".to_owned(),
+        exception_instance_id: "88888888-8888-4888-8888-888888888888".to_owned(),
+        changed_rule_ids: vec![document.rules[0].rule_id.clone()],
+        exact_subject: ExactExceptionSubjectSelectorV1 {
+            protected_scope_ids: vec![document.protected_universe.protected_scope_ids[0].clone()],
+            execution_set_ids: vec![document.protected_universe.execution_set_ids[0].clone()],
+            entry_kind_ids: vec![mithril_control::EntryKindV1::ContainerStart],
+            role_ids: vec!["converter".to_owned()],
+            immutable_definition_digests: vec![],
+            exact_compiled_key_digests: vec!["0".repeat(64)],
+        },
+        authority_delta: PermittedAuthorityDeltaV1 {
+            from_physical_result: "DENY_ERRNO".to_owned(),
+            to_physical_result: "ALLOW_EFFECT".to_owned(),
+            added_or_removed_operation_cells: vec![],
+            added_or_removed_transition_cells: vec![],
+            maximum_blast_radius: BlastRadiusLimitV1::Local {
+                permitted_target_selector_ids: vec![],
+                process_count: 1,
+                execution_set_count: 1,
+                socket_count: 1,
+                node_count: 1,
+            },
+        },
+        approver_principal_id: "99999999-9999-4999-8999-999999999999".to_owned(),
+        approval_proof_digest: "a".repeat(64),
+        closed_reason_code: "ONE_TOKEN_OPEN".to_owned(),
+        valid_from_utc_ns: 1,
+        valid_until_utc_ns: i64::MAX,
+        consumption_scope: ExceptionConsumptionScopeV1::PerTargetNode,
+        maximum_uses: 1,
+        maximum_lifetime_ns: 1_000_000_000,
+    });
+    document.exceptions[0]
+        .exact_subject
+        .exact_compiled_key_digests = vec![compiled_key_digest(document.profile_id(), &cell.key)?];
+    document.exceptions[0]
+        .authority_delta
+        .added_or_removed_operation_cells = document.exceptions[0]
+        .exact_subject
+        .exact_compiled_key_digests
+        .clone();
+    document.rules[0]
+        .exception_ids
+        .push("one-token-open".to_owned());
+
+    let compiled = PolicyCompiler.compile(&document)?;
+    assert_eq!(
+        compiled.compiled_cells[0].consuming_exception_id.as_deref(),
+        Some("one-token-open")
+    );
+    let exact = document.clone();
+    let mut multiple_cells = exact.clone();
+    let mithril_control::RuleMatchV1::LocalPreEffect(effect) =
+        &mut multiple_cells.rules[0].rule_match
+    else {
+        unreachable!("fixture has a local effect rule")
+    };
+    effect.operation_ids = ["OPEN_READ", "OPEN_WRITE"].map(str::to_owned).to_vec();
+    multiple_cells.rules[0].exception_ids.clear();
+    multiple_cells.exceptions.clear();
+    let preliminary = PolicyCompiler.compile(&multiple_cells)?;
+    multiple_cells = exact.clone();
+    let mithril_control::RuleMatchV1::LocalPreEffect(effect) =
+        &mut multiple_cells.rules[0].rule_match
+    else {
+        unreachable!("fixture has a local effect rule")
+    };
+    effect.operation_ids = ["OPEN_READ", "OPEN_WRITE"].map(str::to_owned).to_vec();
+    multiple_cells.exceptions[0]
+        .exact_subject
+        .exact_compiled_key_digests = preliminary
+        .compiled_cells
+        .iter()
+        .map(|cell| compiled_key_digest(multiple_cells.profile_id(), &cell.key))
+        .collect::<mithril_control::Result<Vec<_>>>()?;
+    multiple_cells.exceptions[0]
+        .authority_delta
+        .added_or_removed_operation_cells = multiple_cells.exceptions[0]
+        .exact_subject
+        .exact_compiled_key_digests
+        .clone();
+    assert!(PolicyCompiler.compile(&multiple_cells).is_err());
+    document.rules[0].exception_ids.clear();
+    assert!(PolicyCompiler.compile(&document).is_err());
+    document = exact.clone();
+    document.exceptions[0]
+        .exact_subject
+        .role_ids
+        .push("runtime-external".to_owned());
+    assert!(PolicyCompiler.compile(&document).is_err());
+    document = exact.clone();
+    document.exceptions[0].authority_delta.from_physical_result = "ALLOW_EFFECT".to_owned();
+    assert!(PolicyCompiler.compile(&document).is_err());
+    document = exact;
+    document.exceptions[0]
+        .exact_subject
+        .exact_compiled_key_digests = vec!["f".repeat(64)];
+    assert!(PolicyCompiler.compile(&document).is_err());
+    let exception = document.exceptions[0].clone();
+    document.exceptions = vec![exception; 4_097];
+    assert!(PolicyCompiler.compile(&document).is_err());
     Ok(())
 }
 

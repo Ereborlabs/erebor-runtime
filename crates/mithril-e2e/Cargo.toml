@@ -8,10 +8,13 @@ publish = false
 
 [dependencies]
 clap.workspace = true
+ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-interceptor = { path = "../erebor-interceptor" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 hex.workspace = true
+libbpf-rs.workspace = true
+libc = "0.2.186"
 memmap2 = "0.9.11"
 mithril-control = { path = "../mithril-control" }
 mithril-node = { path = "../mithril-node" }

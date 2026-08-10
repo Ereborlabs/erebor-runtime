@@ -27,6 +27,9 @@ enum Command {
         measured_opens: u32,
         #[arg(long, default_value_t = 50_000)]
         saturation_opens: u32,
+        /// Promote the signed fixture from observation to physical denial.
+        #[arg(long)]
+        protect: bool,
     },
     #[command(hide = true)]
     Child {
@@ -54,6 +57,7 @@ fn run() -> Result<()> {
             cgroup_path,
             measured_opens,
             saturation_opens,
+            protect,
         } => {
             let runner = EffectTestRunner::new(cli.repo_root);
             let bundle = runner.physical_probe(
@@ -63,6 +67,7 @@ fn run() -> Result<()> {
                 &cgroup_path,
                 measured_opens,
                 saturation_opens,
+                protect,
             )?;
             runner.write_json(
                 &output_directory.join("effect-physical-probe.json"),

@@ -23,6 +23,10 @@ _Static_assert(sizeof(physical_decision_v1) == 16,
                "physical decision ABI size");
 _Static_assert(sizeof(profile_generation_descriptor_v1) == 112,
                "profile generation descriptor ABI size");
+_Static_assert(sizeof(exception_runtime_state_key_v1) == 16,
+               "exception runtime key ABI size");
+_Static_assert(sizeof(exception_runtime_state_v1) == 40,
+               "exception runtime state ABI size");
 _Static_assert(sizeof(exact_file_object_key_v1) == 40,
                "exact file object ABI size");
 _Static_assert(sizeof(exact_object_binding_v1) == 32,

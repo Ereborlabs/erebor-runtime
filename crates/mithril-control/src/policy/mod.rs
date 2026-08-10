@@ -11,8 +11,8 @@ mod source_response;
 
 pub use artifact::PolicyArtifactOwner;
 pub use compiler::{
-    kernel_operation_id, CompiledDecisionCellV1, CompiledPhysicalResultV1, PolicyCompiler,
-    StaticDecisionKeyV1, StaticExpandedProfileV1,
+    compiled_key_digest, kernel_operation_id, CompiledDecisionCellV1, CompiledPhysicalResultV1,
+    PolicyCompiler, StaticDecisionKeyV1, StaticExpandedProfileV1,
 };
 pub use path::*;
 pub use rollback::{

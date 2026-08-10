@@ -239,6 +239,13 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, exception_runtime_state_key_v1);
+    __type(value, exception_runtime_state_v1);
+} exception_runtime_states SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65536);
     __type(key, exact_file_object_key_v1);
     __type(value, exact_object_binding_v1);
@@ -457,10 +464,8 @@ static __always_inline execution_set_binding_state_v1 *binding_for_cgroup(
     return NULL;
 }
 
-static __always_inline int identity_deny(identity_runtime_config_v1 *config)
+static __always_inline int identity_errno(__s64 error)
 {
-    __s64 error = config ? config->first_effect_errno : -EACCES;
-
     /* Bound the LSM result for the verifier and preserve the configured s32. */
     asm volatile("%0 <<= 32\n"
                  "%0 s>>= 32\n"
@@ -470,6 +475,49 @@ static __always_inline int identity_deny(identity_runtime_config_v1 *config)
                  : "+r"(error)
                  : "i"(-MAX_ERRNO), "i"(-EACCES));
     return error;
+}
+
+static __always_inline int identity_deny(identity_runtime_config_v1 *config)
+{
+    return identity_errno(config ? config->first_effect_errno : -EACCES);
+}
+
+static __always_inline int consume_bounded_exception(
+    __u64 profile_generation_ref_id, __u32 exception_numeric_handle)
+{
+    exception_runtime_state_key_v1 key = {
+        .profile_generation_ref_id = profile_generation_ref_id,
+        .exception_numeric_handle = exception_numeric_handle,
+    };
+    exception_runtime_state_v1 *exception;
+    __u64 now;
+    int result = -EACCES;
+
+    if (!exception_numeric_handle)
+        return 0;
+    exception = bpf_map_lookup_elem(&exception_runtime_states, &key);
+    if (!exception)
+        return -EACCES;
+    now = bpf_ktime_get_ns();
+    bpf_spin_lock((struct bpf_spin_lock *)&exception->lock);
+    if (exception->exception_numeric_handle != exception_numeric_handle ||
+        !exception->maximum_uses ||
+        exception->consumed_uses >= exception->maximum_uses ||
+        exception->state != exception_runtime_state_kind_v1_active)
+        goto unlock;
+    if (now >= exception->deadline_boottime_ns) {
+        exception->state = exception_runtime_state_kind_v1_expired;
+        exception->transition_version++;
+        goto unlock;
+    }
+    exception->consumed_uses++;
+    exception->transition_version++;
+    if (exception->consumed_uses == exception->maximum_uses)
+        exception->state = exception_runtime_state_kind_v1_exhausted;
+    result = 0;
+unlock:
+    bpf_spin_unlock((struct bpf_spin_lock *)&exception->lock);
+    return result;
 }
 
 static __always_inline bool label_matches_runtime(const task_label_v1 *label,
