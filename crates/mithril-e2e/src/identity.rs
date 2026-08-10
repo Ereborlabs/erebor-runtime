@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read as _, Write as _};
-use std::mem::size_of;
+use std::mem::{offset_of, size_of};
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
@@ -13,8 +13,8 @@ use erebor_interceptor::{
     KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
 use erebor_interceptor_abi::{
-    ExecGuardStateV1, Id128V1, ProcessExecutionStateV1, ProcessStateVectorStateV1,
-    TaskCoordinateStateV1,
+    ExecGuardStateV1, Id128V1, IdentityRuntimeConfigV1, ProcessExecutionStateV1,
+    ProcessStateVectorStateV1, TaskCoordinateStateV1,
 };
 use mithril_node::{
     NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1, WorkloadBindingConfig,
@@ -316,9 +316,8 @@ impl IdentityTestRunner {
         bindings
             .publish_all(&host, std::slice::from_ref(&binding))
             .context(NodeSnafu)?;
-        NativeSecurityStateOwner::new(node_boot_id, 1)
-            .activate(&mut host)
-            .context(NodeSnafu)?;
+        let identity = NativeSecurityStateOwner::new(node_boot_id, 1);
+        identity.activate(&mut host).context(NodeSnafu)?;
         let inspector = NativeIdentityInspector::new(pin_root);
 
         let mut fixture = NativeProcessFixture::start()?;
@@ -328,10 +327,21 @@ impl IdentityTestRunner {
             inspector.snapshot(fixture.outer_pid()).context(NodeSnafu)
         })?;
 
+        let next_id_before_child = identity_next_id(&host)?;
         fixture.release_root()?;
-        let native_pid = self.wait_for("native child creation", &procs_path, || {
+        let native_pid = match self.wait_for("native child creation", &procs_path, || {
             fixture.native_child_pid()
-        })?;
+        }) {
+            Ok(pid) => pid,
+            Err(source) => {
+                let health = identity.health(&host).context(NodeSnafu)?;
+                let next_id_after_child = identity_next_id(&host)?;
+                return Err(invalid_state(format!(
+                    "{source}; identity health {health:?}; child allocation advanced next_id by {}",
+                    next_id_after_child.saturating_sub(next_id_before_child)
+                )));
+            }
+        };
         fixture.open_native_pidfd(native_pid)?;
         let before_exec = self.wait_for("native child identity", &procs_path, || {
             inspector.snapshot(native_pid).context(NodeSnafu)
@@ -608,6 +618,18 @@ fn profile_task_refs(host: &KernelHost) -> Result<u64> {
         .context(InterceptorSnafu)?
         .ok_or_else(|| invalid_state("profile-generation reference state is missing"))?;
     read_u64(&value, 0, "profile-generation task references")
+}
+
+fn identity_next_id(host: &KernelHost) -> Result<u64> {
+    let value = host
+        .lookup_map("identity_config", &0_u32.to_ne_bytes())
+        .context(InterceptorSnafu)?
+        .ok_or_else(|| invalid_state("identity runtime configuration is missing"))?;
+    read_u64(
+        &value,
+        offset_of!(IdentityRuntimeConfigV1, next_id),
+        "identity next ID",
+    )
 }
 
 fn map_ids(manifest: &KernelObjectManifestV1) -> BTreeMap<&str, u32> {

@@ -133,10 +133,10 @@ mod tests {
             })
             .count();
 
-        // One creator lookup plus one child installation in each compiled branch.
-        // Parent topology is read as coordinates; a CO-RE probe-read pointer is
-        // scalar to the verifier and must never be passed to task storage.
-        assert_eq!(calls, 3);
+        // task_alloc inherits from the trusted current creator and installs the
+        // child. Independent roots are established after final placement by the
+        // cgroup-attach hook, not inferred from the half-built child task.
+        assert_eq!(calls, 2);
         Ok(())
     }
 

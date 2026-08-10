@@ -11,12 +11,9 @@ int BPF_PROG(erebor_task_alloc, struct task_struct *task,
     identity_health_v1 *health;
     struct identity_scratch_v1 *scratch;
     struct task_struct *creator;
-    struct cgroup *child_cgroup = NULL;
     struct cgroup *creator_cgroup = NULL;
     task_label_v1 *parent_label;
-    execution_set_binding_state_v1 *binding;
     execution_set_binding_state_v1 *creator_binding;
-    int binding_lookup;
     int creator_binding_lookup;
     int result;
 
@@ -31,46 +28,34 @@ int BPF_PROG(erebor_task_alloc, struct task_struct *task,
         return identity_deny(config);
     creator = bpf_get_current_task_btf();
     parent_label = bpf_task_storage_get(&task_labels, creator, 0, 0);
-    if (task_cgroup(task, &child_cgroup)) {
+    if (task_cgroup(creator, &creator_cgroup)) {
         if (health)
             health->placement_mismatches++;
         return identity_deny(config);
     }
-    binding = binding_for_cgroup(child_cgroup, &binding_lookup);
-    if (binding_lookup) {
+    creator_binding = binding_for_cgroup(creator_cgroup,
+                                         &creator_binding_lookup);
+    if (creator_binding_lookup) {
         if (health)
             health->placement_mismatches++;
         return identity_deny(config);
     }
     if (parent_label) {
-        if (!label_matches_runtime(parent_label, config) || !binding) {
+        if (!label_matches_runtime(parent_label, config) ||
+            !binding_matches_label(creator_binding, parent_label)) {
             if (health)
                 health->placement_mismatches++;
             return identity_deny(config);
         }
         result = create_native_child(task, creator, clone_flags, config,
-                                     parent_label, binding, scratch);
+                                     parent_label, creator_binding, scratch);
     } else {
-        if (task_cgroup(creator, &creator_cgroup)) {
-            if (health)
-                health->placement_mismatches++;
-            return identity_deny(config);
-        }
-        creator_binding = binding_for_cgroup(creator_cgroup,
-                                             &creator_binding_lookup);
-        if (creator_binding_lookup) {
-            if (health)
-                health->placement_mismatches++;
-            return identity_deny(config);
-        }
         if (creator_binding) {
             if (health)
                 health->missing_identity_denials++;
             return identity_deny(config);
         }
-        if (!binding)
-            return 0;
-        result = create_external_root(task, config, binding, scratch);
+        return 0;
     }
     if (result && health)
         health->allocation_failures++;

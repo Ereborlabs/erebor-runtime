@@ -94,7 +94,7 @@ impl NativeSecurityStateOwner {
         Ok(report)
     }
 
-    fn health(&self, host: &KernelHost) -> Result<ReconciliationReportV1> {
+    pub fn health(&self, host: &KernelHost) -> Result<ReconciliationReportV1> {
         let bytes = host
             .lookup_map("identity_health", &0_u32.to_ne_bytes())
             .context(InterceptorSnafu)?
