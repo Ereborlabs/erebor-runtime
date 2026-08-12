@@ -1,8 +1,8 @@
 # Phase 4: Signed Local Pre-Effect Enforcement
 
-Status: Not done. The signed exact-file prevention increment and explicit
-hard-close floor for the currently unqualified local hooks are implemented;
-the complete policy-aware Phase 4 surface and privileged qualification are not
+Status: Not done. The signed exact-file prevention increment, its privileged
+VM and Docker qualification, and the explicit hard-close floor for unqualified
+local hooks are complete. The complete policy-aware Phase 4 surface is not
 complete.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
@@ -137,11 +137,43 @@ Validated architecture revision/digest: policy-and-protection-algorithm-architec
 Completed deliverable IDs: partial D4.1; the hard-close subset of D4.2, D4.4, and D4.5; the exact-file and file-mutation hard-close subset of D4.3; partial D4.6; and the exact-file portion of D4.8.
 Files and durable owners changed: mithril-control owns PROTECT compilation and exact exception binding; NodePolicyGenerationOwner owns PREPARING -> READ_BACK -> ACTIVE installation, anti-rollback, exact rows, and exception state; the production BPF effect gate owns pre-effect deny and atomic exception consumption; mithril-e2e owns the disposable physical oracle; examples/mithril-phase4-manual owns operator cases.
 Upstream-adoption dossier IDs used: existing Phase 0 libbpf-rs/libbpf-cargo and checked vmlinux-header decisions; no new runtime or BPF framework.
-Fixture cases and exact physical results: unprivileged compiler/ABI/interceptor/node/effect suites pass. The self-cleaning privileged PROTECT probe is implemented for exact open, inherited-fd read, file-backed mmap, a same-container exact benign read, concurrent exact N/N+1 exception consumption, monotonic expiry, exhausted-state loader restart, hard-link/bind aliases, denied protected mount races, external mount DIRTY/reconciliation races, unqualified exec and anonymous executable memory, create/chmod/truncate/unlink/link/rename, SysV IPC, ptrace, signal, namespace privilege, device ioctl, BPF map creation, pinned-link removal, saturation, latency, and cleanup. Each hard-close result also requires the expected effect family and operation in the kernel observation. The probe has not been run on the final source state.
-Commands and exact source state covered: `cargo check --workspace` and `bash .github/scripts/verify-rust-ci.sh` pass on the final implementation state, including all-target/all-feature clippy with warnings denied and loopback integration tests; production identity.bpf.c compiles with -Wall -Werror for x86_64, arm64, arm, and riscv checked-in vmlinux headers. Privileged BPF-LSM execution remains to be recorded.
-Platform/kernel/runtime manifests: no new Phase 4 physical result artifact recorded yet.
-Performance/capacity results: exception-state capacity is compiler-checked at 4,096; the physical saturation and latency result awaits the privileged probe.
-Unsupported/degraded paths: receipt-idempotent stable exception instances, policy-aware IPC, device/ioctl, credential, process-control, complete executable-memory/provenance, policy-aware self-protection, Landlock, mount propagation/fan-out, and the complete HF-002..HF-012 local matrix remain unqualified. Exceptions are therefore restricted to one exact file-open cell rather than being broadened unsafely across hooks. Typed unqualified hooks fail protected tasks closed where present and have physical-oracle coverage in the pending privileged probe; this is not a policy-aware support claim. Network remains Phase 5.
-Remaining work in this phase: qualify or implement D4.2-D4.5 and D4.7, implement stable receipt/WAL exception ownership, finish administrative approval-to-profile exception resolution and physical admin-exec proof, run the full required fixture matrix and legitimate controls, and record the final privileged result. Earlier Phase 2/3 Docker/CRI cases also remain unrecorded.
+Fixture cases and exact physical results: unprivileged compiler/ABI/interceptor/node/effect suites pass. The self-cleaning privileged PROTECT probe passes exact open, inherited-fd read, file-backed mmap, a same-container exact benign read, concurrent exact N/N+1 exception consumption, monotonic expiry, exhausted-state loader restart, hard-link/bind aliases, denied protected mount races, external mount DIRTY/reconciliation races, unqualified exec and anonymous executable memory, create/chmod/truncate/unlink/link/rename, SysV IPC, ptrace, signal, namespace privilege, device ioctl, BPF map creation, pinned-link removal, saturation, latency, and cleanup. Each hard-close result also requires the expected effect family and operation in the kernel observation. The real Docker exact-file case also passes: the protected task receives `EACCES` before it obtains a file descriptor or secret bytes.
+Commands and exact source state covered: the disposable VM harness passes the final Phase 2-4 production objects and cleanup assertions. `cargo check --workspace` and `bash .github/scripts/verify-rust-ci.sh` cover the final implementation state, including all-target/all-feature clippy with warnings denied and loopback integration tests; production identity.bpf.c compiles with -Wall -Werror for x86_64, arm64, arm, and riscv checked-in vmlinux headers.
+Platform/kernel/runtime manifests: the privileged result covers x86_64 Ubuntu kernel 6.8.0-136 with BPF LSM, runtime BTF, cgroup v2, and unique mount IDs.
+Performance/capacity results: exception-state capacity is compiler-checked at 4,096. The VM probe passes a 50,000-open saturation case. The average baseline open time was 5,564 ns and the average protected open time was 5,361 ns in that VM.
+Unsupported/degraded paths: receipt-idempotent stable exception instances, policy-aware IPC, device/ioctl, credential, process-control, complete executable-memory/provenance, policy-aware self-protection, Landlock, mount propagation/fan-out, and the complete HF-002..HF-012 local matrix remain unqualified. Exceptions are therefore restricted to one exact file-open cell rather than being broadened unsafely across hooks. Typed unqualified hooks fail protected tasks closed where present and have physical-oracle coverage; this is a safety-floor result, not a policy-aware support claim. Network remains Phase 5.
+Remaining work in this phase: qualify or implement D4.2-D4.5 and D4.7, implement stable receipt/WAL exception ownership, finish administrative approval-to-profile exception resolution and physical admin-exec proof, and run the full required fixture matrix and legitimate controls. Phase 2 and Phase 3 still have the remaining cases recorded in their own phase results.
 Next phase not authorized: yes.
 ```
+
+## Qualification update — 2026-08-12
+
+The disposable VM harness completed the Phase 4 production-object probe in
+`PROTECT` mode. The probe recorded these physical results:
+
+- The exact open, inherited file-descriptor read, and file-backed mapping were
+  denied before the named effect returned authority.
+- The benign exact-file control remained allowed.
+- The hard-link and bind-alias cases retained the expected object and path
+  results.
+- Protected and external mount-replacement races failed closed. Exact
+  reconciliation restored the original object.
+- A bounded exception allowed exactly two concurrent uses. Use N+1 failed.
+  Expiry failed. Loader restart retained the exhausted state.
+- The unqualified exec, anonymous executable memory, file mutation, IPC,
+  ptrace, signal, namespace privilege, device ioctl, BPF, and link-removal
+  probes all took their explicit hard-close paths. These are safety floors.
+  They are not policy-aware support claims.
+- A paused reader and 50,000 opens did not change deny or benign results.
+- The average baseline open time was 5,564 ns. The average protected open time
+  was 5,361 ns. These values apply only to this VM run.
+- The probe removed its fixture tree, pin root, lease file, and cgroup.
+
+The real Docker exact-file manual case also passed. The protected process
+received `EACCES` before it obtained the secret file descriptor or bytes. The
+shell removed all Mithril-owned artifacts.
+
+These results replace the old statement that privileged qualification was
+pending. The phase stays **Not done**. Policy-aware D4.2-D4.5, Landlock D4.7,
+stable receipt/WAL exception ownership, complete administrative-exec proof,
+mount propagation/fan-out, and the full HF local matrix remain incomplete.
