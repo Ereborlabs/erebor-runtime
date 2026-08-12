@@ -1,4 +1,4 @@
-use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 pub const MAX_ANCESTOR_PROCESS_LINEAGES_V1: usize = 8;
 pub const MAX_EXEC_CANDIDATES_V1: usize = 8;
@@ -48,7 +48,9 @@ impl Id128V1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum TaskCoordinateStateV1 {
     #[default]
     Unknown = 0,
@@ -61,7 +63,9 @@ pub enum TaskCoordinateStateV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum KernelRealParentChangeReasonV1 {
     #[default]
     Unknown = 0,
@@ -71,7 +75,9 @@ pub enum KernelRealParentChangeReasonV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum ProcessSecurityStateKindV1 {
     #[default]
     Unknown = 0,
@@ -84,7 +90,9 @@ pub enum ProcessSecurityStateKindV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum ProcessStateVectorStateV1 {
     #[default]
     Unknown = 0,
@@ -94,7 +102,9 @@ pub enum ProcessStateVectorStateV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum ExecGuardStateV1 {
     #[default]
     None = 0,
@@ -117,7 +127,9 @@ pub enum PendingExecStateV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum ImageProvenanceStateV1 {
     #[default]
     Unknown = 0,
@@ -128,7 +140,9 @@ pub enum ImageProvenanceStateV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum ProcessExecutionStartedByV1 {
     #[default]
     Unknown = 0,
@@ -137,7 +151,9 @@ pub enum ProcessExecutionStartedByV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum ProcessExecutionStateV1 {
     #[default]
     Unknown = 0,
@@ -181,7 +197,9 @@ pub enum AuthorityDomainStateKindV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum ExternalRootClassV1 {
     #[default]
     Unknown = 0,
@@ -192,7 +210,9 @@ pub enum ExternalRootClassV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum EntryPurposeV1 {
     #[default]
     Unknown = 0,
@@ -217,7 +237,9 @@ pub enum EntryKindV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum InstalledRoleClassV1 {
     #[default]
     Unknown = 0,
@@ -240,7 +262,9 @@ pub enum ReferenceTombstoneStateV1 {
 }
 
 #[repr(u64)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum InitialRootStateV1 {
     #[default]
     Unarmed = 0,
@@ -252,7 +276,9 @@ pub enum InitialRootStateV1 {
 // state in that directly atomic representation instead of adding a second
 // lock owner around this one-use transition.
 #[repr(u64)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum ApprovedExecSlotStateV1 {
     #[default]
     Unknown = 0,
@@ -272,20 +298,10 @@ pub enum PendingAdministrativeMatchStateV1 {
     SlotConsumed = 2,
 }
 
-impl InitialRootStateV1 {
-    #[must_use]
-    pub const fn from_raw(value: u64) -> Option<Self> {
-        match value {
-            0 => Some(Self::Unarmed),
-            1 => Some(Self::Available),
-            2 => Some(Self::Consumed),
-            _ => None,
-        }
-    }
-}
-
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
+)]
 pub struct TaskPlacementExpectationV1 {
     pub protected_root_binding_id: Id128V1,
     pub protected_root_binding_nonce: Id128V1,
@@ -294,7 +310,9 @@ pub struct TaskPlacementExpectationV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
+)]
 pub struct TaskLabelV1 {
     pub node_boot_id: Id128V1,
     pub label_epoch: u64,
@@ -314,7 +332,9 @@ pub struct TaskLabelV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct TaskCoordinateV1 {
     pub task_cookie: u64,
     pub process_instance_id: Id128V1,
@@ -331,14 +351,18 @@ pub struct TaskCoordinateV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
+)]
 pub struct KernelRealParentIntervalKeyV1 {
     pub child_task_cookie: u64,
     pub interval_sequence: u64,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct KernelRealParentIntervalV1 {
     pub child_task_cookie: u64,
     pub real_parent_task_cookie: u64,
@@ -355,7 +379,9 @@ pub struct KernelRealParentIntervalV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
+)]
 pub struct CreatedByEdgeV1 {
     pub child_task_cookie: u64,
     pub creator_task_cookie: u64,
@@ -368,7 +394,9 @@ pub struct CreatedByEdgeV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct ProcessSecurityStateV1 {
     pub process_state_id: Id128V1,
     pub node_boot_id: Id128V1,
@@ -398,7 +426,9 @@ pub struct ProcessSecurityStateV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct ProcessStateVectorV1 {
     pub node_boot_id: Id128V1,
     pub label_epoch: u64,
@@ -453,7 +483,9 @@ pub struct AuthorityDomainStateV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct ExecutionSetBindingStateV1 {
     pub binding_id: Id128V1,
     pub binding_nonce: Id128V1,
@@ -476,7 +508,7 @@ pub struct ExecutionSetBindingStateV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes)]
 pub struct BoundedAdministrativeArgvV1 {
     pub argument_count: u16,
     pub total_argument_bytes: u16,
@@ -557,7 +589,7 @@ impl BoundedAdministrativeArgvV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes)]
 pub struct ApprovedExecArgumentKeyV1 {
     pub proof_id: Id128V1,
     pub argument_index: u16,
@@ -604,14 +636,16 @@ impl ApprovedExecArgumentKeyV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct ApprovedExecSlotKeyV1 {
     pub node_boot_id: Id128V1,
     pub cgroup_binding_id: Id128V1,
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes)]
 pub struct ApprovedExecSlotV1 {
     pub proof_id: Id128V1,
     pub claim_slot_id: Id128V1,
@@ -673,7 +707,9 @@ pub struct PendingAdministrativeMatchV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
+)]
 pub struct ExactExecutableCandidateV1 {
     pub inode: u64,
     pub mount_namespace_inode: u32,
@@ -683,7 +719,9 @@ pub struct ExactExecutableCandidateV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct ImageProvenanceV1 {
     pub image_provenance_id: Id128V1,
     pub candidate_count: u16,
@@ -695,7 +733,9 @@ pub struct ImageProvenanceV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct ProcessExecutionInstanceV1 {
     pub process_execution_instance_id: Id128V1,
     pub process_lineage_id: Id128V1,
@@ -749,7 +789,9 @@ pub struct TaskReferenceTombstoneV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct ExternalRootClassificationV1 {
     pub node_boot_id: Id128V1,
     pub label_epoch: u64,
@@ -772,7 +814,9 @@ pub struct ExternalRootClassificationV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
+)]
 pub struct IdentityRuntimeConfigV1 {
     pub node_boot_id: Id128V1,
     pub label_epoch: u64,
@@ -784,7 +828,9 @@ pub struct IdentityRuntimeConfigV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, FromBytes, Immutable, IntoBytes, KnownLayout, PartialEq,
+)]
 pub struct IdentityHealthV1 {
     pub allocation_failures: u64,
     pub coordinate_failures: u64,
@@ -799,6 +845,7 @@ mod tests {
     use std::mem::{align_of, offset_of, size_of};
 
     use super::*;
+    use crate::BindingLifecycleStateV1;
 
     #[test]
     fn phase2_identity_abi_has_stable_sizes_and_offsets() {
@@ -838,6 +885,27 @@ mod tests {
         assert_eq!(InitialRootStateV1::Unarmed as u64, 0);
         assert_eq!(InitialRootStateV1::Consumed as u64, 2);
         assert_eq!(TASK_REFERENCE_ALL_V1, 0b111);
+    }
+
+    #[test]
+    fn checked_decoders_reject_invalid_enum_values() {
+        let binding = ExecutionSetBindingStateV1 {
+            lifecycle_state: BindingLifecycleStateV1::Active,
+            initial_root_state: InitialRootStateV1::Available,
+            ..ExecutionSetBindingStateV1::default()
+        };
+        let mut binding_bytes = binding.as_bytes().to_vec();
+        binding_bytes[offset_of!(ExecutionSetBindingStateV1, lifecycle_state)] = u8::MAX;
+        assert!(ExecutionSetBindingStateV1::try_read_from_bytes(&binding_bytes).is_err());
+
+        let slot = ApprovedExecSlotV1 {
+            state: ApprovedExecSlotStateV1::Armed,
+            ..ApprovedExecSlotV1::default()
+        };
+        let mut slot_bytes = slot.as_bytes().to_vec();
+        let state_offset = offset_of!(ApprovedExecSlotV1, state);
+        slot_bytes[state_offset..state_offset + size_of::<u64>()].fill(u8::MAX);
+        assert!(ApprovedExecSlotV1::try_read_from_bytes(&slot_bytes).is_err());
     }
 
     #[test]

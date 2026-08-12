@@ -1,4 +1,4 @@
-use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 use super::Id128V1;
 
@@ -7,7 +7,9 @@ pub const MAX_CANONICAL_COMPONENT_BYTES_V1: usize = 255;
 pub const CANONICAL_COMPONENT_STORAGE_BYTES_V1: usize = 256;
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum MountTopologyStateV1 {
     #[default]
     Unknown = 0,
@@ -16,7 +18,9 @@ pub enum MountTopologyStateV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct MountSecurityViewStateV1 {
     pub topology_generation: u64,
     pub snapshot_digest_id: u64,

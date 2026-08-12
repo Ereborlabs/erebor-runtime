@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use libbpf_rs::{
-    Iter, Link, MapCore as _, MapFlags, MapHandle, Object, ObjectBuilder, OpenObject, Program,
+    Iter, Link, Map, MapCore as _, MapFlags, MapHandle, Object, ObjectBuilder, OpenObject, Program,
     ProgramHandle, ProgramType, RingBuffer, RingBufferBuilder,
 };
 use sha2::{Digest as _, Sha256};
@@ -332,9 +332,8 @@ impl KernelHostOwner {
             path: self.config.object_path(),
         })?;
 
-        let required_programs = self.config.object_kind.required_programs();
-        let mut links = Vec::with_capacity(required_programs.len());
-        let mut link_records = Vec::with_capacity(required_programs.len());
+        let mut links = Vec::new();
+        let mut link_records = Vec::new();
         for program in object.progs_mut() {
             let name = program.name().to_string_lossy().into_owned();
             let section = program.section().to_string_lossy();
@@ -822,9 +821,8 @@ impl KernelHost {
         &self.manifest
     }
 
-    pub fn update_map(&self, name: &str, key: &[u8], value: &[u8]) -> Result<()> {
-        let map = self
-            .object
+    fn map(&self, name: &str) -> Result<Map<'_>> {
+        self.object
             .maps()
             .find(|map| map.name().to_string_lossy() == name)
             .ok_or_else(|| {
@@ -833,7 +831,11 @@ impl KernelHost {
                     reason: "loaded object has no such map".to_owned(),
                 }
                 .build()
-            })?;
+            })
+    }
+
+    pub fn update_map(&self, name: &str, key: &[u8], value: &[u8]) -> Result<()> {
+        let map = self.map(name)?;
         map.update(key, value, MapFlags::ANY).context(LibbpfSnafu {
             action: "update BPF map",
             path: Path::new(name),
@@ -841,17 +843,7 @@ impl KernelHost {
     }
 
     pub fn lookup_map(&self, name: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        let map = self
-            .object
-            .maps()
-            .find(|map| map.name().to_string_lossy() == name)
-            .ok_or_else(|| {
-                ManifestMismatchSnafu {
-                    path: PathBuf::from(name),
-                    reason: "loaded object has no such map".to_owned(),
-                }
-                .build()
-            })?;
+        let map = self.map(name)?;
         if map.map_type().is_percpu() {
             map.lookup_percpu(key, MapFlags::ANY)
                 .map(|values| values.map(|values| values.concat()))
@@ -868,17 +860,7 @@ impl KernelHost {
     }
 
     pub fn delete_map_entry(&self, name: &str, key: &[u8]) -> Result<()> {
-        let map = self
-            .object
-            .maps()
-            .find(|map| map.name().to_string_lossy() == name)
-            .ok_or_else(|| {
-                ManifestMismatchSnafu {
-                    path: PathBuf::from(name),
-                    reason: "loaded object has no such map".to_owned(),
-                }
-                .build()
-            })?;
+        let map = self.map(name)?;
         map.delete(key).context(LibbpfSnafu {
             action: "delete BPF map entry",
             path: Path::new(name),
@@ -886,17 +868,7 @@ impl KernelHost {
     }
 
     pub fn map_keys(&self, name: &str) -> Result<Vec<Vec<u8>>> {
-        let map = self
-            .object
-            .maps()
-            .find(|map| map.name().to_string_lossy() == name)
-            .ok_or_else(|| {
-                ManifestMismatchSnafu {
-                    path: PathBuf::from(name),
-                    reason: "loaded object has no such map".to_owned(),
-                }
-                .build()
-            })?;
+        let map = self.map(name)?;
         Ok(map.keys().collect())
     }
 

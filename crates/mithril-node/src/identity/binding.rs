@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::mem::{offset_of, size_of};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 
@@ -11,7 +10,7 @@ use erebor_interceptor_abi::{
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
 use uuid::Uuid;
-use zerocopy::IntoBytes as _;
+use zerocopy::{FromBytes as _, IntoBytes as _, TryFromBytes as _};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu};
 use crate::{ContainerRuntimeConfig, Result, WorkloadBindingConfig};
@@ -110,7 +109,6 @@ impl WorkloadBindingOwner {
     ) -> Result<()> {
         for spec in configured {
             let mut binding = self.prepare(spec)?;
-            binding.validate_live_cgroup()?;
             ensure!(
                 !self.bindings.contains_key(&binding.root_cgroup_id)
                     && !self.bindings.values().any(|installed| {
@@ -146,55 +144,32 @@ impl WorkloadBindingOwner {
                 .context(InterceptorSnafu)?;
             let mut resume_preparing = false;
             if let Some(existing) = existing.as_deref() {
+                let recovered = execution_set_binding_state(existing)?;
                 ensure!(
-                    existing.len() == size_of::<ExecutionSetBindingStateV1>(),
-                    IdentityStateSnafu {
-                        reason: "recovered execution-set binding has the wrong ABI size".to_owned(),
-                    }
-                );
-                let initial_root_state = read_u64(
-                    existing,
-                    offset_of!(ExecutionSetBindingStateV1, initial_root_state),
-                )?;
-                binding.state.binding_nonce = read_id(
-                    existing,
-                    offset_of!(ExecutionSetBindingStateV1, binding_nonce),
-                )?;
-                ensure!(
-                    !binding.state.binding_nonce.is_zero(),
+                    !recovered.binding_nonce.is_zero(),
                     IdentityStateSnafu {
                         reason: "recovered binding has a zero nonce",
                     }
                 );
-                binding.state.initial_root_state = InitialRootStateV1::from_raw(initial_root_state)
-                    .context(IdentityStateSnafu {
-                        reason: "recovered binding has an invalid initial-root state",
-                    })?;
-                binding.state.transition_version = read_u64(
-                    existing,
-                    offset_of!(ExecutionSetBindingStateV1, transition_version),
-                )?;
-                binding.state.lifecycle_state =
-                    match existing[offset_of!(ExecutionSetBindingStateV1, lifecycle_state)] {
-                        value if value == BindingLifecycleStateV1::Preparing as u8 => {
-                            resume_preparing = true;
-                            BindingLifecycleStateV1::Preparing
-                        }
-                        value if value == BindingLifecycleStateV1::Active as u8 => {
-                            BindingLifecycleStateV1::Active
-                        }
-                        _ => {
-                            return IdentityStateSnafu {
-                                reason: format!(
-                                    "recovered binding `{}` is not preparing or active",
-                                    spec.binding_id
-                                ),
-                            }
-                            .fail()
-                        }
-                    };
+                resume_preparing = recovered.lifecycle_state == BindingLifecycleStateV1::Preparing;
                 ensure!(
-                    existing == binding.state.as_bytes(),
+                    matches!(
+                        recovered.lifecycle_state,
+                        BindingLifecycleStateV1::Preparing | BindingLifecycleStateV1::Active
+                    ),
+                    IdentityStateSnafu {
+                        reason: format!(
+                            "recovered binding `{}` is not preparing or active",
+                            spec.binding_id
+                        ),
+                    }
+                );
+                binding.state.binding_nonce = recovered.binding_nonce;
+                binding.state.initial_root_state = recovered.initial_root_state;
+                binding.state.transition_version = recovered.transition_version;
+                binding.state.lifecycle_state = recovered.lifecycle_state;
+                ensure!(
+                    recovered == binding.state,
                     IdentityStateSnafu {
                         reason: format!(
                             "recovered binding `{}` differs from live runtime identity",
@@ -218,12 +193,14 @@ impl WorkloadBindingOwner {
                 }
             );
             if let Some(task_refs) = profile_task_refs {
-                ensure!(
-                    task_refs.len() == size_of::<u64>(),
+                let _task_refs = u64::read_from_bytes(&task_refs).map_err(|error| {
                     IdentityStateSnafu {
-                        reason: "profile-generation task reference count has the wrong ABI size",
+                        reason: format!(
+                            "profile-generation task reference count has an invalid ABI value: {error}"
+                        ),
                     }
-                );
+                    .build()
+                })?;
             } else {
                 host.update_map(
                     "profile_generation_task_refs",
@@ -541,56 +518,49 @@ impl WorkloadBindingOwner {
             .map_keys("execution_set_bindings")
             .context(InterceptorSnafu)?
         {
-            let root_id = read_u64(&key, 0)?;
+            let root_id = u64::read_from_bytes(&key).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("execution-set binding key has an invalid ABI value: {error}"),
+                }
+                .build()
+            })?;
             if self.bindings.contains_key(&root_id) {
                 continue;
             }
-            let Some(mut value) = host
+            let Some(value) = host
                 .lookup_map("execution_set_bindings", &key)
                 .context(InterceptorSnafu)?
             else {
                 continue;
             };
-            ensure!(
-                value.len() == size_of::<ExecutionSetBindingStateV1>(),
-                IdentityStateSnafu {
-                    reason: "stale execution-set binding has the wrong ABI size",
-                }
-            );
-            let lifecycle_offset = offset_of!(ExecutionSetBindingStateV1, lifecycle_state);
+            let mut value = execution_set_binding_state(&value)?;
             if matches!(
-                value[lifecycle_offset],
-                value if value == BindingLifecycleStateV1::Terminating as u8
-                    || value == BindingLifecycleStateV1::Tombstoned as u8
+                value.lifecycle_state,
+                BindingLifecycleStateV1::Terminating | BindingLifecycleStateV1::Tombstoned
             ) {
                 continue;
             }
             ensure!(
                 matches!(
-                    value[lifecycle_offset],
-                    value if value == BindingLifecycleStateV1::Preparing as u8
-                        || value == BindingLifecycleStateV1::Active as u8
-                        || value == BindingLifecycleStateV1::Draining as u8
+                    value.lifecycle_state,
+                    BindingLifecycleStateV1::Preparing
+                        | BindingLifecycleStateV1::Active
+                        | BindingLifecycleStateV1::Draining
                 ),
                 IdentityStateSnafu {
                     reason: "stale execution-set binding has an invalid lifecycle state",
                 }
             );
-            value[lifecycle_offset] = BindingLifecycleStateV1::Terminating as u8;
-            value[offset_of!(ExecutionSetBindingStateV1, initial_root_state)
-                ..offset_of!(ExecutionSetBindingStateV1, initial_root_state) + 8]
-                .copy_from_slice(&(InitialRootStateV1::Consumed as u64).to_ne_bytes());
-            let version_offset = offset_of!(ExecutionSetBindingStateV1, transition_version);
-            let version = read_u64(&value, version_offset)?
-                .checked_add(1)
-                .ok_or_else(|| {
+            value.lifecycle_state = BindingLifecycleStateV1::Terminating;
+            value.initial_root_state = InitialRootStateV1::Consumed;
+            value.transition_version =
+                value.transition_version.checked_add(1).ok_or_else(|| {
                     IdentityStateSnafu {
                         reason: "stale binding transition version overflowed".to_owned(),
                     }
                     .build()
                 })?;
-            value[version_offset..version_offset + 8].copy_from_slice(&version.to_ne_bytes());
-            host.update_map("execution_set_bindings", &key, &value)
+            host.update_map("execution_set_bindings", &key, value.as_bytes())
                 .context(InterceptorSnafu)?;
         }
         Ok(())
@@ -638,24 +608,13 @@ fn derive_id(parts: &[&[u8]]) -> Id128V1 {
     }
 }
 
-fn read_u64(value: &[u8], offset: usize) -> Result<u64> {
-    let bytes = value
-        .get(offset..offset + size_of::<u64>())
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "recovered binding value is truncated".to_owned(),
-            }
-            .build()
-        })?;
-    Ok(u64::from_ne_bytes(bytes))
-}
-
-fn read_id(value: &[u8], offset: usize) -> Result<Id128V1> {
-    Ok(Id128V1::new(
-        read_u64(value, offset)?,
-        read_u64(value, offset + size_of::<u64>())?,
-    ))
+fn execution_set_binding_state(bytes: &[u8]) -> Result<ExecutionSetBindingStateV1> {
+    ExecutionSetBindingStateV1::try_read_from_bytes(bytes).map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("execution-set binding has an invalid ABI value: {error}"),
+        }
+        .build()
+    })
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
-use std::mem::{offset_of, size_of};
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::PathBuf;
 
@@ -23,7 +22,7 @@ use mithril_control::{
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
 use uuid::Uuid;
-use zerocopy::IntoBytes as _;
+use zerocopy::{FromBytes as _, IntoBytes as _, KnownLayout, TryFromBytes};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, PolicySnafu};
 use crate::{ExactFileObjectConfig, NodeConfig, Result, WorkloadBindingConfig};
@@ -153,7 +152,7 @@ impl NodePolicyGenerationOwner {
         let key = root.mount_namespace_inode.to_ne_bytes();
         let state = mount_view_state(host, &key)?;
         let epoch = mount_epoch(host, &key)?;
-        if state.state == MountTopologyStateV1::Clean as u8
+        if state.state == MountTopologyStateV1::Clean
             && state.topology_generation == epoch
             && state.pending_mutations == 0
         {
@@ -163,7 +162,7 @@ impl NodePolicyGenerationOwner {
             return Ok(());
         }
         ensure!(
-            state.state == MountTopologyStateV1::Dirty as u8,
+            state.state == MountTopologyStateV1::Dirty,
             IdentityStateSnafu {
                 reason: "mount security view is neither CLEAN nor DIRTY",
             }
@@ -279,7 +278,7 @@ struct MountViewSnapshot {
     topology_generation: u64,
     pending_mutations: u64,
     transition_version: u64,
-    state: u8,
+    state: MountTopologyStateV1,
 }
 
 fn same_exact_file(left: &ExactFileObjectConfig, right: &ExactFileObjectConfig) -> bool {
@@ -808,51 +807,42 @@ fn verify_rows(host: &KernelHost, map: &str, rows: &BTreeMap<Vec<u8>, Vec<u8>>) 
 }
 
 fn install_exception_rows(host: &KernelHost, rows: &BTreeMap<Vec<u8>, Vec<u8>>) -> Result<()> {
-    for (key, desired) in rows {
+    for (key, desired_bytes) in rows {
         let existing = host
             .lookup_map("exception_runtime_states", key)
             .context(InterceptorSnafu)?;
         if let Some(existing) = existing {
-            let maximum_uses =
-                native_u32_at(&existing, offset_of!(ExceptionRuntimeStateV1, maximum_uses))?;
-            let consumed_uses = native_u32_at(
+            let existing = read_abi_value::<ExceptionRuntimeStateV1>(
                 &existing,
-                offset_of!(ExceptionRuntimeStateV1, consumed_uses),
+                "existing exception runtime state",
             )?;
-            let state = existing
-                .get(offset_of!(ExceptionRuntimeStateV1, state))
-                .copied()
-                .unwrap_or_default();
+            let desired = read_abi_value::<ExceptionRuntimeStateV1>(
+                desired_bytes,
+                "signed exception runtime state",
+            )?;
             ensure!(
-                existing.len() == size_of::<ExceptionRuntimeStateV1>()
-                    && maximum_uses
-                        == native_u32_at(desired, offset_of!(ExceptionRuntimeStateV1, maximum_uses))?
-                    && native_u32_at(
-                        &existing,
-                        offset_of!(ExceptionRuntimeStateV1, exception_numeric_handle),
-                    )? == native_u32_at(
-                        desired,
-                        offset_of!(ExceptionRuntimeStateV1, exception_numeric_handle),
-                    )?
-                    && exception_counter_is_consistent(maximum_uses, consumed_uses, state)
-                    && native_u64_at(&existing, offset_of!(ExceptionRuntimeStateV1, deadline_boottime_ns))?
-                        <= native_u64_at(desired, offset_of!(ExceptionRuntimeStateV1, deadline_boottime_ns))?
-                    && native_u64_at(&existing, offset_of!(ExceptionRuntimeStateV1, transition_version))?
-                        > 0
-                    ,
+                existing.maximum_uses == desired.maximum_uses
+                    && existing.exception_numeric_handle == desired.exception_numeric_handle
+                    && exception_counter_is_consistent(
+                        existing.maximum_uses,
+                        existing.consumed_uses,
+                        existing.state,
+                    )
+                    && existing.deadline_boottime_ns <= desired.deadline_boottime_ns
+                    && existing.transition_version > 0,
                 IdentityStateSnafu {
                     reason: "existing exception runtime state is inconsistent with the signed generation",
                 }
             );
             continue;
         }
-        host.update_map("exception_runtime_states", key, desired)
+        host.update_map("exception_runtime_states", key, desired_bytes)
             .context(InterceptorSnafu)?;
         ensure!(
             host.lookup_map("exception_runtime_states", key)
                 .context(InterceptorSnafu)?
                 .as_ref()
-                == Some(desired),
+                == Some(desired_bytes),
             IdentityStateSnafu {
                 reason: "exception runtime state readback failed",
             }
@@ -861,13 +851,16 @@ fn install_exception_rows(host: &KernelHost, rows: &BTreeMap<Vec<u8>, Vec<u8>>) 
     Ok(())
 }
 
-const fn exception_counter_is_consistent(maximum_uses: u32, consumed_uses: u32, state: u8) -> bool {
+fn exception_counter_is_consistent(
+    maximum_uses: u32,
+    consumed_uses: u32,
+    state: ExceptionRuntimeStateKindV1,
+) -> bool {
     maximum_uses > 0
         && consumed_uses <= maximum_uses
-        && ((state == ExceptionRuntimeStateKindV1::Active as u8 && consumed_uses < maximum_uses)
-            || (state == ExceptionRuntimeStateKindV1::Exhausted as u8
-                && consumed_uses == maximum_uses)
-            || state == ExceptionRuntimeStateKindV1::Expired as u8)
+        && ((state == ExceptionRuntimeStateKindV1::Active && consumed_uses < maximum_uses)
+            || (state == ExceptionRuntimeStateKindV1::Exhausted && consumed_uses == maximum_uses)
+            || state == ExceptionRuntimeStateKindV1::Expired)
 }
 
 fn install_missing_rows(
@@ -906,21 +899,12 @@ fn mount_view_state(host: &KernelHost, key: &[u8]) -> Result<MountViewSnapshot> 
             }
             .build()
         })?;
-    ensure!(
-        bytes.len() == size_of::<MountSecurityViewStateV1>(),
-        IdentityStateSnafu {
-            reason: "mount security view has an invalid ABI size",
-        }
-    );
-    let topology_generation = offset_of!(MountSecurityViewStateV1, topology_generation);
-    let pending_mutations = offset_of!(MountSecurityViewStateV1, pending_mutations);
-    let state = offset_of!(MountSecurityViewStateV1, state);
-    let transition_version = offset_of!(MountSecurityViewStateV1, transition_version);
+    let state = read_abi_value::<MountSecurityViewStateV1>(&bytes, "mount security view")?;
     Ok(MountViewSnapshot {
-        topology_generation: native_u64(&bytes[topology_generation..topology_generation + 8])?,
-        pending_mutations: native_u64(&bytes[pending_mutations..pending_mutations + 8])?,
-        state: bytes[state],
-        transition_version: native_u64(&bytes[transition_version..transition_version + 8])?,
+        topology_generation: state.topology_generation,
+        pending_mutations: state.pending_mutations,
+        state: state.state,
+        transition_version: state.transition_version,
     })
 }
 
@@ -934,57 +918,21 @@ fn mount_epoch(host: &KernelHost, key: &[u8]) -> Result<u64> {
             }
             .build()
         })?;
-    native_u64(&bytes)
+    u64::read_from_bytes(&bytes).map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("mount mutation epoch has an invalid ABI value: {error}"),
+        }
+        .build()
+    })
 }
 
-fn native_u64(bytes: &[u8]) -> Result<u64> {
-    Ok(u64::from_ne_bytes(bytes.try_into().map_err(|error| {
+fn read_abi_value<T: KnownLayout + TryFromBytes>(bytes: &[u8], name: &str) -> Result<T> {
+    T::try_read_from_bytes(bytes).map_err(|error| {
         IdentityStateSnafu {
-            reason: format!("invalid native u64 map value: {error}"),
+            reason: format!("{name} has an invalid ABI value: {error}"),
         }
         .build()
-    })?))
-}
-
-fn native_u32_at(bytes: &[u8], offset: usize) -> Result<u32> {
-    let end = offset.checked_add(size_of::<u32>()).ok_or_else(|| {
-        IdentityStateSnafu {
-            reason: "native u32 offset overflow".to_owned(),
-        }
-        .build()
-    })?;
-    Ok(u32::from_ne_bytes(
-        bytes
-            .get(offset..end)
-            .ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "native u32 map field is truncated".to_owned(),
-                }
-                .build()
-            })?
-            .try_into()
-            .map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("invalid native u32 map field: {error}"),
-                }
-                .build()
-            })?,
-    ))
-}
-
-fn native_u64_at(bytes: &[u8], offset: usize) -> Result<u64> {
-    let end = offset.checked_add(size_of::<u64>()).ok_or_else(|| {
-        IdentityStateSnafu {
-            reason: "native u64 offset overflow".to_owned(),
-        }
-        .build()
-    })?;
-    native_u64(bytes.get(offset..end).ok_or_else(|| {
-        IdentityStateSnafu {
-            reason: "native u64 map field is truncated".to_owned(),
-        }
-        .build()
-    })?)
+    })
 }
 
 fn cell_matches_binding(key: &StaticDecisionKeyV1, binding: &WorkloadBindingConfig) -> bool {
@@ -1584,21 +1532,13 @@ mod tests {
     fn exception_counter_recovery_never_revives_or_overruns_a_budget() {
         use erebor_interceptor_abi::ExceptionRuntimeStateKindV1 as State;
 
-        assert!(exception_counter_is_consistent(2, 0, State::Active as u8));
-        assert!(exception_counter_is_consistent(2, 1, State::Active as u8));
-        assert!(exception_counter_is_consistent(
-            2,
-            2,
-            State::Exhausted as u8
-        ));
-        assert!(exception_counter_is_consistent(2, 1, State::Expired as u8));
-        assert!(!exception_counter_is_consistent(2, 2, State::Active as u8));
-        assert!(!exception_counter_is_consistent(
-            2,
-            1,
-            State::Exhausted as u8
-        ));
-        assert!(!exception_counter_is_consistent(2, 3, State::Expired as u8));
+        assert!(exception_counter_is_consistent(2, 0, State::Active));
+        assert!(exception_counter_is_consistent(2, 1, State::Active));
+        assert!(exception_counter_is_consistent(2, 2, State::Exhausted));
+        assert!(exception_counter_is_consistent(2, 1, State::Expired));
+        assert!(!exception_counter_is_consistent(2, 2, State::Active));
+        assert!(!exception_counter_is_consistent(2, 1, State::Exhausted));
+        assert!(!exception_counter_is_consistent(2, 3, State::Expired));
     }
 
     #[test]

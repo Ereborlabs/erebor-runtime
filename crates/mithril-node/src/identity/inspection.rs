@@ -1,4 +1,3 @@
-use std::mem::{offset_of, size_of};
 use std::os::fd::AsRawFd as _;
 use std::path::PathBuf;
 
@@ -12,6 +11,7 @@ use erebor_interceptor_abi::{
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
 use serde::Serialize;
 use snafu::{OptionExt as _, ResultExt as _};
+use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu, JsonSnafu};
 use crate::Result;
@@ -73,166 +73,103 @@ impl NativeIdentityInspector {
         else {
             return Ok(None);
         };
-        require_size::<TaskLabelV1>(&label, "task label")?;
-        let task_cookie = read_u64(&label, offset_of!(TaskLabelV1, task_cookie), "task cookie")?;
-        let process_state_id = read_id(
-            &label,
-            offset_of!(TaskLabelV1, process_state_id),
-            "process state ID",
+        let label = read_abi_value::<TaskLabelV1>(&label, "task label")?;
+        let task_cookie = label.task_cookie;
+        let process_state_id = label.process_state_id;
+        let profile_generation_ref_id = label.birth_profile_generation_ref_id;
+        let process = self.required(
+            "process_states",
+            process_state_id.as_bytes(),
+            "process state",
         )?;
-        let profile_generation_ref_id = read_u64(
-            &label,
-            offset_of!(TaskLabelV1, birth_profile_generation_ref_id),
-            "profile generation reference",
-        )?;
-        let process =
-            self.required("process_states", &id_key(process_state_id), "process state")?;
-        require_size::<ProcessSecurityStateV1>(&process, "process state")?;
+        let process = read_abi_value::<ProcessSecurityStateV1>(&process, "process state")?;
         let process_vector = self.required(
             "process_state_vectors",
-            &id_key(process_state_id),
+            process_state_id.as_bytes(),
             "process state vector",
         )?;
-        require_size::<ProcessStateVectorV1>(&process_vector, "process state vector")?;
-        let active_execution_id = read_id(
-            &process,
-            offset_of!(ProcessSecurityStateV1, active_execution_id),
-            "active execution ID",
-        )?;
+        let process_vector =
+            read_abi_value::<ProcessStateVectorV1>(&process_vector, "process state vector")?;
+        let active_execution_id = process.active_execution_id;
         let execution = self.required(
             "process_execution_instances",
-            &id_key(active_execution_id),
+            active_execution_id.as_bytes(),
             "process execution",
         )?;
-        require_size::<ProcessExecutionInstanceV1>(&execution, "process execution")?;
-        let image_provenance_id = read_id(
-            &execution,
-            offset_of!(ProcessExecutionInstanceV1, image_provenance_id),
-            "image provenance ID",
-        )?;
+        let execution =
+            read_abi_value::<ProcessExecutionInstanceV1>(&execution, "process execution")?;
+        let image_provenance_id = execution.image_provenance_id;
         let image = self.required(
             "image_provenance",
-            &id_key(image_provenance_id),
+            image_provenance_id.as_bytes(),
             "image provenance",
         )?;
-        require_size::<ImageProvenanceV1>(&image, "image provenance")?;
+        let image = read_abi_value::<ImageProvenanceV1>(&image, "image provenance")?;
         let coordinate = self.required(
             "task_coordinates",
             &task_cookie.to_ne_bytes(),
             "task coordinate",
         )?;
-        require_size::<TaskCoordinateV1>(&coordinate, "task coordinate")?;
-        let real_parent_interval_sequence = read_u64(
-            &coordinate,
-            offset_of!(TaskCoordinateV1, real_parent_interval_sequence),
-            "real-parent interval sequence",
-        )?;
-        let mut real_parent_key = [0_u8; size_of::<KernelRealParentIntervalKeyV1>()];
-        real_parent_key[..8].copy_from_slice(&task_cookie.to_ne_bytes());
-        real_parent_key[8..].copy_from_slice(&real_parent_interval_sequence.to_ne_bytes());
+        let coordinate = read_abi_value::<TaskCoordinateV1>(&coordinate, "task coordinate")?;
+        let real_parent_interval_sequence = coordinate.real_parent_interval_sequence;
+        let real_parent_key = KernelRealParentIntervalKeyV1 {
+            child_task_cookie: task_cookie,
+            interval_sequence: real_parent_interval_sequence,
+        };
         let real_parent = self.required(
             "kernel_real_parent_intervals",
-            &real_parent_key,
+            real_parent_key.as_bytes(),
             "kernel real-parent interval",
         )?;
-        require_size::<KernelRealParentIntervalV1>(&real_parent, "kernel real-parent interval")?;
+        let real_parent = read_abi_value::<KernelRealParentIntervalV1>(
+            &real_parent,
+            "kernel real-parent interval",
+        )?;
         let creator_task_cookie = self
             .state
             .lookup("created_by_edges", &task_cookie.to_ne_bytes())
             .context(InterceptorSnafu)?
             .map(|edge| {
-                require_size::<CreatedByEdgeV1>(&edge, "created-by edge")?;
-                read_u64(
-                    &edge,
-                    offset_of!(CreatedByEdgeV1, creator_task_cookie),
-                    "creator task cookie",
-                )
+                read_abi_value::<CreatedByEdgeV1>(&edge, "created-by edge")
+                    .map(|edge| edge.creator_task_cookie)
             })
             .transpose()?;
         let classification = self
             .state
             .lookup("external_root_classifications", &task_cookie.to_ne_bytes())
-            .context(InterceptorSnafu)?;
-        let (root_class, installed_role_class) = match classification {
-            Some(classification) => {
-                require_size::<ExternalRootClassificationV1>(
+            .context(InterceptorSnafu)?
+            .map(|classification| {
+                read_abi_value::<ExternalRootClassificationV1>(
                     &classification,
                     "external-root classification",
-                )?;
-                (
-                    Some(root_class_name(read_u8(
-                        &classification,
-                        offset_of!(ExternalRootClassificationV1, root_class),
-                        "external-root class",
-                    )?)?),
-                    Some(installed_role_class_name(read_u8(
-                        &classification,
-                        offset_of!(ExternalRootClassificationV1, installed_role_class),
-                        "installed role class",
-                    )?)?),
                 )
-            }
-            None => (None, None),
-        };
+            })
+            .transpose()?;
+        let (root_class, installed_role_class) = classification.map_or((None, None), |value| {
+            (
+                Some(root_class_name(value.root_class)),
+                Some(installed_role_class_name(value.installed_role_class)),
+            )
+        });
         Ok(Some(NativeTaskSnapshotV1 {
             task_cookie,
             creator_task_cookie,
             root_class,
             installed_role_class,
-            real_parent_task_cookie: read_u64(
-                &real_parent,
-                offset_of!(KernelRealParentIntervalV1, real_parent_task_cookie),
-                "real-parent task cookie",
-            )?,
+            real_parent_task_cookie: real_parent.real_parent_task_cookie,
             real_parent_interval_sequence,
             process_state_id: id_string(process_state_id),
             active_execution_id: id_string(active_execution_id),
             image_provenance_id: id_string(image_provenance_id),
-            image_candidate_count: read_u16(
-                &image,
-                offset_of!(ImageProvenanceV1, candidate_count),
-                "image candidate count",
-            )?,
-            process_execution_state: read_u8(
-                &execution,
-                offset_of!(ProcessExecutionInstanceV1, state),
-                "process execution state",
-            )?,
-            process_state_vector_state: read_u8(
-                &process_vector,
-                offset_of!(ProcessStateVectorV1, state),
-                "process state vector state",
-            )?,
-            process_state_bits: read_u64(
-                &process_vector,
-                offset_of!(ProcessStateVectorV1, state_bits),
-                "process state bits",
-            )?,
-            active_role_id: read_u32(
-                &process,
-                offset_of!(ProcessSecurityStateV1, active_role_id),
-                "active role ID",
-            )?,
-            host_tid: read_u32(
-                &coordinate,
-                offset_of!(TaskCoordinateV1, host_tid),
-                "host TID",
-            )?,
-            host_tgid: read_u32(
-                &coordinate,
-                offset_of!(TaskCoordinateV1, host_tgid),
-                "host TGID",
-            )?,
-            coordinate_state: read_u8(
-                &coordinate,
-                offset_of!(TaskCoordinateV1, state),
-                "coordinate state",
-            )?,
-            exec_guard_state: read_u8(
-                &process,
-                offset_of!(ProcessSecurityStateV1, exec_guard_state),
-                "exec guard state",
-            )?,
+            image_candidate_count: image.candidate_count,
+            process_execution_state: execution.state as u8,
+            process_state_vector_state: process_vector.state as u8,
+            process_state_bits: process_vector.state_bits,
+            active_role_id: process.active_role_id,
+            host_tid: coordinate.host_tid,
+            host_tgid: coordinate.host_tgid,
+            coordinate_state: coordinate.state as u8,
+            exec_guard_state: process.exec_guard_state as u8,
             profile_generation_ref_id,
         }))
     }
@@ -256,111 +193,36 @@ impl NativeIdentityInspector {
     }
 }
 
-fn require_size<T>(bytes: &[u8], name: &str) -> Result<()> {
-    if bytes.len() < size_of::<T>() {
-        return IdentityStateSnafu {
-            reason: format!("{name} is truncated"),
+fn read_abi_value<T: KnownLayout + TryFromBytes>(bytes: &[u8], name: &str) -> Result<T> {
+    T::try_read_from_bytes(bytes).map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("{name} has an invalid ABI value: {error}"),
         }
-        .fail();
-    }
-    Ok(())
-}
-
-fn read_u64(bytes: &[u8], offset: usize, name: &str) -> Result<u64> {
-    let value = bytes
-        .get(offset..offset + size_of::<u64>())
-        .and_then(|value| value.try_into().ok())
-        .context(IdentityStateSnafu {
-            reason: format!("{name} is truncated"),
-        })?;
-    Ok(u64::from_ne_bytes(value))
-}
-
-fn read_u32(bytes: &[u8], offset: usize, name: &str) -> Result<u32> {
-    let value = bytes
-        .get(offset..offset + size_of::<u32>())
-        .and_then(|value| value.try_into().ok())
-        .context(IdentityStateSnafu {
-            reason: format!("{name} is truncated"),
-        })?;
-    Ok(u32::from_ne_bytes(value))
-}
-
-fn read_u16(bytes: &[u8], offset: usize, name: &str) -> Result<u16> {
-    let value = bytes
-        .get(offset..offset + size_of::<u16>())
-        .and_then(|value| value.try_into().ok())
-        .context(IdentityStateSnafu {
-            reason: format!("{name} is truncated"),
-        })?;
-    Ok(u16::from_ne_bytes(value))
-}
-
-fn read_u8(bytes: &[u8], offset: usize, name: &str) -> Result<u8> {
-    bytes.get(offset).copied().context(IdentityStateSnafu {
-        reason: format!("{name} is truncated"),
+        .build()
     })
-}
-
-fn read_id(bytes: &[u8], offset: usize, name: &str) -> Result<Id128V1> {
-    Ok(Id128V1::new(
-        read_u64(bytes, offset, name)?,
-        read_u64(bytes, offset + size_of::<u64>(), name)?,
-    ))
-}
-
-fn id_key(id: Id128V1) -> [u8; 16] {
-    let mut bytes = [0_u8; 16];
-    bytes[..8].copy_from_slice(&id.high.to_ne_bytes());
-    bytes[8..].copy_from_slice(&id.low.to_ne_bytes());
-    bytes
 }
 
 fn id_string(id: Id128V1) -> String {
     format!("{:016x}{:016x}", id.high, id.low)
 }
 
-fn root_class_name(value: u8) -> Result<&'static str> {
+fn root_class_name(value: ExternalRootClassV1) -> &'static str {
     match value {
-        value if value == ExternalRootClassV1::InitialContainerRoot as u8 => {
-            Ok("initial_container_root")
-        }
-        value if value == ExternalRootClassV1::ExternalRuntimeRoot as u8 => {
-            Ok("external_runtime_root")
-        }
-        value if value == ExternalRootClassV1::RestoredOrUnknownRoot as u8 => {
-            Ok("restored_or_unknown_root")
-        }
-        value if value == ExternalRootClassV1::UnresolvedProtected as u8 => {
-            Ok("unresolved_protected")
-        }
-        value if value == ExternalRootClassV1::Unknown as u8 => Ok("unknown"),
-        value => IdentityStateSnafu {
-            reason: format!("external-root class {value} is invalid"),
-        }
-        .fail(),
+        ExternalRootClassV1::InitialContainerRoot => "initial_container_root",
+        ExternalRootClassV1::ExternalRuntimeRoot => "external_runtime_root",
+        ExternalRootClassV1::RestoredOrUnknownRoot => "restored_or_unknown_root",
+        ExternalRootClassV1::UnresolvedProtected => "unresolved_protected",
+        ExternalRootClassV1::Unknown => "unknown",
     }
 }
 
-fn installed_role_class_name(value: u8) -> Result<&'static str> {
+fn installed_role_class_name(value: InstalledRoleClassV1) -> &'static str {
     match value {
-        value if value == InstalledRoleClassV1::InitialRole as u8 => Ok("initial_role"),
-        value if value == InstalledRoleClassV1::RuntimeExternalRestricted as u8 => {
-            Ok("runtime_external_restricted")
-        }
-        value if value == InstalledRoleClassV1::FailClosedUnknown as u8 => {
-            Ok("fail_closed_unknown")
-        }
-        value if value == InstalledRoleClassV1::QualifiedRegisteredRole as u8 => {
-            Ok("qualified_registered_role")
-        }
-        value if value == InstalledRoleClassV1::ApprovedAdministrativeRole as u8 => {
-            Ok("approved_administrative_role")
-        }
-        value if value == InstalledRoleClassV1::Unknown as u8 => Ok("unknown"),
-        value => IdentityStateSnafu {
-            reason: format!("installed role class {value} is invalid"),
-        }
-        .fail(),
+        InstalledRoleClassV1::InitialRole => "initial_role",
+        InstalledRoleClassV1::RuntimeExternalRestricted => "runtime_external_restricted",
+        InstalledRoleClassV1::FailClosedUnknown => "fail_closed_unknown",
+        InstalledRoleClassV1::QualifiedRegisteredRole => "qualified_registered_role",
+        InstalledRoleClassV1::ApprovedAdministrativeRole => "approved_administrative_role",
+        InstalledRoleClassV1::Unknown => "unknown",
     }
 }

@@ -15,6 +15,7 @@ pub use path::*;
     zerocopy::Immutable,
     zerocopy::IntoBytes,
     zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
 )]
 pub enum BindingLifecycleStateV1 {
     #[default]
@@ -37,6 +38,7 @@ pub enum BindingLifecycleStateV1 {
     zerocopy::Immutable,
     zerocopy::IntoBytes,
     zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
 )]
 pub enum PhysicalDecisionKindV1 {
     #[default]
@@ -207,6 +209,7 @@ pub struct ExceptionRuntimeStateKeyV1 {
     zerocopy::Immutable,
     zerocopy::IntoBytes,
     zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
 )]
 pub enum ExceptionRuntimeStateKindV1 {
     #[default]
@@ -228,6 +231,7 @@ pub enum ExceptionRuntimeStateKindV1 {
     zerocopy::Immutable,
     zerocopy::IntoBytes,
     zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
 )]
 pub struct ExceptionRuntimeStateV1 {
     /// Zero-initialized storage used as `struct bpf_spin_lock` by BPF.

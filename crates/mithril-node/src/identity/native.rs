@@ -1,10 +1,10 @@
-use std::mem::{offset_of, size_of};
+use std::mem::size_of;
 
 use erebor_interceptor::KernelHost;
 use erebor_interceptor_abi::{Id128V1, IdentityHealthV1, IdentityRuntimeConfigV1};
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
-use zerocopy::IntoBytes as _;
+use zerocopy::{FromBytes as _, IntoBytes as _};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu};
 use crate::Result;
@@ -61,20 +61,22 @@ impl NativeSecurityStateOwner {
                 }
                 .build()
             })?;
-        ensure!(
-            existing.len() == size_of::<IdentityRuntimeConfigV1>(),
-            IdentityStateSnafu {
-                reason: format!("identity config map returned {} bytes", existing.len()),
-            }
-        );
-        if existing.iter().all(|byte| *byte == 0) {
+        let write_config = if existing.iter().all(|byte| *byte == 0) {
+            true
+        } else {
+            recover_config(
+                IdentityRuntimeConfigV1::read_from_bytes(&existing).map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("identity config map has an invalid ABI value: {error}"),
+                    }
+                    .build()
+                })?,
+                &mut config,
+            )?
+        };
+        if write_config {
             host.update_map("identity_config", &key, config.as_bytes())
                 .context(InterceptorSnafu)?;
-        } else {
-            if recover_config(&existing, &mut config)? {
-                host.update_map("identity_config", &key, config.as_bytes())
-                    .context(InterceptorSnafu)?;
-            }
         }
         host.reconcile_tasks().context(InterceptorSnafu)?;
         let report = self.health(host)?;
@@ -99,35 +101,47 @@ impl NativeSecurityStateOwner {
                 }
                 .build()
             })?;
-        ensure!(
-            !bytes.is_empty() && bytes.len() % size_of::<IdentityHealthV1>() == 0,
-            IdentityStateSnafu {
-                reason: format!("identity health map returned {} bytes", bytes.len()),
-            }
-        );
-        let mut report = ReconciliationReportV1::default();
-        for value in bytes.chunks_exact(size_of::<IdentityHealthV1>()) {
-            report.allocation_failures += read_u64(value, 0)?;
-            report.coordinate_failures += read_u64(value, 8)?;
-            report.placement_mismatches += read_u64(value, 16)?;
-            report.missing_identity_denials += read_u64(value, 24)?;
-            report.exec_guard_denials += read_u64(value, 32)?;
-            report.reconciliation_required += read_u64(value, 40)?;
-        }
-        Ok(report)
+        aggregate_health(&bytes)
     }
 }
 
-fn recover_config(existing: &[u8], desired: &mut IdentityRuntimeConfigV1) -> Result<bool> {
-    desired.next_id = read_u64(existing, offset_of!(IdentityRuntimeConfigV1, next_id))?;
-    let policy = offset_of!(IdentityRuntimeConfigV1, effect_policy_enabled);
+fn aggregate_health(bytes: &[u8]) -> Result<ReconciliationReportV1> {
+    ensure!(
+        !bytes.is_empty() && bytes.len().is_multiple_of(size_of::<IdentityHealthV1>()),
+        IdentityStateSnafu {
+            reason: format!("identity health map returned {} bytes", bytes.len()),
+        }
+    );
+    let mut report = ReconciliationReportV1::default();
+    for value in bytes.chunks_exact(size_of::<IdentityHealthV1>()) {
+        let value = IdentityHealthV1::read_from_bytes(value).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("identity health map has an invalid ABI value: {error}"),
+            }
+            .build()
+        })?;
+        report.allocation_failures += value.allocation_failures;
+        report.coordinate_failures += value.coordinate_failures;
+        report.placement_mismatches += value.placement_mismatches;
+        report.missing_identity_denials += value.missing_identity_denials;
+        report.exec_guard_denials += value.exec_guard_denials;
+        report.reconciliation_required += value.reconciliation_required;
+    }
+    Ok(report)
+}
+
+fn recover_config(
+    existing: IdentityRuntimeConfigV1,
+    desired: &mut IdentityRuntimeConfigV1,
+) -> Result<bool> {
+    desired.next_id = existing.next_id;
     let mut recovered = *desired;
-    recovered.effect_policy_enabled = existing.get(policy).copied().unwrap_or(u8::MAX);
+    recovered.effect_policy_enabled = existing.effect_policy_enabled;
     let enables_policy = recovered.effect_policy_enabled == 0 && desired.effect_policy_enabled == 1;
     ensure!(
         desired.next_id > 0
             && recovered.effect_policy_enabled <= 1
-            && existing == recovered.as_bytes()
+            && existing == recovered
             && (recovered.effect_policy_enabled == desired.effect_policy_enabled || enables_policy),
         IdentityStateSnafu {
             reason: "recovered identity allocator has a different boot, epoch, or configuration"
@@ -137,31 +151,23 @@ fn recover_config(existing: &[u8], desired: &mut IdentityRuntimeConfigV1) -> Res
     Ok(enables_policy)
 }
 
-fn read_u64(value: &[u8], offset: usize) -> Result<u64> {
-    let bytes = value
-        .get(offset..offset + size_of::<u64>())
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "identity health value is truncated".to_owned(),
-            }
-            .build()
-        })?;
-    Ok(u64::from_ne_bytes(bytes))
-}
-
 #[cfg(test)]
 mod tests {
-    use erebor_interceptor_abi::IdentityRuntimeConfigV1;
+    use erebor_interceptor_abi::{IdentityHealthV1, IdentityRuntimeConfigV1};
     use zerocopy::IntoBytes as _;
 
-    use super::{read_u64, recover_config};
+    use super::{aggregate_health, recover_config};
 
     #[test]
     fn health_values_use_native_kernel_layout() -> crate::Result<()> {
-        let mut bytes = [0_u8; 48];
-        bytes[40..48].copy_from_slice(&9_u64.to_ne_bytes());
-        assert_eq!(read_u64(&bytes, 40)?, 9);
+        let report = aggregate_health(
+            IdentityHealthV1 {
+                reconciliation_required: 9,
+                ..IdentityHealthV1::default()
+            }
+            .as_bytes(),
+        )?;
+        assert_eq!(report.reconciliation_required, 9);
         Ok(())
     }
 
@@ -177,7 +183,7 @@ mod tests {
         desired.effect_policy_enabled = 1;
         desired.next_id = 1;
 
-        assert!(recover_config(existing.as_bytes(), &mut desired)?);
+        assert!(recover_config(existing, &mut desired)?);
         assert_eq!(desired.next_id, 19);
         assert_eq!(desired.effect_policy_enabled, 1);
         Ok(())
@@ -194,7 +200,7 @@ mod tests {
         let mut desired = existing;
         desired.first_effect_errno = -13;
 
-        assert!(recover_config(existing.as_bytes(), &mut desired).is_err());
+        assert!(recover_config(existing, &mut desired).is_err());
     }
 
     #[test]
@@ -208,6 +214,6 @@ mod tests {
         let mut desired = existing;
         desired.effect_policy_enabled = 0;
 
-        assert!(recover_config(existing.as_bytes(), &mut desired).is_err());
+        assert!(recover_config(existing, &mut desired).is_err());
     }
 }

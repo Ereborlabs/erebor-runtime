@@ -1,7 +1,6 @@
 mod replay;
 
 use std::collections::BTreeSet;
-use std::mem::{offset_of, size_of};
 use std::path::Path;
 
 use ed25519_dalek::{Signature, VerifyingKey};
@@ -16,7 +15,7 @@ use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
 
 use self::replay::{AcceptedProof, ReplayKey, ReplayLedger};
-use zerocopy::IntoBytes as _;
+use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
 
 use crate::error::{AuthorizationSnafu, InterceptorSnafu};
 use crate::Result;
@@ -273,38 +272,24 @@ impl AuthorizationProofOwner {
             .map_keys("approved_exec_slots")
             .context(InterceptorSnafu)?
         {
-            ensure!(
-                key.len() == size_of::<ApprovedExecSlotKeyV1>(),
-                AuthorizationSnafu {
-                    reason: "administrative slot map returned a malformed key",
-                }
-            );
-            let Some(mut value) = host
+            let slot_key =
+                read_abi_value::<ApprovedExecSlotKeyV1>(&key, "administrative slot key")?;
+            let Some(value) = host
                 .lookup_map("approved_exec_slots", &key)
                 .context(InterceptorSnafu)?
             else {
                 continue;
             };
-            ensure!(
-                value.len() == size_of::<ApprovedExecSlotV1>(),
-                AuthorizationSnafu {
-                    reason: "administrative slot map returned a malformed value",
-                }
-            );
-            let state = read_slot_u64(&value, offset_of!(ApprovedExecSlotV1, state))?;
-            let proof_id = read_slot_id(&value, offset_of!(ApprovedExecSlotV1, proof_id))?;
-            let claim_slot_id =
-                read_slot_id(&value, offset_of!(ApprovedExecSlotV1, claim_slot_id))?;
-            let argument_keys = administrative_argument_keys_from_slot_bytes(&value)?;
-            value[offset_of!(ApprovedExecSlotV1, state)
-                ..offset_of!(ApprovedExecSlotV1, state) + size_of::<u64>()]
-                .copy_from_slice(&(ApprovedExecSlotStateV1::Armed as u64).to_ne_bytes());
-            value[offset_of!(ApprovedExecSlotV1, transition_version)
-                ..offset_of!(ApprovedExecSlotV1, transition_version) + size_of::<u64>()]
-                .copy_from_slice(&1_u64.to_ne_bytes());
-            let intent_sha256 = administrative_slot_intent_sha256_bytes(&key, &value);
+            let mut slot = read_abi_value::<ApprovedExecSlotV1>(&value, "administrative slot")?;
+            let state = slot.state;
+            let proof_id = slot.proof_id;
+            let claim_slot_id = slot.claim_slot_id;
+            let argument_keys = administrative_argument_keys(slot.proof_id, &slot.expected_argv)?;
+            slot.state = ApprovedExecSlotStateV1::Armed;
+            slot.transition_version = 1;
+            let intent_sha256 = administrative_slot_intent_sha256(&slot_key, &slot);
             match state {
-                value if value == ApprovedExecSlotStateV1::Armed as u64 => {
+                ApprovedExecSlotStateV1::Armed => {
                     ensure!(
                         self.replay.armed_intent(claim_slot_id) == Some(intent_sha256),
                         AuthorizationSnafu {
@@ -315,24 +300,22 @@ impl AuthorizationProofOwner {
                     live_slots.insert(claim_slot_id);
                     live_proofs.insert(proof_id);
                 }
-                value if value == ApprovedExecSlotStateV1::Consumed as u64 => {
+                ApprovedExecSlotStateV1::Consumed => {
                     self.replay
                         .reconcile_consumed(proof_id, claim_slot_id, intent_sha256)?;
                     delete_administrative_arguments(host, &argument_keys)?;
                     host.delete_map_entry("approved_exec_slots", &key)
                         .context(InterceptorSnafu)?;
                 }
-                value
-                    if value == ApprovedExecSlotStateV1::Expired as u64
-                        || value == ApprovedExecSlotStateV1::Cancelled as u64
-                        || value == ApprovedExecSlotStateV1::Corrupt as u64 =>
-                {
+                ApprovedExecSlotStateV1::Expired
+                | ApprovedExecSlotStateV1::Cancelled
+                | ApprovedExecSlotStateV1::Corrupt => {
                     self.replay.close(proof_id, claim_slot_id, intent_sha256)?;
                     delete_administrative_arguments(host, &argument_keys)?;
                     host.delete_map_entry("approved_exec_slots", &key)
                         .context(InterceptorSnafu)?;
                 }
-                _ => {
+                ApprovedExecSlotStateV1::Unknown => {
                     return AuthorizationSnafu {
                         reason: "administrative slot is neither armed nor durably consumable"
                             .to_owned(),
@@ -345,13 +328,9 @@ impl AuthorizationProofOwner {
             .map_keys("approved_exec_arguments")
             .context(InterceptorSnafu)?
         {
-            ensure!(
-                key.len() == size_of::<ApprovedExecArgumentKeyV1>(),
-                AuthorizationSnafu {
-                    reason: "administrative argument map returned a malformed key",
-                }
-            );
-            if !live_proofs.contains(&read_slot_id(&key, 0)?) {
+            let argument =
+                read_abi_value::<ApprovedExecArgumentKeyV1>(&key, "administrative argument key")?;
+            if !live_proofs.contains(&argument.proof_id) {
                 host.delete_map_entry("approved_exec_arguments", &key)
                     .context(InterceptorSnafu)?;
             }
@@ -398,37 +377,6 @@ fn administrative_argument_keys(
     Ok(keys)
 }
 
-fn administrative_argument_keys_from_slot_bytes(
-    slot: &[u8],
-) -> Result<Vec<ApprovedExecArgumentKeyV1>> {
-    ensure!(
-        slot.len() == size_of::<ApprovedExecSlotV1>(),
-        AuthorizationSnafu {
-            reason: "administrative slot is truncated",
-        }
-    );
-    let argv_offset = offset_of!(ApprovedExecSlotV1, expected_argv);
-    let mut argv = BoundedAdministrativeArgvV1 {
-        argument_count: read_slot_u16(slot, argv_offset)?,
-        total_argument_bytes: read_slot_u16(slot, argv_offset + size_of::<u16>())?,
-        ..BoundedAdministrativeArgvV1::default()
-    };
-    let lengths_offset = argv_offset + 2 * size_of::<u16>();
-    for (index, length) in argv.argument_lengths.iter_mut().enumerate() {
-        *length = read_slot_u16(slot, lengths_offset + index * size_of::<u16>())?;
-    }
-    let bytes_offset = lengths_offset + size_of::<[u16; 256]>();
-    let argument_bytes_len = argv.argument_bytes.len();
-    argv.argument_bytes.copy_from_slice(
-        slot.get(bytes_offset..bytes_offset + argument_bytes_len)
-            .ok_or_else(|| authorization_error("administrative argv bytes are truncated"))?,
-    );
-    administrative_argument_keys(
-        read_slot_id(slot, offset_of!(ApprovedExecSlotV1, proof_id))?,
-        &argv,
-    )
-}
-
 fn ensure_administrative_arguments(
     host: &KernelHost,
     keys: &[ApprovedExecArgumentKeyV1],
@@ -468,38 +416,16 @@ fn administrative_slot_intent_sha256(
     key: &ApprovedExecSlotKeyV1,
     slot: &ApprovedExecSlotV1,
 ) -> [u8; 32] {
-    administrative_slot_intent_sha256_bytes(key.as_bytes(), slot.as_bytes())
-}
-
-fn administrative_slot_intent_sha256_bytes(key: &[u8], slot: &[u8]) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"MITHRIL-ADMINISTRATIVE-SLOT-V1\0");
-    digest.update(key);
-    digest.update(slot);
+    digest.update(key.as_bytes());
+    digest.update(slot.as_bytes());
     digest.finalize().into()
 }
 
-fn read_slot_u64(value: &[u8], offset: usize) -> Result<u64> {
-    let bytes = value
-        .get(offset..offset + size_of::<u64>())
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| authorization_error("administrative slot is truncated"))?;
-    Ok(u64::from_ne_bytes(bytes))
-}
-
-fn read_slot_u16(value: &[u8], offset: usize) -> Result<u16> {
-    let bytes = value
-        .get(offset..offset + size_of::<u16>())
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| authorization_error("administrative slot is truncated"))?;
-    Ok(u16::from_ne_bytes(bytes))
-}
-
-fn read_slot_id(value: &[u8], offset: usize) -> Result<Id128V1> {
-    Ok(Id128V1::new(
-        read_slot_u64(value, offset)?,
-        read_slot_u64(value, offset + size_of::<u64>())?,
-    ))
+fn read_abi_value<T: KnownLayout + TryFromBytes>(bytes: &[u8], name: &str) -> Result<T> {
+    T::try_read_from_bytes(bytes)
+        .map_err(|error| authorization_error(format!("{name} has an invalid ABI value: {error}")))
 }
 
 impl TrustBundleV1 {
@@ -1322,10 +1248,9 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{
-        administrative_argument_keys, administrative_argument_keys_from_slot_bytes,
-        authorization_error, cbor_error, validate_administrative_body, AuthorizationProofOwner,
-        AuthorizationTargetV1, IntentPayloadV1, IssuerTrustV1, TrustBundleV1,
-        ADMINISTRATIVE_EXEC_KIND, SIGNATURE_DOMAIN,
+        administrative_argument_keys, authorization_error, cbor_error, read_abi_value,
+        validate_administrative_body, AuthorizationProofOwner, AuthorizationTargetV1,
+        IntentPayloadV1, IssuerTrustV1, TrustBundleV1, ADMINISTRATIVE_EXEC_KIND, SIGNATURE_DOMAIN,
     };
     use erebor_interceptor_abi::{ApprovedExecSlotV1, BoundedAdministrativeArgvV1, Id128V1};
     use zerocopy::IntoBytes as _;
@@ -1670,10 +1595,11 @@ mod tests {
             expected_argv: argv,
             ..ApprovedExecSlotV1::default()
         };
+        let decoded = read_abi_value::<ApprovedExecSlotV1>(slot.as_bytes(), "test slot")?;
 
         assert_eq!(
             keys,
-            administrative_argument_keys_from_slot_bytes(slot.as_bytes())?
+            administrative_argument_keys(decoded.proof_id, &decoded.expected_argv)?
         );
         assert_eq!(keys.len(), 3);
         assert_eq!(keys[0].argument_index, 0);
