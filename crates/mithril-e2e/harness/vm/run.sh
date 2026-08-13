@@ -101,7 +101,8 @@ echo "Building the repository-owned physical probes and platform inspector"
   --bin mithril-identity-test --bin mithril-effect-test \
   --bin mithril-kernel-qualification \
   -p mithril-node --bin mithril-node --bin mithril-inspect \
-  -p mithril-control --bin mithril-policy)
+  -p mithril-control --bin mithril-control --bin mithril-policy \
+  --bin kubectl-mithril)
 
 qualification_build=$work_directory/kernel-qualification-build
 "$repo_root/target/debug/mithril-kernel-qualification" \
@@ -132,6 +133,10 @@ remote_bin=$remote_root/bin
   "$remote_bin/mithril-node"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-policy" \
   "$remote_bin/mithril-policy"
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-control" \
+  "$remote_bin/mithril-control"
+"$provider" put "$vm_name" "$repo_root/target/debug/kubectl-mithril" \
+  "$remote_bin/kubectl-mithril"
 "$provider" put "$vm_name" "$repo_root/target/debug/mithril-kernel-qualification" \
   "$remote_bin/mithril-kernel-qualification"
 "$provider" put "$vm_name" "$qualification_build/feasibility.bpf.o" \
@@ -170,6 +175,12 @@ if [[ $with_k3s == true ]]; then
     "$remote_root/harness/k3s-workload-v1.yaml"
   "$provider" put "$vm_name" "$directory/k3s-cri-effect-node-v1.json" \
     "$remote_root/harness/k3s-cri-effect-node-v1.json"
+  "$provider" put "$vm_name" "$directory/k3s-administrative-node-v1.json" \
+    "$remote_root/harness/k3s-administrative-node-v1.json"
+  "$provider" put "$vm_name" "$directory/k3s-administrative-policy-v1.yaml" \
+    "$remote_root/harness/k3s-administrative-policy-v1.yaml"
+  "$provider" put "$vm_name" "$directory/oidc-fixture.py" \
+    "$remote_root/harness/oidc-fixture.py"
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-install "$k3s_version" "$remote_root/harness/k3s-config-v1.yaml" \
     "$remote_root"
@@ -188,6 +199,21 @@ if [[ $with_k3s == true ]]; then
     "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
     >"$k3s_cri_effect_partial"
   mv -- "$k3s_cri_effect_partial" "$output_directory/k3s-cri-effect.txt"
+  k3s_administrative_partial=$output_directory/k3s-administrative-exec.txt.partial
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+    k3s-administrative-exec "$remote_bin/mithril-control" \
+    "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
+    "$remote_bin/mithril-policy" "$remote_bin/kubectl-mithril" \
+    "$remote_root/harness/oidc-fixture.py" \
+    "$remote_root/harness/k3s-administrative-node-v1.json" \
+    "$remote_root/harness/k3s-administrative-policy-v1.yaml" \
+    "$remote_source/examples/mithril-effect-observation-manual/observe-profile-seal-request.json" \
+    "$remote_source/examples/mithril-effect-observation-manual/test-signing-key.hex" \
+    "$remote_source/examples/mithril-effect-observation-manual/test-public-key.hex" \
+    "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
+    >"$k3s_administrative_partial"
+  mv -- "$k3s_administrative_partial" \
+    "$output_directory/k3s-administrative-exec.txt"
 fi
 
 qualification_output=$remote_root/kernel-qualification

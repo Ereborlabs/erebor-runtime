@@ -39,10 +39,23 @@ restricted external root. The same process must read one read-only hostPath
 qualification file before PROTECT and receive an exact-object denial after
 PROTECT. The denial evidence must contain that process task cookie. The
 hostPath file is only a qualification fixture. It does not prove
-projected-token semantic classification. The lane removes its namespace, file,
-node state, socket, lease, and BPF pins. The runtime probes then run while k3s
-is active. Finally, the official k3s uninstall owner runs before the provider
-destroys the guest.
+projected-token semantic classification.
+
+The option also runs the administrative-exec product path. It starts the real
+Control and node services. It uses a disposable HTTPS OIDC provider to test
+authorization-code PKCE and explicit self-approval. `kubectl-mithril` obtains
+one memory-only credential. The stock Kubernetes TokenReview and CONNECT
+admission paths must arm one exact node slot. The matching runtime root must
+receive the approved administrative role. Ordinary `kubectl exec` must fail
+admission. A later direct-runtime task with the same executable must stay
+restricted after slot consumption. This is the single-node physical
+`ADMIN-EXEC-APPROVAL-001` path. Source and unit tests own its malformed,
+replay, expiry, disconnect, and contention cases.
+
+The lanes remove their namespaces, files, node and Control state, sockets,
+leases, temporary trust, webhooks, RBAC, and BPF pins. The runtime probes then
+run while k3s is active. Finally, the official k3s uninstall owner runs before
+the provider destroys the guest.
 
 The libvirt provider uses these optional variables:
 
@@ -65,8 +78,10 @@ probe and benchmark evidence, the generated kernel qualification record, and
 the identity and effect results. With `--with-k3s`, it also keeps `k3s.txt` and
 `k3s-cri-effect.txt`. The second file records the Pod initial-root
 classification, the `kubectl exec` external-root classification, and the exact
-file-open denial. On a failed run, guest destruction remains the cleanup
-boundary, including a partial k3s install.
+file-open denial. It also keeps `k3s-administrative-exec.txt`. That file records
+the product path, approved role, admission denial, restricted non-winner, and
+measured pre-binding start gap. A failed lane retains only a `.partial` host
+record. Guest destruction remains the outer cleanup boundary.
 
 The host compiles the disposable kernel qualification object with the existing
 repository compiler. The guest loads that exact object. The record command
@@ -81,9 +96,12 @@ object but does not install a deny entry for the benchmark file.
 
 All harness-owned configuration is checked in beside this README:
 `cloud-init-v1.yaml`, `k3s-config-v1.yaml`, `k3s-workload-v1.yaml`, and
-`k3s-cri-effect-node-v1.json`. The node template contains no key or
-certificate. The provider substitutes only the requested SSH public key into
-the checked cloud-init template.
+the two k3s node templates. The narrow administrative policy authorizes only
+the checked executable object for the restricted external role. The
+`oidc-fixture.py` file is the credential-free disposable identity provider.
+The templates contain no key, credential, or certificate. The provider
+substitutes only the requested SSH public key into the checked cloud-init
+template.
 
 Run the local shell checks without creating a guest:
 
@@ -110,13 +128,11 @@ does not need changes to the test flow. Keep provider-specific credentials,
 networks, images, and cleanup inside the adapter. Do not put cloud credentials
 in this repository or in the evidence bundle.
 
-The k3s option is a runtime qualification lane. It does not replace a qualified
-kernel, and it does not claim complete local policy, administrative approval,
-or Kubernetes admission coverage. It proves one exact local file denial for a
-`kubectl exec` process after CRI cgroup binding. Those other cases need their
-own product oracles. One node is enough for this local-enforcement lane.
-Multi-node propagation and release-platform qualification remain separate
-work.
+The k3s option does not replace kernel qualification. It proves one exact local
+file denial after CRI binding and one administrative exec transaction on one
+node. It does not claim first-instruction binding: the record states that the
+Pod ran before the snapshot binding. It does not prove projected-token
+semantics or multi-node behavior. Those cases use separate fixtures.
 
 This automated harness complements the operator-driven identity,
 effect-observation, and local-enforcement examples. It does not replace those

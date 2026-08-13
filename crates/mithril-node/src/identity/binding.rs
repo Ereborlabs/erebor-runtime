@@ -28,7 +28,44 @@ struct PublishedBinding {
     runtime_identity: Option<RuntimeContainerIdentity>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdministrativeBindingTargetV1 {
+    pub root_cgroup_id: u64,
+    pub binding_id: Id128V1,
+    pub binding_nonce: Id128V1,
+    pub execution_set_id: Id128V1,
+    pub protected_scope_id: Id128V1,
+    pub profile_id: Id128V1,
+    pub profile_generation_ref_id: u64,
+    pub container_generation: u64,
+    pub namespace: String,
+    pub pod_uid: String,
+    pub container_name: String,
+    pub full_container_id: String,
+    pub init_pid: u32,
+    pub working_directory: PathBuf,
+    pub path_entries: Vec<PathBuf>,
+}
+
 impl PublishedBinding {
+    fn require_initial_root_admission(&self) -> Result<()> {
+        if !self.spec.arm_initial_root {
+            return Ok(());
+        }
+        let procs_path = self.root_cgroup_path.join("cgroup.procs");
+        let procs = fs::read_to_string(&procs_path).context(IoSnafu { path: &procs_path })?;
+        ensure!(
+            procs.trim().is_empty(),
+            IdentityStateSnafu {
+                reason: format!(
+                    "initial-root admission for `{}` requires an empty cgroup",
+                    self.root_cgroup_path.display()
+                ),
+            }
+        );
+        Ok(())
+    }
+
     fn validate_live_cgroup(&self) -> Result<()> {
         let handle = self.root_handle.metadata().context(IoSnafu {
             path: &self.root_cgroup_path,
@@ -101,6 +138,97 @@ impl WorkloadBindingOwner {
         }
         self.publish_all(host, configured)?;
         self.retain_only_configured(host)
+    }
+
+    pub fn administrative_target(
+        &self,
+        namespace: &[u8],
+        pod_uid: &[u8],
+        container_name: &[u8],
+        full_container_id: &[u8],
+        container_generation: u64,
+    ) -> Result<AdministrativeBindingTargetV1> {
+        let namespace = std::str::from_utf8(namespace).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("administrative namespace is not UTF-8: {error}"),
+            }
+            .build()
+        })?;
+        let pod_uid = std::str::from_utf8(pod_uid).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("administrative Pod UID is not UTF-8: {error}"),
+            }
+            .build()
+        })?;
+        let container_name = std::str::from_utf8(container_name).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("administrative container name is not UTF-8: {error}"),
+            }
+            .build()
+        })?;
+        let full_container_id = std::str::from_utf8(full_container_id).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("administrative container ID is not UTF-8: {error}"),
+            }
+            .build()
+        })?;
+        let matches = self
+            .bindings
+            .values()
+            .filter(|binding| {
+                binding.state.lifecycle_state == BindingLifecycleStateV1::Active
+                    && binding.spec.namespace == namespace
+                    && binding.spec.pod_uid == pod_uid
+                    && binding.spec.container_name == container_name
+                    && binding.spec.container_id == full_container_id
+                    && (container_generation == 0
+                        || binding.spec.container_generation == container_generation)
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            matches.len() == 1,
+            IdentityStateSnafu {
+                reason: "administrative exec target does not resolve to one active binding",
+            }
+        );
+        let binding = matches[0];
+        binding.validate_live_cgroup()?;
+        let runtime = binding.runtime_identity.as_ref().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "administrative exec requires an authenticated live CRI identity"
+                    .to_owned(),
+            }
+            .build()
+        })?;
+        ensure!(
+            runtime.namespace == namespace
+                && runtime.pod_uid == pod_uid
+                && runtime.container_name == container_name
+                && runtime.full_container_id == full_container_id
+                && (container_generation == 0 || runtime.generation == container_generation)
+                && runtime.state == super::runtime::RuntimeContainerState::Running
+                && runtime.init_pid > 0,
+            IdentityStateSnafu {
+                reason: "live CRI identity changed during administrative target resolution",
+            }
+        );
+        Ok(AdministrativeBindingTargetV1 {
+            root_cgroup_id: binding.root_cgroup_id,
+            binding_id: binding.state.binding_id,
+            binding_nonce: binding.state.binding_nonce,
+            execution_set_id: binding.state.execution_set_id,
+            protected_scope_id: binding.state.protected_scope_id,
+            profile_id: binding.state.profile_id,
+            profile_generation_ref_id: binding.state.active_profile_generation_ref_id,
+            container_generation: binding.state.container_generation,
+            namespace: runtime.namespace.clone(),
+            pod_uid: runtime.pod_uid.clone(),
+            container_name: runtime.container_name.clone(),
+            full_container_id: runtime.full_container_id.clone(),
+            init_pid: runtime.init_pid,
+            working_directory: runtime.working_directory.clone(),
+            path_entries: runtime.path_entries.clone(),
+        })
     }
 
     pub fn publish_all(
@@ -176,6 +304,7 @@ impl WorkloadBindingOwner {
                 );
                 binding.state = recovered;
             } else {
+                binding.require_initial_root_admission()?;
                 binding.state.lifecycle_state = BindingLifecycleStateV1::Preparing;
                 host.update_map("execution_set_bindings", &key, binding.state.as_bytes())
                     .context(InterceptorSnafu)?;
@@ -517,19 +646,6 @@ impl WorkloadBindingOwner {
                 ),
             }
         );
-        if spec.arm_initial_root {
-            let procs_path = root_cgroup_path.join("cgroup.procs");
-            let procs = fs::read_to_string(&procs_path).context(IoSnafu { path: &procs_path })?;
-            ensure!(
-                procs.trim().is_empty(),
-                IdentityStateSnafu {
-                    reason: format!(
-                        "initial-root admission for `{}` requires an empty cgroup",
-                        root_cgroup_path.display()
-                    ),
-                }
-            );
-        }
         let binding_id = parse_id("binding_id", &spec.binding_id)?;
         let execution_set_id = parse_id("execution_set_id", &spec.execution_set_id)?;
         let protected_scope_id = parse_id("protected_scope_id", &spec.protected_scope_id)?;
@@ -759,7 +875,7 @@ fn same_activation_identity(
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use snafu::ResultExt as _;
 
@@ -780,6 +896,7 @@ mod tests {
             workload_selector_id: "worker".to_owned(),
             profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
             container_id: "a".repeat(64),
+            namespace: "default".to_owned(),
             pod_uid: "pod-uid-a".to_owned(),
             sandbox_id: "sandbox-a".to_owned(),
             container_name: "worker".to_owned(),
@@ -824,7 +941,10 @@ mod tests {
         fs::create_dir(&root).context(IoSnafu { path: &root })?;
         fs::write(root.join("cgroup.procs"), "42\n").context(IoSnafu { path: &root })?;
         let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
-        assert!(owner.prepare(&spec(&root)).is_err());
+        assert!(owner
+            .prepare(&spec(&root))?
+            .require_initial_root_admission()
+            .is_err());
         Ok(())
     }
 
@@ -919,12 +1039,16 @@ mod tests {
         let configured = spec(&root);
         let identity = RuntimeContainerIdentity {
             full_container_id: configured.container_id.clone(),
+            namespace: configured.namespace.clone(),
             pod_uid: configured.pod_uid.clone(),
             sandbox_id: configured.sandbox_id.clone(),
             container_name: configured.container_name.clone(),
             image_digest: configured.image_digest.clone(),
             generation: configured.container_generation,
             cgroup_path: root,
+            init_pid: std::process::id(),
+            working_directory: PathBuf::from("/"),
+            path_entries: vec![PathBuf::from("/usr/bin")],
             state: RuntimeContainerState::Created,
         };
         let mut binding = owner.prepare(&identity.resolve(&configured))?;

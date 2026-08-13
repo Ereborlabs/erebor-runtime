@@ -17,6 +17,10 @@ typedef __s32 int32_t;
 
 #define MAX_NESTED_EFFECT_ATTEMPTS_V1 4
 
+#define MAX_IO_URING_ENTRIES_V1 4096
+
+#define MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1 72
+
 #define MAX_ANCESTOR_PROCESS_LINEAGES_V1 8
 
 #define MAX_EXEC_CANDIDATES_V1 8
@@ -398,6 +402,86 @@ typedef enum exception_use_identity_kind_v1 exception_use_identity_kind_v1;
 typedef uint8_t exception_use_identity_kind_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
+enum io_uring_execution_state_kind_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  io_uring_execution_state_kind_v1_inactive = 0,
+  io_uring_execution_state_kind_v1_active = 1,
+  io_uring_execution_state_kind_v1_fail_closed = 2,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum io_uring_execution_state_kind_v1 io_uring_execution_state_kind_v1;
+#else
+typedef uint8_t io_uring_execution_state_kind_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum io_uring_request_state_kind_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  io_uring_request_state_kind_v1_unknown = 0,
+  io_uring_request_state_kind_v1_submitted = 1,
+  io_uring_request_state_kind_v1_completed = 2,
+  io_uring_request_state_kind_v1_corrupt = 3,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum io_uring_request_state_kind_v1 io_uring_request_state_kind_v1;
+#else
+typedef uint8_t io_uring_request_state_kind_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum io_uring_restriction_state_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  io_uring_restriction_state_v1_unknown = 0,
+  io_uring_restriction_state_v1_none = 1,
+  io_uring_restriction_state_v1_exact_read_write = 2,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum io_uring_restriction_state_v1 io_uring_restriction_state_v1;
+#else
+typedef uint8_t io_uring_restriction_state_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum io_uring_ring_state_kind_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  io_uring_ring_state_kind_v1_unknown = 0,
+  io_uring_ring_state_kind_v1_disabled = 1,
+  io_uring_ring_state_kind_v1_restricted = 2,
+  io_uring_ring_state_kind_v1_active = 3,
+  io_uring_ring_state_kind_v1_corrupt = 4,
+  io_uring_ring_state_kind_v1_closed = 5,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum io_uring_ring_state_kind_v1 io_uring_ring_state_kind_v1;
+#else
+typedef uint8_t io_uring_ring_state_kind_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
+enum io_uring_setup_state_kind_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  io_uring_setup_state_kind_v1_inactive = 0,
+  io_uring_setup_state_kind_v1_prepared = 1,
+  io_uring_setup_state_kind_v1_authorized = 2,
+  io_uring_setup_state_kind_v1_invalid = 3,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum io_uring_setup_state_kind_v1 io_uring_setup_state_kind_v1;
+#else
+typedef uint8_t io_uring_setup_state_kind_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
 enum ipc_channel_kind_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
@@ -511,6 +595,11 @@ enum kernel_effect_operation_v1
   kernel_effect_operation_v1_bpf = 24,
   kernel_effect_operation_v1_create = 25,
   kernel_effect_operation_v1_setattr = 26,
+  kernel_effect_operation_v1_io_uring_setup = 27,
+  kernel_effect_operation_v1_io_uring_register = 28,
+  kernel_effect_operation_v1_io_uring_sqpoll = 29,
+  kernel_effect_operation_v1_io_uring_override_creds = 30,
+  kernel_effect_operation_v1_io_uring_command = 31,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum kernel_effect_operation_v1 kernel_effect_operation_v1;
@@ -582,6 +671,25 @@ typedef enum physical_decision_kind_v1 physical_decision_kind_v1;
 typedef uint8_t physical_decision_kind_v1;
 #endif // __STDC_VERSION__ >= 202311L
 
+enum policy_activation_probe_map_kind_v1
+#if __STDC_VERSION__ >= 202311L
+  : uint8_t
+#endif // __STDC_VERSION__ >= 202311L
+ {
+  policy_activation_probe_map_kind_v1_unknown = 0,
+  policy_activation_probe_map_kind_v1_effect_decision = 1,
+  policy_activation_probe_map_kind_v1_effect_default = 2,
+  policy_activation_probe_map_kind_v1_ipc_relationship = 3,
+  policy_activation_probe_map_kind_v1_device_effect = 4,
+  policy_activation_probe_map_kind_v1_process_control = 5,
+  policy_activation_probe_map_kind_v1_administrative_slot_cancel = 6,
+};
+#if __STDC_VERSION__ >= 202311L
+typedef enum policy_activation_probe_map_kind_v1 policy_activation_probe_map_kind_v1;
+#else
+typedef uint8_t policy_activation_probe_map_kind_v1;
+#endif // __STDC_VERSION__ >= 202311L
+
 enum policy_generation_state_v1
 #if __STDC_VERSION__ >= 202311L
   : uint8_t
@@ -592,6 +700,8 @@ enum policy_generation_state_v1
   policy_generation_state_v1_read_back = 2,
   policy_generation_state_v1_active = 3,
   policy_generation_state_v1_rejected = 4,
+  policy_generation_state_v1_retiring = 5,
+  policy_generation_state_v1_tombstoned = 6,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum policy_generation_state_v1 policy_generation_state_v1;
@@ -1031,6 +1141,20 @@ typedef struct effect_observation_v1 {
   uint32_t target_process_state_vector_id;
   uint32_t operation_argument;
   uint8_t reserved_process_control[4];
+  struct id128_v1 io_uring_ring_id;
+  uint64_t io_uring_ring_generation;
+  uint64_t io_uring_submission_sequence;
+  uint64_t io_uring_user_data;
+  int64_t io_uring_file_offset;
+  uint64_t io_uring_buffer_address;
+  uint64_t io_uring_file_cookie;
+  uint64_t io_uring_executor_pid_tgid;
+  uint32_t io_uring_byte_length;
+  uint32_t io_uring_sqe_index;
+  uint32_t io_uring_request_flags;
+  uint32_t io_uring_rw_flags;
+  uint16_t io_uring_opcode;
+  uint8_t reserved_io_uring[6];
 } effect_observation_v1;
 
 typedef struct exact_object_binding_v1 {
@@ -1124,6 +1248,90 @@ typedef struct identity_runtime_config_v1 {
   uint8_t effect_policy_enabled;
   uint8_t reserved[2];
 } identity_runtime_config_v1;
+
+typedef struct io_uring_actor_snapshot_v1 {
+  struct id128_v1 node_boot_id;
+  struct id128_v1 process_lineage_id;
+  struct id128_v1 process_instance_id;
+  struct id128_v1 process_state_id;
+  struct id128_v1 entry_instance_id;
+  struct id128_v1 authority_domain_id;
+  struct id128_v1 binding_id;
+  struct id128_v1 binding_nonce;
+  struct id128_v1 execution_set_id;
+  struct id128_v1 profile_id;
+  uint64_t task_cookie;
+  uint64_t label_epoch;
+  uint64_t profile_generation_ref_id;
+  uint64_t root_cgroup_id;
+  uint64_t container_generation;
+  uint64_t lifecycle_generation;
+  uint64_t process_transition_version;
+  uint32_t active_role_id;
+  uint32_t process_state_vector_id;
+  uint16_t entry_kind;
+  binding_lifecycle_state_v1 binding_lifecycle_state;
+  uint8_t reserved[5];
+} io_uring_actor_snapshot_v1;
+
+typedef struct io_uring_execution_state_v1 {
+  struct id128_v1 ring_id;
+  uint64_t context_cookie;
+  uint64_t request_cookie;
+  uint64_t submission_sequence;
+  uint64_t user_data;
+  uint64_t executor_pid_tgid;
+  uint16_t opcode;
+  io_uring_execution_state_kind_v1 state;
+  uint8_t reserved[5];
+} io_uring_execution_state_v1;
+
+typedef struct io_uring_request_state_v1 {
+  struct io_uring_actor_snapshot_v1 actor;
+  struct id128_v1 ring_id;
+  uint64_t context_cookie;
+  uint64_t request_cookie;
+  uint64_t ring_generation;
+  uint64_t submission_sequence;
+  uint64_t user_data;
+  int64_t file_offset;
+  uint64_t buffer_address;
+  uint64_t file_cookie;
+  uint64_t transition_version;
+  uint32_t byte_length;
+  uint32_t sqe_index;
+  uint32_t request_flags;
+  uint32_t rw_flags;
+  uint16_t opcode;
+  io_uring_request_state_kind_v1 state;
+  uint8_t reserved[5];
+} io_uring_request_state_v1;
+
+typedef struct io_uring_ring_state_v1 {
+  struct io_uring_actor_snapshot_v1 owner;
+  struct execution_set_binding_state_v1 binding;
+  struct id128_v1 ring_id;
+  uint64_t context_cookie;
+  uint64_t ring_generation;
+  uint64_t next_submission_sequence;
+  uint64_t transition_version;
+  uint64_t outstanding_requests;
+  uint32_t sq_entries;
+  uint32_t cq_entries;
+  uint32_t setup_flags;
+  io_uring_ring_state_kind_v1 state;
+  io_uring_restriction_state_v1 restriction_state;
+  uint8_t reserved[2];
+} io_uring_ring_state_v1;
+
+typedef struct io_uring_setup_state_v1 {
+  uint64_t task_cookie;
+  uint64_t setup_attempt_sequence;
+  uint32_t entries;
+  uint32_t flags;
+  io_uring_setup_state_kind_v1 state;
+  uint8_t reserved[7];
+} io_uring_setup_state_v1;
 
 typedef struct ipc_relationship_decision_key_v1 {
   uint64_t actor_profile_generation_ref_id;
@@ -1241,6 +1449,15 @@ typedef struct physical_decision_v1 {
   uint32_t transition_id;
   uint32_t exception_numeric_handle;
 } physical_decision_v1;
+
+typedef struct policy_activation_probe_v1 {
+  policy_activation_probe_map_kind_v1 map_kind;
+  uint8_t reserved[7];
+  uint32_t key_size;
+  uint32_t reserved_alignment;
+  uint8_t key[MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1];
+  struct physical_decision_v1 expected;
+} policy_activation_probe_v1;
 
 typedef struct path_graph_state_key_v1 {
   uint64_t profile_generation_ref_id;

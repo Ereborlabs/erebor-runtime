@@ -71,6 +71,12 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril administrative approval failed: {reason}"))]
+    AdministrativeApproval {
+        reason: String,
+        #[snafu(implicit)]
+        location: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -83,7 +89,8 @@ impl ErrorExt for Error {
             | Self::PolicySource { .. }
             | Self::PolicyValidation { .. }
             | Self::PolicySignature { .. }
-            | Self::PolicyState { .. } => StatusCode::InvalidArguments,
+            | Self::PolicyState { .. }
+            | Self::AdministrativeApproval { .. } => StatusCode::InvalidArguments,
             Self::Io { .. } | Self::Tls { .. } | Self::Serve { .. } => StatusCode::External,
         }
     }
@@ -98,7 +105,8 @@ impl ErrorExt for Error {
             | Self::PolicySource { .. }
             | Self::PolicyValidation { .. }
             | Self::PolicySignature { .. }
-            | Self::PolicyState { .. } => RetryHint::NonRetryable,
+            | Self::PolicyState { .. }
+            | Self::AdministrativeApproval { .. } => RetryHint::NonRetryable,
         }
     }
 

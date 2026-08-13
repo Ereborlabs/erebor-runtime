@@ -4,12 +4,13 @@ use ed25519_dalek::SigningKey;
 use erebor_interceptor_abi::KernelEffectOperationV1;
 use mithril_control::{
     compiled_key_digest, kernel_operation_id, process_control_operation, AntiRollbackStore,
-    BlastRadiusLimitV1, CompiledPhysicalResultV1, EffectFamilyDefaultV1, EffectFamilyV1, ErrnoV1,
-    ExactExceptionSubjectSelectorV1, ExceptionConsumptionScopeV1, ExceptionV1,
-    HardSafetyConditionV1, IpcRelationshipRuleV1, PermittedAuthorityDeltaV1, PolicyCompiler,
-    PolicyDispositionV1, PolicyDocumentV1, PolicySimulator, ProfileActivationMetadataV1,
-    ProfileCandidateArtifactV1, ProfileSealRequestV1, RegistryDigestsV1,
-    RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1, SimulatedDispositionV1,
+    BlastRadiusLimitV1, CompiledPhysicalResultV1, EffectFamilyDefaultV1, EffectFamilyV1,
+    EntryKindV1, ErrnoV1, ExactExceptionSubjectSelectorV1, ExceptionConsumptionScopeV1,
+    ExceptionV1, HardSafetyConditionV1, IpcRelationshipRuleV1, PermittedAuthorityDeltaV1,
+    PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, PolicySimulator,
+    ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
+    RegistryDigestsV1, RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1,
+    RootClassificationV1, SimulatedDispositionV1,
 };
 
 const VALID_POLICY: &str = include_str!("fixtures/policy-v1.yaml");
@@ -25,6 +26,46 @@ fn checked_policy_is_closed_and_compiles_deterministically() -> mithril_control:
     let second = PolicyCompiler.compile(&document)?;
     assert_eq!(first, second);
     assert_eq!(first.compiled_cells.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn administrative_entry_requires_the_exact_approval_contract() -> mithril_control::Result<()> {
+    let mut document = parse(VALID_POLICY)?;
+    document
+        .protected_universe
+        .entry_kind_ids
+        .push(EntryKindV1::ApprovedAdministrativeExec);
+    document.roles[0]
+        .permitted_entry_kinds
+        .push(EntryKindV1::ApprovedAdministrativeExec);
+    let mut administrative = document.entry_role_assignments[0].clone();
+    administrative.assignment_id = "approved-administrative-exec".to_owned();
+    administrative.entry_kinds = vec![EntryKindV1::ApprovedAdministrativeExec];
+    administrative.accepted_classifications =
+        vec![RootClassificationV1::ApprovedAdministrativeNextMatch];
+    administrative.required_administrative_exec_approval = true;
+    administrative.unknown_restricted_role_id = None;
+    document.entry_role_assignments.push(administrative);
+    assert!(PolicyCompiler.compile(&document).is_ok());
+
+    let mutations: [fn(&mut mithril_control::EntryRoleAssignmentV1); 3] = [
+        |entry: &mut mithril_control::EntryRoleAssignmentV1| {
+            entry.required_administrative_exec_approval = false;
+        },
+        |entry: &mut mithril_control::EntryRoleAssignmentV1| {
+            entry.entry_kinds = vec![EntryKindV1::ContainerStart];
+        },
+        |entry: &mut mithril_control::EntryRoleAssignmentV1| {
+            entry.accepted_classifications = vec![RootClassificationV1::ExactInitial];
+        },
+    ];
+    let administrative_index = document.entry_role_assignments.len() - 1;
+    for mutate in mutations {
+        let mut invalid = document.clone();
+        mutate(&mut invalid.entry_role_assignments[administrative_index]);
+        assert!(PolicyCompiler.compile(&invalid).is_err());
+    }
     Ok(())
 }
 
@@ -211,6 +252,46 @@ fn generic_privilege_local_rules_are_denial_only() -> mithril_control::Result<()
             assert!(PolicyCompiler
                 .compile(&invalid)
                 .is_err_and(|error| error.to_string().contains("CFG_PRIVILEGE_WILDCARD")));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn io_uring_operations_have_closed_authority_rules() -> mithril_control::Result<()> {
+    for (operation, expected) in [
+        ("IO_URING_SETUP", KernelEffectOperationV1::IoUringSetup),
+        (
+            "IO_URING_REGISTER",
+            KernelEffectOperationV1::IoUringRegister,
+        ),
+        ("IO_URING_SQPOLL", KernelEffectOperationV1::IoUringSqpoll),
+        (
+            "IO_URING_OVERRIDE_CREDS",
+            KernelEffectOperationV1::IoUringOverrideCreds,
+        ),
+        ("IO_URING_COMMAND", KernelEffectOperationV1::IoUringCommand),
+    ] {
+        assert_eq!(kernel_operation_id(operation), Some(expected));
+
+        let mut deny = parse(VALID_POLICY)?;
+        let mithril_control::RuleMatchV1::LocalPreEffect(effect) = &mut deny.rules[0].rule_match
+        else {
+            unreachable!("fixture has a local effect rule")
+        };
+        effect.effect_families = vec![EffectFamilyV1::Privilege];
+        effect.operation_ids = vec![operation.to_owned()];
+        assert!(PolicyCompiler.compile(&deny).is_ok());
+
+        let mut allow = deny;
+        allow.rules[0].requested_disposition = PolicyDispositionV1::Allow;
+        allow.rules[0].errno = None;
+        if operation == "IO_URING_SETUP" {
+            assert!(PolicyCompiler.compile(&allow).is_ok());
+        } else {
+            assert!(PolicyCompiler.compile(&allow).is_err_and(|error| error
+                .to_string()
+                .contains("CFG_IO_URING_UNQUALIFIED_AUTHORITY")));
         }
     }
     Ok(())

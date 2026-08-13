@@ -5,13 +5,19 @@ use std::os::fd::AsFd as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use erebor_interceptor_abi::{
+    ApprovedExecSlotKeyV1, Id128V1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+    PolicyActivationProbeMapKindV1, PolicyActivationProbeV1,
+    MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
+};
 use libbpf_rs::{
     query::{ProgInfoIter, ProgInfoQueryOptions},
     Iter, Link, Map, MapCore as _, MapFlags, MapHandle, Object, ObjectBuilder, OpenObject, Program,
-    ProgramHandle, ProgramType, RingBuffer, RingBufferBuilder,
+    ProgramHandle, ProgramInput, ProgramType, RingBuffer, RingBufferBuilder,
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
+use zerocopy::IntoBytes as _;
 
 use crate::error::{
     InvalidConfigurationSnafu, IoSnafu, LibbpfSnafu, ManifestMismatchSnafu, StalePinRootSnafu,
@@ -38,7 +44,7 @@ impl EffectObservationReader {
     }
 }
 
-pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 36] = [
+pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 41] = [
     "qualification_task_alloc",
     "qualification_file_open",
     "qualification_bprm_check_security",
@@ -69,16 +75,70 @@ pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 36] = [
     "qualification_file_truncate",
     "qualification_path_link",
     "qualification_path_rename",
+    "qualification_sb_kern_mount",
     "qualification_sb_mount",
     "qualification_sb_umount",
     "qualification_sb_pivotroot",
     "qualification_move_mount",
     "qualification_capable",
     "qualification_bpf",
+    "qualification_inode_init_security_anon",
+    "qualification_uring_sqpoll",
+    "qualification_uring_override_creds",
+    "qualification_uring_cmd",
 ];
 
-pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 50] = [
+pub const REQUIRED_QUALIFICATION_PROGRAMS: [&str; 45] = [
+    "qualification_task_alloc",
+    "qualification_file_open",
+    "qualification_bprm_check_security",
+    "qualification_file_receive",
+    "qualification_file_permission",
+    "qualification_file_ioctl",
+    "qualification_mmap_file",
+    "qualification_file_mprotect",
+    "qualification_socket_post_create",
+    "qualification_unix_stream_connect",
+    "qualification_ipc_permission",
+    "qualification_socket_connect",
+    "qualification_socket_sendmsg",
+    "qualification_socket_recvmsg",
+    "qualification_socket_socketpair",
+    "qualification_unix_may_send",
+    "qualification_shm_shmat",
+    "qualification_ptrace_access_check",
+    "qualification_task_kill",
+    "qualification_path_unlink",
+    "qualification_path_mknod",
+    "qualification_path_mkdir",
+    "qualification_path_symlink",
+    "qualification_path_rmdir",
+    "qualification_path_chmod",
+    "qualification_path_chown",
+    "qualification_path_truncate",
+    "qualification_file_truncate",
+    "qualification_path_link",
+    "qualification_path_rename",
+    "qualification_sb_kern_mount",
+    "qualification_sb_mount",
+    "qualification_sb_umount",
+    "qualification_sb_pivotroot",
+    "qualification_move_mount",
+    "qualification_mount_sys_enter_open_tree",
+    "qualification_mount_sys_enter_fsconfig",
+    "qualification_mount_sys_enter_fsmount",
+    "qualification_mount_sys_enter_mount_setattr",
+    "qualification_capable",
+    "qualification_bpf",
+    "qualification_inode_init_security_anon",
+    "qualification_uring_sqpoll",
+    "qualification_uring_override_creds",
+    "qualification_uring_cmd",
+];
+
+pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 68] = [
     "erebor_task_alloc",
+    "erebor_policy_activation_probe",
     "erebor_cgroup_attach_task",
     "erebor_cgroup_release",
     "erebor_wake_up_new_task",
@@ -120,12 +180,29 @@ pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 50] = [
     "erebor_identity_file_truncate",
     "erebor_identity_path_link",
     "erebor_identity_path_rename",
+    "erebor_identity_sb_kern_mount",
     "erebor_identity_sb_mount",
     "erebor_identity_sb_umount",
     "erebor_identity_sb_pivotroot",
     "erebor_identity_move_mount",
+    "erebor_mount_sys_enter_open_tree",
+    "erebor_mount_sys_enter_fsconfig",
+    "erebor_mount_sys_enter_fsmount",
+    "erebor_mount_sys_enter_mount_setattr",
     "erebor_identity_capable",
     "erebor_identity_bpf",
+    "erebor_io_uring_setup_enter",
+    "erebor_identity_inode_init_security_anon",
+    "erebor_io_uring_create",
+    "erebor_io_uring_register",
+    "erebor_io_uring_submit_req",
+    "erebor_io_uring_issue_enter",
+    "erebor_io_uring_issue_exit",
+    "erebor_io_uring_complete",
+    "erebor_io_uring_context_free",
+    "erebor_identity_uring_sqpoll",
+    "erebor_identity_uring_override_creds",
+    "erebor_identity_uring_cmd",
     "erebor_sched_process_exit",
     "erebor_reconcile_tasks",
 ];
@@ -136,6 +213,14 @@ pub const EXCEPTION_USE_RECEIPT_CAPACITY: u64 = 65_536;
 pub enum MapInsertResult {
     Inserted,
     AlreadyExists,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AdministrativeSlotCancelResult {
+    Cancelled,
+    Consumed,
+    Closed,
+    Missing,
 }
 
 #[derive(Clone)]
@@ -189,14 +274,13 @@ pub enum KernelObjectKind {
 impl KernelObjectKind {
     const fn required_programs(self) -> &'static [&'static str] {
         match self {
-            Self::Qualification => &REQUIRED_QUALIFICATION_LSM_PROGRAMS,
+            Self::Qualification => &REQUIRED_QUALIFICATION_PROGRAMS,
             Self::Identity => &REQUIRED_IDENTITY_PROGRAMS,
         }
     }
 
-    fn includes(self, name: &str, section: &str) -> bool {
+    fn includes(self, name: &str, _section: &str) -> bool {
         self.required_programs().contains(&name)
-            && (self != Self::Qualification || section.starts_with("lsm/"))
     }
 
     fn attaches(self, name: &str, section: &str) -> bool {
@@ -204,7 +288,11 @@ impl KernelObjectKind {
     }
 
     fn attaches_name(self, name: &str) -> bool {
-        self != Self::Identity || name != "erebor_reconcile_tasks"
+        self != Self::Identity
+            || !matches!(
+                name,
+                "erebor_reconcile_tasks" | "erebor_policy_activation_probe"
+            )
     }
 }
 
@@ -1057,6 +1145,109 @@ impl KernelHost {
         Ok(())
     }
 
+    pub fn run_policy_activation_probe(&mut self, request: &[u8]) -> Result<()> {
+        let return_value = self.run_policy_activation_command(request)?;
+        ensure!(
+            return_value == 1,
+            ManifestMismatchSnafu {
+                path: Path::new("erebor_policy_activation_probe"),
+                reason: format!(
+                    "staged policy row did not match the BPF lookup result; probe code was {return_value}"
+                ),
+            }
+        );
+        Ok(())
+    }
+
+    pub fn cancel_administrative_slot(
+        &mut self,
+        key: ApprovedExecSlotKeyV1,
+        proof_id: Id128V1,
+        claim_slot_id: Id128V1,
+    ) -> Result<AdministrativeSlotCancelResult> {
+        let mut probe_key = [0_u8; MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1];
+        let mut offset = 0;
+        for value in [
+            key.as_bytes(),
+            proof_id.as_bytes(),
+            claim_slot_id.as_bytes(),
+        ] {
+            let end = offset + value.len();
+            probe_key[offset..end].copy_from_slice(value);
+            offset = end;
+        }
+        let request = PolicyActivationProbeV1 {
+            map_kind: PolicyActivationProbeMapKindV1::AdministrativeSlotCancel,
+            reserved: [0; 7],
+            key_size: u32::try_from(offset).map_err(|error| {
+                ManifestMismatchSnafu {
+                    path: PathBuf::from("approved_exec_slots"),
+                    reason: format!("administrative cancellation key exceeds u32: {error}"),
+                }
+                .build()
+            })?,
+            reserved_alignment: 0,
+            key: probe_key,
+            expected: PhysicalDecisionV1 {
+                decision: PhysicalDecisionKindV1::Allow,
+                reserved: 0,
+                errno: 0,
+                evidence_class_id: 0,
+                transition_id: 0,
+                exception_numeric_handle: 0,
+            },
+        };
+        match self.run_policy_activation_command(request.as_bytes())? {
+            1 => Ok(AdministrativeSlotCancelResult::Cancelled),
+            7 => Ok(AdministrativeSlotCancelResult::Missing),
+            9 => Ok(AdministrativeSlotCancelResult::Consumed),
+            10 => Ok(AdministrativeSlotCancelResult::Closed),
+            code => ManifestMismatchSnafu {
+                path: PathBuf::from("approved_exec_slots"),
+                reason: format!(
+                    "administrative slot cancellation failed closed with probe code {code}"
+                ),
+            }
+            .fail(),
+        }
+    }
+
+    fn run_policy_activation_command(&mut self, request: &[u8]) -> Result<u32> {
+        let request_key = 0_u32.to_ne_bytes();
+        self.update_map("policy_activation_probe_requests", &request_key, request)?;
+        ensure!(
+            self.lookup_map("policy_activation_probe_requests", &request_key)?
+                .as_deref()
+                == Some(request),
+            ManifestMismatchSnafu {
+                path: Path::new("policy_activation_probe_requests"),
+                reason: "policy activation probe request failed readback".to_owned(),
+            }
+        );
+        let program = self
+            .object
+            .progs_mut()
+            .find(|program| program.name().to_string_lossy() == "erebor_policy_activation_probe")
+            .ok_or_else(|| {
+                ManifestMismatchSnafu {
+                    path: PathBuf::from("erebor_policy_activation_probe"),
+                    reason: "loaded object has no policy activation probe".to_owned(),
+                }
+                .build()
+            })?;
+        let packet = [0_u8; 14];
+        let output = program
+            .test_run(ProgramInput {
+                data_in: Some(&packet),
+                ..Default::default()
+            })
+            .context(LibbpfSnafu {
+                action: "run policy activation probe",
+                path: Path::new("erebor_policy_activation_probe"),
+            })?;
+        Ok(output.return_value)
+    }
+
     pub fn shutdown(mut self) -> Result<()> {
         if self.remove_pins_on_shutdown {
             self.remove_pins()?;
@@ -1324,6 +1515,8 @@ mod tests {
         ));
         assert!(kind.includes("erebor_reconcile_tasks", "iter/task"));
         assert!(!kind.attaches("erebor_reconcile_tasks", "iter/task"));
+        assert!(kind.includes("erebor_policy_activation_probe", "socket"));
+        assert!(!kind.attaches("erebor_policy_activation_probe", "socket"));
         assert!(!kind.includes("unrelated", "tracepoint/sched/sched_process_exit"));
     }
 

@@ -114,7 +114,9 @@ pub enum ExecGuardStateV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum PendingExecStateV1 {
     #[default]
     Unknown = 0,
@@ -185,7 +187,9 @@ pub enum EntryLifetimeStateV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum AuthorityDomainStateKindV1 {
     #[default]
     Unknown = 0,
@@ -251,7 +255,9 @@ pub enum InstalledRoleClassV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum ReferenceTombstoneStateV1 {
     #[default]
     Unknown = 0,
@@ -290,7 +296,9 @@ pub enum ApprovedExecSlotStateV1 {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub enum PendingAdministrativeMatchStateV1 {
     #[default]
     Unknown = 0,
@@ -462,7 +470,9 @@ pub struct EntrySecurityStateV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct AuthorityDomainStateV1 {
     pub authority_domain_id: Id128V1,
     pub node_boot_id: Id128V1,
@@ -700,7 +710,9 @@ impl Default for ApprovedExecSlotV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct PendingAdministrativeMatchV1 {
     pub task_cookie: u64,
     pub exec_attempt_sequence: u64,
@@ -758,7 +770,9 @@ pub struct ProcessExecutionInstanceV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct PendingExecV1 {
     pub pending_exec_id: Id128V1,
     pub task_cookie: u64,
@@ -779,7 +793,9 @@ pub struct PendingExecV1 {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
 pub struct TaskReferenceTombstoneV1 {
     pub task_cookie: u64,
     pub birth_transaction_id: Id128V1,

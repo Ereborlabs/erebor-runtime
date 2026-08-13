@@ -18,6 +18,7 @@ use crate::{Result, WorkloadBindingConfig};
 
 const POD_UID_LABEL: &str = "io.kubernetes.pod.uid";
 const CONTAINER_NAME_LABEL: &str = "io.kubernetes.container.name";
+const POD_NAMESPACE_LABEL: &str = "io.kubernetes.pod.namespace";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeContainerState {
@@ -28,12 +29,16 @@ pub(super) enum RuntimeContainerState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RuntimeContainerIdentity {
     pub full_container_id: String,
+    pub namespace: String,
     pub pod_uid: String,
     pub sandbox_id: String,
     pub container_name: String,
     pub image_digest: String,
     pub generation: u64,
     pub cgroup_path: PathBuf,
+    pub init_pid: u32,
+    pub working_directory: PathBuf,
+    pub path_entries: Vec<PathBuf>,
     pub state: RuntimeContainerState,
 }
 
@@ -48,12 +53,16 @@ impl RuntimeContainerIdentity {
 
     pub(super) fn same_lifetime_as(&self, other: &Self) -> bool {
         self.full_container_id == other.full_container_id
+            && self.namespace == other.namespace
             && self.pod_uid == other.pod_uid
             && self.sandbox_id == other.sandbox_id
             && self.container_name == other.container_name
             && self.image_digest == other.image_digest
             && self.generation == other.generation
             && self.cgroup_path == other.cgroup_path
+            && self.init_pid == other.init_pid
+            && self.working_directory == other.working_directory
+            && self.path_entries == other.path_entries
     }
 }
 
@@ -170,6 +179,12 @@ impl ContainerRuntimeInventory {
             }
             .build()
         })?;
+        let namespace = status.labels.get(POD_NAMESPACE_LABEL).ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: format!("CRI status is missing `{POD_NAMESPACE_LABEL}`"),
+            }
+            .build()
+        })?;
         let container_name = status.labels.get(CONTAINER_NAME_LABEL).ok_or_else(|| {
             IdentityStateSnafu {
                 reason: format!("CRI status is missing `{CONTAINER_NAME_LABEL}`"),
@@ -182,6 +197,7 @@ impl ContainerRuntimeInventory {
         ensure!(
             status.id == expected.container_id
                 && generation == expected.container_generation
+                && namespace == &expected.namespace
                 && pod_uid == &expected.pod_uid
                 && container.pod_sandbox_id == expected.sandbox_id
                 && container_name == &expected.container_name
@@ -194,15 +210,19 @@ impl ContainerRuntimeInventory {
                 ),
             }
         );
-        let cgroup_path = cgroup_path_from_info(&response.info, &self.cgroup_root)?;
+        let runtime = runtime_process_from_info(&response.info, &self.cgroup_root)?;
         Ok(Some(RuntimeContainerIdentity {
             full_container_id: status.id,
+            namespace: namespace.clone(),
             pod_uid: pod_uid.clone(),
             sandbox_id: container.pod_sandbox_id,
             container_name: container_name.clone(),
             image_digest: status.image_ref,
             generation,
-            cgroup_path,
+            cgroup_path: runtime.cgroup_path,
+            init_pid: runtime.init_pid,
+            working_directory: runtime.working_directory,
+            path_entries: runtime.path_entries,
             state: status_state,
         }))
     }
@@ -218,10 +238,17 @@ const fn runtime_state(raw: i32) -> Option<RuntimeContainerState> {
     }
 }
 
-fn cgroup_path_from_info(
+struct RuntimeProcessIdentity {
+    cgroup_path: PathBuf,
+    init_pid: u32,
+    working_directory: PathBuf,
+    path_entries: Vec<PathBuf>,
+}
+
+fn runtime_process_from_info(
     info: &std::collections::HashMap<String, String>,
     cgroup_root: &Path,
-) -> Result<PathBuf> {
+) -> Result<RuntimeProcessIdentity> {
     let json = info.get("info").ok_or_else(|| {
         IdentityStateSnafu {
             reason: "CRI verbose status has no `info` runtime record".to_owned(),
@@ -234,6 +261,75 @@ fn cgroup_path_from_info(
         }
         .build()
     })?;
+    let init_pid = value
+        .get("pid")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|pid| u32::try_from(pid).ok())
+        .filter(|pid| *pid > 0)
+        .ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "CRI verbose status has no live container init PID".to_owned(),
+            }
+            .build()
+        })?;
+    let working_directory = value
+        .pointer("/runtimeSpec/process/cwd")
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| path.starts_with('/'))
+        .map(PathBuf::from)
+        .ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "CRI verbose status has no absolute container working directory".to_owned(),
+            }
+            .build()
+        })?;
+    let environment = value
+        .pointer("/runtimeSpec/process/env")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "CRI verbose status has no container process environment".to_owned(),
+            }
+            .build()
+        })?;
+    let path = environment
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .find_map(|entry| entry.strip_prefix("PATH="))
+        .ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "CRI verbose status has no effective PATH".to_owned(),
+            }
+            .build()
+        })?;
+    let path_entries = path
+        .split(':')
+        .map(|entry| {
+            let entry = if entry.is_empty() { "." } else { entry };
+            let entry = Path::new(entry);
+            let absolute = if entry.is_absolute() {
+                entry.to_path_buf()
+            } else {
+                working_directory.join(entry)
+            };
+            ensure!(
+                absolute.is_absolute()
+                    && !absolute
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir)),
+                IdentityStateSnafu {
+                    reason: "CRI effective PATH contains a non-canonical entry",
+                }
+            );
+            Ok(absolute)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    ensure!(
+        path_entries.len() <= 64,
+        IdentityStateSnafu {
+            reason: "CRI effective PATH exceeds 64 entries",
+        }
+    );
     let raw = match runtime_cgroup_source(&value)? {
         RuntimeCgroupSource::Path(raw) => raw,
         RuntimeCgroupSource::Process(pid) => {
@@ -267,7 +363,12 @@ fn cgroup_path_from_info(
             reason: "CRI container cgroup cannot be the cgroup root",
         }
     );
-    Ok(cgroup_root.join(relative))
+    Ok(RuntimeProcessIdentity {
+        cgroup_path: cgroup_root.join(relative),
+        init_pid,
+        working_directory,
+        path_entries,
+    })
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -417,6 +518,7 @@ mod tests {
             workload_selector_id: "worker".to_owned(),
             profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
             container_id: "a".repeat(64),
+            namespace: "default".to_owned(),
             pod_uid: "pod-a".to_owned(),
             sandbox_id: "sandbox-a".to_owned(),
             container_name: "worker".to_owned(),
@@ -432,12 +534,16 @@ mod tests {
         };
         let identity = RuntimeContainerIdentity {
             full_container_id: configured.container_id.clone(),
+            namespace: configured.namespace.clone(),
             pod_uid: configured.pod_uid.clone(),
             sandbox_id: configured.sandbox_id.clone(),
             container_name: configured.container_name.clone(),
             image_digest: configured.image_digest.clone(),
             generation: configured.container_generation,
             cgroup_path: PathBuf::from("/sys/fs/cgroup/workload"),
+            init_pid: 42,
+            working_directory: PathBuf::from("/workspace"),
+            path_entries: vec![PathBuf::from("/usr/bin")],
             state: RuntimeContainerState::Running,
         };
 

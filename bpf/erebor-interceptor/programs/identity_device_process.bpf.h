@@ -212,8 +212,7 @@ static __always_inline int snapshot_process_control_target(
                      &config->node_boot_id) ||
         scratch->target_process.active_profile_generation_ref_id !=
             scratch->process.active_profile_generation_ref_id ||
-        !generation ||
-        generation->state != policy_generation_state_v1_active ||
+        !generation_allows_existing_holder(generation) ||
         generation->profile_generation_ref_id !=
             scratch->target_process.active_profile_generation_ref_id ||
         generation->label_epoch != config->label_epoch ||
@@ -377,8 +376,7 @@ static __noinline int identity_process_control_effect(
     generation = bpf_map_lookup_elem(
         &profile_generation_descriptors,
         &scratch->process.active_profile_generation_ref_id);
-    if (!generation ||
-        generation->state != policy_generation_state_v1_active ||
+    if (!generation_allows_existing_holder(generation) ||
         generation->profile_generation_ref_id !=
             scratch->process.active_profile_generation_ref_id ||
         generation->label_epoch != config->label_epoch ||

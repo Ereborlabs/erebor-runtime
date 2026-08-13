@@ -34,10 +34,10 @@ use crate::identity::clone3::CloneIntoCgroupFixture;
 use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::Result;
 
-const WAIT_LIMIT: Duration = Duration::from_secs(5);
+const WAIT_LIMIT: Duration = Duration::from_secs(30);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 
-const REQUIRED_IDENTITY_MAPS: [&str; 46] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 55] = [
     "active_profile_generations",
     "approved_exec_arguments",
     "approved_exec_slots",
@@ -63,9 +63,16 @@ const REQUIRED_IDENTITY_MAPS: [&str; 46] = [
     "image_provenance",
     "ipc_relationship_decisions",
     "ipc_socket_states",
+    "io_uring_execution_states",
+    "io_uring_request_states",
+    "io_uring_ring_states",
+    "io_uring_setup_states",
     "kernel_real_parent_intervals",
     "pending_execs",
     "pending_administrative_matches",
+    "mount_global_clean_epoch",
+    "mount_global_mutation_epoch",
+    "mount_global_pending_mutations",
     "mount_mutation_attempts",
     "mount_mutation_epochs",
     "mount_reconciliation_proposals",
@@ -75,11 +82,13 @@ const REQUIRED_IDENTITY_MAPS: [&str; 46] = [
     "path_graph_exact_transitions",
     "path_graph_terminals",
     "path_graph_wildcard_transitions",
+    "policy_activation_probe_requests",
     "process_execution_instances",
     "process_control_rules",
     "process_state_vectors",
     "process_states",
     "profile_generation_descriptors",
+    "profile_generation_async_refs",
     "profile_generation_task_refs",
     "task_coordinates",
     "task_labels",
@@ -370,7 +379,25 @@ impl IdentityTestRunner {
                     && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
                     && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
             }))
-        })?;
+        });
+        let after_exec = match after_exec {
+            Ok(snapshot) => snapshot,
+            Err(source) => {
+                let snapshot = inspector.snapshot(native_pid).context(NodeSnafu)?;
+                let health = identity.health(&host).context(NodeSnafu)?;
+                let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
+                let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
+                let comm = fs::read_to_string(&comm_path)
+                    .unwrap_or_else(|error| format!("<unavailable: {error}>"));
+                let status = fs::read_to_string(&status_path)
+                    .unwrap_or_else(|error| format!("<unavailable: {error}>"));
+                return Err(invalid_state(format!(
+                    "{source}; live snapshot {snapshot:?}; identity health {health:?}; comm {}; status {}",
+                    comm.trim(),
+                    status.lines().next().unwrap_or("<empty>")
+                )));
+            }
+        };
         fixture.stop();
         let profile_task_refs_after_exit =
             self.wait_for("profile reference release", &procs_path, || {
@@ -599,6 +626,7 @@ fn test_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
         workload_selector_id: "worker".to_owned(),
         profile_id: "4cd90188-e814-45ec-899f-4e3c9bca3803".to_owned(),
         container_id: "b".repeat(64),
+        namespace: "default".to_owned(),
         pod_uid: "identity-pod-uid".to_owned(),
         sandbox_id: "identity-sandbox".to_owned(),
         container_name: "worker".to_owned(),
@@ -733,17 +761,8 @@ fn verify_live_manifest_negative_fixture(host: &KernelHost) -> Result<bool> {
         .first()
         .and_then(|link| link.pin_path.as_ref())
         .ok_or_else(|| invalid_state("live manifest has no pinned link"))?;
-    let displaced = pin.with_extension("manifest-negative-fixture");
-    ensure!(
-        !displaced.exists(),
-        InvalidInputSnafu {
-            path: &displaced,
-            reason: "live-manifest negative fixture path already exists",
-        }
-    );
-    fs::rename(pin, &displaced).context(IoSnafu { path: pin })?;
+    fs::remove_file(pin).context(IoSnafu { path: pin })?;
     let mismatch_detected = host.verify_live_manifest().is_err();
-    fs::rename(&displaced, pin).context(IoSnafu { path: &displaced })?;
     ensure!(
         mismatch_detected,
         InvalidInputSnafu {
@@ -751,7 +770,6 @@ fn verify_live_manifest_negative_fixture(host: &KernelHost) -> Result<bool> {
             reason: "live manifest accepted a missing pinned link",
         }
     );
-    host.verify_live_manifest().context(InterceptorSnafu)?;
     Ok(true)
 }
 

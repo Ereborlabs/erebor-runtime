@@ -5,8 +5,9 @@ use mithril_control::control_envelope::Payload as ControlPayload;
 use mithril_control::node_control_client::NodeControlClient as GrpcNodeControlClient;
 use mithril_control::node_envelope::Payload as NodePayload;
 use mithril_control::{
-    ControlEnvelope, NodeEnvelope, NodeReadinessReport, NodeRegistration, TrustGenerationAck,
-    CONTROL_PROTOCOL_VERSION,
+    AdministrativeExecArmResult, AdministrativeExecResolution, ArmAdministrativeExec,
+    ControlEnvelope, NodeEnvelope, NodeReadinessReport, NodeRegistration,
+    ResolveAdministrativeExec, TrustGenerationAck, CONTROL_PROTOCOL_VERSION,
 };
 use snafu::ResultExt as _;
 use tokio::sync::mpsc;
@@ -27,10 +28,16 @@ pub struct NodeControlConnector {
 }
 
 pub struct ControlConnection {
-    _output: mpsc::Sender<NodeEnvelope>,
+    output: mpsc::Sender<NodeEnvelope>,
     input: Streaming<ControlEnvelope>,
     identity: ConnectionIdentity,
     next_control_sequence: u64,
+    next_node_sequence: u64,
+}
+
+pub enum AdministrativeControlRequest {
+    Resolve(ResolveAdministrativeExec),
+    Arm(ArmAdministrativeExec),
 }
 
 struct ConnectionIdentity {
@@ -150,16 +157,17 @@ impl NodeControlConnector {
                 .build()
             })?;
         Ok(ControlConnection {
-            _output: output,
+            output,
             input,
             identity,
             next_control_sequence: 3,
+            next_node_sequence: 4,
         })
     }
 }
 
 impl ControlConnection {
-    pub async fn wait_for_disconnect(&mut self) -> Result<()> {
+    pub async fn next_administrative_request(&mut self) -> Result<AdministrativeControlRequest> {
         let Some(message) = self.input.message().await.context(ControlRpcSnafu)? else {
             return ControlProtocolSnafu {
                 reason: "Control closed the node stream".to_owned(),
@@ -167,10 +175,75 @@ impl ControlConnection {
             .fail();
         };
         validate_control(&message, &self.identity, self.next_control_sequence)?;
-        ControlProtocolSnafu {
-            reason: "Control sent an unexpected post-registration message".to_owned(),
+        self.next_control_sequence =
+            self.next_control_sequence.checked_add(1).ok_or_else(|| {
+                ControlProtocolSnafu {
+                    reason: "Control input sequence exhausted".to_owned(),
+                }
+                .build()
+            })?;
+        match message.payload {
+            Some(ControlPayload::ResolveAdministrativeExec(request)) => {
+                Ok(AdministrativeControlRequest::Resolve(request))
+            }
+            Some(ControlPayload::ArmAdministrativeExec(request)) => {
+                Ok(AdministrativeControlRequest::Arm(request))
+            }
+            _ => ControlProtocolSnafu {
+                reason: "Control sent an unexpected post-registration message".to_owned(),
+            }
+            .fail(),
         }
-        .fail()
+    }
+
+    pub async fn send_resolution(&mut self, response: AdministrativeExecResolution) -> Result<()> {
+        self.send(NodePayload::Resolution(Box::new(response))).await
+    }
+
+    pub async fn send_arm_result(&mut self, response: AdministrativeExecArmResult) -> Result<()> {
+        self.send(NodePayload::ArmResult(response)).await
+    }
+
+    async fn send(&mut self, payload: NodePayload) -> Result<()> {
+        let sequence = self.next_node_sequence;
+        self.next_node_sequence = sequence.checked_add(1).ok_or_else(|| {
+            ControlProtocolSnafu {
+                reason: "node output sequence exhausted".to_owned(),
+            }
+            .build()
+        })?;
+        self.output
+            .send(self.identity.envelope(sequence, payload))
+            .await
+            .map_err(|_| {
+                ControlProtocolSnafu {
+                    reason: "Control stream closed before administrative response".to_owned(),
+                }
+                .build()
+            })
+    }
+
+    pub async fn wait_for_disconnect(&mut self) -> Result<()> {
+        self.next_administrative_request()
+            .await
+            .map(|_| ())
+            .and_then(|()| {
+                ControlProtocolSnafu {
+                    reason: "Control sent an administrative request to a node without an owner"
+                        .to_owned(),
+                }
+                .fail()
+            })
+    }
+}
+
+impl AdministrativeControlRequest {
+    #[must_use]
+    pub fn request_id(&self) -> &[u8] {
+        match self {
+            Self::Resolve(request) => &request.request_id,
+            Self::Arm(request) => &request.request_id,
+        }
     }
 }
 

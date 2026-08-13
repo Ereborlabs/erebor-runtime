@@ -82,6 +82,16 @@ include = [
   "IdentityRuntimeConfigV1",
   "InstalledRoleClassV1",
   "InitialRootStateV1",
+  "IoUringActorSnapshotV1",
+  "IoUringExecutionStateKindV1",
+  "IoUringExecutionStateV1",
+  "IoUringRequestStateKindV1",
+  "IoUringRequestStateV1",
+  "IoUringRestrictionStateV1",
+  "IoUringRingStateKindV1",
+  "IoUringRingStateV1",
+  "IoUringSetupStateKindV1",
+  "IoUringSetupStateV1",
   "IpcChannelKindV1",
   "IpcOperationV1",
   "IpcRelationshipDecisionKeyV1",
@@ -102,6 +112,8 @@ include = [
   "PendingAdministrativeMatchV1",
   "PhysicalDecisionKindV1",
   "PhysicalDecisionV1",
+  "PolicyActivationProbeMapKindV1",
+  "PolicyActivationProbeV1",
   "PathGraphStateKeyV1",
   "PathGraphTerminalV1",
   "PathGraphTransitionKeyV1",
@@ -186,6 +198,16 @@ include = [
 "IdentityRuntimeConfigV1" = "identity_runtime_config_v1"
 "InstalledRoleClassV1" = "installed_role_class_v1"
 "InitialRootStateV1" = "initial_root_state_v1"
+"IoUringActorSnapshotV1" = "io_uring_actor_snapshot_v1"
+"IoUringExecutionStateKindV1" = "io_uring_execution_state_kind_v1"
+"IoUringExecutionStateV1" = "io_uring_execution_state_v1"
+"IoUringRequestStateKindV1" = "io_uring_request_state_kind_v1"
+"IoUringRequestStateV1" = "io_uring_request_state_v1"
+"IoUringRestrictionStateV1" = "io_uring_restriction_state_v1"
+"IoUringRingStateKindV1" = "io_uring_ring_state_kind_v1"
+"IoUringRingStateV1" = "io_uring_ring_state_v1"
+"IoUringSetupStateKindV1" = "io_uring_setup_state_kind_v1"
+"IoUringSetupStateV1" = "io_uring_setup_state_v1"
 "IpcChannelKindV1" = "ipc_channel_kind_v1"
 "IpcOperationV1" = "ipc_operation_v1"
 "IpcRelationshipDecisionKeyV1" = "ipc_relationship_decision_key_v1"
@@ -206,6 +228,8 @@ include = [
 "PendingAdministrativeMatchV1" = "pending_administrative_match_v1"
 "PhysicalDecisionKindV1" = "physical_decision_kind_v1"
 "PhysicalDecisionV1" = "physical_decision_v1"
+"PolicyActivationProbeMapKindV1" = "policy_activation_probe_map_kind_v1"
+"PolicyActivationProbeV1" = "policy_activation_probe_v1"
 "PathGraphStateKeyV1" = "path_graph_state_key_v1"
 "PathGraphTerminalV1" = "path_graph_terminal_v1"
 "PathGraphTransitionKeyV1" = "path_graph_transition_key_v1"

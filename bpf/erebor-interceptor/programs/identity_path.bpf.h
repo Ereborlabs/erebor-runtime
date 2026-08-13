@@ -18,6 +18,38 @@ static __always_inline __u32 current_mount_namespace_inode(void)
     return inode;
 }
 
+static __always_inline int begin_global_mount_mutation(void)
+{
+    const __u32 global_key = 0;
+    __u64 *global_epoch;
+    __u64 *global_pending;
+    mount_mutation_attempt_v1 *attempt;
+    struct task_struct *task;
+    task_label_v1 *label;
+
+    task = bpf_get_current_task_btf();
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    global_epoch = bpf_map_lookup_elem(&mount_global_mutation_epoch,
+                                       &global_key);
+    global_pending = bpf_map_lookup_elem(&mount_global_pending_mutations,
+                                         &global_key);
+    if (!global_epoch || !global_pending)
+        return label ? -EACCES : 0;
+    attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0,
+                                   BPF_LOCAL_STORAGE_GET_F_CREATE);
+    if (!attempt) {
+        __sync_fetch_and_add(global_epoch, 1);
+        return -EACCES;
+    }
+    if (attempt->active)
+        return 0;
+    __builtin_memset(attempt, 0, sizeof(*attempt));
+    __sync_fetch_and_add(global_pending, 1);
+    __sync_fetch_and_add(global_epoch, 1);
+    attempt->active = 1;
+    return 0;
+}
+
 static __always_inline int begin_mount_mutation(void)
 {
     mount_security_view_state_v1 *view;
@@ -27,9 +59,17 @@ static __always_inline int begin_mount_mutation(void)
     struct task_struct *task;
     task_label_v1 *label;
     __u32 mount_namespace_inode;
+    int result;
 
+    result = begin_global_mount_mutation();
+    if (result)
+        return result;
     task = bpf_get_current_task_btf();
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0, 0);
+    if (!attempt || !attempt->active)
+        return label ? -EACCES : 0;
+
     mount_namespace_inode = current_mount_namespace_inode();
     if (!mount_namespace_inode)
         return label ? -EACCES : 0;
@@ -43,10 +83,6 @@ static __always_inline int begin_mount_mutation(void)
                                          &mount_namespace_inode);
     if (!view_lock || !mutation_epoch)
         return -EACCES;
-    attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0,
-                                   BPF_LOCAL_STORAGE_GET_F_CREATE);
-    if (!attempt || attempt->active)
-        return -EACCES;
     bpf_spin_lock(&view_lock->lock);
     /* Linux cannot have enough live tasks to overflow this u64 counter. */
     __sync_fetch_and_add(&view->pending_mutations, 1);
@@ -54,26 +90,32 @@ static __always_inline int begin_mount_mutation(void)
     (*mutation_epoch)++;
     __sync_fetch_and_add(&view->transition_version, 1);
     bpf_spin_unlock(&view_lock->lock);
-    __builtin_memset(attempt, 0, sizeof(*attempt));
     attempt->mount_namespace_inode = mount_namespace_inode;
-    attempt->active = 1;
     return 0;
 }
 
 static __always_inline void finish_mount_mutation(void)
 {
+    const __u32 global_key = 0;
     struct task_struct *task = bpf_get_current_task_btf();
     mount_mutation_attempt_v1 *attempt;
     mount_security_view_state_v1 *view;
+    __u64 *global_pending;
 
     attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0, 0);
     if (!attempt || !attempt->active)
         return;
-    view = bpf_map_lookup_elem(&mount_security_views,
-                               &attempt->mount_namespace_inode);
-    if (view)
+    if (attempt->mount_namespace_inode) {
+        view = bpf_map_lookup_elem(&mount_security_views,
+                                   &attempt->mount_namespace_inode);
         /* The pre-effect hook already published DIRTY and its new version. */
-        decrement_nonzero_counter(&view->pending_mutations);
+        if (view)
+            decrement_nonzero_counter(&view->pending_mutations);
+    }
+    global_pending = bpf_map_lookup_elem(&mount_global_pending_mutations,
+                                         &global_key);
+    if (global_pending)
+        decrement_nonzero_counter(global_pending);
     attempt->active = 0;
 }
 
@@ -144,6 +186,13 @@ static __always_inline int snapshot_mount_view(
     __u64 *topology_generation_out, __u64 *snapshot_digest_id_out,
     __u64 *transition_version_out)
 {
+    const __u32 global_key = 0;
+    __u64 *global_epoch =
+        bpf_map_lookup_elem(&mount_global_mutation_epoch, &global_key);
+    __u64 *global_clean =
+        bpf_map_lookup_elem(&mount_global_clean_epoch, &global_key);
+    __u64 *global_pending =
+        bpf_map_lookup_elem(&mount_global_pending_mutations, &global_key);
     mount_security_view_state_v1 *view =
         bpf_map_lookup_elem(&mount_security_views, &mount_namespace_inode);
     struct mount_security_view_lock_v1 *view_lock =
@@ -155,21 +204,33 @@ static __always_inline int snapshot_mount_view(
         ? bpf_map_lookup_elem(&mount_reconciliation_proposals,
                               &mount_namespace_inode)
         : NULL;
+    __u64 global_generation;
     int result = -EACCES;
 
-    if (!view || !view_lock || !mutation_epoch)
+    if (!global_epoch || !global_clean || !global_pending || !view ||
+        !view_lock || !mutation_epoch)
         return -EACCES;
-    bpf_spin_lock(&view_lock->lock);
-    if (proposal && proposal->topology_generation == *mutation_epoch &&
-        proposal->snapshot_digest_id && !view->pending_mutations &&
-        proposal->expected_transition_version == view->transition_version &&
-        proposal->transition_version == view->transition_version + 1) {
-        view->topology_generation = proposal->topology_generation;
-        view->snapshot_digest_id = proposal->snapshot_digest_id;
-        view->state = mount_topology_state_v1_clean;
-        view->transition_version = proposal->transition_version;
+    global_generation = *global_epoch;
+    if (!global_generation || *global_clean != global_generation ||
+        *global_pending)
+        return -EACCES;
+    if (reconcile) {
+        bpf_spin_lock(&view_lock->lock);
+        if (proposal && proposal->topology_generation == *mutation_epoch &&
+            proposal->snapshot_digest_id && !view->pending_mutations &&
+            proposal->expected_transition_version == view->transition_version &&
+            proposal->transition_version == view->transition_version + 1) {
+            view->topology_generation = proposal->topology_generation;
+            view->snapshot_digest_id = proposal->snapshot_digest_id;
+            view->state = mount_topology_state_v1_clean;
+            view->transition_version = proposal->transition_version;
+        }
+        bpf_spin_unlock(&view_lock->lock);
     }
+
+    bpf_spin_lock(&view_lock->lock);
     if (*mutation_epoch == view->topology_generation &&
+        view->topology_generation == global_generation &&
         view->state == mount_topology_state_v1_clean &&
         !view->pending_mutations && view->topology_generation &&
         view->snapshot_digest_id &&
@@ -183,7 +244,12 @@ static __always_inline int snapshot_mount_view(
         result = 0;
     }
     bpf_spin_unlock(&view_lock->lock);
-    return result;
+    if (result)
+        return result;
+    return *global_epoch == global_generation &&
+                   *global_clean == global_generation && !*global_pending
+               ? 0
+               : -EACCES;
 }
 
 struct canonical_path_match {
@@ -270,9 +336,6 @@ static __always_inline int canonical_path_candidate(
     canonical_mount_root_v1 *mount_root;
     path_graph_terminal_v1 *terminal;
     struct vfsmount *vfsmount = NULL;
-    __u64 topology_generation;
-    __u64 snapshot_digest_id;
-    __u64 transition_version;
     __u32 component_count = 0;
     long steps;
 
@@ -280,8 +343,9 @@ static __always_inline int canonical_path_candidate(
         return -EACCES;
     if (snapshot_mount_view(scratch->file_object.mount_namespace_inode,
                             0, 0, 0, true,
-                            &topology_generation, &snapshot_digest_id,
-                            &transition_version))
+                            &scratch->mount_topology_generation,
+                            &scratch->mount_snapshot_digest_id,
+                            &scratch->mount_transition_version))
         return -EACCES;
 
     __builtin_memset(&scratch->mount_root_key, 0,
@@ -291,13 +355,14 @@ static __always_inline int canonical_path_candidate(
     scratch->mount_root_key.mount_namespace_inode =
         scratch->file_object.mount_namespace_inode;
     scratch->mount_root_key.binding_id = binding->binding_id;
-    scratch->mount_root_key.topology_generation = topology_generation;
+    scratch->mount_root_key.topology_generation =
+        scratch->mount_topology_generation;
     if (read_mount_root_identity(vfsmount, &scratch->mount_root_key))
         return -EACCES;
     mount_root = bpf_map_lookup_elem(&canonical_mount_roots,
                                      &scratch->mount_root_key);
     if (!mount_root || !mount_root->selected_mount_id_unique ||
-        mount_root->snapshot_digest_id != snapshot_digest_id)
+        mount_root->snapshot_digest_id != scratch->mount_snapshot_digest_id)
         return -EACCES;
     /* Exact authority follows the verified oldest mount for this root. */
     scratch->file_object.mount_id_unique =
@@ -324,10 +389,12 @@ static __always_inline int canonical_path_candidate(
         !terminal->rule_numeric_id)
         return -EACCES;
     if (snapshot_mount_view(scratch->file_object.mount_namespace_inode,
-                            topology_generation,
-                            snapshot_digest_id, transition_version, false,
-                            &topology_generation, &snapshot_digest_id,
-                            &transition_version))
+                            scratch->mount_topology_generation,
+                            scratch->mount_snapshot_digest_id,
+                            scratch->mount_transition_version, false,
+                            &scratch->mount_topology_generation,
+                            &scratch->mount_snapshot_digest_id,
+                            &scratch->mount_transition_version))
         return -EACCES;
     scratch->path_terminal = *terminal;
     return 0;
@@ -339,5 +406,19 @@ int erebor_mount_mutation_sys_exit(struct trace_event_raw_sys_exit *context)
     finish_mount_mutation();
     return 0;
 }
+
+#define MOUNT_SYSCALL_INVALIDATION(NAME)                                  \
+    SEC("tracepoint/syscalls/sys_enter_" #NAME)                           \
+    int erebor_mount_sys_enter_##NAME(struct trace_event_raw_sys_enter *context) \
+    {                                                                     \
+        (void)context;                                                    \
+        begin_global_mount_mutation();                                   \
+        return 0;                                                         \
+    }
+
+MOUNT_SYSCALL_INVALIDATION(open_tree)
+MOUNT_SYSCALL_INVALIDATION(fsconfig)
+MOUNT_SYSCALL_INVALIDATION(fsmount)
+MOUNT_SYSCALL_INVALIDATION(mount_setattr)
 
 #endif /* EREBOR_IDENTITY_PATH_BPF_H */

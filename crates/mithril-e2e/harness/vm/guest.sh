@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 {platform INSPECT WORK_DIRECTORY|k3s-install VERSION CONFIG WORK_DIRECTORY|k3s-qualify MANIFEST WORK_DIRECTORY|k3s-cri-effect NODE INSPECT POLICY TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-remove WORK_DIRECTORY}" >&2
+  echo "usage: $0 {platform INSPECT WORK_DIRECTORY|k3s-install VERSION CONFIG WORK_DIRECTORY|k3s-qualify MANIFEST WORK_DIRECTORY|k3s-cri-effect NODE INSPECT POLICY TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-administrative-exec CONTROL NODE INSPECT POLICY KUBECTL_MITHRIL OIDC TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-remove WORK_DIRECTORY}" >&2
 }
 
 require_root() {
@@ -132,6 +132,7 @@ case ${1:-} in
     work_directory=$3
     require_root
     require_command python3
+    require_command busybox
     require_harness_guest "$work_directory"
     [[ -r $manifest && -f $work_directory/k3s-installed-by-harness ]] || {
       echo "k3s qualification needs its checked workload and guest work directory" >&2
@@ -157,6 +158,7 @@ case ${1:-} in
     fixture_owned=true
     printf 'mithril-k3s-cri-effect\n' >"$fixture_root/secret"
     chmod 400 "$fixture_root/secret"
+    install -m 0555 "$(command -v busybox)" "$fixture_root/admin-exec"
     /usr/local/bin/k3s kubectl apply -f "$manifest" >/dev/null
     /usr/local/bin/k3s kubectl -n "$namespace" wait \
       --for=condition=Ready pod/mithril-runtime --timeout=300s
@@ -226,6 +228,7 @@ case ${1:-} in
     require_command jq
     require_command lsattr
     require_command date
+    require_command busybox
     require_harness_guest "$work_directory"
     for input in "$node" "$inspect" "$policy" "$template" "$policy_source" \
       "$seal_request" "$signing_key" "$public_key" "$manifest"; do
@@ -248,7 +251,6 @@ case ${1:-} in
     node_log=$lane_root/mithril-node.log
     pod_state=/tmp/mithril-k3s-cri-effect
     pod_pid_file=$pod_state/exec.pid
-    pod_result_file=$pod_state/exec.result
     pod_release_file=$pod_state/release
     initial_snapshot=$lane_root/pod-initial-root.json
     external_snapshot=$lane_root/kubectl-exec-root.json
@@ -294,7 +296,7 @@ case ${1:-} in
         release_fd_open=false
       fi
       if [[ $result_fd_open == true ]]; then
-        exec 8<&-
+        exec 8>&-
         result_fd_open=false
       fi
       stop_node
@@ -324,6 +326,7 @@ case ${1:-} in
     fixture_owned=true
     printf 'mithril-k3s-cri-effect\n' >"$fixture_path"
     chmod 400 "$fixture_path"
+    install -m 0555 "$(command -v busybox)" "$fixture_root/admin-exec"
 
     /usr/local/bin/k3s kubectl delete namespace "$namespace" \
       --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
@@ -348,6 +351,7 @@ case ${1:-} in
     /usr/local/bin/k3s crictl inspect "$container_id" >"$container_json"
     init_pid=$(jq -er '.info.pid' "$container_json")
     created_at=$(jq -er '.status.createdAt' "$container_json")
+    container_state=$(jq -er '.status.state' "$container_json")
     generation=$(date --utc --date "$created_at" +%s%N)
     image_digest=$(jq -er '.status.imageRef' "$container_json")
     sandbox_id=$(
@@ -376,6 +380,10 @@ case ${1:-} in
     }
     [[ $image_digest == *sha256:* ]] || {
       echo "k3s CRI returned an unresolved image reference: $image_digest" >&2
+      exit 1
+    }
+    [[ $container_state == CONTAINER_RUNNING ]] || {
+      echo "k3s CRI did not report the pre-existing container as running" >&2
       exit 1
     }
     [[ -r /proc/$init_pid/root/var/lib/mithril/secret ]] || {
@@ -439,10 +447,12 @@ case ${1:-} in
     }
 
     rm -rf -- "/proc/$init_pid/root$pod_state"
+    exec 8>"$lane_root/exec-result"
+    result_fd_open=true
     /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
-      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; exec 3>"$5"; if IFS= read -r _ <"$4"; then printf "BASELINE_ALLOWED\n" >&3; else printf "BASELINE_DENIED\n" >&3; exit 42; fi; echo $$ >"$2"; IFS= read -r _ <"$3"; if IFS= read -r _ <"$4"; then printf "ALLOWED\n" >&3; exit 41; else status=$?; printf "DENIED:%s\n" "$status" >&3; sleep 1; exit 0; fi' \
+      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; if true <"$4"; then printf "BASELINE_ALLOWED\n"; else printf "BASELINE_DENIED\n"; exit 42; fi; echo $$ >"$2"; IFS= read -r _ <"$3"; if true <"$4"; then exit 41; else chmod 777 "$1" "$3"; exit 0; fi' \
       sh "$pod_state" "$pod_pid_file" "$pod_release_file" \
-      /var/lib/mithril/secret "$pod_result_file" &
+      /var/lib/mithril/secret >&8 &
     exec_client_pid=$!
     for _attempt in {1..200}; do
       [[ -s /proc/$init_pid/root$pod_pid_file ]] && break
@@ -457,9 +467,12 @@ case ${1:-} in
       echo "kubectl exec wrote an invalid namespace PID" >&2
       exit 1
     }
-    exec 8<"/proc/$init_pid/root$pod_result_file"
-    result_fd_open=true
-    IFS= read -r baseline_result <&8
+    for _attempt in {1..200}; do
+      [[ -s $lane_root/exec-result ]] && break
+      kill -0 "$exec_client_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    baseline_result=$(head -n 1 "$lane_root/exec-result")
     [[ $baseline_result == BASELINE_ALLOWED ]] || {
       echo "the kubectl exec task could not read the fixture before PROTECT" >&2
       exit 1
@@ -517,23 +530,14 @@ case ${1:-} in
       exit 1
     }
 
-    printf '1\n' >&9
-    exec 9>&-
-    release_fd_open=false
-    IFS= read -r result <&8
-    exec 8<&-
+    printf '1\n' >&9 || true
+    exec 8>&-
     result_fd_open=false
-    if ! wait "$exec_client_pid"; then
-      [[ $result == DENIED:* || $result == ALLOWED ]] || {
-        echo "kubectl exec exited before reporting the file-open result" >&2
-        exit 1
-      }
-    fi
+    set +e
+    wait "$exec_client_pid"
+    exec_status=$?
+    set -e
     exec_client_pid=
-    [[ $result == DENIED:* ]] || {
-      echo "kubectl exec read was not denied: $result" >&2
-      exit 1
-    }
     expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
     for _attempt in {1..100}; do
       "$inspect" effects --socket-path "$lane_root/observation.sock" \
@@ -546,7 +550,7 @@ case ${1:-} in
     done
     grep -F "$expected_effect" "$effects" \
       | grep -Fq 'exact_object_key_id=7' || {
-      echo "Mithril did not report the exact pre-effect denial" >&2
+      echo "Mithril did not report the exact pre-effect denial; kubectl status: $exec_status" >&2
       cat "$effects" >&2
       exit 1
     }
@@ -555,15 +559,18 @@ case ${1:-} in
     printf 'pod_uid=%s\n' "$pod_uid"
     printf 'container_id=%s\n' "$container_ref"
     printf 'pod_initial_root=restored_or_unknown_root:fail_closed_unknown\n'
+    printf 'initial_binding_start_gap=recorded:container_running_before_node_binding\n'
     printf 'kubectl_exec_root=external_runtime_root:runtime_external_restricted\n'
     printf 'baseline_file_open=allowed-before-protect\n'
     printf 'exact_file_open=denied-before-effect:EXACT_POLICY_DENY\n'
     printf 'qualification_fixture=read-only-hostPath-file\n'
-    rm -rf -- "/proc/$init_pid/root$pod_state"
     stop_node
+    exec 9>&-
+    release_fd_open=false
+    [[ $pin_owned == false ]] || rm -rf -- /sys/fs/bpf/mithril-k3s-cri-effect
+    pin_owned=false
     /usr/local/bin/k3s kubectl delete namespace "$namespace" \
       --ignore-not-found --wait=true --timeout=120s >/dev/null
-    [[ $pin_owned == false ]] || rm -rf -- /sys/fs/bpf/mithril-k3s-cri-effect
     [[ $fixture_owned == false ]] || rm -rf -- "$fixture_root"
     rm -rf -- "$lane_root"
     trap - EXIT
@@ -571,6 +578,615 @@ case ${1:-} in
     [[ ! -e /sys/fs/bpf/mithril-k3s-cri-effect \
       && ! -e $fixture_root && ! -e $lane_root ]] || {
       echo "k3s CRI effect qualification left an owned artifact" >&2
+      exit 1
+    }
+    ;;
+  k3s-administrative-exec)
+    (($# == 14)) || { usage; exit 2; }
+    control=$2
+    node=$3
+    inspect=$4
+    policy=$5
+    kubectl_mithril=$6
+    oidc=$7
+    template=$8
+    policy_source=$9
+    seal_request=${10}
+    signing_key=${11}
+    public_key=${12}
+    manifest=${13}
+    work_directory=${14}
+    require_root
+    require_command base64
+    require_command busybox
+    require_command curl
+    require_command date
+    require_command jq
+    require_command lsattr
+    require_command openssl
+    require_command python3
+    require_command sha256sum
+    require_command systemctl
+    require_command update-ca-certificates
+    require_harness_guest "$work_directory"
+    for input in "$control" "$node" "$inspect" "$policy" \
+      "$kubectl_mithril" "$oidc" "$template" "$policy_source" \
+      "$seal_request" "$signing_key" "$public_key" "$manifest"; do
+      [[ -r $input ]] || {
+        echo "k3s administrative-exec input is not readable: $input" >&2
+        exit 2
+      }
+    done
+
+    namespace=mithril-vm-qualification
+    pod=mithril-runtime
+    container=runtime
+    node_id=77777777-7777-4777-8777-777777777777
+    fixture_root=/var/lib/mithril-vm-qualification
+    executable_path=$fixture_root/admin-exec
+    lane_root=$work_directory/k3s-administrative-exec
+    pin_root=/sys/fs/bpf/mithril-k3s-administrative-exec
+    node_config=$lane_root/node.json
+    control_config=$lane_root/control.json
+    artifact=$lane_root/profile.json
+    executable_object=$lane_root/executable-object.json
+    node_log=$lane_root/node.log
+    control_log=$lane_root/control.log
+    oidc_log=$lane_root/oidc.log
+    plugin_log=$lane_root/kubectl-mithril.log
+    plugin_pid=
+    runtime_client_pid=
+    node_pid=
+    control_pid=
+    oidc_pid=
+    fixture_owned=false
+    pin_owned=false
+    k3s_configured=false
+    ca_installed=false
+
+    stop_process() {
+      local pid=${1:-}
+      [[ -n $pid ]] || return 0
+      if kill -0 "$pid" 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null || true
+        for _attempt in {1..50}; do
+          kill -0 "$pid" 2>/dev/null || break
+          sleep 0.1
+        done
+        kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null || true
+      fi
+      wait "$pid" 2>/dev/null || true
+    }
+    wait_for_k3s() {
+      for _attempt in {1..300}; do
+        if systemctl is-active --quiet k3s \
+          && /usr/local/bin/k3s kubectl get node -o name 2>/dev/null \
+            | grep -q '^node/'; then
+          return 0
+        fi
+        sleep 1
+      done
+      echo "k3s did not recover after administrative webhook configuration" >&2
+      return 1
+    }
+    cleanup_administrative_exec() {
+      local status=$?
+      trap - EXIT
+      set +e
+      stop_process "$plugin_pid"
+      stop_process "$runtime_client_pid"
+      stop_process "$node_pid"
+      stop_process "$control_pid"
+      stop_process "$oidc_pid"
+      /usr/local/bin/k3s kubectl delete validatingwebhookconfiguration \
+        mithril-administrative-exec --ignore-not-found >/dev/null 2>&1
+      /usr/local/bin/k3s kubectl delete clusterrolebinding \
+        mithril-approved-administrative-exec --ignore-not-found >/dev/null 2>&1
+      /usr/local/bin/k3s kubectl delete clusterrole \
+        mithril-approved-administrative-exec --ignore-not-found >/dev/null 2>&1
+      /usr/local/bin/k3s kubectl delete namespace "$namespace" \
+        --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1
+      if [[ $k3s_configured == true && -r $lane_root/k3s-config.yaml ]]; then
+        install -m 600 "$lane_root/k3s-config.yaml" /etc/rancher/k3s/config.yaml
+        systemctl restart k3s >/dev/null 2>&1
+        wait_for_k3s >/dev/null 2>&1 || status=1
+      fi
+      if [[ $ca_installed == true ]]; then
+        rm -f -- /usr/local/share/ca-certificates/mithril-vm-administrative.crt
+        update-ca-certificates >/dev/null 2>&1 || status=1
+      fi
+      [[ $pin_owned == false ]] || rm -rf -- "$pin_root"
+      [[ $fixture_owned == false ]] || rm -rf -- "$fixture_root"
+      rm -rf -- "$lane_root"
+      exit "$status"
+    }
+    trap cleanup_administrative_exec EXIT
+    trap 'echo "k3s administrative exec failed at line $LINENO: $BASH_COMMAND" >&2' ERR
+
+    [[ -f $work_directory/k3s-installed-by-harness ]] || {
+      echo "k3s administrative exec needs the harness-owned k3s install" >&2
+      exit 2
+    }
+    [[ ! -e $fixture_root && ! -e $pin_root && ! -e $lane_root ]] || {
+      echo "k3s administrative-exec fixture, pin, or state already exists" >&2
+      exit 2
+    }
+    install -d -m 700 "$fixture_root" "$lane_root" "$lane_root/control-state"
+    fixture_owned=true
+    printf 'mithril-k3s-administrative-exec\n' >"$fixture_root/secret"
+    chmod 400 "$fixture_root/secret"
+    install -m 0555 "$(command -v busybox)" "$executable_path"
+
+    ca_key=$lane_root/ca-key.pem
+    ca=$lane_root/ca.pem
+    server_key=$lane_root/server-key.pem
+    server_csr=$lane_root/server.csr
+    server_certificate=$lane_root/server.pem
+    node_key=$lane_root/node-key.pem
+    node_csr=$lane_root/node.csr
+    node_certificate=$lane_root/node.pem
+    openssl req -x509 -newkey rsa:2048 -nodes -days 1 -sha256 \
+      -subj /CN=Mithril-VM-CA -addext basicConstraints=critical,CA:TRUE \
+      -keyout "$ca_key" -out "$ca" >/dev/null 2>&1
+    openssl req -new -newkey rsa:2048 -nodes -sha256 -subj /CN=localhost \
+      -addext subjectAltName=DNS:localhost,IP:127.0.0.1 \
+      -addext extendedKeyUsage=serverAuth \
+      -keyout "$server_key" -out "$server_csr" >/dev/null 2>&1
+    openssl x509 -req -days 1 -sha256 -in "$server_csr" -CA "$ca" \
+      -CAkey "$ca_key" -CAcreateserial -copy_extensions copy \
+      -out "$server_certificate" >/dev/null 2>&1
+    openssl req -new -newkey rsa:2048 -nodes -sha256 -subj /CN="$node_id" \
+      -addext extendedKeyUsage=clientAuth \
+      -keyout "$node_key" -out "$node_csr" >/dev/null 2>&1
+    openssl x509 -req -days 1 -sha256 -in "$node_csr" -CA "$ca" \
+      -CAkey "$ca_key" -CAcreateserial -copy_extensions copy \
+      -out "$node_certificate" >/dev/null 2>&1
+    chmod 600 "$ca_key" "$server_key" "$node_key"
+    openssl x509 -in "$node_certificate" -outform DER \
+      -out "$lane_root/node.der"
+    node_certificate_sha256=$(sha256sum "$lane_root/node.der" | awk '{print $1}')
+
+    install -m 0644 "$ca" \
+      /usr/local/share/ca-certificates/mithril-vm-administrative.crt
+    ca_installed=true
+    update-ca-certificates >/dev/null
+    webhook_token=$(openssl rand -hex 32)
+    printf '%s\n' "$webhook_token" >"$lane_root/webhook-token"
+    chmod 600 "$lane_root/webhook-token"
+    authentication_kubeconfig=$lane_root/authentication-webhook.kubeconfig
+    cat >"$authentication_kubeconfig" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: mithril
+    cluster:
+      certificate-authority: $ca
+      server: https://localhost:9443/kubernetes/$webhook_token/authenticate
+contexts:
+  - name: mithril
+    context:
+      cluster: mithril
+      user: kube-apiserver
+current-context: mithril
+users:
+  - name: kube-apiserver
+    user: {}
+EOF
+    chmod 600 "$authentication_kubeconfig"
+    cp -- /etc/rancher/k3s/config.yaml "$lane_root/k3s-config.yaml"
+    cat >>/etc/rancher/k3s/config.yaml <<EOF
+kube-apiserver-arg:
+  - authentication-token-webhook-config-file=$authentication_kubeconfig
+  - authentication-token-webhook-version=v1
+  - authentication-token-webhook-cache-ttl=0s
+EOF
+    k3s_configured=true
+    systemctl restart k3s
+    wait_for_k3s
+
+    /usr/local/bin/k3s kubectl delete namespace "$namespace" \
+      --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
+    /usr/local/bin/k3s kubectl apply -f "$manifest" >/dev/null
+    /usr/local/bin/k3s kubectl -n "$namespace" wait \
+      --for=condition=Ready "pod/$pod" --timeout=300s
+    kubernetes_node=$(
+      /usr/local/bin/k3s kubectl -n "$namespace" get pod "$pod" \
+        -o jsonpath='{.spec.nodeName}'
+    )
+    pod_uid=$(
+      /usr/local/bin/k3s kubectl -n "$namespace" get pod "$pod" \
+        -o jsonpath='{.metadata.uid}'
+    )
+    container_ref=$(
+      /usr/local/bin/k3s kubectl -n "$namespace" get pod "$pod" \
+        -o jsonpath='{.status.containerStatuses[0].containerID}'
+    )
+    [[ -n $kubernetes_node && $container_ref == containerd://* ]] || {
+      echo "k3s did not report one exact administrative target" >&2
+      exit 1
+    }
+    container_id=${container_ref#containerd://}
+    container_json=$lane_root/container.json
+    /usr/local/bin/k3s crictl inspect "$container_id" >"$container_json"
+    init_pid=$(jq -er '.info.pid' "$container_json")
+    created_at=$(jq -er '.status.createdAt' "$container_json")
+    container_state=$(jq -er '.status.state' "$container_json")
+    generation=$(date --utc --date "$created_at" +%s%N)
+    image_digest=$(jq -er '.status.imageRef' "$container_json")
+    sandbox_id=$(
+      /usr/local/bin/k3s crictl ps --id "$container_id" -o json \
+        | jq -er '.containers[0].podSandboxId'
+    )
+    [[ $pod_uid =~ ^[0-9a-f-]{36}$ \
+      && $container_id =~ ^[0-9a-f]{64}$ \
+      && $sandbox_id =~ ^[0-9a-f]{64}$ \
+      && $init_pid =~ ^[1-9][0-9]*$ \
+      && $generation =~ ^[1-9][0-9]*$ \
+      && $image_digest == *sha256:* \
+      && $container_state == CONTAINER_RUNNING ]] || {
+      echo "k3s returned an invalid administrative target identity" >&2
+      exit 1
+    }
+
+    sed \
+      -e "s|/var/tmp/mithril-runtime-qualification-0|$work_directory|g" \
+      -e "s|MITHRIL_CONTAINER_ID|$container_id|g" \
+      -e "s|MITHRIL_POD_UID|$pod_uid|g" \
+      -e "s|MITHRIL_SANDBOX_ID|$sandbox_id|g" \
+      -e "s|\"container_generation\": 1|\"container_generation\": $generation|" \
+      -e "s|MITHRIL_IMAGE_DIGEST|$image_digest|g" \
+      "$template" >"$node_config"
+    inode_generation=$(lsattr -v "$executable_path" | awk 'NR == 1 {print $1}')
+    [[ $inode_generation =~ ^[1-9][0-9]*$ ]] || {
+      echo "administrative executable has no nonzero inode generation" >&2
+      exit 1
+    }
+    "$inspect" file-object --root-pid "$init_pid" \
+      --path /var/lib/mithril/admin-exec --profile-generation 1 \
+      --exact-object-key 12 --object-class MANUAL_EXEC_ALLOWED \
+      --inode-generation "$inode_generation" >"$executable_object"
+    "$policy" compile --source "$policy_source" --seal-request "$seal_request" \
+      --signing-key "$signing_key" --output "$artifact"
+    "$policy" verify --artifact "$artifact" --public-key "$public_key"
+    jq --arg artifact "$artifact" --arg public_key "$public_key" \
+      --slurpfile object "$executable_object" \
+      '.policy_candidates = [{artifact_path: $artifact, public_key_path: $public_key}]
+       | .exact_file_objects = $object' "$node_config" >"$lane_root/node-prepared.json"
+    mv -- "$lane_root/node-prepared.json" "$node_config"
+
+    jq -n --arg ca "$ca" --arg server_certificate "$server_certificate" \
+      --arg server_key "$server_key" --arg node_id "$node_id" \
+      --arg node_certificate_sha256 "$node_certificate_sha256" \
+      --arg state "$lane_root/control-state" --arg signing_key "$signing_key" \
+      --arg webhook_token_path "$lane_root/webhook-token" \
+      --arg kubernetes_node "$kubernetes_node" \
+      '{listen:"127.0.0.1:7443",
+        tls:{certificate_path:$server_certificate,private_key_path:$server_key,node_ca_path:$ca},
+        allowed_nodes:[{node_id:$node_id,certificate_sha256:$node_certificate_sha256}],
+        trust:{generation:1,bundle_digest:("d" * 64)},
+        administrative_exec:{listen:"127.0.0.1:9443",
+          public_base_url:"https://localhost:9443",
+          tls_certificate_path:$server_certificate,tls_private_key_path:$server_key,
+          oidc_issuer_url:"https://localhost:9444",oidc_client_id:"mithril-vm",
+          oidc_client_secret_path:null,oidc_ca_path:$ca,
+          kubernetes_audience:"mithril-administrative-exec",
+          kubernetes_webhook_token_path:$webhook_token_path,
+          node_ids_by_kubernetes_name:{($kubernetes_node):$node_id},request_lifetime_seconds:120,
+          approval:{state_directory:$state,tenant_id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            cluster_uid:"55555555-5555-4555-8555-555555555555",
+            trust_domain_id:"22222222-2222-4222-8222-222222222222",
+            issuer_id:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            key_id:"mithril-vm-administrative-key-v1",private_key_path:$signing_key,
+            sequence_epoch:1,authorization_lifetime_seconds:120}}}' >"$control_config"
+
+    python3 "$oidc" --certificate "$server_certificate" \
+      --private-key "$server_key" --issuer https://localhost:9444 \
+      >"$oidc_log" 2>&1 &
+    oidc_pid=$!
+    for _attempt in {1..100}; do
+      curl --silent --show-error --fail --cacert "$ca" \
+        https://localhost:9444/healthz >/dev/null 2>&1 && break
+      kill -0 "$oidc_pid" 2>/dev/null || {
+        echo "OIDC fixture exited before readiness" >&2
+        cat "$oidc_log" >&2
+        exit 1
+      }
+      sleep 0.1
+    done
+    curl --silent --show-error --fail --cacert "$ca" \
+      https://localhost:9444/healthz >/dev/null
+    KUBECONFIG=/etc/rancher/k3s/k3s.yaml "$control" --config "$control_config" \
+      >"$control_log" 2>&1 &
+    control_pid=$!
+    for _attempt in {1..100}; do
+      status=$(curl --silent --show-error --cacert "$ca" --output /dev/null \
+        --write-out '%{http_code}' https://localhost:9443/activate/missing || true)
+      [[ $status == 404 ]] && break
+      kill -0 "$control_pid" 2>/dev/null || {
+        echo "Mithril Control exited before administrative HTTPS readiness" >&2
+        cat "$control_log" >&2
+        exit 1
+      }
+      sleep 0.1
+    done
+    pin_owned=true
+    "$node" --config "$node_config" >"$node_log" 2>&1 &
+    node_pid=$!
+    for _attempt in {1..300}; do
+      if [[ -S $lane_root/observation.sock ]] \
+        && "$inspect" --pin-root "$pin_root" task --host-pid "$init_pid" \
+          >"$lane_root/initial-root.json" 2>/dev/null; then
+        break
+      fi
+      kill -0 "$node_pid" 2>/dev/null || {
+        echo "Mithril node exited before administrative readiness" >&2
+        tail -n 60 "$node_log" >&2
+        exit 1
+      }
+      sleep 0.1
+    done
+    [[ -s $lane_root/initial-root.json ]] || {
+      echo "Mithril node did not publish the administrative binding" >&2
+      exit 1
+    }
+    sleep 1
+
+    ca_bundle=$(base64 -w0 "$ca")
+    rbac=$lane_root/administrative-rbac.yaml
+    webhook=$lane_root/administrative-webhook.yaml
+    cat >"$rbac" <<'EOF'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mithril-approved-administrative-exec
+rules:
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mithril-approved-administrative-exec
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mithril-approved-administrative-exec
+subjects:
+  - kind: Group
+    name: mithril:administrative-exec
+    apiGroup: rbac.authorization.k8s.io
+EOF
+    cat >"$webhook" <<EOF
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: mithril-administrative-exec
+webhooks:
+  - name: administrative-exec.mithril.ereborlabs.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Exact
+    timeoutSeconds: 5
+    clientConfig:
+      url: https://localhost:9443/kubernetes/$webhook_token/admit
+      caBundle: $ca_bundle
+    rules:
+      - operations: ["CONNECT"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods/exec"]
+        scope: Namespaced
+EOF
+    /usr/local/bin/k3s kubectl apply -f "$rbac" >/dev/null
+    /usr/local/bin/k3s kubectl apply -f "$webhook" >/dev/null
+    credential_kubeconfig=$lane_root/credential-kubeconfig.yaml
+    cat >"$credential_kubeconfig" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: k3s
+    cluster:
+      certificate-authority: /var/lib/rancher/k3s/server/tls/server-ca.crt
+      server: https://127.0.0.1:6443
+contexts:
+  - name: k3s
+    context:
+      cluster: k3s
+      user: mithril
+current-context: k3s
+users:
+  - name: mithril
+    user: {}
+EOF
+    chmod 600 "$credential_kubeconfig"
+
+    KUBECONFIG="$credential_kubeconfig" "$kubectl_mithril" \
+      --control-url https://localhost:9443 --control-ca "$ca" \
+      exec -n "$namespace" -c "$container" \
+      "$pod" /var/lib/mithril/admin-exec sleep 20 >"$plugin_log" 2>&1 &
+    plugin_pid=$!
+    activation_url=
+    for _attempt in {1..300}; do
+      activation_url=$(sed -n 's/^Opening \(https:[^[:space:]]*\)$/\1/p' \
+        "$plugin_log" | head -n 1)
+      [[ -n $activation_url ]] && break
+      kill -0 "$plugin_pid" 2>/dev/null || {
+        echo "kubectl-mithril exited before it requested approval" >&2
+        cat "$plugin_log" >&2
+        exit 1
+      }
+      sleep 0.1
+    done
+    [[ $activation_url == https://localhost:9443/activate/* ]] || {
+      echo "kubectl-mithril did not print one local activation URL" >&2
+      cat "$plugin_log" >&2
+      exit 1
+    }
+    curl --silent --show-error --fail --cacert "$ca" "$activation_url" \
+      >"$lane_root/activation.html"
+    grep -Fq '/var/lib/mithril/admin-exec sleep 20' \
+      "$lane_root/activation.html"
+    curl --silent --show-error --cacert "$ca" --dump-header "$lane_root/authorize.headers" \
+      --output /dev/null "$activation_url/authorize"
+    oidc_authorize_url=$(awk 'tolower($1) == "location:" {$1=""; sub(/^ /, ""); gsub(/\r/, ""); print; exit}' \
+      "$lane_root/authorize.headers")
+    [[ $oidc_authorize_url == https://localhost:9444/authorize* ]] || {
+      echo "Control did not start the checked OIDC authorization-code flow" >&2
+      exit 1
+    }
+    curl --silent --show-error --cacert "$ca" --dump-header "$lane_root/oidc.headers" \
+      --output /dev/null "$oidc_authorize_url"
+    oidc_callback_url=$(awk 'tolower($1) == "location:" {$1=""; sub(/^ /, ""); gsub(/\r/, ""); print; exit}' \
+      "$lane_root/oidc.headers")
+    [[ $oidc_callback_url == https://localhost:9443/oidc/callback* ]] || {
+      echo "OIDC fixture did not return to the exact Control callback" >&2
+      exit 1
+    }
+    curl --silent --show-error --fail --cacert "$ca" "$oidc_callback_url" \
+      >"$lane_root/confirmation.html"
+    grep -Fq 'operator@mithril.invalid' "$lane_root/confirmation.html"
+    grep -Fq 'I accept this race and approve once' "$lane_root/confirmation.html"
+    curl --silent --show-error --fail --cacert "$ca" --request POST \
+      "$activation_url/approve" >"$lane_root/approved.html"
+    grep -Fq 'Administrative exec approved' "$lane_root/approved.html"
+
+    cgroup_path=$(sed -n 's|^0::|/sys/fs/cgroup|p' "/proc/$init_pid/cgroup")
+    [[ -d $cgroup_path ]] || {
+      echo "administrative target has no live unified cgroup" >&2
+      exit 1
+    }
+    approved_pid=
+    for _attempt in {1..300}; do
+      while read -r host_pid; do
+        [[ -r /proc/$host_pid/cmdline ]] || continue
+        command_line=$(tr '\0' ' ' <"/proc/$host_pid/cmdline")
+        if [[ $command_line == '/var/lib/mithril/admin-exec sleep 20 ' ]]; then
+          approved_pid=$host_pid
+          break
+        fi
+      done <"$cgroup_path/cgroup.procs"
+      [[ -n $approved_pid ]] && break
+      kill -0 "$plugin_pid" 2>/dev/null || {
+        echo "approved kubectl exec exited before the role was inspected" >&2
+        cat "$plugin_log" >&2
+        exit 1
+      }
+      sleep 0.1
+    done
+    [[ -n $approved_pid ]] || {
+      echo "approved kubectl exec did not create the exact runtime task" >&2
+      exit 1
+    }
+    "$inspect" --pin-root "$pin_root" task --host-pid "$approved_pid" \
+      >"$lane_root/approved-task.json"
+    jq -e '.root_class == "external_runtime_root"
+           and .installed_role_class == "approved_administrative_role"
+           and .active_role_id == 3' "$lane_root/approved-task.json" >/dev/null || {
+      echo "approved kubectl exec did not consume the administrative role" >&2
+      cat "$lane_root/approved-task.json" >&2
+      exit 1
+    }
+    approved_task_cookie=$(jq -er '.task_cookie' "$lane_root/approved-task.json")
+    set +e
+    wait "$plugin_pid"
+    plugin_status=$?
+    set -e
+    plugin_pid=
+    [[ $plugin_status -eq 0 ]] || {
+      echo "approved kubectl-mithril exec failed with status $plugin_status" >&2
+      cat "$plugin_log" >&2
+      exit 1
+    }
+
+    set +e
+    /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
+      /var/lib/mithril/admin-exec true >"$lane_root/unapproved.out" 2>&1
+    unapproved_status=$?
+    set -e
+    [[ $unapproved_status -ne 0 ]] \
+      && grep -Fq 'admission identity has no Mithril approval ID' \
+        "$lane_root/unapproved.out" || {
+      echo "ordinary kubectl exec bypassed the fail-closed admission owner" >&2
+      cat "$lane_root/unapproved.out" >&2
+      exit 1
+    }
+
+    /usr/local/bin/k3s crictl exec "$container_id" \
+      /var/lib/mithril/admin-exec sleep 10 >"$lane_root/direct-runtime.out" 2>&1 &
+    runtime_client_pid=$!
+    restricted_pid=
+    for _attempt in {1..200}; do
+      while read -r host_pid; do
+        [[ $host_pid == "$approved_pid" || ! -r /proc/$host_pid/cmdline ]] && continue
+        command_line=$(tr '\0' ' ' <"/proc/$host_pid/cmdline")
+        if [[ $command_line == '/var/lib/mithril/admin-exec sleep 10 ' ]]; then
+          restricted_pid=$host_pid
+          break
+        fi
+      done <"$cgroup_path/cgroup.procs"
+      [[ -n $restricted_pid ]] && break
+      kill -0 "$runtime_client_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    [[ -n $restricted_pid ]] || {
+      echo "direct runtime non-winner did not create an inspectable root" >&2
+      cat "$lane_root/direct-runtime.out" >&2
+      exit 1
+    }
+    "$inspect" --pin-root "$pin_root" task --host-pid "$restricted_pid" \
+      >"$lane_root/restricted-task.json"
+    jq -e '.root_class == "external_runtime_root"
+           and .installed_role_class == "runtime_external_restricted"
+           and .active_role_id == 2' "$lane_root/restricted-task.json" >/dev/null || {
+      echo "the post-consumption direct runtime root gained administrative authority" >&2
+      cat "$lane_root/restricted-task.json" >&2
+      exit 1
+    }
+    wait "$runtime_client_pid"
+    runtime_client_pid=
+
+    printf 'lane=k3s-administrative-exec\n'
+    printf 'product_path=kubectl-mithril+oidc-pkce+self-approval+tokenreview+connect-admission+node-slot\n'
+    printf 'approver=operator@mithril.invalid:self-approved\n'
+    printf 'pod_uid=%s\n' "$pod_uid"
+    printf 'container_id=%s\n' "$container_ref"
+    printf 'approved_task_cookie=%s\n' "$approved_task_cookie"
+    printf 'approved_root=external_runtime_root:approved_administrative_role\n'
+    printf 'ordinary_kubectl_exec=denied-by-admission\n'
+    printf 'post-consumption_direct_runtime_root=external_runtime_root:runtime_external_restricted\n'
+    printf 'start_gap=recorded:container-running-before-node-binding\n'
+
+    stop_process "$node_pid"
+    node_pid=
+    stop_process "$control_pid"
+    control_pid=
+    stop_process "$oidc_pid"
+    oidc_pid=
+    /usr/local/bin/k3s kubectl delete validatingwebhookconfiguration \
+      mithril-administrative-exec --ignore-not-found >/dev/null
+    /usr/local/bin/k3s kubectl delete clusterrolebinding \
+      mithril-approved-administrative-exec --ignore-not-found >/dev/null
+    /usr/local/bin/k3s kubectl delete clusterrole \
+      mithril-approved-administrative-exec --ignore-not-found >/dev/null
+    /usr/local/bin/k3s kubectl delete namespace "$namespace" \
+      --ignore-not-found --wait=true --timeout=120s >/dev/null
+    install -m 600 "$lane_root/k3s-config.yaml" /etc/rancher/k3s/config.yaml
+    systemctl restart k3s
+    wait_for_k3s
+    k3s_configured=false
+    rm -f -- /usr/local/share/ca-certificates/mithril-vm-administrative.crt
+    update-ca-certificates >/dev/null
+    ca_installed=false
+    rm -rf -- "$pin_root" "$fixture_root"
+    pin_owned=false
+    fixture_owned=false
+    rm -rf -- "$lane_root"
+    trap - EXIT
+    trap - ERR
+    [[ ! -e $pin_root && ! -e $fixture_root && ! -e $lane_root ]] || {
+      echo "k3s administrative-exec qualification left an owned artifact" >&2
       exit 1
     }
     ;;

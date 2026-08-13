@@ -31,7 +31,7 @@ sudo target/debug/mithril-identity-test --repo-root . \
 ```
 
 The physical runner refuses a pre-existing pin root or occupied cgroup, has a
-five-second bound on every asynchronous observation, and owns every process it
+30-second bound on every asynchronous observation, and owns every process it
 creates. It proves external-root classification on cgroup movement, native
 creator identity, pre-wake coordinates, exec commit, typed reference release,
 and exact pinned-map reuse after restart. Descendant placement is resolved by a

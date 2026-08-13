@@ -8,11 +8,186 @@ use std::os::fd::{AsRawFd as _, FromRawFd as _, RawFd};
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
+use std::sync::atomic::{fence, Ordering};
 
 const AT_RECURSIVE: libc::c_int = 0x8000;
 const MOUNT_ATTR_RDONLY: u64 = 0x0000_0001;
 const MOVE_MOUNT_F_EMPTY_PATH: libc::c_uint = 0x0000_0004;
 const OPEN_TREE_CLONE: libc::c_uint = 0x0000_0001;
+const IORING_SETUP_R_DISABLED: u32 = 1 << 6;
+const IORING_SETUP_SQPOLL: u32 = 1 << 1;
+const IORING_SETUP_SINGLE_ISSUER: u32 = 1 << 12;
+const IORING_FEAT_SINGLE_MMAP: u32 = 1;
+const IORING_REGISTER_RESTRICTIONS: libc::c_uint = 11;
+const IORING_REGISTER_ENABLE_RINGS: libc::c_uint = 12;
+const IORING_RESTRICTION_REGISTER_OP: u16 = 0;
+const IORING_RESTRICTION_SQE_OP: u16 = 1;
+const IORING_RESTRICTION_SQE_FLAGS_ALLOWED: u16 = 2;
+const IORING_OP_READ: u8 = 22;
+const IORING_OP_WRITE: u8 = 23;
+const IOSQE_ASYNC: u8 = 1 << 4;
+const IORING_ENTER_GETEVENTS: libc::c_uint = 1;
+const IORING_OFF_SQ_RING: libc::off_t = 0;
+const IORING_OFF_CQ_RING: libc::off_t = 0x0800_0000;
+const IORING_OFF_SQES: libc::off_t = 0x1000_0000;
+
+pub(super) enum ForkResult {
+    Parent(libc::pid_t),
+    Child,
+}
+
+pub(super) fn fork_process() -> io::Result<ForkResult> {
+    // SAFETY: the caller uses the child only for a bounded fixture command loop.
+    let process = unsafe { libc::fork() };
+    if process < 0 {
+        Err(io::Error::last_os_error())
+    } else if process == 0 {
+        Ok(ForkResult::Child)
+    } else {
+        Ok(ForkResult::Parent(process))
+    }
+}
+
+pub(super) fn exit_process(code: libc::c_int) -> ! {
+    // SAFETY: this is called only in the isolated fork child.
+    unsafe { libc::_exit(code) }
+}
+
+pub(super) fn wait_process(process: libc::pid_t) -> io::Result<()> {
+    wait_child(process)
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct IoSqringOffsets {
+    head: u32,
+    tail: u32,
+    ring_mask: u32,
+    ring_entries: u32,
+    flags: u32,
+    dropped: u32,
+    array: u32,
+    resv1: u32,
+    user_addr: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct IoCqringOffsets {
+    head: u32,
+    tail: u32,
+    ring_mask: u32,
+    ring_entries: u32,
+    overflow: u32,
+    cqes: u32,
+    flags: u32,
+    resv1: u32,
+    user_addr: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct IoUringParams {
+    sq_entries: u32,
+    cq_entries: u32,
+    flags: u32,
+    sq_thread_cpu: u32,
+    sq_thread_idle: u32,
+    features: u32,
+    wq_fd: u32,
+    resv: [u32; 3],
+    sq_off: IoSqringOffsets,
+    cq_off: IoCqringOffsets,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct IoUringRestriction {
+    opcode: u16,
+    operation: u8,
+    reserved: u8,
+    reserved2: [u32; 3],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct IoUringSqe {
+    opcode: u8,
+    flags: u8,
+    ioprio: u16,
+    fd: i32,
+    offset: u64,
+    address: u64,
+    length: u32,
+    rw_flags: u32,
+    user_data: u64,
+    buffer_index: u16,
+    personality: u16,
+    splice_fd_in: i32,
+    address3: u64,
+    padding: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct IoUringCqe {
+    user_data: u64,
+    result: i32,
+    flags: u32,
+}
+
+struct MappedRegion {
+    address: *mut libc::c_void,
+    length: usize,
+}
+
+impl MappedRegion {
+    fn new(fd: RawFd, length: usize, offset: libc::off_t) -> io::Result<Self> {
+        // SAFETY: the kernel owns the io_uring mapping and validates the offset.
+        let address = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                length,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED | libc::MAP_POPULATE,
+                fd,
+                offset,
+            )
+        };
+        if address == libc::MAP_FAILED {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { address, length })
+    }
+
+    fn pointer<T>(&self, offset: u32) -> io::Result<*mut T> {
+        let offset = usize::try_from(offset)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "io_uring offset overflow"))?;
+        if offset
+            .checked_add(size_of::<T>())
+            .is_none_or(|end| end > self.length)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "io_uring offset exceeds its mapping",
+            ));
+        }
+        Ok(self.address.cast::<u8>().wrapping_add(offset).cast())
+    }
+}
+
+impl Drop for MappedRegion {
+    fn drop(&mut self) {
+        // SAFETY: this object owns the exact successful mmap range.
+        unsafe {
+            libc::munmap(self.address, self.length);
+        }
+    }
+}
+
+const _: () = assert!(size_of::<IoUringSqe>() == 64);
+const _: () = assert!(size_of::<IoUringCqe>() == 16);
+const _: () = assert!(size_of::<IoUringRestriction>() == 16);
 
 #[repr(C)]
 struct MountAttr {
@@ -176,6 +351,205 @@ pub(super) fn pkey_mprotect_anonymous(protection: libc::c_int) -> io::Result<()>
             0,
         )
     })
+}
+
+pub(super) fn io_uring_read_one(fd: RawFd, expected: u8) -> io::Result<()> {
+    let mut parameters = IoUringParams {
+        flags: IORING_SETUP_R_DISABLED | IORING_SETUP_SINGLE_ISSUER,
+        ..IoUringParams::default()
+    };
+    // SAFETY: parameters points to the exact Linux io_uring_params layout.
+    let ring_fd = unsafe { libc::syscall(libc::SYS_io_uring_setup, 2_u32, &raw mut parameters) };
+    if ring_fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: io_uring_setup returned a new owned descriptor.
+    let ring = unsafe { File::from_raw_fd(ring_fd as RawFd) };
+    let restrictions = [
+        IoUringRestriction {
+            opcode: IORING_RESTRICTION_REGISTER_OP,
+            operation: IORING_REGISTER_ENABLE_RINGS as u8,
+            reserved: 0,
+            reserved2: [0; 3],
+        },
+        IoUringRestriction {
+            opcode: IORING_RESTRICTION_SQE_OP,
+            operation: IORING_OP_READ,
+            reserved: 0,
+            reserved2: [0; 3],
+        },
+        IoUringRestriction {
+            opcode: IORING_RESTRICTION_SQE_OP,
+            operation: IORING_OP_WRITE,
+            reserved: 0,
+            reserved2: [0; 3],
+        },
+        IoUringRestriction {
+            opcode: IORING_RESTRICTION_SQE_FLAGS_ALLOWED,
+            operation: IOSQE_ASYNC,
+            reserved: 0,
+            reserved2: [0; 3],
+        },
+    ];
+    // SAFETY: the restriction array uses the exact Linux UAPI layout.
+    syscall_result(unsafe {
+        libc::syscall(
+            libc::SYS_io_uring_register,
+            ring.as_raw_fd(),
+            IORING_REGISTER_RESTRICTIONS,
+            restrictions.as_ptr(),
+            restrictions.len(),
+        )
+    })?;
+    // SAFETY: ENABLE_RINGS takes no argument array.
+    syscall_result(unsafe {
+        libc::syscall(
+            libc::SYS_io_uring_register,
+            ring.as_raw_fd(),
+            IORING_REGISTER_ENABLE_RINGS,
+            std::ptr::null::<libc::c_void>(),
+            0_u32,
+        )
+    })?;
+
+    let sq_length = usize::try_from(parameters.sq_off.array)
+        .ok()
+        .and_then(|offset| {
+            usize::try_from(parameters.sq_entries)
+                .ok()
+                .and_then(|entries| entries.checked_mul(size_of::<u32>()))
+                .and_then(|array| offset.checked_add(array))
+        })
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid SQ ring size"))?;
+    let cq_length = usize::try_from(parameters.cq_off.cqes)
+        .ok()
+        .and_then(|offset| {
+            usize::try_from(parameters.cq_entries)
+                .ok()
+                .and_then(|entries| entries.checked_mul(size_of::<IoUringCqe>()))
+                .and_then(|cqes| offset.checked_add(cqes))
+        })
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid CQ ring size"))?;
+    let sq_mapping_length = if parameters.features & IORING_FEAT_SINGLE_MMAP != 0 {
+        sq_length.max(cq_length)
+    } else {
+        sq_length
+    };
+    let sq_mapping = MappedRegion::new(ring.as_raw_fd(), sq_mapping_length, IORING_OFF_SQ_RING)?;
+    let cq_mapping = if parameters.features & IORING_FEAT_SINGLE_MMAP != 0 {
+        None
+    } else {
+        Some(MappedRegion::new(
+            ring.as_raw_fd(),
+            cq_length,
+            IORING_OFF_CQ_RING,
+        )?)
+    };
+    let cq_mapping = cq_mapping.as_ref().unwrap_or(&sq_mapping);
+    let sqe_length = usize::try_from(parameters.sq_entries)
+        .ok()
+        .and_then(|entries| entries.checked_mul(size_of::<IoUringSqe>()))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid SQE size"))?;
+    let sqes = MappedRegion::new(ring.as_raw_fd(), sqe_length, IORING_OFF_SQES)?;
+
+    let sq_head = sq_mapping.pointer::<u32>(parameters.sq_off.head)?;
+    let sq_tail = sq_mapping.pointer::<u32>(parameters.sq_off.tail)?;
+    let sq_mask = sq_mapping.pointer::<u32>(parameters.sq_off.ring_mask)?;
+    let sq_array = sq_mapping.pointer::<u32>(parameters.sq_off.array)?;
+    let cq_head = cq_mapping.pointer::<u32>(parameters.cq_off.head)?;
+    let cq_tail = cq_mapping.pointer::<u32>(parameters.cq_off.tail)?;
+    let cq_mask = cq_mapping.pointer::<u32>(parameters.cq_off.ring_mask)?;
+    let cqes = cq_mapping.pointer::<IoUringCqe>(parameters.cq_off.cqes)?;
+    let mut byte = 0xa5_u8;
+    // SAFETY: all pointers and indices were validated against kernel-provided mappings.
+    unsafe {
+        let head = sq_head.read_volatile();
+        let tail = sq_tail.read_volatile();
+        let mask = sq_mask.read_volatile();
+        if tail.wrapping_sub(head) >= parameters.sq_entries {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "io_uring SQ is full",
+            ));
+        }
+        let index = tail & mask;
+        let entry = sqes.pointer::<IoUringSqe>(
+            index
+                .checked_mul(u32::try_from(size_of::<IoUringSqe>()).unwrap_or(u32::MAX))
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "SQE offset overflow"))?,
+        )?;
+        entry.write(IoUringSqe {
+            opcode: IORING_OP_READ,
+            flags: IOSQE_ASYNC,
+            fd,
+            address: (&raw mut byte).addr() as u64,
+            length: 1,
+            user_data: 0x4d49_5448_5249_4c01,
+            ..IoUringSqe::default()
+        });
+        sq_array
+            .add(usize::try_from(index).unwrap_or(usize::MAX))
+            .write(index);
+        fence(Ordering::Release);
+        sq_tail.write_volatile(tail.wrapping_add(1));
+    }
+    // SAFETY: the ring mappings and SQE stay live until one completion arrives.
+    syscall_result(unsafe {
+        libc::syscall(
+            libc::SYS_io_uring_enter,
+            ring.as_raw_fd(),
+            1_u32,
+            1_u32,
+            IORING_ENTER_GETEVENTS,
+            std::ptr::null::<libc::sigset_t>(),
+            0_usize,
+        )
+    })?;
+    fence(Ordering::Acquire);
+    // SAFETY: completion pointers are inside the validated CQ mapping.
+    let result = unsafe {
+        let head = cq_head.read_volatile();
+        let tail = cq_tail.read_volatile();
+        if head == tail {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "io_uring returned without the requested completion",
+            ));
+        }
+        let index = head & cq_mask.read_volatile();
+        let completion = cqes
+            .add(usize::try_from(index).unwrap_or(usize::MAX))
+            .read();
+        cq_head.write_volatile(head.wrapping_add(1));
+        completion.result
+    };
+    if result < 0 {
+        return Err(io::Error::from_raw_os_error(-result));
+    }
+    if result != 1 || byte != expected {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "io_uring read did not return the exact expected byte",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn io_uring_sqpoll_setup() -> io::Result<()> {
+    let mut parameters = IoUringParams {
+        flags: IORING_SETUP_R_DISABLED | IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_SQPOLL,
+        ..IoUringParams::default()
+    };
+    // SAFETY: parameters points to the exact Linux io_uring_params layout.
+    let fd = unsafe { libc::syscall(libc::SYS_io_uring_setup, 2_u32, &raw mut parameters) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a successful setup result is a new descriptor.
+    unsafe {
+        libc::close(fd as RawFd);
+    }
+    Ok(())
 }
 
 pub(super) fn receive_file_from_actor(path: &Path) -> io::Result<File> {
@@ -356,10 +730,18 @@ pub(super) fn move_mount(tree: RawFd, target: &Path) -> io::Result<()> {
 }
 
 pub(super) fn set_mount_read_only(path: &Path) -> io::Result<()> {
+    set_mount_readonly_state(path, true)
+}
+
+pub(super) fn set_mount_read_write(path: &Path) -> io::Result<()> {
+    set_mount_readonly_state(path, false)
+}
+
+fn set_mount_readonly_state(path: &Path, read_only: bool) -> io::Result<()> {
     let path = path_c_string(path)?;
     let attributes = MountAttr {
-        attr_set: MOUNT_ATTR_RDONLY,
-        attr_clr: 0,
+        attr_set: if read_only { MOUNT_ATTR_RDONLY } else { 0 },
+        attr_clr: if read_only { 0 } else { MOUNT_ATTR_RDONLY },
         propagation: 0,
         userns_fd: 0,
     };

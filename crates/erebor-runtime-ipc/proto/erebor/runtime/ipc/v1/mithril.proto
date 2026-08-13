@@ -72,4 +72,17 @@ message MithrilEffectObservation {
   uint32 target_role_id = 35;
   uint32 target_process_state_vector_id = 36;
   uint32 operation_argument = 37;
+  string io_uring_ring_id = 38;
+  uint64 io_uring_ring_generation = 39;
+  uint64 io_uring_submission_sequence = 40;
+  uint64 io_uring_user_data = 41;
+  sint64 io_uring_file_offset = 42;
+  uint64 io_uring_buffer_address = 43;
+  uint64 io_uring_file_cookie = 44;
+  uint64 io_uring_executor_pid_tgid = 45;
+  uint32 io_uring_byte_length = 46;
+  uint32 io_uring_sqe_index = 47;
+  uint32 io_uring_request_flags = 48;
+  uint32 io_uring_rw_flags = 49;
+  uint32 io_uring_opcode = 50;
 }

@@ -7,7 +7,10 @@ use serde::Deserialize;
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidConfigurationSnafu, IoSnafu, JsonSnafu};
-use crate::{AllowedNodeIdentity, ControlPlane, ControlServerTls, Result, TrustGenerationV1};
+use crate::{
+    AdministrativeHttpConfigV1, AllowedNodeIdentity, ControlPlane, ControlServerTls, Result,
+    TrustGenerationV1,
+};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,6 +19,7 @@ pub struct ControlConfig {
     pub tls: ControlServerTls,
     pub allowed_nodes: Vec<AllowedNodeIdentity>,
     pub trust: TrustGenerationV1,
+    pub administrative_exec: Option<AdministrativeHttpConfigV1>,
 }
 
 impl ControlConfig {
@@ -26,9 +30,16 @@ impl ControlConfig {
         Ok(config)
     }
 
-    pub fn into_parts(self) -> (SocketAddr, ControlServerTls, ControlPlane) {
+    pub fn into_parts(
+        self,
+    ) -> (
+        SocketAddr,
+        ControlServerTls,
+        ControlPlane,
+        Option<AdministrativeHttpConfigV1>,
+    ) {
         let control = ControlPlane::new(self.allowed_nodes, self.trust);
-        (self.listen, self.tls, control)
+        (self.listen, self.tls, control, self.administrative_exec)
     }
 
     fn validate(&self) -> Result<()> {
@@ -55,6 +66,9 @@ impl ControlConfig {
                     reason: "every node needs a unique clean ID and lowercase certificate SHA-256 digest",
                 }
             );
+        }
+        if let Some(config) = &self.administrative_exec {
+            config.validate()?;
         }
         Ok(())
     }

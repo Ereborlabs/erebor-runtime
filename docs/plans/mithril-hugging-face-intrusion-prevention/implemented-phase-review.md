@@ -4,34 +4,38 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
-Source reviewed: commit `0c7f3bb8139d878d0214a3a81339c96e218ae4d5` plus the
-Mithril working-tree changes on 2026-08-12. This review includes BPF object
-SHA-256 `49d2f74b6c1312303e7eb1017d28c6a730f907ff7b3e662c73ba77f9d92805de`.
+Source reviewed: commit `997d7ffddc65630941164262dab1db92f2ab0f9e` plus the
+Mithril working-tree changes on 2026-08-13. The latest locally built BPF object
+has SHA-256
+`c1c4215a7b645344507cf02f27fcaeb085970d1b20cbfda402bdabcc019ce403`.
 The validated architecture digest in the phase records is
 `4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8`.
 
 The source contains one production BPF object, native task identity, signed
 local policy rows, exact file decisions, typed device and process decisions,
-exact Unix-stream relationships, and restart-safe bounded exceptions. The
-current source has new programs, maps, policy gates, and evidence predicates.
-Earlier VM records remain historical evidence. A current-source VM and k3s
-qualification run is required before this guide makes a new physical claim.
+exact Unix-stream relationships, restricted io_uring read and write ownership,
+global mount invalidation, restart-safe bounded exceptions, generation
+activation and retirement owners, and a Kubernetes administrative-exec path.
+The current CRI exact-effect lane passed. The administrative-exec lane reached
+Control and failed with HTTP 400 before browser activation. The latest source
+therefore does not have one complete final VM acceptance record.
 
 The latest phase results remain:
 
 - Phase 0: **Done** for its narrow x86-64 BPF Linux Security Module (LSM)
   capability and performance claim.
 - Phase 1: **Done**.
-- Phase 2: **Blocked** on the remaining failure-injection and entry-case
-  matrix. An earlier identity VM probe passed for an older object.
-- Phase 3: **Blocked** on a qualified Mithril CRI effect run and the remaining
-  manual matrix. An earlier standalone observation VM probe passed for an
-  older object.
-- Phase 4: **Not done**. The source implements more narrow policy and
-  hard-close slices. The complete activation, retirement, exec provenance,
-  file lifetime, mount propagation, derived-device, privilege,
-  self-protection, administrative-ingress, and Hugging Face contracts remain
-  incomplete.
+- Phase 2: **Blocked**. Native identity and CRI entry containment have current
+  source and physical evidence. The complete entry, reuse, saturation,
+  failure-injection, and non-x86 physical matrix is not complete.
+- Phase 3: **Blocked**. Exact observation and the CRI-bound exact-effect lane
+  have physical evidence. The full manual and Kubernetes effect matrix is not
+  complete.
+- Phase 4: **Not done**. The source now contains narrow positive and negative
+  enforcement for the listed file, exec, IPC, process, device, io_uring,
+  mount, exception, generation, and administrative paths. The final current
+  VM record, administrative approval transaction, complete provenance and
+  lifetime models, and branch-specific incident proofs are not complete.
 
 The optional Landlock deliverable is complete as `ABSENT`. The node reports
 `LANDLOCK_TARGET_CONTEXT_FLOOR=ABSENT` with reason
@@ -61,19 +65,19 @@ smallest complete explanation of who does what.
 | Order | Open this code first | What to establish before continuing |
 | --- | --- | --- |
 | 1 | [`mithril-node` main](../../../crates/mithril-node/src/main.rs#L22) | The CLI loads `NodeConfig` and starts one `NodeChassis`. It does not load a second object or decide effects. |
-| 2 | [`NodeChassis::start`](../../../crates/mithril-node/src/node.rs#L49) | Startup order is: load or recover one object, publish bindings, install an optional signed generation, activate identity, and start observation and control. |
-| 3 | [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L322) | `KernelHostOwner` is the only production load, attach, pin, manifest, and lease owner. It loads one object for one node. It does not load one object for each container. |
-| 4 | [`WorkloadBindingOwner::publish_configured`](../../../crates/mithril-node/src/identity/binding.rs#L94) | The binding owner turns a validated live cgroup into one `execution_set_bindings` row. It owns container placement in userspace. |
-| 5 | [`ContainerRuntimeInventory::snapshot`](../../../crates/mithril-node/src/identity/runtime.rs#L88) | The optional Container Runtime Interface (CRI) owner verifies configured container identity and resolves its local cgroup. It publishes no BPF program. |
-| 6 | [`NodePolicyGenerationOwner::load_and_install`](../../../crates/mithril-node/src/policy.rs#L48) | A verified candidate becomes node-local map rows. The node reads each required row back before it sets the descriptor to `ACTIVE`. |
+| 2 | [`NodeChassis::start`](../../../crates/mithril-node/src/node.rs#L78) | Startup order is: load or recover one object, publish bindings, install an optional signed generation, activate identity, and start observation and control. |
+| 3 | [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L413) | `KernelHostOwner` is the only production load, attach, pin, manifest, and lease owner. It loads one object for one node. It does not load one object for each container. |
+| 4 | [`WorkloadBindingOwner::publish_configured`](../../../crates/mithril-node/src/identity/binding.rs#L131) | The binding owner turns a validated live cgroup into one `execution_set_bindings` row. It owns container placement in userspace. |
+| 5 | [`ContainerRuntimeInventory::snapshot`](../../../crates/mithril-node/src/identity/runtime.rs#L97) | The optional Container Runtime Interface (CRI) owner verifies configured container identity and resolves its local cgroup. It publishes no BPF program. |
+| 6 | [`NodePolicyGenerationOwner::load_and_install`](../../../crates/mithril-node/src/policy.rs#L111) | A verified candidate becomes node-local map rows. The node reads and probes the required rows before it publishes the profile pointer. |
 | 7 | [`NativeSecurityStateOwner::activate_with_effect_policy`](../../../crates/mithril-node/src/identity/native.rs#L40) | The identity owner writes or recovers one runtime configuration record. It then runs the task iterator. It does not load another BPF object. |
 | 8 | [`identity.bpf.c`](../../../bpf/erebor-interceptor/programs/identity.bpf.c#L3) | One C translation unit includes the maps and all hook families in one ELF object. Read this file before an individual BPF header. |
 | 9 | [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L54) | This file declares BPF state and common helpers. It separates durable map state from per-CPU scratch state. |
-| 10 | [`erebor_task_alloc`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L35) | Read the complete explanation in [Task allocation](#task-allocation-line-by-line). |
+| 10 | [`erebor_task_alloc`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L35) | Read the complete explanation in [Task allocation](#task-allocation-source-walk). |
 | 11 | [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L271) | The common gate validates actor identity, binding, generation, object state, and the selected decision. Typed wrappers add device, process, IPC, file, and mount data. |
-| 12 | [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L902) | This function fills the policy maps. It also prevents a partial generation from becoming active. |
-| 13 | [`ExceptionAuthorityOwner`](../../../crates/mithril-node/src/policy/exception_authority.rs#L85) | This owner reconciles the kernel exception counters and receipts with the append-only local WAL. |
-| 14 | [`IdentityTestRunner`](../../../crates/mithril-e2e/src/identity.rs#L150), [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L509), and [the VM harness](../../../crates/mithril-e2e/harness/vm/README.md) | Automated tests use the production object. Their cleanup owners remove pins, cgroups, leases, processes, mounts, and temporary files. |
+| 12 | [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1567) | This function fills the policy maps. It also prevents a partial generation from becoming active. |
+| 13 | [`ExceptionAuthorityOwner`](../../../crates/mithril-node/src/policy/exception_authority.rs#L87) | This owner reconciles the kernel exception counters and receipts with the append-only local WAL. |
+| 14 | [`IdentityTestRunner`](../../../crates/mithril-e2e/src/identity.rs#L162), [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L613), and [the VM harness](../../../crates/mithril-e2e/harness/vm/README.md) | Automated tests use the production object. Their cleanup owners remove pins, cgroups, leases, processes, mounts, and temporary files. |
 | 15 | [Identity manual cases](../../../examples/mithril-identity-manual/README.md), [effect-observation manual cases](../../../examples/mithril-effect-observation-manual/README.md), and [local-enforcement manual cases](../../../examples/mithril-local-enforcement-manual/README.md) | These shells start the real node and perform operator actions. The examples link to the automated harness but do not own it. |
 
 The most useful first pass is this short chain:
@@ -96,13 +100,15 @@ NodeChassis::start
 | Build and ABI | `erebor-interceptor-abi`, `erebor-interceptor` build script | Rust `repr(C)` ABI types use `zerocopy` for checked byte conversion. cbindgen renders one checked snake_case C header. `libbpf-cargo` compiles one C BPF object at Cargo build time. |
 | Runtime loading | `KernelHostOwner` in `erebor-interceptor` | `libbpf-rs` opens the embedded object, applies the host BTF, loads, attaches, pins, reads back, and recovers it. |
 | Binding and task identity | `WorkloadBindingOwner`, `NativeSecurityStateOwner`, BPF lifecycle hooks | Cgroup binding is userspace-published; task/process/entry/execution state is BPF-native and fail closed when it cannot be proven. |
-| Signed policy generation | `PolicyArtifactOwner`/compiler in `mithril-control`, then `NodePolicyGenerationOwner` | Control-side policy stays portable and signed. The node verifies it, applies anti-rollback, derives local numeric handles, and publishes BPF map rows. |
+| Signed policy generation | `PolicyArtifactOwner`/compiler in `mithril-control`, then `NodePolicyGenerationOwner` | Control-side policy stays portable and signed. The node verifies it, applies recoverable anti-rollback, allocates durable monotonic handles, checks map capacity, probes staged rows, publishes one profile pointer, and retires old rows after typed holders reach zero. |
 | Local policy decisions | BPF effect/path/device/process/IPC headers, `NodePolicyGenerationOwner` | Exact file decisions use the current actor, a clean mount view, the canonical component graph, and an exact kernel object tuple. Device ioctl uses an exact command for allow or alert. Process control uses an exact target role and operation argument. Unix-stream relationships use both live endpoints. Missing or unsupported protected state fails closed. |
-| Bounded exceptions | BPF receipt and counter maps, `ExceptionAuthorityOwner` | A synchronous `file_open` read or write attempt gets one stable receipt identity. BPF consumes under a spin lock. Userspace persists consumed receipts and monotonic runtime state in a local WAL. `file_receive` cannot consume an exception. Generic asynchronous request identity is not implemented. Production Control does not yet deliver an administrative request to this owner. |
+| Bounded exceptions | BPF receipt and counter maps, `ExceptionAuthorityOwner` | A synchronous `file_open` read or write attempt gets one stable receipt identity. BPF consumes under a spin lock. Userspace persists consumed receipts and monotonic runtime state in a local WAL. `file_receive` cannot consume an exception. This claim does not include VFS retry correlation or offloaded exception use. |
+| Restricted asynchronous I/O | io_uring BPF hooks and node policy owner | A managed disabled ring can be enabled for exact `IORING_OP_READ` and `IORING_OP_WRITE` requests. The state retains ring, submission, SQE, object, actor, executor, completion, and generation references. SQPOLL, credential override, and uring command paths hard-close. AIO, registered-resource authority, and other opcodes remain unsupported. |
+| Administrative exec | Control administrative owner, node administrative owner, `AuthorizationProofOwner`, and BPF exec path | The authenticated `kubectl-mithril` requester is the approver. Control performs OIDC authentication, issues one memory-only credential, validates CONNECT admission, resolves the live target, asks the node to arm one exact slot, and commits only after readback. Source and local tests exist. The current physical lane fails at the initial HTTP request and is not qualified. |
 | Other attached hooks | Explicit typed BPF wrappers | An attached hook can still be partial or unsupported. A protected request reaches an explicit hard-safe result when the code cannot prove the required object or state. |
 | Observation | one `EffectObservationReader` plus `EffectObservationStore` | One `libbpf-rs` ring reader copies best-effort records into a bounded in-process history. It does not authorize and is not durable evidence. |
 | Landlock target-context floor | Capability registration | The optional floor is complete as `ABSENT`, with reason `NO_QUALIFIED_TARGET_CONTEXT_INSTALL`. No BPF decision depends on this floor. |
-| Physical qualification | `mithril-e2e` VM harness | The current object requires 50 production programs and 46 maps. It has 49 persistent program links and one temporary task iterator. Current-source VM evidence is pending. The k3s lane is limited to the declared CRI effect probe. It does not prove distributed policy, admission, or administrative approval. |
+| Physical qualification | `mithril-e2e` VM harness | The current object requires 68 production programs and 55 maps. It has 66 persistent links, one temporary task iterator, and one on-demand policy probe. The current CRI exact-effect record passed. The administrative lane failed with HTTP 400 before approval. The latest source still needs one complete kernel, identity, observe, protect, CRI, and administrative run. |
 
 ## One object, one loader, one node
 
@@ -270,7 +276,7 @@ Two loader details answer common review questions:
   normal or per-CPU lookup. A Rust `HashMap<String, Map<'_>>` inside
   `KernelHost` would borrow the `Object` stored in the same structure. That is
   a self-reference. A table of duplicated `MapHandle` values would add handle
-  and close ownership. The object has 46 maps, and no measured lookup
+  and close ownership. The object has 55 maps, and no measured lookup
   bottleneck requires that extra state. The direct object lookup keeps one
   owner and is the simpler design.
 
@@ -285,7 +291,8 @@ Two loader details answer common review questions:
 | Portable policy/signature/simulation | `mithril-control` policy owners | [`mithril-control/src/policy`](../../../crates/mithril-control/src/policy) | BPF map handles or node startup |
 | Node-local policy rows, active handles, and mount reconstruction | `NodePolicyGenerationOwner` | [`policy.rs`](../../../crates/mithril-node/src/policy.rs#L41) | Signature creation or cgroup binding lifecycle |
 | Durable bounded-exception state and receipts | `ExceptionAuthorityOwner` | [`exception_authority.rs`](../../../crates/mithril-node/src/policy/exception_authority.rs#L85) | Policy selection or online approval delivery |
-| Administrative proof and slot state | `AuthorizationProofOwner` | [`authorization/mod.rs`](../../../crates/mithril-node/src/identity/authorization/mod.rs#L110) | Production Control ingress; `NodeChassis` does not invoke this owner yet |
+| Human approval and one-use credential | `AdministrativeApprovalOwner` and the administrative HTTPS owner | [`administrative_exec.rs`](../../../crates/mithril-control/src/administrative_exec.rs), [`administrative_http.rs`](../../../crates/mithril-control/src/administrative_http.rs) | BPF slot mutation or task identity |
+| Exact target resolution and slot state | node `AdministrativeExecOwner` and `AuthorizationProofOwner` | [`administrative_exec.rs`](../../../crates/mithril-node/src/administrative_exec.rs), [`authorization/mod.rs`](../../../crates/mithril-node/src/identity/authorization/mod.rs#L110) | Browser authentication or Kubernetes admission |
 | Task/process/exec state | BPF lifecycle, exec, and exit programs | [`identity_lifecycle.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h), [`identity_exec.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h), [`identity_exit.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_exit.bpf.h) | Userspace task enrollment after the fact |
 | Per-effect result | BPF common and typed gates | [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L271), [`identity_device_process.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_device_process.bpf.h#L32), [`identity_ipc.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L223) | Control round trips or ring-buffer delivery |
 | Ring consumption and recent records | `EffectObservationReader` / `EffectObservationStore` | [`host.rs`](../../../crates/erebor-interceptor/src/host.rs#L929), [`observation.rs`](../../../crates/mithril-node/src/observation.rs) | Policy decisions or durable audit |
@@ -314,15 +321,16 @@ sequenceDiagram
     opt candidate exists
         Node->>Ring: create the only ring-buffer reader
     end
-    Node->>Control: register capabilities and begin reconnect loop
+    Node->>Control: register capabilities and begin resolve/arm reconnect loop
 ```
 
 This is the exact ordering in
-[`NodeChassis::start`](../../../crates/mithril-node/src/node.rs#L49).
+[`NodeChassis::start`](../../../crates/mithril-node/src/node.rs#L78).
 It matters that bindings and an optional generation exist *before* identity is
 enabled and live tasks are reconciled. Policy candidates and workload binding
 specifications are startup configuration in this implementation. The Control
-stream does not deliver or activate a new candidate generation.
+stream can resolve and arm an administrative exec request. It does not deliver
+or activate a general candidate generation.
 
 ### Control connection and readiness
 
@@ -341,7 +349,13 @@ sequenceDiagram
     Connector->>Control: TrustAck, node sequence 2
     Connector->>Control: ReadinessReport, node sequence 3
     Node->>Ready: control_ready=true and admission_ready=identity_healthy
-    alt stream closes or sends an unexpected later message
+    opt administrative request
+        Control->>Connector: ResolveAdministrativeExec
+        Connector-->>Control: exact live target and executable result
+        Control->>Connector: ArmAdministrativeExec
+        Connector-->>Control: exact slot readback result
+    end
+    alt stream closes or sends an unsupported later message
         Node->>Ready: control_ready=false and admission_ready=false
         Node->>Node: reconnect with bounded backoff
     end
@@ -351,10 +365,10 @@ Read the handshake at
 [`NodeControlConnector::connect`](../../../crates/mithril-node/src/control.rs#L52)
 and the reconnect loop at
 [`NodeChassis::run`](../../../crates/mithril-node/src/node.rs#L211). The current
-post-registration handler accepts no policy, binding, exception, or
-administrative-exec delivery message. An unexpected message closes the
-connection. This is a clear implementation limit, not an implicit dynamic
-control plane.
+post-registration handler accepts the two typed administrative resolve and arm
+transactions. It accepts no general policy, binding, or exception delivery.
+An unsupported message closes the connection. This is a narrow administrative
+path, not a general dynamic control plane.
 
 ### CRI binding refresh
 
@@ -431,13 +445,14 @@ is the source-level dependency graph:
 vmlinux.h + generated ABI + libbpf headers
         |
         v
-identity_maps.h             -- 46 maps, shared validation, attempts, exceptions
+identity_maps.h             -- 55 maps, shared validation, attempts, exceptions
 identity_task_helpers.h     -- native child construction and rollback
 identity_root_helpers.h     -- root construction and coordinate finalization
 identity_path.bpf.h         -- bounded path graph and mount-view state
         |
         +--> identity_lifecycle.bpf.h      -- task/cgroup/wakeup/iterator
         +--> identity_exec.bpf.h           -- exec and admin-argv transaction
+        +--> identity_io_uring.bpf.h       -- ring, request, executor, completion
         +--> identity_effects.bpf.h        -- common effect gate
                  +--> identity_device_process.bpf.h
                  +--> identity_ipc.bpf.h
@@ -445,62 +460,82 @@ identity_path.bpf.h         -- bounded path graph and mount-view state
         +--> identity_exit.bpf.h           -- exact reference release
 ```
 
-The loader requires 50 named programs from this one ELF. The exact list is
+The loader requires 68 named programs from this one ELF. The exact list is
 [`REQUIRED_IDENTITY_PROGRAMS`](../../../crates/erebor-interceptor/src/host.rs#L78).
-It permanently attaches 49 programs. The task iterator is loaded but attached
-only while userspace reads it. The following catalog accounts for every
+It permanently attaches 66 programs. The task iterator is attached only while
+userspace reads it. The activation probe runs through `Program::test_run` and
+does not have a persistent link. The following catalog accounts for every
 required program.
 
 | Program | ELF section and program kind | Invocation and relationship |
 | --- | --- | --- |
 | [`erebor_task_alloc`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L35) | `lsm/task_alloc`, BPF LSM | Runs during child allocation. It preserves a prior LSM result. It publishes complete native child state or denies a protected allocation. |
-| [`erebor_cgroup_attach_task`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L107) | `tp_btf/cgroup_attach_task`, BTF tracepoint | Runs when Linux attaches a task to a cgroup. It labels an unlabelled task that enters a protected binding. It marks a labelled placement mismatch fail closed. |
-| [`erebor_cgroup_release`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L156) | `raw_tracepoint/cgroup_release` | Tombstones the released cgroup binding. It does not grant or recover authority. |
-| [`erebor_wake_up_new_task`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L174) | `fentry/wake_up_new_task` | Labels a pre-wake protected root or finalizes the child coordinate before the task runs. |
-| [`erebor_reconcile_tasks`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L210) | `iter/task`, BPF iterator | Userspace attaches and drains this program during activation. It checks live labelled tasks. It retains restrictions and raises reconciliation health on uncertainty. |
-| [`erebor_sys_enter_execve`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L339) | `tracepoint/syscalls/sys_enter_execve` | Tries to prepare one bounded administrative argument match. The BPRM hook starts the general exec transition. |
-| [`erebor_sys_enter_execveat`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L346) | `tracepoint/syscalls/sys_enter_execveat` | Records an `AT_EXECVE_CHECK` marker or tries the same bounded administrative argument match. The BPRM hook handles the executable candidate. |
-| [`erebor_bprm_check_security`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L625) | `lsm/bprm_check_security`, BPF LSM | Adds ordered executable candidates, checks the exec decision, and validates an exact administrative match when one exists. It preserves prior denial. |
-| [`erebor_bprm_committing_creds`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L673) | `fentry/security_bprm_committing_creds` | Marks the transaction past the point where a failed exec can safely restore the old state. |
-| [`erebor_sys_exit_execve`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L779) | `tracepoint/syscalls/sys_exit_execve` | Closes an `execve` failure before or after the point of no return. |
-| [`erebor_sys_exit_execveat`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L785) | `tracepoint/syscalls/sys_exit_execveat` | Closes an `execveat` failure with the same conservative rule. |
-| [`erebor_sched_process_exec`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L804) | `tracepoint/sched/sched_process_exec` | Commits the process, image, execution, role, and administrative-slot outcome after Linux reports exec success. |
+| [`erebor_policy_activation_probe`](../../../bpf/erebor-interceptor/programs/identity.bpf.c#L101) | `socket`, BPF socket filter used with `Program::test_run` | Reads one staged request and proves that the exact decision, default, relationship, typed rule, or administrative cancellation row is present before publication. It is not attached to runtime traffic. |
+| [`erebor_cgroup_attach_task`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L114) | `tp_btf/cgroup_attach_task`, BTF tracepoint | Runs when Linux attaches a task to a cgroup. It labels an unlabelled task that enters a protected binding. It marks a labelled placement mismatch fail closed. |
+| [`erebor_cgroup_release`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L163) | `raw_tracepoint/cgroup_release` | Tombstones the released cgroup binding. It does not grant or recover authority. |
+| [`erebor_wake_up_new_task`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L181) | `fentry/wake_up_new_task` | Labels a pre-wake protected root or finalizes the child coordinate before the task runs. |
+| [`erebor_reconcile_tasks`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L217) | `iter/task`, BPF iterator | Userspace attaches and drains this program during activation. It checks live labelled tasks. It retains restrictions and raises reconciliation health on uncertainty. |
+| [`erebor_sys_enter_execve`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L341) | `tracepoint/syscalls/sys_enter_execve` | Tries to prepare one bounded administrative argument match. The BPRM hook starts the general exec transition. |
+| [`erebor_sys_enter_execveat`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L348) | `tracepoint/syscalls/sys_enter_execveat` | Records an `AT_EXECVE_CHECK` marker or tries the same bounded administrative argument match. The BPRM hook handles the executable candidate. |
+| [`erebor_bprm_check_security`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L629) | `lsm/bprm_check_security`, BPF LSM | Adds ordered executable candidates, checks the exec decision, and validates an exact administrative match when one exists. It preserves prior denial. |
+| [`erebor_bprm_committing_creds`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L677) | `fentry/security_bprm_committing_creds` | Marks the transaction past the point where a failed exec can safely restore the old state. |
+| [`erebor_sys_exit_execve`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L783) | `tracepoint/syscalls/sys_exit_execve` | Closes an `execve` failure before or after the point of no return. |
+| [`erebor_sys_exit_execveat`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L789) | `tracepoint/syscalls/sys_exit_execveat` | Closes an `execveat` failure with the same conservative rule. |
+| [`erebor_sched_process_exec`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L808) | `tracepoint/sched/sched_process_exec` | Commits the process, image, execution, role, and administrative-slot outcome after Linux reports exec success. |
 | [`erebor_exception_sys_enter`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L6) | `raw_tracepoint/sys_enter` | Advances the task-local syscall-attempt sequence. This sequence forms part of the stable exception receipt identity. |
-| [`erebor_exception_sys_exit`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L26) | `raw_tracepoint/sys_exit` | Marks the task-local exception attempt inactive when the syscall ends. |
-| [`erebor_mount_mutation_sys_exit`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L333) | `tracepoint/raw_syscalls/sys_exit` | Completes a task-local mount attempt and leaves the namespace view dirty for userspace reconciliation. It uses atomics because tracing programs cannot use the mount-view BPF spin lock. |
-| [`erebor_identity_file_open`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L574) | `lsm/file_open`, BPF LSM | Applies exact file-open or default policy before Linux returns the file descriptor. |
-| [`erebor_identity_file_permission`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L580) | `lsm/file_permission`, BPF LSM | Converts the Linux read, write, and execute mask into separate typed operations and applies each decision. |
-| [`erebor_identity_file_ioctl`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L600) | `lsm/file_ioctl`, BPF LSM | Runs the common actor and object proof, then uses the exact device and ioctl key in [`identity_device_ioctl_gate`](../../../bpf/erebor-interceptor/programs/identity_device_process.bpf.h#L143). |
-| [`erebor_identity_mmap_file`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L607) | `lsm/mmap_file`, BPF LSM | Applies read, write, and executable file-mapping decisions for the requested protection bits. |
-| [`erebor_identity_file_mprotect`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L631) | `lsm/file_mprotect`, BPF LSM | Uses the mapped file when present and applies write or execute transitions. Anonymous executable memory stays a hard-close path, not a complete VMA model. |
-| [`erebor_identity_socket_post_create`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L434) | `lsm/socket_post_create`, BPF LSM | Stores creator endpoint identity in socket-local storage for a protected Unix stream. Other socket kinds do not receive positive Unix-stream authority. |
-| [`erebor_identity_unix_stream_connect`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L448) | `lsm/unix_stream_connect`, BPF LSM | Validates the current client, stored listener, and accepted child. It creates one channel identity and applies an exact relationship decision. Only denial relationships are compiled. |
-| [`erebor_identity_socket_connect`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L457) | `lsm/socket_connect`, BPF LSM | Defers AF_UNIX stream authority to `unix_stream_connect`. Other protected network connection requests use the unsupported network path. |
-| [`erebor_identity_socket_sendmsg`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L474) | `lsm/socket_sendmsg`, BPF LSM | Revalidates both stored endpoints for a connected Unix stream. Other protected socket messages do not inherit that authority. |
-| [`erebor_identity_socket_recvmsg`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L492) | `lsm/socket_recvmsg`, BPF LSM | Applies the receive direction of the same connected-stream proof. |
-| [`erebor_identity_socket_socketpair`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L509) | `lsm/socket_socketpair`, BPF LSM | Takes the explicit unsupported IPC path. Socket-pair positive authority is not implemented. |
-| [`erebor_identity_unix_may_send`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L516) | `lsm/unix_may_send`, BPF LSM | Takes the explicit unsupported Unix datagram path. |
-| [`erebor_identity_ipc_permission`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L523) | `lsm/ipc_permission`, BPF LSM | Takes the explicit unsupported SysV IPC path for a protected actor. |
-| [`erebor_identity_shm_shmat`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L530) | `lsm/shm_shmat`, BPF LSM | Takes the explicit unsupported shared-memory attach path. |
-| [`erebor_identity_ptrace_access_check`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L662) | `lsm/ptrace_access_check`, BPF LSM | Calls the exact controller-target snapshot and process-rule gate. Positive rows require exact target roles and exact operation arguments. |
-| [`erebor_identity_task_kill`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L670) | `lsm/task_kill`, BPF LSM | Applies the same exact controller-target proof to signal delivery and records the signal as the operation argument. |
-| [`erebor_identity_path_unlink`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L679) | `lsm/path_unlink`, BPF LSM | Applies path/object policy to an existing unlink target. |
-| [`erebor_identity_path_mknod`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L687) | `lsm/path_mknod`, BPF LSM | Checks the destination path. A negative or unresolved destination cannot gain exact-object authority. |
-| [`erebor_identity_path_mkdir`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L696) | `lsm/path_mkdir`, BPF LSM | Checks directory creation with the same conservative destination rule. |
-| [`erebor_identity_path_symlink`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L704) | `lsm/path_symlink`, BPF LSM | Checks symlink creation. It does not infer authority from the target text. |
-| [`erebor_identity_path_rmdir`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L712) | `lsm/path_rmdir`, BPF LSM | Applies path/object policy to the existing directory. |
-| [`erebor_identity_path_chmod`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L720) | `lsm/path_chmod`, BPF LSM | Applies metadata policy to the exact existing path object. |
-| [`erebor_identity_path_chown`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L728) | `lsm/path_chown`, BPF LSM | Applies ownership-change policy to the exact existing path object. |
-| [`erebor_identity_path_truncate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L736) | `lsm/path_truncate`, BPF LSM | Applies truncate policy to an exact path object. |
-| [`erebor_identity_file_truncate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L743) | `lsm/file_truncate`, BPF LSM | Applies truncate policy through an existing file object. |
-| [`erebor_identity_path_link`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L750) | `lsm/path_link`, BPF LSM | Checks the existing source and then the destination. It does not transfer a signed path class to an unrepresented hard-link alias. |
-| [`erebor_identity_path_rename`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L763) | `lsm/path_rename`, BPF LSM | Checks both source and destination before the rename. |
-| [`erebor_identity_sb_mount`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L785) | `lsm/sb_mount`, BPF LSM | Applies the mount policy. If Linux may continue, it dirties the namespace view before mutation. |
-| [`erebor_identity_sb_umount`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L793) | `lsm/sb_umount`, BPF LSM | Applies unmount policy and starts the same dirty-view transaction when allowed. |
-| [`erebor_identity_sb_pivotroot`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L800) | `lsm/sb_pivotroot`, BPF LSM | Applies pivot-root policy and invalidates the represented topology before an allowed change. |
-| [`erebor_identity_move_mount`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L807) | `lsm/move_mount`, BPF LSM | Applies move-mount policy and invalidates the represented topology before an allowed change. |
-| [`erebor_identity_capable`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L814) | `lsm/capable`, BPF LSM | Uses the typed privilege operation and a finite default cell. Missing protected authority hard-denies. It is not a complete credential-transition model. |
-| [`erebor_identity_bpf`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L822) | `lsm/bpf`, BPF LSM | Applies the BPF privilege operation before the command. It is not complete protection of every Mithril map, link, and binary operation. |
+| [`erebor_exception_sys_exit`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L18) | `raw_tracepoint/sys_exit` | Marks the task-local exception attempt inactive when the syscall ends. |
+| [`erebor_mount_mutation_sys_exit`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L403) | `tracepoint/raw_syscalls/sys_exit` | Completes a task-local mount attempt and leaves the namespace view dirty for userspace reconciliation. It uses atomics because tracing programs cannot use the mount-view BPF spin lock. |
+| [`erebor_mount_sys_enter_open_tree`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L411) | `tracepoint/syscalls/sys_enter_open_tree` | Advances the global mount mutation epoch before this mount API can change a represented view. |
+| [`erebor_mount_sys_enter_fsconfig`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L411) | `tracepoint/syscalls/sys_enter_fsconfig` | Applies the same global invalidation to filesystem-context configuration. |
+| [`erebor_mount_sys_enter_fsmount`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L411) | `tracepoint/syscalls/sys_enter_fsmount` | Applies the same global invalidation before a new mount object can become visible. |
+| [`erebor_mount_sys_enter_mount_setattr`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L411) | `tracepoint/syscalls/sys_enter_mount_setattr` | Applies the global fail-closed barrier because Linux has no matching mount-specific LSM hook for this syscall. |
+| [`erebor_identity_file_open`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L730) | `lsm/file_open`, BPF LSM | Applies exact file-open or default policy before Linux returns the file descriptor. |
+| [`erebor_identity_file_receive`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L736) | `lsm/file_receive`, BPF LSM | Revalidates an exact received file for the current recipient before descriptor installation. Linux can return payload with `MSG_CTRUNC` and install no descriptor when this hook denies. Bounded exceptions are disabled on this path. |
+| [`erebor_identity_file_permission`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L744) | `lsm/file_permission`, BPF LSM | Converts the Linux read, write, and execute mask into separate typed operations and applies each decision. |
+| [`erebor_identity_file_ioctl`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L783) | `lsm/file_ioctl`, BPF LSM | Runs the common actor and object proof, then uses the exact device and ioctl key in [`identity_device_ioctl_gate`](../../../bpf/erebor-interceptor/programs/identity_device_process.bpf.h#L130). |
+| [`erebor_identity_mmap_file`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L790) | `lsm/mmap_file`, BPF LSM | Applies read, write, and executable file-mapping decisions for the requested protection bits. |
+| [`erebor_identity_file_mprotect`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L829) | `lsm/file_mprotect`, BPF LSM | Uses the mapped file when present and applies write or execute transitions. Anonymous executable memory stays a hard-close path, not a complete VMA model. |
+| [`erebor_identity_socket_post_create`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L440) | `lsm/socket_post_create`, BPF LSM | Stores creator endpoint identity in socket-local storage for a protected Unix stream. Other socket kinds do not receive positive Unix-stream authority. |
+| [`erebor_identity_unix_stream_connect`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L454) | `lsm/unix_stream_connect`, BPF LSM | Validates the current client, stored listener, and accepted child. It creates one channel identity and applies an exact allow, alert, or deny relationship for the same profile generation. |
+| [`erebor_identity_socket_connect`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L463) | `lsm/socket_connect`, BPF LSM | Defers AF_UNIX stream authority to `unix_stream_connect`. Other protected network connection requests use the unsupported network path. |
+| [`erebor_identity_socket_sendmsg`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L480) | `lsm/socket_sendmsg`, BPF LSM | Revalidates both stored endpoints for a connected Unix stream. Other protected socket messages do not inherit that authority. |
+| [`erebor_identity_socket_recvmsg`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L498) | `lsm/socket_recvmsg`, BPF LSM | Applies the receive direction of the same connected-stream proof. |
+| [`erebor_identity_socket_socketpair`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L515) | `lsm/socket_socketpair`, BPF LSM | Takes the explicit unsupported IPC path. Socket-pair positive authority is not implemented. |
+| [`erebor_identity_unix_may_send`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L522) | `lsm/unix_may_send`, BPF LSM | Takes the explicit unsupported Unix datagram path. |
+| [`erebor_identity_ipc_permission`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L529) | `lsm/ipc_permission`, BPF LSM | Takes the explicit unsupported SysV IPC path for a protected actor. |
+| [`erebor_identity_shm_shmat`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L536) | `lsm/shm_shmat`, BPF LSM | Takes the explicit unsupported shared-memory attach path. |
+| [`erebor_identity_ptrace_access_check`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L867) | `lsm/ptrace_access_check`, BPF LSM | Calls the exact controller-target snapshot and process-rule gate. Positive rows require exact target roles and exact operation arguments. |
+| [`erebor_identity_task_kill`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L875) | `lsm/task_kill`, BPF LSM | Applies the same exact controller-target proof to signal delivery and records the signal as the operation argument. |
+| [`erebor_identity_path_unlink`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L884) | `lsm/path_unlink`, BPF LSM | Applies path/object policy to an existing unlink target. |
+| [`erebor_identity_path_mknod`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L892) | `lsm/path_mknod`, BPF LSM | Checks the destination path. A negative or unresolved destination cannot gain exact-object authority. |
+| [`erebor_identity_path_mkdir`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L901) | `lsm/path_mkdir`, BPF LSM | Checks directory creation with the same conservative destination rule. |
+| [`erebor_identity_path_symlink`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L909) | `lsm/path_symlink`, BPF LSM | Checks symlink creation. It does not infer authority from the target text. |
+| [`erebor_identity_path_rmdir`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L917) | `lsm/path_rmdir`, BPF LSM | Applies path/object policy to the existing directory. |
+| [`erebor_identity_path_chmod`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L925) | `lsm/path_chmod`, BPF LSM | Applies metadata policy to the exact existing path object. |
+| [`erebor_identity_path_chown`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L933) | `lsm/path_chown`, BPF LSM | Applies ownership-change policy to the exact existing path object. |
+| [`erebor_identity_path_truncate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L941) | `lsm/path_truncate`, BPF LSM | Applies truncate policy to an exact path object. |
+| [`erebor_identity_file_truncate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L948) | `lsm/file_truncate`, BPF LSM | Applies truncate policy through an existing file object. |
+| [`erebor_identity_path_link`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L955) | `lsm/path_link`, BPF LSM | Checks the existing source and then the destination. It does not transfer a signed path class to an unrepresented hard-link alias. |
+| [`erebor_identity_path_rename`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L968) | `lsm/path_rename`, BPF LSM | Checks both source and destination before the rename. |
+| [`erebor_identity_sb_kern_mount`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L990) | `lsm/sb_kern_mount`, BPF LSM | Applies the represented mount policy and global invalidation to kernel-created mount objects. |
+| [`erebor_identity_sb_mount`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L999) | `lsm/sb_mount`, BPF LSM | Applies the mount policy. If Linux may continue, it dirties the namespace view before mutation. |
+| [`erebor_identity_sb_umount`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L1007) | `lsm/sb_umount`, BPF LSM | Applies unmount policy and starts the same dirty-view transaction when allowed. |
+| [`erebor_identity_sb_pivotroot`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L1014) | `lsm/sb_pivotroot`, BPF LSM | Applies pivot-root policy and invalidates the represented topology before an allowed change. |
+| [`erebor_identity_move_mount`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L1021) | `lsm/move_mount`, BPF LSM | Applies move-mount policy and invalidates the represented topology before an allowed change. |
+| [`erebor_identity_capable`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L1028) | `lsm/capable`, BPF LSM | Uses the typed privilege operation and a finite default cell. Missing protected authority hard-denies. It is not a complete credential-transition model. |
+| [`erebor_identity_bpf`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L1036) | `lsm/bpf`, BPF LSM | Applies the BPF privilege operation before the command. It is not complete protection of every Mithril map, link, and binary operation. |
+| [`erebor_io_uring_setup_enter`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L431) | `tracepoint/syscalls/sys_enter_io_uring_setup` | Captures the exact managed actor and permitted setup intent before ring creation. |
+| [`erebor_identity_inode_init_security_anon`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L497) | `lsm/inode_init_security_anon`, BPF LSM | Associates the new anonymous io_uring inode with the pending managed setup. |
+| [`erebor_io_uring_create`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L537) | `tp_btf/io_uring_create` | Publishes the ring identity and pinned generation after Linux creates the ring. |
+| [`erebor_io_uring_register`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L637) | `tp_btf/io_uring_register` | Allows the narrow ring-enable transition and rejects unqualified registration authority. |
+| [`erebor_io_uring_submit_req`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L708) | `tp_btf/io_uring_submit_req` | Captures the exact submission, SQE, actor, file, offset, buffer, length, and generation state. |
+| [`erebor_io_uring_issue_enter`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L816) | `fentry/io_issue_sqe` | Binds the current executor to one retained request before Linux issues it. |
+| [`erebor_io_uring_issue_exit`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L867) | `fexit/io_issue_sqe` | Releases the execution state or retains a restrictive result after the issue path returns. |
+| [`erebor_io_uring_complete`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L913) | `tp_btf/io_uring_complete` | Completes one request and releases its retained generation reference. |
+| [`erebor_io_uring_context_free`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L949) | `fentry/io_ring_ctx_free` | Tombstones the ring and releases its asynchronous generation reference. |
+| [`erebor_identity_uring_sqpoll`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L987) | `lsm/uring_sqpoll`, BPF LSM | Hard-closes SQPOLL because positive kernel-worker authority is not qualified. |
+| [`erebor_identity_uring_override_creds`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L995) | `lsm/uring_override_creds`, BPF LSM | Hard-closes credential override for the protected ring. |
+| [`erebor_identity_uring_cmd`](../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h#L1005) | `lsm/uring_cmd`, BPF LSM | Hard-closes driver command authority. |
 | [`erebor_sched_process_exit`](../../../bpf/erebor-interceptor/programs/identity_exit.bpf.h#L16) | `tracepoint/sched/sched_process_exit` | Uses the task tombstone to release task, process, entry, domain, image, execution, and generation references once. Failed decrements retain restriction and raise reconciliation health. |
 
 Use the following family matrix with the program catalog. The program catalog
@@ -511,15 +546,19 @@ constraints, physical result, userspace setup, and proof path.
 | --- | --- | --- | --- | --- |
 | `task_alloc`, `cgroup_attach_task`, `wake_up_new_task` | Read runtime config, live cgroup binding, creator state, and generation refs. Create task storage, coordinates, creator edges, process, vector, entry, domain, image, execution, and tombstone rows. Rollback removes only acquired state. | CO-RE cgroup and task reads, `bpf_get_current_task_btf`, task storage, map lookup/update/delete, and BPF atomics. | `task_alloc` can return the prior LSM denial or a negative errno. Trace and fentry programs return zero after state work; they do not override a syscall result. Missing protected identity retains a restrictive result or health state. | `WorkloadBindingOwner` publishes the cgroup row first. `NativeSecurityStateOwner` enables identity. The identity e2e runner proves root, native-child, exec, restart, reference, and cleanup paths. Source-contract tests in [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs) check verifier-sensitive task-storage and counter rules. |
 | `cgroup_release`, `sched_process_exit` | Tombstone the binding or task. Release exact task, process, vector, entry, domain, image, execution, and generation references. | Raw or scheduler trace context reads, map lookup/update/delete, and nonzero compare-and-swap decrement. | These trace programs return zero. They cannot deny exit. A failed decrement keeps the restrictive row and increments reconciliation health. | Recovery reads retained refs. `lifecycle_counters_use_the_nonzero_cas_decrement` checks the source contract. The identity probe checks final reference counts. |
-| `reconcile_tasks` | Read every live task label and related state. Update health or retain restriction on mismatch. | BPF iterator context, task storage, CO-RE reads, and bounded map lookups. | Returns zero for each iterator element. It changes reconciliation state, not the task syscall result. | `KernelHost::reconcile_tasks` attaches, drains, and drops this program for each reconciliation run. It is the only required program without a persistent link. |
+| `reconcile_tasks` | Read every live task label and related state. Update health or retain restriction on mismatch. | BPF iterator context, task storage, CO-RE reads, and bounded map lookups. | Returns zero for each iterator element. It changes reconciliation state, not the task syscall result. | `KernelHost::reconcile_tasks` attaches, drains, and drops this program for each reconciliation run. It is one of two required programs without a persistent link. |
+| Policy activation probe | Reads one `policy_activation_probe_requests` row and the named staged policy row. It writes no runtime authority. | `Program::test_run`, per-CPU scratch, and exact map lookup. | Returns a small diagnostic code to userspace. It is never attached to a packet or task path. | `LoweredGeneration::probe_staged_rows` runs the probe after readback and before the active profile pointer changes. |
 | Exec entry, BPRM, commit, exit, and success programs | Read task, process, entry, image, exact object, policy, approved slot, approved argument, and exception state. Write pending exec, pending administrative match, candidate image, image provenance, execution, process role, and reference rows. | `bpf_probe_read_user`, bounded loop callbacks, BPRM CO-RE reads, map operations, task storage, spin-locked exception consumption, and atomics. | `bprm_check_security` returns the prior denial, policy denial, or zero before exec. Trace and fentry programs return zero after transaction maintenance. A post-commit uncertainty never restores wider authority. | `AuthorizationProofOwner` installs exact ordered-argument keys and one slot when called. `NodePolicyGenerationOwner` installs exec decisions. The effect probe checks exec variants, an approved exact control, and failed-close memory cases. `bundled.rs` checks argument-loop, candidate-index, and BPRM-loop bounds. |
 | Exception syscall entry and exit | Write task-local syscall state and a bounded `file_open` frame stack in `task_effect_attempt_states`. Read no policy row. | Current task storage and raw syscall context. | Return zero. These programs identify an attempt. They do not allow or deny that attempt. A malformed, unfinished, or overflowed frame fails closed. | `NodePolicyGenerationOwner` installs exception bindings. `ExceptionAuthorityOwner` restores receipts and reconciles the WAL. Current-source physical proof is pending. |
 | File open, permission, mmap, and mprotect | Read actor identity, binding, generation, exact object, mount view, canonical graph, effect decision/default, exception, and observation state. Write late root state, exception receipts/counters, mount proposal state, observation health, and ring records. | Trusted current task, task storage, CO-RE inode/dentry/mount reads, bounded loop callbacks, map operations, spin locks where valid, atomics, ring reserve/submit, and monotonic time. | Preserve a prior LSM denial. Return zero for allow or observe-only `WOULD_DENY`. Return a verified negative errno in protect mode or for an integrity failure. Ring loss cannot change the return. | `NodePolicyGenerationOwner` installs all signed rows and exact mount state. Earlier VM records cover file, alias, descriptor, mapping, saturation, and benign controls for an older object. |
+| File descriptor receive | Reads the current recipient, the received file, exact object state, and the existing open-mode policy cells. It cannot consume a bounded exception. | Trusted current task, file and inode CO-RE reads, exact map lookup, and common observation helpers. | A denied SCM_RIGHTS item installs no descriptor. Linux reports the rejected item through `MSG_CTRUNC`; the payload can still arrive. | The effect fixture uses one declared Unix-stream relationship, compares the target process descriptor set before and after receive, and has a benign exact-file control. Current physical rerun is still required. |
 | Device ioctl | Run the common actor and exact-object proof. Then read `device_effect_decisions` with exact type, major, minor, command, role, and state. Write only common exception and observation state. | File/inode CO-RE reads, Linux device-number helpers, map lookup, and the common observation helpers. | Preserve prior denial. Return an exact command result. A command wildcard is denial-only. Missing typed authority hard-denies. | The node lowerer rejects an unsigned device class and a positive command wildcard. The fixture uses `/dev/pts/ptmx` and `TIOCGPTN`; `/dev/zero` is the exact deny control. |
 | Ptrace and signal | Read controller identity and target task storage, binding, coordinate, process/vector, generation, and `process_control_rules`. Recheck target and transition versions after lookup. Write common observation state. | Trusted target task pointer, task storage, CO-RE target reads, map lookup, and common observation helpers. | Preserve prior denial. Return an exact directional result or hard-deny missing proof. Generic rows are denial-only. | `lower_process` owns the exact target and argument restriction. Current physical evidence covers exact denial and signal-zero permission only. |
 | Unix-stream socket programs | Read and write `ipc_socket_states`. Read actor, peer, binding, generation, and `ipc_relationship_decisions`. Write common observation state. | Socket-local storage, trusted socket member pointers, task storage, CO-RE socket/process reads, and map lookup. | Connected stream hooks apply an exact relationship result or the signed unmatched result. Socketpair, datagram, SysV IPC, and shared-memory hooks take the explicit unsupported path. | `lower_ipc_relationships` installs exact two-direction rows for allow, alert, or deny, plus signed unmatched rows. Current-source physical proof is pending. |
 | Path mutation programs | Read actor, source/destination dentry and inode state, exact object, mount graph, and signed effect rows. Write common observation and exception state. | CO-RE path reads, bounded canonical path loop, map lookup, and the common gate. | Preserve a prior denial. Return source denial before destination evaluation. An unresolved negative destination cannot gain object authority. | The policy owner installs represented roots and exact objects. Earlier VM records cover create, metadata, truncate, unlink, link, and rename hard-close paths for an older object. `link_and_rename_check_source_before_destination` checks source order. |
 | Mount mutation programs and syscall exit | Read actor policy and namespace view. The LSM hooks lock and mark an allowed mutation `DIRTY` before Linux changes topology. The exit tracepoint advances version and pending state with atomics. | Mount/dentry CO-RE reads, map lookup, BPF spin lock in LSM programs, task storage, and atomics in the tracepoint. | LSM hooks deny an unsupported protected mutation or return zero after invalidation. The exit tracepoint returns zero and cannot authorize the mutation. | The policy owner installs and reconciles mount rows from retained namespace capabilities. Earlier VM records cover protected and external replacement races and exact restoration for an older object. Source-contract tests prohibit spin locks in the tracepoint. |
+| Global mount invalidation | Reads and updates the global mutation, clean, and pending epochs. It also marks each represented namespace stale until exact reconciliation. | Atomic map operations from syscall-entry tracepoints and LSM hooks. | It cannot authorize a mount. A mismatch makes exact-object decisions fail closed across represented namespaces. | The physical fixture covers `mount_setattr` invalidation and one propagation peer. Automount, referral, overlay copy-up, and idmapped behavior remain unqualified. |
+| Restricted io_uring | Reads and writes setup, ring, request, execution, exact-object, policy, and asynchronous generation-reference maps. | BTF tracepoints, fentry/fexit, BPF LSM hooks, CO-RE reads, map operations, and bounded state validation. | Exact read or write can proceed under the pinned submitting actor. Unqualified SQPOLL, credential override, command, opcode, or lifecycle state hard-closes. | The fixture creates a disabled ring, installs exact read/write restrictions, enables it, verifies worker attribution, and checks completion and reference release. A current final VM rerun is still required. |
 | `capable` and `bpf` | Read current actor, generation, finite privilege defaults, and observation state. Write common exception and observation state. | Common actor helpers, map lookup, and ring helpers. | Preserve prior denial. Return the signed finite result or hard-deny missing protected authority. | The protection probe checks namespace privilege, BPF, and link-removal safety floors. These programs do not prove the full privilege or self-protection matrix. |
 
 The required-program list is a load-time completeness check. It is not a
@@ -559,6 +598,7 @@ loader has the file descriptor; it does not invent map contents.
 | `identity_config` (array, one record) | `NativeSecurityStateOwner`; `allocate_id` advances `next_id` atomically | Every identity/effect hook | Node boot ID, label epoch, enabled flags, configured deny errno, and opaque-ID allocator. |
 | `identity_health` (per-CPU array) | BPF hook families increment counters | `NativeSecurityStateOwner` aggregates all CPU values | Diagnostic counters; missing health storage never authorizes anything. |
 | `identity_scratch` (per-CPU array) | The currently running BPF invocation | That same invocation only | Reusable temporary construction area, not durable task identity. One invocation completes on one CPU. A later invocation uses the slot for its current CPU. Durable data is published to task storage or hash maps before return. |
+| `policy_activation_probe_requests` (array, one record) | `NodePolicyGenerationOwner` before publication | On-demand policy activation probe | One exact staged-row request. The probe result must succeed before the active profile pointer changes. |
 | `effect_observation_health` (per-CPU array) | Effect gate | Runtime observation | Attempted/emitted/lost/unresolved observation counters. |
 | `effect_observations` (4 MiB ring buffer) | Effect gate after selecting the result | One `libbpf-rs` ring reader | Best-effort evidence. Ring pressure can lose evidence but cannot change allow/deny. |
 
@@ -567,8 +607,8 @@ loader has the file descriptor; it does not invent map contents.
 | Map(s) | Filled by | Read by | Plain meaning |
 | --- | --- | --- | --- |
 | `execution_set_bindings` | `WorkloadBindingOwner`: `PREPARING` → exact readback → `ACTIVE`; BPF consumes the single initial-root marker and tombstones a released cgroup | Lifecycle and effect gate | The live cgroup-to-workload authority record, including nonce, profile generation and roles. BPF never creates or activates a binding. |
-| `profile_generation_task_refs` | Binding owner creates the zero value; BPF birth increments and exit decrements | BPF lifecycle and node recovery | Keeps a generation retained while labelled tasks exist. |
-| `active_profile_generations` | `NodePolicyGenerationOwner` publishes binding ID → generation after the generation is `ACTIVE`; `WorkloadBindingOwner` reads it before it updates the live binding | New-root admission helpers and binding activation | This is the switch for future roots. Existing processes keep the generation stored in their process state. It is not a per-effect global pointer. |
+| `profile_generation_task_refs`, `profile_generation_async_refs` | Policy owner creates zero values; BPF task and io_uring lifecycles increment and decrement them | BPF lifecycle, retirement, and node recovery | Keep a generation retained while labelled tasks, rings, or requests exist. |
+| `active_profile_generations` | `NodePolicyGenerationOwner` publishes profile ID → generation after the generation is `ACTIVE` and probes pass | New-root admission helpers and binding activation | This is the single profile switch for future roots. Existing processes keep the generation stored in their process state. It is not a per-effect global pointer. |
 | `task_labels` (task storage) | BPF `publish_task`; BPF rollback deletes partial publication | Every hot BPF path | Immutable birth identity attached directly to the kernel task. There is no delayed PID enrollment. |
 | `task_coordinates`, `kernel_real_parent_intervals`, `created_by_edges` | BPF birth/wakeup/exec/exit/reconcile | Identity and effect paths; inspection | Reusable Linux coordinates, current kernel-parent observation, and immutable creator proof. |
 | `process_states`, `process_state_vectors`, `entry_states`, `authority_domains` | BPF root/native birth; BPF exec and exit transitions | Lifecycle, exec and effect paths | Current mutable authority state for a process, its finite state vector, entry lifetime, and native-family domain. |
@@ -578,7 +618,7 @@ loader has the file descriptor; it does not invent map contents.
 
 | Map(s) | Filled by | Read or changed by | Plain meaning |
 | --- | --- | --- | --- |
-| `approved_exec_slots`, `approved_exec_arguments` | `AuthorizationProofOwner` when an in-process caller invokes it | Exec path consumes one matching slot; exec path reads bounded argument bytes | Identity-side foundation for an exact administrative exec proof. `NodeChassis` has no production Control request path that invokes this owner. It is not a command-string allow list. |
+| `approved_exec_slots`, `approved_exec_arguments` | The node administrative owner calls `AuthorizationProofOwner` after a typed Control arm request | Exec path consumes one matching slot; exec path reads bounded argument bytes | One exact next-match administrative authority. It is not a command-string allow list. |
 | `pending_administrative_matches` | Exec entry path | BPRM/exec completion path | Short-lived bridge from verified syscall argv to the BPRM transaction. |
 
 ### 4. Signed policy, exact file, and mount state
@@ -593,8 +633,10 @@ loader has the file descriptor; it does not invent map contents.
 | `ipc_socket_states` | BPF socket creation and connect paths | BPF Unix-stream connect/send/receive paths | Socket-local endpoint and channel identity. The value follows the socket lifetime. |
 | `exception_handle_bindings`, `exception_runtime_states`, `exception_use_receipts` | Policy and exception owners install bindings/state and restore durable consumed receipts | BPF claims one receipt, locks one runtime value, checks deadline/count, and consumes one use | Stable exception instance and use identity. The WAL owns restart reconciliation. |
 | `task_effect_attempt_states` | Raw syscall entry/exit and `file_open` BPF code | Exception consumption | Task-local syscall state and bounded `file_open` frames. Each current synchronous file-open decision gets a new effect-attempt sequence. |
+| `io_uring_setup_states`, `io_uring_ring_states`, `io_uring_request_states`, `io_uring_execution_states`, `profile_generation_async_refs` | BPF io_uring setup, create, submit, issue, complete, and free hooks | BPF io_uring and file-effect paths; node retirement | Exact restricted ring and request ownership plus generation retention. These rows do not authorize SQPOLL, credential override, uring commands, arbitrary opcodes, AIO, or unqualified registered resources. |
 | `exact_file_objects` | `NodePolicyGenerationOwner` writes configured tuple rows | Effect and device gates read only | Exact object key: generation, mount namespace, unique mount identity, device, inode, and inode generation. BPF does not create a new authority row from a pathname. |
-| `mount_security_views`, `mount_mutation_epochs`, `mount_security_view_locks`, `mount_reconciliation_proposals` | Policy owner initializes/reconciles; BPF mount hooks dirty/advance state; BPF file gate commits an exact proposal | BPF path and policy reconciliation | Namespace-global topology safety state. A dirty or racing view cannot produce a strict file decision. |
+| `mount_security_views`, `mount_mutation_epochs`, `mount_security_view_locks`, `mount_reconciliation_proposals` | Policy owner initializes/reconciles; BPF mount hooks dirty/advance state; BPF file gate commits an exact proposal | BPF path and policy reconciliation | Per-namespace topology safety state. A dirty or racing view cannot produce a strict file decision. |
+| `mount_global_mutation_epoch`, `mount_global_clean_epoch`, `mount_global_pending_mutations` | Policy owner initializes and reconciles; mount LSM and syscall-entry programs advance global state | Every exact path gate and mount reconciliation | Conservative cross-namespace barrier for mount APIs and propagation. Exact decisions require the global clean epoch to match. |
 | `canonical_mount_roots`, `path_graph_exact_transitions`, `path_graph_wildcard_transitions`, `path_graph_terminals` | Policy owner after resolving the represented mount view | BPF canonical path candidate | The bounded Meta component graph and trusted root prefix used to turn live dentry components into a signed class candidate. |
 | `mount_mutation_attempts` (task storage) | BPF mount and exit paths | BPF mount completion | A small task-local pairing record only. Namespace topology authority stays in namespace-keyed maps. |
 
@@ -623,6 +665,7 @@ the active handle and immutable generation keys.
 | `identity_config` | `u32` → `IdentityRuntimeConfigV1` | `NativeSecurityStateOwner` | `allocate_id` changes `next_id` atomically | All identity and effect families | Pin-root lifetime; one row for one boot and label epoch |
 | `identity_health` | per-CPU `u32` → `IdentityHealthV1` | None | Lifecycle, exec, and exit families | Native health aggregation | Pin-root lifetime; counters are per CPU |
 | `identity_scratch` | per-CPU `u32` → BPF-only `identity_scratch_v1` | None | Current BPF invocation | Current BPF invocation | Pin-root lifetime; content is temporary and can change on the next invocation on that CPU |
+| `policy_activation_probe_requests` | `u32` → `PolicyActivationProbeV1` | `NodePolicyGenerationOwner` | None | On-demand activation probe | Pin-root lifetime; one temporary request during staged-row qualification |
 | `task_labels` | task-storage kernel key → `TaskLabelV1` | None | Root and native publication; rollback deletes | Lifecycle, exec, effect, exit, iterator, inspector | Map has pin-root lifetime; each value has task lifetime |
 | `task_coordinates` | `u64 task_cookie` → `TaskCoordinateV1` | None | Root, native, wake, exec, exit, iterator | Lifecycle, exec, effect, inspector | Pin-root lifetime; explicit exit and rollback cleanup |
 | `kernel_real_parent_intervals` | `KernelRealParentIntervalKeyV1` → `KernelRealParentIntervalV1` | None | Birth, refresh, exec, exit, iterator | Identity, effect, inspector | Pin-root lifetime; interval and exit cleanup |
@@ -630,6 +673,7 @@ the active handle and immutable generation keys.
 | `process_states` | `Id128V1` → `ProcessSecurityStateV1` | None | Root, native, exec, exit | Lifecycle, exec, effect, inspector | Pin-root lifetime; reference-owned process lifetime |
 | `process_state_vectors` | `Id128V1` → `ProcessStateVectorV1` | None | Root, native, exec, exit | Lifecycle, exec, effect, inspector | Pin-root lifetime; process-state lifetime |
 | `profile_generation_task_refs` | `u64 generation_ref` → `u64 count` | Binding owner creates zero row | Birth and exit change count atomically | Lifecycle, effect, binding recovery | Pin-root lifetime; retained while bindings or tasks refer to the generation |
+| `profile_generation_async_refs` | `u64 generation_ref` → `u64 count` | Policy owner creates zero row | Ring and request lifecycle change count atomically | io_uring paths and generation retirement | Pin-root lifetime; retained while asynchronous holders refer to the generation |
 | `entry_states` | `Id128V1` → `EntrySecurityStateV1` | None | Root, native, exec, exit | Lifecycle, exec, effect, inspector | Pin-root lifetime; entry reference lifetime |
 | `authority_domains` | `Id128V1` → `AuthorityDomainStateV1` | None | Root, native, exec, exit | Lifecycle, exec, effect, inspector | Pin-root lifetime; native-family reference lifetime |
 | `execution_set_bindings` | `u64 cgroup_id` → `ExecutionSetBindingStateV1` | `WorkloadBindingOwner` | Initial-root consume; cgroup release tombstones | Lifecycle, exec, effect, binding recovery | Pin-root lifetime; userspace terminates or BPF tombstones a dead cgroup |
@@ -654,8 +698,15 @@ the active handle and immutable generation keys.
 | `exception_runtime_states` | `ExceptionRuntimeStateKeyV1` → `ExceptionRuntimeStateV1` compatible BPF lock wrapper | `NodePolicyGenerationOwner` with `ExceptionAuthorityOwner` | Effect or administrative exec consumes, expires, and exhausts under spin lock | Exception reconciliation and BPF consumption | Pin-root lifetime plus WAL recovery; mutable stable exception instance |
 | `exception_use_receipts` | `ExceptionUseReceiptKeyV1` → `ExceptionUseReceiptV1` | `ExceptionAuthorityOwner` restores durable consumed receipts | BPF inserts `CLAIMING`, changes it to `CONSUMED`, or removes a denied claim | Exception reconciliation and BPF retry | Pin-root lifetime; successful receipts also have WAL lifetime |
 | `task_effect_attempt_states` | task-storage kernel key → `TaskEffectAttemptStateV1` | None | Raw syscall entry starts state; `file_open` creates and returns one frame; raw syscall exit and task exit close frames | BPF exception consumption | Map has pin-root lifetime; each value has task lifetime |
+| `io_uring_setup_states` | `u64 task_cookie` → `IoUringSetupStateV1` | None | io_uring setup and create programs | io_uring creation | Pin-root lifetime; one pending setup transaction |
+| `io_uring_ring_states` | `Id128V1 ring_id` → `IoUringRingStateV1` | None | create, register, submit, and free programs | io_uring and retirement owners | Pin-root lifetime; ring and pinned-generation lifetime |
+| `io_uring_request_states` | `IoUringRequestKeyV1` → `IoUringRequestStateV1` | None | submit, issue, complete, and free programs | io_uring executor and completion paths | Pin-root lifetime; exact request lifetime |
+| `io_uring_execution_states` | `u64 task_cookie` → `IoUringExecutionStateV1` | None | issue entry and exit programs | File-effect attribution and completion | Pin-root lifetime; one in-flight executor binding |
 | `exact_file_objects` | `ExactFileObjectKeyV1` → `ExactObjectBindingV1` | `NodePolicyGenerationOwner` | None | Common effect and device gates | Pin-root lifetime; generation and mount-view validity limit use |
 | `mount_security_views` | `u32 mount_namespace_inode` → `MountSecurityViewStateV1` | `NodePolicyGenerationOwner` | Mount hooks dirty and advance the view; file gate can commit reconciliation | Policy owner, mount hooks, path gate | Pin-root lifetime; namespace view lifetime |
+| `mount_global_mutation_epoch` | `u32` → `u64` | `NodePolicyGenerationOwner` initializes | Mount LSM and syscall-entry programs increment | Exact path gate and reconciliation | Pin-root lifetime; node-global mutation epoch |
+| `mount_global_clean_epoch` | `u32` → `u64` | `NodePolicyGenerationOwner` advances after exact reconciliation | None | Exact path gate and reconciliation | Pin-root lifetime; node-global reconciled epoch |
+| `mount_global_pending_mutations` | `u32` → `u64` | `NodePolicyGenerationOwner` initializes | Mount entry and exit paths use bounded nonzero updates | Exact path gate and reconciliation | Pin-root lifetime; global in-flight mutation count |
 | `mount_security_view_locks` | `u32 mount_namespace_inode` → BPF spin lock | `NodePolicyGenerationOwner` creates row | LSM mount and path programs lock the row | LSM mount and path programs | Pin-root lifetime; namespace view lifetime |
 | `mount_reconciliation_proposals` | `u32 mount_namespace_inode` → `MountReconciliationProposalV1` | `NodePolicyGenerationOwner` | File gate consumes a matching proposal | Policy owner and file gate | Pin-root lifetime; one exact epoch/version proposal |
 | `mount_mutation_epochs` | `u32 mount_namespace_inode` → `u64` | `NodePolicyGenerationOwner` initializes row | Mount paths advance epoch atomically | Policy owner, mount path, file path | Pin-root lifetime; namespace view lifetime |
@@ -726,6 +777,8 @@ sequenceDiagram
     A->>N: candidate path and public key from node config
     N->>N: verify signature, validity, source/compiled binding
     N->>R: validate candidate and record monotonic high-water state
+    N->>N: allocate a durable monotonic generation handle
+    N->>N: preflight every affected map capacity
     N->>H: descriptor = PREPARING
     loop every decision/default/device/process/IPC/object/graph row
         N->>H: write row
@@ -736,6 +789,7 @@ sequenceDiagram
     N->>H: set descriptor to READ_BACK, then read it back
     N->>H: set descriptor to ACTIVE, then read it back
     N->>H: stage immutable binding-and-generation target rows
+    N->>H: test-run every staged decision class
     N->>R: persist a pending activation after target readback
     N->>H: publish profile ID -> active generation, then read it back
     N->>R: finalize pending activation and consume a rollback proof, if used
@@ -761,9 +815,22 @@ multiwriter kernel compare-and-swap transaction.
 `binding_activation_targets` supplies the staged binding state for that
 generation. Existing tasks keep the generation already stored in
 `ProcessSecurityStateV1`. This avoids a mid-execution global policy change.
-Generation retirement and removal after all typed references reach zero are
-not implemented. A durable monotonic node generation-handle allocator and
-ahead-of-write map-capacity proof are also not implemented.
+[`GenerationHandleAllocator`](../../../crates/mithril-node/src/policy/generation_allocator.rs)
+persists a nonzero high-water mark for the current node boot and label epoch.
+It does not reuse an allocated handle. `preflight_policy_map_capacity` rejects
+an installation before the first decision row when its complete retained state
+cannot fit.
+
+`reconcile_generation_retirement` moves an inactive non-current generation to
+`RETIRING`. It waits for task and asynchronous references, ring and request
+state, process and authority state, tombstones, pending execs, pending
+administrative matches, and armed administrative slots to clear. It then marks
+the generation `TOMBSTONED` and deletes generation-keyed policy rows and its
+descriptor. This is an implemented source owner. The current evidence does not
+contain the complete crash, restart, and concurrent-holder retirement matrix.
+The source also has no separately visible kernel grace-period transaction that
+qualifies every architecture race after the last reference reaches zero. Do
+not treat row deletion alone as the complete architecture proof.
 
 ### Bounded exception consumption and WAL recovery
 
@@ -807,19 +874,19 @@ pinned counter after it checks the durable predecessor. A missing live counter
 or a boot change conservatively exhausts any remaining uses. The total reserved
 maximum uses cannot exceed the 65,536 receipt-map capacity.
 
-The kernel-effect identity is currently limited to synchronous `lsm/file_open`
+The bounded-exception identity is currently limited to synchronous `lsm/file_open`
 read and write decisions. The raw syscall hook starts the task state. The
 file-open gate allocates a fresh frame. The gate closes that frame after its
-decision. A nested or malformed stack fails closed. `file_receive` passes no
-exception handle. General VFS retry correlation and asynchronous or offloaded
-io_uring identity are not implemented.
+decision. A nested or malformed stack fails closed. Inline same-task io_uring
+opens get separate frame sequences. `file_receive` passes no exception handle.
+General VFS retry correlation and offloaded exception use are not implemented.
 
-This is a local restart-safe exception owner. It is not complete online
-administrative approval. `AuthorizationProofOwner` can verify and arm an exact
-slot when called, and the BPF exec path can consume that slot. `NodeChassis`
-does not connect this owner to a production Control request. The WAL is also
-reconciled on startup and the periodic node reconciliation interval, not
-synchronously after every permitted effect.
+This is a local restart-safe exception owner. Administrative approval uses a
+separate one-use claim-slot identity. Control and the node now connect that
+owner to typed resolve and arm messages. The latest physical administrative
+lane failed before it created an approval, so the complete transaction is not
+qualified. The exception WAL is reconciled on startup and the periodic node
+reconciliation interval, not synchronously after every permitted effect.
 
 ### Identity birth and use
 
@@ -856,6 +923,16 @@ path when Linux supplies a target protected cgroup. The wake hook and the
 first-effect front are conservative fallbacks for runtime creation orders that
 do not expose a usable attach event before the task enters the protected
 cgroup.
+
+This detail is important for CRI. A runtime task can create a child before the
+child enters its future container cgroup. At `task_alloc`, the runtime creator
+is outside that future binding. The hook therefore cannot claim that the child
+belongs to the container, and it does not deny the allocation only because the
+future binding is unknown. The cgroup-attach, wake, and first-effect paths must
+classify the task before a protected effect can succeed. The current k3s record
+reports `container_running_before_node_binding` and proves that the later
+protected file open is denied. This is fail-closed effect containment. It is
+not pre-start container admission.
 
 ### Exec and administrative-match transaction
 
@@ -909,6 +986,54 @@ for example for an interpreter. The pending record therefore stores up to
 eight ordered executable candidates. The commit and exit hooks separate a
 safe pre-commit rollback from an uncertain post-commit failure. They do not
 convert an uncertain result into authority.
+
+### Kubernetes administrative approval transaction
+
+```mermaid
+sequenceDiagram
+    participant K as kubectl-mithril
+    participant H as Control HTTPS owner
+    participant O as organization OIDC provider
+    participant A as Kubernetes authentication and admission
+    participant C as Control node stream
+    participant N as target NodeChassis
+    participant B as BPF exec path
+
+    K->>H: create exact exec draft
+    H->>O: PKCE authentication for the requester
+    O-->>H: authenticated requester identity
+    H->>H: requester is the self-approver required by this policy path
+    H-->>K: one memory-only Kubernetes bearer credential
+    K->>A: CONNECT pods/exec with that bearer credential
+    A->>H: TokenReview and AdmissionReview context
+    H->>C: resolve exact Pod, container, binding, argv, and executable
+    C->>N: ResolveAdministrativeExec
+    N-->>C: exact live target result
+    H->>C: ArmAdministrativeExec with signed one-use intent
+    C->>N: ArmAdministrativeExec
+    N->>B: install arguments and one ARMED slot, then read back
+    N-->>H: exact slot receipt
+    H->>H: commit approval only after readback
+    A-->>K: allow the exact CONNECT request
+    B->>B: one matching external-root exec consumes ARMED to CONSUMED
+```
+
+The Control owner is in
+[`administrative_exec.rs`](../../../crates/mithril-control/src/administrative_exec.rs)
+and [`administrative_http.rs`](../../../crates/mithril-control/src/administrative_http.rs).
+The client is
+[`kubectl_mithril.rs`](../../../crates/mithril-control/src/bin/kubectl_mithril.rs).
+The node actuator is
+[`administrative_exec.rs`](../../../crates/mithril-node/src/administrative_exec.rs).
+The authenticated user who runs `kubectl-mithril exec` is the approver for the
+implemented self-approval path. The implementation does not invent a trusted
+executable-content signer. The exact executable is resolved in the live target
+view and matched with raw ordered argv as the architecture specifies.
+
+The latest physical run did not reach browser activation. The first request to
+`POST /v1/administrative-exec/requests` returned HTTP 400. Source and local
+tests do not replace the missing end-to-end approval, replay, mismatch, expiry,
+and single-winner physical matrix.
 
 ### Exact-file decision and observation
 
@@ -1027,7 +1152,7 @@ sequenceDiagram
 ```
 
 Read socket storage and the connect hook at
-[`identity_ipc.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L434).
+[`identity_ipc.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L440).
 The BPF model is limited to connected AF_UNIX `SOCK_STREAM` connect, send, and
 receive. The compiler and node lowerer accept exact relationship allow, alert,
 and deny rows; see [`lower_ipc_relationships`](../../../crates/mithril-node/src/policy/ipc.rs#L21).
@@ -1048,12 +1173,17 @@ the current holder's positive authority.
 sequenceDiagram
     participant A as task in represented mount namespace
     participant L as mount LSM hook
+    participant S as mount syscall-entry tracepoint
+    participant G as global mount epochs
     participant V as namespace view maps
     participant X as syscall exit hook
     participant N as NodePolicyGenerationOwner
     participant F as later exact-file hook
 
-    A->>L: mount, unmount, pivot_root, or move_mount
+    A->>S: open_tree, fsconfig, fsmount, or mount_setattr
+    S->>G: increment global mutation and pending state before effect
+    A->>L: kernel mount, mount, unmount, pivot_root, or move_mount
+    L->>G: start the same global fail-closed barrier
     alt protected unsupported mutation
         L-->>A: deny before mutation and leave the view unchanged
     else allowed external entrant
@@ -1063,17 +1193,20 @@ sequenceDiagram
         X->>V: increment version, decrement pending last, and retain the DIRTY state
     end
     N->>V: read epoch/version/pending
+    N->>G: require no pending mutation and reconcile the global epoch
     N->>N: prove configured exact object and snapshot still match
     N->>V: write/read root rows and exact reconciliation proposal
     F->>V: under LSM spin lock, CAS matching proposal to CLEAN
     F->>V: only then walk path graph for strict file decision
 ```
 
-The view key is the mount-namespace inode, not the task cgroup. That prevents a
-host task that enters the represented mount namespace from bypassing topology
-invalidation merely because it is outside the workload cgroup. The LSM-side
-map lock is used only in LSM programs; the tracing exit program uses atomics as
-required by the verifier.
+The view key is the mount-namespace inode, not the task cgroup. The global
+epochs conservatively invalidate every represented namespace for APIs such as
+`mount_setattr` and for propagation into a peer namespace. This prevents an
+unlabelled host task or a propagation peer from retaining a stale clean view.
+The LSM-side map lock is used only in LSM programs; tracing programs use
+atomics as required by the verifier. This source path does not complete
+automount, referral, overlay copy-up, or idmapped-mount exactness.
 
 ## BPF vocabulary needed for review
 
@@ -1122,88 +1255,32 @@ Its contract is deliberately narrow:
 than an invented Mithril clone-flag copy. Threads retain the process-level
 identity; a process child receives distinct process/execution identifiers.
 
-### Task allocation line by line
+### Task allocation source walk
 
-Every physical source line in this function is described below. This includes
-the blank separator and braces. A blank line emits no BPF instruction.
+The table follows the current physical source. It groups adjacent declarations
+and branches that have one review purpose.
 
-| Source line | Exact effect |
+| Source lines | Exact effect |
 | --- | --- |
-| [35](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L35) | `SEC("lsm/task_alloc")` puts the next function in the BPF LSM task-allocation section. libbpf uses this section to load and attach the program to the Linux `task_alloc` security hook. |
-| [36](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L36) | `BPF_PROG` gives C a typed view of the BPF tracing context. `erebor_task_alloc` is the program name that the loader requires. `task` is the new kernel task. |
-| [37](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L37) | `clone_flags` is the Linux clone flag word. `ret` is the result from an earlier LSM program. |
-| [38](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L38) | The opening brace starts the program body. No pointer from this body can escape the BPF invocation. |
-| [39](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L39) | Declares a pointer to the one runtime configuration value. The program assigns the pointer at line 51. |
-| [40](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L40) | Declares a pointer to the current CPU's health counters. Health data reports faults. Health data never grants authority. |
-| [41](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L41) | Declares a pointer to the current CPU's scratch value. The program uses this value to construct state before publication. |
-| [42](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L42) | Declares a verifier-trusted pointer to the current creator task. |
-| [43](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L43) | Declares the creator cgroup pointer and initializes it to `NULL`. This initialization prevents use of an undefined pointer after a failed read. |
-| [44](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L44) | Declares the optional creator label from BPF task storage. |
-| [45](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L45) | Declares the optional binding found from the creator's live cgroup ancestry. |
-| [46](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L46) | Declares the ancestry lookup status. A separate status distinguishes “no binding” from “could not prove the lookup.” |
-| [47](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L47) | Declares the child-construction result. Zero means success. A negative errno denies the allocation. |
-| [48](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L48) | This blank line separates declarations from executable statements. It emits no BPF instruction. |
-| [49](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L49) | Tests the earlier LSM result before Mithril reads or changes state. |
-| [50](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L50) | Returns the earlier result unchanged. Mithril cannot mask an earlier denial. |
-| [51](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L51) | Looks up array key zero in `identity_config`. The helper returns a temporary map-value pointer or `NULL`. |
-| [52](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L52) | Tests for an absent configuration or a disabled identity engine. |
-| [53](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L53) | Returns zero while identity is disabled. Zero adds no Mithril denial. Other LSM decisions remain in force. |
-| [54](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L54) | Gets this CPU's health record. A failed lookup produces `NULL`. |
-| [55](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L55) | Gets this CPU's scratch record. A per-CPU value avoids cross-CPU writers for one invocation. |
-| [56](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L56) | Tests the required scratch pointer. |
-| [57](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L57) | Denies when scratch is unavailable. `identity_deny` returns the configured negative errno or standard `-EACCES`. |
-| [58](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L58) | Calls `bpf_get_current_task_btf()`. The helper returns a BTF-typed, verifier-trusted pointer to the creator that is running this hook. |
-| [59](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L59) | Calls `bpf_task_storage_get` for the creator. The zero flags request lookup only. The helper does not create a label. |
-| [60](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L60) | Calls `task_cgroup` to read the creator's current default cgroup. The test is for a read failure. |
-| [61](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L61) | Tests whether the optional health record exists. |
-| [62](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L62) | Counts the cgroup read failure as a placement mismatch. |
-| [63](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L63) | Denies because the program cannot prove whether the creator is in a protected cgroup. |
-| [64](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L64) | Closes the cgroup-read failure branch. |
-| [65](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L65) | Starts the bounded binding lookup from the creator cgroup. |
-| [66](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L66) | Passes a status output to the lookup. The returned pointer can be `NULL` after a complete walk outside all configured bindings. |
-| [67](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L67) | Tests for an incomplete or invalid ancestry walk. |
-| [68](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L68) | Tests whether health counters are available. |
-| [69](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L69) | Counts the failed ancestry proof as a placement mismatch. |
-| [70](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L70) | Denies rather than treating an incomplete walk as unprotected. |
-| [71](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L71) | Closes the failed-binding-lookup branch. |
-| [72](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L72) | Selects the established native-child path when the creator already has a label. |
-| [73](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L73) | Checks that the creator label has the current node boot ID and label epoch. |
-| [74](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L74) | Checks that the live binding has the label's binding ID and nonce and has the `ACTIVE` state. |
-| [75](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L75) | Tests whether health counters are available after either identity check fails. |
-| [76](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L76) | Counts the stale or misplaced creator identity. |
-| [77](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L77) | Denies before the program publishes child state. |
-| [78](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L78) | Closes the invalid-established-identity branch. |
-| [79](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L79) | Calls the native-child constructor with the new task, trusted creator, Linux clone flags, runtime configuration, creator label, binding, and scratch record. |
-| [80](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L80) | Completes the call and stores its result. The helper publishes all required state or rolls back its partial state. |
-| [81](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L81) | Starts the path for a creator that has no task-storage label. |
-| [82](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L82) | Tests whether the unlabelled creator is already inside a configured protected binding. |
-| [83](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L83) | Calls `label_external_root` for the creator. This helper constructs the complete root state, publishes task storage, and finalizes the Linux coordinate. |
-| [84](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L84) | Tests whether health counters are available after root publication fails. |
-| [85](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L85) | Counts a denied protected creator that still has no usable identity. |
-| [86](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L86) | Denies the child allocation. The failed root helper retains no usable partial authority. |
-| [87](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L87) | Closes the failed-external-root branch. |
-| [88](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L88) | Starts a new lookup of the creator label after root publication. |
-| [89](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L89) | Calls `bpf_task_storage_get` again. The returned pointer proves that publication created the task label. |
-| [90](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L90) | Tests for an absent label after the root helper reported success. |
-| [91](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L91) | Tests whether health counters are available. |
-| [92](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L92) | Counts the inconsistent publication as missing identity. |
-| [93](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L93) | Denies. The program does not create a child from an unproven creator label. |
-| [94](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L94) | Closes the missing-label-after-publication branch. |
-| [95](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L95) | Calls the same native-child constructor after external-root publication. |
-| [96](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L96) | Passes the new creator label and the existing protected binding. |
-| [97](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L97) | Completes the call and stores the result. |
-| [98](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L98) | Starts the case for an unlabelled creator outside all configured bindings. |
-| [99](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L99) | Returns zero. This hook makes no claim about an unprotected task. |
-| [100](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L100) | Closes the no-binding branch. |
-| [101](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L101) | Closes the unlabelled-creator branch. |
-| [102](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L102) | Tests for a failed native-child constructor and an available health record. |
-| [103](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L103) | Counts the child allocation failure. The counter does not change the result. |
-| [104](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L104) | Returns zero after complete publication. It returns the constructor's negative errno after a failure. |
-| [105](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L105) | Ends the program. The BPF verifier proves that no temporary pointer escapes. |
+| [35-38](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L35) | Select the BPF LSM task-allocation hook and declare the typed new-task, clone-flag, and prior-LSM inputs. |
+| [39-48](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L39) | Declare runtime, health, scratch, creator, cgroup, label, binding, io_uring execution, lookup-status, and result state. These pointers are valid only for this BPF invocation. |
+| [50-51](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L50) | Preserve an earlier LSM denial without reading or changing Mithril state. |
+| [52-54](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L52) | Read the one runtime configuration and make no Mithril claim while identity is disabled. |
+| [55-58](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L55) | Obtain diagnostic health and required per-CPU scratch. Missing scratch denies. |
+| [59-64](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L59) | Create and clear io_uring execution task storage for the new task. Failure denies, so a later kernel-worker execution cannot inherit stale task-local state. |
+| [65-66](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L65) | Read the verifier-trusted current creator and its optional Mithril task label. |
+| [67-70](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L67) | Read the creator's current default cgroup. A read failure increments placement health and denies. |
+| [72-78](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L72) | Walk the creator's cgroup ancestry for a live binding. An incomplete or invalid walk is different from a complete no-binding result and denies. |
+| [79-85](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L79) | For a labelled creator, require the current boot, epoch, binding ID, nonce, and active binding before child construction. |
+| [86-87](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L86) | Call the native-child constructor with the trusted creator, live binding, Linux clone flags, and scratch state. |
+| [88-101](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L88) | For an unlabelled creator already inside a binding, publish one external root, read the new creator label back, and deny if publication is incomplete. |
+| [102-104](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L102) | Construct the native child from the newly proved external-root creator. |
+| [105-108](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L105) | For an unlabelled creator outside every configured binding, return zero without claiming the child's future cgroup. Later attach, wake, or first-effect handling owns classification. |
+| [109-112](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L109) | Count a child-construction failure when health storage exists and return the constructor result unchanged. |
 
 ### The helpers `task_alloc` depends on
 
-The line-by-line table above is the complete hook. These helper groups are the
+The source-walk table above covers the complete hook. These helper groups are the
 minimum transitive reading set needed to understand its nontrivial lines.
 
 | Helper | Start | What to verify |
@@ -1257,8 +1334,8 @@ and then calls
 
 | Entry point | When it runs | Reason for the entry point |
 | --- | --- | --- |
-| [`erebor_cgroup_attach_task`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L107) | Linux attaches an unlabelled task to a configured cgroup. | This is the primary path because the hook supplies the target cgroup. |
-| [`erebor_wake_up_new_task`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L174) | Linux is about to wake a new task. | This handles `CLONE_INTO_CGROUP` orders where the new task is already in the configured cgroup before wake. |
+| [`erebor_cgroup_attach_task`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L114) | Linux attaches an unlabelled task to a configured cgroup. | This is the primary path because the hook supplies the target cgroup. |
+| [`erebor_wake_up_new_task`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L181) | Linux is about to wake a new task. | This handles `CLONE_INTO_CGROUP` orders where the new task is already in the configured cgroup before wake. |
 | [`erebor_task_alloc`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L35) | An unlabelled creator already in a configured binding creates a child. | This makes the creator an external root before the program derives a native child from it. |
 | [`prepare_effect_identity`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L206) | An unlabelled task in a configured cgroup reaches its first allowed LSM effect. | This is the last pre-effect safety path for runtime creation orders that do not produce a usable earlier event. |
 
@@ -1311,23 +1388,24 @@ record for this exact source state.
 | Rust/C ABI boundary | Implemented | Rust `repr(C)` is the source. cbindgen checks the snake-case C header. `zerocopy` performs exact-size typed reads and writes. | It is a same-host native-endian ABI, not a network format. |
 | Static and CRI-resolved cgroup binding | Partial | One binding row is published after live cgroup and configured container identity checks. CRI snapshots refresh configured container IDs. | A snapshot does not prove every pre-start ordering. The full runtime entry matrix is not qualified. |
 | Native task/process identity | Partial | Lifecycle hooks publish task-first identity before protected work and retain restriction on cleanup failure. | The phase failure-injection, reuse, non-leader, ephemeral-container, and non-x86 physical matrix is incomplete. |
-| Exec identity transaction | Partial | `execve`, `execveat`, BPRM, commit, failure, success, candidates, and exact ordered argv state exist. | Full immutable image, loader, `binfmt_misc`, content race, VMA, and administrative ingress coverage is incomplete. Arguments are not sorted or normalized. Exact order, count, lengths, and bytes must match. |
-| Signed generation installation | Partial | Verified candidates install immutable rows through `PREPARING`, `READ_BACK`, and `ACTIVE`. They stage all live bindings of one profile and commit one profile pointer. Durable pending state recovers an interrupted commit. | Controlled activation probes, generation retirement, a node-local monotonic generation-handle allocator, and ahead-of-write capacity proof are not implemented. Candidates arrive through startup configuration, not the Control stream. |
+| Exec identity transaction | Partial | `execve`, `execveat`, BPRM, commit, failure, success, candidates, and exact ordered argv state exist. | Full immutable image, loader, `binfmt_misc`, content race, and VMA coverage is incomplete. Arguments are not sorted or normalized. Exact order, count, lengths, and bytes must match. |
+| Signed generation installation | Partial | Verified candidates install immutable rows through `PREPARING`, `READ_BACK`, and `ACTIVE`. The node preflights capacity, allocates a durable monotonic handle, probes staged rows, stages all live bindings of one profile, commits one profile pointer, recovers pending activation, and retires unused old rows. | The complete crash and concurrent-holder physical matrix is not current. The architecture-required grace-period proof after the last typed holder clears is not explicit. Candidates arrive through startup configuration, not the Control stream. |
 | Exact file open, permission, receive, and file-backed map | Partial | Uses exact actor state, clean namespace view, bounded component graph, exact kernel object tuple, and exact/default decision. `file_receive` makes a current-recipient access decision before installing an FD. | Current-source physical proof is pending. Rotation, full content race, delegated I/O, overlay copy-up, persistent-file lifetime coverage, and general async acquisition remain incomplete. |
 | File mutation | Partial | Existing exact objects can use typed unlink, rmdir, chmod, chown, truncate, link, and rename hooks. Source and destination checks are separate where Linux supplies both. | A new negative dentry has no exact inode object. Create-like operations can hard-close as unresolved. Complete positive create/rename lifecycle policy is not implemented. |
 | Exec and executable memory permission | Partial | BPRM, file-backed executable map, file-backed `mprotect`, anonymous executable mapping, and pkey-mprotect use typed or hard-close paths. Positive executable-memory authority requires an exact object. | This is not the complete executable-image, loader, `binfmt_misc`, immutable-content, or VMA-lifetime model. |
-| Mount mutation and path reconciliation | Partial | Allowed represented mutations make the namespace view dirty before effect. A matching epoch/version/digest proposal can make it clean. | Propagation, fan-out, automount/referral, idmapped mount, and all namespace races are not qualified. There is no separate `mount_setattr` LSM program in the required set. |
+| Mount mutation and path reconciliation | Partial | LSM hooks and mount syscall-entry programs advance a global barrier before represented mutation. Per-namespace views remain dirty until an exact epoch, version, and digest proposal succeeds. This covers the current `mount_setattr` and propagation fixture conservatively. | Automount, referral, overlay copy-up, idmapped mounts, and the complete namespace race matrix remain unqualified. `mount_setattr` uses syscall-entry invalidation because Linux supplies no corresponding mount-specific LSM hook. |
 | Exact device ioctl | Partial | Exact configured device tuple, type, major/minor, actor state, and exact command select a decision. Command wildcard rows can deny only. | Device acquisition, derived descriptors, driver subobjects, and authority transfer are not modeled. |
 | Ptrace and signal | Partial | The BPF path snapshots exact controller and target state, then revalidates live target and transition versions. Source policy accepts an exact target role and exact signal or ptrace-access argument. | Current physical proof is limited. `process_vm_*`, `/proc/PID/mem`, `pidfd`, perf, and other process-control operations are unsupported. |
 | Connected Unix stream | Partial | Socket storage tracks endpoint identity. Connect/send/receive validate current actor, live peer, binding, generation, role, and direction. Exact relationships can allow, alert, or deny. | Current-source physical proof is pending. Datagram, socketpair, SysV IPC, shared memory, pipe pairing, listener transfer, socket activation, and listener/socket transfer through `SCM_RIGHTS` are unsupported or unqualified. |
-| Bounded exception counter and receipt | Partial | BPF uses a stable instance key, no-replace receipt claim, spin-locked count, expiry, and one-use identity for synchronous file-open decisions. Userspace persists monotonic state and consumed receipts in a local WAL. | General VFS retry correlation and asynchronous or offloaded request identity are not implemented. Reconciliation is periodic. Online administrative delivery is not wired. |
-| Administrative exec identity | Partial library and BPF path | The owner verifies a signed exact target, durable replay state, exact executable tuple, exact ordered argv, deadline, slot, and exception binding. The BPF path can consume a matching slot. | `NodeChassis` does not call this owner from a Control request. There is no complete production approval-to-task ingress. |
-| Hugging Face local incident classification | Partial source classification | The bundle records a checked deployment digest and static classifications for HF-002 through HF-012. The declared classification is not per-branch physical proof. | A case result must come from that branch and its paired control before it can claim prevention. Network, provider, Kubernetes semantics, resident memory, and trusted content provenance remain outside the current claim. |
-| Capability and BPF hooks | Partial safety floor | Protected requests use a typed default or hard-safe result before the operation. Generic CAPABILITY, BPF, NETWORK, MOUNT, and unqualified executable-memory positive defaults are rejected at compilation. | This is not complete credential, namespace, keyring, module, perf, io_uring, or self-protection policy. |
+| Restricted io_uring read and write | Partial | A managed disabled ring retains the exact submitter, profile generation, ring generation, submission sequence, SQE index, user data, opcode, file range, executor, and completion. Exact `IORING_OP_READ` and `IORING_OP_WRITE` use the pinned actor. | AIO, arbitrary opcodes, positive SQPOLL, credential override, uring commands, and complete registered-file or buffer authority are not implemented or qualified. |
+| Bounded exception counter and receipt | Partial | BPF uses a stable instance key, no-replace receipt claim, spin-locked count, expiry, and one-use identity for synchronous file-open decisions. Userspace persists monotonic state and consumed receipts in a local WAL. | General VFS retry correlation and offloaded exception use are not implemented. Reconciliation is periodic. Administrative exec uses its separate one-use claim slot. |
+| Administrative exec identity | Partial end-to-end source path | OIDC-authenticated self-approval, a memory-only credential, TokenReview, CONNECT admission, exact target and executable resolution, typed Control resolve and arm messages, durable replay, exact argv, slot readback, and BPF one-use consumption exist in source. | The current VM lane returns HTTP 400 at the initial request. The approval, replay, expiry, mismatch, and one-winner physical matrix is not qualified. |
+| Hugging Face local incident classification | Partial source classification | The bundle records a checked deployment digest and static classifications for HF-002 through HF-012. The declared classification is not per-branch physical proof. | A case result must come from that branch and its paired control before it can claim prevention. Network, provider, Kubernetes semantics, resident memory, and staged-content semantics remain outside the current claim. |
+| Capability and BPF hooks | Partial safety floor | Protected requests use a typed default or hard-safe result before the operation. Generic CAPABILITY, BPF, NETWORK, MOUNT, and unqualified executable-memory positive defaults are rejected at compilation. | This is not complete credential, namespace, keyring, module, perf, or self-protection policy. |
 | Self-protection | Partial detection and safety floor | The loader verifies live map, link, and program IDs. A managed task that unlinks one pinned-link pathname hard-closes. | This is not host-root tamper prevention. It does not protect all maps, links, config, binary, process, or update paths. |
 | Local network policy | Unsupported | Non-Unix-stream protected socket activity does not gain positive local authority. | Destination-aware network policy belongs to later work. |
 | Landlock target-context floor | Implemented as absent | Capability registration reports `LANDLOCK_TARGET_CONTEXT_FLOOR=ABSENT` with reason `NO_QUALIFIED_TARGET_CONTEXT_INSTALL`. | This is the complete D4.7 result for this platform path. It provides no Landlock enforcement and does not weaken the BPF decision. |
-| Dynamic Control policy/binding/admin delivery | Unsupported | The stream registers, receives trust, reports readiness, and reconnects. | A later Control message is currently an error. Startup configuration and local CRI reconciliation own current state. |
+| Dynamic Control delivery | Partial | The stream registers, receives trust, reports readiness, reconnects, and accepts typed administrative resolve and arm messages. | General policy, binding, and exception delivery remain unsupported. Startup configuration and local CRI reconciliation own those states. |
 
 ## Review checklist
 
@@ -1335,9 +1413,9 @@ Use this checklist against a change to the current implementation.
 
 1. Is there still one `KernelHost`, one exclusive pin-root lease, and one
    production object for a node pin root?
-2. Does the opened object contain the exact 50-program set? Does the attached
-   manifest contain the exact 49 persistent programs, with only the iterator
-   excluded?
+2. Does the opened object contain the exact 68-program set? Does the attached
+   manifest contain the exact 66 persistent programs, with only the task
+   iterator and activation probe excluded?
 3. Is BPF still built by `libbpf-cargo` at build time and loaded by
    `libbpf-rs` at runtime, with no per-container compiler or program load?
 4. Does each userspace map update have one domain owner and a readback at a
@@ -1352,15 +1430,17 @@ Use this checklist against a change to the current implementation.
    failed decrement retain restriction and raise reconciliation health?
 9. Are all immutable generation rows read back before the descriptor becomes
    `ACTIVE`? Does activation stage every profile binding target before it
-   publishes one profile-keyed pointer? Does durable pending state recover the
-   pointer outcome?
+   probes the rows and publishes one profile-keyed pointer? Does durable
+   pending state recover the pointer outcome? Did capacity preflight and the
+   monotonic handle allocation occur before publication?
 10. Do existing tasks keep their stored generation while only future roots use
     a new active handle?
 11. Does an exact file decision include mount namespace, unique mount ID,
     device, inode, inode generation, represented path graph, and active
     generation?
 12. Does an allowed mount mutation make the namespace view dirty before Linux
-    mutates it? Can only an exact epoch/version proposal make it clean?
+    mutates it? Do the mount syscall-entry programs advance the global barrier?
+    Can only an exact epoch/version proposal make it clean?
 13. Does a device decision include the exact file tuple, device identity, actor
     state, and ioctl command? Can a wildcard command only deny?
 14. Does a process-control decision snapshot and recheck the exact live target?
@@ -1375,6 +1455,12 @@ Use this checklist against a change to the current implementation.
     cannot alter allow or deny?
 18. Does a capability claim distinguish typed positive policy, exact denial,
     hard-close safety, and unsupported behavior?
+19. Does restricted io_uring retain one exact actor and generation from setup
+    through submit, issue, completion, and ring free? Do SQPOLL, credential
+    override, uring commands, and unqualified opcodes remain closed?
+20. Does administrative exec authenticate the requester, bind self-approval to
+    that identity, validate CONNECT admission, resolve the exact live target,
+    arm and read back one slot, and commit only after readback?
 
 ### Hugging Face local branch classification
 
@@ -1429,6 +1515,7 @@ sequenceDiagram
         H->>K: install fixed k3s version with checked config
         K->>K: ready node, CRI, Pod, kubectl exec, exact ID/digest, overlay, token
         K->>K: run the declared CRI-bound local effect probe
+        K->>K: run the optional administrative-exec approval transaction
         K->>K: remove test namespace
     end
     V->>V: run kernel, identity, observe, and protect probes as root
@@ -1454,10 +1541,13 @@ real local Mithril binding. The inspected `kubectl exec` shell performs a
 baseline read and then a protected read. The protected read must return
 `EACCES` and emit the matching exact-file decision for the same task.
 
-This lane does not prove Kubernetes admission, an API-server authorization
-webhook, administrative approval, multi-node propagation, release packaging,
-or a cloud platform. The host-path fixture is an exact-file qualification
-input. It does not prove projected-token rotation semantics.
+The current CRI effect lane proves one local Kubernetes binding and exact
+pre-effect denial. It does not prove distributed policy or multi-node
+authority. The administrative sub-lane exercises the HTTPS, OIDC, TokenReview,
+CONNECT admission, Control-to-node, and slot owners. Its current run failed at
+the first administrative HTTP request, so it proves no approval. The host-path
+fixture is an exact-file qualification input. It does not prove projected-token
+rotation semantics, release packaging, or a cloud platform.
 
 The current provider and checked qualification record lane are x86-64. The BPF
 translation unit also compiles against checked x86, arm64, arm, and RISC-V
@@ -1465,79 +1555,159 @@ headers. A cross-architecture compile is not a non-x86 physical result.
 
 ## Evidence and remaining limits
 
-The prior VM records use an older BPF object. They remain historical evidence.
-They do not qualify the current 50-program, 46-map object. The current source
-has passed focused ABI, interceptor, node, effect, compiler, formatting, and
-checked-header BPF compilation tests. A Linux 6.8 VM also loaded the current
-object past `erebor_bprm_check_security` after the stack fix. The current VM
-and k3s result records are pending at the time of this review.
+The latest source object has 68 required programs and 55 maps. Sixty-six
+programs have persistent links. The task iterator and policy activation probe
+run on demand. The qualification object has 45 required programs, including 41
+LSM programs. Source tests compare these exact sets.
+
+The latest current-source VM attempt is
+`/tmp/mithril-phase234-admin-current-5`. It ran on Ubuntu 24.04, Linux
+`6.8.0-136-generic`, x86-64, with BPF LSM active. The CRI exact-effect record
+passed. Its SHA-256 is
+`53c8acd1d72a4ec88f4286ebeaa8a22b71cc0e6532929f7d03a79e44ec5b08a0`.
+It records the expected start gap, a restricted external `kubectl exec` root,
+and an exact pre-effect file-open denial. The platform record SHA-256 is
+`b29c469a8919f9f17cf7af155d2ef7e0386775a97882e7f762949fe6e04ef7e2`.
+
+The same run did not complete administrative exec. The partial record is
+`/tmp/mithril-phase234-admin-current-5/k3s-administrative-exec.txt.partial`,
+SHA-256
+`079216a35452ba8be9b750535860de3a587d54252ab04847482a551e3b7a4bdd`.
+The request to `POST /v1/administrative-exec/requests` returned HTTP 400 before
+the client received an activation URL. The run stopped before it produced a
+new complete kernel, identity, observe, and protect bundle for this final
+source. The disposable guest cleanup completed.
 
 | Evidence class | Current status |
 | --- | --- |
-| BPF program and map inventory | Source tests require 50 production programs, 36 qualification programs, and 46 maps. The task iterator is the one non-persistent production program. |
-| BPF verifier | A live Ubuntu 24.04 Linux 6.8 guest loaded the current object after the receipt-key scratch change reduced the critical call chain from 544 bytes to 448 bytes. The full probe result is pending. |
+| BPF program and map inventory | Source tests require 68 production programs, 45 qualification programs, and 55 maps. Sixty-six production programs persist. The task iterator and activation probe are on demand. |
+| BPF verifier | A live Ubuntu 24.04 Linux 6.8 guest loaded the current object after the receipt-key scratch change reduced the critical exec chain from 544 bytes to 448 bytes. The later k3s exact-effect lane reached a protected action. |
 | Cross-architecture source compatibility | Production and qualification objects compile against the checked x86, arm64, arm, and RISC-V `vmlinux` headers. This is not non-x86 physical evidence. |
-| Exception attempt identity | ABI, interceptor, node-authority, and compiler tests cover the bounded file-open frame protocol. A current physical max-use record is still required. |
+| Generation lifecycle | Source tests cover durable monotonic allocation, capacity preflight, staged-row probes, one-pointer publication, anti-rollback recovery, typed-holder checks, and row retirement. The complete physical crash, holder, and grace matrix is not current. |
+| Exception attempt identity | ABI, interceptor, node-authority, and compiler tests cover the bounded synchronous file-open frame protocol. A final current physical max-use record is still required. |
 | Exact file receive | E2E source tests cover denied and allowed receipt of a file descriptor over a qualified Unix stream. A current physical VM record is still required. |
-| Exact Unix-stream relationship | Compiler, lowering, BPF-source, and E2E fixture tests cover exact allow, alert, deny, stale-peer, and unmatched cases. A current physical VM record is still required. |
-| CRI effect | The harness owns a declared k3s CRI effect lane. A current result is pending. The lane does not prove Kubernetes admission or a distributed decision. |
+| Restricted io_uring | Source and physical-fixture code cover exact read/write submission, executor attribution, completion, reference release, and unsupported SQPOLL paths. A final current VM bundle is still required. |
+| Global mount invalidation | Source and physical-fixture code cover global `mount_setattr` invalidation and a propagation peer. A final current VM bundle is still required. |
+| Exact Unix-stream relationship | Compiler, lowering, BPF-source, and E2E fixture tests cover exact allow, alert, deny, stale-peer, and unmatched cases. A final current VM bundle is still required. |
+| CRI effect | The current k3s record passed. It proves one Pod binding, one restricted `kubectl exec` root, and one exact local denial. It does not prove pre-start admission, multi-node policy, or all Kubernetes entry paths. |
+| Administrative exec | The source path and local tests exist. The current physical lane failed with HTTP 400 before approval and proves no positive administrative exec. |
 | Hugging Face table | The bundle serializes static source classification. It is not branch-specific physical prevention evidence. |
 
-The historical feasibility and effect distributions remain attached to their
-older records. They do not cover this source state. A new record must contain
-the platform, object digest, raw samples, latency distribution, capacity,
-cleanup result, and the exact current probe outcomes.
+A previous full run at `/tmp/mithril-phase234-k3s-current-2` produced kernel,
+identity, observe, protect, and CRI records. Later source changes added the
+administrative path and changed the object. Keep that directory as historical
+diagnostic evidence only. Do not copy its JSON files into checked acceptance
+records for the final source.
 
 ### Remaining implementation work
 
-- Add controlled activation probes before a future-root generation pointer
-  changes. The present transaction stages and commits atomically for one
-  profile, but it has no isolated allow and deny probe.
-- Add typed-reference retention, a grace protocol, and a deletion owner before
-  any generation retirement. The task reference counter alone is not enough.
-- Add a durable monotonic node generation-handle allocator and capacity
-  preflight. The current write path fails closed when a map is full.
-- Add immutable executable-content, loader, interpreter, `binfmt_misc`, and
-  full virtual-memory-area provenance before making a complete exec claim.
+- Fix the administrative HTTP 400 response. Then run the exact approval,
+  ordinary `kubectl exec` denial, consumed-slot non-winner, replay, expiry,
+  mismatch, disconnect, and contention physical matrix.
+- Run one final current-source VM that completes kernel qualification, native
+  identity, observation, protection, CRI effect, administrative exec, cleanup,
+  and evidence validation. Run the final repository CI gate after that VM.
+- Qualify generation retirement across crashes, concurrent task and async
+  holders, pending exec and administrative state, and the architecture-required
+  grace boundary after the final reference clears.
+- Add complete immutable executable-image, loader, interpreter,
+  `binfmt_misc`, content-race, and virtual-memory-area provenance. This does not
+  require a trusted-content signer for administrative exec.
 - Add projected-token semantic rotation, overlay copy-up, persistent file and
-  VMA lifetimes, delegated I/O, and complete file-acquisition provenance.
-- Add the `mount_setattr` invalidation path, propagation affected-set handling,
-  automount/referral treatment, and idmapped/overlay topology proof before
-  making a complete mount claim.
+  VMA lifetimes, positive create parent-and-name authority, and complete
+  acquisition and delegated-I/O provenance.
+- Complete asynchronous I/O beyond the current restricted io_uring read/write
+  slice. This includes AIO, registered files and buffers, all required opcodes,
+  SQPOLL positive ownership, cancellation, worker races, and restart proof.
+- Complete mount behavior beyond the current global conservative barrier. This
+  includes automount, referral, overlay copy-up, idmapped mounts, bounded
+  affected-set proof, overflow, and the full propagation race matrix.
 - Add listener transfer, socket activation, socketpair, datagram, pipe,
-  shared-memory, asynchronous, and zero-copy IPC models before making a
-  complete IPC claim.
+  shared-memory, and zero-copy IPC models before making a complete IPC claim.
 - Add derived-device, capability-number, credential, namespace, process-vm,
-  pidfd, perf, module, keyring, and io_uring authority models. The present
-  compiler gates only prevent broad positive wildcard authority.
+  pidfd, perf, module, and keyring authority models. The present compiler gates
+  only prevent broad positive wildcard authority.
 - Add host-root-resistant protection for pins, maps, links, config, binaries,
   processes, and update paths. Current map and link identity checks detect
   some tampering after reconciliation. They do not prevent it.
 - Add a branch-specific Hugging Face fixture and a paired legitimate control
   for every branch that claims physical prevention.
 
-### Architecture and product decisions required
+### Architecture requirements that remain to implement
 
-The following work cannot be completed safely by choosing defaults in code.
-The product must make these decisions first.
+The readable architecture already defines the required behavior. These items
+are not open product decisions. This round needs no new product decision.
 
-| Decision | Why the decision is required | Minimum approved outcome |
+| Requirement | Architecture rule | Current implementation gap |
 | --- | --- | --- |
-| Administrative approval authority | The current node library can verify and arm a slot. It has no authenticated requester, approver, issuer, or Control-to-node transaction. | Select the human identity provider flow, requester and approver policy, signer and audience, one-use credential format, expiry, and audit owner. |
-| Kubernetes administrative-exec boundary | A plugin or a node slot alone cannot prove that the Kubernetes request, Pod, container, stream flags, and target task are one request. | Select the AdmissionReview and authentication-webhook design, TokenReview or equivalent validation, SubjectAccessReview policy, `PodExecOptions` checks, TLS/RBAC deployment, and exact consume point. |
-| Control transport and operator delivery | The current stream accepts registration, trust, and readiness only. It cannot route a resolve, arm, or cancel request. | Define typed Control messages, correlated replies, node addressing, retry and cancellation rules, and the `kubectl-mithril` owner and package. |
-| Generation retirement | Deleting a generation needs proof that no task, socket, file, VMA, receipt, WAL record, or future-root target can still reference it. | Define the complete reference set, retention interval, grace proof, restart rule, and one deletion owner. |
-| General request identity | A receipt must identify a logical effect when work retries, fans out, or moves to another task. The current frame model covers only synchronous file-open decisions. | Define request, object, hook, and executor identity for VFS retry, io_uring, AIO, and other asynchronous work. Keep unsupported paths denied until then. |
-| Mount and topology semantics | Linux has no current mount-specific pre-effect hook for every requested operation. Propagation can change more than one namespace. | Select an accepted invalidation source, affected-namespace model, overflow rule, and reconciliation proof before making a complete mount claim. |
-| Immutable content and VMA provenance | A pathname and an inode tuple do not prove immutable image bytes, loader state, or mapping lifetime. | Define the trusted content source, loader/interpreter scope, writable history, VMA lifetime owner, and positive-control policy. |
-| Root-tamper threat boundary | A same-root host actor can still replace pins or stop processes before periodic detection. | Select the trusted boot, measurement, lifecycle authority, and recovery model before claiming prevention instead of detection. |
+| Administrative exec | The user who runs `kubectl-mithril exec` authenticates through the organization identity provider and is the approver for the implemented self-approval policy. Control issues one memory-only credential. Kubernetes authentication and CONNECT admission validate the approval and exact target. The node arms one exact slot and Control commits only after readback. | These owners and messages exist in source. The current physical request fails with HTTP 400 before browser activation. The complete physical transaction and race matrix remain. |
+| Executable identity | Administrative exec matches raw ordered argv and the exact executable object that the node resolves in the container view. It does not require an argv hash, executable-content hash, or trusted-content signer. General exec policy separately requires complete immutable image, script, interpreter, and loader provenance. | Administrative source wiring exists but is not physically qualified. General immutable provenance, interpreter, loader, and `binfmt_misc` coverage remain incomplete. No product choice is missing. |
+| Asynchronous I/O | `ExactRequestIdentityV1` retains ring ID, ring generation, submission sequence, SQE index, user data, opcode, actor, executor, and completion ownership. SQPOLL cannot borrow a kernel worker role. | A restricted exact io_uring read/write slice exists. AIO, registered resources, broader opcodes, positive SQPOLL, and the full failure and restart matrix remain incomplete. |
+| Mount propagation | Mount, move, propagation, pivot-root, automount, overlay copy-up, and referral must invalidate every affected exact view before a new decision. Overflow must fail closed. | A global epoch now conservatively closes represented views for the current mount APIs, including `mount_setattr`, and the fixture covers one propagation peer. Automount, referral, overlay copy-up, idmapped mounts, bounded affected-set behavior, and full physical races remain. |
+| Generation retirement | Handles are monotonic and never reused in one boot and label epoch. Existing typed holders retain the old generation. `RETIRING` denies new references. Deletion requires every typed counter at zero, no owned tombstone after iterator and WAL reconciliation, and a BPF grace period. | Durable allocation, capacity preflight, staged probes, typed-holder checks, `RETIRING`, `TOMBSTONED`, and row deletion exist. The complete physical crash and holder matrix and an explicit grace-period qualification remain. |
+| Root tamper | The privilege and self-protection matrix requires qualified pre-effect coverage and physical oracles for replacement of Mithril programs, configuration, links, maps, and pin roots. | Current code detects some live pin identity changes and closes readiness. Complete prevention remains incomplete. This is implementation work under the stated architecture. |
 
 Phase 2 remains **Blocked**. Phase 3 remains **Blocked**. Phase 4 remains
 **Not done**. Landlock remains complete as the explicit `ABSENT` result. A
 hard-close result proves a safety floor for its exact probe. It does not prove
 a positive policy model for a larger surface.
 
-This guide covers commit `0c7f3bb8139d878d0214a3a81339c96e218ae4d5` plus the
-Mithril working tree on 2026-08-12. It covers the current BPF object SHA-256
-stated at the start of this guide. A later source or BPF-object change needs
-new source checks and a new privileged record.
+### Handover commands and exact outcomes
+
+The following commands were run during this round. A command marked as passed
+passed at its source checkpoint. Later shared-tree changes mean that the final
+workspace still needs the complete CI command.
+
+```bash
+cargo test -p erebor-interceptor-abi
+cargo test -p erebor-interceptor --lib
+cargo test -p mithril-control
+cargo test -p mithril-node
+cargo test -p mithril-e2e --lib effect::
+cargo test -p mithril-e2e \
+  every_checked_in_vmlinux_header_compiles_the_production_identity_object \
+  -- --nocapture
+cargo check -p mithril-control --bin kubectl-mithril
+cargo clippy -p mithril-control --all-targets -- -D warnings
+cargo clippy -p mithril-control --bin kubectl-mithril -- -D warnings
+cargo fmt --all -- --check
+bash crates/mithril-e2e/harness/vm/test.sh
+```
+
+These focused commands passed at their stated checkpoints. The checked-header
+test compiled production BPF for x86, arm64, arm, and RISC-V. The harness
+static test, shell syntax checks, embedded Python compilation, narrow policy
+compile and verification, and scoped diff checks also passed. The complete
+workspace CI script was not run after all final shared-tree changes.
+
+The latest privileged command was:
+
+```bash
+crates/mithril-e2e/harness/vm/run.sh --with-k3s \
+  --output-directory /tmp/mithril-phase234-admin-current-5
+```
+
+Exact outcome:
+
+- The Ubuntu 24.04 Linux 6.8 guest loaded the current BPF object. The previous
+  544-byte combined-stack verifier rejection did not recur.
+- `k3s-cri-effect.txt` passed. The protected `kubectl exec` task received the
+  exact file-open denial before effect.
+- `k3s-administrative-exec.txt.partial` stopped after policy compile and
+  verification. `kubectl-mithril` received HTTP 400 from
+  `POST /v1/administrative-exec/requests`.
+- The harness did not run the later kernel, identity, observe, and protect
+  probes after that failure.
+- The disposable guest and harness-owned resources were cleaned up.
+
+The continuation point is the HTTP 400 response. Preserve the response body in
+the client or harness, identify which request validation failed, fix that exact
+boundary, rerun the command with a new empty output directory, review every
+record, and then run the final repository CI gate. Do not copy historical JSON
+into the checked result path.
+
+This guide covers commit `997d7ffddc65630941164262dab1db92f2ab0f9e` plus the
+Mithril working tree on 2026-08-13. It covers BPF object SHA-256
+`c1c4215a7b645344507cf02f27fcaeb085970d1b20cbfda402bdabcc019ce403`.
+A later source or BPF-object change needs new source checks and a new
+privileged record.

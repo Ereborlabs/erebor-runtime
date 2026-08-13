@@ -56,7 +56,7 @@ static __noinline int ipc_current_actor(int ret)
         scratch->effect_gate_flags = EFFECT_GATE_DEFER_DECISION_V1;
     if (!ret)
         prepare_effect_identity();
-    ret = resolved_identity_effect_gate(
+    ret = dispatch_identity_effect_gate(
         NULL, NULL, kernel_effect_family_v1_ipc,
         kernel_effect_operation_v1_ipc_access, ret);
     if (ret)
@@ -182,8 +182,7 @@ static __always_inline int ipc_validate_stored_endpoint(
         !entry || entry->admission_state != entry_admission_state_v1_committed ||
         entry->lifetime_state != entry_lifetime_state_v1_active ||
         !entry->live_task_refs ||
-        !generation ||
-        generation->state != policy_generation_state_v1_active ||
+        !generation_allows_existing_holder(generation) ||
         generation->profile_generation_ref_id != profile_generation_ref_id ||
         generation->label_epoch != config->label_epoch ||
         !id128_equal(&generation->node_boot_id, &config->node_boot_id) ||

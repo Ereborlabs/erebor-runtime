@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt as _};
 use tonic::{Request, Response, Status, Streaming};
 
@@ -33,7 +33,28 @@ pub struct TrustGenerationV1 {
 struct ControlState {
     node_sequences: BTreeMap<(String, Vec<u8>), u64>,
     trust_acks: BTreeMap<String, TrustGenerationV1>,
+    sessions: BTreeMap<String, NodeSession>,
+    pending: BTreeMap<Vec<u8>, PendingAdministrativeResponse>,
 }
+
+struct NodeSession {
+    identity: StreamIdentity,
+    output: mpsc::Sender<Result<ControlEnvelope, Status>>,
+    next_sequence: u64,
+}
+
+enum PendingAdministrativeResponse {
+    Resolution {
+        node_id: String,
+        sender: oneshot::Sender<crate::AdministrativeExecResolution>,
+    },
+    Arm {
+        node_id: String,
+        sender: oneshot::Sender<crate::AdministrativeExecArmResult>,
+    },
+}
+
+const ADMINISTRATIVE_NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Clone)]
 pub struct ControlPlane {
@@ -75,6 +96,120 @@ impl ControlPlane {
         self.state
             .lock()
             .map_or(0, |state| state.node_sequences.len())
+    }
+
+    pub async fn resolve_administrative_exec(
+        &self,
+        node_id: &str,
+        request: crate::ResolveAdministrativeExec,
+    ) -> Result<crate::AdministrativeExecResolution, Status> {
+        let request_id = request.request_id.clone();
+        let (receiver, output, envelope) = {
+            let (sender, receiver) = oneshot::channel();
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| Status::internal("control session state is poisoned"))?;
+            ensure_request_id_available(&state, &request_id)?;
+            let session = state
+                .sessions
+                .get_mut(node_id)
+                .ok_or_else(|| Status::unavailable("target node has no ready control stream"))?;
+            let sequence = session.next_sequence;
+            session.next_sequence = sequence
+                .checked_add(1)
+                .ok_or_else(|| Status::out_of_range("control stream sequence exhausted"))?;
+            let output = session.output.clone();
+            let envelope = session
+                .identity
+                .envelope(sequence, ControlPayload::ResolveAdministrativeExec(request));
+            state.pending.insert(
+                request_id.clone(),
+                PendingAdministrativeResponse::Resolution {
+                    node_id: node_id.to_owned(),
+                    sender,
+                },
+            );
+            (receiver, output, envelope)
+        };
+        if output.send(Ok(envelope)).await.is_err() {
+            self.remove_pending(&request_id);
+            return Err(Status::unavailable(
+                "target node disconnected before administrative resolution",
+            ));
+        }
+        match tokio::time::timeout(ADMINISTRATIVE_NODE_TIMEOUT, receiver).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => Err(Status::unavailable(
+                "target node disconnected before administrative resolution",
+            )),
+            Err(_) => {
+                self.remove_pending(&request_id);
+                Err(Status::deadline_exceeded(
+                    "target node did not resolve administrative exec before the deadline",
+                ))
+            }
+        }
+    }
+
+    pub async fn arm_administrative_exec(
+        &self,
+        node_id: &str,
+        request: crate::ArmAdministrativeExec,
+    ) -> Result<crate::AdministrativeExecArmResult, Status> {
+        let request_id = request.request_id.clone();
+        let (receiver, output, envelope) = {
+            let (sender, receiver) = oneshot::channel();
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| Status::internal("control session state is poisoned"))?;
+            ensure_request_id_available(&state, &request_id)?;
+            let session = state
+                .sessions
+                .get_mut(node_id)
+                .ok_or_else(|| Status::unavailable("target node has no ready control stream"))?;
+            let sequence = session.next_sequence;
+            session.next_sequence = sequence
+                .checked_add(1)
+                .ok_or_else(|| Status::out_of_range("control stream sequence exhausted"))?;
+            let output = session.output.clone();
+            let envelope = session
+                .identity
+                .envelope(sequence, ControlPayload::ArmAdministrativeExec(request));
+            state.pending.insert(
+                request_id.clone(),
+                PendingAdministrativeResponse::Arm {
+                    node_id: node_id.to_owned(),
+                    sender,
+                },
+            );
+            (receiver, output, envelope)
+        };
+        if output.send(Ok(envelope)).await.is_err() {
+            self.remove_pending(&request_id);
+            return Err(Status::unavailable(
+                "target node disconnected before administrative slot installation",
+            ));
+        }
+        match tokio::time::timeout(ADMINISTRATIVE_NODE_TIMEOUT, receiver).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => Err(Status::unavailable(
+                "target node disconnected before administrative slot installation",
+            )),
+            Err(_) => {
+                self.remove_pending(&request_id);
+                Err(Status::deadline_exceeded(
+                    "target node did not install the administrative slot before the deadline",
+                ))
+            }
+        }
+    }
+
+    fn remove_pending(&self, request_id: &[u8]) {
+        if let Ok(mut state) = self.state.lock() {
+            state.pending.remove(request_id);
+        }
     }
 
     // Tonic requires `Status` at this boundary; wrapping it would only duplicate
@@ -152,6 +287,111 @@ impl ControlPlane {
         }
         Ok(())
     }
+
+    #[allow(clippy::result_large_err)]
+    fn register_ready_session(
+        &self,
+        identity: &StreamIdentity,
+        output: &mpsc::Sender<Result<ControlEnvelope, Status>>,
+    ) -> Result<(), Status> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| Status::internal("control session state is poisoned"))?;
+        if state
+            .sessions
+            .get(&identity.node_id)
+            .is_some_and(|session| session.identity.connection_nonce != identity.connection_nonce)
+        {
+            return Err(Status::already_exists(
+                "target node already has a ready control stream",
+            ));
+        }
+        state.sessions.insert(
+            identity.node_id.clone(),
+            NodeSession {
+                identity: identity.clone(),
+                output: output.clone(),
+                next_sequence: 3,
+            },
+        );
+        Ok(())
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn deliver_resolution(
+        &self,
+        node_id: &str,
+        response: crate::AdministrativeExecResolution,
+    ) -> Result<(), Status> {
+        let pending = self
+            .state
+            .lock()
+            .map_err(|_| Status::internal("control session state is poisoned"))?
+            .pending
+            .remove(&response.request_id)
+            .ok_or_else(|| Status::aborted("administrative response has no pending request"))?;
+        match pending {
+            PendingAdministrativeResponse::Resolution {
+                node_id: expected,
+                sender,
+            } if expected == node_id => sender
+                .send(response)
+                .map_err(|_| Status::cancelled("administrative requester stopped waiting")),
+            _ => Err(Status::unauthenticated(
+                "administrative response does not match its node or operation",
+            )),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn deliver_arm_result(
+        &self,
+        node_id: &str,
+        response: crate::AdministrativeExecArmResult,
+    ) -> Result<(), Status> {
+        let pending = self
+            .state
+            .lock()
+            .map_err(|_| Status::internal("control session state is poisoned"))?
+            .pending
+            .remove(&response.request_id)
+            .ok_or_else(|| Status::aborted("administrative response has no pending request"))?;
+        match pending {
+            PendingAdministrativeResponse::Arm {
+                node_id: expected,
+                sender,
+            } if expected == node_id => sender
+                .send(response)
+                .map_err(|_| Status::cancelled("administrative requester stopped waiting")),
+            _ => Err(Status::unauthenticated(
+                "administrative response does not match its node or operation",
+            )),
+        }
+    }
+
+    fn unregister(&self, identity: &StreamIdentity) {
+        if let Ok(mut state) = self.state.lock() {
+            state
+                .node_sequences
+                .remove(&(identity.node_id.clone(), identity.connection_nonce.clone()));
+            if state
+                .sessions
+                .get(&identity.node_id)
+                .is_some_and(|session| {
+                    session.identity.connection_nonce == identity.connection_nonce
+                })
+            {
+                state.sessions.remove(&identity.node_id);
+            }
+            state.pending.retain(|_, pending| match pending {
+                PendingAdministrativeResponse::Resolution { node_id, .. }
+                | PendingAdministrativeResponse::Arm { node_id, .. } => {
+                    node_id != &identity.node_id
+                }
+            });
+        }
+    }
 }
 
 #[tonic::async_trait]
@@ -211,6 +451,7 @@ impl NodeControl for ControlPlane {
         .await?;
 
         let control = self.clone();
+        let session_output = output.clone();
         tokio::spawn(async move {
             let mut expected_sequence = 2;
             while let Some(message) = input.next().await {
@@ -232,7 +473,14 @@ impl NodeControl for ControlPlane {
                             &ack.bundle_digest,
                         ),
                         Some(NodePayload::ReadinessReport(report)) => {
-                            control.validate_readiness(&report)
+                            control.validate_readiness(&report)?;
+                            control.register_ready_session(&identity, &session_output)
+                        }
+                        Some(NodePayload::Resolution(response)) => {
+                            control.deliver_resolution(&identity.node_id, *response)
+                        }
+                        Some(NodePayload::ArmResult(response)) => {
+                            control.deliver_arm_result(&identity.node_id, response)
                         }
                         Some(NodePayload::Registration(_)) | None => Err(Status::invalid_argument(
                             "registration is allowed only as the first stream message",
@@ -241,9 +489,11 @@ impl NodeControl for ControlPlane {
                 });
                 if let Err(error) = result {
                     let _result = output.send(Err(error)).await;
+                    control.unregister(&identity);
                     return;
                 }
             }
+            control.unregister(&identity);
         });
         Ok(Response::new(Box::pin(ReceiverStream::new(receiver))))
     }
@@ -278,10 +528,39 @@ fn is_sha256_hex(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
+#[derive(Clone)]
 struct StreamIdentity {
     node_id: String,
     node_boot_id: Vec<u8>,
     connection_nonce: Vec<u8>,
+}
+
+impl StreamIdentity {
+    fn envelope(&self, sequence: u64, payload: ControlPayload) -> ControlEnvelope {
+        ControlEnvelope {
+            protocol_version: CONTROL_PROTOCOL_VERSION,
+            node_id: self.node_id.clone(),
+            node_boot_id: self.node_boot_id.clone(),
+            connection_nonce: self.connection_nonce.clone(),
+            sequence,
+            payload: Some(payload),
+        }
+    }
+}
+
+#[allow(clippy::result_large_err)]
+fn ensure_request_id_available(state: &ControlState, request_id: &[u8]) -> Result<(), Status> {
+    if request_id.len() != 16 || request_id.iter().all(|byte| *byte == 0) {
+        return Err(Status::invalid_argument(
+            "administrative request ID must be one nonzero Id128",
+        ));
+    }
+    if state.pending.contains_key(request_id) {
+        return Err(Status::already_exists(
+            "administrative request ID is already pending",
+        ));
+    }
+    Ok(())
 }
 
 impl From<&NodeEnvelope> for StreamIdentity {
@@ -345,7 +624,11 @@ mod tests {
         valid_registration, validate_header, AllowedNodeIdentity, ControlPlane, StreamIdentity,
         TrustGenerationV1,
     };
-    use crate::{CapabilityRecord, NodeEnvelope, NodeRegistration, CONTROL_PROTOCOL_VERSION};
+    use crate::control_envelope::Payload as ControlPayload;
+    use crate::{
+        AdministrativeExecResolution, CapabilityRecord, NodeEnvelope, NodeRegistration,
+        ResolveAdministrativeExec, CONTROL_PROTOCOL_VERSION,
+    };
 
     fn control() -> ControlPlane {
         ControlPlane::new(
@@ -431,5 +714,47 @@ mod tests {
         assert!(!valid_registration(&invalid));
         invalid.capabilities[0].state = "ABSENT".to_owned();
         assert!(!valid_registration(&invalid));
+    }
+
+    #[tokio::test]
+    async fn administrative_resolution_uses_the_ready_authenticated_node_stream(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let control = control();
+        let identity = StreamIdentity {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![2; 16],
+        };
+        let (output, mut input) = tokio::sync::mpsc::channel(1);
+        control.register_ready_session(&identity, &output)?;
+        let request_id = vec![3; 16];
+        let request = ResolveAdministrativeExec {
+            request_id: request_id.clone(),
+            ..ResolveAdministrativeExec::default()
+        };
+        let waiting = tokio::spawn({
+            let control = control.clone();
+            async move { control.resolve_administrative_exec("node-a", request).await }
+        });
+        let envelope = input
+            .recv()
+            .await
+            .transpose()?
+            .ok_or("node request missing")?;
+        assert_eq!(envelope.sequence, 3);
+        assert!(matches!(
+            envelope.payload,
+            Some(ControlPayload::ResolveAdministrativeExec(_))
+        ));
+        control.deliver_resolution(
+            "node-a",
+            AdministrativeExecResolution {
+                request_id: request_id.clone(),
+                resolved: true,
+                ..AdministrativeExecResolution::default()
+            },
+        )?;
+        assert_eq!(waiting.await??.request_id, request_id);
+        Ok(())
     }
 }

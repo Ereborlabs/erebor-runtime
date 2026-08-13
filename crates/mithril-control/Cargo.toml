@@ -7,17 +7,25 @@ repository.workspace = true
 build = "build.rs"
 
 [dependencies]
+axum.workspace = true
+axum-server.workspace = true
 clap.workspace = true
+crossterm.workspace = true
 ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
 hex.workspace = true
+k8s-openapi.workspace = true
+kube.workspace = true
 minicbor.workspace = true
+openidconnect.workspace = true
 prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde-saphyr.workspace = true
 sha2.workspace = true
+reqwest.workspace = true
+secrecy.workspace = true
 snafu.workspace = true
 time.workspace = true
 tokio.workspace = true
@@ -39,6 +47,10 @@ path = "src/main.rs"
 [[bin]]
 name = "mithril-policy"
 path = "src/bin/mithril_policy.rs"
+
+[[bin]]
+name = "kubectl-mithril"
+path = "src/bin/kubectl_mithril.rs"
 
 [lints]
 workspace = true

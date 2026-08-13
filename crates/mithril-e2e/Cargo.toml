@@ -12,6 +12,7 @@ ed25519-dalek.workspace = true
 erebor-interceptor-abi = { path = "../erebor-interceptor-abi" }
 erebor-interceptor = { path = "../erebor-interceptor" }
 erebor-runtime-error = { path = "../erebor-runtime-error" }
+erebor-runtime-ipc = { path = "../erebor-runtime-ipc" }
 hex.workspace = true
 libbpf-rs.workspace = true
 libc = "0.2.186"

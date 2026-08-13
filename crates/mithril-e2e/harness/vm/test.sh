@@ -30,17 +30,32 @@ grep -q '^  serviceAccountName: mithril-runtime$' \
 grep -q '^          readOnly: true$' "$directory/k3s-workload-v1.yaml"
 grep -q '^        path: /var/lib/mithril-vm-qualification/secret$' \
   "$directory/k3s-workload-v1.yaml"
+grep -q '^        path: /var/lib/mithril-vm-qualification/admin-exec$' \
+  "$directory/k3s-workload-v1.yaml"
 grep -q '^        type: File$' "$directory/k3s-workload-v1.yaml"
 grep -q '^      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662$' \
   "$directory/k3s-workload-v1.yaml"
 python3 -c 'import json,re,sys; raw=open(sys.argv[1], encoding="utf-8").read(); config=json.loads(raw); expected={"MITHRIL_CONTAINER_ID", "MITHRIL_POD_UID", "MITHRIL_SANDBOX_ID", "MITHRIL_IMAGE_DIGEST"}; assert config["container_runtime"]["socket_path"] == "/run/k3s/containerd/containerd.sock"; assert config["workload_bindings"][0]["container_id"] == "MITHRIL_CONTAINER_ID"; assert not config["policy_candidates"]; assert set(re.findall(r"MITHRIL_[A-Z_]+", raw)) == expected; assert all(raw.count(value) == 1 for value in expected); assert raw.count("\"container_generation\": 1") == 1' \
   "$directory/k3s-cri-effect-node-v1.json"
+python3 -c 'import json,re,sys; raw=open(sys.argv[1], encoding="utf-8").read(); config=json.loads(raw); expected={"MITHRIL_CONTAINER_ID", "MITHRIL_POD_UID", "MITHRIL_SANDBOX_ID", "MITHRIL_IMAGE_DIGEST"}; assert config["node_id"] == "77777777-7777-4777-8777-777777777777"; assert config["container_runtime"]["socket_path"] == "/run/k3s/containerd/containerd.sock"; assert config["administrative_authorization"]["key_id"] == "mithril-vm-administrative-key-v1"; assert not config["policy_candidates"]; assert not config["exact_file_objects"]; assert set(re.findall(r"MITHRIL_[A-Z_]+", raw)) == expected; assert all(raw.count(value) == 1 for value in expected); assert raw.count("\"container_generation\": 1") == 1' \
+  "$directory/k3s-administrative-node-v1.json"
+python3 -c 'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.argv[1], "exec")' \
+  "$directory/oidc-fixture.py"
 ! grep -Eqi 'private[_ -]?key.*(begin|[0-9a-f]{32})|certificate.*begin' \
   "$directory/k3s-cri-effect-node-v1.json"
+! grep -Eqi 'private[_ -]?key.*(begin|[0-9a-f]{32})|certificate.*begin' \
+  "$directory/k3s-administrative-node-v1.json"
 grep -q 'record-physical-qualification' "$directory/run.sh"
 grep -q 'kernel-qualification-x86_64.json' "$directory/run.sh"
 grep -q 'k3s-cri-effect.txt' "$directory/run.sh"
+grep -q 'k3s-administrative-exec.txt' "$directory/run.sh"
+grep -q 'k3s-administrative-policy-v1.yaml' "$directory/run.sh"
+grep -q '^  desired_profile_mode: PROTECT$' \
+  "$directory/k3s-administrative-policy-v1.yaml"
+grep -q '^        exact_object_key_ids: \[12\]$' \
+  "$directory/k3s-administrative-policy-v1.yaml"
 grep -q '^  k3s-cri-effect)$' "$directory/guest.sh"
+grep -q '^  k3s-administrative-exec)$' "$directory/guest.sh"
 grep -q 'pod_initial_root=restored_or_unknown_root:fail_closed_unknown' \
   "$directory/guest.sh"
 grep -q 'kubectl_exec_root=external_runtime_root:runtime_external_restricted' \
@@ -52,6 +67,14 @@ grep -q 'task_cookie=\$external_task_cookie family=2 operation=2' \
   "$directory/guest.sh"
 grep -q 'k3s-cri-effect.txt.partial' "$directory/run.sh"
 grep -q 'mv -- "\$k3s_cri_effect_partial"' "$directory/run.sh"
+grep -q 'k3s-administrative-exec.txt.partial' "$directory/run.sh"
+grep -q 'mv -- "\$k3s_administrative_partial"' "$directory/run.sh"
+grep -q 'product_path=kubectl-mithril+oidc-pkce+self-approval+tokenreview+connect-admission+node-slot' \
+  "$directory/guest.sh"
+grep -q 'ordinary_kubectl_exec=denied-by-admission' "$directory/guest.sh"
+grep -q 'post-consumption_direct_runtime_root=external_runtime_root:runtime_external_restricted' \
+  "$directory/guest.sh"
+grep -q 'admission identity has no Mithril approval ID' "$directory/guest.sh"
 grep -q -- '--bpf-object "$remote_bin/feasibility.bpf.o"' "$directory/run.sh"
 grep -q 'crates/mithril-e2e/fixtures/hugging-face/\$fixture' \
   "$directory/run.sh"

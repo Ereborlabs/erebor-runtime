@@ -284,6 +284,13 @@ int BPF_PROG(qualification_sb_mount, const char *dev_name, const struct path *pa
     return ret;
 }
 
+SEC("lsm/sb_kern_mount")
+int BPF_PROG(qualification_sb_kern_mount, const struct super_block *superblock,
+             int ret)
+{
+    return ret;
+}
+
 SEC("lsm/sb_umount")
 int BPF_PROG(qualification_sb_umount, struct vfsmount *mnt, int flags, int ret)
 {
@@ -304,6 +311,19 @@ int BPF_PROG(qualification_move_mount, const struct path *from_path,
     return ret;
 }
 
+#define QUALIFY_MOUNT_SYSCALL(NAME)                                      \
+    SEC("tracepoint/syscalls/sys_enter_" #NAME)                          \
+    int qualification_mount_sys_enter_##NAME(                            \
+        struct trace_event_raw_sys_enter *context)                       \
+    {                                                                    \
+        return 0;                                                        \
+    }
+
+QUALIFY_MOUNT_SYSCALL(open_tree)
+QUALIFY_MOUNT_SYSCALL(fsconfig)
+QUALIFY_MOUNT_SYSCALL(fsmount)
+QUALIFY_MOUNT_SYSCALL(mount_setattr)
+
 SEC("lsm/capable")
 int BPF_PROG(qualification_capable, const struct cred *cred,
              struct user_namespace *ns, int cap, unsigned int opts, int ret)
@@ -314,6 +334,33 @@ int BPF_PROG(qualification_capable, const struct cred *cred,
 SEC("lsm/bpf")
 int BPF_PROG(qualification_bpf, int cmd, union bpf_attr *attr, unsigned int size,
              int ret)
+{
+    return ret;
+}
+
+SEC("lsm/inode_init_security_anon")
+int BPF_PROG(qualification_inode_init_security_anon, struct inode *inode,
+             const struct qstr *name, const struct inode *context_inode,
+             int ret)
+{
+    return ret;
+}
+
+SEC("lsm/uring_sqpoll")
+int BPF_PROG(qualification_uring_sqpoll, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/uring_override_creds")
+int BPF_PROG(qualification_uring_override_creds, const struct cred *new,
+             int ret)
+{
+    return ret;
+}
+
+SEC("lsm/uring_cmd")
+int BPF_PROG(qualification_uring_cmd, struct io_uring_cmd *command, int ret)
 {
     return ret;
 }

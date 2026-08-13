@@ -340,7 +340,7 @@ mod tests {
 
         assert!(gate < stop && stop < dirty);
         assert!(helper[gate..dirty].contains("ret);"));
-        assert_eq!(effect_source.matches("begin_mount_mutation()").count(), 1);
+        assert_eq!(effect_source.matches("begin_mount_mutation()").count(), 2);
 
         let path_source =
             include_str!("../../../bpf/erebor-interceptor/programs/identity_path.bpf.h");
@@ -349,18 +349,26 @@ mod tests {
             .nth(1)
             .and_then(|source| source.split("static __always_inline void").next())
             .unwrap_or_default();
-        assert_eq!(begin.matches("return label ? -EACCES : 0;").count(), 2);
+        assert_eq!(begin.matches("return label ? -EACCES : 0;").count(), 3);
 
         let finish = path_source
             .split("static __always_inline void finish_mount_mutation")
             .nth(1)
             .and_then(|source| source.split("static __always_inline int").next())
             .unwrap_or_default();
-        assert_eq!(finish.matches("decrement_nonzero_counter").count(), 1);
+        assert_eq!(finish.matches("decrement_nonzero_counter").count(), 2);
         assert!(!finish.contains("__sync_fetch_and_sub"));
         assert!(!finish.contains("view->state"));
         assert!(!finish.contains("view->transition_version"));
         assert!(!finish.contains("bpf_spin_lock"));
+        assert!(path_source.contains("mount_global_mutation_epoch"));
+        assert!(path_source.contains("mount_global_clean_epoch"));
+        assert!(path_source.contains("mount_global_pending_mutations"));
+        assert!(!path_source.contains("mount_global_security_view"));
+        assert!(!path_source.contains("mount_global_reconciliation_proposal"));
+        for syscall in ["open_tree", "fsconfig", "fsmount", "mount_setattr"] {
+            assert!(path_source.contains(&format!("MOUNT_SYSCALL_INVALIDATION({syscall})")));
+        }
     }
 
     #[test]
@@ -414,7 +422,7 @@ mod tests {
             lifecycle_sources[3]
                 .matches("decrement_nonzero_counter")
                 .count(),
-            1
+            2
         );
         assert!(lifecycle_sources[0]
             .contains("process->state = process_security_state_kind_v1_corrupt"));
@@ -451,7 +459,7 @@ mod tests {
             })
             .unwrap_or_default();
         let mount_root_check = candidate
-            .find("mount_root->snapshot_digest_id != snapshot_digest_id")
+            .find("mount_root->snapshot_digest_id != scratch->mount_snapshot_digest_id")
             .unwrap_or(usize::MAX);
         let normalize = candidate
             .find("scratch->file_object.mount_id_unique =\n        mount_root->selected_mount_id_unique")
@@ -572,8 +580,9 @@ mod tests {
 
             // The hook reads the trusted current creator, can install that creator
             // as an external root, and installs the trusted task_alloc child. It
-            // never derives a task pointer from a scalar identifier.
-            assert_eq!(calls, 5);
+            // also preallocates the child's fail-closed io_uring execution state.
+            // It never derives a task pointer from a scalar identifier.
+            assert_eq!(calls, 6);
         }
         assert!(found);
         Ok(())
@@ -692,8 +701,76 @@ mod tests {
             .and_then(|source| source.split("SEC(\"lsm/file_ioctl\")").next())
             .unwrap_or_default();
 
-        assert!(file_permission.contains("if (file_is_socket(file))"));
+        assert!(file_permission.contains("file_is_socket(file)"));
+        assert!(file_permission.contains("io_uring_execution_state_kind_v1_inactive"));
         assert!(file_permission.contains("return ret;"));
+    }
+
+    #[test]
+    fn io_uring_workers_use_exact_retained_submitter_authority() {
+        let source =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_io_uring.bpf.h");
+        let effects =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h");
+        let lifecycle =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h");
+
+        assert!(source.contains("IORING_SETUP_MITHRIL_V1"));
+        assert!(source.contains("io_uring_exact_restrictions(context)"));
+        assert!(source.contains("io_uring_file_mapping_gate("));
+        assert!(source.contains("BPF_CORE_READ_INTO(&context, file, private_data)"));
+        assert!(source.contains("(flags & MAP_TYPE) != MAP_SHARED"));
+        assert!(source.contains("opcode != IORING_OP_READ && opcode != IORING_OP_WRITE"));
+        assert!(source.contains("request->actor.profile_generation_ref_id"));
+        assert!(source.contains("profile_generation_async_refs"));
+        let resolver = source
+            .split("static __noinline int resolved_io_uring_effect_gate")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("SEC(\"tracepoint/syscalls/sys_enter_io_uring_setup\")")
+                    .next()
+            })
+            .unwrap_or_default();
+        let exact = resolver
+            .find("bpf_map_lookup_elem(&effect_decisions")
+            .unwrap_or(usize::MAX);
+        let class = resolver
+            .find("bpf_map_lookup_elem(&effect_defaults")
+            .unwrap_or_default();
+        assert!(exact < class);
+        assert!(source.contains("setup->state = io_uring_setup_state_kind_v1_invalid;"));
+        let submit = source
+            .split("SEC(\"tp_btf/io_uring_submit_req\")")
+            .nth(1)
+            .and_then(|source| source.split("SEC(\"fentry/io_issue_sqe\")").next())
+            .unwrap_or_default();
+        assert!(submit.contains("generation->state != policy_generation_state_v1_active"));
+        assert!(source.contains("SEC(\"fentry/io_issue_sqe\")"));
+        assert!(source.contains("SEC(\"fexit/io_issue_sqe\")"));
+        let identity = effects
+            .split("static __noinline int resolved_identity_effect_gate")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __noinline int dispatch_identity_effect_gate")
+                    .next()
+            })
+            .unwrap_or_default();
+        let dispatch = effects
+            .split("static __noinline int dispatch_identity_effect_gate")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __noinline int identity_effect_gate")
+                    .next()
+            })
+            .unwrap_or_default();
+        assert!(!identity.contains("resolved_io_uring_effect_gate"));
+        assert!(dispatch.contains("return resolved_io_uring_effect_gate("));
+        assert!(dispatch.contains("return resolved_identity_effect_gate("));
+        assert!(effects.contains("return resolved_io_uring_effect_gate("));
+        assert!(lifecycle.contains("&io_uring_execution_states, task, 0,"));
     }
 
     #[test]
@@ -742,8 +819,9 @@ mod tests {
             .and_then(|source| source.split("SEC(\"lsm/ptrace_access_check\")").next())
             .unwrap_or_default();
 
-        assert!(mmap.contains("if (!file)"));
+        assert!(mmap.contains("if (!file || (flags & MAP_ANONYMOUS))"));
         assert!(mmap.contains("if (!(prot & PROT_EXEC))"));
+        assert!(mmap.contains("identity_unqualified_effect_gate"));
         assert!(mmap.contains("kernel_effect_operation_v1_mmap_exec"));
         assert!(mprotect.contains("if (!file)"));
         assert!(mprotect.contains("if (!adds_exec)"));
@@ -797,7 +875,35 @@ mod tests {
         assert!(effect.contains("rule->decision != physical_decision_kind_v1_deny"));
         assert!(effect.contains("binding_matches_label(target_binding, target_live_label)"));
         assert!(!effect.contains("target_binding->active_profile_generation_ref_id !="));
-        assert!(effect.contains("generation->state != policy_generation_state_v1_active"));
+        assert!(effect.contains("generation_allows_existing_holder(generation)"));
+    }
+
+    #[test]
+    fn retiring_generations_allow_existing_holders_but_not_new_roots() {
+        let maps = include_str!("../../../bpf/erebor-interceptor/programs/identity_maps.h");
+        let holder = maps
+            .split("static __always_inline bool generation_allows_existing_holder")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline execution_set_binding_state_v1 *")
+                    .next()
+            })
+            .unwrap_or_default();
+        let new_root = maps
+            .split("binding_activation_for_new_root")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline bool consume_initial_root")
+                    .next()
+            })
+            .unwrap_or_default();
+
+        assert!(holder.contains("policy_generation_state_v1_active"));
+        assert!(holder.contains("policy_generation_state_v1_retiring"));
+        assert!(new_root.contains("descriptor->state != policy_generation_state_v1_active"));
+        assert!(!new_root.contains("generation_allows_existing_holder"));
     }
 
     #[test]
@@ -996,5 +1102,22 @@ mod tests {
                     })
         }));
         Ok(())
+    }
+
+    #[test]
+    fn administrative_slot_cancellation_is_an_exact_atomic_control_operation() {
+        let source = include_str!("../../../bpf/erebor-interceptor/programs/identity.bpf.c");
+        let cancellation = source
+            .split("policy_activation_probe_map_kind_v1_administrative_slot_cancel")
+            .nth(1)
+            .and_then(|source| source.split("default:").next())
+            .unwrap_or_default();
+
+        assert!(cancellation.contains("&approved_exec_slots"));
+        assert!(cancellation.contains("administrative_slot->proof_id"));
+        assert!(cancellation.contains("administrative_slot->claim_slot_id"));
+        assert!(cancellation.contains("__sync_val_compare_and_swap"));
+        assert!(cancellation.contains("approved_exec_slot_state_v1_armed"));
+        assert!(cancellation.contains("approved_exec_slot_state_v1_cancelled"));
     }
 }

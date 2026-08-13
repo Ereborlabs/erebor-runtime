@@ -417,10 +417,13 @@ impl KernelQualificationRunner {
             .iter()
             .map(|link| link.program.as_str())
             .collect::<BTreeSet<_>>();
+        let expected_attached_programs = erebor_interceptor::REQUIRED_QUALIFICATION_PROGRAMS
+            .into_iter()
+            .collect::<BTreeSet<_>>();
         ensure!(
             object_programs == expected_programs
-                && linked_programs == expected_programs
-                && physical.file_open.links.len() == expected_programs.len()
+                && linked_programs == expected_attached_programs
+                && physical.file_open.links.len() == expected_attached_programs.len()
                 && physical
                     .file_open
                     .links

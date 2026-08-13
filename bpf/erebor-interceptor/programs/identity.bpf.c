@@ -29,6 +29,8 @@ _Static_assert(sizeof(process_control_rule_key_v1) == 40,
                "process-control rule key ABI size");
 _Static_assert(sizeof(physical_decision_v1) == 16,
                "physical decision ABI size");
+_Static_assert(sizeof(policy_activation_probe_v1) == 104,
+               "policy activation probe ABI size");
 _Static_assert(sizeof(profile_generation_descriptor_v1) == 112,
                "profile generation descriptor ABI size");
 _Static_assert(sizeof(exception_runtime_state_key_v1) == 32,
@@ -47,6 +49,16 @@ _Static_assert(sizeof(task_effect_attempt_frame_v1) == 24,
                "effect attempt frame ABI size");
 _Static_assert(sizeof(task_effect_attempt_state_v1) == 128,
                "effect attempt state ABI size");
+_Static_assert(sizeof(io_uring_setup_state_v1) == 32,
+               "io_uring setup state ABI size");
+_Static_assert(sizeof(io_uring_actor_snapshot_v1) == 232,
+               "io_uring actor snapshot ABI size");
+_Static_assert(sizeof(io_uring_ring_state_v1) == 488,
+               "io_uring ring state ABI size");
+_Static_assert(sizeof(io_uring_request_state_v1) == 344,
+               "io_uring request state ABI size");
+_Static_assert(sizeof(io_uring_execution_state_v1) == 64,
+               "io_uring execution state ABI size");
 _Static_assert(sizeof(struct exception_runtime_state_bpf_v1) ==
                    sizeof(exception_runtime_state_v1),
                "exception runtime BPF state ABI size");
@@ -69,7 +81,7 @@ _Static_assert(sizeof(exact_file_object_key_v1) == 40,
                "exact file object ABI size");
 _Static_assert(sizeof(exact_object_binding_v1) == 32,
                "exact object binding ABI size");
-_Static_assert(sizeof(effect_observation_v1) == 280,
+_Static_assert(sizeof(effect_observation_v1) == 376,
                "effect observation ABI size");
 _Static_assert(sizeof(effect_observation_health_v1) == 32,
                "effect observation health ABI size");
@@ -86,6 +98,120 @@ _Static_assert(sizeof(mount_mutation_attempt_v1) == 8,
 #include "identity_root_helpers.h"
 #include "identity_path.bpf.h"
 
+SEC("socket")
+int erebor_policy_activation_probe(struct __sk_buff *context)
+{
+    __u32 request_key = 0;
+    policy_activation_probe_v1 *request;
+    struct identity_scratch_v1 *scratch;
+    physical_decision_v1 *decision = NULL;
+    approved_exec_slot_v1 *administrative_slot;
+
+    (void)context;
+    request = bpf_map_lookup_elem(&policy_activation_probe_requests,
+                                  &request_key);
+    if (!request || request->reserved_alignment)
+        return 2;
+    scratch = identity_scratch_record();
+    if (!scratch)
+        return 3;
+    switch (request->map_kind) {
+    case policy_activation_probe_map_kind_v1_effect_decision:
+        if (request->key_size != sizeof(scratch->effect_key))
+            return 4;
+        __builtin_memcpy(&scratch->effect_key, request->key,
+                         sizeof(scratch->effect_key));
+        decision = bpf_map_lookup_elem(&effect_decisions,
+                                       &scratch->effect_key);
+        break;
+    case policy_activation_probe_map_kind_v1_effect_default:
+        if (request->key_size != sizeof(scratch->effect_default))
+            return 4;
+        __builtin_memcpy(&scratch->effect_default, request->key,
+                         sizeof(scratch->effect_default));
+        decision = bpf_map_lookup_elem(&effect_defaults,
+                                       &scratch->effect_default);
+        break;
+    case policy_activation_probe_map_kind_v1_ipc_relationship:
+        if (request->key_size != sizeof(scratch->ipc_relationship_key))
+            return 4;
+        __builtin_memcpy(&scratch->ipc_relationship_key, request->key,
+                         sizeof(scratch->ipc_relationship_key));
+        decision = bpf_map_lookup_elem(&ipc_relationship_decisions,
+                                       &scratch->ipc_relationship_key);
+        break;
+    case policy_activation_probe_map_kind_v1_device_effect:
+        if (request->key_size != sizeof(scratch->device_effect_key))
+            return 4;
+        __builtin_memcpy(&scratch->device_effect_key, request->key,
+                         sizeof(scratch->device_effect_key));
+        decision = bpf_map_lookup_elem(&device_effect_decisions,
+                                       &scratch->device_effect_key);
+        break;
+    case policy_activation_probe_map_kind_v1_process_control:
+        if (request->key_size != sizeof(scratch->process_control_rule_key))
+            return 4;
+        __builtin_memcpy(&scratch->process_control_rule_key, request->key,
+                         sizeof(scratch->process_control_rule_key));
+        decision = bpf_map_lookup_elem(&process_control_rules,
+                                       &scratch->process_control_rule_key);
+        break;
+    case policy_activation_probe_map_kind_v1_administrative_slot_cancel:
+        if (request->key_size != sizeof(scratch->administrative_slot_key) +
+                                     sizeof(scratch->administrative_match.proof_id) +
+                                     sizeof(scratch->administrative_match.claim_slot_id))
+            return 4;
+        __builtin_memcpy(&scratch->administrative_slot_key, request->key,
+                         sizeof(scratch->administrative_slot_key));
+        __builtin_memcpy(&scratch->administrative_match.proof_id,
+                         request->key + sizeof(scratch->administrative_slot_key),
+                         sizeof(scratch->administrative_match.proof_id));
+        __builtin_memcpy(
+            &scratch->administrative_match.claim_slot_id,
+            request->key + sizeof(scratch->administrative_slot_key) +
+                sizeof(scratch->administrative_match.proof_id),
+            sizeof(scratch->administrative_match.claim_slot_id));
+        administrative_slot = bpf_map_lookup_elem(
+            &approved_exec_slots, &scratch->administrative_slot_key);
+        if (!administrative_slot)
+            return 7;
+        if (!id128_equal(&administrative_slot->proof_id,
+                         &scratch->administrative_match.proof_id) ||
+            !id128_equal(&administrative_slot->claim_slot_id,
+                         &scratch->administrative_match.claim_slot_id))
+            return 8;
+        if (administrative_slot->state == approved_exec_slot_state_v1_consumed)
+            return 9;
+        if (administrative_slot->state == approved_exec_slot_state_v1_cancelled ||
+            administrative_slot->state == approved_exec_slot_state_v1_expired ||
+            administrative_slot->state == approved_exec_slot_state_v1_corrupt)
+            return 10;
+        if (administrative_slot->state != approved_exec_slot_state_v1_armed)
+            return 8;
+        if (__sync_val_compare_and_swap(
+                &administrative_slot->state,
+                approved_exec_slot_state_v1_armed,
+                approved_exec_slot_state_v1_cancelled) !=
+            approved_exec_slot_state_v1_armed)
+            return 11;
+        __sync_fetch_and_add(&administrative_slot->transition_version, 1);
+        return 1;
+    default:
+        return 4;
+    }
+    if (!decision)
+        return 5;
+    if (decision->decision != request->expected.decision ||
+        decision->reserved != request->expected.reserved ||
+        decision->errno != request->expected.errno ||
+        decision->evidence_class_id != request->expected.evidence_class_id ||
+        decision->transition_id != request->expected.transition_id ||
+        decision->exception_numeric_handle !=
+            request->expected.exception_numeric_handle)
+        return 6;
+    return 1;
+}
+
 #include "identity_lifecycle.bpf.h"
 static __noinline int identity_effect_gate(struct file *file,
                                            __u16 effect_family,
@@ -93,8 +219,15 @@ static __noinline int identity_effect_gate(struct file *file,
 static __noinline int identity_path_effect_gate(const struct path *path,
                                                 __u16 effect_family,
                                                 __u16 operation, int ret);
+static __noinline int resolved_io_uring_effect_gate(
+    struct file *file, __u16 effect_family, __u16 operation, int ret,
+    struct identity_scratch_v1 *scratch);
+static __noinline int io_uring_file_mapping_gate(
+    struct file *file, unsigned long reqprot, unsigned long prot,
+    unsigned long flags, int ret);
 #include "identity_exec.bpf.h"
 #include "identity_effects.bpf.h"
+#include "identity_io_uring.bpf.h"
 #include "identity_exit.bpf.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";

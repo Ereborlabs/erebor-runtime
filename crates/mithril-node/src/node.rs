@@ -1,5 +1,8 @@
 use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
-use mithril_control::{CapabilityRecord, NodeRegistration};
+use mithril_control::{
+    AdministrativeExecArmResult, AdministrativeExecResolution, AdministrativeFileObject,
+    CapabilityRecord, NodeRegistration, ResolvedAdministrativeExecutable,
+};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 use snafu::ResultExt as _;
@@ -9,11 +12,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 
+use crate::administrative_exec::{
+    AdministrativeExecOwner, AdministrativeResolutionV1, AdministrativeResolveRequestV1,
+};
 use crate::epoch::NodeEpochs;
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, JsonSnafu, LocalTaskSnafu};
 use crate::{
-    NativeSecurityStateOwner, NodeConfig, NodeControlConnector, Result, TrustCache,
-    WorkloadBindingOwner,
+    AdministrativeControlRequest, NativeSecurityStateOwner, NodeConfig, NodeControlConnector,
+    Result, TrustCache, WorkloadBindingOwner,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -64,6 +70,7 @@ pub struct NodeChassis {
     trust: TrustCache,
     bindings: WorkloadBindingOwner,
     policy: Option<crate::NodePolicyGenerationOwner>,
+    administrative: Option<AdministrativeExecOwner>,
     readiness: watch::Sender<NodeReadinessV1>,
 }
 
@@ -99,13 +106,45 @@ impl NodeChassis {
         } else {
             Some(crate::NodePolicyGenerationOwner::load_and_install(
                 &config,
-                &host,
+                &mut host,
                 node_boot_id,
                 label_epoch,
             )?)
         };
         if policy.is_some() {
             bindings.adopt_activated_profiles(&host, &config.workload_bindings)?;
+        }
+        let administrative_required = policy
+            .as_ref()
+            .is_some_and(crate::NodePolicyGenerationOwner::administrative_enabled);
+        let mut administrative = match (
+            config.administrative_authorization.as_ref(),
+            administrative_required,
+        ) {
+            (Some(authorization), true) => Some(AdministrativeExecOwner::load(
+                authorization,
+                &config.state_directory,
+                crate::policy::stable_node_id(&config.node_id)?,
+                node_boot_id,
+            )?),
+            (None, true) => {
+                return IdentityStateSnafu {
+                    reason: "signed administrative entry policy has no authorization trust owner"
+                        .to_owned(),
+                }
+                .fail()
+            }
+            (Some(_), false) => {
+                return IdentityStateSnafu {
+                    reason: "administrative authorization is configured without a signed administrative entry plan"
+                        .to_owned(),
+                }
+                .fail()
+            }
+            (None, false) => None,
+        };
+        if let Some(administrative) = administrative.as_mut() {
+            administrative.reconcile(&host)?;
         }
         let policy_loaded = policy.is_some();
         let prevention_enabled = policy
@@ -222,6 +261,7 @@ impl NodeChassis {
             trust,
             bindings,
             policy,
+            administrative,
             readiness,
         })
     }
@@ -293,9 +333,25 @@ impl NodeChassis {
                     backoff = self.config.control.reconnect_minimum();
                     loop {
                         tokio::select! {
-                            result = connection.wait_for_disconnect() => {
-                                let _error = result.err();
-                                break;
+                            result = connection.next_administrative_request() => {
+                                let request = match result {
+                                    Ok(request) => request,
+                                    Err(_error) => break,
+                                };
+                                match request {
+                                    AdministrativeControlRequest::Resolve(request) => {
+                                        let response = self.resolve_administrative(request);
+                                        if connection.send_resolution(response).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    AdministrativeControlRequest::Arm(request) => {
+                                        let response = self.arm_administrative(request);
+                                        if connection.send_arm_result(response).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
                             }
                             changed = shutdown.changed() => {
                                 let _result = changed;
@@ -333,6 +389,14 @@ impl NodeChassis {
                     }
                 }
                 Err(_error) => {}
+            }
+            if let (Some(administrative), Some(host)) =
+                (self.administrative.as_mut(), self.host.as_mut())
+            {
+                if administrative.cancel_armed_slots(host).is_err() {
+                    identity_healthy = false;
+                    close_identity_claims(&mut self.registration);
+                }
             }
             self.readiness.send_replace(NodeReadinessV1 {
                 kernel_ready: kernel_healthy,
@@ -425,7 +489,90 @@ impl NodeChassis {
         {
             return ReconciliationOutcome::IdentityUnhealthy;
         }
+        if self
+            .administrative
+            .as_mut()
+            .is_some_and(|administrative| administrative.reconcile(host).is_err())
+        {
+            return ReconciliationOutcome::IdentityUnhealthy;
+        }
         ReconciliationOutcome::Healthy
+    }
+
+    fn resolve_administrative(
+        &self,
+        request: mithril_control::ResolveAdministrativeExec,
+    ) -> AdministrativeExecResolution {
+        let request_id = request.request_id.clone();
+        let resolved = (|| {
+            ensure_request_id(&request_id)?;
+            let stream_flags = u8::try_from(request.stream_flags).map_err(|_| ())?;
+            let administrative = self.administrative.as_ref().ok_or(())?;
+            let host = self.host.as_ref().ok_or(())?;
+            let policy = self.policy.as_ref().ok_or(())?;
+            let resolution = administrative
+                .resolve(
+                    host,
+                    &self.bindings,
+                    policy,
+                    AdministrativeResolveRequestV1 {
+                        namespace: request.namespace,
+                        pod_uid: request.pod_uid,
+                        container_name: request.container_name,
+                        full_container_id: request.full_container_id,
+                        container_generation: request.container_generation,
+                        argv: request.argv,
+                        stream_flags,
+                        approved_role_id: request.approved_role_id,
+                    },
+                )
+                .map_err(|_| ())?;
+            Ok((administrative.node_id(), resolution))
+        })();
+        match resolved {
+            Ok((node_id, resolution)) => resolution_response(request_id, node_id, resolution),
+            Err(()) => rejected_resolution(request_id),
+        }
+    }
+
+    fn arm_administrative(
+        &mut self,
+        request: mithril_control::ArmAdministrativeExec,
+    ) -> AdministrativeExecArmResult {
+        let request_id = request.request_id.clone();
+        let armed = (|| {
+            ensure_request_id(&request_id)?;
+            let body_sha256: [u8; 32] = request.body_sha256.try_into().map_err(|_| ())?;
+            let host = self.host.as_ref().ok_or(())?;
+            let policy = self.policy.as_ref().ok_or(())?;
+            self.administrative
+                .as_mut()
+                .ok_or(())?
+                .verify_and_arm(
+                    host,
+                    &self.bindings,
+                    policy,
+                    &request.signed_intent,
+                    body_sha256,
+                )
+                .map_err(|_| ())
+        })();
+        match armed {
+            Ok(receipt) => AdministrativeExecArmResult {
+                request_id,
+                armed: true,
+                reason_code: "ARMED_AND_READ_BACK".to_owned(),
+                proof_id: portable_id_bytes(receipt.proof_id),
+                claim_slot_id: portable_id_bytes(receipt.claim_slot_id),
+            },
+            Err(()) => AdministrativeExecArmResult {
+                request_id,
+                armed: false,
+                reason_code: "ADMINISTRATIVE_ARM_REJECTED".to_owned(),
+                proof_id: Vec::new(),
+                claim_slot_id: Vec::new(),
+            },
+        }
     }
 
     fn close_kernel_claims(&mut self) {
@@ -481,6 +628,88 @@ async fn effect_reader_finished(
 fn id_from_uuid_bytes(bytes: [u8; 16]) -> erebor_interceptor_abi::Id128V1 {
     let value = u128::from_be_bytes(bytes);
     erebor_interceptor_abi::Id128V1::new((value >> 64) as u64, value as u64)
+}
+
+fn ensure_request_id(request_id: &[u8]) -> std::result::Result<(), ()> {
+    if request_id.len() != 16 || request_id.iter().all(|byte| *byte == 0) {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn portable_id_bytes(value: erebor_interceptor_abi::Id128V1) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(16);
+    bytes.extend_from_slice(&value.high.to_be_bytes());
+    bytes.extend_from_slice(&value.low.to_be_bytes());
+    bytes
+}
+
+fn resolution_response(
+    request_id: Vec<u8>,
+    node_id: erebor_interceptor_abi::Id128V1,
+    resolution: AdministrativeResolutionV1,
+) -> AdministrativeExecResolution {
+    let executable = resolution.policy.resolved_executable;
+    let object = executable.executable_object;
+    AdministrativeExecResolution {
+        request_id,
+        resolved: true,
+        reason_code: "RESOLVED_AND_RECHECKED".to_owned(),
+        target_node_id: portable_id_bytes(node_id),
+        namespace: resolution.target.namespace.into_bytes(),
+        pod_uid: resolution.target.pod_uid.into_bytes(),
+        container_name: resolution.target.container_name.into_bytes(),
+        full_container_id: resolution.target.full_container_id.into_bytes(),
+        container_generation: resolution.target.container_generation,
+        argv: resolution.arguments,
+        stream_flags: u32::from(resolution.stream_flags),
+        approved_role_id: resolution.approved_role_id,
+        profile_id: portable_id_bytes(resolution.policy.profile.profile_id),
+        profile_owner_generation: resolution.policy.profile.owner_generation,
+        profile_artifact_sha256: resolution.policy.profile.artifact_sha256.to_vec(),
+        resolved_executable: Some(ResolvedAdministrativeExecutable {
+            requested_name: executable.requested_name,
+            resolution_mode: u32::from(executable.resolution_mode),
+            resolved_display_path: executable.resolved_display_path,
+            container_working_directory: executable.container_working_directory,
+            effective_path_entries: executable.effective_path_entries,
+            target_mount_namespace_id: portable_id_bytes(executable.target_mount_namespace_id),
+            target_mount_topology_generation: executable.target_mount_topology_generation,
+            executable_object: Some(AdministrativeFileObject {
+                mount_namespace_id: portable_id_bytes(object.mount_namespace_id),
+                mount_topology_generation: object.mount_topology_generation,
+                mount_id: object.mount_id,
+                filesystem_instance_id: portable_id_bytes(object.filesystem_instance_id),
+                inode: object.inode,
+                inode_generation: object.inode_generation,
+                exact_live_object_id: portable_id_bytes(object.exact_live_object_id),
+                object_kind: u32::from(object.object_kind),
+                backing_identity: portable_id_bytes(object.backing_identity),
+                live_interval_id: portable_id_bytes(object.live_interval_id),
+            }),
+        }),
+    }
+}
+
+fn rejected_resolution(request_id: Vec<u8>) -> AdministrativeExecResolution {
+    AdministrativeExecResolution {
+        request_id,
+        resolved: false,
+        reason_code: "ADMINISTRATIVE_RESOLUTION_REJECTED".to_owned(),
+        target_node_id: Vec::new(),
+        namespace: Vec::new(),
+        pod_uid: Vec::new(),
+        container_name: Vec::new(),
+        full_container_id: Vec::new(),
+        container_generation: 0,
+        argv: Vec::new(),
+        stream_flags: 0,
+        approved_role_id: String::new(),
+        profile_id: Vec::new(),
+        profile_owner_generation: 0,
+        profile_artifact_sha256: Vec::new(),
+        resolved_executable: None,
+    }
 }
 
 fn registration(
@@ -668,7 +897,7 @@ mod tests {
         let connected_loop = source
             .split("Ok(mut connection) =>")
             .nth(1)
-            .and_then(|source| source.split("Err(_error)").next())
+            .and_then(|source| source.split("\n                Err(_error) => {}").next())
             .unwrap_or_default();
         let identity_failure = connected_loop
             .split("ReconciliationOutcome::IdentityUnhealthy =>")
@@ -682,6 +911,19 @@ mod tests {
 
         assert!(identity_failure.contains("identity_healthy = false;"));
         assert!(identity_failure.contains("break;"));
+    }
+
+    #[test]
+    fn control_disconnect_cancels_armed_administrative_slots_before_reconnect() {
+        let source = include_str!("node.rs");
+        let disconnect = source
+            .split("Err(_error) => {}")
+            .nth(1)
+            .and_then(|source| source.split("self.readiness.send_replace").next())
+            .unwrap_or_default();
+
+        assert!(disconnect.contains("administrative.cancel_armed_slots(host)"));
+        assert!(disconnect.contains("identity_healthy = false;"));
     }
 
     #[tokio::test]

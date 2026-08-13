@@ -169,6 +169,19 @@ fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
         target_role_id: event.target_role_id,
         target_process_state_vector_id: event.target_process_state_vector_id,
         operation_argument: event.operation_argument,
+        io_uring_ring_id: id_hex(event.io_uring_ring_id),
+        io_uring_ring_generation: event.io_uring_ring_generation,
+        io_uring_submission_sequence: event.io_uring_submission_sequence,
+        io_uring_user_data: event.io_uring_user_data,
+        io_uring_file_offset: event.io_uring_file_offset,
+        io_uring_buffer_address: event.io_uring_buffer_address,
+        io_uring_file_cookie: event.io_uring_file_cookie,
+        io_uring_executor_pid_tgid: event.io_uring_executor_pid_tgid,
+        io_uring_byte_length: event.io_uring_byte_length,
+        io_uring_sqe_index: event.io_uring_sqe_index,
+        io_uring_request_flags: event.io_uring_request_flags,
+        io_uring_rw_flags: event.io_uring_rw_flags,
+        io_uring_opcode: u32::from(event.io_uring_opcode),
     }
 }
 
@@ -250,6 +263,19 @@ mod tests {
                 target_role_id: 11,
                 target_process_state_vector_id: 12,
                 operation_argument: 13,
+                io_uring_ring_id: Id128V1::new(14, 15),
+                io_uring_ring_generation: 16,
+                io_uring_submission_sequence: 17,
+                io_uring_user_data: 18,
+                io_uring_file_offset: 19,
+                io_uring_buffer_address: 20,
+                io_uring_file_cookie: 21,
+                io_uring_executor_pid_tgid: 22,
+                io_uring_byte_length: 23,
+                io_uring_sqe_index: 24,
+                io_uring_request_flags: 25,
+                io_uring_rw_flags: 26,
+                io_uring_opcode: 27,
                 reason: EffectObservationReasonV1::WouldDeny as u8,
                 physical_result: EffectPhysicalResultV1::UnknownAfterPreEffect as u8,
                 ..EffectObservationV1::default()
@@ -279,6 +305,22 @@ mod tests {
         assert_eq!(recent[0].target_role_id, 11);
         assert_eq!(recent[0].target_process_state_vector_id, 12);
         assert_eq!(recent[0].operation_argument, 13);
+        assert_eq!(
+            recent[0].io_uring_ring_id,
+            "000000000000000e000000000000000f"
+        );
+        assert_eq!(recent[0].io_uring_ring_generation, 16);
+        assert_eq!(recent[0].io_uring_submission_sequence, 17);
+        assert_eq!(recent[0].io_uring_user_data, 18);
+        assert_eq!(recent[0].io_uring_file_offset, 19);
+        assert_eq!(recent[0].io_uring_buffer_address, 20);
+        assert_eq!(recent[0].io_uring_file_cookie, 21);
+        assert_eq!(recent[0].io_uring_executor_pid_tgid, 22);
+        assert_eq!(recent[0].io_uring_byte_length, 23);
+        assert_eq!(recent[0].io_uring_sqe_index, 24);
+        assert_eq!(recent[0].io_uring_request_flags, 25);
+        assert_eq!(recent[0].io_uring_rw_flags, 26);
+        assert_eq!(recent[0].io_uring_opcode, 27);
     }
 
     #[test]

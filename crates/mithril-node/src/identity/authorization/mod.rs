@@ -50,19 +50,54 @@ struct IntentPayloadV1 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct AdministrativeExecIdentityV1 {
-    target_node_id: Id128V1,
-    container_generation: u64,
-    approved_argv: BoundedAdministrativeArgvV1,
-    resolved_mount_id: u32,
-    resolved_inode: u64,
-    resolved_inode_generation: u32,
+pub struct AdministrativeExecIdentityV1 {
+    pub authenticated_requester_principal_id: Id128V1,
+    pub authenticated_approver_principal_id: Id128V1,
+    pub cluster_uid: Id128V1,
+    pub namespace: Vec<u8>,
+    pub pod_uid: Vec<u8>,
+    pub container_name: Vec<u8>,
+    pub full_container_id: Vec<u8>,
+    pub container_generation: u64,
+    pub approved_argv: BoundedAdministrativeArgvV1,
+    pub stream_flags: u8,
+    pub approved_role_id: String,
+    pub profile: PortableProfileGenerationIdentityV1,
+    pub target_node_id: Id128V1,
+    pub resolved_executable: ResolvedAdministrativeExecutableIdentityV1,
 }
 
-struct ResolvedExecutableObjectV1 {
-    mount_id: u32,
-    inode: u64,
-    inode_generation: u32,
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PortableProfileGenerationIdentityV1 {
+    pub profile_id: Id128V1,
+    pub owner_generation: u64,
+    pub artifact_sha256: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedAdministrativeExecutableIdentityV1 {
+    pub requested_name: Vec<u8>,
+    pub resolution_mode: u8,
+    pub resolved_display_path: Vec<u8>,
+    pub container_working_directory: Vec<u8>,
+    pub effective_path_entries: Vec<Vec<u8>>,
+    pub target_mount_namespace_id: Id128V1,
+    pub target_mount_topology_generation: u64,
+    pub executable_object: AdministrativeFileObjectIdentityV1,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AdministrativeFileObjectIdentityV1 {
+    pub mount_namespace_id: Id128V1,
+    pub mount_topology_generation: u64,
+    pub mount_id: u32,
+    pub filesystem_instance_id: Id128V1,
+    pub inode: u64,
+    pub inode_generation: u32,
+    pub exact_live_object_id: Id128V1,
+    pub object_kind: u8,
+    pub backing_identity: Id128V1,
+    pub live_interval_id: Id128V1,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,6 +142,13 @@ pub struct PreparedAuthorizationProofV1 {
     administrative_exec: AdministrativeExecIdentityV1,
 }
 
+impl PreparedAuthorizationProofV1 {
+    #[must_use]
+    pub const fn administrative_exec(&self) -> &AdministrativeExecIdentityV1 {
+        &self.administrative_exec
+    }
+}
+
 pub struct AuthorizationProofOwner {
     node_id: Id128V1,
     node_boot_id: Id128V1,
@@ -121,6 +163,11 @@ struct DecodedEnvelope<'a> {
 }
 
 impl AuthorizationProofOwner {
+    #[must_use]
+    pub const fn node_boot_id(&self) -> Id128V1 {
+        self.node_boot_id
+    }
+
     pub fn load(
         state_directory: &Path,
         node_id: Id128V1,
@@ -225,51 +272,66 @@ impl AuthorizationProofOwner {
                 && slot.expected_argv == proof.administrative_exec.approved_argv
                 && slot.resolved_executable.mount_namespace_inode > 0
                 && slot.resolved_executable.mount_id > 0
-                && slot.resolved_executable.mount_id == proof.administrative_exec.resolved_mount_id
+                && slot.resolved_executable.mount_id
+                    == proof
+                        .administrative_exec
+                        .resolved_executable
+                        .executable_object
+                        .mount_id
                 && slot.resolved_executable.filesystem_device > 0
                 && slot.resolved_executable.inode > 0
-                && slot.resolved_executable.inode == proof.administrative_exec.resolved_inode
+                && slot.resolved_executable.inode
+                    == proof
+                        .administrative_exec
+                        .resolved_executable
+                        .executable_object
+                        .inode
                 && slot.resolved_executable.inode_generation > 0
                 && slot.resolved_executable.inode_generation
-                    == proof.administrative_exec.resolved_inode_generation
+                    == proof
+                        .administrative_exec
+                        .resolved_executable
+                        .executable_object
+                        .inode_generation
                 && slot.approved_role_numeric_id > 0
                 && slot.profile_generation_ref_id > 0
-                && slot.exception_numeric_handle > 0
                 && slot.reserved_after_exception == 0
                 && slot.expected_root_class == ExternalRootClassV1::ExternalRuntimeRoot,
             AuthorizationSnafu {
                 reason: "administrative slot is not an exact bounded external-root match",
             }
         );
-        let exception_binding_key = ExceptionHandleBindingKeyV1 {
-            profile_generation_ref_id: slot.profile_generation_ref_id,
-            exception_numeric_handle: slot.exception_numeric_handle,
-            reserved: 0,
-        };
-        let exception_binding = host
-            .lookup_map(
-                "exception_handle_bindings",
-                exception_binding_key.as_bytes(),
-            )
-            .context(InterceptorSnafu)?
-            .ok_or_else(|| {
+        if slot.exception_numeric_handle > 0 {
+            let exception_binding_key = ExceptionHandleBindingKeyV1 {
+                profile_generation_ref_id: slot.profile_generation_ref_id,
+                exception_numeric_handle: slot.exception_numeric_handle,
+                reserved: 0,
+            };
+            let exception_binding = host
+                .lookup_map(
+                    "exception_handle_bindings",
+                    exception_binding_key.as_bytes(),
+                )
+                .context(InterceptorSnafu)?
+                .ok_or_else(|| {
+                    AuthorizationSnafu {
+                        reason: "administrative slot has no active bounded-exception binding"
+                            .to_owned(),
+                    }
+                    .build()
+                })?;
+            let exception_binding = read_abi_value::<ExceptionHandleBindingV1>(
+                &exception_binding,
+                "administrative exception binding",
+            )?;
+            ensure!(
+                exception_binding.state == ExceptionBindingStateV1::Active
+                    && exception_binding.runtime_state_key.node_id == self.node_id,
                 AuthorizationSnafu {
-                    reason: "administrative slot has no active bounded-exception binding"
-                        .to_owned(),
+                    reason: "administrative slot exception is not active on this stable node",
                 }
-                .build()
-            })?;
-        let exception_binding = read_abi_value::<ExceptionHandleBindingV1>(
-            &exception_binding,
-            "administrative exception binding",
-        )?;
-        ensure!(
-            exception_binding.state == ExceptionBindingStateV1::Active
-                && exception_binding.runtime_state_key.node_id == self.node_id,
-            AuthorizationSnafu {
-                reason: "administrative slot exception is not active on this stable node",
-            }
-        );
+            );
+        }
         let intent_sha256 = administrative_slot_intent_sha256(&key, &slot);
         let argument_keys = administrative_argument_keys(slot.proof_id, &slot.expected_argv)?;
         let existing = host
@@ -763,30 +825,34 @@ fn validate_administrative_body(
     );
     expect_key(&mut decoder, 1)?;
     expect_map(&mut decoder, 16, "administrative exec body")?;
-    for key in 0..=2 {
-        expect_key(&mut decoder, key)?;
-        let _id = decode_id(&mut decoder, "administrative principal/cluster ID")?;
-    }
+    expect_key(&mut decoder, 0)?;
+    let authenticated_requester_principal_id =
+        decode_id(&mut decoder, "authenticated requester principal ID")?;
+    expect_key(&mut decoder, 1)?;
+    let authenticated_approver_principal_id =
+        decode_id(&mut decoder, "authenticated approver principal ID")?;
+    expect_key(&mut decoder, 2)?;
+    let cluster_uid = decode_id(&mut decoder, "cluster UID")?;
     expect_key(&mut decoder, 3)?;
-    let namespace = decode_bytes(&mut decoder, 1, 253, true, "namespace")?;
+    let namespace = decode_bytes(&mut decoder, 1, 253, true, "namespace")?.to_vec();
     ensure!(
-        std::str::from_utf8(namespace).is_ok(),
+        std::str::from_utf8(&namespace).is_ok(),
         AuthorizationSnafu {
             reason: "namespace is not UTF-8",
         }
     );
     expect_key(&mut decoder, 4)?;
-    let _pod_uid = decode_bytes(&mut decoder, 1, 64, true, "Pod UID")?;
+    let pod_uid = decode_bytes(&mut decoder, 1, 64, true, "Pod UID")?.to_vec();
     expect_key(&mut decoder, 5)?;
-    let container_name = decode_bytes(&mut decoder, 1, 253, true, "container name")?;
+    let container_name = decode_bytes(&mut decoder, 1, 253, true, "container name")?.to_vec();
     ensure!(
-        std::str::from_utf8(container_name).is_ok(),
+        std::str::from_utf8(&container_name).is_ok(),
         AuthorizationSnafu {
             reason: "container name is not UTF-8",
         }
     );
     expect_key(&mut decoder, 6)?;
-    let _container_id = decode_bytes(&mut decoder, 32, 128, true, "container ID")?;
+    let full_container_id = decode_bytes(&mut decoder, 32, 128, true, "container ID")?.to_vec();
     expect_key(&mut decoder, 7)?;
     let container_generation = decode_u64(&mut decoder)?;
     ensure!(
@@ -821,8 +887,9 @@ fn validate_administrative_body(
         }
     );
     expect_key(&mut decoder, 9)?;
+    let stream_flags = decode_u64(&mut decoder)?;
     ensure!(
-        decode_u64(&mut decoder)? <= 0x0f,
+        stream_flags <= 0x0f,
         AuthorizationSnafu {
             reason: "administrative stream flags contain unallocated bits",
         }
@@ -835,8 +902,9 @@ fn validate_administrative_body(
             reason: "approved role is not a PolicyLocalIdV1",
         }
     );
+    let approved_role_id = role.to_owned();
     expect_key(&mut decoder, 11)?;
-    validate_portable_profile_generation(&mut decoder)?;
+    let profile = validate_portable_profile_generation(&mut decoder)?;
     expect_key(&mut decoder, 12)?;
     let target_node_id = decode_id(&mut decoder, "target node ID")?;
     expect_key(&mut decoder, 13)?;
@@ -856,7 +924,7 @@ fn validate_administrative_body(
     expect_key(&mut decoder, 15)?;
     let approved_argv = BoundedAdministrativeArgvV1::from_arguments(&arguments)
         .ok_or_else(|| authorization_error("approved argv cannot be lowered to the BPF ABI"))?;
-    let resolved =
+    let resolved_executable =
         validate_resolved_executable(&mut decoder, arguments.first().copied().unwrap_or_default())?;
     ensure!(
         decoder.position() == body.len(),
@@ -865,37 +933,56 @@ fn validate_administrative_body(
         }
     );
     Ok(AdministrativeExecIdentityV1 {
-        target_node_id,
+        authenticated_requester_principal_id,
+        authenticated_approver_principal_id,
+        cluster_uid,
+        namespace,
+        pod_uid,
+        container_name,
+        full_container_id,
         container_generation,
         approved_argv,
-        resolved_mount_id: resolved.mount_id,
-        resolved_inode: resolved.inode,
-        resolved_inode_generation: resolved.inode_generation,
+        stream_flags: u8::try_from(stream_flags).map_err(|error| {
+            authorization_error(format!("administrative stream flags exceed u8: {error}"))
+        })?,
+        approved_role_id,
+        profile,
+        target_node_id,
+        resolved_executable,
     })
 }
 
-fn validate_portable_profile_generation(decoder: &mut Decoder<'_>) -> Result<()> {
+fn validate_portable_profile_generation(
+    decoder: &mut Decoder<'_>,
+) -> Result<PortableProfileGenerationIdentityV1> {
     expect_map(decoder, 3, "portable profile generation")?;
     expect_key(decoder, 0)?;
-    let _profile_id = decode_id(decoder, "portable profile ID")?;
+    let profile_id = decode_id(decoder, "portable profile ID")?;
     expect_key(decoder, 1)?;
+    let owner_generation = decode_u64(decoder)?;
     ensure!(
-        decode_u64(decoder)? > 0,
+        owner_generation > 0,
         AuthorizationSnafu {
             reason: "portable profile owner generation is zero",
         }
     );
     expect_key(decoder, 2)?;
-    validate_digest(decoder, "compiled profile artifact digest")
+    let artifact_sha256 = decode_digest(decoder, "compiled profile artifact digest")?;
+    Ok(PortableProfileGenerationIdentityV1 {
+        profile_id,
+        owner_generation,
+        artifact_sha256,
+    })
 }
 
 fn validate_resolved_executable(
     decoder: &mut Decoder<'_>,
     command: &[u8],
-) -> Result<ResolvedExecutableObjectV1> {
+) -> Result<ResolvedAdministrativeExecutableIdentityV1> {
     expect_map(decoder, 8, "resolved administrative executable")?;
     expect_key(decoder, 0)?;
-    let requested_name = decode_bytes(decoder, 1, 4096, true, "requested executable name")?;
+    let requested_name =
+        decode_bytes(decoder, 1, 4096, true, "requested executable name")?.to_vec();
     ensure!(
         requested_name == command,
         AuthorizationSnafu {
@@ -903,30 +990,34 @@ fn validate_resolved_executable(
         }
     );
     expect_key(decoder, 1)?;
+    let resolution_mode = decode_u64(decoder)?;
     ensure!(
-        (1..=3).contains(&decode_u64(decoder)?),
+        (1..=3).contains(&resolution_mode),
         AuthorizationSnafu {
             reason: "executable resolution mode is unallocated",
         }
     );
     expect_key(decoder, 2)?;
-    let resolved = decode_bytes(decoder, 1, 4096, true, "resolved executable path")?;
+    let resolved_display_path =
+        decode_bytes(decoder, 1, 4096, true, "resolved executable path")?.to_vec();
     ensure!(
-        resolved.first() == Some(&b'/'),
+        resolved_display_path.first() == Some(&b'/'),
         AuthorizationSnafu {
             reason: "resolved executable path is not absolute",
         }
     );
     expect_key(decoder, 3)?;
-    let working = decode_bytes(decoder, 1, 4096, true, "container working directory")?;
+    let container_working_directory =
+        decode_bytes(decoder, 1, 4096, true, "container working directory")?.to_vec();
     ensure!(
-        working.first() == Some(&b'/'),
+        container_working_directory.first() == Some(&b'/'),
         AuthorizationSnafu {
             reason: "container working directory is not absolute",
         }
     );
     expect_key(decoder, 4)?;
     let path_count = expect_array(decoder, 0, 64, "effective PATH entries")?;
+    let mut effective_path_entries = Vec::with_capacity(path_count as usize);
     for _ in 0..path_count {
         let path = decode_bytes(decoder, 1, 4096, true, "effective PATH entry")?;
         ensure!(
@@ -935,6 +1026,7 @@ fn validate_resolved_executable(
                 reason: "effective PATH entry is not absolute",
             }
         );
+        effective_path_entries.push(path.to_vec());
     }
     expect_key(decoder, 5)?;
     let mount_namespace = decode_id(decoder, "target mount namespace ID")?;
@@ -947,14 +1039,27 @@ fn validate_resolved_executable(
         }
     );
     expect_key(decoder, 7)?;
-    validate_file_object(decoder, mount_namespace, mount_topology_generation)
+    let executable_object =
+        validate_file_object(decoder, mount_namespace, mount_topology_generation)?;
+    Ok(ResolvedAdministrativeExecutableIdentityV1 {
+        requested_name,
+        resolution_mode: u8::try_from(resolution_mode).map_err(|error| {
+            authorization_error(format!("executable resolution mode exceeds u8: {error}"))
+        })?,
+        resolved_display_path,
+        container_working_directory,
+        effective_path_entries,
+        target_mount_namespace_id: mount_namespace,
+        target_mount_topology_generation: mount_topology_generation,
+        executable_object,
+    })
 }
 
 fn validate_file_object(
     decoder: &mut Decoder<'_>,
     expected_mount_namespace: Id128V1,
     expected_mount_topology_generation: u64,
-) -> Result<ResolvedExecutableObjectV1> {
+) -> Result<AdministrativeFileObjectIdentityV1> {
     expect_map(decoder, 10, "file-object identity")?;
     expect_key(decoder, 0)?;
     let mount_namespace = decode_id(decoder, "file-object mount namespace ID")?;
@@ -974,7 +1079,7 @@ fn validate_file_object(
         ))
     })?;
     expect_key(decoder, 3)?;
-    let _filesystem_instance_id = decode_id(decoder, "filesystem instance ID")?;
+    let filesystem_instance_id = decode_id(decoder, "filesystem instance ID")?;
     expect_key(decoder, 4)?;
     let inode = decode_u64(decoder)?;
     expect_key(decoder, 5)?;
@@ -990,26 +1095,36 @@ fn validate_file_object(
         }
     );
     expect_key(decoder, 6)?;
-    let _exact_live_object_id = decode_id(decoder, "exact live object ID")?;
+    let exact_live_object_id = decode_id(decoder, "exact live object ID")?;
     expect_key(decoder, 7)?;
+    let object_kind = decode_u64(decoder)?;
     ensure!(
-        (1..=12).contains(&decode_u64(decoder)?),
+        (1..=12).contains(&object_kind),
         AuthorizationSnafu {
             reason: "executable object kind is unknown or unallocated",
         }
     );
     expect_key(decoder, 8)?;
-    let _backing_identity = decode_id(decoder, "backing object or volume identity")?;
+    let backing_identity = decode_id(decoder, "backing object or volume identity")?;
     expect_key(decoder, 9)?;
-    let _live_interval_id = decode_id(decoder, "file-object live interval ID")?;
-    Ok(ResolvedExecutableObjectV1 {
+    let live_interval_id = decode_id(decoder, "file-object live interval ID")?;
+    Ok(AdministrativeFileObjectIdentityV1 {
+        mount_namespace_id: mount_namespace,
+        mount_topology_generation,
         mount_id,
+        filesystem_instance_id,
         inode,
         inode_generation,
+        exact_live_object_id,
+        object_kind: u8::try_from(object_kind).map_err(|error| {
+            authorization_error(format!("executable object kind exceeds u8: {error}"))
+        })?,
+        backing_identity,
+        live_interval_id,
     })
 }
 
-fn validate_digest(decoder: &mut Decoder<'_>, name: &str) -> Result<()> {
+fn decode_digest(decoder: &mut Decoder<'_>, name: &str) -> Result<[u8; 32]> {
     expect_map(decoder, 2, name)?;
     expect_key(decoder, 0)?;
     ensure!(
@@ -1019,8 +1134,10 @@ fn validate_digest(decoder: &mut Decoder<'_>, name: &str) -> Result<()> {
         }
     );
     expect_key(decoder, 1)?;
-    let _sha256 = decode_bytes(decoder, 32, 32, false, name)?;
-    Ok(())
+    let sha256 = decode_bytes(decoder, 32, 32, false, name)?;
+    sha256.try_into().map_err(|error| {
+        authorization_error(format!("{name} has the wrong SHA-256 width: {error:?}"))
+    })
 }
 
 fn validate_canonical_cbor(bytes: &[u8]) -> Result<()> {
@@ -1626,12 +1743,87 @@ mod tests {
         let body = administrative_body(b"bash")?;
         let decoded = validate_administrative_body(ADMINISTRATIVE_EXEC_KIND, &body, &[id(1)])?;
         assert_eq!(decoded.target_node_id, id(32));
+        assert_eq!(decoded.authenticated_requester_principal_id, id(20));
+        assert_eq!(decoded.authenticated_approver_principal_id, id(21));
+        assert_eq!(decoded.cluster_uid, id(22));
+        assert_eq!(decoded.namespace, b"default");
+        assert_eq!(decoded.pod_uid, b"pod-uid");
+        assert_eq!(decoded.container_name, b"worker");
+        assert_eq!(decoded.full_container_id, vec![b'c'; 32]);
         assert_eq!(decoded.container_generation, 1);
         assert_eq!(decoded.approved_argv.argument_count, 1);
         assert_eq!(&decoded.approved_argv.argument_bytes[..4], b"bash");
-        assert_eq!(decoded.resolved_mount_id, 42);
-        assert_eq!(decoded.resolved_inode, 100);
-        assert_eq!(decoded.resolved_inode_generation, 2);
+        assert_eq!(decoded.stream_flags, 2);
+        assert_eq!(decoded.approved_role_id, "admin.exec");
+        assert_eq!(decoded.profile.profile_id, id(31));
+        assert_eq!(decoded.profile.owner_generation, 1);
+        assert_eq!(decoded.profile.artifact_sha256, [9; 32]);
+        assert_eq!(decoded.resolved_executable.requested_name, b"bash");
+        assert_eq!(decoded.resolved_executable.resolution_mode, 3);
+        assert_eq!(
+            decoded.resolved_executable.resolved_display_path,
+            b"/usr/bin/bash"
+        );
+        assert_eq!(
+            decoded.resolved_executable.container_working_directory,
+            b"/workspace"
+        );
+        assert_eq!(
+            decoded.resolved_executable.effective_path_entries,
+            [b"/usr/local/bin".to_vec(), b"/usr/bin".to_vec()]
+        );
+        assert_eq!(
+            decoded
+                .resolved_executable
+                .executable_object
+                .mount_namespace_id,
+            id(30)
+        );
+        assert_eq!(
+            decoded
+                .resolved_executable
+                .executable_object
+                .mount_topology_generation,
+            1
+        );
+        assert_eq!(decoded.resolved_executable.executable_object.mount_id, 42);
+        assert_eq!(decoded.resolved_executable.executable_object.inode, 100);
+        assert_eq!(
+            decoded
+                .resolved_executable
+                .executable_object
+                .inode_generation,
+            2
+        );
+        assert_eq!(
+            decoded
+                .resolved_executable
+                .executable_object
+                .filesystem_instance_id,
+            id(33)
+        );
+        assert_eq!(
+            decoded
+                .resolved_executable
+                .executable_object
+                .exact_live_object_id,
+            id(34)
+        );
+        assert_eq!(decoded.resolved_executable.executable_object.object_kind, 1);
+        assert_eq!(
+            decoded
+                .resolved_executable
+                .executable_object
+                .backing_identity,
+            id(35)
+        );
+        assert_eq!(
+            decoded
+                .resolved_executable
+                .executable_object
+                .live_interval_id,
+            id(36)
+        );
         Ok(())
     }
 

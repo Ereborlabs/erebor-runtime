@@ -7,6 +7,7 @@ pub use ipc::*;
 pub use path::*;
 
 pub const MAX_NESTED_EFFECT_ATTEMPTS_V1: usize = 4;
+pub const MAX_IO_URING_ENTRIES_V1: u32 = 4_096;
 
 #[repr(u8)]
 #[derive(
@@ -116,6 +117,11 @@ pub enum KernelEffectOperationV1 {
     Bpf = 24,
     Create = 25,
     Setattr = 26,
+    IoUringSetup = 27,
+    IoUringRegister = 28,
+    IoUringSqpoll = 29,
+    IoUringOverrideCreds = 30,
+    IoUringCommand = 31,
 }
 
 #[repr(u8)]
@@ -194,6 +200,7 @@ pub struct EffectDecisionKeyV1 {
     zerocopy::Immutable,
     zerocopy::IntoBytes,
     zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
 )]
 pub struct PhysicalDecisionV1 {
     pub decision: PhysicalDecisionKindV1,
@@ -202,6 +209,53 @@ pub struct PhysicalDecisionV1 {
     pub evidence_class_id: u32,
     pub transition_id: u32,
     pub exception_numeric_handle: u32,
+}
+
+pub const MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1: usize = 72;
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum PolicyActivationProbeMapKindV1 {
+    #[default]
+    Unknown = 0,
+    EffectDecision = 1,
+    EffectDefault = 2,
+    IpcRelationship = 3,
+    DeviceEffect = 4,
+    ProcessControl = 5,
+    AdministrativeSlotCancel = 6,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct PolicyActivationProbeV1 {
+    pub map_kind: PolicyActivationProbeMapKindV1,
+    pub reserved: [u8; 7],
+    pub key_size: u32,
+    pub reserved_alignment: u32,
+    pub key: [u8; MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1],
+    pub expected: PhysicalDecisionV1,
 }
 
 #[repr(C)]
@@ -546,6 +600,260 @@ pub struct TaskEffectAttemptStateV1 {
     pub reserved: [u8; 5],
 }
 
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum IoUringSetupStateKindV1 {
+    #[default]
+    Inactive = 0,
+    Prepared = 1,
+    Authorized = 2,
+    Invalid = 3,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum IoUringRestrictionStateV1 {
+    #[default]
+    Unknown = 0,
+    None = 1,
+    ExactReadWrite = 2,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum IoUringRingStateKindV1 {
+    #[default]
+    Unknown = 0,
+    Disabled = 1,
+    Restricted = 2,
+    Active = 3,
+    Corrupt = 4,
+    Closed = 5,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum IoUringRequestStateKindV1 {
+    #[default]
+    Unknown = 0,
+    Submitted = 1,
+    Completed = 2,
+    Corrupt = 3,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum IoUringExecutionStateKindV1 {
+    #[default]
+    Inactive = 0,
+    Active = 1,
+    FailClosed = 2,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct IoUringSetupStateV1 {
+    pub task_cookie: u64,
+    pub setup_attempt_sequence: u64,
+    pub entries: u32,
+    pub flags: u32,
+    pub state: IoUringSetupStateKindV1,
+    pub reserved: [u8; 7],
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct IoUringActorSnapshotV1 {
+    pub node_boot_id: Id128V1,
+    pub process_lineage_id: Id128V1,
+    pub process_instance_id: Id128V1,
+    pub process_state_id: Id128V1,
+    pub entry_instance_id: Id128V1,
+    pub authority_domain_id: Id128V1,
+    pub binding_id: Id128V1,
+    pub binding_nonce: Id128V1,
+    pub execution_set_id: Id128V1,
+    pub profile_id: Id128V1,
+    pub task_cookie: u64,
+    pub label_epoch: u64,
+    pub profile_generation_ref_id: u64,
+    pub root_cgroup_id: u64,
+    pub container_generation: u64,
+    pub lifecycle_generation: u64,
+    pub process_transition_version: u64,
+    pub active_role_id: u32,
+    pub process_state_vector_id: u32,
+    pub entry_kind: u16,
+    pub binding_lifecycle_state: BindingLifecycleStateV1,
+    pub reserved: [u8; 5],
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct IoUringRingStateV1 {
+    pub owner: IoUringActorSnapshotV1,
+    pub binding: ExecutionSetBindingStateV1,
+    pub ring_id: Id128V1,
+    pub context_cookie: u64,
+    pub ring_generation: u64,
+    pub next_submission_sequence: u64,
+    pub transition_version: u64,
+    pub outstanding_requests: u64,
+    pub sq_entries: u32,
+    pub cq_entries: u32,
+    pub setup_flags: u32,
+    pub state: IoUringRingStateKindV1,
+    pub restriction_state: IoUringRestrictionStateV1,
+    pub reserved: [u8; 2],
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct IoUringRequestStateV1 {
+    pub actor: IoUringActorSnapshotV1,
+    pub ring_id: Id128V1,
+    pub context_cookie: u64,
+    pub request_cookie: u64,
+    pub ring_generation: u64,
+    pub submission_sequence: u64,
+    pub user_data: u64,
+    pub file_offset: i64,
+    pub buffer_address: u64,
+    pub file_cookie: u64,
+    pub transition_version: u64,
+    pub byte_length: u32,
+    pub sqe_index: u32,
+    pub request_flags: u32,
+    pub rw_flags: u32,
+    pub opcode: u16,
+    pub state: IoUringRequestStateKindV1,
+    pub reserved: [u8; 5],
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct IoUringExecutionStateV1 {
+    pub ring_id: Id128V1,
+    pub context_cookie: u64,
+    pub request_cookie: u64,
+    pub submission_sequence: u64,
+    pub user_data: u64,
+    pub executor_pid_tgid: u64,
+    pub opcode: u16,
+    pub state: IoUringExecutionStateKindV1,
+    pub reserved: [u8; 5],
+}
+
 #[repr(C)]
 #[derive(
     Clone,
@@ -653,6 +961,8 @@ pub enum PolicyGenerationStateV1 {
     ReadBack = 2,
     Active = 3,
     Rejected = 4,
+    Retiring = 5,
+    Tombstoned = 6,
 }
 
 #[repr(u8)]
@@ -856,6 +1166,20 @@ pub struct EffectObservationV1 {
     pub target_process_state_vector_id: u32,
     pub operation_argument: u32,
     pub reserved_process_control: [u8; 4],
+    pub io_uring_ring_id: Id128V1,
+    pub io_uring_ring_generation: u64,
+    pub io_uring_submission_sequence: u64,
+    pub io_uring_user_data: u64,
+    pub io_uring_file_offset: i64,
+    pub io_uring_buffer_address: u64,
+    pub io_uring_file_cookie: u64,
+    pub io_uring_executor_pid_tgid: u64,
+    pub io_uring_byte_length: u32,
+    pub io_uring_sqe_index: u32,
+    pub io_uring_request_flags: u32,
+    pub io_uring_rw_flags: u32,
+    pub io_uring_opcode: u16,
+    pub reserved_io_uring: [u8; 6],
 }
 
 #[repr(C)]
@@ -924,10 +1248,14 @@ mod tests {
         ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
         ExceptionRuntimeStateV1, ExceptionUseIdentityKindV1, ExceptionUseIdentityV1,
         ExceptionUseReceiptKeyV1, ExceptionUseReceiptV1, FileOpenEventV1, FileOpenTargetV1,
-        Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1, PhysicalDecisionKindV1,
-        PhysicalDecisionV1, PolicyGenerationModeV1, ProcessControlRuleKeyV1,
-        ProfileGenerationDescriptorV1, TaskEffectAttemptFrameStateV1, TaskEffectAttemptFrameV1,
-        TaskEffectAttemptStateKindV1, TaskEffectAttemptStateV1, TaskLabelCandidateV1,
+        Id128V1, IoUringActorSnapshotV1, IoUringExecutionStateKindV1, IoUringExecutionStateV1,
+        IoUringRequestStateKindV1, IoUringRequestStateV1, IoUringRestrictionStateV1,
+        IoUringRingStateKindV1, IoUringRingStateV1, IoUringSetupStateKindV1, IoUringSetupStateV1,
+        KernelEffectFamilyV1, KernelEffectOperationV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
+        PolicyActivationProbeMapKindV1, PolicyActivationProbeV1, PolicyGenerationModeV1,
+        ProcessControlRuleKeyV1, ProfileGenerationDescriptorV1, TaskEffectAttemptFrameStateV1,
+        TaskEffectAttemptFrameV1, TaskEffectAttemptStateKindV1, TaskEffectAttemptStateV1,
+        TaskLabelCandidateV1,
     };
 
     #[test]
@@ -939,6 +1267,11 @@ mod tests {
         assert_eq!(offset_of!(EffectDecisionKeyV1, binding_lifecycle_state), 44);
         assert_eq!(size_of::<PhysicalDecisionV1>(), 16);
         assert_eq!(align_of::<PhysicalDecisionV1>(), 4);
+        assert_eq!(size_of::<PolicyActivationProbeV1>(), 104);
+        assert_eq!(align_of::<PolicyActivationProbeV1>(), 4);
+        assert_eq!(offset_of!(PolicyActivationProbeV1, key), 16);
+        assert_eq!(offset_of!(PolicyActivationProbeV1, expected), 88);
+        assert_eq!(PolicyActivationProbeMapKindV1::EffectDecision as u8, 1);
         assert_eq!(size_of::<EffectDefaultKeyV1>(), 40);
         assert_eq!(size_of::<DeviceEffectKeyV1>(), 72);
         assert_eq!(size_of::<ProcessControlRuleKeyV1>(), 40);
@@ -978,9 +1311,21 @@ mod tests {
         assert_eq!(offset_of!(TaskEffectAttemptStateV1, frames), 24);
         assert_eq!(offset_of!(TaskEffectAttemptStateV1, depth), 120);
         assert_eq!(TaskEffectAttemptStateKindV1::OverflowFailClosed as u8, 2);
+        assert_eq!(KernelEffectOperationV1::IoUringSetup as u16, 27);
+        assert_eq!(KernelEffectOperationV1::IoUringCommand as u16, 31);
+        assert_eq!(size_of::<IoUringSetupStateV1>(), 32);
+        assert_eq!(size_of::<IoUringActorSnapshotV1>(), 232);
+        assert_eq!(size_of::<IoUringRingStateV1>(), 488);
+        assert_eq!(size_of::<IoUringRequestStateV1>(), 344);
+        assert_eq!(size_of::<IoUringExecutionStateV1>(), 64);
+        assert_eq!(IoUringSetupStateKindV1::Authorized as u8, 2);
+        assert_eq!(IoUringRestrictionStateV1::ExactReadWrite as u8, 2);
+        assert_eq!(IoUringRingStateKindV1::Active as u8, 3);
+        assert_eq!(IoUringRequestStateKindV1::Submitted as u8, 1);
+        assert_eq!(IoUringExecutionStateKindV1::FailClosed as u8, 2);
         assert_eq!(size_of::<ExactFileObjectKeyV1>(), 40);
         assert_eq!(size_of::<ExactObjectBindingV1>(), 32);
-        assert_eq!(size_of::<EffectObservationV1>(), 280);
+        assert_eq!(size_of::<EffectObservationV1>(), 376);
         assert_eq!(size_of::<EffectObservationHealthV1>(), 32);
         assert_eq!(offset_of!(EffectObservationV1, file_object), 120);
         assert_eq!(offset_of!(EffectObservationV1, kernel_result), 192);

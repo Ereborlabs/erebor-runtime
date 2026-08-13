@@ -312,7 +312,6 @@ static __noinline int resolved_identity_effect_gate(
         file_open_attempt =
             scratch->effect_gate_flags & EFFECT_GATE_FILE_OPEN_ATTEMPT_V1;
         scratch->effect_gate_flags = 0;
-        begin_effect_observation(scratch, effect_family, operation);
     }
     health = identity_health_record();
     task = bpf_get_current_task_btf();
@@ -451,8 +450,7 @@ static __noinline int resolved_identity_effect_gate(
     generation = bpf_map_lookup_elem(
         &profile_generation_descriptors,
         &snapshot->active_profile_generation_ref_id);
-    if (!generation ||
-        generation->state != policy_generation_state_v1_active ||
+    if (!generation_allows_existing_holder(generation) ||
         generation->label_epoch != config->label_epoch ||
         generation->profile_generation_ref_id !=
             snapshot->active_profile_generation_ref_id ||
@@ -518,6 +516,33 @@ static __noinline int resolved_identity_effect_gate(
                                  allow_exception, file_open_attempt);
 }
 
+static __noinline int dispatch_identity_effect_gate(
+    struct file *file, const struct path *path, __u16 effect_family,
+    __u16 operation, int ret)
+{
+    identity_runtime_config_v1 *config = identity_runtime_config();
+    struct identity_scratch_v1 *scratch;
+    io_uring_execution_state_v1 *io_uring_execution;
+
+    if (!config || !config->enabled)
+        return ret;
+    scratch = identity_scratch_record();
+    if (scratch)
+        begin_effect_observation(scratch, effect_family, operation);
+    io_uring_execution = bpf_task_storage_get(
+        &io_uring_execution_states, bpf_get_current_task_btf(), 0, 0);
+    if (io_uring_execution &&
+        io_uring_execution->state !=
+            io_uring_execution_state_kind_v1_inactive) {
+        if (scratch)
+            scratch->effect_gate_flags = 0;
+        return resolved_io_uring_effect_gate(
+            file, effect_family, operation, ret, scratch);
+    }
+    return resolved_identity_effect_gate(file, path, effect_family, operation,
+                                         ret);
+}
+
 static __noinline int identity_effect_gate(struct file *file,
                                            __u16 effect_family,
                                            __u16 operation, int ret)
@@ -528,7 +553,7 @@ static __noinline int identity_effect_gate(struct file *file,
         scratch->effect_gate_flags = 0;
     if (!ret)
         prepare_effect_identity();
-    return resolved_identity_effect_gate(file, NULL, effect_family, operation,
+    return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
                                          ret);
 }
 
@@ -541,7 +566,7 @@ static __noinline int identity_effect_gate_without_exception(
         scratch->effect_gate_flags = EFFECT_GATE_DENY_EXCEPTION_V1;
     if (!ret)
         prepare_effect_identity();
-    return resolved_identity_effect_gate(file, NULL, effect_family, operation,
+    return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
                                          ret);
 }
 
@@ -554,7 +579,7 @@ static __noinline int identity_file_open_effect_gate(
         scratch->effect_gate_flags = EFFECT_GATE_FILE_OPEN_ATTEMPT_V1;
     if (!ret)
         prepare_effect_identity();
-    return resolved_identity_effect_gate(file, NULL, effect_family, operation,
+    return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
                                          ret);
 }
 
@@ -567,7 +592,7 @@ static __noinline int identity_effect_actor_gate(
         scratch->effect_gate_flags = EFFECT_GATE_DEFER_DECISION_V1;
     if (!ret)
         prepare_effect_identity();
-    return resolved_identity_effect_gate(file, NULL, effect_family, operation,
+    return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
                                          ret);
 }
 
@@ -581,12 +606,39 @@ static __noinline int identity_path_effect_gate(const struct path *path,
         scratch->effect_gate_flags = 0;
     if (!ret)
         prepare_effect_identity();
-    return resolved_identity_effect_gate(NULL, path, effect_family, operation,
+    return dispatch_identity_effect_gate(NULL, path, effect_family, operation,
                                          ret);
 }
 
 #include "identity_device_process.bpf.h"
 #include "identity_ipc.bpf.h"
+
+static __noinline int identity_unqualified_effect_gate(
+    __u16 effect_family, __u16 operation, int ret)
+{
+    identity_runtime_config_v1 *config;
+    struct identity_scratch_v1 *scratch;
+    struct task_struct *task;
+    task_label_v1 *label;
+
+    ret = identity_effect_actor_gate(NULL, effect_family, operation, ret);
+    if (ret)
+        return ret;
+    config = identity_runtime_config();
+    if (!config || !config->enabled || !config->effect_policy_enabled)
+        return 0;
+    task = bpf_get_current_task_btf();
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    if (!label)
+        return 0;
+    scratch = identity_scratch_record();
+    if (!current_typed_effect_context(config, scratch, label))
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_corrupt_identity_or_generation);
+    return hard_effect_result(
+        config, scratch, effect_observation_reason_v1_unsupported_object);
+}
 
 static __always_inline int identity_dentry_effect_gate(
     const struct path *dir, struct dentry *dentry, __u16 operation, int ret)
@@ -693,9 +745,15 @@ SEC("lsm/file_permission")
 int BPF_PROG(erebor_identity_file_permission, struct file *file, int mask,
              int ret)
 {
+    io_uring_execution_state_v1 *io_uring_execution =
+        bpf_task_storage_get(&io_uring_execution_states,
+                             bpf_get_current_task_btf(), 0, 0);
     unsigned int flags = 0;
 
-    if (file_is_socket(file))
+    if ((!io_uring_execution ||
+         io_uring_execution->state ==
+             io_uring_execution_state_kind_v1_inactive) &&
+        file_is_socket(file))
         return ret;
     if (file && !BPF_CORE_READ_INTO(&flags, file, f_flags) &&
         (flags & __FMODE_EXEC)) {
@@ -734,15 +792,21 @@ int BPF_PROG(erebor_identity_mmap_file, struct file *file,
              unsigned long reqprot, unsigned long prot, unsigned long flags,
              int ret)
 {
+    int io_uring_result;
+
     /* Anonymous data mappings are not file effects. Only executable
      * anonymous memory crosses the code-authority boundary here. */
-    if (!file) {
+    if (!file || (flags & MAP_ANONYMOUS)) {
         if (!(prot & PROT_EXEC))
             return ret;
-        return identity_effect_gate(NULL, kernel_effect_family_v1_exec,
-                                    kernel_effect_operation_v1_mmap_exec,
-                                    ret);
+        return identity_unqualified_effect_gate(
+            kernel_effect_family_v1_exec,
+            kernel_effect_operation_v1_mmap_exec, ret);
     }
+    io_uring_result =
+        io_uring_file_mapping_gate(file, reqprot, prot, flags, ret);
+    if (io_uring_result != IO_URING_MAPPING_NOT_APPLICABLE_V1)
+        return io_uring_result;
     if (prot & PROT_READ)
         ret = identity_effect_gate(file, kernel_effect_family_v1_file,
                                    kernel_effect_operation_v1_mmap_read,
@@ -918,6 +982,15 @@ static __always_inline int mount_mutation_effect(__u16 operation, int ret)
 {
     ret = identity_effect_gate(NULL, kernel_effect_family_v1_mount, operation,
                                ret);
+    if (ret)
+        return ret;
+    return begin_mount_mutation();
+}
+
+SEC("lsm/sb_kern_mount")
+int BPF_PROG(erebor_identity_sb_kern_mount, const struct super_block *superblock,
+             int ret)
+{
     if (ret)
         return ret;
     return begin_mount_mutation();

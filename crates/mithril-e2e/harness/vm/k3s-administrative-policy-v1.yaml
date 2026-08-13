@@ -11,9 +11,9 @@ protected_universe:
   workload_selector_ids: [worker]
   protected_scope_ids: [33333333-3333-4333-8333-333333333333]
   execution_set_ids: [44444444-4444-4444-8444-444444444444]
-  role_ids: [converter, runtime-external]
-  entry_kind_ids: [CONTAINER_START, EXTERNAL_RUNTIME_UNKNOWN]
-  object_class_ids: [MANUAL_BENIGN, MANUAL_EXEC, MANUAL_SECRET]
+  role_ids: [converter, runtime-external, runtime-external-administrative]
+  entry_kind_ids: [APPROVED_ADMINISTRATIVE_EXEC, CONTAINER_START, EXTERNAL_RUNTIME_UNKNOWN]
+  object_class_ids: [MANUAL_EXEC_ALLOWED]
   provider_account_ids: []
 workload_selectors:
   - workload_selector_id: worker
@@ -26,34 +26,12 @@ workload_selectors:
     container_kinds: [APPLICATION]
     image_digests: []
 classifier_bindings:
-  - classifier_binding_id: manual-benign
-    object_class_id: MANUAL_BENIGN
+  - classifier_binding_id: administrative-executable
+    object_class_id: MANUAL_EXEC_ALLOWED
     selector:
       kind: FILESYSTEM_OBJECT
       workload_selector_ids: [worker]
-      mount_source_class_ids: [manual-source]
-      relative_component_bytes: []
-      filesystem_type_ids: []
-      required_object_type: REGULAR_FILE
-    required_capability_ids: [EXACT_FILE_OBJECT]
-    unknown_result: DENY
-  - classifier_binding_id: manual-secret
-    object_class_id: MANUAL_SECRET
-    selector:
-      kind: FILESYSTEM_OBJECT
-      workload_selector_ids: [worker]
-      mount_source_class_ids: [manual-source]
-      relative_component_bytes: []
-      filesystem_type_ids: []
-      required_object_type: REGULAR_FILE
-    required_capability_ids: [EXACT_FILE_OBJECT]
-    unknown_result: DENY
-  - classifier_binding_id: manual-exec
-    object_class_id: MANUAL_EXEC
-    selector:
-      kind: FILESYSTEM_OBJECT
-      workload_selector_ids: [worker]
-      mount_source_class_ids: [manual-source]
+      mount_source_class_ids: [host-path]
       relative_component_bytes: []
       filesystem_type_ids: []
       required_object_type: REGULAR_FILE
@@ -69,6 +47,11 @@ roles:
     maximum_native_depth: 1
     default_process_state_id: base
     permitted_entry_kinds: [EXTERNAL_RUNTIME_UNKNOWN]
+    description_artifact_digest: null
+  - role_id: runtime-external-administrative
+    maximum_native_depth: 1
+    default_process_state_id: base
+    permitted_entry_kinds: [APPROVED_ADMINISTRATIVE_EXEC]
     description_artifact_digest: null
 entry_role_assignments:
   - assignment_id: initial-worker
@@ -93,6 +76,17 @@ entry_role_assignments:
     resulting_role_id: runtime-external
     on_missing_or_unequal_ambiguity: RESTRICT_EXTERNAL
     unknown_restricted_role_id: runtime-external
+  - assignment_id: approved-administrative-exec
+    workload_selector_ids: [worker]
+    entry_kinds: [APPROVED_ADMINISTRATIVE_EXEC]
+    container_kinds: [APPLICATION]
+    immutable_definition_digests: []
+    accepted_classifications: [APPROVED_ADMINISTRATIVE_NEXT_MATCH]
+    required_purpose_source_capability_id: null
+    required_administrative_exec_approval: true
+    resulting_role_id: runtime-external-administrative
+    on_missing_or_unequal_ambiguity: DENY_PROTECTED_EFFECTS
+    unknown_restricted_role_id: null
 native_transition_rules: []
 state_bit_definitions: []
 process_state_definitions:
@@ -101,13 +95,7 @@ process_state_definitions:
 native_authority_state_rules: []
 ipc_relationship_rules: []
 unmatched_ipc_disposition: DENY
-effect_family_defaults:
-  - role_ids: [converter, runtime-external]
-    effect_family: PRIVILEGE
-    operations: [IO_URING_SETUP]
-    requested_disposition: ALLOW
-    errno: null
-    finding: null
+effect_family_defaults: []
 authority_behavior_rules: []
 correlation_package_bindings: []
 default_postures:
@@ -143,7 +131,7 @@ response_bindings: []
 exceptions: []
 rules:
   - schema_version: 1
-    rule_id: allow-manual-benign-read
+    rule_id: allow-administrative-executable-file
     enabled: true
     priority: 0
     evaluation_stage: LOCAL_PRE_EFFECT
@@ -158,10 +146,10 @@ rules:
         required_process_state_ids: [base]
         forbidden_process_state_ids: []
       effect_families: [FILE]
-      operation_ids: [MMAP_READ, OPEN_READ, READ]
+      operation_ids: [MMAP_READ, MMAP_WRITE, OPEN_READ, READ]
       object:
-        kind: OBJECT_CLASSES
-        object_class_ids: [MANUAL_BENIGN]
+        kind: EXACT_OBJECT_KEYS
+        exact_object_key_ids: [12]
       binding_lifecycle_states: [ACTIVE]
       required_proof:
         source_authority: [KERNEL_DECISION]
@@ -185,49 +173,7 @@ rules:
     valid_from_utc_ns: null
     valid_until_utc_ns: null
   - schema_version: 1
-    rule_id: allow-manual-exec-read
-    enabled: true
-    priority: 0
-    evaluation_stage: LOCAL_PRE_EFFECT
-    match:
-      kind: LOCAL_PRE_EFFECT
-      subject:
-        workload_selector_ids: [worker]
-        protected_scope_ids: [33333333-3333-4333-8333-333333333333]
-        execution_set_ids: [44444444-4444-4444-8444-444444444444]
-        entry_kind_ids: [EXTERNAL_RUNTIME_UNKNOWN]
-        role_ids: [runtime-external]
-        required_process_state_ids: [base]
-        forbidden_process_state_ids: []
-      effect_families: [FILE]
-      operation_ids: [OPEN_READ, READ]
-      object:
-        kind: OBJECT_CLASSES
-        object_class_ids: [MANUAL_EXEC]
-      binding_lifecycle_states: [ACTIVE]
-      required_proof:
-        source_authority: [KERNEL_DECISION]
-        local_subject_binding: [EXACT_TASK]
-        remote_subject_binding: []
-        operation_result_authority: [PRE_EFFECT_DECISION]
-        temporal_coverage: [COMPLETE]
-        integrity: [LOCAL_ATTESTED]
-    requested_disposition: ALLOW
-    errno: null
-    finding: null
-    response_binding_ids: []
-    fallback_by_condition: []
-    budgets:
-      rate_limits: []
-      concurrency_limits: []
-      maximum_lifetime: null
-      automatic_response_limit: null
-    overrides_rule_ids: []
-    exception_ids: []
-    valid_from_utc_ns: null
-    valid_until_utc_ns: null
-  - schema_version: 1
-    rule_id: deny-manual-exec
+    rule_id: allow-administrative-executable-image
     enabled: true
     priority: 0
     evaluation_stage: LOCAL_PRE_EFFECT
@@ -242,10 +188,10 @@ rules:
         required_process_state_ids: [base]
         forbidden_process_state_ids: []
       effect_families: [EXEC]
-      operation_ids: [EXECUTE]
+      operation_ids: [EXECUTE, MMAP_EXEC, MPROTECT]
       object:
-        kind: OBJECT_CLASSES
-        object_class_ids: [MANUAL_EXEC]
+        kind: EXACT_OBJECT_KEYS
+        exact_object_key_ids: [12]
       binding_lifecycle_states: [ACTIVE]
       required_proof:
         source_authority: [KERNEL_DECISION]
@@ -254,61 +200,9 @@ rules:
         operation_result_authority: [PRE_EFFECT_DECISION]
         temporal_coverage: [COMPLETE]
         integrity: [LOCAL_ATTESTED]
-    requested_disposition: DENY
-    errno: EACCES
-    finding:
-      reason_code: MANUAL_EXEC_DENY
-      severity: CRITICAL
-      route_ids: []
-      evidence_level: STANDARD
-      title_template_id: null
-    response_binding_ids: []
-    fallback_by_condition: []
-    budgets:
-      rate_limits: []
-      concurrency_limits: []
-      maximum_lifetime: null
-      automatic_response_limit: null
-    overrides_rule_ids: []
-    exception_ids: []
-    valid_from_utc_ns: null
-    valid_until_utc_ns: null
-  - schema_version: 1
-    rule_id: deny-manual-secret-open
-    enabled: true
-    priority: 0
-    evaluation_stage: LOCAL_PRE_EFFECT
-    match:
-      kind: LOCAL_PRE_EFFECT
-      subject:
-        workload_selector_ids: [worker]
-        protected_scope_ids: [33333333-3333-4333-8333-333333333333]
-        execution_set_ids: [44444444-4444-4444-8444-444444444444]
-        entry_kind_ids: [EXTERNAL_RUNTIME_UNKNOWN]
-        role_ids: [runtime-external]
-        required_process_state_ids: [base]
-        forbidden_process_state_ids: []
-      effect_families: [FILE]
-      operation_ids: [MMAP_READ, OPEN_READ, READ]
-      object:
-        kind: OBJECT_CLASSES
-        object_class_ids: [MANUAL_SECRET]
-      binding_lifecycle_states: [ACTIVE]
-      required_proof:
-        source_authority: [KERNEL_DECISION]
-        local_subject_binding: [EXACT_TASK]
-        remote_subject_binding: []
-        operation_result_authority: [PRE_EFFECT_DECISION]
-        temporal_coverage: [COMPLETE]
-        integrity: [LOCAL_ATTESTED]
-    requested_disposition: DENY
-    errno: EACCES
-    finding:
-      reason_code: MANUAL_SECRET_READ
-      severity: CRITICAL
-      route_ids: []
-      evidence_level: STANDARD
-      title_template_id: null
+    requested_disposition: ALLOW
+    errno: null
+    finding: null
     response_binding_ids: []
     fallback_by_condition: []
     budgets:
@@ -323,7 +217,7 @@ rules:
 source_coverage_health_rules: []
 rollout:
   rollout_generation: 1
-  desired_profile_mode: OBSERVE
+  desired_profile_mode: PROTECT
   cohort_selection: ALL_BOUND_EXECUTION_SETS
   explicit_execution_set_ids: []
   selector_hash_modulus: 1

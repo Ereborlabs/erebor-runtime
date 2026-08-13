@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{self, Read as _, Write as _};
 use std::net::TcpStream;
-use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+use std::os::fd::{AsFd as _, AsRawFd as _, FromRawFd as _, OwnedFd};
 use std::os::linux::net::SocketAddrExt as _;
 use std::os::unix::fs::{symlink, OpenOptionsExt as _, PermissionsExt as _};
 use std::os::unix::net::{SocketAddr, UnixStream};
@@ -79,6 +79,13 @@ enum ChildRequest {
         target: PathBuf,
         count: u32,
     },
+    PreparePropagationPeer {
+        shared_mount: PathBuf,
+        benign: PathBuf,
+        propagated_marker: PathBuf,
+    },
+    PropagationPeerOpen,
+    PropagationPeerHasMarker,
     Connect,
     PrepareHardClosed {
         truncate_path: PathBuf,
@@ -124,6 +131,9 @@ pub(super) enum PreparedOperation {
     BenignMmapRead,
     PassedSecretRead,
     PassedBenignRead,
+    IoUringSecretRead,
+    IoUringBenignRead,
+    IoUringSqpoll,
     ProcFdOpen,
     MoveMount,
     MountSetattr,
@@ -159,6 +169,7 @@ enum ChildResponse {
     Samples(SampledBatchOutcome),
     Prepared,
     PreparedProcess { pid: u32 },
+    Bool(bool),
     DescriptorTransfer(DescriptorTransferOutcome),
     Failed { reason: String },
     Exited,
@@ -178,6 +189,9 @@ pub(super) struct EffectPaths {
     pub(super) deleted_exec_target: PathBuf,
     pub(super) mount_target: PathBuf,
     pub(super) move_mount_target: PathBuf,
+    pub(super) propagation_source: PathBuf,
+    pub(super) propagation_target: PathBuf,
+    pub(super) propagation_marker: PathBuf,
     pub(super) mutation_root: PathBuf,
 }
 
@@ -433,6 +447,37 @@ impl EffectProcessFixture {
         }
     }
 
+    pub(super) fn prepare_propagation_peer(&mut self, paths: &EffectPaths) -> Result<u32> {
+        match self.request(&ChildRequest::PreparePropagationPeer {
+            shared_mount: paths.source.clone(),
+            benign: paths.benign.clone(),
+            propagated_marker: paths.propagation_marker.clone(),
+        })? {
+            ChildResponse::PreparedProcess { pid } => Ok(pid),
+            _ => Err(invalid_state(
+                "effect child returned the wrong propagation-peer response",
+            )),
+        }
+    }
+
+    pub(super) fn propagation_peer_open(&mut self) -> Result<IoOutcome> {
+        match self.request(&ChildRequest::PropagationPeerOpen)? {
+            ChildResponse::Outcome(outcome) => Ok(outcome),
+            _ => Err(invalid_state(
+                "effect child returned the wrong propagation-peer open response",
+            )),
+        }
+    }
+
+    pub(super) fn propagation_peer_has_marker(&mut self) -> Result<bool> {
+        match self.request(&ChildRequest::PropagationPeerHasMarker)? {
+            ChildResponse::Bool(value) => Ok(value),
+            _ => Err(invalid_state(
+                "effect child returned the wrong propagation-peer marker response",
+            )),
+        }
+    }
+
     pub(super) fn connect(&mut self) -> Result<IoOutcome> {
         match self.request(&ChildRequest::Connect)? {
             ChildResponse::Outcome(outcome) => Ok(outcome),
@@ -607,6 +652,7 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
     let mut prepared_write_race = None;
     let mut prepared_file = None;
     let mut prepared_hard_closed = None;
+    let mut propagation_peer = None;
     mailbox.publish(
         READY,
         &ChildResponse::Ready {
@@ -706,6 +752,32 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
                     false,
                 ),
             },
+            ChildRequest::PreparePropagationPeer {
+                shared_mount,
+                benign,
+                propagated_marker,
+            } => match PreparedPropagationPeer::new(&shared_mount, benign, propagated_marker) {
+                Ok(peer) => {
+                    let pid = peer.pid();
+                    propagation_peer = Some(peer);
+                    (Ok(ChildResponse::PreparedProcess { pid }), false)
+                }
+                Err(error) => (Err(error), false),
+            },
+            ChildRequest::PropagationPeerOpen => match propagation_peer.as_mut() {
+                Some(peer) => (peer.open().map(ChildResponse::Outcome), false),
+                None => (
+                    Err(invalid_state("propagation peer is not prepared")),
+                    false,
+                ),
+            },
+            ChildRequest::PropagationPeerHasMarker => match propagation_peer.as_mut() {
+                Some(peer) => (peer.has_marker().map(ChildResponse::Bool), false),
+                None => (
+                    Err(invalid_state("propagation peer is not prepared")),
+                    false,
+                ),
+            },
             ChildRequest::Connect => (Ok(ChildResponse::Outcome(connect_outcome())), false),
             ChildRequest::PrepareHardClosed {
                 truncate_path,
@@ -799,6 +871,7 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
             ),
             ChildRequest::Exit => {
                 prepared_hard_closed.take();
+                propagation_peer.take();
                 (Ok(ChildResponse::Exited), true)
             }
         };
@@ -810,6 +883,24 @@ pub fn run_effect_child(fixture_root: &Path, mailbox_path: &Path) -> Result<()> 
             return Ok(());
         }
     }
+}
+
+pub fn run_mount_setattr_child(namespace: &Path, path: &Path, read_only: bool) -> Result<()> {
+    let namespace = fs::File::open(namespace).context(IoSnafu { path: namespace })?;
+    rustix::thread::move_into_link_name_space(
+        namespace.as_fd(),
+        Some(rustix::thread::LinkNameSpaceType::Mount),
+    )
+    .map_err(io::Error::from)
+    .context(IoSnafu {
+        path: Path::new("mount namespace"),
+    })?;
+    if read_only {
+        fixture_syscalls::set_mount_read_only(path)
+    } else {
+        fixture_syscalls::set_mount_read_write(path)
+    }
+    .context(IoSnafu { path })
 }
 
 #[allow(deprecated)]
@@ -843,6 +934,9 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     let deleted_exec_target = root.join("deleted-exec-target");
     let mount_target = root.join("mount-target");
     let move_mount_target = root.join("move-mount-target");
+    let propagation_source = root.join("propagation-source");
+    let propagation_target = source.join("propagation-target");
+    let propagation_marker = propagation_target.join("propagated-marker");
     let setattr_target = root.join("setattr-target");
     let truncate_target = root.join("truncate-target");
     let unlink_target = root.join("unlink-target");
@@ -903,6 +997,19 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     fs::create_dir(&move_mount_target).context(IoSnafu {
         path: &move_mount_target,
     })?;
+    fs::create_dir(&propagation_source).context(IoSnafu {
+        path: &propagation_source,
+    })?;
+    fs::write(
+        propagation_source.join("propagated-marker"),
+        b"propagated\n",
+    )
+    .context(IoSnafu {
+        path: propagation_source.join("propagated-marker"),
+    })?;
+    fs::create_dir(&propagation_target).context(IoSnafu {
+        path: &propagation_target,
+    })?;
     rustix::mount::mount_bind(&source, &source)
         .map_err(std::io::Error::from)
         .context(IoSnafu { path: &source })?;
@@ -910,6 +1017,11 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
         .map_err(std::io::Error::from)
         .context(IoSnafu {
             path: &bind_directory,
+        })?;
+    rustix::mount::mount_bind(&mount_target, &mount_target)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            path: &mount_target,
         })?;
     Ok(EffectPaths {
         source,
@@ -924,6 +1036,9 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
         deleted_exec_target,
         mount_target,
         move_mount_target,
+        propagation_source,
+        propagation_target,
+        propagation_marker,
         mutation_root: root.to_path_buf(),
     })
 }
@@ -1218,6 +1333,125 @@ impl PreparedMountRace {
         }
         result.elapsed_ns = u64::try_from(start.elapsed().as_nanos()).unwrap_or(u64::MAX);
         Ok(result)
+    }
+}
+
+struct PreparedPropagationPeer {
+    process: libc::pid_t,
+    control: SharedMailbox,
+}
+
+impl PreparedPropagationPeer {
+    fn new(shared_mount: &Path, benign: PathBuf, propagated_marker: PathBuf) -> Result<Self> {
+        rustix::mount::mount_change(shared_mount, rustix::mount::MountPropagationFlags::SHARED)
+            .map_err(io::Error::from)
+            .context(IoSnafu { path: shared_mount })?;
+        let control_path = benign
+            .parent()
+            .unwrap_or_else(|| Path::new("/tmp"))
+            .join(".mithril-propagation-mailbox");
+        let control = SharedMailbox::create(&control_path)?;
+        let process = match fixture_syscalls::fork_process().context(IoSnafu {
+            path: Path::new("propagation peer fork"),
+        })? {
+            fixture_syscalls::ForkResult::Parent(process) => process,
+            fixture_syscalls::ForkResult::Child => {
+                let code =
+                    propagation_peer_loop(control, &benign, &propagated_marker).map_or(1, |()| 0);
+                fixture_syscalls::exit_process(code)
+            }
+        };
+        let mut peer = Self { process, control };
+        let ready = peer.exchange(b'r')?;
+        ensure!(
+            ready == 0,
+            InvalidInputSnafu {
+                path: Path::new("propagation peer"),
+                reason: "propagation peer did not enter its copied mount namespace",
+            }
+        );
+        Ok(peer)
+    }
+
+    fn pid(&self) -> u32 {
+        self.process as u32
+    }
+
+    fn open(&mut self) -> Result<IoOutcome> {
+        let errno = self.exchange(b'o')?;
+        Ok(IoOutcome {
+            allowed: errno == 0,
+            errno: (errno != 0).then_some(errno),
+        })
+    }
+
+    fn has_marker(&mut self) -> Result<bool> {
+        Ok(self.exchange(b'm')? == 0)
+    }
+
+    fn exchange(&mut self, command: u8) -> Result<i32> {
+        ensure!(
+            self.control.state() == EMPTY,
+            InvalidInputSnafu {
+                path: Path::new("propagation peer mailbox"),
+                reason: "propagation peer mailbox is not ready",
+            }
+        );
+        self.control.publish(REQUEST, &command)?;
+        let start = Instant::now();
+        while self.control.state() != RESPONSE {
+            ensure!(
+                start.elapsed() < CHILD_WAIT_LIMIT,
+                InvalidInputSnafu {
+                    path: Path::new("propagation peer mailbox"),
+                    reason: "timed out waiting for the propagation peer",
+                }
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+        let response = self.control.read()?;
+        self.control.reset();
+        Ok(response)
+    }
+}
+
+impl Drop for PreparedPropagationPeer {
+    fn drop(&mut self) {
+        let _result = self.exchange(b'x');
+        let _result = fixture_syscalls::wait_process(self.process);
+    }
+}
+
+fn propagation_peer_loop(
+    mut control: SharedMailbox,
+    benign: &Path,
+    propagated_marker: &Path,
+) -> io::Result<()> {
+    #[allow(deprecated)]
+    rustix::thread::unshare(rustix::thread::UnshareFlags::NEWNS).map_err(io::Error::from)?;
+    loop {
+        while control.state() != REQUEST {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let command = control
+            .read::<u8>()
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        let errno = match command {
+            b'r' => 0,
+            b'o' => open_outcome(benign).errno.unwrap_or_default(),
+            b'm' => fs::metadata(propagated_marker)
+                .err()
+                .and_then(|error| error.raw_os_error())
+                .unwrap_or_default(),
+            b'x' => 0,
+            _ => libc::EINVAL,
+        };
+        control
+            .publish(RESPONSE, &errno)
+            .map_err(|error| io::Error::other(error.to_string()))?;
+        if command == b'x' {
+            return Ok(());
+        }
     }
 }
 
@@ -1601,6 +1835,15 @@ impl PreparedOperations {
             PreparedOperation::BenignMmapRead => mmap_outcome(&self.benign_file),
             PreparedOperation::PassedSecretRead => read_outcome(&mut self.passed_secret_file),
             PreparedOperation::PassedBenignRead => read_outcome(&mut self.passed_benign_file),
+            PreparedOperation::IoUringSecretRead => io_outcome(
+                fixture_syscalls::io_uring_read_one(self.secret_file.as_raw_fd(), b'r'),
+            ),
+            PreparedOperation::IoUringBenignRead => io_outcome(
+                fixture_syscalls::io_uring_read_one(self.benign_file.as_raw_fd(), b'b'),
+            ),
+            PreparedOperation::IoUringSqpoll => {
+                io_outcome(fixture_syscalls::io_uring_sqpoll_setup())
+            }
             PreparedOperation::ProcFdOpen => open_outcome(&PathBuf::from(format!(
                 "/proc/self/fd/{}",
                 self.secret_file.as_raw_fd()
@@ -2292,7 +2535,7 @@ mod tests {
 
     #[test]
     fn ptmx_ioctl_requires_success_and_kernel_output() -> crate::Result<()> {
-        let ptmx_path = std::path::Path::new("/dev/pts/ptmx");
+        let ptmx_path = std::path::Path::new("/dev/ptmx");
         let ptmx = fs::OpenOptions::new()
             .read(true)
             .write(true)

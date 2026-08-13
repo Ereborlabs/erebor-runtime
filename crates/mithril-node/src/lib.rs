@@ -1,3 +1,4 @@
+mod administrative_exec;
 mod config;
 mod control;
 mod epoch;
@@ -11,17 +12,19 @@ mod policy;
 mod trust;
 
 pub use config::{
-    ContainerKindV1, ContainerRuntimeConfig, ExactDeviceConfig, ExactDeviceType,
-    ExactFileObjectConfig, InterceptorConfig, NodeConfig, NodeControlConfig, PolicyCandidateConfig,
-    RuntimeObservationConfig, WorkloadBindingConfig,
+    AdministrativeAuthorizationConfig, ContainerKindV1, ContainerRuntimeConfig, ExactDeviceConfig,
+    ExactDeviceType, ExactFileObjectConfig, InterceptorConfig, NodeConfig, NodeControlConfig,
+    PolicyCandidateConfig, RuntimeObservationConfig, WorkloadBindingConfig,
 };
-pub use control::{ControlConnection, NodeControlConnector};
+pub use control::{AdministrativeControlRequest, ControlConnection, NodeControlConnector};
 pub use error::{Error, Result};
 pub use exact_object::ExactFileObjectResolver;
 pub use identity::{
-    AuthorizationProofOwner, AuthorizationTargetV1, IssuerTrustV1, NativeIdentityInspector,
-    NativeSecurityStateOwner, NativeTaskSnapshotV1, PreparedAuthorizationProofV1,
-    ReconciliationReportV1, TrustBundleV1, WorkloadBindingOwner,
+    AdministrativeBindingTargetV1, AdministrativeExecIdentityV1,
+    AdministrativeFileObjectIdentityV1, AuthorizationProofOwner, AuthorizationTargetV1,
+    IssuerTrustV1, NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1,
+    PortableProfileGenerationIdentityV1, PreparedAuthorizationProofV1, ReconciliationReportV1,
+    ResolvedAdministrativeExecutableIdentityV1, TrustBundleV1, WorkloadBindingOwner,
 };
 pub use local::RuntimeObservationServer;
 pub use node::{NodeChassis, NodeReadinessV1};

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use mithril_control::{serve, ControlConfig};
+use mithril_control::{serve, serve_administrative_http, ControlConfig};
 
 #[derive(Parser)]
 #[command(about = "Run the private Mithril node control service")]
@@ -20,9 +20,36 @@ async fn main() {
 
 async fn run() -> mithril_control::Result<()> {
     let config = ControlConfig::load(&Cli::parse().config)?;
-    let (address, tls, control) = config.into_parts();
-    serve(address, &tls, control, async {
-        let _result = tokio::signal::ctrl_c().await;
-    })
-    .await
+    let (address, tls, control, administrative_exec) = config.into_parts();
+    if let Some(administrative_exec) = administrative_exec {
+        let shutdown = std::sync::Arc::new(tokio::sync::Notify::new());
+        let control_shutdown = shutdown.clone();
+        let administrative_shutdown = shutdown.clone();
+        let control_result = serve(address, &tls, control.clone(), async move {
+            control_shutdown.notified().await;
+        });
+        let administrative_result =
+            serve_administrative_http(administrative_exec, control, async move {
+                administrative_shutdown.notified().await;
+            });
+        tokio::select! {
+            result = control_result => {
+                shutdown.notify_waiters();
+                result
+            },
+            result = administrative_result => {
+                shutdown.notify_waiters();
+                result
+            },
+            _ = tokio::signal::ctrl_c() => {
+                shutdown.notify_waiters();
+                Ok(())
+            },
+        }
+    } else {
+        serve(address, &tls, control, async {
+            let _result = tokio::signal::ctrl_c().await;
+        })
+        .await
+    }
 }

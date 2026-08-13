@@ -135,6 +135,7 @@ impl PolicyCompiler {
         }
         validate_ids(document)?;
         validate_references(document)?;
+        validate_entry_assignments(document)?;
         validate_states(document)?;
         validate_supporting_definitions(document)?;
         validate_rules(document)?;
@@ -376,6 +377,11 @@ pub fn kernel_operation_id(operation: &str) -> Option<KernelEffectOperationV1> {
         "MOVE_MOUNT" => Some(KernelEffectOperationV1::MoveMount),
         "CAPABILITY" => Some(KernelEffectOperationV1::Capability),
         "BPF" => Some(KernelEffectOperationV1::Bpf),
+        "IO_URING_SETUP" => Some(KernelEffectOperationV1::IoUringSetup),
+        "IO_URING_REGISTER" => Some(KernelEffectOperationV1::IoUringRegister),
+        "IO_URING_SQPOLL" => Some(KernelEffectOperationV1::IoUringSqpoll),
+        "IO_URING_OVERRIDE_CREDS" => Some(KernelEffectOperationV1::IoUringOverrideCreds),
+        "IO_URING_COMMAND" => Some(KernelEffectOperationV1::IoUringCommand),
         _ => None,
     }
 }
@@ -962,6 +968,73 @@ fn validate_references(document: &PolicyDocumentV1) -> Result<()> {
     Ok(())
 }
 
+fn validate_entry_assignments(document: &PolicyDocumentV1) -> Result<()> {
+    let policy_id = document.profile_id();
+    for assignment in &document.entry_role_assignments {
+        let role = document
+            .roles
+            .iter()
+            .find(|role| role.role_id == assignment.resulting_role_id)
+            .ok_or_else(|| {
+                PolicyValidationSnafu {
+                    policy_id,
+                    code: "CFG_ROLE_REFERENCE",
+                    reason: format!("entry `{}` has an unknown role", assignment.assignment_id),
+                }
+                .build()
+            })?;
+        check(
+            policy_id,
+            !assignment.workload_selector_ids.is_empty()
+                && !assignment.entry_kinds.is_empty()
+                && !assignment.container_kinds.is_empty()
+                && !assignment.accepted_classifications.is_empty()
+                && ordered_unique(&assignment.workload_selector_ids)
+                && ordered_unique(&assignment.entry_kinds)
+                && ordered_unique(&assignment.container_kinds)
+                && ordered_unique(&assignment.immutable_definition_digests)
+                && ordered_unique(&assignment.accepted_classifications)
+                && assignment
+                    .entry_kinds
+                    .iter()
+                    .all(|kind| role.permitted_entry_kinds.contains(kind)),
+            "CFG_ENTRY_ASSIGNMENT",
+            &format!(
+                "entry `{}` must use nonempty ordered selectors and a role that permits every entry kind",
+                assignment.assignment_id
+            ),
+        )?;
+        let administrative_kind = assignment
+            .entry_kinds
+            .contains(&EntryKindV1::ApprovedAdministrativeExec);
+        let administrative_classification = assignment
+            .accepted_classifications
+            .contains(&super::source::RootClassificationV1::ApprovedAdministrativeNextMatch);
+        check(
+            policy_id,
+            if assignment.required_administrative_exec_approval
+                || administrative_kind
+                || administrative_classification
+            {
+                assignment.entry_kinds == [EntryKindV1::ApprovedAdministrativeExec]
+                    && assignment.accepted_classifications
+                        == [super::source::RootClassificationV1::ApprovedAdministrativeNextMatch]
+                    && assignment.required_administrative_exec_approval
+                    && assignment.required_purpose_source_capability_id.is_none()
+                    && assignment.unknown_restricted_role_id.is_none()
+            } else {
+                true
+            },
+            "CFG_ADMINISTRATIVE_ENTRY",
+            &format!(
+                "entry `{}` must bind administrative approval to only APPROVED_ADMINISTRATIVE_EXEC and APPROVED_ADMINISTRATIVE_NEXT_MATCH",
+                assignment.assignment_id
+            ),
+        )?;
+    }
+    Ok(())
+}
+
 fn validate_states(document: &PolicyDocumentV1) -> Result<()> {
     let policy_id = document.profile_id();
     let mut indices = BTreeSet::new();
@@ -1184,6 +1257,16 @@ fn validate_supporting_definitions(document: &PolicyDocumentV1) -> Result<()> {
                     .all(|operation| !matches!(operation.as_str(), "CAPABILITY" | "BPF")),
             "CFG_PRIVILEGE_WILDCARD",
             "generic CAPABILITY and BPF effect-family defaults are denial-only",
+        )?;
+        check(
+            policy_id,
+            default.requested_disposition == PolicyDispositionV1::Deny
+                || default
+                    .operations
+                    .iter()
+                    .all(|operation| !io_uring_denial_only_operation(operation)),
+            "CFG_IO_URING_UNQUALIFIED_AUTHORITY",
+            "io_uring register, SQPOLL, credential override, and command defaults are denial-only",
         )?;
         check(
             policy_id,
@@ -1931,6 +2014,19 @@ fn validate_rules(document: &PolicyDocumentV1) -> Result<()> {
             check(
                 policy_id,
                 rule.requested_disposition == PolicyDispositionV1::Deny
+                    || effect
+                        .operation_ids
+                        .iter()
+                        .all(|operation| !io_uring_denial_only_operation(operation)),
+                "CFG_IO_URING_UNQUALIFIED_AUTHORITY",
+                &format!(
+                    "rule `{}` uses unqualified io_uring authority; register, SQPOLL, credential override, and command operations are denial-only",
+                    rule.rule_id
+                ),
+            )?;
+            check(
+                policy_id,
+                rule.requested_disposition == PolicyDispositionV1::Deny
                     || !effect.effect_families.contains(&EffectFamilyV1::Exec)
                     || effect
                         .operation_ids
@@ -2275,6 +2371,14 @@ fn operation_belongs_to_family(family: EffectFamilyV1, operation: &str) -> bool 
         EffectFamilyV1::Device => operation == "IOCTL",
         EffectFamilyV1::Privilege => {
             matches!(operation, "CAPABILITY" | "BPF")
+                || matches!(
+                    operation,
+                    "IO_URING_SETUP"
+                        | "IO_URING_REGISTER"
+                        | "IO_URING_SQPOLL"
+                        | "IO_URING_OVERRIDE_CREDS"
+                        | "IO_URING_COMMAND"
+                )
                 || process_control_operation(operation).is_some()
         }
         EffectFamilyV1::Ipc => operation == "IPC_ACCESS",
@@ -2282,6 +2386,13 @@ fn operation_belongs_to_family(family: EffectFamilyV1, operation: &str) -> bool 
             matches!(operation, "MOUNT" | "UNMOUNT" | "PIVOT_ROOT" | "MOVE_MOUNT")
         }
     }
+}
+
+fn io_uring_denial_only_operation(operation: &str) -> bool {
+    matches!(
+        operation,
+        "IO_URING_REGISTER" | "IO_URING_SQPOLL" | "IO_URING_OVERRIDE_CREDS" | "IO_URING_COMMAND"
+    )
 }
 
 fn validate_role_reachability(document: &PolicyDocumentV1) -> Result<()> {

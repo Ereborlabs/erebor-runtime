@@ -1,20 +1,27 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt as _;
+use std::ffi::{OsStr, OsString};
+use std::mem::size_of;
+use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
+    ApprovedExecSlotStateV1, ApprovedExecSlotV1, AuthorityDomainStateV1,
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, CanonicalMountRootKeyV1,
     CanonicalMountRootV1, CanonicalPathComponentV1, EffectDecisionKeyV1, EffectDefaultKeyV1,
-    ExactFileObjectKeyV1, ExactObjectBindingStateV1, ExactObjectBindingV1, ExceptionBindingStateV1,
-    ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1,
-    ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1,
-    MountReconciliationProposalV1, MountSecurityViewStateV1, MountTopologyStateV1,
-    PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1, PathGraphTransitionV1,
-    PhysicalDecisionKindV1, PhysicalDecisionV1, PolicyGenerationModeV1, PolicyGenerationStateV1,
-    ProfileGenerationDescriptorV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
+    ExactExecutableCandidateV1, ExactFileObjectKeyV1, ExactObjectBindingStateV1,
+    ExactObjectBindingV1, ExceptionBindingStateV1, ExceptionHandleBindingKeyV1,
+    ExceptionHandleBindingV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
+    ExceptionRuntimeStateV1, ExecutionSetBindingStateV1, Id128V1, IoUringRequestStateV1,
+    IoUringRingStateV1, MountReconciliationProposalV1, MountSecurityViewStateV1,
+    MountTopologyStateV1, PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1,
+    PathGraphTransitionV1, PendingAdministrativeMatchV1, PendingExecV1, PhysicalDecisionKindV1,
+    PhysicalDecisionV1, PolicyActivationProbeMapKindV1, PolicyActivationProbeV1,
+    PolicyGenerationModeV1, PolicyGenerationStateV1, ProcessSecurityStateKindV1,
+    ProcessSecurityStateV1, ProfileGenerationDescriptorV1, ReferenceTombstoneStateV1,
+    TaskReferenceTombstoneV1, MAX_CANONICAL_COMPONENT_BYTES_V1,
+    MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use mithril_control::{
     kernel_operation_id, AntiRollbackStore, CanonicalPathGraphV1, CompiledPhysicalResultV1,
@@ -29,21 +36,53 @@ use uuid::Uuid;
 use zerocopy::{FromBytes as _, IntoBytes as _, KnownLayout, TryFromBytes};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, PolicySnafu};
-use crate::{ExactFileObjectConfig, NodeConfig, Result, WorkloadBindingConfig};
+use crate::identity::{
+    AdministrativeFileObjectIdentityV1, PortableProfileGenerationIdentityV1,
+    ResolvedAdministrativeExecutableIdentityV1,
+};
+use crate::{
+    AdministrativeBindingTargetV1, ExactFileObjectConfig, NodeConfig, Result, WorkloadBindingConfig,
+};
 
 mod device_process;
 mod exception_authority;
+mod generation_allocator;
 mod ipc;
 
 use self::device_process::{lower_typed_effect, TypedEffectContext};
 use self::exception_authority::ExceptionAuthorityOwner;
+use self::generation_allocator::GenerationHandleAllocator;
 use self::ipc::lower_ipc_relationships;
 
 pub struct NodePolicyGenerationOwner {
+    node_boot_id: Id128V1,
+    label_epoch: u64,
     mount_roots: Vec<MountRootReconciliation>,
     mount_view_handles: BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
     prevention_enabled: bool,
+    administrative_plans: Vec<AdministrativePolicyPlanV1>,
     exception_authority: Mutex<ExceptionAuthorityOwner>,
+}
+
+#[derive(Clone, Debug)]
+struct AdministrativePolicyPlanV1 {
+    binding_id: Id128V1,
+    approved_role_id: String,
+    approved_role_numeric_id: u32,
+    profile: PortableProfileGenerationIdentityV1,
+    profile_generation_ref_id: u64,
+    exception_numeric_handle: u32,
+    executable_object: ExactFileObjectConfig,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedAdministrativePolicyV1 {
+    pub approved_role_numeric_id: u32,
+    pub profile_generation_ref_id: u64,
+    pub exception_numeric_handle: u32,
+    pub profile: PortableProfileGenerationIdentityV1,
+    pub resolved_executable: ResolvedAdministrativeExecutableIdentityV1,
+    pub kernel_executable: ExactExecutableCandidateV1,
 }
 
 #[derive(Clone, Copy)]
@@ -64,10 +103,14 @@ struct StagedActivationTarget {
     desired: ExecutionSetBindingStateV1,
 }
 
+type GenerationRows = BTreeMap<Vec<u8>, Vec<u8>>;
+type PlannedGenerationRow<'a> = (&'static str, &'a GenerationRows);
+type ActivationDecisionRow<'a> = (PolicyActivationProbeMapKindV1, &'a GenerationRows);
+
 impl NodePolicyGenerationOwner {
     pub fn load_and_install(
         config: &NodeConfig,
-        host: &KernelHost,
+        host: &mut KernelHost,
         node_boot_id: Id128V1,
         label_epoch: u64,
     ) -> Result<Self> {
@@ -77,7 +120,7 @@ impl NodePolicyGenerationOwner {
     pub fn reload_and_install(
         self,
         config: &NodeConfig,
-        host: &KernelHost,
+        host: &mut KernelHost,
         node_boot_id: Id128V1,
         label_epoch: u64,
     ) -> Result<Self> {
@@ -92,7 +135,7 @@ impl NodePolicyGenerationOwner {
 
     fn install(
         config: &NodeConfig,
-        host: &KernelHost,
+        host: &mut KernelHost,
         node_boot_id: Id128V1,
         label_epoch: u64,
         mut retained_mount_views: BTreeMap<u32, crate::exact_object::ExactFileObjectView>,
@@ -194,6 +237,16 @@ impl NodePolicyGenerationOwner {
                 }
             }
         }
+        let mut generation_allocator = GenerationHandleAllocator::load(
+            config.state_directory.join("generation-handles-v1.json"),
+            host,
+            node_boot_id,
+            label_epoch,
+        )?;
+        for generation in generations.values() {
+            generation_allocator.reserve(&generation.descriptor)?;
+        }
+        preflight_policy_map_capacity(host, &generations, &activations)?;
         let mut exception_authority =
             ExceptionAuthorityOwner::load(&config.state_directory, node_id, node_boot_id)?;
         exception_authority.restore_receipts(host)?;
@@ -246,8 +299,10 @@ impl NodePolicyGenerationOwner {
             mount_view_is_retained.insert(root.mount_namespace_inode, is_retained);
             mount_view_handles.insert(root.mount_namespace_inode, view);
         }
+        install_global_mount_barrier(host, &mount_roots)?;
         for generation in generations.values() {
             generation.install(host, &mut exception_authority, now_utc_ns, now_boottime_ns)?;
+            generation.probe_staged_rows(host)?;
         }
         for (profile_id, activation) in &activations {
             activate_profile(
@@ -261,12 +316,20 @@ impl NodePolicyGenerationOwner {
             )?;
         }
         exception_authority.reconcile(host, now_utc_ns)?;
+        reconcile_generation_retirement(host, node_boot_id, label_epoch)?;
+        let administrative_plans = generations
+            .values()
+            .flat_map(|generation| generation.administrative_plans.iter().cloned())
+            .collect();
         let owner = Self {
+            node_boot_id,
+            label_epoch,
             mount_roots,
             mount_view_handles,
             prevention_enabled: generations
                 .values()
                 .any(|generation| generation.descriptor.mode == PolicyGenerationModeV1::Protect),
+            administrative_plans,
             exception_authority: Mutex::new(exception_authority),
         };
         owner.reconcile_mount_views(host)?;
@@ -276,6 +339,257 @@ impl NodePolicyGenerationOwner {
     #[must_use]
     pub const fn prevention_enabled(&self) -> bool {
         self.prevention_enabled
+    }
+
+    #[must_use]
+    pub(crate) fn administrative_enabled(&self) -> bool {
+        !self.administrative_plans.is_empty()
+    }
+
+    pub(crate) fn resolve_administrative_policy(
+        &self,
+        host: &KernelHost,
+        target: &AdministrativeBindingTargetV1,
+        requested_name: &[u8],
+        approved_role_id: &str,
+    ) -> Result<ResolvedAdministrativePolicyV1> {
+        ensure!(
+            (1..=4096).contains(&requested_name.len())
+                && !requested_name.contains(&0)
+                && !approved_role_id.is_empty(),
+            IdentityStateSnafu {
+                reason: "administrative command and role are not bounded",
+            }
+        );
+        let plans = self
+            .administrative_plans
+            .iter()
+            .filter(|plan| {
+                plan.binding_id == target.binding_id
+                    && plan.approved_role_id == approved_role_id
+                    && plan.profile.profile_id == target.profile_id
+                    && plan.profile_generation_ref_id == target.profile_generation_ref_id
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            !plans.is_empty(),
+            IdentityStateSnafu {
+                reason: "signed profile has no administrative plan for the exact target and role",
+            }
+        );
+        let mount_namespace_inode = plans[0].executable_object.mount_namespace_inode;
+        ensure!(
+            plans.iter().all(|plan| {
+                plan.executable_object.mount_namespace_inode == mount_namespace_inode
+            }),
+            IdentityStateSnafu {
+                reason: "administrative executable plans span unequal mount views",
+            }
+        );
+        let view = self
+            .mount_view_handles
+            .get(&mount_namespace_inode)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "administrative target has no retained mount view".to_owned(),
+                }
+                .build()
+            })?;
+        ensure!(
+            view.mount_namespace_inode()? == mount_namespace_inode,
+            IdentityStateSnafu {
+                reason: "administrative retained mount view changed identity",
+            }
+        );
+        let view_key = mount_namespace_inode.to_ne_bytes();
+        let view_state = mount_state(host, "mount_security_views", &view_key)?;
+        let global_key = 0_u32.to_ne_bytes();
+        let global_epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)?;
+        ensure!(
+            view_state.state == MountTopologyStateV1::Clean
+                && view_state.pending_mutations == 0
+                && view_state.topology_generation == global_epoch
+                && mount_epoch(host, &view_key)? == global_epoch
+                && mount_epoch_from(host, "mount_global_clean_epoch", &global_key)? == global_epoch
+                && mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? == 0,
+            IdentityStateSnafu {
+                reason: "administrative executable mount view is not globally clean",
+            }
+        );
+        let active = host
+            .lookup_map("active_profile_generations", target.profile_id.as_bytes())
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "administrative profile has no active generation".to_owned(),
+                }
+                .build()
+            })?;
+        ensure!(
+            u64::read_from_bytes(&active)
+                .is_ok_and(|generation| { generation == target.profile_generation_ref_id }),
+            IdentityStateSnafu {
+                reason: "administrative target profile generation is not active",
+            }
+        );
+        let requested = PathBuf::from(OsString::from_vec(requested_name.to_vec()));
+        let (resolution_mode, candidates) = if requested.is_absolute() {
+            (1, vec![requested])
+        } else if requested_name.contains(&b'/') {
+            (2, vec![target.working_directory.join(requested)])
+        } else {
+            (
+                3,
+                target
+                    .path_entries
+                    .iter()
+                    .map(|entry| entry.join(&requested))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let mut selected = None;
+        for path in candidates {
+            let Some(live) = view.try_inspect(&path)? else {
+                continue;
+            };
+            let is_regular_executable =
+                u32::from(live.mode) & 0o170_000 == 0o100_000 && u32::from(live.mode) & 0o111 != 0;
+            if !is_regular_executable && resolution_mode == 3 {
+                continue;
+            }
+            ensure!(
+                is_regular_executable,
+                IdentityStateSnafu {
+                    reason: "resolved administrative command is not a regular executable file",
+                }
+            );
+            let matching = plans
+                .iter()
+                .filter(|plan| live.matches(&plan.executable_object))
+                .collect::<Vec<_>>();
+            ensure!(
+                matching.len() == 1,
+                IdentityStateSnafu {
+                    reason: "resolved administrative command is absent from or ambiguous in the signed exact plans",
+                }
+            );
+            selected = Some((path, live, matching[0]));
+            break;
+        }
+        let (path, live, plan) = selected.ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "administrative command did not resolve in the target container view"
+                    .to_owned(),
+            }
+            .build()
+        })?;
+        ensure!(
+            live.mount_snapshot_digest_id == view_state.snapshot_digest_id,
+            IdentityStateSnafu {
+                reason: "administrative command resolution used a stale mount snapshot",
+            }
+        );
+        let mount_namespace_id = derived_id(
+            b"MITHRIL-MOUNT-NAMESPACE-V1\0",
+            &[
+                portable_id_bytes(self.node_boot_id),
+                self.label_epoch.to_be_bytes().to_vec(),
+                mount_namespace_inode.to_be_bytes().to_vec(),
+            ],
+        )?;
+        let filesystem_instance_id = derived_id(
+            b"MITHRIL-FILESYSTEM-INSTANCE-V1\0",
+            &[
+                portable_id_bytes(mount_namespace_id),
+                live.filesystem_device.to_be_bytes().to_vec(),
+            ],
+        )?;
+        let exact_live_object_id = derived_id(
+            b"MITHRIL-EXACT-LIVE-FILE-V1\0",
+            &[
+                portable_id_bytes(filesystem_instance_id),
+                live.mount_id.to_be_bytes().to_vec(),
+                live.inode.to_be_bytes().to_vec(),
+                plan.executable_object
+                    .inode_generation
+                    .to_be_bytes()
+                    .to_vec(),
+                global_epoch.to_be_bytes().to_vec(),
+            ],
+        )?;
+        let backing_identity = derived_id(
+            b"MITHRIL-ADMINISTRATIVE-EXECUTABLE-BACKING-V1\0",
+            &[
+                portable_id_bytes(plan.profile.profile_id),
+                plan.profile_generation_ref_id.to_be_bytes().to_vec(),
+                plan.executable_object
+                    .exact_object_key_id
+                    .to_be_bytes()
+                    .to_vec(),
+            ],
+        )?;
+        let live_interval_id = derived_id(
+            b"MITHRIL-ADMINISTRATIVE-FILE-INTERVAL-V1\0",
+            &[
+                portable_id_bytes(target.binding_nonce),
+                portable_id_bytes(exact_live_object_id),
+                target.container_generation.to_be_bytes().to_vec(),
+            ],
+        )?;
+        let resolved_display_path = path.as_os_str().as_bytes().to_vec();
+        let container_working_directory = target.working_directory.as_os_str().as_bytes().to_vec();
+        let effective_path_entries = target
+            .path_entries
+            .iter()
+            .map(|entry| entry.as_os_str().as_bytes().to_vec())
+            .collect::<Vec<_>>();
+        ensure!(
+            (1..=4096).contains(&resolved_display_path.len())
+                && resolved_display_path.first() == Some(&b'/')
+                && (1..=4096).contains(&container_working_directory.len())
+                && container_working_directory.first() == Some(&b'/')
+                && effective_path_entries.len() <= 64
+                && effective_path_entries.iter().all(|entry| {
+                    (1..=4096).contains(&entry.len()) && entry.first() == Some(&b'/')
+                }),
+            IdentityStateSnafu {
+                reason: "administrative resolved path, working directory, or PATH exceeds its signed bounds",
+            }
+        );
+        Ok(ResolvedAdministrativePolicyV1 {
+            approved_role_numeric_id: plan.approved_role_numeric_id,
+            profile_generation_ref_id: plan.profile_generation_ref_id,
+            exception_numeric_handle: plan.exception_numeric_handle,
+            profile: plan.profile.clone(),
+            resolved_executable: ResolvedAdministrativeExecutableIdentityV1 {
+                requested_name: requested_name.to_vec(),
+                resolution_mode,
+                resolved_display_path,
+                container_working_directory,
+                effective_path_entries,
+                target_mount_namespace_id: mount_namespace_id,
+                target_mount_topology_generation: global_epoch,
+                executable_object: AdministrativeFileObjectIdentityV1 {
+                    mount_namespace_id,
+                    mount_topology_generation: global_epoch,
+                    mount_id: live.mount_id,
+                    filesystem_instance_id,
+                    inode: live.inode,
+                    inode_generation: plan.executable_object.inode_generation,
+                    exact_live_object_id,
+                    object_kind: 1,
+                    backing_identity,
+                    live_interval_id,
+                },
+            },
+            kernel_executable: ExactExecutableCandidateV1 {
+                inode: live.inode,
+                mount_namespace_inode,
+                mount_id: live.mount_id,
+                filesystem_device: live.filesystem_device,
+                inode_generation: plan.executable_object.inode_generation,
+            },
+        })
     }
 
     pub fn reconcile_mount_views(&self, host: &KernelHost) -> Result<()> {
@@ -288,6 +602,7 @@ impl NodePolicyGenerationOwner {
                 .build()
             })?
             .reconcile(host, current_utc_ns()?)?;
+        reconcile_generation_retirement(host, self.node_boot_id, self.label_epoch)?;
         let mut views = BTreeMap::<u32, Vec<&MountRootReconciliation>>::new();
         for root in &self.mount_roots {
             views
@@ -295,9 +610,50 @@ impl NodePolicyGenerationOwner {
                 .or_default()
                 .push(root);
         }
-        for roots in views.values() {
-            self.reconcile_mount_view(host, roots)?;
+        if views.is_empty() {
+            return Ok(());
         }
+        let global_key = 0_u32.to_ne_bytes();
+        let global_epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)?;
+        let global_clean = mount_epoch_from(host, "mount_global_clean_epoch", &global_key)?;
+        let global_pending = mount_epoch_from(host, "mount_global_pending_mutations", &global_key)?;
+        if global_pending != 0 {
+            return Ok(());
+        }
+        ensure!(
+            global_epoch != 0 && global_clean <= global_epoch,
+            IdentityStateSnafu {
+                reason: "global mount security barrier is not usable",
+            }
+        );
+        if global_clean == global_epoch {
+            return Ok(());
+        }
+        for roots in views.values() {
+            if self
+                .reconcile_mount_view(host, roots, global_epoch)?
+                .is_none()
+            {
+                return Ok(());
+            }
+        }
+        if mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)? != global_epoch
+            || mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? != 0
+        {
+            return Ok(());
+        }
+        host.update_map(
+            "mount_global_clean_epoch",
+            &global_key,
+            &global_epoch.to_ne_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+        ensure!(
+            mount_epoch_from(host, "mount_global_clean_epoch", &global_key)? == global_epoch,
+            IdentityStateSnafu {
+                reason: "global mount clean-epoch publication readback failed",
+            }
+        );
         Ok(())
     }
 
@@ -305,7 +661,8 @@ impl NodePolicyGenerationOwner {
         &self,
         host: &KernelHost,
         roots: &[&MountRootReconciliation],
-    ) -> Result<()> {
+        target_epoch: u64,
+    ) -> Result<Option<u64>> {
         let root = roots.first().ok_or_else(|| {
             IdentityStateSnafu {
                 reason: "mount reconciliation view has no roots".to_owned(),
@@ -323,23 +680,37 @@ impl NodePolicyGenerationOwner {
                 }
                 .build()
             })?;
-        let state = mount_view_state(host, &key)?;
+        let state = mount_state(host, "mount_security_views", &key)?;
         let epoch = mount_epoch(host, &key)?;
         if state.state == MountTopologyStateV1::Clean
-            && state.topology_generation == epoch
+            && state.topology_generation == target_epoch
+            && epoch == target_epoch
             && state.pending_mutations == 0
         {
-            return Ok(());
+            return Ok(Some(state.snapshot_digest_id));
         }
         if state.pending_mutations != 0 {
-            return Ok(());
+            return Ok(None);
         }
         ensure!(
-            state.state == MountTopologyStateV1::Dirty,
+            matches!(
+                state.state,
+                MountTopologyStateV1::Clean | MountTopologyStateV1::Dirty
+            ),
             IdentityStateSnafu {
-                reason: "mount security view is neither CLEAN nor DIRTY",
+                reason: "mount security view is not reconcilable",
             }
         );
+        if epoch != target_epoch {
+            host.update_map("mount_mutation_epochs", &key, &target_epoch.to_ne_bytes())
+                .context(InterceptorSnafu)?;
+            ensure!(
+                mount_epoch(host, &key)? == target_epoch,
+                IdentityStateSnafu {
+                    reason: "mount mutation epoch synchronization failed",
+                }
+            );
+        }
         let mut snapshot_digest_id = None;
         for planned in roots {
             let configured = &planned.configured;
@@ -377,7 +748,7 @@ impl NodePolicyGenerationOwner {
                 profile_generation_ref_id: configured.profile_generation_ref_id,
                 mount_namespace_inode: configured.mount_namespace_inode,
                 binding_id: planned.binding_id,
-                topology_generation: epoch,
+                topology_generation: target_epoch,
                 filesystem_device: resolved.mount_root_filesystem_device,
                 root_inode: resolved.mount_root_inode,
             };
@@ -403,21 +774,22 @@ impl NodePolicyGenerationOwner {
                 }
             );
         }
-        let current = mount_view_state(host, &key)?;
-        if mount_epoch(host, &key)? != epoch
+        let current = mount_state(host, "mount_security_views", &key)?;
+        if mount_epoch(host, &key)? != target_epoch
             || current.pending_mutations != 0
             || current.transition_version != state.transition_version
         {
-            return Ok(());
+            return Ok(None);
         }
+        let snapshot_digest_id = snapshot_digest_id.ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "mount reconciliation produced no snapshot".to_owned(),
+            }
+            .build()
+        })?;
         let proposal = MountReconciliationProposalV1 {
-            topology_generation: epoch,
-            snapshot_digest_id: snapshot_digest_id.ok_or_else(|| {
-                IdentityStateSnafu {
-                    reason: "mount reconciliation produced no snapshot".to_owned(),
-                }
-                .build()
-            })?,
+            topology_generation: target_epoch,
+            snapshot_digest_id,
             expected_transition_version: state.transition_version,
             transition_version: state.transition_version.checked_add(1).ok_or_else(|| {
                 IdentityStateSnafu {
@@ -437,7 +809,7 @@ impl NodePolicyGenerationOwner {
                 reason: "mount reconciliation proposal readback failed",
             }
         );
-        Ok(())
+        Ok(Some(snapshot_digest_id))
     }
 }
 
@@ -452,9 +824,59 @@ struct MountRootReconciliation {
 
 struct MountViewSnapshot {
     topology_generation: u64,
+    snapshot_digest_id: u64,
     pending_mutations: u64,
     transition_version: u64,
     state: MountTopologyStateV1,
+}
+
+fn install_global_mount_barrier(
+    host: &KernelHost,
+    roots: &[MountRootReconciliation],
+) -> Result<()> {
+    if roots.is_empty() {
+        return Ok(());
+    }
+    let key = 0_u32.to_ne_bytes();
+    let zero = 0_u64.to_ne_bytes();
+    let topology_generation = roots
+        .iter()
+        .map(|root| root.configured.mount_topology_generation)
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    if host
+        .lookup_map("mount_global_mutation_epoch", &key)
+        .context(InterceptorSnafu)?
+        .is_none()
+    {
+        host.update_map(
+            "mount_global_mutation_epoch",
+            &key,
+            &topology_generation.to_ne_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+    }
+    for map in ["mount_global_clean_epoch", "mount_global_pending_mutations"] {
+        if host
+            .lookup_map(map, &key)
+            .context(InterceptorSnafu)?
+            .is_none()
+        {
+            host.update_map(map, &key, &zero)
+                .context(InterceptorSnafu)?;
+        }
+    }
+    let epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &key)?;
+    let clean = mount_epoch_from(host, "mount_global_clean_epoch", &key)?;
+    let pending = mount_epoch_from(host, "mount_global_pending_mutations", &key)?;
+    ensure!(
+        epoch != 0 && clean <= epoch && pending == 0,
+        IdentityStateSnafu {
+            reason: "global mount security barrier readback is invalid",
+        }
+    );
+    Ok(())
 }
 
 fn same_exact_file(left: &ExactFileObjectConfig, right: &ExactFileObjectConfig) -> bool {
@@ -513,6 +935,7 @@ struct LoweredGeneration {
     path_exact: BTreeMap<Vec<u8>, Vec<u8>>,
     path_wildcards: BTreeMap<Vec<u8>, Vec<u8>>,
     path_terminals: BTreeMap<Vec<u8>, Vec<u8>>,
+    administrative_plans: Vec<AdministrativePolicyPlanV1>,
     mount_reconciliation: Vec<MountRootReconciliation>,
 }
 
@@ -915,6 +1338,14 @@ impl LoweredGeneration {
             };
             insert_exact(&mut file_objects, key.as_bytes(), value.as_bytes())?;
         }
+        let administrative_plans = lower_administrative_plans(
+            artifact,
+            binding,
+            &role_handles,
+            &process_state_handles,
+            &exception_handles,
+            &generation_objects,
+        )?;
         let path_tables =
             lower_path_tables(artifact, binding, &generation_objects, &composite_handles)?;
         let tables = [
@@ -980,6 +1411,7 @@ impl LoweredGeneration {
             path_exact: path_tables.exact,
             path_wildcards: path_tables.wildcards,
             path_terminals: path_tables.terminals,
+            administrative_plans,
             mount_reconciliation: path_tables.reconciliation,
         })
     }
@@ -1020,6 +1452,7 @@ impl LoweredGeneration {
         merge_rows(&mut self.path_exact, other.path_exact)?;
         merge_rows(&mut self.path_wildcards, other.path_wildcards)?;
         merge_rows(&mut self.path_terminals, other.path_terminals)?;
+        self.administrative_plans.extend(other.administrative_plans);
         self.mount_reconciliation.extend(other.mount_reconciliation);
         self.descriptor.row_count = self
             .decisions
@@ -1046,6 +1479,88 @@ impl LoweredGeneration {
             ("path-wildcard", &self.path_wildcards),
             ("path-terminal", &self.path_terminals),
         ]);
+        Ok(())
+    }
+
+    fn planned_rows(&self) -> Vec<PlannedGenerationRow<'_>> {
+        vec![
+            ("effect_decisions", &self.decisions),
+            ("effect_defaults", &self.defaults),
+            ("device_effect_decisions", &self.device_decisions),
+            ("process_control_rules", &self.process_control_rules),
+            ("ipc_relationship_decisions", &self.ipc_relationships),
+            ("exception_runtime_states", &self.exceptions),
+            ("exception_handle_bindings", &self.exception_bindings),
+            ("exact_file_objects", &self.file_objects),
+            ("mount_security_views", &self.mount_views),
+            ("mount_mutation_epochs", &self.mount_epochs),
+            ("mount_security_view_locks", &self.mount_locks),
+            ("canonical_mount_roots", &self.mount_roots),
+            ("path_graph_exact_transitions", &self.path_exact),
+            ("path_graph_wildcard_transitions", &self.path_wildcards),
+            ("path_graph_terminals", &self.path_terminals),
+        ]
+    }
+
+    fn decision_rows(&self) -> [ActivationDecisionRow<'_>; 5] {
+        [
+            (
+                PolicyActivationProbeMapKindV1::EffectDecision,
+                &self.decisions,
+            ),
+            (
+                PolicyActivationProbeMapKindV1::EffectDefault,
+                &self.defaults,
+            ),
+            (
+                PolicyActivationProbeMapKindV1::IpcRelationship,
+                &self.ipc_relationships,
+            ),
+            (
+                PolicyActivationProbeMapKindV1::DeviceEffect,
+                &self.device_decisions,
+            ),
+            (
+                PolicyActivationProbeMapKindV1::ProcessControl,
+                &self.process_control_rules,
+            ),
+        ]
+    }
+
+    fn probe_staged_rows(&self, host: &mut KernelHost) -> Result<()> {
+        for (map_kind, rows) in self.decision_rows() {
+            for (key, value) in rows {
+                ensure!(
+                    key.len() <= MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
+                    IdentityStateSnafu {
+                        reason: "policy activation probe key exceeds its ABI bound",
+                    }
+                );
+                let expected = PhysicalDecisionV1::try_read_from_bytes(value).map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("policy activation probe decision is invalid: {error}"),
+                    }
+                    .build()
+                })?;
+                let mut probe_key = [0; MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1];
+                probe_key[..key.len()].copy_from_slice(key);
+                let request = PolicyActivationProbeV1 {
+                    map_kind,
+                    reserved: [0; 7],
+                    key_size: key.len().try_into().map_err(|error| {
+                        IdentityStateSnafu {
+                            reason: format!("policy activation probe key is invalid: {error}"),
+                        }
+                        .build()
+                    })?,
+                    reserved_alignment: 0,
+                    key: probe_key,
+                    expected,
+                };
+                host.run_policy_activation_probe(request.as_bytes())
+                    .context(InterceptorSnafu)?;
+            }
+        }
         Ok(())
     }
 
@@ -1110,10 +1625,7 @@ impl LoweredGeneration {
         )?;
         install_rows(host, "exception_handle_bindings", &self.exception_bindings)?;
         install_rows(host, "exact_file_objects", &self.file_objects)?;
-        install_rows(host, "mount_security_views", &self.mount_views)?;
-        install_rows(host, "mount_mutation_epochs", &self.mount_epochs)?;
-        install_rows(host, "mount_security_view_locks", &self.mount_locks)?;
-        install_rows(host, "canonical_mount_roots", &self.mount_roots)?;
+        self.install_missing_mount_rows(host)?;
         install_rows(host, "path_graph_exact_transitions", &self.path_exact)?;
         install_rows(
             host,
@@ -1199,6 +1711,94 @@ impl LoweredGeneration {
         }
         Ok(())
     }
+}
+
+fn preflight_policy_map_capacity(
+    host: &KernelHost,
+    generations: &BTreeMap<u64, LoweredGeneration>,
+    activations: &BTreeMap<Id128V1, ProfileActivation>,
+) -> Result<()> {
+    let mut planned = BTreeMap::<&'static str, BTreeSet<Vec<u8>>>::new();
+    for map in [
+        "mount_global_mutation_epoch",
+        "mount_global_clean_epoch",
+        "mount_global_pending_mutations",
+    ] {
+        planned
+            .entry(map)
+            .or_default()
+            .insert(0_u32.to_ne_bytes().to_vec());
+    }
+    for (handle, generation) in generations {
+        planned
+            .entry("profile_generation_descriptors")
+            .or_default()
+            .insert(handle.to_ne_bytes().to_vec());
+        planned
+            .entry("profile_generation_task_refs")
+            .or_default()
+            .insert(handle.to_ne_bytes().to_vec());
+        for (map, rows) in generation.planned_rows() {
+            planned.entry(map).or_default().extend(rows.keys().cloned());
+        }
+        planned
+            .entry("mount_reconciliation_proposals")
+            .or_default()
+            .extend(generation.mount_views.keys().cloned());
+    }
+    for (profile_id, activation) in activations {
+        planned
+            .entry("active_profile_generations")
+            .or_default()
+            .insert(profile_id.as_bytes().to_vec());
+        for binding_id in activation.bindings.keys() {
+            planned
+                .entry("binding_activation_targets")
+                .or_default()
+                .insert(
+                    BindingActivationTargetKeyV1 {
+                        binding_id: *binding_id,
+                        profile_generation_ref_id: activation.generation,
+                    }
+                    .as_bytes()
+                    .to_vec(),
+                );
+        }
+    }
+    for (map, planned_keys) in planned {
+        let capacity = host
+            .manifest()
+            .maps
+            .iter()
+            .find(|candidate| candidate.name == map)
+            .map(|candidate| u64::from(candidate.max_entries))
+            .context(IdentityStateSnafu {
+                reason: format!("required policy map `{map}` has no manifest capacity"),
+            })?;
+        let existing = host.map_keys(map).context(InterceptorSnafu)?;
+        ensure_map_capacity(map, capacity, existing, planned_keys)?;
+    }
+    Ok(())
+}
+
+fn ensure_map_capacity(
+    map: &str,
+    capacity: u64,
+    existing: impl IntoIterator<Item = Vec<u8>>,
+    planned: impl IntoIterator<Item = Vec<u8>>,
+) -> Result<()> {
+    let mut keys = existing.into_iter().collect::<BTreeSet<_>>();
+    keys.extend(planned);
+    ensure!(
+        u64::try_from(keys.len()).unwrap_or(u64::MAX) <= capacity,
+        IdentityStateSnafu {
+            reason: format!(
+                "policy map `{map}` needs {} rows but its capacity is {capacity}",
+                keys.len()
+            ),
+        }
+    );
+    Ok(())
 }
 
 fn reconcile_pending_activations(
@@ -1358,31 +1958,18 @@ fn activate_profile(
             reason: "staged generation descriptor does not match its activation",
         }
     );
-    let reference_key = activation.generation.to_ne_bytes();
-    if let Some(references) = host
-        .lookup_map("profile_generation_task_refs", &reference_key)
-        .context(InterceptorSnafu)?
-    {
-        u64::read_from_bytes(&references).map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("generation task references are invalid: {error}"),
-            }
-            .build()
-        })?;
-    } else {
-        let zero = 0_u64.to_ne_bytes();
-        host.update_map("profile_generation_task_refs", &reference_key, &zero)
-            .context(InterceptorSnafu)?;
-        ensure!(
-            host.lookup_map("profile_generation_task_refs", &reference_key)
-                .context(InterceptorSnafu)?
-                .as_deref()
-                == Some(zero.as_slice()),
-            IdentityStateSnafu {
-                reason: "generation task-reference row failed readback",
-            }
-        );
-    }
+    ensure_generation_reference_row(
+        host,
+        "profile_generation_task_refs",
+        activation.generation,
+        "task",
+    )?;
+    ensure_generation_reference_row(
+        host,
+        "profile_generation_async_refs",
+        activation.generation,
+        "async",
+    )?;
 
     let pointer_key = profile_id.as_bytes();
     let expected_pointer = host
@@ -1639,6 +2226,37 @@ fn same_activation_identity(
     live == *target
 }
 
+fn ensure_generation_reference_row(
+    host: &KernelHost,
+    map: &str,
+    generation: u64,
+    kind: &str,
+) -> Result<()> {
+    let key = generation.to_ne_bytes();
+    if let Some(references) = host.lookup_map(map, &key).context(InterceptorSnafu)? {
+        u64::read_from_bytes(&references).map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!("generation {kind} references are invalid: {error}"),
+            }
+            .build()
+        })?;
+        return Ok(());
+    }
+    let zero = 0_u64.to_ne_bytes();
+    host.update_map(map, &key, &zero)
+        .context(InterceptorSnafu)?;
+    ensure!(
+        host.lookup_map(map, &key)
+            .context(InterceptorSnafu)?
+            .as_deref()
+            == Some(zero.as_slice()),
+        IdentityStateSnafu {
+            reason: format!("generation {kind}-reference row failed readback"),
+        }
+    );
+    Ok(())
+}
+
 fn ensure_committed_generation(target: &[u8], observed: Option<&[u8]>) -> Result<()> {
     ensure!(
         observed == Some(target),
@@ -1683,6 +2301,370 @@ fn ensure_active_generation_unchanged(
             reason: "active-generation handle changed during serialized publication",
         }
     );
+    Ok(())
+}
+
+fn reconcile_generation_retirement(
+    host: &KernelHost,
+    node_boot_id: Id128V1,
+    label_epoch: u64,
+) -> Result<()> {
+    let active_generations = host
+        .map_keys("active_profile_generations")
+        .context(InterceptorSnafu)?
+        .into_iter()
+        .map(|key| {
+            host.lookup_map("active_profile_generations", &key)
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: "active profile generation disappeared during retirement",
+                })
+                .and_then(|value| {
+                    u64::read_from_bytes(&value).map_err(|error| {
+                        IdentityStateSnafu {
+                            reason: format!("active profile generation is invalid: {error}"),
+                        }
+                        .build()
+                    })
+                })
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+
+    for descriptor_key in host
+        .map_keys("profile_generation_descriptors")
+        .context(InterceptorSnafu)?
+    {
+        let Some(bytes) = host
+            .lookup_map("profile_generation_descriptors", &descriptor_key)
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        let mut descriptor = read_abi_value::<ProfileGenerationDescriptorV1>(
+            &bytes,
+            "profile generation descriptor",
+        )?;
+        if descriptor.node_boot_id != node_boot_id || descriptor.label_epoch != label_epoch {
+            return IdentityStateSnafu {
+                reason: "profile generation survived a node boot or label epoch change".to_owned(),
+            }
+            .fail();
+        }
+        let generation = descriptor.profile_generation_ref_id;
+        ensure!(
+            descriptor_key.as_slice() == generation.to_ne_bytes(),
+            IdentityStateSnafu {
+                reason: "profile generation descriptor key does not match its value",
+            }
+        );
+        if active_generations.contains(&generation) {
+            ensure!(
+                descriptor.state == PolicyGenerationStateV1::Active,
+                IdentityStateSnafu {
+                    reason: "active profile pointer names a non-ACTIVE generation",
+                }
+            );
+            continue;
+        }
+        if descriptor.state == PolicyGenerationStateV1::Active {
+            descriptor.state = PolicyGenerationStateV1::Retiring;
+            descriptor.transition_version =
+                descriptor
+                    .transition_version
+                    .checked_add(1)
+                    .context(IdentityStateSnafu {
+                        reason: "profile generation transition version exhausted",
+                    })?;
+            host.update_map(
+                "profile_generation_descriptors",
+                &descriptor_key,
+                descriptor.as_bytes(),
+            )
+            .context(InterceptorSnafu)?;
+            ensure!(
+                host.lookup_map("profile_generation_descriptors", &descriptor_key)
+                    .context(InterceptorSnafu)?
+                    .as_deref()
+                    == Some(descriptor.as_bytes()),
+                IdentityStateSnafu {
+                    reason: "RETIRING profile generation failed readback",
+                }
+            );
+        }
+        ensure!(
+            descriptor.state == PolicyGenerationStateV1::Retiring,
+            IdentityStateSnafu {
+                reason: "inactive profile generation has an invalid lifecycle state",
+            }
+        );
+        if generation_has_retained_authority(host, generation)? {
+            continue;
+        }
+        retire_generation_rows(host, generation, &mut descriptor, &descriptor_key)?;
+    }
+    Ok(())
+}
+
+fn generation_has_retained_authority(host: &KernelHost, generation: u64) -> Result<bool> {
+    let reference_key = generation.to_ne_bytes();
+    let references = host
+        .lookup_map("profile_generation_task_refs", &reference_key)
+        .context(InterceptorSnafu)?
+        .context(IdentityStateSnafu {
+            reason: "RETIRING generation lost its task-reference row",
+        })?;
+    if u64::read_from_bytes(&references).map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("generation task references are invalid: {error}"),
+        }
+        .build()
+    })? != 0
+    {
+        return Ok(true);
+    }
+    let async_references = host
+        .lookup_map("profile_generation_async_refs", &reference_key)
+        .context(InterceptorSnafu)?
+        .context(IdentityStateSnafu {
+            reason: "RETIRING generation lost its async-reference row",
+        })?;
+    if u64::read_from_bytes(&async_references).map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("generation async references are invalid: {error}"),
+        }
+        .build()
+    })? != 0
+    {
+        return Ok(true);
+    }
+
+    for key in host
+        .map_keys("io_uring_ring_states")
+        .context(InterceptorSnafu)?
+    {
+        let Some(value) = host
+            .lookup_map("io_uring_ring_states", &key)
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        if read_abi_value::<IoUringRingStateV1>(&value, "io_uring ring state")?
+            .owner
+            .profile_generation_ref_id
+            == generation
+        {
+            return Ok(true);
+        }
+    }
+    for key in host
+        .map_keys("io_uring_request_states")
+        .context(InterceptorSnafu)?
+    {
+        let Some(value) = host
+            .lookup_map("io_uring_request_states", &key)
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        if read_abi_value::<IoUringRequestStateV1>(&value, "io_uring request state")?
+            .actor
+            .profile_generation_ref_id
+            == generation
+        {
+            return Ok(true);
+        }
+    }
+
+    for key in host.map_keys("process_states").context(InterceptorSnafu)? {
+        let Some(value) = host
+            .lookup_map("process_states", &key)
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        let process = read_abi_value::<ProcessSecurityStateV1>(&value, "process state")?;
+        if process.active_profile_generation_ref_id == generation
+            && (process.live_thread_refs != 0
+                || process.state != ProcessSecurityStateKindV1::Reclaimable)
+        {
+            return Ok(true);
+        }
+    }
+    for key in host
+        .map_keys("authority_domains")
+        .context(InterceptorSnafu)?
+    {
+        let Some(value) = host
+            .lookup_map("authority_domains", &key)
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        let domain = read_abi_value::<AuthorityDomainStateV1>(&value, "authority domain")?;
+        if domain.retained_generation_set_ref_id == generation
+            && (domain.live_process_refs != 0
+                || domain.response_plan_refs != 0
+                || domain.reconciliation_hold_refs != 0)
+        {
+            return Ok(true);
+        }
+    }
+    for key in host
+        .map_keys("task_reference_tombstones")
+        .context(InterceptorSnafu)?
+    {
+        let Some(value) = host
+            .lookup_map("task_reference_tombstones", &key)
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        let tombstone =
+            read_abi_value::<TaskReferenceTombstoneV1>(&value, "task reference tombstone")?;
+        if tombstone.profile_generation_ref_id == generation
+            && tombstone.state != ReferenceTombstoneStateV1::Released
+            && tombstone.state != ReferenceTombstoneStateV1::Reclaimable
+        {
+            return Ok(true);
+        }
+    }
+    for key in host.map_keys("pending_execs").context(InterceptorSnafu)? {
+        let Some(value) = host
+            .lookup_map("pending_execs", &key)
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        if read_abi_value::<PendingExecV1>(&value, "pending exec")?.source_profile_generation_ref_id
+            == generation
+        {
+            return Ok(true);
+        }
+    }
+    for key in host
+        .map_keys("pending_administrative_matches")
+        .context(InterceptorSnafu)?
+    {
+        let Some(value) = host
+            .lookup_map("pending_administrative_matches", &key)
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        if read_abi_value::<PendingAdministrativeMatchV1>(&value, "pending administrative match")?
+            .profile_generation_ref_id
+            == generation
+        {
+            return Ok(true);
+        }
+    }
+    for key in host
+        .map_keys("approved_exec_slots")
+        .context(InterceptorSnafu)?
+    {
+        let Some(value) = host
+            .lookup_map("approved_exec_slots", &key)
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        let slot = read_abi_value::<ApprovedExecSlotV1>(&value, "approved exec slot")?;
+        if slot.profile_generation_ref_id == generation
+            && slot.state == ApprovedExecSlotStateV1::Armed
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn retire_generation_rows(
+    host: &KernelHost,
+    generation: u64,
+    descriptor: &mut ProfileGenerationDescriptorV1,
+    descriptor_key: &[u8],
+) -> Result<()> {
+    descriptor.state = PolicyGenerationStateV1::Tombstoned;
+    descriptor.transition_version =
+        descriptor
+            .transition_version
+            .checked_add(1)
+            .context(IdentityStateSnafu {
+                reason: "profile generation transition version exhausted",
+            })?;
+    host.update_map(
+        "profile_generation_descriptors",
+        descriptor_key,
+        descriptor.as_bytes(),
+    )
+    .context(InterceptorSnafu)?;
+    ensure!(
+        host.lookup_map("profile_generation_descriptors", descriptor_key)
+            .context(InterceptorSnafu)?
+            .as_deref()
+            == Some(descriptor.as_bytes()),
+        IdentityStateSnafu {
+            reason: "TOMBSTONED profile generation failed readback",
+        }
+    );
+
+    for map in [
+        "effect_decisions",
+        "effect_defaults",
+        "ipc_relationship_decisions",
+        "device_effect_decisions",
+        "process_control_rules",
+        "exception_handle_bindings",
+        "exact_file_objects",
+        "canonical_mount_roots",
+        "path_graph_exact_transitions",
+        "path_graph_wildcard_transitions",
+        "path_graph_terminals",
+    ] {
+        delete_generation_prefixed_rows(host, map, generation, 0)?;
+    }
+    delete_generation_prefixed_rows(host, "binding_activation_targets", generation, 16)?;
+    host.delete_map_entry("profile_generation_task_refs", &generation.to_ne_bytes())
+        .context(InterceptorSnafu)?;
+    host.delete_map_entry("profile_generation_async_refs", &generation.to_ne_bytes())
+        .context(InterceptorSnafu)?;
+    host.delete_map_entry("profile_generation_descriptors", descriptor_key)
+        .context(InterceptorSnafu)?;
+    ensure!(
+        host.lookup_map("profile_generation_descriptors", descriptor_key)
+            .context(InterceptorSnafu)?
+            .is_none(),
+        IdentityStateSnafu {
+            reason: "retired profile generation descriptor survived deletion",
+        }
+    );
+    Ok(())
+}
+
+fn delete_generation_prefixed_rows(
+    host: &KernelHost,
+    map: &str,
+    generation: u64,
+    offset: usize,
+) -> Result<()> {
+    for key in host.map_keys(map).context(InterceptorSnafu)? {
+        let end = offset
+            .checked_add(size_of::<u64>())
+            .context(IdentityStateSnafu {
+                reason: "generation key offset overflow",
+            })?;
+        ensure!(
+            key.len() >= end,
+            IdentityStateSnafu {
+                reason: format!("map `{map}` has a truncated generation key"),
+            }
+        );
+        let mut bytes = [0; size_of::<u64>()];
+        bytes.copy_from_slice(&key[offset..end]);
+        if u64::from_ne_bytes(bytes) == generation {
+            host.delete_map_entry(map, &key).context(InterceptorSnafu)?;
+        }
+    }
     Ok(())
 }
 
@@ -1824,19 +2806,20 @@ fn install_missing_rows(
     Ok(())
 }
 
-fn mount_view_state(host: &KernelHost, key: &[u8]) -> Result<MountViewSnapshot> {
+fn mount_state(host: &KernelHost, map: &str, key: &[u8]) -> Result<MountViewSnapshot> {
     let bytes = host
-        .lookup_map("mount_security_views", key)
+        .lookup_map(map, key)
         .context(InterceptorSnafu)?
         .ok_or_else(|| {
             IdentityStateSnafu {
-                reason: "mount security view disappeared during reconciliation".to_owned(),
+                reason: format!("mount security state `{map}` disappeared during reconciliation"),
             }
             .build()
         })?;
     let state = read_abi_value::<MountSecurityViewStateV1>(&bytes, "mount security view")?;
     Ok(MountViewSnapshot {
         topology_generation: state.topology_generation,
+        snapshot_digest_id: state.snapshot_digest_id,
         pending_mutations: state.pending_mutations,
         state: state.state,
         transition_version: state.transition_version,
@@ -1844,12 +2827,16 @@ fn mount_view_state(host: &KernelHost, key: &[u8]) -> Result<MountViewSnapshot> 
 }
 
 fn mount_epoch(host: &KernelHost, key: &[u8]) -> Result<u64> {
+    mount_epoch_from(host, "mount_mutation_epochs", key)
+}
+
+fn mount_epoch_from(host: &KernelHost, map: &str, key: &[u8]) -> Result<u64> {
     let bytes = host
-        .lookup_map("mount_mutation_epochs", key)
+        .lookup_map(map, key)
         .context(InterceptorSnafu)?
         .ok_or_else(|| {
             IdentityStateSnafu {
-                reason: "mount mutation epoch disappeared during reconciliation".to_owned(),
+                reason: format!("mount mutation epoch `{map}` disappeared during reconciliation"),
             }
             .build()
         })?;
@@ -1967,6 +2954,210 @@ fn validate_binding_roles(
         );
     }
     Ok(())
+}
+
+fn lower_administrative_plans(
+    artifact: &ProfileCandidateArtifactV1,
+    binding: &WorkloadBindingConfig,
+    role_handles: &BTreeMap<String, u32>,
+    process_state_handles: &BTreeMap<String, u32>,
+    exception_handles: &BTreeMap<String, u32>,
+    generation_objects: &[&ExactFileObjectConfig],
+) -> Result<Vec<AdministrativePolicyPlanV1>> {
+    let assignments = artifact
+        .policy_document
+        .entry_role_assignments
+        .iter()
+        .filter(|assignment| {
+            assignment
+                .workload_selector_ids
+                .contains(&binding.workload_selector_id)
+                && assignment.entry_kinds.as_slice() == [EntryKindV1::ApprovedAdministrativeExec]
+                && assignment
+                    .container_kinds
+                    .contains(&policy_container_kind(binding.container_kind))
+                && assignment.required_administrative_exec_approval
+        })
+        .collect::<Vec<_>>();
+    if assignments.is_empty() {
+        return Ok(Vec::new());
+    }
+    let external_role_id = role_handles
+        .iter()
+        .find_map(|(role_id, handle)| (*handle == binding.external_role_id).then_some(role_id))
+        .ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "configured external role has no signed role ID".to_owned(),
+            }
+            .build()
+        })?;
+    let artifact_sha256 = decode_sha256(&artifact.header.policy_document_digest)?;
+    let profile = PortableProfileGenerationIdentityV1 {
+        profile_id: parse_id("profile_id", &artifact.header.profile_id)?,
+        owner_generation: artifact.header.profile_version,
+        artifact_sha256,
+    };
+    let mut plans = Vec::new();
+    let mut plan_keys = BTreeSet::new();
+    for assignment in assignments {
+        let role = artifact
+            .policy_document
+            .roles
+            .iter()
+            .find(|role| role.role_id == assignment.resulting_role_id)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "administrative assignment has no signed role".to_owned(),
+                }
+                .build()
+            })?;
+        let process_state = artifact
+            .policy_document
+            .process_state_definitions
+            .iter()
+            .find(|state| state.process_state_id == role.default_process_state_id)
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "administrative role has no signed process state".to_owned(),
+                }
+                .build()
+            })?;
+        ensure!(
+            role.permitted_entry_kinds
+                .contains(&EntryKindV1::ApprovedAdministrativeExec)
+                && process_state.state_bits.is_empty()
+                && process_state_handles.get(&process_state.process_state_id) == Some(&1),
+            IdentityStateSnafu {
+                reason: "administrative role needs the supported approved entry and conservative process state",
+            }
+        );
+        let approved_role_numeric_id = role_handles[&role.role_id];
+        let mut role_plan_count = 0;
+        for cell in artifact
+            .compiled_profile
+            .compiled_cells
+            .iter()
+            .filter(|cell| {
+                cell_matches_binding(&cell.key, binding)
+                    && cell.key.entry_kind == EntryKindV1::ExternalRuntimeUnknown
+                    && cell.key.role_id == *external_role_id
+                    && cell.key.effect_family == mithril_control::EffectFamilyV1::Exec
+                    && cell.key.operation_id == "EXECUTE"
+                    && cell.key.binding_lifecycle == mithril_control::BindingLifecycleV1::Active
+                    && matches!(
+                        cell.physical_result,
+                        CompiledPhysicalResultV1::AllowEffect
+                            | CompiledPhysicalResultV1::AuditAllowEffect
+                    )
+            })
+        {
+            let Some(exact_object_key_id) = cell.key.object_selector.strip_prefix("EXACT:") else {
+                continue;
+            };
+            let exact_object_key_id = exact_object_key_id.parse::<u64>().map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("administrative exact object key is invalid: {error}"),
+                }
+                .build()
+            })?;
+            let executable_object = generation_objects
+                .iter()
+                .find(|object| object.exact_object_key_id == exact_object_key_id)
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: "administrative executable has no exact configured object"
+                            .to_owned(),
+                    }
+                    .build()
+                })?;
+            ensure!(
+                plan_keys.insert((
+                    parse_id("binding_id", &binding.binding_id)?,
+                    role.role_id.clone(),
+                    exact_object_key_id,
+                )),
+                IdentityStateSnafu {
+                    reason: "administrative role and executable plan is ambiguous",
+                }
+            );
+            plans.push(AdministrativePolicyPlanV1 {
+                binding_id: parse_id("binding_id", &binding.binding_id)?,
+                approved_role_id: role.role_id.clone(),
+                approved_role_numeric_id,
+                profile: profile.clone(),
+                profile_generation_ref_id: binding.active_profile_generation_ref_id,
+                exception_numeric_handle: cell
+                    .consuming_exception_id
+                    .as_ref()
+                    .map(|id| exception_handles[id])
+                    .unwrap_or_default(),
+                executable_object: (*executable_object).clone(),
+            });
+            role_plan_count += 1;
+        }
+        ensure!(
+            role_plan_count > 0,
+            IdentityStateSnafu {
+                reason: format!(
+                    "administrative role `{}` has no exact allowed executable plan for the restricted external root",
+                    role.role_id
+                ),
+            }
+        );
+    }
+    Ok(plans)
+}
+
+fn decode_sha256(value: &str) -> Result<[u8; 32]> {
+    let bytes = hex::decode(value).map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("compiled profile digest is invalid: {error}"),
+        }
+        .build()
+    })?;
+    bytes.try_into().map_err(|bytes: Vec<u8>| {
+        IdentityStateSnafu {
+            reason: format!(
+                "compiled profile digest has {} bytes instead of 32",
+                bytes.len()
+            ),
+        }
+        .build()
+    })
+}
+
+fn portable_id_bytes(id: Id128V1) -> Vec<u8> {
+    [id.high.to_be_bytes(), id.low.to_be_bytes()].concat()
+}
+
+fn derived_id(domain: &[u8], fields: &[Vec<u8>]) -> Result<Id128V1> {
+    let mut digest = Sha256::new();
+    digest.update(domain);
+    for field in fields {
+        digest.update((field.len() as u64).to_be_bytes());
+        digest.update(field);
+    }
+    let digest = digest.finalize();
+    let high = u64::from_be_bytes(digest[0..8].try_into().map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("derived identity high word is invalid: {error}"),
+        }
+        .build()
+    })?);
+    let low = u64::from_be_bytes(digest[8..16].try_into().map_err(|error| {
+        IdentityStateSnafu {
+            reason: format!("derived identity low word is invalid: {error}"),
+        }
+        .build()
+    })?);
+    let id = Id128V1::new(high, low);
+    ensure!(
+        !id.is_zero(),
+        IdentityStateSnafu {
+            reason: "derived identity is zero",
+        }
+    );
+    Ok(id)
 }
 
 const fn policy_container_kind(kind: crate::ContainerKindV1) -> PolicyContainerKindV1 {
@@ -2315,7 +3506,7 @@ fn parse_id(name: &str, value: &str) -> Result<Id128V1> {
     ))
 }
 
-fn stable_node_id(value: &str) -> Result<Id128V1> {
+pub(crate) fn stable_node_id(value: &str) -> Result<Id128V1> {
     if let Ok(id) = parse_id("node_id", value) {
         return Ok(id);
     }
@@ -2336,7 +3527,7 @@ fn stable_node_id(value: &str) -> Result<Id128V1> {
     ))
 }
 
-fn current_utc_ns() -> Result<i64> {
+pub(crate) fn current_utc_ns() -> Result<i64> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let duration = SystemTime::now()
@@ -2355,7 +3546,7 @@ fn current_utc_ns() -> Result<i64> {
     })
 }
 
-fn current_boottime_ns() -> Result<u64> {
+pub(crate) fn current_boottime_ns() -> Result<u64> {
     let value = rustix::time::clock_gettime(rustix::time::ClockId::Boottime);
     u64::try_from(value.tv_sec)
         .ok()
@@ -2390,14 +3581,32 @@ mod tests {
 
     use super::{
         add_binding_activation, ensure_active_generation_unchanged, ensure_committed_generation,
-        exception_counter_is_consistent, parse_id, same_exact_file, LoweredGeneration,
-        ProfileActivation,
+        ensure_map_capacity, exception_counter_is_consistent, parse_id, same_exact_file,
+        LoweredGeneration, ProfileActivation,
     };
     use crate::error::IdentityStateSnafu;
     use crate::{
         ContainerKindV1, ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig,
         WorkloadBindingConfig,
     };
+
+    #[test]
+    fn capacity_preflight_counts_existing_and_planned_unique_keys() -> crate::Result<()> {
+        ensure_map_capacity(
+            "effect_decisions",
+            3,
+            vec![vec![1], vec![2]],
+            vec![vec![2], vec![3]],
+        )?;
+        assert!(ensure_map_capacity(
+            "effect_decisions",
+            2,
+            vec![vec![1], vec![2]],
+            vec![vec![2], vec![3]],
+        )
+        .is_err());
+        Ok(())
+    }
 
     #[test]
     fn exact_decision_key_contains_its_signed_composite_atom() -> crate::Result<()> {
@@ -2654,6 +3863,21 @@ mod tests {
     }
 
     #[test]
+    fn generation_staging_does_not_overwrite_live_mount_state() {
+        let source = include_str!("policy.rs");
+        let install = source
+            .split("fn install(\n        &self,\n        host: &KernelHost")
+            .nth(1)
+            .and_then(|source| source.split("fn active_descriptor(").next())
+            .unwrap_or_default();
+
+        assert!(install.contains("self.install_missing_mount_rows(host)?;"));
+        assert!(!install.contains("install_rows(host, \"mount_security_views\""));
+        assert!(!install.contains("install_rows(host, \"mount_mutation_epochs\""));
+        assert!(!install.contains("install_rows(host, \"mount_security_view_locks\""));
+    }
+
+    #[test]
     fn new_roots_use_one_profile_pointer_and_live_effects_use_pinned_generation() {
         let maps = include_str!("../../../bpf/erebor-interceptor/programs/identity_maps.h");
         let effects =
@@ -2675,6 +3899,26 @@ mod tests {
         ));
         assert!(roots.contains("create_root(task, config, activation, scratch"));
         assert!(exec.contains("slot, binding, process->active_profile_generation_ref_id"));
+    }
+
+    #[test]
+    fn generation_retirement_waits_for_async_io_authority() {
+        let source = include_str!("policy.rs");
+        let retained = source
+            .split("fn generation_has_retained_authority(")
+            .nth(1)
+            .and_then(|source| source.split("fn retire_generation_rows(").next())
+            .unwrap_or_default();
+        let retire = source
+            .split("fn retire_generation_rows(")
+            .nth(1)
+            .and_then(|source| source.split("fn delete_generation_prefixed_rows(").next())
+            .unwrap_or_default();
+
+        assert!(retained.contains("profile_generation_async_refs"));
+        assert!(retained.contains("io_uring_ring_states"));
+        assert!(retained.contains("io_uring_request_states"));
+        assert!(retire.contains("delete_map_entry(\"profile_generation_async_refs\""));
     }
 
     #[test]
@@ -2825,6 +4069,7 @@ mod tests {
             workload_selector_id: "worker".to_owned(),
             profile_id: document.metadata.profile_id.clone(),
             container_id: "a".repeat(64),
+            namespace: "default".to_owned(),
             pod_uid: "pod".to_owned(),
             sandbox_id: "sandbox".to_owned(),
             container_name: "converter".to_owned(),

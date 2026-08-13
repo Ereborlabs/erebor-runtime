@@ -7,27 +7,29 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::mem::{offset_of, size_of};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use erebor_interceptor::{EffectObservationReader, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
-    ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
-    ExceptionRuntimeStateV1, ExceptionUseReceiptV1, Id128V1, IpcOperationV1, KernelEffectFamilyV1,
-    KernelEffectOperationV1,
+    BindingActivationTargetKeyV1, ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1,
+    ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExceptionUseReceiptV1, Id128V1,
+    IpcOperationV1, KernelEffectFamilyV1, KernelEffectOperationV1, PolicyGenerationStateV1,
+    ProfileGenerationDescriptorV1,
 };
-use mithril_control::PolicyArtifactOwner;
+use mithril_control::{PolicyArtifactOwner, PolicyDocumentV1, ProfileSealRequestV1};
 use mithril_node::{
     EffectObservationHealth, EffectObservationStore, ExactFileObjectResolver,
     NativeSecurityStateOwner, NodePolicyGenerationOwner, WorkloadBindingOwner,
 };
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
-use zerocopy::TryFromBytes as _;
+use zerocopy::{IntoBytes as _, TryFromBytes as _};
 
 use self::child::{EffectProcessFixture, HardClosedOperation};
 use self::support::{
-    effect_binding, effect_node_config, effect_peer_binding, health_delta, inode_generation,
-    mount_view_is_dirty, observation_health, wait_for_effect, wait_for_exact_effect,
+    effect_binding, effect_node_config, effect_peer_binding, effect_propagation_binding,
+    global_mount_view_is_dirty, health_delta, inode_generation, mount_view_is_dirty,
+    observation_health, wait_for_effect, wait_for_exact_effect, wait_for_exact_io_uring_effect,
     wait_for_reason, wait_for_unsupported_effect, ExternalMountNamespace,
 };
 use crate::error::{
@@ -38,9 +40,10 @@ use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::LatencyDistributionV1;
 use crate::Result;
 
-pub use child::run_effect_child;
+pub use child::{run_effect_child, run_mount_setattr_child};
 
 pub(super) const PROFILE_GENERATION_REF_ID: u64 = 1;
+const NEXT_PROFILE_GENERATION_REF_ID: u64 = 2;
 pub(super) const EXACT_OBJECT_KEY_ID: u64 = 7;
 pub(super) const BENIGN_OBJECT_KEY_ID: u64 = 8;
 pub(super) const EXEC_OBJECT_KEY_ID: u64 = 9;
@@ -48,6 +51,7 @@ pub(super) const SCRIPT_OBJECT_KEY_ID: u64 = 10;
 pub(super) const ALLOWED_EXEC_OBJECT_KEY_ID: u64 = 12;
 pub(super) const DEVICE_PTMX_OBJECT_KEY_ID: u64 = 13;
 pub(super) const DEVICE_ZERO_OBJECT_KEY_ID: u64 = 14;
+pub(super) const PROPAGATION_BENIGN_OBJECT_KEY_ID: u64 = 15;
 const QUALIFIED_TIOCGPTN_IOCTL: u32 = 2_147_767_344;
 const BOUNDED_EXCEPTION_INSTANCE_ID: Id128V1 =
     Id128V1::new(0x8888_8888_8888_4888, 0x8888_8888_8888_8889);
@@ -175,10 +179,24 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub passed_fd_acquisition_installed_nothing: bool,
     pub passed_benign_fd_acquisition_allowed: bool,
     pub passed_benign_fd_acquisition_read_allowed: bool,
+    pub io_uring_secret_read_observed: bool,
+    pub io_uring_secret_read_denied_before_effect: bool,
+    pub io_uring_benign_read_allowed: bool,
+    pub io_uring_worker_request_attributed: bool,
+    pub io_uring_sqpoll_denied_before_ring: bool,
+    pub io_uring_lifecycle_released: bool,
     pub bind_alias_canonicalized: bool,
     pub protected_mount_race_denied: bool,
+    pub mount_propagation_reached_peer: bool,
+    pub mount_propagation_all_views_failed_closed: bool,
+    pub mount_propagation_reconciled: bool,
+    pub mount_setattr_global_invalidation: bool,
+    pub mount_setattr_reconciled: bool,
     pub external_mount_replacement_failed_closed: bool,
     pub exact_object_restored_after_reconciliation: bool,
+    pub new_roots_generation_published_atomically: bool,
+    pub existing_tasks_retained_old_generation: bool,
+    pub old_generation_deleted_after_last_holder: bool,
     pub baseline_average_open_ns: u64,
     pub observed_average_open_ns: u64,
     pub baseline_open_latency: LatencyDistributionV1,
@@ -193,6 +211,71 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub lease_removed: bool,
     pub cgroup_removed: bool,
     pub fixture_root_removed: bool,
+}
+
+fn build_next_generation_artifact(
+    policy_source: &Path,
+    seal_source: &Path,
+    signing_key: &Path,
+    fixture_root: &Path,
+) -> Result<PathBuf> {
+    let mut document = PolicyDocumentV1::parse(
+        policy_source,
+        &fs::read(policy_source).context(IoSnafu {
+            path: policy_source,
+        })?,
+    )
+    .context(PolicySnafu)?;
+    document.metadata.profile_version = document
+        .metadata
+        .profile_version
+        .checked_add(1)
+        .ok_or_else(|| {
+            InvalidInputSnafu {
+                path: policy_source,
+                reason: "profile version exhausted",
+            }
+            .build()
+        })?;
+    document.rollout.rollout_generation = document
+        .rollout
+        .rollout_generation
+        .checked_add(1)
+        .ok_or_else(|| {
+            InvalidInputSnafu {
+                path: policy_source,
+                reason: "rollout generation exhausted",
+            }
+            .build()
+        })?;
+    let next_policy = fixture_root.join("profile-generation-2.json");
+    fs::write(
+        &next_policy,
+        serde_json::to_vec_pretty(&document).context(JsonSnafu { path: &next_policy })?,
+    )
+    .context(IoSnafu { path: &next_policy })?;
+
+    let mut seal: ProfileSealRequestV1 =
+        serde_json::from_slice(&fs::read(seal_source).context(IoSnafu { path: seal_source })?)
+            .context(JsonSnafu { path: seal_source })?;
+    seal.issuer_sequence = seal.issuer_sequence.checked_add(1).ok_or_else(|| {
+        InvalidInputSnafu {
+            path: seal_source,
+            reason: "issuer sequence exhausted",
+        }
+        .build()
+    })?;
+    let next_seal = fixture_root.join("profile-seal-generation-2.json");
+    fs::write(
+        &next_seal,
+        serde_json::to_vec_pretty(&seal).context(JsonSnafu { path: &next_seal })?,
+    )
+    .context(IoSnafu { path: &next_seal })?;
+    let artifact = fixture_root.join("profile-generation-2-artifact.json");
+    PolicyArtifactOwner::default()
+        .compile_and_sign(&next_policy, &next_seal, signing_key, &artifact)
+        .context(PolicySnafu)?;
+    Ok(artifact)
 }
 
 pub struct EffectTestRunner {
@@ -583,10 +666,26 @@ impl EffectTestRunner {
             name.push("-peer");
             name
         });
+        let propagation_cgroup_path = cgroup_path.with_file_name({
+            let mut name = cgroup_path
+                .file_name()
+                .ok_or_else(|| {
+                    InvalidInputSnafu {
+                        path: cgroup_path,
+                        reason: "effect-test cgroup path has no final component",
+                    }
+                    .build()
+                })?
+                .to_os_string();
+            name.push("-propagation");
+            name
+        });
         let cgroup_cleanup = ProbeCgroup::create(cgroup_path)?;
         let cgroup_path = cgroup_cleanup.path().to_path_buf();
         let peer_cgroup_cleanup = ProbeCgroup::create(&peer_cgroup_path)?;
         let peer_cgroup_path = peer_cgroup_cleanup.path().to_path_buf();
+        let propagation_cgroup_cleanup = ProbeCgroup::create(&propagation_cgroup_path)?;
+        let propagation_cgroup_path = propagation_cgroup_cleanup.path().to_path_buf();
 
         let repo_root = fs::canonicalize(&self.repo_root).context(IoSnafu {
             path: &self.repo_root,
@@ -610,6 +709,12 @@ impl EffectTestRunner {
                 &artifact_path,
             )
             .context(PolicySnafu)?;
+        let next_artifact_path = build_next_generation_artifact(
+            &policy_source,
+            &signing_fixture.join("observe-profile-seal-request.json"),
+            &signing_fixture.join("test-signing-key.hex"),
+            &fixture_root,
+        )?;
 
         let (boot_id, node_boot_id) = boot_identity()?;
         let kernel_config = KernelHostConfig::identity(
@@ -624,7 +729,12 @@ impl EffectTestRunner {
             .context(InterceptorSnafu)?;
         let binding = effect_binding(&cgroup_path);
         let peer_binding = effect_peer_binding(&peer_cgroup_path);
-        let binding_set = [binding.clone(), peer_binding.clone()];
+        let propagation_binding = effect_propagation_binding(&propagation_cgroup_path);
+        let binding_set = [
+            binding.clone(),
+            peer_binding.clone(),
+            propagation_binding.clone(),
+        ];
         let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
         bindings
             .publish_all(&host, &binding_set)
@@ -635,6 +745,7 @@ impl EffectTestRunner {
 
         let mut fixture = EffectProcessFixture::start(&fixture_root)?;
         let paths = fixture.setup()?;
+        let propagation_peer_pid = fixture.prepare_propagation_peer(&paths)?;
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
         let create_target = paths.mutation_root.join("forbidden-create");
         let setattr_target = paths.mutation_root.join("setattr-target");
@@ -673,6 +784,13 @@ impl EffectTestRunner {
         )
         .context(IoSnafu {
             path: peer_cgroup_path.join("cgroup.procs"),
+        })?;
+        fs::write(
+            propagation_cgroup_path.join("cgroup.procs"),
+            propagation_peer_pid.to_string(),
+        )
+        .context(IoSnafu {
+            path: propagation_cgroup_path.join("cgroup.procs"),
         })?;
         let baseline_samples = fixture.open_samples(&paths.secret, measured_opens)?;
         let baseline = baseline_samples.batch;
@@ -736,6 +854,16 @@ impl EffectTestRunner {
             None,
         )
         .context(NodeSnafu)?;
+        let propagation_benign_object = ExactFileObjectResolver::resolve(
+            propagation_peer_pid,
+            &paths.benign,
+            PROFILE_GENERATION_REF_ID,
+            PROPAGATION_BENIGN_OBJECT_KEY_ID,
+            "MANUAL_BENIGN".to_owned(),
+            inode_generation(propagation_peer_pid, &paths.benign)?,
+            None,
+        )
+        .context(NodeSnafu)?;
         let exec_object = ExactFileObjectResolver::resolve(
             fixture.pid(),
             &paths.exec_target,
@@ -759,6 +887,7 @@ impl EffectTestRunner {
         let mut exact_objects = vec![
             exact_object.clone(),
             benign_object,
+            propagation_benign_object,
             exec_object,
             script_object,
         ];
@@ -807,7 +936,24 @@ impl EffectTestRunner {
             &signing_fixture,
             artifact_path,
             binding_set.to_vec(),
-            exact_objects,
+            exact_objects.clone(),
+        );
+        let mut next_bindings = binding_set.to_vec();
+        for binding in &mut next_bindings {
+            binding.active_profile_generation_ref_id = NEXT_PROFILE_GENERATION_REF_ID;
+        }
+        let mut next_exact_objects = exact_objects;
+        for object in &mut next_exact_objects {
+            object.profile_generation_ref_id = NEXT_PROFILE_GENERATION_REF_ID;
+        }
+        let next_node_config = effect_node_config(
+            &fixture_root,
+            pin_root,
+            lease_path,
+            &signing_fixture,
+            next_artifact_path,
+            next_bindings,
+            next_exact_objects,
         );
 
         host.shutdown().context(InterceptorSnafu)?;
@@ -820,7 +966,7 @@ impl EffectTestRunner {
             .publish_all(&host, &binding_set)
             .context(NodeSnafu)?;
         let mut policy =
-            NodePolicyGenerationOwner::load_and_install(&node_config, &host, node_boot_id, 1)
+            NodePolicyGenerationOwner::load_and_install(&node_config, &mut host, node_boot_id, 1)
                 .context(NodeSnafu)?;
         NativeSecurityStateOwner::new(node_boot_id, 1)
             .activate_with_effect_policy(&mut host, true)
@@ -982,7 +1128,7 @@ impl EffectTestRunner {
                 .start()
                 .context(InterceptorSnafu)?;
             policy = policy
-                .reload_and_install(&node_config, &host, node_boot_id, 1)
+                .reload_and_install(&node_config, &mut host, node_boot_id, 1)
                 .context(NodeSnafu)?;
             NativeSecurityStateOwner::new(node_boot_id, 1)
                 .activate_with_effect_policy(&mut host, true)
@@ -1139,6 +1285,138 @@ impl EffectTestRunner {
             }
         );
         wait_for_reason(&reader, &observations, benign_marker, "EXACT_POLICY_ALLOW")?;
+
+        let io_uring_secret_marker = observations.cursor();
+        let io_uring_secret = fixture.run_prepared(HardClosedOperation::IoUringSecretRead)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
+        ensure!(
+            if protect {
+                io_uring_secret.denied()
+            } else {
+                io_uring_secret.allowed
+            },
+            InvalidInputSnafu {
+                path: &paths.secret,
+                reason: format!(
+                    "the exact io_uring secret-read result did not match the profile mode: {io_uring_secret:?}; observed {:?}",
+                    observations
+                        .recent_since(io_uring_secret_marker)
+                        .iter()
+                        .map(|event| {
+                            (
+                                (
+                                    event.reason.as_str(),
+                                    event.effect_family,
+                                    event.operation,
+                                    event.exact_object_key_id,
+                                    event.composite_atom_id,
+                                ),
+                                (
+                                    event.io_uring_ring_id.as_str(),
+                                    event.io_uring_submission_sequence,
+                                    event.io_uring_user_data,
+                                    event.io_uring_file_cookie,
+                                    event.io_uring_executor_pid_tgid,
+                                    event.io_uring_byte_length,
+                                    event.io_uring_request_flags,
+                                    event.io_uring_opcode,
+                                ),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                ),
+            }
+        );
+        wait_for_exact_io_uring_effect(
+            &reader,
+            &observations,
+            io_uring_secret_marker,
+            if protect {
+                "EXACT_POLICY_DENY"
+            } else {
+                "WOULD_DENY"
+            },
+            EXACT_OBJECT_KEY_ID,
+        )?;
+        let io_uring_benign_marker = observations.cursor();
+        ensure!(
+            fixture
+                .run_prepared(HardClosedOperation::IoUringBenignRead)?
+                .allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "the exact io_uring benign read did not complete with the expected byte",
+            }
+        );
+        wait_for_exact_io_uring_effect(
+            &reader,
+            &observations,
+            io_uring_benign_marker,
+            "EXACT_POLICY_ALLOW",
+            BENIGN_OBJECT_KEY_ID,
+        )?;
+        let io_uring_sqpoll_marker = observations.cursor();
+        ensure!(
+            fixture
+                .run_prepared(HardClosedOperation::IoUringSqpoll)?
+                .denied(),
+            InvalidInputSnafu {
+                path: Path::new("io_uring SQPOLL"),
+                reason: "an SQPOLL ring was created for a managed task",
+            }
+        );
+        wait_for_effect(
+            &reader,
+            &observations,
+            io_uring_sqpoll_marker,
+            "UNSUPPORTED_OBJECT",
+            (
+                KernelEffectFamilyV1::Privilege,
+                KernelEffectOperationV1::IoUringSqpoll,
+            ),
+        )?;
+        let io_uring_cleanup_deadline = Instant::now() + Duration::from_secs(5);
+        let (
+            io_uring_lifecycle_released,
+            retained_io_uring_rings,
+            retained_io_uring_requests,
+            retained_io_uring_generation_ref,
+        ) = loop {
+            let ring_keys = host
+                .map_keys("io_uring_ring_states")
+                .context(InterceptorSnafu)?;
+            let request_keys = host
+                .map_keys("io_uring_request_states")
+                .context(InterceptorSnafu)?;
+            let async_ref = host
+                .lookup_map(
+                    "profile_generation_async_refs",
+                    &PROFILE_GENERATION_REF_ID.to_ne_bytes(),
+                )
+                .context(InterceptorSnafu)?;
+            let released = ring_keys.is_empty()
+                && request_keys.is_empty()
+                && async_ref
+                    .as_deref()
+                    .is_some_and(|bytes| bytes == 0_u64.to_ne_bytes());
+            if released || Instant::now() >= io_uring_cleanup_deadline {
+                break (released, ring_keys, request_keys, async_ref);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        ensure!(
+            io_uring_lifecycle_released,
+            InvalidInputSnafu {
+                path: Path::new("io_uring lifecycle maps"),
+                reason: format!(
+                    "a completed io_uring request retained ring, request, or generation authority: rings={}, requests={}, generation_ref={retained_io_uring_generation_ref:?}",
+                    retained_io_uring_rings.len(),
+                    retained_io_uring_requests.len(),
+                ),
+            }
+        );
 
         // Both fork children must inherit the active protected identity.
         fixture.prepare_labeled_targets()?;
@@ -2277,6 +2555,176 @@ impl EffectTestRunner {
             },
         )?;
 
+        ensure!(
+            fixture.propagation_peer_open()?.allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "the propagation-peer benign control was denied before mutation",
+            }
+        );
+        external_mount_namespace
+            .bind_mount(&paths.propagation_source, &paths.propagation_target)?;
+        ensure!(
+            fixture.propagation_peer_has_marker()?,
+            InvalidInputSnafu {
+                path: &paths.propagation_marker,
+                reason: "the shared mount did not propagate into the peer namespace",
+            }
+        );
+        ensure!(
+            fixture.open(&paths.benign)?.denied() && fixture.propagation_peer_open()?.denied(),
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "one represented namespace authorized an exact open after propagation",
+            }
+        );
+        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        ensure!(
+            fixture.open(&paths.benign)?.allowed && fixture.propagation_peer_open()?.allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "the propagated topology did not reconcile across both namespaces",
+            }
+        );
+        external_mount_namespace.unmount(&paths.propagation_target)?;
+        ensure!(
+            !fixture.propagation_peer_has_marker()? && fixture.propagation_peer_open()?.denied(),
+            InvalidInputSnafu {
+                path: &paths.propagation_marker,
+                reason: "propagated unmount did not invalidate the peer namespace",
+            }
+        );
+        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        ensure!(
+            fixture.propagation_peer_open()?.allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "the peer exact decision did not recover after propagated unmount",
+            }
+        );
+
+        external_mount_namespace.mount_setattr(&paths.mount_target, true)?;
+        ensure!(
+            global_mount_view_is_dirty(&host)?
+                && fixture.open(&paths.benign)?.denied()
+                && fixture.propagation_peer_open()?.denied(),
+            InvalidInputSnafu {
+                path: &paths.mount_target,
+                reason: "mount_setattr did not invalidate every represented namespace",
+            }
+        );
+        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        ensure!(
+            fixture.open(&paths.benign)?.allowed && fixture.propagation_peer_open()?.allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "mount_setattr topology did not reconcile",
+            }
+        );
+        external_mount_namespace.mount_setattr(&paths.mount_target, false)?;
+        ensure!(
+            global_mount_view_is_dirty(&host)?,
+            InvalidInputSnafu {
+                path: &paths.mount_target,
+                reason: "mount_setattr restore did not invalidate the global view",
+            }
+        );
+        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        ensure!(
+            fixture.open(&paths.benign)?.allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "mount_setattr restore did not reconcile",
+            }
+        );
+
+        policy = policy
+            .reload_and_install(&next_node_config, &mut host, node_boot_id, 1)
+            .context(NodeSnafu)?;
+        let active_generation = host
+            .lookup_map(
+                "active_profile_generations",
+                Id128V1::new(0x1111_1111_1111_4111, 0x8111_1111_1111_1111).as_bytes(),
+            )
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: Path::new("active_profile_generations"),
+                    reason: "profile generation 2 was not published",
+                }
+                .build()
+            })?;
+        let new_roots_generation_published_atomically =
+            u64::from_ne_bytes(active_generation.try_into().unwrap_or_default())
+                == NEXT_PROFILE_GENERATION_REF_ID;
+        ensure!(
+            new_roots_generation_published_atomically,
+            InvalidInputSnafu {
+                path: Path::new("active_profile_generations"),
+                reason: "profile generation 2 did not become the one active new-root generation",
+            }
+        );
+        let retiring = host
+            .lookup_map(
+                "profile_generation_descriptors",
+                &PROFILE_GENERATION_REF_ID.to_ne_bytes(),
+            )
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: Path::new("profile_generation_descriptors"),
+                    reason: "generation 1 was deleted while it still had task holders",
+                }
+                .build()
+            })?;
+        let retiring =
+            ProfileGenerationDescriptorV1::try_read_from_bytes(&retiring).map_err(|error| {
+                InvalidInputSnafu {
+                    path: Path::new("profile_generation_descriptors"),
+                    reason: format!("generation 1 descriptor is invalid: {error}"),
+                }
+                .build()
+            })?;
+        ensure!(
+            retiring.state == PolicyGenerationStateV1::Retiring,
+            InvalidInputSnafu {
+                path: Path::new("profile_generation_descriptors"),
+                reason: "generation 1 did not enter RETIRING while its tasks remained live",
+            }
+        );
+        let retained_marker = observations.cursor();
+        ensure!(
+            fixture.read(&paths.benign)?.allowed,
+            InvalidInputSnafu {
+                path: &paths.benign,
+                reason: "an existing task lost its pinned generation during activation",
+            }
+        );
+        wait_for_exact_effect(
+            &reader,
+            &observations,
+            retained_marker,
+            "EXACT_POLICY_ALLOW",
+            (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
+            BENIGN_OBJECT_KEY_ID,
+            None,
+        )?;
+        let existing_tasks_retained_old_generation = observations
+            .recent_since(retained_marker)
+            .iter()
+            .any(|event| {
+                event.reason == "EXACT_POLICY_ALLOW"
+                    && event.profile_generation_ref_id == PROFILE_GENERATION_REF_ID
+                    && event.exact_object_key_id == BENIGN_OBJECT_KEY_ID
+            });
+        ensure!(
+            existing_tasks_retained_old_generation,
+            InvalidInputSnafu {
+                path: Path::new("effect_observations"),
+                reason: "existing task evidence did not retain generation 1",
+            }
+        );
+
         let before_latency = observation_health(&host, &observations)?;
         let observed_samples = fixture.open_samples(&paths.secret, measured_opens)?;
         let observed = observed_samples.batch;
@@ -2350,10 +2798,34 @@ impl EffectTestRunner {
         );
 
         fixture.stop()?;
+        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        let old_target = BindingActivationTargetKeyV1 {
+            binding_id: Id128V1::new(0x9999_9999_9999_4999, 0x8999_9999_9999_9999),
+            profile_generation_ref_id: PROFILE_GENERATION_REF_ID,
+        };
+        let old_generation_deleted_after_last_holder = host
+            .lookup_map(
+                "profile_generation_descriptors",
+                &PROFILE_GENERATION_REF_ID.to_ne_bytes(),
+            )
+            .context(InterceptorSnafu)?
+            .is_none()
+            && host
+                .lookup_map("binding_activation_targets", old_target.as_bytes())
+                .context(InterceptorSnafu)?
+                .is_none();
+        ensure!(
+            old_generation_deleted_after_last_holder,
+            InvalidInputSnafu {
+                path: Path::new("profile_generation_descriptors"),
+                reason: "generation 1 survived after its last task holder exited",
+            }
+        );
         host.shutdown().context(InterceptorSnafu)?;
         pin_cleanup.cleanup()?;
         lease_cleanup.cleanup()?;
         peer_cgroup_cleanup.cleanup()?;
+        propagation_cgroup_cleanup.cleanup()?;
         cgroup_cleanup.cleanup()?;
         fixture_cleanup.cleanup()?;
         ensure!(
@@ -2361,6 +2833,7 @@ impl EffectTestRunner {
                 && !lease_path.exists()
                 && !cgroup_path.exists()
                 && !peer_cgroup_path.exists()
+                && !propagation_cgroup_path.exists()
                 && !fixture_root.exists(),
             InvalidInputSnafu {
                 path: output_directory,
@@ -2429,10 +2902,24 @@ impl EffectTestRunner {
             passed_fd_acquisition_installed_nothing: protect,
             passed_benign_fd_acquisition_allowed: protect,
             passed_benign_fd_acquisition_read_allowed: protect,
+            io_uring_secret_read_observed: true,
+            io_uring_secret_read_denied_before_effect: protect,
+            io_uring_benign_read_allowed: true,
+            io_uring_worker_request_attributed: true,
+            io_uring_sqpoll_denied_before_ring: true,
+            io_uring_lifecycle_released,
             bind_alias_canonicalized: true,
             protected_mount_race_denied: true,
+            mount_propagation_reached_peer: true,
+            mount_propagation_all_views_failed_closed: true,
+            mount_propagation_reconciled: true,
+            mount_setattr_global_invalidation: true,
+            mount_setattr_reconciled: true,
             external_mount_replacement_failed_closed: true,
             exact_object_restored_after_reconciliation: true,
+            new_roots_generation_published_atomically,
+            existing_tasks_retained_old_generation,
+            old_generation_deleted_after_last_holder,
             baseline_average_open_ns: baseline.average_ns(),
             observed_average_open_ns: observed.average_ns(),
             baseline_open_latency: LatencyDistributionV1::from_samples(

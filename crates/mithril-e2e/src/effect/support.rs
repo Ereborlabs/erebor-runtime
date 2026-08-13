@@ -57,6 +57,7 @@ pub(super) fn effect_node_config(
             rollback_public_key_path: None,
         }],
         exact_file_objects,
+        administrative_authorization: None,
     }
 }
 
@@ -80,6 +81,16 @@ pub(super) fn effect_peer_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
     )
 }
 
+pub(super) fn effect_propagation_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
+    effect_binding_with_identity(
+        cgroup_path,
+        "99999999-9999-4999-8999-999999999997",
+        'e',
+        "propagation-peer",
+        false,
+    )
+}
+
 fn effect_binding_with_identity(
     cgroup_path: &Path,
     binding_id: &str,
@@ -94,6 +105,7 @@ fn effect_binding_with_identity(
         workload_selector_id: "worker".to_owned(),
         profile_id: "11111111-1111-4111-8111-111111111111".to_owned(),
         container_id: container_id_byte.to_string().repeat(64),
+        namespace: "default".to_owned(),
         pod_uid: "observation-pod".to_owned(),
         sandbox_id: "observation-sandbox".to_owned(),
         container_name: container_name.to_owned(),
@@ -133,19 +145,56 @@ pub(super) fn health_delta(
 }
 
 pub(super) fn mount_view_is_dirty(host: &KernelHost, mount_namespace_inode: u32) -> Result<bool> {
+    mount_state_is_dirty(
+        host,
+        "mount_security_views",
+        &mount_namespace_inode.to_ne_bytes(),
+    )
+}
+
+pub(super) fn global_mount_view_is_dirty(host: &KernelHost) -> Result<bool> {
+    let key = 0_u32.to_ne_bytes();
+    let mutation = mount_counter(host, "mount_global_mutation_epoch", &key)?;
+    let clean = mount_counter(host, "mount_global_clean_epoch", &key)?;
+    let pending = mount_counter(host, "mount_global_pending_mutations", &key)?;
+    Ok(mutation != clean || pending != 0)
+}
+
+fn mount_counter(host: &KernelHost, map: &str, key: &[u8]) -> Result<u64> {
     let bytes = host
-        .lookup_map("mount_security_views", &mount_namespace_inode.to_ne_bytes())
+        .lookup_map(map, key)
         .context(InterceptorSnafu)?
         .ok_or_else(|| {
             InvalidInputSnafu {
-                path: Path::new("mount_security_views"),
-                reason: "protected mount namespace has no security state",
+                path: Path::new(map),
+                reason: "protected mount topology has no global counter",
+            }
+            .build()
+        })?;
+    let value: [u8; 8] = bytes.as_slice().try_into().map_err(|_| {
+        InvalidInputSnafu {
+            path: Path::new(map),
+            reason: "global mount counter has an invalid ABI value",
+        }
+        .build()
+    })?;
+    Ok(u64::from_ne_bytes(value))
+}
+
+fn mount_state_is_dirty(host: &KernelHost, map: &str, key: &[u8]) -> Result<bool> {
+    let bytes = host
+        .lookup_map(map, key)
+        .context(InterceptorSnafu)?
+        .ok_or_else(|| {
+            InvalidInputSnafu {
+                path: Path::new(map),
+                reason: "protected mount topology has no security state",
             }
             .build()
         })?;
     let view = MountSecurityViewStateV1::try_read_from_bytes(&bytes).map_err(|error| {
         InvalidInputSnafu {
-            path: Path::new("mount_security_views"),
+            path: Path::new(map),
             reason: format!("mount security state has an invalid ABI value: {error}"),
         }
         .build()
@@ -227,11 +276,36 @@ pub(super) fn wait_for_unsupported_effect(
     )
 }
 
+pub(super) fn wait_for_exact_io_uring_effect(
+    reader: &EffectObservationReader,
+    store: &EffectObservationStore,
+    marker: u64,
+    expected_reason: &str,
+    exact_object_key_id: u64,
+) -> Result<()> {
+    wait_for_observation(
+        reader,
+        store,
+        marker,
+        expected_reason,
+        Some((
+            u32::from(KernelEffectFamilyV1::File as u16),
+            u32::from(KernelEffectOperationV1::Read as u16),
+        )),
+        Some(ObjectExpectation::IoUringRead {
+            exact_object_key_id,
+        }),
+    )
+}
+
 #[derive(Clone, Copy, Debug)]
 enum ObjectExpectation {
     Exact {
         exact_object_key_id: u64,
         operation_argument: Option<u32>,
+    },
+    IoUringRead {
+        exact_object_key_id: u64,
     },
     Unsupported,
 }
@@ -256,12 +330,7 @@ fn wait_for_observation(
                 event.operation,
                 expected_reason,
                 expected_effect,
-            ) && object_matches(
-                event.exact_object_key_id,
-                event.composite_atom_id,
-                event.operation_argument,
-                expected_object,
-            )
+            ) && object_matches(event, expected_object)
         }) {
             return Ok(());
         }
@@ -292,9 +361,7 @@ fn wait_for_observation(
 }
 
 fn object_matches(
-    exact_object_key_id: u64,
-    composite_atom_id: u64,
-    operation_argument: u32,
+    event: &erebor_runtime_ipc::v1::MithrilEffectObservation,
     expected: Option<ObjectExpectation>,
 ) -> bool {
     match expected {
@@ -303,10 +370,30 @@ fn object_matches(
             exact_object_key_id: expected_key,
             operation_argument: expected_argument,
         }) => {
-            exact_object_key_id == expected_key
-                && expected_argument.is_none_or(|argument| operation_argument == argument)
+            event.exact_object_key_id == expected_key
+                && expected_argument.is_none_or(|argument| event.operation_argument == argument)
         }
-        Some(ObjectExpectation::Unsupported) => exact_object_key_id == 0 && composite_atom_id == 0,
+        Some(ObjectExpectation::IoUringRead {
+            exact_object_key_id,
+        }) => {
+            event.exact_object_key_id == exact_object_key_id
+                && event.io_uring_ring_id != "00000000000000000000000000000000"
+                && event.io_uring_ring_generation == 1
+                && event.io_uring_submission_sequence > 0
+                && event.io_uring_user_data == 0x4d49_5448_5249_4c01
+                && event.io_uring_file_offset == 0
+                && event.io_uring_buffer_address != 0
+                && event.io_uring_file_cookie != 0
+                && event.io_uring_executor_pid_tgid != 0
+                && event.io_uring_byte_length == 1
+                && event.io_uring_sqe_index < 2
+                && event.io_uring_request_flags & 16 != 0
+                && event.io_uring_rw_flags == 0
+                && event.io_uring_opcode == 22
+        }
+        Some(ObjectExpectation::Unsupported) => {
+            event.exact_object_key_id == 0 && event.composite_atom_id == 0
+        }
     }
 }
 
@@ -379,6 +466,47 @@ impl ExternalMountNamespace {
 
     pub(super) fn unmount(&self, target: &Path) -> Result<()> {
         self.run(["umount", "--"], [target])
+    }
+
+    pub(super) fn mount_setattr(&self, target: &Path, read_only: bool) -> Result<()> {
+        let executable = std::env::current_exe().context(IoSnafu {
+            path: Path::new("current executable"),
+        })?;
+        let flags = rustix::io::fcntl_getfd(&self.namespace)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: Path::new("held mount namespace"),
+            })?;
+        rustix::io::fcntl_setfd(&self.namespace, flags - rustix::io::FdFlags::CLOEXEC)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: Path::new("held mount namespace"),
+            })?;
+        let output = Command::new(executable)
+            .arg("mount-setattr")
+            .arg("--namespace")
+            .arg(format!("/proc/self/fd/{}", self.namespace.as_raw_fd()))
+            .arg("--path")
+            .arg(target)
+            .arg("--read-only")
+            .arg(read_only.to_string())
+            .output();
+        rustix::io::fcntl_setfd(&self.namespace, flags)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: Path::new("held mount namespace"),
+            })?;
+        let output = output.context(IoSnafu {
+            path: Path::new("mount_setattr helper"),
+        })?;
+        ensure!(
+            output.status.success(),
+            CommandSnafu {
+                program: "mithril-effect-test mount-setattr",
+                reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            }
+        );
+        Ok(())
     }
 
     fn run<const A: usize, const P: usize>(
@@ -474,27 +602,62 @@ mod tests {
             exact_object_key_id: 13,
             operation_argument: Some(2_147_767_344),
         });
-        assert!(object_matches(13, 99, 2_147_767_344, exact));
-        assert!(!object_matches(12, 99, 2_147_767_344, exact));
-        assert!(!object_matches(13, 99, 0, exact));
-        assert!(object_matches(
-            0,
-            0,
-            0,
-            Some(ObjectExpectation::Unsupported)
-        ));
+        let mut event = erebor_runtime_ipc::v1::MithrilEffectObservation {
+            exact_object_key_id: 13,
+            composite_atom_id: 99,
+            operation_argument: 2_147_767_344,
+            ..Default::default()
+        };
+        assert!(object_matches(&event, exact));
+        event.exact_object_key_id = 12;
+        assert!(!object_matches(&event, exact));
+        event.exact_object_key_id = 13;
+        event.operation_argument = 0;
+        assert!(!object_matches(&event, exact));
+        event.exact_object_key_id = 0;
+        event.composite_atom_id = 0;
+        assert!(object_matches(&event, Some(ObjectExpectation::Unsupported)));
+        event.composite_atom_id = 1;
         assert!(!object_matches(
-            0,
-            1,
-            0,
+            &event,
             Some(ObjectExpectation::Unsupported)
         ));
+        event.composite_atom_id = 0;
+        event.exact_object_key_id = 1;
         assert!(!object_matches(
-            1,
-            0,
-            0,
+            &event,
             Some(ObjectExpectation::Unsupported)
         ));
+    }
+
+    #[test]
+    fn io_uring_match_requires_exact_worker_request_identity() {
+        let expectation = Some(ObjectExpectation::IoUringRead {
+            exact_object_key_id: 7,
+        });
+        let mut event = erebor_runtime_ipc::v1::MithrilEffectObservation {
+            exact_object_key_id: 7,
+            io_uring_ring_id: "00000000000000010000000000000002".to_owned(),
+            io_uring_ring_generation: 1,
+            io_uring_submission_sequence: 3,
+            io_uring_user_data: 0x4d49_5448_5249_4c01,
+            io_uring_file_offset: 0,
+            io_uring_buffer_address: 4,
+            io_uring_file_cookie: 5,
+            io_uring_executor_pid_tgid: 6,
+            io_uring_byte_length: 1,
+            io_uring_sqe_index: 0,
+            io_uring_request_flags: 16,
+            io_uring_rw_flags: 0,
+            io_uring_opcode: 22,
+            ..Default::default()
+        };
+        assert!(object_matches(&event, expectation));
+        event.io_uring_request_flags = 0;
+        assert!(!object_matches(&event, expectation));
+        event.io_uring_request_flags = 16;
+        event.io_uring_file_cookie = 0;
+        assert!(!object_matches(&event, expectation));
     }
 
     #[test]
@@ -664,7 +827,7 @@ mod tests {
                     location: snafu::location!(),
                 })?;
         assert_eq!(compiled.mode, ProfileModeV1::Protect);
-        assert_eq!(compiled.compiled_cells.len(), 27);
+        assert_eq!(compiled.compiled_cells.len(), 37);
         assert_eq!(
             compiled
                 .compiled_cells
@@ -672,6 +835,19 @@ mod tests {
                 .filter(|cell| cell.physical_result == CompiledPhysicalResultV1::DenyEffect)
                 .count(),
             11
+        );
+        assert_eq!(
+            compiled
+                .compiled_cells
+                .iter()
+                .filter(|cell| {
+                    cell.key.effect_family == EffectFamilyV1::Privilege
+                        && cell.key.operation_id == "IO_URING_SETUP"
+                        && cell.key.object_selector == "DEFAULT"
+                        && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
+                })
+                .count(),
+            10
         );
         assert_eq!(
             compiled

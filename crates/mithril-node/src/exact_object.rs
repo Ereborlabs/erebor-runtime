@@ -27,6 +27,48 @@ pub(crate) struct ExactFileObjectView {
     mountinfo: Mutex<File>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LiveExactFileObjectV1 {
+    pub mount_namespace_inode: u32,
+    pub mount_id: u32,
+    pub mount_id_unique: u64,
+    pub filesystem_device: u32,
+    pub inode: u64,
+    pub mode: u16,
+    pub device_type: Option<ExactDeviceType>,
+    pub device_major: u32,
+    pub device_minor: u32,
+    pub canonical_component_hex: Vec<String>,
+    pub mount_relative_component_count: u16,
+    pub mount_root_filesystem_device: u32,
+    pub mount_root_inode: u64,
+    pub selected_mount_id_unique: u64,
+    pub mount_snapshot_digest_id: u64,
+}
+
+impl LiveExactFileObjectV1 {
+    pub(crate) fn matches(&self, configured: &ExactFileObjectConfig) -> bool {
+        self.mount_namespace_inode == configured.mount_namespace_inode
+            && self.mount_id_unique == configured.mount_id_unique
+            && self.filesystem_device == configured.filesystem_device
+            && self.inode == configured.inode
+            && self.canonical_component_hex == configured.canonical_component_hex
+            && self.mount_relative_component_count == configured.mount_relative_component_count
+            && self.mount_root_filesystem_device == configured.mount_root_filesystem_device
+            && self.mount_root_inode == configured.mount_root_inode
+            && self.selected_mount_id_unique == configured.selected_mount_id_unique
+            && match (&configured.device, self.device_type) {
+                (None, None) => true,
+                (Some(device), Some(device_type)) => {
+                    device.device_type == device_type
+                        && device.major == self.device_major
+                        && device.minor == self.device_minor
+                }
+                _ => false,
+            }
+    }
+}
+
 impl ExactFileObjectResolver {
     pub fn resolve(
         root_pid: u32,
@@ -118,17 +160,78 @@ impl ExactFileObjectView {
         inode_generation: u32,
         device_class_id: Option<String>,
     ) -> Result<ExactFileObjectConfig> {
+        let live = self.inspect(path)?;
+        let device = live.device_type.map(|device_type| ExactDeviceConfig {
+            device_class_id: device_class_id.clone().unwrap_or_default(),
+            device_type,
+            major: live.device_major,
+            minor: live.device_minor,
+        });
         ensure!(
             path.is_absolute(),
             IdentityStateSnafu {
                 reason: "exact file resolution needs an absolute in-namespace path",
             }
         );
-        let mount_namespace_inode = self.mount_namespace_inode()?;
+        ensure!(
+            live.mount_namespace_inode > 0
+                && (inode_generation > 0 || device.is_some())
+                && device.is_some() == device_class_id.is_some()
+                && device_class_id.as_ref().is_none_or(|id| !id.is_empty()),
+            IdentityStateSnafu {
+                reason: "device objects need one nonempty device class; non-device objects need a nonzero inode generation",
+            }
+        );
+        Ok(ExactFileObjectConfig {
+            profile_generation_ref_id,
+            exact_object_key_id,
+            object_class_id,
+            mount_namespace_inode: live.mount_namespace_inode,
+            mount_id_unique: live.mount_id_unique,
+            filesystem_device: live.filesystem_device,
+            inode: live.inode,
+            inode_generation,
+            device,
+            canonical_component_hex: live.canonical_component_hex,
+            mount_relative_component_count: live.mount_relative_component_count,
+            mount_root_filesystem_device: live.mount_root_filesystem_device,
+            mount_root_inode: live.mount_root_inode,
+            selected_mount_id_unique: live.selected_mount_id_unique,
+            mount_snapshot_digest_id: live.mount_snapshot_digest_id,
+            mount_topology_generation: 1,
+            mount_view_root_pid: self.root_pid,
+        })
+    }
+
+    pub(crate) fn inspect(&self, path: &Path) -> Result<LiveExactFileObjectV1> {
+        ensure!(
+            path.is_absolute(),
+            IdentityStateSnafu {
+                reason: "exact file resolution needs an absolute in-namespace path",
+            }
+        );
         let file = self.open_path(path)?;
+        self.inspect_file(path, &file)
+    }
+
+    pub(crate) fn try_inspect(&self, path: &Path) -> Result<Option<LiveExactFileObjectV1>> {
+        ensure!(
+            path.is_absolute(),
+            IdentityStateSnafu {
+                reason: "exact file resolution needs an absolute in-namespace path",
+            }
+        );
+        let Some(file) = self.try_open_path(path)? else {
+            return Ok(None);
+        };
+        self.inspect_file(path, &file).map(Some)
+    }
+
+    fn inspect_file(&self, path: &Path, file: &File) -> Result<LiveExactFileObjectV1> {
+        let mount_namespace_inode = self.mount_namespace_inode()?;
         let unique_mount = StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE);
         let status = statx(
-            &file,
+            file,
             "",
             AtFlags::EMPTY_PATH,
             StatxFlags::BASIC_STATS | unique_mount,
@@ -148,32 +251,17 @@ impl ExactFileObjectView {
             0o060_000 => Some(ExactDeviceType::Block),
             _ => None,
         };
-        let device = device_type.map(|device_type| ExactDeviceConfig {
-            device_class_id: device_class_id.clone().unwrap_or_default(),
-            device_type,
-            major: status.stx_rdev_major,
-            minor: status.stx_rdev_minor,
-        });
-        ensure!(
-            mount_namespace_inode > 0
-                && (inode_generation > 0 || device.is_some())
-                && device.is_some() == device_class_id.is_some()
-                && device_class_id.as_ref().is_none_or(|id| !id.is_empty()),
-            IdentityStateSnafu {
-                reason: "device objects need one nonempty device class; non-device objects need a nonzero inode generation",
-            }
-        );
         let mount_snapshot = MountInfoSnapshot::read(self, path)?;
-        Ok(ExactFileObjectConfig {
-            profile_generation_ref_id,
-            exact_object_key_id,
-            object_class_id,
+        Ok(LiveExactFileObjectV1 {
             mount_namespace_inode,
+            mount_id: mount_snapshot.entered_mount_id,
             mount_id_unique: status.stx_mnt_id,
             filesystem_device: encoded_device(status.stx_dev_major, status.stx_dev_minor)?,
             inode: status.stx_ino,
-            inode_generation,
-            device,
+            mode: status.stx_mode,
+            device_type,
+            device_major: status.stx_rdev_major,
+            device_minor: status.stx_rdev_minor,
             canonical_component_hex: mount_snapshot
                 .canonical_components
                 .iter()
@@ -192,8 +280,6 @@ impl ExactFileObjectView {
             mount_root_inode: mount_snapshot.root_inode,
             selected_mount_id_unique: mount_snapshot.selected_mount_id_unique,
             mount_snapshot_digest_id: mount_snapshot.snapshot_digest_id,
-            mount_topology_generation: 1,
-            mount_view_root_pid: self.root_pid,
         })
     }
 
@@ -216,6 +302,20 @@ impl ExactFileObjectView {
         .context(IoSnafu { path })
     }
 
+    fn try_open_path(&self, path: &Path) -> Result<Option<File>> {
+        match openat2(
+            &self.root,
+            path,
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::IN_ROOT,
+        ) {
+            Ok(file) => Ok(Some(File::from(file))),
+            Err(rustix::io::Errno::NOENT | rustix::io::Errno::NOTDIR) => Ok(None),
+            Err(error) => Err(std::io::Error::from(error)).context(IoSnafu { path }),
+        }
+    }
+
     fn read_mountinfo(&self) -> Result<Vec<u8>> {
         let mut file = self.mountinfo.lock().map_err(|_| {
             IdentityStateSnafu {
@@ -228,6 +328,7 @@ impl ExactFileObjectView {
 }
 
 struct MountInfoSnapshot {
+    entered_mount_id: u32,
     canonical_components: Vec<Vec<u8>>,
     relative_component_count: usize,
     root_filesystem_device: u32,
@@ -312,6 +413,7 @@ impl MountInfoSnapshot {
             }
         );
         Ok(Self {
+            entered_mount_id: entered.mount_id,
             canonical_components,
             relative_component_count: relative.len(),
             root_filesystem_device: entered.filesystem_device,

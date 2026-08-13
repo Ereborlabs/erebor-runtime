@@ -59,6 +59,22 @@ pub struct PolicyCandidateConfig {
     pub rollback_public_key_path: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdministrativeAuthorizationConfig {
+    pub tenant_id: String,
+    pub cluster_uid: String,
+    pub trust_domain_id: String,
+    pub issuer_id: String,
+    pub key_id: String,
+    pub public_key_path: PathBuf,
+    pub sequence_epoch: u64,
+    pub valid_from_utc_ns: i64,
+    pub valid_until_utc_ns: i64,
+    #[serde(default = "default_authorization_clock_skew_ns")]
+    pub maximum_clock_skew_ns: i64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExactDeviceConfig {
@@ -116,6 +132,7 @@ pub struct WorkloadBindingConfig {
     pub workload_selector_id: String,
     pub profile_id: String,
     pub container_id: String,
+    pub namespace: String,
     pub pod_uid: String,
     pub sandbox_id: String,
     pub container_name: String,
@@ -149,6 +166,8 @@ pub struct NodeConfig {
     pub policy_candidates: Vec<PolicyCandidateConfig>,
     #[serde(default)]
     pub exact_file_objects: Vec<ExactFileObjectConfig>,
+    #[serde(default)]
+    pub administrative_authorization: Option<AdministrativeAuthorizationConfig>,
 }
 
 impl NodeConfig {
@@ -203,6 +222,7 @@ impl NodeConfig {
         for binding in &self.workload_bindings {
             ensure!(
                 (32..=128).contains(&binding.container_id.len())
+                    && (1..=253).contains(&binding.namespace.len())
                     && (1..=64).contains(&binding.pod_uid.len())
                     && (1..=128).contains(&binding.sandbox_id.len())
                     && (1..=253).contains(&binding.container_name.len())
@@ -306,6 +326,23 @@ impl NodeConfig {
                 }
             );
         }
+        if let Some(authorization) = &self.administrative_authorization {
+            ensure!(
+                canonical_uuid(&authorization.tenant_id)
+                    && canonical_uuid(&authorization.cluster_uid)
+                    && canonical_uuid(&authorization.trust_domain_id)
+                    && canonical_uuid(&authorization.issuer_id)
+                    && (1..=128).contains(&authorization.key_id.len())
+                    && !authorization.key_id.chars().any(char::is_whitespace)
+                    && authorization.public_key_path.is_absolute()
+                    && authorization.sequence_epoch > 0
+                    && authorization.valid_from_utc_ns < authorization.valid_until_utc_ns
+                    && (0..=300_000_000_000).contains(&authorization.maximum_clock_skew_ns),
+                InvalidConfigurationSnafu {
+                    reason: "administrative authorization needs canonical identities, one key, and a bounded validity window",
+                }
+            );
+        }
         Ok(())
     }
 
@@ -342,6 +379,14 @@ const fn default_reconnect_maximum_ms() -> u64 {
 
 const fn default_runtime_reconciliation_ms() -> u64 {
     2_000
+}
+
+const fn default_authorization_clock_skew_ns() -> i64 {
+    300_000_000_000
+}
+
+fn canonical_uuid(value: &str) -> bool {
+    uuid::Uuid::parse_str(value).is_ok_and(|uuid| uuid.hyphenated().to_string() == value)
 }
 
 #[cfg(test)]
@@ -381,6 +426,7 @@ mod tests {
                 workload_selector_id: "worker".to_owned(),
                 profile_id: "33333333-3333-4333-8333-333333333333".to_owned(),
                 container_id: "a".repeat(64),
+                namespace: "default".to_owned(),
                 pod_uid: "configured-scope".to_owned(),
                 sandbox_id: "configured-scope".to_owned(),
                 container_name: "worker".to_owned(),
@@ -396,6 +442,7 @@ mod tests {
             }],
             policy_candidates: Vec::new(),
             exact_file_objects: Vec::new(),
+            administrative_authorization: None,
         }
     }
 

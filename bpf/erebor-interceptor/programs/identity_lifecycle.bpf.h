@@ -43,6 +43,7 @@ int BPF_PROG(erebor_task_alloc, struct task_struct *task,
     struct cgroup *creator_cgroup = NULL;
     task_label_v1 *parent_label;
     execution_set_binding_state_v1 *creator_binding;
+    io_uring_execution_state_v1 *io_uring_execution;
     int creator_binding_lookup;
     int result;
 
@@ -55,6 +56,12 @@ int BPF_PROG(erebor_task_alloc, struct task_struct *task,
     scratch = identity_scratch_record();
     if (!scratch)
         return identity_deny(config);
+    io_uring_execution = bpf_task_storage_get(
+        &io_uring_execution_states, task, 0,
+        BPF_LOCAL_STORAGE_GET_F_CREATE);
+    if (!io_uring_execution)
+        return identity_deny(config);
+    __builtin_memset(io_uring_execution, 0, sizeof(*io_uring_execution));
     creator = bpf_get_current_task_btf();
     parent_label = bpf_task_storage_get(&task_labels, creator, 0, 0);
     if (task_cgroup(creator, &creator_cgroup)) {

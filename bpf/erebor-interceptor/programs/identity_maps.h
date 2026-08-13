@@ -69,6 +69,7 @@ struct identity_scratch_v1 {
     image_provenance_v1 image;
     process_execution_instance_v1 execution;
     pending_administrative_match_v1 administrative_match;
+    approved_exec_slot_key_v1 administrative_slot_key;
     effect_decision_key_v1 effect_key;
     effect_default_key_v1 effect_default;
     ipc_relationship_decision_key_v1 ipc_relationship_key;
@@ -77,6 +78,9 @@ struct identity_scratch_v1 {
     process_control_rule_key_v1 process_control_rule_key;
     exception_use_receipt_key_v1 exception_receipt_key;
     exception_use_receipt_v1 exception_receipt_draft;
+    io_uring_actor_snapshot_v1 io_uring_actor;
+    io_uring_ring_state_v1 io_uring_ring_draft;
+    io_uring_request_state_v1 io_uring_request_draft;
     __u8 effect_gate_flags;
     exact_file_object_key_v1 file_object;
     task_label_v1 target_label;
@@ -87,6 +91,9 @@ struct identity_scratch_v1 {
     path_graph_transition_key_v1 path_transition_key;
     path_graph_state_key_v1 path_state_key;
     path_graph_terminal_v1 path_terminal;
+    __u64 mount_topology_generation;
+    __u64 mount_snapshot_digest_id;
+    __u64 mount_transition_version;
     struct canonical_path_view_v1
         path_component_views[MAX_CANONICAL_PATH_COMPONENTS_V1];
     effect_observation_v1 observation;
@@ -115,6 +122,13 @@ struct {
     __type(key, __u32);
     __type(value, struct identity_scratch_v1);
 } identity_scratch SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, policy_activation_probe_v1);
+} policy_activation_probe_requests SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
@@ -335,6 +349,43 @@ struct {
 } task_effect_attempt_states SEC(".maps");
 
 struct {
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __type(key, int);
+    __type(value, io_uring_setup_state_v1);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} io_uring_setup_states SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, __u64);
+    __type(value, io_uring_ring_state_v1);
+} io_uring_ring_states SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+    __type(key, __u64);
+    __type(value, io_uring_request_state_v1);
+} io_uring_request_states SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_TASK_STORAGE);
+    __type(key, int);
+    __type(value, io_uring_execution_state_v1);
+    __uint(map_flags, BPF_F_NO_PREALLOC);
+} io_uring_execution_states SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, __u64);
+    __type(value, __u64);
+} profile_generation_async_refs SEC(".maps");
+
+struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65536);
     __type(key, exact_file_object_key_v1);
@@ -347,6 +398,27 @@ struct {
     __type(key, __u32);
     __type(value, mount_security_view_state_v1);
 } mount_security_views SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} mount_global_mutation_epoch SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} mount_global_clean_epoch SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} mount_global_pending_mutations SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
@@ -483,6 +555,47 @@ static __always_inline __u64 decrement_nonzero_counter(__u64 *counter)
             health->reconciliation_required++;
     }
     return 0;
+}
+
+static __always_inline bool increment_bounded_counter(__u64 *counter)
+{
+#pragma unroll
+    for (int attempt = 0; attempt < 8; attempt++) {
+        __u64 value = __sync_fetch_and_add(counter, 0);
+
+        if (value == ~0ULL)
+            break;
+        if (__sync_val_compare_and_swap(counter, value, value + 1) == value)
+            return true;
+    }
+    {
+        identity_health_v1 *health = identity_health_record();
+
+        if (health)
+            health->reconciliation_required++;
+    }
+    return false;
+}
+
+static __always_inline bool increment_counter_below(__u64 *counter,
+                                                     __u64 maximum)
+{
+#pragma unroll
+    for (int attempt = 0; attempt < 8; attempt++) {
+        __u64 value = __sync_fetch_and_add(counter, 0);
+
+        if (!maximum || value >= maximum)
+            break;
+        if (__sync_val_compare_and_swap(counter, value, value + 1) == value)
+            return true;
+    }
+    {
+        identity_health_v1 *health = identity_health_record();
+
+        if (health)
+            health->reconciliation_required++;
+    }
+    return false;
 }
 
 static __always_inline int task_cgroup(struct task_struct *task,
@@ -920,6 +1033,14 @@ static __always_inline bool binding_matches_label(
            id128_equal(&binding->binding_nonce,
                        &label->placement.protected_root_binding_nonce) &&
            binding->lifecycle_state == binding_lifecycle_state_v1_active;
+}
+
+static __always_inline bool generation_allows_existing_holder(
+    const profile_generation_descriptor_v1 *generation)
+{
+    return generation &&
+           (generation->state == policy_generation_state_v1_active ||
+            generation->state == policy_generation_state_v1_retiring);
 }
 
 static __always_inline execution_set_binding_state_v1 *
