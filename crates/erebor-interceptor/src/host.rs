@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::os::fd::AsFd as _;
@@ -6,11 +6,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use libbpf_rs::{
+    query::{ProgInfoIter, ProgInfoQueryOptions},
     Iter, Link, Map, MapCore as _, MapFlags, MapHandle, Object, ObjectBuilder, OpenObject, Program,
     ProgramHandle, ProgramType, RingBuffer, RingBufferBuilder,
 };
 use sha2::{Digest as _, Sha256};
-use snafu::{ensure, ResultExt as _};
+use snafu::{ensure, OptionExt as _, ResultExt as _};
 
 use crate::error::{
     InvalidConfigurationSnafu, IoSnafu, LibbpfSnafu, ManifestMismatchSnafu, StalePinRootSnafu,
@@ -37,20 +38,35 @@ impl EffectObservationReader {
     }
 }
 
-pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 21] = [
+pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 36] = [
     "qualification_task_alloc",
     "qualification_file_open",
     "qualification_bprm_check_security",
+    "qualification_file_receive",
     "qualification_file_permission",
     "qualification_file_ioctl",
     "qualification_mmap_file",
     "qualification_file_mprotect",
+    "qualification_socket_post_create",
+    "qualification_unix_stream_connect",
     "qualification_ipc_permission",
     "qualification_socket_connect",
     "qualification_socket_sendmsg",
+    "qualification_socket_recvmsg",
+    "qualification_socket_socketpair",
+    "qualification_unix_may_send",
+    "qualification_shm_shmat",
     "qualification_ptrace_access_check",
     "qualification_task_kill",
     "qualification_path_unlink",
+    "qualification_path_mknod",
+    "qualification_path_mkdir",
+    "qualification_path_symlink",
+    "qualification_path_rmdir",
+    "qualification_path_chmod",
+    "qualification_path_chown",
+    "qualification_path_truncate",
+    "qualification_file_truncate",
     "qualification_path_link",
     "qualification_path_rename",
     "qualification_sb_mount",
@@ -61,7 +77,7 @@ pub const REQUIRED_QUALIFICATION_LSM_PROGRAMS: [&str; 21] = [
     "qualification_bpf",
 ];
 
-pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 37] = [
+pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 50] = [
     "erebor_task_alloc",
     "erebor_cgroup_attach_task",
     "erebor_cgroup_release",
@@ -72,21 +88,34 @@ pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 37] = [
     "erebor_bprm_committing_creds",
     "erebor_sys_exit_execve",
     "erebor_sys_exit_execveat",
+    "erebor_exception_sys_enter",
+    "erebor_exception_sys_exit",
     "erebor_mount_mutation_sys_exit",
     "erebor_sched_process_exec",
     "erebor_identity_file_open",
+    "erebor_identity_file_receive",
     "erebor_identity_file_permission",
     "erebor_identity_file_ioctl",
     "erebor_identity_mmap_file",
     "erebor_identity_file_mprotect",
+    "erebor_identity_socket_post_create",
+    "erebor_identity_unix_stream_connect",
     "erebor_identity_ipc_permission",
     "erebor_identity_socket_connect",
     "erebor_identity_socket_sendmsg",
+    "erebor_identity_socket_recvmsg",
+    "erebor_identity_socket_socketpair",
+    "erebor_identity_unix_may_send",
+    "erebor_identity_shm_shmat",
     "erebor_identity_ptrace_access_check",
     "erebor_identity_task_kill",
     "erebor_identity_path_unlink",
-    "erebor_identity_inode_create",
+    "erebor_identity_path_mknod",
+    "erebor_identity_path_mkdir",
+    "erebor_identity_path_symlink",
+    "erebor_identity_path_rmdir",
     "erebor_identity_path_chmod",
+    "erebor_identity_path_chown",
     "erebor_identity_path_truncate",
     "erebor_identity_file_truncate",
     "erebor_identity_path_link",
@@ -100,6 +129,14 @@ pub const REQUIRED_IDENTITY_PROGRAMS: [&str; 37] = [
     "erebor_sched_process_exit",
     "erebor_reconcile_tasks",
 ];
+
+pub const EXCEPTION_USE_RECEIPT_CAPACITY: u64 = 65_536;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MapInsertResult {
+    Inserted,
+    AlreadyExists,
+}
 
 #[derive(Clone)]
 pub struct KernelStateReader {
@@ -539,6 +576,15 @@ impl KernelHostOwner {
             action: "load BPF object with recovered maps",
             path: self.config.object_path(),
         })?;
+        let program_map_ids =
+            ProgInfoIter::with_query_opts(ProgInfoQueryOptions::default().include_map_ids(true))
+                .map(|program| {
+                    (
+                        program.id,
+                        program.map_ids.into_iter().collect::<BTreeSet<_>>(),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>();
 
         let mut links = Vec::with_capacity(expected_links.len());
         let mut link_records = Vec::with_capacity(expected_links.len());
@@ -574,11 +620,29 @@ impl KernelHostOwner {
                 action: "read replacement BPF program",
                 path: self.config.object_path(),
             })?;
-            ensure!(
-                old_program.tag() == new_program.tag(),
+            let old_map_ids = program_map_ids.get(&info.prog_id).ok_or_else(|| {
                 ManifestMismatchSnafu {
                     path: &path,
-                    reason: format!("pinned program `{name}` does not match the configured object"),
+                    reason: format!("kernel program {} has no readable map-ID set", info.prog_id),
+                }
+                .build()
+            })?;
+            let new_map_ids = program_map_ids.get(&new_program_id).ok_or_else(|| {
+                ManifestMismatchSnafu {
+                    path: self.config.object_path(),
+                    reason: format!(
+                        "replacement kernel program {new_program_id} has no readable map-ID set"
+                    ),
+                }
+                .build()
+            })?;
+            ensure!(
+                old_program.tag() == new_program.tag() && old_map_ids == new_map_ids,
+                ManifestMismatchSnafu {
+                    path: &path,
+                    reason: format!(
+                        "pinned program `{name}` does not match the configured object and recovered maps"
+                    ),
                 }
             );
             link_records.push(KernelLinkManifestV1 {
@@ -676,14 +740,6 @@ impl KernelHostOwner {
     pub fn preflight(&self) -> Result<KernelPreflightV1> {
         self.validate_config()?;
         let platform = KernelPlatformProbe::inspect(&self.config.runtime_btf_path)?;
-        let lsm_path = Path::new("/sys/kernel/security/lsm");
-        ensure!(
-            platform.bpf_lsm_active,
-            InvalidConfigurationSnafu {
-                path: lsm_path,
-                reason: "BPF LSM is not active".to_owned(),
-            }
-        );
         let mounts_path = Path::new("/proc/mounts");
         ensure!(
             platform.cgroup_v2,
@@ -765,7 +821,7 @@ impl KernelHostOwner {
     }
 
     fn validate_program_set(&self, programs: &[KernelProgramLayoutV1]) -> Result<()> {
-        let actual = programs
+        let mut actual = programs
             .iter()
             .filter(|program| {
                 self.config
@@ -773,14 +829,10 @@ impl KernelHostOwner {
                     .includes(&program.name, &program.section)
             })
             .map(|program| program.name.as_str())
-            .collect::<BTreeSet<_>>();
-        let expected = self
-            .config
-            .object_kind
-            .required_programs()
-            .iter()
-            .copied()
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
+        let mut expected = self.config.object_kind.required_programs().to_vec();
+        actual.sort_unstable();
+        expected.sort_unstable();
         ensure!(
             actual == expected,
             ManifestMismatchSnafu {
@@ -792,18 +844,20 @@ impl KernelHostOwner {
     }
 
     fn validate_attached_set(&self, links: &[KernelLinkManifestV1]) -> Result<()> {
-        let actual = links
+        let mut actual = links
             .iter()
             .map(|link| link.program.as_str())
-            .collect::<BTreeSet<_>>();
-        let expected = self
+            .collect::<Vec<_>>();
+        let mut expected = self
             .config
             .object_kind
             .required_programs()
             .iter()
             .copied()
             .filter(|name| self.config.object_kind.attaches_name(name))
-            .collect::<BTreeSet<_>>();
+            .collect::<Vec<_>>();
+        actual.sort_unstable();
+        expected.sort_unstable();
         ensure!(
             actual == expected,
             ManifestMismatchSnafu {
@@ -819,6 +873,59 @@ impl KernelHost {
     #[must_use]
     pub const fn manifest(&self) -> &KernelObjectManifestV1 {
         &self.manifest
+    }
+
+    pub fn verify_live_manifest(&self) -> Result<()> {
+        Self::verify_manifest_pins(&self.manifest)
+    }
+
+    fn verify_manifest_pins(manifest: &KernelObjectManifestV1) -> Result<()> {
+        for record in &manifest.maps {
+            let path = record.pin_path.as_deref().context(ManifestMismatchSnafu {
+                path: Path::new(&record.name),
+                reason: "live map manifest has no pin path",
+            })?;
+            let map = MapHandle::from_pinned_path(path).context(LibbpfSnafu {
+                action: "open live pinned BPF map",
+                path,
+            })?;
+            let info = map.info().context(LibbpfSnafu {
+                action: "read live pinned BPF map",
+                path,
+            })?;
+            ensure!(
+                info.info.id == record.id,
+                ManifestMismatchSnafu {
+                    path,
+                    reason: format!("live map ID is {}, expected {}", info.info.id, record.id),
+                }
+            );
+        }
+        for record in &manifest.links {
+            let path = record.pin_path.as_deref().context(ManifestMismatchSnafu {
+                path: Path::new(&record.program),
+                reason: "live link manifest has no pin path",
+            })?;
+            let link = Link::open(path).context(LibbpfSnafu {
+                action: "open live pinned BPF link",
+                path,
+            })?;
+            let info = link.info().context(LibbpfSnafu {
+                action: "read live pinned BPF link",
+                path,
+            })?;
+            ensure!(
+                info.id == record.link_id && info.prog_id == record.program_id,
+                ManifestMismatchSnafu {
+                    path,
+                    reason: format!(
+                        "live link/program IDs are {}/{}, expected {}/{}",
+                        info.id, info.prog_id, record.link_id, record.program_id
+                    ),
+                }
+            );
+        }
+        Ok(())
     }
 
     fn map(&self, name: &str) -> Result<Map<'_>> {
@@ -842,6 +949,21 @@ impl KernelHost {
         })
     }
 
+    pub fn insert_map(&self, name: &str, key: &[u8], value: &[u8]) -> Result<MapInsertResult> {
+        match self.map(name)?.update(key, value, MapFlags::NO_EXIST) {
+            Ok(()) => Ok(MapInsertResult::Inserted),
+            Err(error) if error.kind() == libbpf_rs::ErrorKind::AlreadyExists => {
+                Ok(MapInsertResult::AlreadyExists)
+            }
+            Err(source) => Err(crate::Error::Libbpf {
+                action: "insert BPF map entry",
+                path: PathBuf::from(name),
+                source,
+                location: snafu::Location::default(),
+            }),
+        }
+    }
+
     pub fn lookup_map(&self, name: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
         let map = self.map(name)?;
         if map.map_type().is_percpu() {
@@ -857,6 +979,15 @@ impl KernelHost {
                 path: Path::new(name),
             })
         }
+    }
+
+    pub fn lookup_map_locked(&self, name: &str, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        self.map(name)?
+            .lookup(key, MapFlags::LOCK)
+            .context(LibbpfSnafu {
+                action: "read spin-locked BPF map",
+                path: Path::new(name),
+            })
     }
 
     pub fn delete_map_entry(&self, name: &str, key: &[u8]) -> Result<()> {
@@ -1022,11 +1153,14 @@ mod tests {
     use std::fs;
 
     use super::{
-        KernelHostConfig, KernelHostOwner, KernelObjectKind, KernelProgramLayoutV1, PinRollback,
-        REQUIRED_QUALIFICATION_LSM_PROGRAMS,
+        KernelHost, KernelHostConfig, KernelHostOwner, KernelObjectKind, KernelProgramLayoutV1,
+        PinRollback, REQUIRED_QUALIFICATION_LSM_PROGRAMS,
     };
     use crate::error::IoSnafu;
-    use crate::BUNDLED_BPF_OBJECT;
+    use crate::{
+        KernelLinkManifestV1, KernelMapManifestV1, KernelObjectManifestV1, KernelPreflightV1,
+        BUNDLED_BPF_OBJECT,
+    };
 
     #[test]
     fn missing_required_hook_cannot_validate() {
@@ -1039,7 +1173,8 @@ mod tests {
             "boot",
             1,
         ));
-        let programs = REQUIRED_QUALIFICATION_LSM_PROGRAMS[..20]
+        let programs = REQUIRED_QUALIFICATION_LSM_PROGRAMS
+            [..REQUIRED_QUALIFICATION_LSM_PROGRAMS.len() - 1]
             .iter()
             .map(|name| KernelProgramLayoutV1 {
                 name: (*name).to_owned(),
@@ -1048,6 +1183,130 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(owner.validate_program_set(&programs).is_err());
+    }
+
+    #[test]
+    fn duplicate_required_hook_cannot_validate() {
+        let owner = KernelHostOwner::new(KernelHostConfig::qualification(
+            "object",
+            "0".repeat(64),
+            "btf",
+            "lease",
+            None,
+            "boot",
+            1,
+        ));
+        let mut programs = REQUIRED_QUALIFICATION_LSM_PROGRAMS
+            .iter()
+            .map(|name| KernelProgramLayoutV1 {
+                name: (*name).to_owned(),
+                section: format!("lsm/{name}"),
+                program_type: "Lsm".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        programs.push(programs[0].clone());
+
+        assert!(owner.validate_program_set(&programs).is_err());
+    }
+
+    #[test]
+    fn locked_map_lookup_uses_the_kernel_lock_flag() {
+        let source = include_str!("host.rs");
+        let method = source
+            .split("pub fn lookup_map_locked")
+            .nth(1)
+            .and_then(|source| source.split("pub fn delete_map_entry").next())
+            .unwrap_or_default();
+
+        assert!(method.contains(".lookup(key, MapFlags::LOCK)"));
+        assert!(!method.contains("MapFlags::ANY"));
+    }
+
+    #[test]
+    fn map_insert_uses_noexist_and_reports_a_race() {
+        let source = include_str!("host.rs");
+        let method = source
+            .split("pub fn insert_map")
+            .nth(1)
+            .and_then(|source| source.split("pub fn lookup_map").next())
+            .unwrap_or_default();
+
+        assert!(method.contains("MapFlags::NO_EXIST"));
+        assert!(method.contains("ErrorKind::AlreadyExists"));
+        assert!(!method.contains("MapFlags::ANY"));
+    }
+
+    #[test]
+    fn live_manifest_requires_every_map_and_link_pin() {
+        let preflight = KernelPreflightV1 {
+            kernel_release: "test".to_owned(),
+            active_lsm_order: "bpf".to_owned(),
+            runtime_btf_sha256: "0".repeat(64),
+            cgroup_v2: true,
+        };
+        let map_without_pin = KernelObjectManifestV1 {
+            schema_version: 1,
+            node_boot_id: "boot".to_owned(),
+            label_epoch: 1,
+            preflight: preflight.clone(),
+            object_sha256: "0".repeat(64),
+            maps: vec![KernelMapManifestV1 {
+                name: "map".to_owned(),
+                map_type: "Hash".to_owned(),
+                id: 1,
+                key_size: 4,
+                value_size: 4,
+                max_entries: 1,
+                pin_path: None,
+            }],
+            links: Vec::new(),
+            ready: true,
+        };
+        assert!(KernelHost::verify_manifest_pins(&map_without_pin)
+            .is_err_and(|error| error.to_string().contains("no pin path")));
+
+        let link_without_pin = KernelObjectManifestV1 {
+            maps: Vec::new(),
+            links: vec![KernelLinkManifestV1 {
+                program: "program".to_owned(),
+                link_id: 1,
+                program_id: 2,
+                pin_path: None,
+            }],
+            preflight,
+            ..map_without_pin
+        };
+        assert!(KernelHost::verify_manifest_pins(&link_without_pin)
+            .is_err_and(|error| error.to_string().contains("no pin path")));
+    }
+
+    #[test]
+    fn live_manifest_compares_exact_map_link_and_program_ids() {
+        let source = include_str!("host.rs");
+        let method = source
+            .split("pub fn verify_live_manifest")
+            .nth(1)
+            .and_then(|source| source.split("fn map(&self").next())
+            .unwrap_or_default();
+
+        assert!(method.contains("MapHandle::from_pinned_path"));
+        assert!(method.contains("info.info.id == record.id"));
+        assert!(method.contains("Link::open(path)"));
+        assert!(method.contains("info.id == record.link_id && info.prog_id == record.program_id"));
+    }
+
+    #[test]
+    fn recovery_requires_retained_programs_to_use_the_recovered_maps() {
+        let source = include_str!("host.rs");
+        let method = source
+            .split("fn recover(")
+            .nth(1)
+            .and_then(|source| source.split("fn validate_config").next())
+            .unwrap_or_default();
+
+        assert!(method.contains("ProgInfoQueryOptions::default().include_map_ids(true)"));
+        assert!(method.contains("old_program.tag() == new_program.tag()"));
+        assert!(method.contains("old_map_ids == new_map_ids"));
     }
 
     #[test]

@@ -25,22 +25,24 @@ static __always_inline int begin_mount_mutation(void)
     __u64 *mutation_epoch;
     mount_mutation_attempt_v1 *attempt;
     struct task_struct *task;
+    task_label_v1 *label;
     __u32 mount_namespace_inode;
 
+    task = bpf_get_current_task_btf();
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
     mount_namespace_inode = current_mount_namespace_inode();
     if (!mount_namespace_inode)
-        return 0;
+        return label ? -EACCES : 0;
     view = bpf_map_lookup_elem(&mount_security_views,
                                &mount_namespace_inode);
     if (!view)
-        return 0;
+        return label ? -EACCES : 0;
     view_lock = bpf_map_lookup_elem(&mount_security_view_locks,
                                     &mount_namespace_inode);
     mutation_epoch = bpf_map_lookup_elem(&mount_mutation_epochs,
                                          &mount_namespace_inode);
     if (!view_lock || !mutation_epoch)
         return -EACCES;
-    task = bpf_get_current_task_btf();
     attempt = bpf_task_storage_get(&mount_mutation_attempts, task, 0,
                                    BPF_LOCAL_STORAGE_GET_F_CREATE);
     if (!attempt || attempt->active)
@@ -69,12 +71,9 @@ static __always_inline void finish_mount_mutation(void)
         return;
     view = bpf_map_lookup_elem(&mount_security_views,
                                &attempt->mount_namespace_inode);
-    if (view) {
-        view->state = mount_topology_state_v1_dirty;
-        __sync_fetch_and_add(&view->transition_version, 1);
-        /* Publish completion last so reconciliation cannot observe partial state. */
-        __sync_fetch_and_sub(&view->pending_mutations, 1);
-    }
+    if (view)
+        /* The pre-effect hook already published DIRTY and its new version. */
+        decrement_nonzero_counter(&view->pending_mutations);
     attempt->active = 0;
 }
 
@@ -98,7 +97,7 @@ static __always_inline int read_mount_root_identity(
 }
 
 static __always_inline int collect_mount_components(
-    struct file *file, struct identity_scratch_v1 *scratch, __u32 *count,
+    const struct path *path, struct identity_scratch_v1 *scratch, __u32 *count,
     struct vfsmount **vfsmount_out)
 {
     struct dentry *current = NULL;
@@ -106,8 +105,8 @@ static __always_inline int collect_mount_components(
     struct vfsmount *vfsmount = NULL;
     __u32 component_count = 0;
 
-    if (!file || BPF_CORE_READ_INTO(&current, file, f_path.dentry) ||
-        !current || BPF_CORE_READ_INTO(&vfsmount, file, f_path.mnt) ||
+    if (!path || BPF_CORE_READ_INTO(&current, path, dentry) ||
+        !current || BPF_CORE_READ_INTO(&vfsmount, path, mnt) ||
         !vfsmount || BPF_CORE_READ_INTO(&root, vfsmount, mnt_root) || !root)
         return -EACCES;
 #pragma clang loop unroll(disable)
@@ -264,8 +263,8 @@ unresolved:
  * The userspace compiler determinizes exact+wildcard pattern subsets. That
  * keeps the kernel hot path to one bounded state instead of an NFA state set.
  */
-static __noinline int canonical_path_candidate(
-    struct file *file, const execution_set_binding_state_v1 *binding,
+static __always_inline int canonical_path_candidate(
+    const struct path *path, const execution_set_binding_state_v1 *binding,
     __u64 profile_generation_ref_id, struct identity_scratch_v1 *scratch)
 {
     canonical_mount_root_v1 *mount_root;
@@ -277,7 +276,7 @@ static __noinline int canonical_path_candidate(
     __u32 component_count = 0;
     long steps;
 
-    if (collect_mount_components(file, scratch, &component_count, &vfsmount))
+    if (collect_mount_components(path, scratch, &component_count, &vfsmount))
         return -EACCES;
     if (snapshot_mount_view(scratch->file_object.mount_namespace_inode,
                             0, 0, 0, true,
@@ -300,6 +299,9 @@ static __noinline int canonical_path_candidate(
     if (!mount_root || !mount_root->selected_mount_id_unique ||
         mount_root->snapshot_digest_id != snapshot_digest_id)
         return -EACCES;
+    /* Exact authority follows the verified oldest mount for this root. */
+    scratch->file_object.mount_id_unique =
+        mount_root->selected_mount_id_unique;
     struct canonical_path_match match = {
         .scratch = scratch,
         .profile_generation_ref_id = profile_generation_ref_id,

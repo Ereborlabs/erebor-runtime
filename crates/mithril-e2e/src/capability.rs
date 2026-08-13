@@ -3,13 +3,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use erebor_interceptor::KernelPlatformProbe;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{CommandSnafu, InterceptorSnafu, IoSnafu};
 use crate::{DigestV1, Result};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlatformProbeV1 {
     pub kernel_release: String,
     pub architecture: String,
@@ -24,7 +25,8 @@ impl PlatformProbeV1 {
     pub fn inspect() -> Result<PlatformProbeV1> {
         let platform = KernelPlatformProbe::inspect(Path::new("/sys/kernel/btf/vmlinux"))
             .context(InterceptorSnafu)?;
-        let prerequisite_result = if platform.bpf_lsm_active
+        let prerequisite_result = if (platform.bpf_lsm_active
+            || platform.active_lsm_order.is_empty())
             && platform.runtime_btf_sha256.is_some()
             && platform.cgroup_v2
         {
@@ -44,7 +46,8 @@ impl PlatformProbeV1 {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct CompileRecordV1 {
     pub source_sha256: String,
     pub object_sha256: String,

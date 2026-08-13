@@ -20,6 +20,11 @@
   without changing the multi-job worker architecture, deterministic
   correlation, honest task-versus-cgroup containment, provider recovery, and
   acceptance tests mapped to the published technical timeline.
+- [Agent Intrusions: Victim-Side Mithril Prevention](agentic-cyber-incidents-mithril-prevention-analysis.md):
+  Exact access gained on attacked services, the first victim-side Mithril
+  stop, current plan status, missing controls, and required fixtures for
+  incidents reported by OpenAI, Anthropic, the UK AI Security Institute, and
+  other operators.
 
 The remaining top-level research files cover ICP discovery, buyer evidence,
 competitor assessment, AI adoption, and an OpenClaw OAuth consent lab.

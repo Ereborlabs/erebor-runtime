@@ -18,9 +18,9 @@ use crate::error::InvalidInputSnafu;
 use crate::error::{IoSnafu, JsonSnafu};
 use crate::Result;
 
-pub struct Phase0ContractValidator;
+pub struct QualificationContractValidator;
 
-impl Phase0ContractValidator {
+impl QualificationContractValidator {
     pub fn policy(policy: &ChassisPolicyDocumentV1) -> Result<()> {
         ensure!(
             policy.schema_version == 1
@@ -28,7 +28,7 @@ impl Phase0ContractValidator {
                 && policy.effect_prevention_rules.is_empty(),
             InvalidInputSnafu {
                 path: "CFG-V1-GOLDEN-002",
-                reason: "Phase 0 policy must be the closed chassis-only schema",
+                reason: "kernel qualification policy must be the closed chassis-only schema",
             }
         );
         Ok(())
@@ -45,7 +45,8 @@ impl Phase0ContractValidator {
                 && profile.signature_hex.len() == 128,
             InvalidInputSnafu {
                 path: "CFG-V1-GOLDEN-002",
-                reason: "compiled Phase 0 profile is invalid or claims effect prevention",
+                reason:
+                    "compiled kernel qualification profile is invalid or claims effect prevention",
             }
         );
         Ok(())
@@ -130,7 +131,7 @@ mod tests {
     };
     use snafu::ResultExt as _;
 
-    use super::{canonical_json, load_json, Phase0ContractValidator, RollbackGuard};
+    use super::{canonical_json, load_json, QualificationContractValidator, RollbackGuard};
     use crate::error::IoSnafu;
 
     #[test]
@@ -138,14 +139,14 @@ mod tests {
         let directory = goldens();
         let policy_path = directory.join("cfg-v1.json");
         let policy: ChassisPolicyDocumentV1 = load_json(&policy_path)?;
-        Phase0ContractValidator::policy(&policy)?;
+        QualificationContractValidator::policy(&policy)?;
         assert_eq!(
             canonical_json(&policy_path, &policy)?,
             fs::read(&policy_path).context(IoSnafu { path: &policy_path })?
         );
         let profile_path = directory.join("compiled-profile-v1.json");
         let profile: SignedCompiledProfileV1 = load_json(&profile_path)?;
-        Phase0ContractValidator::compiled(&profile)?;
+        QualificationContractValidator::compiled(&profile)?;
         assert_eq!(
             canonical_json(&profile_path, &profile)?,
             fs::read(&profile_path).context(IoSnafu {

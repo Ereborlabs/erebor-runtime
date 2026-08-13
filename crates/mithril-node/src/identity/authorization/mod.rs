@@ -7,7 +7,8 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use erebor_interceptor::KernelHost;
 use erebor_interceptor_abi::{
     ApprovedExecArgumentKeyV1, ApprovedExecSlotKeyV1, ApprovedExecSlotStateV1, ApprovedExecSlotV1,
-    BoundedAdministrativeArgvV1, ExternalRootClassV1, Id128V1,
+    BoundedAdministrativeArgvV1, ExceptionBindingStateV1, ExceptionHandleBindingKeyV1,
+    ExceptionHandleBindingV1, ExternalRootClassV1, Id128V1,
 };
 use minicbor::data::Token;
 use minicbor::{Decoder, Encoder};
@@ -50,6 +51,7 @@ struct IntentPayloadV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AdministrativeExecIdentityV1 {
+    target_node_id: Id128V1,
     container_generation: u64,
     approved_argv: BoundedAdministrativeArgvV1,
     resolved_mount_id: u32,
@@ -106,6 +108,8 @@ pub struct PreparedAuthorizationProofV1 {
 }
 
 pub struct AuthorizationProofOwner {
+    node_id: Id128V1,
+    node_boot_id: Id128V1,
     trust: TrustBundleV1,
     replay: ReplayLedger,
 }
@@ -117,11 +121,24 @@ struct DecodedEnvelope<'a> {
 }
 
 impl AuthorizationProofOwner {
-    pub fn load(state_directory: &Path, trust: TrustBundleV1) -> Result<Self> {
+    pub fn load(
+        state_directory: &Path,
+        node_id: Id128V1,
+        node_boot_id: Id128V1,
+        trust: TrustBundleV1,
+    ) -> Result<Self> {
+        ensure!(
+            !node_id.is_zero() && !node_boot_id.is_zero(),
+            AuthorizationSnafu {
+                reason: "authorization owner requires stable node and boot identities",
+            }
+        );
         trust.validate()?;
         Ok(Self {
+            node_id,
+            node_boot_id,
             trust,
-            replay: ReplayLedger::load(state_directory)?,
+            replay: ReplayLedger::load(state_directory, node_id, node_boot_id)?,
         })
     }
 
@@ -138,6 +155,12 @@ impl AuthorizationProofOwner {
         issuer.verify_signature(envelope.payload_bytes, envelope.signature)?;
         self.trust
             .validate_scope_and_time(&payload, expected, now_utc_ns, issuer)?;
+        ensure!(
+            payload.administrative_exec.target_node_id == self.node_id,
+            AuthorizationSnafu {
+                reason: "administrative authorization targets another stable node",
+            }
+        );
         let latest_expiry_utc_ns = payload
             .expires_at_utc_ns
             .checked_add(self.trust.maximum_clock_skew_ns)
@@ -193,7 +216,7 @@ impl AuthorizationProofOwner {
         slot.state = ApprovedExecSlotStateV1::Armed;
         slot.transition_version = 1;
         ensure!(
-            !key.node_boot_id.is_zero()
+            key.node_boot_id == self.node_boot_id
                 && !key.cgroup_binding_id.is_zero()
                 && !slot.cgroup_binding_nonce.is_zero()
                 && slot.container_generation > 0
@@ -211,10 +234,40 @@ impl AuthorizationProofOwner {
                     == proof.administrative_exec.resolved_inode_generation
                 && slot.approved_role_numeric_id > 0
                 && slot.profile_generation_ref_id > 0
+                && slot.exception_numeric_handle > 0
                 && slot.reserved_after_exception == 0
                 && slot.expected_root_class == ExternalRootClassV1::ExternalRuntimeRoot,
             AuthorizationSnafu {
                 reason: "administrative slot is not an exact bounded external-root match",
+            }
+        );
+        let exception_binding_key = ExceptionHandleBindingKeyV1 {
+            profile_generation_ref_id: slot.profile_generation_ref_id,
+            exception_numeric_handle: slot.exception_numeric_handle,
+            reserved: 0,
+        };
+        let exception_binding = host
+            .lookup_map(
+                "exception_handle_bindings",
+                exception_binding_key.as_bytes(),
+            )
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                AuthorizationSnafu {
+                    reason: "administrative slot has no active bounded-exception binding"
+                        .to_owned(),
+                }
+                .build()
+            })?;
+        let exception_binding = read_abi_value::<ExceptionHandleBindingV1>(
+            &exception_binding,
+            "administrative exception binding",
+        )?;
+        ensure!(
+            exception_binding.state == ExceptionBindingStateV1::Active
+                && exception_binding.runtime_state_key.node_id == self.node_id,
+            AuthorizationSnafu {
+                reason: "administrative slot exception is not active on this stable node",
             }
         );
         let intent_sha256 = administrative_slot_intent_sha256(&key, &slot);
@@ -696,7 +749,7 @@ fn validate_administrative_body(
     ensure!(
         kind == ADMINISTRATIVE_EXEC_KIND && claim_slot_ids.len() == 1,
         AuthorizationSnafu {
-            reason: "only one-slot ADMINISTRATIVE_EXEC is allocated in this phase",
+            reason: "the administrative-exec owner supports exactly one bounded slot",
         }
     );
     let mut decoder = Decoder::new(body);
@@ -785,7 +838,7 @@ fn validate_administrative_body(
     expect_key(&mut decoder, 11)?;
     validate_portable_profile_generation(&mut decoder)?;
     expect_key(&mut decoder, 12)?;
-    let _target_node_id = decode_id(&mut decoder, "target node ID")?;
+    let target_node_id = decode_id(&mut decoder, "target node ID")?;
     expect_key(&mut decoder, 13)?;
     ensure!(
         decode_u64(&mut decoder)? == 1,
@@ -812,6 +865,7 @@ fn validate_administrative_body(
         }
     );
     Ok(AdministrativeExecIdentityV1 {
+        target_node_id,
         container_generation,
         approved_argv,
         resolved_mount_id: resolved.mount_id,
@@ -1571,6 +1625,7 @@ mod tests {
     fn administrative_exec_lowers_signed_match_fields_exactly() -> crate::Result<()> {
         let body = administrative_body(b"bash")?;
         let decoded = validate_administrative_body(ADMINISTRATIVE_EXEC_KIND, &body, &[id(1)])?;
+        assert_eq!(decoded.target_node_id, id(32));
         assert_eq!(decoded.container_generation, 1);
         assert_eq!(decoded.approved_argv.argument_count, 1);
         assert_eq!(&decoded.approved_argv.argument_bytes[..4], b"bash");
@@ -1692,10 +1747,18 @@ mod tests {
             intent_kind: ADMINISTRATIVE_EXEC_KIND,
             body_sha256: Sha256::digest(&body).into(),
         };
+        let wrong_node_state = tempfile::tempdir().map_err(|error| {
+            authorization_error(format!("create wrong-node replay test directory: {error}"))
+        })?;
+        let mut wrong_node =
+            AuthorizationProofOwner::load(wrong_node_state.path(), id(33), id(40), trust.clone())?;
+        assert!(wrong_node
+            .verify_and_accept(&envelope, target, now, 100)
+            .is_err_and(|error| error.to_string().contains("targets another stable node")));
         let state = tempfile::tempdir().map_err(|error| {
             authorization_error(format!("create replay test directory: {error}"))
         })?;
-        let mut owner = AuthorizationProofOwner::load(state.path(), trust.clone())?;
+        let mut owner = AuthorizationProofOwner::load(state.path(), id(32), id(40), trust.clone())?;
         let prepared = owner.verify_and_accept(&envelope, target, now, 100)?;
         assert_eq!(prepared.claim_slot_id, id(7));
         owner.replay.arm(
@@ -1706,7 +1769,7 @@ mod tests {
         )?;
         owner.consume(id(1), id(7))?;
         assert!(owner.consume(id(1), id(7)).is_err());
-        let mut restarted = AuthorizationProofOwner::load(state.path(), trust)?;
+        let mut restarted = AuthorizationProofOwner::load(state.path(), id(32), id(40), trust)?;
         assert!(restarted
             .verify_and_accept(&envelope, target, now, 100)
             .is_err());
@@ -1762,7 +1825,7 @@ mod tests {
         let state = tempfile::tempdir().map_err(|error| {
             authorization_error(format!("create signature test directory: {error}"))
         })?;
-        let mut owner = AuthorizationProofOwner::load(state.path(), trust)?;
+        let mut owner = AuthorizationProofOwner::load(state.path(), id(32), id(40), trust)?;
         assert!(owner
             .verify_and_accept(
                 &envelope,

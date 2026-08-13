@@ -18,9 +18,14 @@ pub struct EffectObservationStore {
 }
 
 struct Inner {
-    recent: Mutex<VecDeque<MithrilEffectObservation>>,
+    recent: Mutex<RecentEffects>,
     capacity: usize,
     decoder_errors: AtomicU64,
+}
+
+struct RecentEffects {
+    events: VecDeque<MithrilEffectObservation>,
+    cursor: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -43,7 +48,10 @@ impl EffectObservationStore {
     pub fn new(capacity: usize) -> Self {
         Self {
             inner: Arc::new(Inner {
-                recent: Mutex::new(VecDeque::with_capacity(capacity)),
+                recent: Mutex::new(RecentEffects {
+                    events: VecDeque::with_capacity(capacity),
+                    cursor: 0,
+                }),
                 capacity,
                 decoder_errors: AtomicU64::new(0),
             }),
@@ -56,18 +64,35 @@ impl EffectObservationStore {
             return;
         };
         let mut recent = self.lock_recent();
+        recent.cursor = recent.cursor.saturating_add(1);
         if self.inner.capacity == 0 {
             return;
         }
-        if recent.len() == self.inner.capacity {
-            recent.pop_front();
+        if recent.events.len() == self.inner.capacity {
+            recent.events.pop_front();
         }
-        recent.push_back(to_ipc(event));
+        recent.events.push_back(to_ipc(event));
     }
 
     #[must_use]
     pub fn recent(&self) -> Vec<MithrilEffectObservation> {
-        self.lock_recent().iter().cloned().collect()
+        self.lock_recent().events.iter().cloned().collect()
+    }
+
+    #[must_use]
+    pub fn cursor(&self) -> u64 {
+        self.lock_recent().cursor
+    }
+
+    #[must_use]
+    pub fn recent_since(&self, cursor: u64) -> Vec<MithrilEffectObservation> {
+        let recent = self.lock_recent();
+        let first_cursor = recent.cursor - recent.events.len() as u64;
+        let skip = cursor.saturating_sub(first_cursor);
+        if skip >= recent.events.len() as u64 {
+            return Vec::new();
+        }
+        recent.events.iter().skip(skip as usize).cloned().collect()
     }
 
     #[must_use]
@@ -97,7 +122,7 @@ impl EffectObservationStore {
         health
     }
 
-    fn lock_recent(&self) -> MutexGuard<'_, VecDeque<MithrilEffectObservation>> {
+    fn lock_recent(&self) -> MutexGuard<'_, RecentEffects> {
         self.inner
             .recent
             .lock()
@@ -135,6 +160,15 @@ fn to_ipc(event: EffectObservationV1) -> MithrilEffectObservation {
         physical_result_code: u32::from(event.physical_result),
         physical_result: physical_result_name(event.physical_result).to_owned(),
         stage: "LOCAL_PRE_EFFECT_V1".to_owned(),
+        controller_process_state_id: id_hex(event.controller_process_state_id),
+        controller_transition_version: event.controller_transition_version,
+        target_task_cookie: event.target_task_cookie,
+        target_profile_generation_ref_id: event.target_profile_generation_ref_id,
+        target_process_state_id: id_hex(event.target_process_state_id),
+        target_transition_version: event.target_transition_version,
+        target_role_id: event.target_role_id,
+        target_process_state_vector_id: event.target_process_state_vector_id,
+        operation_argument: event.operation_argument,
     }
 }
 
@@ -189,7 +223,7 @@ mod tests {
     use super::{reason_name, EffectObservationStore};
 
     #[test]
-    fn phase4_denial_reasons_are_not_downgraded_to_unknown() {
+    fn enforcement_denial_reasons_are_not_downgraded_to_unknown() {
         assert_eq!(
             reason_name(EffectObservationReasonV1::ExactPolicyDeny as u8),
             "EXACT_POLICY_DENY"
@@ -207,6 +241,15 @@ mod tests {
             let event = EffectObservationV1 {
                 task_cookie,
                 process_lineage_id: Id128V1::new(1, 2),
+                controller_process_state_id: Id128V1::new(3, 4),
+                controller_transition_version: 5,
+                target_task_cookie: 6,
+                target_profile_generation_ref_id: 7,
+                target_process_state_id: Id128V1::new(8, 9),
+                target_transition_version: 10,
+                target_role_id: 11,
+                target_process_state_vector_id: 12,
+                operation_argument: 13,
                 reason: EffectObservationReasonV1::WouldDeny as u8,
                 physical_result: EffectPhysicalResultV1::UnknownAfterPreEffect as u8,
                 ..EffectObservationV1::default()
@@ -221,6 +264,58 @@ mod tests {
             "00000000000000010000000000000002"
         );
         assert_eq!(recent[0].reason, "WOULD_DENY");
+        assert_eq!(
+            recent[0].controller_process_state_id,
+            "00000000000000030000000000000004"
+        );
+        assert_eq!(recent[0].controller_transition_version, 5);
+        assert_eq!(recent[0].target_task_cookie, 6);
+        assert_eq!(recent[0].target_profile_generation_ref_id, 7);
+        assert_eq!(
+            recent[0].target_process_state_id,
+            "00000000000000080000000000000009"
+        );
+        assert_eq!(recent[0].target_transition_version, 10);
+        assert_eq!(recent[0].target_role_id, 11);
+        assert_eq!(recent[0].target_process_state_vector_id, 12);
+        assert_eq!(recent[0].operation_argument, 13);
+    }
+
+    #[test]
+    fn cursor_excludes_pre_marker_events_after_recent_history_rolls() {
+        let store = EffectObservationStore::new(2);
+        let record = |task_cookie| {
+            store.record_bytes(
+                EffectObservationV1 {
+                    task_cookie,
+                    ..EffectObservationV1::default()
+                }
+                .as_bytes(),
+            );
+        };
+
+        record(1);
+        let after_first = store.cursor();
+        record(2);
+        let after_second = store.cursor();
+        record(3);
+
+        assert_eq!(
+            store
+                .recent_since(after_first)
+                .iter()
+                .map(|event| event.task_cookie)
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
+        assert_eq!(
+            store
+                .recent_since(after_second)
+                .iter()
+                .map(|event| event.task_cookie)
+                .collect::<Vec<_>>(),
+            [3]
+        );
     }
 
     #[test]

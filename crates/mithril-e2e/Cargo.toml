@@ -15,26 +15,28 @@ erebor-runtime-error = { path = "../erebor-runtime-error" }
 hex.workspace = true
 libbpf-rs.workspace = true
 libc = "0.2.186"
+linux-raw-sys = { version = "0.12.1", features = ["general"] }
 memmap2 = "0.9.11"
 mithril-control = { path = "../mithril-control" }
 mithril-node = { path = "../mithril-node" }
-rustix = { version = "1.1.4", features = ["mount", "process"] }
+rustix = { version = "1.1.4", features = ["mount", "process", "thread"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 snafu.workspace = true
 uuid.workspace = true
+zerocopy.workspace = true
 
 [dev-dependencies]
 tempfile = "3.23.0"
 
 [[bin]]
-name = "mithril-phase0"
-path = "src/bin/mithril_phase0.rs"
+name = "mithril-kernel-qualification"
+path = "src/bin/mithril_kernel_qualification.rs"
 
 [[bin]]
-name = "mithril-phase1"
-path = "src/bin/mithril_phase1.rs"
+name = "mithril-host-lifecycle-test"
+path = "src/bin/mithril_host_lifecycle_test.rs"
 
 [[bin]]
 name = "mithril-identity-test"

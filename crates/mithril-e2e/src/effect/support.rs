@@ -1,224 +1,25 @@
-use std::mem::{offset_of, size_of};
+use std::fs::File;
+use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use ed25519_dalek::SigningKey;
 use erebor_interceptor::{EffectObservationReader, KernelHost};
-use erebor_interceptor_abi::{MountSecurityViewStateV1, MountTopologyStateV1};
-use mithril_control::{
-    compiled_key_digest, BlastRadiusLimitV1, EffectFamilyV1, ExactExceptionSubjectSelectorV1,
-    ExceptionConsumptionScopeV1, ExceptionV1, LocalObjectSelectorV1, PermittedAuthorityDeltaV1,
-    PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, ProfileCandidateArtifactV1,
-    ProfileModeV1, ProfileSealRequestV1, RuleMatchV1,
+use erebor_interceptor_abi::{
+    KernelEffectFamilyV1, KernelEffectOperationV1, MountSecurityViewStateV1, MountTopologyStateV1,
 };
 use mithril_node::{
     ContainerKindV1, EffectObservationHealth, EffectObservationStore, InterceptorConfig,
     NodeConfig, NodeControlConfig, PolicyCandidateConfig, WorkloadBindingConfig,
 };
 use snafu::{ensure, ResultExt as _};
+use zerocopy::TryFromBytes as _;
 
 use super::PROFILE_GENERATION_REF_ID;
-use crate::error::{
-    CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, PolicySnafu,
-};
+use crate::error::{CommandSnafu, InterceptorSnafu, InvalidInputSnafu, IoSnafu};
 use crate::Result;
 
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
-
-pub(super) fn compile_phase4_artifact(
-    source_path: &Path,
-    seal_request_path: &Path,
-    signing_key_path: &Path,
-    output_path: &Path,
-) -> Result<()> {
-    let source = std::fs::read(source_path).context(IoSnafu { path: source_path })?;
-    let mut document = PolicyDocumentV1::parse(source_path, &source).context(PolicySnafu)?;
-    document.rollout.desired_profile_mode = ProfileModeV1::Protect;
-    document
-        .protected_universe
-        .object_class_ids
-        .push("MANUAL_BENIGN".to_owned());
-    document.protected_universe.object_class_ids.sort();
-    let mut benign_classifier = document.classifier_bindings[0].clone();
-    benign_classifier.classifier_binding_id = "manual-benign".to_owned();
-    benign_classifier.object_class_id = "MANUAL_BENIGN".to_owned();
-    document.classifier_bindings.push(benign_classifier);
-    let mut benign_allow = document.rules[0].clone();
-    benign_allow.rule_id = "allow-manual-benign-read".to_owned();
-    benign_allow.requested_disposition = PolicyDispositionV1::Allow;
-    benign_allow.errno = None;
-    benign_allow.finding = None;
-    benign_allow.exception_ids.clear();
-    let RuleMatchV1::LocalPreEffect(benign_effect) = &mut benign_allow.rule_match else {
-        return InvalidInputSnafu {
-            path: source_path,
-            reason: "Phase 4 benign control is not a local pre-effect rule",
-        }
-        .fail();
-    };
-    benign_effect.operation_ids = ["MMAP_READ", "OPEN_READ", "READ"]
-        .map(str::to_owned)
-        .to_vec();
-    benign_effect.object = LocalObjectSelectorV1::ObjectClasses {
-        object_class_ids: vec!["MANUAL_BENIGN".to_owned()],
-    };
-    document.rules.push(benign_allow);
-    document
-        .protected_universe
-        .object_class_ids
-        .push("MANUAL_EXEC".to_owned());
-    document.protected_universe.object_class_ids.sort();
-    let mut exec_classifier = document.classifier_bindings[0].clone();
-    exec_classifier.classifier_binding_id = "manual-exec".to_owned();
-    exec_classifier.object_class_id = "MANUAL_EXEC".to_owned();
-    document.classifier_bindings.push(exec_classifier);
-    let mut exec_read_allow = document.rules[0].clone();
-    exec_read_allow.rule_id = "allow-manual-exec-read".to_owned();
-    exec_read_allow.requested_disposition = PolicyDispositionV1::Allow;
-    exec_read_allow.errno = None;
-    exec_read_allow.finding = None;
-    exec_read_allow.exception_ids.clear();
-    let RuleMatchV1::LocalPreEffect(exec_read_effect) = &mut exec_read_allow.rule_match else {
-        return InvalidInputSnafu {
-            path: source_path,
-            reason: "Phase 4 executable read control is not a local pre-effect rule",
-        }
-        .fail();
-    };
-    exec_read_effect.operation_ids = ["OPEN_READ", "READ"].map(str::to_owned).to_vec();
-    exec_read_effect.object = LocalObjectSelectorV1::ObjectClasses {
-        object_class_ids: vec!["MANUAL_EXEC".to_owned()],
-    };
-    document.rules.push(exec_read_allow);
-    let mut exec_deny = document.rules[0].clone();
-    exec_deny.rule_id = "deny-manual-exec".to_owned();
-    exec_deny.exception_ids.clear();
-    let RuleMatchV1::LocalPreEffect(exec_effect) = &mut exec_deny.rule_match else {
-        return InvalidInputSnafu {
-            path: source_path,
-            reason: "Phase 4 executable denial is not a local pre-effect rule",
-        }
-        .fail();
-    };
-    exec_effect.effect_families = vec![EffectFamilyV1::Exec];
-    exec_effect.operation_ids = vec!["EXECUTE".to_owned()];
-    exec_effect.object = LocalObjectSelectorV1::ObjectClasses {
-        object_class_ids: vec!["MANUAL_EXEC".to_owned()],
-    };
-    document.rules.push(exec_deny);
-    let mut bounded_allow = document.rules[0].clone();
-    bounded_allow.rule_id = "allow-bounded-secret-write-open".to_owned();
-    bounded_allow.requested_disposition = PolicyDispositionV1::Allow;
-    bounded_allow.errno = None;
-    bounded_allow.finding = None;
-    bounded_allow.exception_ids.clear();
-    let RuleMatchV1::LocalPreEffect(deny_effect) = &mut document.rules[0].rule_match else {
-        return InvalidInputSnafu {
-            path: source_path,
-            reason: "Phase 4 fixture needs one local pre-effect rule",
-        }
-        .fail();
-    };
-    deny_effect.operation_ids = ["MMAP_READ", "OPEN_READ", "READ"]
-        .map(str::to_owned)
-        .to_vec();
-    let RuleMatchV1::LocalPreEffect(allow_effect) = &mut bounded_allow.rule_match else {
-        return InvalidInputSnafu {
-            path: source_path,
-            reason: "Phase 4 bounded allow is not a local pre-effect rule",
-        }
-        .fail();
-    };
-    allow_effect.operation_ids = vec!["OPEN_WRITE".to_owned()];
-    let bounded_rule_index = document.rules.len();
-    document.rules.push(bounded_allow);
-    let preliminary = PolicyCompiler.compile(&document).context(PolicySnafu)?;
-    let allow_cell = preliminary
-        .compiled_cells
-        .iter()
-        .find(|cell| {
-            cell.source_rule_ids == ["allow-bounded-secret-write-open"]
-                && cell.key.operation_id == "OPEN_WRITE"
-        })
-        .ok_or_else(|| {
-            InvalidInputSnafu {
-                path: source_path,
-                reason: "Phase 4 fixture did not compile its bounded write-open cell",
-            }
-            .build()
-        })?;
-    let exception_id = "bounded-secret-write-open";
-    let allow_cell_digest =
-        compiled_key_digest(document.profile_id(), &allow_cell.key).context(PolicySnafu)?;
-    document.exceptions.push(ExceptionV1 {
-        exception_id: exception_id.to_owned(),
-        exception_instance_id: "88888888-8888-4888-8888-888888888889".to_owned(),
-        changed_rule_ids: vec!["allow-bounded-secret-write-open".to_owned()],
-        exact_subject: ExactExceptionSubjectSelectorV1 {
-            protected_scope_ids: vec![allow_cell.key.protected_scope_id.clone()],
-            execution_set_ids: vec![allow_cell.key.execution_set_id.clone()],
-            entry_kind_ids: vec![allow_cell.key.entry_kind],
-            role_ids: vec![allow_cell.key.role_id.clone()],
-            immutable_definition_digests: vec![],
-            exact_compiled_key_digests: vec![allow_cell_digest.clone()],
-        },
-        authority_delta: PermittedAuthorityDeltaV1 {
-            from_physical_result: "DENY_ERRNO".to_owned(),
-            to_physical_result: "ALLOW_EFFECT".to_owned(),
-            added_or_removed_operation_cells: vec![allow_cell_digest],
-            added_or_removed_transition_cells: vec![],
-            maximum_blast_radius: BlastRadiusLimitV1::Local {
-                permitted_target_selector_ids: vec![],
-                process_count: 1,
-                execution_set_count: 1,
-                socket_count: 1,
-                node_count: 1,
-            },
-        },
-        approver_principal_id: "99999999-9999-4999-8999-999999999999".to_owned(),
-        approval_proof_digest: "a".repeat(64),
-        closed_reason_code: "BOUNDED_SECRET_WRITE_OPEN".to_owned(),
-        valid_from_utc_ns: 1,
-        valid_until_utc_ns: i64::MAX,
-        consumption_scope: ExceptionConsumptionScopeV1::PerTargetNode,
-        maximum_uses: 2,
-        maximum_lifetime_ns: 60 * 60 * 1_000_000_000,
-    });
-    document.rules[bounded_rule_index]
-        .exception_ids
-        .push(exception_id.to_owned());
-    let compiled = PolicyCompiler.compile(&document).context(PolicySnafu)?;
-    let request: ProfileSealRequestV1 =
-        serde_json::from_slice(&std::fs::read(seal_request_path).context(IoSnafu {
-            path: seal_request_path,
-        })?)
-        .context(JsonSnafu {
-            path: seal_request_path,
-        })?;
-    let key_text = std::fs::read_to_string(signing_key_path).context(IoSnafu {
-        path: signing_key_path,
-    })?;
-    let key_bytes: [u8; 32] = hex::decode(key_text.trim())
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| {
-            InvalidInputSnafu {
-                path: signing_key_path,
-                reason: "Phase 4 signing key must be exactly 32 lowercase-hex bytes",
-            }
-            .build()
-        })?;
-    let artifact = ProfileCandidateArtifactV1::sign(
-        &document,
-        compiled,
-        request,
-        &SigningKey::from_bytes(&key_bytes),
-    )
-    .context(PolicySnafu)?;
-    let bytes = serde_json::to_vec_pretty(&artifact).context(JsonSnafu { path: output_path })?;
-    std::fs::write(output_path, bytes).context(IoSnafu { path: output_path })
-}
 
 pub(super) fn effect_node_config(
     state_directory: &Path,
@@ -226,7 +27,7 @@ pub(super) fn effect_node_config(
     lease_path: &Path,
     manual: &Path,
     artifact_path: PathBuf,
-    binding: WorkloadBindingConfig,
+    bindings: Vec<WorkloadBindingConfig>,
     exact_file_objects: Vec<mithril_node::ExactFileObjectConfig>,
 ) -> NodeConfig {
     NodeConfig {
@@ -248,27 +49,55 @@ pub(super) fn effect_node_config(
         },
         runtime_observation: None,
         container_runtime: None,
-        workload_bindings: vec![binding],
+        workload_bindings: bindings,
         policy_candidates: vec![PolicyCandidateConfig {
             artifact_path,
             public_key_path: manual.join("test-public-key.hex"),
+            rollback_authorization_path: None,
+            rollback_public_key_path: None,
         }],
         exact_file_objects,
     }
 }
 
 pub(super) fn effect_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
+    effect_binding_with_identity(
+        cgroup_path,
+        "99999999-9999-4999-8999-999999999999",
+        'c',
+        "worker",
+        false,
+    )
+}
+
+pub(super) fn effect_peer_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
+    effect_binding_with_identity(
+        cgroup_path,
+        "99999999-9999-4999-8999-999999999998",
+        'd',
+        "peer",
+        true,
+    )
+}
+
+fn effect_binding_with_identity(
+    cgroup_path: &Path,
+    binding_id: &str,
+    container_id_byte: char,
+    container_name: &str,
+    arm_initial_root: bool,
+) -> WorkloadBindingConfig {
     WorkloadBindingConfig {
-        binding_id: "99999999-9999-4999-8999-999999999999".to_owned(),
+        binding_id: binding_id.to_owned(),
         execution_set_id: "44444444-4444-4444-8444-444444444444".to_owned(),
         protected_scope_id: "33333333-3333-4333-8333-333333333333".to_owned(),
         workload_selector_id: "worker".to_owned(),
         profile_id: "11111111-1111-4111-8111-111111111111".to_owned(),
-        container_id: "c".repeat(64),
-        pod_uid: "phase3-pod".to_owned(),
-        sandbox_id: "phase3-sandbox".to_owned(),
-        container_name: "worker".to_owned(),
-        image_digest: "sha256:phase3-image".to_owned(),
+        container_id: container_id_byte.to_string().repeat(64),
+        pod_uid: "observation-pod".to_owned(),
+        sandbox_id: "observation-sandbox".to_owned(),
+        container_name: container_name.to_owned(),
+        image_digest: "sha256:effect-fixture-image".to_owned(),
         container_kind: ContainerKindV1::Application,
         container_generation: 1,
         root_cgroup_path: Some(cgroup_path.to_path_buf()),
@@ -276,7 +105,7 @@ pub(super) fn effect_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
         active_profile_generation_ref_id: PROFILE_GENERATION_REF_ID,
         initial_role_id: 1,
         external_role_id: 2,
-        arm_initial_root: false,
+        arm_initial_root,
     }
 }
 
@@ -314,32 +143,126 @@ pub(super) fn mount_view_is_dirty(host: &KernelHost, mount_namespace_inode: u32)
             }
             .build()
         })?;
-    ensure!(
-        bytes.len() == size_of::<MountSecurityViewStateV1>(),
+    let view = MountSecurityViewStateV1::try_read_from_bytes(&bytes).map_err(|error| {
         InvalidInputSnafu {
             path: Path::new("mount_security_views"),
-            reason: "mount security state has the wrong ABI size",
+            reason: format!("mount security state has an invalid ABI value: {error}"),
         }
-    );
-    Ok(bytes[offset_of!(MountSecurityViewStateV1, state)] == MountTopologyStateV1::Dirty as u8)
+        .build()
+    })?;
+    Ok(view.state == MountTopologyStateV1::Dirty)
 }
 
 pub(super) fn wait_for_reason(
     reader: &EffectObservationReader,
     store: &EffectObservationStore,
-    marker: usize,
+    marker: u64,
     expected: &str,
+) -> Result<()> {
+    wait_for_observation(reader, store, marker, expected, None, None)
+}
+
+pub(super) fn wait_for_effect(
+    reader: &EffectObservationReader,
+    store: &EffectObservationStore,
+    marker: u64,
+    expected_reason: &str,
+    expected_effect: (KernelEffectFamilyV1, KernelEffectOperationV1),
+) -> Result<()> {
+    wait_for_observation(
+        reader,
+        store,
+        marker,
+        expected_reason,
+        Some((
+            u32::from(expected_effect.0 as u16),
+            u32::from(expected_effect.1 as u16),
+        )),
+        None,
+    )
+}
+
+pub(super) fn wait_for_exact_effect(
+    reader: &EffectObservationReader,
+    store: &EffectObservationStore,
+    marker: u64,
+    expected_reason: &str,
+    expected_effect: (KernelEffectFamilyV1, KernelEffectOperationV1),
+    exact_object_key_id: u64,
+    operation_argument: Option<u32>,
+) -> Result<()> {
+    wait_for_observation(
+        reader,
+        store,
+        marker,
+        expected_reason,
+        Some((
+            u32::from(expected_effect.0 as u16),
+            u32::from(expected_effect.1 as u16),
+        )),
+        Some(ObjectExpectation::Exact {
+            exact_object_key_id,
+            operation_argument,
+        }),
+    )
+}
+
+pub(super) fn wait_for_unsupported_effect(
+    reader: &EffectObservationReader,
+    store: &EffectObservationStore,
+    marker: u64,
+    expected_reason: &str,
+    expected_effect: (KernelEffectFamilyV1, KernelEffectOperationV1),
+) -> Result<()> {
+    wait_for_observation(
+        reader,
+        store,
+        marker,
+        expected_reason,
+        Some((
+            u32::from(expected_effect.0 as u16),
+            u32::from(expected_effect.1 as u16),
+        )),
+        Some(ObjectExpectation::Unsupported),
+    )
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ObjectExpectation {
+    Exact {
+        exact_object_key_id: u64,
+        operation_argument: Option<u32>,
+    },
+    Unsupported,
+}
+
+fn wait_for_observation(
+    reader: &EffectObservationReader,
+    store: &EffectObservationStore,
+    marker: u64,
+    expected_reason: &str,
+    expected_effect: Option<(u32, u32)>,
+    expected_object: Option<ObjectExpectation>,
 ) -> Result<()> {
     let deadline = Instant::now() + WAIT_LIMIT;
     loop {
         reader
             .poll(Duration::from_millis(50))
             .context(InterceptorSnafu)?;
-        if store
-            .recent()
-            .get(marker..)
-            .is_some_and(|events| events.iter().any(|event| event.reason == expected))
-        {
+        if store.recent_since(marker).iter().any(|event| {
+            observation_matches(
+                &event.reason,
+                event.effect_family,
+                event.operation,
+                expected_reason,
+                expected_effect,
+            ) && object_matches(
+                event.exact_object_key_id,
+                event.composite_atom_id,
+                event.operation_argument,
+                expected_object,
+            )
+        }) {
             return Ok(());
         }
         ensure!(
@@ -347,18 +270,55 @@ pub(super) fn wait_for_reason(
             InvalidInputSnafu {
                 path: Path::new("effect_observations"),
                 reason: format!(
-                    "timed out waiting for reason {expected}; observed {:?}",
+                    "timed out waiting for reason {expected_reason}, effect {expected_effect:?}, and object {expected_object:?}; observed {:?}",
                     store
-                        .recent()
-                        .get(marker..)
-                        .unwrap_or_default()
+                        .recent_since(marker)
                         .iter()
-                        .map(|event| event.reason.as_str())
+                        .map(|event| {
+                            (
+                                event.reason.as_str(),
+                                event.effect_family,
+                                event.operation,
+                                event.operation_argument,
+                                event.exact_object_key_id,
+                                event.composite_atom_id,
+                            )
+                        })
                         .collect::<Vec<_>>()
                 ),
             }
         );
     }
+}
+
+fn object_matches(
+    exact_object_key_id: u64,
+    composite_atom_id: u64,
+    operation_argument: u32,
+    expected: Option<ObjectExpectation>,
+) -> bool {
+    match expected {
+        None => true,
+        Some(ObjectExpectation::Exact {
+            exact_object_key_id: expected_key,
+            operation_argument: expected_argument,
+        }) => {
+            exact_object_key_id == expected_key
+                && expected_argument.is_none_or(|argument| operation_argument == argument)
+        }
+        Some(ObjectExpectation::Unsupported) => exact_object_key_id == 0 && composite_atom_id == 0,
+    }
+}
+
+fn observation_matches(
+    reason: &str,
+    effect_family: u32,
+    operation: u32,
+    expected_reason: &str,
+    expected_effect: Option<(u32, u32)>,
+) -> bool {
+    reason == expected_reason
+        && expected_effect.is_none_or(|expected| expected == (effect_family, operation))
 }
 
 pub(super) fn inode_generation(pid: u32, path: &Path) -> Result<u32> {
@@ -401,53 +361,67 @@ pub(super) fn inode_generation(pid: u32, path: &Path) -> Result<u32> {
     Ok(value)
 }
 
-pub(super) fn external_bind_mount(pid: u32, source: &Path, target: &Path) -> Result<()> {
-    run_nsenter_mount(pid, &["mount", "--bind"], source, target)
+pub(super) struct ExternalMountNamespace {
+    namespace: File,
 }
 
-pub(super) fn external_unmount(pid: u32, target: &Path) -> Result<()> {
-    let output = Command::new("nsenter")
-        .args([
-            "--target",
-            &pid.to_string(),
-            "--mount",
-            "--",
-            "umount",
-            "--",
-        ])
-        .arg(target)
-        .output()
-        .context(IoSnafu {
-            path: Path::new("nsenter"),
-        })?;
-    ensure!(
-        output.status.success(),
-        CommandSnafu {
-            program: "nsenter",
-            reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        }
-    );
-    Ok(())
-}
+impl ExternalMountNamespace {
+    pub(super) fn acquire(pid: u32) -> Result<Self> {
+        let path = PathBuf::from(format!("/proc/{pid}/ns/mnt"));
+        Ok(Self {
+            namespace: File::open(&path).context(IoSnafu { path: &path })?,
+        })
+    }
 
-fn run_nsenter_mount(pid: u32, command: &[&str], source: &Path, target: &Path) -> Result<()> {
-    let output = Command::new("nsenter")
-        .args(["--target", &pid.to_string(), "--mount", "--"])
-        .args(command)
-        .arg(source)
-        .arg(target)
-        .output()
-        .context(IoSnafu {
+    pub(super) fn bind_mount(&self, source: &Path, target: &Path) -> Result<()> {
+        self.run(["mount", "--bind"], [source, target])
+    }
+
+    pub(super) fn unmount(&self, target: &Path) -> Result<()> {
+        self.run(["umount", "--"], [target])
+    }
+
+    fn run<const A: usize, const P: usize>(
+        &self,
+        command: [&str; A],
+        paths: [&Path; P],
+    ) -> Result<()> {
+        let flags = rustix::io::fcntl_getfd(&self.namespace)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: Path::new("held mount namespace"),
+            })?;
+        rustix::io::fcntl_setfd(&self.namespace, flags - rustix::io::FdFlags::CLOEXEC)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: Path::new("held mount namespace"),
+            })?;
+        let output = Command::new("nsenter")
+            .arg(format!(
+                "--mount=/proc/self/fd/{}",
+                self.namespace.as_raw_fd()
+            ))
+            .arg("--")
+            .args(command)
+            .args(paths)
+            .output();
+        rustix::io::fcntl_setfd(&self.namespace, flags)
+            .map_err(std::io::Error::from)
+            .context(IoSnafu {
+                path: Path::new("held mount namespace"),
+            })?;
+        let output = output.context(IoSnafu {
             path: Path::new("nsenter"),
         })?;
-    ensure!(
-        output.status.success(),
-        CommandSnafu {
-            program: "nsenter",
-            reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        }
-    );
-    Ok(())
+        ensure!(
+            output.status.success(),
+            CommandSnafu {
+                program: "nsenter",
+                reason: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            }
+        );
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -460,7 +434,68 @@ mod tests {
     };
     use mithril_node::EffectObservationHealth;
 
-    use super::{compile_phase4_artifact, health_delta};
+    use super::{health_delta, object_matches, observation_matches, ObjectExpectation};
+
+    #[test]
+    fn exact_observation_match_rejects_the_same_reason_from_another_hook() {
+        assert!(observation_matches(
+            "EXACT_POLICY_DENY",
+            2,
+            3,
+            "EXACT_POLICY_DENY",
+            Some((2, 3)),
+        ));
+        assert!(!observation_matches(
+            "EXACT_POLICY_DENY",
+            1,
+            3,
+            "EXACT_POLICY_DENY",
+            Some((2, 3)),
+        ));
+        assert!(!observation_matches(
+            "EXACT_POLICY_DENY",
+            2,
+            4,
+            "EXACT_POLICY_DENY",
+            Some((2, 3)),
+        ));
+        assert!(observation_matches(
+            "EXACT_POLICY_DENY",
+            1,
+            3,
+            "EXACT_POLICY_DENY",
+            None,
+        ));
+    }
+
+    #[test]
+    fn object_match_requires_the_selected_exact_or_unsupported_identity() {
+        let exact = Some(ObjectExpectation::Exact {
+            exact_object_key_id: 13,
+            operation_argument: Some(2_147_767_344),
+        });
+        assert!(object_matches(13, 99, 2_147_767_344, exact));
+        assert!(!object_matches(12, 99, 2_147_767_344, exact));
+        assert!(!object_matches(13, 99, 0, exact));
+        assert!(object_matches(
+            0,
+            0,
+            0,
+            Some(ObjectExpectation::Unsupported)
+        ));
+        assert!(!object_matches(
+            0,
+            1,
+            0,
+            Some(ObjectExpectation::Unsupported)
+        ));
+        assert!(!object_matches(
+            1,
+            0,
+            0,
+            Some(ObjectExpectation::Unsupported)
+        ));
+    }
 
     #[test]
     fn health_delta_preserves_ring_accounting() {
@@ -484,19 +519,23 @@ mod tests {
     }
 
     #[test]
-    fn phase4_fixture_is_a_verified_protect_artifact() -> Result<(), Box<dyn std::error::Error>> {
+    fn enforcement_fixture_is_a_verified_protect_artifact() -> Result<(), Box<dyn std::error::Error>>
+    {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let manual = repository.join("examples/mithril-phase3-manual");
+        let signing_fixture = repository.join("examples/mithril-effect-observation-manual");
+        let policy_source =
+            repository.join("examples/mithril-local-enforcement-manual/protect-policy-v1.yaml");
         let directory = tempfile::tempdir()?;
-        let artifact_path = directory.path().join("phase4-profile.json");
-        compile_phase4_artifact(
-            &manual.join("policy-v1.yaml"),
-            &manual.join("seal-request.json"),
-            &manual.join("test-signing-key.hex"),
+        let artifact_path = directory.path().join("enforcement-profile.json");
+        let owner = PolicyArtifactOwner::default();
+        owner.compile_and_sign(
+            &policy_source,
+            &signing_fixture.join("observe-profile-seal-request.json"),
+            &signing_fixture.join("test-signing-key.hex"),
             &artifact_path,
         )?;
-        let artifact = PolicyArtifactOwner::default()
-            .load_verified(&artifact_path, &manual.join("test-public-key.hex"))?;
+        let artifact =
+            owner.load_verified(&artifact_path, &signing_fixture.join("test-public-key.hex"))?;
 
         assert_eq!(artifact.compiled_profile.mode, ProfileModeV1::Protect);
         let cells = &artifact.compiled_profile.compiled_cells;
@@ -505,7 +544,7 @@ mod tests {
                 .iter()
                 .filter(|cell| cell.physical_result == CompiledPhysicalResultV1::DenyEffect)
                 .count(),
-            4
+            11
         );
         assert!(cells.iter().any(|cell| {
             cell.source_rule_ids == ["allow-manual-exec-read"]
@@ -519,6 +558,58 @@ mod tests {
                 && cell.key.operation_id == "EXECUTE"
                 && cell.physical_result == CompiledPhysicalResultV1::DenyEffect
         }));
+        for operation in ["MMAP_READ", "MMAP_WRITE"] {
+            assert!(cells.iter().any(|cell| {
+                cell.source_rule_ids == ["allow-manual-exec-allowed-read"]
+                    && cell.key.effect_family == EffectFamilyV1::File
+                    && cell.key.operation_id == operation
+                    && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
+            }));
+        }
+        for operation in ["EXECUTE", "MMAP_EXEC", "MPROTECT"] {
+            assert!(cells.iter().any(|cell| {
+                cell.source_rule_ids == ["allow-manual-exec-allowed"]
+                    && cell.key.effect_family == EffectFamilyV1::Exec
+                    && cell.key.operation_id == operation
+                    && cell.key.object_selector == "EXACT:12"
+                    && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
+            }));
+        }
+        assert!(cells.iter().any(|cell| {
+            cell.source_rule_ids == ["allow-labeled-target-signal-zero"]
+                && cell.key.effect_family == EffectFamilyV1::Privilege
+                && cell.key.operation_id == "SIGNAL_0"
+                && cell.key.object_selector == "SECURITY:PROCESS:runtime-external"
+                && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
+        }));
+        assert!(cells.iter().any(|cell| {
+            cell.source_rule_ids == ["deny-labeled-target-signal"]
+                && cell.key.effect_family == EffectFamilyV1::Privilege
+                && cell.key.operation_id == "SIGNAL"
+                && cell.key.object_selector == "SECURITY:PROCESS:runtime-external"
+                && cell.physical_result == CompiledPhysicalResultV1::DenyEffect
+        }));
+        assert!(cells.iter().any(|cell| {
+            cell.source_rule_ids == ["deny-labeled-target-ptrace"]
+                && cell.key.effect_family == EffectFamilyV1::Privilege
+                && cell.key.operation_id == "PTRACE"
+                && cell.key.object_selector == "SECURITY:PROCESS:runtime-external"
+                && cell.physical_result == CompiledPhysicalResultV1::DenyEffect
+        }));
+        assert!(cells.iter().any(|cell| {
+            cell.source_rule_ids == ["allow-ptmx-device-ioctl"]
+                && cell.key.effect_family == EffectFamilyV1::Device
+                && cell.key.operation_id == "IOCTL"
+                && cell.key.object_selector == "DEVICE:PTMX_DEVICE:2147767344"
+                && cell.physical_result == CompiledPhysicalResultV1::AllowEffect
+        }));
+        assert!(cells.iter().any(|cell| {
+            cell.source_rule_ids == ["deny-zero-device-ioctl"]
+                && cell.key.effect_family == EffectFamilyV1::Device
+                && cell.key.operation_id == "IOCTL"
+                && cell.key.object_selector == "DEVICE:ZERO_DEVICE:2147767344"
+                && cell.physical_result == CompiledPhysicalResultV1::DenyEffect
+        }));
         assert_eq!(
             artifact
                 .compiled_profile
@@ -526,25 +617,35 @@ mod tests {
                 .iter()
                 .filter(|cell| cell.consuming_exception_id.is_some())
                 .count(),
-            1
+            2
         );
-        let exception_cell = artifact
-            .compiled_profile
-            .compiled_cells
-            .iter()
-            .find(|cell| cell.consuming_exception_id.is_some())
-            .ok_or("Phase 4 fixture has no exception cell")?;
-        assert_eq!(
-            compiled_key_digest(&artifact.compiled_profile.profile_id, &exception_cell.key)?,
-            "eb7614f22732c8edcac2e55060444472180eb11ab3e34a9ea10c3514d8d16fb3"
-        );
+        for (exception_id, expected_digest) in [
+            (
+                "bounded-secret-write-open",
+                "eb7614f22732c8edcac2e55060444472180eb11ab3e34a9ea10c3514d8d16fb3",
+            ),
+            (
+                "expired-benign-write-open",
+                "d30e1be8582242608dda1b298fdf0a1e593bf54750f7e6497b3a6009d6965c9d",
+            ),
+        ] {
+            let cell = cells
+                .iter()
+                .find(|cell| cell.consuming_exception_id.as_deref() == Some(exception_id))
+                .ok_or("protect fixture has no expected exception cell")?;
+            assert_eq!(
+                compiled_key_digest(&artifact.compiled_profile.profile_id, &cell.key)?,
+                expected_digest
+            );
+        }
         Ok(())
     }
 
     #[test]
-    fn checked_in_phase4_manual_policy_matches_the_automated_fixture() -> crate::Result<()> {
+    fn checked_in_enforcement_manual_policy_matches_the_automated_fixture() -> crate::Result<()> {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let path = repository.join("examples/mithril-phase4-manual/policy-v1.yaml");
+        let path =
+            repository.join("examples/mithril-local-enforcement-manual/protect-policy-v1.yaml");
         let source = std::fs::read(&path).map_err(|source| crate::Error::Io {
             path: path.clone(),
             source,
@@ -562,16 +663,15 @@ mod tests {
                     source,
                     location: snafu::location!(),
                 })?;
-
         assert_eq!(compiled.mode, ProfileModeV1::Protect);
-        assert_eq!(compiled.compiled_cells.len(), 7);
+        assert_eq!(compiled.compiled_cells.len(), 27);
         assert_eq!(
             compiled
                 .compiled_cells
                 .iter()
                 .filter(|cell| cell.physical_result == CompiledPhysicalResultV1::DenyEffect)
                 .count(),
-            3
+            11
         );
         assert_eq!(
             compiled
@@ -579,7 +679,7 @@ mod tests {
                 .iter()
                 .filter(|cell| cell.consuming_exception_id.is_some())
                 .count(),
-            1
+            2
         );
         Ok(())
     }

@@ -1,10 +1,10 @@
 # How To Manually Accept Phase 3
 
-Status: Phase 3 compiler, Meta path/mount, exact-file observation, hard-safety,
-and simulation cases are implemented. The production object and native task
-lifecycle passed the operator's self-cleaning privileged identity probe on
-2026-08-10. The complete self-cleaning privileged Phase 3 effect probe also
-passed on 2026-08-10. Real Docker/CRI operator acceptance remains unrecorded.
+Status: The compiler, canonical path and mount handling, exact-file
+observation, hard-safety, typed effect, and simulation cases have
+implementations. The current source passed the privileged VM observation
+probe. The optional k3s lane passed substrate checks only. A Mithril CRI
+effect run and the remaining operator cases are not recorded.
 
 Phase: [Effect Observation And Profile Simulation](../phase-3-effect-observation-and-profile-simulation.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -39,10 +39,10 @@ a real isolated mount namespace without requiring Docker or Kubernetes:
 ```sh
 cargo build -p mithril-e2e --bin mithril-effect-test
 sudo target/debug/mithril-effect-test --repo-root . physical-probe \
-  --output-directory /tmp/mithril-phase3-effect-final \
-  --pin-root /sys/fs/bpf/erebor-mithril-phase3-effect-final \
-  --lease-path /tmp/mithril-phase3-effect-final/owner.lock \
-  --cgroup-path /sys/fs/cgroup/erebor-mithril-phase3-effect-final
+  --output-directory /tmp/mithril-effect-observation-final \
+  --pin-root /sys/fs/bpf/erebor-mithril-effect-observation-final \
+  --lease-path /tmp/mithril-effect-observation-final/owner.lock \
+  --cgroup-path /sys/fs/cgroup/erebor-mithril-effect-observation-final
 ```
 
 It is an assertion-bearing Rust test runner, not a wrapper around the manual
@@ -50,43 +50,46 @@ scripts. It also covers the stronger architecture race: an external privileged
 task enters the represented namespace and mounts another file over the exact
 path. The namespace must become DIRTY before the mutation, protected opens must
 fail closed, and userspace must refuse to clean the view while the exact
-mount/device/inode/generation differs. Docker direct-cgroup and CRI discovery
-logic remain ordinary Rust fixtures; the manual cases below validate their
+mount/device/inode/generation differs. The same probe checks the configured
+AF_UNIX `SOCK_STREAM` unmatched-policy result. Docker direct-cgroup and CRI
+discovery logic remain ordinary Rust fixtures. The manual cases below validate their
 real-daemon transport integrations.
 
 ## Implemented Manual Cases
 
 Build once, then run only the cases relevant to the available runtime. Every
 script installs an EXIT trap that stops the node and probe, removes its BPF
-pins, cgroup, lease, socket, temporary files, and any mount it created.
+pins, lease, socket, temporary files, and any mount it created. It leaves the
+supplied container and cgroup intact.
 
 ```sh
 cargo build -p mithril-node --bins -p mithril-control --bin mithril-policy
-examples/mithril-phase3-manual/compile-and-simulate.sh
+examples/mithril-effect-observation-manual/compile-observe-policy.sh
 
-sudo examples/mithril-phase3-manual/docker-file-observe.sh \
-  <phase2-node.json> <container> <secret-path>
-sudo examples/mithril-phase3-manual/cri-file-observe.sh \
-  <phase2-node.json> <full-container-id> <secret-path>
-sudo examples/mithril-phase3-manual/nsenter-file-observe.sh \
-  <phase2-node.json> <container> <secret-path>
-sudo examples/mithril-phase3-manual/docker-bind-alias.sh \
-  <phase2-node.json> <container> <mounted-secret-path> <alias-directory>
-sudo examples/mithril-phase3-manual/docker-hardlink-alias.sh \
-  <phase2-node.json> <container>
-sudo examples/mithril-phase3-manual/mount-attack-hard-deny.sh \
-  <phase2-node.json> <container> <secret-path>
-sudo examples/mithril-phase3-manual/unsupported-network-hard-deny.sh \
-  <phase2-node.json> <container> <secret-path>
-sudo examples/mithril-phase3-manual/docker-saturation-hard-safety.sh \
-  <phase2-node.json> <container> <secret-path>
-sudo examples/mithril-phase3-manual/docker-open-latency.sh \
-  <phase2-node.json> <container> <secret-path>
+sudo examples/mithril-effect-observation-manual/docker-file-observe.sh \
+  <identity-node.json> <container> <secret-path>
+sudo examples/mithril-effect-observation-manual/cri-file-observe.sh \
+  <identity-node.json> <full-container-id> <secret-path>
+sudo examples/mithril-effect-observation-manual/nsenter-file-observe.sh \
+  <identity-node.json> <container> <secret-path>
+sudo examples/mithril-effect-observation-manual/docker-bind-alias.sh \
+  <identity-node.json> <container> <mounted-secret-path> <alias-directory>
+sudo examples/mithril-effect-observation-manual/docker-hardlink-alias.sh \
+  <identity-node.json> <container>
+sudo examples/mithril-effect-observation-manual/mount-attack-hard-deny.sh \
+  <identity-node.json> <container> <secret-path>
+sudo examples/mithril-effect-observation-manual/unsupported-network-hard-deny.sh \
+  <identity-node.json> <container> <secret-path>
+sudo examples/mithril-effect-observation-manual/docker-saturation-hard-safety.sh \
+  <identity-node.json> <container> <secret-path>
+sudo examples/mithril-effect-observation-manual/docker-open-latency.sh \
+  <identity-node.json> <container> <secret-path>
 ```
 
 Each command is a separate operator case; there is deliberately no run-all
-wrapper. Kubernetes is optional and does not own a Mithril enforcement
-boundary.
+wrapper. Each prepared process blocks on its own FIFO across node recovery. A
+host signal is not part of the test authority. Kubernetes is optional and does
+not own a Mithril enforcement boundary.
 
 The bind-alias case deliberately creates the represented alias before policy
 activation. Its read remains physically allowed in Phase 3 but resolves to the

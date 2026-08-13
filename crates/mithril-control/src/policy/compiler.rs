@@ -358,7 +358,15 @@ pub fn kernel_operation_id(operation: &str) -> Option<KernelEffectOperationV1> {
         "CONNECT" => Some(KernelEffectOperationV1::Connect),
         "SEND" => Some(KernelEffectOperationV1::Send),
         "PTRACE" => Some(KernelEffectOperationV1::Ptrace),
+        operation if operation_argument(operation, "PTRACE_ACCESS_").is_some() => {
+            Some(KernelEffectOperationV1::Ptrace)
+        }
         "SIGNAL" => Some(KernelEffectOperationV1::Signal),
+        operation if operation_argument(operation, "SIGNAL_").is_some() => {
+            Some(KernelEffectOperationV1::Signal)
+        }
+        "CREATE" => Some(KernelEffectOperationV1::Create),
+        "SETATTR" => Some(KernelEffectOperationV1::Setattr),
         "UNLINK" => Some(KernelEffectOperationV1::Unlink),
         "LINK" => Some(KernelEffectOperationV1::Link),
         "RENAME" => Some(KernelEffectOperationV1::Rename),
@@ -370,6 +378,30 @@ pub fn kernel_operation_id(operation: &str) -> Option<KernelEffectOperationV1> {
         "BPF" => Some(KernelEffectOperationV1::Bpf),
         _ => None,
     }
+}
+
+/// Return the exact Linux hook argument and whether the signed operation is a
+/// denial-only wildcard.
+#[must_use]
+pub fn process_control_operation(operation: &str) -> Option<(KernelEffectOperationV1, u32, bool)> {
+    match operation {
+        "PTRACE" => Some((KernelEffectOperationV1::Ptrace, 0, true)),
+        "SIGNAL" => Some((KernelEffectOperationV1::Signal, 0, true)),
+        operation => operation_argument(operation, "PTRACE_ACCESS_")
+            .map(|argument| (KernelEffectOperationV1::Ptrace, argument, false))
+            .or_else(|| {
+                operation_argument(operation, "SIGNAL_")
+                    .map(|argument| (KernelEffectOperationV1::Signal, argument, false))
+            }),
+    }
+}
+
+fn operation_argument(operation: &str, prefix: &str) -> Option<u32> {
+    let argument = operation.strip_prefix(prefix)?;
+    if argument.is_empty() || (argument.len() > 1 && argument.starts_with('0')) {
+        return None;
+    }
+    argument.parse().ok()
 }
 
 struct RuleDecision<'a> {
@@ -527,11 +559,9 @@ fn default_keys(
             process_states: vec![role.default_process_state_id.as_str()],
             effect_families: vec![default.effect_family],
             operations: default.operations.iter().map(String::as_str).collect(),
-            objects: whole
-                .object_class_ids
-                .iter()
-                .map(|id| format!("CLASS:{id}"))
-                .collect(),
+            // A family default is the signed result when no more specific
+            // object cell is available. It is not one row per object class.
+            objects: vec!["DEFAULT".to_owned()],
             lifecycles: vec![
                 BindingLifecycleV1::Preparing,
                 BindingLifecycleV1::Active,
@@ -795,6 +825,12 @@ fn validate_ids(document: &PolicyDocumentV1) -> Result<()> {
         )
         .chain(
             document
+                .ipc_relationship_rules
+                .iter()
+                .map(|rule| &rule.relationship_rule_id),
+        )
+        .chain(
+            document
                 .process_state_definitions
                 .iter()
                 .map(|state| &state.process_state_id),
@@ -833,6 +869,12 @@ fn validate_ids(document: &PolicyDocumentV1) -> Result<()> {
                     | RuleMatchV1::RemotePreAdmission(_)
                     | RuleMatchV1::PostEffect(_) => [].iter(),
                 }),
+        )
+        .chain(
+            document
+                .ipc_relationship_rules
+                .iter()
+                .flat_map(|rule| rule.channel_class_ids.iter().chain(&rule.operations)),
         )
     {
         check(
@@ -1014,6 +1056,69 @@ fn validate_supporting_definitions(document: &PolicyDocumentV1) -> Result<()> {
             .map(|exception| exception.exception_id.as_str()),
         "exception",
     )?;
+    check_unique(
+        policy_id,
+        document
+            .ipc_relationship_rules
+            .iter()
+            .map(|rule| rule.relationship_rule_id.as_str()),
+        "IPC relationship",
+    )?;
+    let mut ipc_decisions = BTreeMap::new();
+    for relationship in &document.ipc_relationship_rules {
+        check(
+            policy_id,
+            !relationship.source_role_ids.is_empty()
+                && ordered_unique(&relationship.source_role_ids)
+                && relationship
+                    .source_role_ids
+                    .iter()
+                    .all(|role| roles.contains(role.as_str()))
+                && !relationship.peer_role_ids.is_empty()
+                && ordered_unique(&relationship.peer_role_ids)
+                && relationship
+                    .peer_role_ids
+                    .iter()
+                    .all(|role| roles.contains(role.as_str()))
+                && relationship.channel_class_ids == ["UNIX_STREAM"]
+                && relationship.operations == ["IPC_ACCESS"]
+                && relationship.requested_disposition != PolicyDispositionV1::Reject
+                && (relationship.requested_disposition == PolicyDispositionV1::Deny)
+                    == relationship.errno.is_some(),
+            "CFG_IPC_RELATIONSHIP",
+            &format!(
+                "IPC relationship `{}` must use defined roles, the UNIX_STREAM IPC_ACCESS surface, and an errno only for DENY",
+                relationship.relationship_rule_id
+            ),
+        )?;
+        for source in &relationship.source_role_ids {
+            for peer in &relationship.peer_role_ids {
+                let pair = if source <= peer {
+                    (source.as_str(), peer.as_str())
+                } else {
+                    (peer.as_str(), source.as_str())
+                };
+                let decision = (relationship.requested_disposition, relationship.errno);
+                if let Some(existing) = ipc_decisions.insert(pair, decision) {
+                    check(
+                        policy_id,
+                        existing == decision,
+                        "CFG_IPC_RELATIONSHIP_CONFLICT",
+                        &format!(
+                            "IPC relationship `{}` conflicts with another rule for roles `{}` and `{}`",
+                            relationship.relationship_rule_id, pair.0, pair.1
+                        ),
+                    )?;
+                }
+            }
+        }
+    }
+    check(
+        policy_id,
+        document.unmatched_ipc_disposition != PolicyDispositionV1::Reject,
+        "CFG_IPC_UNMATCHED",
+        "unmatched IPC must ALLOW, ALERT, or DENY at a local pre-effect hook",
+    )?;
     for route in &document.notification_routes {
         check(
             policy_id,
@@ -1069,6 +1174,40 @@ fn validate_supporting_definitions(document: &PolicyDocumentV1) -> Result<()> {
                     || default.finding.is_some()),
             "CFG_EFFECT_DEFAULT",
             "effect-family defaults must be exact, ordered local decisions",
+        )?;
+        check(
+            policy_id,
+            default.requested_disposition == PolicyDispositionV1::Deny
+                || default
+                    .operations
+                    .iter()
+                    .all(|operation| !matches!(operation.as_str(), "CAPABILITY" | "BPF")),
+            "CFG_PRIVILEGE_WILDCARD",
+            "generic CAPABILITY and BPF effect-family defaults are denial-only",
+        )?;
+        check(
+            policy_id,
+            default.requested_disposition == PolicyDispositionV1::Deny
+                || default.effect_family != EffectFamilyV1::Network,
+            "CFG_NETWORK_DEFAULT_AUTHORITY",
+            "NETWORK effect-family defaults are denial-only",
+        )?;
+        check(
+            policy_id,
+            default.requested_disposition == PolicyDispositionV1::Deny
+                || default.effect_family != EffectFamilyV1::Mount,
+            "CFG_MOUNT_DEFAULT_AUTHORITY",
+            "MOUNT effect-family defaults are denial-only",
+        )?;
+        check(
+            policy_id,
+            default.requested_disposition == PolicyDispositionV1::Deny
+                || default.effect_family != EffectFamilyV1::Exec
+                || default.operations.iter().all(|operation| {
+                    !matches!(operation.as_str(), "EXECUTE" | "MMAP_EXEC" | "MPROTECT")
+                }),
+            "CFG_EXECUTABLE_MEMORY_AUTHORITY",
+            "unqualified executable-image and executable-memory defaults are denial-only",
         )?;
         if let Some(finding) = &default.finding {
             validate_finding(policy_id, finding, &routes)?;
@@ -1776,6 +1915,37 @@ fn validate_rules(document: &PolicyDocumentV1) -> Result<()> {
                     rule.rule_id
                 ),
             )?;
+            check(
+                policy_id,
+                rule.requested_disposition == PolicyDispositionV1::Deny
+                    || effect
+                        .operation_ids
+                        .iter()
+                        .all(|operation| !matches!(operation.as_str(), "CAPABILITY" | "BPF")),
+                "CFG_PRIVILEGE_WILDCARD",
+                &format!(
+                    "rule `{}` uses generic CAPABILITY or BPF authority; these operations are denial-only",
+                    rule.rule_id
+                ),
+            )?;
+            check(
+                policy_id,
+                rule.requested_disposition == PolicyDispositionV1::Deny
+                    || !effect.effect_families.contains(&EffectFamilyV1::Exec)
+                    || effect
+                        .operation_ids
+                        .iter()
+                        .all(|operation| !matches!(operation.as_str(), "MMAP_EXEC" | "MPROTECT"))
+                    || matches!(
+                        &effect.object,
+                        LocalObjectSelectorV1::ExactObjectKeys { .. }
+                    ),
+                "CFG_EXECUTABLE_MEMORY_AUTHORITY",
+                &format!(
+                    "rule `{}` must use exact object keys to allow or alert on executable memory",
+                    rule.rule_id
+                ),
+            )?;
             match &effect.object {
                 LocalObjectSelectorV1::ExactObjectKeys {
                     exact_object_key_ids,
@@ -1801,7 +1971,48 @@ fn validate_rules(document: &PolicyDocumentV1) -> Result<()> {
                         rule.rule_id
                     ),
                 )?,
+                LocalObjectSelectorV1::Devices {
+                    ioctl_command_ids, ..
+                } => check(
+                    policy_id,
+                    rule.requested_disposition == PolicyDispositionV1::Deny
+                        || !ioctl_command_ids.is_empty(),
+                    "CFG_DEVICE_IOCTL_WILDCARD",
+                    &format!(
+                        "rule `{}` must name exact ioctl commands to allow or alert",
+                        rule.rule_id
+                    ),
+                )?,
                 _ => {}
+            }
+            if let LocalObjectSelectorV1::SecurityObjects {
+                security_object_ids,
+                target_selector_ids,
+            } = &effect.object
+            {
+                if security_object_ids.iter().any(|object| object == "PROCESS") {
+                    check(
+                        policy_id,
+                        security_object_ids.as_slice() == ["PROCESS"]
+                            && target_selector_ids.len() == 1
+                            && universe.roles.contains(target_selector_ids[0].as_str())
+                            && effect.effect_families.as_slice() == [EffectFamilyV1::Privilege]
+                            && effect.operation_ids.iter().all(|operation| {
+                                process_control_operation(operation).is_some_and(
+                                    |(_, _, wildcard)| {
+                                        !wildcard
+                                            || rule.requested_disposition
+                                                == PolicyDispositionV1::Deny
+                                    },
+                                )
+                            }),
+                        "CFG_PROCESS_CONTROL_KEY",
+                        &format!(
+                            "rule `{}` must name one target role and exact process-control arguments; a wildcard is denial-only",
+                            rule.rule_id
+                        ),
+                    )?;
+                }
             }
             for family in &effect.effect_families {
                 for operation in &effect.operation_ids {
@@ -2054,6 +2265,8 @@ fn operation_belongs_to_family(family: EffectFamilyV1, operation: &str) -> bool 
                 | "MMAP_READ"
                 | "MMAP_WRITE"
                 | "MPROTECT"
+                | "CREATE"
+                | "SETATTR"
                 | "UNLINK"
                 | "LINK"
                 | "RENAME"
@@ -2061,7 +2274,8 @@ fn operation_belongs_to_family(family: EffectFamilyV1, operation: &str) -> bool 
         EffectFamilyV1::Network => matches!(operation, "CONNECT" | "SEND"),
         EffectFamilyV1::Device => operation == "IOCTL",
         EffectFamilyV1::Privilege => {
-            matches!(operation, "PTRACE" | "SIGNAL" | "CAPABILITY" | "BPF")
+            matches!(operation, "CAPABILITY" | "BPF")
+                || process_control_operation(operation).is_some()
         }
         EffectFamilyV1::Ipc => operation == "IPC_ACCESS",
         EffectFamilyV1::Mount => {
@@ -2130,9 +2344,9 @@ fn validate_rollout(document: &PolicyDocumentV1) -> Result<()> {
 fn validate_uuid(policy_id: &str, value: &str, field: &str) -> Result<()> {
     check(
         policy_id,
-        Uuid::parse_str(value).is_ok(),
+        Uuid::parse_str(value).is_ok_and(|uuid| uuid.hyphenated().to_string() == value),
         "CFG_ID128",
-        &format!("{field} must be an Id128 UUID"),
+        &format!("{field} must be a canonical lowercase hyphenated Id128 UUID"),
     )
 }
 

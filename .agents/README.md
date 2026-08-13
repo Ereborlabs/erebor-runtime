@@ -1,29 +1,34 @@
 # Agent Instruction Map
 
-This directory keeps detailed agent guidance out of the root `AGENTS.md` while
-making the rules easy to reference.
+`AGENTS.md` defines repository scope and document custody. This directory owns
+the detailed rules. Read the guide that matches the work before editing.
 
-## Files
+## Working Guides
 
-- [engineering.md](engineering.md): coding standards, crate boundaries, CLI
-  rules, error/logging style, and commit behavior.
-- [planning.md](planning.md): phase-plan style, current-code grounding,
-  verification claims, and follow-up tracking.
-- [browser-cdp.md](browser-cdp.md): browser governance, CDP proxy rules,
-  browser state authority, Playwright/browser-use validation, and future
-  process/endpoint governance.
-- [verification.md](verification.md): required checks, real example acceptance,
-  and how to handle host-specific browser failures.
+- [engineering.md](engineering.md): Rust code, crate ownership, CLI boundaries,
+  errors, logging, tests, and handoff.
+- [planning.md](planning.md): plans, phase files, simplification proposals, and
+  truthful status claims.
+- [browser-cdp.md](browser-cdp.md): browser/CDP enforcement, state authority,
+  protocol handling, and browser-client acceptance.
+- [verification.md](verification.md): required quality gates, e2e evidence, and
+  final reporting.
 
-## Canonical Plans
+## Discover Documentation And Plans
 
-Use these plans as source material when work touches their area:
+Start with [docs/README.md](../docs/README.md) and
+[docs/plans/README.md](../docs/plans/README.md). Then use
+`rg --files docs docs/plans` to discover the current material for the task.
 
-- [docs/development-plan.md](../docs/development-plan.md)
-- [docs/governed-browser-and-terminal-plan.md](../docs/governed-browser-and-terminal-plan.md)
-- [docs/browser-state-authority-plan.md](../docs/browser-state-authority-plan.md)
-- [docs/plans/browser-governance/browser-level-cdp/README.md](../docs/plans/browser-governance/browser-level-cdp/README.md)
-- [examples/playwright-cdp-demo/README.md](../examples/playwright-cdp-demo/README.md)
+Read every applicable parent document, design, README, master plan, nested
+plan, phase, result, lifecycle probe, manual acceptance record, and example.
+The indexes help discovery; they do not replace linked documents. Research and
+recovered material can explain a decision, but they do not prove current
+implementation state.
 
-If a plan and the current user instruction conflict, follow the current user
-instruction and update the plan only when the user asks for that.
+Do not add a catalogue of document names, plan titles, phases, or statuses to
+agent instructions. Keep this file stable; plans own their own scope and
+status.
+
+For the required ASD-STE100 writing standard, see
+[AGENTS.md](../AGENTS.md#documents-and-comments).

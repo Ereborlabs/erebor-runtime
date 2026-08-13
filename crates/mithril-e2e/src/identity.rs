@@ -1,7 +1,9 @@
+mod clone3;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read as _, Write as _};
-use std::mem::{offset_of, size_of};
+use std::mem::size_of;
 use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
@@ -16,6 +18,7 @@ use erebor_interceptor_abi::{
     ExecGuardStateV1, IdentityRuntimeConfigV1, ProcessExecutionStateV1, ProcessStateVectorStateV1,
     TaskCoordinateStateV1,
 };
+use libbpf_rs::{MapHandle, MapType};
 use mithril_node::{
     NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1, WorkloadBindingConfig,
     WorkloadBindingOwner,
@@ -23,20 +26,25 @@ use mithril_node::{
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
+use zerocopy::FromBytes as _;
 
 use crate::closure::ArchitectureClosure;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
-use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory};
+use crate::identity::clone3::CloneIntoCgroupFixture;
+use crate::physical::{boot_identity, ProbeCgroup, ProbeDirectory, ProbeFile};
 use crate::Result;
 
 const WAIT_LIMIT: Duration = Duration::from_secs(5);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 
-const REQUIRED_IDENTITY_MAPS: [&str; 37] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 46] = [
+    "active_profile_generations",
     "approved_exec_arguments",
     "approved_exec_slots",
     "authority_domains",
+    "binding_activation_targets",
     "created_by_edges",
+    "device_effect_decisions",
     "effect_decisions",
     "effect_defaults",
     "effect_observation_health",
@@ -45,11 +53,16 @@ const REQUIRED_IDENTITY_MAPS: [&str; 37] = [
     "execution_set_bindings",
     "external_root_classifications",
     "exact_file_objects",
+    "task_effect_attempt_states",
+    "exception_handle_bindings",
     "exception_runtime_states",
+    "exception_use_receipts",
     "identity_config",
     "identity_health",
     "identity_scratch",
     "image_provenance",
+    "ipc_relationship_decisions",
+    "ipc_socket_states",
     "kernel_real_parent_intervals",
     "pending_execs",
     "pending_administrative_matches",
@@ -63,6 +76,7 @@ const REQUIRED_IDENTITY_MAPS: [&str; 37] = [
     "path_graph_terminals",
     "path_graph_wildcard_transitions",
     "process_execution_instances",
+    "process_control_rules",
     "process_state_vectors",
     "process_states",
     "profile_generation_descriptors",
@@ -72,7 +86,7 @@ const REQUIRED_IDENTITY_MAPS: [&str; 37] = [
     "task_reference_tombstones",
 ];
 
-const PHASE2_FIXTURES: [&str; 33] = [
+const IDENTITY_FIXTURES: [&str; 33] = [
     "AUTHORIZATION-REPLAY-004",
     "ENTRY-BINDING-GAP-001",
     "ENTRY-CONTAINERS-001",
@@ -114,7 +128,7 @@ pub struct IdentityVerificationBundleV1 {
     pub object_path: PathBuf,
     pub object_sha256: String,
     pub layout: KernelObjectLayoutV1,
-    pub phase2_fixture_ids: Vec<String>,
+    pub identity_fixture_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -122,13 +136,17 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub object_sha256: String,
     pub first_start: KernelObjectManifestV1,
+    pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
+    pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub external_root: NativeTaskSnapshotV1,
     pub native_child_before_exec: NativeTaskSnapshotV1,
     pub native_child_after_exec: NativeTaskSnapshotV1,
     pub profile_task_refs_after_exit: u64,
     pub recovered_start: KernelObjectManifestV1,
     pub map_ids_stable_across_restart: bool,
+    pub live_manifest_mismatch_detected: bool,
     pub pin_root_removed: bool,
+    pub lease_removed: bool,
     pub cgroup_removed: bool,
 }
 
@@ -207,10 +225,10 @@ impl IdentityTestRunner {
             .map(|fixture| fixture.fixture_id)
             .collect::<BTreeSet<_>>();
         ensure!(
-            fixtures == PHASE2_FIXTURES.into_iter().map(str::to_owned).collect(),
+            fixtures == IDENTITY_FIXTURES.into_iter().map(str::to_owned).collect(),
             InvalidInputSnafu {
                 path: self.repo_root.join("spec/qualification/v1/fixtures.yaml"),
-                reason: "Phase 2 fixture allocation differs from the phase plan",
+                reason: "identity fixture allocation differs from the acceptance registry",
             }
         );
         Ok(IdentityVerificationBundleV1 {
@@ -218,7 +236,7 @@ impl IdentityTestRunner {
             object_path,
             object_sha256,
             layout,
-            phase2_fixture_ids: fixtures.into_iter().collect(),
+            identity_fixture_ids: fixtures.into_iter().collect(),
         })
     }
 
@@ -237,6 +255,7 @@ impl IdentityTestRunner {
             }
         );
         let pin_cleanup = ProbeDirectory::new(pin_root);
+        let lease_cleanup = ProbeFile::new(lease_path);
         let cgroup_cleanup = ProbeCgroup::create(cgroup_path)?;
         let cgroup_path = cgroup_cleanup.path().to_path_buf();
         let procs_path = cgroup_path.join("cgroup.procs");
@@ -263,6 +282,41 @@ impl IdentityTestRunner {
         let identity = NativeSecurityStateOwner::new(node_boot_id, 1);
         identity.activate(&mut host).context(NodeSnafu)?;
         let inspector = NativeIdentityInspector::new(pin_root);
+
+        let mut clone_fixture = CloneIntoCgroupFixture::start(&cgroup_path)?;
+        let clone_external_root = self.wait_for(
+            "pre-wake CLONE_INTO_CGROUP external root identity",
+            &procs_path,
+            || {
+                inspector
+                    .snapshot(clone_fixture.root_pid())
+                    .context(NodeSnafu)
+            },
+        )?;
+        clone_fixture.release_root()?;
+        let clone_child_pid =
+            self.wait_for("CLONE_INTO_CGROUP native child", &procs_path, || {
+                clone_fixture.child_pid()
+            })?;
+        let clone_native_child = self.wait_for(
+            "CLONE_INTO_CGROUP native child identity",
+            &procs_path,
+            || inspector.snapshot(clone_child_pid).context(NodeSnafu),
+        )?;
+        ensure!(
+            clone_external_root.creator_task_cookie.is_none()
+                && clone_external_root.root_class == Some("external_runtime_root")
+                && clone_external_root.installed_role_class == Some("runtime_external_restricted")
+                && clone_native_child.creator_task_cookie == Some(clone_external_root.task_cookie)
+                && clone_native_child.real_parent_task_cookie == clone_external_root.task_cookie
+                && clone_native_child.root_class.is_none()
+                && clone_native_child.coordinate_state == TaskCoordinateStateV1::Runnable as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "CLONE_INTO_CGROUP root or its native child has the wrong identity",
+            }
+        );
+        clone_fixture.stop();
 
         let mut fixture = NativeProcessFixture::start()?;
         fs::write(&procs_path, fixture.outer_pid().to_string())
@@ -326,6 +380,7 @@ impl IdentityTestRunner {
 
         let first_map_ids = map_ids(&first_start);
         host.shutdown().context(InterceptorSnafu)?;
+        verify_recovery_rejects_displaced_map(&config, &first_start)?;
         let mut recovered = KernelHostOwner::new(config)
             .start()
             .context(InterceptorSnafu)?;
@@ -338,6 +393,7 @@ impl IdentityTestRunner {
         NativeSecurityStateOwner::new(node_boot_id, 1)
             .activate(&mut recovered)
             .context(NodeSnafu)?;
+        let live_manifest_mismatch_detected = verify_live_manifest_negative_fixture(&recovered)?;
         let map_ids_stable_across_restart = first_map_ids == map_ids(&recovered_start);
         ensure!(
             map_ids_stable_across_restart,
@@ -348,12 +404,13 @@ impl IdentityTestRunner {
         );
         recovered.shutdown().context(InterceptorSnafu)?;
         pin_cleanup.cleanup()?;
+        lease_cleanup.cleanup()?;
         cgroup_cleanup.cleanup()?;
         ensure!(
-            !pin_root.exists(),
+            !pin_root.exists() && !lease_path.exists(),
             InvalidInputSnafu {
                 path: pin_root,
-                reason: "the identity-test pin root survived cleanup",
+                reason: "the identity-test pin root or lease survived cleanup",
             }
         );
         ensure!(
@@ -367,13 +424,17 @@ impl IdentityTestRunner {
             schema_version: 1,
             object_sha256,
             first_start,
+            clone_into_cgroup_external_root: clone_external_root,
+            clone_into_cgroup_native_child: clone_native_child,
             external_root,
             native_child_before_exec: before_exec,
             native_child_after_exec: after_exec,
             profile_task_refs_after_exit,
             recovered_start,
             map_ids_stable_across_restart,
+            live_manifest_mismatch_detected,
             pin_root_removed: true,
+            lease_removed: true,
             cgroup_removed: true,
         })
     }
@@ -538,10 +599,10 @@ fn test_binding(cgroup_path: &Path) -> WorkloadBindingConfig {
         workload_selector_id: "worker".to_owned(),
         profile_id: "4cd90188-e814-45ec-899f-4e3c9bca3803".to_owned(),
         container_id: "b".repeat(64),
-        pod_uid: "phase2-pod-uid".to_owned(),
-        sandbox_id: "phase2-sandbox".to_owned(),
+        pod_uid: "identity-pod-uid".to_owned(),
+        sandbox_id: "identity-sandbox".to_owned(),
         container_name: "worker".to_owned(),
-        image_digest: "sha256:phase2-image".to_owned(),
+        image_digest: "sha256:identity-fixture-image".to_owned(),
         container_kind: mithril_node::ContainerKindV1::Application,
         container_generation: 1,
         root_cgroup_path: Some(cgroup_path.to_path_buf()),
@@ -569,11 +630,13 @@ fn identity_next_id(host: &KernelHost) -> Result<u64> {
         .lookup_map("identity_config", &0_u32.to_ne_bytes())
         .context(InterceptorSnafu)?
         .ok_or_else(|| invalid_state("identity runtime configuration is missing"))?;
-    read_u64(
-        &value,
-        offset_of!(IdentityRuntimeConfigV1, next_id),
-        "identity next ID",
-    )
+    IdentityRuntimeConfigV1::read_from_bytes(&value)
+        .map(|config| config.next_id)
+        .map_err(|error| {
+            invalid_state(format!(
+                "identity runtime configuration is invalid: {error}"
+            ))
+        })
 }
 
 fn map_ids(manifest: &KernelObjectManifestV1) -> BTreeMap<&str, u32> {
@@ -582,6 +645,114 @@ fn map_ids(manifest: &KernelObjectManifestV1) -> BTreeMap<&str, u32> {
         .iter()
         .map(|map| (map.name.as_str(), map.id))
         .collect()
+}
+
+fn verify_recovery_rejects_displaced_map(
+    config: &KernelHostConfig,
+    manifest: &KernelObjectManifestV1,
+) -> Result<()> {
+    let record = manifest
+        .maps
+        .iter()
+        .find(|map| map.name == "active_profile_generations")
+        .ok_or_else(|| invalid_state("live manifest has no active-profile map"))?;
+    ensure!(
+        record.map_type == "Hash",
+        InvalidInputSnafu {
+            path: Path::new(&record.name),
+            reason: "active-profile map is not a hash map",
+        }
+    );
+    let pin = record
+        .pin_path
+        .as_deref()
+        .ok_or_else(|| invalid_state("active-profile map has no pin path"))?;
+    let displaced = pin
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| invalid_state("active-profile map pin has no pin root"))?
+        .join("recovery-original-active-profile-generations");
+    ensure!(
+        !displaced.exists(),
+        InvalidInputSnafu {
+            path: &displaced,
+            reason: "recovery negative-fixture path already exists",
+        }
+    );
+    fs::rename(pin, &displaced).context(IoSnafu { path: pin })?;
+
+    let attempt = (|| {
+        let options = libbpf_rs::libbpf_sys::bpf_map_create_opts {
+            sz: size_of::<libbpf_rs::libbpf_sys::bpf_map_create_opts>() as _,
+            ..Default::default()
+        };
+        let mut replacement = MapHandle::create(
+            MapType::Hash,
+            Some("recovery_map"),
+            record.key_size,
+            record.value_size,
+            record.max_entries,
+            &options,
+        )
+        .map_err(|error| invalid_state(format!("create same-layout replacement map: {error}")))?;
+        replacement
+            .pin(pin)
+            .map_err(|error| invalid_state(format!("pin same-layout replacement map: {error}")))?;
+        match KernelHostOwner::new(config.clone()).start() {
+            Ok(host) => {
+                host.shutdown().context(InterceptorSnafu)?;
+                Ok(false)
+            }
+            Err(error) => Ok(error.to_string().contains("recovered maps")),
+        }
+    })();
+    let remove = match fs::remove_file(pin) {
+        Ok(()) => Ok(()),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(source).context(IoSnafu { path: pin }),
+    };
+    let restore = fs::rename(&displaced, pin).context(IoSnafu { path: &displaced });
+    let rejected = attempt?;
+    remove?;
+    restore?;
+    ensure!(
+        rejected,
+        InvalidInputSnafu {
+            path: pin,
+            reason: "recovery accepted retained programs that use a displaced map",
+        }
+    );
+    Ok(())
+}
+
+fn verify_live_manifest_negative_fixture(host: &KernelHost) -> Result<bool> {
+    host.verify_live_manifest().context(InterceptorSnafu)?;
+    let pin = host
+        .manifest()
+        .links
+        .first()
+        .and_then(|link| link.pin_path.as_ref())
+        .ok_or_else(|| invalid_state("live manifest has no pinned link"))?;
+    let displaced = pin.with_extension("manifest-negative-fixture");
+    ensure!(
+        !displaced.exists(),
+        InvalidInputSnafu {
+            path: &displaced,
+            reason: "live-manifest negative fixture path already exists",
+        }
+    );
+    fs::rename(pin, &displaced).context(IoSnafu { path: pin })?;
+    let mismatch_detected = host.verify_live_manifest().is_err();
+    fs::rename(&displaced, pin).context(IoSnafu { path: &displaced })?;
+    ensure!(
+        mismatch_detected,
+        InvalidInputSnafu {
+            path: pin,
+            reason: "live manifest accepted a missing pinned link",
+        }
+    );
+    host.verify_live_manifest().context(InterceptorSnafu)?;
+    Ok(true)
 }
 
 fn open_pidfd(pid: u32) -> Result<OwnedFd> {
@@ -614,11 +785,11 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        IdentityTestRunner, NativeProcessFixture, PHASE2_FIXTURES, REQUIRED_IDENTITY_MAPS,
+        IdentityTestRunner, NativeProcessFixture, IDENTITY_FIXTURES, REQUIRED_IDENTITY_MAPS,
     };
 
     #[test]
-    fn production_object_and_phase2_fixture_allocation_are_exact() -> crate::Result<()> {
+    fn production_object_and_identity_fixture_allocation_are_exact() -> crate::Result<()> {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let temporary = tempfile::tempdir().map_err(|error| {
             super::invalid_state(format!("create identity test directory: {error}"))
@@ -626,7 +797,7 @@ mod tests {
         let bundle = IdentityTestRunner::new(root).verify(temporary.path())?;
         assert_eq!(bundle.schema_version, 1);
         assert_eq!(bundle.layout.maps.len(), REQUIRED_IDENTITY_MAPS.len());
-        assert_eq!(bundle.phase2_fixture_ids.len(), PHASE2_FIXTURES.len());
+        assert_eq!(bundle.identity_fixture_ids.len(), IDENTITY_FIXTURES.len());
         Ok(())
     }
 

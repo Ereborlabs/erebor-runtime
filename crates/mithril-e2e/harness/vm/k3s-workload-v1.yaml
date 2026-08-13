@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mithril-vm-qualification
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mithril-runtime
+  namespace: mithril-vm-qualification
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mithril-runtime
+  namespace: mithril-vm-qualification
+spec:
+  serviceAccountName: mithril-runtime
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  containers:
+    - name: runtime
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "test -r /var/run/secrets/tokens/mithril && exec sleep 3600"]
+      volumeMounts:
+        - name: service-account-token
+          mountPath: /var/run/secrets/tokens
+          readOnly: true
+        - name: qualification-secret
+          mountPath: /var/lib/mithril/secret
+          readOnly: true
+  volumes:
+    - name: service-account-token
+      projected:
+        sources:
+          - serviceAccountToken:
+              path: mithril
+              audience: mithril-qualification
+              expirationSeconds: 600
+    - name: qualification-secret
+      hostPath:
+        path: /var/lib/mithril-vm-qualification/secret
+        type: File

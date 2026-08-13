@@ -78,6 +78,13 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display("Mithril node failed to inspect container process {pid}: {source}"))]
+    ContainerRuntimeProcess {
+        pid: i32,
+        source: procfs::ProcError,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Mithril node control protocol failed: {reason}"))]
     ControlProtocol {
         reason: String,
@@ -116,6 +123,7 @@ impl ErrorExt for Error {
             | Self::ControlRpc { .. }
             | Self::ContainerRuntimeTransport { .. }
             | Self::ContainerRuntimeRpc { .. }
+            | Self::ContainerRuntimeProcess { .. }
             | Self::LocalTask { .. } => StatusCode::External,
         }
     }
@@ -130,6 +138,7 @@ impl ErrorExt for Error {
             | Self::ControlRpc { .. }
             | Self::ContainerRuntimeTransport { .. }
             | Self::ContainerRuntimeRpc { .. }
+            | Self::ContainerRuntimeProcess { .. }
             | Self::LocalTask { .. } => RetryHint::Retryable,
             Self::InvalidConfiguration { .. }
             | Self::IdentityState { .. }

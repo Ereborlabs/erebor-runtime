@@ -1,10 +1,12 @@
 # How To Manually Accept Phase 2
 
-Status: Implemented companion; privileged physical acceptance has not yet run.
+Status: The current source passed the automated privileged VM identity probe.
+The optional k3s lane passed its substrate checks. It did not configure a
+Mithril CRI binding. The full operator matrix is not recorded.
 
 Phase: [Exact Native Identity](../phase-2-exact-native-identity.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
-Implementation: [Phase 2 case shells and readable catalog](../../../../examples/mithril-phase2-manual/README.md)
+Implementation: [native-identity case shells and readable catalog](../../../../examples/mithril-identity-manual/README.md)
 
 ## Outcome
 

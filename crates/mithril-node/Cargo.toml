@@ -18,6 +18,7 @@ hex.workspace = true
 k8s-cri.workspace = true
 mithril-control = { path = "../mithril-control" }
 minicbor.workspace = true
+procfs.workspace = true
 rustix = { version = "1.1.4", features = ["fs", "process", "time"] }
 serde.workspace = true
 serde_json.workspace = true

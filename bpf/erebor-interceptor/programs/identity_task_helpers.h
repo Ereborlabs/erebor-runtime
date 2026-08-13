@@ -22,9 +22,22 @@ static __always_inline __u32 encoded_filesystem_device(dev_t device)
     return (minor & 0xff) | (major << 8) | ((minor & ~0xff) << 12);
 }
 
-static __always_inline void exact_file_object_from_file(
-    exact_file_object_key_v1 *object, struct file *file)
+/* Linux d_unlinked(): an unhashed non-root dentry no longer names an object. */
+static __always_inline bool dentry_unlinked(struct dentry *dentry)
 {
+    struct dentry *parent = NULL;
+    struct hlist_bl_node **previous = NULL;
+
+    if (!dentry || BPF_CORE_READ_INTO(&parent, dentry, d_parent) || !parent ||
+        BPF_CORE_READ_INTO(&previous, dentry, d_hash.pprev))
+        return true;
+    return !previous && parent != dentry;
+}
+
+static __always_inline void exact_file_object_from_path(
+    exact_file_object_key_v1 *object, const struct path *path)
+{
+    struct dentry *dentry = NULL;
     struct inode *inode = NULL;
     struct super_block *superblock = NULL;
     struct vfsmount *vfsmount = NULL;
@@ -33,11 +46,14 @@ static __always_inline void exact_file_object_from_file(
     struct mount___unique *unique_mount;
     __u32 mount_namespace_inode = 0;
     dev_t filesystem_device = 0;
+    umode_t mode = 0;
 
     __builtin_memset(object, 0, sizeof(*object));
-    if (!file || BPF_CORE_READ_INTO(&inode, file, f_inode) || !inode ||
+    if (!path || BPF_CORE_READ_INTO(&dentry, path, dentry) ||
+        dentry_unlinked(dentry) ||
+        BPF_CORE_READ_INTO(&inode, dentry, d_inode) || !inode ||
         BPF_CORE_READ_INTO(&superblock, inode, i_sb) || !superblock ||
-        BPF_CORE_READ_INTO(&vfsmount, file, f_path.mnt) || !vfsmount)
+        BPF_CORE_READ_INTO(&vfsmount, path, mnt) || !vfsmount)
         return;
     mount = mount_from_vfsmount(vfsmount);
     unique_mount = (void *)mount;
@@ -50,19 +66,67 @@ static __always_inline void exact_file_object_from_file(
         BPF_CORE_READ_INTO(&filesystem_device, superblock, s_dev) ||
         BPF_CORE_READ_INTO(&object->inode, inode, i_ino) ||
         BPF_CORE_READ_INTO(&object->inode_generation, inode, i_generation) ||
+        BPF_CORE_READ_INTO(&mode, inode, i_mode) ||
         !mount_namespace_inode || !object->mount_id_unique ||
-        !object->inode || !object->inode_generation)
+        !object->inode ||
+        (!object->inode_generation &&
+         (mode & S_IFMT) != S_IFCHR && (mode & S_IFMT) != S_IFBLK))
         __builtin_memset(object, 0, sizeof(*object));
     else {
+        /* Linux does not expose device-node i_generation to user space. */
+        if ((mode & S_IFMT) == S_IFCHR || (mode & S_IFMT) == S_IFBLK)
+            object->inode_generation = 0;
         object->mount_namespace_inode = mount_namespace_inode;
         object->filesystem_device =
             encoded_filesystem_device(filesystem_device);
     }
 }
 
+static __always_inline void exact_file_object_from_file(
+    exact_file_object_key_v1 *object, struct file *file)
+{
+    struct path path = {};
+
+    if (!file || BPF_CORE_READ_INTO(&path, file, f_path)) {
+        __builtin_memset(object, 0, sizeof(*object));
+        return;
+    }
+    exact_file_object_from_path(object, &path);
+}
+
+static __always_inline int exact_device_from_file(
+    exact_file_object_key_v1 *object, struct file *file,
+    exact_device_type_v1 *device_type, __u32 *device_major,
+    __u32 *device_minor)
+{
+    struct inode *inode = NULL;
+    dev_t represented_device = 0;
+    umode_t mode = 0;
+
+    *device_type = exact_device_type_v1_unknown;
+    *device_major = 0;
+    *device_minor = 0;
+    exact_file_object_from_file(object, file);
+    if (!object->mount_id_unique || !file ||
+        BPF_CORE_READ_INTO(&inode, file, f_inode) || !inode ||
+        BPF_CORE_READ_INTO(&mode, inode, i_mode) ||
+        BPF_CORE_READ_INTO(&represented_device, inode, i_rdev))
+        return -EACCES;
+    if ((mode & S_IFMT) == S_IFCHR)
+        *device_type = exact_device_type_v1_character;
+    else if ((mode & S_IFMT) == S_IFBLK)
+        *device_type = exact_device_type_v1_block;
+    else
+        return -EACCES;
+    *device_major = represented_device >> 20;
+    *device_minor = represented_device & ((1U << 20) - 1);
+    return 0;
+}
+
 static __always_inline void candidate_from_file(
     exact_executable_candidate_v1 *candidate, struct file *file)
 {
+    struct dentry *dentry = NULL;
     struct inode *inode = NULL;
     struct super_block *superblock = NULL;
     struct vfsmount *vfsmount = NULL;
@@ -78,8 +142,10 @@ static __always_inline void candidate_from_file(
     candidate->filesystem_device = 0;
     candidate->inode = 0;
     candidate->inode_generation = 0;
-    if (!file || BPF_CORE_READ_INTO(&inode, file, f_inode) ||
-        !inode || BPF_CORE_READ_INTO(&superblock, inode, i_sb) ||
+    if (!file || BPF_CORE_READ_INTO(&dentry, file, f_path.dentry) ||
+        dentry_unlinked(dentry) ||
+        BPF_CORE_READ_INTO(&inode, file, f_inode) || !inode ||
+        BPF_CORE_READ_INTO(&superblock, inode, i_sb) ||
         !superblock || BPF_CORE_READ_INTO(&vfsmount, file, f_path.mnt) ||
         !vfsmount)
         return;
@@ -101,38 +167,32 @@ static __always_inline void candidate_from_file(
     candidate->inode_generation = inode_generation;
 }
 
-static __always_inline int prepare_task_image(
+static __always_inline void prepare_task_image(
     struct task_struct *task, struct identity_scratch_v1 *scratch,
     const id128_v1 *image_provenance_id)
 {
     struct mm_struct *mm = NULL;
     struct file *executable = NULL;
 
-    if (BPF_CORE_READ_INTO(&mm, task, mm) || !mm ||
-        BPF_CORE_READ_INTO(&executable, mm, exe_file) || !executable)
-        return -EACCES;
     scratch->image.image_provenance_id = *image_provenance_id;
-    scratch->image.candidate_count = 1;
+    scratch->image.candidate_count = 0;
 #pragma unroll
     for (int index = 0; index < 6; index++)
         scratch->image.reserved_0[index] = 0;
-    candidate_from_file(&scratch->image.ordered_candidates[0], executable);
-    if (!scratch->image.ordered_candidates[0].mount_id)
-        return -EACCES;
 #pragma unroll
-    for (int index = 1; index < MAX_EXEC_CANDIDATES_V1; index++) {
-        scratch->image.ordered_candidates[index].mount_namespace_inode = 0;
-        scratch->image.ordered_candidates[index].mount_id = 0;
-        scratch->image.ordered_candidates[index].filesystem_device = 0;
-        scratch->image.ordered_candidates[index].inode = 0;
-        scratch->image.ordered_candidates[index].inode_generation = 0;
+    for (int index = 0; index < MAX_EXEC_CANDIDATES_V1; index++)
+        candidate_from_file(&scratch->image.ordered_candidates[index], NULL);
+    if (!BPF_CORE_READ_INTO(&mm, task, mm) && mm &&
+        !BPF_CORE_READ_INTO(&executable, mm, exe_file) && executable) {
+        candidate_from_file(&scratch->image.ordered_candidates[0], executable);
+        if (scratch->image.ordered_candidates[0].mount_id)
+            scratch->image.candidate_count = 1;
     }
     scratch->image.transition_version = 1;
     scratch->image.state = image_provenance_state_v1_active;
 #pragma unroll
     for (int index = 0; index < 7; index++)
         scratch->image.reserved_1[index] = 0;
-    return 0;
 }
 
 static __always_inline int read_parent_interval(
@@ -572,12 +632,15 @@ rollback_published:
     goto rollback_references;
 
 rollback_references:
-    __sync_fetch_and_sub(&entry->live_task_refs, 1);
-    __sync_fetch_and_sub(profile_task_refs, 1);
+    decrement_nonzero_counter(&entry->live_task_refs);
+    decrement_nonzero_counter(profile_task_refs);
     if (thread) {
-        __sync_fetch_and_sub(&parent_process->live_thread_refs, 1);
+        if (!decrement_nonzero_counter(&parent_process->live_thread_refs)) {
+            parent_process->state = process_security_state_kind_v1_corrupt;
+            parent_process->transition_version++;
+        }
     } else {
-        __sync_fetch_and_sub(&domain->live_process_refs, 1);
+        decrement_nonzero_counter(&domain->live_process_refs);
         bpf_map_delete_elem(&process_states, &scratch->label.process_state_id);
         bpf_map_delete_elem(&process_state_vectors,
                             &scratch->label.process_state_id);

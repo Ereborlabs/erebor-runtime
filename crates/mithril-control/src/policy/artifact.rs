@@ -7,7 +7,7 @@ use snafu::ResultExt as _;
 
 use super::{
     EffectSimulationV1, HardSafetyConditionV1, PolicyCompiler, PolicyDocumentV1, PolicySimulator,
-    ProfileCandidateArtifactV1, StaticDecisionKeyV1,
+    ProfileCandidateArtifactV1, RollbackAuthorizationArtifactV1, StaticDecisionKeyV1,
 };
 use crate::error::{IoSnafu, JsonSnafu, PolicySignatureSnafu};
 use crate::Result;
@@ -54,6 +54,17 @@ impl PolicyArtifactOwner {
         let artifact: ProfileCandidateArtifactV1 = read_json(artifact_path)?;
         artifact.verify_at(&verifying_key(public_key_path)?, now_utc_ns)?;
         Ok(artifact)
+    }
+
+    pub fn load_verified_rollback(
+        &self,
+        artifact_path: &Path,
+        public_key_path: &Path,
+    ) -> Result<(RollbackAuthorizationArtifactV1, VerifyingKey)> {
+        let artifact: RollbackAuthorizationArtifactV1 = read_json(artifact_path)?;
+        let key = verifying_key(public_key_path)?;
+        artifact.verify(&key)?;
+        Ok((artifact, key))
     }
 
     pub fn simulate(
@@ -169,4 +180,60 @@ fn temporary_path(path: &Path) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(format!(".{}.tmp", std::process::id()));
     PathBuf::from(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use ed25519_dalek::SigningKey;
+
+    use super::PolicyArtifactOwner;
+    use crate::{RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1};
+
+    #[test]
+    fn rollback_loader_uses_the_existing_signed_artifact_verifier(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let artifact_path = directory.path().join("rollback.json");
+        let public_key_path = directory.path().join("rollback-key.hex");
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let artifact = RollbackAuthorizationArtifactV1::sign(
+            "test-key".to_owned(),
+            RollbackAuthorizationPayloadV1 {
+                authorization_id: "88888888-8888-4888-8888-888888888888".to_owned(),
+                trust_domain_id: "22222222-2222-4222-8222-222222222222".to_owned(),
+                issuer_id: "33333333-3333-4333-8333-333333333333".to_owned(),
+                approver_principal_id: "44444444-4444-4444-8444-444444444444".to_owned(),
+                sequence_epoch: 1,
+                issuer_sequence: 2,
+                profile_id: "11111111-1111-4111-8111-111111111111".to_owned(),
+                current_digest: "a".repeat(64),
+                current_version: 2,
+                exact_older_target_digest: "b".repeat(64),
+                exact_older_target_version: 1,
+                closed_reason_code: 1,
+                human_reason_artifact_digest: None,
+                exact_platform_scope_digest: "c".repeat(64),
+                issued_at_utc_ns: 10,
+                expires_at_utc_ns: 20,
+            },
+            &key,
+        )?;
+        std::fs::write(&artifact_path, serde_json::to_vec(&artifact)?)?;
+        std::fs::write(
+            &public_key_path,
+            hex::encode(key.verifying_key().as_bytes()),
+        )?;
+
+        let (loaded, _) = PolicyArtifactOwner::default()
+            .load_verified_rollback(&artifact_path, &public_key_path)?;
+        assert_eq!(loaded, artifact);
+
+        let mut corrupt = artifact;
+        corrupt.signed_authorization.signature[0] ^= 1;
+        std::fs::write(&artifact_path, serde_json::to_vec(&corrupt)?)?;
+        assert!(PolicyArtifactOwner::default()
+            .load_verified_rollback(&artifact_path, &public_key_path)
+            .is_err());
+        Ok(())
+    }
 }

@@ -4,17 +4,19 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 
 use erebor_interceptor::{KernelHost, KernelHostConfig, KernelHostOwner};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu};
+use crate::physical::ProbeFile;
 use crate::{DigestV1, Result};
 
 const FILE_PROBE_TARGETS: &str = "file_probe_targets";
 const RUNTIME_BTF: &str = "/sys/kernel/btf/vmlinux";
-const PHASE0_BOOT_ID: &str = "phase0-qualification-boot";
+const KERNEL_QUALIFICATION_BOOT_ID: &str = "kernel-qualification-boot";
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BpfMapLayoutV1 {
     pub name: String,
     pub map_type: String,
@@ -23,21 +25,24 @@ pub struct BpfMapLayoutV1 {
     pub max_entries: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BpfObjectLayoutV1 {
     pub maps: Vec<BpfMapLayoutV1>,
     pub lsm_programs: Vec<String>,
     pub other_programs: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BpfLinkRecordV1 {
     pub program: String,
     pub link_id: u32,
     pub program_id: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PhysicalFileOpenProbeV1 {
     pub object_layout: BpfObjectLayoutV1,
     pub links: Vec<BpfLinkRecordV1>,
@@ -48,11 +53,11 @@ pub struct PhysicalFileOpenProbeV1 {
     pub allowed_after_target_clear: bool,
 }
 
-pub struct BpfPhase0Loader {
+pub struct BpfQualificationLoader {
     object_path: PathBuf,
 }
 
-impl BpfPhase0Loader {
+impl BpfQualificationLoader {
     #[must_use]
     pub fn new(object_path: impl Into<PathBuf>) -> Self {
         Self {
@@ -96,11 +101,12 @@ impl BpfPhase0Loader {
     }
 
     pub fn run_file_open_probe(&self, output_directory: &Path) -> Result<PhysicalFileOpenProbeV1> {
+        let lease_cleanup = ProbeFile::new(&self.lease_path());
         fs::create_dir_all(output_directory).context(IoSnafu {
             path: output_directory,
         })?;
-        let target = output_directory.join("phase0-file-open-deny-target");
-        fs::write(&target, b"phase 0 physical BPF LSM probe\n")
+        let target = output_directory.join("kernel-qualification-file-open-deny-target");
+        fs::write(&target, b"kernel qualification BPF LSM probe\n")
             .context(IoSnafu { path: &target })?;
         let target_inode = fs::metadata(&target)
             .context(IoSnafu { path: &target })?
@@ -146,7 +152,7 @@ impl BpfPhase0Loader {
                 program_id: link.program_id,
             })
             .collect();
-        Ok(PhysicalFileOpenProbeV1 {
+        let result = PhysicalFileOpenProbeV1 {
             object_layout,
             links,
             target,
@@ -154,7 +160,14 @@ impl BpfPhase0Loader {
             allowed_before_target_install,
             denied_after_target_install,
             allowed_after_target_clear,
-        })
+        };
+        attachment.shutdown().context(InterceptorSnafu)?;
+        lease_cleanup.cleanup()?;
+        Ok(result)
+    }
+
+    pub(crate) fn lease_path(&self) -> PathBuf {
+        self.object_path.with_extension("owner.lock")
     }
 
     fn owner(&self) -> Result<KernelHostOwner> {
@@ -166,9 +179,9 @@ impl BpfPhase0Loader {
             &self.object_path,
             digest,
             RUNTIME_BTF,
-            self.object_path.with_extension("owner.lock"),
+            self.lease_path(),
             None,
-            PHASE0_BOOT_ID,
+            KERNEL_QUALIFICATION_BOOT_ID,
             1,
         )))
     }
@@ -228,7 +241,7 @@ mod tests {
 
     use erebor_interceptor::{Error as InterceptorError, KernelHostConfig, KernelHostOwner};
 
-    use super::{BpfPhase0Loader, RUNTIME_BTF};
+    use super::{BpfQualificationLoader, RUNTIME_BTF};
     use crate::capability::BpfPrototypeCompiler;
     use crate::error::IoSnafu;
 
@@ -239,7 +252,7 @@ mod tests {
         })?;
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let object = BpfPrototypeCompiler::new(root).compile(output.path())?;
-        let layout = BpfPhase0Loader::new(object.object_path).inspect()?;
+        let layout = BpfQualificationLoader::new(object.object_path).inspect()?;
         assert!(layout
             .lsm_programs
             .iter()

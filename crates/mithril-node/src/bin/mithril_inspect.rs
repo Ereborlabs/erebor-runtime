@@ -38,6 +38,8 @@ enum Command {
         object_class: String,
         #[arg(long)]
         inode_generation: u32,
+        #[arg(long)]
+        device_class: Option<String>,
     },
 }
 
@@ -109,6 +111,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             exact_object_key,
             object_class,
             inode_generation,
+            device_class,
         } => println!(
             "{}",
             serde_json::to_string_pretty(&ExactFileObjectResolver::resolve(
@@ -118,6 +121,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 exact_object_key,
                 object_class,
                 inode_generation,
+                device_class,
             )?)?
         ),
     }

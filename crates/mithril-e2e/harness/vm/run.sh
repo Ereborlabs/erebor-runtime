@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd -- "$directory/../../../.." && pwd)
+provider=$directory/providers/libvirt.sh
+output_directory=
+with_k3s=false
+k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
+
+usage() {
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s]" >&2
+}
+
+while (($#)); do
+  case $1 in
+    --provider)
+      (($# >= 2)) || { usage; exit 2; }
+      provider=$2
+      shift 2
+      ;;
+    --output-directory)
+      (($# >= 2)) || { usage; exit 2; }
+      output_directory=$2
+      shift 2
+      ;;
+    --with-k3s)
+      with_k3s=true
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+[[ -x $provider ]] || {
+  echo "VM provider is not executable: $provider" >&2
+  exit 2
+}
+[[ $k3s_version =~ ^v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+$ ]] || {
+  echo "invalid MITHRIL_VM_K3S_VERSION: $k3s_version" >&2
+  exit 2
+}
+[[ $(uname -m) == x86_64 ]] || {
+  echo "kernel qualification record generation requires an x86_64 host" >&2
+  exit 2
+}
+
+if [[ -z $output_directory ]]; then
+  output_directory=$repo_root/target/mithril-vm-test/$(date -u +%Y%m%dT%H%M%SZ)-$$
+fi
+if [[ -e $output_directory && ! -d $output_directory ]]; then
+  echo "evidence output is not a directory: $output_directory" >&2
+  exit 2
+fi
+if [[ -d $output_directory ]] &&
+    [[ -n $(find "$output_directory" -mindepth 1 -maxdepth 1 -print -quit) ]]; then
+  echo "evidence output directory is not empty: $output_directory" >&2
+  exit 2
+fi
+mkdir -p -- "$output_directory"
+output_directory=$(cd -- "$output_directory" && pwd)
+
+vm_name=mithril-runtime-qualification-$$
+work_directory=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
+export MITHRIL_VM_KNOWN_HOSTS=${MITHRIL_VM_KNOWN_HOSTS:-$work_directory/known_hosts}
+created=false
+
+cleanup() {
+  local status=$?
+  local destroy_ok=true
+  trap - EXIT
+  if [[ $created == true ]] && ! "$provider" destroy "$vm_name" "$work_directory"; then
+    status=1
+    destroy_ok=false
+  fi
+  if [[ $destroy_ok == true && -d $work_directory && $work_directory == /tmp/mithril-vm-test.* ]]; then
+    rm -rf -- "$work_directory"
+  elif [[ $destroy_ok == false ]]; then
+    echo "VM cleanup failed; retained provider state in $work_directory" >&2
+  fi
+  exit "$status"
+}
+trap cleanup EXIT
+
+ssh_public_key=${MITHRIL_VM_SSH_PUBLIC_KEY:-$HOME/.ssh/id_rsa.pub}
+[[ -r $ssh_public_key ]] || {
+  echo "SSH public key is not readable: $ssh_public_key" >&2
+  exit 2
+}
+
+echo "Building the repository-owned physical probes and platform inspector"
+(cd -- "$repo_root" && cargo build --locked -p mithril-e2e \
+  --bin mithril-identity-test --bin mithril-effect-test \
+  --bin mithril-kernel-qualification \
+  -p mithril-node --bin mithril-node --bin mithril-inspect \
+  -p mithril-control --bin mithril-policy)
+
+qualification_build=$work_directory/kernel-qualification-build
+"$repo_root/target/debug/mithril-kernel-qualification" \
+  --repo-root "$repo_root" probe --output-directory "$qualification_build"
+
+"$provider" create "$vm_name" "$work_directory" "$ssh_public_key"
+created=true
+"$provider" wait "$vm_name"
+
+remote_root=/var/tmp/$vm_name
+remote_source=$remote_root/source
+remote_bin=$remote_root/bin
+"$provider" run "$vm_name" mkdir -p \
+  "$remote_source/bpf/erebor-interceptor/qualification" \
+  "$remote_source/crates/mithril-e2e/fixtures/hugging-face/platforms" \
+  "$remote_source/crates/mithril-e2e/fixtures/hugging-face/protected" \
+  "$remote_source/examples/mithril-effect-observation-manual" \
+  "$remote_source/examples/mithril-local-enforcement-manual" \
+  "$remote_root/harness" "$remote_bin"
+
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-identity-test" \
+  "$remote_bin/mithril-identity-test"
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-effect-test" \
+  "$remote_bin/mithril-effect-test"
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-inspect" \
+  "$remote_bin/mithril-inspect"
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-node" \
+  "$remote_bin/mithril-node"
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-policy" \
+  "$remote_bin/mithril-policy"
+"$provider" put "$vm_name" "$repo_root/target/debug/mithril-kernel-qualification" \
+  "$remote_bin/mithril-kernel-qualification"
+"$provider" put "$vm_name" "$qualification_build/feasibility.bpf.o" \
+  "$remote_bin/feasibility.bpf.o"
+"$provider" put "$vm_name" \
+  "$repo_root/bpf/erebor-interceptor/qualification/feasibility.bpf.c" \
+  "$remote_source/bpf/erebor-interceptor/qualification/feasibility.bpf.c"
+"$provider" put "$vm_name" "$directory/guest.sh" \
+  "$remote_root/harness/guest.sh"
+for fixture in observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do
+  "$provider" put "$vm_name" \
+    "$repo_root/examples/mithril-effect-observation-manual/$fixture" \
+    "$remote_source/examples/mithril-effect-observation-manual/$fixture"
+done
+"$provider" put "$vm_name" \
+  "$repo_root/examples/mithril-local-enforcement-manual/protect-policy-v1.yaml" \
+  "$remote_source/examples/mithril-local-enforcement-manual/protect-policy-v1.yaml"
+for fixture in \
+  fixture.json baseline.json replay.jsonl \
+  platforms/node-a.json platforms/node-b.json \
+  protected/image-digest.txt protected/network.json protected/rbac.yaml \
+  protected/topology.json protected/workload.yaml; do
+  "$provider" put "$vm_name" \
+    "$repo_root/crates/mithril-e2e/fixtures/hugging-face/$fixture" \
+    "$remote_source/crates/mithril-e2e/fixtures/hugging-face/$fixture"
+done
+
+"$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+  platform "$remote_bin/mithril-inspect" "$remote_root" \
+  >"$output_directory/platform.txt"
+
+if [[ $with_k3s == true ]]; then
+  "$provider" put "$vm_name" "$directory/k3s-config-v1.yaml" \
+    "$remote_root/harness/k3s-config-v1.yaml"
+  "$provider" put "$vm_name" "$directory/k3s-workload-v1.yaml" \
+    "$remote_root/harness/k3s-workload-v1.yaml"
+  "$provider" put "$vm_name" "$directory/k3s-cri-effect-node-v1.json" \
+    "$remote_root/harness/k3s-cri-effect-node-v1.json"
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+    k3s-install "$k3s_version" "$remote_root/harness/k3s-config-v1.yaml" \
+    "$remote_root"
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+    k3s-qualify "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
+    >"$output_directory/k3s.txt"
+  k3s_cri_effect_partial=$output_directory/k3s-cri-effect.txt.partial
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+    k3s-cri-effect "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
+    "$remote_bin/mithril-policy" \
+    "$remote_root/harness/k3s-cri-effect-node-v1.json" \
+    "$remote_source/examples/mithril-effect-observation-manual/observe-policy-v1.yaml" \
+    "$remote_source/examples/mithril-effect-observation-manual/observe-profile-seal-request.json" \
+    "$remote_source/examples/mithril-effect-observation-manual/test-signing-key.hex" \
+    "$remote_source/examples/mithril-effect-observation-manual/test-public-key.hex" \
+    "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
+    >"$k3s_cri_effect_partial"
+  mv -- "$k3s_cri_effect_partial" "$output_directory/k3s-cri-effect.txt"
+fi
+
+qualification_output=$remote_root/kernel-qualification
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-kernel-qualification" \
+  --repo-root "$remote_source" physical-probe \
+  --output-directory "$qualification_output" \
+  --bpf-object "$remote_bin/feasibility.bpf.o"
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-kernel-qualification" \
+  --repo-root "$remote_source" benchmark \
+  --target "$remote_source/bpf/erebor-interceptor/qualification/feasibility.bpf.c" \
+  --mode baseline --output "$qualification_output/baseline-open-benchmark.json"
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-kernel-qualification" \
+  --repo-root "$remote_source" benchmark \
+  --target "$remote_source/bpf/erebor-interceptor/qualification/feasibility.bpf.c" \
+  --mode protected --bpf-object "$remote_bin/feasibility.bpf.o" \
+  --output "$qualification_output/protected-open-benchmark.json"
+"$provider" get "$vm_name" \
+  "$qualification_output/physical-file-open-probe.json" \
+  "$output_directory/physical-file-open-probe.json"
+"$provider" get "$vm_name" \
+  "$qualification_output/baseline-open-benchmark.json" \
+  "$output_directory/baseline-open-benchmark.json"
+"$provider" get "$vm_name" \
+  "$qualification_output/protected-open-benchmark.json" \
+  "$output_directory/protected-open-benchmark.json"
+"$repo_root/target/debug/mithril-kernel-qualification" \
+  --repo-root "$repo_root" record-physical-qualification \
+  --physical-probe "$output_directory/physical-file-open-probe.json" \
+  --baseline-benchmark "$output_directory/baseline-open-benchmark.json" \
+  --protected-benchmark "$output_directory/protected-open-benchmark.json" \
+  --probe-binary "$repo_root/target/debug/mithril-kernel-qualification" \
+  --output "$output_directory/kernel-qualification-x86_64.json"
+
+identity_output=$remote_root/identity
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
+  --repo-root "$remote_source" --output-directory "$identity_output" \
+  physical-probe --pin-root "/sys/fs/bpf/$vm_name-identity" \
+  --lease-path "$identity_output/owner.lock" \
+  --cgroup-path "/sys/fs/cgroup/$vm_name-identity"
+"$provider" get "$vm_name" "$identity_output/identity-physical-probe.json" \
+  "$output_directory/identity-physical-probe.json"
+
+observation_output=$remote_root/effect-observation
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
+  --repo-root "$remote_source" physical-probe \
+  --output-directory "$observation_output" \
+  --pin-root "/sys/fs/bpf/$vm_name-effect-observation" \
+  --lease-path "$observation_output/owner.lock" \
+  --cgroup-path "/sys/fs/cgroup/$vm_name-effect-observation"
+"$provider" get "$vm_name" "$observation_output/effect-physical-probe.json" \
+  "$output_directory/effect-observation-physical-probe.json"
+
+enforcement_output=$remote_root/local-enforcement
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
+  --repo-root "$remote_source" physical-probe --protect \
+  --output-directory "$enforcement_output" \
+  --pin-root "/sys/fs/bpf/$vm_name-local-enforcement" \
+  --lease-path "$enforcement_output/owner.lock" \
+  --cgroup-path "/sys/fs/cgroup/$vm_name-local-enforcement"
+"$provider" get "$vm_name" "$enforcement_output/effect-physical-probe.json" \
+  "$output_directory/local-enforcement-physical-probe.json"
+
+verify_absent() {
+  local path=$1
+  "$provider" run "$vm_name" sudo test ! -e "$path" || {
+    echo "VM probe left an owned artifact: $path" >&2
+    return 1
+  }
+}
+
+verify_absent "/sys/fs/bpf/$vm_name-identity"
+verify_absent "/sys/fs/bpf/$vm_name-effect-observation"
+verify_absent "/sys/fs/bpf/$vm_name-local-enforcement"
+verify_absent "/sys/fs/cgroup/$vm_name-identity"
+verify_absent "/sys/fs/cgroup/$vm_name-effect-observation"
+verify_absent "/sys/fs/cgroup/$vm_name-local-enforcement"
+verify_absent "$identity_output/owner.lock"
+verify_absent "$observation_output/owner.lock"
+verify_absent "$enforcement_output/owner.lock"
+verify_absent "$remote_bin/feasibility.bpf.owner.lock"
+
+if [[ $with_k3s == true ]]; then
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+    k3s-remove "$remote_root"
+fi
+
+echo "Kernel, identity, effect-observation, and local-enforcement VM probes passed. Evidence: $output_directory"

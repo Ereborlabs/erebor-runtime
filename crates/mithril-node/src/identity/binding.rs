@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use erebor_interceptor::KernelHost;
 use erebor_interceptor_abi::{
-    BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1, InitialRootStateV1,
+    BindingActivationTargetKeyV1, BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1,
+    InitialRootStateV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1,
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
@@ -164,12 +165,8 @@ impl WorkloadBindingOwner {
                         ),
                     }
                 );
-                binding.state.binding_nonce = recovered.binding_nonce;
-                binding.state.initial_root_state = recovered.initial_root_state;
-                binding.state.transition_version = recovered.transition_version;
-                binding.state.lifecycle_state = recovered.lifecycle_state;
                 ensure!(
-                    recovered == binding.state,
+                    same_runtime_binding(&binding.state, &recovered),
                     IdentityStateSnafu {
                         reason: format!(
                             "recovered binding `{}` differs from live runtime identity",
@@ -177,11 +174,23 @@ impl WorkloadBindingOwner {
                         ),
                     }
                 );
+                binding.state = recovered;
             } else {
                 binding.state.lifecycle_state = BindingLifecycleStateV1::Preparing;
                 host.update_map("execution_set_bindings", &key, binding.state.as_bytes())
                     .context(InterceptorSnafu)?;
             }
+            ensure!(
+                self.profile_handles
+                    .get(&binding.state.active_profile_generation_ref_id)
+                    .is_none_or(|profile_id| *profile_id == binding.state.profile_id),
+                IdentityStateSnafu {
+                    reason: format!(
+                        "recovered profile-generation handle {} is assigned to more than one profile",
+                        binding.state.active_profile_generation_ref_id
+                    ),
+                }
+            );
             let profile_key = binding.state.active_profile_generation_ref_id.to_ne_bytes();
             let profile_task_refs = host
                 .lookup_map("profile_generation_task_refs", &profile_key)
@@ -238,6 +247,106 @@ impl WorkloadBindingOwner {
                 binding.state.profile_id,
             );
             self.bindings.insert(binding.root_cgroup_id, binding);
+        }
+        Ok(())
+    }
+
+    pub fn adopt_activated_profiles(
+        &mut self,
+        host: &KernelHost,
+        configured: &[WorkloadBindingConfig],
+    ) -> Result<()> {
+        for spec in configured {
+            let binding = self
+                .bindings
+                .values_mut()
+                .find(|binding| binding.spec.binding_id == spec.binding_id)
+                .context(IdentityStateSnafu {
+                    reason: format!("configured binding `{}` is not published", spec.binding_id),
+                })?;
+            binding.validate_live_cgroup()?;
+
+            let active = host
+                .lookup_map(
+                    "active_profile_generations",
+                    binding.state.profile_id.as_bytes(),
+                )
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: format!(
+                        "binding `{}` has no active signed generation",
+                        spec.binding_id
+                    ),
+                })?;
+            let active = u64::read_from_bytes(&active).map_err(|error| {
+                IdentityStateSnafu {
+                    reason: format!("active generation has an invalid ABI value: {error}"),
+                }
+                .build()
+            })?;
+            ensure!(
+                active == spec.active_profile_generation_ref_id,
+                IdentityStateSnafu {
+                    reason: format!(
+                        "binding `{}` active generation does not match its verified configuration",
+                        spec.binding_id
+                    ),
+                }
+            );
+            let descriptor = host
+                .lookup_map("profile_generation_descriptors", &active.to_ne_bytes())
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: format!("active generation {active} has no descriptor"),
+                })?;
+            let descriptor = ProfileGenerationDescriptorV1::try_read_from_bytes(&descriptor)
+                .map_err(|error| {
+                    IdentityStateSnafu {
+                        reason: format!("active generation descriptor is invalid: {error}"),
+                    }
+                    .build()
+                })?;
+            ensure!(
+                descriptor.state == PolicyGenerationStateV1::Active
+                    && descriptor.profile_generation_ref_id == active
+                    && descriptor.profile_id == binding.state.profile_id
+                    && descriptor.node_boot_id == self.node_boot_id
+                    && descriptor.label_epoch == self.label_epoch,
+                IdentityStateSnafu {
+                    reason: format!(
+                        "binding `{}` active generation descriptor does not match its live identity",
+                        spec.binding_id
+                    ),
+                }
+            );
+            let target_key = BindingActivationTargetKeyV1 {
+                binding_id: binding.state.binding_id,
+                profile_generation_ref_id: active,
+            };
+            let activated = host
+                .lookup_map("binding_activation_targets", target_key.as_bytes())
+                .context(InterceptorSnafu)?
+                .context(IdentityStateSnafu {
+                    reason: format!(
+                        "binding `{}` has no active generation target",
+                        spec.binding_id
+                    ),
+                })?;
+            let activated = execution_set_binding_state(&activated)?;
+            ensure!(
+                same_activation_identity(&binding.state, &activated)
+                    && activated.lifecycle_state == BindingLifecycleStateV1::Active
+                    && activated.active_profile_generation_ref_id == active
+                    && activated.initial_role_id == spec.initial_role_id
+                    && activated.external_role_id == spec.external_role_id,
+                IdentityStateSnafu {
+                    reason: format!(
+                        "binding `{}` does not match its active profile",
+                        spec.binding_id
+                    ),
+                }
+            );
+            self.profile_handles.insert(active, activated.profile_id);
         }
         Ok(())
     }
@@ -617,6 +726,35 @@ fn execution_set_binding_state(bytes: &[u8]) -> Result<ExecutionSetBindingStateV
     })
 }
 
+fn same_runtime_binding(
+    desired: &ExecutionSetBindingStateV1,
+    recovered: &ExecutionSetBindingStateV1,
+) -> bool {
+    let mut desired = *desired;
+    desired.binding_nonce = recovered.binding_nonce;
+    desired.active_profile_generation_ref_id = recovered.active_profile_generation_ref_id;
+    desired.transition_version = recovered.transition_version;
+    desired.initial_role_id = recovered.initial_role_id;
+    desired.external_role_id = recovered.external_role_id;
+    desired.lifecycle_state = recovered.lifecycle_state;
+    desired.initial_root_state = recovered.initial_root_state;
+    desired == *recovered
+}
+
+fn same_activation_identity(
+    live: &ExecutionSetBindingStateV1,
+    target: &ExecutionSetBindingStateV1,
+) -> bool {
+    let mut live = *live;
+    live.active_profile_generation_ref_id = target.active_profile_generation_ref_id;
+    live.transition_version = target.transition_version;
+    live.initial_role_id = target.initial_role_id;
+    live.external_role_id = target.external_role_id;
+    live.lifecycle_state = target.lifecycle_state;
+    live.initial_root_state = target.initial_root_state;
+    live == *target
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -625,7 +763,10 @@ mod tests {
 
     use snafu::ResultExt as _;
 
-    use super::{RuntimeContainerIdentity, WorkloadBindingOwner};
+    use super::{
+        same_activation_identity, same_runtime_binding, RuntimeContainerIdentity,
+        WorkloadBindingOwner,
+    };
     use crate::error::IoSnafu;
     use crate::identity::runtime::RuntimeContainerState;
     use crate::WorkloadBindingConfig;
@@ -715,6 +856,54 @@ mod tests {
         fs::remove_dir_all(&root).context(IoSnafu { path: &root })?;
         fs::create_dir(&root).context(IoSnafu { path: &root })?;
         assert!(binding.validate_live_cgroup().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_can_retain_an_old_generation_until_verified_activation() -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary cgroup root",
+        })?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.procs"), "").context(IoSnafu { path: &root })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let desired = owner.prepare(&spec(&root))?.state;
+        let mut recovered = desired;
+        recovered.binding_nonce = Id128V1::new(9, 10);
+        recovered.active_profile_generation_ref_id = 6;
+        recovered.initial_role_id = 8;
+        recovered.external_role_id = 9;
+        recovered.initial_root_state = InitialRootStateV1::Consumed;
+        recovered.transition_version = 12;
+
+        assert!(same_runtime_binding(&desired, &recovered));
+        recovered.execution_set_id = Id128V1::new(11, 12);
+        assert!(!same_runtime_binding(&desired, &recovered));
+        Ok(())
+    }
+
+    #[test]
+    fn activation_target_can_change_only_generation_roles_and_kernel_owned_state(
+    ) -> crate::Result<()> {
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            path: "temporary cgroup root",
+        })?;
+        let root = temporary.path().join("workload");
+        fs::create_dir(&root).context(IoSnafu { path: &root })?;
+        fs::write(root.join("cgroup.procs"), "").context(IoSnafu { path: &root })?;
+        let owner = WorkloadBindingOwner::at(temporary.path(), Id128V1::new(1, 2), 3)?;
+        let live = owner.prepare(&spec(&root))?.state;
+        let mut target = live;
+        target.active_profile_generation_ref_id += 1;
+        target.initial_role_id += 1;
+        target.external_role_id += 1;
+        target.transition_version += 1;
+        target.initial_root_state = InitialRootStateV1::Consumed;
+        assert!(same_activation_identity(&live, &target));
+
+        target.binding_nonce = Id128V1::new(9, 10);
+        assert!(!same_activation_identity(&live, &target));
         Ok(())
     }
 

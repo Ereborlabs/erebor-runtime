@@ -1,6 +1,6 @@
 use erebor_interceptor_abi::{CapabilityRecordV1, CapabilityStateV1};
 
-pub const PHASE0_ALLOCATED_CAPABILITIES: [&str; 19] = [
+pub const KERNEL_QUALIFICATION_CAPABILITIES: [&str; 19] = [
     "BPF_LSM_ATTACH_READBACK",
     "FILE_OPEN_PRE_EFFECT_DENIAL",
     "TASK_FORK_EXEC_IDENTITY",
@@ -22,12 +22,12 @@ pub const PHASE0_ALLOCATED_CAPABILITIES: [&str; 19] = [
     "X86_64_PHYSICAL_QUALIFICATION",
 ];
 
-pub struct Phase0CapabilityMatrix;
+pub struct KernelQualificationCapabilityMatrix;
 
-impl Phase0CapabilityMatrix {
+impl KernelQualificationCapabilityMatrix {
     #[must_use]
     pub fn records(physical_evidence_digest: Option<&str>) -> Vec<CapabilityRecordV1> {
-        PHASE0_ALLOCATED_CAPABILITIES
+        KERNEL_QUALIFICATION_CAPABILITIES
             .into_iter()
             .map(|capability_id| {
                 let physically_supported = physical_evidence_digest.is_some()
@@ -56,7 +56,7 @@ impl Phase0CapabilityMatrix {
                     {
                         "CURRENT_ARTIFACT_NOT_PHYSICALLY_RECHECKED".to_owned()
                     } else {
-                        "NOT_PHYSICALLY_QUALIFIED_IN_PHASE_0".to_owned()
+                        "NOT_PHYSICALLY_QUALIFIED".to_owned()
                     },
                     evidence_digest: physically_supported
                         .then(|| physical_evidence_digest.unwrap_or_default().to_owned()),
@@ -72,12 +72,12 @@ mod tests {
 
     use erebor_interceptor_abi::CapabilityStateV1;
 
-    use super::{Phase0CapabilityMatrix, PHASE0_ALLOCATED_CAPABILITIES};
+    use super::{KernelQualificationCapabilityMatrix, KERNEL_QUALIFICATION_CAPABILITIES};
 
     #[test]
     fn every_allocated_surface_is_supported_or_explicitly_unsupported() {
-        let records = Phase0CapabilityMatrix::records(Some(&"a".repeat(64)));
-        assert_eq!(records.len(), PHASE0_ALLOCATED_CAPABILITIES.len());
+        let records = KernelQualificationCapabilityMatrix::records(Some(&"a".repeat(64)));
+        assert_eq!(records.len(), KERNEL_QUALIFICATION_CAPABILITIES.len());
         assert_eq!(
             records
                 .iter()

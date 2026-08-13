@@ -164,9 +164,7 @@ static __always_inline int create_root(
             kernel_real_parent_change_reason_v1_birth,
             &scratch->real_parent))
         return identity_deny(config);
-    if (prepare_task_image(task, scratch,
-                           &scratch->image.image_provenance_id))
-        return identity_deny(config);
+    prepare_task_image(task, scratch, &scratch->image.image_provenance_id);
     if (bpf_map_update_elem(&image_provenance,
                             &scratch->image.image_provenance_id,
                             &scratch->image, BPF_NOEXIST))
@@ -196,7 +194,7 @@ static __always_inline int create_root(
         goto rollback_process;
     __sync_fetch_and_add(profile_task_refs, 1);
     if (publish_task(task, scratch)) {
-        __sync_fetch_and_sub(profile_task_refs, 1);
+        decrement_nonzero_counter(profile_task_refs);
         bpf_map_delete_elem(&external_root_classifications,
                             &scratch->classification.task_cookie);
         goto rollback_process;
@@ -214,7 +212,7 @@ static __always_inline int create_root(
             bpf_map_delete_elem(&task_coordinates,
                                 &scratch->label.task_cookie);
             delete_initial_real_parent(scratch->label.task_cookie);
-            __sync_fetch_and_sub(profile_task_refs, 1);
+            decrement_nonzero_counter(profile_task_refs);
             bpf_map_delete_elem(&external_root_classifications,
                                 &scratch->classification.task_cookie);
             goto rollback_process;
@@ -233,7 +231,7 @@ static __always_inline int create_root(
                 bpf_map_delete_elem(&task_coordinates,
                                     &scratch->label.task_cookie);
                 delete_initial_real_parent(scratch->label.task_cookie);
-                __sync_fetch_and_sub(profile_task_refs, 1);
+                decrement_nonzero_counter(profile_task_refs);
                 bpf_map_delete_elem(&external_root_classifications,
                                     &scratch->classification.task_cookie);
                 goto rollback_process;
@@ -267,21 +265,26 @@ static __always_inline int create_external_root(
     struct task_struct *task, identity_runtime_config_v1 *config,
     execution_set_binding_state_v1 *binding, struct identity_scratch_v1 *scratch)
 {
+    execution_set_binding_state_v1 *activation;
     __u8 root_class = external_root_class_v1_external_runtime_root;
     __u8 role_class = installed_role_class_v1_runtime_external_restricted;
-    __u32 role_id = binding->external_role_id;
+    __u32 role_id;
+    bool initial_root;
 
-    bool initial_root = consume_initial_root(binding);
+    activation = binding_activation_for_new_root(binding, config);
+    if (!activation)
+        return identity_deny(config);
+    role_id = activation->external_role_id;
+    initial_root = consume_initial_root(binding);
 
-    if (binding->lifecycle_state != binding_lifecycle_state_v1_active) {
-        root_class = external_root_class_v1_unresolved_protected;
-        role_class = installed_role_class_v1_fail_closed_unknown;
-    } else if (initial_root) {
+    if (binding->lifecycle_state != binding_lifecycle_state_v1_active)
+        return identity_deny(config);
+    if (initial_root) {
         root_class = external_root_class_v1_initial_container_root;
         role_class = installed_role_class_v1_initial_role;
-        role_id = binding->initial_role_id;
+        role_id = activation->initial_role_id;
     }
-    return create_root(task, config, binding, scratch, root_class, role_class,
+    return create_root(task, config, activation, scratch, root_class, role_class,
                        role_id);
 }
 

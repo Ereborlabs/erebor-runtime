@@ -16,7 +16,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::watch;
 
 use crate::error::{ControlProtocolSnafu, IoSnafu, LocalIpcSnafu};
-use crate::{EffectObservationStore, Result, RuntimeObservationConfig};
+use crate::{EffectObservationStore, NodeReadinessV1, Result, RuntimeObservationConfig};
 
 pub struct RuntimeObservationServer {
     config: RuntimeObservationConfig,
@@ -24,6 +24,7 @@ pub struct RuntimeObservationServer {
     snapshot: MithrilObservationSnapshot,
     observations: EffectObservationStore,
     kernel_reader: Option<KernelStateReader>,
+    readiness: watch::Receiver<NodeReadinessV1>,
 }
 
 impl RuntimeObservationServer {
@@ -31,6 +32,7 @@ impl RuntimeObservationServer {
         config: RuntimeObservationConfig,
         manifest: &KernelObjectManifestV1,
         capabilities: &[CapabilityRecord],
+        readiness: watch::Receiver<NodeReadinessV1>,
     ) -> Result<Self> {
         Self::bind_inner(
             config,
@@ -38,6 +40,7 @@ impl RuntimeObservationServer {
             capabilities,
             EffectObservationStore::default(),
             None,
+            readiness,
         )
     }
 
@@ -47,6 +50,7 @@ impl RuntimeObservationServer {
         capabilities: &[CapabilityRecord],
         observations: EffectObservationStore,
         pin_root: PathBuf,
+        readiness: watch::Receiver<NodeReadinessV1>,
     ) -> Result<Self> {
         Self::bind_inner(
             config,
@@ -54,6 +58,7 @@ impl RuntimeObservationServer {
             capabilities,
             observations,
             Some(KernelStateReader::new(pin_root)),
+            readiness,
         )
     }
 
@@ -63,6 +68,7 @@ impl RuntimeObservationServer {
         capabilities: &[CapabilityRecord],
         observations: EffectObservationStore,
         kernel_reader: Option<KernelStateReader>,
+        readiness: watch::Receiver<NodeReadinessV1>,
     ) -> Result<Self> {
         if let Some(parent) = config.socket_path.parent() {
             fs::create_dir_all(parent).context(IoSnafu { path: parent })?;
@@ -127,6 +133,7 @@ impl RuntimeObservationServer {
             snapshot,
             observations,
             kernel_reader,
+            readiness,
         })
     }
 
@@ -142,6 +149,7 @@ impl RuntimeObservationServer {
                     let snapshot = self.snapshot.clone();
                     let observations = self.observations.clone();
                     let kernel_reader = self.kernel_reader.clone();
+                    let readiness = self.readiness.clone();
                     tokio::spawn(async move {
                         let _result = handle(
                             stream,
@@ -150,6 +158,7 @@ impl RuntimeObservationServer {
                             snapshot,
                             observations,
                             kernel_reader,
+                            readiness,
                         ).await;
                     });
                 }
@@ -175,6 +184,7 @@ async fn handle(
     mut snapshot: MithrilObservationSnapshot,
     observations: EffectObservationStore,
     kernel_reader: Option<KernelStateReader>,
+    readiness: watch::Receiver<NodeReadinessV1>,
 ) -> Result<()> {
     let peer = stream.peer_cred().context(IoSnafu {
         path: Path::new("Runtime observation peer"),
@@ -194,20 +204,17 @@ async fn handle(
         "peer identity or cgroup scope was rejected"
     };
     if accepted {
-        let health_bytes = kernel_reader.as_ref().and_then(|reader| {
-            reader
-                .lookup("effect_observation_health", &0_u32.to_ne_bytes())
-                .ok()
-                .flatten()
-        });
-        let health = observations.health(health_bytes.as_deref());
+        let readiness = *readiness.borrow();
+        apply_readiness(&mut snapshot, readiness);
         snapshot.recent_effects = observations.recent();
-        snapshot.attempted_effects = health.attempted;
-        snapshot.emitted_effects = health.emitted;
-        snapshot.lost_effects = health.lost;
-        snapshot.unresolved_effects = health.unresolved;
-        snapshot.decoder_errors = health.decoder_errors;
-        snapshot.effect_health_available = health_bytes.is_some();
+        update_effect_health(&mut snapshot, &observations, || {
+            kernel_reader.as_ref().and_then(|reader| {
+                reader
+                    .lookup("effect_observation_health", &0_u32.to_ne_bytes())
+                    .ok()
+                    .flatten()
+            })
+        });
     }
     send(
         &mut stream,
@@ -224,6 +231,57 @@ async fn handle(
         .context(LocalIpcSnafu)?,
     )
     .await
+}
+
+fn apply_readiness(snapshot: &mut MithrilObservationSnapshot, readiness: NodeReadinessV1) {
+    snapshot.kernel_ready = readiness.kernel_ready;
+    if !readiness.kernel_ready {
+        for capability in &mut snapshot.capabilities {
+            if matches!(
+                capability.capability_id.as_str(),
+                "EXACT_NATIVE_IDENTITY" | "LOCAL_EFFECT_PREVENTION" | "LOCAL_EFFECT_OBSERVATION"
+            ) {
+                capability.state = "UNHEALTHY".to_owned();
+                capability.reason_code = "LIVE_KERNEL_MANIFEST_MISMATCH".to_owned();
+            }
+        }
+        return;
+    }
+    if !readiness.identity_ready {
+        for capability in &mut snapshot.capabilities {
+            if matches!(
+                capability.capability_id.as_str(),
+                "EXACT_NATIVE_IDENTITY" | "LOCAL_EFFECT_OBSERVATION"
+            ) {
+                capability.state = "UNHEALTHY".to_owned();
+                capability.reason_code = "LIVE_IDENTITY_RECONCILIATION_FAILED".to_owned();
+            }
+        }
+    }
+    if !readiness.effect_prevention_claims_enabled {
+        if let Some(capability) = snapshot.capabilities.iter_mut().find(|capability| {
+            capability.capability_id == "LOCAL_EFFECT_PREVENTION"
+                && capability.state != "UNSUPPORTED"
+        }) {
+            capability.state = "UNSUPPORTED".to_owned();
+            capability.reason_code = "LIVE_PREVENTION_CLAIM_CLOSED".to_owned();
+        }
+    }
+}
+
+fn update_effect_health(
+    snapshot: &mut MithrilObservationSnapshot,
+    observations: &EffectObservationStore,
+    read_pinned_health: impl FnOnce() -> Option<Vec<u8>>,
+) {
+    let health_bytes = snapshot.kernel_ready.then(read_pinned_health).flatten();
+    let health = observations.health(health_bytes.as_deref());
+    snapshot.attempted_effects = health.attempted;
+    snapshot.emitted_effects = health.emitted;
+    snapshot.lost_effects = health.lost;
+    snapshot.unresolved_effects = health.unresolved;
+    snapshot.decoder_errors = health.decoder_errors;
+    snapshot.effect_health_available = health_bytes.is_some();
 }
 
 fn peer_in_cgroup_scope(pid: i32, allowed_scope: &str) -> bool {
@@ -266,4 +324,87 @@ async fn send(stream: &mut UnixStream, envelope: Envelope) -> Result<()> {
     AsyncFrameCodec::write_frame(stream, &frame)
         .await
         .context(LocalIpcSnafu)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use erebor_runtime_ipc::v1::{MithrilCapabilityRecord, MithrilObservationSnapshot};
+
+    use super::{apply_readiness, update_effect_health};
+    use crate::{EffectObservationStore, NodeReadinessV1};
+
+    #[test]
+    fn identity_failure_closes_only_identity_dependent_local_claims() {
+        let mut snapshot = MithrilObservationSnapshot {
+            kernel_ready: true,
+            capabilities: [
+                "EXACT_NATIVE_IDENTITY",
+                "LOCAL_EFFECT_PREVENTION",
+                "LOCAL_EFFECT_OBSERVATION",
+                "RUNTIME_READ_ONLY_OBSERVATION",
+            ]
+            .into_iter()
+            .map(|capability_id| MithrilCapabilityRecord {
+                capability_id: capability_id.to_owned(),
+                state: "SUPPORTED".to_owned(),
+                reason_code: "INITIAL_STATE".to_owned(),
+            })
+            .collect(),
+            ..MithrilObservationSnapshot::default()
+        };
+
+        apply_readiness(
+            &mut snapshot,
+            NodeReadinessV1 {
+                kernel_ready: true,
+                identity_ready: false,
+                control_ready: true,
+                admission_ready: false,
+                effect_prevention_claims_enabled: false,
+            },
+        );
+
+        assert!(snapshot.kernel_ready);
+        assert_eq!(snapshot.capabilities[0].state, "UNHEALTHY");
+        assert_eq!(
+            snapshot.capabilities[0].reason_code,
+            "LIVE_IDENTITY_RECONCILIATION_FAILED"
+        );
+        assert_eq!(snapshot.capabilities[1].state, "UNSUPPORTED");
+        assert_eq!(snapshot.capabilities[2].state, "UNHEALTHY");
+        assert_eq!(snapshot.capabilities[3].state, "SUPPORTED");
+    }
+
+    #[test]
+    fn closed_kernel_readiness_suppresses_pinned_effect_health() {
+        let read = Cell::new(false);
+        let mut snapshot = MithrilObservationSnapshot {
+            kernel_ready: false,
+            attempted_effects: 1,
+            emitted_effects: 2,
+            lost_effects: 3,
+            unresolved_effects: 4,
+            effect_health_available: true,
+            ..MithrilObservationSnapshot::default()
+        };
+
+        update_effect_health(&mut snapshot, &EffectObservationStore::default(), || {
+            read.set(true);
+            Some(vec![1])
+        });
+
+        assert!(!read.get());
+        assert!(!snapshot.effect_health_available);
+        assert_eq!(
+            (
+                snapshot.attempted_effects,
+                snapshot.emitted_effects,
+                snapshot.lost_effects,
+                snapshot.unresolved_effects,
+            ),
+            (0, 0, 0, 0)
+        );
+    }
 }

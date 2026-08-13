@@ -169,7 +169,7 @@ impl ProvenanceVerifier {
                 .all(|record| record.transitive_dependencies.is_empty()),
             InvalidInputSnafu {
                 path: path.to_path_buf(),
-                reason: "Phase 0 clean-room prototypes must not add upstream runtime dependencies"
+                reason: "kernel qualification clean-room prototypes must not add upstream runtime dependencies"
             }
         );
         Ok(())

@@ -17,11 +17,11 @@ an effect-prevention claim.
 cargo test -p erebor-interceptor -p erebor-runtime-ipc \
   -p erebor-runtime-client -p mithril-control -p mithril-node -p mithril-e2e \
   --all-targets --all-features
-cargo build -p mithril-e2e --bin mithril-phase1
-sudo target/debug/mithril-phase1 --repo-root . \
-  --output-directory /tmp/mithril-phase1-final \
-  --pin-root /sys/fs/bpf/erebor-mithril-phase1-final \
-  --lease-path /tmp/mithril-phase1-final/owner.lock
+cargo build -p mithril-e2e --bin mithril-host-lifecycle-test
+sudo target/debug/mithril-host-lifecycle-test --repo-root . \
+  --output-directory /tmp/mithril-host-lifecycle-final \
+  --pin-root /sys/fs/bpf/erebor-mithril-host-lifecycle-final \
+  --lease-path /tmp/mithril-host-lifecycle-final/owner.lock
 ```
 
 The lifecycle runner uses the production `KernelHostOwner`. It refuses an

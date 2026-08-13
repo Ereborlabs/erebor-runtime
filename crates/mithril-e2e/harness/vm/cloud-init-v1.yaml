@@ -1,0 +1,19 @@
+#cloud-config
+users:
+  - default
+  - name: ubuntu
+    groups: [adm, sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - __MITHRIL_SSH_PUBLIC_KEY__
+write_files:
+  - path: /etc/default/grub.d/99-mithril-bpf-lsm.cfg
+    permissions: "0644"
+    content: |
+      GRUB_CMDLINE_LINUX_DEFAULT="lsm=landlock,lockdown,yama,integrity,apparmor,bpf"
+mounts:
+  - [bpffs, /sys/fs/bpf, bpf, "defaults", "0", "0"]
+runcmd:
+  - update-grub
+  - reboot

@@ -3,6 +3,35 @@
 #ifndef EREBOR_IDENTITY_LIFECYCLE_BPF_H
 #define EREBOR_IDENTITY_LIFECYCLE_BPF_H
 
+static __always_inline int label_external_root(
+    struct task_struct *task, execution_set_binding_state_v1 *binding,
+    identity_runtime_config_v1 *config)
+{
+    identity_health_v1 *health = identity_health_record();
+    struct identity_scratch_v1 *scratch;
+
+    scratch = identity_scratch_record();
+    if (!scratch || create_external_root(task, config, binding, scratch)) {
+        if (health)
+            health->allocation_failures++;
+        return -EACCES;
+    } else if (finalize_task_coordinate(task, &scratch->label)) {
+        task_coordinate_v1 *coordinate =
+            bpf_map_lookup_elem(&task_coordinates,
+                                &scratch->label.task_cookie);
+
+        if (coordinate) {
+            coordinate->state =
+                task_coordinate_state_v1_fail_closed_unknown;
+            coordinate->transition_version++;
+        }
+        if (health)
+            health->coordinate_failures++;
+        return -EACCES;
+    }
+    return 0;
+}
+
 SEC("lsm/task_alloc")
 int BPF_PROG(erebor_task_alloc, struct task_struct *task,
              unsigned long clone_flags, int ret)
@@ -51,11 +80,24 @@ int BPF_PROG(erebor_task_alloc, struct task_struct *task,
                                      parent_label, creator_binding, scratch);
     } else {
         if (creator_binding) {
-            if (health)
-                health->missing_identity_denials++;
-            return identity_deny(config);
+            if (label_external_root(creator, creator_binding, config)) {
+                if (health)
+                    health->missing_identity_denials++;
+                return identity_deny(config);
+            }
+            parent_label =
+                bpf_task_storage_get(&task_labels, creator, 0, 0);
+            if (!parent_label) {
+                if (health)
+                    health->missing_identity_denials++;
+                return identity_deny(config);
+            }
+            result = create_native_child(task, creator, clone_flags, config,
+                                         parent_label, creator_binding,
+                                         scratch);
+        } else {
+            return 0;
         }
-        return 0;
     }
     if (result && health)
         health->allocation_failures++;
@@ -68,7 +110,6 @@ int BPF_PROG(erebor_cgroup_attach_task, struct cgroup *cgroup,
 {
     identity_runtime_config_v1 *config;
     identity_health_v1 *health;
-    struct identity_scratch_v1 *scratch;
     task_label_v1 *label;
     execution_set_binding_state_v1 *binding;
     int binding_lookup;
@@ -108,21 +149,7 @@ int BPF_PROG(erebor_cgroup_attach_task, struct cgroup *cgroup,
     }
     if (!binding)
         return 0;
-    scratch = identity_scratch_record();
-    health = identity_health_record();
-    if (!scratch || create_external_root(task, config, binding, scratch)) {
-        if (health)
-            health->allocation_failures++;
-    } else if (finalize_task_coordinate(task, &scratch->label)) {
-        task_coordinate_v1 *coordinate =
-            bpf_map_lookup_elem(&task_coordinates, &scratch->label.task_cookie);
-        if (coordinate) {
-            coordinate->state = task_coordinate_state_v1_fail_closed_unknown;
-            coordinate->transition_version++;
-        }
-        if (health)
-            health->coordinate_failures++;
-    }
+    label_external_root(task, binding, config);
     return 0;
 }
 
@@ -147,13 +174,26 @@ int erebor_cgroup_release(struct bpf_raw_tracepoint_args *context)
 SEC("fentry/wake_up_new_task")
 int BPF_PROG(erebor_wake_up_new_task, struct task_struct *task)
 {
+    identity_runtime_config_v1 *config;
     task_label_v1 *label;
     task_coordinate_v1 *coordinate;
     identity_health_v1 *health;
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *cgroup = NULL;
+    int binding_lookup;
 
-    label = bpf_task_storage_get(&task_labels, task, 0, 0);
-    if (!label)
+    config = identity_runtime_config();
+    if (!config || !config->enabled)
         return 0;
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    if (!label) {
+        if (task_cgroup(task, &cgroup))
+            return 0;
+        binding = binding_for_cgroup(cgroup, &binding_lookup);
+        if (!binding_lookup && binding)
+            label_external_root(task, binding, config);
+        return 0;
+    }
     health = identity_health_record();
     if (finalize_task_coordinate(task, label)) {
         coordinate = bpf_map_lookup_elem(&task_coordinates, &label->task_cookie);

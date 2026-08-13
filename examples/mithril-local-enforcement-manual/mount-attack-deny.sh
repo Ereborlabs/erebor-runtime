@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+source "$directory/enforcement-runtime.sh"
+[[ $# -eq 3 ]] || {
+  echo "usage: sudo $0 <node.json> <container> <absolute-secret-path>" >&2
+  exit 2
+}
+
+observation_prepare_docker "$1" "$2" "$3"
+enforcement_mount_target=/tmp/mithril-local-enforcement-mount-target-$$
+mkdir -- "/proc/$identity_init_pid/root$enforcement_mount_target"
+enforcement_cleanup_mount_target() {
+  nsenter -t "$identity_init_pid" -m -r -- \
+    umount -- "$enforcement_mount_target" 2>/dev/null || true
+  rmdir -- "/proc/$identity_init_pid/root$enforcement_mount_target"
+}
+identity_cleanup_functions+=(enforcement_cleanup_mount_target)
+
+observation_preload_nsenter_probe python3 -c '
+import ctypes, errno, os, sys, threading, time
+ready, source, target, protected_file = sys.argv[1:]
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
+                       ctypes.c_ulong, ctypes.c_void_p]
+libc.mount.restype = ctypes.c_int
+barrier = threading.Barrier(9)
+release = threading.Event()
+results = []
+def attack():
+    barrier.wait()
+    release.wait()
+    result = libc.mount(source.encode(), target.encode(), None, 4096, None)
+    results.append((result, ctypes.get_errno()))
+threads = [threading.Thread(target=attack) for _ in range(8)]
+for thread in threads:
+    thread.start()
+barrier.wait()
+gate_path = os.environ["MITHRIL_MANUAL_RELEASE"]
+os.mkfifo(gate_path, 0o600)
+gate = os.open(gate_path, os.O_RDWR)
+with open(ready, "w", encoding="ascii") as output:
+    output.write(str(os.getpid()))
+os.read(gate, 1)
+os.close(gate)
+release.set()
+for thread in threads:
+    thread.join()
+if any(result == 0 for result, _error in results):
+    raise SystemExit("protected bind mount unexpectedly completed")
+if any(error not in (errno.EACCES, errno.EPERM) for _result, error in results):
+    raise SystemExit(f"unexpected mount errors: {results}")
+for _ in range(25):
+    try:
+        with open(protected_file, "rb") as handle:
+            handle.read(1)
+    except PermissionError:
+        time.sleep(0.02)
+        continue
+    raise SystemExit("mount race widened access to the protected file")
+' "$observation_probe_ready" "$(dirname -- "$3")" "$enforcement_mount_target" "$3"
+observation_release_probe
+observation_wait_for_observation 'reason=UNSUPPORTED_OBJECT' "$identity_work/effects.txt"
+enforcement_expect_exact_denial
+identity_pass "PASS: every protected mount attempt was denied and no file retry widened authority."

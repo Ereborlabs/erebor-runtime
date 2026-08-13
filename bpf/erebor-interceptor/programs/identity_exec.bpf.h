@@ -101,15 +101,16 @@ static __always_inline int append_bprm_auxiliary_candidates(
     return 0;
 }
 
-static __always_inline bool administrative_slot_matches_binding(
+static __noinline bool administrative_slot_matches_binding(
     approved_exec_slot_v1 *slot,
-    const execution_set_binding_state_v1 *binding)
+    const execution_set_binding_state_v1 *binding,
+    __u64 profile_generation_ref_id)
 {
     bool body_digest_present = false;
     __u64 now = bpf_ktime_get_ns();
 
     if (slot) {
-#pragma unroll
+#pragma clang loop unroll(disable)
         for (int index = 0; index < 32; index++)
             body_digest_present |= slot->authorization_body_sha256[index] != 0;
         if (slot->state == approved_exec_slot_state_v1_armed &&
@@ -126,8 +127,7 @@ static __always_inline bool administrative_slot_matches_binding(
            !id128_is_zero(&slot->claim_slot_id) &&
            body_digest_present &&
            slot->container_generation == binding->container_generation &&
-           slot->profile_generation_ref_id ==
-               binding->active_profile_generation_ref_id &&
+           slot->profile_generation_ref_id == profile_generation_ref_id &&
            slot->approved_role_numeric_id &&
            slot->resolved_executable.mount_namespace_inode &&
            slot->resolved_executable.mount_id &&
@@ -273,16 +273,21 @@ static __always_inline int prepare_administrative_match(
     if (!config || !config->enabled)
         return 0;
     task = bpf_get_current_task_btf();
-    label = bpf_task_storage_get(&task_labels, task, 0, 0);
-    if (!label)
-        return 0;
-    bpf_map_delete_elem(&pending_administrative_matches,
-                        &label->task_cookie);
     if (task_cgroup(task, &cgroup))
         return 0;
     binding = binding_for_cgroup(cgroup, &binding_lookup);
     if (binding_lookup)
         return 0;
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    if (!label && binding) {
+        if (label_external_root(task, binding, config))
+            return 0;
+        label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    }
+    if (!label)
+        return 0;
+    bpf_map_delete_elem(&pending_administrative_matches,
+                        &label->task_cookie);
     process = bpf_map_lookup_elem(&process_states, &label->process_state_id);
     classification = bpf_map_lookup_elem(&external_root_classifications,
                                          &label->task_cookie);
@@ -304,7 +309,9 @@ static __always_inline int prepare_administrative_match(
     key.cgroup_binding_id = binding->binding_id;
     slot = bpf_map_lookup_elem(&approved_exec_slots, &key);
     scratch = identity_scratch_record();
-    if (!scratch || !administrative_slot_matches_binding(slot, binding) ||
+    if (!scratch ||
+        !administrative_slot_matches_binding(
+            slot, binding, process->active_profile_generation_ref_id) ||
         administrative_argv_matches(slot, argv, scratch))
         return 0;
     scratch->administrative_match.task_cookie = label->task_cookie;
@@ -388,7 +395,8 @@ static __always_inline int consume_administrative_match(
     key.node_boot_id = config->node_boot_id;
     key.cgroup_binding_id = binding->binding_id;
     slot = bpf_map_lookup_elem(&approved_exec_slots, &key);
-    if (!administrative_slot_matches_binding(slot, binding) ||
+    if (!administrative_slot_matches_binding(
+            slot, binding, process->active_profile_generation_ref_id) ||
         !id128_equal(&slot->proof_id, &match->proof_id) ||
         !id128_equal(&slot->claim_slot_id, &match->claim_slot_id) ||
         !candidate_equal(&slot->resolved_executable,
@@ -402,7 +410,8 @@ static __always_inline int consume_administrative_match(
     match->state = pending_administrative_match_state_v1_slot_consumed;
     match->transition_version++;
     if (consume_bounded_exception(slot->profile_generation_ref_id,
-                                  slot->exception_numeric_handle))
+                                  slot->exception_numeric_handle,
+                                  &slot->claim_slot_id, 0, 0, 0))
         return -EACCES;
     process->pending_target_role_id = match->approved_role_numeric_id;
     return 0;
@@ -458,11 +467,20 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
     }
     if (!label) {
         if (binding) {
-            if (health)
-                health->missing_identity_denials++;
-            return identity_deny(config);
+            if (label_external_root(task, binding, config)) {
+                if (health)
+                    health->missing_identity_denials++;
+                return identity_deny(config);
+            }
+            label = bpf_task_storage_get(&task_labels, task, 0, 0);
+            if (!label) {
+                if (health)
+                    health->missing_identity_denials++;
+                return identity_deny(config);
+            }
+        } else {
+            return 0;
         }
-        return 0;
     }
     coordinate = bpf_map_lookup_elem(&task_coordinates, &label->task_cookie);
     if (!label_matches_runtime(label, config) ||
@@ -537,6 +555,12 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
                 health->exec_guard_denials++;
             return identity_deny(config);
         }
+        candidate_from_bprm(&scratch->pending_exec.ordered_candidates[0], bprm);
+        if (!scratch->pending_exec.ordered_candidates[0].mount_id) {
+            release_transition_guard(&process->transition_guard);
+            return config->effect_policy_enabled ? BPRM_OBSERVE_EFFECT_V1
+                                                 : identity_deny(config);
+        }
         if (allocate_id(config, &scratch->pending_exec.pending_exec_id) ||
             allocate_id(config, &scratch->pending_exec.target_execution_id) ||
             allocate_id(config,
@@ -555,11 +579,6 @@ static __noinline int identity_bprm_transition(struct linux_binprm *bprm,
             snapshot->active_profile_generation_ref_id;
         scratch->pending_exec.pending_exec_response_set_ref_id =
             snapshot->effective_response_set_ref_id;
-        candidate_from_bprm(&scratch->pending_exec.ordered_candidates[0], bprm);
-        if (!scratch->pending_exec.ordered_candidates[0].mount_id) {
-            release_transition_guard(&process->transition_guard);
-            return identity_deny(config);
-        }
 #pragma unroll
         for (int candidate = 1; candidate < MAX_EXEC_CANDIDATES_V1; candidate++) {
             scratch->pending_exec.ordered_candidates[candidate]

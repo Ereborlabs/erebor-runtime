@@ -508,6 +508,15 @@ pub struct ExecutionSetBindingStateV1 {
 }
 
 #[repr(C)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes,
+)]
+pub struct BindingActivationTargetKeyV1 {
+    pub binding_id: Id128V1,
+    pub profile_generation_ref_id: u64,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, Immutable, IntoBytes, KnownLayout, PartialEq, TryFromBytes)]
 pub struct BoundedAdministrativeArgvV1 {
     pub argument_count: u16,
@@ -848,7 +857,7 @@ mod tests {
     use crate::BindingLifecycleStateV1;
 
     #[test]
-    fn phase2_identity_abi_has_stable_sizes_and_offsets() {
+    fn native_identity_abi_has_stable_sizes_and_offsets() {
         assert_eq!(size_of::<Id128V1>(), 16);
         assert_eq!(size_of::<TaskPlacementExpectationV1>(), 40);
         assert_eq!(size_of::<TaskLabelV1>(), 328);

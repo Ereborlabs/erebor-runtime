@@ -1,8 +1,10 @@
 # How To Manually Accept Phase 4
 
-Status: the exact-file prevention increment has runnable automated and manual
-cases. The complete catalog below is still the acceptance target, not a claim
-that every Phase 4 surface is implemented.
+Status: The qualified local-enforcement slices have runnable automated and
+manual cases. The current source passed the privileged VM enforcement probe.
+The optional k3s lane passed substrate checks only. The complete catalog below
+remains the acceptance target. The complete policy-aware local surface does
+not have an implementation.
 
 Phase: [Signed Local Pre-Effect Enforcement](../phase-4-signed-local-pre-effect-enforcement.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -21,34 +23,37 @@ cargo build -p mithril-node --bins -p mithril-control --bin mithril-policy \
 
 sudo target/debug/mithril-effect-test --repo-root . physical-probe \
   --protect \
-  --output-directory /tmp/mithril-phase4-effect-final \
-  --pin-root /sys/fs/bpf/erebor-mithril-phase4-effect-final \
-  --lease-path /tmp/mithril-phase4-effect-final/owner.lock \
-  --cgroup-path /sys/fs/cgroup/erebor-mithril-phase4-effect-final
+  --output-directory /tmp/mithril-local-enforcement-final \
+  --pin-root /sys/fs/bpf/erebor-mithril-local-enforcement-final \
+  --lease-path /tmp/mithril-local-enforcement-final/owner.lock \
+  --cgroup-path /sys/fs/cgroup/erebor-mithril-local-enforcement-final
 ```
 
 The probe is assertion-bearing and self-cleaning. It uses the production
 libbpf-rs loader and BPF object, not a second test implementation. It retains
 only its JSON result under the requested output directory. Its current exact
-slice covers open/read/mmap denial, a same-container exact benign read,
-concurrent N/N+1 exception consumption, monotonic expiry, exhausted-state loader restart,
-hard-link/bind aliases, denied protected mounts, external mount replacement
-and reconciliation, hard-close physical oracles for unqualified exec,
-anonymous executable memory, create/chmod/truncate/unlink/link/rename, SysV IPC,
-ptrace/signal, namespace creation, device ioctl, BPF map creation, and pinned-link removal, plus
-ring saturation, latency, and cleanup.
+slice covers exact file open/read/mmap/mprotect allow and deny, exact image
+allow and deny across the supported exec entry variants, exact character-device
+ioctl allow and deny, exact signal and ptrace denial, the configured AF_UNIX
+`SOCK_STREAM` unmatched-policy denial, concurrent N/N+1 exception consumption,
+hard-link/bind aliases, denied protected mounts, external mount replacement,
+reconciliation, ring saturation, latency, and cleanup. Unqualified anonymous
+and memfd execution, file mutation, SysV IPC, namespace creation, BPF map
+creation, and pinned-link removal remain hard closed.
 
 The real `mithril-node` Docker and raw-namespace cases live in
-[`examples/mithril-phase4-manual`](../../../../examples/mithril-phase4-manual/README.md).
+[`examples/mithril-local-enforcement-manual`](../../../../examples/mithril-local-enforcement-manual/README.md).
 Run the individual shell for the behavior under review; each installs an EXIT
-trap before starting the node and removes pins, leases, cgroups, processes,
-mounts, sockets, and temporary state. The checked Phase 4 policy includes an
-exact benign control and a two-use exact write-open exception, so the manual
-cases test denial, allowed operation, and concurrent exception behavior against
-one signed generation. Separate scripts also exercise every hard-close family
-listed above except raw BPF map creation, whose portable test uses the vendored
-libbpf API in the automated probe rather than copying architecture-specific
-syscall numbers into shell/Python.
+trap before starting the node and removes Mithril-owned pins, leases, processes,
+mounts, sockets, FIFOs, and temporary state. It leaves the supplied container
+and cgroup intact. The prepared task waits on a FIFO; the host does not signal
+it after policy activation. The checked policy
+includes exact benign, executable, and device allow and deny controls; exact
+process-control denials; an AF_UNIX unmatched-policy denial; and a two-use
+exact write-open exception. Positive process-control and positive exact Unix
+relationships are rejected. Raw BPF map creation remains in
+the automated probe because it uses the vendored libbpf API instead of copied
+architecture-specific syscall numbers.
 
 ## Procedure
 

@@ -21,6 +21,19 @@ A local kind cluster may run deterministic integration tests, but it cannot
 satisfy the `TWO-NODE` proof because both workers share one kernel and boot
 identity.
 
+For the implemented local physical slice, the repository contains a disposable
+libvirt lane:
+
+```sh
+crates/mithril-e2e/harness/vm/run.sh --with-k3s \
+  --output-directory /tmp/mithril-vm-evidence
+```
+
+This lane supplies a qualified `KERNEL-LAB` and local one-node evidence. Its
+optional k3s check proves runtime facts only. It does not supply the isolated
+Control service, full policy delivery, admission, or two-node proof required
+by later rows in this guide.
+
 ## 2. Isolate The Lab
 
 - Use disposable nodes or VMs dedicated to the run.

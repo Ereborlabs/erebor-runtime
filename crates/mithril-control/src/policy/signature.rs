@@ -238,7 +238,7 @@ fn header_digests(header: &ProfileSignatureHeaderV1) -> impl Iterator<Item = &st
 }
 
 fn valid_uuid(value: &str) -> bool {
-    uuid::Uuid::parse_str(value).is_ok()
+    uuid::Uuid::parse_str(value).is_ok_and(|uuid| uuid.hyphenated().to_string() == value)
 }
 
 fn valid_sha256(value: &str) -> bool {

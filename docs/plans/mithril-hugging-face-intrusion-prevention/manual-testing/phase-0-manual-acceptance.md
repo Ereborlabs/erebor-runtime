@@ -15,22 +15,22 @@ stock mechanism before its ABI freezes, or marks the surface unsupported.
 ```bash
 cargo test -p erebor-interceptor-abi -p erebor-interceptor -p mithril-e2e \
   --all-targets --all-features
-cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . source-check
-cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . verify \
-  --output /tmp/mithril-phase0/verification.json
-cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . probe \
-  --output-directory /tmp/mithril-phase0/probe
-cargo build -p mithril-e2e --bin mithril-phase0
-sudo target/debug/mithril-phase0 --repo-root . physical-probe \
-  --output-directory /tmp/mithril-phase0-final
-cargo run -p mithril-e2e --bin mithril-phase0 -- --repo-root . benchmark \
+cargo run -p mithril-e2e --bin mithril-kernel-qualification -- --repo-root . source-check
+cargo run -p mithril-e2e --bin mithril-kernel-qualification -- --repo-root . verify \
+  --output /tmp/mithril-kernel-qualification/verification.json
+cargo run -p mithril-e2e --bin mithril-kernel-qualification -- --repo-root . probe \
+  --output-directory /tmp/mithril-kernel-qualification/probe
+cargo build -p mithril-e2e --bin mithril-kernel-qualification
+sudo target/debug/mithril-kernel-qualification --repo-root . physical-probe \
+  --output-directory /tmp/mithril-kernel-qualification-final
+cargo run -p mithril-e2e --bin mithril-kernel-qualification -- --repo-root . benchmark \
   --target crates/mithril-e2e/fixtures/hugging-face/protected/image-digest.txt \
-  --mode baseline --output /tmp/mithril-phase0-open-baseline.json
-sudo target/debug/mithril-phase0 --repo-root . benchmark \
+  --mode baseline --output /tmp/mithril-kernel-open-baseline.json
+sudo target/debug/mithril-kernel-qualification --repo-root . benchmark \
   --target crates/mithril-e2e/fixtures/hugging-face/protected/image-digest.txt \
   --mode protected \
-  --bpf-object /tmp/mithril-phase0-final/feasibility.bpf.o \
-  --output /tmp/mithril-phase0-open-protected.json
+  --bpf-object /tmp/mithril-kernel-qualification-final/feasibility.bpf.o \
+  --output /tmp/mithril-kernel-open-protected.json
 ```
 
 The benchmark command defaults to 100,000 warmups and 1,000,000 measured

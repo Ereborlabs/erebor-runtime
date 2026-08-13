@@ -147,7 +147,7 @@ impl ControlPlane {
     fn validate_readiness(&self, report: &crate::NodeReadinessReport) -> Result<(), Status> {
         if !report.kernel_ready || !report.control_ready || !report.admission_ready {
             return Err(Status::failed_precondition(
-                "node cannot advertise incomplete Phase 1 readiness",
+                "node readiness requires kernel, control, and admission readiness",
             ));
         }
         Ok(())
@@ -256,7 +256,10 @@ fn valid_registration(registration: &crate::NodeRegistration) -> bool {
         && !registration.capabilities.is_empty()
         && registration.capabilities.iter().all(|capability| {
             !capability.capability_id.is_empty()
-                && matches!(capability.state.as_str(), "SUPPORTED" | "UNSUPPORTED")
+                && matches!(
+                    capability.state.as_str(),
+                    "SUPPORTED" | "UNSUPPORTED" | "DEGRADED" | "UNHEALTHY"
+                )
                 && !capability.reason_code.is_empty()
         })
         && registration
@@ -339,9 +342,10 @@ async fn send_control(
 #[cfg(test)]
 mod tests {
     use super::{
-        validate_header, AllowedNodeIdentity, ControlPlane, StreamIdentity, TrustGenerationV1,
+        valid_registration, validate_header, AllowedNodeIdentity, ControlPlane, StreamIdentity,
+        TrustGenerationV1,
     };
-    use crate::{NodeEnvelope, CONTROL_PROTOCOL_VERSION};
+    use crate::{CapabilityRecord, NodeEnvelope, NodeRegistration, CONTROL_PROTOCOL_VERSION};
 
     fn control() -> ControlPlane {
         ControlPlane::new(
@@ -391,5 +395,41 @@ mod tests {
         let mut changed = valid;
         changed.connection_nonce = vec![9; 16];
         assert!(validate_header(&changed, 2, Some(&identity)).is_err());
+    }
+
+    #[test]
+    fn registration_accepts_the_closed_capability_states_used_by_nodes() {
+        for state in ["SUPPORTED", "UNSUPPORTED", "DEGRADED", "UNHEALTHY"] {
+            let registration = NodeRegistration {
+                platform_digest: "a".repeat(64),
+                program_digest: "b".repeat(64),
+                label_epoch: 1,
+                kernel_ready: true,
+                effect_prevention_claims_enabled: state == "SUPPORTED",
+                capabilities: vec![CapabilityRecord {
+                    capability_id: "capability".to_owned(),
+                    state: state.to_owned(),
+                    reason_code: "MEASURED_STATE".to_owned(),
+                }],
+            };
+
+            assert!(valid_registration(&registration), "state {state}");
+        }
+
+        let mut invalid = NodeRegistration {
+            platform_digest: "a".repeat(64),
+            program_digest: "b".repeat(64),
+            label_epoch: 1,
+            kernel_ready: true,
+            effect_prevention_claims_enabled: false,
+            capabilities: vec![CapabilityRecord {
+                capability_id: "capability".to_owned(),
+                state: "UNKNOWN".to_owned(),
+                reason_code: "MEASURED_STATE".to_owned(),
+            }],
+        };
+        assert!(!valid_registration(&invalid));
+        invalid.capabilities[0].state = "ABSENT".to_owned();
+        assert!(!valid_registration(&invalid));
     }
 }

@@ -1,21 +1,31 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::fs::{self, File};
+use std::fs::File;
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::os::unix::ffi::{OsStrExt as _, OsStringExt as _};
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use erebor_interceptor_abi::MAX_CANONICAL_COMPONENT_BYTES_V1;
-use rustix::fs::{statx, AtFlags, StatxFlags};
+use rustix::fs::{openat, openat2, statx, AtFlags, Mode, OFlags, ResolveFlags, StatxFlags};
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{IdentityStateSnafu, IoSnafu};
-use crate::{ExactFileObjectConfig, Result};
+use crate::{ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig, Result};
 
 const STATX_MNT_ID_UNIQUE: u32 = 0x0000_4000;
 
 pub struct ExactFileObjectResolver;
+
+pub(crate) struct ExactFileObjectView {
+    root_pid: u32,
+    _process: File,
+    mount_namespace: File,
+    root: File,
+    mountinfo: Mutex<File>,
+}
 
 impl ExactFileObjectResolver {
     pub fn resolve(
@@ -25,18 +35,68 @@ impl ExactFileObjectResolver {
         exact_object_key_id: u64,
         object_class_id: String,
         inode_generation: u32,
+        device_class_id: Option<String>,
     ) -> Result<ExactFileObjectConfig> {
+        ExactFileObjectView::acquire(root_pid)?.resolve(
+            path,
+            profile_generation_ref_id,
+            exact_object_key_id,
+            object_class_id,
+            inode_generation,
+            device_class_id,
+        )
+    }
+}
+
+impl ExactFileObjectView {
+    pub(crate) fn acquire(root_pid: u32) -> Result<Self> {
         ensure!(
-            root_pid > 0 && path.is_absolute(),
+            root_pid > 0,
             IdentityStateSnafu {
-                reason:
-                    "exact file resolution needs a live root PID and absolute in-namespace path",
+                reason: "exact file resolution needs a live root PID",
             }
         );
-        let namespace_path = PathBuf::from(format!("/proc/{root_pid}/ns/mnt"));
-        let mount_namespace_inode = fs::metadata(&namespace_path)
+        let process_path = PathBuf::from(format!("/proc/{root_pid}"));
+        let process = File::open(&process_path).context(IoSnafu {
+            path: &process_path,
+        })?;
+        let mount_namespace = open_process_file(&process, root_pid, "ns/mnt")?;
+        let root = open_process_file(&process, root_pid, "root")?;
+        let mountinfo = open_process_file(&process, root_pid, "mountinfo")?;
+        let final_mount_namespace = open_process_file(&process, root_pid, "ns/mnt")?;
+        let final_root = open_process_file(&process, root_pid, "root")?;
+        ensure!(
+            mount_namespace
+                .metadata()
+                .context(IoSnafu {
+                    path: Path::new("held mount namespace"),
+                })?
+                .ino()
+                == final_mount_namespace
+                    .metadata()
+                    .context(IoSnafu {
+                        path: Path::new("rechecked mount namespace"),
+                    })?
+                    .ino()
+                && same_root(&root, &final_root)?,
+            IdentityStateSnafu {
+                reason: "task mount namespace or root changed while its view was acquired",
+            }
+        );
+        Ok(Self {
+            root_pid,
+            _process: process,
+            mount_namespace,
+            root,
+            mountinfo: Mutex::new(mountinfo),
+        })
+    }
+
+    pub(crate) fn mount_namespace_inode(&self) -> Result<u32> {
+        self.mount_namespace
+            .metadata()
             .context(IoSnafu {
-                path: &namespace_path,
+                path: Path::new("held mount namespace"),
             })?
             .ino()
             .try_into()
@@ -45,16 +105,27 @@ impl ExactFileObjectResolver {
                     reason: format!("mount namespace inode exceeds its Linux u32 ABI: {error}"),
                 }
                 .build()
-            })?;
-        let host_path = PathBuf::from(format!("/proc/{root_pid}/root")).join(
-            path.strip_prefix("/").map_err(|error| {
-                IdentityStateSnafu {
-                    reason: format!("exact object path is not absolute: {error}"),
-                }
-                .build()
-            })?,
+            })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn resolve(
+        &self,
+        path: &Path,
+        profile_generation_ref_id: u64,
+        exact_object_key_id: u64,
+        object_class_id: String,
+        inode_generation: u32,
+        device_class_id: Option<String>,
+    ) -> Result<ExactFileObjectConfig> {
+        ensure!(
+            path.is_absolute(),
+            IdentityStateSnafu {
+                reason: "exact file resolution needs an absolute in-namespace path",
+            }
         );
-        let file = File::open(&host_path).context(IoSnafu { path: &host_path })?;
+        let mount_namespace_inode = self.mount_namespace_inode()?;
+        let file = self.open_path(path)?;
         let unique_mount = StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE);
         let status = statx(
             &file,
@@ -63,7 +134,7 @@ impl ExactFileObjectResolver {
             StatxFlags::BASIC_STATS | unique_mount,
         )
         .map_err(std::io::Error::from)
-        .context(IoSnafu { path: &host_path })?;
+        .context(IoSnafu { path })?;
         ensure!(
             status.stx_mask & STATX_MNT_ID_UNIQUE != 0
                 && status.stx_mnt_id > 0
@@ -72,13 +143,27 @@ impl ExactFileObjectResolver {
                 reason: "kernel/filesystem did not return STATX_MNT_ID_UNIQUE and an inode",
             }
         );
+        let device_type = match u32::from(status.stx_mode) & 0o170_000 {
+            0o020_000 => Some(ExactDeviceType::Character),
+            0o060_000 => Some(ExactDeviceType::Block),
+            _ => None,
+        };
+        let device = device_type.map(|device_type| ExactDeviceConfig {
+            device_class_id: device_class_id.clone().unwrap_or_default(),
+            device_type,
+            major: status.stx_rdev_major,
+            minor: status.stx_rdev_minor,
+        });
         ensure!(
-            mount_namespace_inode > 0 && inode_generation > 0,
+            mount_namespace_inode > 0
+                && (inode_generation > 0 || device.is_some())
+                && device.is_some() == device_class_id.is_some()
+                && device_class_id.as_ref().is_none_or(|id| !id.is_empty()),
             IdentityStateSnafu {
-                reason: "mount namespace and inode generation must be nonzero",
+                reason: "device objects need one nonempty device class; non-device objects need a nonzero inode generation",
             }
         );
-        let mount_snapshot = MountInfoSnapshot::read(root_pid, path)?;
+        let mount_snapshot = MountInfoSnapshot::read(self, path)?;
         Ok(ExactFileObjectConfig {
             profile_generation_ref_id,
             exact_object_key_id,
@@ -88,6 +173,7 @@ impl ExactFileObjectResolver {
             filesystem_device: encoded_device(status.stx_dev_major, status.stx_dev_minor)?,
             inode: status.stx_ino,
             inode_generation,
+            device,
             canonical_component_hex: mount_snapshot
                 .canonical_components
                 .iter()
@@ -107,8 +193,37 @@ impl ExactFileObjectResolver {
             selected_mount_id_unique: mount_snapshot.selected_mount_id_unique,
             mount_snapshot_digest_id: mount_snapshot.snapshot_digest_id,
             mount_topology_generation: 1,
-            mount_view_root_pid: root_pid,
+            mount_view_root_pid: self.root_pid,
         })
+    }
+
+    fn open_path(&self, path: &Path) -> Result<File> {
+        ensure!(
+            path.is_absolute(),
+            IdentityStateSnafu {
+                reason: "exact object path is not absolute",
+            }
+        );
+        openat2(
+            &self.root,
+            path,
+            OFlags::RDONLY | OFlags::CLOEXEC,
+            Mode::empty(),
+            ResolveFlags::IN_ROOT,
+        )
+        .map(File::from)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu { path })
+    }
+
+    fn read_mountinfo(&self) -> Result<Vec<u8>> {
+        let mut file = self.mountinfo.lock().map_err(|_| {
+            IdentityStateSnafu {
+                reason: "held mountinfo lock is poisoned".to_owned(),
+            }
+            .build()
+        })?;
+        read_mountinfo_file(&mut file, self.root_pid)
     }
 }
 
@@ -131,9 +246,8 @@ struct MountInfoEntry {
 }
 
 impl MountInfoSnapshot {
-    fn read(root_pid: u32, target: &Path) -> Result<Self> {
-        let path = PathBuf::from(format!("/proc/{root_pid}/mountinfo"));
-        let first = fs::read(&path).context(IoSnafu { path: &path })?;
+    fn read(view: &ExactFileObjectView, target: &Path) -> Result<Self> {
+        let first = view.read_mountinfo()?;
         let entries = parse_mountinfo(&first)?;
         let entered = entries
             .iter()
@@ -151,7 +265,7 @@ impl MountInfoSnapshot {
         let relevant_entries = relevant_mount_entries(&entries, entered.mount_id)?;
         let mounts = relevant_entries
             .iter()
-            .map(|entry| live_mount(root_pid, entry))
+            .map(|entry| live_mount(view, entry))
             .collect::<Result<Vec<_>>>()?;
         let entered = mounts
             .iter()
@@ -177,7 +291,7 @@ impl MountInfoSnapshot {
                 reason: "canonical path must contain 1..64 bounded components",
             }
         );
-        let second = fs::read(&path).context(IoSnafu { path: &path })?;
+        let second = view.read_mountinfo()?;
         ensure!(
             first == second,
             IdentityStateSnafu {
@@ -261,16 +375,8 @@ struct LiveMount {
     mount_id_unique: u64,
 }
 
-fn live_mount(root_pid: u32, entry: &MountInfoEntry) -> Result<LiveMount> {
-    let host_path = PathBuf::from(format!("/proc/{root_pid}/root")).join(
-        entry.mountpoint.strip_prefix("/").map_err(|error| {
-            IdentityStateSnafu {
-                reason: format!("mountpoint is not absolute: {error}"),
-            }
-            .build()
-        })?,
-    );
-    let file = File::open(&host_path).context(IoSnafu { path: &host_path })?;
+fn live_mount(view: &ExactFileObjectView, entry: &MountInfoEntry) -> Result<LiveMount> {
+    let file = view.open_path(&entry.mountpoint)?;
     let unique_mount = StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE);
     let status = statx(
         &file,
@@ -279,7 +385,9 @@ fn live_mount(root_pid: u32, entry: &MountInfoEntry) -> Result<LiveMount> {
         StatxFlags::BASIC_STATS | unique_mount,
     )
     .map_err(std::io::Error::from)
-    .context(IoSnafu { path: &host_path })?;
+    .context(IoSnafu {
+        path: &entry.mountpoint,
+    })?;
     ensure!(
         status.stx_mask & STATX_MNT_ID_UNIQUE != 0 && status.stx_mnt_id > 0 && status.stx_ino > 0,
         IdentityStateSnafu {
@@ -294,6 +402,49 @@ fn live_mount(root_pid: u32, entry: &MountInfoEntry) -> Result<LiveMount> {
         inode: status.stx_ino,
         mount_id_unique: status.stx_mnt_id,
     })
+}
+
+fn read_mountinfo_file(file: &mut File, root_pid: u32) -> Result<Vec<u8>> {
+    let path = PathBuf::from(format!("held /proc/{root_pid}/mountinfo"));
+    file.seek(SeekFrom::Start(0))
+        .context(IoSnafu { path: &path })?;
+    let mut source = Vec::new();
+    file.read_to_end(&mut source)
+        .context(IoSnafu { path: &path })?;
+    Ok(source)
+}
+
+fn open_process_file(process: &File, root_pid: u32, entry: &str) -> Result<File> {
+    let path = PathBuf::from(format!("held /proc/{root_pid}/{entry}"));
+    openat(
+        process,
+        entry,
+        OFlags::RDONLY | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map(File::from)
+    .map_err(std::io::Error::from)
+    .context(IoSnafu { path })
+}
+
+fn same_root(left: &File, right: &File) -> Result<bool> {
+    let flags = StatxFlags::BASIC_STATS | StatxFlags::from_bits_retain(STATX_MNT_ID_UNIQUE);
+    let left = statx(left, "", AtFlags::EMPTY_PATH, flags)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            path: Path::new("held task root"),
+        })?;
+    let right = statx(right, "", AtFlags::EMPTY_PATH, flags)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            path: Path::new("rechecked task root"),
+        })?;
+    Ok(left.stx_mask & STATX_MNT_ID_UNIQUE != 0
+        && right.stx_mask & STATX_MNT_ID_UNIQUE != 0
+        && left.stx_mnt_id == right.stx_mnt_id
+        && left.stx_dev_major == right.stx_dev_major
+        && left.stx_dev_minor == right.stx_dev_minor
+        && left.stx_ino == right.stx_ino)
 }
 
 struct CanonicalMountPath {
@@ -513,12 +664,35 @@ fn path_components(path: &Path) -> Result<Vec<Vec<u8>>> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::{
         canonicalize_mount_path, parse_mountinfo, relevant_mount_entries, unescape_mountinfo,
-        LiveMount,
+        ExactFileObjectView, LiveMount,
     };
+
+    #[test]
+    fn retained_mount_view_owns_live_namespace_inputs() -> crate::Result<()> {
+        let view = ExactFileObjectView::acquire(std::process::id())?;
+
+        assert!(view.mount_namespace_inode()? > 0);
+        assert!(!parse_mountinfo(&view.read_mountinfo()?)?.is_empty());
+        assert!(view
+            .open_path(Path::new("/"))?
+            .metadata()
+            .is_ok_and(|metadata| metadata.is_dir()));
+        Ok(())
+    }
+
+    #[test]
+    fn retained_mount_view_requires_an_absolute_in_root_path() -> crate::Result<()> {
+        let view = ExactFileObjectView::acquire(std::process::id())?;
+
+        assert!(view.open_path(Path::new("/etc")).is_ok());
+        assert!(view.open_path(Path::new("/../../etc")).is_ok());
+        assert!(view.open_path(Path::new("relative/path")).is_err());
+        Ok(())
+    }
 
     #[test]
     fn mountinfo_parser_preserves_linux_path_bytes() -> crate::Result<()> {

@@ -53,6 +53,26 @@ pub struct ContainerRuntimeConfig {
 pub struct PolicyCandidateConfig {
     pub artifact_path: PathBuf,
     pub public_key_path: PathBuf,
+    #[serde(default)]
+    pub rollback_authorization_path: Option<PathBuf>,
+    #[serde(default)]
+    pub rollback_public_key_path: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExactDeviceConfig {
+    pub device_class_id: String,
+    pub device_type: ExactDeviceType,
+    pub major: u32,
+    pub minor: u32,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExactDeviceType {
+    Character,
+    Block,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -66,6 +86,8 @@ pub struct ExactFileObjectConfig {
     pub filesystem_device: u32,
     pub inode: u64,
     pub inode_generation: u32,
+    #[serde(default)]
+    pub device: Option<ExactDeviceConfig>,
     pub canonical_component_hex: Vec<String>,
     pub mount_relative_component_count: u16,
     pub mount_root_filesystem_device: u32,
@@ -216,9 +238,19 @@ impl NodeConfig {
             ensure!(
                 candidate.artifact_path.is_absolute()
                     && candidate.public_key_path.is_absolute()
+                    && candidate
+                        .rollback_authorization_path
+                        .as_ref()
+                        .is_none_or(|path| path.is_absolute())
+                    && candidate
+                        .rollback_public_key_path
+                        .as_ref()
+                        .is_none_or(|path| path.is_absolute())
+                    && candidate.rollback_authorization_path.is_some()
+                        == candidate.rollback_public_key_path.is_some()
                     && candidate_paths.insert(&candidate.artifact_path),
                 InvalidConfigurationSnafu {
-                    reason: "policy candidates need unique absolute artifact and public-key paths",
+                    reason: "policy candidates need unique absolute artifact and public-key paths and a complete optional rollback proof/key pair",
                 }
             );
         }
@@ -233,7 +265,11 @@ impl NodeConfig {
                     && object.mount_namespace_inode > 0
                     && object.mount_id_unique > 0
                     && object.inode > 0
-                    && object.inode_generation > 0
+                    && (object.inode_generation > 0 || object.device.is_some())
+                    && object
+                        .device
+                        .as_ref()
+                        .is_none_or(|device| !device.device_class_id.is_empty())
                     && !object.canonical_component_hex.is_empty()
                     && object.canonical_component_hex.len()
                         <= MAX_CANONICAL_PATH_COMPONENTS_V1
@@ -273,16 +309,14 @@ impl NodeConfig {
         Ok(())
     }
 
-    pub(crate) fn binding_reconciliation_interval(&self) -> Option<Duration> {
-        (!self.workload_bindings.is_empty()).then(|| {
-            Duration::from_millis(
-                self.container_runtime
-                    .as_ref()
-                    .map_or_else(default_runtime_reconciliation_ms, |runtime| {
-                        runtime.reconciliation_interval_ms
-                    }),
-            )
-        })
+    pub(crate) fn reconciliation_interval(&self) -> Duration {
+        Duration::from_millis(
+            self.container_runtime
+                .as_ref()
+                .map_or_else(default_runtime_reconciliation_ms, |runtime| {
+                    runtime.reconciliation_interval_ms
+                }),
+        )
     }
 }
 
@@ -317,7 +351,7 @@ mod tests {
 
     use super::{
         ContainerKindV1, ExactFileObjectConfig, InterceptorConfig, NodeConfig, NodeControlConfig,
-        WorkloadBindingConfig,
+        PolicyCandidateConfig, WorkloadBindingConfig,
     };
 
     fn config() -> NodeConfig {
@@ -369,10 +403,16 @@ mod tests {
     fn configured_cgroup_binding_does_not_require_cri() -> crate::Result<()> {
         let config = config();
         config.validate()?;
-        assert_eq!(
-            config.binding_reconciliation_interval(),
-            Some(Duration::from_secs(2))
-        );
+        assert_eq!(config.reconciliation_interval(), Duration::from_secs(2));
+        Ok(())
+    }
+
+    #[test]
+    fn kernel_reconciliation_runs_without_workload_bindings() -> crate::Result<()> {
+        let mut config = config();
+        config.workload_bindings.clear();
+        config.validate()?;
+        assert_eq!(config.reconciliation_interval(), Duration::from_secs(2));
         Ok(())
     }
 
@@ -395,6 +435,22 @@ mod tests {
     }
 
     #[test]
+    fn rollback_configuration_requires_its_proof_and_key_together() {
+        let mut config = config();
+        config.policy_candidates.push(PolicyCandidateConfig {
+            artifact_path: PathBuf::from("/tmp/profile.json"),
+            public_key_path: PathBuf::from("/tmp/profile-key.hex"),
+            rollback_authorization_path: Some(PathBuf::from("/tmp/rollback.json")),
+            rollback_public_key_path: None,
+        });
+        assert!(config.validate().is_err());
+
+        config.policy_candidates[0].rollback_public_key_path =
+            Some(PathBuf::from("/tmp/rollback-key.hex"));
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
     fn exact_object_ids_and_kernel_identities_are_one_to_one() {
         let mut config = config();
         config.exact_file_objects = vec![exact_object(7, 11), exact_object(7, 12)];
@@ -414,6 +470,7 @@ mod tests {
             filesystem_device: 30,
             inode,
             inode_generation: 1,
+            device: None,
             canonical_component_hex: ["var", "run", "secret"]
                 .map(|component| hex::encode(component.as_bytes()))
                 .to_vec(),

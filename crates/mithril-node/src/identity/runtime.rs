@@ -4,12 +4,16 @@ use std::path::{Path, PathBuf};
 use hyper_util::rt::TokioIo;
 use k8s_cri::v1::runtime_service_client::RuntimeServiceClient;
 use k8s_cri::v1::{ContainerState, ContainerStatusRequest, ListContainersRequest, VersionRequest};
+use procfs::process::Process;
 use snafu::{ensure, ResultExt as _};
 use tokio::net::UnixStream;
 use tonic::transport::{Channel, Endpoint, Uri};
 use tower::service_fn;
 
-use crate::error::{ContainerRuntimeRpcSnafu, ContainerRuntimeTransportSnafu, IdentityStateSnafu};
+use crate::error::{
+    ContainerRuntimeProcessSnafu, ContainerRuntimeRpcSnafu, ContainerRuntimeTransportSnafu,
+    IdentityStateSnafu,
+};
 use crate::{Result, WorkloadBindingConfig};
 
 const POD_UID_LABEL: &str = "io.kubernetes.pod.uid";
@@ -230,16 +234,27 @@ fn cgroup_path_from_info(
         }
         .build()
     })?;
-    let raw = value
-        .pointer("/runtimeSpec/linux/cgroupsPath")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| {
-            IdentityStateSnafu {
-                reason: "CRI verbose status has no runtimeSpec.linux.cgroupsPath".to_owned(),
-            }
-            .build()
-        })?;
-    let relative = parse_cgroup_path(raw)?;
+    let raw = match runtime_cgroup_source(&value)? {
+        RuntimeCgroupSource::Path(raw) => raw,
+        RuntimeCgroupSource::Process(pid) => {
+            let process = Process::new(pid).context(ContainerRuntimeProcessSnafu { pid })?;
+            let groups = process
+                .cgroups()
+                .context(ContainerRuntimeProcessSnafu { pid })?;
+            groups
+                .0
+                .iter()
+                .find(|group| group.hierarchy == 0 && group.controllers.is_empty())
+                .map(|group| group.pathname.clone())
+                .ok_or_else(|| {
+                    IdentityStateSnafu {
+                        reason: format!("container process {pid} has no unified cgroup"),
+                    }
+                    .build()
+                })?
+        }
+    };
+    let relative = parse_cgroup_path(&raw)?;
     let relative = relative.strip_prefix("/").map_err(|error| {
         IdentityStateSnafu {
             reason: format!("CRI cgroup path `{raw}` is not absolute: {error}"),
@@ -253,6 +268,33 @@ fn cgroup_path_from_info(
         }
     );
     Ok(cgroup_root.join(relative))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum RuntimeCgroupSource {
+    Path(String),
+    Process(i32),
+}
+
+fn runtime_cgroup_source(value: &serde_json::Value) -> Result<RuntimeCgroupSource> {
+    if let Some(path) = value
+        .pointer("/runtimeSpec/linux/cgroupsPath")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Ok(RuntimeCgroupSource::Path(path.to_owned()));
+    }
+    value
+        .get("pid")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|pid| i32::try_from(pid).ok())
+        .filter(|pid| *pid > 0)
+        .map(RuntimeCgroupSource::Process)
+        .ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "CRI verbose status has neither a cgroup path nor a live PID".to_owned(),
+            }
+            .build()
+        })
 }
 
 fn parse_cgroup_path(raw: &str) -> Result<PathBuf> {
@@ -312,7 +354,8 @@ mod tests {
     use k8s_cri::v1::ContainerState;
 
     use super::{
-        parse_cgroup_path, runtime_state, RuntimeContainerIdentity, RuntimeContainerState,
+        parse_cgroup_path, runtime_cgroup_source, runtime_state, RuntimeCgroupSource,
+        RuntimeContainerIdentity, RuntimeContainerState,
     };
     use crate::{ContainerKindV1, WorkloadBindingConfig};
 
@@ -346,6 +389,23 @@ mod tests {
         );
         assert_eq!(runtime_state(ContainerState::ContainerExited as i32), None);
         assert_eq!(runtime_state(ContainerState::ContainerUnknown as i32), None);
+    }
+
+    #[test]
+    fn cri_cgroup_source_accepts_oci_paths_and_cri_dockerd_pids() -> crate::Result<()> {
+        assert_eq!(
+            runtime_cgroup_source(&serde_json::json!({
+                "runtimeSpec": { "linux": { "cgroupsPath": "/kubepods/pod/container" } },
+                "pid": 11
+            }))?,
+            RuntimeCgroupSource::Path("/kubepods/pod/container".to_owned())
+        );
+        assert_eq!(
+            runtime_cgroup_source(&serde_json::json!({ "pid": 42 }))?,
+            RuntimeCgroupSource::Process(42)
+        );
+        assert!(runtime_cgroup_source(&serde_json::json!({ "pid": 0 })).is_err());
+        Ok(())
     }
 
     #[test]

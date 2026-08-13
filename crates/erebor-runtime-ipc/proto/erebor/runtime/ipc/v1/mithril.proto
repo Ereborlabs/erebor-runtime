@@ -63,4 +63,13 @@ message MithrilEffectObservation {
   uint32 physical_result_code = 26;
   string physical_result = 27;
   string stage = 28;
+  string controller_process_state_id = 29;
+  uint64 controller_transition_version = 30;
+  uint64 target_task_cookie = 31;
+  uint64 target_profile_generation_ref_id = 32;
+  string target_process_state_id = 33;
+  uint64 target_transition_version = 34;
+  uint32 target_role_id = 35;
+  uint32 target_process_state_vector_id = 36;
+  uint32 operation_argument = 37;
 }

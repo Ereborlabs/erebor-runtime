@@ -30,6 +30,28 @@ impl NodeReadinessV1 {
     pub const fn admits_new_work(self) -> bool {
         self.kernel_ready && self.identity_ready && self.control_ready && self.admission_ready
     }
+
+    const fn prevention_claims_enabled(
+        kernel_healthy: bool,
+        identity_healthy: bool,
+        prevention_configured: bool,
+    ) -> bool {
+        kernel_healthy && identity_healthy && prevention_configured
+    }
+
+    fn close_kernel_claims(&mut self) {
+        self.kernel_ready = false;
+        self.identity_ready = false;
+        self.admission_ready = false;
+        self.effect_prevention_claims_enabled = false;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReconciliationOutcome {
+    Healthy,
+    IdentityUnhealthy,
+    KernelUnhealthy,
 }
 
 pub struct NodeChassis {
@@ -82,6 +104,9 @@ impl NodeChassis {
                 label_epoch,
             )?)
         };
+        if policy.is_some() {
+            bindings.adopt_activated_profiles(&host, &config.workload_bindings)?;
+        }
         let policy_loaded = policy.is_some();
         let prevention_enabled = policy
             .as_ref()
@@ -113,12 +138,12 @@ impl NodeChassis {
             CapabilityRecord {
                 capability_id: "LOCAL_EFFECT_PREVENTION".to_owned(),
                 state: if prevention_enabled {
-                    "SUPPORTED".to_owned()
+                    "DEGRADED".to_owned()
                 } else {
                     "UNSUPPORTED".to_owned()
                 },
                 reason_code: if prevention_enabled {
-                    "SIGNED_ACTIVE_EXACT_FILE_SLICE".to_owned()
+                    "SIGNED_ACTIVE_QUALIFIED_LOCAL_SLICE".to_owned()
                 } else if policy_loaded {
                     "OBSERVE_ONLY_GENERATION".to_owned()
                 } else {
@@ -151,6 +176,11 @@ impl NodeChassis {
                     "NOT_CONFIGURED".to_owned()
                 },
             },
+            CapabilityRecord {
+                capability_id: "LANDLOCK_TARGET_CONTEXT_FLOOR".to_owned(),
+                state: "UNSUPPORTED".to_owned(),
+                reason_code: "NO_QUALIFIED_TARGET_CONTEXT_INSTALL".to_owned(),
+            },
         ];
         let registration = registration(
             manifest,
@@ -161,6 +191,13 @@ impl NodeChassis {
         let connector =
             NodeControlConnector::new(config.control.clone(), config.node_id.clone(), boot_id);
         let trust = TrustCache::load(&config.state_directory)?;
+        let (readiness, _receiver) = watch::channel(NodeReadinessV1 {
+            kernel_ready: true,
+            identity_ready: true,
+            control_ready: false,
+            admission_ready: false,
+            effect_prevention_claims_enabled: prevention_enabled,
+        });
         let local_server = config
             .runtime_observation
             .clone()
@@ -171,16 +208,10 @@ impl NodeChassis {
                     &capabilities,
                     observations,
                     config.interceptor.pin_root.clone(),
+                    readiness.subscribe(),
                 )
             })
             .transpose()?;
-        let (readiness, _receiver) = watch::channel(NodeReadinessV1 {
-            kernel_ready: true,
-            identity_ready: true,
-            control_ready: false,
-            admission_ready: false,
-            effect_prevention_claims_enabled: prevention_enabled,
-        });
         Ok(Self {
             config,
             effect_reader,
@@ -220,14 +251,11 @@ impl NodeChassis {
             tokio::spawn(server.serve(local_shutdown))
         });
         let mut backoff = self.config.control.reconnect_minimum();
+        let mut kernel_healthy = true;
         let mut identity_healthy = true;
         let mut run_error = None;
-        let mut binding_reconciliation =
-            self.config.binding_reconciliation_interval().map(|period| {
-                let mut interval = tokio::time::interval(period);
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                interval
-            });
+        let mut reconciliation = tokio::time::interval(self.config.reconciliation_interval());
+        reconciliation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         'running: loop {
             if *shutdown.borrow() {
                 break;
@@ -235,7 +263,7 @@ impl NodeChassis {
             let connection = tokio::select! {
                 result = self.connector.connect(
                     self.registration.clone(),
-                    identity_healthy,
+                    kernel_healthy && identity_healthy,
                     &mut self.trust,
                 ) => result,
                 changed = shutdown.changed() => {
@@ -251,11 +279,16 @@ impl NodeChassis {
             match connection {
                 Ok(mut connection) => {
                     self.readiness.send_replace(NodeReadinessV1 {
-                        kernel_ready: true,
+                        kernel_ready: kernel_healthy,
                         identity_ready: identity_healthy,
                         control_ready: true,
-                        admission_ready: identity_healthy,
-                        effect_prevention_claims_enabled: prevention_enabled,
+                        admission_ready: kernel_healthy && identity_healthy,
+                        effect_prevention_claims_enabled:
+                            NodeReadinessV1::prevention_claims_enabled(
+                                kernel_healthy,
+                                identity_healthy,
+                                prevention_enabled,
+                            ),
                     });
                     backoff = self.config.control.reconnect_minimum();
                     loop {
@@ -273,16 +306,27 @@ impl NodeChassis {
                                 effect_task = None;
                                 break 'running;
                             }
-                            () = next_reconciliation_tick(&mut binding_reconciliation) => {
-                                if !self.reconcile_bindings().await {
-                                    identity_healthy = false;
-                                    self.readiness.send_replace(NodeReadinessV1 {
-                                        kernel_ready: true,
-                                        identity_ready: false,
-                                        control_ready: true,
-                                        admission_ready: false,
-                                        effect_prevention_claims_enabled: prevention_enabled,
-                                    });
+                            _instant = reconciliation.tick() => {
+                                match self.reconcile_bindings().await {
+                                    ReconciliationOutcome::Healthy => {}
+                                    ReconciliationOutcome::IdentityUnhealthy => {
+                                        identity_healthy = false;
+                                        close_identity_claims(&mut self.registration);
+                                        self.readiness.send_replace(NodeReadinessV1 {
+                                            kernel_ready: kernel_healthy,
+                                            identity_ready: false,
+                                            control_ready: true,
+                                            admission_ready: false,
+                                            effect_prevention_claims_enabled: false,
+                                        });
+                                        break;
+                                    }
+                                    ReconciliationOutcome::KernelUnhealthy => {
+                                        kernel_healthy = false;
+                                        identity_healthy = false;
+                                        self.close_kernel_claims();
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -291,11 +335,15 @@ impl NodeChassis {
                 Err(_error) => {}
             }
             self.readiness.send_replace(NodeReadinessV1 {
-                kernel_ready: true,
+                kernel_ready: kernel_healthy,
                 identity_ready: identity_healthy,
                 control_ready: false,
                 admission_ready: false,
-                effect_prevention_claims_enabled: prevention_enabled,
+                effect_prevention_claims_enabled: NodeReadinessV1::prevention_claims_enabled(
+                    kernel_healthy,
+                    identity_healthy,
+                    prevention_enabled,
+                ),
             });
             let reconnect = tokio::time::sleep(backoff);
             tokio::pin!(reconnect);
@@ -311,9 +359,18 @@ impl NodeChassis {
                         effect_task = None;
                         break 'running;
                     }
-                    () = next_reconciliation_tick(&mut binding_reconciliation) => {
-                        if !self.reconcile_bindings().await {
-                            identity_healthy = false;
+                    _instant = reconciliation.tick() => {
+                        match self.reconcile_bindings().await {
+                            ReconciliationOutcome::Healthy => {}
+                            ReconciliationOutcome::IdentityUnhealthy => {
+                                identity_healthy = false;
+                                close_identity_claims(&mut self.registration);
+                            }
+                            ReconciliationOutcome::KernelUnhealthy => {
+                                kernel_healthy = false;
+                                identity_healthy = false;
+                                self.close_kernel_claims();
+                            }
                         }
                     }
                 }
@@ -346,21 +403,64 @@ impl NodeChassis {
         Ok(())
     }
 
-    async fn reconcile_bindings(&mut self) -> bool {
+    async fn reconcile_bindings(&mut self) -> ReconciliationOutcome {
         let Some(host) = self.host.as_ref() else {
-            return false;
+            return ReconciliationOutcome::KernelUnhealthy;
         };
+        if host.verify_live_manifest().is_err() {
+            return ReconciliationOutcome::KernelUnhealthy;
+        }
         if self
             .bindings
             .reconcile(host, &self.config.workload_bindings)
             .await
             .is_err()
         {
-            return false;
+            return ReconciliationOutcome::IdentityUnhealthy;
         }
-        self.policy
+        if self
+            .policy
             .as_ref()
-            .is_none_or(|policy| policy.reconcile_mount_views(host).is_ok())
+            .is_some_and(|policy| policy.reconcile_mount_views(host).is_err())
+        {
+            return ReconciliationOutcome::IdentityUnhealthy;
+        }
+        ReconciliationOutcome::Healthy
+    }
+
+    fn close_kernel_claims(&mut self) {
+        close_kernel_claims(&mut self.registration, &self.readiness);
+    }
+}
+
+fn close_kernel_claims(
+    registration: &mut NodeRegistration,
+    readiness: &watch::Sender<NodeReadinessV1>,
+) {
+    registration.kernel_ready = false;
+    registration.effect_prevention_claims_enabled = false;
+    for capability in &mut registration.capabilities {
+        if matches!(
+            capability.capability_id.as_str(),
+            "EXACT_NATIVE_IDENTITY" | "LOCAL_EFFECT_PREVENTION" | "LOCAL_EFFECT_OBSERVATION"
+        ) {
+            capability.state = "UNHEALTHY".to_owned();
+            capability.reason_code = "LIVE_KERNEL_MANIFEST_MISMATCH".to_owned();
+        }
+    }
+    readiness.send_modify(NodeReadinessV1::close_kernel_claims);
+}
+
+fn close_identity_claims(registration: &mut NodeRegistration) {
+    registration.effect_prevention_claims_enabled = false;
+    for capability in &mut registration.capabilities {
+        if matches!(
+            capability.capability_id.as_str(),
+            "EXACT_NATIVE_IDENTITY" | "LOCAL_EFFECT_OBSERVATION"
+        ) {
+            capability.state = "UNHEALTHY".to_owned();
+            capability.reason_code = "LIVE_IDENTITY_RECONCILIATION_FAILED".to_owned();
+        }
     }
 }
 
@@ -376,15 +476,6 @@ async fn effect_reader_finished(
         reason: "effect observation reader stopped before node shutdown",
     }
     .fail()
-}
-
-async fn next_reconciliation_tick(interval: &mut Option<tokio::time::Interval>) {
-    match interval {
-        Some(interval) => {
-            interval.tick().await;
-        }
-        None => std::future::pending().await,
-    }
 }
 
 fn id_from_uuid_bytes(bytes: [u8; 16]) -> erebor_interceptor_abi::Id128V1 {
@@ -413,7 +504,11 @@ fn registration(
 
 #[cfg(test)]
 mod tests {
-    use super::{effect_reader_finished, NodeReadinessV1};
+    use super::{
+        close_identity_claims, close_kernel_claims, effect_reader_finished, NodeReadinessV1,
+    };
+    use mithril_control::{CapabilityRecord, NodeRegistration};
+    use tokio::sync::watch;
 
     #[test]
     fn boot_admission_requires_complete_chassis_readiness_in_both_policy_modes() {
@@ -438,6 +533,155 @@ mod tests {
             ..ready
         }
         .admits_new_work());
+    }
+
+    #[test]
+    fn prevention_claims_require_healthy_kernel_and_identity() {
+        assert!(NodeReadinessV1::prevention_claims_enabled(true, true, true));
+        assert!(!NodeReadinessV1::prevention_claims_enabled(
+            true, false, true
+        ));
+        assert!(!NodeReadinessV1::prevention_claims_enabled(
+            false, true, true
+        ));
+        assert!(!NodeReadinessV1::prevention_claims_enabled(
+            true, true, false
+        ));
+    }
+
+    #[test]
+    fn identity_failure_closes_dependent_registered_claims() {
+        let mut registration = NodeRegistration {
+            platform_digest: "a".repeat(64),
+            program_digest: "b".repeat(64),
+            label_epoch: 1,
+            kernel_ready: true,
+            effect_prevention_claims_enabled: true,
+            capabilities: [
+                "EXACT_NATIVE_IDENTITY",
+                "LOCAL_EFFECT_OBSERVATION",
+                "RUNTIME_READ_ONLY_OBSERVATION",
+            ]
+            .into_iter()
+            .map(|capability_id| CapabilityRecord {
+                capability_id: capability_id.to_owned(),
+                state: "SUPPORTED".to_owned(),
+                reason_code: "INITIAL_STATE".to_owned(),
+            })
+            .collect(),
+        };
+
+        close_identity_claims(&mut registration);
+
+        assert!(registration.kernel_ready);
+        assert!(!registration.effect_prevention_claims_enabled);
+        assert!(registration.capabilities[..2].iter().all(|capability| {
+            capability.state == "UNHEALTHY"
+                && capability.reason_code == "LIVE_IDENTITY_RECONCILIATION_FAILED"
+        }));
+        assert_eq!(registration.capabilities[2].state, "SUPPORTED");
+    }
+
+    #[test]
+    fn kernel_mismatch_closes_readiness_and_prevention_claims() {
+        let (readiness, receiver) = watch::channel(NodeReadinessV1 {
+            kernel_ready: true,
+            identity_ready: true,
+            control_ready: true,
+            admission_ready: true,
+            effect_prevention_claims_enabled: true,
+        });
+        let mut registration = NodeRegistration {
+            platform_digest: "a".repeat(64),
+            program_digest: "b".repeat(64),
+            label_epoch: 1,
+            kernel_ready: true,
+            effect_prevention_claims_enabled: true,
+            capabilities: vec![
+                CapabilityRecord {
+                    capability_id: "EXACT_NATIVE_IDENTITY".to_owned(),
+                    state: "SUPPORTED".to_owned(),
+                    reason_code: "EXACT_ATTACH_AND_RECONCILIATION".to_owned(),
+                },
+                CapabilityRecord {
+                    capability_id: "LOCAL_EFFECT_PREVENTION".to_owned(),
+                    state: "DEGRADED".to_owned(),
+                    reason_code: "SIGNED_ACTIVE_QUALIFIED_LOCAL_SLICE".to_owned(),
+                },
+                CapabilityRecord {
+                    capability_id: "LOCAL_EFFECT_OBSERVATION".to_owned(),
+                    state: "DEGRADED".to_owned(),
+                    reason_code: "SIGNED_ACTIVE_EXACT_FILE_SLICE_ONLY".to_owned(),
+                },
+                CapabilityRecord {
+                    capability_id: "RUNTIME_READ_ONLY_OBSERVATION".to_owned(),
+                    state: "SUPPORTED".to_owned(),
+                    reason_code: "PEER_CREDENTIAL_AND_CGROUP_SCOPED".to_owned(),
+                },
+                CapabilityRecord {
+                    capability_id: "LANDLOCK_TARGET_CONTEXT_FLOOR".to_owned(),
+                    state: "UNSUPPORTED".to_owned(),
+                    reason_code: "NO_QUALIFIED_TARGET_CONTEXT_INSTALL".to_owned(),
+                },
+            ],
+        };
+
+        close_kernel_claims(&mut registration, &readiness);
+
+        assert_eq!(
+            *receiver.borrow(),
+            NodeReadinessV1 {
+                control_ready: true,
+                ..NodeReadinessV1::default()
+            }
+        );
+        assert!(!receiver.borrow().admits_new_work());
+        assert!(!registration.kernel_ready);
+        assert!(!registration.effect_prevention_claims_enabled);
+        assert!(registration.capabilities[..3].iter().all(|capability| {
+            capability.state == "UNHEALTHY"
+                && capability.reason_code == "LIVE_KERNEL_MANIFEST_MISMATCH"
+        }));
+        assert_eq!(registration.capabilities[3].state, "SUPPORTED");
+        assert_eq!(registration.capabilities[4].state, "UNSUPPORTED");
+    }
+
+    #[test]
+    fn reconciliation_checks_the_live_manifest_before_runtime_state() {
+        let source = include_str!("node.rs");
+        let method = source
+            .split("async fn reconcile_bindings")
+            .nth(1)
+            .and_then(|source| source.split("fn close_kernel_claims").next())
+            .unwrap_or_default();
+
+        let manifest = method.find("host.verify_live_manifest()");
+        let bindings = method.find(".bindings");
+        assert!(
+            manifest.is_some_and(|manifest| bindings.is_some_and(|bindings| manifest < bindings))
+        );
+    }
+
+    #[test]
+    fn identity_failure_drops_the_current_control_connection() {
+        let source = include_str!("node.rs");
+        let connected_loop = source
+            .split("Ok(mut connection) =>")
+            .nth(1)
+            .and_then(|source| source.split("Err(_error)").next())
+            .unwrap_or_default();
+        let identity_failure = connected_loop
+            .split("ReconciliationOutcome::IdentityUnhealthy =>")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("ReconciliationOutcome::KernelUnhealthy =>")
+                    .next()
+            })
+            .unwrap_or_default();
+
+        assert!(identity_failure.contains("identity_healthy = false;"));
+        assert!(identity_failure.contains("break;"));
     }
 
     #[tokio::test]

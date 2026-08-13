@@ -31,6 +31,7 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
 
     finish_mount_mutation();
     task = bpf_get_current_task_btf();
+    exit_task_effect_attempts(task);
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!label)
         return 0;
@@ -71,7 +72,7 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
                                    TASK_REFERENCE_ENTRY_V1);
     if (!(previous & TASK_REFERENCE_ENTRY_V1)) {
         if (entry) {
-            if (__sync_fetch_and_sub(&entry->live_task_refs, 1) == 0)
+            if (!decrement_nonzero_counter(&entry->live_task_refs))
                 released = false;
         } else {
             released = false;
@@ -83,8 +84,10 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
                                    TASK_REFERENCE_PROCESS_V1);
     if (!(previous & TASK_REFERENCE_PROCESS_V1)) {
         if (process) {
-            previous = __sync_fetch_and_sub(&process->live_thread_refs, 1);
+            previous = decrement_nonzero_counter(&process->live_thread_refs);
             if (previous == 0) {
+                process->state = process_security_state_kind_v1_corrupt;
+                process->transition_version++;
                 released = false;
             } else if (previous == 1) {
                 process_execution_instance_v1 *execution =
@@ -116,7 +119,7 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
                 domain = bpf_map_lookup_elem(&authority_domains,
                                              &process->authority_domain_id);
                 if (!domain ||
-                    __sync_fetch_and_sub(&domain->live_process_refs, 1) == 0)
+                    !decrement_nonzero_counter(&domain->live_process_refs))
                     released = false;
             }
         } else {
@@ -132,7 +135,7 @@ int erebor_sched_process_exit(struct trace_event_raw_sched_process_template *con
         &tombstone->released_bits, TASK_REFERENCE_PROFILE_GENERATION_V1);
     if (!(previous & TASK_REFERENCE_PROFILE_GENERATION_V1)) {
         if (!profile_task_refs ||
-            __sync_fetch_and_sub(profile_task_refs, 1) == 0)
+            !decrement_nonzero_counter(profile_task_refs))
             released = false;
     }
 

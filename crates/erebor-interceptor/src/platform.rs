@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 
 use sha2::{Digest as _, Sha256};
@@ -17,11 +18,7 @@ impl KernelPlatformProbe {
             path: kernel_release_path,
         })?;
         let lsm_path = Path::new("/sys/kernel/security/lsm");
-        let active_lsm_order = fs::read_to_string(lsm_path).context(IoSnafu {
-            action: "read active Linux security modules",
-            path: lsm_path,
-        })?;
-        let active_lsm_order = active_lsm_order.trim().to_owned();
+        let active_lsm_order = read_active_lsm_order(lsm_path)?;
         let mounts_path = Path::new("/proc/mounts");
         let mounts = fs::read_to_string(mounts_path).context(IoSnafu {
             action: "read mounted filesystems",
@@ -49,5 +46,34 @@ impl KernelPlatformProbe {
                 .lines()
                 .any(|line| line.split_whitespace().nth(2) == Some("cgroup2")),
         })
+    }
+}
+
+fn read_active_lsm_order(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(order) => Ok(order.trim().to_owned()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(String::new()),
+        Err(source) => Err(source).context(IoSnafu {
+            action: "read active Linux security modules",
+            path,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use snafu::ResultExt as _;
+
+    use super::read_active_lsm_order;
+    use crate::error::IoSnafu;
+
+    #[test]
+    fn missing_securityfs_defers_lsm_proof_to_program_load() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            action: "create temporary platform-probe directory",
+            path: "temporary platform-probe directory",
+        })?;
+        assert!(read_active_lsm_order(&directory.path().join("lsm"))?.is_empty());
+        Ok(())
     }
 }

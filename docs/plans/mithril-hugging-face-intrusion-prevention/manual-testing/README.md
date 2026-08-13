@@ -27,6 +27,24 @@ the approved phase:
 | 11 | [Production installation and final conformance](./phase-11-manual-acceptance.md) |
 | 12 | [Optional-surface evaluations](./phase-12-manual-acceptance.md) |
 
+## Current-Source Privileged Lane
+
+Use the [repository-owned VM harness](../../../../crates/mithril-e2e/harness/vm/README.md)
+for the current kernel, identity, effect-observation, and local-enforcement
+physical probes:
+
+```sh
+crates/mithril-e2e/harness/vm/run.sh --with-k3s \
+  --output-directory /tmp/mithril-vm-evidence
+```
+
+The harness creates one disposable Ubuntu 24.04 libvirt guest, verifies the
+qualified kernel features, runs the current binaries, copies the evidence, and
+destroys the guest. The optional k3s lane proves Pod, `kubectl exec`, CRI,
+overlay-root, and projected-token runtime facts while the local probes run. It
+does not prove a Mithril CRI policy binding, admission approval, multi-node
+propagation, or complete Kubernetes protection.
+
 ## How To Read A Manual Case
 
 Each guide contains a fixture matrix. Every row names:
@@ -57,8 +75,7 @@ with timing guesses.
 
 ## Command Contract
 
-Mithril binaries, fixture runners, and packaging do not exist yet. A guide may
-therefore use this marker:
+A guide for a surface that has no implementation may use this marker:
 
 ```text
 IMPLEMENTATION COMMAND REQUIRED: <owner and intended operation>

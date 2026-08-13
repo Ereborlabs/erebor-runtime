@@ -1,9 +1,9 @@
 # Phase 4: Signed Local Pre-Effect Enforcement
 
-Status: Not done. The signed exact-file prevention increment, its privileged
-VM and Docker qualification, and the explicit hard-close floor for unqualified
-local hooks are complete. The complete policy-aware Phase 4 surface is not
-complete.
+Status: Not done. The source has signed exact-file, exec, device-ioctl,
+denial-only process-control, unmatched Unix-stream, bounded-exception, and
+hard-close slices. The current source passed the disposable privileged VM
+enforcement probe. The complete policy-aware local surface remains incomplete.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -134,22 +134,24 @@ correlation, and response coordination.
 ```text
 State: Not done.
 Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md sha256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
-Completed deliverable IDs: partial D4.1; the hard-close subset of D4.2, D4.4, and D4.5; the exact-file and file-mutation hard-close subset of D4.3; partial D4.6; and the exact-file portion of D4.8.
-Files and durable owners changed: mithril-control owns PROTECT compilation and exact exception binding; NodePolicyGenerationOwner owns PREPARING -> READ_BACK -> ACTIVE installation, anti-rollback, exact rows, and exception state; the production BPF effect gate owns pre-effect deny and atomic exception consumption; mithril-e2e owns the disposable physical oracle; examples/mithril-phase4-manual owns operator cases.
+Completed deliverable IDs: D4.1 is partial: generation staging, readback, active selection, and per-binding expected-value recheck exist, but controlled activation probes, one all-binding atomic switch, and complete retirement do not. D4.2 is partial for exact exec variants and qualified file-backed executable mappings; immutable provenance, script and binfmt chains, loader state, pkey transitions, and complete VMA state remain incomplete. D4.3 is partial for exact files, represented aliases, mutations, and DIRTY mount handling; rotation, overlay copy-up, persistent objects, delegated I/O, and propagation remain incomplete. D4.4 is partial for denial-only process-control and unmatched Unix-stream decisions; positive exact relationships remain rejected. D4.5 is partial for exact device ioctl and hard-close floors; derived devices, complete privilege authority, and self-protection remain incomplete. D4.6 has stable exception-instance, receipt, and WAL ownership, but the administrative ingress and end-to-end administrative-exec proof remain incomplete. D4.7 is complete as `ABSENT`: the node reports `LANDLOCK_TARGET_CONTEXT_FLOOR=ABSENT` with reason `NO_QUALIFIED_TARGET_CONTEXT_INSTALL`. D4.8 is partial. The current physical record covers 24 HF local branches: 6 PREVENTED, 1 HARD_CLOSED_UNQUALIFIED, 5 NO_COVERED_EFFECT, 4 OUTSIDE_AUTHORITY, 4 DEFERRED_NETWORK, and 4 UNSUPPORTED. The complete HF local prevention matrix is not qualified.
+Files and durable owners changed: mithril-control owns PROTECT compilation and exact exception binding. NodePolicyGenerationOwner owns generation staging, readback, anti-rollback, active state, and typed rule installation. ExceptionAuthorityOwner owns stable exception instances, successful-use receipts, WAL recovery, restart restoration, and reboot separation. The production BPF effect gate owns pre-effect decisions and atomic exception consumption. mithril-e2e owns the disposable physical oracle. examples/mithril-local-enforcement-manual owns operator cases.
 Upstream-adoption dossier IDs used: existing Phase 0 libbpf-rs/libbpf-cargo and checked vmlinux-header decisions; no new runtime or BPF framework.
-Fixture cases and exact physical results: unprivileged compiler/ABI/interceptor/node/effect suites pass. The self-cleaning privileged PROTECT probe passes exact open, inherited-fd read, file-backed mmap, a same-container exact benign read, concurrent exact N/N+1 exception consumption, monotonic expiry, exhausted-state loader restart, hard-link/bind aliases, denied protected mount races, external mount DIRTY/reconciliation races, unqualified exec and anonymous executable memory, create/chmod/truncate/unlink/link/rename, SysV IPC, ptrace, signal, namespace privilege, device ioctl, BPF map creation, pinned-link removal, saturation, latency, and cleanup. Each hard-close result also requires the expected effect family and operation in the kernel observation. The real Docker exact-file case also passes: the protected task receives `EACCES` before it obtains a file descriptor or secret bytes.
-Commands and exact source state covered: the disposable VM harness passes the final Phase 2-4 production objects and cleanup assertions. `cargo check --workspace` and `bash .github/scripts/verify-rust-ci.sh` cover the final implementation state, including all-target/all-feature clippy with warnings denied and loopback integration tests; production identity.bpf.c compiles with -Wall -Werror for x86_64, arm64, arm, and riscv checked-in vmlinux headers.
-Platform/kernel/runtime manifests: the privileged result covers x86_64 Ubuntu kernel 6.8.0-136 with BPF LSM, runtime BTF, cgroup v2, and unique mount IDs.
-Performance/capacity results: exception-state capacity is compiler-checked at 4,096. The VM probe passes a 50,000-open saturation case. The average baseline open time was 5,564 ns and the average protected open time was 5,361 ns in that VM.
-Unsupported/degraded paths: receipt-idempotent stable exception instances, policy-aware IPC, device/ioctl, credential, process-control, complete executable-memory/provenance, policy-aware self-protection, Landlock, mount propagation/fan-out, and the complete HF-002..HF-012 local matrix remain unqualified. Exceptions are therefore restricted to one exact file-open cell rather than being broadened unsafely across hooks. Typed unqualified hooks fail protected tasks closed where present and have physical-oracle coverage; this is a safety-floor result, not a policy-aware support claim. Network remains Phase 5.
-Remaining work in this phase: qualify or implement D4.2-D4.5 and D4.7, implement stable receipt/WAL exception ownership, finish administrative approval-to-profile exception resolution and physical admin-exec proof, and run the full required fixture matrix and legitimate controls. Phase 2 and Phase 3 still have the remaining cases recorded in their own phase results.
+Fixture cases and exact physical results: compiler, ABI, interceptor, node, and effect suites contain source-level cases for the implemented slices. The current PROTECT record has exact_open_denied_before_effect=true, inherited_fd_read_denied=true, file_mmap_denied=true, writable_shared_mmap_denied=true, executable_mmap_denied=true, file_mprotect_exec_denied=true, and benign_read_allowed=true. execve_denied=true, execveat_denied=true, fexecve_denied=true, script_exec_denied=true, deleted_exec_denied=true, non_leader_exec_denied=true, approved_exec_allowed=true, and memfd_exec_failed_closed=true. device_ioctl_exact_allowed=true, device_ioctl_unmatched_denied=true, process_ptrace_exact_denied=true, process_signal_exact_denied=true, and unix_stream_unmatched_denied=true. bounded_exception_maximum_uses=2, bounded_exception_n_allows=true, bounded_exception_n_plus_one_denied=true, bounded_exception_expiry_denied=true, and bounded_exception_restart_preserved=true. hard_link_alias_denied=true, symlink_alias_denied=true, proc_fd_alias_denied=true, passed_fd_read_denied=true, passed_benign_fd_read_allowed=true, and bind_alias_canonicalized=true. protected_mount_race_denied=true, external_mount_replacement_failed_closed=true, and exact_object_restored_after_reconciliation=true. The hard-close fields for anonymous exec, file creation and mutation, IPC, ptrace, signal, namespace privilege, device ioctl, BPF, and self-protection are true. saturation_preserved_network_denial=true and saturation_preserved_benign_allow=true after saturation_opens=50000. pin_root_removed=true, lease_removed=true, cgroup_removed=true, and fixture_root_removed=true. The local-enforcement evidence SHA-256 is fe708e493601ab3716e724417ee26509466efb03a6bfa0d37d187b6b9f3cb72e.
+Commands and exact source state covered: the disposable VM record under /tmp/mithril-vm-source18-final covers the current typed-effect and durable-exception implementation. Repository CI results are recorded separately after the final repository edit. The production BPF translation unit compiles with `-Wall -Werror` for checked x86, arm64, arm, and riscv vmlinux headers. This is compile evidence, not non-x86 physical evidence.
+Platform/kernel/runtime manifests: the current probe ran on x86_64 Ubuntu kernel 6.8.0-136-generic with LSM order lockdown,capability,landlock,yama,apparmor,bpf, runtime BTF SHA-256 9aa9eb9e8108bff44e685830315fb7a442bafd99778314cdd6de0fb72868829f, cgroup v2, and unique mount IDs. The optional k3s lane recorded k3s v1.35.5+k3s1, Pod readiness, CRI endpoint unix:///run/k3s/containerd/containerd.sock, workload-root discovery, overlay storage, and projected-token discovery. Its record SHA-256 is 905a3ad84106e975cc1cde8b68cb24c861079f8baf3b616c597ec14e234f2503. This is substrate evidence only. It does not run a Mithril CRI binding or local effect decision.
+Performance/capacity results: exception-definition capacity is compiler-checked at 4,096, and the successful-use receipt map is bounded at 65,536 entries. The VM record has measured_opens=10000 and saturation_opens=50000. Its BASELINE distribution has sample_count=10000, p50=6832 ns, p95=6941 ns, p99=75565 ns, maximum=480479 ns, and raw_samples_sha256=16f5b7fc870feb31bdef7fafbc0487b78da77a4c8e813ca33c93b16bcb222eec. Its PROTECT distribution has sample_count=10000, p50=6215 ns, p95=6623 ns, p99=82638 ns, maximum=568239 ns, and raw_samples_sha256=0f341d456eae547df2f6a540536c4759cf81588714f4bc12c6c8e45ceed92768. The recorded averages are baseline_average_open_ns=7990 and observed_average_open_ns=7525.
+Unsupported/degraded paths: exact file, qualified exec, exact device-ioctl, denial-only process-control, unmatched Unix-stream, stable exception receipt and WAL, and explicit hard-close slices exist. Positive process-control and positive exact Unix-stream relationships remain rejected. Immutable exec provenance and complete script, binfmt, loader, pkey, and VMA handling remain incomplete. Token rotation, overlay copy-up, persistent objects, delegated I/O, propagation, derived-device authority, complete privilege authority, and self-protection remain incomplete. Landlock is an advertised `ABSENT` capability, not an unqualified implementation gap. Administrative ingress and the complete HF local matrix remain incomplete. Network remains outside this outcome.
+Remaining work in this phase: complete controlled activation probes, all-binding atomic activation, and retirement; complete the remaining exec, file, IPC, process, device, derived-authority, privilege, and self-protection surfaces; finish administrative approval-to-profile resolution and physical administrative-exec proof; and run the full fixture matrix with legitimate controls. Native identity and effect observation retain their own unresolved acceptance work.
 Next phase not authorized: yes.
 ```
 
 ## Qualification update — 2026-08-12
 
-The disposable VM harness completed the Phase 4 production-object probe in
-`PROTECT` mode. The probe recorded these physical results:
+The current disposable VM harness completed the production-object
+local-enforcement probe in `PROTECT` mode. The evidence file SHA-256 is
+`fe708e493601ab3716e724417ee26509466efb03a6bfa0d37d187b6b9f3cb72e`.
+The probe recorded these physical results:
 
 - The exact open, inherited file-descriptor read, and file-backed mapping were
   denied before the named effect returned authority.
@@ -160,20 +162,32 @@ The disposable VM harness completed the Phase 4 production-object probe in
   reconciliation restored the original object.
 - A bounded exception allowed exactly two concurrent uses. Use N+1 failed.
   Expiry failed. Loader restart retained the exhausted state.
-- The unqualified exec, anonymous executable memory, file mutation, IPC,
-  ptrace, signal, namespace privilege, device ioctl, BPF, and link-removal
-  probes all took their explicit hard-close paths. These are safety floors.
-  They are not policy-aware support claims.
+- Exact exec variants, one approved image, exact device ioctl, exact ptrace
+  and signal targets, and the unmatched Unix-stream rule produced their
+  recorded decisions.
+- The unqualified anonymous and memfd exec, file mutation, IPC, namespace
+  privilege, BPF, and link-removal probes took their explicit hard-close
+  paths. These are safety floors. They are not policy-aware support claims.
 - A paused reader and 50,000 opens did not change deny or benign results.
-- The average baseline open time was 5,564 ns. The average protected open time
-  was 5,361 ns. These values apply only to this VM run.
-- The probe removed its fixture tree, pin root, lease file, and cgroup.
+- The 10,000-sample BASELINE distribution recorded p50=6832 ns, p95=6941 ns,
+  p99=75565 ns, and maximum=480479 ns.
+- The 10,000-sample PROTECT distribution recorded p50=6215 ns, p95=6623 ns,
+  p99=82638 ns, and maximum=568239 ns.
+- The cleanup fields for the fixture root, pin root, lease file, and cgroup are
+  true.
 
-The real Docker exact-file manual case also passed. The protected process
+An earlier real Docker exact-file manual case also passed. The protected process
 received `EACCES` before it obtained the secret file descriptor or bytes. The
 shell removed all Mithril-owned artifacts.
 
-These results replace the old statement that privileged qualification was
-pending. The phase stays **Not done**. Policy-aware D4.2-D4.5, Landlock D4.7,
-stable receipt/WAL exception ownership, complete administrative-exec proof,
-mount propagation/fan-out, and the full HF local matrix remain incomplete.
+The optional k3s lane passed Pod readiness, CRI discovery, workload-root
+discovery, overlay storage, and projected-token discovery. Its record SHA-256
+is `905a3ad84106e975cc1cde8b68cb24c861079f8baf3b616c597ec14e234f2503`.
+It proves the runtime substrate only. It does not prove a Mithril CRI binding
+or local effect decision.
+
+The state stays **Not done**. Controlled activation and retirement, complete
+exec provenance, rotation and persistence, positive relationship models,
+derived authority, privilege and self-protection, administrative ingress, and
+the complete HF local matrix remain incomplete. Landlock is complete as an
+explicit `ABSENT` capability.

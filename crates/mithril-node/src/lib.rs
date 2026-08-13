@@ -11,8 +11,9 @@ mod policy;
 mod trust;
 
 pub use config::{
-    ContainerKindV1, ContainerRuntimeConfig, ExactFileObjectConfig, InterceptorConfig, NodeConfig,
-    NodeControlConfig, PolicyCandidateConfig, RuntimeObservationConfig, WorkloadBindingConfig,
+    ContainerKindV1, ContainerRuntimeConfig, ExactDeviceConfig, ExactDeviceType,
+    ExactFileObjectConfig, InterceptorConfig, NodeConfig, NodeControlConfig, PolicyCandidateConfig,
+    RuntimeObservationConfig, WorkloadBindingConfig,
 };
 pub use control::{ControlConnection, NodeControlConnector};
 pub use error::{Error, Result};

@@ -37,6 +37,8 @@ pub(super) struct AcceptedProof<'a> {
 #[derive(Clone, Debug, Default)]
 pub(super) struct ReplayLedger {
     path: PathBuf,
+    node_id: Option<Id128V1>,
+    node_boot_id: Option<Id128V1>,
     windows: BTreeMap<ReplayKey, ReplayWindow>,
     proofs: BTreeMap<Id128V1, i64>,
     slots: BTreeMap<Id128V1, SlotRecord>,
@@ -60,6 +62,7 @@ enum SlotState {
 #[derive(Clone, Copy, Debug)]
 struct SlotRecord {
     proof_id: Id128V1,
+    accepted_node_boot_id: Id128V1,
     expires_at_utc_ns: i64,
     body_sha256: [u8; 32],
     state: SlotState,
@@ -69,6 +72,14 @@ struct SlotRecord {
 #[serde(deny_unknown_fields)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ReplayRecordV1 {
+    Owner {
+        schema_version: u32,
+        node_id: StoredId,
+    },
+    Boot {
+        schema_version: u32,
+        node_boot_id: StoredId,
+    },
     Accept {
         schema_version: u32,
         trust_domain_id: StoredId,
@@ -113,7 +124,17 @@ impl StoredId {
 }
 
 impl ReplayLedger {
-    pub(super) fn load(state_directory: &Path) -> Result<Self> {
+    pub(super) fn load(
+        state_directory: &Path,
+        node_id: Id128V1,
+        node_boot_id: Id128V1,
+    ) -> Result<Self> {
+        if node_id.is_zero() || node_boot_id.is_zero() {
+            return AuthorizationSnafu {
+                reason: "authorization replay owner has a zero node identity".to_owned(),
+            }
+            .fail();
+        }
         fs::create_dir_all(state_directory).context(IoSnafu {
             path: state_directory,
         })?;
@@ -129,10 +150,13 @@ impl ReplayLedger {
         }
         let path = state_directory.join("authorization-replay-v1.jsonl");
         if !path.exists() {
-            return Ok(Self {
+            let mut ledger = Self {
                 path,
                 ..Self::default()
-            });
+            };
+            ledger.set_owner(node_id)?;
+            ledger.begin_boot(node_boot_id)?;
+            return Ok(ledger);
         }
         let bytes = fs::read(&path).context(IoSnafu { path: &path })?;
         if !bytes.is_empty() && !bytes.ends_with(b"\n") {
@@ -157,11 +181,43 @@ impl ReplayLedger {
                 serde_json::from_slice(line).context(JsonSnafu { path: &ledger.path })?;
             ledger.apply_record(record)?;
         }
+        if ledger.node_id != Some(node_id) {
+            return AuthorizationSnafu {
+                reason: "authorization replay WAL belongs to another stable node".to_owned(),
+            }
+            .fail();
+        }
+        match ledger.node_boot_id {
+            Some(existing) if existing != node_boot_id => {
+                let armed = ledger
+                    .slots
+                    .iter()
+                    .filter_map(|(slot_id, slot)| match slot.state {
+                        SlotState::Armed { intent_sha256 } => {
+                            Some((slot.proof_id, *slot_id, intent_sha256))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                for (proof_id, slot_id, intent_sha256) in armed {
+                    ledger.close(proof_id, slot_id, intent_sha256)?;
+                }
+                ledger.begin_boot(node_boot_id)?;
+            }
+            Some(_) => {}
+            None => ledger.begin_boot(node_boot_id)?,
+        }
         Ok(ledger)
     }
 
     pub(super) fn accept(&mut self, proof: AcceptedProof<'_>) -> Result<()> {
         self.ensure_healthy()?;
+        let node_boot_id = self.node_boot_id.ok_or_else(|| {
+            AuthorizationSnafu {
+                reason: "authorization replay WAL has no active node boot".to_owned(),
+            }
+            .build()
+        })?;
         self.validate_accept(&proof)?;
         let mut next_window = self.windows.get(&proof.key).cloned().unwrap_or_default();
         next_window.accept(proof.sequence)?;
@@ -183,7 +239,7 @@ impl ReplayLedger {
             body_sha256: proof.body_sha256,
         };
         self.append(&record)?;
-        self.install_accept(proof, next_window);
+        self.install_accept(proof, next_window, node_boot_id);
         Ok(())
     }
 
@@ -202,6 +258,12 @@ impl ReplayLedger {
             .build()
         })?;
         ensure_slot_matches(slot, proof_id, body_sha256)?;
+        if Some(slot.accepted_node_boot_id) != self.node_boot_id {
+            return AuthorizationSnafu {
+                reason: "claim slot was accepted in another node boot".to_owned(),
+            }
+            .fail();
+        }
         match slot.state {
             SlotState::Armed { intent_sha256 } if intent_sha256 == slot_intent_sha256 => {
                 return Ok(())
@@ -364,6 +426,37 @@ impl ReplayLedger {
         }
     }
 
+    fn set_owner(&mut self, node_id: Id128V1) -> Result<()> {
+        self.append(&ReplayRecordV1::Owner {
+            schema_version: 1,
+            node_id: node_id.into(),
+        })?;
+        self.node_id = Some(node_id);
+        Ok(())
+    }
+
+    fn begin_boot(&mut self, node_boot_id: Id128V1) -> Result<()> {
+        if node_boot_id.is_zero()
+            || self.node_id.is_none()
+            || self.node_boot_id == Some(node_boot_id)
+            || self
+                .slots
+                .values()
+                .any(|slot| matches!(slot.state, SlotState::Armed { .. }))
+        {
+            return AuthorizationSnafu {
+                reason: "authorization replay WAL has an invalid boot rollover".to_owned(),
+            }
+            .fail();
+        }
+        self.append(&ReplayRecordV1::Boot {
+            schema_version: 1,
+            node_boot_id: node_boot_id.into(),
+        })?;
+        self.node_boot_id = Some(node_boot_id);
+        Ok(())
+    }
+
     fn append(&mut self, record: &ReplayRecordV1) -> Result<()> {
         let new_file = !self.path.exists();
         let result = (|| -> Result<()> {
@@ -398,6 +491,40 @@ impl ReplayLedger {
 
     fn apply_record(&mut self, record: ReplayRecordV1) -> Result<()> {
         match record {
+            ReplayRecordV1::Owner {
+                schema_version,
+                node_id,
+            } => {
+                if schema_version != 1 || node_id.is_zero() || self.node_id.is_some() {
+                    return AuthorizationSnafu {
+                        reason: "replay WAL has invalid or repeated node ownership".to_owned(),
+                    }
+                    .fail();
+                }
+                self.node_id = Some(node_id.into());
+                Ok(())
+            }
+            ReplayRecordV1::Boot {
+                schema_version,
+                node_boot_id,
+            } => {
+                if schema_version != 1
+                    || node_boot_id.is_zero()
+                    || self.node_id.is_none()
+                    || self.node_boot_id == Some(node_boot_id.into())
+                    || self
+                        .slots
+                        .values()
+                        .any(|slot| matches!(slot.state, SlotState::Armed { .. }))
+                {
+                    return AuthorizationSnafu {
+                        reason: "replay WAL has an invalid boot transition".to_owned(),
+                    }
+                    .fail();
+                }
+                self.node_boot_id = Some(node_boot_id.into());
+                Ok(())
+            }
             ReplayRecordV1::Accept {
                 schema_version,
                 trust_domain_id,
@@ -411,6 +538,8 @@ impl ReplayLedger {
                 body_sha256,
             } => {
                 if schema_version != 1
+                    || self.node_id.is_none()
+                    || self.node_boot_id.is_none()
                     || trust_domain_id.is_zero()
                     || issuer_id.is_zero()
                     || !(1..=128).contains(&key_id.len())
@@ -444,7 +573,13 @@ impl ReplayLedger {
                 self.validate_accept(&accepted)?;
                 let mut next_window = self.windows.get(&key).cloned().unwrap_or_default();
                 next_window.accept(sequence)?;
-                self.install_accept(accepted, next_window);
+                let node_boot_id = self.node_boot_id.ok_or_else(|| {
+                    AuthorizationSnafu {
+                        reason: "replay WAL accept record has no node boot".to_owned(),
+                    }
+                    .build()
+                })?;
+                self.install_accept(accepted, next_window, node_boot_id);
                 Ok(())
             }
             ReplayRecordV1::Arm {
@@ -454,6 +589,7 @@ impl ReplayLedger {
                 slot_intent_sha256,
             } => {
                 if schema_version != 1
+                    || self.node_boot_id.is_none()
                     || proof_id.is_zero()
                     || claim_slot_id.is_zero()
                     || slot_intent_sha256 == [0; 32]
@@ -471,7 +607,10 @@ impl ReplayLedger {
                     }
                     .build()
                 })?;
-                if slot.proof_id != proof_id || slot.state != SlotState::Prepared {
+                if slot.proof_id != proof_id
+                    || slot.state != SlotState::Prepared
+                    || Some(slot.accepted_node_boot_id) != self.node_boot_id
+                {
                     return AuthorizationSnafu {
                         reason: "replay WAL repeats or mismatches a slot arm".to_owned(),
                     }
@@ -487,7 +626,11 @@ impl ReplayLedger {
                 proof_id,
                 claim_slot_id,
             } => {
-                if schema_version != 1 || proof_id.is_zero() || claim_slot_id.is_zero() {
+                if schema_version != 1
+                    || self.node_boot_id.is_none()
+                    || proof_id.is_zero()
+                    || claim_slot_id.is_zero()
+                {
                     return AuthorizationSnafu {
                         reason: "replay WAL has an invalid consume record".to_owned(),
                     }
@@ -515,7 +658,11 @@ impl ReplayLedger {
                 proof_id,
                 claim_slot_id,
             } => {
-                if schema_version != 1 || proof_id.is_zero() || claim_slot_id.is_zero() {
+                if schema_version != 1
+                    || self.node_boot_id.is_none()
+                    || proof_id.is_zero()
+                    || claim_slot_id.is_zero()
+                {
                     return AuthorizationSnafu {
                         reason: "replay WAL has an invalid close record".to_owned(),
                     }
@@ -594,7 +741,12 @@ impl ReplayLedger {
         Ok(())
     }
 
-    fn install_accept(&mut self, proof: AcceptedProof<'_>, next_window: ReplayWindow) {
+    fn install_accept(
+        &mut self,
+        proof: AcceptedProof<'_>,
+        next_window: ReplayWindow,
+        node_boot_id: Id128V1,
+    ) {
         self.windows.insert(proof.key, next_window);
         self.proofs.insert(proof.proof_id, proof.expires_at_utc_ns);
         for slot in proof.claim_slot_ids {
@@ -602,6 +754,7 @@ impl ReplayLedger {
                 *slot,
                 SlotRecord {
                     proof_id: proof.proof_id,
+                    accepted_node_boot_id: node_boot_id,
                     expires_at_utc_ns: proof.expires_at_utc_ns,
                     body_sha256: proof.body_sha256,
                     state: SlotState::Prepared,
@@ -696,10 +849,15 @@ impl From<Id128V1> for StoredId {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use erebor_interceptor_abi::Id128V1;
 
     use super::{AcceptedProof, ReplayKey, ReplayLedger, ReplayWindow};
+
+    fn load(path: &Path) -> crate::Result<ReplayLedger> {
+        ReplayLedger::load(path, Id128V1::new(9, 1), Id128V1::new(9, 2))
+    }
 
     #[test]
     fn window_accepts_out_of_order_once_and_rejects_replay() -> crate::Result<()> {
@@ -720,7 +878,7 @@ mod tests {
         })?;
         let trust_domain_id = Id128V1::new(1, 1);
         let issuer_id = Id128V1::new(2, 2);
-        let mut ledger = ReplayLedger::load(state.path())?;
+        let mut ledger = load(state.path())?;
         ledger.accept(AcceptedProof {
             key: ReplayKey {
                 trust_domain_id,
@@ -735,7 +893,7 @@ mod tests {
             body_sha256: [1; 32],
         })?;
 
-        let mut restarted = ReplayLedger::load(state.path())?;
+        let mut restarted = load(state.path())?;
         assert!(restarted
             .accept(AcceptedProof {
                 key: ReplayKey {
@@ -760,7 +918,7 @@ mod tests {
             reason: format!("create replay test directory: {error}"),
             location: snafu::Location::default(),
         })?;
-        let mut ledger = ReplayLedger::load(state.path())?;
+        let mut ledger = load(state.path())?;
         let proof_id = Id128V1::new(3, 1);
         let slot_id = Id128V1::new(4, 1);
         ledger.accept(AcceptedProof {
@@ -783,12 +941,12 @@ mod tests {
             reason: format!("read replay WAL: {error}"),
             location: snafu::Location::default(),
         })?;
-        assert_eq!(wal.lines().count(), 3);
+        assert_eq!(wal.lines().count(), 5);
         fs::write(&path, wal.trim_end()).map_err(|error| crate::Error::Authorization {
             reason: format!("tear replay WAL: {error}"),
             location: snafu::Location::default(),
         })?;
-        assert!(ReplayLedger::load(state.path()).is_err());
+        assert!(load(state.path()).is_err());
         Ok(())
     }
 
@@ -801,7 +959,7 @@ mod tests {
         let proof_id = Id128V1::new(3, 1);
         let slot_id = Id128V1::new(4, 1);
         let intent = [4; 32];
-        let mut ledger = ReplayLedger::load(state.path())?;
+        let mut ledger = load(state.path())?;
         ledger.accept(AcceptedProof {
             key: ReplayKey {
                 trust_domain_id: Id128V1::new(1, 1),
@@ -818,9 +976,59 @@ mod tests {
         ledger.arm(proof_id, slot_id, [3; 32], intent)?;
         ledger.close(proof_id, slot_id, intent)?;
 
-        let mut restarted = ReplayLedger::load(state.path())?;
+        let mut restarted = load(state.path())?;
         restarted.close(proof_id, slot_id, intent)?;
         assert!(restarted.close(proof_id, slot_id, [5; 32]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn reboot_closes_armed_slots_without_refunding_them() -> crate::Result<()> {
+        let state = tempfile::tempdir().map_err(|error| crate::Error::Authorization {
+            reason: format!("create replay test directory: {error}"),
+            location: snafu::Location::default(),
+        })?;
+        let proof_id = Id128V1::new(3, 1);
+        let slot_id = Id128V1::new(4, 1);
+        let mut ledger = load(state.path())?;
+        ledger.accept(AcceptedProof {
+            key: ReplayKey {
+                trust_domain_id: Id128V1::new(1, 1),
+                issuer_id: Id128V1::new(2, 2),
+                key_id: b"key".to_vec(),
+                sequence_epoch: 3,
+            },
+            sequence: 1,
+            proof_id,
+            claim_slot_ids: &[slot_id],
+            expires_at_utc_ns: 100,
+            body_sha256: [3; 32],
+        })?;
+        ledger.arm(proof_id, slot_id, [3; 32], [4; 32])?;
+        let prepared_proof_id = Id128V1::new(3, 2);
+        let prepared_slot_id = Id128V1::new(4, 2);
+        ledger.accept(AcceptedProof {
+            key: ReplayKey {
+                trust_domain_id: Id128V1::new(1, 1),
+                issuer_id: Id128V1::new(2, 2),
+                key_id: b"key".to_vec(),
+                sequence_epoch: 3,
+            },
+            sequence: 2,
+            proof_id: prepared_proof_id,
+            claim_slot_ids: &[prepared_slot_id],
+            expires_at_utc_ns: 100,
+            body_sha256: [5; 32],
+        })?;
+
+        let mut rebooted =
+            ReplayLedger::load(state.path(), Id128V1::new(9, 1), Id128V1::new(9, 3))?;
+        assert!(rebooted.armed_slots().is_empty());
+        assert!(rebooted.arm(proof_id, slot_id, [3; 32], [4; 32]).is_err());
+        assert!(rebooted
+            .arm(prepared_proof_id, prepared_slot_id, [5; 32], [6; 32])
+            .is_err_and(|error| error.to_string().contains("accepted in another node boot")));
+        assert!(ReplayLedger::load(state.path(), Id128V1::new(9, 9), Id128V1::new(9, 3),).is_err());
         Ok(())
     }
 }

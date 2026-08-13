@@ -3,15 +3,16 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Instant;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
 
 use crate::error::{InvalidInputSnafu, IoSnafu};
 use crate::{DigestV1, Result};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LatencyDistributionV1 {
-    pub unit: &'static str,
+    pub unit: String,
     pub sample_count: u64,
     pub p50: u64,
     pub p95: u64,
@@ -21,9 +22,10 @@ pub struct LatencyDistributionV1 {
     pub raw_samples_ns: Vec<u64>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct OpenBenchmarkRecordV1 {
-    pub operation: &'static str,
+    pub operation: String,
     pub concurrency: u32,
     pub warmup_iterations: u64,
     pub measured_iterations: u64,
@@ -86,7 +88,7 @@ impl OpenBenchmark {
             measured_iterations as f64 * 1_000_000_000.0 / elapsed_ns.max(1) as f64;
         let distribution = LatencyDistributionV1::from_samples(samples);
         Ok(OpenBenchmarkRecordV1 {
-            operation: "OPEN",
+            operation: "OPEN".to_owned(),
             concurrency,
             warmup_iterations,
             measured_iterations,
@@ -98,7 +100,7 @@ impl OpenBenchmark {
 }
 
 impl LatencyDistributionV1 {
-    fn from_samples(raw_samples_ns: Vec<u64>) -> Self {
+    pub(crate) fn from_samples(raw_samples_ns: Vec<u64>) -> Self {
         let mut sorted = raw_samples_ns.clone();
         sorted.sort_unstable();
         let mut bytes = Vec::with_capacity(raw_samples_ns.len() * size_of::<u64>());
@@ -106,7 +108,7 @@ impl LatencyDistributionV1 {
             bytes.extend_from_slice(&sample.to_le_bytes());
         }
         Self {
-            unit: "NANOSECONDS",
+            unit: "NANOSECONDS".to_owned(),
             sample_count: raw_samples_ns.len() as u64,
             p50: percentile(&sorted, 50),
             p95: percentile(&sorted, 95),
@@ -115,6 +117,53 @@ impl LatencyDistributionV1 {
             raw_samples_sha256: DigestV1::of(bytes).to_hex(),
             raw_samples_ns,
         }
+    }
+
+    pub(crate) fn validate(&self, path: &Path) -> Result<()> {
+        ensure!(
+            !self.raw_samples_ns.is_empty(),
+            InvalidInputSnafu {
+                path,
+                reason: "open benchmark latency distribution has no raw samples",
+            }
+        );
+        ensure!(
+            self == &Self::from_samples(self.raw_samples_ns.clone()),
+            InvalidInputSnafu {
+                path,
+                reason: "open benchmark latency distribution does not match its raw samples",
+            }
+        );
+        Ok(())
+    }
+}
+
+impl OpenBenchmarkRecordV1 {
+    pub(crate) fn validate(&self, path: &Path) -> Result<()> {
+        self.distribution.validate(path)?;
+        let expected_rate =
+            self.measured_iterations as f64 * 1_000_000_000.0 / self.elapsed_ns.max(1) as f64;
+        ensure!(
+            self.operation == "OPEN"
+                && self.concurrency > 0
+                && self.measured_iterations > 0
+                && self.elapsed_ns > 0
+                && self.distribution.sample_count == self.measured_iterations,
+            InvalidInputSnafu {
+                path,
+                reason: "open benchmark record is inconsistent",
+            }
+        );
+        let rate_tolerance = expected_rate.abs().max(1.0) * f64::EPSILON * 4.0;
+        ensure!(
+            self.operations_per_second.is_finite()
+                && (self.operations_per_second - expected_rate).abs() <= rate_tolerance,
+            InvalidInputSnafu {
+                path,
+                reason: "open benchmark rate does not match its count and elapsed time",
+            }
+        );
+        Ok(())
     }
 }
 
@@ -144,7 +193,7 @@ mod tests {
     use snafu::ResultExt as _;
 
     use super::OpenBenchmark;
-    use crate::error::IoSnafu;
+    use crate::error::{IoSnafu, JsonSnafu};
 
     #[test]
     fn benchmark_records_every_open_sample_at_requested_concurrency() -> crate::Result<()> {
@@ -161,6 +210,41 @@ mod tests {
         assert!(record.distribution.p50 <= record.distribution.p95);
         assert!(record.distribution.p95 <= record.distribution.p99);
         assert!(record.operations_per_second > 0.0);
+        Ok(())
+    }
+
+    #[test]
+    fn benchmark_validation_rejects_changed_raw_samples() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: PathBuf::from("temporary benchmark validation directory"),
+        })?;
+        let target = directory.path().join("target");
+        fs::write(&target, b"safe fixture").context(IoSnafu {
+            path: target.clone(),
+        })?;
+        let mut record = OpenBenchmark::run(&target, 1, 3, 1)?;
+        record.distribution.raw_samples_ns[0] =
+            record.distribution.raw_samples_ns[0].saturating_add(1);
+        assert!(record.validate(&target).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn benchmark_validation_accepts_json_rate_and_rejects_changed_rate() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            path: PathBuf::from("temporary benchmark rate directory"),
+        })?;
+        let target = directory.path().join("target");
+        fs::write(&target, b"safe fixture").context(IoSnafu {
+            path: target.clone(),
+        })?;
+        let record = OpenBenchmark::run(&target, 1, 3, 1)?;
+        let bytes = serde_json::to_vec(&record).context(JsonSnafu { path: &target })?;
+        let mut decoded: super::OpenBenchmarkRecordV1 =
+            serde_json::from_slice(&bytes).context(JsonSnafu { path: &target })?;
+        decoded.validate(&target)?;
+        decoded.operations_per_second += 1.0;
+        assert!(decoded.validate(&target).is_err());
         Ok(())
     }
 }

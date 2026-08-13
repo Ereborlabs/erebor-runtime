@@ -118,6 +118,10 @@ impl SharedMailbox {
         self.state_atomic().store(EMPTY, Ordering::Release);
     }
 
+    pub(super) fn set_state(&self, state: u32) {
+        self.state_atomic().store(state, Ordering::Release);
+    }
+
     fn state_atomic(&self) -> &AtomicU32 {
         // SAFETY: an mmap begins at page alignment and is at least four bytes.
         // Both processes access this word only through AtomicU32.

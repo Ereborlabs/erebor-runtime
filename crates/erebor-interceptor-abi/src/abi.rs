@@ -1,8 +1,12 @@
 mod identity;
+mod ipc;
 mod path;
 
 pub use identity::*;
+pub use ipc::*;
 pub use path::*;
+
+pub const MAX_NESTED_EFFECT_ATTEMPTS_V1: usize = 4;
 
 #[repr(u8)]
 #[derive(
@@ -114,6 +118,26 @@ pub enum KernelEffectOperationV1 {
     Setattr = 26,
 }
 
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum ExactDeviceTypeV1 {
+    #[default]
+    Unknown = 0,
+    Character = 1,
+    Block = 2,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct TaskLabelCandidateV1 {
@@ -191,11 +215,70 @@ pub struct PhysicalDecisionV1 {
     zerocopy::Immutable,
     zerocopy::IntoBytes,
     zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
 )]
 pub struct ExceptionRuntimeStateKeyV1 {
+    pub node_id: Id128V1,
+    pub exception_instance_id: Id128V1,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct ExceptionHandleBindingKeyV1 {
     pub profile_generation_ref_id: u64,
     pub exception_numeric_handle: u32,
     pub reserved: u32,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum ExceptionBindingStateV1 {
+    #[default]
+    Unknown = 0,
+    Preparing = 1,
+    Active = 2,
+    Retiring = 3,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct ExceptionHandleBindingV1 {
+    pub runtime_state_key: ExceptionRuntimeStateKeyV1,
+    pub state: ExceptionBindingStateV1,
+    pub reserved: [u8; 7],
 }
 
 #[repr(u8)]
@@ -238,11 +321,229 @@ pub struct ExceptionRuntimeStateV1 {
     pub lock: u32,
     pub maximum_uses: u32,
     pub consumed_uses: u32,
-    pub exception_numeric_handle: u32,
+    pub bound_profile_generation_refs: u32,
     pub deadline_boottime_ns: u64,
     pub transition_version: u64,
+    pub exception_definition_sha256: [u8; 32],
     pub state: ExceptionRuntimeStateKindV1,
     pub reserved: [u8; 7],
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum ExceptionUseIdentityKindV1 {
+    #[default]
+    Unknown = 0,
+    ClaimSlot = 1,
+    KernelEffectAttempt = 2,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct ExceptionUseIdentityV1 {
+    pub kind: ExceptionUseIdentityKindV1,
+    pub reserved_0: [u8; 7],
+    pub claim_slot_id: Id128V1,
+    pub task_cookie: u64,
+    pub process_state_id: Id128V1,
+    pub syscall_entry_sequence: u64,
+    pub effect_attempt_sequence: u64,
+    pub effect_family: u16,
+    pub operation: u16,
+    pub reserved_1: [u8; 4],
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct ExceptionUseReceiptKeyV1 {
+    pub runtime_state_key: ExceptionRuntimeStateKeyV1,
+    pub use_identity: ExceptionUseIdentityV1,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum ExceptionReceiptStateV1 {
+    #[default]
+    Unknown = 0,
+    Claiming = 1,
+    Consumed = 2,
+    DeniedExhausted = 3,
+    DeniedExpired = 4,
+    DeniedCorrupt = 5,
+    ReconciliationRequired = 6,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct ExceptionUseReceiptV1 {
+    pub consumed_ordinal: u32,
+    pub state: ExceptionReceiptStateV1,
+    pub reserved: [u8; 3],
+    pub claimed_boottime_ns: u64,
+    pub transition_version: u64,
+}
+
+#[repr(u16)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum EffectAttemptHookV1 {
+    #[default]
+    Unknown = 0,
+    FileOpen = 1,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum TaskEffectAttemptFrameStateV1 {
+    #[default]
+    Unknown = 0,
+    Preparing = 1,
+    Decided = 2,
+    Returned = 3,
+    Cancelled = 4,
+}
+
+#[repr(u8)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub enum TaskEffectAttemptStateKindV1 {
+    #[default]
+    Inactive = 0,
+    Active = 1,
+    OverflowFailClosed = 2,
+    TaskExited = 3,
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct TaskEffectAttemptFrameV1 {
+    pub effect_attempt_sequence: u64,
+    pub effect_family: u16,
+    pub operation: u16,
+    pub hook_discriminator: EffectAttemptHookV1,
+    pub repeated_lsm_pass_count: u16,
+    pub state: TaskEffectAttemptFrameStateV1,
+    pub reserved: [u8; 7],
+}
+
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct TaskEffectAttemptStateV1 {
+    pub task_cookie: u64,
+    pub syscall_entry_sequence: u64,
+    pub next_effect_attempt_sequence: u64,
+    pub frames: [TaskEffectAttemptFrameV1; MAX_NESTED_EFFECT_ATTEMPTS_V1],
+    pub depth: u16,
+    pub state: TaskEffectAttemptStateKindV1,
+    pub reserved: [u8; 5],
 }
 
 #[repr(C)]
@@ -270,6 +571,68 @@ pub struct EffectDefaultKeyV1 {
     pub reserved_tail: [u8; 3],
 }
 
+/// One signed ioctl decision for the current actor and one live device object.
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct DeviceEffectKeyV1 {
+    pub profile_generation_ref_id: u64,
+    pub mount_id_unique: u64,
+    pub inode: u64,
+    pub exact_object_key_id: u64,
+    pub active_role_id: u32,
+    pub process_state_vector_id: u32,
+    pub mount_namespace_inode: u32,
+    pub filesystem_device: u32,
+    pub inode_generation: u32,
+    pub device_major: u32,
+    pub device_minor: u32,
+    pub ioctl_command: u32,
+    pub entry_kind: u16,
+    pub operation: u16,
+    pub binding_lifecycle_state: BindingLifecycleStateV1,
+    pub device_type: ExactDeviceTypeV1,
+    /// One only for a policy row that explicitly names all ioctl commands.
+    pub command_wildcard: u8,
+    pub reserved: u8,
+}
+
+/// A signed role relationship used to bind one exact controller-target pair.
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    zerocopy::Immutable,
+    zerocopy::IntoBytes,
+    zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
+)]
+pub struct ProcessControlRuleKeyV1 {
+    pub profile_generation_ref_id: u64,
+    pub controller_role_id: u32,
+    pub controller_process_state_vector_id: u32,
+    pub target_role_id: u32,
+    pub target_process_state_vector_id: u32,
+    pub operation_argument: u32,
+    pub entry_kind: u16,
+    pub operation: u16,
+    pub binding_lifecycle_state: BindingLifecycleStateV1,
+    pub argument_wildcard: u8,
+    pub reserved: [u8; 6],
+}
+
 #[repr(u8)]
 #[derive(
     Clone,
@@ -281,6 +644,7 @@ pub struct EffectDefaultKeyV1 {
     zerocopy::Immutable,
     zerocopy::IntoBytes,
     zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
 )]
 pub enum PolicyGenerationStateV1 {
     #[default]
@@ -302,6 +666,7 @@ pub enum PolicyGenerationStateV1 {
     zerocopy::Immutable,
     zerocopy::IntoBytes,
     zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
 )]
 pub enum PolicyGenerationModeV1 {
     #[default]
@@ -321,6 +686,7 @@ pub enum PolicyGenerationModeV1 {
     zerocopy::Immutable,
     zerocopy::IntoBytes,
     zerocopy::KnownLayout,
+    zerocopy::TryFromBytes,
 )]
 pub struct ProfileGenerationDescriptorV1 {
     pub node_boot_id: Id128V1,
@@ -480,6 +846,16 @@ pub struct EffectObservationV1 {
     pub reason: u8,
     pub physical_result: u8,
     pub reserved: [u8; 2],
+    pub controller_process_state_id: Id128V1,
+    pub controller_transition_version: u64,
+    pub target_task_cookie: u64,
+    pub target_profile_generation_ref_id: u64,
+    pub target_process_state_id: Id128V1,
+    pub target_transition_version: u64,
+    pub target_role_id: u32,
+    pub target_process_state_vector_id: u32,
+    pub operation_argument: u32,
+    pub reserved_process_control: [u8; 4],
 }
 
 #[repr(C)]
@@ -541,11 +917,17 @@ mod tests {
     use std::mem::{align_of, offset_of, size_of};
 
     use super::{
-        BindingLifecycleStateV1, EffectDecisionKeyV1, EffectDefaultKeyV1,
-        EffectObservationHealthV1, EffectObservationV1, ExactFileObjectKeyV1, ExactObjectBindingV1,
-        ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1,
-        FileOpenEventV1, FileOpenTargetV1, PhysicalDecisionKindV1, PhysicalDecisionV1,
-        PolicyGenerationModeV1, ProfileGenerationDescriptorV1, TaskLabelCandidateV1,
+        BindingActivationTargetKeyV1, BindingLifecycleStateV1, DeviceEffectKeyV1,
+        EffectAttemptHookV1, EffectDecisionKeyV1, EffectDefaultKeyV1, EffectObservationHealthV1,
+        EffectObservationV1, ExactDeviceTypeV1, ExactFileObjectKeyV1, ExactObjectBindingV1,
+        ExceptionBindingStateV1, ExceptionHandleBindingKeyV1, ExceptionHandleBindingV1,
+        ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1, ExceptionRuntimeStateKindV1,
+        ExceptionRuntimeStateV1, ExceptionUseIdentityKindV1, ExceptionUseIdentityV1,
+        ExceptionUseReceiptKeyV1, ExceptionUseReceiptV1, FileOpenEventV1, FileOpenTargetV1,
+        Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1, PhysicalDecisionKindV1,
+        PhysicalDecisionV1, PolicyGenerationModeV1, ProcessControlRuleKeyV1,
+        ProfileGenerationDescriptorV1, TaskEffectAttemptFrameStateV1, TaskEffectAttemptFrameV1,
+        TaskEffectAttemptStateKindV1, TaskEffectAttemptStateV1, TaskLabelCandidateV1,
     };
 
     #[test]
@@ -558,21 +940,47 @@ mod tests {
         assert_eq!(size_of::<PhysicalDecisionV1>(), 16);
         assert_eq!(align_of::<PhysicalDecisionV1>(), 4);
         assert_eq!(size_of::<EffectDefaultKeyV1>(), 40);
+        assert_eq!(size_of::<DeviceEffectKeyV1>(), 72);
+        assert_eq!(size_of::<ProcessControlRuleKeyV1>(), 40);
+        assert_eq!(size_of::<BindingActivationTargetKeyV1>(), 24);
+        assert_eq!(align_of::<BindingActivationTargetKeyV1>(), 8);
+        assert_eq!(offset_of!(ProcessControlRuleKeyV1, operation_argument), 24);
+        assert_eq!(offset_of!(ProcessControlRuleKeyV1, argument_wildcard), 33);
         assert_eq!(size_of::<ProfileGenerationDescriptorV1>(), 112);
         assert_eq!(offset_of!(ProfileGenerationDescriptorV1, mode), 65);
-        assert_eq!(size_of::<ExceptionRuntimeStateKeyV1>(), 16);
-        assert_eq!(size_of::<ExceptionRuntimeStateV1>(), 40);
+        assert_eq!(size_of::<ExceptionRuntimeStateKeyV1>(), 32);
+        assert_eq!(size_of::<ExceptionHandleBindingKeyV1>(), 16);
+        assert_eq!(size_of::<ExceptionHandleBindingV1>(), 40);
+        assert_eq!(ExceptionBindingStateV1::Active as u8, 2);
+        assert_eq!(size_of::<ExceptionRuntimeStateV1>(), 72);
         assert_eq!(
             offset_of!(ExceptionRuntimeStateV1, deadline_boottime_ns),
             16
+        );
+        assert_eq!(
+            offset_of!(ExceptionRuntimeStateV1, exception_definition_sha256),
+            32
         );
         assert_eq!(PolicyGenerationModeV1::Observe as u8, 1);
         assert_eq!(PolicyGenerationModeV1::Protect as u8, 2);
         assert_eq!(ExceptionRuntimeStateKindV1::Active as u8, 1);
         assert_eq!(ExceptionRuntimeStateKindV1::ReconciliationRequired as u8, 4);
+        assert_eq!(size_of::<ExceptionUseIdentityV1>(), 72);
+        assert_eq!(ExceptionUseIdentityKindV1::KernelEffectAttempt as u8, 2);
+        assert_eq!(size_of::<ExceptionUseReceiptKeyV1>(), 104);
+        assert_eq!(size_of::<ExceptionUseReceiptV1>(), 24);
+        assert_eq!(ExceptionReceiptStateV1::Consumed as u8, 2);
+        assert_eq!(size_of::<TaskEffectAttemptFrameV1>(), 24);
+        assert_eq!(offset_of!(TaskEffectAttemptFrameV1, state), 16);
+        assert_eq!(EffectAttemptHookV1::FileOpen as u16, 1);
+        assert_eq!(TaskEffectAttemptFrameStateV1::Decided as u8, 2);
+        assert_eq!(size_of::<TaskEffectAttemptStateV1>(), 128);
+        assert_eq!(offset_of!(TaskEffectAttemptStateV1, frames), 24);
+        assert_eq!(offset_of!(TaskEffectAttemptStateV1, depth), 120);
+        assert_eq!(TaskEffectAttemptStateKindV1::OverflowFailClosed as u8, 2);
         assert_eq!(size_of::<ExactFileObjectKeyV1>(), 40);
         assert_eq!(size_of::<ExactObjectBindingV1>(), 32);
-        assert_eq!(size_of::<EffectObservationV1>(), 200);
+        assert_eq!(size_of::<EffectObservationV1>(), 280);
         assert_eq!(size_of::<EffectObservationHealthV1>(), 32);
         assert_eq!(offset_of!(EffectObservationV1, file_object), 120);
         assert_eq!(offset_of!(EffectObservationV1, kernel_result), 192);
@@ -581,6 +989,8 @@ mod tests {
         assert_eq!(PhysicalDecisionKindV1::Deny as u8, 2);
         assert_eq!(BindingLifecycleStateV1::Unknown as u8, 0);
         assert_eq!(BindingLifecycleStateV1::Tombstoned as u8, 5);
+        assert_eq!(ExactDeviceTypeV1::Character as u8, 1);
+        assert_eq!(ExactDeviceTypeV1::Block as u8, 2);
     }
 
     #[test]
@@ -626,6 +1036,37 @@ mod tests {
         assert_eq!(
             missing_state.encode_le(),
             [2, 0, 243, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn synchronous_open_operations_have_distinct_exact_attempt_identities() {
+        let read = ExceptionUseIdentityV1 {
+            kind: ExceptionUseIdentityKindV1::KernelEffectAttempt,
+            task_cookie: 7,
+            process_state_id: Id128V1::new(8, 9),
+            syscall_entry_sequence: 10,
+            effect_attempt_sequence: 1,
+            effect_family: KernelEffectFamilyV1::File as u16,
+            operation: KernelEffectOperationV1::OpenRead as u16,
+            ..ExceptionUseIdentityV1::default()
+        };
+        let write = ExceptionUseIdentityV1 {
+            effect_attempt_sequence: 2,
+            operation: KernelEffectOperationV1::OpenWrite as u16,
+            ..read
+        };
+
+        assert_ne!(read, write);
+        assert_ne!(
+            ExceptionUseReceiptKeyV1 {
+                runtime_state_key: ExceptionRuntimeStateKeyV1::default(),
+                use_identity: read,
+            },
+            ExceptionUseReceiptKeyV1 {
+                runtime_state_key: ExceptionRuntimeStateKeyV1::default(),
+                use_identity: write,
+            }
         );
     }
 }

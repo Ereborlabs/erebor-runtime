@@ -22,7 +22,10 @@ pub use benchmark::{LatencyDistributionV1, OpenBenchmarkRecordV1};
 pub use capability::{CompileRecordV1, PlatformProbeV1};
 pub use closure::ClosureLedgerV1;
 pub use digest::DigestV1;
-pub use effect::{run_effect_child, EffectHealthV1, EffectPhysicalProbeBundleV1, EffectTestRunner};
+pub use effect::{
+    run_effect_child, EffectHealthV1, EffectPhysicalProbeBundleV1, EffectTestRunner,
+    HfStaticEffectClassificationCaseV1, HfStaticEffectClassificationV1,
+};
 pub use error::{Error, Result};
 pub use fixture::FixtureBaselineRecordV1;
 pub use identity::{
@@ -31,7 +34,7 @@ pub use identity::{
 pub use loader::{BpfLinkRecordV1, BpfMapLayoutV1, BpfObjectLayoutV1, PhysicalFileOpenProbeV1};
 pub use mithril_node::NativeTaskSnapshotV1;
 pub use runner::{
-    BenchmarkModeV1, CapabilityProbeBundleV1, OpenBenchmarkBundleV1, Phase0Runner,
-    Phase0VerificationBundleV1, Phase1HostLifecycleBundleV1, Phase1Runner,
+    BenchmarkModeV1, CapabilityProbeBundleV1, HostLifecycleBundleV1, HostLifecycleRunner,
+    KernelQualificationBundleV1, KernelQualificationRunner, OpenBenchmarkBundleV1,
     PhysicalCapabilityProbeBundleV1,
 };

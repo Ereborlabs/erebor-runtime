@@ -3,6 +3,26 @@
 #ifndef EREBOR_IDENTITY_EFFECTS_BPF_H
 #define EREBOR_IDENTITY_EFFECTS_BPF_H
 
+SEC("raw_tracepoint/sys_enter")
+int erebor_exception_sys_enter(struct bpf_raw_tracepoint_args *context)
+{
+    identity_runtime_config_v1 *config = identity_runtime_config();
+
+    (void)context;
+    if (!config || !config->enabled)
+        return 0;
+    begin_task_effect_syscall(bpf_get_current_task_btf());
+    return 0;
+}
+
+SEC("raw_tracepoint/sys_exit")
+int erebor_exception_sys_exit(struct bpf_raw_tracepoint_args *context)
+{
+    (void)context;
+    finish_task_effect_syscall(bpf_get_current_task_btf());
+    return 0;
+}
+
 static __always_inline bool pending_contains_candidate(
     const pending_exec_v1 *pending,
     const exact_executable_candidate_v1 *candidate)
@@ -159,33 +179,99 @@ static __always_inline physical_decision_v1 *effect_base_decision(
     return bpf_map_lookup_elem(&effect_defaults, &scratch->effect_default);
 }
 
-static __always_inline exact_object_binding_v1 *file_object_binding(
-    identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
-    __u64 profile_generation_ref_id)
+static __always_inline exact_object_binding_v1 *configured_file_object_binding(
+    struct identity_scratch_v1 *scratch)
 {
-    exact_object_binding_v1 candidate = {};
-    exact_object_binding_v1 *binding;
-    id128_v1 allocated = {};
-
-    binding = bpf_map_lookup_elem(&exact_file_objects,
-                                  &scratch->file_object);
-    if (binding)
-        return binding;
-    if (allocate_id(config, &allocated) || !allocated.low ||
-        (allocated.low & (1ULL << 63)))
-        return NULL;
-    candidate.profile_generation_ref_id = profile_generation_ref_id;
-    candidate.exact_object_key_id = allocated.low | (1ULL << 63);
-    candidate.composite_atom_id = scratch->path_terminal.composite_atom_id;
-    candidate.state = exact_object_binding_state_v1_active_dynamic;
-    bpf_map_update_elem(&exact_file_objects, &scratch->file_object,
-                        &candidate, BPF_NOEXIST);
     return bpf_map_lookup_elem(&exact_file_objects, &scratch->file_object);
 }
 
-static __noinline int identity_effect_gate(struct file *file,
-                                           __u16 effect_family,
-                                           __u16 operation, int ret)
+static __noinline void prepare_effect_identity(void)
+{
+    identity_runtime_config_v1 *config = identity_runtime_config();
+    struct task_struct *task;
+    task_label_v1 *label;
+    execution_set_binding_state_v1 *binding;
+    struct cgroup *cgroup = NULL;
+    int binding_lookup;
+
+    if (!config || !config->enabled)
+        return;
+    task = bpf_get_current_task_btf();
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    if (label || task_cgroup(task, &cgroup))
+        return;
+    binding = binding_for_cgroup(cgroup, &binding_lookup);
+    if (!binding_lookup && binding)
+        label_external_root(task, binding, config);
+}
+
+static __always_inline int apply_effect_decision(
+    identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
+    const profile_generation_descriptor_v1 *generation,
+    const physical_decision_v1 *decision, bool allow_exception,
+    bool file_open_attempt)
+{
+    if (!decision)
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unsupported_object);
+    scratch->observation.configured_errno = decision->errno;
+    if (decision->decision == physical_decision_kind_v1_deny &&
+        generation->mode == policy_generation_mode_v1_protect)
+        return emit_effect_observation(
+            scratch, identity_errno(decision->errno),
+            effect_observation_reason_v1_exact_policy_deny,
+            effect_physical_result_v1_denied_before_effect);
+    if (decision->decision == physical_decision_kind_v1_deny &&
+        generation->mode == policy_generation_mode_v1_observe)
+        return emit_effect_observation(
+            scratch, 0, effect_observation_reason_v1_would_deny,
+            effect_physical_result_v1_unknown_after_pre_effect);
+    if (decision->decision == physical_decision_kind_v1_audit_allow &&
+        !decision->exception_numeric_handle)
+        return emit_effect_observation(
+            scratch, 0,
+            effect_observation_reason_v1_exact_policy_audit_allow,
+            effect_physical_result_v1_unknown_after_pre_effect);
+    if (decision->decision == physical_decision_kind_v1_allow) {
+        if (decision->exception_numeric_handle) {
+            __u64 effect_attempt_sequence = 0;
+            int consume_result;
+            int finish_result;
+
+            if (!allow_exception || !file_open_attempt ||
+                begin_file_open_effect_attempt(
+                    scratch->observation.task_cookie,
+                    scratch->observation.effect_family,
+                    scratch->observation.operation,
+                    &effect_attempt_sequence))
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_exception_unavailable);
+            consume_result = consume_bounded_exception(
+                scratch->observation.profile_generation_ref_id,
+                decision->exception_numeric_handle, NULL,
+                effect_attempt_sequence, scratch->observation.effect_family,
+                scratch->observation.operation);
+            finish_result =
+                finish_file_open_effect_attempt(effect_attempt_sequence);
+            if (consume_result || finish_result)
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_exception_unavailable);
+        }
+        return emit_effect_observation(
+            scratch, 0, effect_observation_reason_v1_exact_policy_allow,
+            effect_physical_result_v1_unknown_after_pre_effect);
+    }
+    return hard_effect_result(
+        config, scratch,
+        effect_observation_reason_v1_corrupt_identity_or_generation);
+}
+
+static __noinline int resolved_identity_effect_gate(
+    struct file *file, const struct path *supplied_path, __u16 effect_family,
+    __u16 operation, int ret)
 {
     identity_runtime_config_v1 *config;
     identity_health_v1 *health;
@@ -207,14 +293,27 @@ static __noinline int identity_effect_gate(struct file *file,
     pending_exec_v1 *pending;
     __u64 *profile_task_refs;
     struct cgroup *cgroup = NULL;
+    struct path file_path = {};
+    const struct path *path = supplied_path;
+    bool defer_decision = false;
+    bool allow_exception = true;
+    bool file_open_attempt = false;
     int binding_lookup;
 
     config = identity_runtime_config();
     if (!config || !config->enabled)
         return ret;
     scratch = identity_scratch_record();
-    if (scratch)
+    if (scratch) {
+        defer_decision =
+            scratch->effect_gate_flags & EFFECT_GATE_DEFER_DECISION_V1;
+        allow_exception =
+            !(scratch->effect_gate_flags & EFFECT_GATE_DENY_EXCEPTION_V1);
+        file_open_attempt =
+            scratch->effect_gate_flags & EFFECT_GATE_FILE_OPEN_ATTEMPT_V1;
+        scratch->effect_gate_flags = 0;
         begin_effect_observation(scratch, effect_family, operation);
+    }
     health = identity_health_record();
     task = bpf_get_current_task_btf();
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
@@ -311,11 +410,9 @@ static __noinline int identity_effect_gate(struct file *file,
         return emit_effect_observation(
             scratch, ret, effect_observation_reason_v1_prior_lsm_denial,
             effect_physical_result_v1_denied_before_effect);
+    if (!config->effect_policy_enabled)
+        return ret;
     if (snapshot->exec_guard_state != exec_guard_state_v1_none) {
-        if (!file)
-            return hard_effect_result(
-                config, scratch,
-                effect_observation_reason_v1_corrupt_identity_or_generation);
         pending = bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
         if (!pending ||
             (snapshot->exec_guard_state != exec_guard_state_v1_preparing &&
@@ -331,22 +428,26 @@ static __noinline int identity_effect_gate(struct file *file,
             return hard_effect_result(
                 config, scratch,
                 effect_observation_reason_v1_corrupt_identity_or_generation);
-        candidate_from_file(&scratch->image.ordered_candidates[0], file);
-        if (!scratch->image.ordered_candidates[0].mount_id)
-            return hard_effect_result(
-                config, scratch,
-                effect_observation_reason_v1_unresolved_object);
-        if (!pending_contains_candidate(
-                pending, &scratch->image.ordered_candidates[0]) &&
-            !(pending->state == pending_exec_state_v1_preparing &&
-              !append_exec_candidate(
-                  pending, &scratch->image.ordered_candidates[0])))
+        if (!file && !defer_decision)
             return hard_effect_result(
                 config, scratch,
                 effect_observation_reason_v1_corrupt_identity_or_generation);
+        if (file) {
+            candidate_from_file(&scratch->image.ordered_candidates[0], file);
+            if (!scratch->image.ordered_candidates[0].mount_id)
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_unresolved_object);
+            if (!pending_contains_candidate(
+                    pending, &scratch->image.ordered_candidates[0]) &&
+                !(pending->state == pending_exec_state_v1_preparing &&
+                  !append_exec_candidate(
+                      pending, &scratch->image.ordered_candidates[0])))
+                return hard_effect_result(
+                    config, scratch,
+                    effect_observation_reason_v1_corrupt_identity_or_generation);
+        }
     }
-    if (!config->effect_policy_enabled)
-        return ret;
     generation = bpf_map_lookup_elem(
         &profile_generation_descriptors,
         &snapshot->active_profile_generation_ref_id);
@@ -360,11 +461,22 @@ static __noinline int identity_effect_gate(struct file *file,
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
-    if (!file)
-        return hard_effect_result(
-            config, scratch,
-            effect_observation_reason_v1_unsupported_object);
-    exact_file_object_from_file(&scratch->file_object, file);
+    if (!path && file) {
+        if (BPF_CORE_READ_INTO(&file_path, file, f_path))
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_unresolved_object);
+        path = &file_path;
+    }
+    if (!path) {
+        if (defer_decision)
+            return 0;
+        decision = effect_base_decision(scratch, snapshot, process_vector,
+                                        entry, binding);
+        return apply_effect_decision(config, scratch, generation, decision,
+                                     allow_exception, file_open_attempt);
+    }
+    exact_file_object_from_path(&scratch->file_object, path);
     scratch->file_object.profile_generation_ref_id =
         snapshot->active_profile_generation_ref_id;
     scratch->observation.file_object = scratch->file_object;
@@ -373,19 +485,16 @@ static __noinline int identity_effect_gate(struct file *file,
             config, scratch,
             effect_observation_reason_v1_unsupported_object);
     if (canonical_path_candidate(
-            file, binding, snapshot->active_profile_generation_ref_id,
+            path, binding, snapshot->active_profile_generation_ref_id,
             scratch))
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_unresolved_object);
     scratch->observation.composite_atom_id =
         scratch->path_terminal.composite_atom_id;
-    object_binding = file_object_binding(
-        config, scratch, snapshot->active_profile_generation_ref_id);
+    object_binding = configured_file_object_binding(scratch);
     if (!object_binding ||
-        (object_binding->state != exact_object_binding_state_v1_read_back &&
-         object_binding->state !=
-             exact_object_binding_state_v1_active_dynamic) ||
+        object_binding->state != exact_object_binding_state_v1_read_back ||
         object_binding->profile_generation_ref_id !=
             snapshot->active_profile_generation_ref_id ||
         !object_binding->exact_object_key_id ||
@@ -397,77 +506,206 @@ static __noinline int identity_effect_gate(struct file *file,
             effect_observation_reason_v1_unresolved_object);
     scratch->observation.exact_object_key_id =
         object_binding->exact_object_key_id;
+    if (defer_decision)
+        return 0;
     decision = effect_base_decision(scratch, snapshot, process_vector, entry,
                                     binding);
     if (!decision)
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_corrupt_identity_or_generation);
-    scratch->observation.configured_errno = decision->errno;
-    if (decision->decision == physical_decision_kind_v1_deny &&
-        generation->mode == policy_generation_mode_v1_protect)
-        return emit_effect_observation(
-            scratch, identity_errno(decision->errno),
-            effect_observation_reason_v1_exact_policy_deny,
-            effect_physical_result_v1_denied_before_effect);
-    if (decision->decision == physical_decision_kind_v1_deny &&
-        generation->mode == policy_generation_mode_v1_observe)
-        return emit_effect_observation(
-            scratch, 0, effect_observation_reason_v1_would_deny,
-            effect_physical_result_v1_unknown_after_pre_effect);
-    if (decision->decision == physical_decision_kind_v1_audit_allow &&
-        !decision->exception_numeric_handle)
-        return emit_effect_observation(
-            scratch, 0,
-            effect_observation_reason_v1_exact_policy_audit_allow,
-            effect_physical_result_v1_unknown_after_pre_effect);
-    if (decision->decision == physical_decision_kind_v1_allow) {
-        if (consume_bounded_exception(
-                snapshot->active_profile_generation_ref_id,
-                decision->exception_numeric_handle))
-            return hard_effect_result(
-                config, scratch,
-                effect_observation_reason_v1_exception_unavailable);
-        return emit_effect_observation(
-            scratch, 0, effect_observation_reason_v1_exact_policy_allow,
-            effect_physical_result_v1_unknown_after_pre_effect);
-    }
-    return hard_effect_result(
-        config, scratch,
-        effect_observation_reason_v1_corrupt_identity_or_generation);
+    return apply_effect_decision(config, scratch, generation, decision,
+                                 allow_exception, file_open_attempt);
 }
 
-static __always_inline int file_mode_effects(struct file *file, int ret)
+static __noinline int identity_effect_gate(struct file *file,
+                                           __u16 effect_family,
+                                           __u16 operation, int ret)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+
+    if (scratch)
+        scratch->effect_gate_flags = 0;
+    if (!ret)
+        prepare_effect_identity();
+    return resolved_identity_effect_gate(file, NULL, effect_family, operation,
+                                         ret);
+}
+
+static __noinline int identity_effect_gate_without_exception(
+    struct file *file, __u16 effect_family, __u16 operation, int ret)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+
+    if (scratch)
+        scratch->effect_gate_flags = EFFECT_GATE_DENY_EXCEPTION_V1;
+    if (!ret)
+        prepare_effect_identity();
+    return resolved_identity_effect_gate(file, NULL, effect_family, operation,
+                                         ret);
+}
+
+static __noinline int identity_file_open_effect_gate(
+    struct file *file, __u16 effect_family, __u16 operation, int ret)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+
+    if (scratch)
+        scratch->effect_gate_flags = EFFECT_GATE_FILE_OPEN_ATTEMPT_V1;
+    if (!ret)
+        prepare_effect_identity();
+    return resolved_identity_effect_gate(file, NULL, effect_family, operation,
+                                         ret);
+}
+
+static __noinline int identity_effect_actor_gate(
+    struct file *file, __u16 effect_family, __u16 operation, int ret)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+
+    if (scratch)
+        scratch->effect_gate_flags = EFFECT_GATE_DEFER_DECISION_V1;
+    if (!ret)
+        prepare_effect_identity();
+    return resolved_identity_effect_gate(file, NULL, effect_family, operation,
+                                         ret);
+}
+
+static __noinline int identity_path_effect_gate(const struct path *path,
+                                                __u16 effect_family,
+                                                __u16 operation, int ret)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+
+    if (scratch)
+        scratch->effect_gate_flags = 0;
+    if (!ret)
+        prepare_effect_identity();
+    return resolved_identity_effect_gate(NULL, path, effect_family, operation,
+                                         ret);
+}
+
+#include "identity_device_process.bpf.h"
+#include "identity_ipc.bpf.h"
+
+static __always_inline int identity_dentry_effect_gate(
+    const struct path *dir, struct dentry *dentry, __u16 operation, int ret)
+{
+    struct path target = {};
+
+    if (!dir || !dentry || BPF_CORE_READ_INTO(&target.mnt, dir, mnt))
+        return identity_path_effect_gate(
+            NULL, kernel_effect_family_v1_file, operation, ret);
+    target.dentry = dentry;
+    return identity_path_effect_gate(&target, kernel_effect_family_v1_file,
+                                     operation, ret);
+}
+
+static __always_inline bool initial_exec_open_without_pending(void)
+{
+    struct task_struct *task = bpf_get_current_task_btf();
+    task_label_v1 *label;
+
+    if (!task || !BPF_CORE_READ_BITFIELD_PROBED(task, in_execve))
+        return false;
+    label = bpf_task_storage_get(&task_labels, task, 0, 0);
+    return label &&
+           !bpf_map_lookup_elem(&pending_execs, &label->task_cookie);
+}
+
+static __always_inline int file_mode_effects(struct file *file,
+                                             bool allow_exception, int ret)
 {
     fmode_t mode = 0;
+    unsigned int flags = 0;
 
+    if (BPF_CORE_READ_INTO(&flags, file, f_flags))
+        return allow_exception
+                   ? identity_file_open_effect_gate(
+                         file, kernel_effect_family_v1_file,
+                         kernel_effect_operation_v1_unknown, ret)
+                   : identity_effect_gate_without_exception(
+                         file, kernel_effect_family_v1_file,
+                         kernel_effect_operation_v1_unknown, ret);
+    if (flags & __FMODE_EXEC) {
+        return allow_exception
+                   ? identity_file_open_effect_gate(
+                         file, kernel_effect_family_v1_exec,
+                         kernel_effect_operation_v1_execute, ret)
+                   : identity_effect_gate_without_exception(
+                         file, kernel_effect_family_v1_exec,
+                         kernel_effect_operation_v1_execute, ret);
+    }
     if (BPF_CORE_READ_INTO(&mode, file, f_mode))
-        return identity_effect_gate(
-            file, kernel_effect_family_v1_file,
-            kernel_effect_operation_v1_unknown, ret);
+        return allow_exception
+                   ? identity_file_open_effect_gate(
+                         file, kernel_effect_family_v1_file,
+                         kernel_effect_operation_v1_unknown, ret)
+                   : identity_effect_gate_without_exception(
+                         file, kernel_effect_family_v1_file,
+                         kernel_effect_operation_v1_unknown, ret);
     if (mode & FMODE_READ)
-        ret = identity_effect_gate(file, kernel_effect_family_v1_file,
-                                   kernel_effect_operation_v1_open_read,
-                                   ret);
+        ret = allow_exception
+                  ? identity_file_open_effect_gate(
+                        file, kernel_effect_family_v1_file,
+                        kernel_effect_operation_v1_open_read, ret)
+                  : identity_effect_gate_without_exception(
+                        file, kernel_effect_family_v1_file,
+                        kernel_effect_operation_v1_open_read, ret);
     if (ret)
         return ret;
     if (mode & FMODE_WRITE)
-        ret = identity_effect_gate(file, kernel_effect_family_v1_file,
-                                   kernel_effect_operation_v1_open_write,
-                                   ret);
+        ret = allow_exception
+                  ? identity_file_open_effect_gate(
+                        file, kernel_effect_family_v1_file,
+                        kernel_effect_operation_v1_open_write, ret)
+                  : identity_effect_gate_without_exception(
+                        file, kernel_effect_family_v1_file,
+                        kernel_effect_operation_v1_open_write, ret);
     return ret;
+}
+
+static __always_inline bool file_is_socket(struct file *file)
+{
+    struct inode *inode = NULL;
+    umode_t mode = 0;
+
+    return file && !BPF_CORE_READ_INTO(&inode, file, f_inode) && inode &&
+           !BPF_CORE_READ_INTO(&mode, inode, i_mode) &&
+           (mode & S_IFMT) == S_IFSOCK;
 }
 
 SEC("lsm/file_open")
 int BPF_PROG(erebor_identity_file_open, struct file *file, int ret)
 {
-    return file_mode_effects(file, ret);
+    return file_mode_effects(file, true, ret);
+}
+
+SEC("lsm/file_receive")
+int BPF_PROG(erebor_identity_file_receive, struct file *file, int ret)
+{
+    if (file_is_socket(file))
+        return ret;
+    return file_mode_effects(file, false, ret);
 }
 
 SEC("lsm/file_permission")
 int BPF_PROG(erebor_identity_file_permission, struct file *file, int mask,
              int ret)
 {
+    unsigned int flags = 0;
+
+    if (file_is_socket(file))
+        return ret;
+    if (file && !BPF_CORE_READ_INTO(&flags, file, f_flags) &&
+        (flags & __FMODE_EXEC)) {
+        if (initial_exec_open_without_pending())
+            return identity_effect_actor_gate(
+                NULL, kernel_effect_family_v1_exec,
+                kernel_effect_operation_v1_execute, ret);
+        return identity_effect_gate(file, kernel_effect_family_v1_exec,
+                                    kernel_effect_operation_v1_execute, ret);
+    }
     if (mask & MAY_READ)
         ret = identity_effect_gate(file, kernel_effect_family_v1_file,
                                    kernel_effect_operation_v1_read, ret);
@@ -488,9 +726,7 @@ SEC("lsm/file_ioctl")
 int BPF_PROG(erebor_identity_file_ioctl, struct file *file, unsigned int cmd,
              unsigned long arg, int ret)
 {
-    /* Command and argument shape are not yet physically qualified. */
-    return identity_effect_gate(NULL, kernel_effect_family_v1_device,
-                                kernel_effect_operation_v1_ioctl, ret);
+    return identity_device_ioctl_gate(file, cmd, ret);
 }
 
 SEC("lsm/mmap_file")
@@ -498,6 +734,15 @@ int BPF_PROG(erebor_identity_mmap_file, struct file *file,
              unsigned long reqprot, unsigned long prot, unsigned long flags,
              int ret)
 {
+    /* Anonymous data mappings are not file effects. Only executable
+     * anonymous memory crosses the code-authority boundary here. */
+    if (!file) {
+        if (!(prot & PROT_EXEC))
+            return ret;
+        return identity_effect_gate(NULL, kernel_effect_family_v1_exec,
+                                    kernel_effect_operation_v1_mmap_exec,
+                                    ret);
+    }
     if (prot & PROT_READ)
         ret = identity_effect_gate(file, kernel_effect_family_v1_file,
                                    kernel_effect_operation_v1_mmap_read,
@@ -535,6 +780,13 @@ int BPF_PROG(erebor_identity_file_mprotect, struct vm_area_struct *vma,
     if (!adds_write && !adds_exec)
         return ret;
     BPF_CORE_READ_INTO(&file, vma, vm_file);
+    if (!file) {
+        if (!adds_exec)
+            return ret;
+        return identity_effect_gate(NULL, kernel_effect_family_v1_exec,
+                                    kernel_effect_operation_v1_mprotect,
+                                    ret);
+    }
     if (adds_write)
         ret = identity_effect_gate(file, kernel_effect_family_v1_file,
                                    kernel_effect_operation_v1_mprotect,
@@ -548,36 +800,12 @@ int BPF_PROG(erebor_identity_file_mprotect, struct vm_area_struct *vma,
     return ret;
 }
 
-SEC("lsm/ipc_permission")
-int BPF_PROG(erebor_identity_ipc_permission, struct kern_ipc_perm *ipcp,
-             short flag, int ret)
-{
-    return identity_effect_gate(NULL, kernel_effect_family_v1_ipc,
-                                kernel_effect_operation_v1_ipc_access, ret);
-}
-
-SEC("lsm/socket_connect")
-int BPF_PROG(erebor_identity_socket_connect, struct socket *sock,
-             struct sockaddr *address, int addrlen, int ret)
-{
-    return identity_effect_gate(NULL, kernel_effect_family_v1_network,
-                                kernel_effect_operation_v1_connect, ret);
-}
-
-SEC("lsm/socket_sendmsg")
-int BPF_PROG(erebor_identity_socket_sendmsg, struct socket *sock,
-             struct msghdr *msg, int size, int ret)
-{
-    return identity_effect_gate(NULL, kernel_effect_family_v1_network,
-                                kernel_effect_operation_v1_send, ret);
-}
-
 SEC("lsm/ptrace_access_check")
 int BPF_PROG(erebor_identity_ptrace_access_check, struct task_struct *child,
              unsigned int mode, int ret)
 {
-    return identity_effect_gate(NULL, kernel_effect_family_v1_privilege,
-                                kernel_effect_operation_v1_ptrace, ret);
+    return identity_process_control_gate(
+        child, kernel_effect_operation_v1_ptrace, mode, ret);
 }
 
 SEC("lsm/task_kill")
@@ -585,39 +813,72 @@ int BPF_PROG(erebor_identity_task_kill, struct task_struct *task,
              struct kernel_siginfo *info, int sig, const struct cred *cred,
              int ret)
 {
-    return identity_effect_gate(NULL, kernel_effect_family_v1_privilege,
-                                kernel_effect_operation_v1_signal, ret);
+    return identity_process_control_gate(
+        task, kernel_effect_operation_v1_signal, (__u32)sig, ret);
 }
 
 SEC("lsm/path_unlink")
 int BPF_PROG(erebor_identity_path_unlink, const struct path *dir,
              struct dentry *dentry, int ret)
 {
-    return identity_effect_gate(NULL, kernel_effect_family_v1_file,
-                                kernel_effect_operation_v1_unlink, ret);
+    return identity_dentry_effect_gate(
+        dir, dentry, kernel_effect_operation_v1_unlink, ret);
 }
 
-SEC("lsm/inode_create")
-int BPF_PROG(erebor_identity_inode_create, struct inode *dir,
+SEC("lsm/path_mknod")
+int BPF_PROG(erebor_identity_path_mknod, const struct path *dir,
+             struct dentry *dentry, umode_t mode, unsigned int device,
+             int ret)
+{
+    return identity_dentry_effect_gate(
+        dir, dentry, kernel_effect_operation_v1_create, ret);
+}
+
+SEC("lsm/path_mkdir")
+int BPF_PROG(erebor_identity_path_mkdir, const struct path *dir,
              struct dentry *dentry, umode_t mode, int ret)
 {
-    return identity_effect_gate(NULL, kernel_effect_family_v1_file,
-                                kernel_effect_operation_v1_create, ret);
+    return identity_dentry_effect_gate(
+        dir, dentry, kernel_effect_operation_v1_create, ret);
+}
+
+SEC("lsm/path_symlink")
+int BPF_PROG(erebor_identity_path_symlink, const struct path *dir,
+             struct dentry *dentry, const char *old_name, int ret)
+{
+    return identity_dentry_effect_gate(
+        dir, dentry, kernel_effect_operation_v1_create, ret);
+}
+
+SEC("lsm/path_rmdir")
+int BPF_PROG(erebor_identity_path_rmdir, const struct path *dir,
+             struct dentry *dentry, int ret)
+{
+    return identity_dentry_effect_gate(
+        dir, dentry, kernel_effect_operation_v1_unlink, ret);
 }
 
 SEC("lsm/path_chmod")
-int BPF_PROG(erebor_identity_path_chmod, const struct path *path, umode_t mode,
-             int ret)
+int BPF_PROG(erebor_identity_path_chmod, const struct path *path,
+             umode_t mode, int ret)
 {
-    return identity_effect_gate(NULL, kernel_effect_family_v1_file,
-                                kernel_effect_operation_v1_setattr, ret);
+    return identity_path_effect_gate(path, kernel_effect_family_v1_file,
+                                     kernel_effect_operation_v1_setattr, ret);
+}
+
+SEC("lsm/path_chown")
+int BPF_PROG(erebor_identity_path_chown, const struct path *path,
+             unsigned int user, unsigned int group, int ret)
+{
+    return identity_path_effect_gate(path, kernel_effect_family_v1_file,
+                                     kernel_effect_operation_v1_setattr, ret);
 }
 
 SEC("lsm/path_truncate")
 int BPF_PROG(erebor_identity_path_truncate, const struct path *path, int ret)
 {
-    return identity_effect_gate(NULL, kernel_effect_family_v1_file,
-                                kernel_effect_operation_v1_setattr, ret);
+    return identity_path_effect_gate(path, kernel_effect_family_v1_file,
+                                     kernel_effect_operation_v1_setattr, ret);
 }
 
 SEC("lsm/file_truncate")
@@ -631,8 +892,13 @@ SEC("lsm/path_link")
 int BPF_PROG(erebor_identity_path_link, struct dentry *old_dentry,
              const struct path *new_dir, struct dentry *new_dentry, int ret)
 {
-    return identity_effect_gate(NULL, kernel_effect_family_v1_file,
-                                kernel_effect_operation_v1_link, ret);
+    /* Linux rejects cross-mount links before this hook. */
+    ret = identity_dentry_effect_gate(
+        new_dir, old_dentry, kernel_effect_operation_v1_link, ret);
+    if (ret)
+        return ret;
+    return identity_dentry_effect_gate(
+        new_dir, new_dentry, kernel_effect_operation_v1_link, 0);
 }
 
 SEC("lsm/path_rename")
@@ -640,16 +906,18 @@ int BPF_PROG(erebor_identity_path_rename, const struct path *old_dir,
              struct dentry *old_dentry, const struct path *new_dir,
              struct dentry *new_dentry, unsigned int flags, int ret)
 {
-    return identity_effect_gate(NULL, kernel_effect_family_v1_file,
-                                kernel_effect_operation_v1_rename, ret);
+    ret = identity_dentry_effect_gate(
+        old_dir, old_dentry, kernel_effect_operation_v1_rename, ret);
+    if (ret)
+        return ret;
+    return identity_dentry_effect_gate(
+        new_dir, new_dentry, kernel_effect_operation_v1_rename, 0);
 }
 
 static __always_inline int mount_mutation_effect(__u16 operation, int ret)
 {
-    if (ret)
-        return ret;
     ret = identity_effect_gate(NULL, kernel_effect_family_v1_mount, operation,
-                               0);
+                               ret);
     if (ret)
         return ret;
     return begin_mount_mutation();

@@ -1,0 +1,50 @@
+{
+  "node_id": "mithril-k3s-cri-effect",
+  "state_directory": "/var/tmp/mithril-runtime-qualification-0/k3s-cri-effect/state",
+  "interceptor": {
+    "runtime_btf_path": "/sys/kernel/btf/vmlinux",
+    "lease_path": "/var/tmp/mithril-runtime-qualification-0/k3s-cri-effect/owner.lock",
+    "pin_root": "/sys/fs/bpf/mithril-k3s-cri-effect"
+  },
+  "control": {
+    "endpoint": "https://127.0.0.1:1",
+    "server_name": "localhost",
+    "ca_path": "/var/tmp/mithril-runtime-qualification-0/k3s-cri-effect/control-ca.pem",
+    "certificate_path": "/var/tmp/mithril-runtime-qualification-0/k3s-cri-effect/node.pem",
+    "private_key_path": "/var/tmp/mithril-runtime-qualification-0/k3s-cri-effect/node-key.pem",
+    "reconnect_minimum_ms": 100,
+    "reconnect_maximum_ms": 100
+  },
+  "runtime_observation": {
+    "socket_path": "/var/tmp/mithril-runtime-qualification-0/k3s-cri-effect/observation.sock",
+    "allowed_uid": 0,
+    "cgroup_scope": "/"
+  },
+  "container_runtime": {
+    "socket_path": "/run/k3s/containerd/containerd.sock",
+    "reconciliation_interval_ms": 100
+  },
+  "workload_bindings": [
+    {
+      "binding_id": "11111111-1111-4111-8111-111111111111",
+      "execution_set_id": "44444444-4444-4444-8444-444444444444",
+      "protected_scope_id": "33333333-3333-4333-8333-333333333333",
+      "workload_selector_id": "worker",
+      "profile_id": "11111111-1111-4111-8111-111111111111",
+      "container_id": "MITHRIL_CONTAINER_ID",
+      "pod_uid": "MITHRIL_POD_UID",
+      "sandbox_id": "MITHRIL_SANDBOX_ID",
+      "container_name": "runtime",
+      "image_digest": "MITHRIL_IMAGE_DIGEST",
+      "container_kind": "application",
+      "container_generation": 1,
+      "lifecycle_generation": 1,
+      "active_profile_generation_ref_id": 1,
+      "initial_role_id": 1,
+      "external_role_id": 2,
+      "arm_initial_root": false
+    }
+  ],
+  "policy_candidates": [],
+  "exact_file_objects": []
+}

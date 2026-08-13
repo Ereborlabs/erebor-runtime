@@ -96,6 +96,12 @@ int BPF_PROG(qualification_file_permission, struct file *file, int mask, int ret
     return ret;
 }
 
+SEC("lsm/file_receive")
+int BPF_PROG(qualification_file_receive, struct file *file, int ret)
+{
+    return ret;
+}
+
 SEC("lsm/file_ioctl")
 int BPF_PROG(qualification_file_ioctl, struct file *file, unsigned int cmd,
              unsigned long arg, int ret)
@@ -117,6 +123,20 @@ int BPF_PROG(qualification_file_mprotect, struct vm_area_struct *vma,
     return ret;
 }
 
+SEC("lsm/socket_post_create")
+int BPF_PROG(qualification_socket_post_create, struct socket *socket,
+             int family, int type, int protocol, int kern, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/unix_stream_connect")
+int BPF_PROG(qualification_unix_stream_connect, struct sock *sock,
+             struct sock *other, struct sock *newsk, int ret)
+{
+    return ret;
+}
+
 SEC("lsm/ipc_permission")
 int BPF_PROG(qualification_ipc_permission, struct kern_ipc_perm *ipcp, short flag,
              int ret)
@@ -134,6 +154,34 @@ int BPF_PROG(qualification_socket_connect, struct socket *sock,
 SEC("lsm/socket_sendmsg")
 int BPF_PROG(qualification_socket_sendmsg, struct socket *sock, struct msghdr *msg,
              int size, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/socket_recvmsg")
+int BPF_PROG(qualification_socket_recvmsg, struct socket *socket,
+             struct msghdr *msg, int size, int flags, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/socket_socketpair")
+int BPF_PROG(qualification_socket_socketpair, struct socket *socka,
+             struct socket *sockb, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/unix_may_send")
+int BPF_PROG(qualification_unix_may_send, struct socket *socket,
+             struct socket *other, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/shm_shmat")
+int BPF_PROG(qualification_shm_shmat, struct kern_ipc_perm *perm,
+             char *shmaddr, int shmflg, int ret)
 {
     return ret;
 }
@@ -160,9 +208,63 @@ int BPF_PROG(qualification_path_unlink, const struct path *dir,
     return ret;
 }
 
+SEC("lsm/path_mknod")
+int BPF_PROG(qualification_path_mknod, const struct path *dir,
+             struct dentry *dentry, umode_t mode, unsigned int device, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/path_mkdir")
+int BPF_PROG(qualification_path_mkdir, const struct path *dir,
+             struct dentry *dentry, umode_t mode, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/path_symlink")
+int BPF_PROG(qualification_path_symlink, const struct path *dir,
+             struct dentry *dentry, const char *old_name, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/path_rmdir")
+int BPF_PROG(qualification_path_rmdir, const struct path *dir,
+             struct dentry *dentry, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/path_chmod")
+int BPF_PROG(qualification_path_chmod, const struct path *path, umode_t mode,
+             int ret)
+{
+    return ret;
+}
+
+SEC("lsm/path_chown")
+int BPF_PROG(qualification_path_chown, const struct path *path,
+             unsigned int user, unsigned int group, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/path_truncate")
+int BPF_PROG(qualification_path_truncate, const struct path *path, int ret)
+{
+    return ret;
+}
+
+SEC("lsm/file_truncate")
+int BPF_PROG(qualification_file_truncate, struct file *file, int ret)
+{
+    return ret;
+}
+
 SEC("lsm/path_link")
 int BPF_PROG(qualification_path_link, struct dentry *old_dentry,
-             const struct path *new_dir, struct dentry *new_dentry, int ret)
+             const struct path *dir, struct dentry *new_dentry, int ret)
 {
     return ret;
 }
