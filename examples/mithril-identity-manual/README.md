@@ -5,10 +5,10 @@ commands for manually invoking the automated e2e runner.
 
 ## Manual Testing In A VM
 
-Use the [retained-VM shell procedure](../../crates/mithril-e2e/harness/vm/README.md#run-a-manual-shell)
+Use the [retained-VM shell setup](../../crates/mithril-e2e/harness/vm/README.md#manual-shells-in-a-retained-vm)
 to stage this directory and use the current harness binaries. For a CRI or
 Kubernetes case, create a fresh Pod and live binding as shown in the
-[direct-CRI example](../../crates/mithril-e2e/harness/vm/README.md#run-the-direct-cri-observation-example).
+[direct-CRI example](../mithril-effect-observation-manual/README.md#direct-cri-in-a-retained-vm).
 Then run one identity script as root in the guest. Do not reuse a binding from
 a previous container.
 

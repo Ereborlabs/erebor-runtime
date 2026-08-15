@@ -2,10 +2,10 @@
 
 ## Manual Testing In A VM
 
-Use the [retained-VM shell procedure](../../crates/mithril-e2e/harness/vm/README.md#run-a-manual-shell)
+Use the [retained-VM shell setup](../../crates/mithril-e2e/harness/vm/README.md#manual-shells-in-a-retained-vm)
 to stage the current identity and observation helpers. Stage this directory
 too. For a CRI case, create a fresh Pod and live binding as shown in the
-[direct-CRI example](../../crates/mithril-e2e/harness/vm/README.md#run-the-direct-cri-observation-example).
+[direct-CRI example](../mithril-effect-observation-manual/README.md#direct-cri-in-a-retained-vm).
 Add each exact fixture that the selected enforcement shell requires. Run one
 enforcement script as root in the guest. Do not reuse a binding from a previous
 container.
