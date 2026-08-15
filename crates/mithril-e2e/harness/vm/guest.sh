@@ -338,10 +338,12 @@ case ${1:-} in
         result_fd_open=false
       fi
       stop_node
+      [[ $pin_owned == false ]] || rm -rf -- /sys/fs/bpf/mithril-k3s-cri-effect
+      pin_owned=false
       /usr/local/bin/k3s kubectl delete namespace "$namespace" \
         --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1
-      [[ $pin_owned == false ]] || rm -rf -- /sys/fs/bpf/mithril-k3s-cri-effect
       [[ $fixture_owned == false ]] || rm -rf -- "$fixture_root"
+      fixture_owned=false
       rm -rf -- "$lane_root"
       exit "$status"
     }
@@ -786,19 +788,19 @@ case ${1:-} in
     stop_node
     exec 9>&-
     release_fd_open=false
-    rm -rf -- "/proc/$init_pid/root$pod_state"
-    [[ ! -e /proc/$init_pid/root$pod_state ]] || {
-      echo "k3s CRI effect qualification left its Pod state directory" >&2
-      exit 1
-    }
     [[ $pin_owned == false ]] || rm -rf -- /sys/fs/bpf/mithril-k3s-cri-effect
     pin_owned=false
     /usr/local/bin/k3s kubectl delete namespace "$namespace" \
       --ignore-not-found --wait=true --timeout=120s >/dev/null
     [[ $fixture_owned == false ]] || rm -rf -- "$fixture_root"
+    fixture_owned=false
     rm -rf -- "$lane_root"
     trap - EXIT
     trap - ERR
+    if /usr/local/bin/k3s kubectl get namespace "$namespace" >/dev/null 2>&1; then
+      echo "k3s CRI effect qualification left its namespace" >&2
+      exit 1
+    fi
     [[ ! -e /sys/fs/bpf/mithril-k3s-cri-effect \
       && ! -e $fixture_root && ! -e $lane_root ]] || {
       echo "k3s CRI effect qualification left an owned artifact" >&2

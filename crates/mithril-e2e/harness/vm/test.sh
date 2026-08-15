@@ -140,7 +140,11 @@ grep -Fq '[ "$5" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]' \
 grep -Fq '[ "$5" = PROTECT ] && [ "$cri_result" = CRI_EXACT_DENIED ]' \
   "$directory/guest.sh"
 grep -Fq '[[ $cri_status -eq 0 ]]' "$directory/guest.sh"
-grep -q 'k3s CRI effect qualification left its Pod state directory' \
+! grep -Fq 'rm -rf -- "/proc/$init_pid/root$pod_state"' \
+  "$directory/guest.sh"
+grep -q 'k3s CRI effect qualification left its namespace' \
+  "$directory/guest.sh"
+python3 -c 'import sys; source=open(sys.argv[1], encoding="utf-8").read(); cleanup=source.split("cleanup_cri_effect() {", 1)[1].split("trap cleanup_cri_effect EXIT", 1)[0]; assert cleanup.index("rm -rf -- /sys/fs/bpf/mithril-k3s-cri-effect") < cleanup.index("/usr/local/bin/k3s kubectl delete namespace \"$namespace\""); success=source.split("qualification_fixture=read-only-hostPath-secret-benign-and-release-files", 1)[1].split("trap - EXIT", 1)[0]; assert success.index("stop_node") < success.index("rm -rf -- /sys/fs/bpf/mithril-k3s-cri-effect") < success.index("/usr/local/bin/k3s kubectl delete namespace \"$namespace\"")' \
   "$directory/guest.sh"
 grep -q 'kubectl_exec_root=external_runtime_root:runtime_external_restricted' \
   "$directory/guest.sh"
