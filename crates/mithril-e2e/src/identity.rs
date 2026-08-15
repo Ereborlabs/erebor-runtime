@@ -153,6 +153,9 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub external_root: NativeTaskSnapshotV1,
     pub native_child_before_exec: NativeTaskSnapshotV1,
     pub native_child_after_exec: NativeTaskSnapshotV1,
+    pub orphaned_native_parent: NativeTaskSnapshotV1,
+    pub orphaned_native_child_before_parent_exit: NativeTaskSnapshotV1,
+    pub orphaned_native_child_after_parent_exit: NativeTaskSnapshotV1,
     pub profile_task_refs_after_exit: u64,
     pub recovered_start: KernelObjectManifestV1,
     pub map_ids_stable_across_restart: bool,
@@ -475,6 +478,88 @@ impl IdentityTestRunner {
             }
         };
         fixture.stop();
+
+        let mut orphan_fixture = NativeProcessFixture::start_orphaning()?;
+        fs::write(&procs_path, orphan_fixture.outer_pid().to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        let orphaned_native_parent =
+            self.wait_for("orphaned native parent identity", &procs_path, || {
+                inspector
+                    .snapshot(orphan_fixture.outer_pid())
+                    .context(NodeSnafu)
+            })?;
+        orphan_fixture.release_root()?;
+        let orphaned_native_child_pid =
+            self.wait_for("orphaned native child creation", &procs_path, || {
+                orphan_fixture.native_child_pid()
+            })?;
+        orphan_fixture.open_native_pidfd(orphaned_native_child_pid)?;
+        let orphaned_native_child_before_parent_exit =
+            self.wait_for("orphaned native child identity", &procs_path, || {
+                inspector
+                    .snapshot(orphaned_native_child_pid)
+                    .context(NodeSnafu)
+            })?;
+        ensure!(
+            orphaned_native_parent.root_class == Some("external_runtime_root")
+                && orphaned_native_parent.installed_role_class
+                    == Some("runtime_external_restricted")
+                && orphaned_native_child_before_parent_exit.creator_task_cookie
+                    == Some(orphaned_native_parent.task_cookie)
+                && orphaned_native_child_before_parent_exit.real_parent_task_cookie
+                    == orphaned_native_parent.task_cookie
+                && orphaned_native_child_before_parent_exit
+                    .root_class
+                    .is_none()
+                && orphaned_native_child_before_parent_exit
+                    .installed_role_class
+                    .is_none()
+                && orphaned_native_child_before_parent_exit.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "orphaned native child has the wrong pre-exit identity",
+            }
+        );
+        orphan_fixture.release_parent_exit()?;
+        orphan_fixture.wait_for_parent_exit()?;
+        orphan_fixture.release_exec()?;
+        let orphaned_native_child_after_parent_exit = self.wait_for(
+            "orphaned native child exec after parent exit",
+            &procs_path,
+            || {
+                let snapshot = inspector
+                    .snapshot(orphaned_native_child_pid)
+                    .context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    snapshot.task_cookie == orphaned_native_child_before_parent_exit.task_cookie
+                        && snapshot.creator_task_cookie == Some(orphaned_native_parent.task_cookie)
+                        && snapshot.real_parent_task_cookie != orphaned_native_parent.task_cookie
+                        && snapshot.real_parent_interval_sequence
+                            > orphaned_native_child_before_parent_exit.real_parent_interval_sequence
+                        && snapshot.active_execution_id
+                            != orphaned_native_child_before_parent_exit.active_execution_id
+                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
+                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
+                        && snapshot.process_state_vector_state
+                            == ProcessStateVectorStateV1::Active as u8
+                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
+                }))
+            },
+        )?;
+        ensure!(
+            orphaned_native_child_after_parent_exit.root_class.is_none()
+                && orphaned_native_child_after_parent_exit
+                    .installed_role_class
+                    .is_none()
+                && orphaned_native_child_after_parent_exit.active_role_id
+                    == orphaned_native_parent.active_role_id,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "orphaned native child lost its inherited restriction",
+            }
+        );
+        orphan_fixture.stop();
         let profile_task_refs_after_exit =
             self.wait_for("profile reference release", &procs_path, || {
                 let refs = profile_task_refs(&host)?;
@@ -559,7 +644,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 1,
+            schema_version: 2,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -570,6 +655,9 @@ impl IdentityTestRunner {
             external_root,
             native_child_before_exec: before_exec,
             native_child_after_exec: after_exec,
+            orphaned_native_parent,
+            orphaned_native_child_before_parent_exit,
+            orphaned_native_child_after_parent_exit,
             profile_task_refs_after_exit,
             recovered_start,
             map_ids_stable_across_restart,
@@ -623,15 +711,25 @@ struct NativeProcessFixture {
     stdin: Option<ChildStdin>,
     stderr: Option<ChildStderr>,
     native_pidfd: Option<OwnedFd>,
+    parent_exit_mode: bool,
 }
 
 impl NativeProcessFixture {
     fn start() -> Result<Self> {
+        Self::start_with_parent_exit(false)
+    }
+
+    fn start_orphaning() -> Result<Self> {
+        Self::start_with_parent_exit(true)
+    }
+
+    fn start_with_parent_exit(parent_exit_mode: bool) -> Result<Self> {
+        let parent_wait = if parent_exit_mode { "read _" } else { "wait" };
+        let script = format!(
+            "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 30) & {parent_wait}"
+        );
         let mut outer = Command::new("/bin/sh")
-            .args([
-                "-c",
-                "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 30) & wait",
-            ])
+            .args(["-c", &script])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -652,6 +750,7 @@ impl NativeProcessFixture {
             stdin: Some(stdin),
             stderr: Some(stderr),
             native_pidfd: None,
+            parent_exit_mode,
         })
     }
 
@@ -675,6 +774,32 @@ impl NativeProcessFixture {
             .ok_or_else(|| invalid_state("native child has no pidfd"))?;
         pidfd_send_signal(pidfd, Signal::CONT)
             .map_err(|error| invalid_state(format!("release native child exec: {error}")))
+    }
+
+    fn release_parent_exit(&mut self) -> Result<()> {
+        ensure!(
+            self.parent_exit_mode,
+            InvalidInputSnafu {
+                path: Path::new("identity test shell"),
+                reason: "native fixture does not have a parent-exit release",
+            }
+        );
+        self.write_stdin(b"parent-exit\n")
+    }
+
+    fn wait_for_parent_exit(&mut self) -> Result<()> {
+        let status = self.outer.wait().context(IoSnafu {
+            path: Path::new("identity test shell"),
+        })?;
+        ensure!(
+            status.success(),
+            InvalidInputSnafu {
+                path: Path::new("identity test shell"),
+                reason: format!("native parent exited with {status}"),
+            }
+        );
+        self.stdin.take();
+        Ok(())
     }
 
     fn write_stdin(&mut self, bytes: &[u8]) -> Result<()> {
@@ -953,6 +1078,50 @@ mod tests {
         fixture.release_exec()?;
         let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
         runner.wait_for("native child exec", &comm_path, || {
+            fs::read_to_string(&comm_path)
+                .map(|name| (name.trim() == "sleep").then_some(()))
+                .map_err(|error| {
+                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
+                })
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_process_fixture_reparents_a_stopped_child_before_exec() -> crate::Result<()> {
+        let runner = IdentityTestRunner::new(".");
+        let mut fixture = NativeProcessFixture::start_orphaning()?;
+        let outer_pid = fixture.outer_pid();
+        fixture.release_root()?;
+        let children_path = PathBuf::from(format!("/proc/{outer_pid}/task/{outer_pid}/children"));
+        let native_pid =
+            runner.wait_for("orphaned native child creation", &children_path, || {
+                fixture.native_child_pid()
+            })?;
+        fixture.open_native_pidfd(native_pid)?;
+        let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
+        let status = fs::read_to_string(&status_path).map_err(|error| {
+            super::invalid_state(format!("read {}: {error}", status_path.display()))
+        })?;
+        assert!(status.lines().any(|line| line.starts_with("State:\tT")));
+
+        fixture.release_parent_exit()?;
+        fixture.wait_for_parent_exit()?;
+        assert!(!PathBuf::from(format!("/proc/{outer_pid}")).exists());
+        runner.wait_for("native child reparenting", &status_path, || {
+            let status = fs::read_to_string(&status_path).map_err(|error| {
+                super::invalid_state(format!("read {}: {error}", status_path.display()))
+            })?;
+            let parent_pid = status
+                .lines()
+                .find_map(|line| line.strip_prefix("PPid:")?.split_whitespace().next())
+                .and_then(|value| value.parse::<u32>().ok());
+            Ok(parent_pid.filter(|parent_pid| *parent_pid != outer_pid))
+        })?;
+
+        fixture.release_exec()?;
+        let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
+        runner.wait_for("orphaned native child exec", &comm_path, || {
             fs::read_to_string(&comm_path)
                 .map(|name| (name.trim() == "sleep").then_some(()))
                 .map_err(|error| {

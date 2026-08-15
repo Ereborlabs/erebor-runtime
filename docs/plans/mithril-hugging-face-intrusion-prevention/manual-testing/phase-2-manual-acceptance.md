@@ -120,7 +120,7 @@ It does not complete the full entry or failure-injection matrix.
 | `ID-CGROUP-ESCAPE-001` | move a labeled task to host/unprotected placement | task storage still resolves and denies mismatch; unmoved allowed control works |
 | `ID-CLONE-CGROUP-002` | clone into expected and changed placement | child state exists before effect and placement is verified |
 | `ID-CLONE-CGROUP-FAIL-003` | force child allocation/finalization/placement failure | no unlabeled runnable child gains authority; normal clone succeeds |
-| `ID-CREATOR-PARENT-007` | reparent/orphan child after native creation | immutable creator edge stays exact while real-parent interval changes |
+| `ID-CREATOR-PARENT-007` | reparent/orphan child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for the creator-exit branch. | immutable creator edge stays exact while real-parent interval changes. The creator-exit branch does not cover double forks, subreapers, namespace-init reparenting, ptrace reparenting, or PID reuse. |
 | `ID-MOVED-PARENT-FORK-004` | move parent, then fork | child inherits actual task authority and placement floor, not cgroup-derived role |
 | `ID-MOVED-TASK-EXEC-005` | move labeled task, then exec | task-first old identity and placement mismatch constrain transition |
 | `ID-TASK-COORD-FINALIZE-006` | inspect task at allocation, pre-wake finalization, visibility, and exit | opaque state precedes effect; PID/TGID/start coordinates finalize later without granting permission |

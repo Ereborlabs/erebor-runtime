@@ -17,6 +17,7 @@ Then run only the case being checked:
 | Direct CRI exec | `sudo examples/mithril-identity-manual/cri-exec.sh NODE_CONFIG FULL_CONTAINER_ID` |
 | Kubernetes exec | `sudo examples/mithril-identity-manual/kubernetes-exec.sh NODE_CONFIG FULL_CONTAINER_ID NAMESPACE POD CONTAINER` |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
+| Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
@@ -56,6 +57,29 @@ and cgroup placement do not create a probe or application role.
 This check proves one direct CRI exec root after the node starts. It does not
 prove a kubelet probe join, first-instruction binding, or the complete entry
 and failure-injection matrix.
+
+## Creator-Exit Native Child Check
+
+Run this check when a container runtime can start one shell and its stopped
+native child:
+
+```bash
+sudo examples/mithril-identity-manual/native-child.sh \
+  NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan
+```
+
+The script prints one runtime-exec command. Run it in another root terminal.
+Enter the host PID of its shell and stopped child. The script checks their
+creator edge. Kill only the printed shell PID, then press Enter. The script
+resumes the child and checks its next exec record.
+
+The child must keep its original creator task cookie. Its real-parent interval
+sequence must increase, and its current real parent must not be the exited
+creator. The child remains a native task with the inherited restricted role.
+
+This check covers the creator-exit branch of `ID-CREATOR-PARENT-007`. It does
+not cover double forks, subreapers, namespace-init reparenting, ptrace
+reparenting, or PID reuse.
 
 Every executable starts the real `mithril-node`, performs one operator-driven
 case, and removes its test tasks, BPF pins, lease, temporary config, state, and
