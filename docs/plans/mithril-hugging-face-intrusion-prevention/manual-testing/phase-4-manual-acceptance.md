@@ -128,6 +128,9 @@ the physical negative oracle for every advertised deny.
   terminal output. It prints the Control HTTP response body after a rejected
   draft. Use that result to correct the exact binding, policy, or mount-view
   state. Do not retry through raw `kubectl exec`.
+- When you inspect retained effect observations, use each printed
+  `observed_boottime_ns` value to order the denied operations. Do not infer the
+  first denial from log order alone.
 - The VM administrative fixture runs static BusyBox at
   `/var/lib/mithril/busybox`. Invoke it as
   `/var/lib/mithril/busybox sleep 20`. Do not rename this file to
