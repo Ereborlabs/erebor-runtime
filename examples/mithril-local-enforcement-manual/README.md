@@ -19,6 +19,52 @@ cargo build -p mithril-node --bins -p mithril-control --bin mithril-policy \
   -p mithril-e2e --bin mithril-effect-test
 ```
 
+## CRI Benign Allow
+
+Run this operator-driven case against one running CRI container. It uses the
+signed protect-mode runtime. It does not run the VM harness.
+
+Prerequisites:
+
+- Run the command as root with `sudo`.
+- Build the binaries shown above. Install `crictl`, `jq`, and `timeout`.
+- Give the node JSON exactly one workload binding for the CRI container ID.
+  Its `container_runtime.socket_path` must name the active CRI socket.
+- Give a secret path and a different benign path. Both paths must be absolute
+  paths in the container. The benign file must contain `benign` followed by a
+  newline. Both files must exist on a filesystem that reports a nonzero inode
+  generation.
+- Do not run another Mithril owner on this host.
+
+Run:
+
+```sh
+sudo examples/mithril-local-enforcement-manual/cri-benign-allow.sh \
+  /absolute/path/node.json \
+  <cri-container-id> \
+  /absolute/path/in-container/secret \
+  /absolute/path/in-container/benign
+```
+
+Expected output includes:
+
+```text
+PASS: the CRI exact benign file remained readable and mappable in protect mode.
+Mithril, tasks, pins, state, lease, config, and logs removed.
+```
+
+The script waits for an `EXACT_POLICY_ALLOW` observation. After policy
+activation, its one CRI task reads and read-maps the exact benign file. The
+secret path configures the signed policy. This script does not read the secret.
+
+Cleanup: the EXIT trap removes the Mithril-owned processes, pins, state,
+lease, sockets, FIFOs, and temporary files. It leaves the supplied container
+and cgroup intact. Do not remove BPF pins that the script does not own.
+
+Limit: this case proves one exact, non-rotating benign file in one CRI task. It
+does not prove secret denial, projected-token semantics, token rotation, or
+multi-node behavior.
+
 Run the automated privileged host oracle first:
 
 ```sh
@@ -57,7 +103,7 @@ task creates before activation does not test file acquisition because the IPC
 gate stops the unqualified socket first. Use the automated probe until the
 manual runtime can start the declared peer role.
 
-Manual Docker/raw-namespace cases:
+Manual Docker, CRI, and raw-namespace cases:
 
 - `docker-file-deny.sh <node.json> <container> <secret>` proves the
   mandatory `HF-008` first forbidden effect: no fd and no byte is returned.
@@ -72,6 +118,9 @@ Manual Docker/raw-namespace cases:
   protected task.
   The benign file must already exist on a filesystem that exposes a nonzero
   inode generation, and it must not be the secret object.
+- `cri-benign-allow.sh <node.json> <container-id> <secret> <benign>` proves
+  the same exact benign read and mapping control through CRI. See
+  [CRI Benign Allow](#cri-benign-allow) for prerequisites and limits.
 - `bounded-exception-concurrency.sh <node.json> <container> <secret>`
   races eight preallocated consumers and proves exactly two obtain the signed
   write-open exception while six receive `EACCES`.
