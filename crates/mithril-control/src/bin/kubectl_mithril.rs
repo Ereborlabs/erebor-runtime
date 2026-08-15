@@ -89,7 +89,7 @@ async fn run_exec(
             client.add_root_certificate(reqwest::Certificate::from_pem(&std::fs::read(path)?)?);
     }
     let client = client.build()?;
-    let draft: AdministrativeExecDraftResponseV1 = client
+    let response = client
         .post(format!("{control_url}/v1/administrative-exec/requests"))
         .json(&AdministrativeExecDraftRequestV1 {
             namespace: args.namespace.clone(),
@@ -103,10 +103,13 @@ async fn run_exec(
             approved_role_id: args.approved_role_id,
         })
         .send()
-        .await?
-        .error_for_status()?
-        .json()
         .await?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(format!("administrative draft request failed with {status}: {body}").into());
+    }
+    let draft: AdministrativeExecDraftResponseV1 = response.json().await?;
     println!("Approval required for:");
     println!("  namespace: {}", args.namespace);
     println!("  pod:       {}", args.pod);
