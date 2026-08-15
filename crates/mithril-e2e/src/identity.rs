@@ -5,6 +5,7 @@ use std::fs;
 use std::io::{Read as _, Write as _};
 use std::mem::size_of;
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, Command, Stdio};
 use std::thread;
@@ -150,6 +151,10 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub cgroup_escape_placement_mismatch_detected: bool,
     pub moved_parent_fork_denied: bool,
     pub moved_task_exec_denied: bool,
+    pub pre_ponr_failed_exec_restored: bool,
+    pub pre_ponr_failed_exec_before: NativeTaskSnapshotV1,
+    pub pre_ponr_failed_exec_after_failure: NativeTaskSnapshotV1,
+    pub pre_ponr_failed_exec_after_success: NativeTaskSnapshotV1,
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub external_root: NativeTaskSnapshotV1,
@@ -282,6 +287,18 @@ impl IdentityTestRunner {
         let procs_path = cgroup_path.join("cgroup.procs");
 
         self.materialize_object(output_directory)?;
+        let execfail_path = output_directory.join("execfail");
+        let execfail_ready_path = output_directory.join("execfail-ready");
+        ensure!(
+            !execfail_path.exists() && !execfail_ready_path.exists(),
+            InvalidInputSnafu {
+                path: output_directory,
+                reason: "identity exec-failure probe files must not already exist",
+            }
+        );
+        let execfail_cleanup = ProbeFile::new(&execfail_path);
+        let execfail_ready_cleanup = ProbeFile::new(&execfail_ready_path);
+        self.materialize_execfail(&execfail_path)?;
         let object_sha256 = bundled_bpf_sha256();
         let (boot_id, node_boot_id) = boot_identity()?;
         let config = KernelHostConfig::identity(
@@ -505,6 +522,115 @@ impl IdentityTestRunner {
             }
         };
         fixture.stop();
+
+        let mut failed_exec_fixture =
+            NativeProcessFixture::start_with_failed_exec(&execfail_path, &execfail_ready_path)?;
+        fs::write(&procs_path, failed_exec_fixture.outer_pid().to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        let failed_exec_parent =
+            self.wait_for("pre-PONR failed-exec parent identity", &procs_path, || {
+                inspector
+                    .snapshot(failed_exec_fixture.outer_pid())
+                    .context(NodeSnafu)
+            })?;
+        failed_exec_fixture.release_root()?;
+        let failed_exec_pid =
+            self.wait_for("pre-PONR failed-exec child creation", &procs_path, || {
+                failed_exec_fixture.native_child_pid()
+            })?;
+        failed_exec_fixture.open_native_pidfd(failed_exec_pid)?;
+        let failed_exec_before =
+            self.wait_for("pre-PONR failed-exec child identity", &procs_path, || {
+                inspector.snapshot(failed_exec_pid).context(NodeSnafu)
+            })?;
+        ensure!(
+            failed_exec_parent.root_class == Some("external_runtime_root")
+                && failed_exec_parent.installed_role_class == Some("runtime_external_restricted")
+                && failed_exec_before.creator_task_cookie == Some(failed_exec_parent.task_cookie)
+                && failed_exec_before.real_parent_task_cookie == failed_exec_parent.task_cookie
+                && failed_exec_before.root_class.is_none()
+                && failed_exec_before.installed_role_class.is_none()
+                && failed_exec_before.process_execution_state
+                    == ProcessExecutionStateV1::Active as u8
+                && failed_exec_before.process_state_vector_state
+                    == ProcessStateVectorStateV1::Active as u8
+                && failed_exec_before.exec_guard_state == ExecGuardStateV1::None as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "pre-PONR failed-exec child has the wrong initial identity",
+            }
+        );
+        failed_exec_fixture.release_exec(failed_exec_pid)?;
+        let failed_exec_after_failure = self.wait_for(
+            "pre-PONR failed-exec restoration",
+            &execfail_ready_path,
+            || {
+                if !execfail_ready_path.exists() {
+                    return Ok(None);
+                }
+                let Some(snapshot) = inspector.snapshot(failed_exec_pid).context(NodeSnafu)? else {
+                    return Ok(None);
+                };
+                let pending = host
+                    .lookup_map("pending_execs", &snapshot.task_cookie.to_ne_bytes())
+                    .context(InterceptorSnafu)?;
+                Ok((pending.is_none()
+                    && snapshot.task_cookie == failed_exec_before.task_cookie
+                    && snapshot.creator_task_cookie == failed_exec_before.creator_task_cookie
+                    && snapshot.real_parent_task_cookie
+                        == failed_exec_before.real_parent_task_cookie
+                    && snapshot.active_execution_id == failed_exec_before.active_execution_id
+                    && snapshot.image_provenance_id == failed_exec_before.image_provenance_id
+                    && snapshot.active_role_id == failed_exec_before.active_role_id
+                    && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
+                    && snapshot.process_state_vector_state
+                        == ProcessStateVectorStateV1::Active as u8
+                    && snapshot.exec_guard_state == ExecGuardStateV1::None as u8)
+                    .then_some(snapshot))
+            },
+        )?;
+        failed_exec_fixture.release_exec(failed_exec_pid)?;
+        let failed_exec_after_success = self.wait_for(
+            "pre-PONR failed-exec later normal commit",
+            &procs_path,
+            || {
+                let Some(snapshot) = inspector.snapshot(failed_exec_pid).context(NodeSnafu)? else {
+                    return Ok(None);
+                };
+                let pending = host
+                    .lookup_map("pending_execs", &snapshot.task_cookie.to_ne_bytes())
+                    .context(InterceptorSnafu)?;
+                Ok((pending.is_none()
+                    && snapshot.task_cookie == failed_exec_after_failure.task_cookie
+                    && snapshot.creator_task_cookie
+                        == failed_exec_after_failure.creator_task_cookie
+                    && snapshot.real_parent_task_cookie
+                        == failed_exec_after_failure.real_parent_task_cookie
+                    && snapshot.active_execution_id
+                        != failed_exec_after_failure.active_execution_id
+                    && snapshot.image_provenance_id
+                        != failed_exec_after_failure.image_provenance_id
+                    && snapshot.active_role_id == failed_exec_after_failure.active_role_id
+                    && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
+                    && snapshot.process_state_vector_state
+                        == ProcessStateVectorStateV1::Active as u8
+                    && snapshot.exec_guard_state == ExecGuardStateV1::None as u8)
+                    .then_some(snapshot))
+            },
+        )?;
+        ensure!(
+            failed_exec_after_success.root_class.is_none()
+                && failed_exec_after_success.installed_role_class.is_none()
+                && failed_exec_after_success.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "normal exec after the pre-PONR failure did not restore a runnable task",
+            }
+        );
+        failed_exec_fixture.stop();
+        execfail_ready_cleanup.cleanup()?;
+        execfail_cleanup.cleanup()?;
 
         let mut moved_task_fixture = NativeProcessFixture::start()?;
         fs::write(&procs_path, moved_task_fixture.outer_pid().to_string())
@@ -858,7 +984,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 4,
+            schema_version: 5,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -866,6 +992,10 @@ impl IdentityTestRunner {
             cgroup_escape_placement_mismatch_detected: true,
             moved_parent_fork_denied: true,
             moved_task_exec_denied: true,
+            pre_ponr_failed_exec_restored: true,
+            pre_ponr_failed_exec_before: failed_exec_before,
+            pre_ponr_failed_exec_after_failure: failed_exec_after_failure,
+            pre_ponr_failed_exec_after_success: failed_exec_after_success,
             clone_into_cgroup_external_root: clone_external_root,
             clone_into_cgroup_native_child: clone_native_child,
             external_root,
@@ -903,6 +1033,32 @@ impl IdentityTestRunner {
         let path = output_directory.join("erebor-interceptor.bpf.o");
         fs::write(&path, BUNDLED_BPF_OBJECT).context(IoSnafu { path: &path })?;
         Ok(path)
+    }
+
+    fn materialize_execfail(&self, path: &Path) -> Result<()> {
+        let source = Path::new("/bin/true");
+        let mut bytes = fs::read(source).context(IoSnafu { path: source })?;
+        let (linker_offset, linker) = [
+            b"/lib64/ld-linux-x86-64.so.2\0".as_slice(),
+            b"/lib/ld-linux-aarch64.so.1\0".as_slice(),
+            b"/lib/ld-linux-armhf.so.3\0".as_slice(),
+            b"/lib/ld-linux-riscv64-lp64d.so.1\0".as_slice(),
+        ]
+        .into_iter()
+        .find_map(|linker| {
+            bytes
+                .windows(linker.len())
+                .position(|candidate| candidate == linker)
+                .map(|offset| (offset, linker))
+        })
+        .ok_or_else(|| invalid_state("/bin/true has no supported ELF interpreter"))?;
+        let mut missing_linker = linker.to_vec();
+        missing_linker[1] = b'z';
+        bytes[linker_offset..linker_offset + linker.len()].copy_from_slice(&missing_linker);
+        fs::write(path, bytes).context(IoSnafu { path })?;
+        let mut permissions = fs::metadata(path).context(IoSnafu { path })?.permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(path, permissions).context(IoSnafu { path })
     }
 
     fn wait_for<T, F>(&self, description: &str, path: &Path, mut inspect: F) -> Result<T>
@@ -964,15 +1120,30 @@ impl NativeProcessFixture {
     }
 
     fn start_with_script(script: &str, parent_exit_mode: bool) -> Result<Self> {
-        let mut outer = Command::new("/bin/sh")
-            .args(["-c", script])
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", script]);
+        Self::start_command(&mut command, parent_exit_mode, Path::new("/bin/sh"))
+    }
+
+    fn start_with_failed_exec(execfail: &Path, ready: &Path) -> Result<Self> {
+        let mut command = Command::new("/bin/bash");
+        command
+            .args([
+                "-c",
+                "read _; /bin/bash -c 'read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; shopt -s execfail; exec \"$0\"; : > \"$1\"; kill -STOP \"$child_pid\"; exec /bin/sleep 30' \"$0\" \"$1\" & wait \"$!\"",
+            ])
+            .arg(execfail)
+            .arg(ready);
+        Self::start_command(&mut command, false, Path::new("/bin/bash"))
+    }
+
+    fn start_command(command: &mut Command, parent_exit_mode: bool, path: &Path) -> Result<Self> {
+        let mut outer = command
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
-            .context(IoSnafu {
-                path: Path::new("/bin/sh"),
-            })?;
+            .context(IoSnafu { path })?;
         let stdin = outer
             .stdin
             .take()
@@ -1419,6 +1590,48 @@ mod tests {
         fixture.open_native_pidfd(native_pid)?;
         fixture.release_exec(native_pid)?;
         fixture.wait_for_native_exec_failure()
+    }
+
+    #[test]
+    fn native_process_fixture_recovers_from_bash_execfail() -> crate::Result<()> {
+        let runner = IdentityTestRunner::new(".");
+        let temporary = tempfile::tempdir().map_err(|error| {
+            super::invalid_state(format!("create exec-failure test directory: {error}"))
+        })?;
+        let execfail = temporary.path().join("execfail");
+        let ready = temporary.path().join("execfail-ready");
+        runner.materialize_execfail(&execfail)?;
+
+        let mut fixture = NativeProcessFixture::start_with_failed_exec(&execfail, &ready)?;
+        fixture.release_root()?;
+        let children_path =
+            PathBuf::from(format!("/proc/{0}/task/{0}/children", fixture.outer_pid()));
+        let native_pid = runner.wait_for("Bash execfail child creation", &children_path, || {
+            fixture.native_child_pid()
+        })?;
+        fixture.open_native_pidfd(native_pid)?;
+        fixture.release_exec(native_pid)?;
+        let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
+        runner.wait_for("Bash execfail recovery", &ready, || {
+            if !ready.exists() {
+                fixture.native_child_pid()?;
+                return Ok(None);
+            }
+            fs::read_to_string(&comm_path)
+                .map(|name| (name.trim() == "bash").then_some(()))
+                .map_err(|error| {
+                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
+                })
+        })?;
+        fixture.release_exec(native_pid)?;
+        runner.wait_for("Bash execfail later normal exec", &comm_path, || {
+            fs::read_to_string(&comm_path)
+                .map(|name| (name.trim() == "sleep").then_some(()))
+                .map_err(|error| {
+                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
+                })
+        })?;
+        Ok(())
     }
 
     #[test]
