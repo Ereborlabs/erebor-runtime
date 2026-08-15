@@ -98,6 +98,18 @@ start hook.
 | `ENTRY-START-001` | delay/drop configured start-hook metadata | first unresolved protected effect denies; measured start gap remains explicit |
 | `ENTRY-STOCK-HOOK-FAILURE-002` | fail/timeout/mismatch the configured stock hook | exact documented failure result; no held-task or purpose claim |
 
+## Recorded Direct CRI Result — 2026-08-15
+
+The K3s VM lane ran a direct `crictl exec` in the exact configured container.
+The task record had no creator task cookie, `external_runtime_root` as its root
+class, and `runtime_external_restricted` as its installed role. The lane also
+completed its OBSERVE and PROTECT checks and removed its owned namespace,
+fixture, pin root, and lane state.
+
+Use [`examples/mithril-identity-manual/cri-exec.sh`](../../../../examples/mithril-identity-manual/cri-exec.sh)
+for the readable operator procedure. This result covers one direct CRI exec.
+It does not complete the full entry or failure-injection matrix.
+
 ## Native Identity Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |
