@@ -234,3 +234,22 @@ Its real-parent cookie changed to `0`, its real-parent interval changed to
 This is physical evidence for the double-fork subcase of
 `ID-CREATOR-PARENT-007` only. It does not qualify subreaper, namespace-init,
 ptrace-reparenting, or PID-reuse cases. The phase remains **Blocked**.
+
+## Moved-Parent Fork Source Update — 2026-08-15
+
+Source commit `8dbd9f5910cceeb9155a2701f47bbdfe25f58d25` adds a source-backed
+ordinary-fork check for `ID-MOVED-PARENT-FORK-004`. The identity probe moves
+its labeled `CloneIntoCgroupFixture` root to the parent cgroup. It requires
+the `fail_closed_unknown` state before it resumes the root and requires its
+ordinary `fork` call to fail with `EACCES`. The fixture also rejects a visible
+child and the runner requires one more placement-mismatch count. The output
+sets `moved_parent_fork_denied=true` only after those checks pass.
+
+The Linux Security Module task-allocation hook rejects a labeled creator when
+its active cgroup binding does not match the label placement. The node
+configures that denial as `EACCES`. The focused fixture test and
+`bash .github/scripts/verify-rust-ci.sh` passed for this source change.
+
+No privileged VM ran this slice. The existing manual catalog keeps the row,
+but its operator scripts do not create this controlled fixture. The phase
+remains **Blocked**.

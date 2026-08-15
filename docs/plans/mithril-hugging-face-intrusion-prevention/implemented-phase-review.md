@@ -206,6 +206,45 @@ the inherited restricted role. It does not treat the outer task as the new
 real parent. Linux can reparent to another live kernel parent, and the BPF
 record preserves that kernel fact without assigning it an authority role.
 
+### Moved-parent ordinary-fork source review
+
+Source change `8dbd9f5910cceeb9155a2701f47bbdfe25f58d25` adds the source-backed
+check for `ID-MOVED-PARENT-FORK-004`. It reuses the existing protected
+`CloneIntoCgroupFixture`, inspector, and physical-probe bundle. It adds one
+boolean result. No privileged VM has run this slice. Phase 2 remains
+**Blocked**.
+
+Review this narrow path in order:
+
+1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L334)
+   starts the existing labeled root, moves it to the parent cgroup, and
+   requires the restricted fail-closed snapshot. It then resumes the root and
+   requires a second placement-mismatch count.
+2. [`CloneIntoCgroupFixture::moved_parent_fork_denied`](../../../crates/mithril-e2e/src/identity/clone3.rs#L106)
+   waits for the root to exit with `EACCES`. Before that exit, it rejects a
+   visible child. The fixture cleanup retains pidfd ownership of an unexpected
+   child.
+3. [`run_child`](../../../crates/mithril-e2e/src/identity/clone3.rs#L185)
+   makes the ordinary `fork`. A child would stop for inspection. A failed
+   `fork` exits with its errno. Therefore, the required childless `EACCES`
+   exit is the fixture's physical oracle.
+4. [`erebor_task_alloc`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L35)
+   checks the labeled creator before it creates the child. It calls the
+   fail-closed denial when the active binding does not match the label.
+   [`binding_matches_label`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L1029)
+   requires an active binding with the exact label binding ID and nonce.
+5. [`NativeSecurityStateOwner::activate_with_effect_policy`](../../../crates/mithril-node/src/identity/native.rs#L40)
+   configures the identity denial as `EACCES`.
+6. [`clone_into_cgroup_fixture_recognizes_childless_eacces_exit`](../../../crates/mithril-e2e/src/identity/clone3.rs#L216)
+   checks the fixture status oracle without a privileged host.
+
+`cargo test -p mithril-e2e clone_into_cgroup_fixture_recognizes_childless_eacces_exit --all-features`,
+the existing native-process fixture tests, and
+`bash .github/scripts/verify-rust-ci.sh` passed. This is source-test evidence,
+not physical qualification. The manual catalog retains the fixture row. No
+manual procedure was added because the existing scripts do not create this
+controlled fixture.
+
 This guide is explanatory only. The authoritative scope and acceptance records
 remain the phase documents and the readable architecture:
 
