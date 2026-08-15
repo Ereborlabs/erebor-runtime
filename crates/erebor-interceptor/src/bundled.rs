@@ -1002,6 +1002,30 @@ mod tests {
     }
 
     #[test]
+    fn capability_observations_keep_the_numeric_capability() {
+        let source =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h");
+        let dispatch = source
+            .split("static __noinline int dispatch_identity_effect_gate")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __noinline int identity_effect_gate")
+                    .next()
+            })
+            .unwrap_or_default();
+        let capable = source
+            .split("SEC(\"lsm/capable\")")
+            .nth(1)
+            .unwrap_or_default();
+
+        assert!(dispatch.contains("operation_argument = scratch->observation.operation_argument"));
+        assert!(dispatch.contains("scratch->observation.operation_argument = operation_argument"));
+        assert!(capable.contains("identity_effect_gate_with_argument"));
+        assert!(capable.contains("(__u32)cap"));
+    }
+
+    #[test]
     fn unrepresentable_exec_candidate_reaches_effect_policy_without_allocating_ids() {
         let source = include_str!("../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h");
         let initial = source

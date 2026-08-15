@@ -52,8 +52,10 @@ static __noinline int ipc_current_actor(int ret)
     identity_runtime_config_v1 *config;
     struct identity_scratch_v1 *scratch = identity_scratch_record();
 
-    if (scratch)
+    if (scratch) {
         scratch->effect_gate_flags = EFFECT_GATE_DEFER_DECISION_V1;
+        scratch->observation.operation_argument = 0;
+    }
     if (!ret)
         prepare_effect_identity();
     ret = dispatch_identity_effect_gate(

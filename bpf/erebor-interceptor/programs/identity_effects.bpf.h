@@ -523,12 +523,16 @@ static __noinline int dispatch_identity_effect_gate(
     identity_runtime_config_v1 *config = identity_runtime_config();
     struct identity_scratch_v1 *scratch;
     io_uring_execution_state_v1 *io_uring_execution;
+    __u32 operation_argument = 0;
 
     if (!config || !config->enabled)
         return ret;
     scratch = identity_scratch_record();
-    if (scratch)
+    if (scratch) {
+        operation_argument = scratch->observation.operation_argument;
         begin_effect_observation(scratch, effect_family, operation);
+        scratch->observation.operation_argument = operation_argument;
+    }
     io_uring_execution = bpf_task_storage_get(
         &io_uring_execution_states, bpf_get_current_task_btf(), 0, 0);
     if (io_uring_execution &&
@@ -549,8 +553,26 @@ static __noinline int identity_effect_gate(struct file *file,
 {
     struct identity_scratch_v1 *scratch = identity_scratch_record();
 
-    if (scratch)
+    if (scratch) {
         scratch->effect_gate_flags = 0;
+        scratch->observation.operation_argument = 0;
+    }
+    if (!ret)
+        prepare_effect_identity();
+    return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
+                                         ret);
+}
+
+static __noinline int identity_effect_gate_with_argument(
+    struct file *file, __u16 effect_family, __u16 operation,
+    __u32 operation_argument, int ret)
+{
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
+
+    if (scratch) {
+        scratch->effect_gate_flags = 0;
+        scratch->observation.operation_argument = operation_argument;
+    }
     if (!ret)
         prepare_effect_identity();
     return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
@@ -562,8 +584,10 @@ static __noinline int identity_effect_gate_without_exception(
 {
     struct identity_scratch_v1 *scratch = identity_scratch_record();
 
-    if (scratch)
+    if (scratch) {
         scratch->effect_gate_flags = EFFECT_GATE_DENY_EXCEPTION_V1;
+        scratch->observation.operation_argument = 0;
+    }
     if (!ret)
         prepare_effect_identity();
     return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
@@ -575,8 +599,10 @@ static __noinline int identity_file_open_effect_gate(
 {
     struct identity_scratch_v1 *scratch = identity_scratch_record();
 
-    if (scratch)
+    if (scratch) {
         scratch->effect_gate_flags = EFFECT_GATE_FILE_OPEN_ATTEMPT_V1;
+        scratch->observation.operation_argument = 0;
+    }
     if (!ret)
         prepare_effect_identity();
     return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
@@ -588,8 +614,10 @@ static __noinline int identity_effect_actor_gate(
 {
     struct identity_scratch_v1 *scratch = identity_scratch_record();
 
-    if (scratch)
+    if (scratch) {
         scratch->effect_gate_flags = EFFECT_GATE_DEFER_DECISION_V1;
+        scratch->observation.operation_argument = 0;
+    }
     if (!ret)
         prepare_effect_identity();
     return dispatch_identity_effect_gate(file, NULL, effect_family, operation,
@@ -602,8 +630,10 @@ static __noinline int identity_path_effect_gate(const struct path *path,
 {
     struct identity_scratch_v1 *scratch = identity_scratch_record();
 
-    if (scratch)
+    if (scratch) {
         scratch->effect_gate_flags = 0;
+        scratch->observation.operation_argument = 0;
+    }
     if (!ret)
         prepare_effect_identity();
     return dispatch_identity_effect_gate(NULL, path, effect_family, operation,
@@ -1029,8 +1059,9 @@ SEC("lsm/capable")
 int BPF_PROG(erebor_identity_capable, const struct cred *cred,
              struct user_namespace *ns, int cap, unsigned int opts, int ret)
 {
-    return identity_effect_gate(NULL, kernel_effect_family_v1_privilege,
-                                kernel_effect_operation_v1_capability, ret);
+    return identity_effect_gate_with_argument(
+        NULL, kernel_effect_family_v1_privilege,
+        kernel_effect_operation_v1_capability, (__u32)cap, ret);
 }
 
 SEC("lsm/bpf")
