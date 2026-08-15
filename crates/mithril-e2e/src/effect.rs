@@ -2597,7 +2597,7 @@ impl EffectTestRunner {
             "UNSUPPORTED_OBJECT",
             (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
         )?;
-        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
+        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
         let reconciled_marker = observations.cursor();
         ensure!(
             fixture.open(&paths.secret)?.allowed != protect,
@@ -2606,7 +2606,7 @@ impl EffectTestRunner {
                 reason: "failed protected mounts left the exact path permanently unavailable",
             }
         );
-        wait_for_reason(
+        wait_for_exact_effect(
             &reader,
             &observations,
             reconciled_marker,
@@ -2615,6 +2615,12 @@ impl EffectTestRunner {
             } else {
                 "WOULD_DENY"
             },
+            (
+                KernelEffectFamilyV1::File,
+                KernelEffectOperationV1::OpenRead,
+            ),
+            EXACT_OBJECT_KEY_ID,
+            None,
         )?;
 
         external_mount_namespace.bind_mount(&paths.benign, &paths.secret)?;
@@ -2648,7 +2654,7 @@ impl EffectTestRunner {
             }
         );
         external_mount_namespace.unmount(&paths.secret)?;
-        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
+        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
         let restored_marker = observations.cursor();
         ensure!(
             fixture.open(&paths.secret)?.allowed != protect,
@@ -2658,7 +2664,7 @@ impl EffectTestRunner {
                     "the exact object did not recover after the hostile replacement was removed",
             }
         );
-        wait_for_reason(
+        wait_for_exact_effect(
             &reader,
             &observations,
             restored_marker,
@@ -2667,6 +2673,12 @@ impl EffectTestRunner {
             } else {
                 "WOULD_DENY"
             },
+            (
+                KernelEffectFamilyV1::File,
+                KernelEffectOperationV1::OpenRead,
+            ),
+            EXACT_OBJECT_KEY_ID,
+            None,
         )?;
 
         ensure!(
@@ -2692,7 +2704,7 @@ impl EffectTestRunner {
                 reason: "one represented namespace authorized an exact open after propagation",
             }
         );
-        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
+        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
         ensure!(
             fixture.open(&paths.benign)?.allowed && fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
@@ -2708,7 +2720,7 @@ impl EffectTestRunner {
                 reason: "propagated unmount did not invalidate the peer namespace",
             }
         );
-        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
+        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
         ensure!(
             fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
@@ -2727,7 +2739,7 @@ impl EffectTestRunner {
                 reason: "mount_setattr did not invalidate every represented namespace",
             }
         );
-        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
+        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
         ensure!(
             fixture.open(&paths.benign)?.allowed && fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
@@ -2743,7 +2755,7 @@ impl EffectTestRunner {
                 reason: "mount_setattr restore did not invalidate the global view",
             }
         );
-        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
+        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
         ensure!(
             fixture.open(&paths.benign)?.allowed,
             InvalidInputSnafu {
