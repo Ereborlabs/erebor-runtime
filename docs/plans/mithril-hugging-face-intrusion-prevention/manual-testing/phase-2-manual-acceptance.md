@@ -52,6 +52,18 @@ the placement-mismatch counter. The runner then removed its pin root, lease,
 and cgroup. This is qualified evidence for `ID-CGROUP-ESCAPE-001` only. The
 full matrix remains not done.
 
+Creator-exit VM record, 2026-08-15: the physical runner passed on Linux
+`6.8.0-137-generic` with BPF object SHA-256
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+The retained result JSON has SHA-256
+`1297453be1edb7339bd3d28ab43ac75604f62d2401ce7cc85e1d4da65cb5aaa3`.
+The stopped child kept task cookie `44` and creator task cookie `41` after the
+creator exited. Its real parent changed from `41` to `0`, and its real-parent
+interval sequence changed from `1` to `2` when it executed `sleep`. The child
+remained a restricted native task. The runner removed its pin root, lease, and
+cgroup. This is qualified evidence for the creator-exit branch of
+`ID-CREATOR-PARENT-007` only. The full matrix remains blocked.
+
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured
