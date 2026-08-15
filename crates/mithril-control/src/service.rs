@@ -650,22 +650,16 @@ mod tests {
             .register("node-a", &[1; 16], &"a".repeat(64))
             .is_ok());
         assert!(control.record_node_sequence("node-a", &[1; 16], 2).is_ok());
-        assert_eq!(
-            control
-                .register("node-a", &[1; 16], &"a".repeat(64))
-                .unwrap_err()
-                .code(),
-            tonic::Code::AlreadyExists
-        );
+        assert!(matches!(
+            control.register("node-a", &[1; 16], &"a".repeat(64)),
+            Err(error) if error.code() == tonic::Code::AlreadyExists
+        ));
         assert!(control.record_node_sequence("node-a", &[1; 16], 3).is_ok());
         control.unregister(&identity);
-        assert_eq!(
-            control
-                .register("node-a", &[1; 16], &"a".repeat(64))
-                .unwrap_err()
-                .code(),
-            tonic::Code::AlreadyExists
-        );
+        assert!(matches!(
+            control.register("node-a", &[1; 16], &"a".repeat(64)),
+            Err(error) if error.code() == tonic::Code::AlreadyExists
+        ));
         assert!(control
             .register("node-a", &[2; 16], &"c".repeat(64))
             .is_err());
