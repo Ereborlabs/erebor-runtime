@@ -851,20 +851,42 @@ impl EffectTestRunner {
             None,
         )
         .context(NodeSnafu)?;
+        let second_bind_alias_object = ExactFileObjectResolver::resolve(
+            fixture.pid(),
+            &paths.second_bind_alias,
+            PROFILE_GENERATION_REF_ID,
+            EXACT_OBJECT_KEY_ID,
+            "MANUAL_SECRET".to_owned(),
+            secret_inode_generation,
+            None,
+        )
+        .context(NodeSnafu)?;
         ensure!(
             exact_object.mount_id_unique != bind_alias_object.mount_id_unique
+                && exact_object.mount_id_unique != second_bind_alias_object.mount_id_unique
+                && bind_alias_object.mount_id_unique != second_bind_alias_object.mount_id_unique
                 && exact_object.selected_mount_id_unique
                     == bind_alias_object.selected_mount_id_unique
+                && exact_object.selected_mount_id_unique
+                    == second_bind_alias_object.selected_mount_id_unique
                 && exact_object.canonical_component_hex
                     == bind_alias_object.canonical_component_hex
+                && exact_object.canonical_component_hex
+                    == second_bind_alias_object.canonical_component_hex
                 && exact_object.mount_namespace_inode
                     == bind_alias_object.mount_namespace_inode
+                && exact_object.mount_namespace_inode
+                    == second_bind_alias_object.mount_namespace_inode
                 && exact_object.filesystem_device == bind_alias_object.filesystem_device
+                && exact_object.filesystem_device
+                    == second_bind_alias_object.filesystem_device
                 && exact_object.inode == bind_alias_object.inode
-                && exact_object.inode_generation == bind_alias_object.inode_generation,
+                && exact_object.inode == second_bind_alias_object.inode
+                && exact_object.inode_generation == bind_alias_object.inode_generation
+                && exact_object.inode_generation == second_bind_alias_object.inode_generation,
             InvalidInputSnafu {
-                path: &paths.bind_alias,
-                reason: "the bind fixture is not a distinct live mount of the same canonical exact object",
+                path: &paths.second_bind_alias,
+                reason: "the bind fixtures are not distinct live mounts of the same canonical exact object",
             }
         );
         let benign_inode_generation = inode_generation(fixture.pid(), &paths.benign)?;
@@ -2510,42 +2532,57 @@ impl EffectTestRunner {
             "UNRESOLVED_OBJECT",
         )?;
 
-        let bind_marker = observations.cursor();
-        ensure!(
-            fixture.open(&paths.bind_alias)?.allowed != protect,
-            InvalidInputSnafu {
-                path: &paths.bind_alias,
-                reason: "later bind alias did not preserve the exact policy result",
+        for (bind_alias, bind_alias_object) in [
+            (&paths.bind_alias, &bind_alias_object),
+            (&paths.second_bind_alias, &second_bind_alias_object),
+        ] {
+            let bind_marker = observations.cursor();
+            let bind_alias_outcome = fixture.open(bind_alias)?;
+            ensure!(
+                bind_alias_outcome.allowed != protect,
+                InvalidInputSnafu {
+                    path: bind_alias,
+                    reason: "pre-existing bind alias did not preserve the exact policy result",
+                }
+            );
+            if protect {
+                ensure!(
+                    bind_alias_outcome.denied(),
+                    InvalidInputSnafu {
+                        path: bind_alias,
+                        reason: "protected bind alias returned a file descriptor",
+                    }
+                );
             }
-        );
-        wait_for_effect(
-            &reader,
-            &observations,
-            bind_marker,
-            exact_reason,
-            (
-                KernelEffectFamilyV1::File,
-                KernelEffectOperationV1::OpenRead,
-            ),
-        )?;
-        ensure!(
-            observations
-                .recent_since(bind_marker)
-                .iter()
-                .any(|event| {
-                    event.reason == exact_reason
-                        && event.mount_id_unique == bind_alias_object.mount_id_unique
-                        && event.filesystem_device == bind_alias_object.filesystem_device
-                        && event.inode == bind_alias_object.inode
-                        && event.inode_generation == bind_alias_object.inode_generation
-                        && event.exact_object_key_id == EXACT_OBJECT_KEY_ID
-                        && event.composite_atom_id == original_composite_atom_id
-                }),
-            InvalidInputSnafu {
-                path: Path::new("effect_observations"),
-                reason: "bind-alias evidence did not preserve the live alias identity and canonical exact authority",
-            }
-        );
+            wait_for_effect(
+                &reader,
+                &observations,
+                bind_marker,
+                exact_reason,
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+            )?;
+            ensure!(
+                observations
+                    .recent_since(bind_marker)
+                    .iter()
+                    .any(|event| {
+                        event.reason == exact_reason
+                            && event.mount_id_unique == bind_alias_object.mount_id_unique
+                            && event.filesystem_device == bind_alias_object.filesystem_device
+                            && event.inode == bind_alias_object.inode
+                            && event.inode_generation == bind_alias_object.inode_generation
+                            && event.exact_object_key_id == EXACT_OBJECT_KEY_ID
+                            && event.composite_atom_id == original_composite_atom_id
+                    }),
+                InvalidInputSnafu {
+                    path: Path::new("effect_observations"),
+                    reason: "bind-alias evidence did not preserve the live alias identity and canonical exact authority",
+                }
+            );
+        }
 
         for (operation, expected_effect, label) in [
             (

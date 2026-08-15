@@ -182,6 +182,7 @@ pub(super) struct EffectPaths {
     pub(super) hard_link: PathBuf,
     pub(super) symlink_alias: PathBuf,
     pub(super) bind_alias: PathBuf,
+    pub(super) second_bind_alias: PathBuf,
     pub(super) benign: PathBuf,
     pub(super) exec_target: PathBuf,
     pub(super) allowed_exec_target: PathBuf,
@@ -927,6 +928,8 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     let symlink_alias = root.join("symlink-alias");
     let bind_directory = root.join("bind-alias");
     let bind_alias = bind_directory.join("secret");
+    let second_bind_directory = root.join("second-bind-alias");
+    let second_bind_alias = second_bind_directory.join("secret");
     let benign = root.join("benign");
     let exec_target = root.join("exec-target");
     let allowed_exec_target = root.join("allowed-exec-target");
@@ -991,6 +994,9 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
     fs::create_dir(&bind_directory).context(IoSnafu {
         path: &bind_directory,
     })?;
+    fs::create_dir(&second_bind_directory).context(IoSnafu {
+        path: &second_bind_directory,
+    })?;
     fs::create_dir(&mount_target).context(IoSnafu {
         path: &mount_target,
     })?;
@@ -1018,6 +1024,11 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
         .context(IoSnafu {
             path: &bind_directory,
         })?;
+    rustix::mount::mount_bind(&source, &second_bind_directory)
+        .map_err(std::io::Error::from)
+        .context(IoSnafu {
+            path: &second_bind_directory,
+        })?;
     rustix::mount::mount_bind(&mount_target, &mount_target)
         .map_err(std::io::Error::from)
         .context(IoSnafu {
@@ -1029,6 +1040,7 @@ fn setup_paths(root: &Path) -> Result<EffectPaths> {
         hard_link,
         symlink_alias,
         bind_alias,
+        second_bind_alias,
         benign,
         exec_target,
         allowed_exec_target,

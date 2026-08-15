@@ -133,8 +133,8 @@ Manual Docker, CRI, and raw-namespace cases:
 - `docker-hardlink-deny.sh <node.json> <container> <secret>` proves an
   undeclared hard-link spelling cannot return a protected fd. The secret's
   parent directory must permit creation of the temporary hard link.
-- `nsenter-bind-alias-deny.sh <node.json> <container> <secret>` creates
-  a bind alias before activation and proves it canonicalizes to the same deny.
+- `nsenter-bind-alias-deny.sh <node.json> <container> <secret>` creates two
+  bind aliases before activation and proves each canonicalizes to the same deny.
 - `mount-attack-deny.sh <node.json> <container> <secret>` races eight
   protected bind mounts and proves no mutation or protected read succeeds.
 - `external-mount-replacement-deny.sh <node.json> <container> <secret>
