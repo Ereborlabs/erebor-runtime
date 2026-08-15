@@ -148,6 +148,7 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub distinct_pin_root_owner_rejected: bool,
     pub cgroup_escape_root: NativeTaskSnapshotV1,
     pub cgroup_escape_placement_mismatch_detected: bool,
+    pub moved_parent_fork_denied: bool,
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub external_root: NativeTaskSnapshotV1,
@@ -371,6 +372,21 @@ impl IdentityTestRunner {
             InvalidInputSnafu {
                 path: &parent_procs_path,
                 reason: "moving a labeled root out of its cgroup did not fail closed",
+            }
+        );
+        escape_fixture.release_root()?;
+        self.wait_for(
+            "moved-parent ordinary fork denial",
+            &parent_procs_path,
+            || escape_fixture.moved_parent_fork_denied(),
+        )?;
+        let health_after_moved_parent_fork = identity.health(&host).context(NodeSnafu)?;
+        ensure!(
+            health_after_moved_parent_fork.placement_mismatches
+                > health_after_escape.placement_mismatches,
+            InvalidInputSnafu {
+                path: &parent_procs_path,
+                reason: "a moved labeled parent did not record its denied ordinary fork",
             }
         );
         escape_fixture.stop();
@@ -765,6 +781,7 @@ impl IdentityTestRunner {
             distinct_pin_root_owner_rejected,
             cgroup_escape_root,
             cgroup_escape_placement_mismatch_detected: true,
+            moved_parent_fork_denied: true,
             clone_into_cgroup_external_root: clone_external_root,
             clone_into_cgroup_native_child: clone_native_child,
             external_root,
