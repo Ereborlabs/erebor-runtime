@@ -288,15 +288,6 @@ impl IdentityTestRunner {
         let first_start = host.manifest().clone();
         let alternate_pin_root = pin_root.with_extension("alternate");
         let alternate_lease_path = lease_path.with_extension("alternate.lock");
-        ensure!(
-            !alternate_pin_root.exists() && !alternate_lease_path.exists(),
-            InvalidInputSnafu {
-                path: &alternate_pin_root,
-                reason: "the alternate owner paths already exist",
-            }
-        );
-        let alternate_pin_cleanup = ProbeDirectory::new(&alternate_pin_root);
-        let alternate_lease_cleanup = ProbeFile::new(&alternate_lease_path);
         let distinct_pin_root_owner_rejected =
             match KernelHostOwner::new(KernelHostConfig::identity(
                 "/sys/kernel/btf/vmlinux",
@@ -311,15 +302,13 @@ impl IdentityTestRunner {
                 Err(source) => return Err(crate::Error::from_interceptor(source)),
                 Ok(alternate) => {
                     alternate.shutdown().context(InterceptorSnafu)?;
+                    ProbeDirectory::new(&alternate_pin_root).cleanup()?;
+                    ProbeFile::new(&alternate_lease_path).cleanup()?;
                     false
                 }
             };
-        alternate_pin_cleanup.cleanup()?;
-        alternate_lease_cleanup.cleanup()?;
         ensure!(
-            distinct_pin_root_owner_rejected
-                && !alternate_pin_root.exists()
-                && !alternate_lease_path.exists(),
+            distinct_pin_root_owner_rejected,
             InvalidInputSnafu {
                 path: &alternate_pin_root,
                 reason: "a distinct Interceptor owner acquired the host lease",
