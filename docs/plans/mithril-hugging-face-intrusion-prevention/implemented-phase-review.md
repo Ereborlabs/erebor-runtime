@@ -164,6 +164,37 @@ Mithril pin or process. Only unrelated BPF link 1 remained.
 This closes only the direct-CRI exact-file row. It does not qualify projected
 token behavior or the remaining manual matrix. Phase 3 remains **Blocked**.
 
+### Retained alias and mount evidence — 2026-08-15
+
+At source `5b1abfa984d0`, a retained x86_64 VM ran the existing
+[`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L639)
+owner in `PROTECT` mode with unique pin-root, lease, cgroup, fixture, and
+output paths. The JSON artifact SHA-256 is
+`9cfda0507593f4b2b2ca040d58f2bb03d922bbf2cc0f93d182ec746859157dca`.
+The binary SHA-256 is
+`8426f68d285187e74e39bfadadeb57c3595a944a200001df639a685116bbfd1b`.
+The embedded BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+
+The record has `bind_alias_canonicalized=true`,
+`mount_stale_proposal_failed_closed=true`,
+`protected_mount_race_denied=true`,
+`external_mount_replacement_failed_closed=true`, and
+`exact_object_restored_after_reconciliation=true`. It also has
+`mount_propagation_reached_peer=true`,
+`mount_propagation_all_views_failed_closed=true`,
+`mount_propagation_reconciled=true`,
+`mount_setattr_global_invalidation=true`, and
+`mount_setattr_reconciled=true`. The cleanup fields
+`pin_root_removed=true`, `lease_removed=true`, `cgroup_removed=true`, and
+`fixture_root_removed=true`. Postflight found no unique Mithril state or
+Mithril/Erebor process. Only the unrelated `hid_tail_call` BPF link remained.
+
+This is physical evidence for the implemented alias and mount-CAS slice. It
+does not replace a fresh full-harness qualification. Phase 4 remains
+**Not done**. The administrative runc bootstrap sequence remains unsupported;
+do not add a broad runc, pipe, or socket exception.
+
 The automatic probe does not replace the full qualification matrix. The
 checked registry now contains the digest-bound Appendix C fixture IDs,
 required family membership, and canonical golden inputs. The architecture

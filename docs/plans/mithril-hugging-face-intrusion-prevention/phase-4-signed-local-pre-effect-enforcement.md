@@ -255,3 +255,38 @@ It did not invalidate the completed CRI artifacts. This is one K3s
 policy-aware deny and legitimate-control result. It does not qualify rotating
 projected tokens, the administrative runc bootstrap path, or the remaining
 Phase 4 matrix. The phase remains **Not done**.
+
+## Qualification update — 2026-08-15 — retained VM mount slice
+
+At source commit `5b1abfa984d0`, the retained x86_64 VM ran
+`mithril-effect-test physical-probe --protect` with unique pin-root, lease,
+cgroup, fixture, and output paths. The JSON artifact is
+`/tmp/mithril-phase234-codex-retained-1/phase4-meta-mount-5b1abfa984d0-20260815T144741Z/effect-physical-probe.json`,
+SHA-256 `9cfda0507593f4b2b2ca040d58f2bb03d922bbf2cc0f93d182ec746859157dca`.
+The binary SHA-256 is
+`8426f68d285187e74e39bfadadeb57c3595a944a200001df639a685116bbfd1b`.
+The embedded BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+The run reused the retained checked test-signing fixture only after its
+SHA-256 matched `69cb65712b6e3b31d67de53e7eefa898027dc63e19f4f67ae0ae3e698a8fa0f8`.
+It did not copy the signing key.
+
+The JSON records `bind_alias_canonicalized=true`,
+`protected_mount_race_denied=true`,
+`mount_stale_proposal_failed_closed=true`,
+`external_mount_replacement_failed_closed=true`, and
+`exact_object_restored_after_reconciliation=true`. It also records
+`mount_propagation_reached_peer=true`,
+`mount_propagation_all_views_failed_closed=true`,
+`mount_propagation_reconciled=true`,
+`mount_setattr_global_invalidation=true`, and
+`mount_setattr_reconciled=true`. The cleanup fields
+`pin_root_removed=true`, `lease_removed=true`, `cgroup_removed=true`, and
+`fixture_root_removed=true`. Postflight found no unique pin, lease, cgroup,
+fixture root, or Mithril/Erebor process. Only the unrelated
+`hid_tail_call` BPF link remained.
+
+This retained-VM record qualifies the implemented alias and mount-CAS slice.
+It does not replace a fresh full-harness qualification record. The phase
+remains **Not done**. The administrative runc bootstrap sequence remains
+unsupported. Do not add a broad runc, pipe, or socket exception.
