@@ -31,7 +31,7 @@ grep -q '^  serviceAccountName: mithril-runtime$' \
 grep -q '^          readOnly: true$' "$directory/k3s-workload-v1.yaml"
 grep -q '^        path: /var/lib/mithril-vm-qualification/secret$' \
   "$directory/k3s-workload-v1.yaml"
-grep -q '^        path: /var/lib/mithril-vm-qualification/admin-exec$' \
+grep -q '^        path: /var/lib/mithril-vm-qualification/busybox$' \
   "$directory/k3s-workload-v1.yaml"
 grep -q '^        type: File$' "$directory/k3s-workload-v1.yaml"
 grep -q '^      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662$' \

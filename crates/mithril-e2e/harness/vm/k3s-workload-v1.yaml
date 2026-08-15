@@ -32,7 +32,7 @@ spec:
           mountPath: /var/lib/mithril/secret
           readOnly: true
         - name: administrative-executable
-          mountPath: /var/lib/mithril/admin-exec
+          mountPath: /var/lib/mithril/busybox
           readOnly: true
   volumes:
     - name: service-account-token
@@ -48,5 +48,5 @@ spec:
         type: File
     - name: administrative-executable
       hostPath:
-        path: /var/lib/mithril-vm-qualification/admin-exec
+        path: /var/lib/mithril-vm-qualification/busybox
         type: File

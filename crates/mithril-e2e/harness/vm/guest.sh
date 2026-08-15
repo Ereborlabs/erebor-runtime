@@ -158,7 +158,7 @@ case ${1:-} in
     fixture_owned=true
     printf 'mithril-k3s-cri-effect\n' >"$fixture_root/secret"
     chmod 400 "$fixture_root/secret"
-    install -m 0555 "$(command -v busybox)" "$fixture_root/admin-exec"
+    install -m 0555 "$(command -v busybox)" "$fixture_root/busybox"
     /usr/local/bin/k3s kubectl apply -f "$manifest" >/dev/null
     /usr/local/bin/k3s kubectl -n "$namespace" wait \
       --for=condition=Ready pod/mithril-runtime --timeout=300s
@@ -326,7 +326,7 @@ case ${1:-} in
     fixture_owned=true
     printf 'mithril-k3s-cri-effect\n' >"$fixture_path"
     chmod 400 "$fixture_path"
-    install -m 0555 "$(command -v busybox)" "$fixture_root/admin-exec"
+    install -m 0555 "$(command -v busybox)" "$fixture_root/busybox"
 
     /usr/local/bin/k3s kubectl delete namespace "$namespace" \
       --ignore-not-found --wait=true --timeout=120s >/dev/null 2>&1 || true
@@ -623,7 +623,7 @@ case ${1:-} in
     container=runtime
     node_id=77777777-7777-4777-8777-777777777777
     fixture_root=/var/lib/mithril-vm-qualification
-    executable_path=$fixture_root/admin-exec
+    executable_path=$fixture_root/busybox
     lane_root=$work_directory/k3s-administrative-exec
     pin_root=/sys/fs/bpf/mithril-k3s-administrative-exec
     node_config=$lane_root/node.json
@@ -843,7 +843,7 @@ EOF
       exit 1
     }
     "$inspect" file-object --root-pid "$init_pid" \
-      --path /var/lib/mithril/admin-exec --profile-generation 1 \
+      --path /var/lib/mithril/busybox --profile-generation 1 \
       --exact-object-key 12 --object-class MANUAL_EXEC_ALLOWED \
       --inode-generation "$inode_generation" >"$executable_object"
     "$policy" compile --source "$policy_source" --seal-request "$seal_request" \
@@ -1006,7 +1006,7 @@ EOF
     KUBECONFIG="$credential_kubeconfig" "$kubectl_mithril" \
       --control-url https://localhost:9443 --control-ca "$ca" \
       exec -n "$namespace" -c "$container" \
-      "$pod" /var/lib/mithril/admin-exec sleep 20 >"$plugin_log" 2>&1 &
+      "$pod" /var/lib/mithril/busybox sleep 20 >"$plugin_log" 2>&1 &
     plugin_pid=$!
     activation_url=
     for _attempt in {1..300}; do
@@ -1027,7 +1027,7 @@ EOF
     }
     curl --silent --show-error --fail --cacert "$ca" "$activation_url" \
       >"$lane_root/activation.html"
-    grep -Fq '/var/lib/mithril/admin-exec sleep 20' \
+    grep -Fq '/var/lib/mithril/busybox sleep 20' \
       "$lane_root/activation.html"
     curl --silent --show-error --cacert "$ca" --dump-header "$lane_root/authorize.headers" \
       --output /dev/null "$activation_url/authorize"
@@ -1063,7 +1063,7 @@ EOF
       while read -r host_pid; do
         [[ -r /proc/$host_pid/cmdline ]] || continue
         command_line=$(tr '\0' ' ' <"/proc/$host_pid/cmdline")
-        if [[ $command_line == '/var/lib/mithril/admin-exec sleep 20 ' ]]; then
+        if [[ $command_line == '/var/lib/mithril/busybox sleep 20 ' ]]; then
           approved_pid=$host_pid
           break
         fi
@@ -1103,7 +1103,7 @@ EOF
 
     set +e
     /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
-      /var/lib/mithril/admin-exec true >"$lane_root/unapproved.out" 2>&1
+      /var/lib/mithril/busybox true >"$lane_root/unapproved.out" 2>&1
     unapproved_status=$?
     set -e
     [[ $unapproved_status -ne 0 ]] \
@@ -1115,14 +1115,14 @@ EOF
     }
 
     /usr/local/bin/k3s crictl exec "$container_id" \
-      /var/lib/mithril/admin-exec sleep 10 >"$lane_root/direct-runtime.out" 2>&1 &
+      /var/lib/mithril/busybox sleep 10 >"$lane_root/direct-runtime.out" 2>&1 &
     runtime_client_pid=$!
     restricted_pid=
     for _attempt in {1..200}; do
       while read -r host_pid; do
         [[ $host_pid == "$approved_pid" || ! -r /proc/$host_pid/cmdline ]] && continue
         command_line=$(tr '\0' ' ' <"/proc/$host_pid/cmdline")
-        if [[ $command_line == '/var/lib/mithril/admin-exec sleep 10 ' ]]; then
+        if [[ $command_line == '/var/lib/mithril/busybox sleep 10 ' ]]; then
           restricted_pid=$host_pid
           break
         fi

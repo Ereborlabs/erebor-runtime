@@ -128,6 +128,10 @@ the physical negative oracle for every advertised deny.
   terminal output. It prints the Control HTTP response body after a rejected
   draft. Use that result to correct the exact binding, policy, or mount-view
   state. Do not retry through raw `kubectl exec`.
+- The VM administrative fixture runs static BusyBox at
+  `/var/lib/mithril/busybox`. Invoke it as
+  `/var/lib/mithril/busybox sleep 20`. Do not rename this file to
+  `admin-exec`; BusyBox would not find that applet.
 - An event saying `deny` without errno and physical absence does not pass.
 - A failed physical operation still consumes a bounded exception when safe
   refund cannot be proved.
