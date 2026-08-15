@@ -92,7 +92,7 @@ impl ControlPlane {
     }
 
     #[must_use]
-    pub fn registered_connection_count(&self) -> usize {
+    pub fn registered_nonce_count(&self) -> usize {
         self.state
             .lock()
             .map_or(0, |state| state.node_sequences.len())
@@ -229,13 +229,11 @@ impl ControlPlane {
             .state
             .lock()
             .map_err(|_| Status::internal("control registration state is poisoned"))?;
-        if state
-            .node_sequences
-            .insert((node_id.to_owned(), nonce.to_vec()), 1)
-            .is_some()
-        {
+        let key = (node_id.to_owned(), nonce.to_vec());
+        if state.node_sequences.contains_key(&key) {
             return Err(Status::already_exists("registration nonce was replayed"));
         }
+        state.node_sequences.insert(key, 1);
         Ok(())
     }
 
@@ -372,9 +370,6 @@ impl ControlPlane {
 
     fn unregister(&self, identity: &StreamIdentity) {
         if let Ok(mut state) = self.state.lock() {
-            state
-                .node_sequences
-                .remove(&(identity.node_id.clone(), identity.connection_nonce.clone()));
             if state
                 .sessions
                 .get(&identity.node_id)
@@ -644,18 +639,37 @@ mod tests {
     }
 
     #[test]
-    fn registration_nonce_is_one_use_and_certificate_bound() {
+    fn registration_nonce_is_one_use_across_stream_teardown_and_certificate_bound() {
         let control = control();
+        let identity = StreamIdentity {
+            node_id: "node-a".to_owned(),
+            node_boot_id: vec![1; 16],
+            connection_nonce: vec![1; 16],
+        };
         assert!(control
             .register("node-a", &[1; 16], &"a".repeat(64))
             .is_ok());
-        assert!(control
-            .register("node-a", &[1; 16], &"a".repeat(64))
-            .is_err());
+        assert!(control.record_node_sequence("node-a", &[1; 16], 2).is_ok());
+        assert_eq!(
+            control
+                .register("node-a", &[1; 16], &"a".repeat(64))
+                .unwrap_err()
+                .code(),
+            tonic::Code::AlreadyExists
+        );
+        assert!(control.record_node_sequence("node-a", &[1; 16], 3).is_ok());
+        control.unregister(&identity);
+        assert_eq!(
+            control
+                .register("node-a", &[1; 16], &"a".repeat(64))
+                .unwrap_err()
+                .code(),
+            tonic::Code::AlreadyExists
+        );
         assert!(control
             .register("node-a", &[2; 16], &"c".repeat(64))
             .is_err());
-        assert_eq!(control.registered_connection_count(), 1);
+        assert_eq!(control.registered_nonce_count(), 1);
     }
 
     #[test]

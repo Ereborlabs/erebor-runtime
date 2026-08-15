@@ -41,17 +41,17 @@ async fn mtls_registration_acknowledges_trust_and_reconnects_with_a_fresh_nonce(
     let mut trust = TrustCache::load(directory.path())?;
     let first = connector.connect(registration(), true, &mut trust).await?;
     assert_eq!(trust.installed().generation, 4);
+    let first_nonce = trust.installed().control_connection_nonce.clone();
     drop(first);
     let second = connector.connect(registration(), true, &mut trust).await?;
+    assert_ne!(trust.installed().control_connection_nonce, first_nonce);
     for _ in 0..20 {
-        if control.registered_connection_count() == 2
-            && control.acknowledged_trust("node-a").is_some()
-        {
+        if control.registered_nonce_count() == 2 && control.acknowledged_trust("node-a").is_some() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    assert_eq!(control.registered_connection_count(), 2);
+    assert_eq!(control.registered_nonce_count(), 2);
     assert_eq!(
         control.acknowledged_trust("node-a"),
         Some(TrustGenerationV1 {
