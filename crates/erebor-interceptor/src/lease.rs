@@ -7,6 +7,8 @@ use snafu::ResultExt as _;
 use crate::error::{IoSnafu, LeaseOwnedSnafu};
 use crate::Result;
 
+const HOST_LEASE_PATH: &str = "/run/erebor-interceptor/owner.lock";
+
 pub(crate) struct PinRootLease {
     file: File,
 }
@@ -47,15 +49,35 @@ impl Drop for PinRootLease {
     }
 }
 
+pub(crate) struct KernelHostLease {
+    _host: PinRootLease,
+    _pin_root: PinRootLease,
+}
+
+impl KernelHostLease {
+    pub(crate) fn acquire(instance_lease_path: &Path) -> Result<Self> {
+        Self::acquire_at(Path::new(HOST_LEASE_PATH), instance_lease_path)
+    }
+
+    fn acquire_at(host_path: &Path, instance_lease_path: &Path) -> Result<Self> {
+        let host = PinRootLease::acquire(host_path)?;
+        let pin_root = PinRootLease::acquire(instance_lease_path)?;
+        Ok(Self {
+            _host: host,
+            _pin_root: pin_root,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use snafu::ResultExt as _;
 
-    use super::PinRootLease;
+    use super::{KernelHostLease, PinRootLease};
     use crate::error::IoSnafu;
 
     #[test]
-    fn runtime_mithril_and_co_resident_modes_use_the_same_exclusive_lease() -> crate::Result<()> {
+    fn pin_root_lease_rejects_a_concurrent_owner() -> crate::Result<()> {
         let directory = tempfile::tempdir().context(IoSnafu {
             action: "create temporary lease directory",
             path: "temporary lease directory",
@@ -71,6 +93,24 @@ mod tests {
             drop(first);
             assert!(PinRootLease::acquire(&path).is_ok());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn host_lease_rejects_a_distinct_pin_root_owner() -> crate::Result<()> {
+        let directory = tempfile::tempdir().context(IoSnafu {
+            action: "create temporary lease directory",
+            path: "temporary lease directory",
+        })?;
+        let host_path = directory.path().join("host.lock");
+        let first = KernelHostLease::acquire_at(&host_path, &directory.path().join("one.lock"))?;
+        assert!(
+            KernelHostLease::acquire_at(&host_path, &directory.path().join("two.lock")).is_err()
+        );
+        drop(first);
+        assert!(
+            KernelHostLease::acquire_at(&host_path, &directory.path().join("two.lock")).is_ok()
+        );
         Ok(())
     }
 }

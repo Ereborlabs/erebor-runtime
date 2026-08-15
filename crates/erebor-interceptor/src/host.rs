@@ -22,7 +22,7 @@ use zerocopy::IntoBytes as _;
 use crate::error::{
     InvalidConfigurationSnafu, IoSnafu, LibbpfSnafu, ManifestMismatchSnafu, StalePinRootSnafu,
 };
-use crate::lease::PinRootLease;
+use crate::lease::KernelHostLease;
 use crate::{
     bundled_bpf_sha256, KernelLinkManifestV1, KernelMapLayoutV1, KernelMapManifestV1,
     KernelObjectLayoutV1, KernelObjectManifestV1, KernelPlatformProbe, KernelPreflightV1,
@@ -382,7 +382,7 @@ pub struct KernelHostOwner {
 }
 
 pub struct KernelHost {
-    _lease: PinRootLease,
+    _lease: KernelHostLease,
     object: Object,
     links: Vec<Link>,
     pinned_paths: Vec<PathBuf>,
@@ -433,7 +433,7 @@ impl KernelHostOwner {
         let mut open = self.open_object(&mut builder, "open BPF object")?;
         let layout = self.inspect_open_object(&open)?;
         self.configure_autoload(&mut open);
-        let lease = PinRootLease::acquire(&self.config.lease_path)?;
+        let lease = KernelHostLease::acquire(&self.config.lease_path)?;
         if let Some(pin_root) = &self.config.pin_root {
             if pin_root.exists()
                 && fs::read_dir(pin_root)
@@ -626,7 +626,7 @@ impl KernelHostOwner {
         &self,
         pin_root: &Path,
         layout: KernelObjectLayoutV1,
-        lease: PinRootLease,
+        lease: KernelHostLease,
         preflight: KernelPreflightV1,
         object_sha256: String,
         mut open: OpenObject,
