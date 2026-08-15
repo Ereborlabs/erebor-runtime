@@ -1319,12 +1319,16 @@ impl EffectTestRunner {
                         .map(|event| {
                             (
                                 (
+                                    event.observed_boottime_ns,
+                                    event.task_cookie,
                                     event.reason.as_str(),
                                     event.effect_family,
                                     event.operation,
                                     event.operation_argument,
                                     event.exact_object_key_id,
                                     event.composite_atom_id,
+                                    event.kernel_result,
+                                    event.configured_errno,
                                 ),
                                 (
                                     event.io_uring_ring_id.as_str(),
@@ -1370,12 +1374,16 @@ impl EffectTestRunner {
                         .map(|event| {
                             (
                                 (
+                                    event.observed_boottime_ns,
+                                    event.task_cookie,
                                     event.reason.as_str(),
                                     event.effect_family,
                                     event.operation,
                                     event.operation_argument,
                                     event.exact_object_key_id,
                                     event.composite_atom_id,
+                                    event.kernel_result,
+                                    event.configured_errno,
                                 ),
                                 (
                                     event.io_uring_ring_id.as_str(),
