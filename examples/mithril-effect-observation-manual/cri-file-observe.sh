@@ -13,7 +13,7 @@ observation_preload_probe sh -ec '
 umask 077
 printf "%s\n" "$$" >"$1"
 while [ ! -s "$MITHRIL_MANUAL_RELEASE" ]; do
-  sleep 0.1
+  :
 done
 exec 4<"$2"
 IFS= read -r -n 1 _ <&4 || :

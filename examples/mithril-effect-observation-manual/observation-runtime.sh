@@ -48,14 +48,14 @@ observation_prepare_cri() {
 
   local probe_name marker container_marker
   probe_name=.mithril-effect-observation-${identity_work##*.}-$$
+  marker=$probe_name.marker
+  container_marker=$container_shared_directory/$marker
+  observation_configure_secret "$3"
   observation_probe_ready=$container_shared_directory/$probe_name.ready
   observation_probe_release=$container_shared_directory/$probe_name.release
   observation_probe_ready_host=$host_shared_directory/$probe_name.ready
   observation_probe_release_host=$host_shared_directory/$probe_name.release
   observation_probe_marker_host=$host_shared_directory/$probe_name.marker
-  marker=$probe_name.marker
-  container_marker=$container_shared_directory/$marker
-  observation_configure_secret "$3"
 
   umask 077
   printf '%s\n' "$marker" >"$observation_probe_marker_host"
