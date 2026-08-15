@@ -27,6 +27,36 @@ and its exact test profile assignment in `workload_bindings`; the temporary
 config deliberately removes `root_cgroup_path` so `mithril-node` must resolve,
 validate, and reconcile the live cgroup through CRI.
 
+## Direct CRI Exec Check
+
+Use this check only when all of these prerequisites are true:
+
+- Run it as root on the node that owns the live CRI container.
+- Build `mithril-node` and `mithril-inspect` with `cargo build -p mithril-node --bins`.
+- Install `crictl` and `jq`.
+- Put exactly one binding for the full live container ID in `NODE_CONFIG`.
+  The binding must specify the CRI socket and the exact test profile.
+
+Start the check:
+
+```bash
+sudo examples/mithril-identity-manual/cri-exec.sh \
+  NODE_CONFIG FULL_CRI_CONTAINER_ID
+```
+
+The script prints a `crictl --runtime-endpoint ... exec` command. Run that
+command in another root terminal. It starts a sleeping process and asks for its
+host PID from the container cgroup.
+
+The oracle is the printed task record. The process must have no creator task
+cookie, `external_runtime_root` as its root class, and
+`runtime_external_restricted` as its installed role. Command bytes, arguments,
+and cgroup placement do not create a probe or application role.
+
+This check proves one direct CRI exec root after the node starts. It does not
+prove a kubelet probe join, first-instruction binding, or the complete entry
+and failure-injection matrix.
+
 Every executable starts the real `mithril-node`, performs one operator-driven
 case, and removes its test tasks, BPF pins, lease, temporary config, state, and
 logs on success or failure. `identity-runtime.sh` contains only that shared
