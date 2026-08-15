@@ -3,8 +3,8 @@
 Status: The compiler, canonical path and mount handling, exact-file
 observation, hard-safety, typed effect, and simulation cases have
 implementations. The current source passed the privileged VM observation
-probe and one K3s CRI observe run. The remaining operator cases are not
-recorded.
+probe and direct-CRI exact-file K3s runs in `OBSERVE` and `PROTECT` mode. The
+remaining operator cases are not recorded.
 
 Phase: [Effect Observation And Profile Simulation](../phase-3-effect-observation-and-profile-simulation.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -67,6 +67,38 @@ read-only hostPath file read succeeded. The captured event had
 
 This record proves one CRI observe path. It does not replace the separate
 operator cases below or complete the phase.
+
+## Direct CRI Exact-File Qualification Record
+
+At source `e38a117`, the retained x86_64 Linux `6.8.0-137-generic` VM ran the
+production K3s CRI lane in `OBSERVE` and `PROTECT` mode. The staged guest
+script SHA-256 was
+`380fd7c73d33aefc320ff7919160db38c29be7d06b59f6dc51dd5b715fcf4018`.
+
+The `OBSERVE` artifact is
+`/tmp/mithril-phase3-direct-cri-evidence.eWjKKw/observe-clean.txt`, SHA-256
+`c6cdd686dde59b84fa362b1c3e4e3d8e839bac44339081b8611cfc985057b994`.
+Direct `crictl exec` task 19 and `kubectl exec` task 80 had the restricted
+external-root classification. Both baseline reads succeeded. Each exact secret
+event reported family 2, operation 2, key 7, `WOULD_DENY`,
+`UNKNOWN_AFTER_PRE_EFFECT`, and kernel result 0. The task 80 benign read
+reported key 8 and `EXACT_POLICY_ALLOW`.
+
+The `PROTECT` artifact is
+`/tmp/mithril-phase3-direct-cri-evidence.eWjKKw/protect-clean.txt`, SHA-256
+`a3a5a16e8abc67e0d919b4650c62e0a1ce75c0df206c96028d93c8790351f8ab`.
+Direct task 19 and `kubectl` task 80 had the same restricted external-root
+classification. Both baseline reads succeeded. Each exact secret event
+reported family 2, operation 2, key 7, `EXACT_POLICY_DENY`,
+`DENIED_BEFORE_EFFECT`, and kernel result -13. The task 80 benign read
+reported key 8 and `EXACT_POLICY_ALLOW`.
+
+Both commands used `pipefail` and exited 0. Each postflight check found the
+namespace, exact pin root, fixture root, and lane root absent. It found no
+Mithril pin or process. Only unrelated BPF link 1 remained.
+
+This closes only the direct-CRI exact-file row. It does not qualify projected
+token behavior or the remaining operator matrix. The phase remains **Blocked**.
 
 ## Implemented Manual Cases
 
