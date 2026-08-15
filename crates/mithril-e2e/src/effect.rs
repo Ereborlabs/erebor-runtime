@@ -74,7 +74,7 @@ fn reconcile_mount_views_until_clean(
             Instant::now() < deadline,
             InvalidInputSnafu {
                 path: Path::new("mount_security_views"),
-                reason: "mount reconciliation did not restore clean views before the inherited-descriptor check",
+                reason: "mount reconciliation did not restore clean views before a retained-descriptor check",
             }
         );
         std::thread::sleep(Duration::from_millis(25));
@@ -2422,6 +2422,7 @@ impl EffectTestRunner {
             );
             wait_for_reason(&reader, &observations, proc_fd_marker, "EXACT_POLICY_DENY")?;
 
+            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
             let passed_secret_marker = observations.cursor();
             ensure!(
                 fixture
@@ -2432,11 +2433,14 @@ impl EffectTestRunner {
                     reason: "an SCM_RIGHTS descriptor bypassed the current actor decision",
                 }
             );
-            wait_for_reason(
+            wait_for_exact_effect(
                 &reader,
                 &observations,
                 passed_secret_marker,
                 "EXACT_POLICY_DENY",
+                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
+                EXACT_OBJECT_KEY_ID,
+                None,
             )?;
 
             let passed_benign_marker = observations.cursor();
@@ -2449,11 +2453,14 @@ impl EffectTestRunner {
                     reason: "the SCM_RIGHTS benign descriptor control was denied",
                 }
             );
-            wait_for_reason(
+            wait_for_exact_effect(
                 &reader,
                 &observations,
                 passed_benign_marker,
                 "EXACT_POLICY_ALLOW",
+                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
+                BENIGN_OBJECT_KEY_ID,
+                None,
             )?;
         }
 
