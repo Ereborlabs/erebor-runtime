@@ -15,6 +15,9 @@ observation_identity_config=
 observation_final_config=
 observation_probe_ready=
 observation_probe_release=
+observation_probe_ready_host=
+observation_probe_release_host=
+observation_probe_marker_host=
 observation_probe_pid=
 observation_probe_host_pid=
 observation_extra_exact_path=
@@ -27,8 +30,45 @@ observation_prepare_docker() {
 }
 
 observation_prepare_cri() {
+  [[ $# -eq 5 ]] || {
+    echo "CRI observation needs a host and container shared directory" >&2
+    return 2
+  }
   identity_prepare_cri "$1" "$2"
+  local host_shared_directory=$4
+  local container_shared_directory=$5
+  [[ -d $host_shared_directory && -w $host_shared_directory ]] || {
+    echo "the CRI host shared directory must exist and be writable" >&2
+    return 2
+  }
+  [[ $container_shared_directory == /* ]] || {
+    echo "the CRI container shared directory must be absolute" >&2
+    return 2
+  }
+
+  local probe_name marker container_marker
+  probe_name=.mithril-effect-observation-${identity_work##*.}-$$
+  observation_probe_ready=$container_shared_directory/$probe_name.ready
+  observation_probe_release=$container_shared_directory/$probe_name.release
+  observation_probe_ready_host=$host_shared_directory/$probe_name.ready
+  observation_probe_release_host=$host_shared_directory/$probe_name.release
+  observation_probe_marker_host=$host_shared_directory/$probe_name.marker
+  marker=$probe_name.marker
+  container_marker=$container_shared_directory/$marker
   observation_configure_secret "$3"
+
+  umask 077
+  printf '%s\n' "$marker" >"$observation_probe_marker_host"
+  if ! crictl --runtime-endpoint "$identity_runtime_endpoint" \
+    exec "$identity_container_id" sh -ec '
+      IFS= read -r observed < "$1"
+      [ "$observed" = "$2" ]
+    ' sh "$container_marker" "$marker"; then
+    echo "the CRI shared directory is not mounted at the requested container path" >&2
+    return 1
+  fi
+  rm -f -- "$observation_probe_marker_host"
+  observation_probe_marker_host=
 }
 
 observation_configure_secret() {
@@ -161,8 +201,8 @@ observation_preload_nsenter_probe() {
 }
 
 observation_begin_preload() {
-  local host_ready=/proc/$identity_init_pid/root$observation_probe_ready
-  local host_release=/proc/$identity_init_pid/root$observation_probe_release
+  local host_ready=${observation_probe_ready_host:-/proc/$identity_init_pid/root$observation_probe_ready}
+  local host_release=${observation_probe_release_host:-/proc/$identity_init_pid/root$observation_probe_release}
   rm -f -- "$host_ready"
   rm -f -- "$host_release"
   cp -- "$observation_identity_config" "$identity_config"
@@ -171,7 +211,7 @@ observation_begin_preload() {
 
 observation_finish_preload() {
   local move_to_cgroup=$1
-  local host_ready=/proc/$identity_init_pid/root$observation_probe_ready
+  local host_ready=${observation_probe_ready_host:-/proc/$identity_init_pid/root$observation_probe_ready}
   identity_task_pids+=("$observation_probe_pid")
   for ((attempt = 0; attempt < 50; attempt++)); do
     [[ -e $host_ready ]] && break
@@ -231,8 +271,9 @@ observation_wait_for_runtime_socket() {
 }
 
 observation_open_probe_gate() {
+  local host_release=${observation_probe_release_host:-/proc/$identity_init_pid/root$observation_probe_release}
   timeout 5s sh -c 'printf 1 >"$1"' sh \
-    "/proc/$identity_init_pid/root$observation_probe_release"
+    "$host_release"
 }
 
 observation_release_probe() {
@@ -245,8 +286,9 @@ observation_release_probe() {
 observation_cleanup_probe_files() {
   [[ -z $observation_probe_pid ]] || kill -TERM "$observation_probe_pid" 2>/dev/null
   [[ -z $observation_probe_host_pid ]] || kill -TERM "$observation_probe_host_pid" 2>/dev/null
-  [[ -z $observation_probe_ready ]] || rm -f -- "/proc/$identity_init_pid/root$observation_probe_ready"
-  [[ -z $observation_probe_release ]] || rm -f -- "/proc/$identity_init_pid/root$observation_probe_release"
+  [[ -z $observation_probe_marker_host ]] || rm -f -- "$observation_probe_marker_host"
+  [[ -z $observation_probe_ready ]] || rm -f -- "${observation_probe_ready_host:-/proc/$identity_init_pid/root$observation_probe_ready}"
+  [[ -z $observation_probe_release ]] || rm -f -- "${observation_probe_release_host:-/proc/$identity_init_pid/root$observation_probe_release}"
 }
 
 observation_wait_for_observation() {

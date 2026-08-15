@@ -3,19 +3,18 @@ set -euo pipefail
 
 directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 source "$directory/observation-runtime.sh"
-[[ $# -eq 3 ]] || {
-  echo "usage: sudo $0 <node.json> <container-id> <absolute-secret-path>" >&2
+[[ $# -eq 5 ]] || {
+  echo "usage: sudo $0 <node.json> <container-id> <absolute-secret-path> <host-shared-directory> <container-shared-directory>" >&2
   exit 2
 }
 
-observation_prepare_cri "$1" "$2" "$3"
+observation_prepare_cri "$1" "$2" "$3" "$4" "$5"
 observation_preload_probe sh -ec '
 umask 077
-mkfifo "$MITHRIL_MANUAL_RELEASE"
-exec 3<>"$MITHRIL_MANUAL_RELEASE"
 printf "%s\n" "$$" >"$1"
-IFS= read -r -n 1 _ <&3
-exec 3<&-
+while [ ! -s "$MITHRIL_MANUAL_RELEASE" ]; do
+  sleep 0.1
+done
 exec 4<"$2"
 IFS= read -r -n 1 _ <&4 || :
 exec 4<&-

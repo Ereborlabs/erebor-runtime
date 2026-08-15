@@ -5,16 +5,16 @@ runs the automated privileged probe. The cases here remain operator-driven.
 
 These scripts run the real `mithril-node`; they are not wrappers around Rust
 tests. Each case owns its temporary node state, observation socket, lease, BPF
-pins, probe process, FIFO, and any mount/file artifacts. A prepared probe waits
-on its FIFO while the node recovers the signed candidate. The host does not
-signal the protected task. The EXIT trap removes all artifacts on pass,
-failure, or interruption.
+pins, probe process, release gate, and any mount/file artifacts. A prepared
+probe waits on its release gate while the node recovers the signed candidate.
+The host does not signal the protected task. The EXIT trap removes all artifacts
+on pass, failure, or interruption.
 
-The effect probe starts under the identity-only node and blocks on its FIFO.
-The lifecycle opens the FIFO after it recovers the same pinned identity state
-with the signed observe candidate. This is deliberate: starting `docker exec`
-after activation would first test the new executable itself, not the requested
-file or network effect.
+The effect probe starts under the identity-only node and blocks on its release
+gate. The lifecycle opens the gate after it recovers the same pinned identity
+state with the signed observe candidate. This is deliberate: starting `docker
+exec` after activation would first test the new executable itself, not the
+requested file or network effect.
 
 Build once:
 
@@ -45,9 +45,12 @@ in the output directory. The scripts below remain the runtime-specific manual
 operator cases for real Docker and CRI daemons.
 
 The host needs `jq`, `gawk`, `lsattr`, Docker (or `crictl` for the CRI case),
-and a kernel-qualified BPF LSM host. The CRI file case needs BusyBox `sh` and
-`mkfifo` in the target container. Other cases that invoke `python3` need it in
-their target containers.
+and a kernel-qualified BPF LSM host. The CRI file case needs BusyBox `sh` and a
+writable run-scoped host directory mounted at a writable absolute directory in
+the target container. The script verifies that mapping before it starts Mithril.
+It removes only its run-specific marker, ready, and release files. Remove the
+empty run-scoped host directory after the case. Other cases that invoke
+`python3` need it in their target containers.
 
 Cases:
 
@@ -56,9 +59,11 @@ Cases:
 - `docker-file-observe.sh <node.json> <container> <absolute-secret-path>`
   recovers Mithril with the candidate, releases an already-attributed process,
   and requires the read to succeed while the kernel reports `WOULD_DENY`.
-- `cri-file-observe.sh <node.json> <container-id> <absolute-secret-path>`
-  runs the same physical oracle through a configured CRI runtime. It records
-  the direct CRI task cookie and requires `WOULD_DENY`,
+- `cri-file-observe.sh <node.json> <container-id> <absolute-secret-path>
+  <host-shared-directory> <container-shared-directory>` runs the same physical
+  oracle through a configured CRI runtime. The host directory must be the
+  run-scoped directory mounted at the container directory. It records the
+  direct CRI task cookie and requires `WOULD_DENY`,
   `UNKNOWN_AFTER_PRE_EFFECT`, and exact object key `7` for the completed read.
 - `nsenter-file-observe.sh <node.json> <container>
   <absolute-secret-path>` joins the mount view with raw `nsenter`, moves the
