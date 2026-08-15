@@ -505,6 +505,7 @@ case ${1:-} in
     }
 
     rm -rf -- "/proc/$init_pid/root$pod_state"
+    mkdir -m 700 -- "/proc/$init_pid/root$pod_state"
     /usr/local/bin/k3s crictl exec "$container_id" \
       sh -c '
         mkdir -m 700 "$1"

@@ -100,6 +100,7 @@ grep -q 'cri_exec_root=external_runtime_root:runtime_external_restricted' \
   "$directory/guest.sh"
 grep -q 'cri_state=\$pod_state/cri-exec' "$directory/guest.sh"
 grep -q 'kubectl_state=\$pod_state/kubectl-exec' "$directory/guest.sh"
+grep -q 'mkdir -m 700 -- "/proc/\$init_pid/root\$pod_state"' "$directory/guest.sh"
 grep -q 'CRI_BASELINE_ALLOWED' "$directory/guest.sh"
 grep -q 'CRI_EXACT_ALLOWED' "$directory/guest.sh"
 grep -q 'CRI_EXACT_DENIED' "$directory/guest.sh"
