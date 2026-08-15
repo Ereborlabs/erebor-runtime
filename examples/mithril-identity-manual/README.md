@@ -15,6 +15,9 @@ Set `MITHRIL_VM_SOURCE_MOUNT="$PWD"` when you create the guest to use the
 read-only `/mnt/mithril-source` tree. Keep bindings, fixtures, pins, and output
 on the guest.
 
+The retained K3s guest runs the CRI, Kubernetes, and raw-namespace cases.
+Docker cases require a guest that runs Docker.
+
 ## Operator Cases
 
 Build the real node and inspector once:

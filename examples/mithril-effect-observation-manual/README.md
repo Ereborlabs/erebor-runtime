@@ -12,6 +12,9 @@ Set `MITHRIL_VM_SOURCE_MOUNT="$PWD"` when you create the guest to use the
 read-only `/mnt/mithril-source` tree. The harness guide shows SSH and the exact
 run command. Keep bindings, fixtures, pins, and output on the guest.
 
+The retained K3s guest runs the CRI and raw-namespace cases. Docker cases
+require a guest that runs Docker.
+
 ## Operator Cases
 
 These scripts run the real `mithril-node`; they are not wrappers around Rust

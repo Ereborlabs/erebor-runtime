@@ -154,30 +154,28 @@ set +a
 
 ### Run A Manual Shell
 
-Use this source-mount path when `source_mountpoint` is set. These host commands
-create one guest-local directory for the `crictl` wrapper and generated files.
+Use this path when the guest has `/mnt/mithril-source`. Open SSH with the
+previous command, then run these commands in the guest:
 
 ```bash
-set -a
-. /tmp/mithril-manual-vm-evidence/retained-vm.txt
-set +a
-remote_root=/var/tmp/$vm_name
+sudo -i
+remote_root=/var/tmp/<vm_name>
 manual_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
 manual_root=/var/tmp/mithril-manual-$manual_id
-script_root=$source_mountpoint
-"$provider" run "$vm_name" mkdir -p "$manual_root/bin"
-"$provider" run "$vm_name" ln -s /usr/local/bin/k3s "$manual_root/bin/crictl"
-"$provider" ssh "$vm_name"
+script_root=/mnt/mithril-source
+mkdir -p "$manual_root/bin"
+ln -s /usr/local/bin/k3s "$manual_root/bin/crictl"
+export PATH="$manual_root/bin:$PATH"
+export MITHRIL_BIN_DIRECTORY="$remote_root/bin"
 ```
 
-The source tree supplies `examples/` and `crates/`; `$remote_root/bin` supplies
-the built binaries. Run the selected script as root in the guest, for example:
+Replace `<vm_name>` with the value in `retained-vm.txt`. The source tree
+supplies the scripts and templates. `$remote_root/bin` supplies the built
+binaries. Run a selected script in this root shell:
 
 ```bash
-"$provider" run "$vm_name" sudo env \
-  "PATH=$manual_root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-  "MITHRIL_BIN_DIRECTORY=$remote_root/bin" \
-  "$script_root/examples/<case-directory>/<script>.sh" <script-arguments>
+"$script_root/examples/<case-directory>/<script>.sh" \
+  "$manual_root/node.json" <script-arguments>
 ```
 
 Run one Mithril owner at a time. Do not reuse a container ID, Pod UID, or
@@ -211,10 +209,14 @@ tar --exclude='examples/mithril-effect-observation-manual/test-signing-key.hex' 
 ' sh "$manual_root/manual-scripts.tgz" "$manual_root/source" "$manual_root/bin" \
   "$remote_root/source/examples/mithril-effect-observation-manual/test-signing-key.hex"
 rm -f -- "$archive"
+printf 'guest manual root: %s\n' "$manual_root"
 ```
 
-Set `script_root=$manual_root/source` and use the same `sudo env` command
-above. Add `examples/mithril-local-enforcement-manual` to the archive for a
+After SSH, run `sudo -i`, set `remote_root=/var/tmp/<vm_name>`, set
+`manual_root` to the printed value, and set `script_root=$manual_root/source`.
+Export `PATH=$manual_root/bin:$PATH` and
+`MITHRIL_BIN_DIRECTORY=$remote_root/bin`. Add
+`examples/mithril-local-enforcement-manual` to the archive for a
 local-enforcement case. Copy each script directory with its helper files.
 
 ### Run The Direct CRI Observation Example
@@ -223,29 +225,26 @@ This procedure creates the fresh Pod, live binding, and writable shared
 directory for `cri-file-observe.sh`. Continue only when `lsattr -v` reports a
 nonzero generation for `secret`.
 
+Run these commands in the root guest shell from [Run A Manual Shell](#run-a-manual-shell).
+
 ```bash
 namespace=mithril-manual-$manual_id
 fixture_root=/var/lib/mithril-manual-$manual_id
 shared_directory=$fixture_root/shared
-manifest=$(mktemp)
-
-"$provider" run "$vm_name" sudo bash -ec '
-  install -d -m 0700 -- "$1" "$2"
-  printf "mithril manual secret\\n" >"$1/secret"
-  chmod 0400 -- "$1/secret"
-' bash "$fixture_root" "$shared_directory"
-"$provider" run "$vm_name" sudo lsattr -v "$fixture_root/secret"
+install -d -m 0700 -- "$fixture_root" "$shared_directory"
+printf "mithril manual secret\n" >"$fixture_root/secret"
+chmod 0400 -- "$fixture_root/secret"
+lsattr -v "$fixture_root/secret"
 
 sed \
   -e "s|MITHRIL_MANUAL_NAMESPACE|$namespace|g" \
   -e "s|MITHRIL_MANUAL_SECRET_HOST_PATH|$fixture_root/secret|g" \
   -e "s|MITHRIL_MANUAL_SHARED_HOST_DIRECTORY|$shared_directory|g" \
-  examples/mithril-effect-observation-manual/k3s-cri-manual-workload-v1.yaml \
-  >"$manifest"
-"$provider" put "$vm_name" "$manifest" "$manual_root/workload.yaml"
-"$provider" run "$vm_name" sudo /usr/local/bin/k3s kubectl create namespace "$namespace"
-"$provider" run "$vm_name" sudo /usr/local/bin/k3s kubectl apply -f "$manual_root/workload.yaml"
-"$provider" run "$vm_name" sudo /usr/local/bin/k3s kubectl -n "$namespace" wait \
+  "$script_root/examples/mithril-effect-observation-manual/k3s-cri-manual-workload-v1.yaml" \
+  >"$manual_root/workload.yaml"
+k3s kubectl create namespace "$namespace"
+k3s kubectl apply -f "$manual_root/workload.yaml"
+k3s kubectl -n "$namespace" wait \
   --for=condition=Ready pod/mithril-runtime --timeout=300s
 ```
 
@@ -253,19 +252,18 @@ Create the binding from this live container. Do not copy old Pod values. This
 uses the same CRI creation-time conversion as the harness.
 
 ```bash
-container_ref=$("$provider" run "$vm_name" sudo /usr/local/bin/k3s kubectl \
+container_ref=$(k3s kubectl \
   -n "$namespace" get pod mithril-runtime \
   -o jsonpath='{.status.containerStatuses[0].containerID}')
 container_id=${container_ref#containerd://}
-pod_uid=$("$provider" run "$vm_name" sudo /usr/local/bin/k3s kubectl \
+pod_uid=$(k3s kubectl \
   -n "$namespace" get pod mithril-runtime -o jsonpath='{.metadata.uid}')
-container_json=$("$provider" run "$vm_name" sudo /usr/local/bin/k3s crictl inspect "$container_id")
+container_json=$(k3s crictl inspect "$container_id")
 created_at=$(jq -er '.status.createdAt' <<<"$container_json")
 generation=$(date --utc --date "$created_at" +%s%N)
 image_digest=$(jq -er '.status.imageRef' <<<"$container_json")
-sandbox_id=$("$provider" run "$vm_name" sudo /usr/local/bin/k3s crictl ps \
+sandbox_id=$(k3s crictl ps \
   --id "$container_id" -o json | jq -er '.containers[0].podSandboxId')
-node_config=$(mktemp)
 
 sed \
   -e "s|/var/tmp/mithril-runtime-qualification-0|$manual_root|g" \
@@ -275,20 +273,16 @@ sed \
   -e "s|MITHRIL_SANDBOX_ID|$sandbox_id|g" \
   -e "s|MITHRIL_IMAGE_DIGEST|$image_digest|g" \
   -e "s|\"container_generation\": 1|\"container_generation\": $generation|" \
-  crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json >"$node_config"
-"$provider" put "$vm_name" "$node_config" "$manual_root/node.json"
-rm -f -- "$manifest" "$node_config"
+  "$script_root/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json" \
+  >"$manual_root/node.json"
 ```
 
-Run the shell. `MITHRIL_BIN_DIRECTORY` selects the retained harness binaries.
-Use the mount when available. The command must print `PASS:`.
+Run the shell. `script_root` selects the mounted or staged source.
+`MITHRIL_BIN_DIRECTORY` selects the retained harness binaries. The command must
+print `PASS:`.
 
 ```bash
-script_root=${source_mountpoint:-$manual_root/source}
-"$provider" run "$vm_name" sudo env \
-  "PATH=$manual_root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-  "MITHRIL_BIN_DIRECTORY=$remote_root/bin" \
-  "$script_root/examples/mithril-effect-observation-manual/cri-file-observe.sh" \
+"$script_root/examples/mithril-effect-observation-manual/cri-file-observe.sh" \
   "$manual_root/node.json" "$container_id" /var/lib/mithril/secret \
   "$shared_directory" /var/lib/mithril/manual-shared
 ```
@@ -299,9 +293,9 @@ the output, then remove the named Pod namespace and fixture root. Keep
 after the final case.
 
 ```bash
-"$provider" run "$vm_name" sudo /usr/local/bin/k3s kubectl delete namespace \
+k3s kubectl delete namespace \
   "$namespace" --wait=true --timeout=120s
-"$provider" run "$vm_name" sudo rm -rf -- "$fixture_root"
+rm -rf -- "$fixture_root"
 ```
 
 The script owns Mithril state. The operator owns the Pod, fixture, and guest.
