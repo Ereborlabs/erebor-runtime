@@ -11,7 +11,7 @@ use erebor_interceptor_abi::{
     MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use libbpf_rs::{
-    query::{ProgInfoIter, ProgInfoQueryOptions},
+    query::{LinkInfoIter, ProgInfoIter, ProgInfoQueryOptions},
     Iter, Link, Map, MapCore as _, MapFlags, MapHandle, Object, ObjectBuilder, OpenObject, Program,
     ProgramHandle, ProgramInput, ProgramType, RingBuffer, RingBufferBuilder,
 };
@@ -20,7 +20,8 @@ use snafu::{ensure, OptionExt as _, ResultExt as _};
 use zerocopy::IntoBytes as _;
 
 use crate::error::{
-    InvalidConfigurationSnafu, IoSnafu, LibbpfSnafu, ManifestMismatchSnafu, StalePinRootSnafu,
+    InvalidConfigurationSnafu, IoSnafu, LibbpfSnafu, ManifestMismatchSnafu, RetainedLsmLinkSnafu,
+    StalePinRootSnafu,
 };
 use crate::lease::KernelHostLease;
 use crate::{
@@ -30,6 +31,7 @@ use crate::{
 };
 
 const BUNDLED_OBJECT_NAME: &str = "embedded erebor-interceptor.bpf.o";
+const KERNEL_PROGRAM_NAME_BYTES: usize = libbpf_rs::libbpf_sys::BPF_OBJ_NAME_LEN as usize - 1;
 
 pub struct EffectObservationReader {
     ring: RingBuffer<'static>,
@@ -452,6 +454,8 @@ impl KernelHostOwner {
             }
         }
 
+        self.reject_retained_lsm_links(&BTreeSet::new())?;
+
         let mut object = open.load().context(LibbpfSnafu {
             action: "load BPF object",
             path: self.config.object_path(),
@@ -652,6 +656,23 @@ impl KernelHostOwner {
                 && directory_entry_names(&links_root)? == expected_links,
             StalePinRootSnafu { path: pin_root }
         );
+        let allowed_link_ids = expected_links
+            .iter()
+            .map(|name| {
+                let path = links_root.join(name);
+                let link = Link::open(&path).context(LibbpfSnafu {
+                    action: "open retained BPF link",
+                    path: &path,
+                })?;
+                link.info()
+                    .context(LibbpfSnafu {
+                        action: "read retained BPF link",
+                        path: &path,
+                    })
+                    .map(|info| info.id)
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        self.reject_retained_lsm_links(&allowed_link_ids)?;
 
         for mut map in open.maps_mut() {
             let path = maps_root.join(map.name());
@@ -908,6 +929,37 @@ impl KernelHostOwner {
         }
     }
 
+    fn reject_retained_lsm_links(&self, allowed_link_ids: &BTreeSet<u32>) -> Result<()> {
+        let known_names = REQUIRED_IDENTITY_PROGRAMS
+            .iter()
+            .chain(REQUIRED_QUALIFICATION_LSM_PROGRAMS.iter())
+            .map(|name| kernel_program_name(name))
+            .collect::<BTreeSet<_>>();
+        let known_programs = ProgInfoIter::default()
+            .filter(|program| program.ty == ProgramType::Lsm)
+            .filter_map(|program| {
+                let name = program.name.to_string_lossy();
+                known_names
+                    .contains(name.as_bytes())
+                    .then(|| (program.id, name.into_owned()))
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        for link in LinkInfoIter::default() {
+            if let Some(program) = known_programs.get(&link.prog_id) {
+                ensure!(
+                    allowed_link_ids.contains(&link.id),
+                    RetainedLsmLinkSnafu {
+                        program,
+                        link_id: link.id,
+                        program_id: link.prog_id,
+                    }
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn validate_program_set(&self, programs: &[KernelProgramLayoutV1]) -> Result<()> {
         let mut actual = programs
             .iter()
@@ -955,6 +1007,14 @@ impl KernelHostOwner {
         );
         Ok(())
     }
+}
+
+fn kernel_program_name(name: &str) -> Vec<u8> {
+    name.as_bytes()
+        .iter()
+        .copied()
+        .take(KERNEL_PROGRAM_NAME_BYTES)
+        .collect()
 }
 
 impl KernelHost {
@@ -1389,8 +1449,8 @@ mod tests {
     use std::fs;
 
     use super::{
-        KernelHost, KernelHostConfig, KernelHostOwner, KernelObjectKind, KernelProgramLayoutV1,
-        PinRollback, REQUIRED_QUALIFICATION_LSM_PROGRAMS,
+        kernel_program_name, KernelHost, KernelHostConfig, KernelHostOwner, KernelObjectKind,
+        KernelProgramLayoutV1, PinRollback, REQUIRED_QUALIFICATION_LSM_PROGRAMS,
     };
     use crate::error::IoSnafu;
     use crate::{
@@ -1543,6 +1603,48 @@ mod tests {
         assert!(method.contains("ProgInfoQueryOptions::default().include_map_ids(true)"));
         assert!(method.contains("old_program.tag() == new_program.tag()"));
         assert!(method.contains("old_map_ids == new_map_ids"));
+    }
+
+    #[test]
+    fn retained_lsm_link_guard_uses_kernel_program_names() {
+        assert_eq!(
+            kernel_program_name("erebor_identity_file_permission"),
+            b"erebor_identity".to_vec()
+        );
+    }
+
+    #[test]
+    fn retained_lsm_link_guard_runs_before_load_or_attach() {
+        let source = include_str!("host.rs");
+        let start = source
+            .split("pub fn start")
+            .nth(1)
+            .and_then(|source| source.split("fn recover(").next())
+            .unwrap_or_default();
+        let recover = source
+            .split("fn recover(")
+            .nth(1)
+            .and_then(|source| source.split("fn validate_config").next())
+            .unwrap_or_default();
+        let guard = source
+            .split("fn reject_retained_lsm_links")
+            .nth(1)
+            .and_then(|source| source.split("fn validate_program_set").next())
+            .unwrap_or_default();
+
+        let guard_before_load = start
+            .find("reject_retained_lsm_links(&BTreeSet::new())")
+            .expect("fresh start checks retained LSM links");
+        let load = start
+            .find("open.load()")
+            .expect("fresh start loads BPF object");
+        assert!(guard_before_load < load);
+        assert!(recover.contains("reject_retained_lsm_links(&allowed_link_ids)"));
+        assert!(guard.contains("LinkInfoIter"));
+        assert!(guard.contains("ProgInfoIter"));
+        assert!(guard.contains("ProgramType::Lsm"));
+        assert!(guard.contains("allowed_link_ids.contains(&link.id)"));
+        assert!(guard.contains("RetainedLsmLinkSnafu"));
     }
 
     #[test]

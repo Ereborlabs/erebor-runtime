@@ -483,6 +483,41 @@ impl IdentityTestRunner {
 
         let first_map_ids = map_ids(&first_start);
         host.shutdown().context(InterceptorSnafu)?;
+        let retired_pin_root = pin_root.with_extension("retired");
+        let retired_lease_path = lease_path.with_extension("retired.lock");
+        let retired_pin_root_owner_rejected =
+            match KernelHostOwner::new(KernelHostConfig::identity(
+                "/sys/kernel/btf/vmlinux",
+                &retired_lease_path,
+                Some(retired_pin_root.clone()),
+                boot_id.clone(),
+                1,
+            ))
+            .start()
+            {
+                Err(InterceptorError::RetainedLsmLink { .. }) => true,
+                Err(source) => {
+                    if retired_pin_root.exists() {
+                        ProbeDirectory::new(&retired_pin_root).cleanup()?;
+                    }
+                    ProbeFile::new(&retired_lease_path).cleanup()?;
+                    return Err(crate::Error::from_interceptor(source));
+                }
+                Ok(retired) => {
+                    retired.shutdown().context(InterceptorSnafu)?;
+                    ProbeDirectory::new(&retired_pin_root).cleanup()?;
+                    ProbeFile::new(&retired_lease_path).cleanup()?;
+                    false
+                }
+            };
+        ProbeFile::new(&retired_lease_path).cleanup()?;
+        ensure!(
+            retired_pin_root_owner_rejected && !retired_pin_root.exists(),
+            InvalidInputSnafu {
+                path: &retired_pin_root,
+                reason: "a retained Interceptor owner allowed a distinct pin root",
+            }
+        );
         verify_recovery_rejects_displaced_map(&config, &first_start)?;
         let mut recovered = KernelHostOwner::new(config)
             .start()

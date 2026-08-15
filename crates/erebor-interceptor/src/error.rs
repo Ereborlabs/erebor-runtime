@@ -42,6 +42,16 @@ pub enum Error {
         #[snafu(implicit)]
         location: Location,
     },
+    #[snafu(display(
+        "Interceptor retained LSM link {link_id} for program `{program}` ({program_id}) is outside the requested pin root"
+    ))]
+    RetainedLsmLink {
+        program: String,
+        link_id: u32,
+        program_id: u32,
+        #[snafu(implicit)]
+        location: Location,
+    },
     #[snafu(display("Interceptor manifest for `{}` is invalid: {reason}", path.display()))]
     ManifestMismatch {
         path: PathBuf,
@@ -60,7 +70,7 @@ impl ErrorExt for Error {
                 StatusCode::InvalidArguments
             }
             Self::LeaseOwned { .. } => StatusCode::AlreadyExists,
-            Self::StalePinRoot { .. } => StatusCode::IllegalState,
+            Self::StalePinRoot { .. } | Self::RetainedLsmLink { .. } => StatusCode::IllegalState,
             Self::Io { .. } | Self::Libbpf { .. } => StatusCode::External,
         }
     }
@@ -72,6 +82,7 @@ impl ErrorExt for Error {
             Self::InvalidConfiguration { .. }
             | Self::Libbpf { .. }
             | Self::StalePinRoot { .. }
+            | Self::RetainedLsmLink { .. }
             | Self::ManifestMismatch { .. } => RetryHint::NonRetryable,
         }
     }
