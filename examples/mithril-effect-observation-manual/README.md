@@ -1,7 +1,12 @@
 # Effect Observation Manual Cases
 
-The separate [VM e2e harness](../../crates/mithril-e2e/harness/vm/README.md)
-runs the automated privileged probe. The cases here remain operator-driven.
+## Manual Testing In A VM
+
+Use the [retained-VM procedure](../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm)
+to create the guest. Run one observation script as root in that guest with a
+fresh live binding. Do not reuse a binding from a previous container.
+
+## Operator Cases
 
 These scripts run the real `mithril-node`; they are not wrappers around Rust
 tests. Each case owns its temporary node state, observation socket, lease, BPF

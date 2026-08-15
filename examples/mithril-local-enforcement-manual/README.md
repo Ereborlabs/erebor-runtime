@@ -1,9 +1,12 @@
 # Local Enforcement Manual Cases
 
-The separate [VM e2e harness](../../crates/mithril-e2e/harness/vm/README.md)
-runs the automated privileged probe. Its optional `--with-k3s` lane runs the
-same production probes beside a disposable single-node Kubernetes runtime.
-The cases here remain operator-driven.
+## Manual Testing In A VM
+
+Use the [retained-VM procedure](../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm)
+to create the guest. Run one enforcement script as root in that guest with a
+fresh live binding. Do not reuse a binding from a previous container.
+
+## Operator Cases
 
 These are real `mithril-node` cases, not wrappers around Rust tests. Each script
 uses the identity and observation lifecycle owner and its EXIT trap. Each

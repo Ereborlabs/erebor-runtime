@@ -150,10 +150,14 @@ The result requires `creator_task_cookie=null`, `external_runtime_root`,
 `runtime_external_restricted`, the configured external role, and `Runnable`.
 
 [`nsenter-move.sh`](../../../../examples/mithril-identity-manual/nsenter-move.sh)
-checks the same external role and `Runnable` state after namespace entry and
-cgroup movement. It did not run in this VM record. This record does not test
-namespace entry, restore, or a protected effect. It is not complete
-`ENTRY-MIGRATE-001` qualification. The phase remains **Blocked**.
+requires the operator to enter the `nsenter` helper PID and its only direct
+`sleep 300` child PID. The script verifies the child command, target mount,
+UTS, IPC, network, and PID namespaces, and the exact no-identity inspector
+result before it moves the child. It then checks the same external role and
+`Runnable` state after cgroup movement. The script did not run in this VM
+record. This record does not test namespace entry, restore, or a protected
+effect. It is not complete `ENTRY-MIGRATE-001` qualification. The phase
+remains **Blocked**.
 
 ## Procedure
 

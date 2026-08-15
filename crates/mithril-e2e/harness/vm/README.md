@@ -124,6 +124,29 @@ cleanup remains unchanged. If the administrative lane fails with `--keep-vm`,
 the guest also keeps its lane directory and BPF pins. Inspect that state before
 you start another administrative lane.
 
+## Manual Testing In A Retained VM
+
+Run the shell check. Then create one retained K3s guest:
+
+```bash
+bash crates/mithril-e2e/harness/vm/test.sh
+crates/mithril-e2e/harness/vm/run.sh --with-k3s \
+  --skip-administrative-exec \
+  --keep-vm \
+  --output-directory /tmp/mithril-manual-vm-evidence
+```
+
+`run.sh` builds the production binaries. Read
+`/tmp/mithril-manual-vm-evidence/retained-vm.txt` for the VM name, work
+directory, and provider. Copy only the current public manual script and its
+named helper into that guest. Run the script as root with a fresh live binding.
+Run one Mithril owner at a time. Do not reuse a container ID, Pod UID, or
+binding from an earlier run.
+
+The manual script owns its node, pins, lease, and probe. The outer operator
+owns the Pod, fixture, and guest. Use the `destroy` command above with the two
+values from `retained-vm.txt` after the final manual case.
+
 Reuse a retained guest and k3s installation for sequential probes. Do not run
 two Mithril object owners at the same time. A different pin root does not
 isolate BPF LSM links. The loader rejects a concurrent owner before attach. If

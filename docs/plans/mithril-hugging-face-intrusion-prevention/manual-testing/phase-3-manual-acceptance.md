@@ -143,8 +143,13 @@ sudo examples/mithril-effect-observation-manual/docker-file-observe.sh \
 sudo examples/mithril-effect-observation-manual/cri-file-observe.sh \
   <identity-node.json> <full-container-id> <secret-path> \
   <host-shared-directory> <container-shared-directory>
+# Docker nsenter case
 sudo examples/mithril-effect-observation-manual/nsenter-file-observe.sh \
   <identity-node.json> <container> <secret-path>
+# K3s or CRI nsenter case
+sudo examples/mithril-effect-observation-manual/nsenter-file-observe.sh \
+  <identity-node.json> <full-container-id> <secret-path> \
+  <host-shared-directory> <container-shared-directory>
 sudo examples/mithril-effect-observation-manual/docker-bind-alias.sh \
   <identity-node.json> <container> <mounted-secret-path> <alias-directory>
 sudo examples/mithril-effect-observation-manual/docker-hardlink-alias.sh \

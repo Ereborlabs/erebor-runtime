@@ -3,6 +3,14 @@
 These are operator-driven checks against the real `mithril-node`. They are not
 commands for manually invoking the automated e2e runner.
 
+## Manual Testing In A VM
+
+Use the [retained-VM procedure](../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm)
+to create the guest. Run one identity script as root in that guest with a
+fresh live binding. Do not reuse a binding from a previous container.
+
+## Operator Cases
+
 Build the real node and inspector once:
 
 ```bash
