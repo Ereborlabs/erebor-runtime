@@ -178,3 +178,21 @@ or effect decision.
 
 The phase stays **Blocked** until a Mithril CRI effect case runs on a qualified
 kernel and the remaining required manual cases are recorded.
+
+## Qualification update — 2026-08-15
+
+At source commit `e9b380a`, the production effect probe passed in `OBSERVE`
+mode on x86_64 Linux `6.8.0-137-generic`. The evidence file SHA-256 is
+`3317b52ede0b9d4ea4acd3b5ab3e4926d9d8edecad96a40801a7bcbed0ad275c`.
+It recorded `exact_open_observed=true` and
+`exact_open_denied_before_effect=false`. The inherited-descriptor and
+delegated-I/O checks also remained observe-only.
+
+The probe recorded successful mount propagation and mount-attribute
+reconciliation, failed-closed external replacement, and exact-object recovery.
+Its pin root, lease, cgroup, and fixture-root cleanup fields are true. The
+reconciliation check ran before exact effects and did not use a workload file
+access as a warmup.
+
+The phase remains **Blocked**. This evidence does not add a Mithril CRI effect
+binding or complete the manual acceptance matrix.

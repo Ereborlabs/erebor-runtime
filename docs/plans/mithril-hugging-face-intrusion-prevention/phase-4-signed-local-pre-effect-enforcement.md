@@ -191,3 +191,27 @@ exec provenance, rotation and persistence, positive relationship models,
 derived authority, privilege and self-protection, administrative ingress, and
 the complete HF local matrix remain incomplete. Landlock is complete as an
 explicit `ABSENT` capability.
+
+## Qualification update — 2026-08-15
+
+At source commit `e9b380a`, the production effect probe passed in `PROTECT`
+mode on x86_64 Linux `6.8.0-137-generic`. The evidence file SHA-256 is
+`74dec05c7984076a908db509733b078492407a145298fee684e20ed1ef9cc8c6`.
+It recorded `exact_open_denied_before_effect=true`,
+`inherited_fd_read_denied=true`, `passed_fd_read_denied=true`, and
+`io_uring_secret_read_denied_before_effect=true`. It also recorded successful
+mount propagation and mount-attribute reconciliation, failed-closed external
+replacement, exact-object recovery, and complete fixture cleanup.
+
+The retained Kubernetes administrative-exec lane has a separate blocker. Its
+Control draft, admission, and slot-arm steps complete. Stock runc `1.4.2`
+then fails closed before the target exec. The retained observation records
+`EXECUTE` and `FILE WRITE` `UNSUPPORTED_OBJECT` results with `EACCES`, and the
+approved slot remains armed. runc uses a sealed self-clone and inherited
+bootstrap channels that the exact-object and typed-channel models do not
+authorize. A broad runc or pipe exception would expand authority. Supporting
+this runtime requires a separate signed typed bootstrap protocol.
+
+The phase remains **Not done**. The passed probe qualifies the implemented
+local slice only. It does not complete the administrative runtime protocol or
+the remaining policy-aware local matrix.

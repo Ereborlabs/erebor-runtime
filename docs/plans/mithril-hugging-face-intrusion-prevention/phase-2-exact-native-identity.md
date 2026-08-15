@@ -173,3 +173,23 @@ The phase stays **Blocked** because the complete entry-case and
 failure-injection matrix is not recorded. The full ephemeral-container,
 non-leader and concurrent exec, cgroup and PID reuse, saturation, and non-x86
 physical cases remain unqualified.
+
+## Qualification update — 2026-08-15
+
+At source commit `e9b380a`, the production identity probe passed on x86_64
+Linux `6.8.0-137-generic`. It used production object SHA-256
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe` and
+runtime BTF SHA-256
+`6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c`.
+The evidence file SHA-256 is
+`03f33485177eb15ebf08fbaacb502cb823b1174b7c39bc2d1e305554f93da6b4`.
+
+The probe recorded `cgroup_escape_placement_mismatch_detected=true`,
+`distinct_pin_root_owner_rejected=true`,
+`map_ids_stable_across_restart=true`, and
+`profile_task_refs_after_exit=0`. Its pin root, lease, and cgroup cleanup
+fields are true. The second-owner result uses a distinct pin root and instance
+lease. It verifies the active host-owner guard rather than a same-path lock.
+
+The phase remains **Blocked**. This probe does not execute the complete entry
+and failure-injection matrix.
