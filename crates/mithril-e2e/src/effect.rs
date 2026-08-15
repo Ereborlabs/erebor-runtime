@@ -1252,6 +1252,14 @@ impl EffectTestRunner {
                 }
             );
 
+            policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
+            ensure!(
+                mount_views_are_clean(&host, &mount_namespaces)?,
+                InvalidInputSnafu {
+                    path: Path::new("mount_security_views"),
+                    reason: "mount reconciliation did not restore clean views before the inherited-descriptor check",
+                }
+            );
             let inherited_marker = observations.cursor();
             ensure!(
                 fixture.read_prepared()?.denied(),
