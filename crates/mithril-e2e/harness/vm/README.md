@@ -52,6 +52,10 @@ restricted after slot consumption. This is the single-node physical
 `ADMIN-EXEC-APPROVAL-001` path. Source and unit tests own its malformed,
 replay, expiry, disconnect, and contention cases.
 
+The administrative lane sets the k3s API audience to
+`mithril-administrative-exec`. Control verifies the same audience in each
+TokenReview. Do not use a different audience for this test.
+
 The lanes remove their namespaces, files, node and Control state, sockets,
 leases, temporary trust, webhooks, RBAC, and BPF pins. The runtime probes then
 run while k3s is active. Finally, the official k3s uninstall owner runs before

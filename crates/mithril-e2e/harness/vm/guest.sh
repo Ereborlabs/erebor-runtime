@@ -776,6 +776,7 @@ EOF
     cp -- /etc/rancher/k3s/config.yaml "$lane_root/k3s-config.yaml"
     cat >>/etc/rancher/k3s/config.yaml <<EOF
 kube-apiserver-arg:
+  - api-audiences=mithril-administrative-exec
   - authentication-token-webhook-config-file=$authentication_kubeconfig
   - authentication-token-webhook-version=v1
   - authentication-token-webhook-cache-ttl=0s
