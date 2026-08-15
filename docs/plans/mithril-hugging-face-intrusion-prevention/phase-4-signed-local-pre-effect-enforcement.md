@@ -210,15 +210,20 @@ then fails closed before the target exec. The retained observation records
 approved slot remains armed. runc uses a sealed self-clone and inherited
 bootstrap channels that the exact-object and typed-channel models do not
 authorize. A broad runc or pipe exception would expand authority. Supporting
-this runtime requires a signed, short-lived runtime-bootstrap lease. The lease
-is bound to the approved request, exact container generation, and expiry. It
-allows the configured runc path to complete normal setup only in that
-container. It ends when runc hands over to the exact approved executable and
-argv, or when the handover fails, differs, or expires. The normal one-use slot
-then grants the approved role. The temporary lease does not grant a reusable
-container role or authority outside that container. This design explicitly
-trusts runc for the short setup interval. It does not claim that the current
-implementation supports the path.
+this runtime requires this short-lived, signed lease:
+
+```text
+approved exec for container C and command X
+  -> runc bootstrap lease for C, short expiry
+  -> runc may complete normal setup inside C
+  -> exact handover to X
+  -> lease ends; X gets the approved role
+```
+
+The lease cannot start another container or a later exec. If runc does not
+start X before it ends, no task gets the approved role. This design trusts runc
+only for this short setup period. The current implementation does not support
+this path.
 
 The phase remains **Not done**. The passed probe qualifies the implemented
 local slice only. It does not complete the administrative runtime protocol or
