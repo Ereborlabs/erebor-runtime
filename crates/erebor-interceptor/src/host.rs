@@ -435,23 +435,14 @@ impl KernelHostOwner {
         let mut open = self.open_object(&mut builder, "open BPF object")?;
         let layout = self.inspect_open_object(&open)?;
         self.configure_autoload(&mut open);
+        let retained_pin_root = self.retained_pin_root()?;
         let lease = KernelHostLease::acquire(&self.config.lease_path)?;
-        if let Some(pin_root) = &self.config.pin_root {
-            if pin_root.exists()
-                && fs::read_dir(pin_root)
-                    .context(IoSnafu {
-                        action: "inspect pin root",
-                        path: pin_root,
-                    })?
-                    .next()
-                    .is_some()
-            {
-                ensure!(
-                    self.config.object_kind == KernelObjectKind::Identity,
-                    StalePinRootSnafu { path: pin_root }
-                );
-                return self.recover(pin_root, layout, lease, preflight, object_sha256, open);
-            }
+        let retained_pin_root = match retained_pin_root {
+            Some(pin_root) => Some(pin_root),
+            None => self.retained_pin_root()?,
+        };
+        if let Some(pin_root) = retained_pin_root {
+            return self.recover(pin_root, layout, lease, preflight, object_sha256, open);
         }
 
         self.reject_retained_lsm_links(&BTreeSet::new())?;
@@ -927,6 +918,28 @@ impl KernelHostOwner {
             let section = program.section().to_string_lossy();
             program.set_autoload(self.config.object_kind.includes(&name, &section));
         }
+    }
+
+    fn retained_pin_root(&self) -> Result<Option<&Path>> {
+        let Some(pin_root) = self.config.pin_root.as_deref() else {
+            return Ok(None);
+        };
+        let has_entries = pin_root.exists()
+            && fs::read_dir(pin_root)
+                .context(IoSnafu {
+                    action: "inspect pin root",
+                    path: pin_root,
+                })?
+                .next()
+                .is_some();
+        if !has_entries {
+            return Ok(None);
+        }
+        ensure!(
+            self.config.object_kind == KernelObjectKind::Identity,
+            StalePinRootSnafu { path: pin_root }
+        );
+        Ok(Some(pin_root))
     }
 
     fn reject_retained_lsm_links(&self, allowed_link_ids: &BTreeSet<u32>) -> Result<()> {
@@ -1634,9 +1647,14 @@ mod tests {
 
         let guard_before_load = start.find("reject_retained_lsm_links(&BTreeSet::new())");
         let load = start.find("open.load()");
+        let retained_pin_root = start.find("let retained_pin_root = self.retained_pin_root()?");
+        let lease = start.find("KernelHostLease::acquire");
         assert!(guard_before_load.is_some());
         assert!(load.is_some());
         assert!(guard_before_load < load);
+        assert!(retained_pin_root.is_some());
+        assert!(lease.is_some());
+        assert!(retained_pin_root < lease);
         assert!(recover.contains("reject_retained_lsm_links(&allowed_link_ids)"));
         assert!(guard.contains("LinkInfoIter"));
         assert!(guard.contains("ProgInfoIter"));
