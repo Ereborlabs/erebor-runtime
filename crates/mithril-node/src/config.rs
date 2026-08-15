@@ -44,6 +44,8 @@ pub struct RuntimeObservationConfig {
 #[serde(deny_unknown_fields)]
 pub struct ContainerRuntimeConfig {
     pub socket_path: PathBuf,
+    #[serde(default)]
+    pub containerd_event_socket_path: Option<PathBuf>,
     #[serde(default = "default_runtime_reconciliation_ms")]
     pub reconciliation_interval_ms: u64,
 }
@@ -210,9 +212,13 @@ impl NodeConfig {
         if let Some(runtime) = &self.container_runtime {
             ensure!(
                 runtime.socket_path.is_absolute()
+                    && runtime
+                        .containerd_event_socket_path
+                        .as_ref()
+                        .is_none_or(|path| path.is_absolute())
                     && runtime.reconciliation_interval_ms > 0,
                 InvalidConfigurationSnafu {
-                    reason: "container runtime requires an absolute socket path and a nonzero reconciliation interval",
+                    reason: "container runtime requires absolute CRI and optional containerd-event socket paths plus a nonzero reconciliation interval",
                 }
             );
         }
@@ -468,10 +474,22 @@ mod tests {
         let mut config = config();
         config.container_runtime = Some(super::ContainerRuntimeConfig {
             socket_path: PathBuf::from("/run/containerd/containerd.sock"),
+            containerd_event_socket_path: Some(PathBuf::from("/run/containerd/containerd.sock")),
             reconciliation_interval_ms: 2_000,
         });
         config.workload_bindings[0].root_cgroup_path = None;
         config.validate()
+    }
+
+    #[test]
+    fn containerd_event_socket_must_be_absolute() {
+        let mut config = config();
+        config.container_runtime = Some(super::ContainerRuntimeConfig {
+            socket_path: PathBuf::from("/run/containerd/containerd.sock"),
+            containerd_event_socket_path: Some(PathBuf::from("containerd.sock")),
+            reconciliation_interval_ms: 2_000,
+        });
+        assert!(config.validate().is_err());
     }
 
     #[test]

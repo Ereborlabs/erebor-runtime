@@ -38,6 +38,7 @@ axum-server = { version = "0.8.0", default-features = false, features = ["tls-ru
 cdp-protocol = "0.3.1"
 clap = { version = "4", features = ["derive"] }
 comfy-table = "7.2.1"
+containerd-client = "=0.8.0"
 crossterm = "0.29.0"
 ed25519-dalek = "3.0.0"
 futures-util = "0.3"
