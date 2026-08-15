@@ -45,12 +45,12 @@ in the output directory. The scripts below remain the runtime-specific manual
 operator cases for real Docker and CRI daemons.
 
 The host needs `jq`, `gawk`, `lsattr`, Docker (or `crictl` for the CRI case),
-and a kernel-qualified BPF LSM host. The CRI file case needs BusyBox `sh` and a
-writable run-scoped host directory mounted at a writable absolute directory in
-the target container. The script verifies that mapping before it starts Mithril.
-It removes only its run-specific marker, ready, and release files. Remove the
-empty run-scoped host directory after the case. Other cases that invoke
-`python3` need it in their target containers.
+and a kernel-qualified BPF LSM host. The CRI file and CRI `nsenter` cases need
+BusyBox `sh` and a writable run-scoped host directory mounted at a writable
+absolute directory in the target container. The script verifies that mapping
+before it starts Mithril. It removes only its run-specific marker, ready, and
+release files. Remove the empty run-scoped host directory after the case. Other
+cases that invoke `python3` need it in their target containers.
 
 Cases:
 
@@ -65,9 +65,27 @@ Cases:
   run-scoped directory mounted at the container directory. It records the
   direct CRI task cookie and requires `WOULD_DENY`,
   `UNKNOWN_AFTER_PRE_EFFECT`, and exact object key `7` for the completed read.
-- `nsenter-file-observe.sh <node.json> <container>
-  <absolute-secret-path>` joins the mount view with raw `nsenter`, moves the
-  blocked process into the bound cgroup, and proves the same exact attribution.
+- `nsenter-file-observe.sh` accepts either `<node.json> <container>
+  <absolute-secret-path>` for Docker or `<node.json> <full-container-id>
+  <absolute-secret-path> <host-shared-directory> <container-shared-directory>`
+  for K3s/CRI. It joins the mount view with raw `nsenter`, moves the blocked
+  process into the bound cgroup, and opens the exact secret before one read
+  attempt. In K3s/CRI mode it requires the same probe's external-root task
+  cookie in the `family=2`, `operation=2`, `WOULD_DENY`,
+  `UNKNOWN_AFTER_PRE_EFFECT`, and exact object key `7` event.
+
+For K3s/CRI, use the five-argument form with a full container ID and a fresh
+writable shared directory:
+
+```sh
+sudo examples/mithril-effect-observation-manual/nsenter-file-observe.sh \
+  <identity-node.json> <full-container-id> <absolute-secret-path> \
+  <host-shared-directory> <container-shared-directory>
+```
+
+This is a raw `nsenter` and cgroup-placement case. It proves one exact
+observation event for that process. It does not qualify `kubectl exec`, prove a
+nonempty read, or establish physical completion.
 - `docker-bind-alias.sh <node.json> <container>
   <mounted-secret-path> <alias-directory>` creates a later bind alias of the
   secret's existing mount root. Reading through the alias must still report the
