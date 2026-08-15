@@ -31,6 +31,11 @@ mod tests {
         assert!(object
             .progs()
             .any(|program| program.name().to_string_lossy() == "erebor_task_alloc"));
+        let activation_probe = object
+            .progs()
+            .find(|program| program.name().to_string_lossy() == "erebor_policy_activation_probe")
+            .expect("bundled object has the policy activation probe");
+        assert_eq!(activation_probe.section().to_string_lossy(), "classifier");
         Ok(())
     }
 
@@ -1119,5 +1124,47 @@ mod tests {
         assert!(cancellation.contains("__sync_val_compare_and_swap"));
         assert!(cancellation.contains("approved_exec_slot_state_v1_armed"));
         assert!(cancellation.contains("approved_exec_slot_state_v1_cancelled"));
+    }
+
+    #[test]
+    fn mount_reconciliation_commits_in_bpf_before_global_clean_publication() {
+        let source = include_str!("../../../bpf/erebor-interceptor/programs/identity.bpf.c");
+        let command = source
+            .split("policy_activation_probe_map_kind_v1_mount_reconciliation")
+            .nth(1)
+            .and_then(|source| source.split("default:").next())
+            .unwrap_or_default();
+        let path = include_str!("../../../bpf/erebor-interceptor/programs/identity_path.bpf.h");
+        let commit = path
+            .split("static __always_inline int commit_mount_reconciliation_proposal")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int snapshot_mount_view")
+                    .next()
+            })
+            .unwrap_or_default();
+        let apply = path
+            .split("static __always_inline int apply_mount_reconciliation_proposal")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int commit_mount_reconciliation_proposal")
+                    .next()
+            })
+            .unwrap_or_default();
+
+        assert!(command.contains("commit_mount_reconciliation_proposal"));
+        assert!(!command.contains("snapshot_mount_view"));
+        assert!(command.contains("request->expected"));
+        assert!(commit.contains("*global_clean > global_generation"));
+        assert!(!commit.contains("*global_clean != global_generation"));
+        assert!(commit.contains("*global_pending"));
+        assert!(commit.contains("*mutation_epoch != global_generation"));
+        assert!(apply.contains("bpf_spin_lock"));
+        assert!(apply.contains("mount_topology_state_v1_dirty"));
+        assert!(apply.contains("!view->pending_mutations"));
+        assert!(apply.contains("proposal->expected_transition_version"));
+        assert!(apply.contains("view->transition_version != ~0ULL"));
     }
 }

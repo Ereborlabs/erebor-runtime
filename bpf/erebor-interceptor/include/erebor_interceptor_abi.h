@@ -683,6 +683,7 @@ enum policy_activation_probe_map_kind_v1
   policy_activation_probe_map_kind_v1_device_effect = 4,
   policy_activation_probe_map_kind_v1_process_control = 5,
   policy_activation_probe_map_kind_v1_administrative_slot_cancel = 6,
+  policy_activation_probe_map_kind_v1_mount_reconciliation = 7,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum policy_activation_probe_map_kind_v1 policy_activation_probe_map_kind_v1;

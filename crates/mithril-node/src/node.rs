@@ -468,7 +468,7 @@ impl NodeChassis {
     }
 
     async fn reconcile_bindings(&mut self) -> ReconciliationOutcome {
-        let Some(host) = self.host.as_ref() else {
+        let Some(host) = self.host.as_mut() else {
             return ReconciliationOutcome::KernelUnhealthy;
         };
         if host.verify_live_manifest().is_err() {

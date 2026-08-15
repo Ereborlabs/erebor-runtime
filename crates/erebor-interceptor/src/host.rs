@@ -1159,6 +1159,51 @@ impl KernelHost {
         Ok(())
     }
 
+    pub fn apply_mount_reconciliation_proposal(
+        &mut self,
+        mount_namespace_inode: u32,
+    ) -> Result<bool> {
+        ensure!(
+            mount_namespace_inode != 0,
+            ManifestMismatchSnafu {
+                path: PathBuf::from("mount_reconciliation_proposals"),
+                reason: "mount reconciliation needs a nonzero mount namespace".to_owned(),
+            }
+        );
+        let namespace = mount_namespace_inode.to_ne_bytes();
+        let mut key = [0_u8; MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1];
+        key[..namespace.len()].copy_from_slice(&namespace);
+        let request = PolicyActivationProbeV1 {
+            map_kind: PolicyActivationProbeMapKindV1::MountReconciliation,
+            reserved: [0; 7],
+            key_size: namespace.len() as u32,
+            reserved_alignment: 0,
+            key,
+            expected: PhysicalDecisionV1 {
+                decision: PhysicalDecisionKindV1::Allow,
+                reserved: 0,
+                errno: 0,
+                evidence_class_id: 0,
+                transition_id: 0,
+                exception_numeric_handle: 0,
+            },
+        };
+        let return_value = self.run_policy_activation_command(request.as_bytes())?;
+        if return_value == 1 {
+            return Ok(true);
+        }
+        if return_value == 12 {
+            return Ok(false);
+        }
+        Err(ManifestMismatchSnafu {
+            path: PathBuf::from("mount_reconciliation_proposals"),
+            reason: format!(
+                "kernel mount reconciliation command is invalid; probe code {return_value}"
+            ),
+        }
+        .build())
+    }
+
     pub fn cancel_administrative_slot(
         &mut self,
         key: ApprovedExecSlotKeyV1,
@@ -1501,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    fn identity_program_selection_includes_lifecycle_hooks_but_not_the_iterator_link() {
+    fn identity_program_selection_keeps_nonattached_commands_out_of_links() {
         let kind = KernelObjectKind::Identity;
         assert!(kind.includes("erebor_cgroup_attach_task", "tp_btf/cgroup_attach_task"));
         assert!(kind.attaches("erebor_cgroup_attach_task", "tp_btf/cgroup_attach_task"));
@@ -1515,8 +1560,8 @@ mod tests {
         ));
         assert!(kind.includes("erebor_reconcile_tasks", "iter/task"));
         assert!(!kind.attaches("erebor_reconcile_tasks", "iter/task"));
-        assert!(kind.includes("erebor_policy_activation_probe", "socket"));
-        assert!(!kind.attaches("erebor_policy_activation_probe", "socket"));
+        assert!(kind.includes("erebor_policy_activation_probe", "classifier"));
+        assert!(!kind.attaches("erebor_policy_activation_probe", "classifier"));
         assert!(!kind.includes("unrelated", "tracepoint/sched/sched_process_exit"));
     }
 

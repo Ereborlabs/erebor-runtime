@@ -592,7 +592,7 @@ impl NodePolicyGenerationOwner {
         })
     }
 
-    pub fn reconcile_mount_views(&self, host: &KernelHost) -> Result<()> {
+    pub fn reconcile_mount_views(&self, host: &mut KernelHost) -> Result<()> {
         self.exception_authority
             .lock()
             .map_err(|_| {
@@ -626,7 +626,16 @@ impl NodePolicyGenerationOwner {
                 reason: "global mount security barrier is not usable",
             }
         );
-        if global_clean == global_epoch {
+        let mut all_views_clean = global_clean == global_epoch;
+        if all_views_clean {
+            for roots in views.values() {
+                if !self.mount_view_is_clean(host, roots, global_epoch)? {
+                    all_views_clean = false;
+                    break;
+                }
+            }
+        }
+        if all_views_clean {
             return Ok(());
         }
         for roots in views.values() {
@@ -642,24 +651,63 @@ impl NodePolicyGenerationOwner {
         {
             return Ok(());
         }
-        host.update_map(
-            "mount_global_clean_epoch",
-            &global_key,
-            &global_epoch.to_ne_bytes(),
-        )
-        .context(InterceptorSnafu)?;
-        ensure!(
-            mount_epoch_from(host, "mount_global_clean_epoch", &global_key)? == global_epoch,
-            IdentityStateSnafu {
-                reason: "global mount clean-epoch publication readback failed",
+        for roots in views.values() {
+            if !self.mount_view_is_clean(host, roots, global_epoch)? {
+                return Ok(());
             }
-        );
+        }
+        if global_clean != global_epoch {
+            host.update_map(
+                "mount_global_clean_epoch",
+                &global_key,
+                &global_epoch.to_ne_bytes(),
+            )
+            .context(InterceptorSnafu)?;
+            ensure!(
+                mount_epoch_from(host, "mount_global_clean_epoch", &global_key)? == global_epoch,
+                IdentityStateSnafu {
+                    reason: "global mount clean-epoch publication readback failed",
+                }
+            );
+        }
+        if mount_epoch_from(host, "mount_global_mutation_epoch", &global_key)? != global_epoch
+            || mount_epoch_from(host, "mount_global_pending_mutations", &global_key)? != 0
+        {
+            return Ok(());
+        }
+        for roots in views.values() {
+            if !self.mount_view_is_clean(host, roots, global_epoch)? {
+                return Ok(());
+            }
+        }
         Ok(())
+    }
+
+    fn mount_view_is_clean(
+        &self,
+        host: &KernelHost,
+        roots: &[&MountRootReconciliation],
+        target_epoch: u64,
+    ) -> Result<bool> {
+        let root = roots.first().ok_or_else(|| {
+            IdentityStateSnafu {
+                reason: "mount reconciliation view has no roots".to_owned(),
+            }
+            .build()
+        })?;
+        let key = root.mount_namespace_inode.to_ne_bytes();
+        let state = mount_state(host, "mount_security_views", &key)?;
+        Ok(state.state == MountTopologyStateV1::Clean
+            && state.topology_generation == target_epoch
+            && state.snapshot_digest_id != 0
+            && state.pending_mutations == 0
+            && state.transition_version != 0
+            && mount_epoch(host, &key)? == target_epoch)
     }
 
     fn reconcile_mount_view(
         &self,
-        host: &KernelHost,
+        host: &mut KernelHost,
         roots: &[&MountRootReconciliation],
         target_epoch: u64,
     ) -> Result<Option<u64>> {
@@ -686,6 +734,8 @@ impl NodePolicyGenerationOwner {
             && state.topology_generation == target_epoch
             && epoch == target_epoch
             && state.pending_mutations == 0
+            && state.snapshot_digest_id != 0
+            && state.transition_version != 0
         {
             return Ok(Some(state.snapshot_digest_id));
         }
@@ -809,6 +859,22 @@ impl NodePolicyGenerationOwner {
                 reason: "mount reconciliation proposal readback failed",
             }
         );
+        if !host
+            .apply_mount_reconciliation_proposal(root.mount_namespace_inode)
+            .context(InterceptorSnafu)?
+        {
+            return Ok(None);
+        }
+        let committed = mount_state(host, "mount_security_views", &key)?;
+        if mount_epoch(host, &key)? != target_epoch
+            || committed.state != MountTopologyStateV1::Clean
+            || committed.topology_generation != proposal.topology_generation
+            || committed.snapshot_digest_id != proposal.snapshot_digest_id
+            || committed.pending_mutations != 0
+            || committed.transition_version != proposal.transition_version
+        {
+            return Ok(None);
+        }
         Ok(Some(snapshot_digest_id))
     }
 }
@@ -3589,6 +3655,31 @@ mod tests {
         ContainerKindV1, ExactDeviceConfig, ExactDeviceType, ExactFileObjectConfig,
         WorkloadBindingConfig,
     };
+
+    #[test]
+    fn global_mount_clean_epoch_follows_kernel_reconciliation() {
+        let source = include_str!("policy.rs");
+        let reconciliation = source
+            .split("pub fn reconcile_mount_views")
+            .nth(1)
+            .and_then(|source| source.split("fn mount_view_is_clean").next())
+            .unwrap_or_default();
+        let view_reconciliation = source
+            .split("fn reconcile_mount_view(")
+            .nth(1)
+            .and_then(|source| source.split("#[derive(Clone)]").next())
+            .unwrap_or_default();
+        let commit = reconciliation
+            .find(".reconcile_mount_view(host, roots, global_epoch)")
+            .expect("mount reconciliation invokes each kernel view commit");
+        let publish = reconciliation
+            .find("host.update_map(\n                \"mount_global_clean_epoch\"")
+            .expect("mount reconciliation publishes the global clean epoch");
+
+        assert!(commit < publish);
+        assert!(view_reconciliation.contains("apply_mount_reconciliation_proposal"));
+        assert!(reconciliation.contains("self.mount_view_is_clean(host, roots, global_epoch)"));
+    }
 
     #[test]
     fn capacity_preflight_counts_existing_and_planned_unique_keys() -> crate::Result<()> {

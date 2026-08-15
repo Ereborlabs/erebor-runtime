@@ -235,6 +235,7 @@ pub enum PolicyActivationProbeMapKindV1 {
     DeviceEffect = 4,
     ProcessControl = 5,
     AdministrativeSlotCancel = 6,
+    MountReconciliation = 7,
 }
 
 #[repr(C)]
@@ -1272,6 +1273,7 @@ mod tests {
         assert_eq!(offset_of!(PolicyActivationProbeV1, key), 16);
         assert_eq!(offset_of!(PolicyActivationProbeV1, expected), 88);
         assert_eq!(PolicyActivationProbeMapKindV1::EffectDecision as u8, 1);
+        assert_eq!(PolicyActivationProbeMapKindV1::MountReconciliation as u8, 7);
         assert_eq!(size_of::<EffectDefaultKeyV1>(), 40);
         assert_eq!(size_of::<DeviceEffectKeyV1>(), 72);
         assert_eq!(size_of::<ProcessControlRuleKeyV1>(), 40);

@@ -98,7 +98,7 @@ _Static_assert(sizeof(mount_mutation_attempt_v1) == 8,
 #include "identity_root_helpers.h"
 #include "identity_path.bpf.h"
 
-SEC("socket")
+SEC("classifier")
 int erebor_policy_activation_probe(struct __sk_buff *context)
 {
     __u32 request_key = 0;
@@ -195,6 +195,25 @@ int erebor_policy_activation_probe(struct __sk_buff *context)
             approved_exec_slot_state_v1_armed)
             return 11;
         __sync_fetch_and_add(&administrative_slot->transition_version, 1);
+        return 1;
+    case policy_activation_probe_map_kind_v1_mount_reconciliation:
+        if (request->key_size !=
+            sizeof(scratch->file_object.mount_namespace_inode))
+            return 4;
+        if (request->expected.decision != physical_decision_kind_v1_allow ||
+            request->expected.reserved || request->expected.errno ||
+            request->expected.evidence_class_id ||
+            request->expected.transition_id ||
+            request->expected.exception_numeric_handle)
+            return 4;
+        __builtin_memcpy(&scratch->file_object.mount_namespace_inode,
+                         request->key,
+                         sizeof(scratch->file_object.mount_namespace_inode));
+        if (!scratch->file_object.mount_namespace_inode)
+            return 4;
+        if (commit_mount_reconciliation_proposal(
+                scratch->file_object.mount_namespace_inode))
+            return 12;
         return 1;
     default:
         return 4;

@@ -29,8 +29,9 @@ use self::child::{EffectProcessFixture, HardClosedOperation};
 use self::support::{
     effect_binding, effect_node_config, effect_peer_binding, effect_propagation_binding,
     global_mount_view_is_dirty, health_delta, inode_generation, mount_view_is_dirty,
-    observation_health, wait_for_effect, wait_for_exact_effect, wait_for_exact_io_uring_effect,
-    wait_for_reason, wait_for_unsupported_effect, ExternalMountNamespace,
+    mount_views_are_clean, observation_health, wait_for_effect, wait_for_exact_effect,
+    wait_for_exact_io_uring_effect, wait_for_reason, wait_for_unsupported_effect,
+    ExternalMountNamespace,
 };
 use crate::error::{
     InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu, PolicySnafu,
@@ -929,6 +930,10 @@ impl EffectTestRunner {
                 .context(NodeSnafu)?,
             );
         }
+        let mount_namespaces = exact_objects
+            .iter()
+            .map(|object| object.mount_namespace_inode)
+            .collect::<BTreeSet<_>>();
         let node_config = effect_node_config(
             &fixture_root,
             pin_root,
@@ -968,6 +973,13 @@ impl EffectTestRunner {
         let mut policy =
             NodePolicyGenerationOwner::load_and_install(&node_config, &mut host, node_boot_id, 1)
                 .context(NodeSnafu)?;
+        ensure!(
+            mount_views_are_clean(&host, &mount_namespaces)?,
+            InvalidInputSnafu {
+                path: Path::new("mount_security_views"),
+                reason: "policy activation did not complete every kernel mount reconciliation",
+            }
+        );
         NativeSecurityStateOwner::new(node_boot_id, 1)
             .activate_with_effect_policy(&mut host, true)
             .context(NodeSnafu)?;
@@ -2483,7 +2495,7 @@ impl EffectTestRunner {
             "UNSUPPORTED_OBJECT",
             (KernelEffectFamilyV1::Mount, KernelEffectOperationV1::Mount),
         )?;
-        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
         let reconciled_marker = observations.cursor();
         ensure!(
             fixture.open(&paths.secret)?.allowed != protect,
@@ -2527,14 +2539,14 @@ impl EffectTestRunner {
             "UNRESOLVED_OBJECT",
         )?;
         ensure!(
-            policy.reconcile_mount_views(&host).is_err(),
+            policy.reconcile_mount_views(&mut host).is_err(),
             InvalidInputSnafu {
                 path: &paths.secret,
                 reason: "reconciliation accepted a different object mounted over the exact path",
             }
         );
         external_mount_namespace.unmount(&paths.secret)?;
-        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
         let restored_marker = observations.cursor();
         ensure!(
             fixture.open(&paths.secret)?.allowed != protect,
@@ -2578,7 +2590,7 @@ impl EffectTestRunner {
                 reason: "one represented namespace authorized an exact open after propagation",
             }
         );
-        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
         ensure!(
             fixture.open(&paths.benign)?.allowed && fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
@@ -2594,7 +2606,7 @@ impl EffectTestRunner {
                 reason: "propagated unmount did not invalidate the peer namespace",
             }
         );
-        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
         ensure!(
             fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
@@ -2613,7 +2625,7 @@ impl EffectTestRunner {
                 reason: "mount_setattr did not invalidate every represented namespace",
             }
         );
-        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
         ensure!(
             fixture.open(&paths.benign)?.allowed && fixture.propagation_peer_open()?.allowed,
             InvalidInputSnafu {
@@ -2629,7 +2641,7 @@ impl EffectTestRunner {
                 reason: "mount_setattr restore did not invalidate the global view",
             }
         );
-        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
         ensure!(
             fixture.open(&paths.benign)?.allowed,
             InvalidInputSnafu {
@@ -2798,7 +2810,7 @@ impl EffectTestRunner {
         );
 
         fixture.stop()?;
-        policy.reconcile_mount_views(&host).context(NodeSnafu)?;
+        policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
         let old_target = BindingActivationTargetKeyV1 {
             binding_id: Id128V1::new(0x9999_9999_9999_4999, 0x8999_9999_9999_9999),
             profile_generation_ref_id: PROFILE_GENERATION_REF_ID,

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs::File;
 use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
@@ -145,11 +146,13 @@ pub(super) fn health_delta(
 }
 
 pub(super) fn mount_view_is_dirty(host: &KernelHost, mount_namespace_inode: u32) -> Result<bool> {
-    mount_state_is_dirty(
+    Ok(mount_state(
         host,
         "mount_security_views",
         &mount_namespace_inode.to_ne_bytes(),
-    )
+    )?
+    .state
+        == MountTopologyStateV1::Dirty)
 }
 
 pub(super) fn global_mount_view_is_dirty(host: &KernelHost) -> Result<bool> {
@@ -158,6 +161,37 @@ pub(super) fn global_mount_view_is_dirty(host: &KernelHost) -> Result<bool> {
     let clean = mount_counter(host, "mount_global_clean_epoch", &key)?;
     let pending = mount_counter(host, "mount_global_pending_mutations", &key)?;
     Ok(mutation != clean || pending != 0)
+}
+
+pub(super) fn mount_views_are_clean(
+    host: &KernelHost,
+    mount_namespaces: &BTreeSet<u32>,
+) -> Result<bool> {
+    let global_key = 0_u32.to_ne_bytes();
+    let global_epoch = mount_counter(host, "mount_global_mutation_epoch", &global_key)?;
+    let global_clean = mount_counter(host, "mount_global_clean_epoch", &global_key)?;
+    let global_pending = mount_counter(host, "mount_global_pending_mutations", &global_key)?;
+    if mount_namespaces.is_empty()
+        || global_epoch == 0
+        || global_clean != global_epoch
+        || global_pending != 0
+    {
+        return Ok(false);
+    }
+    for mount_namespace_inode in mount_namespaces {
+        let key = mount_namespace_inode.to_ne_bytes();
+        let view = mount_state(host, "mount_security_views", &key)?;
+        if view.state != MountTopologyStateV1::Clean
+            || view.topology_generation != global_epoch
+            || view.snapshot_digest_id == 0
+            || view.pending_mutations != 0
+            || view.transition_version == 0
+            || mount_counter(host, "mount_mutation_epochs", &key)? != global_epoch
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn mount_counter(host: &KernelHost, map: &str, key: &[u8]) -> Result<u64> {
@@ -181,7 +215,7 @@ fn mount_counter(host: &KernelHost, map: &str, key: &[u8]) -> Result<u64> {
     Ok(u64::from_ne_bytes(value))
 }
 
-fn mount_state_is_dirty(host: &KernelHost, map: &str, key: &[u8]) -> Result<bool> {
+fn mount_state(host: &KernelHost, map: &str, key: &[u8]) -> Result<MountSecurityViewStateV1> {
     let bytes = host
         .lookup_map(map, key)
         .context(InterceptorSnafu)?
@@ -199,7 +233,7 @@ fn mount_state_is_dirty(host: &KernelHost, map: &str, key: &[u8]) -> Result<bool
         }
         .build()
     })?;
-    Ok(view.state == MountTopologyStateV1::Dirty)
+    Ok(view)
 }
 
 pub(super) fn wait_for_reason(

@@ -180,6 +180,75 @@ static __always_inline int collect_mount_components(
     return 0;
 }
 
+static __always_inline int apply_mount_reconciliation_proposal(
+    mount_security_view_state_v1 *view,
+    struct mount_security_view_lock_v1 *view_lock, __u64 *mutation_epoch,
+    mount_reconciliation_proposal_v1 *proposal, __u64 global_generation,
+    bool require_dirty)
+{
+    int result = -EACCES;
+
+    if (!view || !view_lock || !mutation_epoch || !proposal ||
+        !global_generation)
+        return -EACCES;
+    bpf_spin_lock(&view_lock->lock);
+    if (proposal->topology_generation == global_generation &&
+        proposal->topology_generation == *mutation_epoch &&
+        proposal->snapshot_digest_id &&
+        (!require_dirty || view->state == mount_topology_state_v1_dirty) &&
+        !view->pending_mutations &&
+        proposal->expected_transition_version == view->transition_version &&
+        view->transition_version != ~0ULL &&
+        proposal->transition_version == view->transition_version + 1) {
+        view->topology_generation = proposal->topology_generation;
+        view->snapshot_digest_id = proposal->snapshot_digest_id;
+        view->state = mount_topology_state_v1_clean;
+        view->transition_version = proposal->transition_version;
+        result = 0;
+    }
+    bpf_spin_unlock(&view_lock->lock);
+    return result;
+}
+
+static __always_inline int commit_mount_reconciliation_proposal(
+    __u32 mount_namespace_inode)
+{
+    const __u32 global_key = 0;
+    __u64 *global_epoch =
+        bpf_map_lookup_elem(&mount_global_mutation_epoch, &global_key);
+    __u64 *global_clean =
+        bpf_map_lookup_elem(&mount_global_clean_epoch, &global_key);
+    __u64 *global_pending =
+        bpf_map_lookup_elem(&mount_global_pending_mutations, &global_key);
+    mount_security_view_state_v1 *view =
+        bpf_map_lookup_elem(&mount_security_views, &mount_namespace_inode);
+    struct mount_security_view_lock_v1 *view_lock =
+        bpf_map_lookup_elem(&mount_security_view_locks,
+                            &mount_namespace_inode);
+    __u64 *mutation_epoch =
+        bpf_map_lookup_elem(&mount_mutation_epochs, &mount_namespace_inode);
+    mount_reconciliation_proposal_v1 *proposal =
+        bpf_map_lookup_elem(&mount_reconciliation_proposals,
+                            &mount_namespace_inode);
+    __u64 global_generation;
+
+    if (!global_epoch || !global_clean || !global_pending || !view ||
+        !view_lock || !mutation_epoch || !proposal)
+        return -EACCES;
+    global_generation = *global_epoch;
+    if (!global_generation || *global_clean > global_generation ||
+        *global_pending)
+        return -EACCES;
+    if (apply_mount_reconciliation_proposal(view, view_lock, mutation_epoch,
+                                            proposal, global_generation, true))
+        return -EACCES;
+    if (*global_epoch != global_generation ||
+        *global_clean > global_generation || *global_pending ||
+        *mutation_epoch != global_generation)
+        return -EACCES;
+    return 0;
+}
+
 static __always_inline int snapshot_mount_view(
     __u32 mount_namespace_inode, __u64 topology_generation,
     __u64 snapshot_digest_id, __u64 transition_version, bool reconcile,
@@ -214,19 +283,10 @@ static __always_inline int snapshot_mount_view(
     if (!global_generation || *global_clean != global_generation ||
         *global_pending)
         return -EACCES;
-    if (reconcile) {
-        bpf_spin_lock(&view_lock->lock);
-        if (proposal && proposal->topology_generation == *mutation_epoch &&
-            proposal->snapshot_digest_id && !view->pending_mutations &&
-            proposal->expected_transition_version == view->transition_version &&
-            proposal->transition_version == view->transition_version + 1) {
-            view->topology_generation = proposal->topology_generation;
-            view->snapshot_digest_id = proposal->snapshot_digest_id;
-            view->state = mount_topology_state_v1_clean;
-            view->transition_version = proposal->transition_version;
-        }
-        bpf_spin_unlock(&view_lock->lock);
-    }
+    if (reconcile)
+        (void)apply_mount_reconciliation_proposal(view, view_lock,
+                                                   mutation_epoch, proposal,
+                                                   global_generation, false);
 
     bpf_spin_lock(&view_lock->lock);
     if (*mutation_epoch == view->topology_generation &&

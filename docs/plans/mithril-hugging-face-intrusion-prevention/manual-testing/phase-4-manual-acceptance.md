@@ -41,6 +41,12 @@ reconciliation, ring saturation, latency, and cleanup. Unqualified anonymous
 and memfd execution, file mutation, SysV IPC, namespace creation, BPF map
 creation, and pinned-link removal remain hard closed.
 
+Before the probe enables effects or opens a protected file, it verifies every
+configured mount view is `CLEAN` at the current global epoch. A policy install
+must complete this check without a workload file access. If it fails, do not
+use a file read as a warmup. Keep the result and correct the signed policy or
+mount state.
+
 The real `mithril-node` Docker and raw-namespace cases live in
 [`examples/mithril-local-enforcement-manual`](../../../../examples/mithril-local-enforcement-manual/README.md).
 Run the individual shell for the behavior under review; each installs an EXIT
