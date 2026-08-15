@@ -64,6 +64,25 @@ remained a restricted native task. The runner removed its pin root, lease, and
 cgroup. This is qualified evidence for the creator-exit branch of
 `ID-CREATOR-PARENT-007` only. The full matrix remains blocked.
 
+Double-fork VM record, 2026-08-15: the isolated physical probe ran at source
+commit `2f3dad0081377651a8d2b52ca9479439ac7176b0`. The identity, BPF, and
+inspector paths were unchanged from
+`6190ca75641cb73d585712e2900afb520576db26`, which added this fixture. On
+Linux `6.8.0-137-generic`, it used BPF object SHA-256
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`. The
+result JSON has SHA-256
+`e69b94754c479ceeddaf55d847b4d89d870793cf30d5a0139eead12fc28c4f64`.
+The outer root had task cookie `57`, the intermediate native child had task
+cookie `60`, and the stopped grandchild had task cookie `66`. Before the
+intermediate exited, the grandchild creator and real parent were `60` and its
+real-parent interval was `1`. After the intermediate exited and the grandchild
+executed `sleep`, the grandchild kept task cookie `66` and creator `60`, while
+its real parent became `0` and its interval became `2`. The probe removed its
+pin root, lease, and cgroup, and `profile_task_refs_after_exit` was `0`. This
+is qualified evidence for the double-fork branch of
+`ID-CREATOR-PARENT-007` only. It does not cover subreapers, namespace-init or
+ptrace reparenting, or PID reuse. The phase remains **Blocked**.
+
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured
@@ -132,7 +151,7 @@ It does not complete the full entry or failure-injection matrix.
 | `ID-CGROUP-ESCAPE-001` | move a labeled task to host/unprotected placement | task storage still resolves and denies mismatch; unmoved allowed control works |
 | `ID-CLONE-CGROUP-002` | clone into expected and changed placement | child state exists before effect and placement is verified |
 | `ID-CLONE-CGROUP-FAIL-003` | force child allocation/finalization/placement failure | no unlabeled runnable child gains authority; normal clone succeeds |
-| `ID-CREATOR-PARENT-007` | reparent/orphan child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for the creator-exit branch. | immutable creator edge stays exact while real-parent interval changes. The creator-exit branch does not cover double forks, subreapers, namespace-init reparenting, ptrace reparenting, or PID reuse. |
+| `ID-CREATOR-PARENT-007` | reparent or orphan a child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for creator exit and [`native-child.sh --double-fork`](../../../../examples/mithril-identity-manual/native-child.sh) for double fork. | immutable creator edge stays exact while the real-parent interval changes. The qualified branches do not cover subreapers, namespace-init reparenting, ptrace reparenting, or PID reuse. |
 | `ID-MOVED-PARENT-FORK-004` | move parent, then fork | child inherits actual task authority and placement floor, not cgroup-derived role |
 | `ID-MOVED-TASK-EXEC-005` | move labeled task, then exec | task-first old identity and placement mismatch constrain transition |
 | `ID-TASK-COORD-FINALIZE-006` | inspect task at allocation, pre-wake finalization, visibility, and exit | opaque state precedes effect; PID/TGID/start coordinates finalize later without granting permission |

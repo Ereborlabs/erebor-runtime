@@ -209,3 +209,28 @@ The phase remains **Blocked**. This probe does not execute the complete entry
 and failure-injection matrix. The full ephemeral-container, non-leader and
 concurrent exec, cgroup and PID reuse, saturation, and non-x86 physical cases
 remain unqualified.
+
+## Double-Fork Qualification Update — 2026-08-15
+
+An isolated physical probe ran at source commit
+`2f3dad0081377651a8d2b52ca9479439ac7176b0`. The identity, BPF, and inspector
+paths were unchanged from
+`6190ca75641cb73d585712e2900afb520576db26`, which added the double-fork
+fixture. It ran on x86-64 Linux `6.8.0-137-generic` with BPF object SHA-256
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`. The
+result JSON SHA-256 is
+`e69b94754c479ceeddaf55d847b4d89d870793cf30d5a0139eead12fc28c4f64`.
+
+The outer restricted runtime root had task cookie `57`. Its intermediate
+native child had task cookie `60` and creator and real-parent cookie `57`.
+The stopped grandchild had task cookie `66`, creator and real-parent cookie
+`60`, and real-parent interval `1`. After the intermediate exited and the
+grandchild executed `sleep`, it kept task cookie `66` and creator cookie `60`.
+Its real-parent cookie changed to `0`, its real-parent interval changed to
+`2`, and its active execution changed. The probe reported
+`pin_root_removed=true`, `lease_removed=true`, `cgroup_removed=true`, and
+`profile_task_refs_after_exit=0`.
+
+This is physical evidence for the double-fork subcase of
+`ID-CREATOR-PARENT-007` only. It does not qualify subreaper, namespace-init,
+ptrace-reparenting, or PID-reuse cases. The phase remains **Blocked**.

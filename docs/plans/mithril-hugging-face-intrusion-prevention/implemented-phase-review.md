@@ -161,8 +161,20 @@ evidence. Do not treat it as a privileged physical result.
 ### Double-fork native-child source review
 
 Source change `6190ca7` adds the double-fork branch of the existing native
-identity probe. It adds source and local fixture evidence only. It does not
-record a new privileged VM result. Phase 2 remains **Blocked**.
+identity probe. The isolated privileged probe ran at source commit
+`2f3dad0081377651a8d2b52ca9479439ac7176b0`; the identity, BPF, and inspector
+paths were unchanged from `6190ca75641cb73d585712e2900afb520576db26`. Its
+result JSON SHA-256 is
+`e69b94754c479ceeddaf55d847b4d89d870793cf30d5a0139eead12fc28c4f64`, and its
+BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`. The
+outer root, intermediate child, and grandchild had task cookies `57`, `60`,
+and `66`. After the intermediate exited, the grandchild kept cookie `66` and
+creator cookie `60`; its real parent changed from `60` to `0`, and its
+real-parent interval changed from `1` to `2`. The runner reported
+`pin_root_removed=true`, `lease_removed=true`, `cgroup_removed=true`, and
+`profile_task_refs_after_exit=0`. This qualifies only the double-fork subcase;
+Phase 2 remains **Blocked**.
 
 Review this narrow path in order:
 
