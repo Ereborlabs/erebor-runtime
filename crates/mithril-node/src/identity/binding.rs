@@ -127,10 +127,17 @@ impl WorkloadBindingOwner {
         runtime: &ContainerRuntimeConfig,
     ) -> Result<Self> {
         let mut owner = Self::system(node_boot_id, label_epoch)?;
-        owner.runtime = Some(
-            ContainerRuntimeInventory::connect(&runtime.socket_path, &owner.cgroup_root).await?,
-        );
+        owner.runtime =
+            Some(ContainerRuntimeInventory::connect(runtime, &owner.cgroup_root).await?);
         Ok(owner)
+    }
+
+    pub async fn wait_for_runtime_change(&mut self) {
+        if let Some(runtime) = self.runtime.as_mut() {
+            runtime.wait_for_change().await;
+        } else {
+            std::future::pending::<()>().await;
+        }
     }
 
     fn at(

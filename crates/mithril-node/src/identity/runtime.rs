@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use containerd_client::services::v1::{events_client::EventsClient, SubscribeRequest};
 use hyper_util::rt::TokioIo;
 use k8s_cri::v1::runtime_service_client::RuntimeServiceClient;
 use k8s_cri::v1::{ContainerState, ContainerStatusRequest, ListContainersRequest, VersionRequest};
@@ -14,11 +16,13 @@ use crate::error::{
     ContainerRuntimeProcessSnafu, ContainerRuntimeRpcSnafu, ContainerRuntimeTransportSnafu,
     IdentityStateSnafu,
 };
-use crate::{Result, WorkloadBindingConfig};
+use crate::{ContainerRuntimeConfig, Result, WorkloadBindingConfig};
 
 const POD_UID_LABEL: &str = "io.kubernetes.pod.uid";
 const CONTAINER_NAME_LABEL: &str = "io.kubernetes.container.name";
 const POD_NAMESPACE_LABEL: &str = "io.kubernetes.pod.namespace";
+const CONTAINERD_KUBERNETES_NAMESPACE_FILTER: &str = "namespace==k8s.io";
+const CONTAINERD_EVENT_RECONNECT_DELAY: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeContainerState {
@@ -69,11 +73,16 @@ impl RuntimeContainerIdentity {
 pub(super) struct ContainerRuntimeInventory {
     client: RuntimeServiceClient<Channel>,
     cgroup_root: PathBuf,
+    event_socket_path: Option<PathBuf>,
+    event_stream: Option<tonic::Streaming<containerd_client::types::Envelope>>,
 }
 
 impl ContainerRuntimeInventory {
-    pub(super) async fn connect(socket_path: &Path, cgroup_root: &Path) -> Result<Self> {
-        let socket_path = socket_path.to_path_buf();
+    pub(super) async fn connect(
+        runtime: &ContainerRuntimeConfig,
+        cgroup_root: &Path,
+    ) -> Result<Self> {
+        let socket_path = runtime.socket_path.clone();
         let channel = Endpoint::from_static("http://[::]")
             .connect_with_connector(service_fn(move |_: Uri| {
                 let socket_path = socket_path.clone();
@@ -91,7 +100,60 @@ impl ContainerRuntimeInventory {
         Ok(Self {
             client,
             cgroup_root: cgroup_root.to_path_buf(),
+            event_socket_path: runtime.containerd_event_socket_path.clone(),
+            event_stream: None,
         })
+    }
+
+    pub(super) async fn wait_for_change(&mut self) {
+        let Some(socket_path) = self.event_socket_path.clone() else {
+            return std::future::pending::<()>().await;
+        };
+        loop {
+            if self.event_stream.is_none() {
+                let Ok(channel) = containerd_client::connect(&socket_path).await else {
+                    tokio::time::sleep(CONTAINERD_EVENT_RECONNECT_DELAY).await;
+                    continue;
+                };
+                let mut client = EventsClient::new(channel);
+                let Ok(response) = client
+                    .subscribe(SubscribeRequest {
+                        filters: vec![CONTAINERD_KUBERNETES_NAMESPACE_FILTER.to_owned()],
+                    })
+                    .await
+                else {
+                    tokio::time::sleep(CONTAINERD_EVENT_RECONNECT_DELAY).await;
+                    continue;
+                };
+                self.event_stream = Some(response.into_inner());
+                return;
+            }
+            let Some(events) = self.event_stream.as_mut() else {
+                continue;
+            };
+            let event = events.message().await;
+            match event {
+                Ok(Some(event))
+                    if matches!(
+                        event.topic.as_str(),
+                        "/containers/create"
+                            | "/containers/update"
+                            | "/containers/delete"
+                            | "/tasks/create"
+                            | "/tasks/start"
+                            | "/tasks/delete"
+                            | "/tasks/exit"
+                    ) =>
+                {
+                    return
+                }
+                Ok(Some(_event)) => {}
+                Ok(None) | Err(_) => {
+                    self.event_stream = None;
+                    return;
+                }
+            }
+        }
     }
 
     pub(super) async fn snapshot(

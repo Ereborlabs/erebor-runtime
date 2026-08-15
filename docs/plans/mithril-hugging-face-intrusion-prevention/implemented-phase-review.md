@@ -1391,7 +1391,7 @@ smallest complete explanation of who does what.
 | 2 | [`NodeChassis::start`](../../../crates/mithril-node/src/node.rs#L78) | Startup order is: load or recover one object, publish bindings, install an optional signed generation, activate identity, and start observation and control. |
 | 3 | [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415) | `KernelHostOwner` is the only production load, attach, pin, manifest, and lease owner. It loads one object for one node. It does not load one object for each container. |
 | 4 | [`WorkloadBindingOwner::publish_configured`](../../../crates/mithril-node/src/identity/binding.rs#L131) | The binding owner turns a validated live cgroup into one `execution_set_bindings` row. It owns container placement in userspace. |
-| 5 | [`ContainerRuntimeInventory::snapshot`](../../../crates/mithril-node/src/identity/runtime.rs#L97) | The optional Container Runtime Interface (CRI) owner verifies configured container identity and resolves its local cgroup. It publishes no BPF program. |
+| 5 | [`ContainerRuntimeInventory::snapshot`](../../../crates/mithril-node/src/identity/runtime.rs#L160) and [`ContainerRuntimeInventory::wait_for_change`](../../../crates/mithril-node/src/identity/runtime.rs#L108) | The optional Container Runtime Interface (CRI) owner verifies configured container identity and resolves its local cgroup. When configured, it retains one containerd event stream and wakes that same snapshot. It publishes no BPF program. |
 | 6 | [`NodePolicyGenerationOwner::load_and_install`](../../../crates/mithril-node/src/policy.rs#L111) | A verified candidate becomes node-local map rows. The node reads and probes the required rows before it publishes the profile pointer. |
 | 7 | [`NativeSecurityStateOwner::activate_with_effect_policy`](../../../crates/mithril-node/src/identity/native.rs#L40) | The identity owner writes or recovers one runtime configuration record. It then runs the task iterator. It does not load another BPF object. |
 | 8 | [`identity.bpf.c`](../../../bpf/erebor-interceptor/programs/identity.bpf.c#L3) | One C translation unit includes the maps and all hook families in one ELF object. Read this file before an individual BPF header. |
@@ -1752,12 +1752,31 @@ sequenceDiagram
 ```
 
 Read this flow at
-[`ContainerRuntimeInventory::snapshot`](../../../crates/mithril-node/src/identity/runtime.rs#L88)
+[`ContainerRuntimeInventory::snapshot`](../../../crates/mithril-node/src/identity/runtime.rs#L160)
 and
 [`WorkloadBindingOwner::reconcile_runtime_inner`](../../../crates/mithril-node/src/identity/binding.rs#L514).
 The node uses the `k8s-cri` generated client. It uses `procfs::Process` for the
 CRI-dockerd PID fallback. It does not start a Docker listener, parse a CRI
 command, or load a per-container BPF object.
+
+### Containerd notification wakeup
+
+When `containerd_event_socket_path` is configured, [`WorkloadBindingOwner`](../../../crates/mithril-node/src/identity/binding.rs#L114)
+waits for [`ContainerRuntimeInventory::wait_for_change`](../../../crates/mithril-node/src/identity/runtime.rs#L108).
+The runtime inventory retains the stream. It subscribes to containerd's Events
+service with the `k8s.io` namespace filter. A create, update, delete, start,
+or exit topic for a container or task returns from that method. A new
+subscription and a closed stream also return. [`NodeChassis::run`](../../../crates/mithril-node/src/node.rs#L274)
+then calls the existing [`reconcile_bindings`](../../../crates/mithril-node/src/node.rs#L480)
+path, which obtains a new CRI snapshot.
+
+The periodic CRI snapshot remains the recovery source after a missed event, an
+unavailable socket, or runtime restart. This path reads only the event topic.
+It does not publish a binding from an event payload. It is specific to
+containerd; a generic CRI or CRI-O configuration without this socket continues
+to use periodic snapshots. It does not hold container start or exec, so it
+does not prove first-exec protection. The focused configuration test verifies
+that the optional event socket path is absolute.
 
 ### Shutdown and recovery
 
@@ -2741,7 +2760,7 @@ record for this exact source state.
 | --- | --- | --- | --- |
 | One object, loader, pin recovery, and manifest | Implemented | One `libbpf-cargo` object is embedded and one `libbpf-rs` owner loads, attaches, pins, or recovers it. | Production pins survive process exit by design. The lease does not remove them. |
 | Rust/C ABI boundary | Implemented | Rust `repr(C)` is the source. cbindgen checks the snake-case C header. `zerocopy` performs exact-size typed reads and writes. | It is a same-host native-endian ABI, not a network format. |
-| Static and CRI-resolved cgroup binding | Partial | One binding row is published after live cgroup and configured container identity checks. CRI snapshots refresh configured container IDs. | A snapshot does not prove every pre-start ordering. The full runtime entry matrix is not qualified. |
+| Static and CRI-resolved cgroup binding | Partial | One binding row is published after live cgroup and configured container identity checks. CRI snapshots refresh configured container IDs. An optional containerd relay wakes the same snapshot on relevant lifecycle topics. | A snapshot does not prove every pre-start ordering. The full runtime entry matrix is not qualified. |
 | Native task/process identity | Partial | Lifecycle hooks publish task-first identity before protected work and retain restriction on cleanup failure. | The phase failure-injection, reuse, non-leader, ephemeral-container, and non-x86 physical matrix is incomplete. |
 | Exec identity transaction | Partial | `execve`, `execveat`, BPRM, commit, failure, success, candidates, and exact ordered argv state exist. | Full immutable image, loader, `binfmt_misc`, content race, and VMA coverage is incomplete. Arguments are not sorted or normalized. Exact order, count, lengths, and bytes must match. |
 | Signed generation installation | Partial | Verified candidates install immutable rows through `PREPARING`, `READ_BACK`, and `ACTIVE`. The node preflights capacity, allocates a durable monotonic handle, probes staged rows, stages all live bindings of one profile, commits one profile pointer, recovers pending activation, and retires unused old rows. | The complete crash and concurrent-holder physical matrix is not current. The architecture-required grace-period proof after the last typed holder clears is not explicit. Candidates arrive through startup configuration, not the Control stream. |

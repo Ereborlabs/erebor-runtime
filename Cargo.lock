@@ -543,6 +543,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
+name = "containerd-client"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "936cc6911381d95039f381080ec148024d2bb0044a03363542b0a6b0b2c46592"
+dependencies = [
+ "hyper-util",
+ "prost",
+ "prost-build",
+ "prost-types",
+ "tokio",
+ "tonic",
+ "tonic-build",
+ "tower 0.5.3",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3190,6 +3206,7 @@ name = "mithril-node"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "containerd-client",
  "ed25519-dalek 3.0.0",
  "erebor-interceptor",
  "erebor-interceptor-abi",

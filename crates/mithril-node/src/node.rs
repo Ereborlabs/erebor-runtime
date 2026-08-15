@@ -406,7 +406,12 @@ impl NodeChassis {
                                 effect_task = None;
                                 break 'running;
                             }
-                            _instant = reconciliation.tick() => {
+                            () = async {
+                                tokio::select! {
+                                    () = self.bindings.wait_for_runtime_change() => {}
+                                    _instant = reconciliation.tick() => {}
+                                }
+                            } => {
                                 match self.reconcile_bindings().await {
                                     ReconciliationOutcome::Healthy => {
                                         if !identity_healthy && kernel_healthy {
@@ -484,7 +489,12 @@ impl NodeChassis {
                         effect_task = None;
                         break 'running;
                     }
-                    _instant = reconciliation.tick() => {
+                    () = async {
+                        tokio::select! {
+                            () = self.bindings.wait_for_runtime_change() => {}
+                            _instant = reconciliation.tick() => {}
+                        }
+                    } => {
                         match self.reconcile_bindings().await {
                             ReconciliationOutcome::Healthy => {
                                 if !identity_healthy && kernel_healthy {

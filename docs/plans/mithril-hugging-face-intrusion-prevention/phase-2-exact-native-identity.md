@@ -1352,3 +1352,26 @@ held-task inspection, purpose, a protected effect, or response evidence.
 This closes `ENTRY-STOCK-HOOK-FAILURE-002`. All 29 required fixtures have
 source, physical, manual when operator-runnable, and exact-limit records.
 Phase 2 is **Done**.
+
+## Containerd Event Recheck Maintenance Update — 2026-08-15
+
+This source update predated the final physical closure. It does not change the
+current result.
+
+`ContainerRuntimeConfig` can now include an optional
+`containerd_event_socket_path`. When it is set, `ContainerRuntimeInventory`
+retains a containerd lifecycle stream for the `k8s.io` namespace. A relevant
+container or task event returns control to the existing CRI snapshot
+reconciliation. `WorkloadBindingOwner` owns this runtime integration within
+the node identity boundary. The node keeps the periodic CRI snapshot as
+recovery truth after event loss, an unavailable socket, or a runtime restart.
+
+The runtime inventory does not publish a binding from event data. It does not
+hold a container start or exec. It therefore does not establish a first-exec
+guarantee. No physical containerd-event qualification was recorded for this
+optional path. The 29 required closure rows do not depend on it. At the
+original source point, `cargo fmt --all -- --check`, strict Clippy for
+`mithril-node`, and `cargo test -p mithril-node --lib --offline -j 1` passed;
+the focused suite ran 86 tests. The repository Rust verification stopped at
+an absent fixture registry that current `main` now contains. The focused
+configuration test validates the event socket path.
