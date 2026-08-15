@@ -80,6 +80,11 @@ grep -q '^  k3s-cri-effect)$' "$directory/guest.sh"
 grep -q '^  k3s-administrative-exec)$' "$directory/guest.sh"
 grep -q 'pod_initial_root=restored_or_unknown_root:fail_closed_unknown' \
   "$directory/guest.sh"
+grep -q 'crictl exec "\$container_id"' "$directory/guest.sh"
+grep -q 'Mithril did not classify direct CRI exec as a restricted external root' \
+  "$directory/guest.sh"
+grep -q 'cri_exec_root=external_runtime_root:runtime_external_restricted' \
+  "$directory/guest.sh"
 grep -q 'kubectl_exec_root=external_runtime_root:runtime_external_restricted' \
   "$directory/guest.sh"
 grep -q 'MITHRIL_VM_CRI_EFFECT_MODE' "$directory/guest.sh"

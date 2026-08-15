@@ -260,11 +260,16 @@ case ${1:-} in
     pod_state=/tmp/mithril-k3s-cri-effect
     pod_pid_file=$pod_state/exec.pid
     pod_release_file=$pod_state/release
+    cri_pid_file=$pod_state/cri-exec.pid
+    cri_release_file=$pod_state/cri-release
     initial_snapshot=$lane_root/pod-initial-root.json
+    cri_snapshot=$lane_root/cri-exec-root.json
     external_snapshot=$lane_root/kubectl-exec-root.json
     effects=$lane_root/effects.txt
     node_pid=
+    cri_client_pid=
     exec_client_pid=
+    cri_release_fd_open=false
     release_fd_open=false
     result_fd_open=false
     fixture_owned=false
@@ -294,10 +299,19 @@ case ${1:-} in
       local status=$?
       trap - EXIT
       set +e
+      if [[ -n $cri_client_pid ]]; then
+        kill -TERM "$cri_client_pid" 2>/dev/null
+        wait "$cri_client_pid" 2>/dev/null || true
+        cri_client_pid=
+      fi
       if [[ -n $exec_client_pid ]]; then
         kill -TERM "$exec_client_pid" 2>/dev/null
         wait "$exec_client_pid" 2>/dev/null || true
         exec_client_pid=
+      fi
+      if [[ $cri_release_fd_open == true ]]; then
+        exec 7>&-
+        cri_release_fd_open=false
       fi
       if [[ $release_fd_open == true ]]; then
         exec 9>&-
@@ -457,6 +471,73 @@ case ${1:-} in
       exit 1
     }
 
+    cgroup_path=$(sed -n 's|^0::|/sys/fs/cgroup|p' "/proc/$init_pid/cgroup")
+    [[ -d $cgroup_path ]] || {
+      echo "Pod init has no live unified cgroup" >&2
+      exit 1
+    }
+
+    rm -rf -- "/proc/$init_pid/root$pod_state"
+    /usr/local/bin/k3s crictl exec "$container_id" \
+      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; echo $$ >"$2"; IFS= read -r _ <"$3"' \
+      sh "$pod_state" "$cri_pid_file" "$cri_release_file" &
+    cri_client_pid=$!
+    for _attempt in {1..200}; do
+      [[ -s /proc/$init_pid/root$cri_pid_file ]] && break
+      kill -0 "$cri_client_pid" 2>/dev/null || {
+        echo "direct CRI exec exited before publishing its namespace PID" >&2
+        exit 1
+      }
+      sleep 0.1
+    done
+    cri_namespace_pid=$(<"/proc/$init_pid/root$cri_pid_file")
+    [[ $cri_namespace_pid =~ ^[1-9][0-9]*$ ]] || {
+      echo "direct CRI exec wrote an invalid namespace PID" >&2
+      exit 1
+    }
+    cri_host_pid=
+    while read -r host_pid; do
+      [[ -r /proc/$host_pid/status ]] || continue
+      mapped_pid=$(awk '/^NSpid:/ {print $NF}' "/proc/$host_pid/status")
+      if [[ $mapped_pid == "$cri_namespace_pid" ]]; then
+        cri_host_pid=$host_pid
+        break
+      fi
+    done <"$cgroup_path/cgroup.procs"
+    [[ -n $cri_host_pid ]] || {
+      echo "could not map direct CRI exec to its host PID" >&2
+      exit 1
+    }
+    "$inspect" --pin-root /sys/fs/bpf/mithril-k3s-cri-effect \
+      task --host-pid "$cri_host_pid" >"$cri_snapshot"
+    jq -e '.creator_task_cookie == null
+           and .root_class == "external_runtime_root"
+           and .installed_role_class == "runtime_external_restricted"' \
+      "$cri_snapshot" >/dev/null || {
+      echo "Mithril did not classify direct CRI exec as a restricted external root" >&2
+      cat "$cri_snapshot" >&2
+      exit 1
+    }
+    cri_task_cookie=$(jq -er '.task_cookie' "$cri_snapshot")
+    [[ $cri_task_cookie =~ ^[1-9][0-9]*$ ]] || {
+      echo "direct CRI exec has no exact Mithril task cookie" >&2
+      exit 1
+    }
+    exec 7>"/proc/$init_pid/root$cri_release_file"
+    cri_release_fd_open=true
+    printf '1\n' >&7
+    exec 7>&-
+    cri_release_fd_open=false
+    set +e
+    wait "$cri_client_pid"
+    cri_status=$?
+    set -e
+    cri_client_pid=
+    [[ $cri_status -eq 0 ]] || {
+      echo "direct CRI exec did not complete its identity check: $cri_status" >&2
+      exit 1
+    }
+
     rm -rf -- "/proc/$init_pid/root$pod_state"
     exec 8>"$lane_root/exec-result"
     result_fd_open=true
@@ -489,11 +570,6 @@ case ${1:-} in
       exit 1
     }
     exec_host_pid=
-    cgroup_path=$(sed -n 's|^0::|/sys/fs/cgroup|p' "/proc/$init_pid/cgroup")
-    [[ -d $cgroup_path ]] || {
-      echo "Pod init has no live unified cgroup" >&2
-      exit 1
-    }
     while read -r host_pid; do
       [[ -r /proc/$host_pid/status ]] || continue
       mapped_pid=$(awk '/^NSpid:/ {print $NF}' "/proc/$host_pid/status")
@@ -588,6 +664,7 @@ case ${1:-} in
     printf 'container_id=%s\n' "$container_ref"
     printf 'pod_initial_root=restored_or_unknown_root:fail_closed_unknown\n'
     printf 'initial_binding_start_gap=recorded:container_running_before_node_binding\n'
+    printf 'cri_exec_root=external_runtime_root:runtime_external_restricted\n'
     printf 'kubectl_exec_root=external_runtime_root:runtime_external_restricted\n'
     printf 'policy_mode=%s\n' "$effect_mode"
     printf 'baseline_file_open=%s\n' "$baseline_file_open"
