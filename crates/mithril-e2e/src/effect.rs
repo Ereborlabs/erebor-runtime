@@ -1353,13 +1353,42 @@ impl EffectTestRunner {
             EXACT_OBJECT_KEY_ID,
         )?;
         let io_uring_benign_marker = observations.cursor();
+        let io_uring_benign = fixture.run_prepared(HardClosedOperation::IoUringBenignRead)?;
+        reader
+            .poll(Duration::from_millis(100))
+            .context(InterceptorSnafu)?;
         ensure!(
-            fixture
-                .run_prepared(HardClosedOperation::IoUringBenignRead)?
-                .allowed,
+            io_uring_benign.allowed,
             InvalidInputSnafu {
                 path: &paths.benign,
-                reason: "the exact io_uring benign read did not complete with the expected byte",
+                reason: format!(
+                    "the exact io_uring benign read did not complete with the expected byte: {io_uring_benign:?}; observed {:?}",
+                    observations
+                        .recent_since(io_uring_benign_marker)
+                        .iter()
+                        .map(|event| {
+                            (
+                                (
+                                    event.reason.as_str(),
+                                    event.effect_family,
+                                    event.operation,
+                                    event.exact_object_key_id,
+                                    event.composite_atom_id,
+                                ),
+                                (
+                                    event.io_uring_ring_id.as_str(),
+                                    event.io_uring_submission_sequence,
+                                    event.io_uring_user_data,
+                                    event.io_uring_file_cookie,
+                                    event.io_uring_executor_pid_tgid,
+                                    event.io_uring_byte_length,
+                                    event.io_uring_request_flags,
+                                    event.io_uring_opcode,
+                                ),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                ),
             }
         );
         wait_for_exact_io_uring_effect(
