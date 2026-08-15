@@ -106,8 +106,12 @@ grep -Fq 'sh "$kubectl_state" "$pod_pid_file" "$pod_release_file"' \
 grep -q 'CRI_BASELINE_ALLOWED' "$directory/guest.sh"
 grep -q 'CRI_EXACT_ALLOWED' "$directory/guest.sh"
 grep -q 'CRI_EXACT_DENIED' "$directory/guest.sh"
-grep -Fq 'mkfifo "$3"' "$directory/guest.sh"
-grep -Fq 'chmod 777 "$1" "$3"' "$directory/guest.sh"
+! grep -q 'cri_release_file' "$directory/guest.sh"
+! grep -q 'cri_release_fd_open' "$directory/guest.sh"
+grep -Fq 'kill -STOP $$' "$directory/guest.sh"
+grep -Fq 'kill -CONT "$cri_host_pid"' "$directory/guest.sh"
+grep -q 'direct CRI exec is not stopped before signed recovery' \
+  "$directory/guest.sh"
 grep -q 'cri_baseline_file=\$cri_state/baseline' "$directory/guest.sh"
 grep -q 'expected_cri_effect="task_cookie=\$cri_task_cookie family=2 operation=2' \
   "$directory/guest.sh"
@@ -116,9 +120,9 @@ grep -q 'cri_exact_file_open=allowed-after-effect:WOULD_DENY' "$directory/guest.
 grep -q 'cri_exact_file_open=denied-before-effect:EXACT_POLICY_DENY' \
   "$directory/guest.sh"
 grep -q 'cri_exact_effect=%s' "$directory/guest.sh"
-grep -Fq '[ "$6" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]' \
+grep -Fq '[ "$5" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]' \
   "$directory/guest.sh"
-grep -Fq '[ "$6" = PROTECT ] && [ "$cri_result" = CRI_EXACT_DENIED ]' \
+grep -Fq '[ "$5" = PROTECT ] && [ "$cri_result" = CRI_EXACT_DENIED ]' \
   "$directory/guest.sh"
 grep -Fq '[[ $cri_status -eq 0 ]]' "$directory/guest.sh"
 grep -q 'k3s CRI effect qualification left its Pod state directory' \

@@ -271,7 +271,6 @@ case ${1:-} in
     pod_pid_file=$kubectl_state/exec.pid
     pod_release_file=$kubectl_state/release
     cri_pid_file=$cri_state/exec.pid
-    cri_release_file=$cri_state/release
     cri_baseline_file=$cri_state/baseline
     initial_snapshot=$lane_root/pod-initial-root.json
     cri_snapshot=$lane_root/cri-exec-root.json
@@ -279,8 +278,8 @@ case ${1:-} in
     effects=$lane_root/effects.txt
     node_pid=
     cri_client_pid=
+    cri_host_pid=
     exec_client_pid=
-    cri_release_fd_open=false
     release_fd_open=false
     result_fd_open=false
     fixture_owned=false
@@ -310,6 +309,7 @@ case ${1:-} in
       local status=$?
       trap - EXIT
       set +e
+      [[ -z $cri_host_pid ]] || kill -CONT "$cri_host_pid" 2>/dev/null
       if [[ -n $cri_client_pid ]]; then
         kill -TERM "$cri_client_pid" 2>/dev/null
         wait "$cri_client_pid" 2>/dev/null || true
@@ -319,10 +319,6 @@ case ${1:-} in
         kill -TERM "$exec_client_pid" 2>/dev/null
         wait "$exec_client_pid" 2>/dev/null || true
         exec_client_pid=
-      fi
-      if [[ $cri_release_fd_open == true ]]; then
-        exec 7>&-
-        cri_release_fd_open=false
       fi
       if [[ $release_fd_open == true ]]; then
         exec 9>&-
@@ -509,31 +505,29 @@ case ${1:-} in
     /usr/local/bin/k3s crictl exec "$container_id" \
       sh -c '
         mkdir -m 700 "$1"
-        mkfifo "$3"
-        chmod 777 "$1" "$3"
-        if IFS= read -r _ <"$4"; then
-          printf "CRI_BASELINE_ALLOWED\\n" >"$5"
+        if IFS= read -r _ <"$3"; then
+          printf "CRI_BASELINE_ALLOWED\\n" >"$4"
         else
-          printf "CRI_BASELINE_DENIED\\n" >"$5"
+          printf "CRI_BASELINE_DENIED\\n" >"$4"
           exit 42
         fi
         echo $$ >"$2"
-        IFS= read -r _ <"$3"
-        if IFS= read -r _ <"$4"; then
+        kill -STOP $$
+        if IFS= read -r _ <"$3"; then
           cri_result=CRI_EXACT_ALLOWED
         else
           cri_result=CRI_EXACT_DENIED
         fi
-        if [ "$6" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]; then
+        if [ "$5" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]; then
           exit 0
         fi
-        if [ "$6" = PROTECT ] && [ "$cri_result" = CRI_EXACT_DENIED ]; then
+        if [ "$5" = PROTECT ] && [ "$cri_result" = CRI_EXACT_DENIED ]; then
           exit 0
         fi
         exit 43
       ' \
-      sh "$cri_state" "$cri_pid_file" "$cri_release_file" \
-      /var/lib/mithril/secret "$cri_baseline_file" "$effect_mode" \
+      sh "$cri_state" "$cri_pid_file" /var/lib/mithril/secret \
+      "$cri_baseline_file" "$effect_mode" \
       >"$lane_root/cri-result.out" 2>&1 &
     cri_client_pid=$!
     for _attempt in {1..200}; do
@@ -549,7 +543,6 @@ case ${1:-} in
       echo "direct CRI exec wrote an invalid namespace PID" >&2
       exit 1
     }
-    cri_host_pid=
     while read -r host_pid; do
       [[ -r /proc/$host_pid/status ]] || continue
       mapped_pid=$(awk '/^NSpid:/ {print $NF}' "/proc/$host_pid/status")
@@ -590,6 +583,12 @@ case ${1:-} in
     [[ $cri_baseline_result == CRI_BASELINE_ALLOWED ]] || {
       echo "direct CRI exec could not read the fixture before $effect_mode" >&2
       cat "/proc/$init_pid/root$cri_baseline_file" >&2
+      exit 1
+    }
+    cri_task_state=$(awk '/^State:/ {print $2}' "/proc/$cri_host_pid/status")
+    [[ $cri_task_state == T ]] || {
+      echo "direct CRI exec is not stopped before signed recovery" >&2
+      cat "/proc/$cri_host_pid/status" >&2
       exit 1
     }
 
@@ -671,11 +670,7 @@ case ${1:-} in
       exit 1
     }
 
-    exec 7>"/proc/$init_pid/root$cri_release_file"
-    cri_release_fd_open=true
-    printf '1\n' >&7
-    exec 7>&-
-    cri_release_fd_open=false
+    kill -CONT "$cri_host_pid"
     printf '1\n' >&9 || true
     exec 8>&-
     result_fd_open=false
