@@ -9,7 +9,7 @@ use std::mem::{offset_of, size_of};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use erebor_interceptor::{EffectObservationReader, KernelHostConfig, KernelHostOwner};
+use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
 use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1,
     ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExceptionUseReceiptV1, Id128V1,
@@ -58,6 +58,28 @@ const BOUNDED_EXCEPTION_INSTANCE_ID: Id128V1 =
     Id128V1::new(0x8888_8888_8888_4888, 0x8888_8888_8888_8889);
 const EXPIRED_EXCEPTION_INSTANCE_ID: Id128V1 =
     Id128V1::new(0x8888_8888_8888_4888, 0x8888_8888_8888_888a);
+
+fn reconcile_mount_views_until_clean(
+    policy: &NodePolicyGenerationOwner,
+    host: &mut KernelHost,
+    mount_namespaces: &BTreeSet<u32>,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        policy.reconcile_mount_views(host).context(NodeSnafu)?;
+        if mount_views_are_clean(host, mount_namespaces)? {
+            return Ok(());
+        }
+        ensure!(
+            Instant::now() < deadline,
+            InvalidInputSnafu {
+                path: Path::new("mount_security_views"),
+                reason: "mount reconciliation did not restore clean views before the inherited-descriptor check",
+            }
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
 
 fn process_descriptor_set(pid: u32) -> Result<BTreeSet<u32>> {
     let path = PathBuf::from(format!("/proc/{pid}/fd"));
@@ -1252,14 +1274,7 @@ impl EffectTestRunner {
                 }
             );
 
-            policy.reconcile_mount_views(&mut host).context(NodeSnafu)?;
-            ensure!(
-                mount_views_are_clean(&host, &mount_namespaces)?,
-                InvalidInputSnafu {
-                    path: Path::new("mount_security_views"),
-                    reason: "mount reconciliation did not restore clean views before the inherited-descriptor check",
-                }
-            );
+            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
             let inherited_marker = observations.cursor();
             ensure!(
                 fixture.read_prepared()?.denied(),
@@ -1268,11 +1283,14 @@ impl EffectTestRunner {
                     reason: "a descriptor acquired before activation bypassed the read decision",
                 }
             );
-            wait_for_reason(
+            wait_for_exact_effect(
                 &reader,
                 &observations,
                 inherited_marker,
                 "EXACT_POLICY_DENY",
+                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
+                EXACT_OBJECT_KEY_ID,
+                None,
             )?;
             let mmap_marker = observations.cursor();
             ensure!(
