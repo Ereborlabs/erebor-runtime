@@ -32,14 +32,16 @@ sudo target/debug/mithril-identity-test --repo-root . \
 
 The physical runner refuses a pre-existing pin root or occupied cgroup, has a
 30-second bound on every asynchronous observation, and owns every process it
-creates. It proves external-root classification on cgroup movement, native
-creator identity, pre-wake coordinates, exec commit, typed reference release,
-and exact pinned-map reuse after restart. Descendant placement is resolved by a
-bounded walk of the live kernel cgroup ancestry; there is no userspace-scanned
-descendant index to synchronize. The runner creates and removes its dedicated
-cgroup and pin tree; the broader matrix below still supplies the required
-concurrency, failure-injection, Docker/CRI, and Kubernetes cases before the
-phase may be marked Done.
+creates. It moves one labeled, stopped external root to the parent cgroup and
+requires a `fail_closed_unknown` coordinate plus a placement-mismatch counter
+increase. It also proves external-root classification on valid cgroup movement,
+native creator identity, pre-wake coordinates, exec commit, typed reference
+release, and exact pinned-map reuse after restart. Descendant placement is
+resolved by a bounded walk of the live kernel cgroup ancestry; there is no
+userspace-scanned descendant index to synchronize. The runner creates and
+removes its dedicated cgroup and pin tree; the broader matrix below still
+supplies the required concurrency, failure-injection, Docker/CRI, and
+Kubernetes cases before the phase may be marked Done.
 
 ## Procedure
 

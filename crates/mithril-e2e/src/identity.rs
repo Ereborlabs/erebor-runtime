@@ -145,6 +145,8 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub object_sha256: String,
     pub first_start: KernelObjectManifestV1,
+    pub cgroup_escape_root: NativeTaskSnapshotV1,
+    pub cgroup_escape_placement_mismatch_detected: bool,
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub external_root: NativeTaskSnapshotV1,
@@ -291,6 +293,51 @@ impl IdentityTestRunner {
         let identity = NativeSecurityStateOwner::new(node_boot_id, 1);
         identity.activate(&mut host).context(NodeSnafu)?;
         let inspector = NativeIdentityInspector::new(pin_root);
+
+        let mut escape_fixture = CloneIntoCgroupFixture::start(&cgroup_path)?;
+        let escape_root_before_move = self.wait_for(
+            "cgroup escape root identity before movement",
+            &procs_path,
+            || {
+                inspector
+                    .snapshot(escape_fixture.root_pid())
+                    .context(NodeSnafu)
+            },
+        )?;
+        let health_before_escape = identity.health(&host).context(NodeSnafu)?;
+        let parent_cgroup = cgroup_path
+            .parent()
+            .ok_or_else(|| invalid_state("identity-test cgroup has no parent"))?;
+        let parent_procs_path = parent_cgroup.join("cgroup.procs");
+        fs::write(&parent_procs_path, escape_fixture.root_pid().to_string()).context(IoSnafu {
+            path: &parent_procs_path,
+        })?;
+        let cgroup_escape_root = self.wait_for(
+            "cgroup escape fail-closed identity",
+            &parent_procs_path,
+            || {
+                let snapshot = inspector
+                    .snapshot(escape_fixture.root_pid())
+                    .context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    snapshot.coordinate_state == TaskCoordinateStateV1::FailClosedUnknown as u8
+                }))
+            },
+        )?;
+        let health_after_escape = identity.health(&host).context(NodeSnafu)?;
+        ensure!(
+            escape_root_before_move.creator_task_cookie.is_none()
+                && cgroup_escape_root.creator_task_cookie.is_none()
+                && cgroup_escape_root.root_class == Some("external_runtime_root")
+                && cgroup_escape_root.installed_role_class == Some("runtime_external_restricted")
+                && health_after_escape.placement_mismatches
+                    > health_before_escape.placement_mismatches,
+            InvalidInputSnafu {
+                path: &parent_procs_path,
+                reason: "moving a labeled root out of its cgroup did not fail closed",
+            }
+        );
+        escape_fixture.stop();
 
         let mut clone_fixture = CloneIntoCgroupFixture::start(&cgroup_path)?;
         let clone_external_root = self.wait_for(
@@ -451,6 +498,8 @@ impl IdentityTestRunner {
             schema_version: 1,
             object_sha256,
             first_start,
+            cgroup_escape_root,
+            cgroup_escape_placement_mismatch_detected: true,
             clone_into_cgroup_external_root: clone_external_root,
             clone_into_cgroup_native_child: clone_native_child,
             external_root,
