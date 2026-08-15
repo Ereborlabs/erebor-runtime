@@ -4,7 +4,7 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
-Source reviewed: commit `1176ed8806e697ee3de571e48181d25085eee68a`.
+Source reviewed: commit `a2189b5`.
 The BPF object loaded by the 2026-08-15 privileged VM probes has SHA-256
 `69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
 The validated architecture digest in the phase records is
@@ -49,7 +49,7 @@ Those statements remain as historical diagnostics only.
    It takes the fixed host lease and the selected instance lease before it
    loads or attaches a fresh object. It then rejects retained Mithril LSM links
    outside the requested recovery root.
-2. Read [`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs#L629).
+2. Read [`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs#L602).
    Recovery opens its expected pinned links, permits only their link IDs, and
    rejects another retained Mithril LSM link. It does not detach or reuse a
    foreign link.
@@ -63,10 +63,22 @@ Those statements remain as historical diagnostics only.
    back, and then publishes the global clean epoch. A workload file access is
    not an activation step.
 5. Read the physical owners:
-   [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L255)
+   [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L269)
    and
-   [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L637).
+   [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L639).
    They load the production object and check cleanup after each probe.
+6. Read [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415).
+   Fresh pin directories now exist before the object attaches.
+7. Read [`ControlPlane::register`](../../../crates/mithril-control/src/service.rs#L218).
+   It preserves the nonce sequence ledger after a stream closes.
+8. Read the [pre-PONR branch](../../../crates/mithril-e2e/src/identity.rs#L526).
+   It snapshots one stopped native task before failure, after rollback, and
+   after a later successful exec.
+9. Read the CRI effect lane in
+   [`guest.sh`](../../../crates/mithril-e2e/harness/vm/guest.sh#L520).
+   It qualifies direct CRI and non-TTY `kubectl exec` tasks together.
+10. Read the [stale-proposal branch](../../../crates/mithril-e2e/src/effect.rs#L2665).
+    It rejects an old clean proposal after an external mount mutation.
 
 ```mermaid
 sequenceDiagram
@@ -113,6 +125,34 @@ kernel program-name width, not the longer source name. It rejects rather than
 detaches an unknown link. The fixed host lease prevents a concurrent owner. The
 retained-link check rejects a discovered Mithril LSM link that is not among the
 requested-root IDs after a previous owner exits while its pins remain.
+
+### Fresh pin transaction
+
+```mermaid
+sequenceDiagram
+    participant O as KernelHostOwner
+    participant L as Host lease
+    participant P as pin-root directories
+    participant B as BPF object
+    participant R as PinRollback
+
+    O->>L: acquire fixed lease
+    O->>P: create root, maps, and links
+    O->>R: retain created paths
+    O->>B: load and attach programs
+    O->>P: pin maps and links
+    O->>R: commit
+    alt load, attach, or pin fails
+        R->>P: remove only retained paths and directories
+    end
+```
+
+[`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415)
+creates fresh directories through
+[`prepare_fresh_pin_directories`](../../../crates/erebor-interceptor/src/host.rs#L905)
+before `open.load()` attaches an LSM program.
+[`PinRollback`](../../../crates/erebor-interceptor/src/host.rs#L1457) removes
+only paths that this start owns. Recovery does not use this path.
 
 ### Current evidence and limits
 
@@ -163,6 +203,32 @@ Mithril pin or process. Only unrelated BPF link 1 remained.
 
 This closes only the direct-CRI exact-file row. It does not qualify projected
 token behavior or the remaining manual matrix. Phase 3 remains **Blocked**.
+
+```mermaid
+sequenceDiagram
+    participant G as guest.sh
+    participant C as direct CRI task
+    participant K as kubectl task
+    participant N as mithril-node
+    participant I as mithril-inspect
+
+    G->>C: baseline secret read and wait for release file
+    G->>K: baseline secret and benign reads and wait for FIFO
+    G->>I: require two restricted external roots
+    G->>N: restart with signed OBSERVE or PROTECT policy
+    G->>C: create the hostPath release file
+    G->>K: release the FIFO
+    C->>C: open exact secret
+    K->>K: open exact secret and benign file
+    G->>I: match both task cookies and exact keys 7 and 8
+    G->>N: stop node
+    G->>G: remove lane-owned pins before namespace deletion
+```
+
+The direct task uses key `7`. The `kubectl` task also uses key `8` as its
+legitimate control. In OBSERVE, key `7` reports `WOULD_DENY`. In PROTECT, key
+`7` reports `EXACT_POLICY_DENY`. Key `8` reports `EXACT_POLICY_ALLOW` in both
+modes. The lane removes its pin root before it deletes the namespace.
 
 ### Readable direct-CRI OBSERVE operator case — 2026-08-15
 
@@ -244,6 +310,29 @@ does not replace a fresh full-harness qualification. Phase 4 remains
 **Not done**. The administrative runc bootstrap sequence remains unsupported;
 do not add a broad runc, pipe, or socket exception.
 
+```mermaid
+sequenceDiagram
+    participant T as EffectTestRunner
+    participant E as external mount namespace
+    participant B as BPF mount view
+    participant N as NodePolicyGenerationOwner
+
+    T->>B: read current clean view and proposal
+    E->>B: make external bind mutation
+    B->>B: mark exact and global views DIRTY
+    T->>B: reinsert old proposal and request commit
+    B-->>T: reject stale proposal
+    T->>B: require protected exact open to deny
+    N->>B: publish a current complete proposal
+    B-->>N: commit CLEAN view
+```
+
+[`ExternalMountNamespace`](../../../crates/mithril-e2e/src/effect/support.rs#L490)
+creates the external mutation. The runner reads the old proposal, reinserts it,
+and requires
+[`KernelHost::apply_mount_reconciliation_proposal`](../../../crates/erebor-interceptor/src/host.rs#L1246)
+to reject it. Only the current node reconciliation may restore the exact result.
+
 The automatic probe does not replace the full qualification matrix. The
 checked registry now contains the digest-bound Appendix C fixture IDs,
 required family membership, and canonical golden inputs. The architecture
@@ -291,11 +380,11 @@ Phase 2 remains **Blocked**.
 
 Review this narrow path in order:
 
-1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L262)
+1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L269)
    creates the existing protected cgroup and starts the double-fork fixture.
    It captures the outer root, intermediate native child, and stopped native
    grandchild before the intermediate exits.
-2. [`NativeProcessFixture::start_double_forking`](../../../crates/mithril-e2e/src/identity.rs#L846)
+2. [`NativeProcessFixture::start_double_forking`](../../../crates/mithril-e2e/src/identity.rs#L1114)
    creates the chain. The outer task waits for the intermediate and then
    remains live. The intermediate waits for its stopped child. The child
    executes `sleep` only after the test releases its pidfd.
@@ -309,7 +398,7 @@ Review this narrow path in order:
 5. [`NativeIdentityInspector::snapshot`](../../../crates/mithril-node/src/identity/inspection.rs#L54)
    reads the immutable creator edge and current real-parent interval from the
    existing maps. It adds no userspace parent inference.
-6. [`native_process_fixture_reparents_double_fork_child_before_exec`](../../../crates/mithril-e2e/src/identity.rs#L1308)
+6. [`native_process_fixture_reparents_double_fork_child_before_exec`](../../../crates/mithril-e2e/src/identity.rs#L1699)
    checks the local process topology before the privileged runner uses it.
 
 The physical assertion keeps the grandchild task cookie and immutable creator
@@ -318,6 +407,27 @@ record, a higher real-parent interval sequence, a new active execution, and
 the inherited restricted role. It does not treat the outer task as the new
 real parent. Linux can reparent to another live kernel parent, and the BPF
 record preserves that kernel fact without assigning it an authority role.
+
+```mermaid
+sequenceDiagram
+    participant T as IdentityTestRunner
+    participant O as external outer root
+    participant M as native intermediate
+    participant C as stopped native child
+    participant I as NativeIdentityInspector
+
+    T->>O: start outer root
+    O->>M: create native child
+    M->>C: create stopped native child
+    I->>C: record creator M and current parent M
+    M-->>T: exit
+    T->>C: release through pidfd
+    C->>C: exec sleep
+    T->>I: retain creator M and record new parent interval
+```
+
+The immutable creator edge is not a current-parent inference. The inspector
+reads the stored creator edge and the current interval after the child execs.
 
 ### Moved-parent ordinary-fork source review
 
@@ -329,7 +439,7 @@ boolean result. No privileged VM has run this slice. Phase 2 remains
 
 Review this narrow path in order:
 
-1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L334)
+1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L269)
    starts the existing labeled root, moves it to the parent cgroup, and
    requires the restricted fail-closed snapshot. It then resumes the root and
    requires a second placement-mismatch count.
@@ -470,6 +580,28 @@ the selected workload. This is only the pre-PONR recovery subcase of
 handling, concurrent or non-leader exec, or the full fixture. Phase 2 remains
 **Blocked**.
 
+```mermaid
+sequenceDiagram
+    participant F as stopped native fixture
+    participant T as IdentityTestRunner
+    participant B as BPF exec hooks
+    participant M as pending_execs and task maps
+
+    F->>T: stopped native Bash child
+    T->>M: require no pending exec and active baseline state
+    T->>F: pidfd CONT for missing-loader exec
+    F->>B: exec enters before the point of no return
+    B->>M: create then remove pending exec and restore active state
+    F->>T: ready marker and second stop
+    T->>M: require unchanged task, execution, image, and role
+    T->>F: pidfd CONT for normal sleep exec
+    B->>M: commit new execution and image
+```
+
+The fixture uses a stopped child to remove the setup-exec race. The failed exec
+must leave no pending entry. The later successful exec must change only the
+execution and image identities that the runner checks.
+
 This guide is explanatory only. The authoritative scope and acceptance records
 remain the phase documents and the readable architecture:
 
@@ -499,9 +631,9 @@ smallest complete explanation of who does what.
 | 9 | [`identity_maps.h`](../../../bpf/erebor-interceptor/programs/identity_maps.h#L54) | This file declares BPF state and common helpers. It separates durable map state from per-CPU scratch state. |
 | 10 | [`erebor_task_alloc`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h#L35) | Read the complete explanation in [Task allocation](#task-allocation-source-walk). |
 | 11 | [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L271) | The common gate validates actor identity, binding, generation, object state, and the selected decision. Typed wrappers add device, process, IPC, file, and mount data. |
-| 12 | [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1567) | This function fills the policy maps. It also prevents a partial generation from becoming active. |
+| 12 | [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1633) | This function fills the policy maps. It also prevents a partial generation from becoming active. |
 | 13 | [`ExceptionAuthorityOwner`](../../../crates/mithril-node/src/policy/exception_authority.rs#L87) | This owner reconciles the kernel exception counters and receipts with the append-only local WAL. |
-| 14 | [`IdentityTestRunner`](../../../crates/mithril-e2e/src/identity.rs#L165), [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L637), and [the VM harness](../../../crates/mithril-e2e/harness/vm/README.md) | Automated tests use the production object. Their cleanup owners remove pins, cgroups, leases, processes, mounts, and temporary files. |
+| 14 | [`IdentityTestRunner`](../../../crates/mithril-e2e/src/identity.rs#L179), [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L639), and [the VM harness](../../../crates/mithril-e2e/harness/vm/README.md) | Automated tests use the production object. Their cleanup owners remove pins, cgroups, leases, processes, mounts, and temporary files. |
 | 15 | [Identity manual cases](../../../examples/mithril-identity-manual/README.md), [effect-observation manual cases](../../../examples/mithril-effect-observation-manual/README.md), and [local-enforcement manual cases](../../../examples/mithril-local-enforcement-manual/README.md) | These shells start the real node and perform operator actions. The examples link to the automated harness but do not own it. |
 
 The most useful first pass is this short chain:
@@ -673,19 +805,19 @@ it does not unlink the lease file, maps, links, or pin directories. It is not a
 policy lock. BPF map atomics and spin locks protect event-time state.
 
 The recovery branch starts at
-[`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs#L629).
+[`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs#L602).
 It reuses existing map pins and verifies the complete expected link set. It
 allows only those retained link IDs before it loads the recovered object. A
 Mithril LSM link outside the requested root returns `RetainedLsmLink`; recovery
 does not attach another persistent hook set or detach the other link. The task
 iterator is the one exception:
-[`KernelHost::reconcile_tasks`](../../../crates/erebor-interceptor/src/host.rs#L1181)
+[`KernelHost::reconcile_tasks`](../../../crates/erebor-interceptor/src/host.rs#L1205)
 attaches the iterator only while it is read to completion during activation.
 
 On normal node shutdown the production identity pins intentionally remain, so
 a later process can validate and recover them. The disposable qualification
 object removes its pins. See
-[`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L1356).
+[`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L1380).
 
 Two loader details answer common review questions:
 
@@ -693,14 +825,14 @@ Two loader details answer common review questions:
   `link_records` empty, attaches only programs selected by
   [`KernelObjectKind::attaches`](../../../crates/erebor-interceptor/src/host.rs#L288),
   and then compares the attached names with the exact required set in
-  [`validate_attached_set`](../../../crates/erebor-interceptor/src/host.rs#L986).
+  [`validate_attached_set`](../../../crates/erebor-interceptor/src/host.rs#L1010).
   Recovery uses `Vec::with_capacity(expected_links.len())` only to reserve
   memory. Before that loop, it derives `expected_links` from the required list
   and compares the complete pin-directory names with that set. It validates
   the resulting records again. The final validation compares sorted vectors,
   not mathematical sets. An extra duplicate therefore also fails. Capacity
   does not accept an extra, duplicate, or missing program.
-- [`KernelHost::map`](../../../crates/erebor-interceptor/src/host.rs#L1079)
+- [`KernelHost::map`](../../../crates/erebor-interceptor/src/host.rs#L1103)
   finds a map by name in the `libbpf-rs` object. `lookup_map` then handles a
   normal or per-CPU lookup. A Rust `HashMap<String, Map<'_>>` inside
   `KernelHost` would borrow the `Object` stored in the same structure. That is
@@ -717,14 +849,14 @@ Two loader details answer common review questions:
 | One node process and shutdown/reconnect loop | `NodeChassis` | [`node.rs`](../../../crates/mithril-node/src/node.rs#L35) | A second privileged daemon |
 | Cgroup workload binding | `WorkloadBindingOwner` | [`binding.rs`](../../../crates/mithril-node/src/identity/binding.rs#L51) | Task labels, process state, policy decision rows |
 | Identity configuration and reconciliation health | `NativeSecurityStateOwner` | [`native.rs`](../../../crates/mithril-node/src/identity/native.rs#L22) | Object loading or container discovery |
-| Portable policy/signature/simulation | `mithril-control` policy owners | [`mithril-control/src/policy`](../../../crates/mithril-control/src/policy) | BPF map handles or node startup |
+| Portable policy/signature/simulation | `mithril-control` policy owners | [`mithril-control/src/policy/mod.rs`](../../../crates/mithril-control/src/policy/mod.rs) | BPF map handles or node startup |
 | Node-local policy rows, active handles, and mount reconstruction | `NodePolicyGenerationOwner` | [`policy.rs`](../../../crates/mithril-node/src/policy.rs#L41) | Signature creation or cgroup binding lifecycle |
 | Durable bounded-exception state and receipts | `ExceptionAuthorityOwner` | [`exception_authority.rs`](../../../crates/mithril-node/src/policy/exception_authority.rs#L85) | Policy selection or online approval delivery |
 | Human approval and one-use credential | `AdministrativeApprovalOwner` and the administrative HTTPS owner | [`administrative_exec.rs`](../../../crates/mithril-control/src/administrative_exec.rs), [`administrative_http.rs`](../../../crates/mithril-control/src/administrative_http.rs) | BPF slot mutation or task identity |
 | Exact target resolution and slot state | node `AdministrativeExecOwner` and `AuthorizationProofOwner` | [`administrative_exec.rs`](../../../crates/mithril-node/src/administrative_exec.rs), [`authorization/mod.rs`](../../../crates/mithril-node/src/identity/authorization/mod.rs#L110) | Browser authentication or Kubernetes admission |
 | Task/process/exec state | BPF lifecycle, exec, and exit programs | [`identity_lifecycle.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h), [`identity_exec.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h), [`identity_exit.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_exit.bpf.h) | Userspace task enrollment after the fact |
 | Per-effect result | BPF common and typed gates | [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L271), [`identity_device_process.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_device_process.bpf.h#L32), [`identity_ipc.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L223) | Control round trips or ring-buffer delivery |
-| Ring consumption and recent records | `EffectObservationReader` / `EffectObservationStore` | [`host.rs`](../../../crates/erebor-interceptor/src/host.rs#L1154), [`observation.rs`](../../../crates/mithril-node/src/observation.rs) | Policy decisions or durable audit |
+| Ring consumption and recent records | `EffectObservationReader` / `EffectObservationStore` | [`EffectObservationReader`](../../../crates/erebor-interceptor/src/host.rs#L36), [`observation.rs`](../../../crates/mithril-node/src/observation.rs) | Policy decisions or durable audit |
 
 ### Node startup order
 
@@ -799,6 +931,31 @@ transactions. It accepts no general policy, binding, or exception delivery.
 An unsupported message closes the connection. This is a narrow administrative
 path, not a general dynamic control plane.
 
+The Control service keeps each accepted `(node_id, nonce)` sequence ledger
+after it removes a closed session. Read
+[`ControlPlane::register`](../../../crates/mithril-control/src/service.rs#L218),
+[`ControlPlane::unregister`](../../../crates/mithril-control/src/service.rs#L371),
+and its
+[`one-use regression test`](../../../crates/mithril-control/src/service.rs#L642).
+
+```mermaid
+sequenceDiagram
+    participant N as node stream
+    participant C as ControlPlane
+    participant L as nonce sequence ledger
+    participant S as live session
+
+    N->>C: register node ID, nonce, and certificate digest
+    C->>L: reject an existing nonce or store sequence 1
+    C->>S: create live session
+    N->>C: send next sequence
+    C->>L: advance exact sequence
+    N->>C: close stream
+    C->>S: remove session and pending responses
+    N->>C: replay same nonce
+    C->>L: reject replay
+```
+
 ### CRI binding refresh
 
 ```mermaid
@@ -830,7 +987,7 @@ sequenceDiagram
 Read this flow at
 [`ContainerRuntimeInventory::snapshot`](../../../crates/mithril-node/src/identity/runtime.rs#L88)
 and
-[`WorkloadBindingOwner::reconcile_runtime_inner`](../../../crates/mithril-node/src/identity/binding.rs#L424).
+[`WorkloadBindingOwner::reconcile_runtime_inner`](../../../crates/mithril-node/src/identity/binding.rs#L514).
 The node uses the `k8s-cri` generated client. It uses `procfs::Process` for the
 CRI-dockerd PID fallback. It does not start a Docker listener, parse a CRI
 command, or load a per-container BPF object.
@@ -863,7 +1020,7 @@ A bpffs pin keeps a map or link alive after the loader process exits. Process
 exit does not delete a pinned object. Production identity shutdown keeps the
 pins for recovery. The test owners explicitly remove disposable pins and then
 assert that the paths no longer exist. The production shutdown implementation
-starts at [`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L1356).
+starts at [`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L1380).
 
 ## The BPF object: source relationship and hook families
 
@@ -1225,7 +1382,7 @@ sequenceDiagram
     G->>M: use rows only after matching ACTIVE descriptor
 ```
 
-[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1052)
+[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1633)
 contains the row sequence. [`reconcile_pending_activations`](../../../crates/mithril-node/src/policy.rs#L1204)
 compares a durable pending activation with the active profile pointer and the
 descriptor digest after restart. A failed pre-commit stage leaves the prior
@@ -1896,7 +2053,7 @@ Use this checklist against a change to the current implementation.
 ### Hugging Face local branch classification
 
 The result bundle contains one explicit static local branch table at
-[`hf_static_effect_classification`](../../../crates/mithril-e2e/src/effect.rs#L198).
+[`hf_static_effect_classification`](../../../crates/mithril-e2e/src/effect.rs#L311).
 The table does not turn an incident name into physical proof. Each row records
 the declared boundary or why no local claim is valid.
 
@@ -1912,7 +2069,7 @@ the declared boundary or why no local claim is valid.
 The runner reads the checked deployment fixture digest before it starts the
 production object. It performs generic exact-file, exec, benign-control, and
 hard-close oracles. It writes the digest and static classifications into
-[`EffectPhysicalProbeBundleV1`](../../../crates/mithril-e2e/src/effect.rs#L117).
+[`EffectPhysicalProbeBundleV1`](../../../crates/mithril-e2e/src/effect.rs#L146).
 The source test checks coverage and prevents a static no-effect, external,
 deferred, or unsupported branch from becoming a physical prevention claim.
 This source test does not replace a branch-specific privileged run.
