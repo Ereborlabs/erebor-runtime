@@ -251,11 +251,13 @@ case ${1:-} in
     container=runtime
     fixture_root=/var/lib/mithril-vm-qualification
     fixture_path=$fixture_root/secret
+    benign_fixture_path=$fixture_root/benign
     lane_root=$work_directory/k3s-cri-effect
     identity_config=$lane_root/identity-node.json
     effect_config=$lane_root/effect-node.json
     artifact=$lane_root/profile.json
     object=$lane_root/exact-file-object.json
+    benign_object=$lane_root/benign-exact-file-object.json
     node_log=$lane_root/mithril-node.log
     pod_state=/tmp/mithril-k3s-cri-effect
     pod_pid_file=$pod_state/exec.pid
@@ -348,6 +350,8 @@ case ${1:-} in
     fixture_owned=true
     printf 'mithril-k3s-cri-effect\n' >"$fixture_path"
     chmod 400 "$fixture_path"
+    printf 'mithril-k3s-cri-benign\n' >"$benign_fixture_path"
+    chmod 444 "$benign_fixture_path"
     install -m 0555 "$(command -v busybox)" "$fixture_root/busybox"
 
     /usr/local/bin/k3s kubectl delete namespace "$namespace" \
@@ -412,6 +416,10 @@ case ${1:-} in
       echo "read-only qualification fixture is not visible through the Pod root" >&2
       exit 1
     }
+    [[ -r /proc/$init_pid/root/var/lib/mithril/benign ]] || {
+      echo "read-only benign control is not visible through the Pod root" >&2
+      exit 1
+    }
 
     sed \
       -e "s|/var/tmp/mithril-runtime-qualification-0|$work_directory|g" \
@@ -431,6 +439,15 @@ case ${1:-} in
       --path /var/lib/mithril/secret --profile-generation 1 \
       --exact-object-key 7 --object-class MANUAL_SECRET \
       --inode-generation "$inode_generation" >"$object"
+    benign_inode_generation=$(lsattr -v "$benign_fixture_path" | awk 'NR == 1 {print $1}')
+    [[ $benign_inode_generation =~ ^[1-9][0-9]*$ ]] || {
+      echo "benign control has no nonzero inode generation" >&2
+      exit 1
+    }
+    "$inspect" file-object --root-pid "$init_pid" \
+      --path /var/lib/mithril/benign --profile-generation 1 \
+      --exact-object-key 8 --object-class MANUAL_BENIGN \
+      --inode-generation "$benign_inode_generation" >"$benign_object"
 
     effect_policy_source=$policy_source
     if [[ $effect_mode == PROTECT ]]; then
@@ -444,8 +461,9 @@ case ${1:-} in
     "$policy" verify --artifact "$artifact" --public-key "$public_key"
     jq --arg artifact "$artifact" --arg public_key "$public_key" \
       --slurpfile object "$object" \
+      --slurpfile benign "$benign_object" \
       '.policy_candidates = [{artifact_path: $artifact, public_key_path: $public_key}]
-       | .exact_file_objects = $object' "$identity_config" >"$effect_config"
+       | .exact_file_objects = ($object + $benign)' "$identity_config" >"$effect_config"
 
     pin_owned=true
     "$node" --config "$identity_config" >>"$node_log" 2>&1 &
@@ -542,9 +560,9 @@ case ${1:-} in
     exec 8>"$lane_root/exec-result"
     result_fd_open=true
     /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
-      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; if true <"$4"; then printf "BASELINE_ALLOWED\n"; else printf "BASELINE_DENIED\n"; exit 42; fi; echo $$ >"$2"; IFS= read -r _ <"$3"; if true <"$4"; then if [ "$5" = OBSERVE ]; then chmod 777 "$1" "$3"; exit 0; fi; exit 41; fi; if [ "$5" = PROTECT ]; then chmod 777 "$1" "$3"; exit 0; fi; exit 43' \
+      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; if IFS= read -r _ <"$4" && IFS= read -r _ <"$5"; then printf "BASELINE_ALLOWED\n"; else printf "BASELINE_DENIED\n"; exit 42; fi; echo $$ >"$2"; IFS= read -r _ <"$3"; if IFS= read -r _ <"$4"; then secret_result=SECRET_ALLOWED; else secret_result=SECRET_DENIED; fi; if IFS= read -r _ <"$5"; then benign_result=BENIGN_ALLOWED; else benign_result=BENIGN_DENIED; fi; printf "%s\n%s\n" "$secret_result" "$benign_result"; if [ "$6" = OBSERVE ] && [ "$secret_result" = SECRET_ALLOWED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; if [ "$6" = PROTECT ] && [ "$secret_result" = SECRET_DENIED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; chmod 777 "$1" "$3"; exit 43' \
       sh "$pod_state" "$pod_pid_file" "$pod_release_file" \
-      /var/lib/mithril/secret "$effect_mode" >&8 &
+      /var/lib/mithril/secret /var/lib/mithril/benign "$effect_mode" >&8 &
     exec_client_pid=$!
     for _attempt in {1..200}; do
       [[ -s /proc/$init_pid/root$pod_pid_file ]] && break
@@ -629,23 +647,39 @@ case ${1:-} in
       echo "kubectl exec did not complete the expected $effect_mode file-open result: $exec_status" >&2
       exit 1
     }
+    secret_result=$(sed -n '2p' "$lane_root/exec-result")
+    benign_result=$(sed -n '3p' "$lane_root/exec-result")
     case $effect_mode in
       OBSERVE)
+        [[ $secret_result == SECRET_ALLOWED && $benign_result == BENIGN_ALLOWED ]] || {
+          echo "kubectl exec did not preserve both observe-mode file reads" >&2
+          exit 1
+        }
         expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
+        expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
         baseline_file_open=allowed-before-observe
         exact_file_open=allowed-after-effect:WOULD_DENY
+        benign_file_open=allowed-after-effect:EXACT_POLICY_ALLOW
         ;;
       PROTECT)
+        [[ $secret_result == SECRET_DENIED && $benign_result == BENIGN_ALLOWED ]] || {
+          echo "kubectl exec did not deny the secret and allow the benign control" >&2
+          exit 1
+        }
         expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
+        expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
         baseline_file_open=allowed-before-protect
         exact_file_open=denied-before-effect:EXACT_POLICY_DENY
+        benign_file_open=allowed-after-effect:EXACT_POLICY_ALLOW
         ;;
     esac
     for _attempt in {1..100}; do
       "$inspect" effects --socket-path "$lane_root/observation.sock" \
         --cgroup-scope / >"$effects"
       if grep -F "$expected_effect" "$effects" \
-        | grep -Fq 'exact_object_key_id=7'; then
+        | grep -Fq 'exact_object_key_id=7' \
+        && grep -F "$expected_benign_effect" "$effects" \
+          | grep -Fq 'exact_object_key_id=8'; then
         break
       fi
       sleep 0.1
@@ -656,8 +690,15 @@ case ${1:-} in
       cat "$effects" >&2
       exit 1
     }
+    grep -F "$expected_benign_effect" "$effects" \
+      | grep -Fq 'exact_object_key_id=8' || {
+      echo "Mithril did not report the expected $effect_mode benign file-open result" >&2
+      cat "$effects" >&2
+      exit 1
+    }
 
     exact_effect=$(grep -F "$expected_effect" "$effects" | grep -F 'exact_object_key_id=7' | sed -n '1p')
+    benign_effect=$(grep -F "$expected_benign_effect" "$effects" | grep -F 'exact_object_key_id=8' | sed -n '1p')
 
     printf 'lane=k3s-cri-effect\n'
     printf 'pod_uid=%s\n' "$pod_uid"
@@ -670,7 +711,9 @@ case ${1:-} in
     printf 'baseline_file_open=%s\n' "$baseline_file_open"
     printf 'exact_file_open=%s\n' "$exact_file_open"
     printf 'exact_effect=%s\n' "$exact_effect"
-    printf 'qualification_fixture=read-only-hostPath-file\n'
+    printf 'benign_file_open=%s\n' "$benign_file_open"
+    printf 'benign_effect=%s\n' "$benign_effect"
+    printf 'qualification_fixture=read-only-hostPath-secret-and-benign-files\n'
     stop_node
     exec 9>&-
     release_fd_open=false

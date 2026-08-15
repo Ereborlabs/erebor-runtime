@@ -45,6 +45,12 @@ grep -q '^  serviceAccountName: mithril-runtime$' \
 grep -q '^          readOnly: true$' "$directory/k3s-workload-v1.yaml"
 grep -q '^        path: /var/lib/mithril-vm-qualification/secret$' \
   "$directory/k3s-workload-v1.yaml"
+grep -q '^        path: /var/lib/mithril-vm-qualification/benign$' \
+  "$directory/k3s-workload-v1.yaml"
+grep -q '^    # This token checks only the projected-token mount at Pod startup\.$' \
+  "$directory/k3s-workload-v1.yaml"
+grep -q '^    # It is not an exact-file enforcement fixture\.$' \
+  "$directory/k3s-workload-v1.yaml"
 grep -q '^        path: /var/lib/mithril-vm-qualification/busybox$' \
   "$directory/k3s-workload-v1.yaml"
 grep -q '^        type: File$' "$directory/k3s-workload-v1.yaml"
@@ -92,6 +98,16 @@ grep -Fq 'effect_policy_source=$policy_source' "$directory/guest.sh"
 grep -q 'reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT' "$directory/guest.sh"
 grep -q 'exact_file_open=allowed-after-effect:WOULD_DENY' "$directory/guest.sh"
 grep -q 'exact_effect=%s' "$directory/guest.sh"
+grep -q 'benign_fixture_path=\$fixture_root/benign' "$directory/guest.sh"
+grep -q -- '--exact-object-key 8 --object-class MANUAL_BENIGN' "$directory/guest.sh"
+grep -Fq '.exact_file_objects = ($object + $benign)' "$directory/guest.sh"
+grep -q 'BENIGN_ALLOWED' "$directory/guest.sh"
+grep -q 'reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT' \
+  "$directory/guest.sh"
+grep -q 'benign_file_open=%s' "$directory/guest.sh"
+grep -q 'benign_effect=%s' "$directory/guest.sh"
+grep -q 'qualification_fixture=read-only-hostPath-secret-and-benign-files' \
+  "$directory/guest.sh"
 grep -Fq '[[ $exec_status -eq 0 ]]' "$directory/guest.sh"
 grep -q 'baseline_file_open=allowed-before-protect' "$directory/guest.sh"
 grep -q 'exact_file_open=denied-before-effect:EXACT_POLICY_DENY' \

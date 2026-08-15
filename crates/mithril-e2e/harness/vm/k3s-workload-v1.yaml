@@ -31,10 +31,15 @@ spec:
         - name: qualification-secret
           mountPath: /var/lib/mithril/secret
           readOnly: true
+        - name: qualification-benign
+          mountPath: /var/lib/mithril/benign
+          readOnly: true
         - name: administrative-executable
           mountPath: /var/lib/mithril/busybox
           readOnly: true
   volumes:
+    # This token checks only the projected-token mount at Pod startup.
+    # It is not an exact-file enforcement fixture.
     - name: service-account-token
       projected:
         sources:
@@ -45,6 +50,10 @@ spec:
     - name: qualification-secret
       hostPath:
         path: /var/lib/mithril-vm-qualification/secret
+        type: File
+    - name: qualification-benign
+      hostPath:
+        path: /var/lib/mithril-vm-qualification/benign
         type: File
     - name: administrative-executable
       hostPath:
