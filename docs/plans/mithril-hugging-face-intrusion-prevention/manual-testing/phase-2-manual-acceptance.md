@@ -238,6 +238,46 @@ lane. This result covers one non-TTY `kubectl exec` identity subcase of
 native application child with the identical command. The phase remains
 **Blocked**.
 
+## Recorded Pre-PONR Failed Native-Exec VM Subcase — 2026-08-15
+
+The isolated identity probe passed at source commit
+`af685cd6a8dd73f22bd44234b3346298dd04dcd1`. The copied
+`mithril-identity-test` binary SHA-256 was
+`b23d8be165d9b88532dcd15db1905233134a86a2be8f7f40042e508a302c49a0`.
+The schema-5 result JSON is
+`/tmp/mithril-phase2-preponr-af685cd.9897yN/identity-physical-probe.json`.
+Its SHA-256 is
+`8a57d0a43b7fe505da68f0644237720e8419145a942ae9173ab643b1c8c6cf45`.
+
+The runner stopped a native Bash child before it read the baseline. It required
+no `pending_execs` entry, then caused an ELF loader failure after exec
+preparation and before the point of no return. The JSON records
+`pre_ponr_failed_exec_restored=true`. The before and post-failure snapshots
+both had task cookie `44`, creator and real-parent cookie `41`, process state
+`00000000000000010000000000000030`, active execution
+`00000000000000010000000000000033`, image provenance
+`00000000000000010000000000000034`, and active role `11`. Both process
+execution and process-state vector states were active, and both exec guards
+were none.
+
+The later normal exec kept task cookie `44`, creator and real-parent cookie
+`41`, process state `00000000000000010000000000000030`, and active role
+`11`. It changed active execution to
+`00000000000000010000000000000039` and image provenance to
+`0000000000000001000000000000003a`. Its process execution and process-state
+vector were active, and its exec guard was none. The JSON also records
+`pin_root_removed=true`, `lease_removed=true`, `cgroup_removed=true`, and
+`profile_task_refs_after_exit=0`. Postflight found the run staging root absent.
+Only the unrelated tracing BPF link remained.
+
+Use [`native-child.sh --failed-exec`](../../../../examples/mithril-identity-manual/native-child.sh)
+for the readable companion procedure. It requires `/bin/bash`, `python3`, and
+a dynamically linked `/bin/true` in the selected workload.
+
+This is one pre-PONR recovery subcase of `EXEC-COMMIT-STATE-001`. It does not
+test post-PONR fatal or unknown handling, concurrent or non-leader exec, or the
+complete fixture. The phase remains **Blocked**.
+
 ## Native Identity Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |

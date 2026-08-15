@@ -360,3 +360,44 @@ This is one non-TTY `kubectl exec` identity subcase of `ENTRY-EXEC-001`.
 It does not test TTY execution, copy-shaped execution, or a native application
 child with the identical command. It does not complete `ENTRY-EXEC-001`. The
 phase remains **Blocked**.
+
+## Pre-PONR Failed-Exec Physical Qualification — 2026-08-15
+
+The isolated identity probe passed at source commit
+`af685cd6a8dd73f22bd44234b3346298dd04dcd1`. The copied
+`mithril-identity-test` binary SHA-256 was
+`b23d8be165d9b88532dcd15db1905233134a86a2be8f7f40042e508a302c49a0`.
+The result JSON is
+`/tmp/mithril-phase2-preponr-af685cd.9897yN/identity-physical-probe.json`.
+It has schema version `5` and SHA-256
+`8a57d0a43b7fe505da68f0644237720e8419145a942ae9173ab643b1c8c6cf45`.
+
+The runner stopped the native Bash child before it took its baseline snapshot.
+It required no `pending_execs` entry. It then forced an ELF loader failure
+after exec preparation and before the point of no return.
+`pre_ponr_failed_exec_restored=true`. The before and post-failure snapshots
+both had task cookie `44`, creator and real-parent cookie `41`, process state
+`00000000000000010000000000000030`, active execution
+`00000000000000010000000000000033`, image provenance
+`00000000000000010000000000000034`, and active role `11`. Their process
+execution and process-state vector were active, and their exec guard was none.
+
+A later normal exec kept task cookie `44`, creator and real-parent cookie
+`41`, process state `00000000000000010000000000000030`, and active role
+`11`. It changed active execution to
+`00000000000000010000000000000039` and image provenance to
+`0000000000000001000000000000003a`. Its process execution and process-state
+vector were active, and its exec guard was none.
+
+The JSON records `pin_root_removed=true`, `lease_removed=true`,
+`cgroup_removed=true`, and `profile_task_refs_after_exit=0`. Postflight found
+the run staging root absent. Only the unrelated tracing BPF link remained.
+
+Use [`native-child.sh --failed-exec`](../../../../examples/mithril-identity-manual/native-child.sh)
+for the readable companion procedure. It requires `/bin/bash`, `python3`, and
+a dynamically linked `/bin/true` in the selected workload.
+
+This is physical evidence for the pre-PONR recovery subcase of
+`EXEC-COMMIT-STATE-001` only. It does not qualify post-PONR fatal or unknown
+handling, concurrent or non-leader exec, or the full fixture. The phase remains
+**Blocked**.

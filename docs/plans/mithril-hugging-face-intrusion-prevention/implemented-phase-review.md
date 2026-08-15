@@ -432,6 +432,44 @@ This is physical evidence for host-task cgroup-entry identity only. It does
 not run `nsenter`, restore, or a protected effect. It does not complete
 `ENTRY-MIGRATE-001`. Phase 2 remains **Blocked**.
 
+### Pre-PONR failed-exec physical qualification
+
+At source commit `af685cd6a8dd73f22bd44234b3346298dd04dcd1`, the isolated
+[`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L269)
+passed. The copied `mithril-identity-test` binary SHA-256 was
+`b23d8be165d9b88532dcd15db1905233134a86a2be8f7f40042e508a302c49a0`. The
+schema-5 result JSON is
+`/tmp/mithril-phase2-preponr-af685cd.9897yN/identity-physical-probe.json`.
+Its SHA-256 is
+`8a57d0a43b7fe505da68f0644237720e8419145a942ae9173ab643b1c8c6cf45`.
+
+The runner stopped a native Bash child before its baseline snapshot. It
+required no `pending_execs` entry, then caused an ELF loader failure after exec
+preparation and before the point of no return. The before and post-failure
+snapshots had the same task cookie `44`, creator and real-parent cookie `41`,
+process state `00000000000000010000000000000030`, active execution
+`00000000000000010000000000000033`, image provenance
+`00000000000000010000000000000034`, and active role `11`. The process
+execution and process-state vector were active. The exec guard was none.
+`pre_ponr_failed_exec_restored=true` records that result.
+
+The later normal exec kept the task, creator, real parent, process state, and
+role. It changed active execution to
+`00000000000000010000000000000039` and image provenance to
+`0000000000000001000000000000003a`. Its process execution and process-state
+vector were active, and its exec guard was none. The cleanup fields
+`pin_root_removed`, `lease_removed`, and `cgroup_removed` are true, and
+`profile_task_refs_after_exit=0`. Postflight found the run staging root absent.
+Only the unrelated tracing BPF link remained.
+
+The readable companion is
+[`native-child.sh --failed-exec`](../../../examples/mithril-identity-manual/native-child.sh).
+It requires `/bin/bash`, `python3`, and a dynamically linked `/bin/true` in
+the selected workload. This is only the pre-PONR recovery subcase of
+`EXEC-COMMIT-STATE-001`. It does not qualify post-PONR fatal or unknown
+handling, concurrent or non-leader exec, or the full fixture. Phase 2 remains
+**Blocked**.
+
 This guide is explanatory only. The authoritative scope and acceptance records
 remain the phase documents and the readable architecture:
 
