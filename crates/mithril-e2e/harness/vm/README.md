@@ -107,6 +107,18 @@ cleanup remains unchanged. If the administrative lane fails with `--keep-vm`,
 the guest also keeps its lane directory and BPF pins. Inspect that state before
 you start another administrative lane.
 
+Reuse a retained guest and k3s installation for sequential probes. Do not run
+two Mithril object owners at the same time. A different pin root does not
+isolate BPF LSM links. The loader rejects a concurrent owner before attach. If
+it reports `RetainedLsmLink`, restart with the original pin root or use a fresh
+guest. Do not delete an unknown pinned link to continue a probe.
+
+The current administrative lane reaches draft creation, admission, and slot
+arm. Stock runc `1.4.2` then fails closed before target exec because its sealed
+self-clone and inherited bootstrap channels are unsupported. Treat this as a
+product blocker. Do not add a broad runc, pipe, or socket exception while you
+investigate it.
+
 The host compiles the disposable kernel qualification object with the existing
 repository compiler. The guest loads that exact object. The record command
 checks the copied source digest, the physical capability records, and every raw

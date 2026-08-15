@@ -4,10 +4,9 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
-Source reviewed: commit `997d7ffddc65630941164262dab1db92f2ab0f9e` plus the
-Mithril working-tree changes on 2026-08-13. The latest locally built BPF object
-has SHA-256
-`c1c4215a7b645344507cf02f27fcaeb085970d1b20cbfda402bdabcc019ce403`.
+Source reviewed: commit `f8cfed97e5e04651ccf60d3de45d6aff9fc67af7`.
+The BPF object loaded by the 2026-08-15 privileged VM probes has SHA-256
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
 The validated architecture digest in the phase records is
 `4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8`.
 
@@ -16,26 +15,129 @@ local policy rows, exact file decisions, typed device and process decisions,
 exact Unix-stream relationships, restricted io_uring read and write ownership,
 global mount invalidation, restart-safe bounded exceptions, generation
 activation and retirement owners, and a Kubernetes administrative-exec path.
-The current CRI exact-effect lane passed. The administrative-exec lane reached
-Control and failed with HTTP 400 before browser activation. The latest source
-therefore does not have one complete final VM acceptance record.
+The latest identity, OBSERVE, and PROTECT probes passed on the qualified VM.
+They prove only their stated local slices. The administrative-exec lane reaches
+Control, admission, and slot arm, but stock runc fails closed before the target
+exec. The source therefore does not have one complete final VM acceptance
+record.
 
 The latest phase results remain:
 
 - Phase 0: **Done** for its narrow x86-64 BPF Linux Security Module (LSM)
   capability and performance claim.
 - Phase 1: **Done**.
-- Phase 2: **Blocked**. Native identity and CRI entry containment have current
-  source and physical evidence. The complete entry, reuse, saturation,
-  failure-injection, and non-x86 physical matrix is not complete.
-- Phase 3: **Blocked**. Exact observation and the CRI-bound exact-effect lane
-  have physical evidence. The full manual and Kubernetes effect matrix is not
-  complete.
+- Phase 2: **Blocked**. Native identity has current source and privileged VM
+  evidence. The complete entry, reuse, saturation, failure-injection, runtime,
+  and non-x86 physical matrix is not complete.
+- Phase 3: **Blocked**. Exact observation has current privileged VM evidence.
+  The qualified Mithril CRI effect and full manual matrix are not complete.
 - Phase 4: **Not done**. The source now contains narrow positive and negative
   enforcement for the listed file, exec, IPC, process, device, io_uring,
   mount, exception, generation, and administrative paths. The final current
   VM record, administrative approval transaction, complete provenance and
   lifetime models, and branch-specific incident proofs are not complete.
+
+## Current-source update — 2026-08-15
+
+This section supersedes older HTTP 400 and earlier-VM statements in this guide.
+Those statements remain as historical diagnostics only.
+
+### Review route for the current changes
+
+1. Read [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415).
+   It takes the fixed host lease and the selected instance lease before it
+   loads or attaches a fresh object. It then rejects retained Mithril LSM links
+   outside the requested recovery root.
+2. Read [`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs#L629).
+   Recovery opens its expected pinned links, permits only their link IDs, and
+   rejects another retained Mithril LSM link. It does not detach or reuse a
+   foreign link.
+3. Read [`commit_mount_reconciliation_proposal`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L217).
+   The non-attached BPF command commits one exact proposal under the existing
+   view spin lock. It accepts a DIRTY view or a CLEAN view from an older global
+   generation. It rejects an UNKNOWN view, a current CLEAN view, pending work,
+   a changed epoch, or a changed transition version.
+4. Read [`NodePolicyGenerationOwner::reconcile_mount_views`](../../../crates/mithril-node/src/policy.rs#L595).
+   The node writes a proposal, asks BPF to commit every view, reads every view
+   back, and then publishes the global clean epoch. A workload file access is
+   not an activation step.
+5. Read the physical owners:
+   [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L255)
+   and
+   [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L637).
+   They load the production object and check cleanup after each probe.
+
+```mermaid
+sequenceDiagram
+    participant N as Node policy owner
+    participant H as KernelHost
+    participant B as BPF reconciliation command
+    participant V as mount view
+
+    N->>H: write exact view proposal
+    H->>B: run non-attached command
+    B->>V: lock and CAS to CLEAN
+    N->>H: read every view and global epoch
+    N->>H: publish global clean epoch
+```
+
+The reconciliation change adds no map, daemon, hook, or workload warmup. The
+existing maps have these narrow current roles:
+
+| Map | Writer | Reader | Lifetime |
+| --- | --- | --- | --- |
+| `mount_reconciliation_proposals` | Node policy owner | BPF reconciliation command | Pin-root lifetime; one exact view proposal. |
+| `mount_security_views` and `mount_security_view_locks` | Node initializes; BPF mutation and reconciliation paths change state | BPF file path and node readback | Pin-root lifetime; the lock remains BPF-owned. |
+| `mount_global_mutation_epoch`, `mount_global_pending_mutations`, and `mount_global_clean_epoch` | Node initializes; BPF mutation paths advance epoch and pending state; node publishes clean state last | BPF file path and node readback | Pin-root lifetime; `clean < epoch` denies exact access. |
+
+```mermaid
+sequenceDiagram
+    participant A as retained identity root
+    participant H as fixed host lease
+    participant Q as kernel link inventory
+    participant B as new identity root
+
+    A->>H: shutdown and retain pinned links
+    B->>H: acquire host and instance leases
+    B->>Q: list linked Mithril LSM programs
+    Q-->>B: known Mithril LSM link ID
+    B->>B: compare with requested-root link IDs
+    B-->>B: return RetainedLsmLink before attach
+    A->>B: restart with original root
+    B->>Q: allow the expected recovered links
+```
+
+The host guard uses discovered kernel LSM link and program IDs. It compares the
+kernel program-name width, not the longer source name. It rejects rather than
+detaches an unknown link. The fixed host lease prevents a concurrent owner. The
+retained-link check rejects a discovered Mithril LSM link that is not among the
+requested-root IDs after a previous owner exits while its pins remain.
+
+### Current evidence and limits
+
+The VM ran on x86_64 Linux `6.8.0-137-generic` with active LSM order
+`lockdown,capability,landlock,yama,apparmor,bpf`. Runtime BTF SHA-256 is
+`6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c`.
+
+| Probe | Result | Evidence SHA-256 |
+| --- | --- | --- |
+| Native identity | Passed. It checks cgroup-escape mismatch, distinct-root owner rejection, retained-link rejection after shutdown, original-root recovery, stable map IDs, reference release, and cleanup. | `dbf7bc49e4aedb22f38d261f0d51720e9bc71e79b9803d12cc74bdb39df4a7ff` |
+| Effect OBSERVE | Passed. It checks exact observation, mount revalidation, external replacement fail-close, propagation, and cleanup. | `3317b52ede0b9d4ea4acd3b5ab3e4926d9d8edecad96a40801a7bcbed0ad275c` |
+| Effect PROTECT | Passed. It checks pre-effect denial, held descriptors, io_uring, mount revalidation, external replacement fail-close, and cleanup. | `74dec05c7984076a908db509733b078492407a145298fee684e20ed1ef9cc8c6` |
+
+The automatic probe does not replace the full qualification matrix. The full
+identity unit suite and the policy-simulation integration test cannot run
+because the repository does not contain
+`spec/qualification/v1/fixtures.yaml`. Do not synthesize that registry from
+documentation.
+
+The administrative transaction now reaches draft creation, admission, and slot
+arm. Stock runc `1.4.2` then executes a sealed self-clone and uses inherited
+bootstrap channels that have no exact-object or typed-channel authority. The
+BPF program denies them as `UNSUPPORTED_OBJECT`, and the slot remains armed.
+Do not add a broad runc, pipe, or socket exception. Support requires a separate
+signed, typed runtime-bootstrap protocol with an exact helper identity and a
+bounded helper-to-target handoff.
 
 The optional Landlock deliverable is complete as `ABSENT`. The node reports
 `LANDLOCK_TARGET_CONTEXT_FLOOR=ABSENT` with reason
@@ -66,7 +168,7 @@ smallest complete explanation of who does what.
 | --- | --- | --- |
 | 1 | [`mithril-node` main](../../../crates/mithril-node/src/main.rs#L22) | The CLI loads `NodeConfig` and starts one `NodeChassis`. It does not load a second object or decide effects. |
 | 2 | [`NodeChassis::start`](../../../crates/mithril-node/src/node.rs#L78) | Startup order is: load or recover one object, publish bindings, install an optional signed generation, activate identity, and start observation and control. |
-| 3 | [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L413) | `KernelHostOwner` is the only production load, attach, pin, manifest, and lease owner. It loads one object for one node. It does not load one object for each container. |
+| 3 | [`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415) | `KernelHostOwner` is the only production load, attach, pin, manifest, and lease owner. It loads one object for one node. It does not load one object for each container. |
 | 4 | [`WorkloadBindingOwner::publish_configured`](../../../crates/mithril-node/src/identity/binding.rs#L131) | The binding owner turns a validated live cgroup into one `execution_set_bindings` row. It owns container placement in userspace. |
 | 5 | [`ContainerRuntimeInventory::snapshot`](../../../crates/mithril-node/src/identity/runtime.rs#L97) | The optional Container Runtime Interface (CRI) owner verifies configured container identity and resolves its local cgroup. It publishes no BPF program. |
 | 6 | [`NodePolicyGenerationOwner::load_and_install`](../../../crates/mithril-node/src/policy.rs#L111) | A verified candidate becomes node-local map rows. The node reads and probes the required rows before it publishes the profile pointer. |
@@ -77,7 +179,7 @@ smallest complete explanation of who does what.
 | 11 | [`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L271) | The common gate validates actor identity, binding, generation, object state, and the selected decision. Typed wrappers add device, process, IPC, file, and mount data. |
 | 12 | [`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1567) | This function fills the policy maps. It also prevents a partial generation from becoming active. |
 | 13 | [`ExceptionAuthorityOwner`](../../../crates/mithril-node/src/policy/exception_authority.rs#L87) | This owner reconciles the kernel exception counters and receipts with the append-only local WAL. |
-| 14 | [`IdentityTestRunner`](../../../crates/mithril-e2e/src/identity.rs#L162), [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L613), and [the VM harness](../../../crates/mithril-e2e/harness/vm/README.md) | Automated tests use the production object. Their cleanup owners remove pins, cgroups, leases, processes, mounts, and temporary files. |
+| 14 | [`IdentityTestRunner`](../../../crates/mithril-e2e/src/identity.rs#L165), [`EffectTestRunner::physical_probe`](../../../crates/mithril-e2e/src/effect.rs#L637), and [the VM harness](../../../crates/mithril-e2e/harness/vm/README.md) | Automated tests use the production object. Their cleanup owners remove pins, cgroups, leases, processes, mounts, and temporary files. |
 | 15 | [Identity manual cases](../../../examples/mithril-identity-manual/README.md), [effect-observation manual cases](../../../examples/mithril-effect-observation-manual/README.md), and [local-enforcement manual cases](../../../examples/mithril-local-enforcement-manual/README.md) | These shells start the real node and perform operator actions. The examples link to the automated harness but do not own it. |
 
 The most useful first pass is this short chain:
@@ -104,11 +206,11 @@ NodeChassis::start
 | Local policy decisions | BPF effect/path/device/process/IPC headers, `NodePolicyGenerationOwner` | Exact file decisions use the current actor, a clean mount view, the canonical component graph, and an exact kernel object tuple. Device ioctl uses an exact command for allow or alert. Process control uses an exact target role and operation argument. Unix-stream relationships use both live endpoints. Missing or unsupported protected state fails closed. |
 | Bounded exceptions | BPF receipt and counter maps, `ExceptionAuthorityOwner` | A synchronous `file_open` read or write attempt gets one stable receipt identity. BPF consumes under a spin lock. Userspace persists consumed receipts and monotonic runtime state in a local WAL. `file_receive` cannot consume an exception. This claim does not include VFS retry correlation or offloaded exception use. |
 | Restricted asynchronous I/O | io_uring BPF hooks and node policy owner | A managed disabled ring can be enabled for exact `IORING_OP_READ` and `IORING_OP_WRITE` requests. The state retains ring, submission, SQE, object, actor, executor, completion, and generation references. SQPOLL, credential override, and uring command paths hard-close. AIO, registered-resource authority, and other opcodes remain unsupported. |
-| Administrative exec | Control administrative owner, node administrative owner, `AuthorizationProofOwner`, and BPF exec path | The authenticated `kubectl-mithril` requester is the approver. Control performs OIDC authentication, issues one memory-only credential, validates CONNECT admission, resolves the live target, asks the node to arm one exact slot, and commits only after readback. Source and local tests exist. The current physical lane fails at the initial HTTP request and is not qualified. |
+| Administrative exec | Control administrative owner, node administrative owner, `AuthorizationProofOwner`, and BPF exec path | The authenticated `kubectl-mithril` requester is the approver. Control completes OIDC authentication, credential issuance, CONNECT admission, target resolution, slot arm, and readback. Stock runc then fails closed before target exec, so this is not a positive administrative-exec result. |
 | Other attached hooks | Explicit typed BPF wrappers | An attached hook can still be partial or unsupported. A protected request reaches an explicit hard-safe result when the code cannot prove the required object or state. |
 | Observation | one `EffectObservationReader` plus `EffectObservationStore` | One `libbpf-rs` ring reader copies best-effort records into a bounded in-process history. It does not authorize and is not durable evidence. |
 | Landlock target-context floor | Capability registration | The optional floor is complete as `ABSENT`, with reason `NO_QUALIFIED_TARGET_CONTEXT_INSTALL`. No BPF decision depends on this floor. |
-| Physical qualification | `mithril-e2e` VM harness | The current object requires 68 production programs and 55 maps. It has 66 persistent links, one temporary task iterator, and one on-demand policy probe. The current CRI exact-effect record passed. The administrative lane failed with HTTP 400 before approval. The latest source still needs one complete kernel, identity, observe, protect, CRI, and administrative run. |
+| Physical qualification | `mithril-e2e` VM harness | The current object requires 68 production programs and 55 maps. It has 66 persistent links, one temporary task iterator, and one on-demand policy probe. Current native-identity, OBSERVE, and PROTECT records passed. The administrative lane is blocked by the unsupported stock-runc bootstrap path. The latest source still needs the complete qualification matrix. |
 
 ## One object, one loader, one node
 
@@ -144,7 +246,7 @@ It names the four checked BTF headers and invokes
 The embedded bytes are in
 [`bundled.rs`](../../../crates/erebor-interceptor/src/bundled.rs#L1), and
 the runtime `libbpf-rs` open/load/attach path is in
-[`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L322).
+[`KernelHostOwner::start`](../../../crates/erebor-interceptor/src/host.rs#L415).
 
 `vmlinux.h` is present. It is the small architecture selector at
 [`bpf/erebor-interceptor/include/vmlinux.h`](../../../bpf/erebor-interceptor/include/vmlinux.h#L1-L22),
@@ -222,13 +324,15 @@ sequenceDiagram
 
     N->>H: start(identity config, host BTF, pin root)
     H->>H: validate config, preflight, calculate ELF digest
-    H->>L: nonblocking exclusive flock on lease file
+    H->>L: nonblocking exclusive flock on fixed host and instance lease files
     alt fresh pin root
+        H->>K: reject retained Mithril LSM links outside this root
         H->>K: load one ELF and attach persistent programs
         H->>K: pin every map and link, then read its ID back
     else populated identity pin root
         H->>K: reuse each pinned map
         H->>K: open each pinned link and verify program tag
+        H->>K: reject another retained Mithril LSM link
     end
     H-->>N: one ready KernelHost and manifest
     N->>B: publish cgroup bindings PREPARING then ACTIVE
@@ -238,40 +342,43 @@ sequenceDiagram
     N->>I: write or recover identity_config, then run task iterator
 ```
 
-[`PinRootLease`](../../../crates/erebor-interceptor/src/lease.rs#L10)
-is a nonblocking exclusive `flock` held as the `_lease` field of the live
-`KernelHost`. Its role is narrow: prevent a second loader from owning the same
-pin root. Dropping it unlocks the lease file. It does not unlink the lease file,
-maps, links, or pin directories. It is not a policy lock. BPF map atomics and
-spin locks still protect event-time state. The single live `KernelHost` owner
-also gives userspace one map writer for active-generation publication.
+[`KernelHostLease`](../../../crates/erebor-interceptor/src/lease.rs#L52)
+holds nonblocking exclusive `flock` records for one fixed host path and the
+selected instance path. The live `KernelHost` owns both records. The fixed path
+prevents a concurrent owner even when pin roots differ. The instance path still
+protects recovery of one selected root. Dropping the lease unlocks the files;
+it does not unlink the lease file, maps, links, or pin directories. It is not a
+policy lock. BPF map atomics and spin locks protect event-time state.
 
 The recovery branch starts at
-[`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs#L534).
+[`KernelHostOwner::recover`](../../../crates/erebor-interceptor/src/host.rs#L629).
 It reuses existing map pins and verifies the complete expected link set. It
-does not attach another persistent hook set. The task iterator is the one
-exception: [`KernelHost::reconcile_tasks`](../../../crates/erebor-interceptor/src/host.rs#L956)
+allows only those retained link IDs before it loads the recovered object. A
+Mithril LSM link outside the requested root returns `RetainedLsmLink`; recovery
+does not attach another persistent hook set or detach the other link. The task
+iterator is the one exception:
+[`KernelHost::reconcile_tasks`](../../../crates/erebor-interceptor/src/host.rs#L1181)
 attaches the iterator only while it is read to completion during activation.
 
 On normal node shutdown the production identity pins intentionally remain, so
 a later process can validate and recover them. The disposable qualification
 object removes its pins. See
-[`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L983).
+[`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L1356).
 
 Two loader details answer common review questions:
 
 - A vector capacity is not a membership rule. The fresh loader starts
   `link_records` empty, attaches only programs selected by
-  [`KernelObjectKind::attaches`](../../../crates/erebor-interceptor/src/host.rs#L199),
+  [`KernelObjectKind::attaches`](../../../crates/erebor-interceptor/src/host.rs#L288),
   and then compares the attached names with the exact required set in
-  [`validate_attached_set`](../../../crates/erebor-interceptor/src/host.rs#L822).
+  [`validate_attached_set`](../../../crates/erebor-interceptor/src/host.rs#L986).
   Recovery uses `Vec::with_capacity(expected_links.len())` only to reserve
   memory. Before that loop, it derives `expected_links` from the required list
   and compares the complete pin-directory names with that set. It validates
   the resulting records again. The final validation compares sorted vectors,
   not mathematical sets. An extra duplicate therefore also fails. Capacity
   does not accept an extra, duplicate, or missing program.
-- [`KernelHost::map`](../../../crates/erebor-interceptor/src/host.rs#L854)
+- [`KernelHost::map`](../../../crates/erebor-interceptor/src/host.rs#L1079)
   finds a map by name in the `libbpf-rs` object. `lookup_map` then handles a
   normal or per-CPU lookup. A Rust `HashMap<String, Map<'_>>` inside
   `KernelHost` would borrow the `Object` stored in the same structure. That is
@@ -284,7 +391,7 @@ Two loader details answer common review questions:
 
 | State or capability | Durable owner | First implementation location | Not owned here |
 | --- | --- | --- | --- |
-| BPF ELF, map/link lifecycle, pins and manifest | `KernelHostOwner` / `KernelHost` | [`host.rs`](../../../crates/erebor-interceptor/src/host.rs#L289) | Workload semantics or policy compilation |
+| BPF ELF, map/link lifecycle, pins and manifest | `KernelHostOwner` / `KernelHost` | [`host.rs`](../../../crates/erebor-interceptor/src/host.rs#L382) | Workload semantics or policy compilation |
 | One node process and shutdown/reconnect loop | `NodeChassis` | [`node.rs`](../../../crates/mithril-node/src/node.rs#L35) | A second privileged daemon |
 | Cgroup workload binding | `WorkloadBindingOwner` | [`binding.rs`](../../../crates/mithril-node/src/identity/binding.rs#L51) | Task labels, process state, policy decision rows |
 | Identity configuration and reconciliation health | `NativeSecurityStateOwner` | [`native.rs`](../../../crates/mithril-node/src/identity/native.rs#L22) | Object loading or container discovery |
@@ -295,7 +402,7 @@ Two loader details answer common review questions:
 | Exact target resolution and slot state | node `AdministrativeExecOwner` and `AuthorizationProofOwner` | [`administrative_exec.rs`](../../../crates/mithril-node/src/administrative_exec.rs), [`authorization/mod.rs`](../../../crates/mithril-node/src/identity/authorization/mod.rs#L110) | Browser authentication or Kubernetes admission |
 | Task/process/exec state | BPF lifecycle, exec, and exit programs | [`identity_lifecycle.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h), [`identity_exec.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h), [`identity_exit.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_exit.bpf.h) | Userspace task enrollment after the fact |
 | Per-effect result | BPF common and typed gates | [`identity_effects.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L271), [`identity_device_process.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_device_process.bpf.h#L32), [`identity_ipc.bpf.h`](../../../bpf/erebor-interceptor/programs/identity_ipc.bpf.h#L223) | Control round trips or ring-buffer delivery |
-| Ring consumption and recent records | `EffectObservationReader` / `EffectObservationStore` | [`host.rs`](../../../crates/erebor-interceptor/src/host.rs#L929), [`observation.rs`](../../../crates/mithril-node/src/observation.rs) | Policy decisions or durable audit |
+| Ring consumption and recent records | `EffectObservationReader` / `EffectObservationStore` | [`host.rs`](../../../crates/erebor-interceptor/src/host.rs#L1154), [`observation.rs`](../../../crates/mithril-node/src/observation.rs) | Policy decisions or durable audit |
 
 ### Node startup order
 
@@ -434,7 +541,7 @@ A bpffs pin keeps a map or link alive after the loader process exits. Process
 exit does not delete a pinned object. Production identity shutdown keeps the
 pins for recovery. The test owners explicitly remove disposable pins and then
 assert that the paths no longer exist. The production shutdown implementation
-starts at [`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L983).
+starts at [`KernelHost::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L1356).
 
 ## The BPF object: source relationship and hook families
 
@@ -461,7 +568,7 @@ identity_path.bpf.h         -- bounded path graph and mount-view state
 ```
 
 The loader requires 68 named programs from this one ELF. The exact list is
-[`REQUIRED_IDENTITY_PROGRAMS`](../../../crates/erebor-interceptor/src/host.rs#L78).
+[`REQUIRED_IDENTITY_PROGRAMS`](../../../crates/erebor-interceptor/src/host.rs#L141).
 It permanently attaches 66 programs. The task iterator is attached only while
 userspace reads it. The activation probe runs through `Program::test_run` and
 does not have a persistent link. The following catalog accounts for every
@@ -1030,10 +1137,12 @@ implemented self-approval path. The implementation does not invent a trusted
 executable-content signer. The exact executable is resolved in the live target
 view and matched with raw ordered argv as the architecture specifies.
 
-The latest physical run did not reach browser activation. The first request to
-`POST /v1/administrative-exec/requests` returned HTTP 400. Source and local
-tests do not replace the missing end-to-end approval, replay, mismatch, expiry,
-and single-winner physical matrix.
+The current physical run reaches draft creation, CONNECT admission, and node
+slot arm. It then stops before target exec because stock runc `1.4.2` uses an
+unsupported sealed self-clone and inherited bootstrap channels. The BPF path
+fails closed and leaves the slot armed. Source and local tests do not replace
+the missing end-to-end approval, replay, mismatch, expiry, and single-winner
+physical matrix.
 
 ### Exact-file decision and observation
 
@@ -1399,7 +1508,7 @@ record for this exact source state.
 | Connected Unix stream | Partial | Socket storage tracks endpoint identity. Connect/send/receive validate current actor, live peer, binding, generation, role, and direction. Exact relationships can allow, alert, or deny. | Current-source physical proof is pending. Datagram, socketpair, SysV IPC, shared memory, pipe pairing, listener transfer, socket activation, and listener/socket transfer through `SCM_RIGHTS` are unsupported or unqualified. |
 | Restricted io_uring read and write | Partial | A managed disabled ring retains the exact submitter, profile generation, ring generation, submission sequence, SQE index, user data, opcode, file range, executor, and completion. Exact `IORING_OP_READ` and `IORING_OP_WRITE` use the pinned actor. | AIO, arbitrary opcodes, positive SQPOLL, credential override, uring commands, and complete registered-file or buffer authority are not implemented or qualified. |
 | Bounded exception counter and receipt | Partial | BPF uses a stable instance key, no-replace receipt claim, spin-locked count, expiry, and one-use identity for synchronous file-open decisions. Userspace persists monotonic state and consumed receipts in a local WAL. | General VFS retry correlation and offloaded exception use are not implemented. Reconciliation is periodic. Administrative exec uses its separate one-use claim slot. |
-| Administrative exec identity | Partial end-to-end source path | OIDC-authenticated self-approval, a memory-only credential, TokenReview, CONNECT admission, exact target and executable resolution, typed Control resolve and arm messages, durable replay, exact argv, slot readback, and BPF one-use consumption exist in source. | The current VM lane returns HTTP 400 at the initial request. The approval, replay, expiry, mismatch, and one-winner physical matrix is not qualified. |
+| Administrative exec identity | Partial end-to-end source path | OIDC-authenticated self-approval, a memory-only credential, TokenReview, CONNECT admission, exact target and executable resolution, typed Control resolve and arm messages, durable replay, exact argv, slot readback, and BPF one-use consumption exist in source. | The current VM lane reaches slot arm but stock runc fails closed before target exec. The approval, replay, expiry, mismatch, runtime-bootstrap, and one-winner physical matrix is not qualified. |
 | Hugging Face local incident classification | Partial source classification | The bundle records a checked deployment digest and static classifications for HF-002 through HF-012. The declared classification is not per-branch physical proof. | A case result must come from that branch and its paired control before it can claim prevention. Network, provider, Kubernetes semantics, resident memory, and staged-content semantics remain outside the current claim. |
 | Capability and BPF hooks | Partial safety floor | Protected requests use a typed default or hard-safe result before the operation. Generic CAPABILITY, BPF, NETWORK, MOUNT, and unqualified executable-memory positive defaults are rejected at compilation. | This is not complete credential, namespace, keyring, module, perf, or self-protection policy. |
 | Self-protection | Partial detection and safety floor | The loader verifies live map, link, and program IDs. A managed task that unlinks one pinned-link pathname hard-closes. | This is not host-root tamper prevention. It does not protect all maps, links, config, binary, process, or update paths. |
@@ -1544,16 +1653,20 @@ baseline read and then a protected read. The protected read must return
 The current CRI effect lane proves one local Kubernetes binding and exact
 pre-effect denial. It does not prove distributed policy or multi-node
 authority. The administrative sub-lane exercises the HTTPS, OIDC, TokenReview,
-CONNECT admission, Control-to-node, and slot owners. Its current run failed at
-the first administrative HTTP request, so it proves no approval. The host-path
-fixture is an exact-file qualification input. It does not prove projected-token
+CONNECT admission, Control-to-node, and slot owners. Its current run reaches
+slot arm, then stock runc fails closed before target exec. The host-path fixture
+is an exact-file qualification input. It does not prove projected-token
 rotation semantics, release packaging, or a cloud platform.
 
 The current provider and checked qualification record lane are x86-64. The BPF
 translation unit also compiles against checked x86, arm64, arm, and RISC-V
 headers. A cross-architecture compile is not a non-x86 physical result.
 
-## Evidence and remaining limits
+## Historical evidence and remaining limits
+
+This section records the 2026-08-13 source snapshot. The
+[current-source update](#current-source-update--2026-08-15) supersedes its
+HTTP 400, object SHA-256, and VM-status statements.
 
 The latest source object has 68 required programs and 55 maps. Sixty-six
 programs have persistent links. The task iterator and policy activation probe
@@ -1601,9 +1714,11 @@ records for the final source.
 
 ### Remaining implementation work
 
-- Fix the administrative HTTP 400 response. Then run the exact approval,
-  ordinary `kubectl exec` denial, consumed-slot non-winner, replay, expiry,
-  mismatch, disconnect, and contention physical matrix.
+- Design and qualify a signed typed stock-runc bootstrap protocol before the
+  final target match. It must preserve the exact target slot and must not add a
+  broad runc, pipe, or socket exception. Then run the exact approval, ordinary
+  `kubectl exec` denial, consumed-slot non-winner, replay, expiry, mismatch,
+  disconnect, and contention physical matrix.
 - Run one final current-source VM that completes kernel qualification, native
   identity, observation, protection, CRI effect, administrative exec, cleanup,
   and evidence validation. Run the final repository CI gate after that VM.
@@ -1640,7 +1755,7 @@ are not open product decisions. This round needs no new product decision.
 
 | Requirement | Architecture rule | Current implementation gap |
 | --- | --- | --- |
-| Administrative exec | The user who runs `kubectl-mithril exec` authenticates through the organization identity provider and is the approver for the implemented self-approval policy. Control issues one memory-only credential. Kubernetes authentication and CONNECT admission validate the approval and exact target. The node arms one exact slot and Control commits only after readback. | These owners and messages exist in source. The current physical request fails with HTTP 400 before browser activation. The complete physical transaction and race matrix remain. |
+| Administrative exec | The user who runs `kubectl-mithril exec` authenticates through the organization identity provider and is the approver for the implemented self-approval policy. Control issues one memory-only credential. Kubernetes authentication and CONNECT admission validate the approval and exact target. The node arms one exact slot and Control commits only after readback. | The physical transaction reaches slot arm. Stock runc then fails closed before target exec because its bootstrap protocol is not modeled. The complete physical transaction and race matrix remain. |
 | Executable identity | Administrative exec matches raw ordered argv and the exact executable object that the node resolves in the container view. It does not require an argv hash, executable-content hash, or trusted-content signer. General exec policy separately requires complete immutable image, script, interpreter, and loader provenance. | Administrative source wiring exists but is not physically qualified. General immutable provenance, interpreter, loader, and `binfmt_misc` coverage remain incomplete. No product choice is missing. |
 | Asynchronous I/O | `ExactRequestIdentityV1` retains ring ID, ring generation, submission sequence, SQE index, user data, opcode, actor, executor, and completion ownership. SQPOLL cannot borrow a kernel worker role. | A restricted exact io_uring read/write slice exists. AIO, registered resources, broader opcodes, positive SQPOLL, and the full failure and restart matrix remain incomplete. |
 | Mount propagation | Mount, move, propagation, pivot-root, automount, overlay copy-up, and referral must invalidate every affected exact view before a new decision. Overflow must fail closed. | A global epoch now conservatively closes represented views for the current mount APIs, including `mount_setattr`, and the fixture covers one propagation peer. Automount, referral, overlay copy-up, idmapped mounts, bounded affected-set behavior, and full physical races remain. |
