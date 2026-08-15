@@ -112,131 +112,48 @@ role, admission denial, restricted non-winner, and measured pre-binding start
 gap. A failed lane retains only a `.partial` host record. Guest destruction
 remains the outer cleanup boundary.
 
-For repeated manual work, add `--keep-vm`. The harness leaves the guest and
-its k3s installation running, and writes `retained-vm.txt` in the output
-directory. Keep that file. When the work is complete, destroy only that guest:
+`--keep-vm` retains a failed or diagnostic qualification guest. Use
+`manual.sh` for manual work. It owns the VM name and the provider record.
+`--keep-vm` writes `retained-vm.txt` for provider-level diagnosis.
+
+## Manual Testing In A VM
+
+On the host:
 
 ```bash
-crates/mithril-e2e/harness/vm/providers/libvirt.sh destroy <vm_name> <work_directory>
+crates/mithril-e2e/harness/vm/manual.sh start
+crates/mithril-e2e/harness/vm/manual.sh ssh
 ```
 
-Use the two values from `retained-vm.txt`. Without `--keep-vm`, the default
-cleanup remains unchanged. If the administrative lane fails with `--keep-vm`,
-the guest also keeps its lane directory and BPF pins. Inspect that state before
-you start another administrative lane.
+`start` creates one K3s VM, mounts the current repository read-only at
+`/mnt/mithril-source`, and builds `mithril-node`, `mithril-inspect`, and
+`mithril-policy`. Do not start a second Mithril owner in this VM.
 
-## Manual Testing In A Retained VM
-
-Check the harness, then create one retained K3s guest:
-
-```bash
-bash crates/mithril-e2e/harness/vm/test.sh
-MITHRIL_VM_SOURCE_MOUNT="$PWD" crates/mithril-e2e/harness/vm/run.sh --with-k3s \
-  --skip-administrative-exec \
-  --keep-vm \
-  --output-directory /tmp/mithril-manual-vm-evidence
-```
-
-`MITHRIL_VM_SOURCE_MOUNT` is optional. When set, libvirt mounts that absolute
-host directory read-only at `/mnt/mithril-source`. Keep fixtures, binding JSON,
-pin roots, leases, and output on the guest. `run.sh` leaves the built binaries
-and checked policy assets in `/var/tmp/<vm_name>`, but no manual Pod or live
-binding. Create a new Pod and binding for each case.
-
-Load the retained settings. Use `ssh` for an interactive guest shell:
-
-```bash
-set -a
-. /tmp/mithril-manual-vm-evidence/retained-vm.txt
-set +a
-"$provider" ssh "$vm_name"
-```
-
-### SSH, Mounts, And Guest Paths
-
-Use this path when the guest has `/mnt/mithril-source`. Open SSH with the
-previous command, then run these commands in the guest:
+In the guest:
 
 ```bash
 sudo -i
-remote_root=/var/tmp/<vm_name>
-manual_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
-manual_root=/var/tmp/mithril-manual-$manual_id
-script_root=/mnt/mithril-source
-mkdir -p "$manual_root/bin"
-ln -s /usr/local/bin/k3s "$manual_root/bin/crictl"
-export PATH="$manual_root/bin:$PATH"
-export MITHRIL_BIN_DIRECTORY="$remote_root/bin"
+. /var/tmp/mithril-manual.env
+cd "$MITHRIL_MANUAL_SOURCE"
 ```
 
-Replace `<vm_name>` with the value in `retained-vm.txt`.
+`MITHRIL_BIN_DIRECTORY` names the staged binaries. `crictl` is on `PATH`.
+Manual scripts start `mithril-node` on the guest host. Mithril is not a
+Kubernetes Deployment.
 
-- `/mnt/mithril-source`: read-only mounted repository source.
-- `$remote_root/bin`: harness-built Mithril binaries.
-- `$remote_root/source`: harness-staged policy assets and test key.
-- `$manual_root`: one case's binding, workload YAML, wrapper, and output.
-- `/var/lib/mithril-manual-$manual_id`: one case's hostPath fixture.
+### Direct CRI Observe Case
 
-Mithril runs on the guest, not as a Kubernetes Deployment. Each manual script
-starts `mithril-node` with `$manual_root/node.json`, binds it to the live K3s
-container, runs one test, and removes its Mithril state.
-
-Run one Mithril owner at a time. Do not reuse a container ID, Pod UID, or
-binding. A different pin root does not isolate BPF LSM links.
-
-### Stage A Manual Shell Without A Source Mount
-
-Run these host commands from the repository root when no source mount is
-available. They stage the identity and effect-observation directories. They do
-not copy the test signing key; the guest uses the harness-staged key.
+Run these commands in the root guest shell. They create one Pod, make its
+exact live binding, and run one manual script.
 
 ```bash
-set -a
-. /tmp/mithril-manual-vm-evidence/retained-vm.txt
-set +a
-remote_root=/var/tmp/$vm_name
-manual_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
-manual_root=/var/tmp/mithril-manual-$manual_id
-archive=$(mktemp)
-
-tar --exclude='examples/mithril-effect-observation-manual/test-signing-key.hex' \
-  -czf "$archive" \
-  examples/mithril-identity-manual \
-  examples/mithril-effect-observation-manual
-"$provider" run "$vm_name" mkdir -p "$manual_root/source" "$manual_root/bin"
-"$provider" put "$vm_name" "$archive" "$manual_root/manual-scripts.tgz"
-"$provider" run "$vm_name" sh -ec '
-  tar -xzf "$1" -C "$2"
-  ln -s /usr/local/bin/k3s "$3/crictl"
-  ln -s "$4" "$2/examples/mithril-effect-observation-manual/test-signing-key.hex"
-' sh "$manual_root/manual-scripts.tgz" "$manual_root/source" "$manual_root/bin" \
-  "$remote_root/source/examples/mithril-effect-observation-manual/test-signing-key.hex"
-rm -f -- "$archive"
-printf 'guest manual root: %s\n' "$manual_root"
-```
-
-After SSH, run `sudo -i`, set `remote_root=/var/tmp/<vm_name>`, set
-`manual_root` to the printed value, and set `script_root=$manual_root/source`.
-Export `PATH=$manual_root/bin:$PATH` and
-`MITHRIL_BIN_DIRECTORY=$remote_root/bin`. Add
-`examples/mithril-local-enforcement-manual` to the archive for a
-local-enforcement case. Copy each script directory with its helper files.
-
-### Deploy A K3s Workload And Bind Mithril
-
-This procedure creates the fresh Pod, live binding, and writable shared
-directory for `cri-file-observe.sh`. Continue only when `lsattr -v` reports a
-nonzero generation for `secret`.
-
-Run these commands in the root guest shell from
-[SSH, Mounts, And Guest Paths](#ssh-mounts-and-guest-paths).
-
-```bash
-namespace=mithril-manual-$manual_id
-fixture_root=/var/lib/mithril-manual-$manual_id
+case_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
+case_root=/var/tmp/mithril-manual-$case_id
+namespace=mithril-manual-$case_id
+fixture_root=/var/lib/mithril-manual-$case_id
 shared_directory=$fixture_root/shared
-install -d -m 0700 -- "$fixture_root" "$shared_directory"
-printf "mithril manual secret\n" >"$fixture_root/secret"
+install -d -m 0700 -- "$fixture_root" "$shared_directory" "$case_root"
+printf 'mithril manual secret\n' >"$fixture_root/secret"
 chmod 0400 -- "$fixture_root/secret"
 lsattr -v "$fixture_root/secret"
 
@@ -244,75 +161,54 @@ sed \
   -e "s|MITHRIL_MANUAL_NAMESPACE|$namespace|g" \
   -e "s|MITHRIL_MANUAL_SECRET_HOST_PATH|$fixture_root/secret|g" \
   -e "s|MITHRIL_MANUAL_SHARED_HOST_DIRECTORY|$shared_directory|g" \
-  "$script_root/examples/mithril-effect-observation-manual/k3s-cri-manual-workload-v1.yaml" \
-  >"$manual_root/workload.yaml"
+  examples/mithril-effect-observation-manual/k3s-cri-manual-workload-v1.yaml \
+  >"$case_root/workload.yaml"
 k3s kubectl create namespace "$namespace"
-k3s kubectl apply -f "$manual_root/workload.yaml"
+k3s kubectl apply -f "$case_root/workload.yaml"
 k3s kubectl -n "$namespace" wait \
   --for=condition=Ready pod/mithril-runtime --timeout=300s
-```
 
-Create the binding from this live container. Do not copy old Pod values. This
-uses the same CRI creation-time conversion as the harness.
-
-```bash
-container_ref=$(k3s kubectl \
-  -n "$namespace" get pod mithril-runtime \
+container_ref=$(k3s kubectl -n "$namespace" get pod mithril-runtime \
   -o jsonpath='{.status.containerStatuses[0].containerID}')
 container_id=${container_ref#containerd://}
-pod_uid=$(k3s kubectl \
-  -n "$namespace" get pod mithril-runtime -o jsonpath='{.metadata.uid}')
+pod_uid=$(k3s kubectl -n "$namespace" get pod mithril-runtime \
+  -o jsonpath='{.metadata.uid}')
 container_json=$(k3s crictl inspect "$container_id")
-created_at=$(jq -er '.status.createdAt' <<<"$container_json")
-generation=$(date --utc --date "$created_at" +%s%N)
+generation=$(date --utc --date "$(jq -er '.status.createdAt' <<<"$container_json")" +%s%N)
 image_digest=$(jq -er '.status.imageRef' <<<"$container_json")
-sandbox_id=$(k3s crictl ps \
-  --id "$container_id" -o json | jq -er '.containers[0].podSandboxId')
+sandbox_id=$(k3s crictl ps --id "$container_id" -o json \
+  | jq -er '.containers[0].podSandboxId')
 
 sed \
-  -e "s|/var/tmp/mithril-runtime-qualification-0|$manual_root|g" \
+  -e "s|/var/tmp/mithril-runtime-qualification-0|$case_root|g" \
   -e "s|mithril-vm-qualification|$namespace|g" \
   -e "s|MITHRIL_CONTAINER_ID|$container_id|g" \
   -e "s|MITHRIL_POD_UID|$pod_uid|g" \
   -e "s|MITHRIL_SANDBOX_ID|$sandbox_id|g" \
   -e "s|MITHRIL_IMAGE_DIGEST|$image_digest|g" \
   -e "s|\"container_generation\": 1|\"container_generation\": $generation|" \
-  "$script_root/crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json" \
-  >"$manual_root/node.json"
-```
+  crates/mithril-e2e/harness/vm/k3s-cri-effect-node-v1.json \
+  >"$case_root/node.json"
 
-### Run A Manual Test
-
-`script_root` selects the mounted or staged source. `MITHRIL_BIN_DIRECTORY`
-selects the retained harness binaries. The example below starts Mithril and
-runs the direct-CRI observe test. It must print `PASS:`.
-
-```bash
-"$script_root/examples/mithril-effect-observation-manual/cri-file-observe.sh" \
-  "$manual_root/node.json" "$container_id" /var/lib/mithril/secret \
+examples/mithril-effect-observation-manual/cri-file-observe.sh \
+  "$case_root/node.json" "$container_id" /var/lib/mithril/secret \
   "$shared_directory" /var/lib/mithril/manual-shared
 ```
 
-For another case, replace the script path and arguments with its command from
-the selected example README. The K3s guest supports CRI, Kubernetes, and raw
-namespace cases. Docker cases require a guest that runs Docker.
+The case must print `PASS:` and the Mithril cleanup line. Use this binding for
+one compatible CRI, Kubernetes, or `nsenter` example. Docker examples require
+a Docker guest.
 
-### Clean Up
-
-The script removes its Mithril node, task, pins, lease, state, and probe files.
-Retain the output, then remove the named Pod namespace and fixture root. Keep
-`$manual_root` for its command and configuration record, or destroy the guest.
+Remove the case, then remove the VM on the host:
 
 ```bash
-k3s kubectl delete namespace \
-  "$namespace" --wait=true --timeout=120s
-rm -rf -- "$fixture_root"
+k3s kubectl delete namespace "$namespace" --wait=true --timeout=120s
+rm -rf -- "$fixture_root" "$case_root"
 ```
 
-The script owns Mithril state. The operator owns the Pod, fixture, and guest.
-Reuse the guest and k3s only for sequential probes. If the loader reports
-`RetainedLsmLink`, use the original pin root or a fresh guest. Do not delete an
-unknown pinned link.
+```bash
+crates/mithril-e2e/harness/vm/manual.sh destroy
+```
 
 The current administrative lane reaches draft creation, admission, and slot
 arm. Stock runc `1.4.2` then fails closed before target exec because its sealed

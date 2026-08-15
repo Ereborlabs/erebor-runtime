@@ -4,7 +4,7 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
-Source reviewed: working tree based on commit `419bdd4`.
+Source reviewed: current working tree on `mithril-phase-2-4`.
 The BPF object loaded by the 2026-08-15 privileged VM probes has SHA-256
 `69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
 The validated architecture digest in the phase records is
@@ -37,6 +37,48 @@ The latest phase results remain:
   mount, exception, generation, and administrative paths. The final current
   VM record, administrative approval transaction, complete provenance and
   lifetime models, and branch-specific incident proofs are not complete.
+
+## Manual VM Controller
+
+Review this flow in this order:
+
+1. [`manual.sh`](../../../crates/mithril-e2e/harness/vm/manual.sh) owns one
+   local provider record. It accepts `start`, `ssh`, and `destroy`.
+2. [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh) handles
+   `--manual`. It builds the node, inspector, and policy compiler. It installs
+   K3s. It does not run the qualification probes.
+3. [`libvirt.sh`](../../../crates/mithril-e2e/harness/vm/providers/libvirt.sh)
+   creates the VM, waits for a DHCP address, mounts the source read-only, and
+   owns exact domain destruction.
+4. [`test.sh`](../../../crates/mithril-e2e/harness/vm/test.sh) checks the
+   command contract and the normal DHCP-not-ready path.
+
+```mermaid
+sequenceDiagram
+    participant O as operator
+    participant M as manual.sh
+    participant R as run.sh
+    participant V as libvirt VM
+
+    O->>M: start
+    M->>R: --manual with source mount
+    R->>V: create, mount, install K3s
+    V-->>R: K3s Ready
+    R-->>M: retained provider record
+    O->>M: ssh or destroy
+    M->>V: connect or destroy exact domain
+```
+
+The controller stores the provider record under the local XDG state directory.
+The operator does not enter a domain name or a provider work directory.
+The guest environment file sets the mounted source, the staged binaries, and
+the K3s `crictl` wrapper. Manual scripts start `mithril-node` on the guest
+host. They do not deploy Mithril into Kubernetes.
+
+This current working tree was verified in one disposable VM. The test mounted
+the source as read-only, reached K3s Ready, ran the direct-CRI observe script,
+removed its Pod and fixture, and destroyed the VM through `manual.sh`. This is
+manual workflow proof. It is not a phase qualification result.
 
 ## Current-source update — 2026-08-15
 

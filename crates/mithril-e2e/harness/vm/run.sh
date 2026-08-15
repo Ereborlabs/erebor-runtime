@@ -9,11 +9,12 @@ output_directory=
 with_k3s=false
 keep_vm=false
 skip_administrative_exec=false
+manual_vm=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--keep-vm]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--keep-vm] [--manual]" >&2
 }
 
 while (($#)); do
@@ -38,6 +39,13 @@ while (($#)); do
       ;;
     --keep-vm)
       keep_vm=true
+      shift
+      ;;
+    --manual)
+      manual_vm=true
+      with_k3s=true
+      keep_vm=true
+      skip_administrative_exec=true
       shift
       ;;
     --help|-h)
@@ -75,6 +83,10 @@ if [[ -n $source_mount ]]; then
   source_mount=$(cd -- "$source_mount" && pwd -P)
   export MITHRIL_VM_SOURCE_MOUNT=$source_mount
 fi
+[[ $manual_vm == false || -n $source_mount ]] || {
+  echo "--manual requires MITHRIL_VM_SOURCE_MOUNT" >&2
+  exit 2
+}
 
 if [[ -z $output_directory ]]; then
   output_directory=$repo_root/target/mithril-vm-test/$(date -u +%Y%m%dT%H%M%SZ)-$$
@@ -107,7 +119,7 @@ cleanup() {
     status=1
     destroy_ok=false
   fi
-  if [[ $keep_vm == true ]]; then
+  if [[ $created == true && $keep_vm == true ]]; then
     {
       printf 'vm_name=%q\nwork_directory=%q\nprovider=%q\n' \
         "$vm_name" "$work_directory" "$provider"
@@ -135,17 +147,24 @@ ssh_public_key=${MITHRIL_VM_SSH_PUBLIC_KEY:-$HOME/.ssh/id_rsa.pub}
   exit 2
 }
 
-echo "Building the repository-owned physical probes and platform inspector"
-(cd -- "$repo_root" && cargo build --locked -p mithril-e2e \
-  --bin mithril-identity-test --bin mithril-effect-test \
-  --bin mithril-kernel-qualification \
-  -p mithril-node --bin mithril-node --bin mithril-inspect \
-  -p mithril-control --bin mithril-control --bin mithril-policy \
-  --bin kubectl-mithril)
+if [[ $manual_vm == true ]]; then
+  echo "Building the Mithril binaries for the manual VM"
+  (cd -- "$repo_root" && cargo build --locked \
+    -p mithril-node --bin mithril-node --bin mithril-inspect \
+    -p mithril-control --bin mithril-policy)
+else
+  echo "Building the repository-owned physical probes and platform inspector"
+  (cd -- "$repo_root" && cargo build --locked -p mithril-e2e \
+    --bin mithril-identity-test --bin mithril-effect-test \
+    --bin mithril-kernel-qualification \
+    -p mithril-node --bin mithril-node --bin mithril-inspect \
+    -p mithril-control --bin mithril-control --bin mithril-policy \
+    --bin kubectl-mithril)
 
-qualification_build=$work_directory/kernel-qualification-build
-"$repo_root/target/debug/mithril-kernel-qualification" \
-  --repo-root "$repo_root" probe --output-directory "$qualification_build"
+  qualification_build=$work_directory/kernel-qualification-build
+  "$repo_root/target/debug/mithril-kernel-qualification" \
+    --repo-root "$repo_root" probe --output-directory "$qualification_build"
+fi
 
 "$provider" create "$vm_name" "$work_directory" "$ssh_public_key"
 created=true
@@ -154,6 +173,33 @@ created=true
 remote_root=/var/tmp/$vm_name
 remote_source=$remote_root/source
 remote_bin=$remote_root/bin
+if [[ $manual_vm == true ]]; then
+  "$provider" run "$vm_name" mkdir -p "$remote_root/harness" \
+    "$remote_root/manual-bin" "$remote_bin"
+  "$provider" put "$vm_name" "$repo_root/target/debug/mithril-node" \
+    "$remote_bin/mithril-node"
+  "$provider" put "$vm_name" "$repo_root/target/debug/mithril-inspect" \
+    "$remote_bin/mithril-inspect"
+  "$provider" put "$vm_name" "$repo_root/target/debug/mithril-policy" \
+    "$remote_bin/mithril-policy"
+  "$provider" put "$vm_name" "$directory/guest.sh" \
+    "$remote_root/harness/guest.sh"
+  "$provider" put "$vm_name" "$directory/k3s-config-v1.yaml" \
+    "$remote_root/harness/k3s-config-v1.yaml"
+  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+    k3s-install "$k3s_version" "$remote_root/harness/k3s-config-v1.yaml" \
+    "$remote_root"
+  "$provider" run "$vm_name" "sudo install -d -m 0755 -- '$remote_root/manual-bin' && \
+    sudo ln -sfn /usr/local/bin/k3s '$remote_root/manual-bin/crictl' && \
+    printf '%s\\n' 'export MITHRIL_MANUAL_SOURCE=/mnt/mithril-source' \
+      'export MITHRIL_BIN_DIRECTORY=$remote_bin' \
+      'export PATH=$remote_root/manual-bin:\$PATH' | \
+      sudo tee /var/tmp/mithril-manual.env >/dev/null && \
+    sudo chmod 0644 /var/tmp/mithril-manual.env"
+  echo "Manual VM ready. SSH, then run: sudo -i; . /var/tmp/mithril-manual.env"
+  exit 0
+fi
+
 "$provider" run "$vm_name" mkdir -p \
   "$remote_source/bpf/erebor-interceptor/qualification" \
   "$remote_source/crates/mithril-e2e/fixtures/hugging-face/platforms" \

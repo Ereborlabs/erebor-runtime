@@ -7,7 +7,7 @@ nsenter_observation_script=$directory/../../../../examples/mithril-effect-observ
 test_root=$(mktemp -d /tmp/mithril-vm-harness-test.XXXXXX)
 trap 'rm -rf -- "$test_root"' EXIT
 
-for script in "$directory/run.sh" "$directory/guest.sh" \
+for script in "$directory/run.sh" "$directory/manual.sh" "$directory/guest.sh" \
   "$directory/providers/libvirt.sh" "$directory/test.sh" \
   "$nsenter_observation_script"; do
   bash -n "$script"
@@ -17,7 +17,29 @@ help=$($directory/run.sh --help 2>&1)
 [[ $help == *--with-k3s* ]]
 [[ $help == *--skip-administrative-exec* ]]
 [[ $help == *--keep-vm* ]]
+[[ $help == *--manual* ]]
 $directory/guest.sh --help >/dev/null 2>&1
+
+set +e
+manual_without_mount=$($directory/run.sh --manual 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $manual_without_mount == "--manual requires MITHRIL_VM_SOURCE_MOUNT" ]]
+
+set +e
+manual_usage=$($directory/manual.sh 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $manual_usage == "usage: $directory/manual.sh {start|ssh|destroy}" ]]
+
+manual_state=$test_root/manual-state
+mkdir -p "$manual_state/mithril-manual-vm"
+touch "$manual_state/mithril-manual-vm/retained-vm.txt"
+set +e
+manual_existing=$(XDG_STATE_HOME=$manual_state "$directory/manual.sh" start 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $manual_existing == *"manual VM already exists"* ]]
 
 set +e
 invalid_effect_mode=$(MITHRIL_VM_CRI_EFFECT_MODE=invalid \
@@ -97,6 +119,22 @@ grep -q 'run_k3s_cri_effect OBSERVE' "$directory/run.sh"
 grep -q 'run_k3s_cri_effect PROTECT' "$directory/run.sh"
 grep -Fq 'if [[ $skip_administrative_exec == false ]]; then' "$directory/run.sh"
 grep -q 'retained-vm.txt' "$directory/run.sh"
+grep -Fq 'manual_vm=false' "$directory/run.sh"
+grep -Fq -- '--manual requires MITHRIL_VM_SOURCE_MOUNT' "$directory/run.sh"
+grep -Fq 'if [[ $created == true && $keep_vm == true ]]; then' "$directory/run.sh"
+grep -Fq -- '-p mithril-control --bin mithril-policy' "$directory/run.sh"
+grep -Fq 'k3s-install "$k3s_version"' "$directory/run.sh"
+grep -Fq '/var/tmp/mithril-manual.env' "$directory/run.sh"
+grep -Fq 'MITHRIL_VM_SOURCE_MOUNT="$repo_root" "$run" --manual' \
+  "$directory/manual.sh"
+grep -Fq 'exec "$provider" ssh "$vm_name"' "$directory/manual.sh"
+grep -Fq '"$provider" destroy "$vm_name" "$work_directory"' \
+  "$directory/manual.sh"
+grep -Fq 'crates/mithril-e2e/harness/vm/manual.sh start' "$directory/README.md"
+grep -Fq 'crates/mithril-e2e/harness/vm/manual.sh ssh' "$directory/README.md"
+grep -Fq 'crates/mithril-e2e/harness/vm/manual.sh destroy' "$directory/README.md"
+grep -Fq '. /var/tmp/mithril-manual.env' "$directory/README.md"
+! grep -Fq 'Replace `<vm_name>`' "$directory/README.md"
 grep -q 'MITHRIL_VM_KEEP_FAILURE_STATE=true' "$directory/run.sh"
 grep -Fq 'MITHRIL_VM_SOURCE_MOUNT must be an existing absolute directory' \
   "$directory/run.sh"
@@ -106,6 +144,7 @@ grep -Fq 'source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}' \
   "$directory/providers/libvirt.sh"
 grep -Fq 'print $4; found = 1} END {exit !found}' \
   "$directory/providers/libvirt.sh"
+grep -Fq 'ip=$(address "$name" || true)' "$directory/providers/libvirt.sh"
 grep -Fq 'readonly=on' "$directory/providers/libvirt.sh"
 grep -Fq 'mount -t 9p -o trans=virtio,version=9p2000.L,ro' \
   "$directory/providers/libvirt.sh"

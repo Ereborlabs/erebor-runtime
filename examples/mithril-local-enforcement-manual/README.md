@@ -2,11 +2,10 @@
 
 ## Manual Testing In A VM
 
-Use the [retained-VM procedure](../../crates/mithril-e2e/harness/vm/README.md#deploy-a-k3s-workload-and-bind-mithril).
-It creates the Pod and live binding. Create the selected script's fixture, then
-run this directory as root from `/mnt/mithril-source`. Each command starts and
-removes Mithril. The K3s VM supports CRI and raw-namespace cases; Docker cases
-require Docker.
+Use the [manual VM](../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-vm).
+In the guest, run `sudo -i`, source `/var/tmp/mithril-manual.env`, and change
+to `$MITHRIL_MANUAL_SOURCE`. The manual VM supports CRI and raw-namespace
+cases. Docker cases require Docker.
 
 ## Operator Cases
 
@@ -17,7 +16,7 @@ task to release the test. The trap removes Mithril-owned BPF pins, leases,
 child processes, mounts, sockets, FIFOs, and temporary files on success,
 failure, or interruption. It leaves the supplied container and cgroup intact.
 
-Build once:
+Outside the manual VM, build once:
 
 ```sh
 cargo build -p mithril-node --bins -p mithril-control --bin mithril-policy \

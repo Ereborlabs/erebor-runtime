@@ -5,15 +5,14 @@ commands for manually invoking the automated e2e runner.
 
 ## Manual Testing In A VM
 
-Use the [VM and SSH steps](../../crates/mithril-e2e/harness/vm/README.md#ssh-mounts-and-guest-paths)
-and the [K3s binding steps](../../crates/mithril-e2e/harness/vm/README.md#deploy-a-k3s-workload-and-bind-mithril).
-Run this script directory as root from `/mnt/mithril-source`. Each command
-starts and removes Mithril. The K3s VM supports CRI, Kubernetes, and
-raw-namespace cases; Docker cases require Docker.
+Use the [manual VM](../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-vm).
+In the guest, run `sudo -i`, source `/var/tmp/mithril-manual.env`, and change
+to `$MITHRIL_MANUAL_SOURCE`. The manual VM supports CRI, Kubernetes, and
+raw-namespace cases. Docker cases require Docker.
 
 ## Operator Cases
 
-Build the real node and inspector once:
+Outside the manual VM, build the real node and inspector once:
 
 ```bash
 cargo build -p mithril-node --bins

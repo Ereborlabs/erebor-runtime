@@ -151,7 +151,7 @@ case ${1:-} in
       if [[ $(virsh -c "$connection" domstate "$name" 2>/dev/null) == "shut off" ]]; then
         virsh -c "$connection" start "$name" >/dev/null
       fi
-      ip=$(address "$name")
+      ip=$(address "$name" || true)
       if [[ -n $ip ]]; then
         mapfile -t options < <(ssh_options)
         if ssh "${options[@]}" "$ssh_user@$ip" \

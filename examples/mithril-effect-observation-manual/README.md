@@ -2,10 +2,10 @@
 
 ## Manual Testing In A VM
 
-Use the [retained-VM procedure](../../crates/mithril-e2e/harness/vm/README.md#deploy-a-k3s-workload-and-bind-mithril).
-It creates the Pod, binding, and shared directory. Run this script directory as
-root from `/mnt/mithril-source`. Each command starts and removes Mithril. The
-K3s VM supports CRI and raw-namespace cases; Docker cases require Docker.
+Use the [manual VM](../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-vm).
+In the guest, run `sudo -i`, source `/var/tmp/mithril-manual.env`, and change
+to `$MITHRIL_MANUAL_SOURCE`. The manual VM supports CRI and raw-namespace
+cases. Docker cases require Docker.
 
 ## Operator Cases
 
@@ -22,7 +22,7 @@ state with the signed observe candidate. This is deliberate: starting `docker
 exec` after activation would first test the new executable itself, not the
 requested file or network effect.
 
-Build once:
+Outside the manual VM, build once:
 
 ```sh
 cargo build -p mithril-node --bins -p mithril-control --bin mithril-policy
