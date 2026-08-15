@@ -20,6 +20,7 @@ Then run only the case being checked:
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
 | Moved native-child exec | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --moved-exec` |
+| Pre-PONR failed native exec | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --failed-exec` |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
@@ -130,6 +131,37 @@ labeled task that leaves its expected placement does not use host exec policy.
 
 This procedure is an operator check for `ID-MOVED-TASK-EXEC-005`. It is not a
 qualified VM result.
+
+## Pre-PONR Failed Native-Exec Check
+
+Run this check only when the selected workload has `/bin/bash`, `python3`, and
+a dynamically linked `/bin/true`:
+
+```bash
+sudo examples/mithril-identity-manual/native-child.sh \
+  NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --failed-exec
+```
+
+The script prints a root Bash command and one paste block. The block copies
+`/bin/true`, changes one byte in its ELF loader path to an equal-length invalid
+path, and starts a stopped native Bash child. This causes an ELF loader failure
+after exec preparation and before exec commit. It does not use a missing
+pathname or a shell script failure.
+
+Enter the host PID of the printed root Bash session and its stopped child. The
+script records their task identities. Resume the child once. Wait for
+`MITHRIL_EXECFAIL_RECOVERED`, then let the script inspect it again. The task,
+creator, execution ID, image ID, and role must remain unchanged. The exec guard
+must be `0`.
+
+Resume the child a second time. It must become `sleep`. The task, creator, and
+role must remain unchanged. The execution ID and image ID must change. End the
+child when the script asks. The remote Bash session removes its exact temporary
+`execfail` file and prints `MITHRIL_EXECFAIL_CLEANED`.
+
+This procedure covers one pre-PONR failure followed by one normal exec commit
+for `EXEC-COMMIT-STATE-001`. It does not cover post-PONR fatal handling,
+concurrent exec, map saturation, or a qualified VM result.
 
 Every executable starts the real `mithril-node`, performs one operator-driven
 case, and removes its test tasks, BPF pins, lease, temporary config, state, and

@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 source "$(dirname "$0")/identity-runtime.sh"
 
-[[ $# -eq 2 || ($# -eq 3 && (${3:-} == --orphan || ${3:-} == --double-fork || ${3:-} == --moved-exec)) ]] || {
-  echo "usage: sudo $0 NODE_CONFIG DOCKER_CONTAINER_OR_FULL_CRI_ID [--orphan|--double-fork|--moved-exec]" >&2
+[[ $# -eq 2 || ($# -eq 3 && (${3:-} == --orphan || ${3:-} == --double-fork || ${3:-} == --moved-exec || ${3:-} == --failed-exec)) ]] || {
+  echo "usage: sudo $0 NODE_CONFIG DOCKER_CONTAINER_OR_FULL_CRI_ID [--orphan|--double-fork|--moved-exec|--failed-exec]" >&2
   exit 2
 }
 
@@ -168,6 +168,153 @@ if [[ ${3:-} == --moved-exec ]]; then
     exit 1
   }
   identity_pass "PASS: a moved native child kept its identity and its exec was denied."
+  exit 0
+fi
+
+if [[ ${3:-} == --failed-exec ]]; then
+  echo "This check requires /bin/bash, python3, and a dynamically linked /bin/true in the workload."
+  echo "Run this in another root terminal:"
+  if [[ $identity_mode == docker ]]; then
+    printf '  docker exec %q /bin/bash\n' "$identity_container"
+  else
+    printf '  crictl --runtime-endpoint %q exec %q /bin/bash\n' \
+      "$identity_runtime_endpoint" "$identity_container_id"
+  fi
+  cat <<'EOF'
+Paste this block into that Bash session. Do not change the block.
+
+execfail=/tmp/mithril-execfail-$RANDOM-$RANDOM
+python3 - "$execfail" <<'PY'
+from pathlib import Path
+import sys
+
+image = bytearray(Path("/bin/true").read_bytes())
+for loader in (
+    b"/lib64/ld-linux-x86-64.so.2\x00",
+    b"/lib/ld-linux-aarch64.so.1\x00",
+    b"/lib/ld-linux-armhf.so.3\x00",
+    b"/lib/ld-linux-riscv64-lp64d.so.1\x00",
+):
+    offset = image.find(loader)
+    if offset >= 0:
+        image[offset + 1] = ord("z")
+        Path(sys.argv[1]).write_bytes(image)
+        break
+else:
+    raise SystemExit("/bin/true has no supported ELF loader path")
+PY
+chmod 700 "$execfail"
+bash -c '
+  read child_pid _ < /proc/self/stat
+  kill -STOP "$child_pid"
+  shopt -s execfail
+  exec "$0"
+  printf "%s\n" MITHRIL_EXECFAIL_RECOVERED
+  kill -STOP "$child_pid"
+  exec /bin/sleep 300
+' "$execfail" &
+wait "$!"
+rm -f -- "$execfail"
+printf '%s\n' MITHRIL_EXECFAIL_CLEANED
+EOF
+  echo "Enter that Bash session host PID, then its first stopped Bash child host PID."
+  identity_read_host_pid "shell host PID: "
+  parent_pid=$identity_read_pid
+  identity_read_host_pid "stopped native child host PID: "
+  child_pid=$identity_read_pid
+  grep -q $'^State:\tT' "/proc/$child_pid/status" || {
+    echo "native child is not stopped before the ELF loader failure" >&2
+    exit 1
+  }
+  identity_inspect_task failed-exec-parent "$parent_pid"
+  identity_inspect_task failed-exec-child-before "$child_pid"
+
+  parent_cookie=$(jq -er '.task_cookie' "$identity_work/failed-exec-parent.json")
+  child_cookie=$(jq -er '.task_cookie' "$identity_work/failed-exec-child-before.json")
+  child_execution=$(jq -er '.active_execution_id' "$identity_work/failed-exec-child-before.json")
+  child_image=$(jq -er '.image_provenance_id' "$identity_work/failed-exec-child-before.json")
+  child_role=$(jq -er '.active_role_id' "$identity_work/failed-exec-child-before.json")
+  identity_assert_external "$identity_work/failed-exec-parent.json"
+  jq -e --argjson parent_cookie "$parent_cookie" \
+    --argjson child_cookie "$child_cookie" \
+    '.task_cookie == $child_cookie
+     and .creator_task_cookie == $parent_cookie
+     and .real_parent_task_cookie == $parent_cookie
+     and .root_class == null
+     and .installed_role_class == null
+     and .process_execution_state == 2
+     and .process_state_vector_state == 2
+     and .exec_guard_state == 0' \
+    "$identity_work/failed-exec-child-before.json" >/dev/null
+
+  echo "In the other root terminal, run: kill -CONT $child_pid"
+  read -r -p "Press Enter after that terminal prints MITHRIL_EXECFAIL_RECOVERED: " _
+  grep -q $'^State:\tT' "/proc/$child_pid/status" || {
+    echo "native child did not stop after the ELF loader failure" >&2
+    exit 1
+  }
+  [[ $(tr -d '\n' </proc/$child_pid/comm 2>/dev/null || true) == bash ]] || {
+    echo "native child did not return to Bash after the ELF loader failure" >&2
+    exit 1
+  }
+  identity_inspect_task failed-exec-child-after-failure "$child_pid"
+  jq -e --argjson parent_cookie "$parent_cookie" \
+    --argjson child_cookie "$child_cookie" \
+    --arg child_execution "$child_execution" \
+    --arg child_image "$child_image" \
+    --argjson child_role "$child_role" \
+    '.task_cookie == $child_cookie
+     and .creator_task_cookie == $parent_cookie
+     and .real_parent_task_cookie == $parent_cookie
+     and .active_execution_id == $child_execution
+     and .image_provenance_id == $child_image
+     and .active_role_id == $child_role
+     and .root_class == null
+     and .installed_role_class == null
+     and .process_execution_state == 2
+     and .process_state_vector_state == 2
+     and .exec_guard_state == 0' \
+    "$identity_work/failed-exec-child-after-failure.json" >/dev/null
+
+  echo "In the other root terminal, run: kill -CONT $child_pid"
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ $(tr -d '\n' </proc/$child_pid/comm 2>/dev/null || true) == sleep ]] && break
+    sleep 0.1
+  done
+  [[ $(tr -d '\n' </proc/$child_pid/comm 2>/dev/null || true) == sleep ]] || {
+    echo "native child did not exec sleep after the pre-PONR failure" >&2
+    exit 1
+  }
+  identity_inspect_task failed-exec-child-after-success "$child_pid"
+  jq -e --argjson parent_cookie "$parent_cookie" \
+    --argjson child_cookie "$child_cookie" \
+    --arg child_execution "$child_execution" \
+    --arg child_image "$child_image" \
+    --argjson child_role "$child_role" \
+    '.task_cookie == $child_cookie
+     and .creator_task_cookie == $parent_cookie
+     and .real_parent_task_cookie == $parent_cookie
+     and .active_execution_id != $child_execution
+     and .image_provenance_id != $child_image
+     and .active_role_id == $child_role
+     and .root_class == null
+     and .installed_role_class == null
+     and .process_execution_state == 2
+     and .process_state_vector_state == 2
+     and .exec_guard_state == 0' \
+    "$identity_work/failed-exec-child-after-success.json" >/dev/null
+
+  echo "In the other root terminal, run: kill -TERM $child_pid"
+  read -r -p "Press Enter after that terminal prints MITHRIL_EXECFAIL_CLEANED: " _
+  for ((attempt = 0; attempt < 50; attempt++)); do
+    [[ ! -d /proc/$child_pid ]] && break
+    sleep 0.1
+  done
+  [[ ! -d /proc/$child_pid ]] || {
+    echo "native child did not exit after cleanup" >&2
+    exit 1
+  }
+  identity_pass "PASS: a pre-PONR ELF loader failure kept the source identity and a later exec committed."
   exit 0
 fi
 

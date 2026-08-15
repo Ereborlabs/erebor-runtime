@@ -7,7 +7,7 @@ until their exact qualification environment is run.
 | Fixture | Operator action | Required oracle and legitimate control |
 | --- | --- | --- |
 | `AUTHORIZATION-REPLAY-004` | Replay, retarget, expire, reboot, and mismatch a signed authorization. | Every invalid envelope rejects; a fresh exact envelope consumes according to contract. |
-| `EXEC-COMMIT-STATE-001` | Run successful exec, pre-PONR failure, and post-PONR fatal/unknown exec. | Success commits once; early failure keeps exact prior state; later failure never restores broader authority. |
+| `EXEC-COMMIT-STATE-001` | Run successful exec, pre-PONR failure, and post-PONR fatal/unknown exec. Run the pre-PONR branch with [`native-child.sh --failed-exec`](./native-child.sh). | Success commits once; early failure keeps exact prior state; later failure never restores broader authority. The procedure does not cover the post-PONR branch. |
 | `EXEC-CONCURRENT-002` | Race execs across threads and non-leader de-threading. | One serialized valid transition occurs; image and role state never mix. |
 | `ID-CGROUP-ESCAPE-001` | Move a labeled task to host/unprotected placement. | Task storage still resolves and constrains the mismatch; an unmoved control works. |
 | `ID-CLONE-CGROUP-002` | Clone into expected and changed placement. | Child state exists before its first effect and placement is verified. |
