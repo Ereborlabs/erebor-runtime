@@ -83,6 +83,38 @@ is qualified evidence for the double-fork branch of
 `ID-CREATOR-PARENT-007` only. It does not cover subreapers, namespace-init or
 ptrace reparenting, or PID reuse. The phase remains **Blocked**.
 
+Moved-parent fork VM record, 2026-08-15: the isolated physical probe passed
+at source commit `bd48b5a474273510c92611fa90285632883d13cb`. The copied
+`mithril-identity-test` binary SHA-256 was
+`5bf7300dc74ff6792727210a3d4907dfb50cf1fe32ca855ab40f2db815c288d1`. The
+result JSON is
+`/tmp/mithril-phase2-moved-parent-bd48b5a47427/identity-physical-probe.json`.
+Its SHA-256 is
+`82a525950ccf1a78d8be29307f2cf479eb28901a016d48e9404bdece982f3216`.
+
+The repaired normal native child had task cookie `28`. Its active execution
+changed from `0000000000000001000000000000001d` to
+`00000000000000010000000000000023`. Its image provenance changed from
+`0000000000000001000000000000001b` to
+`00000000000000010000000000000024`. Both snapshots were active and the final
+exec guard was none.
+
+The runner moved its labeled parent into the parent cgroup, observed the
+fail-closed state, and resumed it. The ordinary `fork` exited with `EACCES`.
+The fixture rejected a visible child. The runner also required a second
+placement-mismatch increment. The JSON records
+`moved_parent_fork_denied=true` and
+`cgroup_escape_placement_mismatch_detected=true`.
+
+The JSON records `map_ids_stable_across_restart=true`,
+`profile_task_refs_after_exit=0`, and
+`live_manifest_mismatch_detected=true`. Its pin-root, lease, and cgroup cleanup
+fields are true. Postflight found those dedicated paths absent.
+
+This qualifies `ID-MOVED-PARENT-FORK-004` only. A readable manual script was
+not added. It cannot reproduce the fixture-controlled cgroup move without
+creating a separate runtime. The phase remains **Blocked**.
+
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured
