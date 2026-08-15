@@ -74,7 +74,8 @@ fn reconcile_mount_views_until_clean(
             Instant::now() < deadline,
             InvalidInputSnafu {
                 path: Path::new("mount_security_views"),
-                reason: "mount reconciliation did not restore clean views before a retained-descriptor check",
+                reason:
+                    "mount reconciliation did not restore clean views before an exact-effect check",
             }
         );
         std::thread::sleep(Duration::from_millis(25));
@@ -2306,6 +2307,7 @@ impl EffectTestRunner {
             }
         );
 
+        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
         let original_marker = observations.cursor();
         let original = fixture.open(&paths.secret)?;
         if original.allowed == protect {
@@ -2386,7 +2388,18 @@ impl EffectTestRunner {
                         ),
                     }
                 );
-                wait_for_reason(&reader, &observations, marker, "EXACT_POLICY_DENY")?;
+                wait_for_exact_effect(
+                    &reader,
+                    &observations,
+                    marker,
+                    "EXACT_POLICY_DENY",
+                    (
+                        KernelEffectFamilyV1::File,
+                        KernelEffectOperationV1::OpenRead,
+                    ),
+                    EXACT_OBJECT_KEY_ID,
+                    None,
+                )?;
             }
         }
 
@@ -2398,7 +2411,7 @@ impl EffectTestRunner {
                 reason: "symlink resolution changed the exact object decision",
             }
         );
-        wait_for_reason(
+        wait_for_exact_effect(
             &reader,
             &observations,
             symlink_marker,
@@ -2407,6 +2420,12 @@ impl EffectTestRunner {
             } else {
                 "WOULD_DENY"
             },
+            (
+                KernelEffectFamilyV1::File,
+                KernelEffectOperationV1::OpenRead,
+            ),
+            EXACT_OBJECT_KEY_ID,
+            None,
         )?;
 
         if protect {
@@ -2420,7 +2439,18 @@ impl EffectTestRunner {
                     reason: "a proc-fd alias bypassed the exact object denial",
                 }
             );
-            wait_for_reason(&reader, &observations, proc_fd_marker, "EXACT_POLICY_DENY")?;
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                proc_fd_marker,
+                "EXACT_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+                EXACT_OBJECT_KEY_ID,
+                None,
+            )?;
 
             reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
             let passed_secret_marker = observations.cursor();
