@@ -54,7 +54,9 @@ replay, expiry, disconnect, and contention cases.
 
 The administrative lane sets the k3s API audience to
 `mithril-administrative-exec`. Control verifies the same audience in each
-TokenReview. Do not use a different audience for this test.
+TokenReview. Kubernetes can repeat TokenReview while it completes one CONNECT.
+The credential remains valid through its expiry, but Control accepts only the
+original admission request. Do not use a different audience for this test.
 
 The lanes remove their namespaces, files, node and Control state, sockets,
 leases, temporary trust, webhooks, RBAC, and BPF pins. The runtime probes then

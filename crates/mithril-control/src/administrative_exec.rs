@@ -573,6 +573,7 @@ fn credential_authentication_is_open(state: &ApprovalRecordState) -> bool {
         ApprovalRecordState::Approved
             | ApprovalRecordState::Authenticated
             | ApprovalRecordState::Arming { .. }
+            | ApprovalRecordState::Committed { .. }
     )
 }
 
@@ -1162,14 +1163,14 @@ mod tests {
     use crate::AdministrativeExecRequestV1;
 
     #[test]
-    fn administrative_credential_closes_after_commit() {
+    fn administrative_credential_stays_open_for_the_committed_admission() {
         assert!(credential_authentication_is_open(
             &ApprovalRecordState::Approved
         ));
         assert!(credential_authentication_is_open(
             &ApprovalRecordState::Authenticated
         ));
-        assert!(!credential_authentication_is_open(
+        assert!(credential_authentication_is_open(
             &ApprovalRecordState::Committed {
                 admission_uid: vec![1],
                 result: Default::default(),
@@ -1178,6 +1179,23 @@ mod tests {
         assert!(!credential_authentication_is_open(
             &ApprovalRecordState::Closed
         ));
+    }
+
+    #[test]
+    fn committed_admission_accepts_only_its_original_request() {
+        let source = include_str!("administrative_exec.rs");
+        let committed = source
+            .split("if let ApprovalRecordState::Committed")
+            .nth(1)
+            .and_then(|source| source.split("ensure!(").next())
+            .unwrap_or_default();
+        let guard = source
+            .split("administrative approval was committed to another admission request")
+            .next()
+            .unwrap_or_default();
+
+        assert!(committed.contains("admission_uid"));
+        assert!(guard.contains("admission_uid == &target.admission_uid"));
     }
 
     #[test]
