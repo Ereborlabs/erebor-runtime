@@ -47,6 +47,9 @@ grep -q '^        path: /var/lib/mithril-vm-qualification/secret$' \
   "$directory/k3s-workload-v1.yaml"
 grep -q '^        path: /var/lib/mithril-vm-qualification/benign$' \
   "$directory/k3s-workload-v1.yaml"
+grep -Fq ': >"$fixture_root/release"' "$directory/guest.sh"
+grep -q 'empty direct CRI release fixture is not visible through the workload root' \
+  "$directory/guest.sh"
 grep -q '^    # This token checks only the projected-token mount at Pod startup\.$' \
   "$directory/k3s-workload-v1.yaml"
 grep -q '^    # It is not an exact-file enforcement fixture\.$' \
