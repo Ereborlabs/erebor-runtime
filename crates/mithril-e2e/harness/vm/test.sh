@@ -109,7 +109,8 @@ grep -q 'CRI_EXACT_DENIED' "$directory/guest.sh"
 ! grep -q 'cri_release_file' "$directory/guest.sh"
 ! grep -q 'cri_release_fd_open' "$directory/guest.sh"
 grep -Fq 'kill -STOP $$' "$directory/guest.sh"
-grep -Fq 'kill -CONT "$cri_host_pid"' "$directory/guest.sh"
+grep -Fq 'nsenter -t "$init_pid" -U -p -- kill -CONT "$cri_namespace_pid"' \
+  "$directory/guest.sh"
 grep -q 'direct CRI exec is not stopped before signed recovery' \
   "$directory/guest.sh"
 grep -q 'cri_baseline_file=\$cri_state/baseline' "$directory/guest.sh"

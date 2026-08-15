@@ -670,7 +670,7 @@ case ${1:-} in
       exit 1
     }
 
-    kill -CONT "$cri_host_pid"
+    nsenter -t "$init_pid" -U -p -- kill -CONT "$cri_namespace_pid"
     printf '1\n' >&9 || true
     exec 8>&-
     result_fd_open=false
