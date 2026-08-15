@@ -198,7 +198,7 @@ identity_start_node() {
   "$identity_node" --config "$identity_config" >>"$identity_work/mithril-node.log" 2>&1 &
   identity_node_pid=$!
 
-  for ((attempt = 0; attempt < 100; attempt++)); do
+  for ((attempt = 0; attempt < 600; attempt++)); do
     # This final attached link signals that all map and link pins are ready.
     [[ -d $identity_pin_root/maps \
       && -e $identity_pin_root/links/erebor_sched_process_exit ]] && return 0
@@ -209,7 +209,7 @@ identity_start_node() {
     fi
     sleep 0.1
   done
-  echo "mithril-node did not publish its pins within 10 seconds" >&2
+  echo "mithril-node did not publish its pins within 60 seconds" >&2
   tail -n 30 "$identity_work/mithril-node.log" >&2
   return 1
 }
