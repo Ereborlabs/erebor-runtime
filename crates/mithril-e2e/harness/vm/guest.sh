@@ -672,6 +672,10 @@ case ${1:-} in
     cleanup_administrative_exec() {
       local status=$?
       trap - EXIT
+      if [[ $status -ne 0 && ${MITHRIL_VM_KEEP_FAILURE_STATE:-false} == true ]]; then
+        echo "administrative failure state retained in $lane_root" >&2
+        exit "$status"
+      fi
       set +e
       stop_process "$plugin_pid"
       stop_process "$runtime_client_pid"

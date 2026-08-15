@@ -210,7 +210,11 @@ if [[ $with_k3s == true ]]; then
     >"$k3s_cri_effect_partial"
   mv -- "$k3s_cri_effect_partial" "$output_directory/k3s-cri-effect.txt"
   k3s_administrative_partial=$output_directory/k3s-administrative-exec.txt.partial
-  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
+  administrative_command=(sudo)
+  if [[ $keep_vm == true ]]; then
+    administrative_command=(sudo env MITHRIL_VM_KEEP_FAILURE_STATE=true)
+  fi
+  "$provider" run "$vm_name" "${administrative_command[@]}" bash "$remote_root/harness/guest.sh" \
     k3s-administrative-exec "$remote_bin/mithril-control" \
     "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
     "$remote_bin/mithril-policy" "$remote_bin/kubectl-mithril" \

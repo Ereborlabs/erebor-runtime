@@ -51,6 +51,8 @@ grep -q 'kernel-qualification-x86_64.json' "$directory/run.sh"
 grep -q 'k3s-cri-effect.txt' "$directory/run.sh"
 grep -q 'k3s-administrative-exec.txt' "$directory/run.sh"
 grep -q 'retained-vm.txt' "$directory/run.sh"
+grep -q 'MITHRIL_VM_KEEP_FAILURE_STATE=true' "$directory/run.sh"
+grep -q 'administrative failure state retained' "$directory/guest.sh"
 grep -q 'k3s-administrative-policy-v1.yaml' "$directory/run.sh"
 grep -q '^  desired_profile_mode: PROTECT$' \
   "$directory/k3s-administrative-policy-v1.yaml"

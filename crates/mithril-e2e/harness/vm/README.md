@@ -103,7 +103,9 @@ crates/mithril-e2e/harness/vm/providers/libvirt.sh destroy <vm_name> <work_direc
 ```
 
 Use the two values from `retained-vm.txt`. Without `--keep-vm`, the default
-cleanup remains unchanged.
+cleanup remains unchanged. If the administrative lane fails with `--keep-vm`,
+the guest also keeps its lane directory and BPF pins. Inspect that state before
+you start another administrative lane.
 
 The host compiles the disposable kernel qualification object with the existing
 repository compiler. The guest loads that exact object. The record command
