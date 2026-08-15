@@ -118,6 +118,10 @@ the physical negative oracle for every advertised deny.
 
 ## Troubleshooting
 
+- If `kubectl-mithril` exits before it prints an activation URL, keep its
+  terminal output. It prints the Control HTTP response body after a rejected
+  draft. Use that result to correct the exact binding, policy, or mount-view
+  state. Do not retry through raw `kubectl exec`.
 - An event saying `deny` without errno and physical absence does not pass.
 - A failed physical operation still consumes a bounded exception when safe
   refund cannot be proved.
