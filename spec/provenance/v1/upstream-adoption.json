@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "dossier_id": "UPSTREAM-ADOPTION-V1",
+  "snapshots": [
+    {
+      "project": "AGENTSIGHT",
+      "directory": "agentsight",
+      "repository": "https://github.com/eunomia-bpf/agentsight",
+      "commit": "14e561a27dccaf1e33f42836d1cdbe808718bde6",
+      "license_path": "LICENSE",
+      "license_sha256": "6e717eac56fc03070c8d186d95b0f22994016eb69ee0af243194ad8c3ce84c0b"
+    },
+    {
+      "project": "KUBEARMOR",
+      "directory": "KubeArmor",
+      "repository": "https://github.com/kubearmor/KubeArmor",
+      "commit": "e46f112e8bd4d3c8c8a73c23bfe438ff40eeea1a",
+      "license_path": "LICENSE",
+      "license_sha256": "cd7dd3ca7366fe52430d9e6f168bde8d850786efaa91c1777ccff4972d52a79b"
+    },
+    {
+      "project": "TETRAGON",
+      "directory": "tetragon",
+      "repository": "https://github.com/cilium/tetragon",
+      "commit": "dbb59576f9ce504c044f8d9a0cd7a0f91c71ae2c",
+      "license_path": "LICENSE",
+      "license_sha256": "f096c31ac0fb2e66df5b7ec20049741ae15accd50c8cd4d100b4db6c9353f6aa"
+    },
+    {
+      "project": "BPFJAILER",
+      "directory": "jailer",
+      "repository": "https://github.com/gen0sec/jailer",
+      "commit": "3ffc155512b8be4296842c2f0c2c47f8d3407694",
+      "license_path": "LICENSE",
+      "license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    }
+  ],
+  "records": [
+    {
+      "adoption_id": "META-MOUNT-ROOT-001",
+      "project": "META_BPFJAILER_DECK",
+      "classification": "context_only",
+      "source": "BpfJailer LPC 2025.pdf; slides 16-21",
+      "source_sha256": "81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6",
+      "license_decision": "NO_PUBLIC_SOURCE_OR_REUSE_LICENSE_IDENTIFIED",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_e2e::prototype::MountGraph",
+      "semantic_differences": "Presentation evidence only; the owned prototype uses exact live mount identities and never copies slide implementation material.",
+      "hostile_fixture_id": "MOUNT-SNAPSHOT-004"
+    },
+    {
+      "adoption_id": "META-OLDEST-MOUNT-002",
+      "project": "META_BPFJAILER_DECK",
+      "classification": "context_only",
+      "source": "BpfJailer LPC 2025.pdf; slides 16-21",
+      "source_sha256": "81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6",
+      "license_decision": "NO_PUBLIC_SOURCE_OR_REUSE_LICENSE_IDENTIFIED",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_e2e::prototype::MountGraph",
+      "semantic_differences": "Canonicalization selects the oldest tracked mount identity and explicitly reports the ordinary-subdirectory limitation.",
+      "hostile_fixture_id": "MOUNT-CAS-002"
+    },
+    {
+      "adoption_id": "META-COMPONENT-GRAPH-003",
+      "project": "META_BPFJAILER_DECK",
+      "classification": "reimplemented",
+      "source": "BpfJailer LPC 2025.pdf; slides 16-21",
+      "source_sha256": "81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6",
+      "license_decision": "CLEAN_ROOM_FROM_PUBLIC_DESIGN_DESCRIPTION",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_e2e::prototype::ComponentGraph",
+      "semantic_differences": "Owned bounded graph rejects overflow and ambiguous terminal wildcard results instead of truncating to allow.",
+      "hostile_fixture_id": "SOURCE-KA-BOUNDS-004"
+    },
+    {
+      "adoption_id": "META-MUTATION-DIRTY-004",
+      "project": "META_BPFJAILER_DECK",
+      "classification": "reimplemented",
+      "source": "BpfJailer LPC 2025.pdf; slides 16-21",
+      "source_sha256": "81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6",
+      "license_decision": "CLEAN_ROOM_FROM_PUBLIC_DESIGN_DESCRIPTION",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_e2e::prototype::MountGraph",
+      "semantic_differences": "Every mutation enters DIRTY before effect and requires a complete snapshot to return ACTIVE.",
+      "hostile_fixture_id": "MOUNT-ATTR-001"
+    },
+    {
+      "adoption_id": "META-VERIFIER-BUDGET-005",
+      "project": "META_BPFJAILER_DECK",
+      "classification": "context_only",
+      "source": "BpfJailer LPC 2025.pdf; slides 16-21",
+      "source_sha256": "81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6",
+      "license_decision": "NO_PUBLIC_SOURCE_OR_REUSE_LICENSE_IDENTIFIED",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_e2e::capability::BpfPrototypeCompiler",
+      "semantic_differences": "Budgets are measured per generated owned hook object; slide values never become a platform claim.",
+      "hostile_fixture_id": "SOURCE-KA-STACK-PER-HOOK-002"
+    },
+    {
+      "adoption_id": "BJ-TASK-STORAGE-001",
+      "project": "BPFJAILER",
+      "classification": "reimplemented",
+      "source": "bpfjailer-bpf/src/main.bpf.c:23-31,486-510",
+      "source_sha256": "f378a71e2bdfc65ca920f16ed30495c12938592075516f15a0f799a43c0737e2",
+      "license_decision": "FILE_HAS_NO_SPDX; TOP_LEVEL_APACHE_2_0_AND_KERNEL_GPL_STRING_DO_NOT_AUTHORIZE_COPYING; REIMPLEMENT_ONLY",
+      "transitive_dependencies": [],
+      "local_owner": "bpf/erebor-interceptor/programs/identity.bpf.c; erebor_interceptor_abi::TaskLabelV1",
+      "semantic_differences": "Production task storage installs bounded identity in task_alloc, finalizes coordinates pre-wake, and makes protected allocation or finalization failure fail closed.",
+      "hostile_fixture_id": "ID-CLONE-CGROUP-FAIL-003"
+    },
+    {
+      "adoption_id": "BJ-REJECTED-ENROLLMENT-002",
+      "project": "BPFJAILER",
+      "classification": "do_not_inherit",
+      "source": "bpfjailer-bpf/src/main.bpf.c:58-64,466-483,515-526",
+      "source_sha256": "f378a71e2bdfc65ca920f16ed30495c12938592075516f15a0f799a43c0737e2",
+      "license_decision": "NO_SOURCE_REUSE",
+      "transitive_dependencies": [],
+      "local_owner": "bpf/erebor-interceptor/programs/identity.bpf.c",
+      "semantic_differences": "Pending-PID enrollment and dentry-only inode-cache authority are rejected; no compatibility mode exists.",
+      "hostile_fixture_id": "ID-CGROUP-ESCAPE-001"
+    },
+    {
+      "adoption_id": "KA-LSM-DECISION-001",
+      "project": "KUBEARMOR",
+      "classification": "reimplemented",
+      "source": "KubeArmor/BPF/enforcer.bpf.c:10-808",
+      "source_sha256": "66d963a32179edc5a2a8af7c7d7ae243639404cf4596e4f800f5cf93d70be975",
+      "license_decision": "SOURCE_SPDX_GPL_2_0; OWNED CLEAN_ROOM PROGRAM; NO COPIED RANGE",
+      "transitive_dependencies": [],
+      "local_owner": "bpf/erebor-interceptor/programs/identity.bpf.c",
+      "semantic_differences": "The production identity gate preserves prior LSM denial and denies protected first effects on missing, stale, moved, or incomplete task-first state.",
+      "hostile_fixture_id": "SOURCE-KA-READER-LOSS-003"
+    },
+    {
+      "adoption_id": "KA-POLICY-PUBLICATION-002",
+      "project": "KUBEARMOR",
+      "classification": "reimplemented",
+      "source": "KubeArmor/enforcer/bpflsm/rulesHandling.go:414-638; KubeArmor/enforcer/bpflsm/mapHelpers.go:47-148",
+      "source_sha256": "07de11f0324fd4ce1b4b856602ccb3aa94ac2d14df98e71ba1d2528b26aa18ea",
+      "license_decision": "TOP_LEVEL_APACHE_2_0; REIMPLEMENTED TRANSACTION; NO COPIED RANGE",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_e2e::prototype::AtomicGeneration",
+      "semantic_differences": "Fresh complete generations are read back before one active switch; row-by-row active mutation is prohibited.",
+      "hostile_fixture_id": "SOURCE-KA-PARTIAL-ATTACH-001"
+    },
+    {
+      "adoption_id": "KA-PATH-MOUNT-003",
+      "project": "KUBEARMOR",
+      "classification": "reimplemented",
+      "source": "KubeArmor/BPF/shared.h:315-395,809-922; KubeArmor/BPF/enforcer_path.bpf.c:7-73",
+      "source_sha256": "91a8722ef7bae88aa44ee998be13e3ca6ae787baa7aed238d249363cc9209d7d",
+      "license_decision": "SOURCE_SPDX_GPL_2_0; OWNED CLEAN_ROOM MODEL; NO COPIED RANGE",
+      "transitive_dependencies": [],
+      "local_owner": "bpf/erebor-interceptor/programs/identity.bpf.c",
+      "semantic_differences": "The production exec transaction uses the live mount object, mount ID, inode, and inode generation; it does not treat path text as identity.",
+      "hostile_fixture_id": "SOURCE-TG-PATH-RENAME-008"
+    },
+    {
+      "adoption_id": "KA-DNS-BOUNDS-004",
+      "project": "KUBEARMOR",
+      "classification": "reimplemented",
+      "source": "KubeArmor/BPF/enforcer.bpf.c:889-1075; KubeArmor/BPF/shared.h:1221-1263",
+      "source_sha256": "66d963a32179edc5a2a8af7c7d7ae243639404cf4596e4f800f5cf93d70be975",
+      "license_decision": "SOURCE_SPDX_GPL_2_0; OWNED BOUNDED PARSER; NO COPIED RANGE",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_e2e::prototype::BoundedDnsName",
+      "semantic_differences": "Parser failure is unknown context and always retains the IP/packet floor.",
+      "hostile_fixture_id": "SOURCE-KA-BOUNDS-004"
+    },
+    {
+      "adoption_id": "KA-READER-CAPACITY-005",
+      "project": "KUBEARMOR",
+      "classification": "reimplemented",
+      "source": "KubeArmor/BPF/system_monitor.c:261-328; KubeArmor/enforcer/bpflsm/enforcer.go:81-285",
+      "source_sha256": "54176e559df2c9aee7d9ac43c1d101352577782909ff2e5db0486b4540f6164d",
+      "license_decision": "MIXED FILE LICENSES; REIMPLEMENTED MODEL; NO COPIED RANGE",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_e2e::prototype::AuthoritativeMap",
+      "semantic_differences": "Authority maps are non-evicting, capacity is preflighted, and N+1 denies while existing rows remain correct.",
+      "hostile_fixture_id": "SOURCE-KA-CAPACITY-005"
+    },
+    {
+      "adoption_id": "TG-FORK-EXEC-001",
+      "project": "TETRAGON",
+      "classification": "reimplemented",
+      "source": "bpf/process/bpf_fork.c:24-104; bpf/process/bpf_execve_event.c:1-458",
+      "source_sha256": "4f9cc4d2cc0fea2cd388c252141690f96b79d09d66371f30c5c83249192ecf89",
+      "license_decision": "GPL_2_0_ONLY_OR_BSD_2_CLAUSE; OWNED REIMPLEMENTATION; NO COPIED RANGE",
+      "transitive_dependencies": [],
+      "local_owner": "bpf/erebor-interceptor/programs/identity.bpf.c",
+      "semantic_differences": "Production task_alloc inherits from the creating task; one guarded exec transaction records the complete bprm chain and commits at sched_process_exec, while post-PONR uncertainty never restores authority.",
+      "hostile_fixture_id": "SOURCE-TG-EXEC-MAP-007"
+    },
+    {
+      "adoption_id": "TG-RUNTIME-CGROUP-JOIN-002",
+      "project": "TETRAGON",
+      "classification": "reimplemented",
+      "source": "bpf/process/policy_filter.h:27-95; contrib/tetragon-rthooks/cmd/oci-hook/main.go:443-459",
+      "source_sha256": "39d024d9390f65f77e829c1d4a7e6c7a0268ffeca645b84df6cd23dd38f6535c",
+      "license_decision": "MIXED FILE LICENSES; REIMPLEMENTED CONTRACT; NO COPIED RANGE",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_node::WorkloadBindingOwner; bpf/erebor-interceptor/programs/identity.bpf.c",
+      "semantic_differences": "Published cgroup bindings carry only exact execution-set/container-lifetime identity; later external roots remain restricted and command, timing, and TTY never invent purpose.",
+      "hostile_fixture_id": "SOURCE-TG-RUNTIME-JOIN-006"
+    },
+    {
+      "adoption_id": "TG-GENERIC-LSM-003",
+      "project": "TETRAGON",
+      "classification": "reimplemented",
+      "source": "bpf/process/bpf_generic_lsm_core.c:1-145; bpf/process/bpf_enforcer.c:1-55",
+      "source_sha256": "cb69f7abd3daabdf917126bc1c93aac30b5e85f0534365c5a01056f816354d64",
+      "license_decision": "GPL_2_0_ONLY_OR_BSD_2_CLAUSE; OWNED REIMPLEMENTATION; NO COPIED RANGE",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_e2e::capability::BpfPrototypeCompiler",
+      "semantic_differences": "Every hook has an exact signature/prior-result record; generic LSM and separate enforcement results never merge.",
+      "hostile_fixture_id": "SOURCE-TG-PATH-RENAME-008"
+    },
+    {
+      "adoption_id": "TG-VMLINUX-HEADER-006",
+      "project": "TETRAGON",
+      "classification": "copied",
+      "source": "bpf/include/vmlinux.h:1-62",
+      "source_sha256": "747255472f09b0d9f45a4370966138676aff3b9b95cf0d93134eee0cf549168d",
+      "license_decision": "SOURCE_DUAL_LGPL_2_1_OR_BSD_2_CLAUSE; BSD_2_CLAUSE_SELECTED; COPYRIGHT_NOTICE_RETAINED",
+      "transitive_dependencies": [],
+      "local_owner": "bpf/erebor-interceptor/include/vmlinux.h",
+      "semantic_differences": "Copied only the target-selection wrapper. The generated x86 kernel declarations are generated locally from the qualified host BTF; Tetragon's compatibility-only local definitions are not included.",
+      "hostile_fixture_id": "SOURCE-KA-STACK-PER-HOOK-002"
+    },
+    {
+      "adoption_id": "TG-VMLINUX-ARM64-007",
+      "project": "TETRAGON",
+      "classification": "copied",
+      "source": "bpf/include/vmlinux_generated_arm64.h:1-169309",
+      "source_sha256": "4db26f63a4461cf7c91c32c68e0accf0c5b420969dcd5fe2fb672fcf024d90a6",
+      "license_decision": "SOURCE_DUAL_LGPL_2_1_OR_BSD_2_CLAUSE; BSD_2_CLAUSE_SELECTED; COPYRIGHT_NOTICE_RETAINED",
+      "transitive_dependencies": [],
+      "local_owner": "bpf/erebor-interceptor/include/vmlinux_generated_arm64.h",
+      "semantic_differences": "Copied generated arm64 kernel declarations unchanged; physical compatibility remains unqualified until an arm64 BPF-LSM probe passes.",
+      "hostile_fixture_id": "SOURCE-KA-STACK-PER-HOOK-002"
+    },
+    {
+      "adoption_id": "AS-VMLINUX-ARM-001",
+      "project": "AGENTSIGHT",
+      "classification": "copied",
+      "source": "vmlinux/arm/vmlinux_62.h:1-119802",
+      "source_sha256": "82f62474cd2eb8edffdbf5297f57105dc2aad854cacb683e340add121903a88f",
+      "license_decision": "TOP_LEVEL_MIT; LICENSE_RETAINED_AT_bpf/erebor-interceptor/include/LICENSES/agentsight-MIT.txt",
+      "transitive_dependencies": [],
+      "local_owner": "bpf/erebor-interceptor/include/vmlinux_generated_arm.h",
+      "semantic_differences": "Copied generated arm kernel declarations unchanged; physical compatibility remains unqualified until an arm BPF-LSM probe passes.",
+      "hostile_fixture_id": "SOURCE-KA-STACK-PER-HOOK-002"
+    },
+    {
+      "adoption_id": "AS-VMLINUX-RISCV-002",
+      "project": "AGENTSIGHT",
+      "classification": "copied",
+      "source": "vmlinux/riscv/vmlinux_602.h:1-146849",
+      "source_sha256": "79618e8f787a28a1c1b1c07def5b9ca27b43ad148db1348cc21aee71f27071d5",
+      "license_decision": "TOP_LEVEL_MIT; LICENSE_RETAINED_AT_bpf/erebor-interceptor/include/LICENSES/agentsight-MIT.txt",
+      "transitive_dependencies": [],
+      "local_owner": "bpf/erebor-interceptor/include/vmlinux_generated_riscv.h",
+      "semantic_differences": "Copied generated riscv kernel declarations unchanged; physical compatibility remains unqualified until a riscv BPF-LSM probe passes.",
+      "hostile_fixture_id": "SOURCE-KA-STACK-PER-HOOK-002"
+    },
+    {
+      "adoption_id": "TG-FRESH-MAPS-004",
+      "project": "TETRAGON",
+      "classification": "reimplemented",
+      "source": "pkg/policyfilter/state.go:1-898; forward/reverse policy filter maps",
+      "source_sha256": "6cc7c63ea34d003a64c2d48929b5307e0fac5cb8ed0d499ef5b64a590e2c119b",
+      "license_decision": "TOP_LEVEL_APACHE_2_0; REIMPLEMENTED TRANSACTION; NO COPIED RANGE",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_node::WorkloadBindingOwner; erebor_interceptor::KernelHostOwner",
+      "semantic_differences": "Bindings publish PREPARING state and descendants before one read-back ACTIVE transition; pinned maps are reused only as an exact complete generation.",
+      "hostile_fixture_id": "SOURCE-KA-PARTIAL-ATTACH-001"
+    },
+    {
+      "adoption_id": "TG-CONCURRENCY-LOSS-005",
+      "project": "TETRAGON",
+      "classification": "reimplemented",
+      "source": "bpf/process/bpf_enforcer.c:1-55; pkg/observer/observer_linux.go:1-199",
+      "source_sha256": "6c8924958dacbe1d6543432523d34504984f9ef5569708d5709768f9d3c82d19",
+      "license_decision": "MIXED FILE LICENSES; REIMPLEMENTED MODEL; NO COPIED RANGE",
+      "transitive_dependencies": [],
+      "local_owner": "mithril_e2e::prototype::SourceCoverage",
+      "semantic_differences": "Authoritative insertion failure denies; reader loss opens an explicit gapped interval without changing installed physical denial.",
+      "hostile_fixture_id": "SOURCE-KA-READER-LOSS-003"
+    }
+  ],
+  "explicit_rejections": [
+    "INDEPENDENT_JAILER_PENDING_PID_ENROLLMENT",
+    "INDEPENDENT_JAILER_DENTRY_ONLY_INODE_CACHE_AUTHORITY",
+    "UPSTREAM_DAEMONS_AS_PRODUCT_CHASSIS",
+    "INDEPENDENT_RUNTIME_BPF_LOADER_AFTER_SHARED_OWNER"
+  ]
+}
+
