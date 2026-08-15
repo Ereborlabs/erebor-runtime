@@ -176,13 +176,13 @@ physical cases remain unqualified.
 
 ## Qualification update — 2026-08-15
 
-At source commit `e9b380a`, the production identity probe passed on x86_64
+At source commit `d4fd67f`, the production identity probe passed on x86_64
 Linux `6.8.0-137-generic`. It used production object SHA-256
 `69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe` and
 runtime BTF SHA-256
 `6da9f6b4ebcae9b07e6a717b517884abf7f6b524e46340e40fb164eed4a49a7c`.
 The evidence file SHA-256 is
-`03f33485177eb15ebf08fbaacb502cb823b1174b7c39bc2d1e305554f93da6b4`.
+`dbf7bc49e4aedb22f38d261f0d51720e9bc71e79b9803d12cc74bdb39df4a7ff`.
 
 The probe recorded `cgroup_escape_placement_mismatch_detected=true`,
 `distinct_pin_root_owner_rejected=true`,
@@ -190,6 +190,13 @@ The probe recorded `cgroup_escape_placement_mismatch_detected=true`,
 `profile_task_refs_after_exit=0`. Its pin root, lease, and cgroup cleanup
 fields are true. The second-owner result uses a distinct pin root and instance
 lease. It verifies the active host-owner guard rather than a same-path lock.
+After the first owner shut down while its pins remained, a second pin root was
+rejected before it attached a link. The original pin root then recovered its
+links and maps.
 
 The phase remains **Blocked**. This probe does not execute the complete entry
-and failure-injection matrix.
+and failure-injection matrix. The full identity unit command is also blocked:
+`cargo test -p mithril-e2e --lib identity::tests --all-features` cannot read
+`spec/qualification/v1/fixtures.yaml`. The repository does not contain that
+future registry source. The focused native-child test passes. Do not replace
+the missing registry with a prose-derived fixture list.

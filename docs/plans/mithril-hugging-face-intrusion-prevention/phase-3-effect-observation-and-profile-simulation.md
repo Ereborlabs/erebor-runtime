@@ -196,3 +196,8 @@ access as a warmup.
 
 The phase remains **Blocked**. This evidence does not add a Mithril CRI effect
 binding or complete the manual acceptance matrix.
+
+The operator-facing command
+`bash examples/mithril-effect-observation-manual/compile-observe-policy.sh`
+also passed. It compiled 19 exact cells and verified a deterministic signed
+candidate. It does not replace a physical CRI effect result.
