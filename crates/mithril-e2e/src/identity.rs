@@ -468,7 +468,7 @@ impl IdentityTestRunner {
             }
         );
 
-        fixture.release_exec()?;
+        fixture.release_exec(native_pid)?;
         let after_exec = self.wait_for("native exec commit", &procs_path, || {
             let snapshot = inspector.snapshot(native_pid).context(NodeSnafu)?;
             Ok(snapshot.filter(|snapshot| {
@@ -543,7 +543,7 @@ impl IdentityTestRunner {
         );
         orphan_fixture.release_parent_exit()?;
         orphan_fixture.wait_for_parent_exit()?;
-        orphan_fixture.release_exec()?;
+        orphan_fixture.release_exec(orphaned_native_child_pid)?;
         let orphaned_native_child_after_parent_exit = self.wait_for(
             "orphaned native child exec after parent exit",
             &procs_path,
@@ -648,7 +648,7 @@ impl IdentityTestRunner {
                 .intermediate_exited(double_fork_intermediate_pid)?
                 .then_some(()))
         })?;
-        double_fork_fixture.release_exec()?;
+        double_fork_fixture.release_exec(double_fork_native_child_pid)?;
         let double_fork_native_child_after_intermediate_exit = self.wait_for(
             "double-fork native child exec after intermediate exit",
             &procs_path,
@@ -921,11 +921,28 @@ impl NativeProcessFixture {
         self.write_stdin(b"root\n")
     }
 
-    fn release_exec(&mut self) -> Result<()> {
+    fn release_exec(&mut self, native_pid: u32) -> Result<()> {
         let pidfd = self
             .native_pidfd
             .as_ref()
             .ok_or_else(|| invalid_state("native child has no pidfd"))?;
+        let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
+        let deadline = Instant::now() + WAIT_LIMIT;
+        loop {
+            let status =
+                fs::read_to_string(&status_path).context(IoSnafu { path: &status_path })?;
+            if status.lines().any(|line| line.starts_with("State:\tT")) {
+                break;
+            }
+            ensure!(
+                Instant::now() < deadline,
+                InvalidInputSnafu {
+                    path: &status_path,
+                    reason: "native child did not stop before exec release",
+                }
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
         pidfd_send_signal(pidfd, Signal::CONT)
             .map_err(|error| invalid_state(format!("release native child exec: {error}")))
     }
@@ -1249,7 +1266,7 @@ mod tests {
     }
 
     #[test]
-    fn native_process_fixture_pauses_its_child_before_exec() -> crate::Result<()> {
+    fn native_process_fixture_waits_for_stopped_child_before_exec() -> crate::Result<()> {
         let runner = IdentityTestRunner::new(".");
         let mut fixture = NativeProcessFixture::start()?;
         fixture.release_root()?;
@@ -1259,13 +1276,7 @@ mod tests {
             fixture.native_child_pid()
         })?;
         fixture.open_native_pidfd(native_pid)?;
-        let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
-        let status = fs::read_to_string(&status_path).map_err(|error| {
-            super::invalid_state(format!("read {}: {error}", status_path.display()))
-        })?;
-        assert!(status.lines().any(|line| line.starts_with("State:\tT")));
-
-        fixture.release_exec()?;
+        fixture.release_exec(native_pid)?;
         let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
         runner.wait_for("native child exec", &comm_path, || {
             fs::read_to_string(&comm_path)
@@ -1309,7 +1320,7 @@ mod tests {
             Ok(parent_pid.filter(|parent_pid| *parent_pid != outer_pid))
         })?;
 
-        fixture.release_exec()?;
+        fixture.release_exec(native_pid)?;
         let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
         runner.wait_for("orphaned native child exec", &comm_path, || {
             fs::read_to_string(&comm_path)
@@ -1364,7 +1375,7 @@ mod tests {
             },
         )?;
         assert!(PathBuf::from(format!("/proc/{outer_pid}")).exists());
-        fixture.release_exec()?;
+        fixture.release_exec(native_pid)?;
         runner.wait_for("double-fork native child reparenting", &status_path, || {
             let status = fs::read_to_string(&status_path).map_err(|error| {
                 super::invalid_state(format!("read {}: {error}", status_path.display()))
