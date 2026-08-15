@@ -115,6 +115,32 @@ This qualifies `ID-MOVED-PARENT-FORK-004` only. A readable manual script was
 not added. It cannot reproduce the fixture-controlled cgroup move without
 creating a separate runtime. The phase remains **Blocked**.
 
+Moved-native-task exec VM record, 2026-08-15: the isolated physical probe
+passed at source commit `0c25e8c84a94d4a632e1f44efd50befbbe37f420`. The copied
+`mithril-identity-test` binary SHA-256 was
+`ab212876b1cca4a38255a64a09b0c56c0831bef513b11ce6dc12a19b83c56404`. The
+preserved result JSON is
+`/tmp/mithril-phase2-moved-task-0c25e8c84a94-39721.identity-physical-probe.json`.
+Its SHA-256 is
+`dc116ae01389e131232f8d3c0d850b23f716cfed9309c338edaea5077cb0a854`.
+
+The JSON has schema version `4` and `moved_task_exec_denied=true`. The normal
+native child kept its task cookie across exec, changed its active execution
+and image provenance IDs, and ended Runnable with no exec guard. The runner
+moved only the stopped labeled child to the parent cgroup and required
+`FailClosedUnknown` before release. It then required a second
+placement-mismatch increase and a nonzero outer-shell exit before five
+seconds. A child that executes `sleep` cannot pass that oracle.
+
+The JSON records `pin_root_removed=true`, `lease_removed=true`, and
+`cgroup_removed=true`. Postflight found the primary, alternate, and retired
+pin roots, the cgroup, lease, and lane root absent. Only the unrelated tracing
+BPF link remained. This is qualified physical evidence for
+`ID-MOVED-TASK-EXEC-005` only. Use
+[`native-child.sh --moved-exec`](../../../../examples/mithril-identity-manual/native-child.sh)
+for the readable operator procedure. The full matrix remains unqualified, and
+the phase remains **Blocked**.
+
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured

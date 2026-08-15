@@ -289,3 +289,33 @@ This qualifies `ID-MOVED-PARENT-FORK-004` only. A readable manual script was
 not added. It cannot reproduce the fixture-controlled cgroup move without
 creating a separate runtime. The phase remains **Blocked** because the full
 entry and failure-injection matrix is not qualified.
+
+## Moved-Native-Task Exec Physical Qualification Update — 2026-08-15
+
+The isolated identity probe passed at source commit
+`0c25e8c84a94d4a632e1f44efd50befbbe37f420`. The copied
+`mithril-identity-test` binary SHA-256 was
+`ab212876b1cca4a38255a64a09b0c56c0831bef513b11ce6dc12a19b83c56404`.
+The preserved result JSON is
+`/tmp/mithril-phase2-moved-task-0c25e8c84a94-39721.identity-physical-probe.json`.
+Its SHA-256 is
+`dc116ae01389e131232f8d3c0d850b23f716cfed9309c338edaea5077cb0a854`.
+
+The JSON records schema version `4` and `moved_task_exec_denied=true`. The
+normal native child kept its task cookie across exec. Its active execution ID
+and image provenance ID changed. Its final coordinate state was `Runnable`,
+and its exec guard state was `None`.
+
+The runner moved only the stopped labeled child to the parent cgroup. It
+required `FailClosedUnknown` before release. After release, it required a
+second placement-mismatch increase and a failing outer shell within five
+seconds. A successful `sleep` exec cannot satisfy that oracle. This proves the
+denied moved-task exec without a later `sleep` effect.
+
+The JSON records `pin_root_removed=true`, `lease_removed=true`, and
+`cgroup_removed=true`. Postflight found the primary, alternate, and retired
+pin roots, the cgroup, the lease, and the lane root absent. Only the unrelated
+tracing BPF link remained.
+
+This qualifies `ID-MOVED-TASK-EXEC-005` only. The complete entry and
+failure-injection matrix remains unqualified. The phase remains **Blocked**.

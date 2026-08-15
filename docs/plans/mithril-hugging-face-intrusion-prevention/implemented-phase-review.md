@@ -345,6 +345,30 @@ This is physical evidence for `ID-MOVED-PARENT-FORK-004` only. A readable
 manual script was not added. It cannot reproduce the fixture-controlled cgroup
 move without creating a separate runtime. Phase 2 remains **Blocked**.
 
+### Moved-native-task exec physical qualification
+
+The isolated identity probe passed at source
+`0c25e8c84a94d4a632e1f44efd50befbbe37f420`. The copied
+`mithril-identity-test` binary SHA-256 was
+`ab212876b1cca4a38255a64a09b0c56c0831bef513b11ce6dc12a19b83c56404`. The
+preserved JSON is
+`/tmp/mithril-phase2-moved-task-0c25e8c84a94-39721.identity-physical-probe.json`.
+Its SHA-256 is
+`dc116ae01389e131232f8d3c0d850b23f716cfed9309c338edaea5077cb0a854`.
+
+The JSON has schema version `4` and `moved_task_exec_denied=true`. The normal
+native child kept its task cookie across exec, changed active execution and
+image provenance, and ended Runnable with no exec guard. The runner moved only
+the stopped labeled child to the parent cgroup. It observed
+`FailClosedUnknown`, then required a second placement-mismatch increase and a
+failing outer shell before five seconds. A later `sleep` exec cannot satisfy
+that oracle.
+
+The JSON records pin-root, lease, and cgroup cleanup as true. Postflight found
+the primary, alternate, and retired pin roots, cgroup, lease, and lane root
+absent. Only the unrelated tracing BPF link remained. This is physical evidence
+for `ID-MOVED-TASK-EXEC-005` only. Phase 2 remains **Blocked**.
+
 This guide is explanatory only. The authoritative scope and acceptance records
 remain the phase documents and the readable architecture:
 
