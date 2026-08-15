@@ -18,6 +18,7 @@ Then run only the case being checked:
 | Kubernetes exec | `sudo examples/mithril-identity-manual/kubernetes-exec.sh NODE_CONFIG FULL_CONTAINER_ID NAMESPACE POD CONTAINER` |
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
+| Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
@@ -80,6 +81,32 @@ creator. The child remains a native task with the inherited restricted role.
 This check covers the creator-exit branch of `ID-CREATOR-PARENT-007`. It does
 not cover double forks, subreapers, namespace-init reparenting, ptrace
 reparenting, or PID reuse.
+
+## Double-Fork Native Child Check
+
+Run this check when a container runtime can start an outer shell, one native
+intermediate child, and one stopped native grandchild:
+
+```bash
+sudo examples/mithril-identity-manual/native-child.sh \
+  NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork
+```
+
+The script prints one runtime-exec command. Run it in another root terminal.
+Enter the host PID of the outer shell, its intermediate child, and the stopped
+grandchild. The script checks both creator edges and their current real-parent
+records. Kill only the printed intermediate PID, then press Enter. The outer
+task changes to `sleep` and stays live. The script resumes the grandchild and
+checks its next exec record.
+
+The grandchild must keep its original task cookie and creator task cookie. Its
+creator is the exited intermediate task, not the outer root. Its current
+real-parent record must change, its real-parent interval sequence must
+increase, and it must remain a native task with the inherited restricted role.
+
+This procedure covers the double-fork branch of `ID-CREATOR-PARENT-007`. It
+does not cover subreapers, namespace-init reparenting, ptrace reparenting, or
+PID reuse. It is an operator procedure, not a qualified VM result.
 
 Every executable starts the real `mithril-node`, performs one operator-driven
 case, and removes its test tasks, BPF pins, lease, temporary config, state, and

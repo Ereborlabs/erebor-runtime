@@ -158,6 +158,42 @@ Treat a source-backed hard denial as a safety floor. Do not treat it as a
 positive policy-support result. Treat a unit or source-contract test as code
 evidence. Do not treat it as a privileged physical result.
 
+### Double-fork native-child source review
+
+Source change `6190ca7` adds the double-fork branch of the existing native
+identity probe. It adds source and local fixture evidence only. It does not
+record a new privileged VM result. Phase 2 remains **Blocked**.
+
+Review this narrow path in order:
+
+1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L262)
+   creates the existing protected cgroup and starts the double-fork fixture.
+   It captures the outer root, intermediate native child, and stopped native
+   grandchild before the intermediate exits.
+2. [`NativeProcessFixture::start_double_forking`](../../../crates/mithril-e2e/src/identity.rs#L846)
+   creates the chain. The outer task waits for the intermediate and then
+   remains live. The intermediate waits for its stopped child. The child
+   executes `sleep` only after the test releases its pidfd.
+3. [`create_native_child`](../../../bpf/erebor-interceptor/programs/identity_task_helpers.h#L435)
+   writes one immutable `created_by_edges` row for each native child. The
+   grandchild therefore names the intermediate task cookie, not the outer
+   root cookie.
+4. [`refresh_real_parent`](../../../bpf/erebor-interceptor/programs/identity_task_helpers.h#L270)
+   compares the live kernel parent coordinate at the next effect or exec. A
+   changed coordinate closes the old interval and creates the next interval.
+5. [`NativeIdentityInspector::snapshot`](../../../crates/mithril-node/src/identity/inspection.rs#L54)
+   reads the immutable creator edge and current real-parent interval from the
+   existing maps. It adds no userspace parent inference.
+6. [`native_process_fixture_reparents_double_fork_child_before_exec`](../../../crates/mithril-e2e/src/identity.rs#L1308)
+   checks the local process topology before the privileged runner uses it.
+
+The physical assertion keeps the grandchild task cookie and immutable creator
+edge after the intermediate exits. It requires a different current real-parent
+record, a higher real-parent interval sequence, a new active execution, and
+the inherited restricted role. It does not treat the outer task as the new
+real parent. Linux can reparent to another live kernel parent, and the BPF
+record preserves that kernel fact without assigning it an authority role.
+
 This guide is explanatory only. The authoritative scope and acceptance records
 remain the phase documents and the readable architecture:
 
