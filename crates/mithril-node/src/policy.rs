@@ -3657,7 +3657,7 @@ mod tests {
     };
 
     #[test]
-    fn global_mount_clean_epoch_follows_kernel_reconciliation() {
+    fn global_mount_clean_epoch_follows_kernel_reconciliation() -> crate::Result<()> {
         let source = include_str!("policy.rs");
         let reconciliation = source
             .split("pub fn reconcile_mount_views")
@@ -3671,14 +3671,27 @@ mod tests {
             .unwrap_or_default();
         let commit = reconciliation
             .find(".reconcile_mount_view(host, roots, global_epoch)")
-            .expect("mount reconciliation invokes each kernel view commit");
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "mount reconciliation does not invoke each kernel view commit"
+                        .to_owned(),
+                }
+                .build()
+            })?;
         let publish = reconciliation
             .find("host.update_map(\n                \"mount_global_clean_epoch\"")
-            .expect("mount reconciliation publishes the global clean epoch");
+            .ok_or_else(|| {
+                IdentityStateSnafu {
+                    reason: "mount reconciliation does not publish the global clean epoch"
+                        .to_owned(),
+                }
+                .build()
+            })?;
 
         assert!(commit < publish);
         assert!(view_reconciliation.contains("apply_mount_reconciliation_proposal"));
         assert!(reconciliation.contains("self.mount_view_is_clean(host, roots, global_epoch)"));
+        Ok(())
     }
 
     #[test]
