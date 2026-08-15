@@ -195,7 +195,11 @@ static __always_inline int apply_mount_reconciliation_proposal(
     if (proposal->topology_generation == global_generation &&
         proposal->topology_generation == *mutation_epoch &&
         proposal->snapshot_digest_id &&
-        (!require_dirty || view->state == mount_topology_state_v1_dirty) &&
+        (view->state == mount_topology_state_v1_dirty ||
+         (!require_dirty &&
+          view->state == mount_topology_state_v1_clean &&
+          view->topology_generation &&
+          view->topology_generation < global_generation)) &&
         !view->pending_mutations &&
         proposal->expected_transition_version == view->transition_version &&
         view->transition_version != ~0ULL &&
@@ -240,7 +244,7 @@ static __always_inline int commit_mount_reconciliation_proposal(
         *global_pending)
         return -EACCES;
     if (apply_mount_reconciliation_proposal(view, view_lock, mutation_epoch,
-                                            proposal, global_generation, true))
+                                            proposal, global_generation, false))
         return -EACCES;
     if (*global_epoch != global_generation ||
         *global_clean > global_generation || *global_pending ||

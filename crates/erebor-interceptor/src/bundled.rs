@@ -1184,8 +1184,12 @@ mod tests {
         assert!(!commit.contains("*global_clean != global_generation"));
         assert!(commit.contains("*global_pending"));
         assert!(commit.contains("*mutation_epoch != global_generation"));
+        assert!(commit.contains("proposal, global_generation, false"));
         assert!(apply.contains("bpf_spin_lock"));
         assert!(apply.contains("mount_topology_state_v1_dirty"));
+        assert!(apply.contains("mount_topology_state_v1_clean"));
+        assert!(apply.contains("view->topology_generation < global_generation"));
+        assert!(!apply.contains("(!require_dirty ||"));
         assert!(apply.contains("!view->pending_mutations"));
         assert!(apply.contains("proposal->expected_transition_version"));
         assert!(apply.contains("view->transition_version != ~0ULL"));
