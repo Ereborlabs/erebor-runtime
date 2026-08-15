@@ -385,6 +385,11 @@ fn wait_for_observation(
                                 event.operation_argument,
                                 event.exact_object_key_id,
                                 event.composite_atom_id,
+                                event.mount_namespace_inode,
+                                event.mount_id_unique,
+                                event.filesystem_device,
+                                event.inode,
+                                event.inode_generation,
                             )
                         })
                         .collect::<Vec<_>>()
