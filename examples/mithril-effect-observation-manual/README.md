@@ -44,8 +44,10 @@ and fixture files on success or failure; only the requested JSON result remains
 in the output directory. The scripts below remain the runtime-specific manual
 operator cases for real Docker and CRI daemons.
 
-The container needs Python 3. The host needs `jq`, `gawk`, `lsattr`, Docker (or
-`crictl` for the CRI case), and a kernel-qualified BPF LSM host.
+The host needs `jq`, `gawk`, `lsattr`, Docker (or `crictl` for the CRI case),
+and a kernel-qualified BPF LSM host. The CRI file case needs BusyBox `sh` and
+`mkfifo` in the target container. Other cases that invoke `python3` need it in
+their target containers.
 
 Cases:
 

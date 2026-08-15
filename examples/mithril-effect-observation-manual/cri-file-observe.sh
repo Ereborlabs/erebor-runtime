@@ -9,19 +9,17 @@ source "$directory/observation-runtime.sh"
 }
 
 observation_prepare_cri "$1" "$2" "$3"
-observation_preload_probe python3 -c '
-import os, sys
-ready, path = sys.argv[1:]
-release = os.environ["MITHRIL_MANUAL_RELEASE"]
-os.mkfifo(release, 0o600)
-release_fd = os.open(release, os.O_RDWR)
-with open(ready, "w", encoding="ascii") as output:
-    output.write(str(os.getpid()))
-os.read(release_fd, 1)
-os.close(release_fd)
-with open(path, "rb") as source:
-    source.read(1)
-' "$observation_probe_ready" "$3"
+observation_preload_probe sh -ec '
+umask 077
+mkfifo "$MITHRIL_MANUAL_RELEASE"
+exec 3<>"$MITHRIL_MANUAL_RELEASE"
+printf "%s\n" "$$" >"$1"
+IFS= read -r -n 1 _ <&3
+exec 3<&-
+exec 4<"$2"
+IFS= read -r -n 1 _ <&4 || :
+exec 4<&-
+' sh "$observation_probe_ready" "$3"
 identity_inspect_task cri-effect-probe "$observation_probe_host_pid" >/dev/null
 identity_assert_external "$identity_work/cri-effect-probe.json"
 task_cookie=$(jq -er '.task_cookie' "$identity_work/cri-effect-probe.json")
