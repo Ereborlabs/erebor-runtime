@@ -72,6 +72,7 @@ grep -q 'mv -- "\$k3s_administrative_partial"' "$directory/run.sh"
 grep -q 'product_path=kubectl-mithril+oidc-pkce+self-approval+tokenreview+connect-admission+node-slot' \
   "$directory/guest.sh"
 grep -q 'api-audiences=mithril-administrative-exec' "$directory/guest.sh"
+grep -q 'verbs: \["get", "create"\]' "$directory/guest.sh"
 grep -q 'ordinary_kubectl_exec=denied-by-admission' "$directory/guest.sh"
 grep -q 'post-consumption_direct_runtime_root=external_runtime_root:runtime_external_restricted' \
   "$directory/guest.sh"

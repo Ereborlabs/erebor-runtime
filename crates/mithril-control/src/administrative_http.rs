@@ -197,6 +197,10 @@ struct OidcCallbackQuery {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct PodExecOptionsV1 {
+    #[serde(default, rename = "apiVersion")]
+    api_version: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
     #[serde(default)]
     command: Vec<String>,
     container: Option<String>,
@@ -1128,11 +1132,17 @@ fn validate_draft(request: &AdministrativeExecDraftRequestV1) -> Result<()> {
 }
 
 fn validate_exec_options(options: &PodExecOptionsV1) -> Result<()> {
+    let valid_type_metadata = match (&options.api_version, &options.kind) {
+        (None, None) => true,
+        (Some(api_version), Some(kind)) => api_version == "v1" && kind == "PodExecOptions",
+        _ => false,
+    };
     ensure!(
-        options
-            .container
-            .as_ref()
-            .is_some_and(|value| !value.is_empty())
+        valid_type_metadata
+            && options
+                .container
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
             && !options.command.is_empty()
             && options.command.len() <= 256
             && !options.command[0].is_empty()
@@ -1280,10 +1290,11 @@ mod tests {
 
     use erebor_interceptor_abi::Id128V1;
     use k8s_openapi::api::authentication::v1::UserInfo;
+    use serde_json::json;
 
     use super::{
-        approval_identity_from_user, html_escape, principal_id, stream_flags, Draft, HttpState,
-        APPROVAL_EXTRA_KEY,
+        approval_identity_from_user, html_escape, principal_id, stream_flags,
+        validate_exec_options, Draft, HttpState, PodExecOptionsV1, APPROVAL_EXTRA_KEY,
     };
     use crate::AdministrativeExecRequestV1;
 
@@ -1307,6 +1318,47 @@ mod tests {
     fn exact_stream_flags_match_the_signed_contract() {
         assert_eq!(stream_flags(true, true, false, true), 0b1011);
         assert_eq!(stream_flags(false, true, true, false), 0b0110);
+    }
+
+    #[test]
+    fn pod_exec_options_accept_kubernetes_type_metadata() {
+        let options: PodExecOptionsV1 = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "PodExecOptions",
+            "command": ["/var/lib/mithril/admin-exec", "sleep", "20"],
+            "container": "runtime",
+            "stdout": true,
+            "stderr": true,
+        }))
+        .expect("Kubernetes PodExecOptions must deserialize");
+        assert!(validate_exec_options(&options).is_ok());
+
+        let without_type_metadata: PodExecOptionsV1 = serde_json::from_value(json!({
+            "command": ["/var/lib/mithril/admin-exec"],
+            "container": "runtime",
+            "stdout": true,
+        }))
+        .expect("PodExecOptions without optional type metadata must deserialize");
+        assert!(validate_exec_options(&without_type_metadata).is_ok());
+
+        let partial: PodExecOptionsV1 = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "command": ["/var/lib/mithril/admin-exec"],
+            "container": "runtime",
+            "stdout": true,
+        }))
+        .expect("a structurally valid partial type must deserialize");
+        assert!(validate_exec_options(&partial).is_err());
+
+        let mismatched: PodExecOptionsV1 = serde_json::from_value(json!({
+            "apiVersion": "v1",
+            "kind": "PodAttachOptions",
+            "command": ["/var/lib/mithril/admin-exec"],
+            "container": "runtime",
+            "stdout": true,
+        }))
+        .expect("a structurally valid but mismatched type must deserialize");
+        assert!(validate_exec_options(&mismatched).is_err());
     }
 
     #[test]

@@ -58,6 +58,11 @@ TokenReview. Kubernetes can repeat TokenReview while it completes one CONNECT.
 The credential remains valid through its expiry, but Control accepts only the
 original admission request. Do not use a different audience for this test.
 
+The WebSocket exec client starts with an HTTP `GET`. The narrow test role grants
+only `get` and `create` on `pods/exec`; current Kubernetes also checks `create`
+for the CONNECT upgrade. The validating webhook stays fail-closed for both
+permissions.
+
 The lanes remove their namespaces, files, node and Control state, sockets,
 leases, temporary trust, webhooks, RBAC, and BPF pins. The runtime probes then
 run while k3s is active. Finally, the official k3s uninstall owner runs before
