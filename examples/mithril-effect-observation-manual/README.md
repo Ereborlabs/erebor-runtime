@@ -85,7 +85,7 @@ sudo examples/mithril-effect-observation-manual/nsenter-file-observe.sh \
 
 This is a raw `nsenter` and cgroup-placement case. It proves one exact
 observation event for that process. It does not qualify `kubectl exec`, prove a
-nonempty read, or establish physical completion.
+nonempty read, or complete the Phase 3 manual matrix.
 - `docker-bind-alias.sh <node.json> <container>
   <mounted-secret-path> <alias-directory>` creates a later bind alias of the
   secret's existing mount root. Reading through the alias must still report the
