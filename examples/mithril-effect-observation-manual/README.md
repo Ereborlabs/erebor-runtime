@@ -2,21 +2,10 @@
 
 ## Manual Testing In A VM
 
-Use the [retained-VM direct-CRI procedure](../../crates/mithril-e2e/harness/vm/README.md#run-the-direct-cri-observation-example)
-to create a fresh Pod, live binding, writable shared directory, and the
-`cri-file-observe.sh` run. Use the same setup for another observation script.
-Run it from the selected source directory with its documented arguments. Do
-not reuse a container binding.
-
-Set `MITHRIL_VM_SOURCE_MOUNT="$PWD"` when you create the guest to use the
-read-only `/mnt/mithril-source` tree. The harness guide shows SSH and the exact
-run command. Keep bindings, fixtures, pins, and output on the guest.
-
-The retained K3s guest runs the CRI and raw-namespace cases. Docker cases
-require a guest that runs Docker.
-
-Do not start `mithril-node` separately. Each case command starts it, runs one
-test, and removes its Mithril state.
+Use the [retained-VM procedure](../../crates/mithril-e2e/harness/vm/README.md#deploy-a-k3s-workload-and-bind-mithril).
+It creates the Pod, binding, and shared directory. Run this script directory as
+root from `/mnt/mithril-source`. Each command starts and removes Mithril. The
+K3s VM supports CRI and raw-namespace cases; Docker cases require Docker.
 
 ## Operator Cases
 

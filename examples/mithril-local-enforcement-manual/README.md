@@ -2,22 +2,11 @@
 
 ## Manual Testing In A VM
 
-Use the [retained-VM shell procedure](../../crates/mithril-e2e/harness/vm/README.md#run-a-manual-shell)
-to stage this directory and its identity and observation helpers. For CRI,
-create a fresh Pod and live binding with the
-[direct-CRI procedure](../../crates/mithril-e2e/harness/vm/README.md#run-the-direct-cri-observation-example).
-Create the exact fixture that the selected script needs, then run one script as
-root. Do not reuse a container binding.
-
-Set `MITHRIL_VM_SOURCE_MOUNT="$PWD"` when you create the guest to use the
-read-only `/mnt/mithril-source` tree. Keep bindings, fixtures, pins, and output
-on the guest.
-
-The retained K3s guest runs CRI and raw-namespace cases. Docker cases require
-a guest that runs Docker.
-
-Do not start `mithril-node` separately. Each case command starts it, runs one
-test, and removes its Mithril state.
+Use the [retained-VM procedure](../../crates/mithril-e2e/harness/vm/README.md#deploy-a-k3s-workload-and-bind-mithril).
+It creates the Pod and live binding. Create the selected script's fixture, then
+run this directory as root from `/mnt/mithril-source`. Each command starts and
+removes Mithril. The K3s VM supports CRI and raw-namespace cases; Docker cases
+require Docker.
 
 ## Operator Cases
 

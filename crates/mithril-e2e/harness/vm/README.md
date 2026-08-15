@@ -152,7 +152,7 @@ set +a
 "$provider" ssh "$vm_name"
 ```
 
-### Run A Manual Shell
+### SSH, Mounts, And Guest Paths
 
 Use this path when the guest has `/mnt/mithril-source`. Open SSH with the
 previous command, then run these commands in the guest:
@@ -169,26 +169,17 @@ export PATH="$manual_root/bin:$PATH"
 export MITHRIL_BIN_DIRECTORY="$remote_root/bin"
 ```
 
-Replace `<vm_name>` with the value in `retained-vm.txt`. The source tree
-supplies the scripts and templates. `$remote_root/bin` supplies the built
-binaries. Run a selected script in this root shell:
+Replace `<vm_name>` with the value in `retained-vm.txt`.
 
-```bash
-"$script_root/examples/<case-directory>/<script>.sh" \
-  "$manual_root/node.json" <script-arguments>
-```
+- `/mnt/mithril-source`: read-only mounted repository source.
+- `$remote_root/bin`: harness-built Mithril binaries.
+- `$remote_root/source`: harness-staged policy assets and test key.
+- `$manual_root`: one case's binding, workload YAML, wrapper, and output.
+- `/var/lib/mithril-manual-$manual_id`: one case's hostPath fixture.
 
-Do not start `mithril-node` by hand. Each manual script starts the node, runs
-one case, and removes its Mithril state. Its README gives the required
-arguments and oracle.
-
-| Guest path | Content |
-| --- | --- |
-| `/mnt/mithril-source` | Read-only mounted repository scripts and templates |
-| `$remote_root/bin` | Harness-built `mithril-node`, inspector, and policy tool |
-| `$remote_root/source` | Harness-staged policy assets and test key |
-| `$manual_root` | One case's `node.json`, workload YAML, wrapper, and output |
-| `/var/lib/mithril-manual-$manual_id` | One case's hostPath fixture |
+Mithril runs on the guest, not as a Kubernetes Deployment. Each manual script
+starts `mithril-node` with `$manual_root/node.json`, binds it to the live K3s
+container, runs one test, and removes its Mithril state.
 
 Run one Mithril owner at a time. Do not reuse a container ID, Pod UID, or
 binding. A different pin root does not isolate BPF LSM links.
@@ -231,13 +222,14 @@ Export `PATH=$manual_root/bin:$PATH` and
 `examples/mithril-local-enforcement-manual` to the archive for a
 local-enforcement case. Copy each script directory with its helper files.
 
-### Run The Direct CRI Observation Example
+### Deploy A K3s Workload And Bind Mithril
 
 This procedure creates the fresh Pod, live binding, and writable shared
 directory for `cri-file-observe.sh`. Continue only when `lsattr -v` reports a
 nonzero generation for `secret`.
 
-Run these commands in the root guest shell from [Run A Manual Shell](#run-a-manual-shell).
+Run these commands in the root guest shell from
+[SSH, Mounts, And Guest Paths](#ssh-mounts-and-guest-paths).
 
 ```bash
 namespace=mithril-manual-$manual_id
@@ -289,9 +281,11 @@ sed \
   >"$manual_root/node.json"
 ```
 
-Run the shell. `script_root` selects the mounted or staged source.
-`MITHRIL_BIN_DIRECTORY` selects the retained harness binaries. The command must
-print `PASS:`.
+### Run A Manual Test
+
+`script_root` selects the mounted or staged source. `MITHRIL_BIN_DIRECTORY`
+selects the retained harness binaries. The example below starts Mithril and
+runs the direct-CRI observe test. It must print `PASS:`.
 
 ```bash
 "$script_root/examples/mithril-effect-observation-manual/cri-file-observe.sh" \
@@ -299,10 +293,15 @@ print `PASS:`.
   "$shared_directory" /var/lib/mithril/manual-shared
 ```
 
-The shell removes its node, task, pins, lease, state, and probe files. Retain
-the output, then remove the named Pod namespace and fixture root. Keep
-`$manual_root` for its command and configuration record, or destroy the guest
-after the final case.
+For another case, replace the script path and arguments with its command from
+the selected example README. The K3s guest supports CRI, Kubernetes, and raw
+namespace cases. Docker cases require a guest that runs Docker.
+
+### Clean Up
+
+The script removes its Mithril node, task, pins, lease, state, and probe files.
+Retain the output, then remove the named Pod namespace and fixture root. Keep
+`$manual_root` for its command and configuration record, or destroy the guest.
 
 ```bash
 k3s kubectl delete namespace \

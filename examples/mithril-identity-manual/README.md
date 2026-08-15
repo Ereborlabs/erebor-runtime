@@ -5,21 +5,11 @@ commands for manually invoking the automated e2e runner.
 
 ## Manual Testing In A VM
 
-Use the [retained-VM shell procedure](../../crates/mithril-e2e/harness/vm/README.md#run-a-manual-shell)
-to create the guest, connect with SSH, and run this directory with the harness
-binaries. For CRI or Kubernetes, create a fresh Pod and live binding with the
-[direct-CRI procedure](../../crates/mithril-e2e/harness/vm/README.md#run-the-direct-cri-observation-example).
-Run one script as root. Do not reuse a container binding.
-
-Set `MITHRIL_VM_SOURCE_MOUNT="$PWD"` when you create the guest to use the
-read-only `/mnt/mithril-source` tree. Keep bindings, fixtures, pins, and output
-on the guest.
-
-The retained K3s guest runs the CRI, Kubernetes, and raw-namespace cases.
-Docker cases require a guest that runs Docker.
-
-Do not start `mithril-node` separately. Each case command starts it, runs one
-test, and removes its Mithril state.
+Use the [VM and SSH steps](../../crates/mithril-e2e/harness/vm/README.md#ssh-mounts-and-guest-paths)
+and the [K3s binding steps](../../crates/mithril-e2e/harness/vm/README.md#deploy-a-k3s-workload-and-bind-mithril).
+Run this script directory as root from `/mnt/mithril-source`. Each command
+starts and removes Mithril. The K3s VM supports CRI, Kubernetes, and
+raw-namespace cases; Docker cases require Docker.
 
 ## Operator Cases
 
