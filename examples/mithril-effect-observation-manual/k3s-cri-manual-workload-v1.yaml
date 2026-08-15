@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mithril-runtime
+  namespace: MITHRIL_MANUAL_NAMESPACE
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  containers:
+    - name: runtime
+      image: docker.io/library/busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c", "test -r /var/lib/mithril/secret && exec sleep 3600"]
+      volumeMounts:
+        - name: secret
+          mountPath: /var/lib/mithril/secret
+          readOnly: true
+        - name: shared
+          mountPath: /var/lib/mithril/manual-shared
+  volumes:
+    - name: secret
+      hostPath:
+        path: MITHRIL_MANUAL_SECRET_HOST_PATH
+        type: File
+    - name: shared
+      hostPath:
+        path: MITHRIL_MANUAL_SHARED_HOST_DIRECTORY
+        type: Directory

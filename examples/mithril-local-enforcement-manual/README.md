@@ -2,9 +2,13 @@
 
 ## Manual Testing In A VM
 
-Use the [retained-VM procedure](../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm)
-to create the guest. Run one enforcement script as root in that guest with a
-fresh live binding. Do not reuse a binding from a previous container.
+Use the [retained-VM shell procedure](../../crates/mithril-e2e/harness/vm/README.md#run-a-manual-shell)
+to stage the current identity and observation helpers. Stage this directory
+too. For a CRI case, create a fresh Pod and live binding as shown in the
+[direct-CRI example](../../crates/mithril-e2e/harness/vm/README.md#run-the-direct-cri-observation-example).
+Add each exact fixture that the selected enforcement shell requires. Run one
+enforcement script as root in the guest. Do not reuse a binding from a previous
+container.
 
 ## Operator Cases
 

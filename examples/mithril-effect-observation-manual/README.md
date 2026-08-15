@@ -2,9 +2,13 @@
 
 ## Manual Testing In A VM
 
-Use the [retained-VM procedure](../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm)
-to create the guest. Run one observation script as root in that guest with a
-fresh live binding. Do not reuse a binding from a previous container.
+Use the [retained-VM direct-CRI procedure](../../crates/mithril-e2e/harness/vm/README.md#run-the-direct-cri-observation-example)
+to create a fresh Pod, live binding JSON, and writable shared directory. It
+also stages this directory and its identity helper before it runs
+`cri-file-observe.sh`. Do not reuse a binding from a previous container.
+
+For another observation shell, use the same staging and fresh-binding steps.
+Then run that shell from the staged directory with its documented arguments.
 
 ## Operator Cases
 
