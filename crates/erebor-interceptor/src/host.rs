@@ -446,6 +446,12 @@ impl KernelHostOwner {
         }
 
         self.reject_retained_lsm_links(&BTreeSet::new())?;
+        let mut rollback = PinRollback {
+            paths: Vec::new(),
+            directories: Vec::new(),
+            committed: false,
+        };
+        let pin_directories = self.prepare_fresh_pin_directories(&mut rollback)?;
 
         let mut object = open.load().context(LibbpfSnafu {
             action: "load BPF object",
@@ -515,31 +521,7 @@ impl KernelHostOwner {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut rollback = PinRollback {
-            paths: Vec::new(),
-            directories: Vec::new(),
-            committed: false,
-        };
-        if let Some(pin_root) = &self.config.pin_root {
-            let maps_root = pin_root.join("maps");
-            let links_root = pin_root.join("links");
-            if !pin_root.exists() {
-                fs::create_dir_all(pin_root).context(IoSnafu {
-                    action: "create pin root",
-                    path: pin_root,
-                })?;
-                rollback.directories.push(pin_root.clone());
-            }
-            fs::create_dir(&maps_root).context(IoSnafu {
-                action: "create map pin directory",
-                path: &maps_root,
-            })?;
-            rollback.directories.push(maps_root.clone());
-            fs::create_dir(&links_root).context(IoSnafu {
-                action: "create link pin directory",
-                path: &links_root,
-            })?;
-            rollback.directories.push(links_root.clone());
+        if let Some((maps_root, links_root)) = pin_directories {
             for (mut map, record) in object.maps_mut().zip(map_records.iter_mut()) {
                 let path = maps_root.join(&record.name);
                 map.pin(&path).context(LibbpfSnafu {
@@ -918,6 +900,35 @@ impl KernelHostOwner {
             let section = program.section().to_string_lossy();
             program.set_autoload(self.config.object_kind.includes(&name, &section));
         }
+    }
+
+    fn prepare_fresh_pin_directories(
+        &self,
+        rollback: &mut PinRollback,
+    ) -> Result<Option<(PathBuf, PathBuf)>> {
+        let Some(pin_root) = self.config.pin_root.as_deref() else {
+            return Ok(None);
+        };
+        let maps_root = pin_root.join("maps");
+        let links_root = pin_root.join("links");
+        if !pin_root.exists() {
+            fs::create_dir_all(pin_root).context(IoSnafu {
+                action: "create pin root",
+                path: pin_root,
+            })?;
+            rollback.directories.push(pin_root.to_path_buf());
+        }
+        fs::create_dir(&maps_root).context(IoSnafu {
+            action: "create map pin directory",
+            path: &maps_root,
+        })?;
+        rollback.directories.push(maps_root.clone());
+        fs::create_dir(&links_root).context(IoSnafu {
+            action: "create link pin directory",
+            path: &links_root,
+        })?;
+        rollback.directories.push(links_root.clone());
+        Ok(Some((maps_root, links_root)))
     }
 
     fn retained_pin_root(&self) -> Result<Option<&Path>> {
@@ -1661,6 +1672,46 @@ mod tests {
         assert!(guard.contains("ProgramType::Lsm"));
         assert!(guard.contains("allowed_link_ids.contains(&link.id)"));
         assert!(guard.contains("RetainedLsmLinkSnafu"));
+    }
+
+    #[test]
+    fn fresh_pin_directories_prepare_before_load_and_roll_back() -> crate::Result<()> {
+        let source = include_str!("host.rs");
+        let start = source
+            .split("pub fn start")
+            .nth(1)
+            .and_then(|source| source.split("fn recover(").next())
+            .unwrap_or_default();
+        let lease = start.find("KernelHostLease::acquire");
+        let prepare = start.find("prepare_fresh_pin_directories");
+        let load = start.find("open.load()");
+        assert!(lease.is_some() && prepare.is_some() && load.is_some());
+        assert!(lease < prepare && prepare < load);
+
+        let temporary = tempfile::tempdir().context(IoSnafu {
+            action: "create temporary pin root",
+            path: "temporary pin root",
+        })?;
+        let root = temporary.path().join("pins");
+        let owner = KernelHostOwner::new(KernelHostConfig::identity(
+            "btf",
+            temporary.path().join("owner.lock"),
+            Some(root.clone()),
+            "boot",
+            1,
+        ));
+        let mut rollback = PinRollback {
+            paths: Vec::new(),
+            directories: Vec::new(),
+            committed: false,
+        };
+        let (maps, links) = owner
+            .prepare_fresh_pin_directories(&mut rollback)?
+            .expect("configured pin root creates pin directories");
+        assert!(root.is_dir() && maps.is_dir() && links.is_dir());
+        drop(rollback);
+        assert!(!root.exists());
+        Ok(())
     }
 
     #[test]
