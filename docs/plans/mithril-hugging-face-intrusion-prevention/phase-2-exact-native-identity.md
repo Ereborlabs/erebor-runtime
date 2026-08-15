@@ -334,3 +334,29 @@ The JSON records those values in `external_root`.
 This is physical identity evidence for host-task cgroup entry only. It does
 not run `nsenter`, restore, or a protected effect. It does not qualify the
 complete `ENTRY-MIGRATE-001` row. The phase remains **Blocked**.
+
+## Non-TTY Kubernetes Exec Identity Subcase — 2026-08-15
+
+The retained K3s CRI lane ran at source commit
+`e38a117b1d2a3bb2f3e1947483c1f4f61f7fd43e`. Its staged guest script SHA-256
+was `380fd7c73d33aefc320ff7919160db38c29be7d06b59f6dc51dd5b715fcf4018`.
+The lane invoked `kubectl exec ... -- sh -c ...` without `-i`, `-t`, or
+`--tty`. Before it accepted the task, the staged script required
+`creator_task_cookie=null`, `external_runtime_root`, and
+`runtime_external_restricted` for that `kubectl exec` root.
+
+The `OBSERVE` record is
+`/tmp/mithril-phase3-direct-cri-evidence.eWjKKw/observe-clean.txt`, SHA-256
+`c6cdd686dde59b84fa362b1c3e4e3d8e839bac44339081b8611cfc985057b994`. It
+records task cookie `80` for the `kubectl exec` exact read. The `PROTECT`
+record is
+`/tmp/mithril-phase3-direct-cri-evidence.eWjKKw/protect-clean.txt`, SHA-256
+`a3a5a16e8abc67e0d919b4650c62e0a1ce75c0df206c96028d93c8790351f8ab`. It
+also records task cookie `80` for the exact read. The Phase 3 record reports
+clean lane postflight. This reuses that physical evidence; it is not a new VM
+run.
+
+This is one non-TTY `kubectl exec` identity subcase of `ENTRY-EXEC-001`.
+It does not test TTY execution, copy-shaped execution, or a native application
+child with the identical command. It does not complete `ENTRY-EXEC-001`. The
+phase remains **Blocked**.

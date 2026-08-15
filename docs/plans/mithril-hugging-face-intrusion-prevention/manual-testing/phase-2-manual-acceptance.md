@@ -213,6 +213,31 @@ Use [`examples/mithril-identity-manual/cri-exec.sh`](../../../../examples/mithri
 for the readable operator procedure. This result covers one direct CRI exec.
 It does not complete the full entry or failure-injection matrix.
 
+## Recorded Non-TTY Kubernetes Exec Identity Subcase — 2026-08-15
+
+The same retained K3s CRI lane ran at source
+`e38a117b1d2a3bb2f3e1947483c1f4f61f7fd43e`. Its staged guest script SHA-256
+was `380fd7c73d33aefc320ff7919160db38c29be7d06b59f6dc51dd5b715fcf4018`.
+It ran `kubectl exec ... -- sh -c ...` without `-i`, `-t`, or `--tty`. The
+staged script required `creator_task_cookie=null`, `external_runtime_root`,
+and `runtime_external_restricted` before it accepted the task.
+
+The `OBSERVE` artifact
+`/tmp/mithril-phase3-direct-cri-evidence.eWjKKw/observe-clean.txt` has SHA-256
+`c6cdd686dde59b84fa362b1c3e4e3d8e839bac44339081b8611cfc985057b994` and
+records task cookie `80`. The `PROTECT` artifact
+`/tmp/mithril-phase3-direct-cri-evidence.eWjKKw/protect-clean.txt` has SHA-256
+`a3a5a16e8abc67e0d919b4650c62e0a1ce75c0df206c96028d93c8790351f8ab` and
+also records task cookie `80`. Phase 3 recorded clean lane postflight. This
+record reuses that evidence; it does not run another VM case.
+
+Use [`kubernetes-exec.sh`](../../../../examples/mithril-identity-manual/kubernetes-exec.sh)
+for the readable non-TTY operator procedure. It was not run in this retained
+lane. This result covers one non-TTY `kubectl exec` identity subcase of
+`ENTRY-EXEC-001`. It excludes TTY execution, copy-shaped execution, and a
+native application child with the identical command. The phase remains
+**Blocked**.
+
 ## Native Identity Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |

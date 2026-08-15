@@ -164,6 +164,28 @@ Mithril pin or process. Only unrelated BPF link 1 remained.
 This closes only the direct-CRI exact-file row. It does not qualify projected
 token behavior or the remaining manual matrix. Phase 3 remains **Blocked**.
 
+### Non-TTY Kubernetes exec identity subcase — 2026-08-15
+
+The same physical K3s lane is Phase 2 evidence for one non-TTY
+`ENTRY-EXEC-001` subcase. At source
+`e38a117b1d2a3bb2f3e1947483c1f4f61f7fd43e`, the staged guest script SHA-256
+was `380fd7c73d33aefc320ff7919160db38c29be7d06b59f6dc51dd5b715fcf4018`.
+Its `kubectl exec ... -- sh -c ...` command has no `-i`, `-t`, or `--tty`
+option. Before it accepts the task, the script requires
+`creator_task_cookie=null`, `external_runtime_root`, and
+`runtime_external_restricted`.
+
+The existing `OBSERVE` and `PROTECT` artifacts have SHA-256
+`c6cdd686dde59b84fa362b1c3e4e3d8e839bac44339081b8611cfc985057b994` and
+`a3a5a16e8abc67e0d919b4650c62e0a1ce75c0df206c96028d93c8790351f8ab`.
+Each records task cookie `80` for the `kubectl exec` exact read. Phase 3
+recorded clean lane postflight. This reclassifies existing physical evidence;
+it does not add a VM run.
+
+The record excludes TTY execution, copy-shaped execution, and a native
+application child with the identical command. It does not complete
+`ENTRY-EXEC-001`. Phase 2 remains **Blocked**.
+
 ### Retained alias and mount evidence — 2026-08-15
 
 At source `5b1abfa984d0`, a retained x86_64 VM ran the existing
