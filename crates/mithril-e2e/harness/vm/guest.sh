@@ -258,6 +258,7 @@ case ${1:-} in
     fixture_root=/var/lib/mithril-vm-qualification
     fixture_path=$fixture_root/secret
     benign_fixture_path=$fixture_root/benign
+    release_fixture_path=$fixture_root/release
     lane_root=$work_directory/k3s-cri-effect
     identity_config=$lane_root/identity-node.json
     effect_config=$lane_root/effect-node.json
@@ -309,7 +310,8 @@ case ${1:-} in
       local status=$?
       trap - EXIT
       set +e
-      [[ -z $cri_host_pid ]] || kill -CONT "$cri_host_pid" 2>/dev/null
+      [[ -z $release_fixture_path ]] || \
+        printf '1\n' >"$release_fixture_path" 2>/dev/null
       if [[ -n $cri_client_pid ]]; then
         kill -TERM "$cri_client_pid" 2>/dev/null
         wait "$cri_client_pid" 2>/dev/null || true
@@ -357,6 +359,8 @@ case ${1:-} in
     chmod 400 "$fixture_path"
     printf 'mithril-k3s-cri-benign\n' >"$benign_fixture_path"
     chmod 444 "$benign_fixture_path"
+    : >"$release_fixture_path"
+    chmod 644 "$release_fixture_path"
     install -m 0555 "$(command -v busybox)" "$fixture_root/busybox"
 
     /usr/local/bin/k3s kubectl delete namespace "$namespace" \
@@ -423,6 +427,10 @@ case ${1:-} in
     }
     [[ -r /proc/$init_pid/root/var/lib/mithril/benign ]] || {
       echo "read-only benign control is not visible through the Pod root" >&2
+      exit 1
+    }
+    [[ -r /proc/$init_pid/root/var/lib/mithril/release ]] || {
+      echo "read-only direct CRI release fixture is not visible through the Pod root" >&2
       exit 1
     }
 
@@ -512,7 +520,7 @@ case ${1:-} in
           exit 42
         fi
         echo $$ >"$2"
-        kill -STOP $$
+        while [ ! -s /var/lib/mithril/release ]; do :; done
         if IFS= read -r _ <"$3"; then
           cri_result=CRI_EXACT_ALLOWED
         else
@@ -585,10 +593,9 @@ case ${1:-} in
       cat "/proc/$init_pid/root$cri_baseline_file" >&2
       exit 1
     }
-    cri_task_state=$(awk '/^State:/ {print $2}' "/proc/$cri_host_pid/status")
-    [[ $cri_task_state == T ]] || {
-      echo "direct CRI exec is not stopped before signed recovery" >&2
-      cat "/proc/$cri_host_pid/status" >&2
+    [[ ! -s $release_fixture_path \
+      && ! -s /proc/$init_pid/root/var/lib/mithril/release ]] || {
+      echo "direct CRI release fixture is not empty before signed recovery" >&2
       exit 1
     }
 
@@ -670,7 +677,7 @@ case ${1:-} in
       exit 1
     }
 
-    nsenter -t "$init_pid" -U -p -- kill -CONT "$cri_namespace_pid"
+    printf '1\n' >"$release_fixture_path"
     printf '1\n' >&9 || true
     exec 8>&-
     result_fd_open=false
@@ -768,7 +775,7 @@ case ${1:-} in
     printf 'exact_effect=%s\n' "$exact_effect"
     printf 'benign_file_open=%s\n' "$benign_file_open"
     printf 'benign_effect=%s\n' "$benign_effect"
-    printf 'qualification_fixture=read-only-hostPath-secret-and-benign-files\n'
+    printf 'qualification_fixture=read-only-hostPath-secret-benign-and-release-files\n'
     stop_node
     exec 9>&-
     release_fd_open=false

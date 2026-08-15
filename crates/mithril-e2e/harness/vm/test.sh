@@ -89,6 +89,11 @@ grep -Fq "printf 'mithril-k3s-cri-benign\\n' >\"\$fixture_root/benign\"" \
 grep -Fq 'chmod 444 "$fixture_root/benign"' "$directory/guest.sh"
 grep -q 'benign hostPath fixture is not visible through the workload root' \
   "$directory/guest.sh"
+grep -Fq 'mountPath: /var/lib/mithril/release' "$directory/k3s-workload-v1.yaml"
+grep -Fq 'path: /var/lib/mithril-vm-qualification/release' \
+  "$directory/k3s-workload-v1.yaml"
+grep -q 'direct CRI release fixture is not visible through the Pod root' \
+  "$directory/guest.sh"
 grep -Fq '[[ $fixture_owned == false ]] || rm -rf -- "$fixture_root"' \
   "$directory/guest.sh"
 grep -q 'pod_initial_root=restored_or_unknown_root:fail_closed_unknown' \
@@ -108,10 +113,16 @@ grep -q 'CRI_EXACT_ALLOWED' "$directory/guest.sh"
 grep -q 'CRI_EXACT_DENIED' "$directory/guest.sh"
 ! grep -q 'cri_release_file' "$directory/guest.sh"
 ! grep -q 'cri_release_fd_open' "$directory/guest.sh"
-grep -Fq 'kill -STOP $$' "$directory/guest.sh"
-grep -Fq 'nsenter -t "$init_pid" -U -p -- kill -CONT "$cri_namespace_pid"' \
+! grep -Fq 'kill -STOP $$' "$directory/guest.sh"
+! grep -Fq 'nsenter -t "$init_pid" -U -p' "$directory/guest.sh"
+grep -Fq 'while [ ! -s /var/lib/mithril/release ]; do :; done' \
   "$directory/guest.sh"
-grep -q 'direct CRI exec is not stopped before signed recovery' \
+grep -q 'direct CRI release fixture is not empty before signed recovery' \
+  "$directory/guest.sh"
+grep -Fq "printf '1\\n' >\"\$release_fixture_path\"" \
+  "$directory/guest.sh"
+grep -Fq ': >"$release_fixture_path"' "$directory/guest.sh"
+grep -Fq '[[ ! -s $release_fixture_path \' \
   "$directory/guest.sh"
 grep -q 'cri_baseline_file=\$cri_state/baseline' "$directory/guest.sh"
 grep -q 'expected_cri_effect="task_cookie=\$cri_task_cookie family=2 operation=2' \
@@ -143,7 +154,7 @@ grep -q 'reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT' \
   "$directory/guest.sh"
 grep -q 'benign_file_open=%s' "$directory/guest.sh"
 grep -q 'benign_effect=%s' "$directory/guest.sh"
-grep -q 'qualification_fixture=read-only-hostPath-secret-and-benign-files' \
+grep -q 'qualification_fixture=read-only-hostPath-secret-benign-and-release-files' \
   "$directory/guest.sh"
 grep -Fq '[[ $exec_status -eq 0 ]]' "$directory/guest.sh"
 grep -Fq '[ "$6" = OBSERVE ] && [ "$secret_result" = SECRET_ALLOWED ] && [ "$benign_result" = BENIGN_ALLOWED ]' \
@@ -173,6 +184,7 @@ grep -q -- '--bpf-object "$remote_bin/feasibility.bpf.o"' "$directory/run.sh"
 grep -q 'crates/mithril-e2e/fixtures/hugging-face/\$fixture' \
   "$directory/run.sh"
 grep -q 'k3s-cri-observe.txt' "$directory/README.md"
+grep -q 'read-only hostPath release file' "$directory/README.md"
 grep -q -- '--skip-administrative-exec' "$directory/README.md"
 
 fake_provider=$test_root/provider

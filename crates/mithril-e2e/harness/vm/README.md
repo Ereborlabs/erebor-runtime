@@ -44,7 +44,8 @@ task cookie, exact object key, `WOULD_DENY`, and
 exact-object denial. `kubectl exec` also reads a benign exact file after
 recovery; that read must stay allowed. The hostPath file is only a
 qualification fixture. It does not prove projected-token semantic
-classification.
+classification. An empty read-only hostPath release file holds the direct CRI
+task until signed recovery. The host writes that file after recovery.
 
 The CRI guest lane accepts only `MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT`.
 It uses `PROTECT` by default. The harness sets each mode explicitly and writes

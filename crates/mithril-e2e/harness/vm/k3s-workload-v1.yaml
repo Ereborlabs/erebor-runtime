@@ -34,6 +34,9 @@ spec:
         - name: qualification-benign
           mountPath: /var/lib/mithril/benign
           readOnly: true
+        - name: qualification-release
+          mountPath: /var/lib/mithril/release
+          readOnly: true
         - name: administrative-executable
           mountPath: /var/lib/mithril/busybox
           readOnly: true
@@ -54,6 +57,10 @@ spec:
     - name: qualification-benign
       hostPath:
         path: /var/lib/mithril-vm-qualification/benign
+        type: File
+    - name: qualification-release
+      hostPath:
+        path: /var/lib/mithril-vm-qualification/release
         type: File
     - name: administrative-executable
       hostPath:
