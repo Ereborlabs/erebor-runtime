@@ -158,6 +158,8 @@ case ${1:-} in
     fixture_owned=true
     printf 'mithril-k3s-cri-effect\n' >"$fixture_root/secret"
     chmod 400 "$fixture_root/secret"
+    printf 'mithril-k3s-cri-benign\n' >"$fixture_root/benign"
+    chmod 444 "$fixture_root/benign"
     install -m 0555 "$(command -v busybox)" "$fixture_root/busybox"
     /usr/local/bin/k3s kubectl apply -f "$manifest" >/dev/null
     /usr/local/bin/k3s kubectl -n "$namespace" wait \
@@ -189,6 +191,10 @@ case ${1:-} in
     }
     [[ -s /proc/$container_pid/root/var/run/secrets/tokens/mithril ]] || {
       echo "projected service-account token is not visible through the workload root" >&2
+      exit 1
+    }
+    [[ -r /proc/$container_pid/root/var/lib/mithril/benign ]] || {
+      echo "benign hostPath fixture is not visible through the workload root" >&2
       exit 1
     }
     grep -q ' / .* - overlay ' "/proc/$container_pid/mountinfo" || {

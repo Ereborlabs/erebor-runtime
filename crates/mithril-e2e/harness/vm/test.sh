@@ -84,6 +84,13 @@ grep -q '^        exact_object_key_ids: \[12\]$' \
   "$directory/k3s-administrative-policy-v1.yaml"
 grep -q '^  k3s-cri-effect)$' "$directory/guest.sh"
 grep -q '^  k3s-administrative-exec)$' "$directory/guest.sh"
+grep -Fq "printf 'mithril-k3s-cri-benign\\n' >\"\$fixture_root/benign\"" \
+  "$directory/guest.sh"
+grep -Fq 'chmod 444 "$fixture_root/benign"' "$directory/guest.sh"
+grep -q 'benign hostPath fixture is not visible through the workload root' \
+  "$directory/guest.sh"
+grep -Fq '[[ $fixture_owned == false ]] || rm -rf -- "$fixture_root"' \
+  "$directory/guest.sh"
 grep -q 'pod_initial_root=restored_or_unknown_root:fail_closed_unknown' \
   "$directory/guest.sh"
 grep -q 'crictl exec "\$container_id"' "$directory/guest.sh"
