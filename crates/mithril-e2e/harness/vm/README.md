@@ -94,6 +94,17 @@ the product path, approved role, admission denial, restricted non-winner, and
 measured pre-binding start gap. A failed lane retains only a `.partial` host
 record. Guest destruction remains the outer cleanup boundary.
 
+For repeated manual work, add `--keep-vm`. The harness leaves the guest and
+its k3s installation running, and writes `retained-vm.txt` in the output
+directory. Keep that file. When the work is complete, destroy only that guest:
+
+```bash
+crates/mithril-e2e/harness/vm/providers/libvirt.sh destroy <vm_name> <work_directory>
+```
+
+Use the two values from `retained-vm.txt`. Without `--keep-vm`, the default
+cleanup remains unchanged.
+
 The host compiles the disposable kernel qualification object with the existing
 repository compiler. The guest loads that exact object. The record command
 checks the copied source digest, the physical capability records, and every raw

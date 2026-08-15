@@ -7,10 +7,11 @@ repo_root=$(cd -- "$directory/../../../.." && pwd)
 provider=$directory/providers/libvirt.sh
 output_directory=
 with_k3s=false
+keep_vm=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--keep-vm]" >&2
 }
 
 while (($#)); do
@@ -27,6 +28,10 @@ while (($#)); do
       ;;
     --with-k3s)
       with_k3s=true
+      shift
+      ;;
+    --keep-vm)
+      keep_vm=true
       shift
       ;;
     --help|-h)
@@ -77,11 +82,16 @@ cleanup() {
   local status=$?
   local destroy_ok=true
   trap - EXIT
-  if [[ $created == true ]] && ! "$provider" destroy "$vm_name" "$work_directory"; then
+  if [[ $created == true && $keep_vm == false ]] &&
+      ! "$provider" destroy "$vm_name" "$work_directory"; then
     status=1
     destroy_ok=false
   fi
-  if [[ $destroy_ok == true && -d $work_directory && $work_directory == /tmp/mithril-vm-test.* ]]; then
+  if [[ $keep_vm == true ]]; then
+    printf 'vm_name=%s\nwork_directory=%s\nprovider=%s\n' \
+      "$vm_name" "$work_directory" "$provider" >"$output_directory/retained-vm.txt"
+    echo "VM retained: $vm_name ($work_directory)" >&2
+  elif [[ $destroy_ok == true && -d $work_directory && $work_directory == /tmp/mithril-vm-test.* ]]; then
     rm -rf -- "$work_directory"
   elif [[ $destroy_ok == false ]]; then
     echo "VM cleanup failed; retained provider state in $work_directory" >&2

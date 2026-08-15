@@ -13,6 +13,7 @@ done
 
 help=$($directory/run.sh --help 2>&1)
 [[ $help == *--with-k3s* ]]
+[[ $help == *--keep-vm* ]]
 $directory/guest.sh --help >/dev/null 2>&1
 
 set +e
@@ -49,6 +50,7 @@ grep -q 'record-physical-qualification' "$directory/run.sh"
 grep -q 'kernel-qualification-x86_64.json' "$directory/run.sh"
 grep -q 'k3s-cri-effect.txt' "$directory/run.sh"
 grep -q 'k3s-administrative-exec.txt' "$directory/run.sh"
+grep -q 'retained-vm.txt' "$directory/run.sh"
 grep -q 'k3s-administrative-policy-v1.yaml' "$directory/run.sh"
 grep -q '^  desired_profile_mode: PROTECT$' \
   "$directory/k3s-administrative-policy-v1.yaml"
