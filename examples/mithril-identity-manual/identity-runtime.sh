@@ -199,7 +199,9 @@ identity_start_node() {
   identity_node_pid=$!
 
   for ((attempt = 0; attempt < 100; attempt++)); do
-    [[ -d $identity_pin_root/maps && -d $identity_pin_root/links ]] && return 0
+    # This final attached link signals that all map and link pins are ready.
+    [[ -d $identity_pin_root/maps \
+      && -e $identity_pin_root/links/erebor_sched_process_exit ]] && return 0
     if ! kill -0 "$identity_node_pid" 2>/dev/null; then
       echo "mithril-node exited:" >&2
       tail -n 30 "$identity_work/mithril-node.log" >&2
