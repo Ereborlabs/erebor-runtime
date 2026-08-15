@@ -149,6 +149,7 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub cgroup_escape_root: NativeTaskSnapshotV1,
     pub cgroup_escape_placement_mismatch_detected: bool,
     pub moved_parent_fork_denied: bool,
+    pub moved_task_exec_denied: bool,
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub external_root: NativeTaskSnapshotV1,
@@ -499,6 +500,82 @@ impl IdentityTestRunner {
         };
         fixture.stop();
 
+        let mut moved_task_fixture = NativeProcessFixture::start()?;
+        fs::write(&procs_path, moved_task_fixture.outer_pid().to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        let moved_task_parent =
+            self.wait_for("moved-task exec parent identity", &procs_path, || {
+                inspector
+                    .snapshot(moved_task_fixture.outer_pid())
+                    .context(NodeSnafu)
+            })?;
+        moved_task_fixture.release_root()?;
+        let moved_task_pid =
+            self.wait_for("moved-task exec child creation", &procs_path, || {
+                moved_task_fixture.native_child_pid()
+            })?;
+        moved_task_fixture.open_native_pidfd(moved_task_pid)?;
+        let moved_task_before_move =
+            self.wait_for("moved-task exec child identity", &procs_path, || {
+                inspector.snapshot(moved_task_pid).context(NodeSnafu)
+            })?;
+        ensure!(
+            moved_task_parent.root_class == Some("external_runtime_root")
+                && moved_task_parent.installed_role_class == Some("runtime_external_restricted")
+                && moved_task_before_move.creator_task_cookie
+                    == Some(moved_task_parent.task_cookie)
+                && moved_task_before_move.real_parent_task_cookie == moved_task_parent.task_cookie
+                && moved_task_before_move.task_cookie != moved_task_parent.task_cookie
+                && moved_task_before_move.coordinate_state == TaskCoordinateStateV1::Runnable as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "moved-task exec child has the wrong pre-move identity",
+            }
+        );
+        let health_before_moved_task = identity.health(&host).context(NodeSnafu)?;
+        fs::write(&parent_procs_path, moved_task_pid.to_string()).context(IoSnafu {
+            path: &parent_procs_path,
+        })?;
+        let moved_task_after_move = self.wait_for(
+            "moved-task exec fail-closed identity",
+            &parent_procs_path,
+            || {
+                let snapshot = inspector.snapshot(moved_task_pid).context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    snapshot.task_cookie == moved_task_before_move.task_cookie
+                        && snapshot.creator_task_cookie
+                            == moved_task_before_move.creator_task_cookie
+                        && snapshot.real_parent_task_cookie
+                            == moved_task_before_move.real_parent_task_cookie
+                        && snapshot.coordinate_state
+                            == TaskCoordinateStateV1::FailClosedUnknown as u8
+                }))
+            },
+        )?;
+        let health_after_moved_task_move = identity.health(&host).context(NodeSnafu)?;
+        ensure!(
+            moved_task_after_move.root_class.is_none()
+                && moved_task_after_move.installed_role_class.is_none()
+                && health_after_moved_task_move.placement_mismatches
+                    > health_before_moved_task.placement_mismatches,
+            InvalidInputSnafu {
+                path: &parent_procs_path,
+                reason: "moving a labeled native child did not fail closed",
+            }
+        );
+        moved_task_fixture.release_exec(moved_task_pid)?;
+        moved_task_fixture.wait_for_native_exec_failure()?;
+        let health_after_moved_task_exec = identity.health(&host).context(NodeSnafu)?;
+        ensure!(
+            health_after_moved_task_exec.placement_mismatches
+                > health_after_moved_task_move.placement_mismatches,
+            InvalidInputSnafu {
+                path: &parent_procs_path,
+                reason: "a moved labeled native child did not record its denied exec",
+            }
+        );
+        moved_task_fixture.stop();
+
         let mut orphan_fixture = NativeProcessFixture::start_orphaning()?;
         fs::write(&procs_path, orphan_fixture.outer_pid().to_string())
             .context(IoSnafu { path: &procs_path })?;
@@ -775,13 +852,14 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 3,
+            schema_version: 4,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
             cgroup_escape_root,
             cgroup_escape_placement_mismatch_detected: true,
             moved_parent_fork_denied: true,
+            moved_task_exec_denied: true,
             clone_into_cgroup_external_root: clone_external_root,
             clone_into_cgroup_native_child: clone_native_child,
             external_root,
@@ -868,7 +946,11 @@ impl NativeProcessFixture {
     }
 
     fn start_with_parent_exit(parent_exit_mode: bool) -> Result<Self> {
-        let parent_wait = if parent_exit_mode { "read _" } else { "wait" };
+        let parent_wait = if parent_exit_mode {
+            "read _"
+        } else {
+            "wait \"$!\""
+        };
         let script = format!(
             "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 30) & {parent_wait}"
         );
@@ -945,6 +1027,33 @@ impl NativeProcessFixture {
         }
         pidfd_send_signal(pidfd, Signal::CONT)
             .map_err(|error| invalid_state(format!("release native child exec: {error}")))
+    }
+
+    fn wait_for_native_exec_failure(&mut self) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(status) = self.outer.try_wait().context(IoSnafu {
+                path: Path::new("identity test shell"),
+            })? {
+                self.stdin.take();
+                ensure!(
+                    !status.success(),
+                    InvalidInputSnafu {
+                        path: Path::new("identity test shell"),
+                        reason: format!("native child exec unexpectedly completed with {status}"),
+                    }
+                );
+                return Ok(());
+            }
+            ensure!(
+                Instant::now() < deadline,
+                InvalidInputSnafu {
+                    path: Path::new("identity test shell"),
+                    reason: "native child exec did not fail before the short deadline",
+                }
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     fn release_parent_exit(&mut self) -> Result<()> {
@@ -1286,6 +1395,24 @@ mod tests {
                 })
         })?;
         Ok(())
+    }
+
+    #[test]
+    fn native_process_fixture_reports_failed_exec() -> crate::Result<()> {
+        let runner = IdentityTestRunner::new(".");
+        let mut fixture = NativeProcessFixture::start_with_script(
+            "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /missing-native-exec) & wait \"$!\"",
+            false,
+        )?;
+        fixture.release_root()?;
+        let children_path =
+            PathBuf::from(format!("/proc/{0}/task/{0}/children", fixture.outer_pid()));
+        let native_pid = runner.wait_for("failed native child creation", &children_path, || {
+            fixture.native_child_pid()
+        })?;
+        fixture.open_native_pidfd(native_pid)?;
+        fixture.release_exec(native_pid)?;
+        fixture.wait_for_native_exec_failure()
     }
 
     #[test]
