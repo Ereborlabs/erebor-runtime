@@ -29,8 +29,8 @@ The latest phase results remain:
 - Phase 2: **Blocked**. Native identity has current source and privileged VM
   evidence. The complete entry, reuse, saturation, failure-injection, runtime,
   and non-x86 physical matrix is not complete.
-- Phase 3: **Blocked**. Exact observation has current privileged VM evidence.
-  The qualified Mithril CRI effect and full manual matrix are not complete.
+- Phase 3: **Blocked**. Exact observation has current privileged VM and K3s
+  CRI observe evidence. The full manual matrix is not complete.
 - Phase 4: **Not done**. The source now contains narrow positive and negative
   enforcement for the listed file, exec, IPC, process, device, io_uring,
   mount, exception, generation, and administrative paths. The final current
@@ -124,6 +124,12 @@ The VM ran on x86_64 Linux `6.8.0-137-generic` with active LSM order
 | Native identity | Passed. It checks cgroup-escape mismatch, distinct-root owner rejection, retained-link rejection after shutdown, original-root recovery, stable map IDs, reference release, and cleanup. | `dbf7bc49e4aedb22f38d261f0d51720e9bc71e79b9803d12cc74bdb39df4a7ff` |
 | Effect OBSERVE | Passed. It checks exact observation, mount revalidation, external replacement fail-close, propagation, and cleanup. | `3317b52ede0b9d4ea4acd3b5ab3e4926d9d8edecad96a40801a7bcbed0ad275c` |
 | Effect PROTECT | Passed. It checks pre-effect denial, held descriptors, io_uring, mount revalidation, external replacement fail-close, and cleanup. | `74dec05c7984076a908db509733b078492407a145298fee684e20ed1ef9cc8c6` |
+
+The retained K3s VM also passed the CRI OBSERVE lane at source commit
+`bd325aa`. A real `kubectl exec` task had task cookie 19 and a restricted
+external-root classification. Its exact file read completed with
+`WOULD_DENY`, `UNKNOWN_AFTER_PRE_EFFECT`, exact object key 7, and kernel
+result 0. The lane removed its namespace, fixture, pin root, and Mithril links.
 
 The automatic probe does not replace the full qualification matrix. The
 checked registry now contains the digest-bound Appendix C fixture IDs,

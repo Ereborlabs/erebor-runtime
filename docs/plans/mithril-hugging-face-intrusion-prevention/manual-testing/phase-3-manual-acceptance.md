@@ -3,8 +3,8 @@
 Status: The compiler, canonical path and mount handling, exact-file
 observation, hard-safety, typed effect, and simulation cases have
 implementations. The current source passed the privileged VM observation
-probe. The optional k3s lane passed substrate checks only. A Mithril CRI
-effect run and the remaining operator cases are not recorded.
+probe and one K3s CRI observe run. The remaining operator cases are not
+recorded.
 
 Phase: [Effect Observation And Profile Simulation](../phase-3-effect-observation-and-profile-simulation.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -54,6 +54,19 @@ mount/device/inode/generation differs. The same probe checks the configured
 AF_UNIX `SOCK_STREAM` unmatched-policy result. Docker direct-cgroup and CRI
 discovery logic remain ordinary Rust fixtures. The manual cases below validate their
 real-daemon transport integrations.
+
+## Current K3s CRI Record
+
+The retained VM ran the production K3s CRI lane in `OBSERVE` mode on
+2026-08-15. A real `kubectl exec` task remained an
+`external_runtime_root` with the restricted external role. Its exact
+read-only hostPath file read succeeded. The captured event had
+`family=2`, `operation=2`, `reason=WOULD_DENY`,
+`result=UNKNOWN_AFTER_PRE_EFFECT`, `exact_object_key_id=7`, and
+`kernel_result=0`.
+
+This record proves one CRI observe path. It does not replace the separate
+operator cases below or complete the phase.
 
 ## Implemented Manual Cases
 

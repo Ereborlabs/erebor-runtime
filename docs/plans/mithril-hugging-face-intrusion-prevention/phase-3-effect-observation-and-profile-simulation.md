@@ -1,8 +1,8 @@
 # Phase 3: Effect Observation And Profile Simulation
 
 Status: Blocked. The current source passed the disposable privileged VM
-observation probe. A Mithril CRI effect run and the remaining manual matrix
-are not recorded. No prevention claim is made.
+observation probe and one real K3s CRI observe run. The remaining manual
+matrix is not recorded. No prevention claim is made.
 
 Master: [Mithril Hugging Face Intrusion Prevention](./README.md)
 Design: [Validated readable architecture](./policy-and-protection-algorithm-architecture-readable.md)
@@ -132,7 +132,7 @@ distributed graphing, and response.
 ```text
 State: Blocked.
 Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md at SHA-256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
-Completed deliverable IDs: D3.1-D3.4, D3.6, and D3.7 are code-backed. D3.5 has exact file and mount-view handling plus narrow typed Unix-stream, device-ioctl, and process-target models. The compiler rejects positive exact Unix relationships and positive process-control decisions. Other unqualified mechanisms keep explicit hard-safe results. The current source passed the privileged VM observation probe. A qualified Mithril CRI effect run and the remaining manual matrix are not recorded. The state remains Blocked.
+Completed deliverable IDs: D3.1-D3.4, D3.6, and D3.7 are code-backed. D3.5 has exact file and mount-view handling plus narrow typed Unix-stream, device-ioctl, and process-target models. The compiler rejects positive exact Unix relationships and positive process-control decisions. Other unqualified mechanisms keep explicit hard-safe results. The current source passed the privileged VM observation probe and one qualified K3s CRI observe run. The remaining manual matrix is not recorded. The state remains Blocked.
 Files and durable owners changed: mithril-control::policy owns the closed restricted YAML parser, reference and bound validation, deterministic CBOR, Ed25519 candidate and rollback envelopes, exact conflicts, finite local cells and defaults, bounded component graph, typed effect lowering, honest simulation, and the 50-case observation oracle. mithril-node::NodePolicyGenerationOwner verifies candidates, enforces anti-rollback, derives local handles, installs and reads back immutable candidate rows, resolves live exact files, snapshots mount views, selects the oldest unique mount, and proposes exact DIRTY-to-CLEAN reconciliation. erebor-interceptor remains the only libbpf-rs loader and one native RingBuffer reader. The production object owns the bounded component walk, graph lookup, namespace-global mount mutation state, reconciliation CAS, dynamic exact-file binding, typed effect decisions, hard-safety results, and per-CPU loss health. mithril-e2e::EffectTestRunner owns the assertion-bearing self-cleaning privileged host oracle. examples/mithril-effect-observation-manual retains separate real Docker, CRI, raw nsenter, hard-link, bind-alias, mount-attack, saturation, latency, and unsupported-network operator cases.
 Correctness and simplicity result: one C/CO-RE object and one libbpf-rs owner serve every container. The BPF decision is fixed before best-effort ring reservation, prior LSM errno is returned unchanged, multi-operation wrappers stop after the first nonzero result, and ring loss cannot change the result. Exact device decisions use the qualified object and ioctl-command axes. Process-target and exact Unix-stream rows use only the narrow represented operations. The compiler rejects positive process-control and positive exact Unix-stream decisions. An unmatched Unix-stream operation keeps its configured unmatched-policy result. A file candidate requires a CLEAN mount-namespace view, stable epoch/snapshot before and after the bounded component graph, exact live mount/device/inode/generation identity, and a retained read-back profile. Mount topology state is keyed by mount namespace rather than the mutating task's cgroup, so an external privileged task entering a protected namespace marks it DIRTY too. Reconciliation refuses to clean the view when the configured exact mount/device/inode/generation changed. Covered mount hooks retain the mutation in task storage until syscall exit and accept only an exact userspace epoch/version proposal. The LSM paths alone use the namespace-view spin lock; the tracing exit path uses BPF atomic version/pending updates and decrements pending last because Linux rejects spin-lock maps for tracing programs. A configured creation errno is explicitly sign-extended and verifier-bounded to `[-MAX_ERRNO, -1]`, with `-EACCES` as the invalid-value fallback. Task storage receives only a verifier-trusted typed hook task or `bpf_get_current_task_btf()` result. Real-parent topology uses exact CO-RE-read coordinates; an ordinary fork attaches the already proven creator cookie, while `CLONE_PARENT`, `CLONE_THREAD`, reparenting, and independent roots retain the architecture's coordinate-only representation instead of inventing a cookie or passing a scalar probe-read pointer to task storage. No final decision cache or second path engine was added. An identical recovered generation is verified in place and is never downgraded to PREPARING. Reader exit is a node failure. Both the Rust probe and manual cases own bounded cleanup.
 Upstream-adoption dossier IDs used: KA-LSM-DECISION-001 and KA-READER-CAPACITY-005 for decision-before-telemetry and ring-loss behavior; TG-GENERIC-LSM-003, TG-VMLINUX-HEADER-006, TG-VMLINUX-ARM64-007, TG-CONCURRENCY-LOSS-005, AS-VMLINUX-ARM-001, and AS-VMLINUX-RISCV-002 for explicit CO-RE programs, generated multi-architecture headers, per-CPU scratch, and concurrency/loss practices; META-MOUNT-ROOT-001, META-OLDEST-MOUNT-002, and META-COMPONENT-GRAPH-003 for the bounded mount-root traversal and component graph. The local implementation adds actor-view snapshot validation, DIRTY ordering, exact proposal CAS, and final object/profile revalidation required by the Mithril architecture.
@@ -141,8 +141,11 @@ Commands and exact source state covered: the disposable VM record under /tmp/mit
 Platform/kernel/runtime manifests: the current probe ran on x86_64 Linux 6.8.0-136-generic with LSM order lockdown,capability,landlock,yama,apparmor,bpf, runtime BTF SHA-256 9aa9eb9e8108bff44e685830315fb7a442bafd99778314cdd6de0fb72868829f, cgroup v2, and unique mount IDs. The verifier constraints and the production implementation described above remain unchanged. The optional k3s lane recorded k3s v1.35.5+k3s1, Pod readiness, CRI endpoint unix:///run/k3s/containerd/containerd.sock, workload-root discovery, overlay storage, and projected-token discovery. Its record SHA-256 is 905a3ad84106e975cc1cde8b68cb24c861079f8baf3b616c597ec14e234f2503. This is substrate evidence only. It does not run a Mithril CRI binding or effect decision. Compilation is not a non-x86 physical claim.
 Performance/capacity results: the observation ring is bounded at 4 MiB, recent userspace history at 1,024 records, compiled exact cells at 65,536, and the path model at 4,096 states and 64 components. The VM record has measured_opens=10000 and saturation_opens=50000. Its BASELINE distribution has sample_count=10000, p50=6821 ns, p95=7906 ns, p99=60240 ns, maximum=477409 ns, and raw_samples_sha256=cce53272e67763a1d82865d4e96119637a5ca1c1b52a4cb380f108e1c85451d5. Its OBSERVE distribution has sample_count=10000, p50=8353 ns, p95=8691 ns, p99=180059 ns, maximum=699532 ns, and raw_samples_sha256=31aec8e8beba8c42f235cb3588dd4ce44f8fb65679832a46310c6b84690dfab7. The recorded averages are baseline_average_open_ns=8063 and observed_average_open_ns=9765.
 Unsupported/degraded paths: LOCAL_EFFECT_OBSERVATION remains DEGRADED and LOCAL_EFFECT_PREVENTION remains unsupported. A signed candidate DENY is physically allowed and reported as WOULD_DENY. Exact file and mount-view handling and narrow typed Unix-stream, device-ioctl, and process-target models exist. Positive exact Unix relationships and positive process-control decisions are rejected. Unqualified derived authority, other IPC and asynchronous channels, complete memory and VMA provenance, persistent provenance, privilege authority, self-protection, propagation, automount/referral, and cross-namespace fan-out retain explicit hard-safe results. Exact-file configuration still needs a live resolver plus a nonzero operator or filesystem inode generation and is not yet a rotation-aware runtime binding. Runtime observation is bounded and non-durable. A pre-existing represented bind alias canonicalizes correctly, but its signed denial remains observe-only. A new protected mount attempt is physically hard-denied because its mount object is unqualified.
-Remaining work in this phase: run a real Mithril CRI effect integration on a kernel that supplies unique mount IDs, and run the remaining manual matrix. Complete memory and VMA provenance, persistent provenance, derived authority, propagation, and positive relationship models remain outside the qualified observation slice. Change State to Done only if every required observation oracle passes.
-Next phase not authorized: yes.
+Remaining work in this phase: run the remaining manual matrix. Complete memory
+and VMA provenance, persistent provenance, derived authority, propagation, and
+positive relationship models remain outside the qualified observation slice.
+Change State to Done only if every required observation oracle passes.
+Next phase work is authorized by the current user request.
 ```
 
 ## Qualification update — 2026-08-12
@@ -170,14 +173,13 @@ An earlier real Docker manual case also passed. The protected container read the
 secret in observe mode, Mithril emitted the exact `WOULD_DENY`, and the shell
 removed its node process, tasks, pins, state, lease, configuration, and logs.
 
-The optional k3s lane passed Pod readiness, CRI discovery, workload-root
+The earlier optional k3s lane passed Pod readiness, CRI discovery, workload-root
 discovery, overlay storage, and projected-token discovery. Its record SHA-256
 is `905a3ad84106e975cc1cde8b68cb24c861079f8baf3b616c597ec14e234f2503`.
-It proves the runtime substrate only. It does not prove a Mithril CRI binding
-or effect decision.
+It was substrate evidence only.
 
-The phase stays **Blocked** until a Mithril CRI effect case runs on a qualified
-kernel and the remaining required manual cases are recorded.
+The phase stays **Blocked** until the remaining required manual cases are
+recorded.
 
 ## Qualification update — 2026-08-15
 
@@ -194,10 +196,25 @@ Its pin root, lease, cgroup, and fixture-root cleanup fields are true. The
 reconciliation check ran before exact effects and did not use a workload file
 access as a warmup.
 
-The phase remains **Blocked**. This evidence does not add a Mithril CRI effect
-binding or complete the manual acceptance matrix.
+The phase remains **Blocked**. This evidence does not complete the manual
+acceptance matrix.
 
 The operator-facing command
 `bash examples/mithril-effect-observation-manual/compile-observe-policy.sh`
 also passed. It compiled 19 exact cells and verified a deterministic signed
 candidate. It does not replace a physical CRI effect result.
+
+## Qualification update — 2026-08-15 — K3s CRI OBSERVE
+
+At source commit `bd325aa`, the retained x86_64 Linux
+`6.8.0-137-generic` VM ran the production K3s CRI lane in `OBSERVE` mode.
+The real `kubectl exec` task had `task_cookie=19` and retained the
+`external_runtime_root` and `runtime_external_restricted` classification.
+It read the exact read-only hostPath object successfully. The retained output
+recorded `family=2`, `operation=2`, `reason=WOULD_DENY`,
+`result=UNKNOWN_AFTER_PRE_EFFECT`, `exact_object_key_id=7`, and
+`kernel_result=0`.
+
+The lane removed its namespace, fixture, pin root, and Mithril links. This
+closes the K3s CRI observation row. The phase remains **Blocked** because the
+remaining manual matrix is not complete.
