@@ -658,6 +658,8 @@ case ${1:-} in
     case $effect_mode in
       OBSERVE)
         [[ $secret_result == SECRET_ALLOWED && $benign_result == BENIGN_ALLOWED ]] || {
+          printf 'post_release_secret_result=%s\n' "$secret_result"
+          printf 'post_release_benign_result=%s\n' "$benign_result"
           echo "kubectl exec did not preserve both observe-mode file reads" >&2
           exit 1
         }
@@ -669,6 +671,8 @@ case ${1:-} in
         ;;
       PROTECT)
         [[ $secret_result == SECRET_DENIED && $benign_result == BENIGN_ALLOWED ]] || {
+          printf 'post_release_secret_result=%s\n' "$secret_result"
+          printf 'post_release_benign_result=%s\n' "$benign_result"
           echo "kubectl exec did not deny the secret and allow the benign control" >&2
           exit 1
         }
