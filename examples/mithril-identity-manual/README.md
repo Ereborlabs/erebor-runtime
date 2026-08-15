@@ -19,6 +19,7 @@ Then run only the case being checked:
 | Native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Orphaned native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --orphan` |
 | Double-fork native child | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --double-fork` |
+| Moved native-child exec | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --moved-exec` |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
@@ -107,6 +108,28 @@ increase, and it must remain a native task with the inherited restricted role.
 This procedure covers the double-fork branch of `ID-CREATOR-PARENT-007`. It
 does not cover subreapers, namespace-init reparenting, ptrace reparenting, or
 PID reuse. It is an operator procedure, not a qualified VM result.
+
+## Moved Native-Child Exec Check
+
+Run this check when the host can move one stopped native child to the parent of
+the configured container cgroup:
+
+```bash
+sudo examples/mithril-identity-manual/native-child.sh \
+  NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --moved-exec
+```
+
+The script prints one runtime-exec command. Run it in another root terminal.
+Enter the host PID of its shell and stopped child. The script records their
+native identity, moves only the child PID to the parent cgroup, and waits for
+`coordinate_state=6` (`FailClosedUnknown`). It then resumes the child.
+
+The child must keep its task and creator cookies. It must not become `sleep`.
+It must exit within five seconds because its exec is denied. This shows that a
+labeled task that leaves its expected placement does not use host exec policy.
+
+This procedure is an operator check for `ID-MOVED-TASK-EXEC-005`. It is not a
+qualified VM result.
 
 Every executable starts the real `mithril-node`, performs one operator-driven
 case, and removes its test tasks, BPF pins, lease, temporary config, state, and

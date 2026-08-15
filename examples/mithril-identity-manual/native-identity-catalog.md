@@ -14,7 +14,7 @@ until their exact qualification environment is run.
 | `ID-CLONE-CGROUP-FAIL-003` | Force child allocation, finalization, or placement failure. | No unlabeled runnable child gains authority; a normal clone succeeds. |
 | `ID-CREATOR-PARENT-007` | Reparent or orphan a child after native creation. Run the creator-exit branch with [`native-child.sh --orphan`](./native-child.sh) and the double-fork branch with [`native-child.sh --double-fork`](./native-child.sh). | The immutable creator edge stays exact while the real-parent interval changes. The procedures do not cover subreapers, namespace-init reparenting, ptrace reparenting, or PID reuse. |
 | `ID-MOVED-PARENT-FORK-004` | Move a parent, then fork. | The child inherits actual task authority and the placement floor, not a cgroup-derived role. |
-| `ID-MOVED-TASK-EXEC-005` | Move a labeled task, then exec. | Task-first old identity and placement mismatch constrain the transition. |
+| `ID-MOVED-TASK-EXEC-005` | Move a stopped labeled child, then exec. Run [`native-child.sh --moved-exec`](./native-child.sh). | The task and creator cookies stay exact. The moved child becomes fail closed and cannot exec `sleep` through host policy. |
 | `ID-TASK-COORD-FINALIZE-006` | Inspect allocation, pre-wake finalization, visibility, and exit. | Opaque state precedes effects; coordinates finalize later without granting permission. |
 | `NATIVE-STATE-REF-LIFETIME-001` | Exit tasks/processes while sockets, objects, or generations remain referenced. | Exact references and tombstones retain restrictions until final qualified release. |
 | `STATE-FORK-IPC-002` | Fork with inherited IPC, file, and socket state. | Native state inheritance is exact; communication does not merge independent roots. |
