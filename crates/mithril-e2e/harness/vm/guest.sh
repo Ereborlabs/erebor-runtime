@@ -266,10 +266,13 @@ case ${1:-} in
     benign_object=$lane_root/benign-exact-file-object.json
     node_log=$lane_root/mithril-node.log
     pod_state=/tmp/mithril-k3s-cri-effect
-    pod_pid_file=$pod_state/exec.pid
-    pod_release_file=$pod_state/release
-    cri_pid_file=$pod_state/cri-exec.pid
-    cri_release_file=$pod_state/cri-release
+    cri_state=$pod_state/cri-exec
+    kubectl_state=$pod_state/kubectl-exec
+    pod_pid_file=$kubectl_state/exec.pid
+    pod_release_file=$kubectl_state/release
+    cri_pid_file=$cri_state/exec.pid
+    cri_release_file=$cri_state/release
+    cri_result_file=$cri_state/result
     initial_snapshot=$lane_root/pod-initial-root.json
     cri_snapshot=$lane_root/cri-exec-root.json
     external_snapshot=$lane_root/kubectl-exec-root.json
@@ -503,8 +506,35 @@ case ${1:-} in
 
     rm -rf -- "/proc/$init_pid/root$pod_state"
     /usr/local/bin/k3s crictl exec "$container_id" \
-      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; echo $$ >"$2"; IFS= read -r _ <"$3"' \
-      sh "$pod_state" "$cri_pid_file" "$cri_release_file" &
+      sh -c '
+        mkdir -m 700 "$1"
+        mkfifo "$3"
+        if IFS= read -r _ <"$4"; then
+          printf "CRI_BASELINE_ALLOWED\\n" >"$5"
+        else
+          printf "CRI_BASELINE_DENIED\\n" >"$5"
+          exit 42
+        fi
+        echo $$ >"$2"
+        IFS= read -r _ <"$3"
+        if IFS= read -r _ <"$4"; then
+          cri_result=CRI_EXACT_ALLOWED
+        else
+          cri_result=CRI_EXACT_DENIED
+        fi
+        printf "%s\\n" "$cri_result" >>"$5"
+        chmod 777 "$1" "$3"
+        if [ "$6" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]; then
+          exit 0
+        fi
+        if [ "$6" = PROTECT ] && [ "$cri_result" = CRI_EXACT_DENIED ]; then
+          exit 0
+        fi
+        exit 43
+      ' \
+      sh "$cri_state" "$cri_pid_file" "$cri_release_file" \
+      /var/lib/mithril/secret "$cri_result_file" "$effect_mode" \
+      >"$lane_root/cri-result.out" 2>&1 &
     cri_client_pid=$!
     for _attempt in {1..200}; do
       [[ -s /proc/$init_pid/root$cri_pid_file ]] && break
@@ -547,22 +577,22 @@ case ${1:-} in
       echo "direct CRI exec has no exact Mithril task cookie" >&2
       exit 1
     }
-    exec 7>"/proc/$init_pid/root$cri_release_file"
-    cri_release_fd_open=true
-    printf '1\n' >&7
-    exec 7>&-
-    cri_release_fd_open=false
-    set +e
-    wait "$cri_client_pid"
-    cri_status=$?
-    set -e
-    cri_client_pid=
-    [[ $cri_status -eq 0 ]] || {
-      echo "direct CRI exec did not complete its identity check: $cri_status" >&2
+    for _attempt in {1..200}; do
+      [[ -s /proc/$init_pid/root$cri_result_file ]] && break
+      kill -0 "$cri_client_pid" 2>/dev/null || {
+        echo "direct CRI exec exited before its baseline file read" >&2
+        cat "$lane_root/cri-result.out" >&2
+        exit 1
+      }
+      sleep 0.1
+    done
+    cri_baseline_result=$(head -n 1 "/proc/$init_pid/root$cri_result_file")
+    [[ $cri_baseline_result == CRI_BASELINE_ALLOWED ]] || {
+      echo "direct CRI exec could not read the fixture before $effect_mode" >&2
+      cat "/proc/$init_pid/root$cri_result_file" >&2
       exit 1
     }
 
-    rm -rf -- "/proc/$init_pid/root$pod_state"
     exec 8>"$lane_root/exec-result"
     result_fd_open=true
     /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
@@ -641,6 +671,11 @@ case ${1:-} in
       exit 1
     }
 
+    exec 7>"/proc/$init_pid/root$cri_release_file"
+    cri_release_fd_open=true
+    printf '1\n' >&7
+    exec 7>&-
+    cri_release_fd_open=false
     printf '1\n' >&9 || true
     exec 8>&-
     result_fd_open=false
@@ -653,17 +688,44 @@ case ${1:-} in
       echo "kubectl exec did not complete the expected $effect_mode file-open result: $exec_status" >&2
       exit 1
     }
+    set +e
+    wait "$cri_client_pid"
+    cri_status=$?
+    set -e
+    cri_client_pid=
+    [[ $cri_status -eq 0 ]] || {
+      echo "direct CRI exec did not complete the expected $effect_mode file-open result: $cri_status" >&2
+      cat "$lane_root/cri-result.out" >&2
+      exit 1
+    }
+    cri_exact_result=$(tail -n 1 "/proc/$init_pid/root$cri_result_file")
     case $effect_mode in
       OBSERVE)
+        [[ $cri_exact_result == CRI_EXACT_ALLOWED ]] || {
+          echo "direct CRI exec did not allow the observe exact file read" >&2
+          cat "/proc/$init_pid/root$cri_result_file" >&2
+          exit 1
+        }
+        expected_cri_effect="task_cookie=$cri_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
         expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
         expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
+        cri_baseline_file_open=allowed-before-observe
+        cri_exact_file_open=allowed-after-effect:WOULD_DENY
         baseline_file_open=allowed-before-observe
         exact_file_open=allowed-after-effect:WOULD_DENY
         benign_file_open=allowed-after-effect:EXACT_POLICY_ALLOW
         ;;
       PROTECT)
+        [[ $cri_exact_result == CRI_EXACT_DENIED ]] || {
+          echo "direct CRI exec did not deny the protect exact file read" >&2
+          cat "/proc/$init_pid/root$cri_result_file" >&2
+          exit 1
+        }
+        expected_cri_effect="task_cookie=$cri_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
         expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
         expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
+        cri_baseline_file_open=allowed-before-protect
+        cri_exact_file_open=denied-before-effect:EXACT_POLICY_DENY
         baseline_file_open=allowed-before-protect
         exact_file_open=denied-before-effect:EXACT_POLICY_DENY
         benign_file_open=allowed-after-effect:EXACT_POLICY_ALLOW
@@ -672,7 +734,9 @@ case ${1:-} in
     for _attempt in {1..100}; do
       "$inspect" effects --socket-path "$lane_root/observation.sock" \
         --cgroup-scope / >"$effects"
-      if grep -F "$expected_effect" "$effects" \
+      if grep -F "$expected_cri_effect" "$effects" \
+        | grep -Fq 'exact_object_key_id=7' \
+        && grep -F "$expected_effect" "$effects" \
         | grep -Fq 'exact_object_key_id=7' \
         && grep -F "$expected_benign_effect" "$effects" \
           | grep -Fq 'exact_object_key_id=8'; then
@@ -680,6 +744,12 @@ case ${1:-} in
       fi
       sleep 0.1
     done
+    grep -F "$expected_cri_effect" "$effects" \
+      | grep -Fq 'exact_object_key_id=7' || {
+      echo "Mithril did not report the expected $effect_mode direct CRI exact file-open result" >&2
+      cat "$effects" >&2
+      exit 1
+    }
     grep -F "$expected_effect" "$effects" \
       | grep -Fq 'exact_object_key_id=7' || {
       echo "Mithril did not report the expected $effect_mode exact file-open result" >&2
@@ -693,6 +763,8 @@ case ${1:-} in
       exit 1
     }
 
+    cri_exact_effect=$(grep -F "$expected_cri_effect" "$effects" \
+      | grep -F 'exact_object_key_id=7' | sed -n '1p')
     exact_effect=$(grep -F "$expected_effect" "$effects" | grep -F 'exact_object_key_id=7' | sed -n '1p')
     benign_effect=$(grep -F "$expected_benign_effect" "$effects" | grep -F 'exact_object_key_id=8' | sed -n '1p')
 
@@ -702,6 +774,9 @@ case ${1:-} in
     printf 'pod_initial_root=restored_or_unknown_root:fail_closed_unknown\n'
     printf 'initial_binding_start_gap=recorded:container_running_before_node_binding\n'
     printf 'cri_exec_root=external_runtime_root:runtime_external_restricted\n'
+    printf 'cri_baseline_file_open=%s\n' "$cri_baseline_file_open"
+    printf 'cri_exact_file_open=%s\n' "$cri_exact_file_open"
+    printf 'cri_exact_effect=%s\n' "$cri_exact_effect"
     printf 'kubectl_exec_root=external_runtime_root:runtime_external_restricted\n'
     printf 'policy_mode=%s\n' "$effect_mode"
     printf 'baseline_file_open=%s\n' "$baseline_file_open"
@@ -713,6 +788,11 @@ case ${1:-} in
     stop_node
     exec 9>&-
     release_fd_open=false
+    rm -rf -- "/proc/$init_pid/root$pod_state"
+    [[ ! -e /proc/$init_pid/root$pod_state ]] || {
+      echo "k3s CRI effect qualification left its Pod state directory" >&2
+      exit 1
+    }
     [[ $pin_owned == false ]] || rm -rf -- /sys/fs/bpf/mithril-k3s-cri-effect
     pin_owned=false
     /usr/local/bin/k3s kubectl delete namespace "$namespace" \

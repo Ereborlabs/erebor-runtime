@@ -32,16 +32,19 @@ This option installs k3s only after the provider creates the disposable guest.
 It uses the checked `k3s-config-v1.yaml`, k3s `v1.35.5+k3s1`, and an immutable
 BusyBox image reference. It waits for the node and CRI, then proves Pod
 readiness, direct CRI exec, `kubectl exec`, the CRI container ID and workload
-root, an overlay root, and a projected service-account token. It then starts the real
-`mithril-node` against the k3s containerd socket. The node binds the exact Pod
-and CRI cgroup. The lane succeeds only if Mithril classifies the pre-existing
-Pod root conservatively and classifies later direct CRI and `kubectl exec`
-processes as restricted external roots. It runs the `kubectl exec` process through two file-open
-checks. The first uses `OBSERVE`. The read must complete and the evidence must
-contain that process task cookie, exact object key, `WOULD_DENY`, and
-`UNKNOWN_AFTER_PRE_EFFECT`. The second uses `PROTECT`. The read must receive an
-exact-object denial. The hostPath file is only a qualification fixture. It
-does not prove projected-token semantic classification.
+root, an overlay root, and a projected service-account token. It then starts
+the real `mithril-node` against the k3s containerd socket. The node binds the
+exact Pod and CRI cgroup. The lane succeeds only if Mithril classifies the
+pre-existing Pod root conservatively and classifies later direct CRI and
+`kubectl exec` processes as restricted external roots. Each process reads the
+exact secret before signed policy recovery, then reads it again after recovery.
+In `OBSERVE`, each later read must complete. Its evidence must contain that
+task cookie, exact object key, `WOULD_DENY`, and
+`UNKNOWN_AFTER_PRE_EFFECT`. In `PROTECT`, each later read must receive an
+exact-object denial. `kubectl exec` also reads a benign exact file after
+recovery; that read must stay allowed. The hostPath file is only a
+qualification fixture. It does not prove projected-token semantic
+classification.
 
 The CRI guest lane accepts only `MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT`.
 It uses `PROTECT` by default. The harness sets each mode explicitly and writes
@@ -99,7 +102,8 @@ probe and benchmark evidence, the generated kernel qualification record, and
 the identity and effect results. With `--with-k3s`, it also keeps `k3s.txt` and
 `k3s-cri-observe.txt` and `k3s-cri-effect.txt`. These files record the Pod
 initial-root classification, the direct CRI and `kubectl exec` external-root
-classifications, the matching exact effect, and the observe and protect file-open results. Unless
+classifications, each matching exact-secret effect, and the observe and protect
+file-open results. Unless
 `--skip-administrative-exec` is set, it also keeps
 `k3s-administrative-exec.txt`. That file records the product path, approved
 role, admission denial, restricted non-winner, and measured pre-binding start

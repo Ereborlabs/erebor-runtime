@@ -55,7 +55,9 @@ Cases:
   recovers Mithril with the candidate, releases an already-attributed process,
   and requires the read to succeed while the kernel reports `WOULD_DENY`.
 - `cri-file-observe.sh <node.json> <container-id> <absolute-secret-path>`
-  runs the same physical oracle through a configured CRI runtime.
+  runs the same physical oracle through a configured CRI runtime. It records
+  the direct CRI task cookie and requires `WOULD_DENY`,
+  `UNKNOWN_AFTER_PRE_EFFECT`, and exact object key `7` for the completed read.
 - `nsenter-file-observe.sh <node.json> <container>
   <absolute-secret-path>` joins the mount view with raw `nsenter`, moves the
   blocked process into the bound cgroup, and proves the same exact attribution.
