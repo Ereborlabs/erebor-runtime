@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "families": [
+    {
+      "family_id": "PHASE_0_REQUIRED",
+      "member_fixture_ids": [
+        "CFG-ROLLBACK-GOLDEN-002",
+        "CFG-V1-GOLDEN-002",
+        "DECISION-SET-GOLDEN-001",
+        "FIXTURE-REGISTRY-COMPLETE-001",
+        "SOURCE-KA-BOUNDS-004",
+        "SOURCE-KA-CAPACITY-005",
+        "SOURCE-KA-PARTIAL-ATTACH-001",
+        "SOURCE-KA-READER-LOSS-003",
+        "SOURCE-KA-STACK-PER-HOOK-002",
+        "SOURCE-TG-EXEC-MAP-007",
+        "SOURCE-TG-PATH-RENAME-008",
+        "SOURCE-TG-RUNTIME-JOIN-006"
+      ]
+    },
+    {
+      "family_id": "PHASE_12_CONDITIONAL",
+      "member_fixture_ids": [
+        "CHECKPOINT-CREATE-001",
+        "CI-CACHE-001",
+        "CI-CONTAINER-001",
+        "CI-DEBUG-001",
+        "CI-DIND-001",
+        "CI-FANOUT-001",
+        "CI-GITHUB-TOKEN-001",
+        "CI-NATIVE-001",
+        "CI-OFFICIAL-STEP-JOIN-001",
+        "CI-OIDC-001",
+        "CI-OUTPUT-001",
+        "CI-POST-001",
+        "CI-PR-001",
+        "CI-RETRY-001",
+        "CI-RUNNER-REUSE-001",
+        "CI-STATE-001",
+        "ENTRY-RESTORE-001",
+        "ENTRY-STREAM-001",
+        "HF-GRAN-CI-BUILDRS-001",
+        "SECCOMP-QUAL-001"
+      ]
+    }
+  ],
+  "forbidden_active_fixture_ids": [
+    "CI-ATTEST-001",
+    "ENTRY-CLAIM-TRANSACTION-004",
+    "ENTRY-HOLD-ATTACK-002",
+    "ENTRY-KUBELET-TICKET-001",
+    "ENTRY-ROOTFS-BARRIER-001"
+  ]
+}

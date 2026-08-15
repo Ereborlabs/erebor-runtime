@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "profile_id": "kernel-qualification-chassis",
+  "from_generation": 2,
+  "to_generation": 1,
+  "compiled_profile_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "signer_key_id": "kernel-qualification-key",
+  "signature_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+}

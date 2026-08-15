@@ -194,9 +194,18 @@ After the first owner shut down while its pins remained, a second pin root was
 rejected before it attached a link. The original pin root then recovered its
 links and maps.
 
+The checked qualification registry now contains the digest-bound 134 Appendix
+C fixture IDs, required families, and canonical golden inputs. The readable
+architecture, master allocation, and parser validate it. These commands pass:
+
+```sh
+cargo test -p mithril-e2e --lib closure::tests::fixture_registry_matches_architecture_master_and_criteria --all-features
+cargo test -p mithril-e2e --lib golden::tests --all-features
+cargo test -p mithril-e2e --lib identity::tests --all-features
+cargo test -p mithril-control --test profile_simulation --all-features
+```
+
 The phase remains **Blocked**. This probe does not execute the complete entry
-and failure-injection matrix. The full identity unit command is also blocked:
-`cargo test -p mithril-e2e --lib identity::tests --all-features` cannot read
-`spec/qualification/v1/fixtures.yaml`. The repository does not contain that
-future registry source. The focused native-child test passes. Do not replace
-the missing registry with a prose-derived fixture list.
+and failure-injection matrix. The full ephemeral-container, non-leader and
+concurrent exec, cgroup and PID reuse, saturation, and non-x86 physical cases
+remain unqualified.

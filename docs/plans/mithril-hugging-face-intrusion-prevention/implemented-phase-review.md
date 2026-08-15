@@ -125,13 +125,12 @@ The VM ran on x86_64 Linux `6.8.0-137-generic` with active LSM order
 | Effect OBSERVE | Passed. It checks exact observation, mount revalidation, external replacement fail-close, propagation, and cleanup. | `3317b52ede0b9d4ea4acd3b5ab3e4926d9d8edecad96a40801a7bcbed0ad275c` |
 | Effect PROTECT | Passed. It checks pre-effect denial, held descriptors, io_uring, mount revalidation, external replacement fail-close, and cleanup. | `74dec05c7984076a908db509733b078492407a145298fee684e20ed1ef9cc8c6` |
 
-The automatic probe does not replace the full qualification matrix. The full
-identity unit suite and the policy-simulation integration test cannot run
-because the repository does not contain
-`spec/qualification/v1/fixtures.yaml`. Do not synthesize that registry from
-documentation. The final repository command
-`bash .github/scripts/verify-rust-ci.sh` reaches that same missing
-`include_str!` input in `crates/mithril-control/tests/profile_simulation.rs`.
+The automatic probe does not replace the full qualification matrix. The
+checked registry now contains the digest-bound Appendix C fixture IDs,
+required family membership, and canonical golden inputs. The architecture
+closure, golden, identity, and profile-simulation tests pass against those
+inputs. The final repository command still needs a current checked kernel
+qualification record before it can provide complete CI evidence.
 
 The administrative transaction now reaches draft creation, admission, and slot
 arm. Stock runc `1.4.2` then executes a sealed self-clone and uses inherited
