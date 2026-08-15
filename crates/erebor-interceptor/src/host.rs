@@ -1469,14 +1469,14 @@ impl Drop for PinRollback {
 
 #[cfg(test)]
 mod tests {
-    use snafu::ResultExt as _;
+    use snafu::{OptionExt as _, ResultExt as _};
     use std::fs;
 
     use super::{
         kernel_program_name, KernelHost, KernelHostConfig, KernelHostOwner, KernelObjectKind,
         KernelProgramLayoutV1, PinRollback, REQUIRED_QUALIFICATION_LSM_PROGRAMS,
     };
-    use crate::error::IoSnafu;
+    use crate::error::{InvalidConfigurationSnafu, IoSnafu};
     use crate::{
         KernelLinkManifestV1, KernelMapManifestV1, KernelObjectManifestV1, KernelPreflightV1,
         BUNDLED_BPF_OBJECT,
@@ -1707,7 +1707,10 @@ mod tests {
         };
         let (maps, links) = owner
             .prepare_fresh_pin_directories(&mut rollback)?
-            .expect("configured pin root creates pin directories");
+            .context(InvalidConfigurationSnafu {
+                path: root.clone(),
+                reason: "configured pin root did not create pin directories",
+            })?;
         assert!(root.is_dir() && maps.is_dir() && links.is_dir());
         drop(rollback);
         assert!(!root.exists());
