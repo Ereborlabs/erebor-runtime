@@ -1632,12 +1632,10 @@ mod tests {
             .and_then(|source| source.split("fn validate_program_set").next())
             .unwrap_or_default();
 
-        let guard_before_load = start
-            .find("reject_retained_lsm_links(&BTreeSet::new())")
-            .expect("fresh start checks retained LSM links");
-        let load = start
-            .find("open.load()")
-            .expect("fresh start loads BPF object");
+        let guard_before_load = start.find("reject_retained_lsm_links(&BTreeSet::new())");
+        let load = start.find("open.load()");
+        assert!(guard_before_load.is_some());
+        assert!(load.is_some());
         assert!(guard_before_load < load);
         assert!(recover.contains("reject_retained_lsm_links(&allowed_link_ids)"));
         assert!(guard.contains("LinkInfoIter"));

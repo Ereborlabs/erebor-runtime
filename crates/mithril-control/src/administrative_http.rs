@@ -1322,43 +1322,51 @@ mod tests {
 
     #[test]
     fn pod_exec_options_accept_kubernetes_type_metadata() {
-        let options: PodExecOptionsV1 = serde_json::from_value(json!({
+        let options = serde_json::from_value::<PodExecOptionsV1>(json!({
             "apiVersion": "v1",
             "kind": "PodExecOptions",
             "command": ["/var/lib/mithril/admin-exec", "sleep", "20"],
             "container": "runtime",
             "stdout": true,
             "stderr": true,
-        }))
-        .expect("Kubernetes PodExecOptions must deserialize");
-        assert!(validate_exec_options(&options).is_ok());
+        }));
+        assert!(options.is_ok());
+        if let Ok(options) = options {
+            assert!(validate_exec_options(&options).is_ok());
+        }
 
-        let without_type_metadata: PodExecOptionsV1 = serde_json::from_value(json!({
+        let without_type_metadata = serde_json::from_value::<PodExecOptionsV1>(json!({
             "command": ["/var/lib/mithril/admin-exec"],
             "container": "runtime",
             "stdout": true,
-        }))
-        .expect("PodExecOptions without optional type metadata must deserialize");
-        assert!(validate_exec_options(&without_type_metadata).is_ok());
+        }));
+        assert!(without_type_metadata.is_ok());
+        if let Ok(without_type_metadata) = without_type_metadata {
+            assert!(validate_exec_options(&without_type_metadata).is_ok());
+        }
 
-        let partial: PodExecOptionsV1 = serde_json::from_value(json!({
+        let partial = serde_json::from_value::<PodExecOptionsV1>(json!({
             "apiVersion": "v1",
             "command": ["/var/lib/mithril/admin-exec"],
             "container": "runtime",
             "stdout": true,
-        }))
-        .expect("a structurally valid partial type must deserialize");
-        assert!(validate_exec_options(&partial).is_err());
+        }));
+        assert!(partial.is_ok());
+        if let Ok(partial) = partial {
+            assert!(validate_exec_options(&partial).is_err());
+        }
 
-        let mismatched: PodExecOptionsV1 = serde_json::from_value(json!({
+        let mismatched = serde_json::from_value::<PodExecOptionsV1>(json!({
             "apiVersion": "v1",
             "kind": "PodAttachOptions",
             "command": ["/var/lib/mithril/admin-exec"],
             "container": "runtime",
             "stdout": true,
-        }))
-        .expect("a structurally valid but mismatched type must deserialize");
-        assert!(validate_exec_options(&mismatched).is_err());
+        }));
+        assert!(mismatched.is_ok());
+        if let Ok(mismatched) = mismatched {
+            assert!(validate_exec_options(&mismatched).is_err());
+        }
     }
 
     #[test]

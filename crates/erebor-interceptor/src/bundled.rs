@@ -33,9 +33,11 @@ mod tests {
             .any(|program| program.name().to_string_lossy() == "erebor_task_alloc"));
         let activation_probe = object
             .progs()
-            .find(|program| program.name().to_string_lossy() == "erebor_policy_activation_probe")
-            .expect("bundled object has the policy activation probe");
-        assert_eq!(activation_probe.section().to_string_lossy(), "classifier");
+            .find(|program| program.name().to_string_lossy() == "erebor_policy_activation_probe");
+        assert!(activation_probe.is_some());
+        if let Some(activation_probe) = activation_probe {
+            assert_eq!(activation_probe.section().to_string_lossy(), "classifier");
+        }
         Ok(())
     }
 
