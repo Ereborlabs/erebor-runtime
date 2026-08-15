@@ -4,7 +4,7 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
-Source reviewed: commit `f8cfed97e5e04651ccf60d3de45d6aff9fc67af7`.
+Source reviewed: commit `1176ed8806e697ee3de571e48181d25085eee68a`.
 The BPF object loaded by the 2026-08-15 privileged VM probes has SHA-256
 `69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
 The validated architecture digest in the phase records is
@@ -129,7 +129,9 @@ The automatic probe does not replace the full qualification matrix. The full
 identity unit suite and the policy-simulation integration test cannot run
 because the repository does not contain
 `spec/qualification/v1/fixtures.yaml`. Do not synthesize that registry from
-documentation.
+documentation. The final repository command
+`bash .github/scripts/verify-rust-ci.sh` reaches that same missing
+`include_str!` input in `crates/mithril-control/tests/profile_simulation.rs`.
 
 The administrative transaction now reaches draft creation, admission, and slot
 arm. Stock runc `1.4.2` then executes a sealed self-clone and uses inherited
