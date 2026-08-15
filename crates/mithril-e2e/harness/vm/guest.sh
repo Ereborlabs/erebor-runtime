@@ -581,6 +581,8 @@ case ${1:-} in
       exit 1
     }
 
+    exact_effect=$(grep -F "$expected_effect" "$effects" | grep -F 'exact_object_key_id=7' | sed -n '1p')
+
     printf 'lane=k3s-cri-effect\n'
     printf 'pod_uid=%s\n' "$pod_uid"
     printf 'container_id=%s\n' "$container_ref"
@@ -590,6 +592,7 @@ case ${1:-} in
     printf 'policy_mode=%s\n' "$effect_mode"
     printf 'baseline_file_open=%s\n' "$baseline_file_open"
     printf 'exact_file_open=%s\n' "$exact_file_open"
+    printf 'exact_effect=%s\n' "$exact_effect"
     printf 'qualification_fixture=read-only-hostPath-file\n'
     stop_node
     exec 9>&-

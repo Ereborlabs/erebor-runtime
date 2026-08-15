@@ -99,7 +99,7 @@ probe and benchmark evidence, the generated kernel qualification record, and
 the identity and effect results. With `--with-k3s`, it also keeps `k3s.txt` and
 `k3s-cri-observe.txt` and `k3s-cri-effect.txt`. These files record the Pod
 initial-root classification, the `kubectl exec` external-root classification,
-and the observe and protect file-open results. Unless
+the matching exact effect, and the observe and protect file-open results. Unless
 `--skip-administrative-exec` is set, it also keeps
 `k3s-administrative-exec.txt`. That file records the product path, approved
 role, admission denial, restricted non-winner, and measured pre-binding start

@@ -86,6 +86,7 @@ grep -q 'MITHRIL_VM_CRI_EFFECT_MODE' "$directory/guest.sh"
 grep -Fq 'effect_policy_source=$policy_source' "$directory/guest.sh"
 grep -q 'reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT' "$directory/guest.sh"
 grep -q 'exact_file_open=allowed-after-effect:WOULD_DENY' "$directory/guest.sh"
+grep -q 'exact_effect=%s' "$directory/guest.sh"
 grep -Fq '[[ $exec_status -eq 0 ]]' "$directory/guest.sh"
 grep -q 'baseline_file_open=allowed-before-protect' "$directory/guest.sh"
 grep -q 'exact_file_open=denied-before-effect:EXACT_POLICY_DENY' \
