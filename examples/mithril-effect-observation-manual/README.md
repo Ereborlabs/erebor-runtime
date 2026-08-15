@@ -3,12 +3,14 @@
 ## Manual Testing In A VM
 
 Use the [retained-VM direct-CRI procedure](../../crates/mithril-e2e/harness/vm/README.md#run-the-direct-cri-observation-example)
-to create a fresh Pod, live binding JSON, and writable shared directory. It
-also stages this directory and its identity helper before it runs
-`cri-file-observe.sh`. Do not reuse a binding from a previous container.
+to create a fresh Pod, live binding, writable shared directory, and the
+`cri-file-observe.sh` run. Use the same setup for another observation script.
+Run it from the selected source directory with its documented arguments. Do
+not reuse a container binding.
 
-For another observation shell, use the same staging and fresh-binding steps.
-Then run that shell from the staged directory with its documented arguments.
+Set `MITHRIL_VM_SOURCE_MOUNT="$PWD"` when you create the guest to use the
+read-only `/mnt/mithril-source` tree. The harness guide shows SSH and the exact
+run command. Keep bindings, fixtures, pins, and output on the guest.
 
 ## Operator Cases
 

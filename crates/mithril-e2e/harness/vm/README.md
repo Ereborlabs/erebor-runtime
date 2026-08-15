@@ -94,6 +94,7 @@ The libvirt provider uses these optional variables:
 | `MITHRIL_VM_BASE_IMAGE_URL` | Ubuntu 24.04 amd64 cloud image |
 | `MITHRIL_VM_IMAGE_CACHE` | user cache directory |
 | `MITHRIL_VM_K3S_VERSION` | `v1.35.5+k3s1` |
+| `MITHRIL_VM_SOURCE_MOUNT` | unset; libvirt mounts this absolute host directory read-only at `/mnt/mithril-source` |
 
 The cache keeps only the verified base image. A download stays in the
 disposable work directory until checksum validation succeeds. The harness removes its overlay,
@@ -126,27 +127,67 @@ you start another administrative lane.
 
 ## Manual Testing In A Retained VM
 
-Run the shell check. Then create one retained K3s guest:
+Check the harness, then create one retained K3s guest:
 
 ```bash
 bash crates/mithril-e2e/harness/vm/test.sh
-crates/mithril-e2e/harness/vm/run.sh --with-k3s \
+MITHRIL_VM_SOURCE_MOUNT="$PWD" crates/mithril-e2e/harness/vm/run.sh --with-k3s \
   --skip-administrative-exec \
   --keep-vm \
   --output-directory /tmp/mithril-manual-vm-evidence
 ```
 
-`run.sh` leaves the current binaries and checked policy assets in
-`/var/tmp/<vm_name>`. It does not leave a manual Pod, a live binding JSON, or
-the current manual shell sources. Create these inputs for every manual case.
-Run one Mithril owner at a time. Do not reuse a container ID, Pod UID, or
-binding from an earlier run.
+`MITHRIL_VM_SOURCE_MOUNT` is optional. When set, libvirt mounts that absolute
+host directory read-only at `/mnt/mithril-source`. Keep fixtures, binding JSON,
+pin roots, leases, and output on the guest. `run.sh` leaves the built binaries
+and checked policy assets in `/var/tmp/<vm_name>`, but no manual Pod or live
+binding. Create a new Pod and binding for each case.
+
+Load the retained settings. Use `ssh` for an interactive guest shell:
+
+```bash
+set -a
+. /tmp/mithril-manual-vm-evidence/retained-vm.txt
+set +a
+"$provider" ssh "$vm_name"
+```
 
 ### Run A Manual Shell
 
-Run these host commands from the repository root. They stage the current
-identity and effect-observation shells. They do not copy the test signing key.
-The guest reuses the harness-staged key.
+Use this source-mount path when `source_mountpoint` is set. These host commands
+create one guest-local directory for the `crictl` wrapper and generated files.
+
+```bash
+set -a
+. /tmp/mithril-manual-vm-evidence/retained-vm.txt
+set +a
+remote_root=/var/tmp/$vm_name
+manual_id=$(date -u +%Y%m%dT%H%M%SZ)-$$
+manual_root=/var/tmp/mithril-manual-$manual_id
+script_root=$source_mountpoint
+"$provider" run "$vm_name" mkdir -p "$manual_root/bin"
+"$provider" run "$vm_name" ln -s /usr/local/bin/k3s "$manual_root/bin/crictl"
+"$provider" ssh "$vm_name"
+```
+
+The source tree supplies `examples/` and `crates/`; `$remote_root/bin` supplies
+the built binaries. Run the selected script as root in the guest, for example:
+
+```bash
+"$provider" run "$vm_name" sudo env \
+  "PATH=$manual_root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+  "MITHRIL_BIN_DIRECTORY=$remote_root/bin" \
+  "$script_root/examples/<case-directory>/<script>.sh" <script-arguments>
+```
+
+Run one Mithril owner at a time. Do not reuse a container ID, Pod UID, or
+binding. A different pin root does not isolate BPF LSM links.
+
+### Stage A Manual Shell Without A Source Mount
+
+Run these host commands from the repository root when no source mount is
+available. They stage the identity and effect-observation directories. They do
+not copy the test signing key; the guest uses the harness-staged key.
 
 ```bash
 set -a
@@ -172,23 +213,15 @@ tar --exclude='examples/mithril-effect-observation-manual/test-signing-key.hex' 
 rm -f -- "$archive"
 ```
 
-For an identity-only case, run the staged entry shell from
-`$manual_root/source/examples/mithril-identity-manual`. For an
-effect-observation case, run the staged entry shell from
-`$manual_root/source/examples/mithril-effect-observation-manual`. A local
-enforcement case also needs its `mithril-local-enforcement-manual` directory.
-Copy that directory with the same archive command when you need it. Each
-entry shell sources its helper from its own directory. Do not copy only the
-entry shell.
+Set `script_root=$manual_root/source` and use the same `sudo env` command
+above. Add `examples/mithril-local-enforcement-manual` to the archive for a
+local-enforcement case. Copy each script directory with its helper files.
 
 ### Run The Direct CRI Observation Example
 
-This is the complete retained-VM procedure for
-`cri-file-observe.sh`. It creates a fresh Pod, a fresh live binding, and the
-writable shared directory that the shell requires.
-
-Create the exact host fixtures in the guest. Continue only when `lsattr -v`
-prints a nonzero generation for `secret`.
+This procedure creates the fresh Pod, live binding, and writable shared
+directory for `cri-file-observe.sh`. Continue only when `lsattr -v` reports a
+nonzero generation for `secret`.
 
 ```bash
 namespace=mithril-manual-$manual_id
@@ -216,8 +249,8 @@ sed \
   --for=condition=Ready pod/mithril-runtime --timeout=300s
 ```
 
-Create the binding from that live container. Do not copy values from an older
-Pod. This command uses the same CRI creation-time conversion as the harness.
+Create the binding from this live container. Do not copy old Pod values. This
+uses the same CRI creation-time conversion as the harness.
 
 ```bash
 container_ref=$("$provider" run "$vm_name" sudo /usr/local/bin/k3s kubectl \
@@ -247,22 +280,23 @@ sed \
 rm -f -- "$manifest" "$node_config"
 ```
 
-Run the staged shell in the guest. `MITHRIL_BIN_DIRECTORY` selects the
-binaries that the retained harness built. The run must print its `PASS:` line.
+Run the shell. `MITHRIL_BIN_DIRECTORY` selects the retained harness binaries.
+Use the mount when available. The command must print `PASS:`.
 
 ```bash
+script_root=${source_mountpoint:-$manual_root/source}
 "$provider" run "$vm_name" sudo env \
   "PATH=$manual_root/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
   "MITHRIL_BIN_DIRECTORY=$remote_root/bin" \
-  "$manual_root/source/examples/mithril-effect-observation-manual/cri-file-observe.sh" \
+  "$script_root/examples/mithril-effect-observation-manual/cri-file-observe.sh" \
   "$manual_root/node.json" "$container_id" /var/lib/mithril/secret \
   "$shared_directory" /var/lib/mithril/manual-shared
 ```
 
-The shell owns its node, task, pins, lease, state, and probe files. The outer
-operator owns the Pod and fixture. After you retain any output, remove only
-the named namespace and fixture root. Keep `$manual_root` for the command and
-configuration record, or destroy the retained VM after the final case.
+The shell removes its node, task, pins, lease, state, and probe files. Retain
+the output, then remove the named Pod namespace and fixture root. Keep
+`$manual_root` for its command and configuration record, or destroy the guest
+after the final case.
 
 ```bash
 "$provider" run "$vm_name" sudo /usr/local/bin/k3s kubectl delete namespace \
@@ -270,15 +304,10 @@ configuration record, or destroy the retained VM after the final case.
 "$provider" run "$vm_name" sudo rm -rf -- "$fixture_root"
 ```
 
-The manual script owns its node, pins, lease, and probe. The outer operator
-owns the Pod, fixture, and guest. Use the `destroy` command above with the two
-values from `retained-vm.txt` after the final manual case.
-
-Reuse a retained guest and k3s installation for sequential probes. Do not run
-two Mithril object owners at the same time. A different pin root does not
-isolate BPF LSM links. The loader rejects a concurrent owner before attach. If
-it reports `RetainedLsmLink`, restart with the original pin root or use a fresh
-guest. Do not delete an unknown pinned link to continue a probe.
+The script owns Mithril state. The operator owns the Pod, fixture, and guest.
+Reuse the guest and k3s only for sequential probes. If the loader reports
+`RetainedLsmLink`, use the original pin root or a fresh guest. Do not delete an
+unknown pinned link.
 
 The current administrative lane reaches draft creation, admission, and slot
 arm. Stock runc `1.4.2` then fails closed before target exec because its sealed

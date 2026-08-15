@@ -6,11 +6,14 @@ commands for manually invoking the automated e2e runner.
 ## Manual Testing In A VM
 
 Use the [retained-VM shell procedure](../../crates/mithril-e2e/harness/vm/README.md#run-a-manual-shell)
-to stage this directory and use the current harness binaries. For a CRI or
-Kubernetes case, create a fresh Pod and live binding as shown in the
-[direct-CRI example](../../crates/mithril-e2e/harness/vm/README.md#run-the-direct-cri-observation-example).
-Then run one identity script as root in the guest. Do not reuse a binding from
-a previous container.
+to create the guest, connect with SSH, and run this directory with the harness
+binaries. For CRI or Kubernetes, create a fresh Pod and live binding with the
+[direct-CRI procedure](../../crates/mithril-e2e/harness/vm/README.md#run-the-direct-cri-observation-example).
+Run one script as root. Do not reuse a container binding.
+
+Set `MITHRIL_VM_SOURCE_MOUNT="$PWD"` when you create the guest to use the
+read-only `/mnt/mithril-source` tree. Keep bindings, fixtures, pins, and output
+on the guest.
 
 ## Operator Cases
 

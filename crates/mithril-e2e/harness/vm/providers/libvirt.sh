@@ -15,6 +15,9 @@ known_hosts=${MITHRIL_VM_KNOWN_HOSTS:-/tmp/mithril-vm-test-known-hosts}
 base_image_url=${MITHRIL_VM_BASE_IMAGE_URL:-https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img}
 image_cache=${MITHRIL_VM_IMAGE_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/mithril-vm-test}
 owner_file_name=libvirt-domain-owner
+source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}
+source_mount_tag=mithril-source
+source_mountpoint=/mnt/mithril-source
 
 require_command() {
   command -v "$1" >/dev/null || {
@@ -25,7 +28,7 @@ require_command() {
 
 address() {
   virsh -c "$connection" domifaddr "$1" --source lease 2>/dev/null \
-    | awk '$3 == "ipv4" {sub(/\/.*/, "", $4); print $4; exit}'
+    | awk '$3 == "ipv4" && !found {sub(/\/.*/, "", $4); print $4; found = 1} END {exit !found}'
 }
 
 ssh_options() {
@@ -57,6 +60,13 @@ case ${1:-} in
         echo "libvirt default network is not active" >&2
         exit 2
       }
+    if [[ -n $source_mount ]]; then
+      [[ $source_mount == /* && -d $source_mount ]] || {
+        echo "MITHRIL_VM_SOURCE_MOUNT must be an existing absolute directory: $source_mount" >&2
+        exit 2
+      }
+      source_mount=$(cd -- "$source_mount" && pwd -P)
+    fi
     chmod 755 "$work_directory"
     mkdir -p -- "$image_cache"
     image_name=${base_image_url##*/}
@@ -115,12 +125,17 @@ case ${1:-} in
       exit "$status"
     }
     trap cleanup_partial_create EXIT
+    filesystem=()
+    if [[ -n $source_mount ]]; then
+      filesystem=(--filesystem "$source_mount,$source_mount_tag,accessmode=mapped,readonly=on")
+    fi
     virt-install --connect "$connection" --name "$name" \
       --uuid "$domain_uuid" \
       --memory 4096 --vcpus 2 --cpu host-passthrough \
       --disk "path=$overlay,format=qcow2,bus=virtio" \
       --os-variant ubuntu24.04 --network network=default,model=virtio \
       --graphics none --noautoconsole --import \
+      "${filesystem[@]}" \
       --cloud-init "user-data=$user_data,disable=on"
     ;;
   wait)
@@ -142,6 +157,12 @@ case ${1:-} in
         if ssh "${options[@]}" "$ssh_user@$ip" \
           'test -r /sys/kernel/btf/vmlinux && test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs && test "$(stat -fc %T /sys/fs/bpf)" = bpf_fs && grep -qw bpf /sys/kernel/security/lsm' \
           >/dev/null 2>&1; then
+          if [[ -n $source_mount ]] && ! ssh "${options[@]}" "$ssh_user@$ip" \
+            "sudo install -d -m 0755 -- $source_mountpoint && if [ \"\$(findmnt -rn -o FSTYPE --target $source_mountpoint)\" != 9p ]; then mountpoint -q $source_mountpoint && exit 1; sudo mount -t 9p -o trans=virtio,version=9p2000.L,ro $source_mount_tag $source_mountpoint; fi && test \"\$(findmnt -rn -o FSTYPE --target $source_mountpoint)\" = 9p && test -r $source_mountpoint" \
+            >/dev/null 2>&1; then
+            sleep 1
+            continue
+          fi
           exit 0
         fi
       fi
@@ -169,6 +190,23 @@ case ${1:-} in
     ip=$(address "$name")
     mapfile -t options < <(ssh_options)
     ssh "${options[@]}" "$ssh_user@$ip" "$@"
+    ;;
+  ssh)
+    (($# == 2)) || { echo "usage: $0 ssh NAME" >&2; exit 2; }
+    name=$2
+    require_command ssh
+    require_command virsh
+    [[ -r $ssh_private_key ]] || {
+      echo "SSH private key is not readable: $ssh_private_key" >&2
+      exit 2
+    }
+    ip=$(address "$name")
+    [[ -n $ip ]] || {
+      echo "VM has no DHCP lease address: $name" >&2
+      exit 1
+    }
+    mapfile -t options < <(ssh_options)
+    ssh "${options[@]}" "$ssh_user@$ip"
     ;;
   destroy)
     (($# == 3)) || { echo "usage: $0 destroy NAME WORK_DIRECTORY" >&2; exit 2; }
@@ -206,7 +244,7 @@ case ${1:-} in
     rm -f -- "$owner_file"
     ;;
   *)
-    echo "usage: $0 {create|wait|put|get|run|destroy} ..." >&2
+    echo "usage: $0 {create|wait|put|get|run|ssh|destroy} ..." >&2
     exit 2
     ;;
 esac

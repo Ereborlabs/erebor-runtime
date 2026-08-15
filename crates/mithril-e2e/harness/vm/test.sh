@@ -98,6 +98,21 @@ grep -q 'run_k3s_cri_effect PROTECT' "$directory/run.sh"
 grep -Fq 'if [[ $skip_administrative_exec == false ]]; then' "$directory/run.sh"
 grep -q 'retained-vm.txt' "$directory/run.sh"
 grep -q 'MITHRIL_VM_KEEP_FAILURE_STATE=true' "$directory/run.sh"
+grep -Fq 'MITHRIL_VM_SOURCE_MOUNT must be an existing absolute directory' \
+  "$directory/run.sh"
+grep -Fq 'export MITHRIL_VM_KNOWN_HOSTS=%q' "$directory/run.sh"
+grep -Fq 'export MITHRIL_VM_SOURCE_MOUNT=%q' "$directory/run.sh"
+grep -Fq 'source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}' \
+  "$directory/providers/libvirt.sh"
+grep -Fq 'print $4; found = 1} END {exit !found}' \
+  "$directory/providers/libvirt.sh"
+grep -Fq 'readonly=on' "$directory/providers/libvirt.sh"
+grep -Fq 'mount -t 9p -o trans=virtio,version=9p2000.L,ro' \
+  "$directory/providers/libvirt.sh"
+grep -Fq 'mountpoint -q $source_mountpoint && exit 1' \
+  "$directory/providers/libvirt.sh"
+grep -q '^  ssh)$' "$directory/providers/libvirt.sh"
+grep -Fq 'usage: $0 ssh NAME' "$directory/providers/libvirt.sh"
 grep -q 'administrative failure state retained' "$directory/guest.sh"
 grep -q 'k3s-administrative-policy-v1.yaml' "$directory/run.sh"
 grep -q '^  desired_profile_mode: PROTECT$' \

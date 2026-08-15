@@ -4,7 +4,7 @@ This guide explains the current implementation. It uses source links so that a
 reviewer can follow each owner, state transition, and BPF decision. It does not
 replace an acceptance record.
 
-Source reviewed: commit `a2189b5`.
+Source reviewed: working tree based on commit `419bdd4`.
 The BPF object loaded by the 2026-08-15 privileged VM probes has SHA-256
 `69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
 The validated architecture digest in the phase records is
@@ -2141,7 +2141,7 @@ The current provider and checked qualification record lane are x86-64. The BPF
 translation unit also compiles against checked x86, arm64, arm, and RISC-V
 headers. A cross-architecture compile is not a non-x86 physical result.
 
-### Retained-VM manual review route — source `a2189b5`
+### Retained-VM manual review route
 
 This route reviews the current manual-test source. The operator procedure is
 in the [harness README](../../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm).
@@ -2149,17 +2149,21 @@ Do not duplicate that procedure in this guide.
 
 1. Read [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh). It builds
    the binaries and writes `retained-vm.txt` when `--keep-vm` retains a guest.
-2. Read [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh#L40).
+   It records the SSH settings and an optional source mount.
+2. Read [`providers/libvirt.sh`](../../../crates/mithril-e2e/harness/vm/providers/libvirt.sh).
+   It attaches the optional source directory as a read-only 9p device, mounts
+   it at `/mnt/mithril-source` during `wait`, and owns `ssh NAME`.
+3. Read [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh#L40).
    It owns the manual node, pin root, lease, task processes, and local cleanup.
-3. Read [`nsenter-move.sh`](../../../examples/mithril-identity-manual/nsenter-move.sh#L10).
+4. Read [`nsenter-move.sh`](../../../examples/mithril-identity-manual/nsenter-move.sh#L10).
    It verifies the selected helper and direct `sleep 300` child before it moves
    that child into the configured cgroup.
-4. Read [`observation-runtime.sh`](../../../examples/mithril-effect-observation-manual/observation-runtime.sh#L32).
+5. Read [`observation-runtime.sh`](../../../examples/mithril-effect-observation-manual/observation-runtime.sh#L32).
    It validates a CRI shared directory, starts the identity-only node, moves
    the preloaded `nsenter` task, and then starts the signed observation node.
-5. Read [`nsenter-file-observe.sh`](../../../examples/mithril-effect-observation-manual/nsenter-file-observe.sh#L6).
+6. Read [`nsenter-file-observe.sh`](../../../examples/mithril-effect-observation-manual/nsenter-file-observe.sh#L6).
    It accepts the Docker three-argument form or the CRI five-argument form.
-6. Read [`harness/vm/test.sh`](../../../crates/mithril-e2e/harness/vm/test.sh#L41).
+7. Read [`harness/vm/test.sh`](../../../crates/mithril-e2e/harness/vm/test.sh#L41).
    It checks the CRI `nsenter` source contract and the retained-guest options.
 
 ```mermaid
@@ -2172,6 +2176,7 @@ sequenceDiagram
     O->>H: create one retained K3s guest
     H->>V: build, copy, and qualify
     H-->>O: retained-vm.txt
+    O->>V: optional SSH and read-only source mount
     O->>S: run one case with a fresh binding
     S->>V: start node, run probe, remove local state
     O->>H: destroy the named guest
@@ -2182,6 +2187,13 @@ fresh Pod or container binding and the fixture. The manual script owns only
 its node, pin root, lease, probe, state, and logs. Do not reuse a container ID,
 Pod UID, or binding from an earlier run. Do not run two Mithril owners in one
 guest.
+
+The libvirt provider owns the source mount. It exports one host directory as
+read-only 9p. The guest mounts it at `/mnt/mithril-source`. The manual shells
+can read scripts from this mount. The mount cannot own a fixture, binding,
+pin root, lease, or output. A disposable provider test read the mounted
+`Cargo.toml`, rejected a guest write, and accepted `ssh NAME`. This test did
+not run the K3s qualification lane.
 
 `nsenter-move.sh` requires the helper PID and its only direct child PID. It
 requires `sleep 300`, matching mount, UTS, IPC, network, and PID namespaces,

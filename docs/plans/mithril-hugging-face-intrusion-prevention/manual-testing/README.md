@@ -45,6 +45,12 @@ overlay-root, and projected-token runtime facts while the local probes run. It
 does not prove a Mithril CRI policy binding, admission approval, multi-node
 propagation, or complete Kubernetes protection.
 
+For a retained guest that runs manual shells, use the [manual retained-VM
+procedure](../../../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm).
+The default provider supports `ssh NAME`. Set `MITHRIL_VM_SOURCE_MOUNT` to an
+absolute source directory to mount it read-only at `/mnt/mithril-source`.
+Keep all fixture, binding, pin, lease, and output paths in the guest.
+
 ## How To Read A Manual Case
 
 Each guide contains a fixture matrix. Every row names:

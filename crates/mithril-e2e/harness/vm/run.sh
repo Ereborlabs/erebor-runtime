@@ -10,6 +10,7 @@ with_k3s=false
 keep_vm=false
 skip_administrative_exec=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
+source_mount=${MITHRIL_VM_SOURCE_MOUNT:-}
 
 usage() {
   echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--keep-vm]" >&2
@@ -66,6 +67,14 @@ done
   echo "kernel qualification record generation requires an x86_64 host" >&2
   exit 2
 }
+if [[ -n $source_mount ]]; then
+  [[ $source_mount == /* && -d $source_mount ]] || {
+    echo "MITHRIL_VM_SOURCE_MOUNT must be an existing absolute directory: $source_mount" >&2
+    exit 2
+  }
+  source_mount=$(cd -- "$source_mount" && pwd -P)
+  export MITHRIL_VM_SOURCE_MOUNT=$source_mount
+fi
 
 if [[ -z $output_directory ]]; then
   output_directory=$repo_root/target/mithril-vm-test/$(date -u +%Y%m%dT%H%M%SZ)-$$
@@ -85,6 +94,8 @@ output_directory=$(cd -- "$output_directory" && pwd)
 vm_name=mithril-runtime-qualification-$$
 work_directory=$(mktemp -d /tmp/mithril-vm-test.XXXXXX)
 export MITHRIL_VM_KNOWN_HOSTS=${MITHRIL_VM_KNOWN_HOSTS:-$work_directory/known_hosts}
+ssh_user=${MITHRIL_VM_SSH_USER:-ubuntu}
+ssh_private_key=${MITHRIL_VM_SSH_PRIVATE_KEY:-$HOME/.ssh/id_rsa}
 created=false
 
 cleanup() {
@@ -97,8 +108,17 @@ cleanup() {
     destroy_ok=false
   fi
   if [[ $keep_vm == true ]]; then
-    printf 'vm_name=%s\nwork_directory=%s\nprovider=%s\n' \
-      "$vm_name" "$work_directory" "$provider" >"$output_directory/retained-vm.txt"
+    {
+      printf 'vm_name=%q\nwork_directory=%q\nprovider=%q\n' \
+        "$vm_name" "$work_directory" "$provider"
+      printf 'export MITHRIL_VM_KNOWN_HOSTS=%q\n' "$MITHRIL_VM_KNOWN_HOSTS"
+      printf 'export MITHRIL_VM_SSH_USER=%q\n' "$ssh_user"
+      printf 'export MITHRIL_VM_SSH_PRIVATE_KEY=%q\n' "$ssh_private_key"
+      if [[ -n $source_mount ]]; then
+        printf 'export MITHRIL_VM_SOURCE_MOUNT=%q\nsource_mountpoint=%q\n' \
+          "$source_mount" /mnt/mithril-source
+      fi
+    } >"$output_directory/retained-vm.txt"
     echo "VM retained: $vm_name ($work_directory)" >&2
   elif [[ $destroy_ok == true && -d $work_directory && $work_directory == /tmp/mithril-vm-test.* ]]; then
     rm -rf -- "$work_directory"
