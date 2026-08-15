@@ -228,3 +228,30 @@ this path.
 The phase remains **Not done**. The passed probe qualifies the implemented
 local slice only. It does not complete the administrative runtime protocol or
 the remaining policy-aware local matrix.
+
+## Qualification update — 2026-08-15 — K3s CRI paired control
+
+At source commit `bf0e606`, a fresh disposable x86_64 Linux
+`6.8.0-137-generic` VM ran the production K3s CRI lane against one bound
+container. The lane used a real `crictl exec` root and a real `kubectl exec`
+root. Both roots were `external_runtime_root` with the
+`runtime_external_restricted` role.
+
+The lane used two exact read-only hostPath files in the same `kubectl exec`
+task. In `OBSERVE` mode, secret object key 7 completed its open and recorded
+`WOULD_DENY` with `UNKNOWN_AFTER_PRE_EFFECT`. Benign object key 8 completed
+its open and recorded `EXACT_POLICY_ALLOW` with
+`UNKNOWN_AFTER_PRE_EFFECT`. The observe evidence SHA-256 is
+`16d72808d4dbaec218522a8432c18f50ae495cb655784223b537f0f08c5a695b`.
+
+In `PROTECT` mode, secret object key 7 recorded `EXACT_POLICY_DENY`,
+`DENIED_BEFORE_EFFECT`, and kernel result `-13`. The same task opened benign
+object key 8 and recorded `EXACT_POLICY_ALLOW` with kernel result `0`. The
+protect evidence SHA-256 is
+`12195030548676e93f71ce836d3ebf12999bc267195be6aebd8cb5cb6748ee94`.
+
+The combined VM command later failed in the separate native-identity probe.
+It did not invalidate the completed CRI artifacts. This is one K3s
+policy-aware deny and legitimate-control result. It does not qualify rotating
+projected tokens, the administrative runc bootstrap path, or the remaining
+Phase 4 matrix. The phase remains **Not done**.

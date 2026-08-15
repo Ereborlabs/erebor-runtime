@@ -2,9 +2,9 @@
 
 Status: The qualified local-enforcement slices have runnable automated and
 manual cases. The current source passed the privileged VM enforcement probe.
-The optional k3s lane passed substrate checks only. The complete catalog below
-remains the acceptance target. The complete policy-aware local surface does
-not have an implementation.
+A K3s CRI lane also passed one exact secret-deny and benign-control check.
+The complete catalog below remains the acceptance target. The complete
+policy-aware local surface does not have an implementation.
 
 Phase: [Signed Local Pre-Effect Enforcement](../phase-4-signed-local-pre-effect-enforcement.md)  
 Setup: [`SINGLE-NODE`](./environment-setup.md)
@@ -60,6 +60,34 @@ exact write-open exception. Positive process-control and positive exact Unix
 relationships are rejected. Raw BPF map creation remains in
 the automated probe because it uses the vendored libbpf API instead of copied
 architecture-specific syscall numbers.
+
+## K3s CRI Paired Control
+
+The disposable K3s lane uses one real `kubectl exec` task and two exact
+read-only hostPath files. It verifies the secret denial and the benign allow
+control in the same task. Run the lane with:
+
+```sh
+rtk proxy bash crates/mithril-e2e/harness/vm/run.sh \
+  --with-k3s \
+  --skip-administrative-exec \
+  --output-directory /tmp/mithril-k3s-cri-control
+```
+
+Inspect `k3s-cri-observe.txt` and `k3s-cri-effect.txt` before using later
+probe output as an overall result. The CRI files are complete evidence when
+they show these facts for one task cookie:
+
+- Observe: secret key 7 is `WOULD_DENY`; benign key 8 is
+  `EXACT_POLICY_ALLOW`; both have `UNKNOWN_AFTER_PRE_EFFECT`.
+- Protect: secret key 7 is `EXACT_POLICY_DENY` with
+  `DENIED_BEFORE_EFFECT` and `kernel_result=-13`; benign key 8 is
+  `EXACT_POLICY_ALLOW` with `kernel_result=0`.
+
+For an operator-driven benign-only CRI case, use
+[`cri-benign-allow.sh`](../../../../examples/mithril-local-enforcement-manual/cri-benign-allow.sh).
+It does not prove the secret-deny half, projected-token rotation, or the
+administrative-exec path.
 
 ## Procedure
 
