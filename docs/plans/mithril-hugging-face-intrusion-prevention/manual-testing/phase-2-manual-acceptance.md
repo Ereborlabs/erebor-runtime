@@ -43,6 +43,15 @@ removes its dedicated cgroup and pin tree; the broader matrix below still
 supplies the required concurrency, failure-injection, Docker/CRI, and
 Kubernetes cases before the phase may be marked Done.
 
+Qualified VM record, 2026-08-15: the physical runner passed on Linux
+`6.8.0-137-generic` with BPF object SHA-256
+`94abdfa381e9f65330f21532f0d5113efe0c15814c68bdc6bd73a46e8cae4e7d`.
+It moved a stopped `external_runtime_root` from its bound cgroup to the parent
+cgroup. The task stayed tracked, became `fail_closed_unknown`, and increased
+the placement-mismatch counter. The runner then removed its pin root, lease,
+and cgroup. This is qualified evidence for `ID-CGROUP-ESCAPE-001` only. The
+full matrix remains not done.
+
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured
