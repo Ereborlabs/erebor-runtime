@@ -251,3 +251,59 @@ Mithril pin or process. Only unrelated BPF link 1 remained.
 
 This closes only the direct-CRI exact-file row. It does not qualify projected
 token behavior or the remaining manual matrix. The phase remains **Blocked**.
+
+## Qualification update — 2026-08-15 — Readable direct-CRI OBSERVE operator case
+
+At source commit `4a6ff2b1cfafa9cf3310b30353d9417cc5b919c4`, an operator ran
+`examples/mithril-effect-observation-manual/cri-file-observe.sh` against a
+fresh K3s CRI binding. The run used Pod UID
+`3adc7e25-a0a2-4b09-a53c-2b656027ecc1`, container ID
+`a8d52808cca2394589f10ae11807e51b371a36f5a64f3a1f776a57b7d151e3ae`,
+and a run-scoped writable host directory mounted at
+`/var/lib/mithril/manual-shared`. The script exited 0. Its stdout SHA-256 is
+`f5ca9565f5f5b7976211043ebfb816d3cb1bc071fdcfd6d8ac2b0d1df40c6023`.
+
+The script inspected the released CRI probe. It required
+`creator_task_cookie=null`, `root_class=external_runtime_root`,
+`installed_role_class=runtime_external_restricted`, and a positive task
+cookie. It then required an event for that task cookie with `family=2`,
+`operation=2`, `reason=WOULD_DENY`, `result=UNKNOWN_AFTER_PRE_EFFECT`, and
+`exact_object_key_id=7`. The probe opened the exact secret and completed the
+scripted one-byte read attempt after its release gate. The script does not
+parse or assert `kernel_result`. This record makes no kernel-result claim.
+
+Provenance SHA-256: mithril-node
+`b9dc1ffa54801adfe2fa3bac7565a60f04e2febed1e8578f8911b1ecdd0622e0`;
+mithril-inspect
+`c4efaa3adba740c3f919b142fd08bb0d725c8d308179edbe1cbb905e276a6079`;
+mithril-policy
+`72383137eb0a7bd8881b13d62b57fdc4ee5587b6ec584e1298f20fa563bfc91a`;
+observation runtime
+`6109f8ed4f032845a75a02480a6fb966a4669ca1417720e36dc3157721c6cdf9`;
+CRI script
+`643bf68ab72cc1eab995272df0e9c15b7008e79877890807ac2523a10a204c18`;
+identity runtime
+`b010d7a0a86a2e015181dc88440b84dab4fda4b988e63a3cf3f5aeb9e3d77b8f`;
+policy source
+`d0c595aba5dec9becca2af29b52af875388b32bc68e4701aa926d4b2f5824c3c`;
+seal request
+`22b2f40bd3dea1d5a1aa66962a22008ce0ec887e28ee753f1fc27fb8814f7b3e`;
+generated node configuration
+`dc153866cc44a3167db5bcc36b10276c91eef3cbf94fb43136c3de27df661adc`;
+generated Pod manifest
+`286ef5b66169497d3401c7d2d5241ced15c7a92b384226c0791a8450eee3c85d`;
+and run provenance
+`0b01ed7370f8b5772b0e112c7500a3eb4a8ad5cda4a6a502a9fb520d473b0612`.
+No signing key was transferred. The run reused a matching guest test key.
+
+The script removed its node, task, pins, state, lease, configuration, and
+logs. External cleanup then removed both owned Pods, the namespace, and the
+fixture root. Final VM inspection found no named namespace, fixture root,
+Mithril process, or Mithril BPF pin. Only unrelated BPF link 1 remained. The
+staging root
+`/var/tmp/mithril-manual-phase3-c52da253-20260815t154608z` remains because it
+retains the archive and run evidence. Retain it only until nonsecret evidence
+is copied, its hashes are verified, and scoped deletion is authorized. Then
+remove only this root. Do not change its external symlink targets. This is one
+direct-CRI OBSERVE operator case. The remaining manual matrix is not complete.
+Phase 3 remains **Blocked**.

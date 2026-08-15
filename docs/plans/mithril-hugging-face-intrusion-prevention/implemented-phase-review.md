@@ -164,6 +164,33 @@ Mithril pin or process. Only unrelated BPF link 1 remained.
 This closes only the direct-CRI exact-file row. It does not qualify projected
 token behavior or the remaining manual matrix. Phase 3 remains **Blocked**.
 
+### Readable direct-CRI OBSERVE operator case — 2026-08-15
+
+At source `4a6ff2b1cfafa9cf3310b30353d9417cc5b919c4`, an operator ran the
+readable `cri-file-observe.sh` case against a fresh K3s CRI binding with a
+run-scoped writable hostPath directory. The script exited 0. Its stdout
+SHA-256 is
+`f5ca9565f5f5b7976211043ebfb816d3cb1bc071fdcfd6d8ac2b0d1df40c6023`.
+
+The script required `creator_task_cookie=null`,
+`root_class=external_runtime_root`,
+`installed_role_class=runtime_external_restricted`, and a positive task cookie.
+It required the same cookie in an event with `family=2`, `operation=2`,
+`reason=WOULD_DENY`, `result=UNKNOWN_AFTER_PRE_EFFECT`, and
+`exact_object_key_id=7`. The probe opened the exact secret and completed the
+scripted one-byte read attempt. The script does not assert `kernel_result`. The
+Phase 3 result records the exact source, script, binary, policy, configuration,
+manifest, and provenance hashes.
+
+The script removed its node state. External cleanup removed the named Pods,
+namespace, and fixture root. Final VM inspection found no named namespace,
+fixture root, Mithril process, or Mithril BPF pin. Only unrelated BPF link 1
+remained. Retain the named staging root only until nonsecret evidence is copied,
+its hashes are verified, and scoped deletion is authorized. Then remove only
+this root. Do not change its external symlink targets. This is one Phase 3
+direct-CRI OBSERVE operator case. It does not complete the manual matrix. Phase
+3 remains **Blocked**.
+
 ### Non-TTY Kubernetes exec identity subcase — 2026-08-15
 
 The same physical K3s lane is Phase 2 evidence for one non-TTY

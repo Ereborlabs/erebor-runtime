@@ -100,6 +100,33 @@ Mithril pin or process. Only unrelated BPF link 1 remained.
 This closes only the direct-CRI exact-file row. It does not qualify projected
 token behavior or the remaining operator matrix. The phase remains **Blocked**.
 
+## Readable Direct-CRI OBSERVE Operator Record
+
+At source `4a6ff2b1cfafa9cf3310b30353d9417cc5b919c4`, an operator ran
+`examples/mithril-effect-observation-manual/cri-file-observe.sh` against a
+fresh K3s CRI binding and a run-scoped writable host directory mounted in the
+container. The script exited 0. Its stdout SHA-256 is
+`f5ca9565f5f5b7976211043ebfb816d3cb1bc071fdcfd6d8ac2b0d1df40c6023`.
+
+The script required `creator_task_cookie=null`,
+`root_class=external_runtime_root`,
+`installed_role_class=runtime_external_restricted`, and a positive task cookie
+for the released probe. It required the same task cookie in an event with
+`family=2`, `operation=2`, `reason=WOULD_DENY`,
+`result=UNKNOWN_AFTER_PRE_EFFECT`, and `exact_object_key_id=7`. The probe
+opened the exact secret and completed the scripted one-byte read attempt. The
+script does not assert `kernel_result`. The phase result records the exact
+source, script, binary, policy, configuration, manifest, and provenance hashes.
+
+The script removed its own node state. External cleanup removed the named
+Pods, namespace, and fixture root. Final VM inspection found no named
+namespace, fixture root, Mithril process, or Mithril BPF pin. Only unrelated
+BPF link 1 remained. Retain the named staging root only until nonsecret
+evidence is copied, its hashes are verified, and scoped deletion is authorized.
+Then remove only this root. Do not change its external symlink targets. This is
+one direct-CRI OBSERVE operator case. It does not complete the manual matrix.
+Phase 3 remains **Blocked**.
+
 ## Implemented Manual Cases
 
 Build once, then run only the cases relevant to the available runtime. Every
@@ -114,7 +141,8 @@ examples/mithril-effect-observation-manual/compile-observe-policy.sh
 sudo examples/mithril-effect-observation-manual/docker-file-observe.sh \
   <identity-node.json> <container> <secret-path>
 sudo examples/mithril-effect-observation-manual/cri-file-observe.sh \
-  <identity-node.json> <full-container-id> <secret-path>
+  <identity-node.json> <full-container-id> <secret-path> \
+  <host-shared-directory> <container-shared-directory>
 sudo examples/mithril-effect-observation-manual/nsenter-file-observe.sh \
   <identity-node.json> <container> <secret-path>
 sudo examples/mithril-effect-observation-manual/docker-bind-alias.sh \
@@ -135,6 +163,10 @@ Each command is a separate operator case; there is deliberately no run-all
 wrapper. Each prepared process blocks on its own FIFO across node recovery. A
 host signal is not part of the test authority. Kubernetes is optional and does
 not own a Mithril enforcement boundary.
+
+For the CRI case, use a fresh writable host directory mounted at the absolute
+writable container directory. The script validates this mapping before it
+starts Mithril.
 
 The bind-alias case deliberately creates the represented alias before policy
 activation. Its read remains physically allowed in Phase 3 but resolves to the
