@@ -138,9 +138,9 @@ Manual Docker, CRI, and raw-namespace cases:
 - `mount-attack-deny.sh <node.json> <container> <secret>` races eight
   protected bind mounts and proves no mutation or protected read succeeds.
 - `external-mount-replacement-deny.sh <node.json> <container> <secret>
-  <benign>` performs the hostile case from outside the protected cgroup and
-  proves the namespace-wide DIRTY view returns no fd or bytes. The benign file
-  has the same filesystem requirements as the benign allow case.
+  <benign>` performs two hostile bind changes from outside the protected
+  cgroup and proves the namespace-wide DIRTY view returns no fd or bytes. The
+  benign file has the same filesystem requirements as the benign allow case.
 - `docker-exec-deny.sh <node.json> <container> <secret>
   <denied-executable>` proves a signed exact image cannot replace the prepared
   task.

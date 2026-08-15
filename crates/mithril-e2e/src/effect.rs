@@ -13,7 +13,8 @@ use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, 
 use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, ExceptionReceiptStateV1, ExceptionRuntimeStateKeyV1,
     ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExceptionUseReceiptV1, Id128V1,
-    IpcOperationV1, KernelEffectFamilyV1, KernelEffectOperationV1, PolicyGenerationStateV1,
+    IpcOperationV1, KernelEffectFamilyV1, KernelEffectOperationV1, MountReconciliationProposalV1,
+    MountSecurityViewStateV1, MountTopologyStateV1, PolicyGenerationStateV1,
     ProfileGenerationDescriptorV1,
 };
 use mithril_control::{PolicyArtifactOwner, PolicyDocumentV1, ProfileSealRequestV1};
@@ -211,6 +212,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub io_uring_lifecycle_released: bool,
     pub bind_alias_canonicalized: bool,
     pub protected_mount_race_denied: bool,
+    pub mount_stale_proposal_failed_closed: bool,
     pub mount_propagation_reached_peer: bool,
     pub mount_propagation_all_views_failed_closed: bool,
     pub mount_propagation_reconciled: bool,
@@ -2660,6 +2662,140 @@ impl EffectTestRunner {
             None,
         )?;
 
+        let stale_proposal_key = exact_object.mount_namespace_inode.to_ne_bytes();
+        let clean_view_bytes = host
+            .lookup_map("mount_security_views", &stale_proposal_key)
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: Path::new("mount_security_views"),
+                    reason: "the exact mount view disappeared before the stale proposal test",
+                }
+                .build()
+            })?;
+        let clean_view =
+            MountSecurityViewStateV1::try_read_from_bytes(&clean_view_bytes).map_err(|error| {
+                InvalidInputSnafu {
+                    path: Path::new("mount_security_views"),
+                    reason: format!("mount security view has invalid ABI: {error}"),
+                }
+                .build()
+            })?;
+        let stale_proposal_bytes = host
+            .lookup_map("mount_reconciliation_proposals", &stale_proposal_key)
+            .context(InterceptorSnafu)?
+            .ok_or_else(|| {
+                InvalidInputSnafu {
+                    path: Path::new("mount_reconciliation_proposals"),
+                    reason: "the clean mount view has no reconciliation proposal",
+                }
+                .build()
+            })?;
+        let stale_proposal = MountReconciliationProposalV1::try_read_from_bytes(
+            &stale_proposal_bytes,
+        )
+        .map_err(|error| {
+            InvalidInputSnafu {
+                path: Path::new("mount_reconciliation_proposals"),
+                reason: format!("mount reconciliation proposal has invalid ABI: {error}"),
+            }
+            .build()
+        })?;
+        ensure!(
+            clean_view.state == MountTopologyStateV1::Clean
+                && clean_view.pending_mutations == 0
+                && stale_proposal.topology_generation == clean_view.topology_generation
+                && stale_proposal.snapshot_digest_id == clean_view.snapshot_digest_id
+                && stale_proposal.transition_version == clean_view.transition_version
+                && stale_proposal.topology_generation != 0
+                && stale_proposal.snapshot_digest_id != 0
+                && stale_proposal.transition_version > stale_proposal.expected_transition_version,
+            InvalidInputSnafu {
+                path: Path::new("mount_reconciliation_proposals"),
+                reason: "the clean mount view did not retain a usable proposal",
+            }
+        );
+
+        external_mount_namespace.bind_mount(&paths.source, &paths.mount_target)?;
+        ensure!(
+            global_mount_view_is_dirty(&host)?
+                && mount_view_is_dirty(&host, exact_object.mount_namespace_inode)?,
+            InvalidInputSnafu {
+                path: &paths.mount_target,
+                reason: "an external topology change did not dirty the exact mount view",
+            }
+        );
+        host.update_map(
+            "mount_reconciliation_proposals",
+            &stale_proposal_key,
+            stale_proposal.as_bytes(),
+        )
+        .context(InterceptorSnafu)?;
+        ensure!(
+            host.lookup_map("mount_reconciliation_proposals", &stale_proposal_key)
+                .context(InterceptorSnafu)?
+                .as_deref()
+                == Some(stale_proposal.as_bytes()),
+            InvalidInputSnafu {
+                path: Path::new("mount_reconciliation_proposals"),
+                reason: "the stale mount proposal readback changed",
+            }
+        );
+        ensure!(
+            !host
+                .apply_mount_reconciliation_proposal(exact_object.mount_namespace_inode)
+                .context(InterceptorSnafu)?,
+            InvalidInputSnafu {
+                path: Path::new("mount_reconciliation_proposals"),
+                reason: "a stale mount proposal committed after an external topology change",
+            }
+        );
+        ensure!(
+            global_mount_view_is_dirty(&host)?
+                && mount_view_is_dirty(&host, exact_object.mount_namespace_inode)?,
+            InvalidInputSnafu {
+                path: &paths.mount_target,
+                reason: "a rejected stale proposal cleared the exact mount view",
+            }
+        );
+        let stale_proposal_marker = observations.cursor();
+        ensure!(
+            fixture.open(&paths.secret)?.denied(),
+            InvalidInputSnafu {
+                path: &paths.secret,
+                reason: "a stale mount proposal made the exact path readable",
+            }
+        );
+        wait_for_reason(
+            &reader,
+            &observations,
+            stale_proposal_marker,
+            "UNRESOLVED_OBJECT",
+        )?;
+        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+        let current_proposal_marker = observations.cursor();
+        ensure!(
+            fixture.open(&paths.secret)?.allowed != protect,
+            InvalidInputSnafu {
+                path: &paths.secret,
+                reason: "the current mount snapshot did not restore the exact policy result",
+            }
+        );
+        wait_for_exact_effect(
+            &reader,
+            &observations,
+            current_proposal_marker,
+            exact_reason,
+            (
+                KernelEffectFamilyV1::File,
+                KernelEffectOperationV1::OpenRead,
+            ),
+            EXACT_OBJECT_KEY_ID,
+            None,
+        )?;
+        external_mount_namespace.unmount(&paths.mount_target)?;
+        reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+
         external_mount_namespace.bind_mount(&paths.benign, &paths.secret)?;
         ensure!(
             mount_view_is_dirty(&host, exact_object.mount_namespace_inode)?,
@@ -3073,6 +3209,7 @@ impl EffectTestRunner {
             io_uring_lifecycle_released,
             bind_alias_canonicalized: true,
             protected_mount_race_denied: true,
+            mount_stale_proposal_failed_closed: true,
             mount_propagation_reached_peer: true,
             mount_propagation_all_views_failed_closed: true,
             mount_propagation_reconciled: true,

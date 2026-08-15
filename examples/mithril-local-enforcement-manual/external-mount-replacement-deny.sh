@@ -35,6 +35,10 @@ raise SystemExit("external mount replacement made the protected path readable")
 ' "$observation_probe_ready" "$3"
 nsenter -t "$identity_init_pid" -m -r -- \
   mount --bind -- "$enforcement_benign_path" "$3"
+nsenter -t "$identity_init_pid" -m -r -- \
+  umount -- "$enforcement_replacement_target"
+nsenter -t "$identity_init_pid" -m -r -- \
+  mount --bind -- "$enforcement_benign_path" "$3"
 observation_release_probe
 observation_wait_for_observation 'reason=UNRESOLVED_OBJECT' "$identity_work/effects.txt"
-identity_pass "PASS: an external bind replacement dirtied the view and returned no fd or bytes."
+identity_pass "PASS: repeated external bind changes kept the view dirty and returned no fd or bytes."

@@ -596,7 +596,7 @@ case ${1:-} in
     result_fd_open=true
     /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
       sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; if IFS= read -r _ <"$4" && IFS= read -r _ <"$5"; then printf "BASELINE_ALLOWED\n"; else printf "BASELINE_DENIED\n"; exit 42; fi; echo $$ >"$2"; IFS= read -r _ <"$3"; if IFS= read -r _ <"$4"; then secret_result=SECRET_ALLOWED; else secret_result=SECRET_DENIED; fi; if IFS= read -r _ <"$5"; then benign_result=BENIGN_ALLOWED; else benign_result=BENIGN_DENIED; fi; if [ "$6" = OBSERVE ] && [ "$secret_result" = SECRET_ALLOWED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; if [ "$6" = PROTECT ] && [ "$secret_result" = SECRET_DENIED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; chmod 777 "$1" "$3"; exit 43' \
-      sh "$pod_state" "$pod_pid_file" "$pod_release_file" \
+      sh "$kubectl_state" "$pod_pid_file" "$pod_release_file" \
       /var/lib/mithril/secret /var/lib/mithril/benign "$effect_mode" >&8 &
     exec_client_pid=$!
     for _attempt in {1..200}; do
