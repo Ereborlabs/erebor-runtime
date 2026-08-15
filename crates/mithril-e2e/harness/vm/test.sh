@@ -104,10 +104,7 @@ grep -q 'mkdir -m 700 -- "/proc/\$init_pid/root\$pod_state"' "$directory/guest.s
 grep -q 'CRI_BASELINE_ALLOWED' "$directory/guest.sh"
 grep -q 'CRI_EXACT_ALLOWED' "$directory/guest.sh"
 grep -q 'CRI_EXACT_DENIED' "$directory/guest.sh"
-grep -q 'direct CRI exec did not allow the observe exact file read' \
-  "$directory/guest.sh"
-grep -q 'direct CRI exec did not deny the protect exact file read' \
-  "$directory/guest.sh"
+grep -q 'cri_baseline_file=\$cri_state/baseline' "$directory/guest.sh"
 grep -q 'expected_cri_effect="task_cookie=\$cri_task_cookie family=2 operation=2' \
   "$directory/guest.sh"
 grep -q 'cri_baseline_file_open=allowed-before-observe' "$directory/guest.sh"
@@ -119,6 +116,7 @@ grep -Fq '[ "$6" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]' \
   "$directory/guest.sh"
 grep -Fq '[ "$6" = PROTECT ] && [ "$cri_result" = CRI_EXACT_DENIED ]' \
   "$directory/guest.sh"
+grep -Fq '[[ $cri_status -eq 0 ]]' "$directory/guest.sh"
 grep -q 'k3s CRI effect qualification left its Pod state directory' \
   "$directory/guest.sh"
 grep -q 'kubectl_exec_root=external_runtime_root:runtime_external_restricted' \

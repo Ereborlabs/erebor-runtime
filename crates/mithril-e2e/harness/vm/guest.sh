@@ -272,7 +272,7 @@ case ${1:-} in
     pod_release_file=$kubectl_state/release
     cri_pid_file=$cri_state/exec.pid
     cri_release_file=$cri_state/release
-    cri_result_file=$cri_state/result
+    cri_baseline_file=$cri_state/baseline
     initial_snapshot=$lane_root/pod-initial-root.json
     cri_snapshot=$lane_root/cri-exec-root.json
     external_snapshot=$lane_root/kubectl-exec-root.json
@@ -523,8 +523,6 @@ case ${1:-} in
         else
           cri_result=CRI_EXACT_DENIED
         fi
-        printf "%s\\n" "$cri_result" >>"$5"
-        chmod 777 "$1" "$3"
         if [ "$6" = OBSERVE ] && [ "$cri_result" = CRI_EXACT_ALLOWED ]; then
           exit 0
         fi
@@ -534,7 +532,7 @@ case ${1:-} in
         exit 43
       ' \
       sh "$cri_state" "$cri_pid_file" "$cri_release_file" \
-      /var/lib/mithril/secret "$cri_result_file" "$effect_mode" \
+      /var/lib/mithril/secret "$cri_baseline_file" "$effect_mode" \
       >"$lane_root/cri-result.out" 2>&1 &
     cri_client_pid=$!
     for _attempt in {1..200}; do
@@ -579,7 +577,7 @@ case ${1:-} in
       exit 1
     }
     for _attempt in {1..200}; do
-      [[ -s /proc/$init_pid/root$cri_result_file ]] && break
+      [[ -s /proc/$init_pid/root$cri_baseline_file ]] && break
       kill -0 "$cri_client_pid" 2>/dev/null || {
         echo "direct CRI exec exited before its baseline file read" >&2
         cat "$lane_root/cri-result.out" >&2
@@ -587,10 +585,10 @@ case ${1:-} in
       }
       sleep 0.1
     done
-    cri_baseline_result=$(head -n 1 "/proc/$init_pid/root$cri_result_file")
+    cri_baseline_result=$(head -n 1 "/proc/$init_pid/root$cri_baseline_file")
     [[ $cri_baseline_result == CRI_BASELINE_ALLOWED ]] || {
       echo "direct CRI exec could not read the fixture before $effect_mode" >&2
-      cat "/proc/$init_pid/root$cri_result_file" >&2
+      cat "/proc/$init_pid/root$cri_baseline_file" >&2
       exit 1
     }
 
@@ -699,14 +697,8 @@ case ${1:-} in
       cat "$lane_root/cri-result.out" >&2
       exit 1
     }
-    cri_exact_result=$(tail -n 1 "/proc/$init_pid/root$cri_result_file")
     case $effect_mode in
       OBSERVE)
-        [[ $cri_exact_result == CRI_EXACT_ALLOWED ]] || {
-          echo "direct CRI exec did not allow the observe exact file read" >&2
-          cat "/proc/$init_pid/root$cri_result_file" >&2
-          exit 1
-        }
         expected_cri_effect="task_cookie=$cri_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
         expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
         expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
@@ -717,11 +709,6 @@ case ${1:-} in
         benign_file_open=allowed-after-effect:EXACT_POLICY_ALLOW
         ;;
       PROTECT)
-        [[ $cri_exact_result == CRI_EXACT_DENIED ]] || {
-          echo "direct CRI exec did not deny the protect exact file read" >&2
-          cat "/proc/$init_pid/root$cri_result_file" >&2
-          exit 1
-        }
         expected_cri_effect="task_cookie=$cri_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
         expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
         expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
