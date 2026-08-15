@@ -156,6 +156,10 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub orphaned_native_parent: NativeTaskSnapshotV1,
     pub orphaned_native_child_before_parent_exit: NativeTaskSnapshotV1,
     pub orphaned_native_child_after_parent_exit: NativeTaskSnapshotV1,
+    pub double_fork_outer_parent: NativeTaskSnapshotV1,
+    pub double_fork_intermediate_before_exit: NativeTaskSnapshotV1,
+    pub double_fork_native_child_before_intermediate_exit: NativeTaskSnapshotV1,
+    pub double_fork_native_child_after_intermediate_exit: NativeTaskSnapshotV1,
     pub profile_task_refs_after_exit: u64,
     pub recovered_start: KernelObjectManifestV1,
     pub map_ids_stable_across_restart: bool,
@@ -560,6 +564,117 @@ impl IdentityTestRunner {
             }
         );
         orphan_fixture.stop();
+
+        let mut double_fork_fixture = NativeProcessFixture::start_double_forking()?;
+        fs::write(&procs_path, double_fork_fixture.outer_pid().to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        let double_fork_outer_parent =
+            self.wait_for("double-fork outer parent identity", &procs_path, || {
+                inspector
+                    .snapshot(double_fork_fixture.outer_pid())
+                    .context(NodeSnafu)
+            })?;
+        double_fork_fixture.release_root()?;
+        let double_fork_intermediate_pid =
+            self.wait_for("double-fork intermediate creation", &procs_path, || {
+                double_fork_fixture.intermediate_pid()
+            })?;
+        double_fork_fixture.open_intermediate_pidfd(double_fork_intermediate_pid)?;
+        let double_fork_native_child_pid =
+            self.wait_for("double-fork native child creation", &procs_path, || {
+                double_fork_fixture.intermediate_native_child_pid(double_fork_intermediate_pid)
+            })?;
+        double_fork_fixture.open_native_pidfd(double_fork_native_child_pid)?;
+        let double_fork_intermediate_before_exit =
+            self.wait_for("double-fork intermediate identity", &procs_path, || {
+                inspector
+                    .snapshot(double_fork_intermediate_pid)
+                    .context(NodeSnafu)
+            })?;
+        let double_fork_native_child_before_intermediate_exit =
+            self.wait_for("double-fork native child identity", &procs_path, || {
+                inspector
+                    .snapshot(double_fork_native_child_pid)
+                    .context(NodeSnafu)
+            })?;
+        ensure!(
+            double_fork_outer_parent.root_class == Some("external_runtime_root")
+                && double_fork_outer_parent.installed_role_class
+                    == Some("runtime_external_restricted")
+                && double_fork_intermediate_before_exit.creator_task_cookie
+                    == Some(double_fork_outer_parent.task_cookie)
+                && double_fork_intermediate_before_exit.real_parent_task_cookie
+                    == double_fork_outer_parent.task_cookie
+                && double_fork_intermediate_before_exit.root_class.is_none()
+                && double_fork_intermediate_before_exit
+                    .installed_role_class
+                    .is_none()
+                && double_fork_native_child_before_intermediate_exit.creator_task_cookie
+                    == Some(double_fork_intermediate_before_exit.task_cookie)
+                && double_fork_native_child_before_intermediate_exit.real_parent_task_cookie
+                    == double_fork_intermediate_before_exit.task_cookie
+                && double_fork_native_child_before_intermediate_exit
+                    .root_class
+                    .is_none()
+                && double_fork_native_child_before_intermediate_exit
+                    .installed_role_class
+                    .is_none()
+                && double_fork_native_child_before_intermediate_exit.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "double-fork native identity is incorrect before intermediate exit",
+            }
+        );
+        double_fork_fixture.release_intermediate_exit()?;
+        self.wait_for("double-fork intermediate exit", &procs_path, || {
+            Ok(double_fork_fixture
+                .intermediate_exited(double_fork_intermediate_pid)?
+                .then_some(()))
+        })?;
+        double_fork_fixture.release_exec()?;
+        let double_fork_native_child_after_intermediate_exit = self.wait_for(
+            "double-fork native child exec after intermediate exit",
+            &procs_path,
+            || {
+                let snapshot = inspector
+                    .snapshot(double_fork_native_child_pid)
+                    .context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    snapshot.task_cookie
+                        == double_fork_native_child_before_intermediate_exit.task_cookie
+                        && snapshot.creator_task_cookie
+                            == Some(double_fork_intermediate_before_exit.task_cookie)
+                        && snapshot.real_parent_task_cookie
+                            != double_fork_intermediate_before_exit.task_cookie
+                        && snapshot.real_parent_interval_sequence
+                            > double_fork_native_child_before_intermediate_exit
+                                .real_parent_interval_sequence
+                        && snapshot.active_execution_id
+                            != double_fork_native_child_before_intermediate_exit.active_execution_id
+                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
+                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
+                        && snapshot.process_state_vector_state
+                            == ProcessStateVectorStateV1::Active as u8
+                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
+                }))
+            },
+        )?;
+        ensure!(
+            double_fork_native_child_after_intermediate_exit
+                .root_class
+                .is_none()
+                && double_fork_native_child_after_intermediate_exit
+                    .installed_role_class
+                    .is_none()
+                && double_fork_native_child_after_intermediate_exit.active_role_id
+                    == double_fork_outer_parent.active_role_id,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "double-fork native child lost its inherited restriction",
+            }
+        );
+        double_fork_fixture.stop();
         let profile_task_refs_after_exit =
             self.wait_for("profile reference release", &procs_path, || {
                 let refs = profile_task_refs(&host)?;
@@ -644,7 +759,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 2,
+            schema_version: 3,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -658,6 +773,10 @@ impl IdentityTestRunner {
             orphaned_native_parent,
             orphaned_native_child_before_parent_exit,
             orphaned_native_child_after_parent_exit,
+            double_fork_outer_parent,
+            double_fork_intermediate_before_exit,
+            double_fork_native_child_before_intermediate_exit,
+            double_fork_native_child_after_intermediate_exit,
             profile_task_refs_after_exit,
             recovered_start,
             map_ids_stable_across_restart,
@@ -711,6 +830,7 @@ struct NativeProcessFixture {
     stdin: Option<ChildStdin>,
     stderr: Option<ChildStderr>,
     native_pidfd: Option<OwnedFd>,
+    intermediate_pidfd: Option<OwnedFd>,
     parent_exit_mode: bool,
 }
 
@@ -723,13 +843,24 @@ impl NativeProcessFixture {
         Self::start_with_parent_exit(true)
     }
 
+    fn start_double_forking() -> Result<Self> {
+        Self::start_with_script(
+            "read _; ( ( read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 30 ) & wait ) & middle_pid=$!; wait \"$middle_pid\"; exec /bin/sleep 30",
+            false,
+        )
+    }
+
     fn start_with_parent_exit(parent_exit_mode: bool) -> Result<Self> {
         let parent_wait = if parent_exit_mode { "read _" } else { "wait" };
         let script = format!(
             "read _; (read child_pid _ < /proc/self/stat; kill -STOP \"$child_pid\"; exec /bin/sleep 30) & {parent_wait}"
         );
+        Self::start_with_script(&script, parent_exit_mode)
+    }
+
+    fn start_with_script(script: &str, parent_exit_mode: bool) -> Result<Self> {
         let mut outer = Command::new("/bin/sh")
-            .args(["-c", &script])
+            .args(["-c", script])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -750,6 +881,7 @@ impl NativeProcessFixture {
             stdin: Some(stdin),
             stderr: Some(stderr),
             native_pidfd: None,
+            intermediate_pidfd: None,
             parent_exit_mode,
         })
     }
@@ -760,6 +892,11 @@ impl NativeProcessFixture {
 
     fn open_native_pidfd(&mut self, pid: u32) -> Result<()> {
         self.native_pidfd = Some(open_pidfd(pid)?);
+        Ok(())
+    }
+
+    fn open_intermediate_pidfd(&mut self, pid: u32) -> Result<()> {
+        self.intermediate_pidfd = Some(open_pidfd(pid)?);
         Ok(())
     }
 
@@ -785,6 +922,24 @@ impl NativeProcessFixture {
             }
         );
         self.write_stdin(b"parent-exit\n")
+    }
+
+    fn release_intermediate_exit(&mut self) -> Result<()> {
+        let pidfd = self
+            .intermediate_pidfd
+            .as_ref()
+            .ok_or_else(|| invalid_state("double-fork intermediate has no pidfd"))?;
+        pidfd_send_signal(pidfd, Signal::TERM)
+            .map_err(|error| invalid_state(format!("release intermediate exit: {error}")))
+    }
+
+    fn intermediate_exited(&self, intermediate_pid: u32) -> Result<bool> {
+        let path = PathBuf::from(format!("/proc/{intermediate_pid}/status"));
+        match fs::read_to_string(&path) {
+            Ok(status) => Ok(status.lines().any(|line| line.starts_with("State:\tZ"))),
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(true),
+            Err(source) => Err(source).context(IoSnafu { path: &path }),
+        }
     }
 
     fn wait_for_parent_exit(&mut self) -> Result<()> {
@@ -827,9 +982,24 @@ impl NativeProcessFixture {
                 stderr.trim()
             )));
         }
-        let pid = self.outer.id();
+        self.first_child_pid(self.outer.id())
+    }
+
+    fn intermediate_pid(&mut self) -> Result<Option<u32>> {
+        self.native_child_pid()
+    }
+
+    fn intermediate_native_child_pid(&self, intermediate_pid: u32) -> Result<Option<u32>> {
+        self.first_child_pid(intermediate_pid)
+    }
+
+    fn first_child_pid(&self, pid: u32) -> Result<Option<u32>> {
         let path = PathBuf::from(format!("/proc/{pid}/task/{pid}/children"));
-        let children = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
+        let children = match fs::read_to_string(&path) {
+            Ok(children) => children,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(source).context(IoSnafu { path: &path }),
+        };
         children
             .split_ascii_whitespace()
             .next()
@@ -843,6 +1013,9 @@ impl NativeProcessFixture {
 
     fn stop(&mut self) {
         if let Some(pidfd) = &self.native_pidfd {
+            let _result = pidfd_send_signal(pidfd, Signal::TERM);
+        }
+        if let Some(pidfd) = &self.intermediate_pidfd {
             let _result = pidfd_send_signal(pidfd, Signal::TERM);
         }
         let _result = self.outer.kill();
@@ -1122,6 +1295,71 @@ mod tests {
         fixture.release_exec()?;
         let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
         runner.wait_for("orphaned native child exec", &comm_path, || {
+            fs::read_to_string(&comm_path)
+                .map(|name| (name.trim() == "sleep").then_some(()))
+                .map_err(|error| {
+                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
+                })
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_process_fixture_reparents_double_fork_child_before_exec() -> crate::Result<()> {
+        let runner = IdentityTestRunner::new(".");
+        let mut fixture = NativeProcessFixture::start_double_forking()?;
+        let outer_pid = fixture.outer_pid();
+        fixture.release_root()?;
+        let outer_children_path =
+            PathBuf::from(format!("/proc/{outer_pid}/task/{outer_pid}/children"));
+        let intermediate_pid = runner.wait_for(
+            "double-fork intermediate creation",
+            &outer_children_path,
+            || fixture.intermediate_pid(),
+        )?;
+        fixture.open_intermediate_pidfd(intermediate_pid)?;
+        let intermediate_children_path = PathBuf::from(format!(
+            "/proc/{intermediate_pid}/task/{intermediate_pid}/children"
+        ));
+        let native_pid = runner.wait_for(
+            "double-fork native child creation",
+            &intermediate_children_path,
+            || fixture.intermediate_native_child_pid(intermediate_pid),
+        )?;
+        fixture.open_native_pidfd(native_pid)?;
+        let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
+        let status = fs::read_to_string(&status_path).map_err(|error| {
+            super::invalid_state(format!("read {}: {error}", status_path.display()))
+        })?;
+        assert!(status.lines().any(|line| line.starts_with("State:\tT")));
+        assert!(status
+            .lines()
+            .any(|line| line == format!("PPid:\t{intermediate_pid}")));
+
+        fixture.release_intermediate_exit()?;
+        runner.wait_for(
+            "double-fork intermediate exit",
+            &intermediate_children_path,
+            || {
+                fixture
+                    .intermediate_exited(intermediate_pid)
+                    .map(|exited| exited.then_some(()))
+            },
+        )?;
+        assert!(PathBuf::from(format!("/proc/{outer_pid}")).exists());
+        fixture.release_exec()?;
+        runner.wait_for("double-fork native child reparenting", &status_path, || {
+            let status = fs::read_to_string(&status_path).map_err(|error| {
+                super::invalid_state(format!("read {}: {error}", status_path.display()))
+            })?;
+            let parent_pid = status
+                .lines()
+                .find_map(|line| line.strip_prefix("PPid:")?.split_whitespace().next())
+                .and_then(|value| value.parse::<u32>().ok());
+            Ok(parent_pid.filter(|parent_pid| *parent_pid != intermediate_pid))
+        })?;
+        let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
+        runner.wait_for("double-fork native child exec", &comm_path, || {
             fs::read_to_string(&comm_path)
                 .map(|name| (name.trim() == "sleep").then_some(()))
                 .map_err(|error| {
