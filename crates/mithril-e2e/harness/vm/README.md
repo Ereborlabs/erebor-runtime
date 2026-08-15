@@ -178,6 +178,18 @@ binaries. Run a selected script in this root shell:
   "$manual_root/node.json" <script-arguments>
 ```
 
+Do not start `mithril-node` by hand. Each manual script starts the node, runs
+one case, and removes its Mithril state. Its README gives the required
+arguments and oracle.
+
+| Guest path | Content |
+| --- | --- |
+| `/mnt/mithril-source` | Read-only mounted repository scripts and templates |
+| `$remote_root/bin` | Harness-built `mithril-node`, inspector, and policy tool |
+| `$remote_root/source` | Harness-staged policy assets and test key |
+| `$manual_root` | One case's `node.json`, workload YAML, wrapper, and output |
+| `/var/lib/mithril-manual-$manual_id` | One case's hostPath fixture |
+
 Run one Mithril owner at a time. Do not reuse a container ID, Pod UID, or
 binding. A different pin root does not isolate BPF LSM links.
 

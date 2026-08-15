@@ -16,6 +16,9 @@ on the guest.
 The retained K3s guest runs CRI and raw-namespace cases. Docker cases require
 a guest that runs Docker.
 
+Do not start `mithril-node` separately. Each case command starts it, runs one
+test, and removes its Mithril state.
+
 ## Operator Cases
 
 These are real `mithril-node` cases, not wrappers around Rust tests. Each script
