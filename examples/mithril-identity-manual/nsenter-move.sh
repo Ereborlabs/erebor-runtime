@@ -25,4 +25,8 @@ fi
 echo "$nsenter_pid" >"$identity_cgroup_path/cgroup.procs"
 identity_inspect_task nsenter-after-move "$nsenter_pid"
 identity_assert_external "$identity_work/nsenter-after-move.json"
+external_role_id=$(jq -er '.workload_bindings[0].external_role_id' "$identity_config")
+jq -e --argjson external_role_id "$external_role_id" \
+  '.active_role_id == $external_role_id and .coordinate_state == 3' \
+  "$identity_work/nsenter-after-move.json" >/dev/null
 identity_pass "PASS: nsenter grants nothing; cgroup movement creates a restricted external root"

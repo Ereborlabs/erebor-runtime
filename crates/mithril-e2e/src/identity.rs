@@ -454,9 +454,15 @@ impl IdentityTestRunner {
             inspector.snapshot(native_pid).context(NodeSnafu)
         })?;
         ensure!(
-            before_exec.creator_task_cookie == Some(external_root.task_cookie)
+            external_root.creator_task_cookie.is_none()
+                && external_root.root_class == Some("external_runtime_root")
+                && external_root.installed_role_class == Some("runtime_external_restricted")
+                && external_root.active_role_id == binding.external_role_id
+                && external_root.coordinate_state == TaskCoordinateStateV1::Runnable as u8
+                && before_exec.creator_task_cookie == Some(external_root.task_cookie)
                 && before_exec.real_parent_task_cookie == external_root.task_cookie
                 && before_exec.task_cookie != external_root.task_cookie
+                && before_exec.active_role_id == external_root.active_role_id
                 && before_exec.image_provenance_id == external_root.image_provenance_id
                 && before_exec.image_candidate_count > 0
                 && before_exec.process_execution_state == ProcessExecutionStateV1::Active as u8
@@ -465,7 +471,7 @@ impl IdentityTestRunner {
                 && before_exec.coordinate_state == TaskCoordinateStateV1::Runnable as u8,
             InvalidInputSnafu {
                 path: &procs_path,
-                reason: "native child creator, cookie, or pre-wake coordinate is incorrect",
+                reason: "external root or native child identity is incorrect",
             }
         );
 
