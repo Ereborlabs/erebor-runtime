@@ -82,6 +82,8 @@ struct identity_scratch_v1 {
     io_uring_ring_state_v1 io_uring_ring_draft;
     io_uring_request_state_v1 io_uring_request_draft;
     __u8 effect_gate_flags;
+    __u8 effect_gate_reserved[3];
+    __u32 effect_gate_operation_argument;
     exact_file_object_key_v1 file_object;
     task_label_v1 target_label;
     task_coordinate_v1 target_coordinate;

@@ -54,7 +54,7 @@ static __noinline int ipc_current_actor(int ret)
 
     if (scratch) {
         scratch->effect_gate_flags = EFFECT_GATE_DEFER_DECISION_V1;
-        scratch->observation.operation_argument = 0;
+        scratch->effect_gate_operation_argument = 0;
     }
     if (!ret)
         prepare_effect_identity();

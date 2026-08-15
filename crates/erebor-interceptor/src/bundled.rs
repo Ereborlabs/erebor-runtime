@@ -1019,10 +1019,9 @@ mod tests {
             .nth(1)
             .unwrap_or_default();
 
-        assert!(dispatch.contains("operation_argument = scratch->observation.operation_argument"));
-        assert!(dispatch.contains("scratch->observation.operation_argument = operation_argument"));
-        assert!(capable.contains("identity_effect_gate_with_argument"));
-        assert!(capable.contains("(__u32)cap"));
+        assert!(dispatch.contains("scratch->observation.operation_argument ="));
+        assert!(dispatch.contains("scratch->effect_gate_operation_argument"));
+        assert!(capable.contains("effect_gate_operation_argument = (__u32)cap"));
     }
 
     #[test]
