@@ -53,6 +53,22 @@ clearing the direct map target. The links are owned by the probe process and
 detach on exit; this is a qualification loader, not a product daemon or a
 persistent pin-root installation.
 
+## Current Checked Record
+
+`spec/qualification/v1/results/kernel-qualification-x86_64.json` is the
+current x86_64 record. It was measured on Linux `6.8.0-137-generic` with 41
+attached LSM programs. It records the current ABI header, BPF source, object,
+physical probe, and benchmark digests. The following command passed for this
+record:
+
+```bash
+cargo run -p mithril-e2e --bin mithril-kernel-qualification -- --repo-root . verify \
+  --output /tmp/mithril-kernel-qualification/verification.json
+```
+
+The record proves only its listed x86_64 surfaces. It does not replace a
+separate physical result for another architecture or unsupported capability.
+
 ## Procedure
 
 1. Create one `KERNEL-LAB` manifest per candidate platform.

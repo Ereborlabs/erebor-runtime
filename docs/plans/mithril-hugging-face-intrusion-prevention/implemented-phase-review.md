@@ -135,8 +135,11 @@ The automatic probe does not replace the full qualification matrix. The
 checked registry now contains the digest-bound Appendix C fixture IDs,
 required family membership, and canonical golden inputs. The architecture
 closure, golden, identity, and profile-simulation tests pass against those
-inputs. The final repository command still needs a current checked kernel
-qualification record before it can provide complete CI evidence.
+inputs. The fresh x86_64 qualification record at
+`spec/qualification/v1/results/kernel-qualification-x86_64.json` records
+kernel `6.8.0-137-generic`, 41 LSM programs, and the current ABI, BPF source,
+object, probe, and benchmark digests. `mithril-kernel-qualification verify`
+passes for that record. The final repository CI command still needs to run.
 
 The administrative transaction now reaches draft creation, admission, and slot
 arm. Stock runc `1.4.2` then executes a sealed self-clone and uses inherited

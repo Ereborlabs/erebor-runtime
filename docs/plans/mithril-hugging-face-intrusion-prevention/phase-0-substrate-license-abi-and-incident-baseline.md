@@ -188,3 +188,20 @@ Unsupported/degraded paths: task/fork/exec identity, mount component graph, muta
 Remaining work in this phase: none for the closed x86_64 claim. New capability work belongs to a later authorized outcome.
 Next authorization boundary: each later phase has its own result.
 ```
+
+## Current Checked Qualification Record — 2026-08-15
+
+`spec/qualification/v1/results/kernel-qualification-x86_64.json` replaces the
+older record that did not match the current ABI and BPF object. The record was
+measured on x86_64 Linux `6.8.0-137-generic` with 41 attached LSM programs.
+It records ABI header SHA-256
+`6311588645a81b338c45cea0482f6054c24a21c457aa4c7a545687b15c47181d`, BPF
+object SHA-256
+`4d56e05b36bb310af66c7ec553aa13fa4b29d4839096a7dd0e5708edddaa1eac`, and
+physical evidence SHA-256
+`f2042054b0cf4a7c2a6cc599af26102900ea74264d3dcf4699f9dc2761c3bb2c`.
+
+The record contains the full 1,000,000-operation baseline and protected
+distributions for concurrency 1 and 32. The record verifier passed. This
+update does not change the supported capability boundary or make a non-x86
+claim.
