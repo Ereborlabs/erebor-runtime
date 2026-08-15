@@ -106,6 +106,8 @@ grep -Fq 'sh "$kubectl_state" "$pod_pid_file" "$pod_release_file"' \
 grep -q 'CRI_BASELINE_ALLOWED' "$directory/guest.sh"
 grep -q 'CRI_EXACT_ALLOWED' "$directory/guest.sh"
 grep -q 'CRI_EXACT_DENIED' "$directory/guest.sh"
+grep -Fq 'mkfifo "$3"' "$directory/guest.sh"
+grep -Fq 'chmod 777 "$1" "$3"' "$directory/guest.sh"
 grep -q 'cri_baseline_file=\$cri_state/baseline' "$directory/guest.sh"
 grep -q 'expected_cri_effect="task_cookie=\$cri_task_cookie family=2 operation=2' \
   "$directory/guest.sh"

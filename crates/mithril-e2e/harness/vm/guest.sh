@@ -510,6 +510,7 @@ case ${1:-} in
       sh -c '
         mkdir -m 700 "$1"
         mkfifo "$3"
+        chmod 777 "$1" "$3"
         if IFS= read -r _ <"$4"; then
           printf "CRI_BASELINE_ALLOWED\\n" >"$5"
         else
