@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 {platform INSPECT WORK_DIRECTORY|k3s-install VERSION CONFIG WORK_DIRECTORY|k3s-qualify MANIFEST WORK_DIRECTORY|k3s-cri-effect NODE INSPECT POLICY TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-administrative-exec CONTROL NODE INSPECT POLICY KUBECTL_MITHRIL OIDC TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-remove WORK_DIRECTORY}" >&2
+  echo "usage: MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT $0 {platform INSPECT WORK_DIRECTORY|k3s-install VERSION CONFIG WORK_DIRECTORY|k3s-qualify MANIFEST WORK_DIRECTORY|k3s-cri-effect NODE INSPECT POLICY TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-administrative-exec CONTROL NODE INSPECT POLICY KUBECTL_MITHRIL OIDC TEMPLATE POLICY_SOURCE SEAL_REQUEST SIGNING_KEY PUBLIC_KEY MANIFEST WORK_DIRECTORY|k3s-remove WORK_DIRECTORY}" >&2
 }
 
 require_root() {
@@ -213,6 +213,14 @@ case ${1:-} in
     fi
     ;;
   k3s-cri-effect)
+    effect_mode=${MITHRIL_VM_CRI_EFFECT_MODE:-PROTECT}
+    case $effect_mode in
+      OBSERVE|PROTECT) ;;
+      *)
+        echo "invalid MITHRIL_VM_CRI_EFFECT_MODE: $effect_mode" >&2
+        exit 2
+        ;;
+    esac
     (($# == 11)) || { usage; exit 2; }
     node=$2
     inspect=$3
@@ -245,7 +253,7 @@ case ${1:-} in
     fixture_path=$fixture_root/secret
     lane_root=$work_directory/k3s-cri-effect
     identity_config=$lane_root/identity-node.json
-    protect_config=$lane_root/protect-node.json
+    effect_config=$lane_root/effect-node.json
     artifact=$lane_root/profile.json
     object=$lane_root/exact-file-object.json
     node_log=$lane_root/mithril-node.log
@@ -410,17 +418,20 @@ case ${1:-} in
       --exact-object-key 7 --object-class MANUAL_SECRET \
       --inode-generation "$inode_generation" >"$object"
 
-    protect_policy=$lane_root/protect-policy-v1.yaml
-    sed \
-      -e 's/desired_profile_mode: OBSERVE/desired_profile_mode: PROTECT/' \
-      "$policy_source" >"$protect_policy"
-    "$policy" compile --source "$protect_policy" --seal-request "$seal_request" \
+    effect_policy_source=$policy_source
+    if [[ $effect_mode == PROTECT ]]; then
+      effect_policy_source=$lane_root/protect-policy-v1.yaml
+      sed \
+        -e 's/desired_profile_mode: OBSERVE/desired_profile_mode: PROTECT/' \
+        "$policy_source" >"$effect_policy_source"
+    fi
+    "$policy" compile --source "$effect_policy_source" --seal-request "$seal_request" \
       --signing-key "$signing_key" --output "$artifact"
     "$policy" verify --artifact "$artifact" --public-key "$public_key"
     jq --arg artifact "$artifact" --arg public_key "$public_key" \
       --slurpfile object "$object" \
       '.policy_candidates = [{artifact_path: $artifact, public_key_path: $public_key}]
-       | .exact_file_objects = $object' "$identity_config" >"$protect_config"
+       | .exact_file_objects = $object' "$identity_config" >"$effect_config"
 
     pin_owned=true
     "$node" --config "$identity_config" >>"$node_log" 2>&1 &
@@ -450,9 +461,9 @@ case ${1:-} in
     exec 8>"$lane_root/exec-result"
     result_fd_open=true
     /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
-      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; if true <"$4"; then printf "BASELINE_ALLOWED\n"; else printf "BASELINE_DENIED\n"; exit 42; fi; echo $$ >"$2"; IFS= read -r _ <"$3"; if true <"$4"; then exit 41; else chmod 777 "$1" "$3"; exit 0; fi' \
+      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; if true <"$4"; then printf "BASELINE_ALLOWED\n"; else printf "BASELINE_DENIED\n"; exit 42; fi; echo $$ >"$2"; IFS= read -r _ <"$3"; if true <"$4"; then if [ "$5" = OBSERVE ]; then chmod 777 "$1" "$3"; exit 0; fi; exit 41; fi; if [ "$5" = PROTECT ]; then chmod 777 "$1" "$3"; exit 0; fi; exit 43' \
       sh "$pod_state" "$pod_pid_file" "$pod_release_file" \
-      /var/lib/mithril/secret >&8 &
+      /var/lib/mithril/secret "$effect_mode" >&8 &
     exec_client_pid=$!
     for _attempt in {1..200}; do
       [[ -s /proc/$init_pid/root$pod_pid_file ]] && break
@@ -474,7 +485,7 @@ case ${1:-} in
     done
     baseline_result=$(head -n 1 "$lane_root/exec-result")
     [[ $baseline_result == BASELINE_ALLOWED ]] || {
-      echo "the kubectl exec task could not read the fixture before PROTECT" >&2
+      echo "the kubectl exec task could not read the fixture before $effect_mode" >&2
       exit 1
     }
     exec_host_pid=
@@ -514,12 +525,12 @@ case ${1:-} in
     release_fd_open=true
 
     stop_node
-    "$node" --config "$protect_config" >>"$node_log" 2>&1 &
+    "$node" --config "$effect_config" >>"$node_log" 2>&1 &
     node_pid=$!
     for _attempt in {1..200}; do
       [[ -S $lane_root/observation.sock ]] && break
       kill -0 "$node_pid" 2>/dev/null || {
-        echo "Mithril node exited before signed PROTECT recovery" >&2
+        echo "Mithril node exited before signed $effect_mode recovery" >&2
         tail -n 40 "$node_log" >&2
         exit 1
       }
@@ -538,7 +549,22 @@ case ${1:-} in
     exec_status=$?
     set -e
     exec_client_pid=
-    expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
+    [[ $exec_status -eq 0 ]] || {
+      echo "kubectl exec did not complete the expected $effect_mode file-open result: $exec_status" >&2
+      exit 1
+    }
+    case $effect_mode in
+      OBSERVE)
+        expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
+        baseline_file_open=allowed-before-observe
+        exact_file_open=allowed-after-effect:WOULD_DENY
+        ;;
+      PROTECT)
+        expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
+        baseline_file_open=allowed-before-protect
+        exact_file_open=denied-before-effect:EXACT_POLICY_DENY
+        ;;
+    esac
     for _attempt in {1..100}; do
       "$inspect" effects --socket-path "$lane_root/observation.sock" \
         --cgroup-scope / >"$effects"
@@ -550,7 +576,7 @@ case ${1:-} in
     done
     grep -F "$expected_effect" "$effects" \
       | grep -Fq 'exact_object_key_id=7' || {
-      echo "Mithril did not report the exact pre-effect denial; kubectl status: $exec_status" >&2
+      echo "Mithril did not report the expected $effect_mode exact file-open result" >&2
       cat "$effects" >&2
       exit 1
     }
@@ -561,8 +587,9 @@ case ${1:-} in
     printf 'pod_initial_root=restored_or_unknown_root:fail_closed_unknown\n'
     printf 'initial_binding_start_gap=recorded:container_running_before_node_binding\n'
     printf 'kubectl_exec_root=external_runtime_root:runtime_external_restricted\n'
-    printf 'baseline_file_open=allowed-before-protect\n'
-    printf 'exact_file_open=denied-before-effect:EXACT_POLICY_DENY\n'
+    printf 'policy_mode=%s\n' "$effect_mode"
+    printf 'baseline_file_open=%s\n' "$baseline_file_open"
+    printf 'exact_file_open=%s\n' "$exact_file_open"
     printf 'qualification_fixture=read-only-hostPath-file\n'
     stop_node
     exec 9>&-

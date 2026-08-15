@@ -8,10 +8,11 @@ provider=$directory/providers/libvirt.sh
 output_directory=
 with_k3s=false
 keep_vm=false
+skip_administrative_exec=false
 k3s_version=${MITHRIL_VM_K3S_VERSION:-v1.35.5+k3s1}
 
 usage() {
-  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--keep-vm]" >&2
+  echo "usage: $0 [--provider PATH] [--output-directory PATH] [--with-k3s] [--skip-administrative-exec] [--keep-vm]" >&2
 }
 
 while (($#)); do
@@ -30,6 +31,10 @@ while (($#)); do
       with_k3s=true
       shift
       ;;
+    --skip-administrative-exec)
+      skip_administrative_exec=true
+      shift
+      ;;
     --keep-vm)
       keep_vm=true
       shift
@@ -45,6 +50,10 @@ while (($#)); do
   esac
 done
 
+[[ $skip_administrative_exec == false || $with_k3s == true ]] || {
+  echo "--skip-administrative-exec requires --with-k3s" >&2
+  exit 2
+}
 [[ -x $provider ]] || {
   echo "VM provider is not executable: $provider" >&2
   exit 2
@@ -179,6 +188,20 @@ done
   >"$output_directory/platform.txt"
 
 if [[ $with_k3s == true ]]; then
+  run_k3s_cri_effect() {
+    local effect_mode=$1
+    "$provider" run "$vm_name" sudo env \
+      "MITHRIL_VM_CRI_EFFECT_MODE=$effect_mode" \
+      bash "$remote_root/harness/guest.sh" \
+      k3s-cri-effect "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
+      "$remote_bin/mithril-policy" \
+      "$remote_root/harness/k3s-cri-effect-node-v1.json" \
+      "$remote_source/examples/mithril-effect-observation-manual/observe-policy-v1.yaml" \
+      "$remote_source/examples/mithril-effect-observation-manual/observe-profile-seal-request.json" \
+      "$remote_source/examples/mithril-effect-observation-manual/test-signing-key.hex" \
+      "$remote_source/examples/mithril-effect-observation-manual/test-public-key.hex" \
+      "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root"
+  }
   "$provider" put "$vm_name" "$directory/k3s-config-v1.yaml" \
     "$remote_root/harness/k3s-config-v1.yaml"
   "$provider" put "$vm_name" "$directory/k3s-workload-v1.yaml" \
@@ -197,37 +220,33 @@ if [[ $with_k3s == true ]]; then
   "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
     k3s-qualify "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
     >"$output_directory/k3s.txt"
+  k3s_cri_observe_partial=$output_directory/k3s-cri-observe.txt.partial
+  run_k3s_cri_effect OBSERVE >"$k3s_cri_observe_partial"
+  mv -- "$k3s_cri_observe_partial" "$output_directory/k3s-cri-observe.txt"
   k3s_cri_effect_partial=$output_directory/k3s-cri-effect.txt.partial
-  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
-    k3s-cri-effect "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
-    "$remote_bin/mithril-policy" \
-    "$remote_root/harness/k3s-cri-effect-node-v1.json" \
-    "$remote_source/examples/mithril-effect-observation-manual/observe-policy-v1.yaml" \
-    "$remote_source/examples/mithril-effect-observation-manual/observe-profile-seal-request.json" \
-    "$remote_source/examples/mithril-effect-observation-manual/test-signing-key.hex" \
-    "$remote_source/examples/mithril-effect-observation-manual/test-public-key.hex" \
-    "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
-    >"$k3s_cri_effect_partial"
+  run_k3s_cri_effect PROTECT >"$k3s_cri_effect_partial"
   mv -- "$k3s_cri_effect_partial" "$output_directory/k3s-cri-effect.txt"
-  k3s_administrative_partial=$output_directory/k3s-administrative-exec.txt.partial
-  administrative_command=(sudo)
-  if [[ $keep_vm == true ]]; then
-    administrative_command=(sudo env MITHRIL_VM_KEEP_FAILURE_STATE=true)
+  if [[ $skip_administrative_exec == false ]]; then
+    k3s_administrative_partial=$output_directory/k3s-administrative-exec.txt.partial
+    administrative_command=(sudo)
+    if [[ $keep_vm == true ]]; then
+      administrative_command=(sudo env MITHRIL_VM_KEEP_FAILURE_STATE=true)
+    fi
+    "$provider" run "$vm_name" "${administrative_command[@]}" bash "$remote_root/harness/guest.sh" \
+      k3s-administrative-exec "$remote_bin/mithril-control" \
+      "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
+      "$remote_bin/mithril-policy" "$remote_bin/kubectl-mithril" \
+      "$remote_root/harness/oidc-fixture.py" \
+      "$remote_root/harness/k3s-administrative-node-v1.json" \
+      "$remote_root/harness/k3s-administrative-policy-v1.yaml" \
+      "$remote_source/examples/mithril-effect-observation-manual/observe-profile-seal-request.json" \
+      "$remote_source/examples/mithril-effect-observation-manual/test-signing-key.hex" \
+      "$remote_source/examples/mithril-effect-observation-manual/test-public-key.hex" \
+      "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
+      >"$k3s_administrative_partial"
+    mv -- "$k3s_administrative_partial" \
+      "$output_directory/k3s-administrative-exec.txt"
   fi
-  "$provider" run "$vm_name" "${administrative_command[@]}" bash "$remote_root/harness/guest.sh" \
-    k3s-administrative-exec "$remote_bin/mithril-control" \
-    "$remote_bin/mithril-node" "$remote_bin/mithril-inspect" \
-    "$remote_bin/mithril-policy" "$remote_bin/kubectl-mithril" \
-    "$remote_root/harness/oidc-fixture.py" \
-    "$remote_root/harness/k3s-administrative-node-v1.json" \
-    "$remote_root/harness/k3s-administrative-policy-v1.yaml" \
-    "$remote_source/examples/mithril-effect-observation-manual/observe-profile-seal-request.json" \
-    "$remote_source/examples/mithril-effect-observation-manual/test-signing-key.hex" \
-    "$remote_source/examples/mithril-effect-observation-manual/test-public-key.hex" \
-    "$remote_root/harness/k3s-workload-v1.yaml" "$remote_root" \
-    >"$k3s_administrative_partial"
-  mv -- "$k3s_administrative_partial" \
-    "$output_directory/k3s-administrative-exec.txt"
 fi
 
 qualification_output=$remote_root/kernel-qualification

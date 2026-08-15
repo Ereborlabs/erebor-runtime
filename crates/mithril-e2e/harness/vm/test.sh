@@ -13,14 +13,28 @@ done
 
 help=$($directory/run.sh --help 2>&1)
 [[ $help == *--with-k3s* ]]
+[[ $help == *--skip-administrative-exec* ]]
 [[ $help == *--keep-vm* ]]
 $directory/guest.sh --help >/dev/null 2>&1
+
+set +e
+invalid_effect_mode=$(MITHRIL_VM_CRI_EFFECT_MODE=invalid \
+  "$directory/guest.sh" k3s-cri-effect 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $invalid_effect_mode == "invalid MITHRIL_VM_CRI_EFFECT_MODE: invalid" ]]
 
 set +e
 invalid=$($directory/guest.sh k3s-install latest /dev/null /tmp 2>&1)
 status=$?
 set -e
 [[ $status -eq 2 && $invalid == "invalid k3s version: latest" ]]
+
+set +e
+skip_without_k3s=$($directory/run.sh --skip-administrative-exec 2>&1)
+status=$?
+set -e
+[[ $status -eq 2 && $skip_without_k3s == "--skip-administrative-exec requires --with-k3s" ]]
 
 grep -q '^write-kubeconfig-mode: "0600"$' "$directory/k3s-config-v1.yaml"
 grep -q '^#cloud-config$' "$directory/cloud-init-v1.yaml"
@@ -48,8 +62,12 @@ python3 -c 'import sys; compile(open(sys.argv[1], encoding="utf-8").read(), sys.
   "$directory/k3s-administrative-node-v1.json"
 grep -q 'record-physical-qualification' "$directory/run.sh"
 grep -q 'kernel-qualification-x86_64.json' "$directory/run.sh"
+grep -q 'k3s-cri-observe.txt' "$directory/run.sh"
 grep -q 'k3s-cri-effect.txt' "$directory/run.sh"
 grep -q 'k3s-administrative-exec.txt' "$directory/run.sh"
+grep -q 'run_k3s_cri_effect OBSERVE' "$directory/run.sh"
+grep -q 'run_k3s_cri_effect PROTECT' "$directory/run.sh"
+grep -Fq 'if [[ $skip_administrative_exec == false ]]; then' "$directory/run.sh"
 grep -q 'retained-vm.txt' "$directory/run.sh"
 grep -q 'MITHRIL_VM_KEEP_FAILURE_STATE=true' "$directory/run.sh"
 grep -q 'administrative failure state retained' "$directory/guest.sh"
@@ -64,6 +82,11 @@ grep -q 'pod_initial_root=restored_or_unknown_root:fail_closed_unknown' \
   "$directory/guest.sh"
 grep -q 'kubectl_exec_root=external_runtime_root:runtime_external_restricted' \
   "$directory/guest.sh"
+grep -q 'MITHRIL_VM_CRI_EFFECT_MODE' "$directory/guest.sh"
+grep -Fq 'effect_policy_source=$policy_source' "$directory/guest.sh"
+grep -q 'reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT' "$directory/guest.sh"
+grep -q 'exact_file_open=allowed-after-effect:WOULD_DENY' "$directory/guest.sh"
+grep -Fq '[[ $exec_status -eq 0 ]]' "$directory/guest.sh"
 grep -q 'baseline_file_open=allowed-before-protect' "$directory/guest.sh"
 grep -q 'exact_file_open=denied-before-effect:EXACT_POLICY_DENY' \
   "$directory/guest.sh"
@@ -71,6 +94,8 @@ grep -q 'task_cookie=\$external_task_cookie family=2 operation=2' \
   "$directory/guest.sh"
 grep -q 'k3s-cri-effect.txt.partial' "$directory/run.sh"
 grep -q 'mv -- "\$k3s_cri_effect_partial"' "$directory/run.sh"
+grep -q 'k3s-cri-observe.txt.partial' "$directory/run.sh"
+grep -q 'mv -- "\$k3s_cri_observe_partial"' "$directory/run.sh"
 grep -q 'k3s-administrative-exec.txt.partial' "$directory/run.sh"
 grep -q 'mv -- "\$k3s_administrative_partial"' "$directory/run.sh"
 grep -q 'product_path=kubectl-mithril+oidc-pkce+self-approval+tokenreview+connect-admission+node-slot' \
@@ -84,6 +109,8 @@ grep -q 'admission identity has no Mithril approval ID' "$directory/guest.sh"
 grep -q -- '--bpf-object "$remote_bin/feasibility.bpf.o"' "$directory/run.sh"
 grep -q 'crates/mithril-e2e/fixtures/hugging-face/\$fixture' \
   "$directory/run.sh"
+grep -q 'k3s-cri-observe.txt' "$directory/README.md"
+grep -q -- '--skip-administrative-exec' "$directory/README.md"
 
 fake_provider=$test_root/provider
 printf '#!/usr/bin/env bash\nexit 0\n' >"$fake_provider"

@@ -24,6 +24,7 @@ Add the optional single-node k3s lane:
 
 ```bash
 crates/mithril-e2e/harness/vm/run.sh --with-k3s \
+  --skip-administrative-exec \
   --output-directory /tmp/mithril-k3s-vm-test-evidence
 ```
 
@@ -35,14 +36,19 @@ root, and a projected service-account token. It then starts the real
 `mithril-node` against the k3s containerd socket. The node binds the exact Pod
 and CRI cgroup. The lane succeeds only if Mithril classifies the pre-existing
 Pod root conservatively and classifies a later `kubectl exec` process as a
-restricted external root. The same process must read one read-only hostPath
-qualification file before PROTECT and receive an exact-object denial after
-PROTECT. The denial evidence must contain that process task cookie. The
-hostPath file is only a qualification fixture. It does not prove
-projected-token semantic classification.
+restricted external root. It runs the same process through two file-open
+checks. The first uses `OBSERVE`. The read must complete and the evidence must
+contain that process task cookie, exact object key, `WOULD_DENY`, and
+`UNKNOWN_AFTER_PRE_EFFECT`. The second uses `PROTECT`. The read must receive an
+exact-object denial. The hostPath file is only a qualification fixture. It
+does not prove projected-token semantic classification.
 
-The option also runs the administrative-exec product path. It starts the real
-Control and node services. It uses a disposable HTTPS OIDC provider to test
+The CRI guest lane accepts only `MITHRIL_VM_CRI_EFFECT_MODE=OBSERVE|PROTECT`.
+It uses `PROTECT` by default. The harness sets each mode explicitly and writes
+the observe result before the protect result.
+
+By default, the option also runs the administrative-exec product path. It
+starts the real Control and node services. It uses a disposable HTTPS OIDC provider to test
 authorization-code PKCE and explicit self-approval. `kubectl-mithril` obtains
 one memory-only credential. The stock Kubernetes TokenReview and CONNECT
 admission paths must arm one exact node slot. The matching runtime root must
@@ -51,6 +57,10 @@ admission. A later direct-runtime task with the same executable must stay
 restricted after slot consumption. This is the single-node physical
 `ADMIN-EXEC-APPROVAL-001` path. Source and unit tests own its malformed,
 replay, expiry, disconnect, and contention cases.
+
+Use `--skip-administrative-exec` with `--with-k3s` to run the CRI checks
+without the administrative path. The flag does not skip the runtime probes or
+kernel qualification.
 
 The administrative lane sets the k3s API audience to
 `mithril-administrative-exec`. Control verifies the same audience in each
@@ -87,12 +97,14 @@ cloud-init data, guest, BPF pins, cgroups, lease files, and guest test files.
 The selected output directory keeps the platform manifest, the raw physical
 probe and benchmark evidence, the generated kernel qualification record, and
 the identity and effect results. With `--with-k3s`, it also keeps `k3s.txt` and
-`k3s-cri-effect.txt`. The second file records the Pod initial-root
-classification, the `kubectl exec` external-root classification, and the exact
-file-open denial. It also keeps `k3s-administrative-exec.txt`. That file records
-the product path, approved role, admission denial, restricted non-winner, and
-measured pre-binding start gap. A failed lane retains only a `.partial` host
-record. Guest destruction remains the outer cleanup boundary.
+`k3s-cri-observe.txt` and `k3s-cri-effect.txt`. These files record the Pod
+initial-root classification, the `kubectl exec` external-root classification,
+and the observe and protect file-open results. Unless
+`--skip-administrative-exec` is set, it also keeps
+`k3s-administrative-exec.txt`. That file records the product path, approved
+role, admission denial, restricted non-winner, and measured pre-binding start
+gap. A failed lane retains only a `.partial` host record. Guest destruction
+remains the outer cleanup boundary.
 
 For repeated manual work, add `--keep-vm`. The harness leaves the guest and
 its k3s installation running, and writes `retained-vm.txt` in the output
