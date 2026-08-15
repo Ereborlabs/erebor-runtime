@@ -115,9 +115,11 @@ grep -q 'benign_file_open=%s' "$directory/guest.sh"
 grep -q 'benign_effect=%s' "$directory/guest.sh"
 grep -q 'qualification_fixture=read-only-hostPath-secret-and-benign-files' \
   "$directory/guest.sh"
-grep -q 'post_release_secret_result=%s' "$directory/guest.sh"
-grep -q 'post_release_benign_result=%s' "$directory/guest.sh"
 grep -Fq '[[ $exec_status -eq 0 ]]' "$directory/guest.sh"
+grep -Fq '[ "$6" = OBSERVE ] && [ "$secret_result" = SECRET_ALLOWED ] && [ "$benign_result" = BENIGN_ALLOWED ]' \
+  "$directory/guest.sh"
+grep -Fq '[ "$6" = PROTECT ] && [ "$secret_result" = SECRET_DENIED ] && [ "$benign_result" = BENIGN_ALLOWED ]' \
+  "$directory/guest.sh"
 grep -q 'baseline_file_open=allowed-before-protect' "$directory/guest.sh"
 grep -q 'exact_file_open=denied-before-effect:EXACT_POLICY_DENY' \
   "$directory/guest.sh"

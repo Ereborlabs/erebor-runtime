@@ -566,7 +566,7 @@ case ${1:-} in
     exec 8>"$lane_root/exec-result"
     result_fd_open=true
     /usr/local/bin/k3s kubectl -n "$namespace" exec "$pod" -c "$container" -- \
-      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; if IFS= read -r _ <"$4" && IFS= read -r _ <"$5"; then printf "BASELINE_ALLOWED\n"; else printf "BASELINE_DENIED\n"; exit 42; fi; echo $$ >"$2"; IFS= read -r _ <"$3"; if IFS= read -r _ <"$4"; then secret_result=SECRET_ALLOWED; else secret_result=SECRET_DENIED; fi; if IFS= read -r _ <"$5"; then benign_result=BENIGN_ALLOWED; else benign_result=BENIGN_DENIED; fi; printf "%s\n%s\n" "$secret_result" "$benign_result"; if [ "$6" = OBSERVE ] && [ "$secret_result" = SECRET_ALLOWED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; if [ "$6" = PROTECT ] && [ "$secret_result" = SECRET_DENIED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; chmod 777 "$1" "$3"; exit 43' \
+      sh -c 'mkdir -m 700 "$1"; mkfifo "$3"; if IFS= read -r _ <"$4" && IFS= read -r _ <"$5"; then printf "BASELINE_ALLOWED\n"; else printf "BASELINE_DENIED\n"; exit 42; fi; echo $$ >"$2"; IFS= read -r _ <"$3"; if IFS= read -r _ <"$4"; then secret_result=SECRET_ALLOWED; else secret_result=SECRET_DENIED; fi; if IFS= read -r _ <"$5"; then benign_result=BENIGN_ALLOWED; else benign_result=BENIGN_DENIED; fi; if [ "$6" = OBSERVE ] && [ "$secret_result" = SECRET_ALLOWED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; if [ "$6" = PROTECT ] && [ "$secret_result" = SECRET_DENIED ] && [ "$benign_result" = BENIGN_ALLOWED ]; then chmod 777 "$1" "$3"; exit 0; fi; chmod 777 "$1" "$3"; exit 43' \
       sh "$pod_state" "$pod_pid_file" "$pod_release_file" \
       /var/lib/mithril/secret /var/lib/mithril/benign "$effect_mode" >&8 &
     exec_client_pid=$!
@@ -653,16 +653,8 @@ case ${1:-} in
       echo "kubectl exec did not complete the expected $effect_mode file-open result: $exec_status" >&2
       exit 1
     }
-    secret_result=$(sed -n '2p' "$lane_root/exec-result")
-    benign_result=$(sed -n '3p' "$lane_root/exec-result")
     case $effect_mode in
       OBSERVE)
-        [[ $secret_result == SECRET_ALLOWED && $benign_result == BENIGN_ALLOWED ]] || {
-          printf 'post_release_secret_result=%s\n' "$secret_result"
-          printf 'post_release_benign_result=%s\n' "$benign_result"
-          echo "kubectl exec did not preserve both observe-mode file reads" >&2
-          exit 1
-        }
         expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=WOULD_DENY result=UNKNOWN_AFTER_PRE_EFFECT"
         expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
         baseline_file_open=allowed-before-observe
@@ -670,12 +662,6 @@ case ${1:-} in
         benign_file_open=allowed-after-effect:EXACT_POLICY_ALLOW
         ;;
       PROTECT)
-        [[ $secret_result == SECRET_DENIED && $benign_result == BENIGN_ALLOWED ]] || {
-          printf 'post_release_secret_result=%s\n' "$secret_result"
-          printf 'post_release_benign_result=%s\n' "$benign_result"
-          echo "kubectl exec did not deny the secret and allow the benign control" >&2
-          exit 1
-        }
         expected_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_DENY result=DENIED_BEFORE_EFFECT"
         expected_benign_effect="task_cookie=$external_task_cookie family=2 operation=2 reason=EXACT_POLICY_ALLOW result=UNKNOWN_AFTER_PRE_EFFECT"
         baseline_file_open=allowed-before-protect
