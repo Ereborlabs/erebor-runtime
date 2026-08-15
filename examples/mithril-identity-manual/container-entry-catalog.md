@@ -13,7 +13,7 @@ entry surfaces too.
 | `ENTRY-EXEC-002` | Run direct `crictl exec` or `docker exec` with probe-identical argv using [`cri-exec.sh`](./cri-exec.sh) or [`docker-exec.sh`](./docker-exec.sh). | It is a restricted external root, never fabricated probe purpose. |
 | `ENTRY-EXTERNAL-AMBIGUITY-001` | Create indistinguishable external purposes concurrently. | They receive the same permission intersection/restricted class; timing and argv do not split them. |
 | `ENTRY-LOSS-001` | Drop runtime, audit, and entry evidence independently. | Protected unknown state remains restricted and coverage records each loss. |
-| `ENTRY-MIGRATE-001` | Use namespace-only `nsenter`, then move the task into the protected cgroup with [`nsenter-move.sh`](./nsenter-move.sh). | Namespace entry grants no workload identity; movement creates a restricted external root and never application authority. |
+| `ENTRY-MIGRATE-001` | Run the verified namespace-only `sleep 300` child from [`nsenter-move.sh`](./nsenter-move.sh), then move that child into the protected cgroup. | Namespace entry grants no workload identity. The cgroup move creates a restricted external root and never application authority. |
 | `ENTRY-NETPROBE-001` | Run HTTP, TCP, and gRPC probes. | No fake in-container process root appears; application receive and host flow remain distinct. |
 | `ENTRY-POSTSTART-001` | Race `PostStart` and the entrypoint in both orders. | Initial and external roots remain distinct. |
 | `ENTRY-POSTSTART-002` | Restart kubelet and repeat `PostStart`. | A fresh task/lifetime identity gets the same restricted budget; stale identity is not reused. |

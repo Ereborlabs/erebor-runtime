@@ -61,6 +61,34 @@ This check proves one direct CRI exec root after the node starts. It does not
 prove a kubelet probe join, first-instruction binding, or the complete entry
 and failure-injection matrix.
 
+## Namespace Entry And Cgroup Movement Check
+
+Use this check with a live configured container and a second terminal that is
+already root:
+
+```bash
+sudo examples/mithril-identity-manual/nsenter-move.sh \
+  NODE_CONFIG CONTAINER_OR_FULL_CRI_ID
+```
+
+The script prints an `nsenter` command. Run it in the second root terminal as
+a background command. Its next command saves and prints the helper PID. Then
+read its only direct child from `/proc/$helper/task/$helper/children`. Enter
+the helper PID and the child PID when the script asks.
+
+The script accepts the child only when it is live, is the helper's only direct
+child, has command `sleep 300`, and has the target container's mount, UTS, IPC,
+network, and PID namespaces. It also requires the child to be outside the
+configured cgroup and requires the exact inspector result that it has no
+Mithril task identity. The script then moves only that verified child into the
+configured cgroup.
+
+The moved child must have no creator task cookie, `external_runtime_root`,
+`runtime_external_restricted`, the configured external role, and `Runnable`.
+This is one namespace-entry and cgroup-move identity subcase. It does not test
+a protected effect, movement of an already labeled task, restore, or the full
+entry-migration matrix.
+
 ## Creator-Exit Native Child Check
 
 Run this check when a container runtime can start one shell and its stopped
