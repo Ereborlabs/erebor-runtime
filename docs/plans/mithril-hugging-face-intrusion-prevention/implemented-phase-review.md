@@ -369,6 +369,20 @@ the primary, alternate, and retired pin roots, cgroup, lease, and lane root
 absent. Only the unrelated tracing BPF link remained. This is physical evidence
 for `ID-MOVED-TASK-EXEC-005` only. Phase 2 remains **Blocked**.
 
+### Entry-migration host-task cgroup-entry subcase
+
+The same physical JSON also proves one narrow `ENTRY-MIGRATE-001` identity
+subcase. At source `0c25e8c84a94d4a632e1f44efd50befbbe37f420`, which contains
+`5d5518e95350b364bc6bb5da58d3e0c13ea561d5`, the runner starts a host shell
+outside the configured cgroup and moves its PID into that cgroup. It requires
+no creator cookie, `external_runtime_root`, `runtime_external_restricted`, the
+configured external role, and `Runnable`. The JSON records those values in
+`external_root`.
+
+This is physical evidence for host-task cgroup-entry identity only. It does
+not run `nsenter`, restore, or a protected effect. It does not complete
+`ENTRY-MIGRATE-001`. Phase 2 remains **Blocked**.
+
 This guide is explanatory only. The authoritative scope and acceptance records
 remain the phase documents and the readable architecture:
 

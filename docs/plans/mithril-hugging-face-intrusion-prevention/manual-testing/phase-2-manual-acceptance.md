@@ -141,6 +141,20 @@ BPF link remained. This is qualified physical evidence for
 for the readable operator procedure. The full matrix remains unqualified, and
 the phase remains **Blocked**.
 
+`ENTRY-MIGRATE-001` host-task cgroup-entry VM subcase, 2026-08-15: the
+moved-native-task JSON above also records one physical identity result. The
+probe ran at source commit `0c25e8c84a94d4a632e1f44efd50befbbe37f420`, which
+contains `5d5518e95350b364bc6bb5da58d3e0c13ea561d5`. It starts a host shell
+outside the configured cgroup, then moves that PID into the configured cgroup.
+The result requires `creator_task_cookie=null`, `external_runtime_root`,
+`runtime_external_restricted`, the configured external role, and `Runnable`.
+
+[`nsenter-move.sh`](../../../../examples/mithril-identity-manual/nsenter-move.sh)
+checks the same external role and `Runnable` state after namespace entry and
+cgroup movement. It did not run in this VM record. This record does not test
+namespace entry, restore, or a protected effect. It is not complete
+`ENTRY-MIGRATE-001` qualification. The phase remains **Blocked**.
+
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured

@@ -319,3 +319,18 @@ tracing BPF link remained.
 
 This qualifies `ID-MOVED-TASK-EXEC-005` only. The complete entry and
 failure-injection matrix remains unqualified. The phase remains **Blocked**.
+
+## Entry-Migration Identity Subcase — 2026-08-15
+
+The moved-native-task JSON above also proves one narrow
+`ENTRY-MIGRATE-001` subcase. The probe ran at source commit
+`0c25e8c84a94d4a632e1f44efd50befbbe37f420`, which contains
+`5d5518e95350b364bc6bb5da58d3e0c13ea561d5`. It starts a host shell outside
+the configured cgroup, then moves that PID into the configured cgroup. The
+runner requires `creator_task_cookie=null`, `external_runtime_root`,
+`runtime_external_restricted`, the configured external role, and `Runnable`.
+The JSON records those values in `external_root`.
+
+This is physical identity evidence for host-task cgroup entry only. It does
+not run `nsenter`, restore, or a protected effect. It does not qualify the
+complete `ENTRY-MIGRATE-001` row. The phase remains **Blocked**.
