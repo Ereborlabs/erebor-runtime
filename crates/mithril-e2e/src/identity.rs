@@ -11,8 +11,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use erebor_interceptor::{
-    bundled_bpf_sha256, KernelHost, KernelHostConfig, KernelHostOwner, KernelObjectLayoutV1,
-    KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
+    bundled_bpf_sha256, Error as InterceptorError, KernelHost, KernelHostConfig, KernelHostOwner,
+    KernelObjectLayoutV1, KernelObjectManifestV1, BUNDLED_BPF_OBJECT, REQUIRED_IDENTITY_PROGRAMS,
 };
 use erebor_interceptor_abi::{
     ExecGuardStateV1, IdentityRuntimeConfigV1, ProcessExecutionStateV1, ProcessStateVectorStateV1,
@@ -145,6 +145,7 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub object_sha256: String,
     pub first_start: KernelObjectManifestV1,
+    pub distinct_pin_root_owner_rejected: bool,
     pub cgroup_escape_root: NativeTaskSnapshotV1,
     pub cgroup_escape_placement_mismatch_detected: bool,
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
@@ -278,13 +279,52 @@ impl IdentityTestRunner {
             "/sys/kernel/btf/vmlinux",
             lease_path,
             Some(pin_root.to_path_buf()),
-            boot_id,
+            boot_id.clone(),
             1,
         );
         let mut host = KernelHostOwner::new(config.clone())
             .start()
             .context(InterceptorSnafu)?;
         let first_start = host.manifest().clone();
+        let alternate_pin_root = pin_root.with_extension("alternate");
+        let alternate_lease_path = lease_path.with_extension("alternate.lock");
+        ensure!(
+            !alternate_pin_root.exists() && !alternate_lease_path.exists(),
+            InvalidInputSnafu {
+                path: &alternate_pin_root,
+                reason: "the alternate owner paths already exist",
+            }
+        );
+        let alternate_pin_cleanup = ProbeDirectory::new(&alternate_pin_root);
+        let alternate_lease_cleanup = ProbeFile::new(&alternate_lease_path);
+        let distinct_pin_root_owner_rejected =
+            match KernelHostOwner::new(KernelHostConfig::identity(
+                "/sys/kernel/btf/vmlinux",
+                &alternate_lease_path,
+                Some(alternate_pin_root.clone()),
+                boot_id.clone(),
+                1,
+            ))
+            .start()
+            {
+                Err(InterceptorError::LeaseOwned { .. }) => true,
+                Err(source) => return Err(crate::Error::from_interceptor(source)),
+                Ok(alternate) => {
+                    alternate.shutdown().context(InterceptorSnafu)?;
+                    false
+                }
+            };
+        alternate_pin_cleanup.cleanup()?;
+        alternate_lease_cleanup.cleanup()?;
+        ensure!(
+            distinct_pin_root_owner_rejected
+                && !alternate_pin_root.exists()
+                && !alternate_lease_path.exists(),
+            InvalidInputSnafu {
+                path: &alternate_pin_root,
+                reason: "a distinct Interceptor owner acquired the host lease",
+            }
+        );
         let binding = test_binding(&cgroup_path);
         let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
         bindings
@@ -498,6 +538,7 @@ impl IdentityTestRunner {
             schema_version: 1,
             object_sha256,
             first_start,
+            distinct_pin_root_owner_rejected,
             cgroup_escape_root,
             cgroup_escape_placement_mismatch_detected: true,
             clone_into_cgroup_external_root: clone_external_root,
