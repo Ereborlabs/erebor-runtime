@@ -1188,6 +1188,7 @@ mod tests {
         assert!(apply.contains("bpf_spin_lock"));
         assert!(apply.contains("mount_topology_state_v1_dirty"));
         assert!(apply.contains("mount_topology_state_v1_clean"));
+        assert!(apply.contains("view->topology_generation &&"));
         assert!(apply.contains("view->topology_generation < global_generation"));
         assert!(!apply.contains("(!require_dirty ||"));
         assert!(apply.contains("!view->pending_mutations"));
