@@ -539,13 +539,21 @@ impl IdentityTestRunner {
                 failed_exec_fixture.native_child_pid()
             })?;
         failed_exec_fixture.open_native_pidfd(failed_exec_pid)?;
+        failed_exec_fixture.wait_for_stopped_native_child(failed_exec_pid)?;
         let failed_exec_before =
             self.wait_for("pre-PONR failed-exec child identity", &procs_path, || {
                 inspector.snapshot(failed_exec_pid).context(NodeSnafu)
             })?;
+        let failed_exec_pending = host
+            .lookup_map(
+                "pending_execs",
+                &failed_exec_before.task_cookie.to_ne_bytes(),
+            )
+            .context(InterceptorSnafu)?;
         ensure!(
             failed_exec_parent.root_class == Some("external_runtime_root")
                 && failed_exec_parent.installed_role_class == Some("runtime_external_restricted")
+                && failed_exec_pending.is_none()
                 && failed_exec_before.creator_task_cookie == Some(failed_exec_parent.task_cookie)
                 && failed_exec_before.real_parent_task_cookie == failed_exec_parent.task_cookie
                 && failed_exec_before.root_class.is_none()
@@ -557,7 +565,10 @@ impl IdentityTestRunner {
                 && failed_exec_before.exec_guard_state == ExecGuardStateV1::None as u8,
             InvalidInputSnafu {
                 path: &procs_path,
-                reason: "pre-PONR failed-exec child has the wrong initial identity",
+                reason: format!(
+                    "pre-PONR failed-exec child has the wrong initial identity; parent snapshot {failed_exec_parent:?}; child snapshot {failed_exec_before:?}; pending exec present {}",
+                    failed_exec_pending.is_some()
+                ),
             }
         );
         failed_exec_fixture.release_exec(failed_exec_pid)?;
@@ -1185,6 +1196,13 @@ impl NativeProcessFixture {
             .native_pidfd
             .as_ref()
             .ok_or_else(|| invalid_state("native child has no pidfd"))?;
+        self.wait_for_stopped_native_child(native_pid)?;
+
+        pidfd_send_signal(pidfd, Signal::CONT)
+            .map_err(|error| invalid_state(format!("release native child exec: {error}")))
+    }
+
+    fn wait_for_stopped_native_child(&self, native_pid: u32) -> Result<()> {
         let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
         let deadline = Instant::now() + WAIT_LIMIT;
         loop {
@@ -1202,8 +1220,7 @@ impl NativeProcessFixture {
             );
             thread::sleep(Duration::from_millis(10));
         }
-        pidfd_send_signal(pidfd, Signal::CONT)
-            .map_err(|error| invalid_state(format!("release native child exec: {error}")))
+        Ok(())
     }
 
     fn wait_for_native_exec_failure(&mut self) -> Result<()> {
