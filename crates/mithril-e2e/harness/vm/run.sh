@@ -174,7 +174,7 @@ remote_root=/var/tmp/$vm_name
 remote_source=$remote_root/source
 remote_bin=$remote_root/bin
 if [[ $manual_vm == true ]]; then
-  "$provider" run "$vm_name" mkdir -p "$remote_root/manual-bin"
+  "$provider" run "$vm_name" mkdir -p "$remote_root"
   "$provider" run "$vm_name" test -x \
     /mnt/mithril-source/target/debug/mithril-node
   "$provider" run "$vm_name" sudo bash \
@@ -196,13 +196,14 @@ if [[ $manual_vm == true ]]; then
     tar -xzf \"\$archive\" -C '$remote_root' k9s; \
     sudo install -m 0755 '$remote_root/k9s' /usr/local/bin/k9s; \
     rm -f -- \"\$archive\" \"\$checksums\" '$remote_root/k9s'"
-  "$provider" run "$vm_name" "sudo install -d -m 0755 -- '$remote_root/manual-bin' && \
-    sudo ln -sfn /usr/local/bin/k3s '$remote_root/manual-bin/crictl' && \
-    sudo ln -sfn /usr/local/bin/k3s '$remote_root/manual-bin/kubectl' && \
+  "$provider" run "$vm_name" "sudo install -d -o ubuntu -g ubuntu -m 0700 -- /home/ubuntu/.kube && \
+    sudo install -o ubuntu -g ubuntu -m 0600 /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config && \
+    sudo install -d -m 0700 -- /root/.kube && \
+    sudo install -m 0600 /etc/rancher/k3s/k3s.yaml /root/.kube/config && \
+    sudo ln -sfn /usr/local/bin/k3s /usr/local/bin/crictl && \
+    sudo ln -sfn /usr/local/bin/k3s /usr/local/bin/kubectl && \
     printf '%s\\n' 'export MITHRIL_MANUAL_SOURCE=/mnt/mithril-source' \
-      'export MITHRIL_BIN_DIRECTORY=/mnt/mithril-source/target/debug' \
-      'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml' \
-      'export PATH=$remote_root/manual-bin:\$PATH' | \
+      'export MITHRIL_BIN_DIRECTORY=/mnt/mithril-source/target/debug' | \
       sudo tee /var/tmp/mithril-manual.env >/dev/null && \
     sudo chmod 0644 /var/tmp/mithril-manual.env"
   echo "Manual VM ready. SSH, then run: sudo -i; . /var/tmp/mithril-manual.env"

@@ -138,8 +138,10 @@ cd "$MITHRIL_MANUAL_SOURCE"
 ```
 
 `MITHRIL_BIN_DIRECTORY` names the mounted binaries. `kubectl`, `crictl`,
-`netstat`, and `k9s` are on `PATH`. `KUBECONFIG` names the K3s configuration
-file.
+`netstat`, and `k9s` are on `PATH`. K3s configuration is in
+`/home/ubuntu/.kube/config` and `/root/.kube/config`. K9s uses the same
+configuration. Do not set `KUBECONFIG`. Run `crictl` as `root` because the
+containerd socket is root-owned.
 Manual scripts start `mithril-node` on the guest host. Mithril is not a
 Kubernetes Deployment.
 

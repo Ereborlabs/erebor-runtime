@@ -64,7 +64,7 @@ sequenceDiagram
 
     O->>M: start
     M->>R: --manual with source mount
-    R->>V: create, mount, install K3s and tools
+    R->>V: create, mount, install K3s, tools, and kubeconfig
     V-->>R: K3s Ready
     R-->>M: retained provider record
     O->>M: ssh or destroy
@@ -73,8 +73,10 @@ sequenceDiagram
 
 The controller stores the provider record under the local XDG state directory.
 The operator does not enter a domain name or a provider work directory.
-The guest environment file sets the mounted binaries, `KUBECONFIG`, and K3s
-wrappers for `kubectl` and `crictl`. It also provides `netstat` and K9s.
+The runner installs `kubectl` and `crictl` in the guest PATH. It installs the
+K3s configuration for `ubuntu` and `root`. K9s uses the same configuration.
+The guest environment file sets only the mounted Mithril source and binaries.
+It also provides `netstat` and K9s.
 Manual scripts start `mithril-node` on the guest host. They do not deploy
 Mithril into Kubernetes.
 
