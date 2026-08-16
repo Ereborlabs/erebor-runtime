@@ -174,25 +174,34 @@ remote_root=/var/tmp/$vm_name
 remote_source=$remote_root/source
 remote_bin=$remote_root/bin
 if [[ $manual_vm == true ]]; then
-  "$provider" run "$vm_name" mkdir -p "$remote_root/harness" \
-    "$remote_root/manual-bin" "$remote_bin"
-  "$provider" put "$vm_name" "$repo_root/target/debug/mithril-node" \
-    "$remote_bin/mithril-node"
-  "$provider" put "$vm_name" "$repo_root/target/debug/mithril-inspect" \
-    "$remote_bin/mithril-inspect"
-  "$provider" put "$vm_name" "$repo_root/target/debug/mithril-policy" \
-    "$remote_bin/mithril-policy"
-  "$provider" put "$vm_name" "$directory/guest.sh" \
-    "$remote_root/harness/guest.sh"
-  "$provider" put "$vm_name" "$directory/k3s-config-v1.yaml" \
-    "$remote_root/harness/k3s-config-v1.yaml"
-  "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
-    k3s-install "$k3s_version" "$remote_root/harness/k3s-config-v1.yaml" \
+  "$provider" run "$vm_name" mkdir -p "$remote_root/manual-bin"
+  "$provider" run "$vm_name" test -x \
+    /mnt/mithril-source/target/debug/mithril-node
+  "$provider" run "$vm_name" sudo bash \
+    /mnt/mithril-source/crates/mithril-e2e/harness/vm/guest.sh \
+    k3s-install "$k3s_version" \
+    /mnt/mithril-source/crates/mithril-e2e/harness/vm/k3s-config-v1.yaml \
     "$remote_root"
+  "$provider" run "$vm_name" \
+    'sudo apt-get update && sudo apt-get install -y --no-install-recommends net-tools'
+  "$provider" run "$vm_name" "set -e; cd '$remote_root'; \
+    archive='$remote_root/k9s_Linux_amd64.tar.gz'; \
+    checksums='$remote_root/k9s-checksums.sha256'; \
+    curl --fail --location --silent --show-error --output \"\$archive\" \
+      https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_Linux_amd64.tar.gz; \
+    curl --fail --location --silent --show-error --output \"\$checksums\" \
+      https://github.com/derailed/k9s/releases/download/v0.51.0/checksums.sha256; \
+    awk '\$2 == \"k9s_Linux_amd64.tar.gz\" { print; found = 1 } END { exit !found }' \
+      \"\$checksums\" | sha256sum --check --status -; \
+    tar -xzf \"\$archive\" -C '$remote_root' k9s; \
+    sudo install -m 0755 '$remote_root/k9s' /usr/local/bin/k9s; \
+    rm -f -- \"\$archive\" \"\$checksums\" '$remote_root/k9s'"
   "$provider" run "$vm_name" "sudo install -d -m 0755 -- '$remote_root/manual-bin' && \
     sudo ln -sfn /usr/local/bin/k3s '$remote_root/manual-bin/crictl' && \
+    sudo ln -sfn /usr/local/bin/k3s '$remote_root/manual-bin/kubectl' && \
     printf '%s\\n' 'export MITHRIL_MANUAL_SOURCE=/mnt/mithril-source' \
-      'export MITHRIL_BIN_DIRECTORY=$remote_bin' \
+      'export MITHRIL_BIN_DIRECTORY=/mnt/mithril-source/target/debug' \
+      'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml' \
       'export PATH=$remote_root/manual-bin:\$PATH' | \
       sudo tee /var/tmp/mithril-manual.env >/dev/null && \
     sudo chmod 0644 /var/tmp/mithril-manual.env"

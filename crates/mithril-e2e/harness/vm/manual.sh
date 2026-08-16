@@ -63,6 +63,7 @@ case ${1:-} in
     (($# == 1)) || { usage; exit 2; }
     load_state
     "$provider" destroy "$vm_name" "$work_directory"
+    rm -rf -- "$work_directory"
     rm -f -- "$state"
     echo "Manual VM removed."
     ;;

@@ -137,9 +137,18 @@ sudo -i
 cd "$MITHRIL_MANUAL_SOURCE"
 ```
 
-`MITHRIL_BIN_DIRECTORY` names the staged binaries. `crictl` is on `PATH`.
+`MITHRIL_BIN_DIRECTORY` names the mounted binaries. `kubectl`, `crictl`,
+`netstat`, and `k9s` are on `PATH`. `KUBECONFIG` names the K3s configuration
+file.
 Manual scripts start `mithril-node` on the guest host. Mithril is not a
 Kubernetes Deployment.
+
+```bash
+kubectl get nodes -o name
+crictl info
+netstat -lnt
+k9s version
+```
 
 ### Direct CRI Observe Case
 
@@ -209,6 +218,8 @@ rm -rf -- "$fixture_root" "$case_root"
 ```bash
 crates/mithril-e2e/harness/vm/manual.sh destroy
 ```
+
+`destroy` removes the VM and its local work directory.
 
 The current administrative lane reaches draft creation, admission, and slot
 arm. Stock runc `1.4.2` then fails closed before target exec because its sealed

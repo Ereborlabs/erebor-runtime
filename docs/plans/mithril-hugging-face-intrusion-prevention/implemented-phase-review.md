@@ -45,11 +45,13 @@ Review this flow in this order:
 1. [`manual.sh`](../../../crates/mithril-e2e/harness/vm/manual.sh) owns one
    local provider record. It accepts `start`, `ssh`, and `destroy`.
 2. [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh) handles
-   `--manual`. It builds the node, inspector, and policy compiler. It installs
-   K3s. It does not run the qualification probes.
+   `--manual`. It builds the node, inspector, and policy compiler in the
+   mounted source. It installs K3s, `netstat`, and K9s. It does not run the
+   qualification probes.
 3. [`libvirt.sh`](../../../crates/mithril-e2e/harness/vm/providers/libvirt.sh)
    creates the VM, waits for a DHCP address, mounts the source read-only, and
-   owns exact domain destruction.
+   owns the SSH transport and exact domain destruction. `manual.sh` then
+   removes the verified local work directory.
 4. [`test.sh`](../../../crates/mithril-e2e/harness/vm/test.sh) checks the
    command contract and the normal DHCP-not-ready path.
 
@@ -62,7 +64,7 @@ sequenceDiagram
 
     O->>M: start
     M->>R: --manual with source mount
-    R->>V: create, mount, install K3s
+    R->>V: create, mount, install K3s and tools
     V-->>R: K3s Ready
     R-->>M: retained provider record
     O->>M: ssh or destroy
@@ -71,14 +73,15 @@ sequenceDiagram
 
 The controller stores the provider record under the local XDG state directory.
 The operator does not enter a domain name or a provider work directory.
-The guest environment file sets the mounted source, the staged binaries, and
-the K3s `crictl` wrapper. Manual scripts start `mithril-node` on the guest
-host. They do not deploy Mithril into Kubernetes.
+The guest environment file sets the mounted binaries, `KUBECONFIG`, and K3s
+wrappers for `kubectl` and `crictl`. It also provides `netstat` and K9s.
+Manual scripts start `mithril-node` on the guest host. They do not deploy
+Mithril into Kubernetes.
 
-This current working tree was verified in one disposable VM. The test mounted
-the source as read-only, reached K3s Ready, ran the direct-CRI observe script,
-removed its Pod and fixture, and destroyed the VM through `manual.sh`. This is
-manual workflow proof. It is not a phase qualification result.
+The current working tree was verified in one disposable VM. The guest mounted
+the source as read-only. K3s was active. `kubectl get nodes`, `crictl info`,
+`netstat -lnt`, and `k9s version` passed. The controller then destroyed the
+guest. This is manual workflow proof. It is not a phase qualification result.
 
 ## Current-source update — 2026-08-15
 
@@ -2189,39 +2192,42 @@ This route reviews the current manual-test source. The operator procedure is
 in the [harness README](../../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm).
 Do not duplicate that procedure in this guide.
 
-1. Read [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh). It builds
-   the binaries and writes `retained-vm.txt` when `--keep-vm` retains a guest.
-   It records the SSH settings and an optional source mount.
-2. Read [`providers/libvirt.sh`](../../../crates/mithril-e2e/harness/vm/providers/libvirt.sh).
+1. Read [`manual.sh`](../../../crates/mithril-e2e/harness/vm/manual.sh). It
+   owns the local record and accepts `start`, `ssh`, and `destroy`.
+2. Read [`run.sh`](../../../crates/mithril-e2e/harness/vm/run.sh). Its
+   `--manual` path builds the mounted binaries, installs K3s and the manual
+   tools, and writes the guest environment file.
+3. Read [`providers/libvirt.sh`](../../../crates/mithril-e2e/harness/vm/providers/libvirt.sh).
    It attaches the optional source directory as a read-only 9p device, mounts
    it at `/mnt/mithril-source` during `wait`, and owns `ssh NAME`.
-3. Read [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh#L40).
+4. Read [`identity-runtime.sh`](../../../examples/mithril-identity-manual/identity-runtime.sh#L40).
    It owns the manual node, pin root, lease, task processes, and local cleanup.
-4. Read [`nsenter-move.sh`](../../../examples/mithril-identity-manual/nsenter-move.sh#L10).
+5. Read [`nsenter-move.sh`](../../../examples/mithril-identity-manual/nsenter-move.sh#L10).
    It verifies the selected helper and direct `sleep 300` child before it moves
    that child into the configured cgroup.
-5. Read [`observation-runtime.sh`](../../../examples/mithril-effect-observation-manual/observation-runtime.sh#L32).
+6. Read [`observation-runtime.sh`](../../../examples/mithril-effect-observation-manual/observation-runtime.sh#L32).
    It validates a CRI shared directory, starts the identity-only node, moves
    the preloaded `nsenter` task, and then starts the signed observation node.
-6. Read [`nsenter-file-observe.sh`](../../../examples/mithril-effect-observation-manual/nsenter-file-observe.sh#L6).
+7. Read [`nsenter-file-observe.sh`](../../../examples/mithril-effect-observation-manual/nsenter-file-observe.sh#L6).
    It accepts the Docker three-argument form or the CRI five-argument form.
-7. Read [`harness/vm/test.sh`](../../../crates/mithril-e2e/harness/vm/test.sh#L41).
-   It checks the CRI `nsenter` source contract and the retained-guest options.
+8. Read [`harness/vm/test.sh`](../../../crates/mithril-e2e/harness/vm/test.sh#L41).
+   It checks the manual command contract, source mount, and CRI `nsenter`
+   source contract.
 
 ```mermaid
 sequenceDiagram
     participant O as Operator
-    participant H as VM harness
+    participant H as Manual VM controller
     participant V as Retained VM
     participant S as Manual script
 
-    O->>H: create one retained K3s guest
-    H->>V: build, copy, and qualify
-    H-->>O: retained-vm.txt
-    O->>V: optional SSH and read-only source mount
+    O->>H: start one K3s guest
+    H->>V: mount source, install K3s and tools
+    H-->>O: local controller record
+    O->>H: ssh
     O->>S: run one case with a fresh binding
     S->>V: start node, run probe, remove local state
-    O->>H: destroy the named guest
+    O->>H: destroy the guest
 ```
 
 The harness owns the retained guest and its metadata. The operator owns the
@@ -2232,10 +2238,9 @@ guest.
 
 The libvirt provider owns the source mount. It exports one host directory as
 read-only 9p. The guest mounts it at `/mnt/mithril-source`. The manual shells
-can read scripts from this mount. The mount cannot own a fixture, binding,
-pin root, lease, or output. A disposable provider test read the mounted
-`Cargo.toml`, rejected a guest write, and accepted `ssh NAME`. This test did
-not run the K3s qualification lane.
+and binaries run from this mount. The mount cannot own a fixture, binding, pin
+root, lease, or output. The controller opens SSH without a VM name. This test
+does not run the K3s qualification lane.
 
 `nsenter-move.sh` requires the helper PID and its only direct child PID. It
 requires `sleep 300`, matching mount, UTS, IPC, network, and PID namespaces,

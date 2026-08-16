@@ -47,9 +47,9 @@ propagation, or complete Kubernetes protection.
 
 For a retained guest that runs manual shells, use the [manual retained-VM
 procedure](../../../../crates/mithril-e2e/harness/vm/README.md#manual-testing-in-a-retained-vm).
-The default provider supports `ssh NAME`. Set `MITHRIL_VM_SOURCE_MOUNT` to an
-absolute source directory to mount it read-only at `/mnt/mithril-source`.
-Keep all fixture, binding, pin, lease, and output paths in the guest.
+The controller mounts the current source read-only at `/mnt/mithril-source`.
+Use its `start`, `ssh`, and `destroy` commands. Keep all fixture, binding,
+pin, lease, and output paths in the guest.
 
 ## How To Read A Manual Case
 
