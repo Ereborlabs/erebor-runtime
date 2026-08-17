@@ -13,9 +13,13 @@ the checked registry in [`spec/qualification/v1/fixtures.yaml`](../../../spec/qu
 case and emits the row evidence. A manual shell is required only when an
 operator can run the case in an existing VM without a second runner.
 
+`AUTHORIZATION-REPLAY-004` remains in this matrix because Phase 2 owns its
+identity binding. Phase 4 owns the complete approved-exec physical result.
+That Phase 4 result is not a Phase 2 closure gate.
+
 | Fixture ID | Rust fixture | Manual shell | Physical VM result | Status and exact limit |
 | --- | --- | --- | --- | --- |
-| `AUTHORIZATION-REPLAY-004` | No `IdentityTestRunner` fixture. | None. | None. | Blocked: other-owner unit tests do not supply the required runner-owned VM evidence. |
+| `AUTHORIZATION-REPLAY-004` | Identity binding has code-backed coverage in the administrative owner. | None. | Phase 4 owns the complete approved-exec physical result. | Implemented outside Phase 2: retain this trace row, but do not require Phase 4 permission or physical exec proof to close Phase 2. |
 | `ENTRY-BINDING-GAP-001` | None. | None. | None. | Blocked: no source fixture, shell, or VM result. |
 | `ENTRY-CONTAINERS-001` | None. | None. | None. | Blocked: init, sidecar, and shared-resource cases are absent. |
 | `ENTRY-EPHEMERAL-001` | None. | None. | None. | Blocked: no ephemeral-container fixture or VM result. |
@@ -37,7 +41,7 @@ operator can run the case in an existing VM without a second runner.
 | `ENTRY-START-001` | None. | None. | None. | Blocked: configured start-hook gap case is absent. |
 | `ENTRY-STOCK-HOOK-FAILURE-002` | None. | None. | None. | Blocked: stock-hook failure cases are absent. |
 | `EXEC-COMMIT-STATE-001` | `IdentityTestRunner::physical_probe` with `NativeProcessFixture`. | `native-child.sh --failed-exec`. | Success and pre-PONR recovery subcases. | Blocked: post-PONR fatal and unknown outcomes are absent. |
-| `EXEC-CONCURRENT-002` | `NativeProcessFixture` has a serial non-leader exec only. | `native-child.sh --thread-exec` has the same serial case. | Serial non-leader result only. | Blocked: no approved real target-role transition model exists for the required race. |
+| `EXEC-CONCURRENT-002` | `NativeProcessFixture` has a serial non-leader exec only. | `native-child.sh --thread-exec` has the same serial case. | Serial non-leader result only. | Blocked: Phase 2 still needs real concurrent exec and fork/vfork/thread-creation races for the inherited restricted role. The approved one-use target-role race is Phase 4 work. |
 | `ID-CGROUP-ESCAPE-001` | `IdentityTestRunner::physical_probe` with `CloneIntoCgroupFixture`. | None; the controlled fixture cannot be reproduced without another runner. | Qualified moved-root result. | Partial: the result records the root escape only. |
 | `ID-CLONE-CGROUP-002` | `IdentityTestRunner::physical_probe` with `CloneIntoCgroupFixture`. | None; the controlled `clone3` fixture has no operator shell. | Direct `CLONE_INTO_CGROUP` root and native-child result. | Partial: no checked row record names this fixture alone. |
 | `ID-CLONE-CGROUP-FAIL-003` | None. | None. | None. | Blocked: allocation, finalization, and placement fault injection are absent. |
@@ -49,8 +53,11 @@ operator can run the case in an existing VM without a second runner.
 | `STATE-FORK-IPC-002` | `NativeProcessFixture` covers fork, not inherited IPC state. | None. | None. | Blocked: IPC inheritance case is absent. |
 | `STATE-THREAD-RACE-001` | `NativeProcessFixture` has a serial non-leader exec. | `native-child.sh --thread-exec`. | Serial non-leader result only. | Blocked: no concurrent restriction-transition race exists. |
 
-`EXEC-CONCURRENT-002` remains blocked until an approved design defines real
-target-role transitions. The current serial non-leader case is not that race.
+`EXEC-CONCURRENT-002` remains a Phase 2 fixture. It must race concurrent normal
+exec transactions with the inherited restricted role and race exec against
+fork, vfork, and thread creation. The current serial non-leader case is not
+that race. The one-use approved-administrative target-role race belongs to
+Phase 4.
 The phase remains `Blocked` until every row has the required source fixture,
 physical result, manual shell when applicable, and acceptance record with its
 exact limit.
