@@ -24,10 +24,7 @@ use mithril_node::{
     NativeIdentityInspector, NativeSecurityStateOwner, NativeTaskSnapshotV1, WorkloadBindingConfig,
     WorkloadBindingOwner,
 };
-use rustix::process::{
-    child_subreaper, pidfd_open, pidfd_send_signal, set_child_subreaper, waitpid, Pid, PidfdFlags,
-    Signal, WaitOptions,
-};
+use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
 use zerocopy::{FromBytes as _, TryFromBytes as _};
@@ -174,6 +171,7 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub orphaned_native_child_before_parent_exit: NativeTaskSnapshotV1,
     pub orphaned_native_child_after_parent_exit: NativeTaskSnapshotV1,
     pub subreaper_native_parent: NativeTaskSnapshotV1,
+    pub subreaper_intermediate_before_exit: NativeTaskSnapshotV1,
     pub subreaper_native_child_before_parent_exit: NativeTaskSnapshotV1,
     pub subreaper_native_child_after_parent_exit: NativeTaskSnapshotV1,
     pub double_fork_outer_parent: NativeTaskSnapshotV1,
@@ -1086,7 +1084,7 @@ impl IdentityTestRunner {
         );
         orphan_fixture.stop();
 
-        let mut subreaper_fixture = NativeProcessFixture::start_subreaper_orphaning()?;
+        let mut subreaper_fixture = NativeProcessFixture::start_subreaper()?;
         fs::write(&procs_path, subreaper_fixture.outer_pid().to_string())
             .context(IoSnafu { path: &procs_path })?;
         let subreaper_native_parent =
@@ -1096,11 +1094,22 @@ impl IdentityTestRunner {
                     .context(NodeSnafu)
             })?;
         subreaper_fixture.release_root()?;
+        let subreaper_intermediate_pid =
+            self.wait_for("subreaper intermediate creation", &procs_path, || {
+                subreaper_fixture.intermediate_pid()
+            })?;
+        subreaper_fixture.open_intermediate_pidfd(subreaper_intermediate_pid)?;
         let subreaper_native_child_pid =
             self.wait_for("subreaper native child creation", &procs_path, || {
-                subreaper_fixture.native_child_pid()
+                subreaper_fixture.intermediate_native_child_pid(subreaper_intermediate_pid)
             })?;
         subreaper_fixture.open_native_pidfd(subreaper_native_child_pid)?;
+        let subreaper_intermediate_before_exit =
+            self.wait_for("subreaper intermediate identity", &procs_path, || {
+                inspector
+                    .snapshot(subreaper_intermediate_pid)
+                    .context(NodeSnafu)
+            })?;
         let subreaper_native_child_before_parent_exit =
             self.wait_for("subreaper native child identity", &procs_path, || {
                 inspector
@@ -1111,10 +1120,26 @@ impl IdentityTestRunner {
             subreaper_native_parent.root_class == Some("external_runtime_root")
                 && subreaper_native_parent.installed_role_class
                     == Some("runtime_external_restricted")
-                && subreaper_native_child_before_parent_exit.creator_task_cookie
+                && subreaper_intermediate_before_exit.creator_task_cookie
                     == Some(subreaper_native_parent.task_cookie)
-                && subreaper_native_child_before_parent_exit.real_parent_task_cookie
+                && subreaper_intermediate_before_exit.real_parent_task_cookie
                     == subreaper_native_parent.task_cookie
+                && subreaper_intermediate_before_exit.real_parent_host_tid
+                    == subreaper_native_parent.host_tid
+                && subreaper_intermediate_before_exit.real_parent_host_tgid
+                    == subreaper_native_parent.host_tgid
+                && subreaper_intermediate_before_exit.root_class.is_none()
+                && subreaper_intermediate_before_exit
+                    .installed_role_class
+                    .is_none()
+                && subreaper_native_child_before_parent_exit.creator_task_cookie
+                    == Some(subreaper_intermediate_before_exit.task_cookie)
+                && subreaper_native_child_before_parent_exit.real_parent_task_cookie
+                    == subreaper_intermediate_before_exit.task_cookie
+                && subreaper_native_child_before_parent_exit.real_parent_host_tid
+                    == subreaper_intermediate_before_exit.host_tid
+                && subreaper_native_child_before_parent_exit.real_parent_host_tgid
+                    == subreaper_intermediate_before_exit.host_tgid
                 && subreaper_native_child_before_parent_exit
                     .root_class
                     .is_none()
@@ -1128,8 +1153,12 @@ impl IdentityTestRunner {
                 reason: "subreaper native child has the wrong pre-exit identity",
             }
         );
-        subreaper_fixture.release_parent_exit()?;
-        subreaper_fixture.wait_for_parent_exit()?;
+        subreaper_fixture.release_intermediate_exit()?;
+        self.wait_for("subreaper intermediate exit", &procs_path, || {
+            Ok(subreaper_fixture
+                .intermediate_exited(subreaper_intermediate_pid)?
+                .then_some(()))
+        })?;
         subreaper_fixture.release_exec(subreaper_native_child_pid)?;
         let subreaper_native_child_after_parent_exit = self.wait_for(
             "subreaper native child exec after parent exit",
@@ -1140,8 +1169,11 @@ impl IdentityTestRunner {
                     .context(NodeSnafu)?;
                 Ok(snapshot.filter(|snapshot| {
                     snapshot.task_cookie == subreaper_native_child_before_parent_exit.task_cookie
-                        && snapshot.creator_task_cookie == Some(subreaper_native_parent.task_cookie)
-                        && snapshot.real_parent_task_cookie != subreaper_native_parent.task_cookie
+                        && snapshot.creator_task_cookie
+                            == Some(subreaper_intermediate_before_exit.task_cookie)
+                        && snapshot.real_parent_task_cookie == 0
+                        && snapshot.real_parent_host_tid == subreaper_native_parent.host_tid
+                        && snapshot.real_parent_host_tgid == subreaper_native_parent.host_tgid
                         && snapshot.real_parent_interval_sequence
                             > subreaper_native_child_before_parent_exit
                                 .real_parent_interval_sequence
@@ -1394,6 +1426,7 @@ impl IdentityTestRunner {
             orphaned_native_child_before_parent_exit,
             orphaned_native_child_after_parent_exit,
             subreaper_native_parent,
+            subreaper_intermediate_before_exit,
             subreaper_native_child_before_parent_exit,
             subreaper_native_child_after_parent_exit,
             double_fork_outer_parent,
@@ -1482,7 +1515,6 @@ struct NativeProcessFixture {
     native_pidfd: Option<OwnedFd>,
     intermediate_pidfd: Option<OwnedFd>,
     parent_exit_mode: bool,
-    subreaper_was_enabled: Option<bool>,
 }
 
 impl NativeProcessFixture {
@@ -1494,19 +1526,31 @@ impl NativeProcessFixture {
         Self::start_with_parent_exit(true)
     }
 
-    fn start_subreaper_orphaning() -> Result<Self> {
-        let was_enabled = Self::subreaper_enabled()?;
-        Self::set_subreaper(true)?;
-        match Self::start_orphaning() {
-            Ok(mut fixture) => {
-                fixture.subreaper_was_enabled = Some(was_enabled);
-                Ok(fixture)
-            }
-            Err(error) => {
-                let _result = Self::set_subreaper(was_enabled);
-                Err(error)
-            }
-        }
+    fn start_subreaper() -> Result<Self> {
+        let mut command = Command::new("python3");
+        command.args([
+            "-c",
+            r#"import ctypes
+import os
+import signal
+import sys
+
+sys.stdin.readline()
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0):
+    raise OSError(ctypes.get_errno(), "set child subreaper")
+middle = os.fork()
+if middle == 0:
+    child = os.fork()
+    if child == 0:
+        os.kill(os.getpid(), signal.SIGSTOP)
+        os.execv("/bin/sleep", ["/bin/sleep", "30"])
+    os.waitpid(child, 0)
+    os._exit(0)
+os.waitpid(middle, 0)
+os.waitpid(-1, 0)
+"#,
+        ]);
+        Self::start_command(&mut command, false, Path::new("python3"))
     }
 
     fn start_double_forking() -> Result<Self> {
@@ -1644,7 +1688,6 @@ second.join()
             native_pidfd: None,
             intermediate_pidfd: None,
             parent_exit_mode,
-            subreaper_was_enabled: None,
         })
     }
 
@@ -1656,22 +1699,6 @@ second.join()
         self.native_pid = Some(pid);
         self.native_pidfd = Some(open_pidfd(pid)?);
         Ok(())
-    }
-
-    fn subreaper_enabled() -> Result<bool> {
-        child_subreaper()
-            .map(|setting| setting.is_some())
-            .map_err(|error| invalid_state(format!("read child subreaper: {error}")))
-    }
-
-    fn set_subreaper(enabled: bool) -> Result<()> {
-        let setting = if enabled {
-            Some(Pid::from_raw(1).ok_or_else(|| invalid_state("PID 1 is zero"))?)
-        } else {
-            None
-        };
-        set_child_subreaper(setting)
-            .map_err(|error| invalid_state(format!("set child subreaper: {error}")))
     }
 
     fn open_intermediate_pidfd(&mut self, pid: u32) -> Result<()> {
@@ -1947,21 +1974,6 @@ second.join()
         }
         let _result = self.outer.kill();
         let _result = self.outer.wait();
-        if self.subreaper_was_enabled.is_some() {
-            if let Some(native_pid) = self.native_pid {
-                for _ in 0..100 {
-                    let result = Pid::from_raw(native_pid as i32)
-                        .and_then(|pid| waitpid(Some(pid), WaitOptions::NOHANG).ok());
-                    if !matches!(result, Some(None)) {
-                        break;
-                    }
-                    thread::sleep(Duration::from_millis(10));
-                }
-            }
-        }
-        if let Some(was_enabled) = self.subreaper_was_enabled.take() {
-            let _result = Self::set_subreaper(was_enabled);
-        }
         self.stdin.take();
     }
 }
@@ -2246,12 +2258,43 @@ mod tests {
     }
 
     #[test]
-    fn native_process_fixture_restores_child_subreaper_setting() -> crate::Result<()> {
-        let before = NativeProcessFixture::subreaper_enabled()?;
-        let fixture = NativeProcessFixture::start_subreaper_orphaning()?;
-        assert!(NativeProcessFixture::subreaper_enabled()?);
-        drop(fixture);
-        assert_eq!(NativeProcessFixture::subreaper_enabled()?, before);
+    fn native_process_fixture_executes_after_subreaper_reparenting() -> crate::Result<()> {
+        let runner = IdentityTestRunner::new(".");
+        let mut fixture = NativeProcessFixture::start_subreaper()?;
+        let outer_pid = fixture.outer_pid();
+        fixture.release_root()?;
+        let children_path = PathBuf::from(format!("/proc/{outer_pid}/task/{outer_pid}/children"));
+        let intermediate_pid =
+            runner.wait_for("subreaper intermediate creation", &children_path, || {
+                fixture.intermediate_pid()
+            })?;
+        fixture.open_intermediate_pidfd(intermediate_pid)?;
+        let native_pid =
+            runner.wait_for("subreaper native child creation", &children_path, || {
+                fixture.intermediate_native_child_pid(intermediate_pid)
+            })?;
+        fixture.open_native_pidfd(native_pid)?;
+        fixture.release_intermediate_exit()?;
+        let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
+        runner.wait_for("subreaper native child adoption", &status_path, || {
+            let status = fs::read_to_string(&status_path).map_err(|error| {
+                super::invalid_state(format!("read {}: {error}", status_path.display()))
+            })?;
+            let parent_pid = status
+                .lines()
+                .find_map(|line| line.strip_prefix("PPid:")?.split_whitespace().next())
+                .and_then(|value| value.parse::<u32>().ok());
+            Ok(parent_pid.filter(|parent_pid| *parent_pid == outer_pid))
+        })?;
+        fixture.release_exec(native_pid)?;
+        let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
+        runner.wait_for("subreaper native child exec", &comm_path, || {
+            fs::read_to_string(&comm_path)
+                .map(|name| (name.trim() == "sleep").then_some(()))
+                .map_err(|error| {
+                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
+                })
+        })?;
         Ok(())
     }
 

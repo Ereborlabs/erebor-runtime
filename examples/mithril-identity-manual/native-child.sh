@@ -415,6 +415,8 @@ os.waitpid(int(child), 0)
   subreaper_child_execution=$(jq -er '.active_execution_id' "$identity_work/subreaper-child-before.json")
   subreaper_child_image=$(jq -er '.image_provenance_id' "$identity_work/subreaper-child-before.json")
   subreaper_root_role=$(jq -er '.active_role_id' "$identity_work/subreaper-root.json")
+  subreaper_root_host_tid=$(jq -er '.host_tid' "$identity_work/subreaper-root.json")
+  subreaper_root_host_tgid=$(jq -er '.host_tgid' "$identity_work/subreaper-root.json")
   identity_assert_external "$identity_work/subreaper-root.json"
   jq -e --argjson root_cookie "$subreaper_root_cookie" \
     --argjson middle_cookie "$subreaper_middle_cookie" \
@@ -454,9 +456,10 @@ os.waitpid(int(child), 0)
     exit 1
   }
   identity_inspect_task subreaper-child-after "$subreaper_child_pid" >/dev/null
-  jq -e --argjson child_cookie "$subreaper_child_cookie" \
+  if ! jq -e --argjson child_cookie "$subreaper_child_cookie" \
     --argjson middle_cookie "$subreaper_middle_cookie" \
-    --argjson root_cookie "$subreaper_root_cookie" \
+    --argjson root_host_tid "$subreaper_root_host_tid" \
+    --argjson root_host_tgid "$subreaper_root_host_tgid" \
     --argjson child_interval "$subreaper_child_interval" \
     --arg child_process "$subreaper_child_process" \
     --arg child_execution "$subreaper_child_execution" \
@@ -464,7 +467,9 @@ os.waitpid(int(child), 0)
     --argjson root_role "$subreaper_root_role" \
     '.task_cookie == $child_cookie
      and .creator_task_cookie == $middle_cookie
-     and .real_parent_task_cookie == $root_cookie
+     and .real_parent_task_cookie == 0
+     and .real_parent_host_tid == $root_host_tid
+     and .real_parent_host_tgid == $root_host_tgid
      and .real_parent_interval_sequence > $child_interval
      and .process_state_id == $child_process
      and .active_execution_id != $child_execution
@@ -476,7 +481,11 @@ os.waitpid(int(child), 0)
      and .process_execution_state == 2
      and .process_state_vector_state == 2
      and .exec_guard_state == 0' \
-    "$identity_work/subreaper-child-after.json" >/dev/null
+    "$identity_work/subreaper-child-after.json" >/dev/null; then
+    echo "subreaper child identity did not meet the required limit:" >&2
+    cat "$identity_work/subreaper-child-after.json" >&2
+    exit 1
+  fi
   identity_pass "PASS: subreaper reparenting kept native creator identity and restriction."
   exit 0
 fi
