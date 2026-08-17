@@ -49,12 +49,15 @@ const WAIT_LIMIT: Duration = Duration::from_secs(30);
 const PROFILE_GENERATION_REF_ID: u64 = 7;
 const PRESTART_REQUEST_DIRECTORY: &str = "/run/mithril-identity-prestart";
 
-const REQUIRED_IDENTITY_MAPS: [&str; 55] = [
+const REQUIRED_IDENTITY_MAPS: [&str; 59] = [
     "active_profile_generations",
     "approved_exec_arguments",
     "approved_exec_slots",
     "authority_domains",
     "binding_activation_targets",
+    "canonical_mount_cache",
+    "canonical_mount_cache_states",
+    "exact_mount_events",
     "created_by_edges",
     "device_effect_decisions",
     "effect_decisions",
@@ -82,6 +85,7 @@ const REQUIRED_IDENTITY_MAPS: [&str; 55] = [
     "kernel_real_parent_intervals",
     "pending_execs",
     "pending_administrative_matches",
+    "mount_global_ambiguous_epoch",
     "mount_global_clean_epoch",
     "mount_global_mutation_epoch",
     "mount_global_pending_mutations",

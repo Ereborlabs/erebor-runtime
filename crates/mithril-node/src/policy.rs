@@ -900,9 +900,6 @@ fn install_global_mount_barrier(
     host: &KernelHost,
     roots: &[MountRootReconciliation],
 ) -> Result<()> {
-    if roots.is_empty() {
-        return Ok(());
-    }
     let key = 0_u32.to_ne_bytes();
     let zero = 0_u64.to_ne_bytes();
     let topology_generation = roots
@@ -933,11 +930,22 @@ fn install_global_mount_barrier(
                 .context(InterceptorSnafu)?;
         }
     }
+    if host
+        .lookup_map("mount_global_ambiguous_epoch", &key)
+        .context(InterceptorSnafu)?
+        .is_none()
+    {
+        host.update_map("mount_global_ambiguous_epoch", &key, &1_u64.to_ne_bytes())
+            .context(InterceptorSnafu)?;
+    }
     let epoch = mount_epoch_from(host, "mount_global_mutation_epoch", &key)?;
     let clean = mount_epoch_from(host, "mount_global_clean_epoch", &key)?;
     let pending = mount_epoch_from(host, "mount_global_pending_mutations", &key)?;
     ensure!(
-        epoch != 0 && clean <= epoch && pending == 0,
+        epoch != 0
+            && clean <= epoch
+            && pending == 0
+            && mount_epoch_from(host, "mount_global_ambiguous_epoch", &key)? != 0,
         IdentityStateSnafu {
             reason: "global mount security barrier readback is invalid",
         }
@@ -1786,6 +1794,7 @@ fn preflight_policy_map_capacity(
 ) -> Result<()> {
     let mut planned = BTreeMap::<&'static str, BTreeSet<Vec<u8>>>::new();
     for map in [
+        "mount_global_ambiguous_epoch",
         "mount_global_mutation_epoch",
         "mount_global_clean_epoch",
         "mount_global_pending_mutations",
@@ -3688,7 +3697,8 @@ mod tests {
     use erebor_interceptor_abi::{
         BindingLifecycleStateV1, EffectDecisionKeyV1, EntryKindV1 as AbiEntryKindV1,
         ExactFileObjectKeyV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
-        PathGraphTerminalV1, PhysicalDecisionKindV1, PolicyGenerationModeV1,
+        PathGraphStateKeyV1, PathGraphTerminalV1, PathGraphTransitionKeyV1, PhysicalDecisionKindV1,
+        PolicyGenerationModeV1,
     };
     use mithril_control::{
         EffectFamilyV1, LocalObjectSelectorV1, ObjectClassifierSelectorV1, PathTreeDenyFloorV1,
@@ -4051,7 +4061,7 @@ mod tests {
         assert!(maps.contains("&target->profile_id, &binding->profile_id"));
         assert!(maps.contains("binding->lifecycle_state != binding_lifecycle_state_v1_active"));
         assert!(effects.contains(
-            "&profile_generation_descriptors,\n        &snapshot->active_profile_generation_ref_id"
+            "&profile_generation_descriptors,\n        &scratch->process.active_profile_generation_ref_id"
         ));
         assert!(roots.contains("create_root(task, config, activation, scratch"));
         assert!(exec.contains("slot, binding, process->active_profile_generation_ref_id"));
@@ -4119,8 +4129,8 @@ mod tests {
     }
 
     #[test]
-    fn path_tree_floor_lowers_without_an_exact_child_object() -> crate::Result<()> {
-        let (mut artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+    fn path_tree_floor_lowers_without_a_live_mount_view() -> crate::Result<()> {
+        let (mut artifact, binding, _) = exact_artifact(ProfileModeV1::Protect)?;
         artifact
             .policy_document
             .path_tree_deny_floors
@@ -4134,17 +4144,68 @@ mod tests {
                 requested_disposition: PolicyDispositionV1::Deny,
                 exception_ids: Vec::new(),
             });
-        let composite_handles = BTreeMap::from([("CLASS:PROJECTED_TOKEN".to_owned(), 7)]);
-        let tables = lower_path_tables(&artifact, &binding, &[&object], &composite_handles)?;
+        let tables = lower_path_tables(&artifact, &binding, &[], &BTreeMap::new())?;
         let open_read_mask = 1_u64 << KernelEffectOperationV1::OpenRead as u16;
 
-        assert_eq!(tables.mount_roots.len(), 1);
+        assert!(tables.mount_roots.is_empty());
+        assert!(tables.reconciliation.is_empty());
+        assert!(!tables.exact.is_empty());
         assert!(tables.terminals.values().any(|value| {
             PathGraphTerminalV1::read_from_bytes(value).is_ok_and(|terminal| {
                 terminal.composite_atom_id == 0
                     && terminal.path_tree_deny_operation_mask & open_read_mask != 0
             })
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn path_graph_rows_are_scoped_to_the_bound_generation() -> crate::Result<()> {
+        let (mut artifact, binding, _) = exact_artifact(ProfileModeV1::Protect)?;
+        artifact
+            .policy_document
+            .path_tree_deny_floors
+            .push(PathTreeDenyFloorV1 {
+                schema_version: 1,
+                rule_id: "secret-tree-deny".to_owned(),
+                canonical_path: "/var/run/secrets".to_owned(),
+                recursive: true,
+                effect_families: vec![EffectFamilyV1::File],
+                operation_ids: vec!["OPEN_READ".to_owned()],
+                requested_disposition: PolicyDispositionV1::Deny,
+                exception_ids: Vec::new(),
+            });
+        let first = lower_path_tables(&artifact, &binding, &[], &BTreeMap::new())?;
+        let second_binding = WorkloadBindingConfig {
+            active_profile_generation_ref_id: 2,
+            ..binding
+        };
+        let second = lower_path_tables(&artifact, &second_binding, &[], &BTreeMap::new())?;
+
+        assert!(first.exact.keys().all(|key| {
+            PathGraphTransitionKeyV1::read_from_bytes(key)
+                .is_ok_and(|key| key.profile_generation_ref_id == 1)
+        }));
+        assert!(second.exact.keys().all(|key| {
+            PathGraphTransitionKeyV1::read_from_bytes(key)
+                .is_ok_and(|key| key.profile_generation_ref_id == 2)
+        }));
+        assert!(first.terminals.keys().all(|key| {
+            PathGraphStateKeyV1::read_from_bytes(key)
+                .is_ok_and(|key| key.profile_generation_ref_id == 1)
+        }));
+        assert!(second.terminals.keys().all(|key| {
+            PathGraphStateKeyV1::read_from_bytes(key)
+                .is_ok_and(|key| key.profile_generation_ref_id == 2)
+        }));
+        assert!(first
+            .exact
+            .keys()
+            .all(|key| !second.exact.contains_key(key)));
+        assert!(first
+            .terminals
+            .keys()
+            .all(|key| !second.terminals.contains_key(key)));
         Ok(())
     }
 
