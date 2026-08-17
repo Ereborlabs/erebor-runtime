@@ -292,6 +292,31 @@ role identity. It changed execution and image identity. This is one serial
 non-leader de-threading case. It does not prove concurrent exec races. The
 phase remains **Blocked**.
 
+## Concurrent Exec Manual VM Result — 2026-08-17
+
+The retained x86_64 Ubuntu 24.04 VM, kernel `6.8.0-137-generic`, ran
+[`native-child.sh --concurrent-thread-exec`](../../../../examples/mithril-identity-manual/native-child.sh)
+as root. The shell source SHA-256 was
+`adc11a45efb571fe4e73e4d8aaa27a4de3d9ede69a6244117b53ee446ac9644d`.
+It created one K3s Pod with a live CRI binding, then created two sibling Python
+workers. One `SIGUSR1` released both workers through their barrier. Linux left
+one `sleep` process. The shell required the surviving task to keep the root
+creator, process state, and restricted role, with changed execution and image
+IDs and no exec guard. It printed `PASS`.
+
+The paired automated VM result used source SHA-256
+`a168927ad6a9f37da535f7c05be1cb9eeab8a72303555025946c410e3c85c3f9`.
+It required exactly four identity-ID allocations for the two worker threads,
+two distinct live task coordinates, and a committed winner. Its JSON SHA-256
+was `6438be6817109b6592fb60bd39fd50e061528fcc8615f5403037c4bcc5a0ee08`.
+The BPF object SHA-256 was
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+
+Postflight found no case namespace, fixture directory, Mithril pin, node
+process, lease, or cgroup. This qualifies only the normal two-worker exec
+subcase of `EXEC-CONCURRENT-002`. Exec versus fork, vfork, and thread creation
+remain required. The phase remains **Blocked**.
+
 ## Entry-Migration Manual VM Result — 2026-08-17
 
 At source commit `e6352f8`, the retained x86_64 Ubuntu 24.04 VM ran this exact
@@ -360,7 +385,7 @@ no node or fixture process. This result qualifies
 | --- | --- | --- |
 | `AUTHORIZATION-REPLAY-004` | replay, retarget, expire, reboot, and mismatch signed authorization | every invalid envelope rejects; fresh exact envelope consumes according to contract |
 | `EXEC-COMMIT-STATE-001` | run success, pre-PONR failure, and post-PONR fatal/unknown exec | success commits once; early failure keeps exact prior state; later failure never restores broad authority |
-| `EXEC-CONCURRENT-002` | race execs across threads/non-leader de-threading | one serial non-leader de-threading case passed. Concurrent races remain required. |
+| `EXEC-CONCURRENT-002` | run [`native-child.sh --concurrent-thread-exec`](../../../../examples/mithril-identity-manual/native-child.sh) in the manual VM | serial and two-worker normal exec passed. Exec versus fork, vfork, and thread creation remain required. |
 | `ID-CGROUP-ESCAPE-001` | move a labeled task to host/unprotected placement | task storage still resolves and denies mismatch; unmoved allowed control works |
 | `ID-CLONE-CGROUP-002` | clone into expected and changed placement | child state exists before effect and placement is verified |
 | `ID-CLONE-CGROUP-FAIL-003` | force child allocation/finalization/placement failure | no unlabeled runnable child gains authority; normal clone succeeds |

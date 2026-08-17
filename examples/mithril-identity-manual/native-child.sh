@@ -4,14 +4,14 @@ source "$(dirname "$0")/identity-runtime.sh"
 
 identity_case_mode=
 identity_case_k3s=false
-if [[ $# -eq 1 && $1 == --thread-exec ]]; then
+if [[ $# -eq 1 && ($1 == --thread-exec || $1 == --concurrent-thread-exec) ]]; then
   identity_case_mode=$1
   identity_case_k3s=true
 elif [[ $# -eq 2 || ($# -eq 3 && (${3:-} == --orphan || ${3:-} == --double-fork || ${3:-} == --moved-exec || ${3:-} == --failed-exec || ${3:-} == --thread-exec)) ]]; then
   identity_case_mode=${3:-}
 else
   echo "usage: sudo $0 NODE_CONFIG DOCKER_CONTAINER_OR_FULL_CRI_ID [--orphan|--double-fork|--moved-exec|--failed-exec|--thread-exec]" >&2
-  echo "   or: sudo $0 --thread-exec" >&2
+  echo "   or: sudo $0 --thread-exec|--concurrent-thread-exec" >&2
   exit 2
 fi
 
@@ -328,6 +328,128 @@ EOF
     exit 1
   }
   identity_pass "PASS: a pre-PONR ELF loader failure kept the source identity and a later exec committed."
+  exit 0
+fi
+
+if [[ $identity_case_mode == --concurrent-thread-exec ]]; then
+  ready_name=.mithril-concurrent-thread-exec-${identity_work##*.}.ready
+  ready_host=$identity_k3s_shared_directory/$ready_name
+  ready_container=$identity_k3s_container_shared_directory/$ready_name
+  crictl --runtime-endpoint "$identity_runtime_endpoint" exec "$identity_container_id" \
+    python3 -c '
+import os
+import signal
+import sys
+import threading
+
+release = threading.Event()
+started = threading.Barrier(3)
+racing = threading.Barrier(2)
+signal.signal(signal.SIGUSR1, lambda _signal, _frame: release.set())
+
+def execute():
+    started.wait()
+    release.wait()
+    racing.wait()
+    os.execv("/bin/sleep", ["/bin/sleep", "300"])
+
+first = threading.Thread(target=execute)
+second = threading.Thread(target=execute)
+first.start()
+second.start()
+started.wait()
+with open(sys.argv[1], "w", encoding="ascii") as output:
+    output.write(f"{os.getpid()}\n")
+signal.pause()
+first.join()
+second.join()
+' "$ready_container" >"$identity_work/concurrent-thread-exec-client.log" 2>&1 &
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ -s $ready_host ]] && break
+    sleep 0.1
+  done
+  [[ -s $ready_host ]] || {
+    echo "the K3s concurrent Python workers did not become ready" >&2
+    exit 1
+  }
+  namespace_pid=$(<"$ready_host")
+  [[ $namespace_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "the K3s concurrent Python workers wrote an invalid namespace PID" >&2
+    exit 1
+  }
+  root_pid=
+  for candidate in $(<"$identity_cgroup_path/cgroup.procs"); do
+    [[ -r /proc/$candidate/status ]] || continue
+    mapped_pid=$(awk '/^NSpid:/ {print $NF}' "/proc/$candidate/status")
+    if [[ $mapped_pid == "$namespace_pid" ]]; then
+      root_pid=$candidate
+      break
+    fi
+  done
+  [[ $root_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "cannot map the K3s concurrent Python root to a host PID" >&2
+    exit 1
+  }
+
+  root_task_directory=/proc/$root_pid/task
+  thread_paths=("$root_task_directory"/*)
+  thread_pids=()
+  for thread_path in "${thread_paths[@]}"; do
+    candidate=${thread_path##*/}
+    [[ $candidate == "$root_pid" ]] || thread_pids+=("$candidate")
+  done
+  [[ ${#thread_pids[@]} -eq 2 ]] || {
+    echo "Python root does not have exactly two concurrent worker threads" >&2
+    exit 1
+  }
+  first_thread_pid=${thread_pids[0]}
+  second_thread_pid=${thread_pids[1]}
+  [[ $first_thread_pid =~ ^[1-9][0-9]*$ && $second_thread_pid =~ ^[1-9][0-9]*$ \
+    && -d /proc/$root_pid/task/$first_thread_pid && -d /proc/$root_pid/task/$second_thread_pid ]] || {
+    echo "cannot identify the two concurrent Python worker threads" >&2
+    exit 1
+  }
+
+  identity_inspect_task concurrent-thread-exec-root "$root_pid" >/dev/null
+  root_cookie=$(jq -er '.task_cookie' "$identity_work/concurrent-thread-exec-root.json")
+  root_process=$(jq -er '.process_state_id' "$identity_work/concurrent-thread-exec-root.json")
+  root_execution=$(jq -er '.active_execution_id' "$identity_work/concurrent-thread-exec-root.json")
+  root_image=$(jq -er '.image_provenance_id' "$identity_work/concurrent-thread-exec-root.json")
+  root_role=$(jq -er '.active_role_id' "$identity_work/concurrent-thread-exec-root.json")
+  identity_assert_external "$identity_work/concurrent-thread-exec-root.json"
+
+  kill -USR1 "$root_pid"
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [[ $(tr -d '\n' </proc/$root_pid/comm 2>/dev/null || true) == sleep ]] && break
+    sleep 0.1
+  done
+  [[ $(tr -d '\n' </proc/$root_pid/comm 2>/dev/null || true) == sleep ]] || {
+    echo "neither concurrent Python worker exec became sleep" >&2
+    exit 1
+  }
+  identity_inspect_task concurrent-thread-exec-after "$root_pid" >/dev/null
+  jq -e --argjson root_cookie "$root_cookie" \
+    --arg root_process "$root_process" \
+    --arg root_execution "$root_execution" \
+    --arg root_image "$root_image" \
+    --argjson root_role "$root_role" \
+    --argjson root_pid "$root_pid" \
+    '.task_cookie != $root_cookie
+     and .creator_task_cookie == $root_cookie
+     and .process_state_id == $root_process
+     and .active_execution_id != $root_execution
+     and .image_provenance_id != $root_image
+     and .active_role_id == $root_role
+     and .root_class == null
+     and .installed_role_class == null
+     and .host_tid == $root_pid
+     and .host_tgid == $root_pid
+     and .coordinate_state == 3
+     and .process_execution_state == 2
+     and .process_state_vector_state == 2
+     and .exec_guard_state == 0' \
+    "$identity_work/concurrent-thread-exec-after.json" >/dev/null
+  identity_pass "PASS: one concurrent Python worker exec kept the process identity and restricted role."
   exit 0
 fi
 

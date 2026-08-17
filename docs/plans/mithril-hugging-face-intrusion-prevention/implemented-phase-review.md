@@ -38,6 +38,34 @@ The latest phase results remain:
   VM record, administrative approval transaction, complete provenance and
   lifetime models, and branch-specific incident proofs are not complete.
 
+## Current Native Concurrent-Exec Evidence — 2026-08-17
+
+This review update covers the normal restricted-role case only. It does not
+cover the Phase 4 administrative-exec exception.
+
+1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L619)
+   starts two sibling Python workers through the existing
+   `NativeProcessFixture`. It holds both workers before `exec`, then releases
+   both through one barrier.
+2. [`task_coordinate_for_host_tid`](../../../crates/mithril-e2e/src/identity.rs#L1827)
+   reads the existing `task_coordinates` map. It selects one runnable entry
+   for each live TID. This is necessary because Linux `pidfd_open` does not
+   open a non-leader thread. It adds no map, runner, or durable type.
+3. The fixture requires two distinct worker task cookies, one shared process
+   state, and exactly four identity-ID allocations. After Linux selects one
+   exec winner, the fixture requires that worker cookie, root creator, same
+   restricted role, changed execution and image IDs, and no exec guard.
+4. [`native-child.sh`](../../../examples/mithril-identity-manual/native-child.sh#L334)
+   provides the matching root-only manual VM case. It creates and removes its
+   K3s Pod, CRI binding, node, pin, lease, cgroup, and fixture.
+
+The privileged VM result passed on kernel `6.8.0-137-generic`. Its JSON SHA-256
+is `6438be6817109b6592fb60bd39fd50e061528fcc8615f5403037c4bcc5a0ee08`.
+The BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+This closes only the normal two-worker subcase. Exec versus fork, vfork, and
+thread creation remain open in the Phase 2 matrix.
+
 ## Manual VM Controller
 
 Review this flow in this order:

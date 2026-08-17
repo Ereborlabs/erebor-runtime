@@ -17,7 +17,7 @@ use erebor_interceptor::{
 };
 use erebor_interceptor_abi::{
     ExecGuardStateV1, IdentityRuntimeConfigV1, ProcessExecutionStateV1, ProcessStateVectorStateV1,
-    TaskCoordinateStateV1,
+    TaskCoordinateStateV1, TaskCoordinateV1,
 };
 use libbpf_rs::{MapHandle, MapType};
 use mithril_node::{
@@ -27,7 +27,7 @@ use mithril_node::{
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
 use serde::Serialize;
 use snafu::{ensure, ResultExt as _};
-use zerocopy::FromBytes as _;
+use zerocopy::{FromBytes as _, TryFromBytes as _};
 
 use crate::closure::ArchitectureClosure;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
@@ -158,6 +158,9 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub non_leader_thread_exec_committed: bool,
     pub non_leader_thread_exec_root: NativeTaskSnapshotV1,
     pub non_leader_thread_exec_after_exec: NativeTaskSnapshotV1,
+    pub concurrent_thread_exec_committed: bool,
+    pub concurrent_thread_exec_root: NativeTaskSnapshotV1,
+    pub concurrent_thread_exec_after_exec: NativeTaskSnapshotV1,
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub external_root: NativeTaskSnapshotV1,
@@ -293,18 +296,21 @@ impl IdentityTestRunner {
         let execfail_path = output_directory.join("execfail");
         let execfail_ready_path = output_directory.join("execfail-ready");
         let non_leader_thread_ready_path = output_directory.join("non-leader-thread-ready");
+        let concurrent_thread_ready_path = output_directory.join("concurrent-thread-ready");
         ensure!(
             !execfail_path.exists()
                 && !execfail_ready_path.exists()
-                && !non_leader_thread_ready_path.exists(),
+                && !non_leader_thread_ready_path.exists()
+                && !concurrent_thread_ready_path.exists(),
             InvalidInputSnafu {
                 path: output_directory,
-                reason: "identity exec-failure probe files must not already exist",
+                reason: "identity exec probe files must not already exist",
             }
         );
         let execfail_cleanup = ProbeFile::new(&execfail_path);
         let execfail_ready_cleanup = ProbeFile::new(&execfail_ready_path);
         let non_leader_thread_ready_cleanup = ProbeFile::new(&non_leader_thread_ready_path);
+        let concurrent_thread_ready_cleanup = ProbeFile::new(&concurrent_thread_ready_path);
         self.materialize_execfail(&execfail_path)?;
         let object_sha256 = bundled_bpf_sha256();
         let (boot_id, node_boot_id) = boot_identity()?;
@@ -610,6 +616,141 @@ impl IdentityTestRunner {
             })?;
         non_leader_thread_fixture.stop();
         non_leader_thread_ready_cleanup.cleanup()?;
+
+        let mut concurrent_thread_fixture =
+            NativeProcessFixture::start_with_concurrent_thread_exec(&concurrent_thread_ready_path)?;
+        let concurrent_thread_root_pid = concurrent_thread_fixture.outer_pid();
+        fs::write(&procs_path, concurrent_thread_root_pid.to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        let concurrent_thread_exec_root =
+            self.wait_for("concurrent thread exec root identity", &procs_path, || {
+                inspector
+                    .snapshot(concurrent_thread_root_pid)
+                    .context(NodeSnafu)
+            })?;
+        ensure!(
+            concurrent_thread_exec_root.creator_task_cookie.is_none()
+                && concurrent_thread_exec_root.root_class == Some("external_runtime_root")
+                && concurrent_thread_exec_root.installed_role_class
+                    == Some("runtime_external_restricted")
+                && concurrent_thread_exec_root.active_role_id == binding.external_role_id
+                && concurrent_thread_exec_root.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "concurrent thread exec root has the wrong identity",
+            }
+        );
+        let next_id_before_concurrent_threads = identity_next_id(&host)?;
+        let expected_next_id_after_concurrent_threads = next_id_before_concurrent_threads
+            .checked_add(4)
+            .ok_or_else(|| {
+                invalid_state("identity ID sequence overflowed for concurrent threads")
+            })?;
+        concurrent_thread_fixture.release_root()?;
+        let concurrent_thread_tids = self.wait_for(
+            "concurrent Python thread creation",
+            &concurrent_thread_ready_path,
+            || concurrent_thread_fixture.concurrent_thread_tids(&concurrent_thread_ready_path),
+        )?;
+        let [first_concurrent_thread_tid, second_concurrent_thread_tid] = concurrent_thread_tids;
+        let first_concurrent_thread_path = PathBuf::from(format!(
+            "/proc/{concurrent_thread_root_pid}/task/{first_concurrent_thread_tid}"
+        ));
+        let second_concurrent_thread_path = PathBuf::from(format!(
+            "/proc/{concurrent_thread_root_pid}/task/{second_concurrent_thread_tid}"
+        ));
+        let concurrent_thread_root_coordinate =
+            self.wait_for("concurrent thread root coordinate", &procs_path, || {
+                task_coordinate_for_host_tid(
+                    &host,
+                    concurrent_thread_root_pid,
+                    concurrent_thread_root_pid,
+                )
+            })?;
+        let first_concurrent_thread_coordinate = self.wait_for(
+            "first concurrent thread coordinate",
+            &first_concurrent_thread_path,
+            || {
+                task_coordinate_for_host_tid(
+                    &host,
+                    first_concurrent_thread_tid,
+                    concurrent_thread_root_pid,
+                )
+            },
+        )?;
+        let second_concurrent_thread_coordinate = self.wait_for(
+            "second concurrent thread coordinate",
+            &second_concurrent_thread_path,
+            || {
+                task_coordinate_for_host_tid(
+                    &host,
+                    second_concurrent_thread_tid,
+                    concurrent_thread_root_pid,
+                )
+            },
+        )?;
+        let next_id_after_concurrent_threads = identity_next_id(&host)?;
+        ensure!(
+            first_concurrent_thread_tid != concurrent_thread_root_pid
+                && second_concurrent_thread_tid != concurrent_thread_root_pid
+                && first_concurrent_thread_path.is_dir()
+                && second_concurrent_thread_path.is_dir()
+                && concurrent_thread_root_coordinate.task_cookie
+                    == concurrent_thread_exec_root.task_cookie
+                && first_concurrent_thread_coordinate.task_cookie
+                    != second_concurrent_thread_coordinate.task_cookie
+                && first_concurrent_thread_coordinate.task_cookie
+                    != concurrent_thread_exec_root.task_cookie
+                && second_concurrent_thread_coordinate.task_cookie
+                    != concurrent_thread_exec_root.task_cookie
+                && first_concurrent_thread_coordinate.process_state_id
+                    == concurrent_thread_root_coordinate.process_state_id
+                && second_concurrent_thread_coordinate.process_state_id
+                    == concurrent_thread_root_coordinate.process_state_id
+                && first_concurrent_thread_coordinate.state == TaskCoordinateStateV1::Runnable
+                && second_concurrent_thread_coordinate.state == TaskCoordinateStateV1::Runnable
+                && next_id_after_concurrent_threads == expected_next_id_after_concurrent_threads,
+            InvalidInputSnafu {
+                path: &concurrent_thread_ready_path,
+                reason: format!(
+                    "concurrent Python threads did not receive two exact task identities; expected next ID {expected_next_id_after_concurrent_threads}, got {next_id_after_concurrent_threads}"
+                ),
+            }
+        );
+        let concurrent_thread_task_cookies = BTreeSet::from([
+            first_concurrent_thread_coordinate.task_cookie,
+            second_concurrent_thread_coordinate.task_cookie,
+        ]);
+        concurrent_thread_fixture.release_concurrent_thread_exec()?;
+        let concurrent_thread_exec_after_exec =
+            self.wait_for("concurrent thread exec commit", &procs_path, || {
+                let snapshot = inspector
+                    .snapshot(concurrent_thread_root_pid)
+                    .context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    concurrent_thread_task_cookies.contains(&snapshot.task_cookie)
+                        && snapshot.creator_task_cookie
+                            == Some(concurrent_thread_exec_root.task_cookie)
+                        && snapshot.process_state_id == concurrent_thread_exec_root.process_state_id
+                        && snapshot.active_execution_id
+                            != concurrent_thread_exec_root.active_execution_id
+                        && snapshot.image_provenance_id
+                            != concurrent_thread_exec_root.image_provenance_id
+                        && snapshot.active_role_id == concurrent_thread_exec_root.active_role_id
+                        && snapshot.root_class.is_none()
+                        && snapshot.installed_role_class.is_none()
+                        && snapshot.host_tid == concurrent_thread_root_pid
+                        && snapshot.host_tgid == concurrent_thread_root_pid
+                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
+                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
+                        && snapshot.process_state_vector_state
+                            == ProcessStateVectorStateV1::Active as u8
+                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
+                }))
+            })?;
+        concurrent_thread_fixture.stop();
+        concurrent_thread_ready_cleanup.cleanup()?;
 
         let mut failed_exec_fixture =
             NativeProcessFixture::start_with_failed_exec(&execfail_path, &execfail_ready_path)?;
@@ -1083,7 +1224,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 6,
+            schema_version: 7,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1098,6 +1239,9 @@ impl IdentityTestRunner {
             non_leader_thread_exec_committed: true,
             non_leader_thread_exec_root,
             non_leader_thread_exec_after_exec,
+            concurrent_thread_exec_committed: true,
+            concurrent_thread_exec_root,
+            concurrent_thread_exec_after_exec,
             clone_into_cgroup_external_root: clone_external_root,
             clone_into_cgroup_native_child: clone_native_child,
             external_root,
@@ -1269,6 +1413,51 @@ thread.join()
         Self::start_command(&mut command, false, Path::new("python3"))
     }
 
+    fn start_with_concurrent_thread_exec(ready: &Path) -> Result<Self> {
+        let mut command = Command::new("python3");
+        command
+            .args([
+                "-c",
+                r#"import os
+import sys
+import threading
+
+ready = sys.argv[1]
+sys.stdin.readline()
+release = threading.Event()
+started = threading.Barrier(3)
+racing = threading.Barrier(2)
+thread_ids = []
+thread_ids_lock = threading.Lock()
+
+def execute():
+    with thread_ids_lock:
+        thread_ids.append(threading.get_native_id())
+    started.wait()
+    release.wait()
+    racing.wait()
+    os.execv("/bin/sleep", ["/bin/sleep", "30"])
+
+first = threading.Thread(target=execute)
+second = threading.Thread(target=execute)
+first.start()
+second.start()
+started.wait()
+temporary = f"{ready}.tmp"
+with open(temporary, "x", encoding="ascii") as output:
+    output.write("\n".join(str(thread_id) for thread_id in thread_ids))
+    output.write("\n")
+os.replace(temporary, ready)
+sys.stdin.readline()
+release.set()
+first.join()
+second.join()
+"#,
+            ])
+            .arg(ready);
+        Self::start_command(&mut command, false, Path::new("python3"))
+    }
+
     fn start_command(command: &mut Command, parent_exit_mode: bool, path: &Path) -> Result<Self> {
         let mut outer = command
             .stdin(Stdio::piped())
@@ -1316,6 +1505,10 @@ thread.join()
         self.write_stdin(b"exec\n")
     }
 
+    fn release_concurrent_thread_exec(&mut self) -> Result<()> {
+        self.write_stdin(b"exec\n")
+    }
+
     fn release_exec(&mut self, native_pid: u32) -> Result<()> {
         let pidfd = self
             .native_pidfd
@@ -1331,18 +1524,27 @@ thread.join()
         let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
         let deadline = Instant::now() + WAIT_LIMIT;
         loop {
-            let status =
-                fs::read_to_string(&status_path).context(IoSnafu { path: &status_path })?;
+            let status = match fs::read_to_string(&status_path) {
+                Ok(status) => status,
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => {
+                    return Err(invalid_state(format!(
+                        "native child {native_pid} exited before it stopped for exec release"
+                    )));
+                }
+                Err(source) => return Err(source).context(IoSnafu { path: &status_path }),
+            };
             if status.lines().any(|line| line.starts_with("State:\tT")) {
                 break;
             }
-            ensure!(
-                Instant::now() < deadline,
-                InvalidInputSnafu {
-                    path: &status_path,
-                    reason: "native child did not stop before exec release",
-                }
-            );
+            if Instant::now() >= deadline {
+                let state = status
+                    .lines()
+                    .find(|line| line.starts_with("State:"))
+                    .unwrap_or("State: <missing>");
+                return Err(invalid_state(format!(
+                    "native child {native_pid} did not stop before exec release; last {state}"
+                )));
+            }
             thread::sleep(Duration::from_millis(10));
         }
         Ok(())
@@ -1479,6 +1681,55 @@ thread.join()
         Ok(Some(tid))
     }
 
+    fn concurrent_thread_tids(&mut self, ready: &Path) -> Result<Option<[u32; 2]>> {
+        if let Some(status) = self.outer.try_wait().context(IoSnafu {
+            path: Path::new("concurrent thread fixture"),
+        })? {
+            let mut stderr = String::new();
+            if let Some(mut pipe) = self.stderr.take() {
+                pipe.read_to_string(&mut stderr).context(IoSnafu {
+                    path: Path::new("concurrent thread fixture stderr"),
+                })?;
+            }
+            return Err(invalid_state(format!(
+                "concurrent thread fixture exited before it reported its TIDs ({status}): {}",
+                stderr.trim()
+            )));
+        }
+        let text = match fs::read_to_string(ready) {
+            Ok(text) => text,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(source).context(IoSnafu { path: ready }),
+        };
+        let mut tids = text
+            .split_ascii_whitespace()
+            .map(|value| {
+                value.parse::<u32>().map_err(|source| {
+                    invalid_state(format!(
+                        "concurrent thread fixture wrote an invalid TID `{value}`: {source}"
+                    ))
+                })
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        ensure!(
+            tids.len() == 2,
+            InvalidInputSnafu {
+                path: ready,
+                reason: format!(
+                    "concurrent thread fixture must report two distinct TIDs, got {}",
+                    tids.len()
+                ),
+            }
+        );
+        let first = tids
+            .pop_first()
+            .ok_or_else(|| invalid_state("first concurrent thread TID is missing"))?;
+        let second = tids
+            .pop_first()
+            .ok_or_else(|| invalid_state("second concurrent thread TID is missing"))?;
+        Ok(Some([first, second]))
+    }
+
     fn intermediate_pid(&mut self) -> Result<Option<u32>> {
         self.native_child_pid()
     }
@@ -1571,6 +1822,55 @@ fn identity_next_id(host: &KernelHost) -> Result<u64> {
                 "identity runtime configuration is invalid: {error}"
             ))
         })
+}
+
+fn task_coordinate_for_host_tid(
+    host: &KernelHost,
+    host_tid: u32,
+    host_tgid: u32,
+) -> Result<Option<TaskCoordinateV1>> {
+    let mut found = None;
+    for key in host
+        .map_keys("task_coordinates")
+        .context(InterceptorSnafu)?
+    {
+        let key: [u8; size_of::<u64>()] = key.try_into().map_err(|_| {
+            invalid_state("task-coordinate map key does not contain one task cookie")
+        })?;
+        let task_cookie = u64::from_ne_bytes(key);
+        let Some(value) = host
+            .lookup_map("task_coordinates", &task_cookie.to_ne_bytes())
+            .context(InterceptorSnafu)?
+        else {
+            continue;
+        };
+        let coordinate = TaskCoordinateV1::try_read_from_bytes(&value).map_err(|error| {
+            invalid_state(format!("task coordinate has an invalid ABI value: {error}"))
+        })?;
+        ensure!(
+            coordinate.task_cookie == task_cookie,
+            InvalidInputSnafu {
+                path: Path::new("task_coordinates"),
+                reason: "task-coordinate map key does not match its task cookie",
+            }
+        );
+        if coordinate.host_tid == host_tid
+            && coordinate.host_tgid == host_tgid
+            && coordinate.state == TaskCoordinateStateV1::Runnable
+        {
+            ensure!(
+                found.is_none(),
+                InvalidInputSnafu {
+                    path: Path::new("task_coordinates"),
+                    reason: format!(
+                        "task-coordinate map has multiple live entries for host TID {host_tid}"
+                    ),
+                }
+            );
+            found = Some(coordinate);
+        }
+    }
+    Ok(found)
 }
 
 fn map_ids(manifest: &KernelObjectManifestV1) -> BTreeMap<&str, u32> {
@@ -1774,6 +2074,39 @@ mod tests {
         fixture.release_non_leader_exec()?;
         let comm_path = PathBuf::from(format!("/proc/{outer_pid}/comm"));
         runner.wait_for("non-leader Python thread exec", &comm_path, || {
+            fs::read_to_string(&comm_path)
+                .map(|name| (name.trim() == "sleep").then_some(()))
+                .map_err(|error| {
+                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
+                })
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_process_fixture_races_two_thread_execs() -> crate::Result<()> {
+        let runner = IdentityTestRunner::new(".");
+        let temporary = tempfile::tempdir().map_err(|error| {
+            super::invalid_state(format!("create concurrent thread test directory: {error}"))
+        })?;
+        let ready = temporary.path().join("concurrent-thread-ready");
+        let mut fixture = NativeProcessFixture::start_with_concurrent_thread_exec(&ready)?;
+        let outer_pid = fixture.outer_pid();
+
+        fixture.release_root()?;
+        let [first_thread_tid, second_thread_tid] =
+            runner.wait_for("concurrent Python thread creation", &ready, || {
+                fixture.concurrent_thread_tids(&ready)
+            })?;
+        assert_ne!(first_thread_tid, outer_pid);
+        assert_ne!(second_thread_tid, outer_pid);
+        assert_ne!(first_thread_tid, second_thread_tid);
+        assert!(PathBuf::from(format!("/proc/{outer_pid}/task/{first_thread_tid}")).is_dir());
+        assert!(PathBuf::from(format!("/proc/{outer_pid}/task/{second_thread_tid}")).is_dir());
+
+        fixture.release_concurrent_thread_exec()?;
+        let comm_path = PathBuf::from(format!("/proc/{outer_pid}/comm"));
+        runner.wait_for("concurrent Python thread exec", &comm_path, || {
             fs::read_to_string(&comm_path)
                 .map(|name| (name.trim() == "sleep").then_some(()))
                 .map_err(|error| {

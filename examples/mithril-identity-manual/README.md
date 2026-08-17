@@ -20,6 +20,17 @@ The command creates one Python Pod and live CRI binding. It starts a Python
 root with one non-leader thread. That thread executes `sleep`. The command
 removes its Pod and fixture directory at exit.
 
+Run this concurrent-exec case from the same root shell:
+
+```sh
+examples/mithril-identity-manual/native-child.sh --concurrent-thread-exec
+```
+
+The command creates one Python Pod and live CRI binding. Two sibling worker
+threads wait at one barrier, then both call `exec`. Linux leaves one `sleep`
+process. The command checks that its Mithril process state and restricted role
+remain correct. It removes its Pod and fixture directory at exit.
+
 Run this self-contained namespace-entry case from the same root shell:
 
 ```sh
@@ -53,6 +64,7 @@ Then run only the case being checked:
 | Moved native-child exec | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --moved-exec` |
 | Pre-PONR failed native exec | `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --failed-exec` |
 | Non-leader Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --thread-exec` in the manual VM; otherwise `sudo examples/mithril-identity-manual/native-child.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID --thread-exec` |
+| Concurrent Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --concurrent-thread-exec` in the manual VM |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh` in the manual VM |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |
 
@@ -236,6 +248,22 @@ Python root as creator, keep the same process state and role, change execution
 and image IDs, have no external-root class, and report the original PID as
 both host TID and TGID. This is one non-leader de-threading subcase. It does
 not race execs or cover concurrent fork, vfork, or thread creation.
+
+## Concurrent Python Thread Exec Check
+
+Run this case in the manual VM as root:
+
+```bash
+sudo examples/mithril-identity-manual/native-child.sh --concurrent-thread-exec
+```
+
+The script creates its own K3s Pod and live CRI binding. It starts two sibling
+Python workers and releases both through one barrier. Linux leaves one `sleep`
+process. The survivor must keep the root creator, process state, and restricted
+role. Its execution and image IDs must change. The script removes its Pod,
+fixture, node, pin, lease, state, config, and logs. This is the normal
+two-worker subcase. It does not test exec versus fork, vfork, or thread
+creation.
 
 Every executable starts the real `mithril-node`, performs one operator-driven
 case, and removes its test tasks, BPF pins, lease, temporary config, state, and
