@@ -6,6 +6,7 @@ mod support;
 use std::collections::BTreeSet;
 use std::fs;
 use std::mem::{offset_of, size_of};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -215,6 +216,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub io_uring_lifecycle_released: bool,
     pub bind_alias_canonicalized: bool,
     pub path_tree_preexisting_child_denied: bool,
+    pub path_tree_future_namespace_denied: bool,
     pub path_tree_later_child_denied: bool,
     pub path_tree_replacement_child_denied: bool,
     pub path_tree_outside_control_allowed: bool,
@@ -1127,6 +1129,64 @@ impl EffectTestRunner {
                 0
             })
             .context(InterceptorSnafu)?;
+
+        let mut path_tree_future_namespace_denied = false;
+        if protect {
+            let future_fixture_root = fixture_root.join("future-mount-namespace");
+            fs::create_dir(&future_fixture_root).context(IoSnafu {
+                path: &future_fixture_root,
+            })?;
+            let mut future_fixture = EffectProcessFixture::start(&future_fixture_root)?;
+            let future_namespace_inode: u32 =
+                fs::metadata(format!("/proc/{}/ns/mnt", future_fixture.pid()))
+                    .context(IoSnafu {
+                        path: Path::new("future process mount namespace"),
+                    })?
+                    .ino()
+                    .try_into()
+                    .map_err(|error| {
+                        InvalidInputSnafu {
+                            path: Path::new("future process mount namespace"),
+                            reason: format!("mount namespace inode exceeds u32: {error}"),
+                        }
+                        .build()
+                    })?;
+            ensure!(
+                !mount_namespaces.contains(&future_namespace_inode),
+                InvalidInputSnafu {
+                    path: Path::new("future process mount namespace"),
+                    reason:
+                        "future process reused a mount namespace present during policy activation",
+                }
+            );
+            fs::write(
+                cgroup_path.join("cgroup.procs"),
+                future_fixture.pid().to_string(),
+            )
+            .context(IoSnafu {
+                path: cgroup_path.join("cgroup.procs"),
+            })?;
+            let marker = observations.cursor();
+            ensure!(
+                future_fixture.open(&path_tree_preexisting)?.denied(),
+                InvalidInputSnafu {
+                    path: &path_tree_preexisting,
+                    reason: "a process in a mount namespace created after policy activation opened the protected path",
+                }
+            );
+            wait_for_effect(
+                &reader,
+                &observations,
+                marker,
+                "PATH_TREE_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+            )?;
+            future_fixture.stop()?;
+            path_tree_future_namespace_denied = true;
+        }
 
         if protect {
             for (path, label) in [
@@ -3455,6 +3515,7 @@ impl EffectTestRunner {
             io_uring_lifecycle_released,
             bind_alias_canonicalized: true,
             path_tree_preexisting_child_denied: protect,
+            path_tree_future_namespace_denied,
             path_tree_later_child_denied: protect,
             path_tree_replacement_child_denied: protect,
             path_tree_outside_control_allowed: protect,

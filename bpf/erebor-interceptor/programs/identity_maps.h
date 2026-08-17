@@ -47,10 +47,100 @@ struct exception_runtime_state_bpf_v1 {
 #define EFFECT_GATE_DEFER_DECISION_V1 1
 #define EFFECT_GATE_DENY_EXCEPTION_V1 2
 #define EFFECT_GATE_FILE_OPEN_ATTEMPT_V1 4
+#define EFFECT_GATE_PATH_SUPPLIED_V1 8
+#define MAX_CANONICAL_MOUNTS_V1 4096
+#define MAX_CANONICAL_MOUNT_TREE_DEPTH_V1 64
+#define CANONICAL_MOUNT_CACHE_READY_V1 1
+
+struct canonical_mount_cache_key_v1 {
+    __u64 mount_namespace_address;
+    __u64 namespace_root_mount_id_unique;
+    __u64 namespace_event;
+    __u64 root_dentry_address;
+};
+
+struct canonical_mount_cache_value_v1 {
+    struct bpf_spin_lock lock;
+    __u32 reserved;
+    __u64 selected_mount_address;
+    __u64 selected_mount_id_unique;
+};
+
+struct canonical_mount_cache_state_key_v1 {
+    __u64 mount_namespace_address;
+    __u64 namespace_root_mount_id_unique;
+    __u64 namespace_event;
+};
+
+struct canonical_mount_cache_state_v1 {
+    __u32 mount_count;
+    __u32 state;
+};
+
+struct exact_mount_event_key_v1 {
+    __u64 mount_namespace_address;
+    __u64 namespace_root_mount_id_unique;
+    __u32 mount_namespace_inode;
+    __u32 reserved;
+};
+
+struct exact_mount_event_v1 {
+    struct bpf_spin_lock lock;
+    __u32 reserved;
+    __u64 transition_version;
+    __u64 namespace_event;
+    __u64 ambiguous_mount_epoch;
+};
+
+struct canonical_mount_cache_build_state_v1 {
+    __u64 mount_namespace_address;
+    __u64 namespace_root_mount_id_unique;
+    __u64 namespace_event;
+    __u64 candidate_mount_address;
+    __u64 candidate_namespace_address;
+    __u64 candidate_root_address;
+    __u64 candidate_mount_id_unique;
+    __u64 left_node_address;
+    __u64 right_node_address;
+    __u32 expected_mounts;
+    __u32 stack_depth;
+    __u32 failed;
+    __u32 reserved;
+};
+
+struct canonical_mount_path_walk_state_v1 {
+    __u64 mount_namespace_address;
+    __u64 namespace_root_address;
+    __u64 current_mount_address;
+    __u64 current_dentry_address;
+    __u64 next_mount_address;
+    __u64 next_dentry_address;
+    __u64 component_name_address;
+    __u64 selected_mount_address;
+    __u64 selected_mount_id_unique;
+    __u64 selected_mount_namespace_address;
+    __u64 selected_mount_root_address;
+    __u64 live_selected_mount_id_unique;
+    __u64 namespace_event;
+    __u64 namespace_root_mount_id_unique;
+    __u64 first_selected_mount_id_unique;
+    __u32 component_count;
+    __u32 component_length;
+    __u32 reached_namespace_root;
+    __u32 failed;
+};
 
 struct canonical_path_view_v1 {
     __u64 name_address;
     __u32 length;
+    __u32 reserved;
+};
+
+struct canonical_path_match_state_v1 {
+    __u64 profile_generation_ref_id;
+    __u32 component_count;
+    __u32 state_id;
+    __u32 unresolved;
     __u32 reserved;
 };
 
@@ -85,18 +175,27 @@ struct identity_scratch_v1 {
     __u8 effect_gate_reserved[3];
     __u32 effect_gate_operation_argument;
     __u32 path_mount_namespace_inode;
+    struct path effect_path;
     exact_file_object_key_v1 file_object;
     task_label_v1 target_label;
     task_coordinate_v1 target_coordinate;
     process_security_state_v1 target_process;
     process_state_vector_v1 target_process_vector;
-    canonical_mount_root_key_v1 mount_root_key;
     path_graph_transition_key_v1 path_transition_key;
     path_graph_state_key_v1 path_state_key;
     path_graph_terminal_v1 path_terminal;
     __u64 mount_topology_generation;
-    __u64 mount_snapshot_digest_id;
     __u64 mount_transition_version;
+    struct canonical_mount_cache_key_v1 mount_cache_key;
+    struct canonical_mount_cache_value_v1 mount_cache_value;
+    struct canonical_mount_cache_state_key_v1 mount_cache_state_key;
+    struct canonical_mount_cache_state_v1 mount_cache_state;
+    struct exact_mount_event_key_v1 exact_mount_event_key;
+    struct exact_mount_event_v1 exact_mount_event;
+    struct canonical_mount_cache_build_state_v1 mount_cache_build;
+    __u64 mount_scan_stack[MAX_CANONICAL_MOUNT_TREE_DEPTH_V1];
+    struct canonical_mount_path_walk_state_v1 mount_path_walk;
+    struct canonical_path_match_state_v1 path_match;
     struct canonical_path_view_v1
         path_component_views[MAX_CANONICAL_PATH_COMPONENTS_V1];
     effect_observation_v1 observation;
@@ -425,6 +524,13 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} mount_global_ambiguous_epoch SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 4096);
     __type(key, __u32);
     __type(value, struct mount_security_view_lock_v1);
@@ -450,6 +556,27 @@ struct {
     __type(key, canonical_mount_root_key_v1);
     __type(value, canonical_mount_root_v1);
 } canonical_mount_roots SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 65536);
+    __type(key, struct canonical_mount_cache_key_v1);
+    __type(value, struct canonical_mount_cache_value_v1);
+} canonical_mount_cache SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(max_entries, 4096);
+    __type(key, struct canonical_mount_cache_state_key_v1);
+    __type(value, struct canonical_mount_cache_state_v1);
+} canonical_mount_cache_states SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, struct exact_mount_event_key_v1);
+    __type(value, struct exact_mount_event_v1);
+} exact_mount_events SEC(".maps");
 
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);

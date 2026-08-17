@@ -454,30 +454,50 @@ mod tests {
     }
 
     #[test]
-    fn exact_file_lookup_uses_the_verified_oldest_mount() {
+    fn exact_file_lookup_uses_the_bpf_selected_oldest_mount() {
         let source = include_str!("../../../bpf/erebor-interceptor/programs/identity_path.bpf.h");
-        let candidate = source
-            .split("static __always_inline int canonical_path_candidate")
+        let build = source
+            .split("static long canonical_mount_cache_build_step")
             .nth(1)
             .and_then(|source| {
                 source
-                    .split("SEC(\"tracepoint/raw_syscalls/sys_exit\")")
+                    .split("static __always_inline int global_mount_epoch_snapshot")
                     .next()
             })
             .unwrap_or_default();
-        let mount_root_check = candidate
-            .find("mount_root->snapshot_digest_id != scratch->mount_snapshot_digest_id")
-            .unwrap_or(usize::MAX);
-        let normalize = candidate
-            .find("scratch->file_object.mount_id_unique =\n        mount_root->selected_mount_id_unique")
+        let collect = source
+            .split("static __always_inline int collect_mount_components")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int apply_mount")
+                    .next()
+            })
+            .unwrap_or_default();
+        let walk = source
+            .split("static long canonical_mount_path_walk_step")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int collect_mount_components")
+                    .next()
+            })
             .unwrap_or_default();
 
-        assert!(mount_root_check < normalize);
-        assert!(normalize < candidate.find("bpf_loop(").unwrap_or_default());
+        assert!(build.contains(
+            "build->candidate_namespace_address !=\n            build->mount_namespace_address"
+        ));
+        assert!(build.contains(
+            "build->candidate_mount_id_unique <\n            cached->selected_mount_id_unique"
+        ));
+        assert!(walk.contains("selected_mount_for_root("));
+        assert!(walk.contains("walk->selected_mount_address == walk->namespace_root_address"));
+        assert!(collect.contains("walk->first_selected_mount_id_unique"));
+        assert!(!collect.contains("canonical_mount_roots"));
     }
 
     #[test]
-    fn path_tree_deny_uses_the_clean_canonical_path_before_object_lookup() {
+    fn path_tree_deny_uses_the_live_bpf_mount_path_before_object_lookup() {
         let effects =
             include_str!("../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h");
         let gate = effects
@@ -485,7 +505,7 @@ mod tests {
             .nth(1)
             .and_then(|source| {
                 source
-                    .split("static __noinline int dispatch_identity_effect_gate")
+                    .split("static __always_inline int dispatch_identity_effect_gate")
                     .next()
             })
             .unwrap_or_default();
@@ -497,7 +517,7 @@ mod tests {
             .unwrap_or(usize::MAX);
         let canonical = gate.find("canonical_path_candidate(").unwrap_or(usize::MAX);
         let floor = gate
-            .find("path_tree_denies(scratch, operation)")
+            .find("path_tree_denies(scratch, scratch->observation.operation)")
             .unwrap_or(usize::MAX);
         let object = gate
             .find("configured_file_object_binding(scratch)")
@@ -535,12 +555,24 @@ mod tests {
                     .next()
             })
             .unwrap_or_default();
-        assert!(collect.contains("BPF_CORE_READ_INTO(&parent, current, d_parent)"));
-        assert!(collect.contains("current = parent;"));
-        assert!(collect.contains("if (current != root)"));
+        let walk = path
+            .split("static long canonical_mount_path_walk_step")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int collect_mount_components")
+                    .next()
+            })
+            .unwrap_or_default();
+        assert!(walk.contains("if (current != mount_root)"));
+        assert!(walk.contains("d_parent"));
+        assert!(walk.contains("walk->current_dentry_address = walk->next_dentry_address;"));
+        assert!(walk.contains("walk->current_mount_address = walk->next_mount_address;"));
+        assert!(walk.contains("walk->selected_mount_address == walk->namespace_root_address"));
+        assert!(collect.contains("canonical_mount_path_walk_step"));
         assert!(step.contains("raw_index = match->component_count - offset - 1;"));
-        assert_eq!(candidate.matches("snapshot_mount_view(").count(), 2);
-        assert!(candidate.contains("mount_root->selected_mount_id_unique"));
+        assert_eq!(candidate.matches("snapshot_mount_view(").count(), 0);
+        assert!(candidate.contains("match->state_id = 0"));
     }
 
     #[test]
@@ -827,16 +859,16 @@ mod tests {
             .nth(1)
             .and_then(|source| {
                 source
-                    .split("static __noinline int dispatch_identity_effect_gate")
+                    .split("static __always_inline int dispatch_identity_effect_gate")
                     .next()
             })
             .unwrap_or_default();
         let dispatch = effects
-            .split("static __noinline int dispatch_identity_effect_gate")
+            .split("static __always_inline int dispatch_identity_effect_gate")
             .nth(1)
             .and_then(|source| {
                 source
-                    .split("static __noinline int identity_effect_gate")
+                    .split("static __always_inline int identity_effect_gate")
                     .next()
             })
             .unwrap_or_default();
@@ -1075,11 +1107,11 @@ mod tests {
         let source =
             include_str!("../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h");
         let dispatch = source
-            .split("static __noinline int dispatch_identity_effect_gate")
+            .split("static __always_inline int dispatch_identity_effect_gate")
             .nth(1)
             .and_then(|source| {
                 source
-                    .split("static __noinline int identity_effect_gate")
+                    .split("static __always_inline int identity_effect_gate")
                     .next()
             })
             .unwrap_or_default();
