@@ -29,6 +29,8 @@ pub struct PolicyDocumentV1 {
     pub protected_universe: ProtectedUniverseV1,
     pub workload_selectors: Vec<WorkloadSelectorV1>,
     pub classifier_bindings: Vec<ObjectClassifierBindingV1>,
+    #[serde(default)]
+    pub path_tree_deny_floors: Vec<PathTreeDenyFloorV1>,
     pub roles: Vec<RoleDefinitionV1>,
     pub entry_role_assignments: Vec<EntryRoleAssignmentV1>,
     pub native_transition_rules: Vec<NativeRoleTransitionRuleV1>,
@@ -427,6 +429,19 @@ pub enum EffectFamilyV1 {
     Privilege,
     Ipc,
     Mount,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathTreeDenyFloorV1 {
+    pub schema_version: u32,
+    pub rule_id: String,
+    pub canonical_path: String,
+    pub recursive: bool,
+    pub effect_families: Vec<EffectFamilyV1>,
+    pub operation_ids: Vec<String>,
+    pub requested_disposition: PolicyDispositionV1,
+    pub exception_ids: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

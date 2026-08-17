@@ -285,6 +285,7 @@ enum effect_observation_reason_v1
   effect_observation_reason_v1_unsupported_object = 8,
   effect_observation_reason_v1_exact_policy_deny = 9,
   effect_observation_reason_v1_exception_unavailable = 10,
+  effect_observation_reason_v1_path_tree_policy_deny = 11,
 };
 #if __STDC_VERSION__ >= 202311L
 typedef enum effect_observation_reason_v1 effect_observation_reason_v1;
@@ -1469,6 +1470,7 @@ typedef struct path_graph_state_key_v1 {
 typedef struct path_graph_terminal_v1 {
   uint64_t composite_atom_id;
   uint64_t rule_numeric_id;
+  uint64_t path_tree_deny_operation_mask;
 } path_graph_terminal_v1;
 
 typedef struct path_graph_transition_key_v1 {

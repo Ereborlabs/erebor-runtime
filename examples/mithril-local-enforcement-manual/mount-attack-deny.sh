@@ -7,6 +7,7 @@ host_shared_directory=
 container_shared_directory=
 case $# in
   0)
+    enforcement_path_tree_root=/var/lib/mithril
     enforcement_prepare_k3s \
       docker.io/library/python@sha256:78098ea6a3a9c6a7727a5d4674e4a44e57e01fac878ee9cb4d24a86bd93916ff
     secret_path=$identity_k3s_secret_path
@@ -14,10 +15,12 @@ case $# in
     container_shared_directory=$identity_k3s_container_shared_directory
     ;;
   3)
+    enforcement_path_tree_root=$(dirname -- "$3")
     observation_prepare_docker "$1" "$2" "$3"
     secret_path=$3
     ;;
   5)
+    enforcement_path_tree_root=$(dirname -- "$3")
     enforcement_prepare_cri_shared "$1" "$2" "$3" "$4" "$5"
     secret_path=$3
     host_shared_directory=$4
@@ -31,13 +34,14 @@ case $# in
     ;;
 esac
 enforcement_mount_target=/tmp/mithril-local-enforcement-mount-target-$$
+enforcement_attack_target=$(dirname -- "$secret_path")
 exec {enforcement_mount_namespace_fd}<"/proc/$identity_init_pid/ns/mnt"
 exec {enforcement_root_fd}<"/proc/$identity_init_pid/root"
 mkdir -- "/proc/$identity_init_pid/root$enforcement_mount_target"
 enforcement_cleanup_mount_target() {
   nsenter --mount="/proc/self/fd/$enforcement_mount_namespace_fd" \
     --root="/proc/self/fd/$enforcement_root_fd" -- \
-    umount -- "$enforcement_mount_target" 2>/dev/null || true
+    umount -- "$enforcement_attack_target" 2>/dev/null || true
   nsenter --mount="/proc/self/fd/$enforcement_mount_namespace_fd" \
     --root="/proc/self/fd/$enforcement_root_fd" -- \
     rmdir -- "$enforcement_mount_target"
@@ -87,9 +91,9 @@ for _ in range(25):
         time.sleep(0.02)
         continue
     raise SystemExit("mount race widened access to the protected file")
-' "$observation_probe_ready" "$(dirname -- "$secret_path")" "$enforcement_mount_target" "$secret_path"
+' "$observation_probe_ready" "$enforcement_mount_target" "$enforcement_attack_target" "$secret_path"
 observation_release_probe
 observation_wait_for_observation 'reason=UNSUPPORTED_OBJECT' "$identity_work/effects.txt"
 [[ $(grep -c 'reason=UNSUPPORTED_OBJECT' "$identity_work/effects.txt") -ge 8 ]]
-enforcement_expect_exact_denial
-identity_pass "PASS: every protected mount attempt was denied and no file retry widened authority."
+enforcement_expect_path_tree_denial
+identity_pass "PASS: every mount over the signed path tree was denied and no file retry widened authority."

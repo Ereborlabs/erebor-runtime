@@ -6,9 +6,9 @@ use mithril_control::{
     compiled_key_digest, kernel_operation_id, process_control_operation, AntiRollbackStore,
     BlastRadiusLimitV1, CompiledPhysicalResultV1, EffectFamilyDefaultV1, EffectFamilyV1,
     EntryKindV1, ErrnoV1, ExactExceptionSubjectSelectorV1, ExceptionConsumptionScopeV1,
-    ExceptionV1, HardSafetyConditionV1, IpcRelationshipRuleV1, PermittedAuthorityDeltaV1,
-    PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, PolicySimulator,
-    ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
+    ExceptionV1, HardSafetyConditionV1, IpcRelationshipRuleV1, PathTreeDenyFloorV1,
+    PermittedAuthorityDeltaV1, PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1,
+    PolicySimulator, ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileSealRequestV1,
     RegistryDigestsV1, RollbackAuthorizationArtifactV1, RollbackAuthorizationPayloadV1,
     RootClassificationV1, SimulatedDispositionV1,
 };
@@ -85,6 +85,49 @@ fn protect_mode_compiles_the_same_denial_as_a_physical_deny() -> mithril_control
         PolicySimulator::new(&compiled).simulate(compiled.compiled_cells[0].key.clone(), None);
     assert_eq!(outcome.disposition, SimulatedDispositionV1::Deny);
     assert_eq!(outcome.configured_errno, Some(-13));
+    Ok(())
+}
+
+#[test]
+fn path_tree_rules_are_signed_denial_floors_only() -> mithril_control::Result<()> {
+    let mut document = parse(&VALID_POLICY.replacen(
+        "desired_profile_mode: OBSERVE",
+        "desired_profile_mode: PROTECT",
+        1,
+    ))?;
+    document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
+        schema_version: 1,
+        rule_id: "deny-secret-tree".to_owned(),
+        canonical_path: "/tmp/secret-dir".to_owned(),
+        recursive: true,
+        effect_families: vec![EffectFamilyV1::File],
+        operation_ids: ["CREATE", "OPEN_READ", "RENAME"]
+            .map(str::to_owned)
+            .to_vec(),
+        requested_disposition: PolicyDispositionV1::Deny,
+        exception_ids: Vec::new(),
+    });
+    assert!(PolicyCompiler.compile(&document).is_ok());
+
+    let mut allow = document.clone();
+    allow.path_tree_deny_floors[0].requested_disposition = PolicyDispositionV1::Allow;
+    assert!(PolicyCompiler
+        .compile(&allow)
+        .is_err_and(|error| error.to_string().contains("CFG_PATH_TREE_DENY")));
+
+    let mut non_recursive = document.clone();
+    non_recursive.path_tree_deny_floors[0].recursive = false;
+    assert!(PolicyCompiler
+        .compile(&non_recursive)
+        .is_err_and(|error| error.to_string().contains("CFG_PATH_TREE_DENY")));
+
+    let mut excepted = document;
+    excepted.path_tree_deny_floors[0]
+        .exception_ids
+        .push("not-a-positive-path-exception".to_owned());
+    assert!(PolicyCompiler
+        .compile(&excepted)
+        .is_err_and(|error| error.to_string().contains("CFG_PATH_TREE_DENY")));
     Ok(())
 }
 

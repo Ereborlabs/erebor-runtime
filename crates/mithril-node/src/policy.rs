@@ -24,11 +24,11 @@ use erebor_interceptor_abi::{
     MAX_POLICY_ACTIVATION_PROBE_KEY_BYTES_V1,
 };
 use mithril_control::{
-    kernel_operation_id, AntiRollbackStore, CanonicalPathGraphV1, CompiledPhysicalResultV1,
-    ContainerKindV1 as PolicyContainerKindV1, EntryKindV1, ObjectClassifierSelectorV1,
-    PathPatternComponentV1, PathPatternV1, PendingProfileActivationV1, PolicyArtifactOwner,
-    ProfileActivationMetadataV1, ProfileCandidateArtifactV1, ProfileModeV1, StaticDecisionKeyV1,
-    ValidatedProfileCandidateV1,
+    canonical_path_components, kernel_operation_id, AntiRollbackStore, CanonicalPathGraphV1,
+    CompiledPhysicalResultV1, ContainerKindV1 as PolicyContainerKindV1, EntryKindV1,
+    ObjectClassifierSelectorV1, PathPatternComponentV1, PathPatternV1, PathTreeDenyPatternV1,
+    PendingProfileActivationV1, PolicyArtifactOwner, ProfileActivationMetadataV1,
+    ProfileCandidateArtifactV1, ProfileModeV1, StaticDecisionKeyV1, ValidatedProfileCandidateV1,
 };
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
@@ -3351,10 +3351,48 @@ fn lower_path_tables(
         });
         decoded.insert(object.exact_object_key_id, components);
     }
-    let graph = CanonicalPathGraphV1::compile(artifact.header.profile_id.as_str(), &patterns)
-        .context(PolicySnafu)?
-        .determinize(artifact.header.profile_id.as_str())
-        .context(PolicySnafu)?;
+    let path_tree_denies = artifact
+        .policy_document
+        .path_tree_deny_floors
+        .iter()
+        .map(|floor| {
+            let mut operations = floor
+                .operation_ids
+                .iter()
+                .map(|operation| {
+                    kernel_operation_id(operation)
+                        .map(|operation| operation as u16)
+                        .ok_or_else(|| {
+                            IdentityStateSnafu {
+                                reason: format!(
+                                    "path-tree rule has unknown operation `{operation}`"
+                                ),
+                            }
+                            .build()
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            operations.sort_unstable();
+            Ok(PathTreeDenyPatternV1 {
+                rule_id: floor.rule_id.clone(),
+                components: canonical_path_components(
+                    artifact.header.profile_id.as_str(),
+                    &floor.canonical_path,
+                )
+                .context(PolicySnafu)?,
+                recursive: floor.recursive,
+                operations,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let graph = CanonicalPathGraphV1::compile_with_path_tree_denies(
+        artifact.header.profile_id.as_str(),
+        &patterns,
+        &path_tree_denies,
+    )
+    .context(PolicySnafu)?
+    .determinize(artifact.header.profile_id.as_str())
+    .context(PolicySnafu)?;
     let mut tables = PathTables {
         mount_views: BTreeMap::new(),
         mount_epochs: BTreeMap::new(),
@@ -3397,12 +3435,8 @@ fn lower_path_tables(
             .iter()
             .map(|terminal| terminal.rule_id.as_str()),
     );
+    let mut terminal_values = BTreeMap::<u32, PathGraphTerminalV1>::new();
     for terminal in &graph.terminals {
-        let key = PathGraphStateKeyV1 {
-            profile_generation_ref_id: binding.active_profile_generation_ref_id,
-            state_id: terminal.state_id,
-            reserved: 0,
-        };
         let composite_atom_id = *composite_handles
             .get(&format!("CLASS:{}", terminal.candidate_object_class_id))
             .ok_or_else(|| {
@@ -3417,6 +3451,26 @@ fn lower_path_tables(
         let value = PathGraphTerminalV1 {
             composite_atom_id,
             rule_numeric_id: u64::from(rule_handles[&terminal.rule_id]),
+            path_tree_deny_operation_mask: 0,
+        };
+        ensure!(
+            terminal_values.insert(terminal.state_id, value).is_none(),
+            IdentityStateSnafu {
+                reason: "deterministic path state has multiple exact terminals",
+            }
+        );
+    }
+    for floor in &graph.path_tree_deny_floors {
+        terminal_values
+            .entry(floor.state_id)
+            .or_default()
+            .path_tree_deny_operation_mask |= floor.operation_mask;
+    }
+    for (state_id, value) in terminal_values {
+        let key = PathGraphStateKeyV1 {
+            profile_generation_ref_id: binding.active_profile_generation_ref_id,
+            state_id,
+            reserved: 0,
         };
         insert_exact(&mut tables.terminals, key.as_bytes(), value.as_bytes())?;
     }
@@ -3636,19 +3690,19 @@ mod tests {
     use erebor_interceptor_abi::{
         BindingLifecycleStateV1, EffectDecisionKeyV1, EntryKindV1 as AbiEntryKindV1,
         ExactFileObjectKeyV1, Id128V1, KernelEffectFamilyV1, KernelEffectOperationV1,
-        PhysicalDecisionKindV1, PolicyGenerationModeV1,
+        PathGraphTerminalV1, PhysicalDecisionKindV1, PolicyGenerationModeV1,
     };
     use mithril_control::{
-        LocalObjectSelectorV1, ObjectClassifierSelectorV1, PolicyCompiler, PolicyDocumentV1,
-        ProfileCandidateArtifactV1, ProfileModeV1, ProfileSealRequestV1, RegistryDigestsV1,
-        RuleMatchV1,
+        EffectFamilyV1, LocalObjectSelectorV1, ObjectClassifierSelectorV1, PathTreeDenyFloorV1,
+        PolicyCompiler, PolicyDispositionV1, PolicyDocumentV1, ProfileCandidateArtifactV1,
+        ProfileModeV1, ProfileSealRequestV1, RegistryDigestsV1, RuleMatchV1,
     };
     use zerocopy::{FromBytes as _, IntoBytes as _};
 
     use super::{
         add_binding_activation, ensure_active_generation_unchanged, ensure_committed_generation,
-        ensure_map_capacity, exception_counter_is_consistent, parse_id, same_exact_file,
-        LoweredGeneration, ProfileActivation,
+        ensure_map_capacity, exception_counter_is_consistent, lower_path_tables, parse_id,
+        same_exact_file, LoweredGeneration, ProfileActivation,
     };
     use crate::error::IdentityStateSnafu;
     use crate::{
@@ -4063,6 +4117,36 @@ mod tests {
                 .build()
             })?;
         assert_eq!(atom, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn path_tree_floor_lowers_without_an_exact_child_object() -> crate::Result<()> {
+        let (mut artifact, binding, object) = exact_artifact(ProfileModeV1::Protect)?;
+        artifact
+            .policy_document
+            .path_tree_deny_floors
+            .push(PathTreeDenyFloorV1 {
+                schema_version: 1,
+                rule_id: "secret-tree-deny".to_owned(),
+                canonical_path: "/var/run/secrets".to_owned(),
+                recursive: true,
+                effect_families: vec![EffectFamilyV1::File],
+                operation_ids: ["CREATE", "LINK", "OPEN_READ"].map(str::to_owned).to_vec(),
+                requested_disposition: PolicyDispositionV1::Deny,
+                exception_ids: Vec::new(),
+            });
+        let composite_handles = BTreeMap::from([("CLASS:PROJECTED_TOKEN".to_owned(), 7)]);
+        let tables = lower_path_tables(&artifact, &binding, &[&object], &composite_handles)?;
+        let open_read_mask = 1_u64 << KernelEffectOperationV1::OpenRead as u16;
+
+        assert_eq!(tables.mount_roots.len(), 1);
+        assert!(tables.terminals.values().any(|value| {
+            PathGraphTerminalV1::read_from_bytes(value).is_ok_and(|terminal| {
+                terminal.composite_atom_id == 0
+                    && terminal.path_tree_deny_operation_mask & open_read_mask != 0
+            })
+        }));
         Ok(())
     }
 

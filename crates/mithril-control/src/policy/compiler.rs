@@ -8,6 +8,7 @@ use uuid::Uuid;
 use erebor_interceptor_abi::{KernelEffectFamilyV1, KernelEffectOperationV1};
 
 use super::canonical::canonical_cbor;
+use super::path::canonical_path_components;
 use super::source::{
     duplicate_ids, ordered_unique, BindingLifecycleV1, DetectionDispositionRuleV1, EffectFamilyV1,
     EntryKindV1, EvaluationStageV1, LocalObjectSelectorV1, PolicyDispositionV1, PolicyDocumentV1,
@@ -138,6 +139,7 @@ impl PolicyCompiler {
         validate_entry_assignments(document)?;
         validate_states(document)?;
         validate_supporting_definitions(document)?;
+        validate_path_tree_deny_floors(document)?;
         validate_rules(document)?;
         validate_role_reachability(document)?;
         validate_rollout(document)?;
@@ -844,6 +846,12 @@ fn validate_ids(document: &PolicyDocumentV1) -> Result<()> {
         .chain(document.rules.iter().map(|rule| &rule.rule_id))
         .chain(
             document
+                .path_tree_deny_floors
+                .iter()
+                .map(|floor| &floor.rule_id),
+        )
+        .chain(
+            document
                 .exceptions
                 .iter()
                 .map(|exception| &exception.exception_id),
@@ -881,6 +889,12 @@ fn validate_ids(document: &PolicyDocumentV1) -> Result<()> {
                 .ipc_relationship_rules
                 .iter()
                 .flat_map(|rule| rule.channel_class_ids.iter().chain(&rule.operations)),
+        )
+        .chain(
+            document
+                .path_tree_deny_floors
+                .iter()
+                .flat_map(|floor| floor.operation_ids.iter()),
         )
     {
         check(
@@ -1902,16 +1916,50 @@ fn valid_digest(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+fn validate_path_tree_deny_floors(document: &PolicyDocumentV1) -> Result<()> {
+    let policy_id = document.profile_id();
+    for floor in &document.path_tree_deny_floors {
+        canonical_path_components(policy_id, &floor.canonical_path)?;
+        check(
+            policy_id,
+            floor.schema_version == 1
+                && document.rollout.desired_profile_mode == ProfileModeV1::Protect
+                && floor.recursive
+                && floor.requested_disposition == PolicyDispositionV1::Deny
+                && floor.exception_ids.is_empty()
+                && floor.effect_families.as_slice() == [EffectFamilyV1::File]
+                && !floor.operation_ids.is_empty()
+                && ordered_unique(&floor.operation_ids)
+                && floor
+                    .operation_ids
+                    .iter()
+                    .all(|operation| operation_belongs_to_family(EffectFamilyV1::File, operation)),
+            "CFG_PATH_TREE_DENY",
+            &format!(
+                "path-tree rule `{}` must be a recursive Version 1 PROTECT-mode FILE DENY without exceptions",
+                floor.rule_id
+            ),
+        )?;
+    }
+    Ok(())
+}
+
 fn validate_rules(document: &PolicyDocumentV1) -> Result<()> {
     let policy_id = document.profile_id();
     let rule_ids = document
         .rules
         .iter()
         .map(|rule| rule.rule_id.as_str())
+        .chain(
+            document
+                .path_tree_deny_floors
+                .iter()
+                .map(|floor| floor.rule_id.as_str()),
+        )
         .collect::<BTreeSet<_>>();
     check(
         policy_id,
-        rule_ids.len() == document.rules.len(),
+        rule_ids.len() == document.rules.len() + document.path_tree_deny_floors.len(),
         "CFG_DUPLICATE_ID",
         "rule IDs must be unique",
     )?;

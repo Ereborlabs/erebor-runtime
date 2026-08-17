@@ -3,6 +3,7 @@
 Status: The qualified local-enforcement slices have runnable automated and
 manual cases. The current source passed the privileged VM enforcement probe.
 A K3s CRI lane also passed one exact secret-deny and benign-control check.
+The signed recursive path-tree denial has automated and manual VM evidence.
 The complete catalog below remains the acceptance target. The complete
 policy-aware local surface does not have an implementation.
 
@@ -159,6 +160,52 @@ protected open. These are one-container manual cases. They do not qualify
 propagation, idmapped mounts, token rotation, or administrative exec. The
 phase remains **Not done**.
 
+### Signed path-tree denial — 2026-08-17
+
+State: **Done** for `FILE-PATH-TREE-DENY-001`. The broader phase remains
+**Not done**.
+
+The disposable x86_64 VM harness ran from a worktree based on `4875862`. The
+kernel was `6.8.0-137-generic`, and the active LSM order included `bpf`. The
+local-enforcement artifact is
+`/tmp/mithril-path-tree-vm-20260817-v8/local-enforcement-physical-probe.json`.
+Its SHA-256 is
+`f029aea87ed30aa38da79c8946dca5d78b3a9c63811a71971256bd3c85bffe8d`.
+
+The artifact records these true fields:
+
+- `path_tree_preexisting_child_denied`
+- `path_tree_later_child_denied`
+- `path_tree_replacement_child_denied`
+- `path_tree_outside_control_allowed`
+- `path_tree_mount_attack_failed_closed`
+
+The same run denied a managed `CREATE` before it created the file. During an
+external bind replacement, the mount view became `DIRTY`, and covered access
+failed closed as `UNRESOLVED_OBJECT`. Reconciliation restored the path-tree
+denial. The artifact also records `cgroup_removed=true` and
+`fixture_root_removed=true`.
+
+An isolated retained harness VM then ran this documented command from the
+root guest shell:
+
+```sh
+examples/mithril-local-enforcement-manual/mount-attack-deny.sh
+```
+
+It printed:
+
+```text
+PASS: every mount over the signed path tree was denied and no file retry widened authority.
+Mithril, tasks, pins, state, lease, config, and logs removed.
+```
+
+The implementation accepts at most 64 canonical path components. Each
+component accepts at most 255 bytes. This is the checked verifier bound, not
+the BpfJailer prototype's 255-component capacity. The proof does not qualify
+idmapped mounts, full propagation coverage, token rotation, or administrative
+exec.
+
 ## Procedure
 
 1. Install a signed candidate generation only after complete readback and
@@ -184,6 +231,7 @@ phase remains **Not done**.
 | `FILE-MMAP-001` | map forbidden file for read/write/execute | forbidden mapping absent; allowed mapping exists with exact state |
 | `FILE-MMAP-SHARED-011` | share writable mapping across roots | forbidden acquisition/attachment denies or exact supported floor applies; no byte-taint claim |
 | `FILE-NAMESPACE-001` | access same spelling/object across mount views | actor-specific exact-object decision; allowed view succeeds and denied view has no effect |
+| `FILE-PATH-TREE-DENY-001` | read old, new, and replaced children; create a child; replace the protected tree with a bind mount | every covered effect denies before an fd, byte, or filesystem mutation; the outside-tree control succeeds; a dirty mount view fails closed |
 | `FILE-SA-TOKEN-OPEN-001` | worker and controller access rotating token | worker gets `EACCES` and no fd/positive bytes; controller succeeds; rotation cannot create a gap |
 | `FILE-VMA-SNAPSHOT-001` | race response/policy decision with VMA changes | incomplete snapshot never relaxes; complete approved snapshot permits its control |
 | `HF-LOCAL-001` | run safe in-process protected-file/effect sequence | first distinguishable forbidden effect is prevented; no later prohibited stage; clean conversion succeeds |

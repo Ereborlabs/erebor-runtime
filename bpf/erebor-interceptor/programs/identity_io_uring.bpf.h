@@ -376,6 +376,13 @@ static __noinline int resolved_io_uring_effect_gate(
             config, scratch, effect_observation_reason_v1_unresolved_object);
     scratch->observation.composite_atom_id =
         scratch->path_terminal.composite_atom_id;
+    if (path_tree_denies(scratch, operation)) {
+        if (generation->mode != policy_generation_mode_v1_protect)
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_corrupt_identity_or_generation);
+        return path_tree_effect_result(config, scratch);
+    }
     object_binding = configured_file_object_binding(scratch);
     if (!object_binding ||
         object_binding->state != exact_object_binding_state_v1_read_back ||

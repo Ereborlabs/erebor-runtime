@@ -209,6 +209,9 @@ const fn reason_name(reason: u8) -> &'static str {
         value if value == EffectObservationReasonV1::ExceptionUnavailable as u8 => {
             "EXCEPTION_UNAVAILABLE"
         }
+        value if value == EffectObservationReasonV1::PathTreePolicyDeny as u8 => {
+            "PATH_TREE_POLICY_DENY"
+        }
         _ => "UNKNOWN",
     }
 }

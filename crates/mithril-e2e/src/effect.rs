@@ -17,7 +17,10 @@ use erebor_interceptor_abi::{
     MountSecurityViewStateV1, MountTopologyStateV1, PolicyGenerationStateV1,
     ProfileGenerationDescriptorV1,
 };
-use mithril_control::{PolicyArtifactOwner, PolicyDocumentV1, ProfileSealRequestV1};
+use mithril_control::{
+    EffectFamilyV1, PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDispositionV1,
+    PolicyDocumentV1, ProfileSealRequestV1,
+};
 use mithril_node::{
     EffectObservationHealth, EffectObservationStore, ExactFileObjectResolver,
     NativeSecurityStateOwner, NodePolicyGenerationOwner, WorkloadBindingOwner,
@@ -211,6 +214,11 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub io_uring_sqpoll_denied_before_ring: bool,
     pub io_uring_lifecycle_released: bool,
     pub bind_alias_canonicalized: bool,
+    pub path_tree_preexisting_child_denied: bool,
+    pub path_tree_later_child_denied: bool,
+    pub path_tree_replacement_child_denied: bool,
+    pub path_tree_outside_control_allowed: bool,
+    pub path_tree_mount_attack_failed_closed: bool,
     pub protected_mount_race_denied: bool,
     pub mount_stale_proposal_failed_closed: bool,
     pub mount_propagation_reached_peer: bool,
@@ -239,12 +247,21 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub fixture_root_removed: bool,
 }
 
-fn build_next_generation_artifact(
+fn build_generation_artifact(
     policy_source: &Path,
     seal_source: &Path,
     signing_key: &Path,
     fixture_root: &Path,
+    generation: u64,
+    path_tree_root: Option<&Path>,
 ) -> Result<PathBuf> {
+    ensure!(
+        generation == 1 || generation == 2,
+        InvalidInputSnafu {
+            path: policy_source,
+            reason: "the effect fixture supports policy generations 1 and 2",
+        }
+    );
     let mut document = PolicyDocumentV1::parse(
         policy_source,
         &fs::read(policy_source).context(IoSnafu {
@@ -252,10 +269,45 @@ fn build_next_generation_artifact(
         })?,
     )
     .context(PolicySnafu)?;
+    if let Some(path_tree_root) = path_tree_root {
+        let canonical_path = path_tree_root.to_str().ok_or_else(|| {
+            InvalidInputSnafu {
+                path: path_tree_root,
+                reason: "the path-tree fixture path must be UTF-8",
+            }
+            .build()
+        })?;
+        document.path_tree_deny_floors.push(PathTreeDenyFloorV1 {
+            schema_version: 1,
+            rule_id: "manual-secret-tree-deny".to_owned(),
+            canonical_path: canonical_path.to_owned(),
+            recursive: true,
+            effect_families: vec![EffectFamilyV1::File],
+            operation_ids: [
+                "CREATE",
+                "LINK",
+                "MMAP_READ",
+                "MMAP_WRITE",
+                "MPROTECT",
+                "OPEN_READ",
+                "OPEN_WRITE",
+                "READ",
+                "RENAME",
+                "SETATTR",
+                "UNLINK",
+                "WRITE",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            requested_disposition: PolicyDispositionV1::Deny,
+            exception_ids: Vec::new(),
+        });
+    }
+    let generation_delta = generation - 1;
     document.metadata.profile_version = document
         .metadata
         .profile_version
-        .checked_add(1)
+        .checked_add(generation_delta)
         .ok_or_else(|| {
             InvalidInputSnafu {
                 path: policy_source,
@@ -266,7 +318,7 @@ fn build_next_generation_artifact(
     document.rollout.rollout_generation = document
         .rollout
         .rollout_generation
-        .checked_add(1)
+        .checked_add(generation_delta)
         .ok_or_else(|| {
             InvalidInputSnafu {
                 path: policy_source,
@@ -274,32 +326,43 @@ fn build_next_generation_artifact(
             }
             .build()
         })?;
-    let next_policy = fixture_root.join("profile-generation-2.json");
+    let generated_policy = fixture_root.join(format!("profile-generation-{generation}.json"));
     fs::write(
-        &next_policy,
-        serde_json::to_vec_pretty(&document).context(JsonSnafu { path: &next_policy })?,
+        &generated_policy,
+        serde_json::to_vec_pretty(&document).context(JsonSnafu {
+            path: &generated_policy,
+        })?,
     )
-    .context(IoSnafu { path: &next_policy })?;
+    .context(IoSnafu {
+        path: &generated_policy,
+    })?;
 
     let mut seal: ProfileSealRequestV1 =
         serde_json::from_slice(&fs::read(seal_source).context(IoSnafu { path: seal_source })?)
             .context(JsonSnafu { path: seal_source })?;
-    seal.issuer_sequence = seal.issuer_sequence.checked_add(1).ok_or_else(|| {
-        InvalidInputSnafu {
-            path: seal_source,
-            reason: "issuer sequence exhausted",
-        }
-        .build()
-    })?;
-    let next_seal = fixture_root.join("profile-seal-generation-2.json");
+    seal.issuer_sequence = seal
+        .issuer_sequence
+        .checked_add(generation_delta)
+        .ok_or_else(|| {
+            InvalidInputSnafu {
+                path: seal_source,
+                reason: "issuer sequence exhausted",
+            }
+            .build()
+        })?;
+    let generated_seal = fixture_root.join(format!("profile-seal-generation-{generation}.json"));
     fs::write(
-        &next_seal,
-        serde_json::to_vec_pretty(&seal).context(JsonSnafu { path: &next_seal })?,
+        &generated_seal,
+        serde_json::to_vec_pretty(&seal).context(JsonSnafu {
+            path: &generated_seal,
+        })?,
     )
-    .context(IoSnafu { path: &next_seal })?;
-    let artifact = fixture_root.join("profile-generation-2-artifact.json");
+    .context(IoSnafu {
+        path: &generated_seal,
+    })?;
+    let artifact = fixture_root.join(format!("profile-generation-{generation}-artifact.json"));
     PolicyArtifactOwner::default()
-        .compile_and_sign(&next_policy, &next_seal, signing_key, &artifact)
+        .compile_and_sign(&generated_policy, &generated_seal, signing_key, &artifact)
         .context(PolicySnafu)?;
     Ok(artifact)
 }
@@ -675,6 +738,9 @@ impl EffectTestRunner {
         fs::create_dir(&fixture_root).context(IoSnafu {
             path: &fixture_root,
         })?;
+        let fixture_root = fs::canonicalize(&fixture_root).context(IoSnafu {
+            path: &fixture_root,
+        })?;
         let fixture_cleanup = ProbeDirectory::new(&fixture_root);
         let pin_cleanup = ProbeDirectory::new(pin_root);
         let lease_cleanup = ProbeFile::new(lease_path);
@@ -726,20 +792,25 @@ impl EffectTestRunner {
         } else {
             "observe-policy-v1.yaml"
         });
-        let artifact_path = fixture_root.join("profile.json");
-        PolicyArtifactOwner::default()
-            .compile_and_sign(
-                &policy_source,
-                &policy_fixture.join("observe-profile-seal-request.json"),
-                &policy_fixture.join("test-signing-key.hex"),
-                &artifact_path,
-            )
-            .context(PolicySnafu)?;
-        let next_artifact_path = build_next_generation_artifact(
+        let path_tree_root = fixture_root.join("secret-dir");
+        let path_tree_floor = protect.then_some(path_tree_root.as_path());
+        let seal_source = policy_fixture.join("observe-profile-seal-request.json");
+        let signing_key = policy_fixture.join("test-signing-key.hex");
+        let artifact_path = build_generation_artifact(
             &policy_source,
-            &policy_fixture.join("observe-profile-seal-request.json"),
-            &policy_fixture.join("test-signing-key.hex"),
+            &seal_source,
+            &signing_key,
             &fixture_root,
+            1,
+            path_tree_floor,
+        )?;
+        let next_artifact_path = build_generation_artifact(
+            &policy_source,
+            &seal_source,
+            &signing_key,
+            &fixture_root,
+            2,
+            path_tree_floor,
         )?;
 
         let (boot_id, node_boot_id) = boot_identity()?;
@@ -771,6 +842,19 @@ impl EffectTestRunner {
 
         let mut fixture = EffectProcessFixture::start(&fixture_root)?;
         let paths = fixture.setup()?;
+        let path_tree_preexisting = path_tree_root.join("pre-existing");
+        let path_tree_later = path_tree_root.join("created-after-activation");
+        let path_tree_replacement = path_tree_root.join("replacement");
+        let path_tree_actor_create = path_tree_root.join("actor-created");
+        fs::create_dir(&path_tree_root).context(IoSnafu {
+            path: &path_tree_root,
+        })?;
+        fs::write(&path_tree_preexisting, b"restricted before activation\n").context(IoSnafu {
+            path: &path_tree_preexisting,
+        })?;
+        fs::write(&path_tree_replacement, b"first object\n").context(IoSnafu {
+            path: &path_tree_replacement,
+        })?;
         let propagation_peer_pid = fixture.prepare_propagation_peer(&paths)?;
         let external_mount_namespace = ExternalMountNamespace::acquire(fixture.pid())?;
         let create_target = paths.mutation_root.join("forbidden-create");
@@ -780,7 +864,12 @@ impl EffectTestRunner {
         let mutation_source = paths.mutation_root.join("mutation-source");
         let link_target = paths.mutation_root.join("link-target");
         let rename_target = paths.mutation_root.join("rename-target");
-        fixture.prepare_mount_race(&paths.source, &paths.mount_target, 8)?;
+        let mount_race_target = if protect {
+            &path_tree_root
+        } else {
+            &paths.mount_target
+        };
+        fixture.prepare_mount_race(&paths.source, mount_race_target, 8)?;
         fixture.prepare_operations(&paths, &truncate_target)?;
         let unix_stream_peer_pid = fixture.prepare_unix_stream_target()?;
         if protect {
@@ -1040,6 +1129,116 @@ impl EffectTestRunner {
             .context(InterceptorSnafu)?;
 
         if protect {
+            for (path, label) in [
+                (&path_tree_preexisting, "pre-existing path-tree child"),
+                (&path_tree_replacement, "initial replacement-test child"),
+            ] {
+                let marker = observations.cursor();
+                ensure!(
+                    fixture.open(path)?.denied(),
+                    InvalidInputSnafu {
+                        path,
+                        reason: format!("the {label} returned a file descriptor"),
+                    }
+                );
+                wait_for_effect(
+                    &reader,
+                    &observations,
+                    marker,
+                    "PATH_TREE_POLICY_DENY",
+                    (
+                        KernelEffectFamilyV1::File,
+                        KernelEffectOperationV1::OpenRead,
+                    ),
+                )?;
+            }
+
+            fs::write(&path_tree_later, b"created after activation\n").context(IoSnafu {
+                path: &path_tree_later,
+            })?;
+            let later_marker = observations.cursor();
+            ensure!(
+                fixture.open(&path_tree_later)?.denied(),
+                InvalidInputSnafu {
+                    path: &path_tree_later,
+                    reason: "a child created after activation returned a file descriptor",
+                }
+            );
+            wait_for_effect(
+                &reader,
+                &observations,
+                later_marker,
+                "PATH_TREE_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+            )?;
+
+            let create_marker = observations.cursor();
+            ensure!(
+                fixture
+                    .run_prepared(HardClosedOperation::Create {
+                        path: path_tree_actor_create.clone(),
+                    })?
+                    .denied()
+                    && !path_tree_actor_create.exists(),
+                InvalidInputSnafu {
+                    path: &path_tree_actor_create,
+                    reason: "a managed create produced a child in the protected tree",
+                }
+            );
+            wait_for_effect(
+                &reader,
+                &observations,
+                create_marker,
+                "PATH_TREE_POLICY_DENY",
+                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Create),
+            )?;
+
+            fs::remove_file(&path_tree_replacement).context(IoSnafu {
+                path: &path_tree_replacement,
+            })?;
+            fs::write(&path_tree_replacement, b"replacement object\n").context(IoSnafu {
+                path: &path_tree_replacement,
+            })?;
+            let replacement_marker = observations.cursor();
+            ensure!(
+                fixture.open(&path_tree_replacement)?.denied(),
+                InvalidInputSnafu {
+                    path: &path_tree_replacement,
+                    reason: "a replacement child returned a file descriptor",
+                }
+            );
+            wait_for_effect(
+                &reader,
+                &observations,
+                replacement_marker,
+                "PATH_TREE_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+            )?;
+
+            let outside_marker = observations.cursor();
+            ensure!(
+                fixture.read(&paths.benign)?.allowed,
+                InvalidInputSnafu {
+                    path: &paths.benign,
+                    reason: "the exact file outside the protected tree was denied",
+                }
+            );
+            wait_for_exact_effect(
+                &reader,
+                &observations,
+                outside_marker,
+                "EXACT_POLICY_ALLOW",
+                (KernelEffectFamilyV1::File, KernelEffectOperationV1::Read),
+                BENIGN_OBJECT_KEY_ID,
+                None,
+            )?;
+
             let exception_marker = observations.cursor();
             let exception_race = fixture.write_race(&paths.secret, 8)?;
             ensure!(
@@ -2621,11 +2820,11 @@ impl EffectTestRunner {
         }
 
         let mount_marker = observations.cursor();
-        let mount_race = fixture.mount_race(&paths.source, &paths.mount_target, 8)?;
+        let mount_race = fixture.mount_race(&paths.source, mount_race_target, 8)?;
         ensure!(
             mount_race.allowed == 0 && mount_race.denied == 8 && mount_race.other_errors == 0,
             InvalidInputSnafu {
-                path: &paths.mount_target,
+                path: mount_race_target,
                 reason: "one or more protected mount attempts escaped hard safety",
             }
         );
@@ -2853,6 +3052,53 @@ impl EffectTestRunner {
             EXACT_OBJECT_KEY_ID,
             None,
         )?;
+
+        if protect {
+            external_mount_namespace.bind_mount(&paths.source, &path_tree_root)?;
+            ensure!(
+                global_mount_view_is_dirty(&host)?
+                    && mount_view_is_dirty(&host, exact_object.mount_namespace_inode)?,
+                InvalidInputSnafu {
+                    path: &path_tree_root,
+                    reason: "a mount over the protected tree did not dirty its mount view",
+                }
+            );
+            let path_tree_mount_marker = observations.cursor();
+            let mounted_child = path_tree_root.join("secret");
+            ensure!(
+                fixture.open(&mounted_child)?.denied(),
+                InvalidInputSnafu {
+                    path: &mounted_child,
+                    reason: "a mount replacement bypassed the protected tree while DIRTY",
+                }
+            );
+            wait_for_reason(
+                &reader,
+                &observations,
+                path_tree_mount_marker,
+                "UNRESOLVED_OBJECT",
+            )?;
+            external_mount_namespace.unmount(&path_tree_root)?;
+            reconcile_mount_views_until_clean(&policy, &mut host, &mount_namespaces)?;
+            let path_tree_restored_marker = observations.cursor();
+            ensure!(
+                fixture.open(&path_tree_preexisting)?.denied(),
+                InvalidInputSnafu {
+                    path: &path_tree_preexisting,
+                    reason: "the path-tree floor did not recover after hostile unmount",
+                }
+            );
+            wait_for_effect(
+                &reader,
+                &observations,
+                path_tree_restored_marker,
+                "PATH_TREE_POLICY_DENY",
+                (
+                    KernelEffectFamilyV1::File,
+                    KernelEffectOperationV1::OpenRead,
+                ),
+            )?;
+        }
 
         ensure!(
             fixture.propagation_peer_open()?.allowed,
@@ -3208,6 +3454,11 @@ impl EffectTestRunner {
             io_uring_sqpoll_denied_before_ring: true,
             io_uring_lifecycle_released,
             bind_alias_canonicalized: true,
+            path_tree_preexisting_child_denied: protect,
+            path_tree_later_child_denied: protect,
+            path_tree_replacement_child_denied: protect,
+            path_tree_outside_control_allowed: protect,
+            path_tree_mount_attack_failed_closed: protect,
             protected_mount_race_denied: true,
             mount_stale_proposal_failed_closed: true,
             mount_propagation_reached_peer: true,
