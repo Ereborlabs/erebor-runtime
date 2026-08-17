@@ -174,6 +174,12 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub subreaper_intermediate_before_exit: NativeTaskSnapshotV1,
     pub subreaper_native_child_before_parent_exit: NativeTaskSnapshotV1,
     pub subreaper_native_child_after_parent_exit: NativeTaskSnapshotV1,
+    pub namespace_init_outer_parent: NativeTaskSnapshotV1,
+    pub namespace_init_parent: NativeTaskSnapshotV1,
+    pub namespace_init_pid_in_own_namespace: u32,
+    pub namespace_init_intermediate_before_exit: NativeTaskSnapshotV1,
+    pub namespace_init_native_child_before_parent_exit: NativeTaskSnapshotV1,
+    pub namespace_init_native_child_after_parent_exit: NativeTaskSnapshotV1,
     pub double_fork_outer_parent: NativeTaskSnapshotV1,
     pub double_fork_intermediate_before_exit: NativeTaskSnapshotV1,
     pub double_fork_native_child_before_intermediate_exit: NativeTaskSnapshotV1,
@@ -1203,6 +1209,156 @@ impl IdentityTestRunner {
         );
         subreaper_fixture.stop();
 
+        let mut namespace_init_fixture = NativeProcessFixture::start_namespace_init_reparenting()?;
+        fs::write(&procs_path, namespace_init_fixture.outer_pid().to_string())
+            .context(IoSnafu { path: &procs_path })?;
+        let namespace_init_outer_parent =
+            self.wait_for("PID-namespace outer parent identity", &procs_path, || {
+                inspector
+                    .snapshot(namespace_init_fixture.outer_pid())
+                    .context(NodeSnafu)
+            })?;
+        namespace_init_fixture.release_root()?;
+        let namespace_init_parent_pid =
+            self.wait_for("PID-namespace init creation", &procs_path, || {
+                namespace_init_fixture.namespace_init_pid()
+            })?;
+        namespace_init_fixture.open_namespace_init_pidfd(namespace_init_parent_pid)?;
+        let namespace_init_pid_in_own_namespace = pid_in_own_namespace(namespace_init_parent_pid)?;
+        ensure!(
+            namespace_init_pid_in_own_namespace == 1,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "PID-namespace init did not have namespace PID 1",
+            }
+        );
+        let namespace_init_intermediate_pid =
+            self.wait_for("PID-namespace intermediate creation", &procs_path, || {
+                namespace_init_fixture.namespace_init_intermediate_pid(namespace_init_parent_pid)
+            })?;
+        namespace_init_fixture.open_intermediate_pidfd(namespace_init_intermediate_pid)?;
+        let namespace_init_native_child_pid =
+            self.wait_for("PID-namespace native child creation", &procs_path, || {
+                namespace_init_fixture
+                    .intermediate_native_child_pid(namespace_init_intermediate_pid)
+            })?;
+        namespace_init_fixture.open_native_pidfd(namespace_init_native_child_pid)?;
+        let namespace_init_parent =
+            self.wait_for("PID-namespace init identity", &procs_path, || {
+                inspector
+                    .snapshot(namespace_init_parent_pid)
+                    .context(NodeSnafu)
+            })?;
+        let namespace_init_intermediate_before_exit =
+            self.wait_for("PID-namespace intermediate identity", &procs_path, || {
+                inspector
+                    .snapshot(namespace_init_intermediate_pid)
+                    .context(NodeSnafu)
+            })?;
+        let namespace_init_native_child_before_parent_exit =
+            self.wait_for("PID-namespace native child identity", &procs_path, || {
+                inspector
+                    .snapshot(namespace_init_native_child_pid)
+                    .context(NodeSnafu)
+            })?;
+        ensure!(
+            namespace_init_outer_parent.root_class == Some("external_runtime_root")
+                && namespace_init_outer_parent.installed_role_class
+                    == Some("runtime_external_restricted")
+                && namespace_init_parent.creator_task_cookie
+                    == Some(namespace_init_outer_parent.task_cookie)
+                && namespace_init_parent.real_parent_task_cookie
+                    == namespace_init_outer_parent.task_cookie
+                && namespace_init_parent.real_parent_host_tid
+                    == namespace_init_outer_parent.host_tid
+                && namespace_init_parent.real_parent_host_tgid
+                    == namespace_init_outer_parent.host_tgid
+                && namespace_init_parent.root_class.is_none()
+                && namespace_init_parent.installed_role_class.is_none()
+                && namespace_init_intermediate_before_exit.creator_task_cookie
+                    == Some(namespace_init_parent.task_cookie)
+                && namespace_init_intermediate_before_exit.real_parent_task_cookie
+                    == namespace_init_parent.task_cookie
+                && namespace_init_intermediate_before_exit.real_parent_host_tid
+                    == namespace_init_parent.host_tid
+                && namespace_init_intermediate_before_exit.real_parent_host_tgid
+                    == namespace_init_parent.host_tgid
+                && namespace_init_intermediate_before_exit.root_class.is_none()
+                && namespace_init_intermediate_before_exit
+                    .installed_role_class
+                    .is_none()
+                && namespace_init_native_child_before_parent_exit.creator_task_cookie
+                    == Some(namespace_init_intermediate_before_exit.task_cookie)
+                && namespace_init_native_child_before_parent_exit.real_parent_task_cookie
+                    == namespace_init_intermediate_before_exit.task_cookie
+                && namespace_init_native_child_before_parent_exit.real_parent_host_tid
+                    == namespace_init_intermediate_before_exit.host_tid
+                && namespace_init_native_child_before_parent_exit.real_parent_host_tgid
+                    == namespace_init_intermediate_before_exit.host_tgid
+                && namespace_init_native_child_before_parent_exit
+                    .root_class
+                    .is_none()
+                && namespace_init_native_child_before_parent_exit
+                    .installed_role_class
+                    .is_none()
+                && namespace_init_native_child_before_parent_exit.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "PID-namespace native child has the wrong pre-exit identity",
+            }
+        );
+        namespace_init_fixture.release_intermediate_exit()?;
+        self.wait_for("PID-namespace intermediate exit", &procs_path, || {
+            Ok(namespace_init_fixture
+                .intermediate_exited(namespace_init_intermediate_pid)?
+                .then_some(()))
+        })?;
+        namespace_init_fixture.release_exec(namespace_init_native_child_pid)?;
+        let namespace_init_native_child_after_parent_exit = self.wait_for(
+            "PID-namespace native child exec after parent exit",
+            &procs_path,
+            || {
+                let snapshot = inspector
+                    .snapshot(namespace_init_native_child_pid)
+                    .context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    snapshot.task_cookie
+                        == namespace_init_native_child_before_parent_exit.task_cookie
+                        && snapshot.creator_task_cookie
+                            == Some(namespace_init_intermediate_before_exit.task_cookie)
+                        && snapshot.real_parent_task_cookie == 0
+                        && snapshot.real_parent_host_tid == namespace_init_parent.host_tid
+                        && snapshot.real_parent_host_tgid == namespace_init_parent.host_tgid
+                        && snapshot.real_parent_interval_sequence
+                            > namespace_init_native_child_before_parent_exit
+                                .real_parent_interval_sequence
+                        && snapshot.active_execution_id
+                            != namespace_init_native_child_before_parent_exit.active_execution_id
+                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
+                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
+                        && snapshot.process_state_vector_state
+                            == ProcessStateVectorStateV1::Active as u8
+                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
+                }))
+            },
+        )?;
+        ensure!(
+            namespace_init_native_child_after_parent_exit
+                .root_class
+                .is_none()
+                && namespace_init_native_child_after_parent_exit
+                    .installed_role_class
+                    .is_none()
+                && namespace_init_native_child_after_parent_exit.active_role_id
+                    == namespace_init_outer_parent.active_role_id,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "PID-namespace native child lost its inherited restriction",
+            }
+        );
+        namespace_init_fixture.stop();
+
         let mut double_fork_fixture = NativeProcessFixture::start_double_forking()?;
         fs::write(&procs_path, double_fork_fixture.outer_pid().to_string())
             .context(IoSnafu { path: &procs_path })?;
@@ -1429,6 +1585,12 @@ impl IdentityTestRunner {
             subreaper_intermediate_before_exit,
             subreaper_native_child_before_parent_exit,
             subreaper_native_child_after_parent_exit,
+            namespace_init_outer_parent,
+            namespace_init_parent,
+            namespace_init_pid_in_own_namespace,
+            namespace_init_intermediate_before_exit,
+            namespace_init_native_child_before_parent_exit,
+            namespace_init_native_child_after_parent_exit,
             double_fork_outer_parent,
             double_fork_intermediate_before_exit,
             double_fork_native_child_before_intermediate_exit,
@@ -1514,6 +1676,7 @@ struct NativeProcessFixture {
     native_pid: Option<u32>,
     native_pidfd: Option<OwnedFd>,
     intermediate_pidfd: Option<OwnedFd>,
+    namespace_init_pidfd: Option<OwnedFd>,
     parent_exit_mode: bool,
 }
 
@@ -1551,6 +1714,29 @@ os.waitpid(-1, 0)
 "#,
         ]);
         Self::start_command(&mut command, false, Path::new("python3"))
+    }
+
+    fn start_namespace_init_reparenting() -> Result<Self> {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "read _; exec /usr/bin/unshare --user --map-root-user --pid --fork --mount-proc python3 -c \"$0\"",
+            r#"import os
+import signal
+
+middle = os.fork()
+if middle == 0:
+    child = os.fork()
+    if child == 0:
+        os.kill(os.getpid(), signal.SIGSTOP)
+        os.execv("/bin/sleep", ["/bin/sleep", "30"])
+    os.waitpid(child, 0)
+    os._exit(0)
+os.waitpid(middle, 0)
+os.waitpid(-1, 0)
+"#,
+        ]);
+        Self::start_command(&mut command, false, Path::new("/usr/bin/unshare"))
     }
 
     fn start_double_forking() -> Result<Self> {
@@ -1687,6 +1873,7 @@ second.join()
             native_pid: None,
             native_pidfd: None,
             intermediate_pidfd: None,
+            namespace_init_pidfd: None,
             parent_exit_mode,
         })
     }
@@ -1703,6 +1890,11 @@ second.join()
 
     fn open_intermediate_pidfd(&mut self, pid: u32) -> Result<()> {
         self.intermediate_pidfd = Some(open_pidfd(pid)?);
+        Ok(())
+    }
+
+    fn open_namespace_init_pidfd(&mut self, pid: u32) -> Result<()> {
+        self.namespace_init_pidfd = Some(open_pidfd(pid)?);
         Ok(())
     }
 
@@ -1947,6 +2139,14 @@ second.join()
         self.first_child_pid(intermediate_pid)
     }
 
+    fn namespace_init_pid(&mut self) -> Result<Option<u32>> {
+        self.native_child_pid()
+    }
+
+    fn namespace_init_intermediate_pid(&self, namespace_init_pid: u32) -> Result<Option<u32>> {
+        self.first_child_pid(namespace_init_pid)
+    }
+
     fn first_child_pid(&self, pid: u32) -> Result<Option<u32>> {
         let path = PathBuf::from(format!("/proc/{pid}/task/{pid}/children"));
         let children = match fs::read_to_string(&path) {
@@ -1971,6 +2171,9 @@ second.join()
         }
         if let Some(pidfd) = &self.intermediate_pidfd {
             let _result = pidfd_send_signal(pidfd, Signal::TERM);
+        }
+        if let Some(pidfd) = &self.namespace_init_pidfd {
+            let _result = pidfd_send_signal(pidfd, Signal::KILL);
         }
         let _result = self.outer.kill();
         let _result = self.outer.wait();
@@ -2196,6 +2399,20 @@ fn open_pidfd(pid: u32) -> Result<OwnedFd> {
         .map_err(|error| invalid_state(format!("pidfd_open({raw}) failed: {error}")))
 }
 
+fn pid_in_own_namespace(host_pid: u32) -> Result<u32> {
+    let path = PathBuf::from(format!("/proc/{host_pid}/status"));
+    let status = fs::read_to_string(&path).context(IoSnafu { path: &path })?;
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("NSpid:"))
+        .and_then(|line| line.split_ascii_whitespace().last())
+        .ok_or_else(|| invalid_state(format!("host PID {host_pid} has no NSpid record")))?
+        .parse::<u32>()
+        .map_err(|error| {
+            invalid_state(format!("host PID {host_pid} has an invalid NSpid: {error}"))
+        })
+}
+
 fn read_u64(bytes: &[u8], offset: usize, name: &str) -> Result<u64> {
     let value = bytes
         .get(offset..offset + size_of::<u64>())
@@ -2289,6 +2506,58 @@ mod tests {
         fixture.release_exec(native_pid)?;
         let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
         runner.wait_for("subreaper native child exec", &comm_path, || {
+            fs::read_to_string(&comm_path)
+                .map(|name| (name.trim() == "sleep").then_some(()))
+                .map_err(|error| {
+                    super::invalid_state(format!("read {}: {error}", comm_path.display()))
+                })
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_process_fixture_executes_after_namespace_init_reparenting() -> crate::Result<()> {
+        let runner = IdentityTestRunner::new(".");
+        let mut fixture = NativeProcessFixture::start_namespace_init_reparenting()?;
+        fixture.release_root()?;
+        let outer_pid = fixture.outer_pid();
+        let outer_children = PathBuf::from(format!("/proc/{outer_pid}/task/{outer_pid}/children"));
+        let namespace_init_pid =
+            runner.wait_for("PID-namespace init creation", &outer_children, || {
+                fixture.namespace_init_pid()
+            })?;
+        fixture.open_namespace_init_pidfd(namespace_init_pid)?;
+        assert_eq!(super::pid_in_own_namespace(namespace_init_pid)?, 1);
+        let namespace_init_children = PathBuf::from(format!(
+            "/proc/{namespace_init_pid}/task/{namespace_init_pid}/children"
+        ));
+        let intermediate_pid = runner.wait_for(
+            "PID-namespace intermediate creation",
+            &namespace_init_children,
+            || fixture.namespace_init_intermediate_pid(namespace_init_pid),
+        )?;
+        fixture.open_intermediate_pidfd(intermediate_pid)?;
+        let native_pid = runner.wait_for(
+            "PID-namespace native child creation",
+            &namespace_init_children,
+            || fixture.intermediate_native_child_pid(intermediate_pid),
+        )?;
+        fixture.open_native_pidfd(native_pid)?;
+        fixture.release_intermediate_exit()?;
+        let status_path = PathBuf::from(format!("/proc/{native_pid}/status"));
+        runner.wait_for("PID-namespace native child adoption", &status_path, || {
+            let status = fs::read_to_string(&status_path).map_err(|error| {
+                super::invalid_state(format!("read {}: {error}", status_path.display()))
+            })?;
+            let parent_pid = status
+                .lines()
+                .find_map(|line| line.strip_prefix("PPid:")?.split_whitespace().next())
+                .and_then(|value| value.parse::<u32>().ok());
+            Ok(parent_pid.filter(|parent_pid| *parent_pid == namespace_init_pid))
+        })?;
+        fixture.release_exec(native_pid)?;
+        let comm_path = PathBuf::from(format!("/proc/{native_pid}/comm"));
+        runner.wait_for("PID-namespace native child exec", &comm_path, || {
             fs::read_to_string(&comm_path)
                 .map(|name| (name.trim() == "sleep").then_some(()))
                 .map_err(|error| {
