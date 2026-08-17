@@ -299,7 +299,7 @@ pub fn canonical_path_components(policy_id: &str, path: &str) -> Result<Vec<Vec<
                     && component.as_slice() != b".."
             }),
         "PATH_TREE_SELECTOR",
-        "a path-tree selector must contain 1..64 bounded non-special components",
+        "a path-tree selector must contain 1..255 bounded non-special components",
     )?;
     Ok(components)
 }
@@ -908,6 +908,24 @@ mod tests {
         assert!(graph
             .state_after(&[b"tmp".to_vec(), b"ordinary".to_vec()])
             .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn canonical_path_accepts_meta_depth_and_rejects_one_more() -> crate::Result<()> {
+        let path = format!(
+            "/{}",
+            (0..MAX_CANONICAL_PATH_COMPONENTS_V1)
+                .map(|index| format!("d{index}"))
+                .collect::<Vec<_>>()
+                .join("/")
+        );
+
+        assert_eq!(
+            canonical_path_components("meta-depth", &path)?.len(),
+            MAX_CANONICAL_PATH_COMPONENTS_V1
+        );
+        assert!(canonical_path_components("too-deep", &format!("{path}/overflow")).is_err());
         Ok(())
     }
 }

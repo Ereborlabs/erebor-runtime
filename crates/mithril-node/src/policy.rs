@@ -4085,6 +4085,9 @@ mod tests {
         assert!(retained.contains("io_uring_ring_states"));
         assert!(retained.contains("io_uring_request_states"));
         assert!(retire.contains("delete_map_entry(\"profile_generation_async_refs\""));
+        assert!(retire.contains("\"path_graph_exact_transitions\""));
+        assert!(retire.contains("\"path_graph_wildcard_transitions\""));
+        assert!(retire.contains("\"path_graph_terminals\""));
     }
 
     #[test]

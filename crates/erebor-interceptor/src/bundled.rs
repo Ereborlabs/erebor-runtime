@@ -1214,23 +1214,39 @@ mod tests {
     }
 
     #[test]
-    fn bprm_path_match_uses_one_bounded_loop_callback() -> crate::Result<()> {
+    fn bpf_path_walks_use_meta_component_and_namespace_budgets() -> crate::Result<()> {
         use libbpf_rs::libbpf_sys::{BPF_ALU64, BPF_K, BPF_MOV};
 
-        const PATH_COMPONENT_BUDGET: i32 = 64;
+        const PATH_COMPONENT_BUDGET: i32 = 255;
+        const PATH_WALK_BUDGET: i32 = 4_096 + PATH_COMPONENT_BUDGET;
         let instructions = BUNDLED_BPF_OBJECT.chunks_exact(8).collect::<Vec<_>>();
-        assert!(instructions.iter().enumerate().any(|(index, instruction)| {
-            instruction[0] == 0x85
-                && bpf_immediate(instruction) == Some(libbpf_rs::libbpf_sys::BPF_FUNC_loop as i32)
-                && instructions[index.saturating_sub(8)..index]
-                    .iter()
-                    .any(|candidate| {
-                        candidate[0] == (BPF_ALU64 | BPF_MOV | BPF_K) as u8
-                            && candidate[1] & 0x0f == 1
-                            && bpf_immediate(candidate) == Some(PATH_COMPONENT_BUDGET)
-                    })
-        }));
+        for budget in [PATH_COMPONENT_BUDGET, PATH_WALK_BUDGET] {
+            assert!(instructions.iter().enumerate().any(|(index, instruction)| {
+                instruction[0] == 0x85
+                    && bpf_immediate(instruction)
+                        == Some(libbpf_rs::libbpf_sys::BPF_FUNC_loop as i32)
+                    && instructions[index.saturating_sub(8)..index]
+                        .iter()
+                        .any(|candidate| {
+                            candidate[0] == (BPF_ALU64 | BPF_MOV | BPF_K) as u8
+                                && candidate[1] & 0x0f == 1
+                                && bpf_immediate(candidate) == Some(budget)
+                        })
+            }));
+        }
         Ok(())
+    }
+
+    #[test]
+    fn canonical_mount_cache_evicts_stale_topology_rows() {
+        let maps = include_str!("../../../bpf/erebor-interceptor/programs/identity_maps.h");
+        let declaration = maps
+            .split("} canonical_mount_cache SEC(\".maps\");")
+            .next()
+            .and_then(|source| source.rsplit("struct {").next())
+            .unwrap_or_default();
+
+        assert!(declaration.contains("BPF_MAP_TYPE_LRU_HASH"));
     }
 
     #[test]
