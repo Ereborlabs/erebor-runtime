@@ -242,6 +242,8 @@ int erebor_reconcile_tasks(struct bpf_iter__task *context)
     label = bpf_task_storage_get(&task_labels, task, 0, 0);
     if (!task_cgroup(task, &cgroup))
         binding = binding_for_cgroup(cgroup, &binding_lookup);
+    if (task_label_is_uninitialized(label))
+        label = NULL;
     if (label) {
         coordinate = bpf_map_lookup_elem(&task_coordinates,
                                          &label->task_cookie);

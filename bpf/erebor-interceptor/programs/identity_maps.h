@@ -1026,6 +1026,37 @@ static __always_inline bool label_matches_runtime(const task_label_v1 *label,
            id128_equal(&label->node_boot_id, &config->node_boot_id);
 }
 
+static __always_inline bool task_label_is_uninitialized(
+    const task_label_v1 *label)
+{
+    if (!label || label->label_epoch || label->task_cookie ||
+        label->birth_profile_generation_ref_id || label->lineage_depth ||
+        !id128_is_zero(&label->node_boot_id) ||
+        !id128_is_zero(&label->process_lineage_id) ||
+        !id128_is_zero(&label->process_instance_id) ||
+        !id128_is_zero(&label->process_state_id) ||
+        !id128_is_zero(&label->entry_instance_id) ||
+        !id128_is_zero(&label->execution_set_id) ||
+        !id128_is_zero(&label->birth_execution_id) ||
+        !id128_is_zero(&label->birth_authority_domain_id) ||
+        !id128_is_zero(&label->placement.protected_root_binding_id) ||
+        !id128_is_zero(&label->placement.protected_root_binding_nonce) ||
+        label->placement.allowed_descendant_policy_id ||
+        label->placement.reserved)
+        return false;
+#pragma unroll
+    for (int index = 0; index < 6; index++) {
+        if (label->reserved[index])
+            return false;
+    }
+#pragma unroll
+    for (int index = 0; index < MAX_ANCESTOR_PROCESS_LINEAGES_V1; index++) {
+        if (!id128_is_zero(&label->ancestor_process_lineage_ids[index]))
+            return false;
+    }
+    return true;
+}
+
 static __always_inline bool binding_matches_label(
     const execution_set_binding_state_v1 *binding, const task_label_v1 *label)
 {

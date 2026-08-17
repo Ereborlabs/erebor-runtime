@@ -1,13 +1,16 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File};
+use std::mem::size_of;
+use std::os::fd::AsRawFd as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 
-use erebor_interceptor::KernelHost;
+use erebor_interceptor::{KernelHost, MapInsertResult};
 use erebor_interceptor_abi::{
     BindingActivationTargetKeyV1, BindingLifecycleStateV1, ExecutionSetBindingStateV1, Id128V1,
-    InitialRootStateV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1,
+    InitialRootStateV1, PolicyGenerationStateV1, ProfileGenerationDescriptorV1, TaskLabelV1,
 };
+use rustix::process::{pidfd_open, Pid, PidfdFlags};
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, OptionExt as _, ResultExt as _};
 use uuid::Uuid;
@@ -357,6 +360,7 @@ impl WorkloadBindingOwner {
                         reason: format!("binding `{}` failed preparing readback", spec.binding_id),
                     }
                 );
+                reserve_live_root_task_labels(host, &binding)?;
                 binding.state.lifecycle_state = BindingLifecycleStateV1::Active;
                 binding.state.transition_version += 1;
                 host.update_map("execution_set_bindings", &key, binding.state.as_bytes())
@@ -840,6 +844,44 @@ fn execution_set_binding_state(bytes: &[u8]) -> Result<ExecutionSetBindingStateV
         }
         .build()
     })
+}
+
+fn reserve_live_root_task_labels(host: &KernelHost, binding: &PublishedBinding) -> Result<()> {
+    let tasks_path = binding.root_cgroup_path.join("cgroup.procs");
+    let tasks = fs::read_to_string(&tasks_path).context(IoSnafu { path: &tasks_path })?;
+    let empty_label = [0_u8; size_of::<TaskLabelV1>()];
+
+    for raw_pid in tasks.split_whitespace() {
+        let raw_pid = raw_pid.parse::<i32>().map_err(|error| {
+            IdentityStateSnafu {
+                reason: format!(
+                    "binding `{}` has an invalid live task PID `{raw_pid}`: {error}",
+                    binding.spec.binding_id
+                ),
+            }
+            .build()
+        })?;
+        let pid = Pid::from_raw(raw_pid).context(IdentityStateSnafu {
+            reason: format!(
+                "binding `{}` has a zero live task PID",
+                binding.spec.binding_id
+            ),
+        })?;
+        let pidfd = pidfd_open(pid, PidfdFlags::empty())
+            .map_err(std::io::Error::from)
+            .context(IoSnafu { path: &tasks_path })?;
+        match host
+            .insert_map(
+                "task_labels",
+                &pidfd.as_raw_fd().to_ne_bytes(),
+                &empty_label,
+            )
+            .context(InterceptorSnafu)?
+        {
+            MapInsertResult::Inserted | MapInsertResult::AlreadyExists => {}
+        }
+    }
+    Ok(())
 }
 
 fn same_runtime_binding(

@@ -147,6 +147,8 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub object_sha256: String,
     pub first_start: KernelObjectManifestV1,
     pub distinct_pin_root_owner_rejected: bool,
+    pub binding_gap_reconciled_root: NativeTaskSnapshotV1,
+    pub binding_gap_reconciliation_closed: bool,
     pub cgroup_escape_root: NativeTaskSnapshotV1,
     pub cgroup_escape_placement_mismatch_detected: bool,
     pub moved_parent_fork_denied: bool,
@@ -363,14 +365,39 @@ impl IdentityTestRunner {
                 reason: "a distinct Interceptor owner acquired the host lease",
             }
         );
+        let mut binding_gap_fixture = NativeProcessFixture::start()?;
+        fs::write(&procs_path, binding_gap_fixture.outer_pid().to_string())
+            .context(IoSnafu { path: &procs_path })?;
         let binding = test_binding(&cgroup_path);
         let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
         bindings
             .publish_all(&host, std::slice::from_ref(&binding))
             .context(NodeSnafu)?;
         let identity = NativeSecurityStateOwner::new(node_boot_id, 1);
-        identity.activate(&mut host).context(NodeSnafu)?;
+        let binding_gap_reconciliation = identity.activate(&mut host).context(NodeSnafu)?;
         let inspector = NativeIdentityInspector::new(pin_root);
+        let binding_gap_reconciled_root =
+            self.wait_for("binding-gap reconciled root identity", &procs_path, || {
+                inspector
+                    .snapshot(binding_gap_fixture.outer_pid())
+                    .context(NodeSnafu)
+            })?;
+        ensure!(
+            binding_gap_reconciled_root.creator_task_cookie.is_none()
+                && binding_gap_reconciled_root.root_class == Some("restored_or_unknown_root")
+                && binding_gap_reconciled_root.installed_role_class == Some("fail_closed_unknown")
+                && binding_gap_reconciled_root.active_role_id == binding.external_role_id
+                && binding_gap_reconciled_root.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8
+                && binding_gap_reconciliation.allocation_failures == 0
+                && binding_gap_reconciliation.coordinate_failures == 0
+                && binding_gap_reconciliation.reconciliation_required == 0,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "a task present before binding did not reconcile to the fail-closed root",
+            }
+        );
+        binding_gap_fixture.stop();
 
         let mut escape_fixture = CloneIntoCgroupFixture::start(&cgroup_path)?;
         let escape_root_before_move = self.wait_for(
@@ -1536,10 +1563,12 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 9,
+            schema_version: 10,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
+            binding_gap_reconciled_root,
+            binding_gap_reconciliation_closed: true,
             cgroup_escape_root,
             cgroup_escape_placement_mismatch_detected: true,
             moved_parent_fork_denied: true,
