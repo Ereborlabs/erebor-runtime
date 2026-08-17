@@ -87,6 +87,199 @@ time, BPF reads that generation from the task's process state. BPF then:
 The walk does not test the inode type. A file and a directory both use their
 path. Name operations can deny a negative dentry before an inode exists.
 
+## Algorithm walkthrough
+
+The algorithm has a static stage and a live stage. Rust runs the static stage
+when the node installs a policy generation. BPF runs the live stage for each
+covered effect. The live stage uses the task's current mount namespace. It
+does not use a path that Rust resolved during policy installation.
+
+### 1. Compile the signed path-tree floor
+
+[`validate_path_tree_deny_floors`](../../../crates/mithril-control/src/policy/compiler.rs#L1919)
+accepts only a recursive `FILE` denial in `PROTECT` mode. The rule cannot have
+an exception. The validator also rejects an empty or unsupported operation
+set.
+
+[`canonical_path_components`](../../../crates/mithril-control/src/policy/path.rs#L279)
+splits the absolute policy path into Linux name bytes. It rejects the root
+path, empty components, `.` and `..`, embedded null bytes, more than 255
+components, and a component longer than 255 bytes. This function parses policy
+text. It does not read the filesystem.
+
+[`insert_path_tree_deny`](../../../crates/mithril-control/src/policy/path.rs#L552)
+adds one exact graph edge for each policy component. At the terminal state, it
+adds the denied operation IDs and a wildcard self-loop. The self-loop makes
+the rule recursive. A path that stays below that terminal remains in a state
+that contains the denial.
+
+[`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L388)
+converts the graph to one deterministic state per active state set. Each
+deterministic state contains the union of its active denial operation IDs.
+This conversion preserves the recursive wildcard when another exact edge also
+starts at the same state.
+
+[`lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L3329)
+adds `profile_generation_ref_id` to every exact-transition, wildcard-transition,
+and terminal key. The terminal value contains a 64-bit denied-operation mask.
+The function does not require a Pod, target file, target directory, or mount
+namespace.
+
+[`LoweredGeneration::install`](../../../crates/mithril-node/src/policy.rs#L1641)
+writes the three graph tables, verifies the immutable rows, and then changes
+the generation descriptor to active. The graph is complete before a task can
+use the generation.
+
+### 2. Select the task's generation and live path
+
+An LSM hook calls
+[`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L292)
+with a live `struct file` or a path that a name hook supplied. The gate finds
+the current task and its cgroup binding. It reads
+`active_profile_generation_ref_id` from the task's process state. It then
+checks that the active generation belongs to the bound profile.
+
+The gate passes the live `struct path` and the active generation to
+[`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L810).
+The candidate function has two operations:
+
+1. Reconstruct the path from the live mount namespace.
+2. Traverse graph rows that contain the active generation in their keys.
+
+A state ID cannot select another profile's graph. The generation is part of
+every graph lookup key.
+
+### 3. Build the oldest-mount index in BPF
+
+[`global_mount_epoch_snapshot`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L145)
+first records the global mount-mutation epoch. It rejects the walk when a mount
+mutation is pending.
+
+[`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L387)
+reads the task's `mnt_namespace.root`, namespace event number, and mount count.
+It also reads the namespace root's `mnt_id_unique` through
+[`read_unique_mount_id`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L129).
+The resolver rejects a missing unique ID, an empty namespace, or more than
+4,096 mounts.
+
+The cache-state key contains these values:
+
+- mount-namespace address;
+- namespace-root `mnt_id_unique`;
+- namespace event number.
+
+A ready state with the same mount count can reuse the corresponding index. A
+cache miss makes BPF enumerate `mnt_namespace.mounts`.
+
+[`mount_scan_push`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L284)
+and
+[`canonical_mount_cache_build_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L304)
+perform a bounded red-black-tree scan. The callback verifies that each mount
+belongs to the selected namespace. For each mount, it forms this index entry:
+
+```text
+(namespace address, namespace-root mnt_id_unique, namespace event, root dentry)
+    -> (selected mount address, selected mnt_id_unique)
+```
+
+Several mounts can have the same root dentry. This condition occurs with bind
+mounts and other aliases. The callback uses a BPF spin lock and keeps the
+lowest nonzero `mnt_id_unique`. The lowest unique ID identifies the oldest
+mount for that root. A later attacker-created mount has a higher unique ID and
+cannot replace the selected path edge.
+
+After the scan, BPF requires all of these conditions:
+
+- the loop visited the reported mount count;
+- the explicit scan stack is empty;
+- the namespace event number did not change;
+- the reported mount count did not change;
+- the global mutation epoch did not change;
+- no mount mutation is pending.
+
+A failed condition returns `-EACCES`. The effect gate classifies the failure
+as an unsupported or unresolved object and denies the effect. The live
+oldest-mount index is implemented for x86_64 and arm64. The compiled fallback at
+[`ensure_canonical_mount_cache`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L460)
+returns `-EACCES` on the other checked architectures.
+
+### 4. Walk from the leaf to the namespace root
+
+[`collect_mount_components`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L608)
+starts with `path->dentry` and `path->mnt`. It converts the virtual filesystem
+mount to its containing `struct mount`, finds that mount's live namespace, and
+initializes the per-CPU walk state.
+
+[`canonical_mount_path_walk_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L522)
+runs one of two actions for each callback:
+
+1. If the current dentry is not the current mount root, record its `d_name`
+   address and length. Then move to `d_parent`. This operation collects the
+   path from leaf to head.
+2. If the current dentry is the mount root, call
+   [`selected_mount_for_root`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L474).
+   That function reads the oldest-mount index under its spin lock. It then
+   rechecks the selected mount's namespace, root dentry, and live
+   `mnt_id_unique`.
+
+If the selected mount is `mnt_namespace.root`, the walk is complete. Otherwise,
+the callback changes the current position to the selected mount's `mnt_parent`
+and `mnt_mountpoint`. The next callback continues toward the namespace root.
+This step is the mount-boundary traversal in Meta's algorithm.
+
+The combined loop allows 4,351 callbacks. This bound covers 4,096 mount
+crossings and 255 dentry components. The walk fails when it reaches a bad
+pointer, a repeated mount boundary, an invalid name, an oversized name, or an
+overflow. It does not use a truncated path.
+
+After the walk, `collect_mount_components` requires the namespace root to be
+reached. It also rechecks the namespace event and the global mount epoch. A
+concurrent mount change therefore invalidates the complete result.
+
+### 5. Traverse only the active generation's graph
+
+The component vector is in leaf-first order. For example, the live path
+`/srv/secret/team/a` produces `a`, `team`, `secret`, `srv` during the kernel
+walk.
+
+[`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L741)
+reads the vector in reverse order. It therefore submits `srv`, `secret`,
+`team`, and `a` to the graph. For each component, the callback:
+
+1. reads the live name bytes with `bpf_probe_read_kernel`;
+2. builds an exact-transition key from the active generation, current state,
+   and component;
+3. reads `path_graph_exact_transitions`;
+4. reads `path_graph_wildcard_transitions` for the same generation and state
+   when the exact row is absent;
+5. changes the current state to `next_state_id`.
+
+A missing transition or failed helper call marks the match unresolved. After
+all components, `canonical_path_candidate` reads `path_graph_terminals` with
+the active generation and final state. It copies the terminal and its denied
+operation mask to per-CPU scratch.
+
+For a recursive `/srv/secret` floor, the graph enters the denial state after
+`secret`. The wildcard-derived deterministic states keep the denial mask while
+the matcher consumes `team` and `a`. The policy therefore covers the root and
+all descendants.
+
+### 6. Return the physical decision
+
+Back in
+[`resolved_identity_effect_gate`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L292),
+[`path_tree_denies`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L102)
+tests the current operation bit in the terminal mask. A set bit in a protect
+generation calls
+[`path_tree_effect_result`](../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h#L111).
+That function emits `PATH_TREE_POLICY_DENY` and returns the configured negative
+error before the kernel effect.
+
+The gate evaluates this denial before exact-object policy. If the path-tree
+mask does not deny the operation, the existing exact-object branch continues.
+If path reconstruction or graph traversal fails, the gate returns a hard
+denial. It does not convert an unresolved path to an allow.
+
 ## Validation against Meta's algorithm
 
 The implementation follows the algorithm described in the presentation. It
