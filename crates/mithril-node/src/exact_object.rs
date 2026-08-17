@@ -7,7 +7,7 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use erebor_interceptor_abi::MAX_CANONICAL_COMPONENT_BYTES_V1;
+use erebor_interceptor_abi::{MAX_CANONICAL_COMPONENT_BYTES_V1, MAX_CANONICAL_PATH_COMPONENTS_V1};
 use rustix::fs::{openat, openat2, statx, AtFlags, Mode, OFlags, ResolveFlags, StatxFlags};
 use sha2::{Digest as _, Sha256};
 use snafu::{ensure, ResultExt as _};
@@ -387,9 +387,12 @@ impl MountInfoSnapshot {
         let canonical = canonicalize_mount_path(entered.mount_id, relative.clone(), &mounts)?;
         let canonical_components = canonical.components;
         ensure!(
-            !canonical_components.is_empty() && canonical_components.len() <= 64,
+            !canonical_components.is_empty()
+                && canonical_components.len() <= MAX_CANONICAL_PATH_COMPONENTS_V1,
             IdentityStateSnafu {
-                reason: "canonical path must contain 1..64 bounded components",
+                reason: format!(
+                    "canonical path must contain 1..{MAX_CANONICAL_PATH_COMPONENTS_V1} bounded components"
+                ),
             }
         );
         let second = view.read_mountinfo()?;
@@ -571,7 +574,7 @@ fn canonicalize_mount_path(
     })?;
     let mut first_selected_mount_id_unique = 0;
     let mut visited = BTreeSet::new();
-    for _ in 0..=64 {
+    for _ in 0..mounts.len() {
         ensure!(
             visited.insert(current.mount_id),
             IdentityStateSnafu {
@@ -629,16 +632,18 @@ fn canonicalize_mount_path(
         let mut parent_relative = path_components(attachment)?;
         parent_relative.append(&mut components);
         ensure!(
-            parent_relative.len() <= 64,
+            parent_relative.len() <= MAX_CANONICAL_PATH_COMPONENTS_V1,
             IdentityStateSnafu {
-                reason: "canonical mount path exceeds 64 components",
+                reason: format!(
+                    "canonical mount path exceeds {MAX_CANONICAL_PATH_COMPONENTS_V1} components"
+                ),
             }
         );
         components = parent_relative;
         current = parent;
     }
     IdentityStateSnafu {
-        reason: "canonical mount walk exceeds 64 crossings".to_owned(),
+        reason: "canonical mount walk exceeds the represented mount count".to_owned(),
     }
     .fail()
 }

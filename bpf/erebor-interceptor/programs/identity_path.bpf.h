@@ -289,13 +289,13 @@ static __always_inline int mount_scan_push(
 
     if (!node)
         return 0;
-    if (build->stack_depth >= MAX_CANONICAL_MOUNT_TREE_DEPTH_V1)
+    if (build->stack_depth >= MAX_CANONICAL_MOUNTS_V1)
         return -EACCES;
     asm volatile("%[bounded] = %[raw] ;\n"
                  "%[bounded] &= %2 ;\n"
                  : [bounded] "=&r"(index)
                  : [raw] "r"((__u64)build->stack_depth),
-                   "i"(MAX_CANONICAL_MOUNT_TREE_DEPTH_V1 - 1));
+                   "i"(MAX_CANONICAL_MOUNTS_V1 - 1));
     scratch->mount_scan_stack[index] = (__u64)node;
     build->stack_depth++;
     return 0;
@@ -325,7 +325,7 @@ static long canonical_mount_cache_build_step(__u32 offset, void *data)
                  "%[bounded] &= %2 ;\n"
                  : [bounded] "=&r"(index)
                  : [raw] "r"((__u64)build->stack_depth),
-                   "i"(MAX_CANONICAL_MOUNT_TREE_DEPTH_V1 - 1));
+                   "i"(MAX_CANONICAL_MOUNTS_V1 - 1));
     node = (struct rb_node *)scratch->mount_scan_stack[index];
     build->left_node_address = 0;
     build->right_node_address = 0;
@@ -429,8 +429,6 @@ static __always_inline int ensure_canonical_mount_cache(
     if (BPF_CORE_READ_INTO(&tree_root, mount_namespace, mounts.rb_node) ||
         !tree_root)
         return -EACCES;
-    __builtin_memset(scratch->mount_scan_stack, 0,
-                     sizeof(scratch->mount_scan_stack));
     __builtin_memset(build, 0, sizeof(*build));
     build->mount_namespace_address = (__u64)mount_namespace;
     build->namespace_root_mount_id_unique = root_mount_id_unique;
@@ -552,7 +550,7 @@ static long canonical_mount_path_walk_step(__u32 offset, void *data)
                      "%[bounded] &= %2 ;\n"
                      : [bounded] "=&r"(index)
                      : [raw] "r"((__u64)walk->component_count),
-                       "i"(MAX_CANONICAL_PATH_COMPONENTS_V1 - 1));
+                       "i"(MAX_CANONICAL_PATH_COMPONENTS_V1));
         walk->next_dentry_address = 0;
         walk->component_name_address = 0;
         walk->component_length = 0;
@@ -647,7 +645,8 @@ static __always_inline int collect_mount_components(
     walk->current_dentry_address = (__u64)current;
     walk->namespace_event = namespace_event;
     walk->namespace_root_mount_id_unique = namespace_root_mount_id_unique;
-    steps = bpf_loop(MAX_CANONICAL_PATH_COMPONENTS_V1 * 2,
+    steps = bpf_loop(MAX_CANONICAL_MOUNTS_V1 +
+                         MAX_CANONICAL_PATH_COMPONENTS_V1,
                      canonical_mount_path_walk_step, &context, 0);
     if (steps < 0 || walk->failed || !walk->reached_namespace_root ||
         !walk->first_selected_mount_id_unique ||
@@ -759,7 +758,7 @@ static long canonical_path_match_step(__u32 offset, void *data)
                  "%[bounded] &= %2 ;\n"
                  : [bounded] "=&r"(index)
                  : [raw] "r"((__u64)raw_index),
-                   "i"(MAX_CANONICAL_PATH_COMPONENTS_V1 - 1));
+                   "i"(MAX_CANONICAL_PATH_COMPONENTS_V1));
     view = &scratch->path_component_views[index];
     raw_length = view->length;
     if (!raw_length || raw_length > MAX_CANONICAL_COMPONENT_BYTES_V1 ||

@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::mem::{offset_of, size_of};
 use std::os::unix::fs::MetadataExt as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use erebor_interceptor::{EffectObservationReader, KernelHost, KernelHostConfig, KernelHostOwner};
@@ -16,7 +16,7 @@ use erebor_interceptor_abi::{
     ExceptionRuntimeStateKindV1, ExceptionRuntimeStateV1, ExceptionUseReceiptV1, Id128V1,
     IpcOperationV1, KernelEffectFamilyV1, KernelEffectOperationV1, MountReconciliationProposalV1,
     MountSecurityViewStateV1, MountTopologyStateV1, PolicyGenerationStateV1,
-    ProfileGenerationDescriptorV1,
+    ProfileGenerationDescriptorV1, MAX_CANONICAL_PATH_COMPONENTS_V1,
 };
 use mithril_control::{
     EffectFamilyV1, PathTreeDenyFloorV1, PolicyArtifactOwner, PolicyDispositionV1,
@@ -216,6 +216,7 @@ pub struct EffectPhysicalProbeBundleV1 {
     pub io_uring_lifecycle_released: bool,
     pub bind_alias_canonicalized: bool,
     pub path_tree_preexisting_child_denied: bool,
+    pub path_tree_meta_depth_denied: bool,
     pub path_tree_future_namespace_denied: bool,
     pub path_tree_later_child_denied: bool,
     pub path_tree_replacement_child_denied: bool,
@@ -794,7 +795,26 @@ impl EffectTestRunner {
         } else {
             "observe-policy-v1.yaml"
         });
-        let path_tree_root = fixture_root.join("secret-dir");
+        let path_tree_root = if protect {
+            let component_count = fixture_root
+                .components()
+                .filter(|component| matches!(component, Component::Normal(_)))
+                .count();
+            ensure!(
+                component_count < MAX_CANONICAL_PATH_COMPONENTS_V1 - 1,
+                InvalidInputSnafu {
+                    path: &fixture_root,
+                    reason: "the fixture root leaves no room for the 255-component path proof",
+                }
+            );
+            let mut path = fixture_root.clone();
+            for index in component_count..MAX_CANONICAL_PATH_COMPONENTS_V1 - 1 {
+                path.push(format!("d{index}"));
+            }
+            path
+        } else {
+            fixture_root.join("secret-dir")
+        };
         let path_tree_floor = protect.then_some(path_tree_root.as_path());
         let seal_source = policy_fixture.join("observe-profile-seal-request.json");
         let signing_key = policy_fixture.join("test-signing-key.hex");
@@ -848,9 +868,21 @@ impl EffectTestRunner {
         let path_tree_later = path_tree_root.join("created-after-activation");
         let path_tree_replacement = path_tree_root.join("replacement");
         let path_tree_actor_create = path_tree_root.join("actor-created");
-        fs::create_dir(&path_tree_root).context(IoSnafu {
+        fs::create_dir_all(&path_tree_root).context(IoSnafu {
             path: &path_tree_root,
         })?;
+        ensure!(
+            !protect
+                || path_tree_preexisting
+                    .components()
+                    .filter(|component| matches!(component, Component::Normal(_)))
+                    .count()
+                    == MAX_CANONICAL_PATH_COMPONENTS_V1,
+            InvalidInputSnafu {
+                path: &path_tree_preexisting,
+                reason: "the Meta-depth path-tree fixture does not have 255 components",
+            }
+        );
         fs::write(&path_tree_preexisting, b"restricted before activation\n").context(IoSnafu {
             path: &path_tree_preexisting,
         })?;
@@ -1131,6 +1163,7 @@ impl EffectTestRunner {
             .context(InterceptorSnafu)?;
 
         let mut path_tree_future_namespace_denied = false;
+        let mut path_tree_meta_depth_denied = false;
         if protect {
             let future_fixture_root = fixture_root.join("future-mount-namespace");
             fs::create_dir(&future_fixture_root).context(IoSnafu {
@@ -1212,6 +1245,7 @@ impl EffectTestRunner {
                     ),
                 )?;
             }
+            path_tree_meta_depth_denied = true;
 
             fs::write(&path_tree_later, b"created after activation\n").context(IoSnafu {
                 path: &path_tree_later,
@@ -3515,6 +3549,7 @@ impl EffectTestRunner {
             io_uring_lifecycle_released,
             bind_alias_canonicalized: true,
             path_tree_preexisting_child_denied: protect,
+            path_tree_meta_depth_denied,
             path_tree_future_namespace_denied,
             path_tree_later_child_denied: protect,
             path_tree_replacement_child_denied: protect,

@@ -2,7 +2,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 use super::Id128V1;
 
-pub const MAX_CANONICAL_PATH_COMPONENTS_V1: usize = 64;
+pub const MAX_CANONICAL_PATH_COMPONENTS_V1: usize = 255;
 pub const MAX_CANONICAL_COMPONENT_BYTES_V1: usize = 255;
 pub const CANONICAL_COMPONENT_STORAGE_BYTES_V1: usize = 256;
 
@@ -154,6 +154,7 @@ mod tests {
 
     #[test]
     fn canonical_path_component_preserves_the_platform_bound() {
+        assert_eq!(MAX_CANONICAL_PATH_COMPONENTS_V1, 255);
         let bytes = vec![b'x'; MAX_CANONICAL_COMPONENT_BYTES_V1];
         let mut component = CanonicalPathComponentV1 {
             length: bytes.len() as u16,
