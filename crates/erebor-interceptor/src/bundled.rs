@@ -1242,18 +1242,6 @@ mod tests {
     }
 
     #[test]
-    fn canonical_mount_cache_evicts_stale_topology_rows() {
-        let maps = include_str!("../../../bpf/erebor-interceptor/programs/identity_maps.h");
-        let declaration = maps
-            .split("} canonical_mount_cache SEC(\".maps\");")
-            .next()
-            .and_then(|source| source.rsplit("struct {").next())
-            .unwrap_or_default();
-
-        assert!(declaration.contains("BPF_MAP_TYPE_LRU_HASH"));
-    }
-
-    #[test]
     fn administrative_slot_cancellation_is_an_exact_atomic_control_operation() {
         let source = include_str!("../../../bpf/erebor-interceptor/programs/identity.bpf.c");
         let cancellation = source

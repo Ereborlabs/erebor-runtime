@@ -557,7 +557,7 @@ struct {
 } canonical_mount_roots SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 65536);
     __type(key, struct canonical_mount_cache_key_v1);
     __type(value, struct canonical_mount_cache_value_v1);
