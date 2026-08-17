@@ -159,6 +159,28 @@ record. This record does not test namespace entry, restore, or a protected
 effect. It is not complete `ENTRY-MIGRATE-001` qualification. The phase
 remains **Blocked**.
 
+## Recorded Live-Binding-Gap Qualification — 2026-08-17
+
+The retained Ubuntu 24.04 VM ran this root-shell command after
+`manual.sh start` and `manual.sh ssh`:
+
+```sh
+examples/mithril-identity-manual/binding-gap.sh
+```
+
+The shell used `identity_prepare_k3s_case` to create the Pod and live CRI
+binding input. Before `identity_start_node`, it moved one waiting host process
+into the target cgroup. The inspected process had no creator task cookie,
+`restored_or_unknown_root`, `fail_closed_unknown`, external role `2`, and
+`Runnable` coordinate state `3`. A later waiting host process in the same
+cgroup had `external_runtime_root` and `runtime_external_restricted`.
+
+The shell printed `PASS`. Its owned cleanup verified that the exact Pod cgroup
+was absent. Postflight also found no case namespace, fixture directory,
+Mithril pin, node process, lease work directory, or manual work directory.
+This qualifies `ENTRY-BINDING-GAP-001` only. It does not qualify the remaining
+entry fixtures. The phase remains **Blocked**.
+
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured

@@ -58,6 +58,20 @@ grandchild, which then executes `sleep`. The command checks the immutable
 creator, the adopted real-parent coordinates, and the inherited restricted
 role. It removes the host processes, Pod, and fixture directory at exit.
 
+Run this live-binding-gap case from the same root shell:
+
+```sh
+examples/mithril-identity-manual/binding-gap.sh
+```
+
+The command creates one Pod and moves one waiting host process into its cgroup
+before it starts Mithril. It requires
+`restored_or_unknown_root`, `fail_closed_unknown`, the configured external
+role, and `Runnable`. It then moves a later waiting host process into the same
+cgroup and requires the normal restricted external-root identity. The command
+removes both processes, the Pod, node process, pin root, lease, state, and
+fixture directory at exit.
+
 Run this self-contained namespace-entry case from the same root shell:
 
 ```sh
@@ -106,6 +120,7 @@ Then run only the case being checked:
 | Concurrent Python thread exec | `sudo examples/mithril-identity-manual/native-child.sh --concurrent-thread-exec` in the manual VM |
 | Subreaper native reparenting | `sudo examples/mithril-identity-manual/native-child.sh --subreaper` in the manual VM |
 | PID-namespace-init reparenting | `sudo examples/mithril-identity-manual/native-child.sh --namespace-init` in the manual VM |
+| Live binding gap | `sudo examples/mithril-identity-manual/binding-gap.sh` in the manual VM |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh` in the manual VM |
 | Labeled native-child mount entry | `sudo examples/mithril-identity-manual/nsenter-move.sh --labeled-task` in the manual VM |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |

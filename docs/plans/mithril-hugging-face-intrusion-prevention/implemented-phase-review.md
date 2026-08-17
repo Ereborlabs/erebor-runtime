@@ -2779,3 +2779,52 @@ Mithril e2e suite and stopped at the pre-existing readable-architecture digest
 mismatch in `spec/qualification/v1/fixtures.yaml`. This row does not change
 that registry. This result qualifies the PID-namespace-init subcase only.
 Ptrace reparenting and PID reuse remain open. Phase 2 remains **Blocked**.
+
+## Live Binding-Gap Fixture Review — 2026-08-17
+
+Source commit `e3962e8` extends the existing binding owner, task-label map,
+physical bundle, and manual case. It adds no map, role, generic runner, or
+durable type.
+
+1. [`reserve_live_root_task_labels`](../../../crates/mithril-node/src/identity/binding.rs)
+   reads `cgroup.procs`, opens an existing Linux pidfd, and inserts a zero
+   value into the existing task-local `task_labels` map with `BPF_NOEXIST`.
+2. [`task_label_is_uninitialized`](../../../bpf/erebor-interceptor/programs/identity_maps.h)
+   accepts only a completely zero task label. A partial or corrupt label stays
+   invalid and fails closed.
+3. [`erebor_reconcile_tasks`](../../../bpf/erebor-interceptor/programs/identity_lifecycle.bpf.h)
+   treats that reservation as unlabelled, then uses the existing root creator
+   to install `restored_or_unknown_root` and `fail_closed_unknown`.
+4. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   moves its waiting root into the cgroup before it publishes the binding. It
+   requires the restored root, zero reconciliation failures, and a later
+   restricted external-root control.
+5. [`binding-gap.sh`](../../../examples/mithril-identity-manual/binding-gap.sh)
+   repeats the same order against one K3s Pod. Its runtime owner removes the
+   Pod, target cgroup, node, pin, lease, processes, and fixture directory.
+
+```mermaid
+sequenceDiagram
+    participant R as IdentityTestRunner
+    participant B as WorkloadBindingOwner
+    participant T as live task
+    participant I as reconciliation iterator
+
+    R->>T: move waiting task into target cgroup
+    R->>B: publish preparing binding
+    B->>T: reserve zero task label through pidfd
+    B->>B: publish active binding
+    R->>I: activate native identity
+    I->>T: replace zero label with restored unknown root
+```
+
+The privileged VM passed on Linux `6.8.0-137-generic`. Its schema-10 JSON
+SHA-256 is `aec5e501424d0347c2b2c38d236ddd35a754051d20a1f8283fc2d8af1d744fdf`.
+The pre-binding root had task cookie `5`, no creator, restored/unknown root
+class, fail-closed role, role `11`, and `Runnable` coordinates. Allocation,
+coordinate, and reconciliation failures were zero. The runner removed its
+pin, lease, and cgroup. The manual shell printed `PASS` and removed its
+namespace, fixture, exact Pod cgroup, node, pin, lease work, and manual work.
+
+This qualifies `ENTRY-BINDING-GAP-001` only. The remaining required rows are
+open. Phase 2 remains **Blocked**.

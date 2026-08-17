@@ -685,3 +685,49 @@ user-owned registry.
 This qualifies the PID-namespace-init reparenting subcase of
 `ID-CREATOR-PARENT-007`. Ptrace reparenting and PID reuse remain required. The
 phase remains **Blocked**.
+
+## Live-Binding-Gap Qualification — 2026-08-17
+
+Source commit `e3962e8` adds a bounded live-task reconciliation path. It uses
+the existing `task_labels` task-local map. `WorkloadBindingOwner` reads the
+target cgroup's live process leaders, opens a pidfd for each leader, and
+inserts a zero label with `BPF_NOEXIST` while the binding is preparing. The
+iterator recognizes only a fully zero label as uninitialized. It then creates
+the existing `restored_or_unknown_root` with the existing
+`fail_closed_unknown` role. A task that acts before the iterator completes has
+an invalid label and does not receive authority.
+
+The retained x86_64 Ubuntu 24.04 VM ran Linux `6.8.0-137-generic` and this
+command with unique paths:
+
+```sh
+"$MITHRIL_BIN_DIRECTORY/mithril-identity-test" \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-phase2-binding-1786986448 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-phase2-binding-1786986448 \
+  --lease-path /run/mithril-phase2-binding-1786986448.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-phase2-binding-1786986448
+```
+
+The schema-10 JSON SHA-256 is
+`aec5e501424d0347c2b2c38d236ddd35a754051d20a1f8283fc2d8af1d744fdf`.
+The test binary SHA-256 is
+`f10a021dc4f597ca408e6627fe840928cef172c86b64b52917e683648592e123`.
+The BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The pre-binding root had task cookie `5`, no creator task cookie,
+`restored_or_unknown_root`, `fail_closed_unknown`, role `11`, and coordinate
+state `3`. Its reconciliation report had zero allocation, coordinate, and
+reconciliation failures. The later cgroup-entry control remained the normal
+restricted external root. The JSON records that the dedicated pin root, lease,
+and cgroup were removed.
+
+The same retained VM ran
+[`binding-gap.sh`](../../../../examples/mithril-identity-manual/binding-gap.sh).
+It printed `PASS` and verified that its exact Pod cgroup was removed. The
+postflight found no case namespace, fixture directory, Mithril pin, node
+process, lease work directory, or manual work directory.
+
+This qualifies `ENTRY-BINDING-GAP-001` only. The remaining required fixtures
+are open. The phase remains **Blocked**.
