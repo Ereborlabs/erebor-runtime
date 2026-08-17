@@ -366,13 +366,13 @@ malformed counter and does not create an IPC event.
 | `path_tree_floor_lowers_without_an_exact_child_object` | Installs a floor-only terminal mask without a child exact-object terminal. Uses an unrelated exact object to supply the represented mount view. |
 | `path_tree_deny_uses_the_clean_canonical_path_before_object_lookup` | Checks leaf-to-root collection, component reversal, two clean-view checks, selected oldest mount use, and decision order. |
 | Repository Rust CI | `bash .github/scripts/verify-rust-ci.sh` passed through `367400b`. It ran formatting, workspace check, strict all-target and all-feature clippy, and all workspace tests. |
-| Disposable VM harness | Passed at exact commit `2872526a3fd7a23d83ead50438818014f425eb22` with `crates/mithril-e2e/harness/vm/run.sh --output-directory /tmp/mithril-path-tree-vm-20260817-v9-2872526`. |
+| Disposable VM harness | Passed at exact commit `2ccac0662b9dd135a4df2b7ad5843413c3a9091e` with `crates/mithril-e2e/harness/vm/run.sh --output-directory /tmp/mithril-path-tree-vm-20260817-v10-2ccac06`. |
 | Manual harness VM | `mount-attack-deny.sh` printed its PASS line and the complete Mithril cleanup line. |
 
-The exact-commit local-enforcement artifact is
-`/tmp/mithril-path-tree-vm-20260817-v9-2872526/local-enforcement-physical-probe.json`.
+The current-source local-enforcement artifact is
+`/tmp/mithril-path-tree-vm-20260817-v10-2ccac06/local-enforcement-physical-probe.json`.
 Its SHA-256 is
-`20c34a1afbfad23d5d8940fb190f2228b57b614fd814c6555eafd9a1b5707e37`.
+`dcb49423cca475bd8f82c0293ff4eb78e5943b1efbbac0c6a1e72d4920ba2d87`.
 It records these true fields:
 
 - `path_tree_preexisting_child_denied`
@@ -394,9 +394,9 @@ fail-closed unresolved result. Reconciliation restores the path-tree terminal.
   bytes. Meta's presentation describes a 255-component prototype bound.
 - The physical path-tree proof is x86_64 only. The checked BPF build compiles
   other supported headers, but that result is not non-x86 physical evidence.
-- The code descriptions and Rust CI result cover `367400b`. The physical VM
-  artifact covers exact commit `2872526`. The simplification commit has no
-  separate physical VM artifact.
+- The Rust CI result covers code commit `367400b`. The disposable VM result
+  covers exact commit `2ccac06`, which adds only a guide update after the code
+  commit. The final evidence update changes only this guide.
 - The floor covers the signed `FILE` operations accepted by
   [`operation_belongs_to_family`](../../../crates/mithril-control/src/policy/compiler.rs#L2400).
   It does not create positive file authority.
