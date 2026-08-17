@@ -731,3 +731,47 @@ process, lease work directory, or manual work directory.
 
 This qualifies `ENTRY-BINDING-GAP-001` only. The remaining required fixtures
 are open. The phase remains **Blocked**.
+
+## External-Root-Ambiguity Qualification — 2026-08-17
+
+Source commit `e0e2af9` extends `IdentityTestRunner` and the existing physical
+bundle. It starts two independent `NativeProcessFixture` roots, moves both
+into one active binding, and requires different task cookies and process-state
+IDs. Both roots must have no creator, `external_runtime_root`,
+`runtime_external_restricted`, the configured external role, and `Runnable`
+coordinates. It adds no map, role, runner, or durable type.
+
+The retained x86_64 Ubuntu 24.04 VM ran Linux `6.8.0-137-generic` and this
+command with unique paths:
+
+```sh
+"$MITHRIL_BIN_DIRECTORY/mithril-identity-test" \
+  --repo-root "$MITHRIL_MANUAL_SOURCE" \
+  --output-directory /var/tmp/mithril-phase2-ambiguity-1786987689 \
+  physical-probe \
+  --pin-root /sys/fs/bpf/mithril-phase2-ambiguity-1786987689 \
+  --lease-path /run/mithril-phase2-ambiguity-1786987689.lock \
+  --cgroup-path /sys/fs/cgroup/mithril-phase2-ambiguity-1786987689
+```
+
+The schema-11 JSON SHA-256 is
+`e259bb5f298d2ebcd0a0179176781e88925fef382ddb0f5a153410cb343167cf`.
+The test binary SHA-256 is
+`678b8e0ff7c70c50e46e36cc5d795dc8df4b4d55632de3a143520868f206f15c`.
+The BPF object SHA-256 is
+`3269516fcd2714ab7fbe29df26386c40f0c912b6284007b641d8bbf68842b876`.
+The first root had task cookie `12`, process state
+`0000000000000001000000000000000a`, and role `11`. The second had task cookie
+`19`, process state `00000000000000010000000000000011`, and role `11`. Both
+had no creator, `external_runtime_root`, `runtime_external_restricted`, and
+coordinate state `3`. The JSON records equal restricted roles and removed pin,
+lease, and cgroup paths.
+
+The same retained VM ran
+[`external-ambiguity.sh`](../../../../examples/mithril-identity-manual/external-ambiguity.sh)
+as root. It printed `PASS` and verified that its exact Pod cgroup was removed.
+Postflight found no case namespace, fixture directory, Mithril pin, node
+process, lease work directory, or manual work directory.
+
+This qualifies `ENTRY-EXTERNAL-AMBIGUITY-001` only. The remaining required
+fixtures are open. The phase remains **Blocked**.

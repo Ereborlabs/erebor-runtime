@@ -72,6 +72,18 @@ cgroup and requires the normal restricted external-root identity. The command
 removes both processes, the Pod, node process, pin root, lease, state, and
 fixture directory at exit.
 
+Run this concurrent external-root case from the same root shell:
+
+```sh
+examples/mithril-identity-manual/external-ambiguity.sh
+```
+
+The command starts Mithril, then moves two waiting host processes with the
+same command into one Pod cgroup. It requires separate task and process
+identities, no creator, and the same configured restricted external role. The
+command removes both processes, the Pod, node process, pin root, lease, state,
+and fixture directory at exit.
+
 Run this self-contained namespace-entry case from the same root shell:
 
 ```sh
@@ -121,6 +133,7 @@ Then run only the case being checked:
 | Subreaper native reparenting | `sudo examples/mithril-identity-manual/native-child.sh --subreaper` in the manual VM |
 | PID-namespace-init reparenting | `sudo examples/mithril-identity-manual/native-child.sh --namespace-init` in the manual VM |
 | Live binding gap | `sudo examples/mithril-identity-manual/binding-gap.sh` in the manual VM |
+| Concurrent external roots | `sudo examples/mithril-identity-manual/external-ambiguity.sh` in the manual VM |
 | `nsenter` and cgroup movement | `sudo examples/mithril-identity-manual/nsenter-move.sh` in the manual VM |
 | Labeled native-child mount entry | `sudo examples/mithril-identity-manual/nsenter-move.sh --labeled-task` in the manual VM |
 | Node restart | `sudo examples/mithril-identity-manual/restart.sh NODE_CONFIG CONTAINER_OR_FULL_CRI_ID` |

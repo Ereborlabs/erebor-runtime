@@ -181,6 +181,28 @@ Mithril pin, node process, lease work directory, or manual work directory.
 This qualifies `ENTRY-BINDING-GAP-001` only. It does not qualify the remaining
 entry fixtures. The phase remains **Blocked**.
 
+## Recorded External-Root-Ambiguity Qualification — 2026-08-17
+
+The retained Ubuntu 24.04 VM ran this root-shell command after
+`manual.sh start` and `manual.sh ssh`:
+
+```sh
+examples/mithril-identity-manual/external-ambiguity.sh
+```
+
+The shell used `identity_prepare_k3s_case`, started Mithril, and then moved
+two waiting host processes with the same command into the live Pod cgroup.
+Each inspected task had no creator, `external_runtime_root`,
+`runtime_external_restricted`, and coordinate state `3`. Their task cookies
+and process-state IDs differed. Their active role IDs were equal to the
+configured external role.
+
+The shell printed `PASS`. Its owned cleanup verified that the exact Pod cgroup
+was absent. Postflight found no case namespace, fixture directory, Mithril
+pin, node process, lease work directory, or manual work directory. This
+qualifies `ENTRY-EXTERNAL-AMBIGUITY-001` only. It does not qualify the
+remaining entry fixtures. The phase remains **Blocked**.
+
 ## Procedure
 
 1. Start the unchanged worker, legitimate controller, and all configured

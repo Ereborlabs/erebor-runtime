@@ -8,8 +8,8 @@ shell when an operator can run the case. It excludes completed rows and the
 approved administrative-exec physical path, which Phase 4 owns.
 
 Completed-row evidence remains in the phase result and acceptance record:
-`ENTRY-BINDING-GAP-001`, `ID-MOVED-PARENT-FORK-004`, and
-`ID-MOVED-TASK-EXEC-005`.
+`ENTRY-BINDING-GAP-001`, `ENTRY-EXTERNAL-AMBIGUITY-001`,
+`ID-MOVED-PARENT-FORK-004`, and `ID-MOVED-TASK-EXEC-005`.
 
 | Fixture ID | Current proof | Missing closure proof |
 | --- | --- | --- |
@@ -17,7 +17,6 @@ Completed-row evidence remains in the phase result and acceptance record:
 | `ENTRY-EPHEMERAL-001` | No fixture. | Ephemeral-container case. |
 | `ENTRY-EXEC-001` | One non-TTY `kubectl exec` subcase. | Runner fixture, TTY, copy-shaped, and identical native-child controls. |
 | `ENTRY-EXEC-002` | One direct CRI exec subcase. | Runner fixture and row JSON. |
-| `ENTRY-EXTERNAL-AMBIGUITY-001` | No fixture. | Concurrent indistinguishable-root case. |
 | `ENTRY-LOSS-001` | No fixture. | Independent runtime, audit, and entry-loss cases. |
 | `ENTRY-MIGRATE-001` | Blocked. Namespace-only entry, cgroup movement, and labeled native mount-namespace entry passed. The Phase 2 identity owner has no effect permission table, so an unlabeled moved root is restricted but has no first-effect denial oracle. No owned restore operation exists. | Add a Phase-2-compatible first-effect and restore mechanism before adding the remaining fixture, VM result, and manual shell. |
 | `ENTRY-NETPROBE-001` | No fixture. | HTTP, TCP, and gRPC cases. |

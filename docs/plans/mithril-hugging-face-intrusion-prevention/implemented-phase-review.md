@@ -2828,3 +2828,43 @@ namespace, fixture, exact Pod cgroup, node, pin, lease work, and manual work.
 
 This qualifies `ENTRY-BINDING-GAP-001` only. The remaining required rows are
 open. Phase 2 remains **Blocked**.
+
+## Concurrent External-Root Fixture Review — 2026-08-17
+
+Source commit `e0e2af9` extends the existing `IdentityTestRunner` and physical
+bundle. It adds no map, role, generic runner, or durable type.
+
+1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs)
+   starts two existing `NativeProcessFixture` roots and moves them into the
+   active binding while both remain live.
+2. The runner requires separate task cookies and process-state IDs. It also
+   requires no creator, the external-root class, the restricted external role,
+   one equal configured role ID, and runnable coordinates for both roots.
+3. [`external-ambiguity.sh`](../../../examples/mithril-identity-manual/external-ambiguity.sh)
+   starts the K3s binding first, then moves two processes with the same command
+   into the Pod cgroup. `identity-runtime.sh` removes the Pod, cgroup, node,
+   pins, lease, processes, and fixture directory.
+
+```mermaid
+sequenceDiagram
+    participant R as IdentityTestRunner
+    participant A as first external root
+    participant B as second external root
+    participant I as identity inspector
+
+    R->>A: move into active cgroup
+    R->>B: move into active cgroup
+    R->>I: inspect A and B while both are live
+    I-->>R: different identities, equal restricted role
+```
+
+The privileged VM passed on Linux `6.8.0-137-generic`. Its schema-11 JSON
+SHA-256 is `e259bb5f298d2ebcd0a0179176781e88925fef382ddb0f5a153410cb343167cf`.
+The roots had task cookies `12` and `19`, separate process-state IDs, no
+creator, `external_runtime_root`, `runtime_external_restricted`, role `11`,
+and `Runnable` coordinates. The runner removed its pin, lease, and cgroup.
+The manual shell printed `PASS`, and postflight found no namespace, fixture,
+pin, node process, lease work, Pod cgroup, or manual work.
+
+This qualifies `ENTRY-EXTERNAL-AMBIGUITY-001` only. The remaining required
+rows are open. Phase 2 remains **Blocked**.

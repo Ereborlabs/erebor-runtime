@@ -11,7 +11,7 @@ entry surfaces too.
 | `ENTRY-EPHEMERAL-001` | Add an ephemeral container that shares the PID namespace. | It receives a new independent root/profile; the shared namespace does not merge lineage. |
 | `ENTRY-EXEC-001` | Run TTY and non-TTY `kubectl exec` and a copy-shaped command. Start with [`kubernetes-exec.sh`](./kubernetes-exec.sh). | It is a restricted external root unless the approved path completes; a normal app child remains native. |
 | `ENTRY-EXEC-002` | Run direct `crictl exec` or `docker exec` with probe-identical argv using [`cri-exec.sh`](./cri-exec.sh) or [`docker-exec.sh`](./docker-exec.sh). | It is a restricted external root, never fabricated probe purpose. |
-| `ENTRY-EXTERNAL-AMBIGUITY-001` | Create indistinguishable external purposes concurrently. | They receive the same permission intersection/restricted class; timing and argv do not split them. |
+| `ENTRY-EXTERNAL-AMBIGUITY-001` | Create two identical external roots with [`external-ambiguity.sh`](./external-ambiguity.sh). | They have separate task/process identity and the same restricted external role; timing and argv do not split them. |
 | `ENTRY-LOSS-001` | Drop runtime, audit, and entry evidence independently. | Protected unknown state remains restricted and coverage records each loss. |
 | `ENTRY-MIGRATE-001` | Run the verified namespace-only `sleep 300` child from [`nsenter-move.sh`](./nsenter-move.sh), then move that child into the protected cgroup. | Namespace entry grants no workload identity. The cgroup move creates a restricted external root and never application authority. |
 | `ENTRY-NETPROBE-001` | Run HTTP, TCP, and gRPC probes. | No fake in-container process root appears; application receive and host flow remain distinct. |
