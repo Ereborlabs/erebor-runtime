@@ -325,6 +325,35 @@ cgroup-move subcase only. It does not prove a protected effect, an already
 labeled task that crosses a namespace boundary, restore, or complete
 `ENTRY-MIGRATE-001`. The phase remains **Blocked**.
 
+## Current Moved-Native VM Result — 2026-08-17
+
+The retained x86_64 Ubuntu 24.04 VM ran the current
+`IdentityTestRunner::physical_probe` at source commit
+`c1b15be02553ae6cd18210d23f9e2bb2447a9511`. The command used the unique root
+paths `/tmp/mithril-phase2-native-current.WXbFLa`,
+`/sys/fs/bpf/erebor-mithril-native-current-WXbFLa`, and
+`/sys/fs/cgroup/erebor-mithril-native-current-WXbFLa`. The
+`mithril-identity-test` binary SHA-256 was
+`ad9365eb1e89236b50f70284cdaa0688b2895e15259fd25293f5596e873a0566`.
+The result JSON SHA-256 was
+`25fde400976256d45d6b5a30f2c6854355af88dd910e99d97ef6c91c2de544da`.
+
+The result has `moved_parent_fork_denied=true`. The
+`CloneIntoCgroupFixture` saw the parent become fail-closed, then rejected its
+ordinary fork with `EACCES`. No operator shell is valid because reproducing
+that controlled move needs another fixture owner.
+
+The result has `moved_task_exec_denied=true`. The runner moved the stopped
+labeled child, required a fail-closed state, and required the child exec to
+fail. Operators can run the readable
+[`native-child.sh --moved-exec`](../../../../examples/mithril-identity-manual/native-child.sh)
+case in an existing VM.
+
+The JSON records removal of the pin root, lease, and cgroup. Postflight found
+no node or fixture process. This result qualifies
+`ID-MOVED-PARENT-FORK-004` and `ID-MOVED-TASK-EXEC-005` only. The phase remains
+**Blocked**.
+
 ## Native Identity Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |

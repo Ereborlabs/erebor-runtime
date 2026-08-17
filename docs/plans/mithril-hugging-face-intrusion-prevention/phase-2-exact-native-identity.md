@@ -437,3 +437,41 @@ process, lease, or cgroup. This is a qualified namespace-entry and cgroup-move
 subcase of `ENTRY-MIGRATE-001`. It does not test a protected effect, movement
 of an already labeled task through a namespace boundary, restore, or the full
 fixture. The phase remains **Blocked**.
+
+## Current Moved-Native Rows — 2026-08-17
+
+At source commit `c1b15be02553ae6cd18210d23f9e2bb2447a9511`, the retained
+x86_64 Ubuntu 24.04 VM ran this root-shell command with unique paths:
+
+```sh
+/mnt/mithril-source/target/debug/mithril-identity-test \
+  --repo-root /mnt/mithril-source \
+  --output-directory /tmp/mithril-phase2-native-current.WXbFLa \
+  physical-probe \
+  --cgroup-path /sys/fs/cgroup/erebor-mithril-native-current-WXbFLa \
+  --pin-root /sys/fs/bpf/erebor-mithril-native-current-WXbFLa \
+  --lease-path /tmp/mithril-phase2-native-current.WXbFLa/owner.lock
+```
+
+The binary SHA-256 was
+`ad9365eb1e89236b50f70284cdaa0688b2895e15259fd25293f5596e873a0566`.
+The `identity.rs` SHA-256 was
+`55a41850493db34587f6ccb513bcad33e016ce3b0a23e5bcca23f67a26643ec2`.
+The `clone3.rs` SHA-256 was
+`8bebbc088420f8280e9e3fa80717f2901ff48c530aca2e1c7e6fedd97d444e78`.
+The JSON SHA-256 was
+`25fde400976256d45d6b5a30f2c6854355af88dd910e99d97ef6c91c2de544da`.
+
+The result recorded `moved_parent_fork_denied=true` and
+`moved_task_exec_denied=true`. It recorded
+`pin_root_removed=true`, `lease_removed=true`, `cgroup_removed=true`, and
+`profile_task_refs_after_exit=0`. Postflight found no probe pin, lease,
+cgroup, node, or fixture process.
+
+This current result qualifies `ID-MOVED-PARENT-FORK-004` and
+`ID-MOVED-TASK-EXEC-005`. The first case has no valid operator shell because
+the controlled `CloneIntoCgroupFixture` owns its process synchronization. The
+second case has the readable
+[`native-child.sh --moved-exec`](../../../../examples/mithril-identity-manual/native-child.sh)
+procedure. The other matrix rows remain unqualified. The phase remains
+**Blocked**.

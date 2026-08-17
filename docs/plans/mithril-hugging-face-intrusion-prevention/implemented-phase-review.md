@@ -481,7 +481,7 @@ reads the stored creator edge and the current interval after the child execs.
 Source change `8dbd9f5910cceeb9155a2701f47bbdfe25f58d25` adds the source-backed
 check for `ID-MOVED-PARENT-FORK-004`. It reuses the existing protected
 `CloneIntoCgroupFixture`, inspector, and physical-probe bundle. It adds one
-boolean result. No privileged VM has run this slice. Phase 2 remains
+boolean result. The later VM qualification is below. Phase 2 remains
 **Blocked**.
 
 Review this narrow path in order:
@@ -2519,3 +2519,30 @@ Mithril working tree on 2026-08-13. It covers BPF object SHA-256
 `c1c4215a7b645344507cf02f27fcaeb085970d1b20cbfda402bdabcc019ce403`.
 A later source or BPF-object change needs new source checks and a new
 privileged record.
+
+## Current Moved-Native Fixture Review — 2026-08-17
+
+This update covers source commit `c1b15be02553ae6cd18210d23f9e2bb2447a9511`.
+Read the existing physical fixture path in this order:
+
+1. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L272)
+   creates the unique cgroup, starts the node, checks task state, and removes
+   the pin, lease, and cgroup.
+2. [`CloneIntoCgroupFixture`](../../../crates/mithril-e2e/src/identity/clone3.rs#L14)
+   owns the stopped root and its pidfds. The runner moves that root, observes
+   `FailClosedUnknown`, and calls its ordinary-fork denial check.
+3. [`NativeProcessFixture`](../../../crates/mithril-e2e/src/identity.rs#L1053)
+   owns the stopped native child. The runner moves that child, then requires
+   the denied exec result.
+4. [`erebor_bprm_check_security`](../../../bpf/erebor-interceptor/programs/identity_exec.bpf.h#L630)
+   stages the task exec state. The BPF commit path preserves the fail-closed
+   placement state instead of restoring a runnable exec.
+
+The current VM result JSON SHA-256 is
+`25fde400976256d45d6b5a30f2c6854355af88dd910e99d97ef6c91c2de544da`.
+It records `moved_parent_fork_denied=true`,
+`moved_task_exec_denied=true`, and removal of the dedicated pin root, lease,
+and cgroup. No operator shell is valid for the controlled moved-parent case.
+[`native-child.sh --moved-exec`](../../../examples/mithril-identity-manual/native-child.sh)
+is the operator procedure for the moved-task exec case. This result does not
+qualify any other fixture row.
