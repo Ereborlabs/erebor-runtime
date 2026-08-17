@@ -425,6 +425,49 @@ no node or fixture process. This result qualifies
 `ID-MOVED-PARENT-FORK-004` and `ID-MOVED-TASK-EXEC-005` only. The phase remains
 **Blocked**.
 
+## Subreaper Reparenting VM Result — 2026-08-17
+
+The qualifying source commit is `7f742772b5f6bf51a9eee9e48cc63197c08480a1`.
+The retained x86_64 Ubuntu 24.04 VM ran kernel `6.8.0-137-generic`.
+It ran the production probe with unique paths under
+`/tmp/mithril-phase2-subreaper-20260817-1642`,
+`/sys/fs/bpf/erebor-mithril-phase2-subreaper-20260817-1642`, and
+`/sys/fs/cgroup/erebor-mithril-phase2-subreaper-20260817-1642`.
+
+The schema-9 result is
+`/tmp/mithril-phase2-subreaper-20260817-1642/identity-physical-probe.json`.
+Its SHA-256 is
+`a448889bbed4a157af9146ef7f504cac25fefc0682b2f030fc120a6e2fe6882e`.
+The BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+
+The source fixture makes the restricted external root a Linux child
+subreaper. It creates an intermediate native child and a stopped grandchild.
+The intermediate exit reparents the grandchild to the root. The grandchild
+then executes `sleep`. The exact final limits are task cookie `133`, creator
+cookie `127`, real-parent cookie `0`, real-parent TID and TGID `6997`,
+real-parent interval `2`, active role `11`, runnable coordinate, active process
+execution and state vector, and no exec guard. The task cookie, creator cookie,
+process state, and role remain unchanged. The execution and image IDs change.
+
+The same VM then ran this command as root:
+
+```sh
+examples/mithril-identity-manual/native-child.sh --subreaper
+```
+
+The manual shell printed `PASS`. It used `identity_prepare_k3s_case` to own
+its Pod, CRI binding, fixture directory, node, pin, lease, state, and cleanup.
+It checked the same creator, parent-coordinate, execution, image, role, and
+active-state limits. Postflight found no case namespace, fixture directory,
+Mithril pin, node process, lease, or cgroup. The result JSON records
+`pin_root_removed=true`, `lease_removed=true`, `cgroup_removed=true`, and
+`profile_task_refs_after_exit=0`.
+
+This is physical and manual evidence for the subreaper subcase of
+`ID-CREATOR-PARENT-007`. Namespace-init reparenting, ptrace reparenting, and
+PID reuse remain unqualified. The phase remains **Blocked**.
+
 ## Native Identity Fixture Matrix
 
 | Fixture | Operator action | Required oracle and legitimate control |
@@ -435,7 +478,7 @@ no node or fixture process. This result qualifies
 | `ID-CGROUP-ESCAPE-001` | move a labeled task to host/unprotected placement | task storage still resolves and denies mismatch; unmoved allowed control works |
 | `ID-CLONE-CGROUP-002` | clone into expected and changed placement | child state exists before effect and placement is verified |
 | `ID-CLONE-CGROUP-FAIL-003` | force child allocation/finalization/placement failure | no unlabeled runnable child gains authority; normal clone succeeds |
-| `ID-CREATOR-PARENT-007` | reparent or orphan a child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for creator exit and [`native-child.sh --double-fork`](../../../../examples/mithril-identity-manual/native-child.sh) for double fork. | immutable creator edge stays exact while the real-parent interval changes. The qualified branches do not cover subreapers, namespace-init reparenting, ptrace reparenting, or PID reuse. |
+| `ID-CREATOR-PARENT-007` | reparent or orphan a child after native creation. Use [`native-child.sh --orphan`](../../../../examples/mithril-identity-manual/native-child.sh) for creator exit, [`native-child.sh --double-fork`](../../../../examples/mithril-identity-manual/native-child.sh) for double fork, and [`native-child.sh --subreaper`](../../../../examples/mithril-identity-manual/native-child.sh) for subreaper reparenting. | immutable creator edge stays exact while the real-parent interval changes. The qualified branches do not cover namespace-init reparenting, ptrace reparenting, or PID reuse. |
 | `ID-MOVED-PARENT-FORK-004` | move parent, then fork | child inherits actual task authority and placement floor, not cgroup-derived role |
 | `ID-MOVED-TASK-EXEC-005` | move labeled task, then exec | task-first old identity and placement mismatch constrain transition |
 | `ID-TASK-COORD-FINALIZE-006` | inspect task at allocation, pre-wake finalization, visibility, and exit | opaque state precedes effect; PID/TGID/start coordinates finalize later without granting permission |

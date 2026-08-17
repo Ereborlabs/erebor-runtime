@@ -573,3 +573,43 @@ second case has the readable
 [`native-child.sh --moved-exec`](../../../../examples/mithril-identity-manual/native-child.sh)
 procedure. The other matrix rows remain unqualified. The phase remains
 **Blocked**.
+
+## Subreaper Reparenting Qualification — 2026-08-17
+
+The qualifying source commit is `7f742772b5f6bf51a9eee9e48cc63197c08480a1`.
+The retained x86_64 Ubuntu 24.04 VM ran kernel `6.8.0-137-generic`.
+It ran `IdentityTestRunner::physical_probe` with unique output, pin, lease,
+and cgroup paths. The schema-9 JSON is
+`/tmp/mithril-phase2-subreaper-20260817-1642/identity-physical-probe.json`.
+Its SHA-256 is
+`a448889bbed4a157af9146ef7f504cac25fefc0682b2f030fc120a6e2fe6882e`.
+The BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+
+The fixture created restricted external root task `124`, native intermediate
+task `127`, and stopped native child task `133`. Before the intermediate exit,
+the child creator and real-parent cookie were `127`. After the exit and child
+`sleep` exec, the child kept task cookie `133`, creator cookie `127`, process
+state, and restricted role `11`. Its real-parent cookie was `0`, its
+real-parent coordinates were the live root TID and TGID `6997`, and its
+real-parent interval changed from `1` to `2`. Its execution and image IDs
+changed. Its coordinate and both process records remained active, and its exec
+guard was none.
+
+The same VM ran this root-shell command:
+
+```sh
+examples/mithril-identity-manual/native-child.sh --subreaper
+```
+
+The shell created its K3s Pod and live CRI binding through
+`identity_prepare_k3s_case`. It printed `PASS`. It checked the same immutable
+creator, real-parent coordinate, execution, image, role, and active-state
+limits. Postflight found no case namespace, fixture directory, Mithril pin,
+node process, lease, or cgroup. The JSON records
+`pin_root_removed=true`, `lease_removed=true`, `cgroup_removed=true`, and
+`profile_task_refs_after_exit=0`.
+
+This qualifies the subreaper reparenting subcase of
+`ID-CREATOR-PARENT-007` only. Namespace-init, ptrace reparenting, and PID reuse
+remain required. The phase remains **Blocked**.

@@ -2638,3 +2638,65 @@ and cgroup. No operator shell is valid for the controlled moved-parent case.
 [`native-child.sh --moved-exec`](../../../examples/mithril-identity-manual/native-child.sh)
 is the operator procedure for the moved-task exec case. This result does not
 qualify any other fixture row.
+
+## Subreaper Reparenting Fixture Review — 2026-08-17
+
+This update covers source commit `7f742772b5f6bf51a9eee9e48cc63197c08480a1`.
+It adds no BPF map, role, or runner. It extends the existing physical bundle
+and task inspection record with the existing real-parent coordinates.
+
+Review this path in order:
+
+1. [`NativeProcessFixture::start_subreaper`](../../../crates/mithril-e2e/src/identity.rs#L1529)
+   owns the restricted root, intermediate child, stopped grandchild, pidfds,
+   and shutdown. The root enables Linux child-subreaper mode after the runner
+   places and labels it.
+2. [`IdentityTestRunner::physical_probe`](../../../crates/mithril-e2e/src/identity.rs#L1087)
+   snapshots the three tasks. It terminates the intermediate through its pidfd,
+   waits for adoption, releases the grandchild, and requires the exact final
+   record.
+3. [`NativeIdentityInspector::snapshot`](../../../crates/mithril-node/src/identity/inspection.rs#L54)
+   reads the current parent interval from the existing pinned map. Its output
+   includes the parent TID, TGID, PID namespace inode, and start time. It does
+   not infer a parent in user space.
+4. [`native-child.sh --subreaper`](../../../examples/mithril-identity-manual/native-child.sh#L334)
+   provides the root-only K3s operator case. `identity-runtime.sh` owns its
+   Pod, CRI binding, node, pin, lease, and cleanup.
+5. [`native_process_fixture_executes_after_subreaper_reparenting`](../../../crates/mithril-e2e/src/identity.rs#L2261)
+   proves the Linux process topology before the physical runner loads Mithril.
+
+```mermaid
+sequenceDiagram
+    participant R as IdentityTestRunner
+    participant P as labeled subreaper root
+    participant M as native intermediate
+    participant C as stopped native child
+    participant I as inspector
+
+    R->>P: release root after placement
+    P->>M: fork
+    M->>C: fork and stop
+    R->>I: inspect creator M and parent M
+    R->>M: terminate through pidfd
+    M-->>P: exit; Linux reparents C to P
+    R->>C: resume through pidfd
+    C->>C: exec sleep
+    R->>I: require creator M and parent coordinates P
+```
+
+[`refresh_real_parent`](../../../bpf/erebor-interceptor/programs/identity_task_helpers.h#L270)
+closes the earlier parent interval when the kernel coordinates change. The BPF
+program records cookie `0` for this reparented parent and records its exact
+kernel coordinates. This behavior matches the architecture field
+`real_parent_task_cookie_or_coordinates`. It does not give the new parent
+authority over the child's immutable creator edge or restricted role.
+
+The privileged VM passed on kernel `6.8.0-137-generic`. Its schema-9 JSON
+SHA-256 is `a448889bbed4a157af9146ef7f504cac25fefc0682b2f030fc120a6e2fe6882e`.
+The BPF object SHA-256 is
+`69ee79417f875f7c7a7065d18e08918e9d9bc32359711b57013eba77879fbcbe`.
+The physical runner removed its fixture, pin, lease, and cgroup. The manual
+command printed `PASS` and removed its namespace, fixture, node, pin, lease,
+and cgroup. This qualifies the subreaper subcase only. Namespace-init
+reparenting, ptrace reparenting, and PID reuse remain open. Phase 2 remains
+**Blocked**.
