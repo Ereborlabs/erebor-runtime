@@ -214,6 +214,7 @@ fi
   "$remote_source/bpf/erebor-interceptor/qualification" \
   "$remote_source/crates/mithril-e2e/fixtures/hugging-face/platforms" \
   "$remote_source/crates/mithril-e2e/fixtures/hugging-face/protected" \
+  "$remote_source/crates/mithril-e2e/fixtures/identity" \
   "$remote_source/crates/mithril-e2e/fixtures/mithril-policy" \
   "$remote_root/harness" "$remote_bin"
 
@@ -240,6 +241,9 @@ fi
   "$remote_source/bpf/erebor-interceptor/qualification/feasibility.bpf.c"
 "$provider" put "$vm_name" "$directory/guest.sh" \
   "$remote_root/harness/guest.sh"
+"$provider" put "$vm_name" \
+  "$repo_root/crates/mithril-e2e/fixtures/identity/kubernetes-entry-workload-v1.yaml" \
+  "$remote_source/crates/mithril-e2e/fixtures/identity/kubernetes-entry-workload-v1.yaml"
 for fixture in observe-profile-seal-request.json test-public-key.hex test-signing-key.hex observe-policy-v1.yaml; do
   "$provider" put "$vm_name" \
     "$repo_root/crates/mithril-e2e/fixtures/mithril-policy/$fixture" \
@@ -261,6 +265,15 @@ done
 "$provider" run "$vm_name" sudo bash "$remote_root/harness/guest.sh" \
   platform "$remote_bin/mithril-inspect" "$remote_root" \
   >"$output_directory/platform.txt"
+
+identity_output=$remote_root/identity
+"$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
+  --repo-root "$remote_source" --output-directory "$identity_output" \
+  physical-probe --pin-root "/sys/fs/bpf/$vm_name-identity" \
+  --lease-path "$identity_output/owner.lock" \
+  --cgroup-path "/sys/fs/cgroup/$vm_name-identity"
+"$provider" get "$vm_name" "$identity_output/identity-physical-probe.json" \
+  "$output_directory/identity-physical-probe.json"
 
 if [[ $with_k3s == true ]]; then
   run_k3s_cri_effect() {
@@ -355,15 +368,6 @@ qualification_output=$remote_root/kernel-qualification
   --probe-binary "$repo_root/target/debug/mithril-kernel-qualification" \
   --output "$output_directory/kernel-qualification-x86_64.json"
 
-identity_output=$remote_root/identity
-"$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
-  --repo-root "$remote_source" --output-directory "$identity_output" \
-  physical-probe --pin-root "/sys/fs/bpf/$vm_name-identity" \
-  --lease-path "$identity_output/owner.lock" \
-  --cgroup-path "/sys/fs/cgroup/$vm_name-identity"
-"$provider" get "$vm_name" "$identity_output/identity-physical-probe.json" \
-  "$output_directory/identity-physical-probe.json"
-
 observation_output=$remote_root/effect-observation
 "$provider" run "$vm_name" sudo "$remote_bin/mithril-effect-test" \
   --repo-root "$remote_source" physical-probe \
@@ -384,6 +388,20 @@ enforcement_output=$remote_root/local-enforcement
 "$provider" get "$vm_name" "$enforcement_output/effect-physical-probe.json" \
   "$output_directory/local-enforcement-physical-probe.json"
 
+if [[ $with_k3s == true ]]; then
+  kubernetes_identity_output=$remote_root/kubernetes-identity
+  "$provider" run "$vm_name" sudo "$remote_bin/mithril-identity-test" \
+    --repo-root "$remote_source" --output-directory "$kubernetes_identity_output" \
+    physical-probe --pin-root "/sys/fs/bpf/$vm_name-kubernetes-identity" \
+    --lease-path "$kubernetes_identity_output/owner.lock" \
+    --cgroup-path "/sys/fs/cgroup/$vm_name-kubernetes-identity" \
+    --with-kubernetes \
+    --previous-bundle "$identity_output/identity-physical-probe.json"
+  "$provider" get "$vm_name" \
+    "$kubernetes_identity_output/identity-physical-probe.json" \
+    "$output_directory/identity-physical-probe.json"
+fi
+
 verify_absent() {
   local path=$1
   "$provider" run "$vm_name" sudo test ! -e "$path" || {
@@ -399,6 +417,12 @@ verify_absent "/sys/fs/cgroup/$vm_name-identity"
 verify_absent "/sys/fs/cgroup/$vm_name-effect-observation"
 verify_absent "/sys/fs/cgroup/$vm_name-local-enforcement"
 verify_absent "$identity_output/owner.lock"
+if [[ $with_k3s == true ]]; then
+  verify_absent "$remote_root/kubernetes-identity/kubernetes-entry"
+  verify_absent "$remote_root/kubernetes-identity/owner.lock"
+  verify_absent "/sys/fs/bpf/$vm_name-kubernetes-identity"
+  verify_absent "/sys/fs/cgroup/$vm_name-kubernetes-identity"
+fi
 verify_absent "$observation_output/owner.lock"
 verify_absent "$enforcement_output/owner.lock"
 verify_absent "$remote_bin/feasibility.bpf.owner.lock"

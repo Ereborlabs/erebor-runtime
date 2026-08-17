@@ -17,7 +17,7 @@ use erebor_interceptor::{
 };
 use erebor_interceptor_abi::{
     ExecGuardStateV1, IdentityRuntimeConfigV1, ProcessExecutionStateV1, ProcessStateVectorStateV1,
-    TaskCoordinateStateV1, TaskCoordinateV1,
+    TaskCoordinateStateV1,
 };
 use libbpf_rs::{MapHandle, MapType};
 use mithril_node::{
@@ -25,9 +25,9 @@ use mithril_node::{
     WorkloadBindingOwner,
 };
 use rustix::process::{pidfd_open, pidfd_send_signal, Pid, PidfdFlags, Signal};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use snafu::{ensure, ResultExt as _};
-use zerocopy::{FromBytes as _, TryFromBytes as _};
+use zerocopy::FromBytes as _;
 
 use crate::closure::ArchitectureClosure;
 use crate::error::{InterceptorSnafu, InvalidInputSnafu, IoSnafu, JsonSnafu, NodeSnafu};
@@ -137,7 +137,7 @@ pub struct IdentityVerificationBundleV1 {
     pub identity_fixture_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct IdentityPhysicalProbeBundleV1 {
     pub schema_version: u32,
     pub object_sha256: String,
@@ -162,9 +162,6 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub non_leader_thread_exec_committed: bool,
     pub non_leader_thread_exec_root: NativeTaskSnapshotV1,
     pub non_leader_thread_exec_after_exec: NativeTaskSnapshotV1,
-    pub concurrent_thread_exec_committed: bool,
-    pub concurrent_thread_exec_root: NativeTaskSnapshotV1,
-    pub concurrent_thread_exec_after_exec: NativeTaskSnapshotV1,
     pub clone_into_cgroup_external_root: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child: NativeTaskSnapshotV1,
     pub clone_into_cgroup_native_child_after_namespace_move: NativeTaskSnapshotV1,
@@ -197,6 +194,10 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub pin_root_removed: bool,
     pub lease_removed: bool,
     pub cgroup_removed: bool,
+    pub kubernetes_initial_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_direct_cri_exec_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_kubectl_exec_root: Option<NativeTaskSnapshotV1>,
+    pub kubernetes_fixture_removed: bool,
 }
 
 pub struct IdentityTestRunner {
@@ -313,13 +314,11 @@ impl IdentityTestRunner {
         let execfail_path = output_directory.join("execfail");
         let execfail_ready_path = output_directory.join("execfail-ready");
         let non_leader_thread_ready_path = output_directory.join("non-leader-thread-ready");
-        let concurrent_thread_ready_path = output_directory.join("concurrent-thread-ready");
         let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
         ensure!(
             !execfail_path.exists()
                 && !execfail_ready_path.exists()
                 && !non_leader_thread_ready_path.exists()
-                && !concurrent_thread_ready_path.exists()
                 && !cgroup_escape_sentinel_path.exists(),
             InvalidInputSnafu {
                 path: output_directory,
@@ -329,7 +328,6 @@ impl IdentityTestRunner {
         let execfail_cleanup = ProbeFile::new(&execfail_path);
         let execfail_ready_cleanup = ProbeFile::new(&execfail_ready_path);
         let non_leader_thread_ready_cleanup = ProbeFile::new(&non_leader_thread_ready_path);
-        let concurrent_thread_ready_cleanup = ProbeFile::new(&concurrent_thread_ready_path);
         let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
         self.materialize_execfail(&execfail_path)?;
         fs::write(
@@ -399,8 +397,10 @@ impl IdentityTestRunner {
             })?;
         ensure!(
             binding_gap_reconciled_root.creator_task_cookie.is_none()
-                && binding_gap_reconciled_root.root_class == Some("restored_or_unknown_root")
-                && binding_gap_reconciled_root.installed_role_class == Some("fail_closed_unknown")
+                && binding_gap_reconciled_root.root_class.as_deref()
+                    == Some("restored_or_unknown_root")
+                && binding_gap_reconciled_root.installed_role_class.as_deref()
+                    == Some("fail_closed_unknown")
                 && binding_gap_reconciled_root.active_role_id == binding.external_role_id
                 && binding_gap_reconciled_root.coordinate_state
                     == TaskCoordinateStateV1::Runnable as u8
@@ -453,11 +453,11 @@ impl IdentityTestRunner {
                     != external_ambiguity_second_root.task_cookie
                 && external_ambiguity_first_root.process_state_id
                     != external_ambiguity_second_root.process_state_id
-                && external_ambiguity_first_root.root_class == Some("external_runtime_root")
-                && external_ambiguity_second_root.root_class == Some("external_runtime_root")
-                && external_ambiguity_first_root.installed_role_class
+                && external_ambiguity_first_root.root_class.as_deref() == Some("external_runtime_root")
+                && external_ambiguity_second_root.root_class.as_deref() == Some("external_runtime_root")
+                && external_ambiguity_first_root.installed_role_class.as_deref()
                     == Some("runtime_external_restricted")
-                && external_ambiguity_second_root.installed_role_class
+                && external_ambiguity_second_root.installed_role_class.as_deref()
                     == Some("runtime_external_restricted")
                 && external_ambiguity_same_restricted_role
                 && external_ambiguity_first_root.active_role_id == binding.external_role_id
@@ -507,8 +507,9 @@ impl IdentityTestRunner {
         ensure!(
             escape_root_before_move.creator_task_cookie.is_none()
                 && cgroup_escape_root.creator_task_cookie.is_none()
-                && cgroup_escape_root.root_class == Some("external_runtime_root")
-                && cgroup_escape_root.installed_role_class == Some("runtime_external_restricted")
+                && cgroup_escape_root.root_class.as_deref() == Some("external_runtime_root")
+                && cgroup_escape_root.installed_role_class.as_deref()
+                    == Some("runtime_external_restricted")
                 && health_after_escape.placement_mismatches
                     > health_before_escape.placement_mismatches,
             InvalidInputSnafu {
@@ -556,8 +557,9 @@ impl IdentityTestRunner {
         )?;
         ensure!(
             clone_external_root.creator_task_cookie.is_none()
-                && clone_external_root.root_class == Some("external_runtime_root")
-                && clone_external_root.installed_role_class == Some("runtime_external_restricted")
+                && clone_external_root.root_class.as_deref() == Some("external_runtime_root")
+                && clone_external_root.installed_role_class.as_deref()
+                    == Some("runtime_external_restricted")
                 && clone_native_child.creator_task_cookie == Some(clone_external_root.task_cookie)
                 && clone_native_child.real_parent_task_cookie == clone_external_root.task_cookie
                 && clone_native_child.root_class.is_none()
@@ -645,8 +647,9 @@ impl IdentityTestRunner {
         })?;
         ensure!(
             external_root.creator_task_cookie.is_none()
-                && external_root.root_class == Some("external_runtime_root")
-                && external_root.installed_role_class == Some("runtime_external_restricted")
+                && external_root.root_class.as_deref() == Some("external_runtime_root")
+                && external_root.installed_role_class.as_deref()
+                    == Some("runtime_external_restricted")
                 && external_root.active_role_id == binding.external_role_id
                 && external_root.coordinate_state == TaskCoordinateStateV1::Runnable as u8
                 && before_exec.creator_task_cookie == Some(external_root.task_cookie)
@@ -709,8 +712,9 @@ impl IdentityTestRunner {
             })?;
         ensure!(
             non_leader_thread_exec_root.creator_task_cookie.is_none()
-                && non_leader_thread_exec_root.root_class == Some("external_runtime_root")
-                && non_leader_thread_exec_root.installed_role_class
+                && non_leader_thread_exec_root.root_class.as_deref()
+                    == Some("external_runtime_root")
+                && non_leader_thread_exec_root.installed_role_class.as_deref()
                     == Some("runtime_external_restricted")
                 && non_leader_thread_exec_root.active_role_id == binding.external_role_id
                 && non_leader_thread_exec_root.coordinate_state
@@ -777,141 +781,6 @@ impl IdentityTestRunner {
         non_leader_thread_fixture.stop();
         non_leader_thread_ready_cleanup.cleanup()?;
 
-        let mut concurrent_thread_fixture =
-            NativeProcessFixture::start_with_concurrent_thread_exec(&concurrent_thread_ready_path)?;
-        let concurrent_thread_root_pid = concurrent_thread_fixture.outer_pid();
-        fs::write(&procs_path, concurrent_thread_root_pid.to_string())
-            .context(IoSnafu { path: &procs_path })?;
-        let concurrent_thread_exec_root =
-            self.wait_for("concurrent thread exec root identity", &procs_path, || {
-                inspector
-                    .snapshot(concurrent_thread_root_pid)
-                    .context(NodeSnafu)
-            })?;
-        ensure!(
-            concurrent_thread_exec_root.creator_task_cookie.is_none()
-                && concurrent_thread_exec_root.root_class == Some("external_runtime_root")
-                && concurrent_thread_exec_root.installed_role_class
-                    == Some("runtime_external_restricted")
-                && concurrent_thread_exec_root.active_role_id == binding.external_role_id
-                && concurrent_thread_exec_root.coordinate_state
-                    == TaskCoordinateStateV1::Runnable as u8,
-            InvalidInputSnafu {
-                path: &procs_path,
-                reason: "concurrent thread exec root has the wrong identity",
-            }
-        );
-        let next_id_before_concurrent_threads = identity_next_id(&host)?;
-        let expected_next_id_after_concurrent_threads = next_id_before_concurrent_threads
-            .checked_add(4)
-            .ok_or_else(|| {
-                invalid_state("identity ID sequence overflowed for concurrent threads")
-            })?;
-        concurrent_thread_fixture.release_root()?;
-        let concurrent_thread_tids = self.wait_for(
-            "concurrent Python thread creation",
-            &concurrent_thread_ready_path,
-            || concurrent_thread_fixture.concurrent_thread_tids(&concurrent_thread_ready_path),
-        )?;
-        let [first_concurrent_thread_tid, second_concurrent_thread_tid] = concurrent_thread_tids;
-        let first_concurrent_thread_path = PathBuf::from(format!(
-            "/proc/{concurrent_thread_root_pid}/task/{first_concurrent_thread_tid}"
-        ));
-        let second_concurrent_thread_path = PathBuf::from(format!(
-            "/proc/{concurrent_thread_root_pid}/task/{second_concurrent_thread_tid}"
-        ));
-        let concurrent_thread_root_coordinate =
-            self.wait_for("concurrent thread root coordinate", &procs_path, || {
-                task_coordinate_for_host_tid(
-                    &host,
-                    concurrent_thread_root_pid,
-                    concurrent_thread_root_pid,
-                )
-            })?;
-        let first_concurrent_thread_coordinate = self.wait_for(
-            "first concurrent thread coordinate",
-            &first_concurrent_thread_path,
-            || {
-                task_coordinate_for_host_tid(
-                    &host,
-                    first_concurrent_thread_tid,
-                    concurrent_thread_root_pid,
-                )
-            },
-        )?;
-        let second_concurrent_thread_coordinate = self.wait_for(
-            "second concurrent thread coordinate",
-            &second_concurrent_thread_path,
-            || {
-                task_coordinate_for_host_tid(
-                    &host,
-                    second_concurrent_thread_tid,
-                    concurrent_thread_root_pid,
-                )
-            },
-        )?;
-        let next_id_after_concurrent_threads = identity_next_id(&host)?;
-        ensure!(
-            first_concurrent_thread_tid != concurrent_thread_root_pid
-                && second_concurrent_thread_tid != concurrent_thread_root_pid
-                && first_concurrent_thread_path.is_dir()
-                && second_concurrent_thread_path.is_dir()
-                && concurrent_thread_root_coordinate.task_cookie
-                    == concurrent_thread_exec_root.task_cookie
-                && first_concurrent_thread_coordinate.task_cookie
-                    != second_concurrent_thread_coordinate.task_cookie
-                && first_concurrent_thread_coordinate.task_cookie
-                    != concurrent_thread_exec_root.task_cookie
-                && second_concurrent_thread_coordinate.task_cookie
-                    != concurrent_thread_exec_root.task_cookie
-                && first_concurrent_thread_coordinate.process_state_id
-                    == concurrent_thread_root_coordinate.process_state_id
-                && second_concurrent_thread_coordinate.process_state_id
-                    == concurrent_thread_root_coordinate.process_state_id
-                && first_concurrent_thread_coordinate.state == TaskCoordinateStateV1::Runnable
-                && second_concurrent_thread_coordinate.state == TaskCoordinateStateV1::Runnable
-                && next_id_after_concurrent_threads == expected_next_id_after_concurrent_threads,
-            InvalidInputSnafu {
-                path: &concurrent_thread_ready_path,
-                reason: format!(
-                    "concurrent Python threads did not receive two exact task identities; expected next ID {expected_next_id_after_concurrent_threads}, got {next_id_after_concurrent_threads}"
-                ),
-            }
-        );
-        let concurrent_thread_task_cookies = BTreeSet::from([
-            first_concurrent_thread_coordinate.task_cookie,
-            second_concurrent_thread_coordinate.task_cookie,
-        ]);
-        concurrent_thread_fixture.release_concurrent_thread_exec()?;
-        let concurrent_thread_exec_after_exec =
-            self.wait_for("concurrent thread exec commit", &procs_path, || {
-                let snapshot = inspector
-                    .snapshot(concurrent_thread_root_pid)
-                    .context(NodeSnafu)?;
-                Ok(snapshot.filter(|snapshot| {
-                    concurrent_thread_task_cookies.contains(&snapshot.task_cookie)
-                        && snapshot.creator_task_cookie
-                            == Some(concurrent_thread_exec_root.task_cookie)
-                        && snapshot.process_state_id == concurrent_thread_exec_root.process_state_id
-                        && snapshot.active_execution_id
-                            != concurrent_thread_exec_root.active_execution_id
-                        && snapshot.image_provenance_id
-                            != concurrent_thread_exec_root.image_provenance_id
-                        && snapshot.active_role_id == concurrent_thread_exec_root.active_role_id
-                        && snapshot.root_class.is_none()
-                        && snapshot.installed_role_class.is_none()
-                        && snapshot.host_tid == concurrent_thread_root_pid
-                        && snapshot.host_tgid == concurrent_thread_root_pid
-                        && snapshot.coordinate_state == TaskCoordinateStateV1::Runnable as u8
-                        && snapshot.process_execution_state == ProcessExecutionStateV1::Active as u8
-                        && snapshot.process_state_vector_state
-                            == ProcessStateVectorStateV1::Active as u8
-                        && snapshot.exec_guard_state == ExecGuardStateV1::None as u8
-                }))
-            })?;
-        concurrent_thread_fixture.stop();
-        concurrent_thread_ready_cleanup.cleanup()?;
-
         let mut failed_exec_fixture =
             NativeProcessFixture::start_with_failed_exec(&execfail_path, &execfail_ready_path)?;
         fs::write(&procs_path, failed_exec_fixture.outer_pid().to_string())
@@ -940,8 +809,9 @@ impl IdentityTestRunner {
             )
             .context(InterceptorSnafu)?;
         ensure!(
-            failed_exec_parent.root_class == Some("external_runtime_root")
-                && failed_exec_parent.installed_role_class == Some("runtime_external_restricted")
+            failed_exec_parent.root_class.as_deref() == Some("external_runtime_root")
+                && failed_exec_parent.installed_role_class.as_deref()
+                    == Some("runtime_external_restricted")
                 && failed_exec_pending.is_none()
                 && failed_exec_before.creator_task_cookie == Some(failed_exec_parent.task_cookie)
                 && failed_exec_before.real_parent_task_cookie == failed_exec_parent.task_cookie
@@ -1052,8 +922,9 @@ impl IdentityTestRunner {
                 inspector.snapshot(moved_task_pid).context(NodeSnafu)
             })?;
         ensure!(
-            moved_task_parent.root_class == Some("external_runtime_root")
-                && moved_task_parent.installed_role_class == Some("runtime_external_restricted")
+            moved_task_parent.root_class.as_deref() == Some("external_runtime_root")
+                && moved_task_parent.installed_role_class.as_deref()
+                    == Some("runtime_external_restricted")
                 && moved_task_before_move.creator_task_cookie
                     == Some(moved_task_parent.task_cookie)
                 && moved_task_before_move.real_parent_task_cookie == moved_task_parent.task_cookie
@@ -1130,8 +1001,8 @@ impl IdentityTestRunner {
                     .context(NodeSnafu)
             })?;
         ensure!(
-            orphaned_native_parent.root_class == Some("external_runtime_root")
-                && orphaned_native_parent.installed_role_class
+            orphaned_native_parent.root_class.as_deref() == Some("external_runtime_root")
+                && orphaned_native_parent.installed_role_class.as_deref()
                     == Some("runtime_external_restricted")
                 && orphaned_native_child_before_parent_exit.creator_task_cookie
                     == Some(orphaned_native_parent.task_cookie)
@@ -1223,8 +1094,8 @@ impl IdentityTestRunner {
                     .context(NodeSnafu)
             })?;
         ensure!(
-            subreaper_native_parent.root_class == Some("external_runtime_root")
-                && subreaper_native_parent.installed_role_class
+            subreaper_native_parent.root_class.as_deref() == Some("external_runtime_root")
+                && subreaper_native_parent.installed_role_class.as_deref()
                     == Some("runtime_external_restricted")
                 && subreaper_intermediate_before_exit.creator_task_cookie
                     == Some(subreaper_native_parent.task_cookie)
@@ -1337,18 +1208,19 @@ impl IdentityTestRunner {
                 namespace_init_fixture.namespace_init_intermediate_pid(namespace_init_parent_pid)
             })?;
         namespace_init_fixture.open_intermediate_pidfd(namespace_init_intermediate_pid)?;
-        let namespace_init_native_child_pid =
-            self.wait_for("PID-namespace native child creation", &procs_path, || {
-                namespace_init_fixture
-                    .intermediate_native_child_pid(namespace_init_intermediate_pid)
-            })?;
-        namespace_init_fixture.open_native_pidfd(namespace_init_native_child_pid)?;
         let namespace_init_intermediate_before_exit =
             self.wait_for("PID-namespace intermediate identity", &procs_path, || {
                 inspector
                     .snapshot(namespace_init_intermediate_pid)
                     .context(NodeSnafu)
             })?;
+        namespace_init_fixture.release_intermediate_start()?;
+        let namespace_init_native_child_pid =
+            self.wait_for("PID-namespace native child creation", &procs_path, || {
+                namespace_init_fixture
+                    .intermediate_native_child_pid(namespace_init_intermediate_pid)
+            })?;
+        namespace_init_fixture.open_native_pidfd(namespace_init_native_child_pid)?;
         let namespace_init_native_child_before_parent_exit =
             self.wait_for("PID-namespace native child identity", &procs_path, || {
                 inspector
@@ -1356,8 +1228,8 @@ impl IdentityTestRunner {
                     .context(NodeSnafu)
             })?;
         ensure!(
-            namespace_init_parent.root_class == Some("external_runtime_root")
-                && namespace_init_parent.installed_role_class
+            namespace_init_parent.root_class.as_deref() == Some("external_runtime_root")
+                && namespace_init_parent.installed_role_class.as_deref()
                     == Some("runtime_external_restricted")
                 && namespace_init_intermediate_before_exit.creator_task_cookie
                     == Some(namespace_init_parent.task_cookie)
@@ -1476,8 +1348,8 @@ impl IdentityTestRunner {
                     .context(NodeSnafu)
             })?;
         ensure!(
-            double_fork_outer_parent.root_class == Some("external_runtime_root")
-                && double_fork_outer_parent.installed_role_class
+            double_fork_outer_parent.root_class.as_deref() == Some("external_runtime_root")
+                && double_fork_outer_parent.installed_role_class.as_deref()
                     == Some("runtime_external_restricted")
                 && double_fork_intermediate_before_exit.creator_task_cookie
                     == Some(double_fork_outer_parent.task_cookie)
@@ -1569,9 +1441,9 @@ impl IdentityTestRunner {
         )?;
         ensure!(
             cgroup_escape_unmoved_control.creator_task_cookie.is_none()
-                && cgroup_escape_unmoved_control.root_class
+                && cgroup_escape_unmoved_control.root_class.as_deref()
                     == Some("external_runtime_root")
-                && cgroup_escape_unmoved_control.installed_role_class
+                && cgroup_escape_unmoved_control.installed_role_class.as_deref()
                     == Some("runtime_external_restricted")
                 && cgroup_escape_unmoved_control.active_role_id == binding.external_role_id
                 && cgroup_escape_unmoved_control.coordinate_state
@@ -1623,15 +1495,17 @@ impl IdentityTestRunner {
         let health_after_cgroup_escape = identity.health(&host).context(NodeSnafu)?;
         ensure!(
             cgroup_escape_unmoved_root.creator_task_cookie.is_none()
-                && cgroup_escape_unmoved_root.root_class == Some("external_runtime_root")
-                && cgroup_escape_unmoved_root.installed_role_class
+                && cgroup_escape_unmoved_root.root_class.as_deref()
+                    == Some("external_runtime_root")
+                && cgroup_escape_unmoved_root.installed_role_class.as_deref()
                     == Some("runtime_external_restricted")
                 && cgroup_escape_unmoved_root.active_role_id == binding.external_role_id
                 && cgroup_escape_unmoved_root.coordinate_state
                     == TaskCoordinateStateV1::Runnable as u8
                 && cgroup_escape_root.creator_task_cookie.is_none()
-                && cgroup_escape_root.root_class == Some("external_runtime_root")
-                && cgroup_escape_root.installed_role_class == Some("runtime_external_restricted")
+                && cgroup_escape_root.root_class.as_deref() == Some("external_runtime_root")
+                && cgroup_escape_root.installed_role_class.as_deref()
+                    == Some("runtime_external_restricted")
                 && cgroup_escape_root.active_role_id == binding.external_role_id
                 && health_after_cgroup_escape.placement_mismatches
                     > health_before_cgroup_escape.placement_mismatches,
@@ -1688,8 +1562,11 @@ impl IdentityTestRunner {
             clone_into_cgroup_first_effect_root
                 .creator_task_cookie
                 .is_none()
-                && clone_into_cgroup_first_effect_root.root_class == Some("external_runtime_root")
-                && clone_into_cgroup_first_effect_root.installed_role_class
+                && clone_into_cgroup_first_effect_root.root_class.as_deref()
+                    == Some("external_runtime_root")
+                && clone_into_cgroup_first_effect_root
+                    .installed_role_class
+                    .as_deref()
                     == Some("runtime_external_restricted")
                 && clone_into_cgroup_first_effect_root.active_role_id == binding.external_role_id
                 && clone_into_cgroup_first_effect_root.coordinate_state
@@ -1809,7 +1686,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 13,
+            schema_version: 14,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1832,9 +1709,6 @@ impl IdentityTestRunner {
             non_leader_thread_exec_committed: true,
             non_leader_thread_exec_root,
             non_leader_thread_exec_after_exec,
-            concurrent_thread_exec_committed: true,
-            concurrent_thread_exec_root,
-            concurrent_thread_exec_after_exec,
             clone_into_cgroup_external_root: clone_external_root,
             clone_into_cgroup_native_child: clone_native_child,
             clone_into_cgroup_native_child_after_namespace_move:
@@ -1868,7 +1742,45 @@ impl IdentityTestRunner {
             pin_root_removed: true,
             lease_removed: true,
             cgroup_removed: true,
+            kubernetes_initial_root: None,
+            kubernetes_direct_cri_exec_root: None,
+            kubernetes_kubectl_exec_root: None,
+            kubernetes_fixture_removed: false,
         })
+    }
+
+    pub fn physical_kubernetes_probe(
+        &self,
+        output_directory: &Path,
+        previous_bundle_path: &Path,
+        pin_root: &Path,
+        lease_path: &Path,
+    ) -> Result<IdentityPhysicalProbeBundleV1> {
+        let bytes = fs::read(previous_bundle_path).context(IoSnafu {
+            path: previous_bundle_path,
+        })?;
+        let mut bundle: IdentityPhysicalProbeBundleV1 =
+            serde_json::from_slice(&bytes).context(JsonSnafu {
+                path: previous_bundle_path,
+            })?;
+        ensure!(
+            bundle.schema_version == 14
+                && bundle.kubernetes_initial_root.is_none()
+                && bundle.kubernetes_direct_cri_exec_root.is_none()
+                && bundle.kubernetes_kubectl_exec_root.is_none()
+                && !bundle.kubernetes_fixture_removed,
+            InvalidInputSnafu {
+                path: previous_bundle_path,
+                reason: "the prior identity bundle cannot accept one Kubernetes result",
+            }
+        );
+        let (initial_root, direct_cri_exec_root, kubectl_exec_root) =
+            self.physical_kubernetes_exec_probe(output_directory, pin_root, lease_path)?;
+        bundle.kubernetes_initial_root = Some(initial_root);
+        bundle.kubernetes_direct_cri_exec_root = Some(direct_cri_exec_root);
+        bundle.kubernetes_kubectl_exec_root = Some(kubectl_exec_root);
+        bundle.kubernetes_fixture_removed = true;
+        Ok(bundle)
     }
 
     pub fn write_json<T: Serialize>(&self, output: &Path, value: &T) -> Result<()> {
@@ -1931,6 +1843,576 @@ impl IdentityTestRunner {
                 }
             );
             thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn physical_kubernetes_exec_probe(
+        &self,
+        output_directory: &Path,
+        pin_root: &Path,
+        lease_path: &Path,
+    ) -> Result<(
+        NativeTaskSnapshotV1,
+        NativeTaskSnapshotV1,
+        NativeTaskSnapshotV1,
+    )> {
+        const ENTRY_COMMAND: &str = "read identity_pid _ < /proc/self/stat; printf \"%s\\n\" \"$identity_pid\" > /var/lib/mithril/entry/pid; while [ ! -f /var/lib/mithril/entry/release ]; do sleep 0.1; done";
+
+        fs::create_dir_all(output_directory).context(IoSnafu {
+            path: output_directory,
+        })?;
+        let work_directory = output_directory.join("kubernetes-entry");
+        ensure!(
+            !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes identity fixture directory must not already exist",
+            }
+        );
+        fs::create_dir(&work_directory).context(IoSnafu {
+            path: &work_directory,
+        })?;
+        let work_cleanup = ProbeDirectory::new(&work_directory);
+        let namespace = format!("mithril-identity-{}", std::process::id());
+        let fixture_root = work_directory.join("fixture");
+        let marker_path = fixture_root.join("pid");
+        let release_path = fixture_root.join("release");
+        let manifest_path = work_directory.join("workload.yaml");
+        ensure!(
+            !pin_root.exists() && !lease_path.exists(),
+            InvalidInputSnafu {
+                path: pin_root,
+                reason: "the Kubernetes identity pin root and lease must not already exist",
+            }
+        );
+        let pin_cleanup = ProbeDirectory::new(pin_root);
+        let lease_cleanup = ProbeFile::new(lease_path);
+        let mut namespace_created = false;
+        let mut host = None;
+        let mut direct_cri_exec = None;
+        let mut kubectl_exec = None;
+
+        let probe = (|| -> Result<_> {
+            fs::create_dir(&fixture_root).context(IoSnafu {
+                path: &fixture_root,
+            })?;
+            let manifest_template_path = self
+                .repo_root
+                .join("crates/mithril-e2e/fixtures/identity/kubernetes-entry-workload-v1.yaml");
+            let manifest = fs::read_to_string(&manifest_template_path)
+                .context(IoSnafu {
+                    path: &manifest_template_path,
+                })?
+                .replace("MITHRIL_IDENTITY_NAMESPACE", &namespace)
+                .replace(
+                    "MITHRIL_IDENTITY_FIXTURE_ROOT",
+                    fixture_root.to_string_lossy().as_ref(),
+                );
+            ensure!(
+                manifest.contains(ENTRY_COMMAND),
+                InvalidInputSnafu {
+                    path: &manifest_template_path,
+                    reason:
+                        "the Kubernetes startup command differs from the direct CRI fixture command",
+                }
+            );
+            fs::write(&manifest_path, manifest).context(IoSnafu {
+                path: &manifest_path,
+            })?;
+
+            self.kubernetes_output(
+                &["kubectl", "create", "namespace", namespace.as_str()],
+                "create Kubernetes fixture namespace",
+            )?;
+            namespace_created = true;
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "apply",
+                    "-f",
+                    manifest_path.to_string_lossy().as_ref(),
+                ],
+                "create Kubernetes identity fixture Pod",
+            )?;
+            let container_ref =
+                self.wait_for("Kubernetes identity fixture root", &manifest_path, || {
+                    let container_ref = self.kubernetes_output(
+                        &[
+                            "kubectl",
+                            "-n",
+                            namespace.as_str(),
+                            "get",
+                            "pod",
+                            "mithril-identity",
+                            "-o",
+                            "jsonpath={.status.containerStatuses[0].containerID}",
+                        ],
+                        "read the Kubernetes fixture container ID",
+                    )?;
+                    Ok((!container_ref.trim().is_empty()).then_some(container_ref))
+                })?;
+            let container_id = container_ref
+                .trim()
+                .strip_prefix("containerd://")
+                .ok_or_else(|| {
+                    invalid_state("Kubernetes did not return a containerd container ID")
+                })?
+                .to_owned();
+            let container_inspect = self.kubernetes_output(
+                &["crictl", "inspect", container_id.as_str()],
+                "inspect the Kubernetes fixture container",
+            )?;
+            let container_inspect: serde_json::Value = serde_json::from_str(&container_inspect)
+                .context(JsonSnafu {
+                    path: &manifest_path,
+                })?;
+            let initial_pid = container_inspect
+                .pointer("/info/pid")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|pid| u32::try_from(pid).ok())
+                .filter(|pid| *pid > 0)
+                .ok_or_else(|| invalid_state("CRI did not return a live fixture root PID"))?;
+            let image_digest = container_inspect
+                .pointer("/status/imageRef")
+                .and_then(serde_json::Value::as_str)
+                .filter(|digest| digest.contains("sha256:"))
+                .ok_or_else(|| invalid_state("CRI did not return the fixture image digest"))?
+                .to_owned();
+            let container_generation = container_inspect
+                .pointer("/status/createdAt")
+                .ok_or_else(|| invalid_state("CRI did not return the fixture container generation"))
+                .and_then(|created_at| self.kubernetes_container_generation(created_at))?;
+            let pod_uid = self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "-n",
+                    namespace.as_str(),
+                    "get",
+                    "pod",
+                    "mithril-identity",
+                    "-o",
+                    "jsonpath={.metadata.uid}",
+                ],
+                "read the Kubernetes fixture Pod UID",
+            )?;
+            let pod_uid = pod_uid.trim().to_owned();
+            ensure!(
+                !pod_uid.is_empty(),
+                InvalidInputSnafu {
+                    path: &manifest_path,
+                    reason: "Kubernetes did not return the fixture Pod UID",
+                }
+            );
+            let sandbox = self.kubernetes_output(
+                &["crictl", "ps", "--id", container_id.as_str(), "-o", "json"],
+                "read the Kubernetes fixture sandbox ID",
+            )?;
+            let sandbox: serde_json::Value = serde_json::from_str(&sandbox).context(JsonSnafu {
+                path: &manifest_path,
+            })?;
+            let sandbox_id = sandbox
+                .pointer("/containers/0/podSandboxId")
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| invalid_state("CRI did not return the fixture sandbox ID"))?
+                .to_owned();
+            let probe_namespace_pid =
+                self.wait_for("Kubernetes startup probe start", &marker_path, || {
+                    self.kubernetes_fixture_pid(&marker_path)
+                })?;
+            let initial_cgroup = self.kubernetes_cgroup_for_pid(initial_pid)?;
+            let probe_host_pid =
+                self.wait_for("Kubernetes startup probe host PID", &initial_cgroup, || {
+                    self.kubernetes_host_pid(&initial_cgroup, probe_namespace_pid)
+                })?;
+            ensure!(
+                probe_host_pid != initial_pid,
+                InvalidInputSnafu {
+                    path: &initial_cgroup,
+                    reason: "the Kubernetes startup probe did not create a separate task",
+                }
+            );
+            fs::write(&release_path, b"release\\n").context(IoSnafu {
+                path: &release_path,
+            })?;
+            self.wait_for("Kubernetes startup probe release", &marker_path, || {
+                Ok(self
+                    .kubernetes_host_pid(&initial_cgroup, probe_namespace_pid)?
+                    .is_none()
+                    .then_some(()))
+            })?;
+            fs::remove_file(&release_path).context(IoSnafu {
+                path: &release_path,
+            })?;
+            fs::remove_file(&marker_path).context(IoSnafu { path: &marker_path })?;
+
+            let (boot_id, node_boot_id) = boot_identity()?;
+            let mut identity_host = KernelHostOwner::new(KernelHostConfig::identity(
+                "/sys/kernel/btf/vmlinux",
+                lease_path,
+                Some(pin_root.to_path_buf()),
+                boot_id,
+                1,
+            ))
+            .start()
+            .context(InterceptorSnafu)?;
+            let mut binding = test_binding(&initial_cgroup);
+            binding.container_id.clone_from(&container_id);
+            binding.namespace.clone_from(&namespace);
+            binding.pod_uid = pod_uid;
+            binding.sandbox_id = sandbox_id;
+            binding.container_name = "runtime".to_owned();
+            binding.image_digest = image_digest;
+            binding.container_generation = container_generation;
+            let mut bindings = WorkloadBindingOwner::system(node_boot_id, 1).context(NodeSnafu)?;
+            bindings
+                .publish_all(&identity_host, std::slice::from_ref(&binding))
+                .context(NodeSnafu)?;
+            NativeSecurityStateOwner::new(node_boot_id, 1)
+                .activate(&mut identity_host)
+                .context(NodeSnafu)?;
+            host = Some(identity_host);
+            let inspector = NativeIdentityInspector::new(pin_root);
+            let initial_root =
+                self.wait_for("Kubernetes initial-root reconciliation", pin_root, || {
+                    inspector.snapshot(initial_pid).context(NodeSnafu)
+                })?;
+            ensure!(
+                initial_root.creator_task_cookie.is_none()
+                    && initial_root.root_class.as_deref() == Some("restored_or_unknown_root")
+                    && initial_root.installed_role_class.as_deref() == Some("fail_closed_unknown"),
+                InvalidInputSnafu {
+                    path: &pin_root,
+                    reason: "the pre-existing Kubernetes Pod root was not reconciled fail closed",
+                }
+            );
+
+            direct_cri_exec = Some(
+                Command::new("/usr/local/bin/k3s")
+                    .args([
+                        "crictl",
+                        "exec",
+                        container_id.as_str(),
+                        "/bin/sh",
+                        "-c",
+                        ENTRY_COMMAND,
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .context(IoSnafu {
+                        path: Path::new("/usr/local/bin/k3s"),
+                    })?,
+            );
+            let direct_cri_namespace_pid =
+                self.wait_for("direct CRI exec start", &marker_path, || {
+                    self.kubernetes_fixture_pid(&marker_path)
+                })?;
+            let direct_cri_host_pid =
+                self.wait_for("direct CRI exec host PID", &initial_cgroup, || {
+                    self.kubernetes_host_pid(&initial_cgroup, direct_cri_namespace_pid)
+                })?;
+            let direct_cri_exec_root =
+                self.wait_for("direct CRI exec identity", pin_root, || {
+                    inspector.snapshot(direct_cri_host_pid).context(NodeSnafu)
+                })?;
+            ensure!(
+                direct_cri_exec_root.creator_task_cookie.is_none()
+                    && direct_cri_exec_root.root_class.as_deref() == Some("external_runtime_root")
+                    && direct_cri_exec_root.installed_role_class.as_deref()
+                        == Some("runtime_external_restricted")
+                    && direct_cri_exec_root.active_role_id == binding.external_role_id,
+                InvalidInputSnafu {
+                    path: &pin_root,
+                    reason: "direct CRI exec did not remain a restricted external root",
+                }
+            );
+            fs::write(&release_path, b"release\\n").context(IoSnafu {
+                path: &release_path,
+            })?;
+            let direct_cri_status = direct_cri_exec
+                .as_mut()
+                .ok_or_else(|| invalid_state("direct CRI exec process is missing"))?
+                .wait()
+                .context(IoSnafu {
+                    path: Path::new("direct CRI exec"),
+                })?;
+            ensure!(
+                direct_cri_status.success(),
+                InvalidInputSnafu {
+                    path: Path::new("direct CRI exec"),
+                    reason: format!("direct CRI exec exited with {direct_cri_status}"),
+                }
+            );
+            direct_cri_exec = None;
+            fs::remove_file(&release_path).context(IoSnafu {
+                path: &release_path,
+            })?;
+            fs::remove_file(&marker_path).context(IoSnafu { path: &marker_path })?;
+
+            kubectl_exec = Some(
+                Command::new("/usr/local/bin/k3s")
+                    .args([
+                        "kubectl",
+                        "-n",
+                        namespace.as_str(),
+                        "exec",
+                        "mithril-identity",
+                        "-c",
+                        "runtime",
+                        "--",
+                        "/bin/sh",
+                        "-c",
+                        ENTRY_COMMAND,
+                    ])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .context(IoSnafu {
+                        path: Path::new("/usr/local/bin/k3s"),
+                    })?,
+            );
+            let kubectl_namespace_pid =
+                self.wait_for("kubectl exec start", &marker_path, || {
+                    self.kubernetes_fixture_pid(&marker_path)
+                })?;
+            let kubectl_host_pid =
+                self.wait_for("kubectl exec host PID", &initial_cgroup, || {
+                    self.kubernetes_host_pid(&initial_cgroup, kubectl_namespace_pid)
+                })?;
+            let kubectl_exec_root = self.wait_for("kubectl exec identity", pin_root, || {
+                inspector.snapshot(kubectl_host_pid).context(NodeSnafu)
+            })?;
+            ensure!(
+                kubectl_exec_root.creator_task_cookie.is_none()
+                    && kubectl_exec_root.root_class.as_deref() == Some("external_runtime_root")
+                    && kubectl_exec_root.installed_role_class.as_deref()
+                        == Some("runtime_external_restricted")
+                    && kubectl_exec_root.active_role_id == binding.external_role_id
+                    && kubectl_exec_root.task_cookie != direct_cri_exec_root.task_cookie,
+                InvalidInputSnafu {
+                    path: &pin_root,
+                    reason: "kubectl exec did not remain a separate restricted external root",
+                }
+            );
+            fs::write(&release_path, b"release\\n").context(IoSnafu {
+                path: &release_path,
+            })?;
+            let kubectl_status = kubectl_exec
+                .as_mut()
+                .ok_or_else(|| invalid_state("kubectl exec process is missing"))?
+                .wait()
+                .context(IoSnafu {
+                    path: Path::new("kubectl exec"),
+                })?;
+            ensure!(
+                kubectl_status.success(),
+                InvalidInputSnafu {
+                    path: Path::new("kubectl exec"),
+                    reason: format!("kubectl exec exited with {kubectl_status}"),
+                }
+            );
+            kubectl_exec = None;
+            Ok((initial_root, direct_cri_exec_root, kubectl_exec_root))
+        })();
+
+        Self::stop_fixture_process(&mut direct_cri_exec);
+        Self::stop_fixture_process(&mut kubectl_exec);
+        let host_cleanup = if let Some(host) = host.take() {
+            host.shutdown().context(InterceptorSnafu)
+        } else {
+            Ok(())
+        };
+        let namespace_cleanup = if namespace_created {
+            self.kubernetes_output(
+                &[
+                    "kubectl",
+                    "delete",
+                    "namespace",
+                    namespace.as_str(),
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=120s",
+                ],
+                "remove the Kubernetes identity fixture namespace",
+            )
+            .map(|_| ())
+        } else {
+            Ok(())
+        };
+        let pin_cleanup = pin_cleanup.cleanup();
+        let lease_cleanup = lease_cleanup.cleanup();
+        let cleanup = work_cleanup.cleanup();
+        let cleanup_result = host_cleanup
+            .and(namespace_cleanup)
+            .and(pin_cleanup)
+            .and(lease_cleanup)
+            .and(cleanup);
+        if let Err(source) = probe {
+            cleanup_result?;
+            return Err(source);
+        }
+        cleanup_result?;
+        let namespace_removed =
+            !namespace_created || self.kubernetes_namespace_absent(&namespace)?;
+        let pin_removed = !pin_root.exists() && !lease_path.exists();
+        ensure!(
+            namespace_removed && pin_removed && !work_directory.exists(),
+            InvalidInputSnafu {
+                path: &work_directory,
+                reason: "the Kubernetes identity fixture left a namespace, Mithril pin, lease, or fixture directory",
+            }
+        );
+        probe
+    }
+
+    fn kubernetes_output(&self, arguments: &[&str], description: &str) -> Result<String> {
+        let program = Path::new("/usr/local/bin/k3s");
+        let output = Command::new(program)
+            .args(arguments)
+            .output()
+            .context(IoSnafu { path: program })?;
+        ensure!(
+            output.status.success(),
+            InvalidInputSnafu {
+                path: program,
+                reason: format!(
+                    "{description} failed with {}: {}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                ),
+            }
+        );
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    fn kubernetes_namespace_absent(&self, namespace: &str) -> Result<bool> {
+        let program = Path::new("/usr/local/bin/k3s");
+        let output = Command::new(program)
+            .args(["kubectl", "get", "namespace", namespace])
+            .output()
+            .context(IoSnafu { path: program })?;
+        if output.status.success() {
+            return Ok(false);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        ensure!(
+            stderr.contains("NotFound") || stderr.contains("not found"),
+            InvalidInputSnafu {
+                path: program,
+                reason: format!(
+                    "cannot verify removal of Kubernetes namespace {namespace}: {}",
+                    stderr.trim()
+                ),
+            }
+        );
+        Ok(true)
+    }
+
+    fn kubernetes_fixture_pid(&self, path: &Path) -> Result<Option<u32>> {
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(source).context(IoSnafu { path }),
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let pid = text.parse::<u32>().map_err(|source| {
+            invalid_state(format!(
+                "Kubernetes fixture wrote an invalid namespace PID `{}`: {source}",
+                text
+            ))
+        })?;
+        Ok((pid > 0).then_some(pid))
+    }
+
+    fn kubernetes_container_generation(&self, created_at: &serde_json::Value) -> Result<u64> {
+        if let Some(generation) = created_at.as_u64().filter(|generation| *generation > 0) {
+            return Ok(generation);
+        }
+        let created_at = created_at
+            .as_str()
+            .filter(|created_at| !created_at.is_empty())
+            .ok_or_else(|| {
+                invalid_state("CRI returned an invalid fixture container creation time")
+            })?;
+        let output = Command::new("date")
+            .args(["--utc", "--date", created_at, "+%s%N"])
+            .output()
+            .context(IoSnafu {
+                path: Path::new("date"),
+            })?;
+        ensure!(
+            output.status.success(),
+            InvalidInputSnafu {
+                path: Path::new("date"),
+                reason: format!(
+                    "cannot convert the CRI container creation time `{created_at}`: {}",
+                    String::from_utf8_lossy(&output.stderr).trim(),
+                ),
+            }
+        );
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|generation| *generation > 0)
+            .ok_or_else(|| invalid_state("CRI container generation is invalid"))
+    }
+
+    fn kubernetes_cgroup_for_pid(&self, pid: u32) -> Result<PathBuf> {
+        let proc_path = PathBuf::from(format!("/proc/{pid}/cgroup"));
+        let cgroup = fs::read_to_string(&proc_path).context(IoSnafu { path: &proc_path })?;
+        let cgroup_path = cgroup
+            .lines()
+            .find_map(|line| line.strip_prefix("0::"))
+            .map(|path| PathBuf::from("/sys/fs/cgroup").join(path.trim_start_matches('/')))
+            .ok_or_else(|| {
+                invalid_state(format!("Kubernetes root PID {pid} has no unified cgroup"))
+            })?;
+        ensure!(
+            cgroup_path.is_dir(),
+            InvalidInputSnafu {
+                path: &cgroup_path,
+                reason: "Kubernetes root cgroup does not exist",
+            }
+        );
+        Ok(cgroup_path)
+    }
+
+    fn kubernetes_host_pid(&self, cgroup: &Path, namespace_pid: u32) -> Result<Option<u32>> {
+        let procs_path = cgroup.join("cgroup.procs");
+        let procs = fs::read_to_string(&procs_path).context(IoSnafu { path: &procs_path })?;
+        for process in procs.split_ascii_whitespace() {
+            let Ok(host_pid) = process.parse::<u32>() else {
+                continue;
+            };
+            let status_path = PathBuf::from(format!("/proc/{host_pid}/status"));
+            let status = match fs::read_to_string(&status_path) {
+                Ok(status) => status,
+                Err(source) if source.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(source) => return Err(source).context(IoSnafu { path: &status_path }),
+            };
+            let mapped_pid = status
+                .lines()
+                .find_map(|line| line.strip_prefix("NSpid:"))
+                .and_then(|line| line.split_ascii_whitespace().last())
+                .and_then(|pid| pid.parse::<u32>().ok());
+            if mapped_pid == Some(namespace_pid) {
+                return Ok(Some(host_pid));
+            }
+        }
+        Ok(None)
+    }
+
+    fn stop_fixture_process(child: &mut Option<Child>) {
+        if let Some(mut child) = child.take() {
+            let _result = child.kill();
+            let _result = child.wait();
         }
     }
 }
@@ -1997,6 +2479,7 @@ import signal
 os.kill(os.getpid(), signal.SIGSTOP)
 middle = os.fork()
 if middle == 0:
+    os.kill(os.getpid(), signal.SIGSTOP)
     child = os.fork()
     if child == 0:
         os.kill(os.getpid(), signal.SIGSTOP)
@@ -2077,6 +2560,7 @@ thread.join()
         Self::start_command(&mut command, false, Path::new("python3"))
     }
 
+    #[cfg(test)]
     fn start_with_concurrent_thread_exec(ready: &Path) -> Result<Self> {
         let mut command = Command::new("python3");
         command
@@ -2186,6 +2670,7 @@ second.join()
         self.write_stdin(b"exec\n")
     }
 
+    #[cfg(test)]
     fn release_concurrent_thread_exec(&mut self) -> Result<()> {
         self.write_stdin(b"exec\n")
     }
@@ -2292,6 +2777,15 @@ second.join()
             .map_err(|error| invalid_state(format!("release intermediate exit: {error}")))
     }
 
+    fn release_intermediate_start(&self) -> Result<()> {
+        let pidfd = self
+            .intermediate_pidfd
+            .as_ref()
+            .ok_or_else(|| invalid_state("PID-namespace intermediate has no pidfd"))?;
+        pidfd_send_signal(pidfd, Signal::CONT)
+            .map_err(|error| invalid_state(format!("release intermediate start: {error}")))
+    }
+
     fn intermediate_exited(&self, intermediate_pid: u32) -> Result<bool> {
         let path = PathBuf::from(format!("/proc/{intermediate_pid}/status"));
         match fs::read_to_string(&path) {
@@ -2376,6 +2870,7 @@ second.join()
         Ok(Some(tid))
     }
 
+    #[cfg(test)]
     fn concurrent_thread_tids(&mut self, ready: &Path) -> Result<Option<[u32; 2]>> {
         if let Some(status) = self.outer.try_wait().context(IoSnafu {
             path: Path::new("concurrent thread fixture"),
@@ -2461,10 +2956,10 @@ second.join()
 
     fn stop(&mut self) {
         if let Some(pidfd) = &self.native_pidfd {
-            let _result = pidfd_send_signal(pidfd, Signal::TERM);
+            let _result = pidfd_send_signal(pidfd, Signal::KILL);
         }
         if let Some(pidfd) = &self.intermediate_pidfd {
-            let _result = pidfd_send_signal(pidfd, Signal::TERM);
+            let _result = pidfd_send_signal(pidfd, Signal::KILL);
         }
         if let Some(pidfd) = &self.namespace_init_pidfd {
             let _result = pidfd_send_signal(pidfd, Signal::KILL);
@@ -2528,55 +3023,6 @@ fn identity_next_id(host: &KernelHost) -> Result<u64> {
                 "identity runtime configuration is invalid: {error}"
             ))
         })
-}
-
-fn task_coordinate_for_host_tid(
-    host: &KernelHost,
-    host_tid: u32,
-    host_tgid: u32,
-) -> Result<Option<TaskCoordinateV1>> {
-    let mut found = None;
-    for key in host
-        .map_keys("task_coordinates")
-        .context(InterceptorSnafu)?
-    {
-        let key: [u8; size_of::<u64>()] = key.try_into().map_err(|_| {
-            invalid_state("task-coordinate map key does not contain one task cookie")
-        })?;
-        let task_cookie = u64::from_ne_bytes(key);
-        let Some(value) = host
-            .lookup_map("task_coordinates", &task_cookie.to_ne_bytes())
-            .context(InterceptorSnafu)?
-        else {
-            continue;
-        };
-        let coordinate = TaskCoordinateV1::try_read_from_bytes(&value).map_err(|error| {
-            invalid_state(format!("task coordinate has an invalid ABI value: {error}"))
-        })?;
-        ensure!(
-            coordinate.task_cookie == task_cookie,
-            InvalidInputSnafu {
-                path: Path::new("task_coordinates"),
-                reason: "task-coordinate map key does not match its task cookie",
-            }
-        );
-        if coordinate.host_tid == host_tid
-            && coordinate.host_tgid == host_tgid
-            && coordinate.state == TaskCoordinateStateV1::Runnable
-        {
-            ensure!(
-                found.is_none(),
-                InvalidInputSnafu {
-                    path: Path::new("task_coordinates"),
-                    reason: format!(
-                        "task-coordinate map has multiple live entries for host TID {host_tid}"
-                    ),
-                }
-            );
-            found = Some(coordinate);
-        }
-    }
-    Ok(found)
 }
 
 fn map_ids(manifest: &KernelObjectManifestV1) -> BTreeMap<&str, u32> {
@@ -2831,6 +3277,7 @@ mod tests {
             || fixture.namespace_init_intermediate_pid(namespace_init_pid),
         )?;
         fixture.open_intermediate_pidfd(intermediate_pid)?;
+        fixture.release_intermediate_start()?;
         let native_pid = runner.wait_for(
             "PID-namespace native child creation",
             &namespace_init_children,

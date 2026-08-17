@@ -9,19 +9,19 @@ use erebor_interceptor_abi::{
     TaskLabelV1,
 };
 use rustix::process::{pidfd_open, Pid, PidfdFlags};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use snafu::{OptionExt as _, ResultExt as _};
 use zerocopy::{IntoBytes as _, KnownLayout, TryFromBytes};
 
 use crate::error::{IdentityStateSnafu, InterceptorSnafu, IoSnafu, JsonSnafu};
 use crate::Result;
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NativeTaskSnapshotV1 {
     pub task_cookie: u64,
     pub creator_task_cookie: Option<u64>,
-    pub root_class: Option<&'static str>,
-    pub installed_role_class: Option<&'static str>,
+    pub root_class: Option<String>,
+    pub installed_role_class: Option<String>,
     pub real_parent_task_cookie: u64,
     pub real_parent_interval_sequence: u64,
     pub real_parent_host_tid: u32,
@@ -151,8 +151,8 @@ impl NativeIdentityInspector {
             .transpose()?;
         let (root_class, installed_role_class) = classification.map_or((None, None), |value| {
             (
-                Some(root_class_name(value.root_class)),
-                Some(installed_role_class_name(value.installed_role_class)),
+                Some(root_class_name(value.root_class).to_owned()),
+                Some(installed_role_class_name(value.installed_role_class).to_owned()),
             )
         });
         Ok(Some(NativeTaskSnapshotV1 {

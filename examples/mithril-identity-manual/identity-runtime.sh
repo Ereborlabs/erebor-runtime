@@ -30,6 +30,7 @@ identity_require_command() {
 
 identity_check_base() {
   identity_source_config=$1
+  identity_require_command bpftool
   identity_require_command jq
   [[ $(id -u) -eq 0 ]] || {
     echo "run this example with sudo" >&2
@@ -43,6 +44,21 @@ identity_check_base() {
     echo "node config does not exist: $identity_source_config" >&2
     exit 2
   }
+}
+
+identity_wait_for_interceptor_detach() {
+  local attempt
+  for ((attempt = 0; attempt < 300; attempt++)); do
+    if ! bpftool -j prog show | jq -e \
+      'any(.[]; ((.name? // "") | startswith("erebor_")))' >/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Erebor Interceptor programs remain loaded after cleanup" >&2
+  bpftool -j prog show | jq \
+    '[.[] | select(((.name? // "") | startswith("erebor_"))) | {id, name}]' >&2
+  return 1
 }
 
 identity_begin() {
@@ -84,6 +100,7 @@ identity_on_exit() {
   done
   [[ -z $identity_pin_root || ! -e $identity_pin_root ]] || rm -r -- "$identity_pin_root"
   [[ -z $identity_work || ! -e $identity_work ]] || rm -r -- "$identity_work"
+  identity_wait_for_interceptor_detach || cleanup_failed=1
   [[ (-z $identity_pin_root || ! -e $identity_pin_root) \
     && (-z $identity_work || ! -e $identity_work) ]] || cleanup_failed=1
 
@@ -320,6 +337,23 @@ identity_start_node() {
   return 1
 }
 
+identity_wait_for_initial_binding() {
+  local snapshot=$identity_work/initial-root.json
+  for ((attempt = 0; attempt < 300; attempt++)); do
+    if "$identity_inspect" --pin-root "$identity_pin_root" task --host-pid "$identity_init_pid" \
+      >"$snapshot" 2>/dev/null \
+      && jq -e '.creator_task_cookie == null
+                 and .root_class == "restored_or_unknown_root"
+                 and .installed_role_class == "fail_closed_unknown"' \
+        "$snapshot" >/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "Mithril did not reconcile the Kubernetes Pod root before later entry" >&2
+  return 1
+}
+
 identity_stop_node() {
   local pid=$identity_node_pid
   if [[ -n $pid ]] && kill -0 "$pid" 2>/dev/null; then
@@ -356,6 +390,24 @@ identity_read_host_pid() {
     return 1
   }
   identity_task_pids+=("$identity_read_pid")
+}
+
+identity_kubernetes_host_pid() {
+  local namespace_pid=$1
+  local host_pid mapped_pid
+  [[ $namespace_pid =~ ^[1-9][0-9]*$ ]] || {
+    echo "Kubernetes fixture did not report a valid namespace PID" >&2
+    return 1
+  }
+  while read -r host_pid; do
+    [[ -r /proc/$host_pid/status ]] || continue
+    mapped_pid=$(awk '/^NSpid:/ {print $NF}' "/proc/$host_pid/status")
+    if [[ $mapped_pid == "$namespace_pid" ]]; then
+      printf '%s\n' "$host_pid"
+      return 0
+    fi
+  done <"$identity_cgroup_path/cgroup.procs"
+  return 1
 }
 
 identity_print_runtime_exec() {

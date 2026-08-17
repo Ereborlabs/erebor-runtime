@@ -98,8 +98,10 @@ impl VmTestHarness {
 
         ensure!(
             run.contains("cargo build --locked -p mithril-e2e")
-                && run.matches(" physical-probe").count() == 4
+                && run.matches(" physical-probe").count() == 5
                 && run.contains("physical-probe --protect")
+                && run.contains("--with-kubernetes")
+                && run.contains("--previous-bundle")
                 && run.contains("trap cleanup EXIT")
                 && run.contains("$work_directory/known_hosts")
                 && run.contains("destroy \"$vm_name\"")
@@ -107,7 +109,7 @@ impl VmTestHarness {
                 && run.matches("verify_absent \"").count() >= 10,
             InvalidInputSnafu {
                 path: self.root.join("crates/mithril-e2e/harness/vm/run.sh"),
-                reason: "VM test flow must build both probes, run the identity, observation, and enforcement probes, and verify cleanup",
+                reason: "VM test flow must build the probes, run native and Kubernetes identity, observation, and enforcement, and verify cleanup",
             }
         );
         for command in ["create", "wait", "put", "get", "run", "destroy"] {
