@@ -43,7 +43,17 @@ projected-token rotation, proc aliases, inherited/passed fds, overlay copy-up,
 persistent objects, and delegated-I/O acquisition. Mount/topology mutations
 are denied where undeclared; any allowed change enters DIRTY before effect and
 blocks strict file/exec decisions until complete reconciliation. Canonical path
-matching remains only an exact-object candidate.
+matching remains an exact-object candidate for a positive decision.
+
+Add signed recursive path-tree `DENY` floors. A rule can protect a canonical
+path such as `/tmp/secret-dir/**` and deny its covered effects for every
+current, new, or replaced child. The terminal decision uses the clean canonical
+path and mount view. It does not require the child inode or inode generation.
+Apply it before exact-object lookup. Check every affected parent/name path for
+create, rename, link, and other name-changing operations before visibility.
+Reject a path-tree `ALLOW`, allow exception, or another positive disposition.
+Exact object identity remains required for positive file authority and for
+file-instance provenance.
 
 ### D4.4 — IPC and process-control enforcement
 
@@ -101,7 +111,8 @@ remain outside the checkpoint.
 - `ADMIN-EXEC-APPROVAL-001`, `DEVICE-DERIVED-001`,
   `FILE-CONTENT-RACE-002`, `FILE-FD-PASS-001`, `FILE-IDENTITY-001`,
   `FILE-MMAP-001`, `FILE-MMAP-SHARED-011`, `FILE-NAMESPACE-001`,
-  `FILE-SA-TOKEN-OPEN-001`, and `FILE-VMA-SNAPSHOT-001`.
+  `FILE-PATH-TREE-DENY-001`, `FILE-SA-TOKEN-OPEN-001`, and
+  `FILE-VMA-SNAPSHOT-001`.
 - `MEM-EXEC-001`, `MEM-KERNEL-MAP-002`, `MOUNT-ATTR-001`,
   `MOUNT-CAS-002`, `MOUNT-PROPAGATION-003`, and `MOUNT-SNAPSHOT-004`.
 - `IPC-ASYNC-UNSUPPORTED-010`, `IPC-PEER-RACE-004`,
@@ -120,6 +131,9 @@ remain outside the checkpoint.
   atomically active.
 - Mount, alias, identity, fd, mmap, async, and object-reuse bypasses do not
   widen authority.
+- A signed path-tree denial protects each covered current, new, or replaced
+  file under the canonical tree without a child inode binding. A path-only
+  rule cannot allow a file effect.
 - Exceptions cannot exceed `maximum_uses` or be consumed by unrelated entries.
 - Normal worker, controller, probes, lifecycle, and approved admin controls
   remain functional.
@@ -133,7 +147,7 @@ correlation, and response coordination.
 
 ```text
 State: Not done.
-Validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md sha256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
+Last implementation-validated architecture revision/digest: policy-and-protection-algorithm-architecture-readable.md sha256 4a445b4015c4868a87af4893398068c5f362452c316d0cb8d06c038d41ffc0d8.
 Completed deliverable IDs: D4.1 is partial: generation staging, readback, active selection, and per-binding expected-value recheck exist, but controlled activation probes, one all-binding atomic switch, and complete retirement do not. D4.2 is partial for exact exec variants and qualified file-backed executable mappings; immutable provenance, script and binfmt chains, loader state, pkey transitions, and complete VMA state remain incomplete. D4.3 is partial for exact files, represented aliases, mutations, and DIRTY mount handling; rotation, overlay copy-up, persistent objects, delegated I/O, and propagation remain incomplete. D4.4 is partial for denial-only process-control and unmatched Unix-stream decisions; positive exact relationships remain rejected. D4.5 is partial for exact device ioctl and hard-close floors; derived devices, complete privilege authority, and self-protection remain incomplete. D4.6 has stable exception-instance, receipt, and WAL ownership, but the administrative ingress and end-to-end administrative-exec proof remain incomplete. D4.7 is complete as `ABSENT`: the node reports `LANDLOCK_TARGET_CONTEXT_FLOOR=ABSENT` with reason `NO_QUALIFIED_TARGET_CONTEXT_INSTALL`. D4.8 is partial. The current physical record covers 24 HF local branches: 6 PREVENTED, 1 HARD_CLOSED_UNQUALIFIED, 5 NO_COVERED_EFFECT, 4 OUTSIDE_AUTHORITY, 4 DEFERRED_NETWORK, and 4 UNSUPPORTED. The complete HF local prevention matrix is not qualified.
 Files and durable owners changed: mithril-control owns PROTECT compilation and exact exception binding. NodePolicyGenerationOwner owns generation staging, readback, anti-rollback, active state, and typed rule installation. ExceptionAuthorityOwner owns stable exception instances, successful-use receipts, WAL recovery, restart restoration, and reboot separation. The production BPF effect gate owns pre-effect decisions and atomic exception consumption. mithril-e2e owns the disposable physical oracle. examples/mithril-local-enforcement-manual owns operator cases.
 Upstream-adoption dossier IDs used: existing Phase 0 libbpf-rs/libbpf-cargo and checked vmlinux-header decisions; no new runtime or BPF framework.
@@ -145,6 +159,30 @@ Unsupported/degraded paths: exact file, qualified exec, exact device-ioctl, deni
 Remaining work in this phase: complete controlled activation probes, all-binding atomic activation, and retirement; complete the remaining exec, file, IPC, process, device, derived-authority, privilege, and self-protection surfaces; finish administrative approval-to-profile resolution and physical administrative-exec proof; and run the full fixture matrix with legitimate controls. Native identity and effect observation retain their own unresolved acceptance work.
 Next phase not authorized: yes.
 ```
+
+## Path-tree protection design update — 2026-08-17
+
+State: Not done. This is a design requirement. It is not implementation or
+physical-test evidence.
+
+Architecture source digest after this design update:
+`f62e7e0075bbbfae142034fe421bf9fe4dbfd950b265acfc0536d786d2dcfca4`.
+
+Mithril must support a signed canonical path-tree `DENY` rule. The rule must
+deny each covered effect under the selected tree, including a file created or
+replaced after policy activation. It must decide from the clean canonical path
+and mount view before exact-object lookup. It must not require the child inode
+or inode generation.
+
+`FILE-PATH-TREE-DENY-001` must prove that a rule for `/tmp/secret-dir/**`
+denies a pre-existing child, a child created after activation, and a replacement
+child before a descriptor or bytes are returned. It must prove that a legitimate
+file outside the tree still follows its normal policy. It must also prove that
+a path-tree `ALLOW` fails policy compilation, and that an ambiguous or dirty
+mount view fails closed.
+
+This rule is a restriction only. Positive file authority and retained file
+instance authority still require exact-object and provenance checks.
 
 ## Qualification update — 2026-08-12
 

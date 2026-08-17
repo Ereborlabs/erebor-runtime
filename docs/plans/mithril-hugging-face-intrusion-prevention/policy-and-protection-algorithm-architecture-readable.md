@@ -2343,20 +2343,21 @@ before DIRTY see the old exact object; every open after DIRTY denies until the
 new snapshot commits. The fixture repeats with two concurrent changes, failed
 mount, propagation, overlay copy-up, and a process dying during snapshot.
 
-#### Path selector resolution and exact object authority
+#### Path selector resolution, path-tree floors, and exact object authority
 
-Paths remain policy-authoring inputs, never the final file authority. Mithril
-resolves them with Meta's bounded canonical-path algorithm: reconstruct the
-path through a verified mount tree, canonicalizing a repeated mount-root dentry
-to its oldest mount before matching components with a compiled graph/state
-machine. This is deliberately different from merely reconstructing the path
-string through which the caller reached the file: a later bind-mount alias must
-not choose the path that policy matches. Mithril adds the clean-topology,
-identity, and exact-object conditions that make the canonical path candidate
-safe to use as a file decision. The public Meta BpfJailer LPC 2025 presentation
-supplies the mount-crossing traversal and graph-matching approach. The
-presentation is design evidence, not public implementation source; its slides
-16-21 are bound here to the supplied PDF SHA-256
+Paths are policy-authoring inputs. A signed path can be final authority only
+for a restrictive path-tree `DENY` floor. It can never grant file authority.
+Mithril resolves paths with Meta's bounded canonical-path algorithm:
+reconstruct the path through a verified mount tree, canonicalizing a repeated
+mount-root dentry to its oldest mount before matching components with a
+compiled graph/state machine. This is deliberately different from merely
+reconstructing the path string through which the caller reached the file: a
+later bind-mount alias must not choose the path that policy matches. Mithril
+adds clean-topology, identity, and exact-object conditions for a positive file
+decision. The public Meta BpfJailer LPC 2025 presentation supplies the
+mount-crossing traversal and graph-matching approach. The presentation is
+design evidence, not public implementation source; its slides 16-21 are bound
+here to the supplied PDF SHA-256
 `81dca098d1ed96e19fd89b48b78be63c504f9f52f9f25b662e4a94c14a5209f6`.
 
 | Design part | Meta presentation contributes | Mithril retains or adds | Combined result |
@@ -2364,7 +2365,7 @@ presentation is design evidence, not public implementation source; its slides
 | Canonical path reconstruction | Enumerate one root mount namespace, index `mount-root dentry -> mounts`, select the oldest (`lowest mnt_id_unique`) mount for that dentry, then cross through that selected mount's parent mountpoint | A verified `MountSecurityViewV1` is the selected root domain; its complete clean snapshot supplies the mount index, unique IDs, parent, and mountpoint | A later bind alias cannot select its own target spelling when the same root dentry already belongs to an older tracked mount. |
 | Large rule matching | Bounded component graph/state machine with exact and wildcard transitions | Compile-time bounds, terminal-overlap rejection or signed exact override, no priority-by-specificity | Large hierarchical policies evaluate without linear rule scans or an unbounded string map. |
 | Cache correctness | Cache/invalidate path work around rename and mount changes | Cache key includes policy generation, actor mount view, topology snapshot, live mount, and exact object; DIRTY stops decisions before topology change | A cache cannot grant access through an old bind alias, reused inode, overlay copy-up, or remount. |
-| Authorization result | A matched path rule | Revalidate live object/integrity and all task, policy, response, and generation state | A path match is only a candidate; the final physical decision remains exact and fail closed. |
+| Authorization result | A matched path rule | A signed path-tree `DENY` terminal can deny directly. Any positive decision revalidates live object/integrity and all task, policy, response, and generation state. | A path match can impose a restriction, but it cannot grant access. Positive authority remains exact and fail closed. |
 
 Mithril's compiler and hot path therefore use this single bounded algorithm:
 
@@ -2393,11 +2394,43 @@ Mithril's compiler and hot path therefore use this single bounded algorithm:
    with different physical results unless a signed override names the exact
    selector delta; YAML order, wildcard count, and “more specific” never
    choose authority.
-5. Revalidate the task mount view, topology generation, selected canonical
-   mount chain, exact file object, and retained policy generation before
-   returning the candidate physical decision. A selector match never
-   authorizes a later bind alias, inode generation, overlay object, or a
-   different selected root.
+5. If the terminal is a signed path-tree `DENY` floor for this effect, deny
+   before resolving an exact file object. The canonical path and clean mount
+   view are sufficient for this restriction. The leaf can be new, replaced, or
+   lack an inode generation. It is still denied.
+6. For every other terminal, revalidate the task mount view, topology
+   generation, selected canonical mount chain, exact file object, and retained
+   policy generation before returning a positive physical decision. A selector
+   match never authorizes a later bind alias, inode generation, overlay object,
+   or a different selected root.
+
+##### Signed path-tree deny floors
+
+A signed `PathTreeDenyFloorV1` names one canonical path selector, whether the
+selector is recursive, the covered file effects, and disposition `DENY`. The
+compiler lowers the selector into the same bounded component graph as other
+path selectors. It rejects `ALLOW`, an allow exception, or any other positive
+disposition for this rule type. A recursive selector includes its named
+directory and every descendant component.
+
+For example, a recursive signed rule for `/tmp/secret-dir/**` denies each
+covered effect on the directory and on every current or later child. The rule
+does not contain a child inode number or inode generation. A file created after
+policy activation, a replacement after unlink, and a file reached through a
+represented alias are denied when their real canonical path is in this tree.
+
+The BPF decision checks this floor after canonical path reconstruction and
+clean-view validation, but before exact-object lookup. For create, rename,
+link, and similar name-changing operations, it checks each affected canonical
+parent/name path before the object becomes visible. A missing path, an
+ambiguous mount chain, a dirty view, or an unqualified hook cannot bypass the
+floor. Strict policy denies the operation until Mithril has a qualified result.
+
+This rule protects a location. It does not make pathname spelling a positive
+identity. A separate exact-object rule is still required to allow a file, to
+make a content claim, or to retain authority across a file instance. Existing,
+passed, or inherited file descriptors remain subject to their
+`FileInstanceProvenanceV1` and current-actor floors.
 
 **Canonical bind-mount example.** The first defense is before this resolver:
 an untrusted worker is denied `mount --bind`, `move_mount`, `umount`,
@@ -8764,9 +8797,12 @@ FileInstanceProvenanceV1 {
 }
 ```
 
-Paths are display and policy-authoring inputs. The physical decision uses the
-resolved mount, filesystem, object, and generation. Rename and bind aliases do
-not change object authority. Inode-number reuse creates a new generation.
+Paths are display and policy-authoring inputs. A signed path-tree `DENY` floor
+is the limited exception: it can deny a covered effect when the real canonical
+path is in the protected tree, without an exact child object or inode
+generation. The final positive decision uses the resolved mount, filesystem,
+object, and generation. Rename and bind aliases do not change positive object
+authority. Inode-number reuse creates a new generation.
 
 Mount, unmount, move, propagation, pivot-root, chroot, automount, overlay copy-
 up, and network-filesystem referral synchronously mark the affected namespace
@@ -10541,7 +10577,7 @@ accidentally revive them. They are history, not a second normative contract.
 | Migrate live processes to new generation in V1 | Cross-thread/socket/native-state/reference transaction is not proved | Existing holders stay pinned; new roots use new generation (§12) |
 | Label generation must equal active generation | Existing protected objects intentionally retain older valid generation | Validate retained typed generation reference, not current pointer (§12) |
 | Ad-hoc state/default lookup in generic hook | Missing cells can accidentally inherit allow | Exact decision key plus explicit default and required dynamic floors (§13) |
-| Reusable inode or undefined mount generation identifies a file | Inode is reused and namespace/mount topology changes object meaning | Mount namespace generation + mount/fs/inode/version/live identity (§15, §17) |
+| Reusable inode or undefined mount generation grants a file effect | Inode is reused and namespace/mount topology changes object meaning | Use mount namespace generation + mount/fs/inode/version/live identity for positive file authority. A signed canonical path-tree `DENY` floor needs none of these child-object fields (§15, §17). |
 | Projected-token rotation can wait for asynchronous userspace update | New object may be readable before classifier catches up | Classify synchronously before access, or deny until the exact object is bound (§17) |
 | Process-local sensitive bit proves which bytes were published | The kernel does not know which input bytes caused a later output | Use the bit only to restrict that actor/native family; govern each IPC/output operation and make no byte-provenance claim (§18) |
 | Old process-shared ABI sketch or task-label role cache is authoritative | Duplicated mutable authority diverges | One `ProcessSecurityStateV1` and one native authority state; label stores a reference only (§6, §18) |
