@@ -1,8 +1,10 @@
 #![allow(unsafe_code)]
 
+use std::ffi::CString;
 use std::fs::File;
 use std::io::Write as _;
 use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+use std::os::unix::ffi::OsStrExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -25,17 +27,22 @@ pub(super) struct CloneIntoCgroupFixture {
 
 impl CloneIntoCgroupFixture {
     pub(super) fn start(cgroup_path: &Path) -> Result<Self> {
-        Self::start_with_namespace_target(cgroup_path, None)
+        Self::start_with_namespace_target(cgroup_path, None, None)
+    }
+
+    pub(super) fn start_with_root_first_effect(cgroup_path: &Path, path: &Path) -> Result<Self> {
+        Self::start_with_namespace_target(cgroup_path, None, Some(path))
     }
 
     pub(super) fn start_with_mount_namespace_target(cgroup_path: &Path) -> Result<Self> {
         let target = start_mount_namespace_target()?;
-        Self::start_with_namespace_target(cgroup_path, Some(target))
+        Self::start_with_namespace_target(cgroup_path, Some(target), None)
     }
 
     fn start_with_namespace_target(
         cgroup_path: &Path,
         mut namespace_target: Option<Child>,
+        first_effect_path: Option<&Path>,
     ) -> Result<Self> {
         let cgroup = match File::open(cgroup_path).context(IoSnafu { path: cgroup_path }) {
             Ok(cgroup) => cgroup,
@@ -71,7 +78,10 @@ impl CloneIntoCgroupFixture {
         let result =
             unsafe { libc::syscall(libc::SYS_clone3, &raw const args, size_of::<clone_args>()) };
         if result == 0 {
-            run_child(namespace_target_read.as_ref().map(|file| file.as_raw_fd()));
+            run_child(
+                namespace_target_read.as_ref().map(|file| file.as_raw_fd()),
+                first_effect_path,
+            );
         }
         if result < 0 {
             stop_namespace_target(&mut namespace_target);
@@ -260,6 +270,64 @@ impl CloneIntoCgroupFixture {
         Ok(None)
     }
 
+    pub(super) fn moved_root_first_effect_denied(&mut self) -> Result<Option<()>> {
+        let mut status = 0;
+        // SAFETY: root_pid is this process's child and status is writable.
+        let result =
+            unsafe { libc::waitpid(self.root_pid as libc::pid_t, &raw mut status, libc::WNOHANG) };
+        if result < 0 {
+            return Err(invalid_state(format!(
+                "wait for moved-root first-effect exit: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        if result == self.root_pid as libc::pid_t {
+            if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == libc::EACCES {
+                return Ok(Some(()));
+            }
+            let reason = if libc::WIFEXITED(status) {
+                format!("exit status {}", libc::WEXITSTATUS(status))
+            } else if libc::WIFSIGNALED(status) {
+                format!("signal {}", libc::WTERMSIG(status))
+            } else {
+                format!("wait status {status}")
+            };
+            return Err(invalid_state(format!(
+                "moved-root first effect did not fail with EACCES: {reason}"
+            )));
+        }
+        Ok(None)
+    }
+
+    pub(super) fn root_first_effect_allowed(&mut self) -> Result<Option<()>> {
+        let mut status = 0;
+        // SAFETY: root_pid is this process's child and status is writable.
+        let result =
+            unsafe { libc::waitpid(self.root_pid as libc::pid_t, &raw mut status, libc::WNOHANG) };
+        if result < 0 {
+            return Err(invalid_state(format!(
+                "wait for unmoved-root first-effect exit: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        if result == self.root_pid as libc::pid_t {
+            if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
+                return Ok(Some(()));
+            }
+            let reason = if libc::WIFEXITED(status) {
+                format!("exit status {}", libc::WEXITSTATUS(status))
+            } else if libc::WIFSIGNALED(status) {
+                format!("signal {}", libc::WTERMSIG(status))
+            } else {
+                format!("wait status {status}")
+            };
+            return Err(invalid_state(format!(
+                "unmoved-root first effect did not complete: {reason}"
+            )));
+        }
+        Ok(None)
+    }
+
     pub(super) fn stop(&mut self) {
         if let Some(pidfd) = &self.child_pidfd {
             let _result = pidfd_send_signal(pidfd, Signal::KILL);
@@ -348,9 +416,24 @@ fn stop_namespace_target(target: &mut Option<Child>) {
     }
 }
 
-fn run_child(namespace_target_fd: Option<i32>) -> ! {
+fn run_child(namespace_target_fd: Option<i32>, first_effect_path: Option<&Path>) -> ! {
     unsafe {
         libc::raise(libc::SIGSTOP);
+    }
+    if let Some(path) = first_effect_path {
+        let path = CString::new(path.as_os_str().as_bytes())
+            .unwrap_or_else(|_| unsafe { libc::_exit(126) });
+        let descriptor = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+        if descriptor >= 0 {
+            unsafe {
+                libc::close(descriptor);
+                libc::_exit(0);
+            }
+        }
+        let status = std::io::Error::last_os_error()
+            .raw_os_error()
+            .unwrap_or(127);
+        unsafe { libc::_exit(status) }
     }
     let native_child = unsafe { libc::fork() };
     if native_child == 0 {

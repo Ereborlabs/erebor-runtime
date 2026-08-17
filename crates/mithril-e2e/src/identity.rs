@@ -152,8 +152,11 @@ pub struct IdentityPhysicalProbeBundleV1 {
     pub external_ambiguity_first_root: NativeTaskSnapshotV1,
     pub external_ambiguity_second_root: NativeTaskSnapshotV1,
     pub external_ambiguity_same_restricted_role: bool,
+    pub cgroup_escape_unmoved_control: NativeTaskSnapshotV1,
+    pub cgroup_escape_unmoved_first_effect_allowed: bool,
     pub cgroup_escape_root: NativeTaskSnapshotV1,
     pub cgroup_escape_placement_mismatch_detected: bool,
+    pub cgroup_escape_first_effect_denied: bool,
     pub moved_parent_fork_denied: bool,
     pub moved_task_exec_denied: bool,
     pub pre_ponr_failed_exec_restored: bool,
@@ -312,11 +315,13 @@ impl IdentityTestRunner {
         let execfail_ready_path = output_directory.join("execfail-ready");
         let non_leader_thread_ready_path = output_directory.join("non-leader-thread-ready");
         let concurrent_thread_ready_path = output_directory.join("concurrent-thread-ready");
+        let cgroup_escape_sentinel_path = output_directory.join("cgroup-escape-sentinel");
         ensure!(
             !execfail_path.exists()
                 && !execfail_ready_path.exists()
                 && !non_leader_thread_ready_path.exists()
-                && !concurrent_thread_ready_path.exists(),
+                && !concurrent_thread_ready_path.exists()
+                && !cgroup_escape_sentinel_path.exists(),
             InvalidInputSnafu {
                 path: output_directory,
                 reason: "identity exec probe files must not already exist",
@@ -326,7 +331,15 @@ impl IdentityTestRunner {
         let execfail_ready_cleanup = ProbeFile::new(&execfail_ready_path);
         let non_leader_thread_ready_cleanup = ProbeFile::new(&non_leader_thread_ready_path);
         let concurrent_thread_ready_cleanup = ProbeFile::new(&concurrent_thread_ready_path);
+        let cgroup_escape_sentinel_cleanup = ProbeFile::new(&cgroup_escape_sentinel_path);
         self.materialize_execfail(&execfail_path)?;
+        fs::write(
+            &cgroup_escape_sentinel_path,
+            b"identity cgroup escape sentinel\n",
+        )
+        .context(IoSnafu {
+            path: &cgroup_escape_sentinel_path,
+        })?;
         let object_sha256 = bundled_bpf_sha256();
         let (boot_id, node_boot_id) = boot_identity()?;
         let config = KernelHostConfig::identity(
@@ -1541,6 +1554,109 @@ impl IdentityTestRunner {
             }
         );
         double_fork_fixture.stop();
+
+        let mut cgroup_escape_control = CloneIntoCgroupFixture::start_with_root_first_effect(
+            &cgroup_path,
+            &cgroup_escape_sentinel_path,
+        )?;
+        let cgroup_escape_unmoved_control = self.wait_for(
+            "cgroup escape unmoved control identity",
+            &procs_path,
+            || {
+                inspector
+                    .snapshot(cgroup_escape_control.root_pid())
+                    .context(NodeSnafu)
+            },
+        )?;
+        ensure!(
+            cgroup_escape_unmoved_control.creator_task_cookie.is_none()
+                && cgroup_escape_unmoved_control.root_class
+                    == Some("external_runtime_root")
+                && cgroup_escape_unmoved_control.installed_role_class
+                    == Some("runtime_external_restricted")
+                && cgroup_escape_unmoved_control.active_role_id == binding.external_role_id
+                && cgroup_escape_unmoved_control.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8,
+            InvalidInputSnafu {
+                path: &procs_path,
+                reason: "the unmoved cgroup-escape control did not have the restricted external identity",
+            }
+        );
+        cgroup_escape_control.release_root()?;
+        self.wait_for("unmoved-root first-effect success", &procs_path, || {
+            cgroup_escape_control.root_first_effect_allowed()
+        })?;
+        cgroup_escape_control.stop();
+
+        let mut cgroup_escape_fixture = CloneIntoCgroupFixture::start_with_root_first_effect(
+            &cgroup_path,
+            &cgroup_escape_sentinel_path,
+        )?;
+        let cgroup_escape_unmoved_root = self.wait_for(
+            "cgroup escape root identity before movement",
+            &procs_path,
+            || {
+                inspector
+                    .snapshot(cgroup_escape_fixture.root_pid())
+                    .context(NodeSnafu)
+            },
+        )?;
+        let health_before_cgroup_escape = identity.health(&host).context(NodeSnafu)?;
+        fs::write(
+            &parent_procs_path,
+            cgroup_escape_fixture.root_pid().to_string(),
+        )
+        .context(IoSnafu {
+            path: &parent_procs_path,
+        })?;
+        let cgroup_escape_root = self.wait_for(
+            "cgroup escape fail-closed identity",
+            &parent_procs_path,
+            || {
+                let snapshot = inspector
+                    .snapshot(cgroup_escape_fixture.root_pid())
+                    .context(NodeSnafu)?;
+                Ok(snapshot.filter(|snapshot| {
+                    snapshot.coordinate_state == TaskCoordinateStateV1::FailClosedUnknown as u8
+                }))
+            },
+        )?;
+        let health_after_cgroup_escape = identity.health(&host).context(NodeSnafu)?;
+        ensure!(
+            cgroup_escape_unmoved_root.creator_task_cookie.is_none()
+                && cgroup_escape_unmoved_root.root_class == Some("external_runtime_root")
+                && cgroup_escape_unmoved_root.installed_role_class
+                    == Some("runtime_external_restricted")
+                && cgroup_escape_unmoved_root.active_role_id == binding.external_role_id
+                && cgroup_escape_unmoved_root.coordinate_state
+                    == TaskCoordinateStateV1::Runnable as u8
+                && cgroup_escape_root.creator_task_cookie.is_none()
+                && cgroup_escape_root.root_class == Some("external_runtime_root")
+                && cgroup_escape_root.installed_role_class == Some("runtime_external_restricted")
+                && cgroup_escape_root.active_role_id == binding.external_role_id
+                && health_after_cgroup_escape.placement_mismatches
+                    > health_before_cgroup_escape.placement_mismatches,
+            InvalidInputSnafu {
+                path: &parent_procs_path,
+                reason: "moving a labeled root out of its cgroup did not fail closed",
+            }
+        );
+        cgroup_escape_fixture.release_root()?;
+        self.wait_for("moved-root first-effect denial", &parent_procs_path, || {
+            cgroup_escape_fixture.moved_root_first_effect_denied()
+        })?;
+        let health_after_cgroup_escape_effect = identity.health(&host).context(NodeSnafu)?;
+        ensure!(
+            health_after_cgroup_escape_effect.placement_mismatches
+                > health_after_cgroup_escape.placement_mismatches,
+            InvalidInputSnafu {
+                path: &parent_procs_path,
+                reason: "a moved labeled root did not record its denied first effect",
+            }
+        );
+        cgroup_escape_fixture.stop();
+        cgroup_escape_sentinel_cleanup.cleanup()?;
+
         let profile_task_refs_after_exit =
             self.wait_for("profile reference release", &procs_path, || {
                 let refs = profile_task_refs(&host)?;
@@ -1625,7 +1741,7 @@ impl IdentityTestRunner {
             }
         );
         Ok(IdentityPhysicalProbeBundleV1 {
-            schema_version: 11,
+            schema_version: 12,
             object_sha256,
             first_start,
             distinct_pin_root_owner_rejected,
@@ -1634,8 +1750,11 @@ impl IdentityTestRunner {
             external_ambiguity_first_root,
             external_ambiguity_second_root,
             external_ambiguity_same_restricted_role,
+            cgroup_escape_unmoved_control,
+            cgroup_escape_unmoved_first_effect_allowed: true,
             cgroup_escape_root,
             cgroup_escape_placement_mismatch_detected: true,
+            cgroup_escape_first_effect_denied: true,
             moved_parent_fork_denied: true,
             moved_task_exec_denied: true,
             pre_ponr_failed_exec_restored: true,
