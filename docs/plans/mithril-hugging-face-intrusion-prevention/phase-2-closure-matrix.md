@@ -36,7 +36,7 @@ Completed-row evidence remains in the phase result and acceptance record:
 | `ENTRY-START-001` | Blocked: no current fixture contract. | Configured start-hook gap case. |
 | `ENTRY-STOCK-HOOK-FAILURE-002` | Blocked: no current fixture contract. | Stock-hook failure cases. |
 | `EXEC-COMMIT-STATE-001` | Blocked: success and pre-PONR recovery passed; no post-PONR fault contract. | Post-PONR fatal and unknown outcomes. |
-| `ID-CREATOR-PARENT-007` | Creator exit, double fork, subreaper, and PID-namespace-init reparenting passed. | Blocked: current owners have a `PTRACE_ATTACH` denial fixture, not a permitted ptrace transition. A ptrace topology needs an approved permitted transition. The existing fixture has no bounded way to require a real host-PID collision; a PID-reuse case needs an approved deterministic collision design. |
+| `ID-CREATOR-PARENT-007` | Creator exit, double fork, subreaper, and PID-namespace-init reparenting passed. | Blocked: the current fixture has no bounded way to require a real host-PID collision. A PID-reuse case needs an approved deterministic collision design. |
 | `ID-TASK-COORD-FINALIZE-006` | Blocked. Allocation and runnable snapshots exist. The current fixture has no allocation or finalization fault-injection protocol, missing-`PIDFD_THREAD` control, or leader-first-exit/TID-reuse oracle. | Add the required coordinate-failure controls before adding retained allocation, finalization, visibility, and exit evidence. |
 | `NATIVE-STATE-REF-LIFETIME-001` | Blocked: task-reference count is the only current observable. | Socket, object, and generation-reference cases. |
 
