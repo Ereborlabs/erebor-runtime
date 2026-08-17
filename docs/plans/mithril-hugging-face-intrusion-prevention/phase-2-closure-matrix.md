@@ -33,7 +33,7 @@ Completed-row evidence remains in the phase result and acceptance record:
 | `ENTRY-START-001` | No fixture. | Configured start-hook gap case. |
 | `ENTRY-STOCK-HOOK-FAILURE-002` | No fixture. | Stock-hook failure cases. |
 | `EXEC-COMMIT-STATE-001` | Success and pre-PONR recovery passed. | Post-PONR fatal and unknown outcomes. |
-| `EXEC-CONCURRENT-002` | Serial and two-worker normal exec passed in the VM. | Exec versus fork, vfork, and thread creation. |
+| `EXEC-CONCURRENT-002` | Serial and two-worker normal exec passed in the VM. | Blocked: the current fixture has no control that holds real exec staging. A shared barrier loses the creator sibling to Linux `de_thread` before it reaches fork, vfork, or thread creation. |
 | `ID-CGROUP-ESCAPE-001` | Moved root becomes fail closed. | Unmoved control and first-effect denial proof. |
 | `ID-CLONE-CGROUP-002` | Direct `CLONE_INTO_CGROUP` root and child passed. | First-effect proof and fixture-specific record. |
 | `ID-CLONE-CGROUP-FAIL-003` | No fixture. | Allocation, finalization, and placement fault injection. |
