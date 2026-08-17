@@ -99,6 +99,26 @@ static __always_inline int hard_effect_result(
         effect_physical_result_v1_denied_before_effect);
 }
 
+static __always_inline bool path_tree_denies(
+    const struct identity_scratch_v1 *scratch, __u16 operation)
+{
+    if (!scratch || operation >= 64)
+        return false;
+    return scratch->path_terminal.path_tree_deny_operation_mask &
+           (1ULL << operation);
+}
+
+static __always_inline int path_tree_effect_result(
+    identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch)
+{
+    int result = identity_deny(config);
+
+    scratch->observation.configured_errno = result;
+    return emit_effect_observation(
+        scratch, result, effect_observation_reason_v1_path_tree_policy_deny,
+        effect_physical_result_v1_denied_before_effect);
+}
+
 static __always_inline int identity_or_prior_effect_result(
     identity_runtime_config_v1 *config, struct identity_scratch_v1 *scratch,
     int prior_result, __u8 identity_reason)
@@ -477,19 +497,45 @@ static __noinline int resolved_identity_effect_gate(
     exact_file_object_from_path(&scratch->file_object, path);
     scratch->file_object.profile_generation_ref_id =
         snapshot->active_profile_generation_ref_id;
+    if (!scratch->file_object.mount_id_unique &&
+        scratch->path_mount_namespace_inode)
+        scratch->file_object.mount_namespace_inode =
+            scratch->path_mount_namespace_inode;
+    else
+        scratch->path_mount_namespace_inode = 0;
     scratch->observation.file_object = scratch->file_object;
-    if (!scratch->file_object.mount_id_unique)
+    if (!scratch->file_object.mount_id_unique &&
+        !scratch->file_object.mount_namespace_inode)
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_unsupported_object);
     if (canonical_path_candidate(
             path, binding, snapshot->active_profile_generation_ref_id,
-            scratch))
+            scratch)) {
+        if (scratch->path_mount_namespace_inode) {
+            scratch->path_mount_namespace_inode = 0;
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_unsupported_object);
+        }
         return hard_effect_result(
             config, scratch,
             effect_observation_reason_v1_unresolved_object);
+    }
+    scratch->path_mount_namespace_inode = 0;
     scratch->observation.composite_atom_id =
         scratch->path_terminal.composite_atom_id;
+    if (path_tree_denies(scratch, operation)) {
+        if (generation->mode != policy_generation_mode_v1_protect)
+            return hard_effect_result(
+                config, scratch,
+                effect_observation_reason_v1_corrupt_identity_or_generation);
+        return path_tree_effect_result(config, scratch);
+    }
+    if (!scratch->file_object.inode)
+        return hard_effect_result(
+            config, scratch,
+            effect_observation_reason_v1_unsupported_object);
     object_binding = configured_file_object_binding(scratch);
     if (!object_binding ||
         object_binding->state != exact_object_binding_state_v1_read_back ||
@@ -556,6 +602,7 @@ static __noinline int identity_effect_gate(struct file *file,
     if (scratch) {
         scratch->effect_gate_flags = 0;
         scratch->effect_gate_operation_argument = 0;
+        scratch->path_mount_namespace_inode = 0;
     }
     if (!ret)
         prepare_effect_identity();
@@ -571,6 +618,7 @@ static __noinline int identity_effect_gate_without_exception(
     if (scratch) {
         scratch->effect_gate_flags = EFFECT_GATE_DENY_EXCEPTION_V1;
         scratch->effect_gate_operation_argument = 0;
+        scratch->path_mount_namespace_inode = 0;
     }
     if (!ret)
         prepare_effect_identity();
@@ -586,6 +634,7 @@ static __noinline int identity_file_open_effect_gate(
     if (scratch) {
         scratch->effect_gate_flags = EFFECT_GATE_FILE_OPEN_ATTEMPT_V1;
         scratch->effect_gate_operation_argument = 0;
+        scratch->path_mount_namespace_inode = 0;
     }
     if (!ret)
         prepare_effect_identity();
@@ -601,6 +650,7 @@ static __noinline int identity_effect_actor_gate(
     if (scratch) {
         scratch->effect_gate_flags = EFFECT_GATE_DEFER_DECISION_V1;
         scratch->effect_gate_operation_argument = 0;
+        scratch->path_mount_namespace_inode = 0;
     }
     if (!ret)
         prepare_effect_identity();
@@ -617,6 +667,7 @@ static __noinline int identity_path_effect_gate(const struct path *path,
     if (scratch) {
         scratch->effect_gate_flags = 0;
         scratch->effect_gate_operation_argument = 0;
+        scratch->path_mount_namespace_inode = 0;
     }
     if (!ret)
         prepare_effect_identity();
@@ -654,17 +705,43 @@ static __noinline int identity_unqualified_effect_gate(
         config, scratch, effect_observation_reason_v1_unsupported_object);
 }
 
+static __noinline void prepare_path_mount_namespace(
+    struct vfsmount *vfsmount, struct identity_scratch_v1 *scratch)
+{
+    struct mount *mount;
+    struct mnt_namespace *mount_namespace = NULL;
+
+    if (!vfsmount || !scratch)
+        return;
+    mount = mount_from_vfsmount(vfsmount);
+    if (BPF_CORE_READ_INTO(&mount_namespace, mount, mnt_ns) ||
+        !mount_namespace)
+        return;
+    (void)BPF_CORE_READ_INTO(&scratch->path_mount_namespace_inode,
+                             mount_namespace, ns.inum);
+}
+
 static __always_inline int identity_dentry_effect_gate(
     const struct path *dir, struct dentry *dentry, __u16 operation, int ret)
 {
+    struct identity_scratch_v1 *scratch = identity_scratch_record();
     struct path target = {};
 
+    if (scratch) {
+        scratch->effect_gate_flags = 0;
+        scratch->effect_gate_operation_argument = 0;
+        scratch->path_mount_namespace_inode = 0;
+    }
+    if (!ret)
+        prepare_effect_identity();
     if (!dir || !dentry || BPF_CORE_READ_INTO(&target.mnt, dir, mnt))
-        return identity_path_effect_gate(
-            NULL, kernel_effect_family_v1_file, operation, ret);
+        return dispatch_identity_effect_gate(
+            NULL, NULL, kernel_effect_family_v1_file, operation, ret);
     target.dentry = dentry;
-    return identity_path_effect_gate(&target, kernel_effect_family_v1_file,
-                                     operation, ret);
+    if (scratch)
+        prepare_path_mount_namespace(target.mnt, scratch);
+    return dispatch_identity_effect_gate(
+        NULL, &target, kernel_effect_family_v1_file, operation, ret);
 }
 
 static __always_inline bool initial_exec_open_without_pending(void)

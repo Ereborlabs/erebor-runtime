@@ -449,8 +449,9 @@ static __always_inline int canonical_path_candidate(
     scratch->path_state_key.state_id = match.state_id;
     terminal = bpf_map_lookup_elem(&path_graph_terminals,
                                    &scratch->path_state_key);
-    if (!terminal || !terminal->composite_atom_id ||
-        !terminal->rule_numeric_id)
+    if (!terminal ||
+        ((!terminal->composite_atom_id || !terminal->rule_numeric_id) &&
+         !terminal->path_tree_deny_operation_mask))
         return -EACCES;
     if (snapshot_mount_view(scratch->file_object.mount_namespace_inode,
                             scratch->mount_topology_generation,

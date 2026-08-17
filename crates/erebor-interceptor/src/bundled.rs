@@ -477,6 +477,73 @@ mod tests {
     }
 
     #[test]
+    fn path_tree_deny_uses_the_clean_canonical_path_before_object_lookup() {
+        let effects =
+            include_str!("../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h");
+        let gate = effects
+            .split("static __noinline int resolved_identity_effect_gate")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __noinline int dispatch_identity_effect_gate")
+                    .next()
+            })
+            .unwrap_or_default();
+        let exact = gate
+            .find("exact_file_object_from_path(")
+            .unwrap_or(usize::MAX);
+        let name_mount = gate
+            .find("scratch->path_mount_namespace_inode;")
+            .unwrap_or(usize::MAX);
+        let canonical = gate.find("canonical_path_candidate(").unwrap_or(usize::MAX);
+        let floor = gate
+            .find("path_tree_denies(scratch, operation)")
+            .unwrap_or(usize::MAX);
+        let object = gate
+            .find("configured_file_object_binding(scratch)")
+            .unwrap_or(usize::MAX);
+
+        assert!(
+            exact < name_mount && name_mount < canonical && canonical < floor && floor < object
+        );
+
+        let path = include_str!("../../../bpf/erebor-interceptor/programs/identity_path.bpf.h");
+        let candidate = path
+            .split("static __always_inline int canonical_path_candidate")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("SEC(\"tracepoint/raw_syscalls/sys_exit\")")
+                    .next()
+            })
+            .unwrap_or_default();
+        let collect = path
+            .split("static __always_inline int collect_mount_components")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int apply_mount")
+                    .next()
+            })
+            .unwrap_or_default();
+        let step = path
+            .split("static long canonical_path_match_step")
+            .nth(1)
+            .and_then(|source| {
+                source
+                    .split("static __always_inline int canonical_path_candidate")
+                    .next()
+            })
+            .unwrap_or_default();
+        assert!(collect.contains("BPF_CORE_READ_INTO(&parent, current, d_parent)"));
+        assert!(collect.contains("current = parent;"));
+        assert!(collect.contains("if (current != root)"));
+        assert!(step.contains("raw_index = match->component_count - offset - 1;"));
+        assert_eq!(candidate.matches("snapshot_mount_view(").count(), 2);
+        assert!(candidate.contains("mount_root->selected_mount_id_unique"));
+    }
+
+    #[test]
     fn link_and_rename_check_source_before_destination() {
         let source =
             include_str!("../../../bpf/erebor-interceptor/programs/identity_effects.bpf.h");

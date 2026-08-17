@@ -1101,6 +1101,7 @@ pub enum EffectObservationReasonV1 {
     UnsupportedObject = 8,
     ExactPolicyDeny = 9,
     ExceptionUnavailable = 10,
+    PathTreePolicyDeny = 11,
 }
 
 #[repr(u8)]

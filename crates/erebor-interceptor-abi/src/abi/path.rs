@@ -118,6 +118,7 @@ pub struct PathGraphTransitionV1 {
 pub struct PathGraphTerminalV1 {
     pub composite_atom_id: u64,
     pub rule_numeric_id: u64,
+    pub path_tree_deny_operation_mask: u64,
 }
 
 #[repr(C)]
@@ -147,7 +148,7 @@ mod tests {
         assert_eq!(size_of::<CanonicalMountRootV1>(), 24);
         assert_eq!(size_of::<PathGraphStateKeyV1>(), 16);
         assert_eq!(size_of::<PathGraphTransitionV1>(), 8);
-        assert_eq!(size_of::<PathGraphTerminalV1>(), 16);
+        assert_eq!(size_of::<PathGraphTerminalV1>(), 24);
         assert_eq!(size_of::<MountMutationAttemptV1>(), 8);
     }
 

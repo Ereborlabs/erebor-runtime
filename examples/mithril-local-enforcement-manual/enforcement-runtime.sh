@@ -11,16 +11,49 @@ source "$enforcement_directory/../mithril-effect-observation-manual/observation-
 
 enforcement_benign_path=
 enforcement_exception_lifetime_ns=${enforcement_exception_lifetime_ns:-}
+enforcement_path_tree_root=${enforcement_path_tree_root:-}
 
 enforcement_configure_policy_source() {
-  [[ -n $enforcement_exception_lifetime_ns ]] || return 0
-  [[ $enforcement_exception_lifetime_ns =~ ^[1-9][0-9]*$ ]] || {
+  [[ -n $enforcement_exception_lifetime_ns || -n $enforcement_path_tree_root ]] || return 0
+  local lifetime_ns=${enforcement_exception_lifetime_ns:-3600000000000}
+  [[ $lifetime_ns =~ ^[1-9][0-9]*$ ]] || {
     echo "enforcement_exception_lifetime_ns must be a positive integer" >&2
     return 2
   }
+  if [[ -n $enforcement_path_tree_root ]]; then
+    [[ $enforcement_path_tree_root =~ ^/[A-Za-z0-9._/-]+$ \
+      && -d /proc/$identity_init_pid/root$enforcement_path_tree_root ]] || {
+      echo "path-tree root must be an existing absolute container directory" >&2
+      return 2
+    }
+  fi
   observation_policy_source=$identity_work/local-protect-policy-v1.yaml
-  sed "s/maximum_lifetime_ns: 3600000000000/maximum_lifetime_ns: $enforcement_exception_lifetime_ns/" \
-    "$enforcement_policy_fixture_directory/protect-policy-v1.yaml" >"$observation_policy_source"
+  local policy_fixture=$enforcement_policy_fixture_directory/protect-policy-v1.yaml
+  if [[ -n $enforcement_path_tree_root ]]; then
+    policy_fixture=$enforcement_policy_fixture_directory/observe-policy-v1.yaml
+  fi
+  sed -e 's/desired_profile_mode: OBSERVE/desired_profile_mode: PROTECT/' \
+    -e "s/maximum_lifetime_ns: 3600000000000/maximum_lifetime_ns: $lifetime_ns/" \
+    "$policy_fixture" >"$observation_policy_source"
+  [[ -n $enforcement_path_tree_root ]] || return 0
+  local quoted_root
+  quoted_root=$(jq -Rn --arg value "$enforcement_path_tree_root" '$value')
+  awk -v root="$quoted_root" '
+    /^roles:/ && !inserted {
+      print "path_tree_deny_floors:"
+      print "  - schema_version: 1"
+      print "    rule_id: manual-secret-tree-deny"
+      print "    canonical_path: " root
+      print "    recursive: true"
+      print "    effect_families: [FILE]"
+      print "    operation_ids: [CREATE, LINK, MMAP_READ, MMAP_WRITE, MPROTECT, OPEN_READ, OPEN_WRITE, READ, RENAME, SETATTR, UNLINK, WRITE]"
+      print "    requested_disposition: DENY"
+      print "    exception_ids: []"
+      inserted = 1
+    }
+    { print }
+  ' "$observation_policy_source" >"$observation_policy_source.path-tree"
+  mv -- "$observation_policy_source.path-tree" "$observation_policy_source"
 }
 
 enforcement_configure_benign_control() {
@@ -78,6 +111,7 @@ enforcement_prepare_cri_shared() {
   }
   identity_prepare_cri "$1" "$2"
   observation_policy_source=$observation_policy_fixture_directory/observe-policy-v1.yaml
+  enforcement_configure_policy_source
   [[ -z $enforcement_benign_path ]] || enforcement_configure_benign_control
   observation_configure_secret "$3"
   observation_configure_cri_shared_directory "$4" "$5"
@@ -86,6 +120,7 @@ enforcement_prepare_cri_shared() {
 enforcement_prepare_k3s() {
   identity_prepare_k3s_case "$1"
   observation_policy_source=$observation_policy_fixture_directory/observe-policy-v1.yaml
+  enforcement_configure_policy_source
   [[ -z $enforcement_benign_path ]] || enforcement_configure_benign_control
   observation_configure_secret "$identity_k3s_secret_path"
   observation_configure_cri_shared_directory \
@@ -94,6 +129,11 @@ enforcement_prepare_k3s() {
 
 enforcement_expect_exact_denial() {
   observation_wait_for_observation 'reason=EXACT_POLICY_DENY' "$identity_work/effects.txt"
+  grep -q 'result=DENIED_BEFORE_EFFECT' "$identity_work/effects.txt"
+}
+
+enforcement_expect_path_tree_denial() {
+  observation_wait_for_observation 'reason=PATH_TREE_POLICY_DENY' "$identity_work/effects.txt"
   grep -q 'result=DENIED_BEFORE_EFFECT' "$identity_work/effects.txt"
 }
 

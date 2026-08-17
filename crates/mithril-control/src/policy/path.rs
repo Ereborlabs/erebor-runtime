@@ -215,8 +215,9 @@ pub struct CanonicalPathGraphV1 {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct PathGraphStateV1 {
     exact: BTreeMap<Vec<u8>, usize>,
-    wildcard: Option<usize>,
+    wildcards: BTreeSet<usize>,
     terminal: Option<PathTerminalV1>,
+    path_tree_deny_operations: BTreeSet<u16>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -240,6 +241,7 @@ pub struct DeterministicPathGraphV1 {
     pub exact_transitions: Vec<DeterministicPathTransitionV1>,
     pub wildcard_transitions: Vec<DeterministicPathWildcardV1>,
     pub terminals: Vec<DeterministicPathTerminalV1>,
+    pub path_tree_deny_floors: Vec<DeterministicPathTreeDenyFloorV1>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -262,8 +264,58 @@ pub struct DeterministicPathTerminalV1 {
     pub candidate_object_class_id: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PathTreeDenyPatternV1 {
+    pub rule_id: String,
+    pub components: Vec<Vec<u8>>,
+    pub recursive: bool,
+    pub operations: Vec<u16>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeterministicPathTreeDenyFloorV1 {
+    pub state_id: u32,
+    pub operation_mask: u64,
+}
+
+pub fn canonical_path_components(policy_id: &str, path: &str) -> Result<Vec<Vec<u8>>> {
+    ensure_path(
+        policy_id,
+        path.starts_with('/') && path.len() > 1 && !path.ends_with('/'),
+        "PATH_TREE_SELECTOR",
+        "a path-tree selector must be an absolute non-root path without a trailing slash",
+    )?;
+    let components = path[1..]
+        .split('/')
+        .map(str::as_bytes)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    ensure_path(
+        policy_id,
+        components.len() <= MAX_CANONICAL_PATH_COMPONENTS_V1
+            && components.iter().all(|component| {
+                !component.is_empty()
+                    && component.len() <= MAX_CANONICAL_COMPONENT_BYTES_V1
+                    && !component.contains(&0)
+                    && component.as_slice() != b"."
+                    && component.as_slice() != b".."
+            }),
+        "PATH_TREE_SELECTOR",
+        "a path-tree selector must contain 1..64 bounded non-special components",
+    )?;
+    Ok(components)
+}
+
 impl CanonicalPathGraphV1 {
     pub fn compile(policy_id: &str, patterns: &[PathPatternV1]) -> Result<Self> {
+        Self::compile_with_path_tree_denies(policy_id, patterns, &[])
+    }
+
+    pub fn compile_with_path_tree_denies(
+        policy_id: &str,
+        patterns: &[PathPatternV1],
+        deny_patterns: &[PathTreeDenyPatternV1],
+    ) -> Result<Self> {
         let mut graph = Self {
             states: vec![PathGraphStateV1::default()],
         };
@@ -294,6 +346,9 @@ impl CanonicalPathGraphV1 {
                 )?;
             }
         }
+        for pattern in deny_patterns {
+            graph.insert_path_tree_deny(policy_id, pattern)?;
+        }
         Ok(graph)
     }
 
@@ -306,9 +361,7 @@ impl CanonicalPathGraphV1 {
                 if let Some(exact) = state.exact.get(component) {
                     next.insert(*exact);
                 }
-                if let Some(wildcard) = state.wildcard {
-                    next.insert(wildcard);
-                }
+                next.extend(&state.wildcards);
             }
             active = next;
             if active.is_empty() {
@@ -341,6 +394,7 @@ impl CanonicalPathGraphV1 {
         let mut exact_transitions = Vec::new();
         let mut wildcard_transitions = Vec::new();
         let mut terminals = Vec::new();
+        let mut path_tree_deny_floors = Vec::new();
         while let Some(active) = pending.pop_front() {
             let current_state_id = state_ids[&active];
             if let Some(terminal) = self.terminal_for(&active) {
@@ -348,6 +402,16 @@ impl CanonicalPathGraphV1 {
                     state_id: current_state_id,
                     rule_id: terminal.rule_id.clone(),
                     candidate_object_class_id: terminal.candidate_object_class_id.clone(),
+                });
+            }
+            let operation_mask = active
+                .iter()
+                .flat_map(|state_id| &self.states[*state_id].path_tree_deny_operations)
+                .fold(0_u64, |mask, operation| mask | (1_u64 << *operation));
+            if operation_mask != 0 {
+                path_tree_deny_floors.push(DeterministicPathTreeDenyFloorV1 {
+                    state_id: current_state_id,
+                    operation_mask,
                 });
             }
             let exact_components = active
@@ -380,11 +444,13 @@ impl CanonicalPathGraphV1 {
         });
         wildcard_transitions.sort_by_key(|transition| transition.current_state_id);
         terminals.sort_by_key(|terminal| terminal.state_id);
+        path_tree_deny_floors.sort_by_key(|floor| floor.state_id);
         Ok(DeterministicPathGraphV1 {
             state_count: state_ids.len() as u32,
             exact_transitions,
             wildcard_transitions,
             terminals,
+            path_tree_deny_floors,
         })
     }
 
@@ -401,9 +467,7 @@ impl CanonicalPathGraphV1 {
                     next.insert(*exact);
                 }
             }
-            if let Some(wildcard) = state.wildcard {
-                next.insert(wildcard);
-            }
+            next.extend(&state.wildcards);
         }
         next
     }
@@ -440,7 +504,9 @@ impl CanonicalPathGraphV1 {
                     )?;
                     self.states[state_id].exact.get(bytes).copied()
                 }
-                PathPatternComponentV1::Wildcard => self.states[state_id].wildcard,
+                PathPatternComponentV1::Wildcard => {
+                    self.states[state_id].wildcards.iter().next().copied()
+                }
             };
             let next = if let Some(existing) = existing {
                 existing
@@ -458,7 +524,7 @@ impl CanonicalPathGraphV1 {
                         self.states[state_id].exact.insert(bytes.clone(), next);
                     }
                     PathPatternComponentV1::Wildcard => {
-                        self.states[state_id].wildcard = Some(next);
+                        self.states[state_id].wildcards.insert(next);
                     }
                 }
                 next
@@ -481,6 +547,58 @@ impl CanonicalPathGraphV1 {
                 self.states[state_id].terminal = Some(incoming);
             }
             Some(_) => {}
+        }
+        Ok(())
+    }
+
+    fn insert_path_tree_deny(
+        &mut self,
+        policy_id: &str,
+        pattern: &PathTreeDenyPatternV1,
+    ) -> Result<()> {
+        ensure_path(
+            policy_id,
+            !pattern.rule_id.is_empty()
+                && !pattern.components.is_empty()
+                && pattern.components.len() <= MAX_CANONICAL_PATH_COMPONENTS_V1
+                && !pattern.operations.is_empty()
+                && pattern.operations.windows(2).all(|pair| pair[0] < pair[1])
+                && pattern.operations.iter().all(|operation| *operation < 64),
+            "PATH_TREE_DENY_PATTERN",
+            "path-tree denial needs one bounded path and ordered kernel operations",
+        )?;
+        let mut state_id = 0;
+        for component in &pattern.components {
+            ensure_path(
+                policy_id,
+                !component.is_empty()
+                    && component.len() <= MAX_CANONICAL_COMPONENT_BYTES_V1
+                    && !component.contains(&0)
+                    && component.as_slice() != b"."
+                    && component.as_slice() != b"..",
+                "PATH_COMPONENT",
+                "exact components must be bounded non-special Linux d_name bytes",
+            )?;
+            state_id = if let Some(existing) = self.states[state_id].exact.get(component) {
+                *existing
+            } else {
+                ensure_path(
+                    policy_id,
+                    self.states.len() < MAX_PATH_GRAPH_STATES_V1,
+                    "PATH_GRAPH_CAPACITY",
+                    "path graph exceeds the verified state capacity",
+                )?;
+                let next = self.states.len();
+                self.states.push(PathGraphStateV1::default());
+                self.states[state_id].exact.insert(component.clone(), next);
+                next
+            };
+        }
+        self.states[state_id]
+            .path_tree_deny_operations
+            .extend(&pattern.operations);
+        if pattern.recursive {
+            self.states[state_id].wildcards.insert(state_id);
         }
         Ok(())
     }
@@ -751,6 +869,46 @@ mod tests {
                 .binary_search_by_key(&state, |terminal| terminal.state_id)
                 .is_ok());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_path_tree_deny_covers_the_root_and_descendants() -> crate::Result<()> {
+        let graph = CanonicalPathGraphV1::compile_with_path_tree_denies(
+            "test",
+            &[],
+            &[PathTreeDenyPatternV1 {
+                rule_id: "deny-secret-tree".to_owned(),
+                components: canonical_path_components("test", "/tmp/secret-dir")?,
+                recursive: true,
+                operations: vec![2],
+            }],
+        )?
+        .determinize("test")?;
+
+        for components in [
+            vec![b"tmp".to_vec(), b"secret-dir".to_vec()],
+            vec![
+                b"tmp".to_vec(),
+                b"secret-dir".to_vec(),
+                b"new-child".to_vec(),
+            ],
+        ] {
+            let state = graph
+                .state_after(&components)
+                .expect("protected path state");
+            assert_eq!(
+                graph
+                    .path_tree_deny_floors
+                    .iter()
+                    .find(|floor| floor.state_id == state)
+                    .map(|floor| floor.operation_mask),
+                Some(1 << 2)
+            );
+        }
+        assert!(graph
+            .state_after(&[b"tmp".to_vec(), b"ordinary".to_vec()])
+            .is_none());
         Ok(())
     }
 }

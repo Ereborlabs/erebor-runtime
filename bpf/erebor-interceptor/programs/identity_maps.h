@@ -84,6 +84,7 @@ struct identity_scratch_v1 {
     __u8 effect_gate_flags;
     __u8 effect_gate_reserved[3];
     __u32 effect_gate_operation_argument;
+    __u32 path_mount_namespace_inode;
     exact_file_object_key_v1 file_object;
     task_label_v1 target_label;
     task_coordinate_v1 target_coordinate;

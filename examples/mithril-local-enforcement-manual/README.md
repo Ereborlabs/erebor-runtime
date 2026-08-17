@@ -96,15 +96,15 @@ examples/mithril-local-enforcement-manual/mount-attack-deny.sh \
 
 The bind-alias case creates two file bind aliases before policy activation. It
 requires two `EXACT_POLICY_DENY` observations for key `7`. The mount case
-starts eight Python `mount(2)` attempts after activation. It requires each
-attempt to return `EACCES` or `EPERM`, then requires protected file reads to
-fail.
+starts eight Python `mount(2)` attempts over the signed path-tree root after
+activation. It requires each attempt to return `EACCES` or `EPERM`, then
+requires protected file reads to fail with `PATH_TREE_POLICY_DENY`.
 
 Expected output is one of these lines followed by the Mithril cleanup line:
 
 ```text
 PASS: two pre-existing bind aliases canonicalized to the same exact denial.
-PASS: every protected mount attempt was denied and no file retry widened authority.
+PASS: every mount over the signed path tree was denied and no file retry widened authority.
 ```
 
 These cases prove one bound CRI container on one node. They do not prove mount
@@ -182,9 +182,9 @@ Manual Docker, CRI, and raw-namespace cases:
   bind aliases before activation and proves each canonicalizes to the same deny.
   It also accepts the CRI five-argument form shown above. That form requires
   Python 3.12 in the container and a writable shared hostPath directory.
-- `mount-attack-deny.sh <node.json> <container> <secret>` races eight
-  protected bind mounts and proves no mutation or protected read succeeds. It
-  also accepts the same Python CRI five-argument form.
+- `mount-attack-deny.sh <node.json> <container> <secret>` races eight bind
+  mounts over the signed recursive tree and proves no mutation or covered read
+  succeeds. It also accepts the same Python CRI five-argument form.
 - `external-mount-replacement-deny.sh <node.json> <container> <secret>
   <benign>` performs two hostile bind changes from outside the protected
   cgroup and proves the namespace-wide DIRTY view returns no fd or bytes. The

@@ -8,6 +8,7 @@ source "$directory/enforcement-runtime.sh"
   exit 2
 }
 
+enforcement_path_tree_root=$(dirname -- "$3")
 observation_prepare_docker "$1" "$2" "$3"
 observation_preload_probe python3 -c '
 import errno, os, sys
@@ -28,5 +29,5 @@ except PermissionError as error:
 os._exit(1)
 ' "$observation_probe_ready" "$3"
 observation_release_probe
-enforcement_expect_exact_denial
-identity_pass "PASS: signed protect mode denied the secret before returning an fd or bytes."
+enforcement_expect_path_tree_denial
+identity_pass "PASS: the signed canonical path-tree floor denied the secret before returning an fd or bytes."
