@@ -165,18 +165,19 @@ phase remains **Not done**.
 State: **Done** for `FILE-PATH-TREE-DENY-001`. The broader phase remains
 **Not done**.
 
-The disposable x86_64 VM harness ran exact implementation commit `6a0f389`.
+The disposable x86_64 VM harness ran exact implementation commit `d38248f`.
 The kernel was `6.8.0-137-generic`, and the active LSM order included `bpf`.
 The local-enforcement artifact is
-`/tmp/mithril-path-tree-6a0f389/local-enforcement-physical-probe.json`. Its
+`/tmp/mithril-path-tree-d38248f/local-enforcement-physical-probe.json`. Its
 SHA-256 is
-`951c12344e7c4a3199c10ff70d52289a058979b8e2f243e4306cf3e2fa74bd5e`.
+`fa91e8f1a3ee179285ec0d6ad7f592cc5a612d1d030d3f70ffefd9cec6898a3b`.
 The production BPF object SHA-256 is
-`b80388fcce6e6afeb73b700fc8b6f2e23322cce9858b41c3e4823af6dbdce204`.
+`edf9d9941e8bd3bbc8ec0a04f32e5fec1adc1571b8b1b508b8c4ab8a994d6943`.
 
 The artifact records these true fields:
 
 - `path_tree_preexisting_child_denied`
+- `path_tree_meta_depth_denied`
 - `path_tree_future_namespace_denied`
 - `path_tree_later_child_denied`
 - `path_tree_replacement_child_denied`
@@ -204,11 +205,12 @@ PASS: every mount over the signed path tree was denied and no file retry widened
 Mithril, tasks, pins, state, lease, config, and logs removed.
 ```
 
-The implementation accepts at most 64 canonical path components. Each
-component accepts at most 255 bytes. This is the checked verifier bound, not
-the BpfJailer prototype's 255-component capacity. The proof does not qualify
-idmapped mounts, full propagation coverage, token rotation, or administrative
-exec.
+The implementation accepts at most 255 canonical path components. Each
+component accepts at most 255 bytes. The mount enumeration accepts 4,096
+mounts. The red-black-tree scan stack accepts 255 entries, and the combined
+mount and dentry walk accepts 4,351 callbacks. These are checked verifier
+bounds. The proof does not qualify idmapped mounts, full propagation coverage,
+token rotation, or administrative exec.
 
 ## Procedure
 

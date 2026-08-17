@@ -206,16 +206,21 @@ therefore covers a negative dentry for `CREATE`, children that appear or
 change after activation, and a task whose mount namespace appears after
 policy activation.
 
-Exact implementation commit `6a0f389` passed the repository VM kernel,
+Exact implementation commit `d38248f` passed the repository VM kernel,
 identity, observation, and protection probes on x86_64 Linux
 `6.8.0-137-generic`. The production BPF object SHA-256 is
-`b80388fcce6e6afeb73b700fc8b6f2e23322cce9858b41c3e4823af6dbdce204`.
+`edf9d9941e8bd3bbc8ec0a04f32e5fec1adc1571b8b1b508b8c4ab8a994d6943`.
 The local-enforcement artifact SHA-256 is
-`951c12344e7c4a3199c10ff70d52289a058979b8e2f243e4306cf3e2fa74bd5e`.
-It records future-namespace denial, pre-existing, later, and replacement child
-denials, an allowed outside control, failed-closed mount replacement,
-propagation invalidation, `mount_setattr` reconciliation, and complete fixture
-cleanup.
+`fa91e8f1a3ee179285ec0d6ad7f592cc5a612d1d030d3f70ffefd9cec6898a3b`.
+It records a denial at the 255-component limit, future-namespace denial,
+pre-existing, later, and replacement child denials, an allowed outside
+control, failed-closed mount replacement, propagation invalidation,
+`mount_setattr` reconciliation, and complete fixture cleanup.
+
+The BPF mount enumeration limit is 4,096. The mount scan stack and path vector
+each accept 255 entries. Each component accepts at most 255 bytes. The
+combined live mount and dentry walk accepts 4,351 callbacks. The source has no
+separate 64-entry mount-depth limit.
 
 The disposable VM artifact and manual operator result are recorded in the
 [manual acceptance document](./manual-testing/phase-4-manual-acceptance.md#signed-path-tree-denial--2026-08-17).
