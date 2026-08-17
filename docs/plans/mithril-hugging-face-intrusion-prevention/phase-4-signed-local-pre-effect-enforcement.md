@@ -196,13 +196,26 @@ It rejects `ALLOW`, exceptions, noncanonical paths, empty operation sets, and
 unsupported effect families. The node determinizes the floor with exact path
 patterns and installs one operation mask on each matching terminal.
 
-The kernel collects the live dentry names from the leaf to the current mount
-root, reverses them for graph evaluation, and starts from the clean mount
-snapshot prefix. The snapshot selects the lowest `mnt_id_unique` for a mount
-root. A second clean-view check closes the race after graph lookup. The floor
-runs before exact-object lookup and therefore covers a negative dentry for
-`CREATE` and children that appear or change after activation. A dirty or
-ambiguous topology fails closed.
+The node compiles only the static generation-scoped graph. It does not resolve
+a live mount path for a path-tree floor. BPF reads the task's live mount
+namespace, scans its mount tree, selects the lowest `mnt_id_unique` for each
+root dentry, and walks from the leaf across mount parents to the namespace
+root. It reverses the components and traverses only the task's bound profile
+generation from state zero. The floor runs before exact-object lookup. It
+therefore covers a negative dentry for `CREATE`, children that appear or
+change after activation, and a task whose mount namespace appears after
+policy activation.
+
+Exact implementation commit `6a0f389` passed the repository VM kernel,
+identity, observation, and protection probes on x86_64 Linux
+`6.8.0-137-generic`. The production BPF object SHA-256 is
+`b80388fcce6e6afeb73b700fc8b6f2e23322cce9858b41c3e4823af6dbdce204`.
+The local-enforcement artifact SHA-256 is
+`951c12344e7c4a3199c10ff70d52289a058979b8e2f243e4306cf3e2fa74bd5e`.
+It records future-namespace denial, pre-existing, later, and replacement child
+denials, an allowed outside control, failed-closed mount replacement,
+propagation invalidation, `mount_setattr` reconciliation, and complete fixture
+cleanup.
 
 The disposable VM artifact and manual operator result are recorded in the
 [manual acceptance document](./manual-testing/phase-4-manual-acceptance.md#signed-path-tree-denial--2026-08-17).

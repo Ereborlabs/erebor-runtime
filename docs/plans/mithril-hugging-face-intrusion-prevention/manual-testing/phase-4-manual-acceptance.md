@@ -165,25 +165,29 @@ phase remains **Not done**.
 State: **Done** for `FILE-PATH-TREE-DENY-001`. The broader phase remains
 **Not done**.
 
-The disposable x86_64 VM harness ran from a worktree based on `4875862`. The
-kernel was `6.8.0-137-generic`, and the active LSM order included `bpf`. The
-local-enforcement artifact is
-`/tmp/mithril-path-tree-vm-20260817-v9-2872526/local-enforcement-physical-probe.json`.
-Its SHA-256 is
-`20c34a1afbfad23d5d8940fb190f2228b57b614fd814c6555eafd9a1b5707e37`.
+The disposable x86_64 VM harness ran exact implementation commit `6a0f389`.
+The kernel was `6.8.0-137-generic`, and the active LSM order included `bpf`.
+The local-enforcement artifact is
+`/tmp/mithril-path-tree-6a0f389/local-enforcement-physical-probe.json`. Its
+SHA-256 is
+`951c12344e7c4a3199c10ff70d52289a058979b8e2f243e4306cf3e2fa74bd5e`.
+The production BPF object SHA-256 is
+`b80388fcce6e6afeb73b700fc8b6f2e23322cce9858b41c3e4823af6dbdce204`.
 
 The artifact records these true fields:
 
 - `path_tree_preexisting_child_denied`
+- `path_tree_future_namespace_denied`
 - `path_tree_later_child_denied`
 - `path_tree_replacement_child_denied`
 - `path_tree_outside_control_allowed`
 - `path_tree_mount_attack_failed_closed`
 
-The same run denied a managed `CREATE` before it created the file. During an
-external bind replacement, the mount view became `DIRTY`, and covered access
-failed closed as `UNRESOLVED_OBJECT`. Reconciliation restored the path-tree
-denial. The artifact also records `cgroup_removed=true` and
+The same run denied a managed `CREATE` before it created the file. It installed
+the graph before it created one test mount namespace, then moved that task to
+the managed cgroup and required `PATH_TREE_POLICY_DENY`. An external bind
+replacement also failed closed. The artifact records successful propagation
+invalidation, `mount_setattr` reconciliation, `cgroup_removed=true`, and
 `fixture_root_removed=true`.
 
 An isolated retained harness VM then ran this documented command from the
@@ -231,7 +235,7 @@ exec.
 | `FILE-MMAP-001` | map forbidden file for read/write/execute | forbidden mapping absent; allowed mapping exists with exact state |
 | `FILE-MMAP-SHARED-011` | share writable mapping across roots | forbidden acquisition/attachment denies or exact supported floor applies; no byte-taint claim |
 | `FILE-NAMESPACE-001` | access same spelling/object across mount views | actor-specific exact-object decision; allowed view succeeds and denied view has no effect |
-| `FILE-PATH-TREE-DENY-001` | read old, new, and replaced children; create a child; replace the protected tree with a bind mount | every covered effect denies before an fd, byte, or filesystem mutation; the outside-tree control succeeds; a dirty mount view fails closed |
+| `FILE-PATH-TREE-DENY-001` | install before one namespace exists; bind its task later; read old, new, and replaced children; create a child; replace the protected tree with a bind mount | every covered effect denies before an fd, byte, or filesystem mutation; the outside-tree control succeeds; a live mount replacement or topology race fails closed |
 | `FILE-SA-TOKEN-OPEN-001` | worker and controller access rotating token | worker gets `EACCES` and no fd/positive bytes; controller succeeds; rotation cannot create a gap |
 | `FILE-VMA-SNAPSHOT-001` | race response/policy decision with VMA changes | incomplete snapshot never relaxes; complete approved snapshot permits its control |
 | `HF-LOCAL-001` | run safe in-process protected-file/effect sequence | first distinguishable forbidden effect is prevented; no later prohibited stage; clean conversion succeeds |
