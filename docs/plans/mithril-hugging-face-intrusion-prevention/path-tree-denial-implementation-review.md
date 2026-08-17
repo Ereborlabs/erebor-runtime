@@ -5,6 +5,9 @@ This guide covers implementation commit
 `4875862804b64c003927b60e634b7989dd3897f7`.
 Test-only follow-up commit `a8133da` replaces one prohibited `Option::expect`
 with the repository's fallible test style. It does not change runtime code.
+Simplification commit `367400b5fe7c75514df6c35a5109b8efcb7e37d3`
+removes the redundant rule ID and recursion flag from the lowered graph input.
+It does not change the signed policy schema, BPF runtime, or ABI.
 
 The design source is the
 [validated architecture](./policy-and-protection-algorithm-architecture-readable.md#path-selector-resolution-path-tree-floors-and-exact-object-authority).
@@ -28,9 +31,9 @@ Read the implementation in this order:
    [`validate_path_tree_deny_floors`](../../../crates/mithril-control/src/policy/compiler.rs#L1919).
    This function rejects positive, excepted, nonrecursive, and non-file rules.
 3. Read
-   [`CanonicalPathGraphV1::compile_with_path_tree_denies`](../../../crates/mithril-control/src/policy/path.rs#L314)
+   [`CanonicalPathGraphV1::compile_with_path_tree_denies`](../../../crates/mithril-control/src/policy/path.rs#L312)
    and
-   [`insert_path_tree_deny`](../../../crates/mithril-control/src/policy/path.rs#L554).
+   [`insert_path_tree_deny`](../../../crates/mithril-control/src/policy/path.rs#L552).
    These functions add the recursive terminal state and its operation mask.
 4. Read
    [`MountInfoSnapshot::read`](../../../crates/mithril-node/src/exact_object.rs#L349)
@@ -74,6 +77,11 @@ operation ID `N`. The recursive state is also a terminal state. A self-loop
 wildcard consumes each descendant component. The terminal therefore matches
 the named directory and all descendants.
 
+The compiler first requires `recursive: true` at the signed input boundary.
+The node then lowers only path components and operation IDs. The graph always
+adds the recursive self-loop. The lowered input does not retain a rule ID or a
+recursion flag that cannot change graph behavior.
+
 The kernel evaluates the terminal before it reads `exact_file_objects`. A
 covered `CREATE` can therefore deny a negative dentry that has no inode. A
 later child and a replacement child use the same terminal. A path-tree rule
@@ -90,7 +98,7 @@ not use Meta source code. The presentation does not publish that source.
 | Reverse the leaf-first component vector before graph evaluation. | The loop reads `component_count - offset - 1`. | [`canonical_path_match_step`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L327) |
 | At a repeated mount-root dentry, select the oldest mount by the lowest `mnt_id_unique`. | Userspace indexes mounts by root identity, uses `min_by_key(mount_id_unique)`, and repeats through the selected parent mountpoint. | [`canonicalize_mount_path`](../../../crates/mithril-node/src/exact_object.rs#L557) |
 | Continue the mount walk to the selected namespace root. | Userspace prepends each selected parent attachment. BPF starts the live mount-relative walk at the resulting graph prefix. | [`lower_path_tables`](../../../crates/mithril-node/src/policy.rs#L3320), [`canonical_path_candidate`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L396) |
-| Match components with a bounded graph. | The compiler determinizes exact and wildcard transitions. BPF uses one state ID per step. | [`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L390) |
+| Match components with a bounded graph. | The compiler determinizes exact and wildcard transitions. BPF uses one state ID per step. | [`CanonicalPathGraphV1::determinize`](../../../crates/mithril-control/src/policy/path.rs#L388) |
 | Invalidate path decisions on mount changes. | Mount hooks publish `DIRTY` and advance the global epoch before the effect. The path gate checks the clean view before and after graph lookup. | [`begin_mount_mutation`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L53), [`snapshot_mount_view`](../../../bpf/erebor-interceptor/programs/identity_path.bpf.h#L257) |
 
 The runtime split is important. BPF walks from the live leaf to the current
@@ -104,9 +112,9 @@ caller-visible bind alias. It replaces the live mount ID with the snapshot's
 | Owner | State and input | Output or side effect | Change and cleanup authority | Proof |
 | --- | --- | --- | --- | --- |
 | `PolicyCompiler` | Owns validation of the signed `PathTreeDenyFloorV1` input. | Produces a signed candidate only for a recursive protect-mode file denial. | The compiler creates no runtime state. A new signed artifact is the only update input. | [`path_tree_rules_are_signed_denial_floors_only`](../../../crates/mithril-control/tests/policy_compilation.rs#L92) |
-| `CanonicalPathGraphV1` | Owns nondeterministic and deterministic path states. | Produces bounded exact transitions, wildcard transitions, and terminal masks. | The graph exists only during compilation and lowering. | [`recursive_path_tree_deny_covers_the_root_and_descendants`](../../../crates/mithril-control/src/policy/path.rs#L876) |
+| `CanonicalPathGraphV1` | Owns nondeterministic and deterministic path states. | Produces bounded exact transitions, wildcard transitions, and terminal masks. | The graph exists only during compilation and lowering. | [`recursive_path_tree_deny_covers_the_root_and_descendants`](../../../crates/mithril-control/src/policy/path.rs#L871) |
 | `ExactFileObjectResolver` | Owns a held workload root and two equal mountinfo reads. | Produces canonical components, the selected oldest mount ID, and a snapshot digest. | It rejects a changed or incomplete snapshot. The held handles close with the resolver. | [`canonical_mount_walk_selects_the_oldest_root_and_repeats_to_namespace_root`](../../../crates/mithril-node/src/exact_object.rs#L819) |
-| `NodePolicyGenerationOwner` | Owns lowered generation rows and mount reconciliation. | Installs, reads back, activates, reconciles, and retires generation-prefixed rows. | Only this owner writes policy graph rows. BPF can change mount state, not policy terminals. | [`path_tree_floor_lowers_without_an_exact_child_object`](../../../crates/mithril-node/src/policy.rs#L4120) |
+| `NodePolicyGenerationOwner` | Owns lowered generation rows and mount reconciliation. | Installs, reads back, activates, reconciles, and retires generation-prefixed rows. | Only this owner writes policy graph rows. BPF can change mount state, not policy terminals. | [`path_tree_floor_lowers_without_an_exact_child_object`](../../../crates/mithril-node/src/policy.rs#L4122) |
 | `KernelHostOwner` | Owns the loaded BPF object, links, map handles, and pin paths. | Attaches programs and pins maps and links in bpffs. | Qualification shutdown removes owned pins. Production pins remain for explicit recovery or operator cleanup. | [`KernelHostOwner::shutdown`](../../../crates/erebor-interceptor/src/host.rs#L1380) |
 | BPF effect and path gates | Own per-attempt scratch state and the physical kernel return value. | Return the configured negative errno and emit `PATH_TREE_POLICY_DENY`. | BPF changes scratch, observation counters, and mount state. It does not change a signed terminal. | [`path_tree_deny_uses_the_clean_canonical_path_before_object_lookup`](../../../crates/erebor-interceptor/src/bundled.rs#L480) |
 | `EffectObservationStore` | Owns copied userspace observation records. | Converts the fixed ABI record to the runtime IPC record. | The ring-buffer callback appends records. Store retention is bounded in userspace. | [`EffectObservationStore::record_bytes`](../../../crates/mithril-node/src/observation.rs#L61) |
@@ -357,7 +365,7 @@ malformed counter and does not create an IPC event.
 | `recursive_path_tree_deny_covers_the_root_and_descendants` | Matches the named root and a later descendant. Does not match an outside path. |
 | `path_tree_floor_lowers_without_an_exact_child_object` | Installs a floor-only terminal mask without a child exact-object terminal. Uses an unrelated exact object to supply the represented mount view. |
 | `path_tree_deny_uses_the_clean_canonical_path_before_object_lookup` | Checks leaf-to-root collection, component reversal, two clean-view checks, selected oldest mount use, and decision order. |
-| Repository Rust CI | `bash .github/scripts/verify-rust-ci.sh` passed through `a8133da`. It ran formatting, workspace check, strict all-target and all-feature clippy, and all workspace tests. |
+| Repository Rust CI | `bash .github/scripts/verify-rust-ci.sh` passed through `367400b`. It ran formatting, workspace check, strict all-target and all-feature clippy, and all workspace tests. |
 | Disposable VM harness | Passed at exact commit `2872526a3fd7a23d83ead50438818014f425eb22` with `crates/mithril-e2e/harness/vm/run.sh --output-directory /tmp/mithril-path-tree-vm-20260817-v9-2872526`. |
 | Manual harness VM | `mount-attack-deny.sh` printed its PASS line and the complete Mithril cleanup line. |
 
@@ -386,6 +394,9 @@ fail-closed unresolved result. Reconciliation restores the path-tree terminal.
   bytes. Meta's presentation describes a 255-component prototype bound.
 - The physical path-tree proof is x86_64 only. The checked BPF build compiles
   other supported headers, but that result is not non-x86 physical evidence.
+- The code descriptions and Rust CI result cover `367400b`. The physical VM
+  artifact covers exact commit `2872526`. The simplification commit has no
+  separate physical VM artifact.
 - The floor covers the signed `FILE` operations accepted by
   [`operation_belongs_to_family`](../../../crates/mithril-control/src/policy/compiler.rs#L2400).
   It does not create positive file authority.
