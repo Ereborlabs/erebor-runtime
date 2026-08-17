@@ -41,7 +41,6 @@ Completed-row evidence remains in the phase result and acceptance record:
 | `ID-CREATOR-PARENT-007` | Creator exit, double fork, subreaper, and PID-namespace-init reparenting passed. | Blocked: current owners have a `PTRACE_ATTACH` denial fixture, not a permitted ptrace transition. A ptrace topology needs an approved permitted transition. The existing fixture has no bounded way to require a real host-PID collision; a PID-reuse case needs an approved deterministic collision design. |
 | `ID-TASK-COORD-FINALIZE-006` | Blocked. Allocation and runnable snapshots exist. The current fixture has no allocation or finalization fault-injection protocol, missing-`PIDFD_THREAD` control, or leader-first-exit/TID-reuse oracle. | Add the required coordinate-failure controls before adding retained allocation, finalization, visibility, and exit evidence. |
 | `NATIVE-STATE-REF-LIFETIME-001` | Blocked: task-reference count is the only current observable. | Socket, object, and generation-reference cases. |
-| `STATE-FORK-IPC-002` | Blocked: no resource-inheritance snapshot contract. | Inherited IPC state case. |
 | `STATE-THREAD-RACE-001` | Blocked: no restriction-transition fixture contract. | Concurrent restriction-transition race. |
 
 Phase 2 closes only after every row in this matrix passes. The Phase 4

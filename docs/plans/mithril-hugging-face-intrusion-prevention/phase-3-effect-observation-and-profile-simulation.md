@@ -100,7 +100,7 @@ matcher passes its hostile corpus. Policy denial remains physically disabled.
   `MEM-EXEC-001`,
   `MEM-KERNEL-MAP-002`, `MOUNT-ATTR-001`, `MOUNT-CAS-002`,
   `MOUNT-PROPAGATION-003`, `MOUNT-SNAPSHOT-004`, `SELF-PROTECT-001`, and
-  `STATE-PERSISTENT-FILE-LIFETIME-007`.
+  `STATE-FORK-IPC-002`, `STATE-PERSISTENT-FILE-LIFETIME-007`.
 - Observe/simulate the exact Phase 5 first-owned IDs:
   `FILE-DELEGATED-EGRESS-001`, `HF-004-RESULT-001`,
   `HF-011-READ-RESULT-001`, `HF-NET-001`, `IPC-LOCAL-INET-008`,

@@ -96,7 +96,7 @@ const REQUIRED_IDENTITY_MAPS: [&str; 55] = [
     "task_reference_tombstones",
 ];
 
-const IDENTITY_FIXTURES: [&str; 32] = [
+const IDENTITY_FIXTURES: [&str; 31] = [
     "AUTHORIZATION-REPLAY-004",
     "ENTRY-BINDING-GAP-001",
     "ENTRY-CONTAINERS-001",
@@ -127,7 +127,6 @@ const IDENTITY_FIXTURES: [&str; 32] = [
     "ID-MOVED-TASK-EXEC-005",
     "ID-TASK-COORD-FINALIZE-006",
     "NATIVE-STATE-REF-LIFETIME-001",
-    "STATE-FORK-IPC-002",
     "STATE-THREAD-RACE-001",
 ];
 

@@ -247,6 +247,7 @@ cannot be created reliably by hand.
 | `IPC-PROCESS-CHANNEL-009` | run directional control and channel operations | exact controller/peer/operation direction; reverse authority not inferred |
 | `IPC-RELATIONSHIP-ALLOW-003` | declared peers communicate | exact allowed relationship and physical completion |
 | `IPC-RELATIONSHIP-UNMATCHED-005` | unknown/reused/wildcard peer communicates | configured unmatched result and honest peer limit |
+| `STATE-FORK-IPC-002` | fork while pipe/socket state is inherited | observe the inherited family restriction and channel result without merging independent roots |
 | `LSM-DENY-SATURATION-001` | saturate event delivery while an earlier/required denial occurs | physical denial remains hard; observe transport gap is separate |
 | `MEM-EXEC-001` | create executable memfd/anonymous/file-backed memory | exact mmap/mprotect/pkey transition and completion state |
 | `MEM-KERNEL-MAP-002` | race/overflow mm/VMA authority state | missing/partial state remains hard-safe; ordinary mapping control is observed |
