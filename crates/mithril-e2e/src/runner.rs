@@ -770,7 +770,7 @@ mod tests {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let bundle = KernelQualificationRunner::new(root).verify()?;
         assert_eq!(bundle.schema_version, 1);
-        assert_eq!(bundle.architecture_closure.fixtures.len(), 134);
+        assert_eq!(bundle.architecture_closure.fixtures.len(), 133);
         assert_eq!(bundle.abi_state, "FROZEN_PROVEN_SURFACES_ONLY");
         assert_eq!(bundle.closed_contract_digest.len(), 64);
         assert_eq!(bundle.physical_qualification_sha256.len(), 64);

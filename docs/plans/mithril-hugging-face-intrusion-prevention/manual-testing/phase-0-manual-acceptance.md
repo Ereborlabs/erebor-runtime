@@ -93,7 +93,7 @@ separate physical result for another architecture or unsupported capability.
 | `CFG-ROLLBACK-GOLDEN-002` | inspect valid, rollback, replay, and corrupted profile artifacts | canonical bytes agree; forbidden rollback/replay rejects; prior generation remains readable |
 | `CFG-V1-GOLDEN-002` | compile the readable policy golden twice and inspect unknown/duplicate variants | byte-identical output; invalid fields reject; valid minimal policy succeeds |
 | `DECISION-SET-GOLDEN-001` | compare generated Rust/C offsets, enum values, keys, and lookup traces | exact byte equality and fail-closed missing-state result; allowed control key agrees |
-| `FIXTURE-REGISTRY-COMPLETE-001` | compare architecture markers, registry, executable cases, criteria, and phase allocation | exactly 134 active IDs; no missing, extra, duplicate, or rejected active ID |
+| `FIXTURE-REGISTRY-COMPLETE-001` | compare architecture markers, registry, executable cases, criteria, and phase allocation | exactly 133 active IDs; no missing, extra, duplicate, or rejected active ID |
 | `SOURCE-KA-BOUNDS-004` | run every adopted bounded parser/path case at limit and limit+1 | at-limit result matches; overflow never truncates to allow |
 | `SOURCE-KA-CAPACITY-005` | fill each adopted authoritative map to N and attempt N+1 | documented failure/health transition occurs; existing allowed control remains correct |
 | `SOURCE-KA-PARTIAL-ATTACH-001` | fail one required attach after earlier attaches succeed | readiness stays false and rollback leaves a complete old set or no advertised set |

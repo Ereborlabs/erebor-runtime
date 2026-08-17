@@ -303,7 +303,7 @@ approved dossier entry; “inspired by upstream” is not enough.
 
 ## Exact Fixture Allocation
 
-The following is the first-completion owner for every one of the 134 IDs in
+The following is the first-completion owner for every one of the 133 IDs in
 architecture Appendix C. Phase 3 reruns the Phase 4/5 physical-effect cases in
 observe/simulation mode; Phases 7-10 rerun inputs needed by their graph and
 response boundaries; Phase 11 reruns every active criterion. Those repetitions
